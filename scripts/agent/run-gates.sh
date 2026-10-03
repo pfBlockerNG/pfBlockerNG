@@ -140,8 +140,8 @@ gates_for() {
 	# agent configs), so select it for every path CI's shell-tests job runs for (all but
 	# Markdown and docs/) plus the Markdown those guards read.
 	# ponytail: the Markdown arm mirrors those specs' scan sets by hand; a new Markdown-reading guard adds its paths here.
-	if printf '%s\n' "$files" | LC_ALL=C grep -Ev '\.md$|^docs/' | LC_ALL=C grep -q . ||
-		printf '%s\n' "$files" | LC_ALL=C grep -Eq '^(src|scripts|tests)/.*\.md$|^(AGENTS|GROK|CLAUDE)\.md$|^\.github/(copilot-instructions|agents/[^/]+\.agent)\.md$|^\.agents/(skills/[^/]+/SKILL|policy/landing|context/[^/]+-adapter)\.md$'; then
+	if printf '%s\n' "$files" | LC_ALL=C grep -Evq '\.md$|^docs/|^$' ||
+		printf '%s\n' "$files" | LC_ALL=C grep -Eq '^((src|scripts|tests)/.*|AGENTS|GROK|CLAUDE|\.github/(copilot-instructions|agents/[^/]+\.agent)|\.(claude|agents)/skills/[^/]+/SKILL|\.agents/(policy/landing|context/[^/]+-adapter))\.md$'; then
 		out="${out}shellspec --shell \$(command -v dash || command -v sh)${nl}"
 	fi
 	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.md$'; then

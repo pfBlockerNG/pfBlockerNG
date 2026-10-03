@@ -236,17 +236,23 @@ Describe 'run-gates.sh gates_for()'
     The lines of output should equal 3
   End
 
-  # issue #3425: the ShellSpec arm reads the same raw path bytes, so its greps must pin
-  # LC_ALL=C too -- under a UTF-8 locale a binary-classified list would drop the line.
-  utf8_txt_gates_for() {
+  # issue #3425: the ShellSpec arms read the same raw path bytes, so their greps must pin
+  # LC_ALL=C too -- under a UTF-8 locale `.` cannot match an invalid byte.
+  utf8_path_gates_for() {
     ( LC_ALL=C.UTF-8; export LC_ALL
-      printf 'tests/fixtures/bad\377.txt\n' | gates_for )
+      printf "$1\n" | gates_for )
   }
 
   It 'selects ShellSpec for a non-Markdown path carrying an invalid UTF-8 byte under a UTF-8 locale'
     Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
-    When call utf8_txt_gates_for
+    When call utf8_path_gates_for 'tests/fixtures/bad\377.txt'
     The output should equal "$shellspec_gate"
+  End
+
+  It 'selects ShellSpec for guarded Markdown carrying an invalid UTF-8 byte under a UTF-8 locale'
+    Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
+    When call utf8_path_gates_for 'tests/bad\377.md'
+    The output should include "$shellspec_gate"
   End
 
   It 'keeps aggregate gates for an unsafe-named Python file (no per-file interpolation)'
@@ -331,7 +337,8 @@ Describe 'run-gates.sh gates_for()'
       'scripts/build-pkg-portable.py'
       'scripts/release-notes-prompt.txt'
       'tests/php/DnsblServiceRestartTest.php'
-      'tests/test_x.py'
+      'tests/fixtures/docs/x.txt'
+      'tests/fixtures/x.md.bak'
       'tests/fixtures/other.txt'
       'tests/fixtures/feed_corpus/sample.bin'
       'src/usr/local/www/pfblockerng/vendor/codemirror/LICENSES.md'
@@ -355,6 +362,7 @@ Describe 'run-gates.sh gates_for()'
       '.agents/context/grok-adapter.md'
       '.agents/context/omp-adapter.md'
       '.agents/skills/subsystem-sweep/SKILL.md'
+      '.claude/skills/example/SKILL.md'
       'composer.json'
       '.githooks/pre-commit'
       'README.MD'
@@ -371,8 +379,8 @@ Describe 'run-gates.sh gates_for()'
   # the guarded-Markdown arm is anchored: a look-alike path no guard reads selects nothing.
   Describe 'a path no repository-wide ShellSpec guard scans'
     Parameters
-      'docs/misc/notes.md'
-      'docs/images/diagram.png'
+      'docs/x.sh'
+      'docs/tests/x.md'
       'docs/x.php'
       'README.md'
       'CONTRIBUTING.md'
@@ -388,6 +396,9 @@ Describe 'run-gates.sh gates_for()'
       '.agents/skills/a/b/SKILL.md'
       '.agents/context/adapter.md'
       '.github/agents/x.md'
+      'x/.github/copilot-instructions.md'
+      'x/.agents/policy/landing.md'
+      '.claude/skills/a/b/SKILL.md'
     End
 
     It "leaves ShellSpec unselected for '$1'"
@@ -448,14 +459,9 @@ Describe 'run-gates.sh Composer vendor guard'
     } > "$repo/vendor/bin/phpunit"
     # issue #3425: a PHP diff now selects the full ShellSpec gate; this stub keeps the rows
     # that run the whole plan from nesting the real suite, inside the minimal-PATH contract.
-    {
-      printf '%s\n' '#!/bin/sh' 'reportdir=' \
-        'while [ "$#" -gt 0 ]; do' \
-        '  if [ "$1" = --reportdir ]; then shift; reportdir=$1; fi' \
-        '  shift' \
-        'done' \
-        'printf "<testsuites/>\\n" > "$reportdir/results_junit.xml"'
-    } > "$stubdir/shellspec"
+    # --reportdir's value is the gate's last argument.
+    printf '%s\n' '#!/bin/sh' 'for dir do :; done' \
+      'printf "<testsuites/>\\n" > "$dir/results_junit.xml"' > "$stubdir/shellspec"
     chmod +x "$stubdir/python3" "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$stubdir/shellspec" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
     # The minimal-PATH contract uses only POSIX utilities plus the runner's

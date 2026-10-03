@@ -42,14 +42,9 @@ Describe 'run-gates.sh over a C-quoted path'
     # issue #3425: any non-Markdown path under scripts/ or tests/ now selects the full
     # ShellSpec gate; this stub keeps the rows that run the whole plan from nesting the
     # real suite while still producing the JUnit report the skip-set checker reads.
-    {
-      printf '%s\n' '#!/bin/sh' 'reportdir=' \
-        'while [ "$#" -gt 0 ]; do' \
-        '  if [ "$1" = --reportdir ]; then shift; reportdir=$1; fi' \
-        '  shift' \
-        'done' \
-        'printf "<testsuites/>\\n" > "$reportdir/results_junit.xml"'
-    } > "$stubdir/shellspec"
+    # --reportdir's value is the gate's last argument.
+    printf '%s\n' '#!/bin/sh' 'for dir do :; done' \
+      'printf "<testsuites/>\\n" > "$dir/results_junit.xml"' > "$stubdir/shellspec"
     chmod +x "$stubdir/python3" "$stubdir/npx" "$stubdir/shellspec"
     PATH="$stubdir:$PATH"
   }
