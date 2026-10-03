@@ -1651,3 +1651,107 @@ def test_dnsbl_block_writes_persistent_log_line(
                 f"cat rc={observed.returncode} stdout={observed.stdout!r} stderr={observed.stderr!r}"
             )
         assert hits >= 1, f"no dnsbl.log line for {domain} after a VIP block (ADR-03 persistent log handle)"
+
+
+@pytest.mark.timeout(120)
+def test_dnsbl_rapid_restart_keeps_one_stable_webserver(deployed_vm: SmokeVM) -> None:
+    """#3423: two rapid service restarts leave one stable HTTP/HTTPS block-page server."""
+    domain = h.unique_domain("restart3423")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_restart3423.txt", f"{domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smokerestart3423",
+        feed_url=feed_url,
+        header="smokerestart3423",
+        mode=h.DnsblMode.VIP,
+    )
+    observed: dict[str, object] = {}
+
+    def fetch(scheme: str) -> dict[str, object]:
+        args = [
+            h.GUEST_CURL,
+            "-sS",
+            "--connect-timeout",
+            "2",
+            "--max-time",
+            "5",
+        ]
+        if scheme == "https":
+            args.append("-k")
+        args.extend(
+            [
+                "-H",
+                f"Host: {domain}",
+                "-w",
+                "\n%{http_code}",
+                f"{scheme}://{h.DEFAULT_DNSBL_VIP4}/",
+            ]
+        )
+        result = deployed_vm.ssh(*args, timeout=10.0)
+        body, _, code = result.stdout.rpartition("\n")
+        return {
+            "rc": result.returncode,
+            "code": code,
+            "block_page": "Site blocked via DNSBL" in body,
+            "stderr": result.stderr,
+        }
+
+    def snapshot() -> dict[str, object]:
+        pgrep = deployed_vm.ssh("/bin/pgrep", "-x", "lighttpd_pfb", timeout=10.0)
+        sockstat = deployed_vm.ssh("/usr/bin/sockstat", "-46", "-l", timeout=10.0)
+        return {
+            "pids": [line.strip() for line in pgrep.stdout.splitlines() if line.strip()],
+            "sockstat": [line for line in sockstat.stdout.splitlines() if "lighttpd_p" in line],
+            "http": fetch("http"),
+            "https": fetch("https"),
+        }
+
+    def ready() -> bool:
+        observed.clear()
+        observed.update(snapshot())
+        return (
+            len(observed["pids"]) == 1
+            and observed["http"]["rc"] == 0
+            and observed["http"]["code"] == "200"
+            and observed["http"]["block_page"] is True
+            and observed["https"]["rc"] == 0
+            and observed["https"]["code"] == "200"
+            and observed["https"]["block_page"] is True
+        )
+
+    with h.CaseContext(deployed_vm, spec):
+        h.wait_until(ready, timeout=30.0, interval=1.0)
+        restart = h.php_eval(
+            deployed_vm,
+            "require_once('service-utils.inc');\n"
+            "restart_service('pfb_dnsbl');\n"
+            "restart_service('pfb_dnsbl');\n"
+            "echo 'OK';",
+            timeout=30.0,
+        )
+        assert restart.returncode == 0 and "OK" in restart.stdout, (
+            f"rapid restart dispatch failed: rc={restart.returncode} "
+            f"stdout={restart.stdout!r} stderr={restart.stderr!r}"
+        )
+
+        try:
+            h.wait_until(ready, timeout=30.0, interval=1.0)
+        except RuntimeError as exc:
+            pytest.fail(f"{exc}; last rapid-restart observation={json.dumps(observed, sort_keys=True)}")
+
+        first_pid = list(observed["pids"])
+        final = snapshot()
+        assert final["pids"] == first_pid and len(first_pid) == 1, (
+            f"lighttpd_pfb did not remain one stable process: before={first_pid}, "
+            f"after={final['pids']}; sockets={final['sockstat']}"
+        )
+        for scheme in ("http", "https"):
+            response = final[scheme]
+            assert response["rc"] == 0 and response["code"] == "200" and response["block_page"] is True, (
+                f"{scheme} block page failed after rapid restarts: {response}; "
+                f"pids={final['pids']} sockets={final['sockstat']}"
+            )
+        sockets = "\n".join(final["sockstat"])
+        assert f"{h.DEFAULT_DNSBL_VIP4}:80" in sockets and f"{h.DEFAULT_DNSBL_VIP4}:443" in sockets, (
+            f"missing DNSBL HTTP/HTTPS listeners after rapid restarts: {final['sockstat']}"
+        )
+        print("PFB3423_EVIDENCE " + json.dumps(final, sort_keys=True))
