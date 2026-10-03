@@ -129,6 +129,47 @@ GRAPHIFY
     The result of function leftovers should equal ''
   End
 
+  # Stub TOOL: run the real one, then send SIGNAL to the checker when its first
+  # argument starts with PREFIX -- a signal landing outside the rebuild.
+  signal_after() {
+    real=$(command -v "$1") || return 1
+    cat > "$stubdir/$1" <<STUB
+#!/bin/sh
+"$real" "\$@"; rc=\$?
+case "\$1" in "$3"*) kill -s $2 "\$PPID" ;; esac
+exit \$rc
+STUB
+    chmod +x "$stubdir/$1"
+  }
+
+  Describe 'a signal outside the rebuild still removes the lock and scratch (issue #3421)'
+    Parameters
+      TERM
+      INT
+      HUP
+    End
+
+    It "exits before rebuilding when $1 lands while the lock is taken"
+      signal_after mkdir "$1" "$lock"
+      export GRAPHIFY_STUB_GRAPH='rebuilt graph'
+      When run sh "$script_abs" "$worktree"
+      The status should equal 1
+      The file "$graphify_log" should not be exist
+      The contents of file "$graph" should equal 'committed graph'
+      The result of function leftovers should equal ''
+    End
+
+    It "finishes the restore when a second $1 lands during it"
+      signal_after cp "$1" "$scratch/"
+      export GRAPHIFY_STUB_GRAPH='partial graph' GRAPHIFY_STUB_SIGNAL="$1"
+      When run sh "$script_abs" "$worktree"
+      The status should equal 1
+      The contents of file "$graph" should equal 'committed graph'
+      The result of function graph_status should equal ''
+      The result of function leftovers should equal ''
+    End
+  End
+
   It 'exits 1 naming the lock, rebuilds nothing and touches nothing while another checker holds the worktree'
     mkdir "$lock"
     export GRAPHIFY_STUB_GRAPH='rebuilt graph'

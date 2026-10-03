@@ -10,7 +10,7 @@
 # skipped gate reads greener than a failed one; --allow-missing downgrades that
 # deliberately for an incomplete workstation.
 #
-# Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]
+# Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing] [--gate-timeout SECONDS]
 #   --worktree       repo checkout to run in (default: cwd's repo root)
 #   --diff BASE      compute touched files: BASE...HEAD merge-base diff UNIONED with
 #                     any uncommitted (staged+unstaged+untracked, .gitignore-filtered)
@@ -19,6 +19,7 @@
 #   --allow-missing  a missing tool reports SKIP without failing the run (default: fails).
 #                    The Composer vendor checker is exempt: a missing interpreter there
 #                    FAILS regardless, so the PHP gates can never silently skip.
+#   --gate-timeout   hard deadline per gate in seconds (default: 1800).
 #
 # Exits 2 without running anything when a changed path holds a literal newline: such a
 # path cannot be carried by a line-based file list, and gating a torn fragment would lint
@@ -37,8 +38,8 @@
 # property of the whole tree, not of a touched file type. Its tool is `sh`, so a missing
 # Graphify surfaces as the checker's own FAIL, never as a SKIP.
 
-worktree='' base='origin/devel' plan=0 allow_missing=0
-overall=0
+worktree='' base='origin/devel' plan=0 allow_missing=0 gate_timeout=1800
+overall=0 active_gate=''
 
 # Composer refuses to load plugins as root/superuser and aborts before the gate can
 # run (issue #3143); the gate runner itself may be invoked by root.
@@ -46,7 +47,7 @@ COMPOSER_ALLOW_SUPERUSER=1
 export COMPOSER_ALLOW_SUPERUSER
 
 usage() {
-	echo "usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]" >&2
+	echo "usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing] [--gate-timeout SECONDS]" >&2
 	exit 2
 }
 
@@ -173,6 +174,7 @@ gate_command() {
 run_gate() {
 	# $1 = command line
 	label=$1
+	printf 'GATE RUN: %s\n' "$label" >&2
 	tool=${1%% *}
 	if ! (cd "$worktree" && { command -v "$tool" >/dev/null 2>&1 || [ -x "$tool" ]; }); then
 		if is_vendor_gate "$1"; then
@@ -191,17 +193,28 @@ run_gate() {
 	case "$1" in
 	'python3 scripts/check_coverage_pairing.py --name-status-z') gate_input=$status_tmp ;;
 	esac
-	# issue #1865: capture combined stdout+stderr so a failing gate's own output
-	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed.
+	# issue #3421: run the deadline monitor asynchronously so a signal trap can
+	# terminate the active process group instead of waiting forever in dash.
 	gate_exec=$(gate_command "$1")
-	gate_output=$(cd "$worktree" && sh -c "$gate_exec" < "$gate_input" 2>&1)
+	gate_output_file=$skip_report_dir/gate-output
+	rm -f "$gate_output_file"
+	(cd "$worktree" && exec timeout -s KILL "$gate_timeout" sh -c "$gate_exec" < "$gate_input") \
+		> "$gate_output_file" 2>&1 &
+	active_gate=$!
+	wait "$active_gate"
 	gate_status=$?
+	active_gate=''
+	gate_output=$(cat "$gate_output_file")
 	if [ "$gate_status" -eq 0 ]; then
 		printf 'GATE PASS: %s\n' "$label"
 		return 0
 	fi
 	[ -z "$gate_output" ] || printf '%s\n' "$gate_output"
-	printf 'GATE FAIL: %s\n' "$label"
+	if [ "$gate_status" -eq 124 ] || [ "$gate_status" -eq 137 ]; then
+		printf 'GATE FAIL: %s (TIMEOUT: %ss)\n' "$label" "$gate_timeout"
+	else
+		printf 'GATE FAIL: %s\n' "$label"
+	fi
 	overall=1
 	is_vendor_gate "$1" && return 1
 	return 0
@@ -217,6 +230,12 @@ main() {
 			--diff) [ $# -ge 2 ] || usage; base=$2; shift 2 ;;
 			--plan) plan=1; shift ;;
 			--allow-missing) allow_missing=1; shift ;;
+			--gate-timeout)
+				[ $# -ge 2 ] || usage
+				case "$2" in '' | *[!0-9]* | 0) usage ;; esac
+				gate_timeout=$2
+				shift 2
+				;;
 			*) usage ;;
 		esac
 	done
@@ -248,12 +267,37 @@ main() {
 	}
 	PFB_SKIP_REPORT_DIR=$skip_report_dir
 	export PFB_SKIP_REPORT_DIR
-	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"' EXIT
-	# dash runs no EXIT trap on an untrapped signal, so reap explicitly there too.
-	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 129' HUP
-	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 130' INT
-	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 131' QUIT
-	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 143' TERM
+	# shellcheck disable=SC2329 # invoked by the traps below
+	cleanup_runner() {
+		rm -f "$paths_tmp" "$status_tmp"
+		rm -rf "$skip_report_dir"
+	}
+	# shellcheck disable=SC2329 # invoked by the traps below
+	handle_signal() {
+		signal=$1 signal_status=$2
+		trap '' HUP INT QUIT TERM
+		if [ -n "$active_gate" ]; then
+			kill "-$signal" "-$active_gate" 2>/dev/null || kill "-$signal" "$active_gate" 2>/dev/null || :
+			signal_wait=0
+			while kill -0 "-$active_gate" 2>/dev/null; do
+				signal_wait=$((signal_wait + 1))
+				if [ "$signal_wait" -ge 10 ]; then
+					kill -KILL "-$active_gate" 2>/dev/null || :
+					break
+				fi
+				sleep 1
+			done
+			wait "$active_gate" 2>/dev/null || :
+		fi
+		cleanup_runner
+		trap - EXIT
+		exit "$signal_status"
+	}
+	trap cleanup_runner EXIT
+	trap 'handle_signal HUP 129' HUP
+	trap 'handle_signal INT 130' INT
+	trap 'handle_signal QUIT 131' QUIT
+	trap 'handle_signal TERM 143' TERM
 
 	# Coverage pairing consumes status-aware records: deletions and rename sources
 	# still trigger production rules, while only live destinations can satisfy tests.
@@ -286,21 +330,20 @@ $cmds"
 		printf '%s' "$all_cmds"
 		exit 0
 	fi
+	require_tool timeout
 
-	# Pipelines run in subshells under POSIX sh, so `overall` cannot propagate out of a
-	# `| while` loop -- run the loop in one subshell and carry the flag in its output.
-	report=$(printf '%s\n' "$all_cmds" | {
-		overall=0
-		while IFS= read -r c; do
-			[ -n "$c" ] || continue
-			if ! run_gate "$c"; then
-				is_vendor_gate "$c" && break
-			fi
-		done
-		echo "OVERALL=$overall"
-	})
-	overall_status=${report##*OVERALL=}
-	printf '%s' "${report%OVERALL=*}"
+	# A redirected loop stays in this shell, so signal traps retain ownership of
+	# the active gate process group.
+	overall=0
+	while IFS= read -r c; do
+		[ -n "$c" ] || continue
+		if ! run_gate "$c"; then
+			is_vendor_gate "$c" && break
+		fi
+	done <<EOF
+$all_cmds
+EOF
+	overall_status=$overall
 	if printf '%s\n' "$files" | grep -q '^src/usr/local/www/'; then
 		printf 'REMINDER: www/ touched -- Tier-A ui_render coverage is required and cannot be script-checked (test mandate #4)\n'
 	fi

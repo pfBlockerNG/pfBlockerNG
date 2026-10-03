@@ -21,12 +21,16 @@ Describe 'prepare-commit-msg fixture maintenance isolation (issue #2055)'
       --shell "$(command -v dash)" "$subject_spec"
   }
 
+  # issue #3421: grep, not `The contents of file`, which loads the multi-MB trace
+  # into ShellSpec and runs superlinearly long under dash.
+  trace_lacks() { ! grep -qF -e "$1" "$trace"; }
+
   It 'proves successful fixture commits do not launch detached maintenance'
     When run run_subject
     The status should equal 0
     The stdout should include '0 failures'
     The stderr should equal ''
-    The contents of file "$trace" should include '"name":"commit"'
-    The contents of file "$trace" should not include '"--detach"'
+    Assert grep -qF -e '"name":"commit"' "$trace"
+    Assert trace_lacks '"--detach"'
   End
 End

@@ -56,15 +56,21 @@ main() {
 	# One checker per worktree: a second one saving the graph mid-rebuild would
 	# restore the wrong bytes over the first one's restore.
 	lock=$root/graphify-out/.check-graph-fresh.lock
+	scratch='' restore=0 locked=0 signalled=0
+	# Restored unless a verdict below says the tree may keep the rebuilt graph;
+	# a signal during the rebuild takes the same exit path. Cleanup ignores further
+	# signals so a second one cannot cut it short (issue #3421).
+	trap 'trap "" HUP INT TERM; [ "$restore" = 0 ] || cp "$saved" "$graph"; [ "$locked" = 0 ] || rm -rf "$lock"; rm -rf "$scratch"' EXIT
+	# dash runs a pending trap right after mkdir returns, before `locked=1`: hold a
+	# signal until the lock's ownership is recorded.
+	trap 'signalled=1' HUP INT TERM
 	mkdir "$lock" 2>/dev/null || {
 		echo "check-graph-fresh.sh: another checker holds '$lock'; wait for it, or remove the lock if its owner is gone" >&2
 		exit 1
 	}
-	scratch='' restore=0
-	# Restored unless a verdict below says the tree may keep the rebuilt graph;
-	# a signal during the rebuild takes the same exit path.
-	trap '[ "$restore" = 0 ] || cp "$saved" "$graph"; rm -rf "$lock" "$scratch"' EXIT
+	locked=1
 	trap 'exit 1' HUP INT TERM
+	[ "$signalled" = 0 ] || exit 1
 	scratch=$(mktemp -d "${TMPDIR:-/var/tmp}/check-graph-fresh.XXXXXX") || exit 2
 	saved=$scratch/graph.json
 	cp "$graph" "$saved" || exit 2

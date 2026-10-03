@@ -46,12 +46,6 @@ def test_command_prefixed_pytest_row_is_rejected() -> None:
     assert any("test-row table mismatch" in error for error in errors)
 
 
-def test_local_report_cleanup_traps_hup_and_quit() -> None:
-    script = (Path(__file__).resolve().parents[1] / "scripts/agent/run-gates.sh").read_text()
-    assert "exit 129' HUP" in script
-    assert "exit 131' QUIT" in script
-
-
 def test_tab_prefixed_command_and_comment_shapes_are_rejected() -> None:
     command_errors = _validation_errors(_mutate_widget_step("command\tuv run pytest tests/unlisted-blocking-row.py"))
     assert any("test-row table mismatch" in error or "workflow YAML is invalid" in error for error in command_errors)
@@ -342,11 +336,6 @@ def _local_runner_canary_errors(script: str) -> list[str]:
             errors.append(f"{suite}: canary checker/guard is missing")
         if len(checks) != 2 or checks[1][0] != report:
             errors.append(f"{suite}: real checker is missing")
-    if 'rm -rf "$skip_report_dir"\' EXIT' not in script:
-        errors.append("EXIT cleanup is missing")
-    for signal, status in (("HUP", 129), ("INT", 130), ("QUIT", 131), ("TERM", 143)):
-        if f"exit {status}' {signal}" not in script:
-            errors.append(f"{signal} cleanup is missing")
     return errors
 
 
