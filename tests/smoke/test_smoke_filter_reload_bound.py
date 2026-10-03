@@ -4,12 +4,13 @@
 ``sync_package_pfblockerng()`` (``pfblockerng_apply.inc``) now fires
 ``/etc/rc.filter_configure_sync`` through ``pfb_filter_reload_exec()`` as a
 detached, fire-and-forget child: no wait, no timeout kill. pfSense's reload is
-uncontrollable and signals filterd asynchronously anyway — the script exiting
-never meant the rules were live — so the pass neither waits on it nor judges
-its outcome. The ONE failure pfBlockerNG owns is the launch itself. The
-PHPUnit suite (``tests/php/FilterReloadBoundTest.php``) proves the seam with
-deterministic doubles; this module is the live black-box verification on a
-real appliance with the real ``/etc/rc.filter_configure_sync``.
+uncontrollable; the script loads the ruleset synchronously under pfSense's
+``filter`` lock, but the launch is detached, so the rules can land after the
+pass returns and the pass neither waits on it nor judges its outcome. The ONE
+failure pfBlockerNG owns is the launch itself. The PHPUnit suite
+(``tests/php/FilterReloadBoundTest.php``) proves the seam with deterministic
+doubles; this module is the live black-box verification on a real appliance
+with the real ``/etc/rc.filter_configure_sync``.
 
 ROWS:
 
