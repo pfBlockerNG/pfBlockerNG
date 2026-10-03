@@ -41,24 +41,36 @@ usage() {
 	exit 2
 }
 
-# Completion phrases count for $head only. No $head, or no "between SHA and SHA"
-# range, keeps content-first. issue #3294: edited quota bodies retain old ranges.
+# Completion phrases count for $head only. No $head, or no recognized head marker,
+# keeps content-first. issue #3294: edited comments may retain old completion text.
 issuec_completion_for_head() {
 	[ -n "$head" ] || return 0
 	body=$(printf '%s\n' "$issuec" | tr '[:upper:]' '[:lower:]')
-	printf '%s\n' "$body" | grep -qE 'between [0-9a-f]+ and [0-9a-f]+' || return 0
+	printf '%s\n' "$body" |
+		grep -qE 'between [0-9a-f]+ and [0-9a-f]+|reviewed commit:[^0-9a-f]*[0-9a-f]+' ||
+		return 0
 	hl=$(printf '%s' "$head" | tr '[:upper:]' '[:lower:]')
 	printf '%s\n' "$body" | awk -v h="$hl" '
+		function matches(to) {
+			return length(h) >= 7 && length(to) >= 7 &&
+			    (index(h, to) == 1 || index(to, h) == 1)
+		}
 		BEGIN { want = 0 }
-		/actionable comments posted|no actionable comments/ { want = 1 }
+		/actionable comments posted|no actionable comments|codex review: didn.t find any major issues/ { want = 1 }
 		want && match($0, /between [0-9a-f]+ and [0-9a-f]+/) {
 			line = substr($0, RSTART, RLENGTH)
 			n = split(line, a, /[[:space:]]+/)
-			to = a[n]
-			want = 0
-			if (length(h) >= 7 && length(to) >= 7 &&
-			    (index(h, to) == 1 || index(to, h) == 1))
+			if (matches(a[n]))
 				found = 1
+			want = 0
+			next
+		}
+		want && match($0, /reviewed commit:[^0-9a-f]*[0-9a-f]+/) {
+			line = substr($0, RSTART, RLENGTH)
+			sub(/^reviewed commit:[^0-9a-f]*/, "", line)
+			if (matches(line))
+				found = 1
+			want = 0
 		}
 		END { exit found ? 0 : 1 }
 	'
@@ -88,7 +100,7 @@ classify() {
 		printf 'FINISHED'
 		return 0
 	fi
-	if printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments' &&
+	if printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments|codex review: didn.t find any major issues' &&
 	   issuec_completion_for_head; then
 		printf 'FINISHED'
 		return 0

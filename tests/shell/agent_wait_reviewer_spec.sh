@@ -430,6 +430,26 @@ STUB
     The output should include 'FINISHED'
   End
 
+  It 'reports FINISHED for the current-head Codex clean-review wording'
+    export GH_STUB_ISSUE_SINCE="$stubdir/issue.txt"
+    cat > "$GH_STUB_ISSUE_SINCE" <<'NOTICE'
+Codex Review: Didn't find any major issues.
+**Reviewed commit:** `a4c1c1977e`
+NOTICE
+    When run sh "$script" --repo o/r --pr 1 --handle chatgpt-codex-connector --until finished --since x --head a4c1c1977e3726a28b8a167a870bf52111dd7031 --interval 0 --max-iter 3
+    The output should include 'FINISHED'
+  End
+
+  It 'does not finish from Codex clean-review wording for another head'
+    export GH_STUB_ISSUE_SINCE="$stubdir/issue.txt"
+    cat > "$GH_STUB_ISSUE_SINCE" <<'NOTICE'
+Codex Review: Didn't find any major issues.
+**Reviewed commit:** `a4c1c1977e`
+NOTICE
+    When run sh "$script" --repo o/r --pr 1 --handle chatgpt-codex-connector --until finished --since x --head deadbeef1234567890 --interval 0 --max-iter 3
+    The output should not include 'FINISHED'
+  End
+
   It 'prints QUOTA 6 as the final CLI verdict for the PR 2809 wording'
     export GH_STUB_ISSUE_SINCE="$stubdir/issue.txt"
     cat > "$GH_STUB_ISSUE_SINCE" <<'NOTICE'
