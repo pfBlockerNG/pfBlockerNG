@@ -111,7 +111,7 @@ the explicit ask above, so the fix is almost always "ask later, once".
 
 Codex code review (ChatGPT Codex Connector, login `chatgpt-codex-connector`) is a
 second on-request review bot. It reads the shared rules through the `AGENTS.md`
-"Code Review Rules" pointer and posts only P0/P1 findings.
+"Code Review Rules" pointer and tags each finding P0–P2 (docs claim P0/P1 only; #3429 drew a P2).
 
 - **Available** only once this repository shows a Codex review or reaction, or the
   owner confirms it in conversation. Otherwise skip it and say so in the audit comment.
