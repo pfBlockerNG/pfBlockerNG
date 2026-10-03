@@ -80,7 +80,8 @@ def _wire(
     """Wire ONE IP list (alias ``pfB_<header>_v4``) + the full rule-shaping settings, then update.
 
     Every setting the scenario depends on is written explicitly, so no case inherits a
-    sibling's interface/float/toggle state.
+    sibling's interface/float/toggle state. The package's own filter reload is detached, so
+    every rule-changing update here is followed by a blocking ``apply_filter_sync``.
     """
     feed = h.write_local_feed(vm, f"{header}.txt", "".join(f"{ip}/32\n" for ip in victims))
     case = h.IpCase(aliasname=header, feed_url=feed, action=action, family="v4", header=header)
@@ -96,6 +97,7 @@ def _wire(
         },
     )
     h.reload(vm, "update")
+    h.apply_filter_sync(vm)
     return case
 
 
@@ -292,6 +294,7 @@ def test_fw_self_outbound_blocks_the_firewalls_own_connection(deployed_vm: Smoke
     try:
         _set_ipcfg(vm, {"fw_self_outbound": "on"})
         h.reload(vm, "update")
+        h.apply_filter_sync(vm)
 
         counter_before = _rule_packets(vm, case.alias, "out")
         assert counter_before >= 0, f"no out twin for {case.alias} is loaded with the toggle ON"
@@ -306,3 +309,4 @@ def test_fw_self_outbound_blocks_the_firewalls_own_connection(deployed_vm: Smoke
         # The twin cuts the firewall off from the runner host (feeds, stub DNS): never leave it on.
         _set_ipcfg(vm, {"fw_self_outbound": ""})
         h.reload(vm, "update")
+        h.apply_filter_sync(vm)
