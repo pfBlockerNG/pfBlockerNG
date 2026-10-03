@@ -9888,7 +9888,7 @@ function pfb_dnsbl_abp_extract_ip($line) {
 }
 
 // issue #3434: '/^A\.B\.C\.D$/' regex rule with one pattern per octet -> the exact merged CIDRs it matches, else [].
-// Parts use only digits, ?*+{},()[]|- and \d, so the four 0..255 value sets compose exactly; max /16, 256 CIDRs.
+// Parts use only digits, ?*+{},()|-, \d and digit-only [] classes, so the four 0..255 value sets compose exactly; max /16, 256 CIDRs.
 function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 	if (strlen($line) > 514 || !str_starts_with($line, '/') || !str_ends_with($line, '$/')) {
 		return [];
@@ -9905,8 +9905,8 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 		if ($anchored) {
 			$inner = substr($inner, 1);
 		}
-		// An optional '(<letters>://)?' can only match empty against a dotted quad.
-		if (preg_match('/^\((?:[A-Za-z.*?+]|\([A-Za-z?|]*\))*:\/\/\)\?/', $inner, $m)) {
+		// An optional '(.*://)?' or '((w|w?)://)?' can only match empty against a dotted quad.
+		if (preg_match('~^\((?:\.\*|\([A-Za-z]+\??(?:\|[A-Za-z]+\??)*\))://\)\?~', $inner, $m)) {
 			$inner = substr($inner, strlen($m[0]));
 		}
 		foreach (['(/.*)?', '(\/.*)?', '([:/].*)?'] as $path) {
@@ -9919,13 +9919,11 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 		$parts = [];
 		$cur = '';
 		$depth = 0;
-		$class = FALSE;
-		$classAt = 0;
 		for ($i = 0, $n = strlen($inner); $i < $n; $i++) {
 			$c = $inner[$i];
 			if ($c === '\\') {
 				$token = substr($inner, $i++, 2);
-				if ($token === '\.' && $depth === 0 && !$class) {
+				if ($token === '\.' && $depth === 0) {
 					$parts[] = $cur;
 					$cur = '';
 				} else {
@@ -9933,12 +9931,7 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 				}
 				continue;
 			}
-			if ($class) {
-				$class = !($c === ']' && $i > $classAt + 1);
-			} elseif ($c === '[') {
-				$class = TRUE;
-				$classAt = $i;
-			} elseif ($c === '(') {
+			if ($c === '(') {
 				$depth++;
 			} elseif ($c === ')') {
 				if (--$depth < 0) {
@@ -9950,7 +9943,7 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 			$cur .= $c;
 		}
 		$parts[] = $cur;
-		if ($class || $depth !== 0 || count($parts) !== 4) {
+		if ($depth !== 0 || count($parts) !== 4) {
 			return [];
 		}
 		// Without '^' the first octet must be a literal 100-255: no longer octet can end in it.
@@ -9958,7 +9951,7 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 			return [];
 		}
 		foreach ($parts as $part) {
-			if (!preg_match('/^(?:[\d?*+{},()\[\]|-]|\\\\d)+$/D', $part) || str_contains($part, '(?') || str_contains($part, '{,}')) {
+			if (!preg_match('/^(?:[\d?*+{},()|-]|\\\\d|\[(?:\d-\d|\\\\d|\d)+\])+$/D', $part) || str_contains($part, '(?') || str_contains($part, '{,}')) {
 				return [];
 			}
 			// Brace bounds stay within an octet's 3 digits.
@@ -10033,7 +10026,9 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 		return [];
 	} finally {
 		restore_error_handler();
-		ini_set('pcre.backtrack_limit', (string) $limit);
+		if (is_string($limit)) {
+			ini_set('pcre.backtrack_limit', $limit);
+		}
 	}
 }
 
