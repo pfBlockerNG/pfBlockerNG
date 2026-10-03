@@ -287,6 +287,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 			'(??://) scheme group'          => ['/^(??://)?5\.8\.44\.\d+$/', []],
 			'((?x)://) scheme group'        => ['/^((?x)://)?5\.8\.44\.\d+$/', []],
 			'(123://) scheme group'         => ['/^(123://)?5\.8\.44\.\d+$/', []],
+			'digit in a nested scheme word' => ['/^((http2|tcp)://)?5\.8\.44\.\d+$/', []],
 			'possessive class holding ('    => ['/^5\.8\.4[(-9]++\.\d+$/', []],
 			'class holding , and a bound'   => ['/^5\.8\.4[,-9]{1,2}+\.\d+$/', []],
 			'class range from -'            => ['/^5\.8\.4[--9]\.\d+$/', []],
@@ -561,11 +562,18 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 		$this->assertSame([], $this->logLines());
 	}
 
-	public function testForcedInternalFailureIsContainedLoggedOnceAndRestoresState(): void
+	/** @return array<string, array{\Throwable}> an Exception and an Error, since the catch must hold both */
+	public static function faultProvider(): array
+	{
+		return ['RuntimeException' => [new RuntimeException('x')], 'Error' => [new Error('x')]];
+	}
+
+	#[DataProvider('faultProvider')]
+	public function testForcedInternalFailureIsContainedLoggedOnceAndRestoresState(\Throwable $fault): void
 	{
 		$rule = '/^5\.8\.44\.\d{1,3}$/';
 		$this->assertSame(['5.8.44.0/24'], $this->helper($rule), 'control: without the fault the rule collects');
-		$GLOBALS['pfb_test_abp_regex_fault'] = new RuntimeException('x');
+		$GLOBALS['pfb_test_abp_regex_fault'] = $fault;
 		$this->assertSame([], $this->callAndAssertStateRestored($rule));
 		$lines = $this->logLines();
 		$this->assertCount(1, $lines);
