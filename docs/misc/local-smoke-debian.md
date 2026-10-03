@@ -294,7 +294,7 @@ command line at all (see `pfSsh.php` gotcha below).
   config name or literal `53`.
 - **Wait on signals, not timing.** After config change, force deterministic apply
   (e.g. blocking `/etc/rc.filter_configure_sync`) and read once, rather than polling for
-  async effect against fixed timeout (async `filter_configure()` apply can lag).
+  effect against fixed timeout (`reload()` launches the script detached, so apply can lag).
 - **Free ports between runs.** `pkill -9 -f qemu-system-x86_64` releases host
   forwards (pfSense ssh 2222 / web 8080, civm ssh 2223) and LAN crossover socket.
 - Published CE image reports `2.8.1-RELEASE` even though its tag is `2.8`.

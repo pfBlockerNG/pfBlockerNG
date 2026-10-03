@@ -5213,8 +5213,8 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval
     """Poll until the predicate event is observed; expiry is salvage only.
 
     ``reload()`` launches ``/etc/rc.filter_configure_sync`` detached, so a ``pfctl`` read
-    right after it can still see the previous ruleset. A truthy predicate observation is the verdict;
-    expiry raises ``stuck/environment`` and is never a false observation.
+    right after it can still see the previous ruleset. A truthy predicate observation is the
+    verdict; expiry raises ``stuck/environment`` and is never a false observation.
     """
     deadline = time.monotonic() + timeout
     while True:
