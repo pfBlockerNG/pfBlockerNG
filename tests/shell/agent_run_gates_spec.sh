@@ -560,7 +560,7 @@ CHECK
   End
 
   It 'fails (never skips) a gate that outlives its deadline, naming it, and still runs the later gates'
-    printf '#!/bin/sh\nprintf "graph check started\\n"\nsleep 300\n' > "$graph_check"
+    printf '#!/bin/sh\nprintf "graph check started\\n"\ntrap "" TERM\nsh -c '"'"'trap "" TERM; while :; do sleep 1; done'"'"' &\nwait\n' > "$graph_check"
     When run sh "$script" --worktree "$repo" --diff "$base_sha" --gate-timeout 1 --allow-missing
     The stderr should include 'GATE RUN:'
     The status should equal 1
@@ -572,6 +572,39 @@ CHECK
     Assert [ -e "$marker" ]
   End
 
+
+  interrupt_runner() {
+    signal_lock="$stubdir/signal-lock"
+    signal_scratch="$stubdir/signal-scratch"
+    signal_ready="$stubdir/signal-ready"
+    cat > "$graph_check" <<CHECK
+#!/bin/sh
+trap 'rm -f "$signal_lock" "$signal_scratch"' EXIT
+trap 'exit 1' HUP INT TERM
+touch "$signal_lock" "$signal_scratch" "$signal_ready"
+sleep 300
+CHECK
+    sh "$script" --worktree "$repo" --diff "$base_sha" >/dev/null 2>&1 &
+    runner_pid=$!
+    tries=0
+    while [ ! -e "$signal_ready" ]; do
+      tries=$((tries + 1))
+      [ "$tries" -lt 100 ] || { kill -KILL "$runner_pid"; wait "$runner_pid"; return 1; }
+      sleep 0.01
+    done
+    kill -TERM "$runner_pid"
+    wait "$runner_pid"
+    runner_status=$?
+    printf 'status=%s lock=%s scratch=%s\n' "$runner_status" \
+      "$([ -e "$signal_lock" ] && echo present || echo gone)" \
+      "$([ -e "$signal_scratch" ] && echo present || echo gone)"
+  }
+
+  It 'reaps the active gate before an interrupted runner exits'
+    When call interrupt_runner
+    The status should equal 0
+    The output should equal 'status=143 lock=gone scratch=gone'
+  End
   It 'rejects a gate deadline that is not a positive whole number of seconds'
     When run sh "$script" --worktree "$repo" --diff "$base_sha" --gate-timeout 0
     The status should equal 2
