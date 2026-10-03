@@ -9887,9 +9887,9 @@ function pfb_dnsbl_abp_extract_ip($line) {
 	return '';
 }
 
-// issue #3434: '/^A\.B\.C\.<tail>$/' whose pattern matches all 256 of A.B.C.0..A.B.C.255 -> 'A.B.C.0/24', else ''.
-// The tail whitelist keeps out recursion, inline flags, POSIX/\p classes and backreferences, so the one
-// preg_grep() over the 256 addresses is the whole decision. No self-strip, like pfb_dnsbl_is_abp_rule_line().
+// issue #3434: '/^A\.B\.C\.<tail>$/' matching all 256 of A.B.C.0..255 -> 'A.B.C.0/24', else ''. No self-strip.
+// The tail whitelist keeps out recursion, inline flags, POSIX/\p classes, backreferences and '{,}' (PCRE accepts it,
+// Python re does not); one preg_grep() over the 256 addresses, capped at 10000 backtracking steps, then decides.
 function pfb_dnsbl_abp_regex_ip4_24(string $line): string {
 	if (strlen($line) > 514 ||
 	    !preg_match('/^\/\^(\d{1,3}\\\\\.\d{1,3}\\\\\.\d{1,3})\\\\\.((?:[\d.?*+{},()\[\]|-]|\\\\[d.])+)\$\/$/D', $line, $m) ||

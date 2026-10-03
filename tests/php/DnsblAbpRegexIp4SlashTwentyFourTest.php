@@ -119,6 +119,12 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		return '/^5\.8\.44\.' . $star . str_repeat('()', intdiv($bytes - $fixed, 2)) . '$/';
 	}
 
+	/** @return list<string> the 256 addresses 5.8.44.0..5.8.44.255 */
+	private static function hosts(): array
+	{
+		return array_map(static fn(int $n): string => "5.8.44.$n", range(0, 255));
+	}
+
 	/** Matches all of 5.8.44.0-255, but only after a failing branch of nested alternations backtracks far past 10000 steps. */
 	private static function backtrackHeavyRule(): string
 	{
@@ -196,6 +202,7 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		return $rows;
 	}
 
+	/** The helper's verdict per rule, with no PHP warning escaping (the parse-loop test catches every error level). */
 	#[DataProvider('ruleProvider')]
 	public function testHelperDecidesPerRule(string $line, string $expected): void
 	{
@@ -209,15 +216,14 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		$this->assertSame(512, strlen($at) - 2);
 		$this->assertSame(513, strlen($over) - 2);
 		// The refused rule is a valid, qualifying pattern: only its length disqualifies it.
-		$this->assertSame(256, count(preg_grep('~' . substr($over, 1, -1) . '~', array_map(static fn(int $n): string => "5.8.44.$n", range(0, 255)))));
+		$this->assertSame(256, count(preg_grep('~' . substr($over, 1, -1) . '~', self::hosts())));
 	}
 
 	public function testBacktrackHeavyRuleIsRefusedOnlyForItsCost(): void
 	{
 		$rule = self::backtrackHeavyRule();
 		$this->assertLessThanOrEqual(512, strlen($rule) - 2);
-		$hosts = array_map(static fn(int $n): string => "5.8.44.$n", range(0, 255));
-		$this->assertCount(256, preg_grep('~' . substr($rule, 1, -1) . '~', $hosts), 'under the default limit it matches every address');
+		$this->assertCount(256, preg_grep('~' . substr($rule, 1, -1) . '~', self::hosts()), 'under the default limit it matches every address');
 		$this->assertSame(PREG_NO_ERROR, preg_last_error());
 	}
 
