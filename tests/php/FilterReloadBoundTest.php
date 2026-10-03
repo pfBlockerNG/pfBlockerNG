@@ -9,7 +9,8 @@ use PHPUnit\Framework\TestCase;
  * superseding the issue #2878 bound): pfb_filter_reload_exec() fires
  * /etc/rc.filter_configure_sync as a fire-and-forget background child. No wait,
  * no timeout kill: pfSense's reload is uncontrollable. The script itself loads
- * the ruleset synchronously under pfSense's filter lock; only the launch is detached.
+ * the ruleset synchronously under pfSense's filter lock; only the launch is
+ * detached.
  * The ONE failure pfBlockerNG owns is the launch itself -- a missing or
  * non-executable script gate returns -1 and names itself in both logs. The
  * command is built inline (shape not observable), so these rows pin BEHAVIOR

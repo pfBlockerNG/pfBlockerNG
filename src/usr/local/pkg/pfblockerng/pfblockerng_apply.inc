@@ -796,13 +796,11 @@ function pfb_dnsbl_script_reuse_decision(bool $verbatim_reuse_ok, $script_pre, $
 }
 
 /*
- * Detached fire-and-forget firewall-configuration reload (issue #2878 bound
- * superseded by owner directive 2026-09-05). pfSense's reload is not ours to
- * bound or kill; the script loads the ruleset synchronously under pfSense's
- * filter lock, but the launch is detached, so the pass neither waits on it nor
- * judges its outcome:
- * output stays discarded so the backgrounded child holds no capture pipe, and
- * the only owned failure is the launch itself.
+ * Detached fire-and-forget firewall-configuration reload (owner directive
+ * 2026-09-05). pfSense's reload is not ours to bound or kill; the script loads
+ * the ruleset synchronously under pfSense's filter lock, but the launch is
+ * detached, so the rules can land after the pass returns. Output is discarded so
+ * the child holds no capture pipe; the only owned failure is the launch itself.
  */
 function pfb_filter_reload_exec(): int {
 	global $pfb;
@@ -5109,7 +5107,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 		// Only a LAUNCH failure leaves the firewall state unknown (pending + flagged so
 		// the closing clear cannot wipe it): a detached reload's outcome is pfSense's
-		// own -- it loads the ruleset under pfSense's filter lock and logs its own results.
+		// own -- it loads the ruleset under pfSense's filter lock and logs its
+		// own results.
 		$reload_status = pfb_filter_reload_exec();
 		if ($reload_status !== 0) {
 			pfb_mark_pending_changes();
