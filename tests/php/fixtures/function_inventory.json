@@ -1715,6 +1715,26 @@
             }
         ]
     },
+    "pfb_dnsbl_abp_regex_ip4_cidrs": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_alias_count_norm_skip": {
         "returnsRef": false,
         "returnType": "int",

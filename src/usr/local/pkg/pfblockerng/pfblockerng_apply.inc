@@ -2523,6 +2523,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 													}
 													continue;
 												}
+												// issue #3434: an IPv4-shaped regex rule also feeds its CIDRs to the IP table; the line still goes to Python.
+												foreach (pfb_dnsbl_abp_regex_ip4_cidrs($line, $header) as $abp_cidr) {
+													if (pfb_dnsbl_collect_feed_ip(explode('/', $abp_cidr, 2)[0], $abp_cidr, $custom, $domain_data_ip, $domain_data_ip6)) {
+														$pfb['updateip'] = TRUE;
+														$ipcount++;
+													}
+												}
 											}
 
 											// ADR-62 Decision 2: any self-identifying ABP shape (||/@@
