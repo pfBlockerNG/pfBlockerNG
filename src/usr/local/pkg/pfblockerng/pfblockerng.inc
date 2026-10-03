@@ -3847,8 +3847,8 @@ function pfb_dnsbl_service() {
 		exit
 	fi
 
-	# Ensure all processes are stopped
-	rc_stop
+	# Ensure all processes are stopped; never launch over a survivor (#3423)
+	rc_stop || return 1
 
 	# Start DNSBL Lighttpd webserver (Python mode)
 	if [ -e '/var/unbound/pfb_dnsbl_lighty.conf' ]; then
@@ -3868,12 +3868,22 @@ function pfb_dnsbl_service() {
 EOF;
 	$rc['stop']	= <<<EOF
 
-	# Terminate DNSBL Lighttpd webserver, if found
+	# Terminate DNSBL Lighttpd webserver, if found, and wait for its exit (#3423):
+	# TERM at 0 s, KILL at 5 s, give up at 7 s. Exact-name match: a look-alike must not stall it.
 	/usr/bin/logger -p daemon.info -t lighttpd_pfb "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver stopped"
-	pidnum="\$(/bin/pgrep lighttpd_pfb)"
-	if [ ! -z "\${pidnum}" ]; then
-		/usr/bin/killall lighttpd_pfb
-	fi
+	tick=0
+	while /bin/pgrep -x lighttpd_pfb >/dev/null 2>&1; do
+		case "\${tick}" in
+			0) /usr/bin/killall lighttpd_pfb ;;
+			5)
+				/usr/bin/logger -p daemon.warning -t lighttpd_pfb "WARNING [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver ignored TERM for 5 s, sending KILL"
+				/usr/bin/killall -KILL lighttpd_pfb
+				;;
+			7) return 1 ;;
+		esac
+		/bin/sleep 1
+		tick="\$((tick + 1))"
+	done
 
 EOF;
 	write_rcfile($rc);
