@@ -130,6 +130,12 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		return '/^5\.8\.44\.' . $star . str_repeat('()', intdiv($bytes - $fixed, 2)) . '$/';
 	}
 
+	/** Matches all of 5.8.44.0-255, but only after a failing branch of nested alternations backtracks far past 10000 steps. */
+	private static function backtrackHeavyRule(): string
+	{
+		return '/^5\.8\.44\.(' . str_repeat('(\d|\d)*', 15) . '-|\d{1,3})$/';
+	}
+
 	/**
 	 * Every shape the helper decides on: [rule line, expected 'A.B.C.0/24' or ''].
 	 *
@@ -184,6 +190,13 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 			'512-byte inner qualifies'     => [self::paddedRule(512), '5.8.44.0/24'],
 			'513-byte inner is refused'    => [self::paddedRule(513, '.*+'), ''],
 			'100 KB inner'                 => ['/^5\.8\.44\.' . str_repeat('()', 51200) . '\d+$/', ''],
+			'empty group tail ()'          => ['/^5\.8\.44\.()$/', ''],
+			'zero-repeat tail \d{0}'       => ['/^5\.8\.44\.\d{0}$/', ''],
+			'empty alternative (|\d+)'     => ['/^5\.8\.44\.(|\d+)$/', '5.8.44.0/24'],
+			'{,} after |'                  => ['/^1\.2\.3\.\d+|{,}$/', ''],
+			'{,} after ? then |'           => ['/^1\.2\.3\.\d?{,}|\d+$/', ''],
+			'{,} inside a group'           => ['/^1\.2\.3\.(\d+|{,})$/', ''],
+			'backtrack-heavy tail'         => [self::backtrackHeavyRule(), ''],
 		];
 		return $rows;
 	}
@@ -206,6 +219,15 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24($over));
 		// The refused rule is a valid, qualifying pattern: only its length disqualifies it.
 		$this->assertSame(256, count(preg_grep('~' . substr($over, 1, -1) . '~', array_map(static fn(int $n): string => "5.8.44.$n", range(0, 255)))));
+	}
+
+	public function testBacktrackHeavyRuleIsRefusedOnlyForItsCost(): void
+	{
+		$rule = self::backtrackHeavyRule();
+		$this->assertLessThanOrEqual(512, strlen($rule) - 2);
+		$hosts = array_map(static fn(int $n): string => "5.8.44.$n", range(0, 255));
+		$this->assertCount(256, preg_grep('~' . substr($rule, 1, -1) . '~', $hosts), 'under the default limit it matches every address');
+		$this->assertSame(PREG_NO_ERROR, preg_last_error());
 	}
 
 	public function testHelperDoesNotSelfStripAnEndOfLine(): void

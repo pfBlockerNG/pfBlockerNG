@@ -9897,7 +9897,7 @@ function pfb_dnsbl_abp_regex_ip4_24(string $line): string {
 	$inner = substr($line, 1, -1);
 	if (strlen($inner) > 512 ||
 	    !preg_match('/^\^(\d{1,3})\\\\\.(\d{1,3})\\\\\.(\d{1,3})\\\\\.((?:[\d.?*+{},()\[\]|-]|\\\\[d.])+)\$$/D', $inner, $m) ||
-	    str_contains($m[4], '(?')) {
+	    str_contains($m[4], '(?') || str_contains($m[4], '{,}')) {
 		return '';
 	}
 	foreach (array_slice($m, 1, 3) as $octet) {
@@ -9910,11 +9910,18 @@ function pfb_dnsbl_abp_regex_ip4_24(string $line): string {
 	for ($i = 0; $i < 256; $i++) {
 		$hosts[] = $prefix . $i;
 	}
-	// A feed-supplied pattern may not compile; keep that warning from reaching any installed handler.
+	// A feed-supplied pattern may not compile (keep the warning from any installed handler), and 10000
+	// backtracking steps cap what one line can cost.
+	$limit = ini_set('pcre.backtrack_limit', '10000');
 	set_error_handler(static fn(): bool => TRUE);
-	$hits = preg_grep('~' . $inner . '~', $hosts);
-	restore_error_handler();
-	return (is_array($hits) && count($hits) === 256 && preg_last_error() === PREG_NO_ERROR) ? $prefix . '0/24' : '';
+	try {
+		$hits = preg_grep('~' . $inner . '~', $hosts);
+		$ok = is_array($hits) && count($hits) === 256 && preg_last_error() === PREG_NO_ERROR;
+	} finally {
+		restore_error_handler();
+		ini_set('pcre.backtrack_limit', (string) $limit);
+	}
+	return $ok ? $prefix . '0/24' : '';
 }
 
 
