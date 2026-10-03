@@ -329,9 +329,10 @@ Describe 'run-gates.sh Composer vendor guard'
     } > "$repo/vendor/bin/phpunit"
     chmod +x "$stubdir/python3" "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
-    # The minimal-PATH contract uses only POSIX utilities. The report directory
-    # adds mkdir; rm reaps it and the NUL-separated path/status files.
-    for tool in cat dirname grep mkdir rm sh sort tr; do
+    # The minimal-PATH contract uses only POSIX utilities plus the runner's
+    # required timeout(1). The report directory adds mkdir; rm reaps it and the
+    # NUL-separated path/status files.
+    for tool in cat dirname grep mkdir rm sh sort timeout tr; do
       ln -s "$(command -v "$tool")" "$stubdir/$tool"
     done
     PATH="$stubdir:$PATH"
@@ -343,6 +344,7 @@ Describe 'run-gates.sh Composer vendor guard'
 
   It 'stops before PHP analysis when the Composer vendor checker fails'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 2 of output should equal 'GATE PASS: sh scripts/agent/check-graph-fresh.sh'
@@ -365,6 +367,7 @@ Describe 'run-gates.sh Composer vendor guard'
     printf '#!/bin/sh\nprintf "checker diagnostic OVERALL=0\\n"\nexit 1\n' > "$stubdir/uv"
     chmod +x "$stubdir/uv"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The output should include 'checker diagnostic OVERALL=0'
     The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py'
@@ -377,6 +380,7 @@ Describe 'run-gates.sh Composer vendor guard'
     # Composer-backed gate downstream of it is unsafe against an unverified vendor tree.
     rm -f "$stubdir/uv"
     When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha' --allow-missing"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py (TOOL-MISSING: uv)'
     The output should not include 'GATE SKIP: uv run --locked python scripts/check_composer_vendor.py'
@@ -396,7 +400,7 @@ Describe 'run-gates.sh Composer vendor guard'
     The status should equal 0
     The output should not include 'checker stdout'
     The output should not include 'checker stderr'
-    The stderr should equal ''
+    The stderr should not include 'checker stderr'
     The output should include 'GATE PASS: uv run --locked python scripts/check_composer_vendor.py'
     The output should include 'GATE PASS: php -l src/a.php'
     The output should include 'GATE PASS: vendor/bin/phpunit'
@@ -419,6 +423,7 @@ Describe 'run-gates.sh Composer vendor guard'
     chmod +x "$stubdir/composer" "$stubdir/uv"
     unset COMPOSER_ALLOW_SUPERUSER
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: composer phpstan'
     The output should include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
@@ -488,6 +493,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
 
   It 'executes EVERY planned gate including the last one, and passes'
     When run sh -c "TMPDIR='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     # issue #3139: the graph-freshness gate is always-on and follows pairing directly.
@@ -521,7 +527,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The line 3 of output should equal 'GATE FAIL: sh scripts/agent/check-graph-fresh.sh'
     The output should include 'GATE PASS: shellspec'
     The output should include 'GATES: FAIL'
-    The stderr should equal ''
+    The stderr should include 'GATE RUN: sh scripts/agent/check-graph-fresh.sh'
     Assert [ -e "$marker" ]
   End
 
@@ -535,16 +541,49 @@ printf '%s\n' "resolve-graphify.sh: Graphify is not installed; $install_hint" >&
 exit 4
 CHECK
     When run sh "$script" --worktree "$repo" --diff "$base_sha" --allow-missing
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The line 2 of output should equal "resolve-graphify.sh: Graphify is not installed; $install_hint"
     The output should not include 'GATE SKIP: sh scripts/agent/check-graph-fresh.sh'
     The output should include 'GATES: FAIL'
   End
 
+  # issue #3421: the verdict prints only at the end, so a stuck gate must not look like
+  # a silent runner -- each gate is named on stderr as it starts.
+  It 'names each gate on stderr as it starts, in plan order'
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The line 1 of stderr should equal 'GATE RUN: python3 scripts/check_coverage_pairing.py --name-status-z'
+    The line 2 of stderr should equal 'GATE RUN: sh scripts/agent/check-graph-fresh.sh'
+    The stderr should include 'GATE RUN: shellspec --shell $(command -v dash || command -v sh)'
+    The output should include 'GATES: PASS'
+  End
+
+  It 'fails (never skips) a gate that outlives its deadline, naming it, and still runs the later gates'
+    printf '#!/bin/sh\nprintf "graph check started\\n"\nsleep 300\n' > "$graph_check"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha" --gate-timeout 1 --allow-missing
+    The stderr should include 'GATE RUN:'
+    The status should equal 1
+    The line 2 of output should equal 'graph check started'
+    The line 3 of output should equal 'GATE FAIL: sh scripts/agent/check-graph-fresh.sh (TIMEOUT: 1s)'
+    The output should not include 'GATE SKIP'
+    The output should include 'GATE PASS: shellspec'
+    The output should include 'GATES: FAIL'
+    Assert [ -e "$marker" ]
+  End
+
+  It 'rejects a gate deadline that is not a positive whole number of seconds'
+    When run sh "$script" --worktree "$repo" --diff "$base_sha" --gate-timeout 0
+    The status should equal 2
+    The stderr should include 'usage:'
+    The output should equal ''
+  End
+
   It 'preserves a selected suite failure and cleans its report directory'
     printf '#!/bin/sh\nexit 37\n' > "$stubdir/shellspec"
     chmod +x "$stubdir/shellspec"
     When run sh -c "TMPDIR='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The output should include 'GATE FAIL: shellspec --shell $(command -v dash || command -v sh)'
     The output should include 'GATES: FAIL'
@@ -561,6 +600,7 @@ CHECK
     } > "$stubdir/python3"
     chmod +x "$stubdir/python3"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The output should include 'red canary failed: an unlisted skip did not fail the gate'
     The output should include 'GATE FAIL: shellspec --shell $(command -v dash || command -v sh)'
@@ -570,6 +610,7 @@ CHECK
   It 'feeds exact NUL status records to the first checker gate'
     expected=$(printf 'D\nscripts/gone.sh\nA\nscripts/kept.sh\nA\ntests/coverage-pairing.fixture')
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The contents of file "$pairing_lines" should equal "$expected"
@@ -583,6 +624,7 @@ CHECK
     touch "$require_pair"
     expected=$(printf 'M\nscripts/kept.sh')
     When run sh "$script" --worktree "$repo" --diff "$unpaired_base"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The line 1 of output should equal 'GATE FAIL: python3 scripts/check_coverage_pairing.py --name-status-z'
     The output should include 'GATES: FAIL'
@@ -593,6 +635,7 @@ CHECK
     printf '#!/bin/sh\nexit 1\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The output should include 'GATE FAIL: shellcheck scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
@@ -606,6 +649,7 @@ CHECK
     printf '#!/bin/sh\nprintf "shellcheck stdout diagnostic\\n"\nexit 1\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
@@ -625,13 +669,14 @@ CHECK
     The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
     The line 5 of output should equal 'shellcheck stderr diagnostic'
     The line 6 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
-    The stderr should equal ''
+    The stderr should include 'GATE RUN: shellcheck scripts/kept.sh'
   End
 
   It 'preserves every line, in order, for a multi-line failing gate'
     printf '#!/bin/sh\nprintf "line one\\nline two\\nline three\\n"\nexit 1\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
@@ -647,7 +692,7 @@ CHECK
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 0
     The output should not include 'should not appear'
-    The stderr should equal ''
+    The stderr should not include 'should not appear'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
     The line 7 of output should equal 'GATES: PASS'
   End
@@ -656,6 +701,7 @@ CHECK
     printf '#!/bin/sh\nprintf "diagnostic OVERALL=0\\n"\nexit 1\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The output should include 'diagnostic OVERALL=0'
     The output should include 'GATE FAIL: shellcheck scripts/kept.sh'
@@ -669,6 +715,7 @@ CHECK
     printf '#!/bin/sh\nprintf "before\\nOVERALL=0\\nafter\\n"\nexit 1\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
@@ -685,6 +732,7 @@ CHECK
     printf '#!/bin/sh\nexit 1\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
@@ -693,6 +741,7 @@ CHECK
 
   It 'ignores deleted files instead of failing on their ghosts'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should not include 'gone.sh'
     The output should include 'GATES: PASS'
@@ -707,6 +756,7 @@ CHECK
       sh "$script" --worktree "$repo" --diff "$base_sha"
     }
     When call stdin_eating_gate
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
@@ -720,6 +770,7 @@ CHECK
     head_sha=$(gitc rev-parse HEAD)
     printf '#!/bin/sh\n# unstaged edit, never committed\ntrue\n' > "$repo/scripts/kept.sh"
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
@@ -732,6 +783,7 @@ CHECK
     printf '#!/bin/sh\n# staged edit, never committed\ntrue\n' > "$repo/scripts/kept.sh"
     gitc add scripts/kept.sh
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
@@ -742,6 +794,7 @@ CHECK
   It 'lists a file touched by both a commit and a further uncommitted edit exactly once'
     printf '#!/bin/sh\n# further uncommitted edit atop the committed one\ntrue\n' > "$repo/scripts/kept.sh"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
@@ -759,6 +812,7 @@ CHECK
     # index keeps the staged edit, working tree goes back to HEAD's exact bytes.
     printf '#!/bin/sh\ntrue\n' > "$repo/scripts/kept.sh"
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
@@ -772,6 +826,7 @@ CHECK
     head_sha=$(gitc rev-parse HEAD)
     printf '#!/bin/sh\n# never staged, never committed\ntrue\n' > "$repo/scripts/brand_new.sh"
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
@@ -788,6 +843,7 @@ CHECK
     printf '#!/bin/sh\n# would gate if not excluded\ntrue\n' > "$repo/scripts/ignored.sh"
     printf '#!/bin/sh\n# real untracked file alongside the ignored one\ntrue\n' > "$repo/scripts/brand_new.sh"
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The stderr should include 'GATE RUN:'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
@@ -811,6 +867,7 @@ Describe 'run-gates.sh run_gate() TOOL-MISSING path for a GENERIC gate'
     allow_missing=0
     overall=0
     When call run_gate 'nonexistent_tool_xyz123 --version'
+    The stderr should equal 'GATE RUN: nonexistent_tool_xyz123 --version'
     The status should equal 0
     The output should equal 'GATE SKIP: nonexistent_tool_xyz123 --version (TOOL-MISSING: nonexistent_tool_xyz123)'
     The variable overall should equal 1
@@ -821,6 +878,7 @@ Describe 'run-gates.sh run_gate() TOOL-MISSING path for a GENERIC gate'
     allow_missing=1
     overall=0
     When call run_gate 'nonexistent_tool_xyz123 --version'
+    The stderr should equal 'GATE RUN: nonexistent_tool_xyz123 --version'
     The status should equal 0
     The output should equal 'GATE SKIP: nonexistent_tool_xyz123 --version (TOOL-MISSING: nonexistent_tool_xyz123)'
     The variable overall should equal 0

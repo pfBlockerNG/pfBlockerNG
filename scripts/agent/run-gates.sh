@@ -10,7 +10,7 @@
 # skipped gate reads greener than a failed one; --allow-missing downgrades that
 # deliberately for an incomplete workstation.
 #
-# Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]
+# Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing] [--gate-timeout SECONDS]
 #   --worktree       repo checkout to run in (default: cwd's repo root)
 #   --diff BASE      compute touched files: BASE...HEAD merge-base diff UNIONED with
 #                     any uncommitted (staged+unstaged+untracked, .gitignore-filtered)
@@ -19,6 +19,7 @@
 #   --allow-missing  a missing tool reports SKIP without failing the run (default: fails).
 #                    The Composer vendor checker is exempt: a missing interpreter there
 #                    FAILS regardless, so the PHP gates can never silently skip.
+#   --gate-timeout   hard deadline per gate in seconds (default: 1800).
 #
 # Exits 2 without running anything when a changed path holds a literal newline: such a
 # path cannot be carried by a line-based file list, and gating a torn fragment would lint
@@ -37,7 +38,7 @@
 # property of the whole tree, not of a touched file type. Its tool is `sh`, so a missing
 # Graphify surfaces as the checker's own FAIL, never as a SKIP.
 
-worktree='' base='origin/devel' plan=0 allow_missing=0
+worktree='' base='origin/devel' plan=0 allow_missing=0 gate_timeout=1800
 overall=0
 
 # Composer refuses to load plugins as root/superuser and aborts before the gate can
@@ -46,7 +47,7 @@ COMPOSER_ALLOW_SUPERUSER=1
 export COMPOSER_ALLOW_SUPERUSER
 
 usage() {
-	echo "usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]" >&2
+	echo "usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing] [--gate-timeout SECONDS]" >&2
 	exit 2
 }
 
@@ -173,6 +174,7 @@ gate_command() {
 run_gate() {
 	# $1 = command line
 	label=$1
+	printf 'GATE RUN: %s\n' "$label" >&2
 	tool=${1%% *}
 	if ! (cd "$worktree" && { command -v "$tool" >/dev/null 2>&1 || [ -x "$tool" ]; }); then
 		if is_vendor_gate "$1"; then
@@ -194,14 +196,18 @@ run_gate() {
 	# issue #1865: capture combined stdout+stderr so a failing gate's own output
 	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed.
 	gate_exec=$(gate_command "$1")
-	gate_output=$(cd "$worktree" && sh -c "$gate_exec" < "$gate_input" 2>&1)
+	gate_output=$(cd "$worktree" && timeout -k 10 "$gate_timeout" sh -c "$gate_exec" < "$gate_input" 2>&1)
 	gate_status=$?
 	if [ "$gate_status" -eq 0 ]; then
 		printf 'GATE PASS: %s\n' "$label"
 		return 0
 	fi
 	[ -z "$gate_output" ] || printf '%s\n' "$gate_output"
-	printf 'GATE FAIL: %s\n' "$label"
+	if [ "$gate_status" -eq 124 ]; then
+		printf 'GATE FAIL: %s (TIMEOUT: %ss)\n' "$label" "$gate_timeout"
+	else
+		printf 'GATE FAIL: %s\n' "$label"
+	fi
 	overall=1
 	is_vendor_gate "$1" && return 1
 	return 0
@@ -217,6 +223,12 @@ main() {
 			--diff) [ $# -ge 2 ] || usage; base=$2; shift 2 ;;
 			--plan) plan=1; shift ;;
 			--allow-missing) allow_missing=1; shift ;;
+			--gate-timeout)
+				[ $# -ge 2 ] || usage
+				case "$2" in '' | *[!0-9]* | 0) usage ;; esac
+				gate_timeout=$2
+				shift 2
+				;;
 			*) usage ;;
 		esac
 	done
@@ -286,6 +298,7 @@ $cmds"
 		printf '%s' "$all_cmds"
 		exit 0
 	fi
+	require_tool timeout
 
 	# Pipelines run in subshells under POSIX sh, so `overall` cannot propagate out of a
 	# `| while` loop -- run the loop in one subshell and carry the flag in its output.
