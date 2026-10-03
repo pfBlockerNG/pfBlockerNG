@@ -66,6 +66,7 @@ import re
 import shlex
 import time
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -296,6 +297,254 @@ def test_dnsbl_python_vip_over_ipv6_transport(deployed_vm: SmokeVM, client_vm: S
             h.reload(deployed_vm, "updatednsbl")
     finally:
         h.unpin_client_route6(client_vm, lan6)
+
+
+@pytest.mark.timeout(420)  # CaseContext enter + two full updates (each restarts lighttpd) + retried HTTP probes
+def test_dnsbl_ipv6_vip_block_page(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Issue #3407: a non-lo0 DNSBL AAAA block reaches the page directly on the IPv6 VIP.
+
+    Given DNSBL enabled on the LAN interface (non-lo0) with an IPv6 sinkhole VIP,
+      And a VIP-mode list blocking one unique AAAA name,
+    When civm resolves that name and fetches it over HTTP and HTTPS straight at the VIP6,
+    Then the AAAA answer is the VIP6 by value,
+      And pfBlockerNG emits NO managed IPv6 DNSBL NAT row (lighttpd already listens
+      directly on [VIP6]:80/443 -- pfblockerng.inc:9194-9211, unconditional on the
+      interface), only the two IPv4 rows unchanged,
+      And both HTTP and HTTPS reach the real block page,
+      And the IPv6 "packets that violated scope rules" counter does not move.
+
+    Before the fix, pfb_create_dnsbl() ALSO emitted a managed inet6 NAT row
+    redirecting VIP6:80/443 to ::1:{8081,8443}; FreeBSD rejects that rewritten LAN
+    packet as a loopback-scope violation before it ever reaches a listener, so the
+    client got neither a stable scope counter nor a block page.
+    """
+    vm = deployed_vm
+    lan6 = h.get_lan_ipv6(vm)
+    lan_if = h.config_get(vm, "interfaces/lan/if")
+    domain = h.unique_domain("vip6block3407")
+    feed_url = h.write_local_feed(vm, "smoke_dnsbl_vip6_block_3407.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokevip6block3407", feed_url=feed_url, header="smokevip6block3407")
+    scope_re = re.compile(r"^\s*(\d+) packets? that violated scope rules\s*$", re.MULTILINE)
+
+    def scope_violations() -> int:
+        result = vm.ssh("/usr/bin/netstat", "-s", "-p", "ip6", timeout=30.0)
+        match = scope_re.search(result.stdout)
+        assert match is not None, f"scope counter missing from netstat rc={result.returncode}:\n{result.stdout}"
+        return int(match.group(1))
+
+    def curl_page(scheme: str) -> dict[str, Any]:
+        port = 443 if scheme == "https" else 80
+        argv = (
+            "curl",
+            "-6",
+            "-g",
+            "--noproxy",
+            "*",
+            "-k",
+            "-sS",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "8",
+            "--resolve",
+            f"{domain}:{port}:[{h.DNSBL_VIP6}]",
+            f"{scheme}://{domain}/",
+        )
+        # lighttpd self-daemonizes after restart_service('pfb_dnsbl') forks it (issue
+        # #1013); poll instead of one unbounded curl -- same shape as
+        # ui/test_dnsbl_block_page.py and test_smoke_adr65.py's sinkhole probes. Data is
+        # returned, never asserted here: every observation lands before any assertion.
+        attempts, delay = 10, 1.5
+        result = None
+        for attempt in range(attempts):
+            result = client_vm.ssh(*argv, timeout=15.0)
+            if result.returncode == 0 and "Site blocked via DNSBL" in result.stdout:
+                break
+            if attempt < attempts - 1:
+                time.sleep(delay)
+        assert result is not None  # attempts >= 1, loop always assigns
+        return {
+            "rc": result.returncode,
+            "marker": "Site blocked via DNSBL" in result.stdout,
+            "stderr": result.stderr.strip(),
+        }
+
+    def managed_nat_rows() -> list[dict[str, str]]:
+        prefix = h._php_str("pfB DNSBL")
+        result = h.php_eval(
+            vm,
+            "$rows = array();\n"
+            "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+            "  if (strpos(($r['descr'] ?? ''), " + prefix + ") === 0) {\n"
+            "    $rows[] = array(\n"
+            "      'ipprotocol' => $r['ipprotocol'] ?? 'inet',\n"
+            "      'destination_address' => $r['destination']['address'] ?? '',\n"
+            "      'destination_port' => $r['destination']['port'] ?? '',\n"
+            "      'protocol' => $r['protocol'] ?? '',\n"
+            "      'target' => $r['target'] ?? '',\n"
+            "      'local_port' => $r['local-port'] ?? '',\n"
+            "      'interface' => $r['interface'] ?? '',\n"
+            "      'associated_rule_id' => $r['associated-rule-id'] ?? '',\n"
+            "      'natreflection' => $r['natreflection'] ?? '',\n"
+            "    );\n"
+            "  }\n"
+            "}\n"
+            "echo 'PFB3407_NAT=' . json_encode($rows);",
+            timeout=60.0,
+        )
+        match = re.search(r"PFB3407_NAT=(\[.*\])", result.stdout)
+        assert match is not None, (
+            f"managed NAT row dump failed: rc={result.returncode}\n{result.stdout}\n{result.stderr}"
+        )
+        return json.loads(match.group(1))
+
+    def move_vips(iface: str, uniqids: tuple[str, ...]) -> None:
+        """Move the live interface of the DNSBL VIPs named by ``uniqids`` (interfaces.inc dance)."""
+        ids_php = ", ".join(h._php_str(u) for u in uniqids)
+        result = h.php_eval(
+            vm,
+            f"""
+require_once('interfaces.inc');
+$vips = config_get_path('virtualip/vip', array());
+$hits = 0;
+foreach ($vips as &$vip) {{
+    if (in_array(($vip['uniqid'] ?? ''), array({ids_php}), TRUE)) {{
+        if (function_exists('interface_vip_bring_down')) {{
+            interface_vip_bring_down($vip);
+        }}
+        $vip['interface'] = {h._php_str(iface)};
+        if (function_exists('interface_vip_configure')) {{
+            interface_vip_configure($vip);
+        }}
+        $hits++;
+    }}
+}}
+unset($vip);
+config_set_path('virtualip/vip', $vips);
+write_config('pfBlockerNG smoke #3407: move DNSBL VIPs to {iface}');
+echo 'PFB3407_MOVE_HITS=' . $hits;
+""",
+            timeout=120.0,
+        )
+        assert result.returncode == 0 and "PFB3407_MOVE_HITS=" in result.stdout, (
+            f"could not move DNSBL VIPs {uniqids} to {iface!r}: rc={result.returncode}\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+
+    primary_exc: BaseException | None = None
+    try:
+        try:
+            h.set_dnsbl_vip6(vm, present=True)
+            src6 = h.pin_client_route6(client_vm, h.DNSBL_VIP6, lan6)
+            with h.CaseContext(vm, spec):
+                move_vips("lan", (h.SMOKE_VIP_UNIQID, h.SMOKE_VIP6_UNIQID))
+                h.set_dnsbl_interface(vm, "lan")
+                # Belt-and-suspenders live-alias move (issue #1013's fallback dance, the
+                # same shape ensure_dnsbl_vip/set_dnsbl_vip6 use): interface_vip_configure()
+                # has been observed to update config.xml but leave the OS-level alias on
+                # its old interface.
+                vm.ssh(
+                    f"/sbin/ifconfig lo0 -alias {shlex.quote(h.DEFAULT_DNSBL_VIP4)} >/dev/null 2>&1 || true; "
+                    f"/sbin/ifconfig lo0 inet6 {shlex.quote(h.DNSBL_VIP6)} -alias >/dev/null 2>&1 || true; "
+                    f"/sbin/ifconfig {shlex.quote(lan_if)} alias {shlex.quote(h.DEFAULT_DNSBL_VIP4 + '/32')} "
+                    ">/dev/null 2>&1 || true; "
+                    f"/sbin/ifconfig {shlex.quote(lan_if)} inet6 {shlex.quote(h.DNSBL_VIP6)} prefixlen 128 alias "
+                    ">/dev/null 2>&1 || true",
+                    timeout=30.0,
+                )
+                iface_snapshot = vm.ssh("/sbin/ifconfig", lan_if, timeout=30.0)
+                assert h.DEFAULT_DNSBL_VIP4 in iface_snapshot.stdout and h.DNSBL_VIP6 in iface_snapshot.stdout, (
+                    f"DNSBL VIP aliases not live on {lan_if}:\n{iface_snapshot.stdout}{iface_snapshot.stderr}"
+                )
+                h.unblock_egress()
+                h.reload(vm, "update")
+                h.apply_filter_sync(vm)
+                iface_cfg = h.config_get(vm, f"{h.CFG_DNSBL_SETTINGS}/dnsbl_interface")
+                assert iface_cfg == "lan", f"dnsbl_interface did not stick: {iface_cfg!r}"
+
+                # Collect EVERY main observation before any desired-behaviour assertion, so
+                # a RED artifact always carries the complete defect in one object.
+                scope_before = scope_violations()
+                answer = h.dns_probe_client(client_vm, domain, "AAAA", server=lan6)
+                nat_rows = managed_nat_rows()
+                http = curl_page("http")
+                https = curl_page("https")
+                scope_after = scope_violations()
+
+                observation = {
+                    "domain": domain,
+                    "client_source": src6,
+                    "dnsbl_interface": iface_cfg,
+                    "dnsbl_vip6": h.DNSBL_VIP6,
+                    "aaaa": answer.records,
+                    "nat_rows": nat_rows,
+                    "http": http,
+                    "https": https,
+                    "scope": {"before": scope_before, "after": scope_after},
+                }
+                print("PFB3407_OBSERVATION=" + json.dumps(observation, sort_keys=True))
+
+                assert {ipaddress.ip_address(r) for r in answer.records} == {ipaddress.ip_address(h.DNSBL_VIP6)}, (
+                    f"AAAA {domain} @{lan6}: expected {h.DNSBL_VIP6}, got {answer}"
+                )
+
+                v6_rows = [row for row in nat_rows if row["ipprotocol"] == "inet6"]
+                assert v6_rows == [], f"managed IPv6 DNSBL NAT rows still emitted: {v6_rows}"
+
+                v4_nat_rows = [row for row in nat_rows if row["ipprotocol"] != "inet6"]
+                assert len(v4_nat_rows) == 2, f"managed IPv4 DNSBL NAT rows missing/extra: {nat_rows}"
+                v4_rows = {row["destination_port"]: row for row in v4_nat_rows}
+                assert set(v4_rows) == {"80", "443"}, f"managed IPv4 DNSBL NAT rows have unexpected ports: {nat_rows}"
+                for port, local_port in (("80", h.DNSBL_PORT), ("443", h.DNSBL_PORT_SSL)):
+                    row = v4_rows[port]
+                    assert row == {
+                        "ipprotocol": "inet",
+                        "destination_address": h.DEFAULT_DNSBL_VIP4,
+                        "destination_port": port,
+                        "protocol": "tcp",
+                        "target": "127.0.0.1",
+                        "local_port": local_port,
+                        "interface": "lan",
+                        "associated_rule_id": "pass",
+                        "natreflection": "purenat",
+                    }, f"managed IPv4 DNSBL NAT row for port {port} changed shape: {row}"
+
+                assert http["rc"] == 0 and http["marker"], (
+                    f"VIP6:80 did not serve the DNSBL block page directly: {http}"
+                )
+                assert https["rc"] == 0 and https["marker"], (
+                    f"VIP6:443 did not serve the DNSBL block page directly: {https}"
+                )
+                assert scope_after == scope_before, (
+                    f"IPv6 scope violations moved: before={scope_before} after={scope_after}"
+                )
+        except BaseException as exc:
+            primary_exc = exc
+            raise
+        finally:
+            try:
+                h.set_dnsbl_vip6(vm, present=False)
+                move_vips("lo0", (h.SMOKE_VIP_UNIQID,))
+                h.set_dnsbl_interface(vm, "lo0")
+                vm.ssh(
+                    f"/sbin/ifconfig {shlex.quote(lan_if)} -alias {shlex.quote(h.DEFAULT_DNSBL_VIP4)} "
+                    ">/dev/null 2>&1 || true; "
+                    f"/sbin/ifconfig lo0 alias {shlex.quote(h.DEFAULT_DNSBL_VIP4 + '/32')} >/dev/null 2>&1 || true",
+                    timeout=30.0,
+                )
+                h.unblock_egress()
+                h.reload(vm, "update")
+                h.apply_filter_sync(vm)
+            except Exception as cleanup_exc:
+                if primary_exc is not None:
+                    print(
+                        f"[smoke] #3407 cleanup failed during teardown "
+                        f"(suppressed; original error stands): {cleanup_exc!r}"
+                    )
+                else:
+                    raise
+    finally:
+        h.unpin_client_route6(client_vm, h.DNSBL_VIP6)
 
 
 _SECTION_COUNTS = re.compile(

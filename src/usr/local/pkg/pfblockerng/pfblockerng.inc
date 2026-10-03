@@ -9319,21 +9319,6 @@ function pfb_create_dnsbl($mode) {
 									'natreflection'		=> 'purenat'
 									);
 
-					// Add DNSBL IPv6 NAT Rules
-					if (!empty($pfb['dnsbl_vip6'])) {
-						$dnsbl_new_nat[] = array (	'source'		=> array('any'  => ''),
-										'destination'		=> array('address' => "{$pfb['dnsbl_vip6']}",
-														'port' => "{$lport}"),
-										'protocol'		=> 'tcp',
-										'target'		=> '::1',
-										'local-port'		=> "{$port}",
-										'interface'		=> "{$pfb['dnsbl_iface']}",
-										'ipprotocol'		=> 'inet6',
-										'descr'			=> 'pfB DNSBL - DO NOT EDIT',
-										'associated-rule-id'	=> 'pass',
-										'natreflection'		=> 'purenat'
-										);
-					}
 				}
 			}
 
