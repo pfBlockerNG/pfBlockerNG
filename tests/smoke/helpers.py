@@ -3525,12 +3525,12 @@ def reload_deprecated_verb(vm: SmokeVM, verb: str, *, timeout: float = 600.0) ->
 def apply_filter_sync(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Force a BLOCKING pf filter reload via ``/etc/rc.filter_configure_sync``.
 
-    pfBlockerNG's reload (``pfb_filter_reload_exec()``) launches
-    ``/etc/rc.filter_configure_sync`` detached, so the first ``pfctl`` read after ``reload()``
-    can still see the previous ruleset — which is why the older tests wrapped every ``pfctl``
-    read in a bounded :func:`wait_until` poll. This runs the same script blocking: it returns
-    only once the ruleset has been rebuilt and applied, so the FIRST ``pfctl -sn`` / ``-sr``
-    read afterwards is authoritative — assert once, no poll, no flake.
+    When a pass changes firewall rules, pfBlockerNG's reload (``pfb_filter_reload_exec()``)
+    launches ``/etc/rc.filter_configure_sync`` detached, so the first ``pfctl`` read after
+    ``reload()`` can still see the previous ruleset — which is why the older tests wrapped
+    every ``pfctl`` read in a bounded :func:`wait_until` poll. This runs the same script
+    blocking: it returns only once the ruleset has been rebuilt and applied, so the FIRST
+    ``pfctl -sn`` / ``-sr`` read afterwards is authoritative — assert once, no poll, no flake.
 
     A bare ``filter_configure_sync()`` from ``pfSsh.php`` eval is NOT equivalent — it needs
     the full rc environment (``shaper.inc`` / ``interfaces.inc`` globals) and throws
@@ -5212,9 +5212,10 @@ def _rule_line_has_alias(line: str, alias: str) -> bool:
 def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0) -> bool:
     """Poll until the predicate event is observed; expiry is salvage only.
 
-    ``reload()`` launches ``/etc/rc.filter_configure_sync`` detached, so a ``pfctl`` read
-    right after it can still see the previous ruleset. A truthy predicate observation is the
-    verdict; expiry raises ``stuck/environment`` and is never a false observation.
+    A rule-changing ``reload()`` launches ``/etc/rc.filter_configure_sync`` detached, so a
+    ``pfctl`` read right after it can still see the previous ruleset. A truthy predicate
+    observation is the verdict; expiry raises ``stuck/environment`` and is never a false
+    observation.
     """
     deadline = time.monotonic() + timeout
     while True:

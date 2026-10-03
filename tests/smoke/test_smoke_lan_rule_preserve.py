@@ -228,8 +228,9 @@ def _run_two_reload_cycle(
     are dropped during the cycle (the pass_order bug, observable as early as reload #1 depending
     on install-time syncs); after the fix they survive both snapshots.
 
-    ``reload()`` launches ``/etc/rc.filter_configure_sync`` detached, so a one-shot
-    config.xml/pfctl read right after it races the apply (same class as #483's misdiagnosis).
+    A rule-changing ``reload()`` launches ``/etc/rc.filter_configure_sync`` detached, so a
+    one-shot config.xml/pfctl read right after it races the apply (same class as #483's
+    misdiagnosis).
     ``h.apply_filter_sync()`` blocks on the synchronous rc entrypoint instead, so the read that
     follows is authoritative.
 
