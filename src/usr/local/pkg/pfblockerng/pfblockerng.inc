@@ -9891,31 +9891,21 @@ function pfb_dnsbl_abp_extract_ip($line) {
 // The tail whitelist keeps out recursion, inline flags, POSIX/\p classes and backreferences, so the one
 // preg_grep() over the 256 addresses is the whole decision. No self-strip, like pfb_dnsbl_is_abp_rule_line().
 function pfb_dnsbl_abp_regex_ip4_24(string $line): string {
-	if (strlen($line) < 2 || !str_starts_with($line, '/') || !str_ends_with($line, '/')) {
+	if (strlen($line) > 514 ||
+	    !preg_match('/^\/\^(\d{1,3}\\\\\.\d{1,3}\\\\\.\d{1,3})\\\\\.((?:[\d.?*+{},()\[\]|-]|\\\\[d.])+)\$\/$/D', $line, $m) ||
+	    str_contains($m[2], '(?') || str_contains($m[2], '{,}')) {
 		return '';
 	}
-	$inner = substr($line, 1, -1);
-	if (strlen($inner) > 512 ||
-	    !preg_match('/^\^(\d{1,3})\\\\\.(\d{1,3})\\\\\.(\d{1,3})\\\\\.((?:[\d.?*+{},()\[\]|-]|\\\\[d.])+)\$$/D', $inner, $m) ||
-	    str_contains($m[4], '(?') || str_contains($m[4], '{,}')) {
+	$prefix = str_replace('\\.', '.', $m[1]) . '.';
+	if (!is_ipaddrv4($prefix . '0')) {
 		return '';
-	}
-	foreach (array_slice($m, 1, 3) as $octet) {
-		if ((int) $octet > 255 || $octet !== (string) (int) $octet) {
-			return '';
-		}
-	}
-	$prefix = "{$m[1]}.{$m[2]}.{$m[3]}.";
-	$hosts = array();
-	for ($i = 0; $i < 256; $i++) {
-		$hosts[] = $prefix . $i;
 	}
 	// A feed-supplied pattern may not compile (keep the warning from any installed handler), and 10000
 	// backtracking steps cap what one line can cost.
 	$limit = ini_set('pcre.backtrack_limit', '10000');
 	set_error_handler(static fn(): bool => TRUE);
 	try {
-		$hits = preg_grep('~' . $inner . '~', $hosts);
+		$hits = preg_grep('~' . substr($line, 1, -1) . '~', array_map(static fn(int $i): string => $prefix . $i, range(0, 255)));
 		$ok = is_array($hits) && count($hits) === 256 && preg_last_error() === PREG_NO_ERROR;
 	} finally {
 		restore_error_handler();

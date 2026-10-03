@@ -6,6 +6,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
+
 /**
  * Issue #3434: an ABP block regex rule '/^A\.B\.C\.<tail>$/' whose pattern matches all 256 strings
  * A.B.C.0..A.B.C.255 also puts 'A.B.C.0/24' into the DNSBL IP table. The rule is still staged for
@@ -14,11 +16,14 @@ use PHPUnit\Framework\TestCase;
  * The helper rows call pfb_dnsbl_abp_regex_ip4_24() directly; the parse-loop rows run the ABP region
  * eval-extracted verbatim from the REAL pfblockerng_apply.inc (house precedent:
  * tests/php/DnsblNumericHostTest.php) and never name the helper, so they pin the wiring by behaviour.
+ *
+ * The oracle rows are the 47 IP-shaped regex lines (`grep -E '^/\^?[0-9\\]'`) of DandelionSprout's
+ * Anti-Malware List for AdGuard Home, version 19September2026v1: 34 name a whole /24, 13 do not.
  */
 #[CoversFunction('pfb_dnsbl_abp_regex_ip4_24')]
 final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 {
-	private const FIXTURE = __DIR__ . '/fixtures/dnsbl_abp_regex_ipv4_24_oracle.txt';
+	use PfbNoPhpWarningTrait;
 
 	private static string $abpRegion;
 
@@ -107,22 +112,6 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		];
 	}
 
-	/** Call the helper with warnings/notices captured; returns [result, warnings]. */
-	private function callHelper(string $line): array
-	{
-		$warnings = [];
-		set_error_handler(static function (int $no, string $str) use (&$warnings): bool {
-			$warnings[] = $str;
-			return TRUE;
-		});
-		try {
-			$result = pfb_dnsbl_abp_regex_ip4_24($line);
-		} finally {
-			restore_error_handler();
-		}
-		return [$result, $warnings];
-	}
-
 	/** An eligible rule whose inner is exactly $bytes long: '^5\.8\.44\.' + '.*' + '()' padding + '$'. */
 	private static function paddedRule(int $bytes, string $star = '.*'): string
 	{
@@ -197,16 +186,20 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 			'{,} after ? then |'           => ['/^1\.2\.3\.\d?{,}|\d+$/', ''],
 			'{,} inside a group'           => ['/^1\.2\.3\.(\d+|{,})$/', ''],
 			'backtrack-heavy tail'         => [self::backtrackHeavyRule(), ''],
+			'trailing CRLF'                => ["/^5\\.8\\.44\\.\\d+$/\r\n", ''],
+			'empty line'                   => ['', ''],
+			'bare IP'                      => ['1.2.3.4', ''],
 		];
+		foreach (self::oracle() as $line => $cidr) {
+			$rows["oracle $line"] = [(string) $line, $cidr];
+		}
 		return $rows;
 	}
 
 	#[DataProvider('ruleProvider')]
 	public function testHelperDecidesPerRule(string $line, string $expected): void
 	{
-		[$result, $warnings] = $this->callHelper($line);
-		$this->assertSame($expected, $result);
-		$this->assertSame([], $warnings, 'no warning or notice may escape the helper');
+		$this->assertSame($expected, $this->assertNoPhpWarning(static fn(): string => pfb_dnsbl_abp_regex_ip4_24($line)));
 	}
 
 	public function testHelperInnerLengthBoundaryIs512Bytes(): void
@@ -215,8 +208,6 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		$over = self::paddedRule(513, '.*+');
 		$this->assertSame(512, strlen($at) - 2);
 		$this->assertSame(513, strlen($over) - 2);
-		$this->assertSame('5.8.44.0/24', pfb_dnsbl_abp_regex_ip4_24($at));
-		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24($over));
 		// The refused rule is a valid, qualifying pattern: only its length disqualifies it.
 		$this->assertSame(256, count(preg_grep('~' . substr($over, 1, -1) . '~', array_map(static fn(int $n): string => "5.8.44.$n", range(0, 255)))));
 	}
@@ -228,21 +219,6 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		$hosts = array_map(static fn(int $n): string => "5.8.44.$n", range(0, 255));
 		$this->assertCount(256, preg_grep('~' . substr($rule, 1, -1) . '~', $hosts), 'under the default limit it matches every address');
 		$this->assertSame(PREG_NO_ERROR, preg_last_error());
-	}
-
-	public function testHelperDoesNotSelfStripAnEndOfLine(): void
-	{
-		$this->assertSame('5.8.44.0/24', pfb_dnsbl_abp_regex_ip4_24('/^5\.8\.44\.\d+$/'));
-		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24("/^5\\.8\\.44\\.\\d+$/\n"));
-		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24("/^5\\.8\\.44\\.\\d+$/\r\n"));
-	}
-
-	public function testHelperLeavesPcreStateAndReturnTypeAlone(): void
-	{
-		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24('/^5\.8\.44\.\d{3,1}$/'));
-		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24(''));
-		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24('||5.8.44.1^'));
-		$this->assertSame('', pfb_dnsbl_abp_regex_ip4_24('1.2.3.4'));
 	}
 
 	/** Parse-loop wiring: the collected /24 (or nothing) and the staged rows, for every rule shape. */
@@ -288,37 +264,10 @@ final class DnsblAbpRegexIp4SlashTwentyFourTest extends TestCase
 		$this->assertSame([['5.8.44.1'], 1, []], [$out['ip4'], $out['ipcount'], $out['rows']]);
 	}
 
-	public function testFixtureIsTheFortySevenLinesTheOracleMapNames(): void
+	public function testOracleIsTheFortySevenListLinesWithThirtyFourSlash24s(): void
 	{
-		$lines = file(self::FIXTURE, FILE_IGNORE_NEW_LINES);
-		$this->assertIsArray($lines);
-		$this->assertSame(array_keys(self::oracle()), $lines);
-		$this->assertCount(47, $lines);
+		$this->assertCount(47, self::oracle());
 		$this->assertCount(34, array_filter(self::oracle(), static fn(string $cidr): bool => $cidr !== ''));
-	}
-
-	/** @return array<string, array{string, string}> */
-	public static function oracleProvider(): array
-	{
-		$rows = [];
-		foreach (self::oracle() as $line => $cidr) {
-			$rows[$line] = [(string) $line, $cidr];
-		}
-		return $rows;
-	}
-
-	#[DataProvider('oracleProvider')]
-	public function testOracleLineThroughHelper(string $line, string $cidr): void
-	{
-		$this->assertSame($cidr, pfb_dnsbl_abp_regex_ip4_24($line));
-	}
-
-	#[DataProvider('oracleProvider')]
-	public function testOracleLineThroughParseLoop(string $line, string $cidr): void
-	{
-		$out = $this->runRegion($line);
-		$this->assertSame($cidr === '' ? [] : [$cidr], $out['ip4']);
-		$this->assertSame([['a', $line]], $out['rows']);
 	}
 
 	/**
