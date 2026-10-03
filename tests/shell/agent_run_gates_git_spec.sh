@@ -117,6 +117,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc add -A
       gitc commit -q -m hostile
       When run sh "$SCRIPT" --worktree "$repo" --diff base --allow-missing
+      The stderr should include 'GATE RUN:'
       The status should equal 1
       The output should include 'unsafe filename in diff'
       The output should include 'GATES: FAIL'
@@ -132,6 +133,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc rm -q scripts/deleted.py
       gitc commit -q -m deleted
       When run sh "$SCRIPT" --worktree "$repo" --diff "$deletion_base"
+      The stderr should include 'GATE RUN:'
       The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
       The status should equal 0
       expected=$(printf 'D\nscripts/deleted.py')
@@ -146,6 +148,7 @@ Describe 'run-gates.sh over a C-quoted path'
       deletion_base=$(gitc rev-parse HEAD)
       gitc rm -q scripts/deleted.py
       When run sh "$SCRIPT" --worktree "$repo" --diff "$deletion_base"
+      The stderr should include 'GATE RUN:'
       The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
       The status should equal 0
       expected=$(printf 'D\nscripts/deleted.py')
@@ -160,6 +163,7 @@ Describe 'run-gates.sh over a C-quoted path'
       deletion_base=$(gitc rev-parse HEAD)
       rm "$repo/scripts/deleted.py"
       When run sh "$SCRIPT" --worktree "$repo" --diff "$deletion_base"
+      The stderr should include 'GATE RUN:'
       The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
       The status should equal 0
       expected=$(printf 'D\nscripts/deleted.py')
@@ -175,6 +179,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc mv scripts/renamed.py scripts/README.md
       gitc commit -q -m renamed
       When run sh "$SCRIPT" --worktree "$repo" --diff "$rename_base" --allow-missing
+      The stderr should include 'GATE RUN:'
       The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
       The status should equal 0
       expected=$(printf 'R100\nscripts/renamed.py\nscripts/README.md')
@@ -191,6 +196,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m paired
       rm "$repo/tests/pair.fixture"
       When run sh "$SCRIPT" --worktree "$repo" --diff "$layered_base"
+      The stderr should include 'GATE RUN:'
       The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
       The status should equal 0
       expected=$(printf 'A\nscripts/release.fixture\nA\ntests/pair.fixture\nD\ntests/pair.fixture')
@@ -208,6 +214,7 @@ Describe 'run-gates.sh over a C-quoted path'
       mkdir -p "$repo/docs"
       mv "$repo/tests/pair.fixture" "$repo/docs/renamed.fixture"
       When run sh "$SCRIPT" --worktree "$repo" --diff "$layered_base"
+      The stderr should include 'GATE RUN:'
       The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
       The status should equal 0
       expected=$(printf 'A\nscripts/release.fixture\nA\ntests/pair.fixture\nD\ntests/pair.fixture\nA\ndocs/renamed.fixture')
@@ -226,6 +233,7 @@ Describe 'run-gates.sh over a C-quoted path'
       mkdir -p "$repo/tests"
       printf 'recreated\n' > "$repo/tests/pair.fixture"
       When run sh "$SCRIPT" --worktree "$repo" --diff "$layered_base"
+      The stderr should include 'GATE RUN:'
       The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
       The status should equal 0
       expected=$(printf 'A\nscripts/release.fixture\nA\ntests/pair.fixture\nD\ntests/pair.fixture\nA\ntests/pair.fixture')
@@ -290,6 +298,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc add -A
       gitc commit -q -m python
       When run sh -c "PATH='$stub:$PATH' sh '$SCRIPT' --worktree '$repo' --diff base"
+      The stderr should include 'GATE RUN:'
       The status should equal 0
       The output should include 'GATES: PASS'
       The output should not include 'TOOL-MISSING'
