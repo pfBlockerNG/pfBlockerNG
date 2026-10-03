@@ -10,11 +10,10 @@
 #   pfctl -t <table> -T test <ip> -> "1/1 addresses match." when <ip> is listed in
 #                                    PFB_FAKE_MATCH (space-separated), else "0/1 ..."
 #   pfctl -k <ip> [-k <ip>]       -> append the argv to "$PFB_FAKE_KILL_LOG" and print pfctl's
-#                                    "killed N states ..." on stderr. Every canned state counts
-#                                    as a flow TO the victim: the one-host form (states FROM
-#                                    <ip>) kills 0; the two-host form kills PFB_FAKE_KILLED
-#                                    (default 0), or 0 when the hosts' address families
-#                                    differ (pfctl skips such a destination).
+#                                    "killed N states ..." on stderr. The one-host form reports
+#                                    PFB_FAKE_KILLED_SOURCE (default 0). The two-host form reports
+#                                    PFB_FAKE_KILLED (default 0), or 0 when the hosts' address
+#                                    families differ (pfctl skips such a destination).
 #
 # Anything else fails loud: the test drove an invocation this stub does not model.
 
@@ -39,8 +38,9 @@ case "$1" in
 		;;
 	-k)
 		echo "$*" >> "${PFB_FAKE_KILL_LOG}"
-		killed=0
+		killed="${PFB_FAKE_KILLED_SOURCE:-0}"
 		if [ "$#" -eq 4 ]; then
+			killed=0
 			case "$2" in *:*) src_af=6 ;; *) src_af=4 ;; esac
 			case "$4" in *:*) dst_af=6 ;; *) dst_af=4 ;; esac
 			[ "${src_af}" = "${dst_af}" ] && killed="${PFB_FAKE_KILLED:-0}"

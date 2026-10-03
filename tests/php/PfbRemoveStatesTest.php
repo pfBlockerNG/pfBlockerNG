@@ -123,7 +123,7 @@ final class PfbRemoveStatesTest extends TestCase
 		$GLOBALS['config'] = $this->savedConfig;
 		$GLOBALS['pfb']    = $this->savedPfb;
 		unset($GLOBALS['pfb_test_dns_servers']);
-		foreach (['PFB_FAKE_RULES', 'PFB_FAKE_STATES', 'PFB_FAKE_MATCH', 'PFB_FAKE_KILL_LOG', 'PFB_FAKE_KILLED'] as $env) {
+		foreach (['PFB_FAKE_RULES', 'PFB_FAKE_STATES', 'PFB_FAKE_MATCH', 'PFB_FAKE_KILL_LOG', 'PFB_FAKE_KILLED', 'PFB_FAKE_KILLED_SOURCE'] as $env) {
 			putenv($env);
 		}
 		// Best-effort recursive cleanup of the sandbox.
@@ -316,24 +316,39 @@ final class PfbRemoveStatesTest extends TestCase
 		$this->assertNotContains('-k 0.0.0.0/0 -k ' . self::V6_VICTIM, $kills, 'an IPv4 wildcard never kills an IPv6 destination');
 	}
 
+	/** Noncanonical pfctl output must never inflate the removal count. */
+	public function test_killed_count_rejects_noncanonical_pfctl_output(): void
+	{
+		foreach ([
+			'killed -3 states',
+			'killed 1e3 states',
+			'killed 2.9 states',
+			'killed ' . PHP_INT_MAX . '0 states',
+			'prefix killed 4 states',
+		] as $line) {
+			$this->assertSame(0, pfb_pfctl_killed_count([$line]), "unexpected count parsed from '{$line}'");
+		}
+	}
+
 	/**
-	 * Scenario (#3406) — the removal log reports what pfctl killed.
+	 * Scenario (#3406) — the removal log reports what both pfctl kills removed.
 	 *
 	 * Given: one table-matched state TO 3fff::9, and pfctl reporting 2 states
-	 *        killed by the same-family destination kill.
+	 *        killed by the source kill plus 3 by the destination kill.
 	 * When:  pfb_remove_states() runs.
-	 * Then:  the log says 2 were removed — pfctl's count, not the 1 collected line.
+	 * Then:  the log says 5 were removed — the sum, not the 1 collected line.
 	 */
 	public function test_removal_log_reports_pfctl_killed_count(): void
 	{
 		$this->seedConfig();
 		$this->seedStates($this->v6InState(self::V6_VICTIM));
 		$this->seedTableMatches(self::V6_VICTIM);
-		putenv('PFB_FAKE_KILLED=2');
+		putenv('PFB_FAKE_KILLED_SOURCE=2');
+		putenv('PFB_FAKE_KILLED=3');
 
 		$this->runRemoveStates();
 
-		$this->assertStringContainsString('Removed 2 state(s) for [ ' . self::V6_VICTIM . ' ]', $this->removalLog());
+		$this->assertStringContainsString('Removed 5 state(s) for [ ' . self::V6_VICTIM . ' ]', $this->removalLog());
 	}
 
 	/**

@@ -8105,19 +8105,18 @@ function pfb_pfctl_test_match_count(string $output): int {
 	return (int) $output;
 }
 
-// Sum only the states pfctl reports as killed. Missing/error output means zero, never
-// the number of candidate state lines collected before the kill (issue #3406).
+// Each pfctl kill emits one summary. Return its canonical nonnegative count;
+// missing, malformed, or overflowing output means zero (issue #3406).
 function pfb_pfctl_killed_count(array $output): int {
 	foreach ($output as $line) {
 		$line = trim($line);
-		if (str_starts_with($line, 'killed ')) {
-			return (int) substr($line, 7);
+		if (preg_match('/^killed ([0-9]+) states?\b/', $line, $match) === 1) {
+			$count = filter_var($match[1], FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+			return $count === FALSE ? 0 : $count;
 		}
 	}
 	return 0;
 }
-
-
 
 // ONE `pfctl -vvsTables` exec. Full dump — do not pipe through grep -A4 (that
 // truncation drops the In/Out packet lines the parser is meant to read).
