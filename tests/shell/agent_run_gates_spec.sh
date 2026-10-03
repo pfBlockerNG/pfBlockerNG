@@ -13,6 +13,12 @@ Describe 'run-gates.sh gates_for()'
   # exactly ONCE when both are touched -- a duplicated gate is the defect this counts.
   count_reentry_gate() { gates_for | grep -c 'scripts/check_reentry_bounds.py --self-test'; }
 
+  # issue #3425: the full ShellSpec gate line, pinned byte-for-byte (gate_command()
+  # keys on this exact string).
+  # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+  shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
+  count_shellspec_gate() { gates_for | grep -cF "$shellspec_gate"; }
+
   It 'maps a Python file to the four Python gates'
     Data "tests/test_x.py"
     When call gates_for
@@ -20,7 +26,8 @@ Describe 'run-gates.sh gates_for()'
     The line 2 of output should equal 'uv run --locked ruff check .'
     The line 3 of output should equal 'uv run --locked ruff format --check .'
     The line 4 of output should equal 'uv run --locked mypy tests/'
-    The lines of output should equal 4
+    The line 5 of output should equal "$shellspec_gate"
+    The lines of output should equal 5
   End
 
   It 'maps PHP files to per-file lint, the toggle-registry and re-entry-bounds gates, and the three suite gates'
@@ -41,7 +48,8 @@ Describe 'run-gates.sh gates_for()'
     The line 6 of output should equal 'vendor/bin/phpunit'
     The line 7 of output should equal 'composer phpstan'
     The line 8 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
-    The lines of output should equal 8
+    The line 9 of output should equal "$shellspec_gate"
+    The lines of output should equal 9
   End
 
   It 'emits the re-entry-bounds gate exactly once for a PHP-only diff'
@@ -101,6 +109,18 @@ Describe 'run-gates.sh gates_for()'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
     The line 10 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
     The lines of output should equal 10
+  End
+
+  It 'emits the ShellSpec gate exactly once when several buckets and both selection arms want it'
+    # tests/x.php hits the any-non-Markdown arm, AGENTS.md the guarded-Markdown arm, and
+    # scripts/y.sh the shell bucket: one gate line, not one per reason.
+    Data
+      #|tests/x.php
+      #|AGENTS.md
+      #|scripts/y.sh
+    End
+    When call count_shellspec_gate
+    The output should equal '1'
   End
 
   It 'wraps the selected pytest gate with JUnit, canary, and real check'
@@ -212,14 +232,29 @@ Describe 'run-gates.sh gates_for()'
     When call utf8_gates_for
     The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
     The line 2 of output should equal 'uv run --locked pytest'
-    The lines of output should equal 2
+    The line 3 of output should equal "$shellspec_gate"
+    The lines of output should equal 3
+  End
+
+  # issue #3425: the ShellSpec arm reads the same raw path bytes, so its greps must pin
+  # LC_ALL=C too -- under a UTF-8 locale a binary-classified list would drop the line.
+  utf8_txt_gates_for() {
+    ( LC_ALL=C.UTF-8; export LC_ALL
+      printf 'tests/fixtures/bad\377.txt\n' | gates_for )
+  }
+
+  It 'selects ShellSpec for a non-Markdown path carrying an invalid UTF-8 byte under a UTF-8 locale'
+    Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
+    When call utf8_txt_gates_for
+    The output should equal "$shellspec_gate"
   End
 
   It 'keeps aggregate gates for an unsafe-named Python file (no per-file interpolation)'
     Data "my file.py"
     When call gates_for
     The line 1 of output should equal 'uv run --locked pytest'
-    The lines of output should equal 4
+    The line 5 of output should equal "$shellspec_gate"
+    The lines of output should equal 5
   End
 
   It 'ignores an unsafe-named file that has no gates at all'
@@ -237,7 +272,9 @@ Describe 'run-gates.sh gates_for()'
   It 'maps a skip-allowlist-only diff to the pytest gate'
     Data "tests/skip-allowlist.txt"
     When call gates_for
-    The output should equal 'uv run --locked pytest'
+    The line 1 of output should equal 'uv run --locked pytest'
+    The line 2 of output should equal "$shellspec_gate"
+    The lines of output should equal 2
   End
 
   # issue #3174: every suite gate proves its red canary against
@@ -247,7 +284,9 @@ Describe 'run-gates.sh gates_for()'
   It 'maps a skip-allowlist-canary-fixture-only diff to the pytest gate'
     Data "tests/fixtures/skip-allowlist-canary.xml"
     When call gates_for
-    The output should equal 'uv run --locked pytest'
+    The line 1 of output should equal 'uv run --locked pytest'
+    The line 2 of output should equal "$shellspec_gate"
+    The lines of output should equal 2
   End
 
   It 'emits the pytest gate once when the diff touches both the allowlist and a Python file'
@@ -256,12 +295,13 @@ Describe 'run-gates.sh gates_for()'
       #|tests/test_x.py
     End
     When call gates_for
-    The output should equal "$(printf '%s\n%s\n%s\n%s' 'uv run --locked pytest' 'uv run --locked ruff check .' 'uv run --locked ruff format --check .' 'uv run --locked mypy tests/')"
+    The output should equal "$(printf '%s\n%s\n%s\n%s\n%s' 'uv run --locked pytest' 'uv run --locked ruff check .' 'uv run --locked ruff format --check .' 'uv run --locked mypy tests/' "$shellspec_gate")"
   End
 
-  # The arms match the whole line: a near-miss path must stay gate-less, or an
-  # unrelated .txt or fixture edit pays for the pytest suite.
-  It 'leaves a near-miss allowlist or canary path gate-less'
+  # The arms match the whole line: a near-miss path must not select the pytest suite,
+  # or an unrelated .txt or fixture edit pays for it. ShellSpec alone is selected -- its
+  # truncate-survival guard scans every file under tests/.
+  It 'keeps a near-miss allowlist or canary path off the pytest gate'
     Data
       #|tests/fixtures/other.txt
       #|tests/skip-allowlist.txt.bak
@@ -269,13 +309,92 @@ Describe 'run-gates.sh gates_for()'
       #|other/tests/skip-allowlist.txt
     End
     When call gates_for
-    The output should equal ''
+    The output should equal "$shellspec_gate"
   End
 
   It 'emits nothing for file types with no gates'
-    Data "src/usr/local/pkg/pfblockerng/info.xml"
+    Data "docs/images/diagram.png"
     When call gates_for
     The output should equal ''
+  End
+
+  # issue #3425: every path a repository-wide ShellSpec guard scans selects the full
+  # gate, not only *.sh. Rows follow the guards: truncate_survival (src/ scripts/ tests/,
+  # every tracked file), parity_guard (workflow YAML), agent_config_parity (agent configs),
+  # plus CI's shell-tests job, which runs for every path but Markdown and docs/.
+  Describe 'a path a repository-wide ShellSpec guard scans'
+    Parameters
+      'src/usr/local/pkg/pfblockerng/pfblockerng.inc'
+      'src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml'
+      'src/usr/local/pkg/pfblockerng/pfb_unbound.py'
+      'src/usr/local/www/pfblockerng/pfblockerng.js'
+      'scripts/build-pkg-portable.py'
+      'scripts/release-notes-prompt.txt'
+      'tests/php/DnsblServiceRestartTest.php'
+      'tests/test_x.py'
+      'tests/fixtures/other.txt'
+      'tests/fixtures/feed_corpus/sample.bin'
+      'src/usr/local/www/pfblockerng/vendor/codemirror/LICENSES.md'
+      'scripts/README.md'
+      'tests/shell/README.md'
+      '.github/workflows/test.yml'
+      '.codex/config.toml'
+      '.codex/agents/planner.toml'
+      '.agents/model-tiers.conf'
+      '.claude/workflows/review.js'
+      '.claude/skills/release'
+      'AGENTS.md'
+      'GROK.md'
+      'CLAUDE.md'
+      '.github/copilot-instructions.md'
+      '.github/agents/planner.agent.md'
+      '.agents/policy/landing.md'
+      '.agents/context/claude-adapter.md'
+      '.agents/context/codex-adapter.md'
+      '.agents/context/copilot-adapter.md'
+      '.agents/context/grok-adapter.md'
+      '.agents/context/omp-adapter.md'
+      '.agents/skills/subsystem-sweep/SKILL.md'
+      'composer.json'
+      '.githooks/pre-commit'
+      'README.MD'
+    End
+
+    It "selects ShellSpec for '$1'"
+      Data "$1"
+      When call gates_for
+      The output should include "$shellspec_gate"
+    End
+  End
+
+  # Markdown and docs/ stay on the markdownlint-only path (test.yml's paths-ignore), and
+  # the guarded-Markdown arm is anchored: a look-alike path no guard reads selects nothing.
+  Describe 'a path no repository-wide ShellSpec guard scans'
+    Parameters
+      'docs/misc/notes.md'
+      'docs/images/diagram.png'
+      'docs/x.php'
+      'README.md'
+      'CONTRIBUTING.md'
+      '.agents/policy/workflow.md'
+      '.agents/context/repository-intelligence.md'
+      '.agents/skills/release/references/notes.md'
+      '.claude/agents/adversarial-reviewer.md'
+      '.claude/rules/smoke.md'
+      'graphify-out/memory/query_x.md'
+      'legacy/ADRs/x.php'
+      'x/AGENTS.md'
+      'docs/AGENTS.md'
+      '.agents/skills/a/b/SKILL.md'
+      '.agents/context/adapter.md'
+      '.github/agents/x.md'
+    End
+
+    It "leaves ShellSpec unselected for '$1'"
+      Data "$1"
+      When call gates_for
+      The output should not include 'shellspec'
+    End
   End
 End
 
@@ -327,7 +446,17 @@ Describe 'run-gates.sh Composer vendor guard'
         'printf "<testsuites/>\\n" > "$report"'
       printf 'touch "%s"\nexit 0\n' "$phpunit_marker"
     } > "$repo/vendor/bin/phpunit"
-    chmod +x "$stubdir/python3" "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
+    # issue #3425: a PHP diff now selects the full ShellSpec gate; this stub keeps the rows
+    # that run the whole plan from nesting the real suite, inside the minimal-PATH contract.
+    {
+      printf '%s\n' '#!/bin/sh' 'reportdir=' \
+        'while [ "$#" -gt 0 ]; do' \
+        '  if [ "$1" = --reportdir ]; then shift; reportdir=$1; fi' \
+        '  shift' \
+        'done' \
+        'printf "<testsuites/>\\n" > "$reportdir/results_junit.xml"'
+    } > "$stubdir/shellspec"
+    chmod +x "$stubdir/python3" "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$stubdir/shellspec" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
     # The minimal-PATH contract uses only POSIX utilities plus the runner's
     # required timeout(1). The report directory adds mkdir; rm reaps it and the

@@ -39,7 +39,18 @@ Describe 'run-gates.sh over a C-quoted path'
       printf 'cat > "%s"\nexit 0\n' "$pairing_raw"
     } > "$stubdir/python3"
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/npx"
-    chmod +x "$stubdir/python3" "$stubdir/npx"
+    # issue #3425: any non-Markdown path under scripts/ or tests/ now selects the full
+    # ShellSpec gate; this stub keeps the rows that run the whole plan from nesting the
+    # real suite while still producing the JUnit report the skip-set checker reads.
+    {
+      printf '%s\n' '#!/bin/sh' 'reportdir=' \
+        'while [ "$#" -gt 0 ]; do' \
+        '  if [ "$1" = --reportdir ]; then shift; reportdir=$1; fi' \
+        '  shift' \
+        'done' \
+        'printf "<testsuites/>\\n" > "$reportdir/results_junit.xml"'
+    } > "$stubdir/shellspec"
+    chmod +x "$stubdir/python3" "$stubdir/npx" "$stubdir/shellspec"
     PATH="$stubdir:$PATH"
   }
   cleanup() { rm -rf "$repo" "$stubdir"; }
@@ -281,6 +292,30 @@ Describe 'run-gates.sh over a C-quoted path'
       The status should equal 0
       # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
       The output should include 'shellspec --shell $(command -v dash || command -v sh)'
+    End
+
+    # issue #3425: the full ShellSpec gate follows the repository-wide guards' scan sets,
+    # so a lone test file with no shell file in the diff plans it ...
+    It 'plans the ShellSpec gate for a committed test file with no shell file in the diff'
+      mkdir -p "$repo/tests/php"
+      printf '<?php\n' > "$repo/tests/php/XTest.php"
+      gitc add -A
+      gitc commit -q -m php-test
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
+      The status should equal 0
+      # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+      The output should include 'shellspec --shell $(command -v dash || command -v sh)'
+    End
+
+    # ... while a docs-only diff stays off it (test.yml's shell-tests job ignores docs/).
+    It 'does not plan the ShellSpec gate for a docs-only diff'
+      mkdir -p "$repo/docs"
+      printf '# notes\n' > "$repo/docs/notes.md"
+      gitc add -A
+      gitc commit -q -m docs
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
+      The status should equal 0
+      The output should not include 'shellspec'
     End
 
     It 'executes the planned command rather than a rewritten one'
