@@ -91,7 +91,7 @@ final class PfbRemoveStatesTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->root = sys_get_temp_dir() . '/pfb_killstates_' . getmypid() . '_' . uniqid();
-		if (!mkdir($this->root, 0777, true)) {
+		if (!mkdir($this->root, 0777, TRUE)) {
 			$this->fail("could not create sandbox {$this->root}");
 		}
 		$this->savedConfig = $GLOBALS['config'] ?? [];
@@ -123,7 +123,7 @@ final class PfbRemoveStatesTest extends TestCase
 		$GLOBALS['config'] = $this->savedConfig;
 		$GLOBALS['pfb']    = $this->savedPfb;
 		unset($GLOBALS['pfb_test_dns_servers']);
-		foreach (['PFB_FAKE_RULES', 'PFB_FAKE_STATES', 'PFB_FAKE_MATCH', 'PFB_FAKE_KILL_LOG'] as $env) {
+		foreach (['PFB_FAKE_RULES', 'PFB_FAKE_STATES', 'PFB_FAKE_MATCH', 'PFB_FAKE_KILL_LOG', 'PFB_FAKE_KILLED', 'PFB_FAKE_KILLED_SOURCE'] as $env) {
 			putenv($env);
 		}
 		// Best-effort recursive cleanup of the sandbox.
@@ -199,6 +199,19 @@ final class PfbRemoveStatesTest extends TestCase
 		return self::IFACE . " tcp {$left}[443] -> 3fff:ffff::1[80] ESTABLISHED:ESTABLISHED";
 	}
 
+	/** A LAN-ingress v6 state as pf prints it: the kill-candidate IP is the DESTINATION. */
+	private function v6InState(string $dst): string
+	{
+		return self::IFACE . " tcp {$dst}[80] <- fd00::1000[54321] CLOSED:SYN_SENT";
+	}
+
+	/** The run's pfblockerng.log (the walk's removal report). */
+	private function removalLog(): string
+	{
+		$log = "{$this->root}/pfblockerng.log";
+		return is_file($log) ? (string) file_get_contents($log) : '';
+	}
+
 	/**
 	 * Run the REAL pfb_remove_states() and return the recorded kill log.
 	 *
@@ -210,7 +223,7 @@ final class PfbRemoveStatesTest extends TestCase
 	 */
 	private function runRemoveStates(): string
 	{
-		set_error_handler(static fn (): bool => true, E_WARNING | E_DEPRECATED);
+		set_error_handler(static fn (): bool => TRUE, E_WARNING | E_DEPRECATED);
 		try {
 			pfb_remove_states();
 		} finally {
@@ -278,6 +291,85 @@ final class PfbRemoveStatesTest extends TestCase
 			$kills,
 			"reserved IPv6 endpoints (::1, fe80::1) must never be killed — kill log was:\n{$kills}"
 		);
+	}
+
+	/**
+	 * Scenario (#3406) — the destination kill uses the victim's own address family.
+	 *
+	 * Given: table-matched states TO the public 198.51.100.9 and TO 3fff::9.
+	 * When:  pfb_remove_states() runs.
+	 * Then:  each destination kill pairs a same-family source wildcard with the
+	 *        victim — pfctl skips a destination whose family differs from the
+	 *        source's, so '-k 0.0.0.0/0 -k 3fff::9' killed nothing live.
+	 */
+	public function test_destination_kill_wildcard_matches_the_victims_family(): void
+	{
+		$this->seedConfig();
+		$this->seedStates($this->v4State(self::V4_VICTIM), $this->v6InState(self::V6_VICTIM));
+		$this->seedTableMatches(self::V4_VICTIM, self::V6_VICTIM);
+
+		$kills = explode("\n", trim($this->runRemoveStates()));
+
+		foreach (['-k 0.0.0.0/0 -k ' . self::V4_VICTIM, '-k ::/0 -k ' . self::V6_VICTIM] as $want) {
+			$this->assertContains($want, $kills, "expected the destination kill '{$want}' — kills were:\n" . implode("\n", $kills));
+		}
+		$this->assertNotContains('-k 0.0.0.0/0 -k ' . self::V6_VICTIM, $kills, 'an IPv4 wildcard never kills an IPv6 destination');
+	}
+
+	/** Noncanonical pfctl output must never inflate the removal count. */
+	public function test_killed_count_rejects_noncanonical_pfctl_output(): void
+	{
+		foreach ([
+			'killed -3 states',
+			'killed 1e3 states',
+			'killed 2.9 states',
+			'killed ' . PHP_INT_MAX . '0 states',
+			'prefix killed 4 states',
+		] as $line) {
+			$this->assertSame(0, pfb_pfctl_killed_count([$line]), "unexpected count parsed from '{$line}'");
+		}
+	}
+
+	/**
+	 * Scenario (#3406) — the removal log reports what both pfctl kills removed.
+	 *
+	 * Given: one table-matched state TO 3fff::9, and pfctl reporting 2 states
+	 *        killed by the source kill plus 3 by the destination kill.
+	 * When:  pfb_remove_states() runs.
+	 * Then:  the log says 5 were removed — the sum, not the 1 collected line.
+	 */
+	public function test_removal_log_reports_pfctl_killed_count(): void
+	{
+		$this->seedConfig();
+		$this->seedStates($this->v6InState(self::V6_VICTIM));
+		$this->seedTableMatches(self::V6_VICTIM);
+		putenv('PFB_FAKE_KILLED_SOURCE=2');
+		putenv('PFB_FAKE_KILLED=3');
+
+		$this->runRemoveStates();
+
+		$this->assertStringContainsString('Removed 5 state(s) for [ ' . self::V6_VICTIM . ' ]', $this->removalLog());
+	}
+
+	/**
+	 * Scenario (#3406) — no removal is claimed when pfctl kills nothing.
+	 *
+	 * Given: one table-matched state TO 3fff::9, and pfctl reporting 0 killed
+	 *        (the state is already gone, or the kill matched nothing).
+	 * When:  pfb_remove_states() runs.
+	 * Then:  the log reports 0 removed, never the collected line count.
+	 */
+	public function test_removal_log_claims_nothing_when_pfctl_kills_nothing(): void
+	{
+		$this->seedConfig();
+		$this->seedStates($this->v6InState(self::V6_VICTIM));
+		$this->seedTableMatches(self::V6_VICTIM);
+
+		$this->runRemoveStates();
+
+		$log = $this->removalLog();
+		$this->assertStringContainsString('Removed 0 state(s) for [ ' . self::V6_VICTIM . ' ]', $log);
+		$this->assertStringNotContainsString('Removed 1 state(s)', $log);
 	}
 
 	/**
