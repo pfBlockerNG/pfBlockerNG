@@ -560,7 +560,7 @@ CHECK
   End
 
   It 'fails (never skips) a gate that outlives its deadline, naming it, and still runs the later gates'
-    printf '#!/bin/sh\nprintf "graph check started\\n"\ntrap "" TERM\nsh -c '"'"'trap "" TERM; while :; do sleep 1; done'"'"' &\nwait\n' > "$graph_check"
+    printf '#!/bin/sh\nprintf "graph check started\\n"\ntrap "" TERM\nsh -c '"'"'trap "" TERM; while true; do sleep 1; done'"'"' &\nwait\n' > "$graph_check"
     When run sh "$script" --worktree "$repo" --diff "$base_sha" --gate-timeout 1 --allow-missing
     The stderr should include 'GATE RUN:'
     The status should equal 1
