@@ -15133,6 +15133,54 @@
             }
         ]
     },
+    "pfblockerng_sync_dnsblip_mismatch": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "syncinterfaces",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbToggle",
+                "default": null
+            },
+            {
+                "name": "synconchanges",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "enable",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbToggle",
+                "default": null
+            },
+            {
+                "name": "dnsbl",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbToggle",
+                "default": null
+            },
+            {
+                "name": "dnsbl_ip_action",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "hasync_rules",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfblockerng_sync_on_changes": {
         "returnsRef": false,
         "returnType": null,

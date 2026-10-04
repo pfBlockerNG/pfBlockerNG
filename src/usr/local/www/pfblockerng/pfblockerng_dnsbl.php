@@ -3631,6 +3631,7 @@ $section->addInput(new Form_StaticText(
 	. ' a firewall rule will be added to block those IPs.<br /><br />'
 	. 'IPv6 entries appear only when a Feed lists literal IPv6 addresses (uncommon); an empty <strong>pfB_DNSBLIP_v6</strong> does not mean the blocked Domains have no IPv6 &#8212; the Domain itself is sinkholed at the DNS layer for both A and AAAA queries.<br /><br />'
 	. '<span class="text-danger">Note: </span>To utilize this feature, select the appropriate List Action and define the Inbound/Outbound Interfaces in the <strong>IP Tab</strong>.'
+	. '<br /><br />In a High Availability pair where pfSense synchronizes Firewall rules and the Sync tab\'s "Disable General/IP/DNSBL tab settings sync" is selected, configure DNSBL IP identically on both nodes (see the <strong>Sync Tab</strong>).'
 ));
 
 $list_action_text = 'Default: <strong>Disabled</strong>

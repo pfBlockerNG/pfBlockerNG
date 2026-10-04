@@ -511,7 +511,7 @@ registered path set). Each annotation committed in relevant source file.
 | `pfblockerng{continent}/config/0` | Dynamic per-continent structure |
 | `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
-| `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
+| `aliases/alias`, `filter/rule`, `system/*`, `hasync/*`, `interfaces`, `unbound/*` | pfSense core sections |
 | `pfblockernglistsv4/v6/config/{row}/auto{addrnot,ports,addr,not}_{in,out}` | Dynamic per-row keys (issue #2123: same bare names as the registered `dnsbl/auto*` scalars; `pfblockerng_category_edit.php` writes them at `installedpackages/{$conf_type}/config/{$rowid}/…`, a path no exact-path registry entry can address). Runtime reads stay direct and normalize through `pfb_dnsbl_toggle_enabled()` (#2817). |
 | `pfblockernglistsv4/v6/config/{row}/whois_convert` + `filter_top1m` | Dynamic per-row `PFB_FILTER_ON_OFF` keys, same reason |
 | `pfblockerng{continent}/config/0/auto*` | Dynamic per-continent structure (issue #2123: `pfblockerng_geoip.inc` writes the same bare names per continent). Runtime reads stay direct and normalize through `pfb_dnsbl_toggle_enabled()` (#2817). |

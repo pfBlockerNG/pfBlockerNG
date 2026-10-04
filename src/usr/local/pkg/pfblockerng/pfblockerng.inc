@@ -21476,6 +21476,18 @@ function pfblockerng_sync_sections($include_interfaces) {
 	]);
 }
 
+// issue #3441: TRUE when pfSense HA copies this node's pfB_DNSBLIP_* rules to a peer whose
+// DNSBL settings are excluded from pfBlockerNG sync, so the peer can serve an empty alias.
+function pfblockerng_sync_dnsblip_mismatch(PfbToggle $syncinterfaces, mixed $synconchanges, PfbToggle $enable,
+	PfbToggle $dnsbl, mixed $dnsbl_ip_action, mixed $hasync_rules): bool {
+	return $syncinterfaces === PfbToggle::On
+	    && in_array($synconchanges, ['auto', 'manual'], TRUE)
+	    && $enable === PfbToggle::On
+	    && $dnsbl === PfbToggle::On
+	    && $hasync_rules === 'on'
+	    && pfb_dnsblip_action_value($dnsbl_ip_action) !== 'Disabled';
+}
+
 /* Do the actual XMLRPC sync */
 function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout) {
 	global $g;
