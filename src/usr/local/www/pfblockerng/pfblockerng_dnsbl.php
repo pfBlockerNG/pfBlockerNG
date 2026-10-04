@@ -2915,6 +2915,7 @@ $section->addInput(new Form_StaticText(
 	'When IPs are found in any Domain based Feed, these IPs will be added to the <strong>pfB_DNSBL_IP</strong> IP Aliastable and<br />'
 	. ' a firewall rule will be added to block those IPs.<br /><br />'
 	. '<span class="text-danger">Note: </span>To utilize this feature, select the appropriate List Action and define the Inbound/Outbound Interfaces in the <strong>IP Tab</strong>.'
+	. '<br /><br />In a High Availability pair where pfSense synchronizes Firewall rules and the Sync tab\'s "Disable General/IP/DNSBL tab settings sync" is selected, configure DNSBL IP identically on both nodes (see the <strong>Sync Tab</strong>).'
 ));
 
 $list_action_text = 'Default: <strong>Disabled</strong>

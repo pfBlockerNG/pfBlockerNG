@@ -174,6 +174,15 @@ $tab_array[]	= array(gettext('Sync'),	true,	'/pfblockerng/pfblockerng_sync.php')
 if (function_exists('pfb_software_add_tab')) { pfb_software_add_tab($tab_array); }
 display_top_tabs($tab_array, true);
 
+// Stored flags, not the $pfb runtime mirrors: pfb_global() turns DNSBL off when its VIPs are invalid.
+if (pfblockerng_sync_dnsblip_mismatch($pconfig['syncinterfaces'], $pconfig['varsynconchanges'],
+    config_get_path('installedpackages/pfblockerng/config/0/enable_cb'),
+    config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl'),
+    config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/action'),
+    config_get_path('hasync/synchronizerules'))) {
+	print_info_box(gettext('<strong>DNSBL IP rules may be skipped on the High Availability peer.</strong> System &gt; High Availability Sync copies this firewall\'s rules, including the pfB_DNSBLIP_v4 auto rules, to the peer, but "Disable General/IP/DNSBL tab settings sync" keeps this firewall\'s DNSBL settings off the peer. Unless DNSBL and DNSBL IP are enabled there, the peer\'s pfB_DNSBLIP_v4 alias stays empty and pfSense skips those rules as "Unresolvable alias". Enable DNSBL with the same DNSBL IP settings on both nodes, or untick "Disable General/IP/DNSBL tab settings sync".'), 'warning');
+}
+
 $form = new Form('Save XMLRPC sync settings');
 
 $section = new Form_Section('XMLRPC Sync Settings');
@@ -208,7 +217,8 @@ $section->addInput(new Form_Checkbox(
 	NULL,
 	$pconfig['syncinterfaces'] === 'on' ? true:false,
 	'on'
-))->setHelp('When selected, the \'General\', \'IP\', and \'DNSBL\' tab customizations will not be sync\'d');
+))->setHelp('When selected, the \'General\', \'IP\', and \'DNSBL\' tab customizations will not be sync\'d'
+		. '<br /><br /><b>Note:</b> When System &gt; High Availability Sync also synchronizes Firewall rules, enable DNSBL with the same DNSBL IP settings on both nodes. Otherwise the peer skips the pfB_DNSBLIP_v4 auto rules as "Unresolvable alias".');
 $form->add($section);
 
 $section = new Form_Section('XMLRPC Replication Targets');

@@ -11497,6 +11497,20 @@ function pfb_remove_config_settings() {
 }
 
 
+// issue #3441: TRUE when pfSense HA copies this node's pfB_DNSBLIP_v4 auto rules to a peer whose DNSBL
+// settings are excluded from pfBlockerNG sync, so the peer serves an empty alias. Only the nine actions
+// pfb_firewall_rule() turns into rules count; Alias_*, Disabled and invalid values create no rule.
+function pfblockerng_sync_dnsblip_mismatch(mixed $syncinterfaces, mixed $synconchanges, mixed $enable, mixed $dnsbl,
+	mixed $dnsbl_ip_action, mixed $hasync_rules): bool {
+	return $syncinterfaces === 'on'
+	    && in_array($synconchanges, ['auto', 'manual'], TRUE)
+	    && $enable === 'on'
+	    && $dnsbl === 'on'
+	    && $hasync_rules === 'on'
+	    && in_array($dnsbl_ip_action, ['Deny_Both', 'Deny_Inbound', 'Deny_Outbound', 'Permit_Both', 'Permit_Inbound',
+		'Permit_Outbound', 'Match_Both', 'Match_Inbound', 'Match_Outbound'], TRUE);
+}
+
 /* Uses XMLRPC to synchronize the changes to a remote node */
 function pfblockerng_sync_on_changes() {
 	// Create array of sync settings and exit if sync is disabled.
