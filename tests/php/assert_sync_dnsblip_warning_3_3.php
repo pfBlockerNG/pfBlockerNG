@@ -89,6 +89,22 @@ function run_slice(string $code, array $vars): array
 	return get_defined_vars();
 }
 
+/** @return list<string> the PHP diagnostics raised while $body runs */
+function diagnostics_of(callable $body): array
+{
+	$seen = [];
+	set_error_handler(static function (int $errno, string $errstr) use (&$seen): bool {
+		$seen[] = $errstr;
+		return true;
+	});
+	try {
+		$body();
+	} finally {
+		restore_error_handler();
+	}
+	return $seen;
+}
+
 // --- behavioural doubles -------------------------------------------------------------------
 
 if (!function_exists('gettext')) {
@@ -98,31 +114,25 @@ if (!function_exists('gettext')) {
 	}
 }
 
-if (!function_exists('display_top_tabs')) {
-	function display_top_tabs(...$args): void
-	{
-	}
+function display_top_tabs(...$args): void
+{
 }
 
-if (!function_exists('print_info_box')) {
-	function print_info_box($msg, $class = 'alert-warning', $btn = '')
-	{
-		$GLOBALS['info_boxes'][] = [$msg, $class];
-	}
+function print_info_box($msg, $class = 'alert-warning', $btn = '')
+{
+	$GLOBALS['info_boxes'][] = [$msg, $class];
 }
 
-if (!function_exists('config_get_path')) {
-	function config_get_path(string $path, mixed $default = null): mixed
-	{
-		$node = $GLOBALS['test_config'];
-		foreach (explode('/', $path) as $segment) {
-			if (!is_array($node) || !array_key_exists($segment, $node)) {
-				return $default;
-			}
-			$node = $node[$segment];
+function config_get_path(string $path, mixed $default = null): mixed
+{
+	$node = $GLOBALS['test_config'];
+	foreach (explode('/', $path) as $segment) {
+		if (!is_array($node) || !array_key_exists($segment, $node)) {
+			return $default;
 		}
-		return $node;
+		$node = $node[$segment];
 	}
+	return $node;
 }
 
 /** Records every form element the page code builds, with its constructor args and help text. */
@@ -137,7 +147,7 @@ class Recording_Element
 		$GLOBALS['form_elements'][] = $this;
 	}
 
-	public function setHelp($help, ...$rest): static
+	public function setHelp($help): static
 	{
 		$this->help = $help;
 		return $this;
@@ -151,11 +161,6 @@ class Recording_Element
 	public function add($element)
 	{
 		return $element;
-	}
-
-	public function __call(string $name, array $arguments): static
-	{
-		return $this;
 	}
 }
 
@@ -190,7 +195,7 @@ function reset_state(array $config = []): void
 	$GLOBALS['test_config'] = $config;
 }
 
-// --- A: the production predicate -----------------------------------------------------------
+// --- setup: the production predicate, shared by sections A and B ---------------------------
 
 $predicate_error = null;
 try {
@@ -198,6 +203,8 @@ try {
 } catch (Throwable $error) {
 	$predicate_error = $error->getMessage();
 }
+
+// --- A: the production predicate -----------------------------------------------------------
 
 // (syncinterfaces, synconchanges, enable, dnsbl, dnsbl_ip_action, hasync_rules)
 $base = ['on', 'auto', 'on', 'on', 'Deny_Both', 'on'];
@@ -229,18 +236,25 @@ foreach ([
 	'NULL' => null,
 	'empty string' => '',
 	'array' => ['Deny_Both'],
+	'boolean TRUE' => true,
 ] as $label => $action) {
 	$matrix[] = ["rule-less action {$label}", with_args($base, [4 => $action]), false];
 }
 $matrix[] = ['syncinterfaces empty string', with_args($base, [0 => '']), false];
 $matrix[] = ['syncinterfaces NULL', with_args($base, [0 => null]), false];
+$matrix[] = ["syncinterfaces 'ON'", with_args($base, [0 => 'ON']), false];
+$matrix[] = ['syncinterfaces TRUE', with_args($base, [0 => true]), false];
 $matrix[] = ["synconchanges 'disabled'", with_args($base, [1 => 'disabled']), false];
 $matrix[] = ['synconchanges empty string', with_args($base, [1 => '']), false];
 $matrix[] = ["synconchanges 'AUTO'", with_args($base, [1 => 'AUTO']), false];
 $matrix[] = ["synconchanges ['auto']", with_args($base, [1 => ['auto']]), false];
+$matrix[] = ['synconchanges TRUE', with_args($base, [1 => true]), false];
 $matrix[] = ['enable empty string', with_args($base, [2 => '']), false];
 $matrix[] = ["enable 'ON'", with_args($base, [2 => 'ON']), false];
+$matrix[] = ['enable TRUE', with_args($base, [2 => true]), false];
 $matrix[] = ['dnsbl empty string', with_args($base, [3 => '']), false];
+$matrix[] = ["dnsbl 'ON'", with_args($base, [3 => 'ON']), false];
+$matrix[] = ['dnsbl TRUE', with_args($base, [3 => true]), false];
 $matrix[] = ['hasync NULL', with_args($base, [5 => null]), false];
 $matrix[] = ["hasync 'ON'", with_args($base, [5 => 'ON']), false];
 $matrix[] = ['hasync TRUE', with_args($base, [5 => true]), false];
@@ -274,7 +288,8 @@ function sync_page_info_boxes(array $config): array
 	$code = source_slice($sync, "\$pfb['sconfig'] = config_get_path(", '// Select field options')
 		. source_slice($sync, 'display_top_tabs($tab_array, true);', '$form = new Form(');
 	// The runtime mirror is already off, as pfb_global() leaves it when the DNSBL VIPs are invalid.
-	run_slice($code, ['pfb' => ['enable' => 'on', 'dnsbl' => '', 'dnsbl_ip' => 'Disabled'], 'tab_array' => []]);
+	$diagnostics = diagnostics_of(static fn () => run_slice($code, ['pfb' => ['enable' => 'on', 'dnsbl' => '', 'dnsbl_ip' => 'Disabled'], 'tab_array' => []]));
+	same([], $diagnostics, 'PHP diagnostics raised by the Sync page code');
 	return $GLOBALS['info_boxes'];
 }
 
@@ -335,13 +350,14 @@ foreach ($flips as $name => $flip) {
 row('C1 Sync tab checkbox help names the HA requirement and the alias', static function (): void {
 	global $sync;
 	reset_state();
-	run_slice(
+	$diagnostics = diagnostics_of(static fn () => run_slice(
 		source_slice($sync, "\$form = new Form('Save XMLRPC sync settings');", "\$section = new Form_Section('XMLRPC Replication Targets');"),
 		[
 			'pconfig' => ['varsynconchanges' => 'auto', 'varsynctimeout' => 150, 'syncinterfaces' => 'on'],
 			'options_varsynconchanges' => ['disabled' => 'Do not sync this package configuration', 'auto' => 'Sync to configured system backup server', 'manual' => 'Sync to host(s) defined below'],
 		],
-	);
+	));
+	same([], $diagnostics, 'PHP diagnostics raised by the Sync page form code');
 	$checkbox = null;
 	foreach ($GLOBALS['form_elements'] as $element) {
 		if ($element instanceof Form_Checkbox && ($element->args[0] ?? null) === 'syncinterfaces') {
@@ -357,7 +373,8 @@ row('C1 Sync tab checkbox help names the HA requirement and the alias', static f
 row('C2 DNSBL tab DNSBL IPs note points at the Sync tab for HA pairs', static function (): void {
 	global $dnsbl;
 	reset_state();
-	run_slice(source_slice($dnsbl, "\$section = new Form_Section('DNSBL IPs');", '$list_action_text = '), []);
+	$diagnostics = diagnostics_of(static fn () => run_slice(source_slice($dnsbl, "\$section = new Form_Section('DNSBL IPs');", '$list_action_text = '), []));
+	same([], $diagnostics, 'PHP diagnostics raised by the DNSBL page code');
 	$note = null;
 	foreach ($GLOBALS['form_elements'] as $element) {
 		if ($element instanceof Form_StaticText) {
