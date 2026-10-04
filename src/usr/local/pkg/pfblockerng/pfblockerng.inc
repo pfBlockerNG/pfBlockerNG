@@ -21485,7 +21485,7 @@ function pfblockerng_sync_dnsblip_mismatch(PfbToggle $syncinterfaces, mixed $syn
 	    && $enable === PfbToggle::On
 	    && $dnsbl === PfbToggle::On
 	    && $hasync_rules === 'on'
-	    && pfb_dnsblip_action_value($dnsbl_ip_action) !== 'Disabled';
+	    && str_starts_with(pfb_dnsblip_action_value($dnsbl_ip_action), 'Deny_');
 }
 
 /* Do the actual XMLRPC sync */

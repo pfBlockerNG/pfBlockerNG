@@ -43,8 +43,17 @@ final class SyncDnsblipMismatchTest extends TestCase
 		yield 'R2 all active with manual sync' => [
 			'R2 all active with manual sync', TRUE, PfbToggle::On, 'manual', PfbToggle::On, PfbToggle::On, 'Deny_Both', 'on',
 		];
-		yield 'R3 another valid DNSBL IP action' => [
-			'R3 another valid DNSBL IP action', TRUE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, 'Alias_Native', 'on',
+		yield 'R3 Alias Native does not generate firewall rules' => [
+			'R3 Alias Native does not generate firewall rules', FALSE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, 'Alias_Native', 'on',
+		];
+		yield 'Deny Inbound generates firewall rules' => [
+			'Deny Inbound generates firewall rules', TRUE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, 'Deny_Inbound', 'on',
+		];
+		yield 'Deny Outbound generates firewall rules' => [
+			'Deny Outbound generates firewall rules', TRUE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, 'Deny_Outbound', 'on',
+		];
+		yield 'Alias Deny does not generate firewall rules' => [
+			'Alias Deny does not generate firewall rules', FALSE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, 'Alias_Deny', 'on',
 		];
 		yield 'R4 settings sync remains enabled' => [
 			'R4 settings sync remains enabled', FALSE, PfbToggle::Off, 'auto', PfbToggle::On, PfbToggle::On, 'Deny_Both', 'on',
