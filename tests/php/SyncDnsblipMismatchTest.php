@@ -55,6 +55,16 @@ final class SyncDnsblipMismatchTest extends TestCase
 		yield 'Alias Deny does not generate firewall rules' => [
 			'Alias Deny does not generate firewall rules', FALSE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, 'Alias_Deny', 'on',
 		];
+		foreach (['Permit_Inbound', 'Permit_Outbound', 'Permit_Both', 'Match_Inbound', 'Match_Outbound', 'Match_Both'] as $action) {
+			yield "{$action} generates firewall rules" => [
+				"{$action} generates firewall rules", TRUE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, $action, 'on',
+			];
+		}
+		foreach (['Alias_Permit', 'Alias_Match'] as $action) {
+			yield "{$action} does not generate firewall rules" => [
+				"{$action} does not generate firewall rules", FALSE, PfbToggle::On, 'auto', PfbToggle::On, PfbToggle::On, $action, 'on',
+			];
+		}
 		yield 'R4 settings sync remains enabled' => [
 			'R4 settings sync remains enabled', FALSE, PfbToggle::Off, 'auto', PfbToggle::On, PfbToggle::On, 'Deny_Both', 'on',
 		];

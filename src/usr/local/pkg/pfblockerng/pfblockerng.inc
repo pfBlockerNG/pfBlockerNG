@@ -21480,12 +21480,14 @@ function pfblockerng_sync_sections($include_interfaces) {
 // DNSBL settings are excluded from pfBlockerNG sync, so the peer can serve an empty alias.
 function pfblockerng_sync_dnsblip_mismatch(PfbToggle $syncinterfaces, mixed $synconchanges, PfbToggle $enable,
 	PfbToggle $dnsbl, mixed $dnsbl_ip_action, mixed $hasync_rules): bool {
+	$dnsbl_ip_action = pfb_dnsblip_action_value($dnsbl_ip_action);
 	return $syncinterfaces === PfbToggle::On
 	    && in_array($synconchanges, ['auto', 'manual'], TRUE)
 	    && $enable === PfbToggle::On
 	    && $dnsbl === PfbToggle::On
 	    && $hasync_rules === 'on'
-	    && str_starts_with(pfb_dnsblip_action_value($dnsbl_ip_action), 'Deny_');
+	    && $dnsbl_ip_action !== 'Disabled'
+	    && !str_starts_with($dnsbl_ip_action, 'Alias_');
 }
 
 /* Do the actual XMLRPC sync */
