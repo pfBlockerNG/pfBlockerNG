@@ -180,7 +180,7 @@ if (pfblockerng_sync_dnsblip_mismatch($pconfig['syncinterfaces'], $pconfig['vars
     config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl'),
     config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/action'),
     config_get_path('hasync/synchronizerules'))) {
-	print_info_box(gettext('<strong>DNSBL IP rules may be skipped on the High Availability peer.</strong> System &gt; High Availability Sync copies this firewall\'s rules, including the pfB_DNSBLIP_v4 auto rules, to the peer, but "Disable General/IP/DNSBL tab settings sync" keeps this firewall\'s DNSBL settings off the peer. Unless DNSBL and DNSBL IP are enabled there, the peer\'s pfB_DNSBLIP_v4 alias stays empty and pfSense skips those rules as "Unresolvable alias". Enable DNSBL with the same DNSBL IP settings on both nodes, or untick "Disable General/IP/DNSBL tab settings sync".'), 'warning');
+	print_info_box(gettext('<strong>DNSBL IP rules may be skipped on the High Availability peer.</strong> System &gt; High Availability Sync copies this firewall\'s rules, including the pfB_DNSBLIP_v4 auto rules, to the peer, but "Disable General/IP/DNSBL tab settings sync" keeps this firewall\'s DNSBL settings off the peer. Unless DNSBL and DNSBL IP are enabled there, the peer\'s pfB_DNSBLIP_v4 alias stays empty and pfSense skips those rules as "Unresolvable alias". Enable DNSBL with the same DNSBL IP settings on both nodes, or untick "Disable General/IP/DNSBL tab settings sync". If the peer\'s pfBlockerNG log still shows "DNSBL disabled", re-select the DNSBL Virtual IP on the peer: a VIP that was deleted and re-created keeps a stale reference until it is selected again.'), 'warning');
 }
 
 $form = new Form('Save XMLRPC sync settings');

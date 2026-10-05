@@ -308,6 +308,7 @@ row('B1 every stored input on: one warning naming the peer, the alias and the re
 		'Unresolvable alias',
 		'Enable DNSBL with the same DNSBL IP settings on both nodes',
 		'untick "Disable General/IP/DNSBL tab settings sync"',
+		're-select the DNSBL Virtual IP on the peer',
 	] as $needle) {
 		contains($needle, $boxes[0][0], 'warning text');
 	}
