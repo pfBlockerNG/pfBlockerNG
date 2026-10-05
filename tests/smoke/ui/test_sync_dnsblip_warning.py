@@ -21,6 +21,7 @@ pytestmark = pytest.mark.ui_render
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 WARNING_MARKER = "DNSBL IP rules may be skipped on the High Availability peer"
+WARNING_HINT = "re-select the DNSBL Virtual IP on the peer"
 
 CONFIG = {
     "installedpackages/pfblockerngsync/config/0/syncinterfaces": "on",
@@ -73,6 +74,9 @@ def test_sync_page_warns_until_hasync_rule_sync_is_cleared(
     )
     assert warning is not None, (
         f"before: expected {WARNING_MARKER!r} inside an alert-warning element; marker_present={WARNING_MARKER in html}"
+    )
+    assert WARNING_HINT in warning.group(0), (
+        f"before: expected {WARNING_HINT!r} inside the alert-warning element; found {warning.group(0)!r}"
     )
 
     helpers.config_restore_state(smoke_vm, "hasync/synchronizerules", (False, ""))
