@@ -4218,7 +4218,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										return '';
 									}, "{$file_dwn}.pre");
 
-							if (!$custom && $file_chk == 0 && empty($ip_data)) {
+							if (!$custom && $file_chk == 0 && pfb_is_empty($ip_data)) {
 									if ($list['vtype'] == '_v6') {
 										$p_ip = "::{$pfb['ip_ph']}";
 									} else {
