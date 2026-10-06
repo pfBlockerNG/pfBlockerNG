@@ -30,8 +30,8 @@ pfb_global();
 $pfb['sconfig'] = PfbConfig::readSection('installedpackages/pfblockerngsync/config/0');
 
 $pconfig = array();
-$pconfig['varsynconchanges']	= $pfb['sconfig']['varsynconchanges']	?: '';
-$pconfig['varsynctimeout']	= $pfb['sconfig']['varsynctimeout']	?: 150;
+$pconfig['varsynconchanges']	= ($pfb['sconfig']['varsynconchanges'] ?? '') ?: '';
+$pconfig['varsynctimeout']	= ($pfb['sconfig']['varsynctimeout'] ?? 150) ?: 150;
 // issue #2123: default owned by the registry (ADR-29). This page never replaces
 // $pconfig with raw $_POST -- a save either redirects or re-renders from the section
 // read above -- so the value stays a PfbToggle all the way to the render.
@@ -252,7 +252,7 @@ $section->addInput(new Form_StaticText(
 	. 'account) is recommended, so the primary account is not exposed for syncing.'
 	. '</small>'
 ));
-$rowdata = $pfb['sconfig']['row'];
+$rowdata = $pfb['sconfig']['row'] ?? null;
 
 // Add empty row placeholder if no rows defined
 if (empty($rowdata)) {
