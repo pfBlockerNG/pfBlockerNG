@@ -3013,8 +3013,8 @@ function pfb_dnsbl_vip_missing(?string $vip): bool {
 	return !empty($vip) && get_configured_vip_interface($vip) === null;
 }
 
-// HTML warning for the DNSBL page: a stored manual-mode VIP id that no longer exists leaves DNSBL
-// disabled at every update. Auto mode repoints the id itself, so it never warns. '' = nothing to show.
+// HTML warning for the DNSBL page: a stored manual-mode VIP id that no longer exists stops DNSBL from
+// running. Auto mode repoints the id itself, so it never warns. '' = nothing to show.
 function pfb_dnsbl_stale_vip_warning(PfbToggle $auto, ?string $vip4, ?string $vip6): string {
 	if ($auto === PfbToggle::On) {
 		return '';
@@ -3032,7 +3032,7 @@ function pfb_dnsbl_stale_vip_warning(PfbToggle $auto, ?string $vip4, ?string $vi
 	}
 
 	return '<strong>The saved DNSBL Virtual IP no longer exists.</strong> ' . $missing
-		. 'DNSBL stays disabled at every update until you re-select the DNSBL Virtual IP below and save. '
+		. 'DNSBL cannot run until you re-select the DNSBL Virtual IP below and save. '
 		. 'This happens when a VIP is deleted and re-created.';
 }
 

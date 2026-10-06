@@ -531,6 +531,7 @@ restarts the Resolver iff that marker drifts from the shipped files' fingerprint
 A DNSBL "VIP" block sinks the queried name to a **sinkhole Virtual IP** that the DNSBL web server
 (lighttpd) listens on. The VIP must exist before DNSBL can be enabled; `pfb_validate_vips()`
 force-disables DNSBL if it is missing or invalid.
+A stored VIP id that no longer exists in Firewall > Virtual IPs (for example after the VIP is deleted and re-created) fails validation with `IPv4/IPv6 VIP <id> no longer exists in Firewall > Virtual IPs`, and the DNSBL page warns in manual mode until the VIP is re-selected (#3456).
 
 **Create VIPs automatically** (`pfb_dnsvip_auto`, default off): when set, pfBlockerNG owns the
 sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.

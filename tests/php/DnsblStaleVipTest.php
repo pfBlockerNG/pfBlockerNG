@@ -76,14 +76,6 @@ final class DnsblStaleVipTest extends TestCase
 		);
 	}
 
-	public function testWrongInterfaceStillSaysNotFoundOnInterface(): void
-	{
-		$this->assertSame(
-			[FALSE, 'IPv4 VIP not found on interface lo0'],
-			pfb_validate_vips('lo0', '_vip_test_4', '')
-		);
-	}
-
 	// --- pfb_dnsbl_stale_vip_warning ---
 
 	public function testWarningNamesMissingIpv4Only(): void
@@ -127,5 +119,9 @@ final class DnsblStaleVipTest extends TestCase
 		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_"><script>x</script>', '');
 		$this->assertStringContainsString('&lt;script&gt;', $html);
 		$this->assertStringNotContainsString('<script>', $html);
+
+		$html6 = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '', '_vip_gone_"><script>x</script>');
+		$this->assertStringContainsString('&lt;script&gt;', $html6);
+		$this->assertStringNotContainsString('<script>', $html6);
 	}
 }

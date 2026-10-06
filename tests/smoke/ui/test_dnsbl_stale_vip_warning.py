@@ -28,7 +28,7 @@ CFG = "installedpackages/pfblockerngdnsblsettings/config/0"
 @pytest.fixture
 def stale_vip_config(smoke_vm: SmokeVM) -> Iterator[None]:
     """Seed a manual-mode DNSBL config pointing at a VIP id that does not exist, then restore it."""
-    config = {f"{CFG}/pfb_dnsvip4": STALE_VIP, f"{CFG}/pfb_dnsvip_auto": ""}
+    config = {f"{CFG}/pfb_dnsvip4": STALE_VIP, f"{CFG}/pfb_dnsvip6": "", f"{CFG}/pfb_dnsvip_auto": ""}
     saved = {path: helpers.config_get_state(smoke_vm, path) for path in config}
     for path, value in config.items():
         helpers.config_set(smoke_vm, path, value)
@@ -51,13 +51,17 @@ def _render(smoke_vm: SmokeVM, webui: WebUI) -> str:
     return resp.text
 
 
-def test_dnsbl_page_warns_about_deleted_vip_in_manual_mode_only(
+def test_dnsbl_page_warns_only_for_a_deleted_vip_in_manual_mode(
     smoke_vm: SmokeVM, webui: WebUI, stale_vip_config: None
 ) -> None:
-    """Given a stored VIP id absent from Virtual IPs, manual mode warns naming it; auto mode does not."""
+    """Manual mode warns naming a deleted VIP; auto mode and a cleared VIP do not."""
     html = _render(smoke_vm, webui)
+    # Tempered: the box may not run into another alert div (the pfSense info box nests alert-icon divs, so
+    # match only a standalone ``alert`` class token).
+    other_alert = r'<div[^>]+class="(?:[^"]*\s)?alert[\s"]'
     warning = re.search(
-        rf'<div[^>]+class="[^"]*\balert-warning\b[^"]*"[^>]*>.*?{re.escape(WARNING_MARKER)}.*?</div>',
+        rf'<div[^>]+class="[^"]*\balert-warning\b[^"]*"[^>]*>(?:(?!{other_alert}).)*?{re.escape(WARNING_MARKER)}'
+        rf"(?:(?!{other_alert}).)*?</div>",
         html,
         re.DOTALL,
     )
@@ -69,3 +73,9 @@ def test_dnsbl_page_warns_about_deleted_vip_in_manual_mode_only(
     helpers.config_set(smoke_vm, f"{CFG}/pfb_dnsvip_auto", "on")
     html = _render(smoke_vm, webui)
     assert WARNING_MARKER not in html, f"auto: expected no {WARNING_MARKER!r}, found the marker"
+
+    helpers.config_set(smoke_vm, f"{CFG}/pfb_dnsvip_auto", "")
+    helpers.config_set(smoke_vm, f"{CFG}/pfb_dnsvip4", "")
+    helpers.config_set(smoke_vm, f"{CFG}/pfb_dnsvip6", "")
+    html = _render(smoke_vm, webui)
+    assert WARNING_MARKER not in html, f"no VIP: expected no {WARNING_MARKER!r}, found the marker"
