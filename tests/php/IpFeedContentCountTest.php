@@ -108,12 +108,26 @@ final class IpFeedContentCountTest extends TestCase
 		$this->assertSame('1', pfb_ip_feed_content_count($this->grep, $this->feed("not-an-ip\n")));
 	}
 
+	public function testSemicolonLedLineIsAProbeCommentEvenWhenItHoldsAnAddress(): void
+	{
+		// The probe is not the parser: the caller writes the placeholder only if the parser also found nothing.
+		$this->assertSame('0', pfb_ip_feed_content_count($this->grep, $this->feed("; 1.2.3.4\n")));
+	}
+
+	public function testSingleSlashLedLinesAreContent(): void
+	{
+		$this->assertSame('2', pfb_ip_feed_content_count(
+			$this->grep,
+			$this->feed("/w00tw00t.at.blackhats.romanian.anti-sec:)\n/etc/hosts\n")
+		));
+	}
+
 	public function testShellHostilePathIsQuoted(): void
 	{
 		$dir = sys_get_temp_dir() . '/pfb3457_dir_' . bin2hex(random_bytes(4));
 		$this->assertTrue(mkdir($dir, 0700));
 		$this->cleanup[] = $dir;
-		$file = "{$dir}/a b'c;\$(x).orig";
+		$file = "{$dir}/a b'c;\$(touch x).orig";
 		file_put_contents($file, "; only\n");
 		$this->cleanup[] = $file;
 

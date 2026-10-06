@@ -5009,11 +5009,17 @@ def test_ip_feed_turning_comment_only_clears_stale_entries(deployed_vm: SmokeVM,
         empty_before = h.count_log_marker(deployed_vm, h.PFB_LOG, empty_marker)
 
         # The IP update/updateip verbs reuse the stored feed (no refetch); only the scheduled
-        # cron detector sees the changed body (no validator -> plain 200 -> hash differs).
+        # cron detector sees the changed body (the mock ignores If-Modified-Since -> plain 200 -> hash differs).
+        chg_marker = h.detector_status_marker(f"{spec.aliasname}_{spec.family}", "( content changed )")
+        chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
         mock_feeds.set_content(feed_name, comment_only)
         h.pin_cron_due(deployed_vm)
         h.reload(deployed_vm, "cron")
         h.apply_filter_sync(deployed_vm)
+        chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
+        assert chg_after >= chg_before + 1, (
+            f"cron detector never logged {chg_marker!r} (before={chg_before}, after={chg_after})"
+        )
 
         members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert not h.member_present(members, stale_host), (
@@ -5023,3 +5029,20 @@ def test_ip_feed_turning_comment_only_clears_stale_entries(deployed_vm: SmokeVM,
         assert empty_after == empty_before + 1, (
             f"expected exactly ONE new {empty_marker!r} line (before={empty_before}, after={empty_after})"
         )
+
+
+def test_ip_feed_semicolon_led_data_lines_still_load(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #3457: a ``;``-led line that holds an address still loads.
+
+    The emptiness probe treats the line as a comment, but the parser extracts the address,
+    so the placeholder must not overwrite parsed entries (#3457 review).
+    """
+    host = "203.0.113.92"
+    feed_url = mock_feeds.register("ip_3457_semicolon_data.txt", f"; {host}\n")
+    spec = h.IpCase(aliasname="smokeip3457s", feed_url=feed_url, header="smokeip3457s", family="v4")
+
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
+
+    with h.CaseContext(deployed_vm, spec):
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        assert h.member_present(members, host), f"{host} not in {spec.alias}: {members}"
