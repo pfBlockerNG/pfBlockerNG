@@ -6404,6 +6404,26 @@
             }
         ]
     },
+    "pfb_ip_feed_content_count": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "grep",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_in_allowlist": {
         "returnsRef": false,
         "returnType": null,

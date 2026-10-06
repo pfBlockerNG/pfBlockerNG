@@ -734,6 +734,12 @@ function pfb_ip_script_probe_staged(bool $custom, string $parse_path, ?string $s
 	    static fn (string $path): mixed => $custom ? NULL : $probe($path), $known_path);
 }
 
+// Count lines of an IP feed that are not blank and not a '#', ';', '!' or '//' comment (leading whitespace/CR
+// allowed). '0' marks a comment-only feed; the caller writes the placeholder only if the parser also found nothing.
+function pfb_ip_feed_content_count(string $grep, string $path): string {
+	return (string) exec("{$grep} -cv " . escapeshellarg('^[[:space:]]*\([#;!]\|//\)\|^[[:space:]]*$') . ' ' . escapeshellarg($path));
+}
+
 function pfb_dnsbl_script_consume_staged(string $parse_path, ?string $staged_path, callable $consumer,
     ?string $known_path = NULL): mixed {
 	return pfb_list_script_consume_staged($parse_path, $staged_path, $consumer, $known_path);
@@ -4207,12 +4213,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								static function (string $parse_path) use ($pfb, $pfb_norm, $file_dwn): string {
 										$pfb_probe = ($parse_path === $pfb_norm['path']) ? "{$file_dwn}.orig" : $parse_path;
 										if (file_exists($pfb_probe) && @filesize($pfb_probe) > 0) {
-											return (string) exec("{$pfb['grep']} -cv '^#\|^\$' " . escapeshellarg($pfb_probe));
+											return pfb_ip_feed_content_count($pfb['grep'], $pfb_probe);
 										}
 										return '';
 									}, "{$file_dwn}.pre");
 
-							if (!$custom && $file_chk == 0) {
+							if (!$custom && $file_chk == 0 && pfb_is_empty($ip_data)) {
 									if ($list['vtype'] == '_v6') {
 										$p_ip = "::{$pfb['ip_ph']}";
 									} else {
