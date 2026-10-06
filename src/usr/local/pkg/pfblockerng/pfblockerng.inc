@@ -3008,6 +3008,34 @@ function pfb_dnsbl_hold_stale_rebuild_skip(bool $stale_generation_rebuild, bool 
 	return $stale_generation_rebuild && $is_hold && !$orig_exists;
 }
 
+// TRUE iff $vip is a stored VIP id that pfSense no longer knows (get_configured_vip_interface() is NULL).
+function pfb_dnsbl_vip_missing(?string $vip): bool {
+	return !empty($vip) && get_configured_vip_interface($vip) === null;
+}
+
+// HTML warning for the DNSBL page: a stored manual-mode VIP id that no longer exists stops DNSBL from
+// running. Auto mode repoints the id itself, so it never warns. '' = nothing to show.
+function pfb_dnsbl_stale_vip_warning(PfbToggle $auto, ?string $vip4, ?string $vip6): string {
+	if ($auto === PfbToggle::On) {
+		return '';
+	}
+
+	$missing = '';
+	if (pfb_dnsbl_vip_missing($vip4)) {
+		$missing .= sprintf('The saved IPv4 VIP (%s) is not in Firewall &gt; Virtual IPs. ', htmlspecialchars($vip4));
+	}
+	if (pfb_dnsbl_vip_missing($vip6)) {
+		$missing .= sprintf('The saved IPv6 VIP (%s) is not in Firewall &gt; Virtual IPs. ', htmlspecialchars($vip6));
+	}
+	if ($missing === '') {
+		return '';
+	}
+
+	return '<strong>The saved DNSBL Virtual IP no longer exists.</strong> ' . $missing
+		. 'DNSBL cannot run until you re-select the DNSBL Virtual IP below and save. '
+		. 'This happens when a VIP is deleted and re-created.';
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -3018,6 +3046,15 @@ function pfb_validate_vips(string $interface, string|null $vip4 = '', string|nul
 
 	if (!$enabled4 && !$enabled6) {
 		return [FALSE, gettext('no VIP configured')];
+	}
+
+	// A stored id absent from virtualip/vip (VIP deleted and re-created gets a new uniqid) makes
+	// pfSense return NULL, which would otherwise read as "not found on interface".
+	if ($enabled4 && pfb_dnsbl_vip_missing($vip4)) {
+		return [FALSE, sprintf(gettext('IPv4 VIP %s no longer exists in Firewall > Virtual IPs'), $vip4)];
+	}
+	if ($enabled6 && pfb_dnsbl_vip_missing($vip6)) {
+		return [FALSE, sprintf(gettext('IPv6 VIP %s no longer exists in Firewall > Virtual IPs'), $vip6)];
 	}
 
 	if ($enabled4 && ($interface != get_configured_vip_interface($vip4))) {

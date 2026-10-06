@@ -559,6 +559,11 @@ if (!function_exists('get_configured_vip_interface')) {
 			return 'opt-double';
 		}
 
+		// pfSense returns NULL for a uniqid absent from virtualip/vip (deleted VIP).
+		if (is_string($vipif) && str_starts_with($vipif, '_vip_gone_')) {
+			return null;
+		}
+
 		throw new LogicException(__FUNCTION__ . '() double not implemented for VIP id: ' . (string) $vipif);
 	}
 }

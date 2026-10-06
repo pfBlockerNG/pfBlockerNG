@@ -2640,6 +2640,11 @@ if (isset($_REQUEST['savemsg'])) {
 	print_info_box($savemsg);
 }
 
+$pfb_stale_vip_warning = pfb_dnsbl_stale_vip_warning(PfbConfig::read('dnsbl/pfb_dnsvip_auto'), PfbConfig::read('dnsbl/pfb_dnsvip4'), PfbConfig::read('dnsbl/pfb_dnsvip6'));
+if ($pfb_stale_vip_warning !== '') {
+	print_info_box($pfb_stale_vip_warning, 'warning');
+}
+
 $form = new Form('Save DNSBL settings');
 
 $section = new Form_Section('DNSBL');
