@@ -734,8 +734,8 @@ function pfb_ip_script_probe_staged(bool $custom, string $parse_path, ?string $s
 	    static fn (string $path): mixed => $custom ? NULL : $probe($path), $known_path);
 }
 
-// Count lines of an IP feed that could carry an entry: not blank and not a '#', ';', '!' or '//' comment
-// (leading whitespace/CR allowed). '0' means the feed is empty, so the caller writes the placeholder.
+// Count lines of an IP feed that are not blank and not a '#', ';', '!' or '//' comment (leading whitespace/CR
+// allowed). '0' marks a comment-only feed; the caller writes the placeholder only if the parser also found nothing.
 function pfb_ip_feed_content_count(string $grep, string $path): string {
 	return (string) exec("{$grep} -cv " . escapeshellarg('^[[:space:]]*\([#;!]\|//\)\|^[[:space:]]*$') . ' ' . escapeshellarg($path));
 }
@@ -4218,7 +4218,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										return '';
 									}, "{$file_dwn}.pre");
 
-							if (!$custom && $file_chk == 0) {
+							if (!$custom && $file_chk == 0 && empty($ip_data)) {
 									if ($list['vtype'] == '_v6') {
 										$p_ip = "::{$pfb['ip_ph']}";
 									} else {
