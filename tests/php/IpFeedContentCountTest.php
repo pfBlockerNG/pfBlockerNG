@@ -8,10 +8,10 @@ use PHPUnit\Framework\TestCase;
 /**
  * pfb_ip_feed_content_count() — issue #3457: the IP emptiness probe must not
  * count blank lines or '#', ';', '!', '//' comment lines, so a feed that turned
- * comment-only (e.g. Spamhaus EDROP, whose body is all ';' lines) is empty and
- * takes the "Empty file, Adding '<placeholder>'" path instead of keeping its
- * stale entries. The probe is not the parser: a non-comment line without an IP
- * still counts.
+ * comment-only (e.g. Spamhaus EDROP, whose body is all ';' lines) reads '0'. The
+ * caller then writes the "Empty file, Adding '<placeholder>'" entry only if the
+ * parser also found nothing, so its stale entries leave the alias. The probe is
+ * not the parser: a non-comment line without an IP still counts.
  */
 #[CoversFunction('pfb_ip_feed_content_count')]
 final class IpFeedContentCountTest extends TestCase
