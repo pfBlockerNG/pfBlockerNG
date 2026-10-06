@@ -3225,6 +3225,33 @@
             }
         ]
     },
+    "pfb_dnsbl_stale_vip_warning": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "auto",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbToggle",
+                "default": null
+            },
+            {
+                "name": "vip4",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "vip6",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_strip_bom": {
         "returnsRef": false,
         "returnType": "string",
@@ -3398,6 +3425,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_vip_missing": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "vip",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
                 "default": null
             }
         ]
