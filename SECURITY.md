@@ -27,6 +27,10 @@ We strongly encourage reporting vulnerabilities through **GitHub Private Securit
 
 This is our preferred method as it allows private communication, proper tracking, and coordinated disclosure (including the option to publish a CVE).
 
+### Email
+
+If you cannot use GitHub, email [security@pfblockerng.com](mailto:security@pfblockerng.com). This address also receives automated reports from [Anthropic's OSS Scanner](https://red.anthropic.com/oss-scanner/).
+
 ### What to Include
 
 When reporting a vulnerability, please include:
