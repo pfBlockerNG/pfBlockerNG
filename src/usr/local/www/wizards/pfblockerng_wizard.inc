@@ -197,6 +197,7 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['outbound_interface']		= config_get_path('pfblockerng_wizard/step2/outbound_interface'); 
 	$new_config['pfblockerngipsettings']['config'][0]['outbound_deny_action']	= 'reject';	
 	$new_config['pfblockerngipsettings']['config'][0]['pass_order']			= 'order_0';
+	$new_config['pfblockerngipsettings']['config'][0]['autorule_suffix']		= 'autorule';	// the registry fresh-install default, written so the upgrade grandfather pass cannot flip it
 
 	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
 	$pfb_auto_wiz = (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')) === PfbToggle::On);

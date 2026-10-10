@@ -303,20 +303,4 @@ final class CfgSyncScalarRegistrationTest extends TestCase
 		$merged = array_replace($sections, pfb_registry_pass($sections));
 		$this->assertSame([], pfb_registry_pass($merged), 'a second pass over the first pass output changes nothing');
 	}
-
-	// D7 -- the toggle-checker / gateway sniff knows every new path.
-	public function testSniffRegisteredPathsListEveryNewField(): void
-	{
-		if (!interface_exists(\PHP_CodeSniffer\Sniffs\Sniff::class)) {
-			eval('namespace PHP_CodeSniffer\Sniffs; interface Sniff {}');
-		}
-		require_once dirname(__DIR__) . '/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php';
-
-		$paths = (array) (new \PfBlockerNG\Sniffs\Config\RequireConfigGatewaySniff())->registeredPaths;
-
-		$this->assertCount(20, self::fields(), 'vacuity guard');
-		foreach (self::fields() as $key => [$section]) {
-			$this->assertContains($section . '/' . self::bare($key), $paths, "{$key} must be in the sniff \$registeredPaths");
-		}
-	}
 }

@@ -200,6 +200,15 @@ final class SyncPolicyProjectionTest extends TestCase
 		}
 	}
 
+	// A row-local key name is local only inside a group's `config/<N>` rows, not at the same depth elsewhere.
+	public function testRowLocalKeyNameOutsideGroupRowsStaysPolicy(): void
+	{
+		$this->assertSame(
+			['installedpackages/pfblockerngblacklist/item/0/srcint' => 'lan'],
+			$this->project(['pfblockerngblacklist' => ['item' => [['srcint' => 'lan']]]])
+		);
+	}
+
 	// B7 -- in pfblockerngglobal only feed_* (which includes feed_alt_*) is policy.
 	public function testGlobalSectionProjectsOnlyFeedPrefixedKeys(): void
 	{

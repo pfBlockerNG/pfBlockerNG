@@ -21638,6 +21638,8 @@ function pfb_sync_policy_projection(array $sections): array {
  * therefore agree, whatever their key order or row-index gaps; a changed value, row order or
  * leaf moves the digest.
  *
+ * Callers pass leaves already in the persisted form (true as '', false omitted): normalising them is the manual builder's job.
+ *
  * @param  array<string,mixed> $projection  pfb_sync_policy_projection() output.
  * @return string                           64 lowercase hex characters.
  */

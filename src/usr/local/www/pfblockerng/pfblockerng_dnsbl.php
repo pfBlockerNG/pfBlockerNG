@@ -3245,10 +3245,9 @@ $group->add(new Form_Checkbox(
 // and $options_dnsbl_dot_block_int are both aliases of $options_dnsbl_interface (identical
 // interface list), so this one computed set/JSON serves both sections -- see the DoT/DoQ
 // Block section below, which reuses it via a JS alias instead of recomputing it.
-$pfb_ipconfig_raw = config_get_path('installedpackages/pfblockerngipsettings/config/0', []);
 $pfb_redir_fill_ifaces = array_unique(array_filter(array_merge(
-	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['inbound_interface'] ?? ''))),
-	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['outbound_interface'] ?? '')))
+	array_filter(array_map('trim', explode(',', PfbConfig::read('ip/inbound_interface')))),
+	array_filter(array_map('trim', explode(',', PfbConfig::read('ip/outbound_interface'))))
 )));
 // Restrict to only interfaces present in the DNS Redirect option list.
 $pfb_redir_fill_ifaces = array_values(array_intersect($pfb_redir_fill_ifaces, array_keys($options_dnsbl_redir_int)));
