@@ -58,8 +58,9 @@ a missing or unknown value and pins the local set by name.
 `pfb_sync_policy_merge($incoming, $current)` (issue #3451) is the pure receive side: it
 validates both bare-section-keyed snapshots whole, throwing `InvalidArgumentException` before
 computing anything, then takes the receiver's policy leaves from the payload (`[]` stored as
-`''`, an absent policy key deleted) and keeps every local and unknown leaf. A payload key outside
-`[a-z0-9_.-]` is ignored at every depth (core lower-cases element names on reload). Group rows
+`''`, an absent policy key deleted) and keeps every local and unknown leaf. A payload key that is
+not a lower-case XML element name (`^[a-z_][a-z0-9_.-]*$`, digits only as a list position) is
+ignored at every depth (core lower-cases element names on reload and writes them unescaped). Group rows
 match by `aliasname` (the editor's rule: not `0`, word characters, at most 24 for IPv4/IPv6) and
 Blacklist `item` rows by `xml` (`pfb_blacklist_identity_valid()`, no comma); a new row gets the
 editor's local defaults (and `''` credentials), and a removed row takes its local leaves with it.

@@ -352,7 +352,7 @@ final class SyncPolicyMergeTest extends TestCase
 		return [
 			'angle brackets' => ['<x>'], 'tag close' => ['</feed_a></pfblockerngglobal><pfblockerngsync><syncscope>x'],
 			'space' => [' x'], 'ampersand' => ['&x'], 'newline' => ["\nx"], 'uppercase' => ['X'], 'slash' => ['/x'],
-			'quote' => ['"x'], 'umlaut' => ['é'], 'nul byte' => ["\0x"],
+			'quote' => ['"x'], 'umlaut' => ['é'], 'nul byte' => ["\0x"], 'trailing newline' => ["\n"],
 		];
 	}
 
@@ -385,6 +385,9 @@ final class SyncPolicyMergeTest extends TestCase
 			['pfblockernglistsv4', ['config', 0], 'act', 'EVILVALUE'],
 			['pfblockernglistsv4', ['config', 0, 'row', 0], 'ur', 'EVILVALUE'],
 			['pfblockernglistsv4', ['config'], 'r', $row],
+			['pfblockernglistsv4', ['config'], 'r', ['aliasname' => 'GRP', 'action' => 'EVILVALUE']],
+			['pfblockernglistsv4', ['config'], 'r', ['aliasname' => 'bad alias', 'action' => 'EVILVALUE']],
+			['pfblockernglistsv4', ['config', 0, 'row'], 'f', ['format' => 'auto', 'url' => 'EVILVALUE']],
 			['pfblockerngafrica', ['config', 0], 'act', 'EVILVALUE'],
 		];
 		$cur  = self::keyFixture(TRUE);
@@ -400,6 +403,46 @@ final class SyncPolicyMergeTest extends TestCase
 			$this->assertStringNotContainsString($key, serialize($out));
 			$this->assertStringNotContainsString('EVILVALUE', serialize($out));
 		}
+	}
+
+	/** @return array<string,array{string}> */
+	public static function nonElementNameKeys(): array
+	{
+		return ['leading digit' => ['1x'], 'leading hyphen' => ['-x'], 'leading dot' => ['.x'], 'zero' => ['0'],
+			'digits' => ['5'], 'empty' => ['']];
+	}
+
+	// config.xml element names must start with a letter or underscore; a bare digit is only a list position.
+	#[DataProvider('nonElementNameKeys')]
+	public function testKeysThatAreNotXmlElementNamesAreIgnored(string $key): void
+	{
+		$positions = [
+			['pfblockerngsafesearch', []], ['pfblockerngblacklist', []], ['pfblockerngblacklist', ['item', 0]],
+			['pfblockernglistsv4', ['config', 0]], ['pfblockernglistsv4', ['config', 0, 'row', 0]],
+			['pfblockerngafrica', ['config', 0]],
+		];
+		$cur  = self::keyFixture(TRUE);
+		$base = $this->merge(self::keyFixture(FALSE), $cur);
+
+		foreach ($positions as [$section, $path]) {
+			$inc = self::keyFixture(FALSE);
+			self::setPath($inc, array_merge([$section], $path, [$key]), 'EVILVALUE');
+
+			$out = $this->merge($inc, $cur);
+			$this->assertSame($base, $out, "{$section}/" . implode('/', $path) . ": key '{$key}' must not change the result");
+			$this->assertStringNotContainsString('EVILVALUE', serialize($out));
+		}
+	}
+
+	// A trailing newline must not let a local key through the canonical-key check.
+	public function testLocalKeysWithATrailingNewlineAreIgnored(): void
+	{
+		$cur = self::keyFixture(TRUE);
+		$inc = self::keyFixture(FALSE);
+		$inc['pfblockerngblacklist']['item'][0] += ["username\n" => 'EVIL-user', "password\n" => 'EVIL-pass'];
+		$inc['pfblockernglistsv4']['config'][0]["srcint\n"] = 'EVIL-iface';
+
+		$this->assertSame($this->merge(self::keyFixture(FALSE), $cur), $this->merge($inc, $cur));
 	}
 
 	// ---- row 3: G sections ------------------------------------------------------------------

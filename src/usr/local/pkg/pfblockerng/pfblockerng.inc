@@ -21731,8 +21731,9 @@ function pfb_sync_policy_digest(array $projection): string {
  * of a removed alias belongs to the receive hook, which diffs the aliasname sets of $current and the
  * result.
  *
- * A payload key outside [a-z0-9_.-] (core lower-cases element names on reload) cannot be classified
- * and is ignored at every depth, like any other key the receiver does not own.
+ * A payload key that is not a lower-case XML element name (core lower-cases element names on reload
+ * and writes them unescaped) cannot be classified and is ignored at every depth; digit-only keys are
+ * valid only as list positions.
  *
  * Both inputs are validated whole before anything is built. A malformed shape, a leaf that is
  * neither a string nor [], a feed Header that pfb_normalize_row_header() would change, or a missing
@@ -21789,9 +21790,10 @@ function pfb_sync_policy_merge(array $incoming, array $current): array {
 	$feed = static fn(array $p): bool => count($p) === 4 && $p[0] === 'config' && $p[2] === 'row';
 
 	// Settings sections are an allowlist over config/0; the rest share the projection's deny list.
-	$is_local = static function (string $s, array $p) use ($local, $settings, $registry): bool {
-		// Core lower-cases element names on reload: a key outside [a-z0-9_.-] cannot be classified, so it is ignored.
-		if (preg_match('/^[a-z0-9_.-]+$/D', (string) end($p)) !== 1) {
+	$is_local = static function (string $s, array $p) use ($local, $settings, $registry, $container): bool {
+		// Core lower-cases element names on reload and writes them unescaped: anything else cannot be classified.
+		$key = (string) end($p);
+		if (preg_match('/^[a-z_][a-z0-9_.-]*$/D', $key) !== 1 && !(ctype_digit($key) && $container($s, $p))) {
 			return TRUE;
 		}
 		if (!isset($settings[$s])) {
