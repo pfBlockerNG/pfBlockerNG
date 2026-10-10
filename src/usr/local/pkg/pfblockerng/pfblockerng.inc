@@ -2785,7 +2785,13 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		}
 		// Empty-scheme IP anchor ('://1.2.3.4:443^'): port dropped, CIDR honoured, as the '||' anchor.
 		if ($pos === 0) {
-			$ip = pfb_dnsbl_anchor_ip(preg_replace('/\^(\$.*)?$/D', '', $rest));
+			$anchor = preg_replace('/\^(\$.*)?$/D', '', $rest);
+			// Three octets and a trailing dot ('5.8.67.') name that /24 (#3408), never a short-form fill.
+			if (preg_match('/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.$/D', $anchor, $octets) &&
+			    max((int) $octets[1], (int) $octets[2], (int) $octets[3]) <= 255) {
+				return (int) $octets[1] . '.' . (int) $octets[2] . '.' . (int) $octets[3] . '.0/24';
+			}
+			$ip = pfb_dnsbl_anchor_ip($anchor);
 			if ($ip === FALSE) {
 				pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
 				return FALSE;
@@ -10177,7 +10183,7 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 // short spellings ('0xC0A80164', '0300.0250.01.0144', '192.168.356') map to the address a client
 // actually dials. Returns NULL when $host is not numeric-shaped (last label neither all digits nor
 // 0x-hex, or any ':' -- IPv6 is not an IPv4 spelling), array('ip' => 'a.b.c.d') when valid, and
-// array('ip' => NULL) when numeric-shaped but invalid (bad digit, overflow, more than four parts).
+// array('ip' => NULL) when numeric-shaped but invalid (bad digit, overflow, over four parts, '5.8.67.' prefix).
 // Canonical dotted quads return themselves. Twin: pfb_unbound.py _dnsbl_is_numeric_host();
 // shared table tests/fixtures/ipv4_numeric_host.json.
 function pfb_ipv4_numeric_host(string $host): ?array {
@@ -10185,7 +10191,8 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 		return NULL;
 	}
 	$parts = explode('.', $host);
-	if (count($parts) > 1 && end($parts) === '') {
+	$trailing_dot = count($parts) > 1 && end($parts) === '';
+	if ($trailing_dot) {
 		array_pop($parts);
 	}
 	$last = end($parts);
@@ -10223,7 +10230,7 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 	};
 
 	$invalid = array('ip' => NULL);
-	if (count($parts) > 4) {
+	if (count($parts) > 4 || ($trailing_dot && count($parts) < 4)) {
 		return $invalid;
 	}
 	$numbers = array();
