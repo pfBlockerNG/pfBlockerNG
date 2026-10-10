@@ -921,7 +921,12 @@ const PFB_GF_ABSENT = "\0absent";
  * Required 'sync': spec ownership class; `policy` syncs in policy scope, `local` never
  * leaves this node (issue #3450).
  *
- * @return array<string,array{default:string,read_adapter:callable|null,write_adapter:callable|null,sync:'policy'|'local',write_priv?:string,old_name?:string,grandfather?:array<string,string>,no_grandfather?:string}>
+ * Optional 'zero_reads_default' => TRUE (issue #3450): a stored '0' reads the registered
+ * default, as the retired `$stored ?: <default>` page/runtime expressions did. Set on exactly
+ * the 18 IP/DNSBL scalars registered by #3450 whose old read was `?:`; every other entry (the two
+ * interface lists included: "0" is a real CSV entry, #1792) passes a stored '0' through.
+ *
+ * @return array<string,array{default:string,read_adapter:callable|null,write_adapter:callable|null,sync:'policy'|'local',zero_reads_default?:bool,write_priv?:string,old_name?:string,grandfather?:array<string,string>,no_grandfather?:string}>
  */
 function pfb_cfg_registry(): array
 {
@@ -1934,6 +1939,7 @@ function pfb_cfg_registry(): array
 		// generates the same rule an absent key did; agateway_* never leaves the node.
 		'dnsbl/agateway_in' => [
 			'default'        => 'default',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'local',
@@ -1941,6 +1947,7 @@ function pfb_cfg_registry(): array
 		],
 		'dnsbl/agateway_out' => [
 			'default'        => 'default',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'local',
@@ -1948,6 +1955,7 @@ function pfb_cfg_registry(): array
 		],
 		'dnsbl/aliasaddr_in' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -1955,6 +1963,7 @@ function pfb_cfg_registry(): array
 		],
 		'dnsbl/aliasaddr_out' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -1962,6 +1971,7 @@ function pfb_cfg_registry(): array
 		],
 		'dnsbl/aliasports_in' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -1969,6 +1979,7 @@ function pfb_cfg_registry(): array
 		],
 		'dnsbl/aliasports_out' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -1976,6 +1987,7 @@ function pfb_cfg_registry(): array
 		],
 		'dnsbl/autoproto_in' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -1983,6 +1995,7 @@ function pfb_cfg_registry(): array
 		],
 		'dnsbl/autoproto_out' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -2172,6 +2185,7 @@ function pfb_cfg_registry(): array
 		// maxmind_key and asn_token stay write-only on the page (masked, never repopulated).
 		'ip/ip_placeholder' => [
 			'default'        => '127.1.7.7',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -2179,6 +2193,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/maxmind_locale' => [
 			'default'        => 'en',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'local',
@@ -2186,6 +2201,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/maxmind_account' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'local',
@@ -2193,6 +2209,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/maxmind_key' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'local',
@@ -2200,6 +2217,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/asn_reporting' => [
 			'default'        => 'disabled',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'local',
@@ -2207,6 +2225,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/asn_token' => [
 			'default'        => '',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'local',
@@ -2221,6 +2240,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/inbound_deny_action' => [
 			'default'        => 'block',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -2235,6 +2255,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/outbound_deny_action' => [
 			'default'        => 'reject',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -2242,6 +2263,7 @@ function pfb_cfg_registry(): array
 		],
 		'ip/pass_order' => [
 			'default'        => 'order_0',
+			'zero_reads_default' => TRUE,
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'sync'           => 'policy',
@@ -2251,6 +2273,7 @@ function pfb_cfg_registry(): array
 		// a fresh install takes the page default 'autorule'.
 		'ip/autorule_suffix' => [
 			'default'       => 'autorule',
+			'zero_reads_default' => TRUE,
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'policy',
@@ -2829,12 +2852,17 @@ final class PfbConfig
 	 * as Off. Plain scalar fields retain their existing NULL/'' defaulting behaviour.
 	 * This shared rule is used by read(), write(), writeSection(), and canonicalize().
 	 *
-	 * @param  array{default:string,read_adapter:callable|null,write_adapter:callable|null} $entry
+	 * @param  array{default:string,read_adapter:callable|null,write_adapter:callable|null,zero_reads_default?:bool} $entry
 	 * @param  mixed $value  Raw stored value, or the runtime value on a write path.
 	 * @return mixed         Registered default only for the field's not-configured state.
 	 */
 	private static function notConfigured(array $entry, mixed $value): mixed
 	{
+		// issue #3450: 18 newly registered scalars were read as `$stored ?: <default>`, so a stored
+		// '0' (falsy) took the default; the flag keeps that, for plain and adapter entries alike.
+		if (($entry['zero_reads_default'] ?? FALSE) && $value === '0') {
+			return $entry['default'];
+		}
 		if ($entry['read_adapter'] !== NULL) {
 			return $value === NULL ? $entry['default'] : $value;
 		}
@@ -2845,7 +2873,7 @@ final class PfbConfig
 	 * Look up a registry entry by its path-form key, throwing on an unregistered key.
 	 *
 	 * @param  string $key  A path-form key (e.g. 'gen/pfb_keep').
-	 * @return array{default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string}
+	 * @return array{default:string,read_adapter:callable|null,write_adapter:callable|null,zero_reads_default?:bool,write_priv?:string}
 	 * @throws InvalidArgumentException
 	 */
 	private static function entry(string $key): array

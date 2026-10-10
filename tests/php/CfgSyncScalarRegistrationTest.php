@@ -17,14 +17,18 @@ use PHPUnit\Framework\TestCase;
  * for every raw state a producer can leave (absent, '', canonical tokens, padded and
  * upper-cased variants) instead of being described.
  *
- * One state differs on purpose and is pinned as an accepted delta (D3): a stored '0'.
- * Plain registered scalars pass '0' through (the #1887/#2120 plain-scalar rule), where the
- * old `?:` read it as falsy and took the default. No producer writes '0' for any of these.
+ * A stored '0' is the one state a plain registered scalar would pass through, where the old
+ * `?:` read it as falsy. The 18 entries whose old expression was `?:` carry
+ * 'zero_reads_default' so it still reads the default (D3). The two interface lists never used
+ * `?:` (a "0" interface is a real CSV entry, #1792) and, like plain scalars registered
+ * earlier, keep the '0' pass-through (#1887/#2120).
  */
 final class CfgSyncScalarRegistrationTest extends TestCase
 {
 	private const IP_SECTION    = 'installedpackages/pfblockerngipsettings/config/0';
 	private const DNSBL_SECTION = 'installedpackages/pfblockerngdnsblsettings/config/0';
+	// '0' is a real CSV entry for these two lists (Issue1792SweepSitesTest); their old reads were not `?:`.
+	private const ZERO_PASSTHROUGH = ['ip/inbound_interface', 'ip/outbound_interface'];
 
 	private bool $hadConfig   = FALSE;
 	private mixed $savedConfig = NULL;
@@ -166,15 +170,62 @@ final class CfgSyncScalarRegistrationTest extends TestCase
 		$this->assertSame($expected, PfbConfig::read($key));
 	}
 
-	// D3 -- accepted delta: a stored '0' now reads '0' where the old `?:` fell back to the default.
-	#[DataProvider('fieldProvider')]
-	public function testStoredZeroReadsZeroUnlikeThePreRegistrationExpression(string $key): void
+	// D3 -- a stored '0' reads the registered default, exactly as the retired `?:` did. These 18
+	// entries carry 'zero_reads_default'; the interface lists and earlier scalars pass '0' through.
+	#[DataProvider('zeroDefaultFieldProvider')]
+	public function testStoredZeroReadsTheRegisteredDefaultLikeThePreRegistrationExpression(string $key): void
 	{
 		[$section, $default] = self::fields()[$key];
 		config_set_path($section . '/' . self::bare($key), '0');
 
 		$this->assertSame($default, '0' ?: $default, 'before-state: the retired expression took the default for a stored 0');
-		$this->assertSame('0', PfbConfig::read($key), 'plain registered scalars pass a stored 0 through (#1887/#2120)');
+		$this->assertSame($default, PfbConfig::read($key), "{$key}: a stored 0 reads the default");
+		$this->assertTrue(pfb_cfg_registry()[$key]['zero_reads_default'] ?? FALSE, "{$key} is flagged");
+	}
+
+	/** @return iterable<string,array{0:string}> */
+	public static function zeroDefaultFieldProvider(): iterable
+	{
+		foreach (array_keys(self::fields()) as $key) {
+			if (!in_array($key, self::ZERO_PASSTHROUGH, TRUE)) {
+				yield $key => [$key];
+			}
+		}
+	}
+
+	// D3 -- the flag is exact: unflagged plain scalars (the interface lists, and one registered before
+	// #3450) still read a stored '0' as '0'.
+	#[DataProvider('zeroPassthroughProvider')]
+	public function testUnflaggedPlainScalarStillReadsStoredZeroAsZero(string $key, string $path): void
+	{
+		$entry = pfb_cfg_registry()[$key];
+		$this->assertNull($entry['read_adapter'], 'control is a plain scalar');
+		$this->assertArrayNotHasKey('zero_reads_default', $entry);
+		$this->assertNotSame('0', $entry['default'], 'control default differs from 0');
+		config_set_path($path, '0');
+
+		$this->assertSame('0', PfbConfig::read($key));
+	}
+
+	/** @return iterable<string,array{0:string,1:string}> */
+	public static function zeroPassthroughProvider(): iterable
+	{
+		yield 'gen/pfb_schedule_weekday' => ['gen/pfb_schedule_weekday', 'installedpackages/pfblockerng/config/0/pfb_schedule_weekday'];
+		foreach (self::ZERO_PASSTHROUGH as $key) {
+			yield $key => [$key, self::IP_SECTION . '/' . self::bare($key)];
+		}
+	}
+
+	// D3 -- end to end: the rule builder takes $pfb['deny_action_inbound'] verbatim as $rule['type']
+	// (pfb_firewall_rule(), pfblockerng.inc), and sync_package_pfblockerng() fills it from this very
+	// read. No seam below that sync function exists, so the read is the seam asserted.
+	public function testStoredZeroDenyActionResolvesToBlockForTheRuleType(): void
+	{
+		config_set_path(self::IP_SECTION . '/inbound_deny_action', '0');
+		config_set_path(self::IP_SECTION . '/outbound_deny_action', '0');
+
+		$this->assertSame('block', PfbConfig::read('ip/inbound_deny_action'));
+		$this->assertSame('reject', PfbConfig::read('ip/outbound_deny_action'));
 	}
 
 	// D4 -- the canonical tokens persist byte-identical through the single-field writer.

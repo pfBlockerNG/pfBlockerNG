@@ -117,6 +117,12 @@ Authorization = property of **write**, not call site (generalises
   and resolves to registry default. `PfbConfig::read()` never exposes absence. Writing
   `NULL` to adapter-bearing entry deletes that key (section write omits it), so absence
   stays truthful instead of materialising default; plain-scalar behaviour unchanged.
+- **`zero_reads_default` (issue #3450):** optional registry entry key `'zero_reads_default' => TRUE`
+  makes a stored `'0'` read as the registered default, as the retired `$stored ?: <default>`
+  expressions did; set on exactly the 18 IP/DNSBL scalars #3450 registered whose old read was `?:`
+  (not the two interface lists, where `'0'` is a real CSV entry), applied before any read adapter.
+  Every other plain scalar still passes a stored `'0'` through. Writing `'0'` to such a field
+  therefore stores the default, like the `''` write on any plain scalar.
 - Enums/booleans = **internal runtime representation**; conversion at boundary:
   stored string → enum on read; enum → canonical stored string on write.
 - **Enum owns its stored-value semantics** via `PfbStoredEnum` interface +
