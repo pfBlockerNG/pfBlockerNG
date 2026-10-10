@@ -61,6 +61,11 @@ final class IpParseLineNumericHostTest extends TestCase
 			'invalid host + query quad'  => ['http://08.08.08.08/?to=9.9.9.9', ['9.9.9.9'], TRUE],
 			'url host with NUL label'   => ["http://1.2\x00.3.4/x", [], TRUE],
 			'invalid host alone'         => ['http://08.08.08.08/x', [], TRUE],
+			// Issue #3408: a trailing-dot prefix host is never short-form filled; a full quad keeps its address.
+			'prefix url host'            => ['http://5.8.67./', [], TRUE],
+			'two-octet prefix url host'  => ['http://5.68./x', [], TRUE],
+			'full quad url host + dot'   => ['http://1.2.3.4./x', ['1.2.3.4'], FALSE],
+			'bare prefix, trailing dot'  => ['5.68.45.', [], TRUE],
 			// Unchanged: canonical host keeps the regex path; a mid-line URL is not decoded.
 			'canonical host + query quad' => ['http://1.2.3.4/?to=5.6.7.8', ['1.2.3.4', '5.6.7.8'], FALSE],
 			'mid-line url'               => ['see http://0x7f000001/ in text 9.9.9.9', ['9.9.9.9'], FALSE],
