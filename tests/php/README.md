@@ -88,13 +88,6 @@ sudo apt-get install -y --no-install-recommends libarchive-tools
 
 No `dpkg-divert` or host binary mutation is required.
 
-## Host non-CLI SAPI
-
-`PfblockerngSapiGuardTest` runs `pfblockerng.php` under `php-cgi`, the only way to
-observe the non-CLI SAPI behaviour of the webConfigurator docroot. CI's `setup-php`
-installs it on Linux; a development seat without it fails the test loudly (it never
-skips). Debian and Ubuntu seats install it with `sudo apt-get install -y php-cgi`.
-
 ## Adding a test
 
 - Put `*Test.php` here; it is picked up automatically (`phpunit.xml` testsuite

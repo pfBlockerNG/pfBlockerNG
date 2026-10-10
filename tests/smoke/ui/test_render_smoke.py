@@ -3662,12 +3662,13 @@ def test_pfblockerng_tick_delegates_safesearch_to_due_ledger() -> None:
 def test_pfblockerng_dispatcher_answers_a_verb_query_over_http_with_nothing(webui: WebUI) -> None:
     """issue #3469: the root-privileged CLI verb dispatcher sits in the webConfigurator docroot.
 
-    Scenario: a verb-shaped request over HTTP runs nothing.
+    Scenario: a verb-shaped request over HTTP answers with nothing.
       Given an authenticated session on php-fpm, the production non-CLI SAPI
       When  pfblockerng.php is requested with a verb as the query string
-      Then  the answer is an empty 200: the SAPI guard exits before any include or verb.
-            ``PfblockerngSapiGuardTest`` (php-cgi, PHPUnit) holds the red/green proof;
-            this holds the same contract on the real SAPI.
+      Then  the answer is an empty 200. This detects an error response or a verb that prints;
+            it cannot tell a guarded request from an unguarded one, because the verbs stay
+            inert while ``$argv`` is unset. ``PfblockerngSapiGuardTest`` (php-cgi, PHPUnit)
+            holds the guard proof.
     """
     resp = webui.get("/pfblockerng/pfblockerng.php?clearip", allow_redirects=False)
 
