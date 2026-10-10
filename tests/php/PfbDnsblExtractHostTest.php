@@ -361,6 +361,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 			'://5.8.67.^' => '5.8.67.0/24',
 			'://5.8.67.^$important' => '5.8.67.0/24',
 			'://05.008.067.' => '5.8.67.0/24',
+			'://255.255.255.' => '255.255.255.0/24',
 			// A full quad keeps its trailing-dot spelling's address.
 			'://1.2.3.4.' => '1.2.3.4',
 		];
@@ -386,7 +387,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 	public static function trailingDotPrefixRejectProvider(): array
 	{
 		$rows = [];
-		foreach (['://5.68.', '://5.', '://0x05.8.67.', '://256.8.67.'] as $line) {
+		foreach (['://5.68.', '://5.', '://0x05.8.67.', '://256.8.67.', '://5.256.67.', '://5.8.256.', '://5.8.67.:80', '://0005.8.67.', '://000.000.000.'] as $line) {
 			foreach ([TRUE, FALSE] as $strict) {
 				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $strict];
 			}
@@ -401,5 +402,13 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertFalse($this->extract($line, $strict, $skipped), "line {$line}");
 		$this->assertSame(0, $skipped);
 		$this->assertStringContainsString($line, (string) file_get_contents($this->parseErr));
+	}
+
+	/** The /24 rule needs the trailing dot: without it '5.8.67' stays the WHATWG short form. */
+	public function testThreeOctetsWithoutTrailingDotKeepTheShortFormFill(): void
+	{
+		foreach ([TRUE, FALSE] as $strict) {
+			$this->assertSame('5.8.0.67', $this->extract('://5.8.67', $strict), 'strict=' . var_export($strict, TRUE));
+		}
 	}
 }

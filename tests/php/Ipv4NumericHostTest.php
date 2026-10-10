@@ -47,13 +47,4 @@ final class Ipv4NumericHostTest extends TestCase
 		$this->assertContains(FALSE, $expected);
 		$this->assertNotEmpty(array_filter($expected, 'is_string'));
 	}
-
-	/** Issue #3408: a trailing-dot prefix is never short-form filled ('5.8.67.' is not '5.8.0.67'); a full quad keeps its dot. */
-	public function testTrailingDotPrefixIsInvalidButAFullQuadKeepsItsAddress(): void
-	{
-		foreach (array('5.', '5.8.', '5.8.67.') as $prefix) {
-			$this->assertSame(array('ip' => NULL), pfb_ipv4_numeric_host($prefix), "prefix {$prefix}");
-		}
-		$this->assertSame(array('ip' => '1.2.3.4'), pfb_ipv4_numeric_host('1.2.3.4.'));
-	}
 }

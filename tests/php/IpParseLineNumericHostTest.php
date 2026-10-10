@@ -64,6 +64,7 @@ final class IpParseLineNumericHostTest extends TestCase
 			// Issue #3408: a trailing-dot prefix host is never short-form filled; a full quad keeps its address.
 			'prefix url host'            => ['http://5.8.67./', [], TRUE],
 			'two-octet prefix url host'  => ['http://5.68./x', [], TRUE],
+			'dword url host + dot'       => ['http://2130706433./x', [], TRUE],
 			'full quad url host + dot'   => ['http://1.2.3.4./x', ['1.2.3.4'], FALSE],
 			'bare prefix, trailing dot'  => ['5.68.45.', [], TRUE],
 			// Unchanged: canonical host keeps the regex path; a mid-line URL is not decoded.
