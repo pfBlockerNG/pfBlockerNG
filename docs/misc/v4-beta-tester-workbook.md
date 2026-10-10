@@ -138,18 +138,20 @@ schedule, a custom domain). Call this **snapshot A** — “how my box looked on
 
 ## Step 2 — install v4 (Nightly)
 
-v4 is not a Stable release yet. This beta uses **Nightly** from
+v4 is not a Stable release yet. For now, use **Nightly** from
 [pkg.pfblockerng.com](https://pkg.pfblockerng.com/) (the site labels Nightly
-“not for daily use”). Testing and Edge are also listed there — do not use
-those for this pass unless someone asked you to.
+“not for daily use”). Until tagged v4 previews appear on Edge, Nightly is the
+only channel that carries v4 (Edge currently lists 3.3.x builds).
+
+Tagged v4 previews (release tags like `v4.0.0.a1`) will be published on the
+**Edge** channel. When the install page shows a v4 version under Edge,
+switch to Edge (same command with `--channel edge`).
 
 On the firewall, as root, copy the **Nightly** command from that page:
 
 ```sh
 fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel nightly
 ```
-
-If the site’s copy command differs, use the site.
 
 Nightly versions look like a timestamp (`20260905123014.713025f`), not
 `4.0.0`. That is still v4. Nightly keeps its **own** saved-settings copy,
@@ -243,9 +245,7 @@ may open the wizard itself until you finish or skip it.
 
 Saving a page often does **not** apply lists immediately. Look for a yellow
 banner. Pending changes apply on **Update → Run Now**, or when a scheduled
-feed pass runs. **Automatic Apply Window** only delays a *standalone*
-pending apply (no feed run due). A due feed update still applies pending
-changes and can clear the banner even outside that window.
+feed pass runs (see **Pending changes** below).
 
 On **Update**, before you press Run Now:
 
@@ -314,8 +314,10 @@ word “Alias” is only on the menu, not in the alias name).
 They are **reference only**. No extra firewall rule is created. You use the
 name in your own rule, or in something like HAProxy.
 
-Do **not** create your own aliases that start with `pfB_`. pfBlockerNG owns
-that prefix and will delete aliases it does not manage.
+Do **not** create your own aliases whose names start with `pfB_`.
+pfBlockerNG owns that prefix: when an update rebuilds the firewall aliases,
+it keeps only the `pfB_` aliases it generated and removes any other alias
+whose name starts with `pfB_`.
 
 If you feed these aliases into HAProxy, André’s worked example is a `post`
 update hook that reloads HAProxy when the aggregated lists change:
@@ -384,19 +386,35 @@ this name block?” report.
 
 ### How a blocked name is answered
 
-**Global Logging/Blocking Mode** can override each group’s own setting:
+Two controls sit in the main **DNSBL** section of the DNSBL tab, just below
+**Download Schemes**:
 
-- DNSBL WebServer/VIP — send the client to the sinkhole IP (block page)
-- Null Blocking — answer `0.0.0.0` (with or without logging)
-- NXDOMAIN — answer “this name does not exist” (with or without logging;
-  no block page)
+**Global Logging/Blocking Mechanism** — how a blocked name is answered:
 
-Leave it on **No Global mode** unless you are testing a specific answer
-style. A DNSBL reload is needed after you change it.
+- **DNSBL WebServer/VIP** — send the client to the sinkhole IP (block page)
+- **Null Blocking (logging)** / **(no logging)** — answer `0.0.0.0`
+- **NXDOMAIN (logging)** / **(no logging)** — answer “this name does not
+  exist” (no block page)
+- **NODATA (logging)** / **(no logging)** — answer “the name exists but has
+  no address” (an empty reply; no block page)
 
-Each DNSBL **group** also has its own **Logging / Blocking Mode** on the
-group edit page. Global mode, when set, overrides those. **Group Order**
-(Primary) on that page decides which group is considered first.
+**Global Application Mode** — how that mechanism is applied:
+
+- **Default** — each group keeps its own **Logging / Blocking Mode**. A
+  group set to *Default* follows the global mechanism above
+- **Override** — every group uses the global mechanism. The groups’ own
+  choices are kept and come back when you return to Default
+
+New installs start on Default with Null Blocking (logging). An upgraded box
+keeps what it had: no previous override means Default with DNSBL
+WebServer/VIP; an active override stays as Override with the same answer.
+After changing either control, save and run a DNSBL update (**Update → Run
+Now**, Scope **DNSBL** or **Both**).
+
+Each DNSBL **group** has its own **Logging / Blocking Mode** on the group
+edit page (**DNSBL → DNSBL Groups**, then the pencil on a group). New groups
+start on Default. **Group Order** (Primary) on that page decides which group
+is considered first.
 
 **HSTS mode** (still there) answers known HSTS-preload names with `0.0.0.0`
 instead of the VIP, which may avoid browser certificate errors.
@@ -406,11 +424,15 @@ instead of the VIP, which may avoid browser certificate errors.
 **DNS Reply Logging** (on the main DNSBL block) records replies that were
 *not* blocked. Useful to prove a name was allowed; it can fill the log.
 
-- [ ] Note your current Global mode (usually none)
-- [ ] Optional: set NXDOMAIN (logging), save, DNSBL update, resolve a blocked
-      name — you should see “does not exist,” not a block page
-- [ ] Optional: leave Global mode unset, set one group to NXDOMAIN, update,
-      and confirm only that group’s names answer that way
+- [ ] Note your current **Global Logging/Blocking Mechanism** and **Global
+      Application Mode** after the upgrade
+- [ ] Optional: set the mechanism to **NXDOMAIN (logging)** and the
+      application mode to **Override**, save, DNSBL update, resolve a
+      blocked name — you should see “does not exist,” not a block page
+- [ ] Optional: with application mode **Default**, set one group to
+      **NXDOMAIN (logging)**, update, and confirm only that group’s names
+      answer that way
+- [ ] Put both controls back the way you found them, then update again
 - [ ] Optional: enable DNS Reply Logging, resolve a few names, then open
       **Reports → DNS Reply**
 
@@ -754,10 +776,13 @@ window — that is not a bug.
       Turning **Scheduled Feed Updates** off also stops these automatic
       checks; **Check now** still works
 - [ ] **Update → Hooks** — run your own script before (`pre`) or after
-      (`post`) each update. Files must be named `hook_pre_<name>.sh` (or
-      `.py`) / `hook_post_<name>.sh` in
-      `/usr/local/pkg/pfblockerng/hooks/` — anything else is skipped and
-      logged. Example: André’s HAProxy reload gist linked under aggregated
+      (`post`) each update. A hook can be a shell script or a Python
+      script: name it `hook_pre_<name>.sh` / `hook_post_<name>.sh` or
+      `hook_pre_<name>.py` / `hook_post_<name>.py` and put it in
+      `/usr/local/pkg/pfblockerng/hooks/`. Only files named that way show
+      up on the Hooks tab. A shell hook needs a `#!` first line and must be
+      executable (`chmod +x`); a Python hook needs neither, because
+      pfBlockerNG runs it with its own Python. Example: André’s HAProxy reload gist linked under aggregated
       aliases. A failing hook is logged and does **not** abort the update.
       Optional without HAProxy: create
       `/usr/local/pkg/pfblockerng/hooks/hook_post_test.sh` with a `#!/bin/sh`
@@ -818,7 +843,23 @@ window — that is not a bug.
 - [ ] Reports sub-tabs open: Unified, Alerts, IP Block/Permit/Match Stats,
       DNS Reply, DNS Reply Stats, DNSBL Block Stats
 - [ ] After an update, **DNSBL Block Stats** shows your newly enabled group
+- [ ] **Reports → Alerts**: each blocked IP or domain has a small **i**
+      (info) icon, and blocked IP rows have a magnifier icon next to the
+      port. They open a new browser tab with links to outside lookup sites
+      (for example VirusTotal, Talos, Internet Storm Center) for that IP,
+      domain, or port. The firewall does not look anything up itself; the
+      address is only sent to a site when you click its link. Click one
+      and confirm the page opens with your IP or domain filled in
 - [ ] Logs still lets you pick a file
+- [ ] **Sync** opens and still shows your v3 sync settings: **Enable
+      Sync** (Do not sync / Sync to configured system backup server / Sync
+      to host(s) defined below), **XMLRPC Timeout**, **Disable
+      General/IP/DNSBL tab settings sync**, and any **Replication Targets**.
+      If you use HA, save once on the primary and confirm the peer receives
+      the change. If the peer gets firewall rules from **System → High
+      Availability Sync** but not DNSBL settings, the Sync page shows a
+      yellow warning: the peer needs DNSBL enabled with the same DNSBL IP
+      settings, or its `pfB_DNSBLIP_v4` / `_v6` rules are skipped
 - [ ] Feeds: **+** one IPv4 feed and one DNSBL feed, enable those groups,
       run an update; scan for red icons and open the legend if you see one
 
