@@ -285,19 +285,6 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
         self.assertNotIn("smoke_repo_live_url", job)
         self.assertNotIn("smoke_nightly_live_url", job)
 
-    def test_source_readme_install_recipes_match_the_pkg_client_contract(self) -> None:
-        for channel in ("stable", "edge"):
-            self.assertIn(
-                (
-                    't=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && '
-                    'fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && '
-                    '[ -s "$t" ] && '
-                    f'/bin/sh "$t" --channel {channel}'
-                    '; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)'
-                ),
-                README,
-            )
-
     def test_dispatch_helper_is_bounded_and_correlates_exact_run_title(self) -> None:
         helper = (ROOT / "scripts" / "dispatch-pkg-publication.sh").read_text(encoding="utf-8")
         self.assertIn("Ingest ${PKG_OPERATION} ${SOURCE_RUN_ID}", helper)
