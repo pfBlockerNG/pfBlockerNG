@@ -55,7 +55,15 @@ a missing or unknown value and pins the local set by name.
 - Credentials are local: `ip/maxmind_account`, `ip/maxmind_key`, `ip/asn_token`,
   `dnsbl/top1m_token`, and the Blacklist rows' `item/*/username` and `item/*/password`.
 
-Spec: `docs/specs/xmlrpc-per-field-sync.md`, "Ownership classification".
+`pfb_sync_policy_merge($incoming, $current)` (issue #3451) is the pure receive side: it
+validates both bare-section-keyed snapshots whole, throwing `InvalidArgumentException` before
+computing anything, then takes the receiver's policy leaves from the payload (`[]` stored as
+`''`, an absent policy key deleted) and keeps every local and unknown leaf. Group rows match by
+`aliasname` and Blacklist `item` rows by `xml`; a new row gets the editor's local defaults (and
+`''` credentials), and a removed row takes its local leaves with it. It writes nothing and
+closes no ledger: the receive hook diffs the returned aliases for that.
+
+Spec: `docs/specs/xmlrpc-per-field-sync.md`, "Ownership classification" and "Receive merge".
 
 ## Write authorization (issue #1895)
 

@@ -12601,12 +12601,59 @@
         "returnType": "array",
         "params": []
     },
+    "pfb_sync_path_is_local": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "local",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "section",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "rel",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_sync_policy_digest": {
         "returnsRef": false,
         "returnType": "string",
         "params": [
             {
                 "name": "projection",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_policy_merge": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "incoming",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "current",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
