@@ -242,6 +242,117 @@ final class DnsblNumericHostTest extends TestCase
 		$this->assertStringContainsString('1.2.3.4.5', $out['fail']);
 	}
 
+	/** @return array<string, array{string, string}> */
+	public static function emptySchemePrefixProvider(): array
+	{
+		return [
+			'three octets'        => ['://5.8.67.', '5.8.67.0/24'],
+			'other prefix'        => ['://199.191.50.', '199.191.50.0/24'],
+			'caret'               => ['://5.8.67.^', '5.8.67.0/24'],
+			'caret + options'     => ['://5.8.67.^$important', '5.8.67.0/24'],
+			'padded octets'       => ['://05.008.067.', '5.8.67.0/24'],
+		];
+	}
+
+	/** Issue #3408: an empty-scheme anchor with a three-octet trailing-dot prefix lists its /24, in both modes. */
+	#[DataProvider('emptySchemePrefixProvider')]
+	public function testEmptySchemeTrailingDotPrefixIsCollectedAsItsSlash24(string $feedLine, string $cidr): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$this->assertSame(
+				[[], [$cidr], [], ''],
+				[$out['rows'], $out['ip4'], $out['ip6'], $out['fail']],
+				"line {$feedLine} lenient=" . var_export($lenient, TRUE) . ': ip4=' . json_encode($out['ip4'])
+			);
+		}
+	}
+
+	/** @return array<string, array{string}> */
+	public static function trailingDotPrefixRejectedProvider(): array
+	{
+		return [
+			'plain three octets'          => ['5.68.45.'],
+			'plain two octets'            => ['5.68.'],
+			'plain dword'                 => ['167772161.'],
+			'url host'                    => ['http://5.8.67./'],
+			'empty scheme two octets'     => ['://5.68.'],
+			'empty scheme one octet'      => ['://5.'],
+			'empty scheme hex octet'      => ['://0x05.8.67.'],
+			'empty scheme octet past 255' => ['://256.8.67.'],
+		];
+	}
+
+	/** Issue #3408: every other trailing-dot prefix is a parse-error entry, never the short-form address. */
+	#[DataProvider('trailingDotPrefixRejectedProvider')]
+	public function testTrailingDotPrefixIsLoggedNotCollectedAsAnAddress(string $feedLine): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$this->assertSame(
+				[[], [], []],
+				[$out['rows'], $out['ip4'], $out['ip6']],
+				"line {$feedLine} lenient=" . var_export($lenient, TRUE) . ': rows=' . json_encode($out['rows']) . ' ip4=' . json_encode($out['ip4'])
+			);
+			$this->assertStringContainsString($feedLine, $out['fail'], "line {$feedLine} missing from the parse-error log");
+		}
+	}
+
+	public function testHostsLineTrailingDotPrefixTargetIsLoggedNotCollected(): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 5.68.45.');
+		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']]);
+		$this->assertStringContainsString('5.68.45.', $out['fail']);
+	}
+
+	/** @return array<string, array{string}> */
+	public static function doubleTrailingDotProvider(): array
+	{
+		return [
+			'empty scheme prefix' => ['://5.8.67..'],
+			'plain prefix'        => ['5.8.67..'],
+		];
+	}
+
+	#[DataProvider('doubleTrailingDotProvider')]
+	public function testDoubleTrailingDotIsNeverCollectedAsAnAddress(string $feedLine): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$this->assertSame([[], []], [$out['ip4'], $out['ip6']], "line {$feedLine} lenient=" . var_export($lenient, TRUE));
+		}
+	}
+
+	/** @return array<string, array{string, string}> */
+	public static function fullQuadTrailingDotProvider(): array
+	{
+		return [
+			'plain 1.2.3.4.'          => ['1.2.3.4.', '1.2.3.4'],
+			'plain 8.8.8.8.'          => ['8.8.8.8.', '8.8.8.8'],
+			'empty scheme 1.2.3.4.'   => ['://1.2.3.4.', '1.2.3.4'],
+		];
+	}
+
+	/** Issue #3408: a full quad keeps its trailing-dot spelling's address; only the prefix forms changed. */
+	#[DataProvider('fullQuadTrailingDotProvider')]
+	public function testFullQuadWithTrailingDotIsStillCollected(string $feedLine, string $ip): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$this->assertSame([[], [$ip], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']], "line {$feedLine}");
+		}
+	}
+
+	/** Issue #3408 leaves an explicit '*' prefix alone: it is still a logged parse error, never an address. */
+	public function testExplicitWildcardPrefixKeepsItsHandling(): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$out = $this->runRegion(self::$plainRegion, '://193.143.1.*', $lenient);
+			$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']], 'lenient=' . var_export($lenient, TRUE));
+			$this->assertStringContainsString('://193.143.1.*', $out['fail'], 'lenient=' . var_export($lenient, TRUE));
+		}
+	}
+
 	public function testUserinfoIsRemovedSoTheRealDomainIsBlocked(): void
 	{
 		$out = $this->runRegion(self::$plainRegion, 'http://user@evil.com/');
@@ -316,6 +427,8 @@ final class DnsblNumericHostTest extends TestCase
 			'non-number anchor'    => ['||a.0x1^'],
 			'cidr mask past /32'   => ['||10.0.0.0/33^'],
 			'short-form cidr'      => ['||192.168.1/24^'],
+			'three-octet prefix anchor' => ['||5.68.45.^'],
+			'two-octet prefix anchor' => ['||5.68.^'],
 		];
 	}
 

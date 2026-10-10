@@ -348,4 +348,67 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertSame(0, $skipped);
 		$this->assertFileDoesNotExist($this->parseErr, 'the CIDR rules must not fire for a near-miss shape');
 	}
+
+	// -- issue #3408: a trailing-dot IPv4 prefix is never short-form filled; an empty-scheme anchor
+	// with exactly three octets lists its /24, every other prefix form is a parse error --
+
+	/** @return array<string, array{string, bool, string}> */
+	public static function emptySchemePrefixProvider(): array
+	{
+		$lines = [
+			'://5.8.67.' => '5.8.67.0/24',
+			'://199.191.50.' => '199.191.50.0/24',
+			'://5.8.67.^' => '5.8.67.0/24',
+			'://5.8.67.^$important' => '5.8.67.0/24',
+			'://05.008.067.' => '5.8.67.0/24',
+			'://255.255.255.' => '255.255.255.0/24',
+			// A full quad keeps its trailing-dot spelling's address.
+			'://1.2.3.4.' => '1.2.3.4',
+		];
+		$rows = [];
+		foreach ($lines as $line => $expected) {
+			foreach ([TRUE, FALSE] as $strict) {
+				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $strict, $expected];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('emptySchemePrefixProvider')]
+	public function testEmptySchemeTrailingDotPrefixIsItsSlash24(string $line, bool $strict, string $expected): void
+	{
+		$skipped = 0;
+		$this->assertSame($expected, $this->extract($line, $strict, $skipped));
+		$this->assertSame(0, $skipped);
+		$this->assertFileDoesNotExist($this->parseErr);
+	}
+
+	/** @return array<string, array{string, bool}> */
+	public static function trailingDotPrefixRejectProvider(): array
+	{
+		$rows = [];
+		foreach (['://5.68.', '://5.', '://0x05.8.67.', '://256.8.67.', '://5.256.67.', '://5.8.256.', '://5.8.67.:80', '://0005.8.67.', '://000.000.000.'] as $line) {
+			foreach ([TRUE, FALSE] as $strict) {
+				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $strict];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('trailingDotPrefixRejectProvider')]
+	public function testOtherTrailingDotPrefixesAreRejectedWithParseError(string $line, bool $strict): void
+	{
+		$skipped = 0;
+		$this->assertFalse($this->extract($line, $strict, $skipped), "line {$line}");
+		$this->assertSame(0, $skipped);
+		$this->assertStringContainsString($line, (string) file_get_contents($this->parseErr));
+	}
+
+	/** The /24 rule needs the trailing dot: without it '5.8.67' stays the WHATWG short form. */
+	public function testThreeOctetsWithoutTrailingDotKeepTheShortFormFill(): void
+	{
+		foreach ([TRUE, FALSE] as $strict) {
+			$this->assertSame('5.8.0.67', $this->extract('://5.8.67', $strict), 'strict=' . var_export($strict, TRUE));
+		}
+	}
 }
