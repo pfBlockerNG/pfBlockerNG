@@ -3659,6 +3659,22 @@ def test_pfblockerng_tick_delegates_safesearch_to_due_ledger() -> None:
     assert "pfblockerng_ss_refresh" not in tick_branch
 
 
+def test_pfblockerng_dispatcher_answers_a_verb_query_over_http_with_nothing(webui: WebUI) -> None:
+    """issue #3469: the root-privileged CLI verb dispatcher sits in the webConfigurator docroot.
+
+    Scenario: a verb-shaped request over HTTP runs nothing.
+      Given an authenticated session on php-fpm, the production non-CLI SAPI
+      When  pfblockerng.php is requested with a verb as the query string
+      Then  the answer is an empty 200: the SAPI guard exits before any include or verb.
+            ``PfblockerngSapiGuardTest`` (php-cgi, PHPUnit) holds the red/green proof;
+            this holds the same contract on the real SAPI.
+    """
+    resp = webui.get("/pfblockerng/pfblockerng.php?clearip", allow_redirects=False)
+
+    assert resp.status_code == 200, f"dispatcher request: HTTP {resp.status_code}: {resp.text[:200]!r}"
+    assert resp.text == "", f"dispatcher request must produce no output, got {resp.text[:200]!r}"
+
+
 def test_reputation_page_help_text_names_relocated_matchgen_paths(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:  # noqa: ARG001
