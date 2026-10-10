@@ -445,6 +445,28 @@ final class SyncPolicyMergeTest extends TestCase
 		$this->assertSame($this->merge(self::keyFixture(FALSE), $cur), $this->merge($inc, $cur));
 	}
 
+	// Group, feed and provider lists are positional: a named child would not round-trip as a list row.
+	public function testNamedKeysAtListPositionsAreIgnored(): void
+	{
+		$positions = [
+			['pfblockernglistsv4', ['config'], ['aliasname' => 'NAMED', 'action' => 'EVILVALUE']],
+			['pfblockernglistsv4', ['config', 0, 'row'], ['format' => 'auto', 'url' => 'EVILVALUE']],
+			['pfblockerngblacklist', ['item'], self::bitem('evilvalue')],
+			['pfblockerngafrica', ['config'], ['action' => 'EVILVALUE']],
+		];
+		$cur  = self::keyFixture(TRUE);
+		$base = $this->merge(self::keyFixture(FALSE), $cur);
+
+		foreach ($positions as [$section, $path, $value]) {
+			$inc = self::keyFixture(FALSE);
+			self::setPath($inc, array_merge([$section], $path, ['named']), $value);
+
+			$out = $this->merge($inc, $cur);
+			$this->assertSame($base, $out, "{$section}/" . implode('/', $path) . ': a named list child must not change the result');
+			$this->assertStringNotContainsString('EVILVALUE', serialize($out));
+		}
+	}
+
 	// ---- row 3: G sections ------------------------------------------------------------------
 
 	/** @return array<string,mixed> */

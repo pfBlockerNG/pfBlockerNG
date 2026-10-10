@@ -183,7 +183,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 > subtree stays local. It is the legacy v1 tag the category editor deletes on save
 > (`pfblockerng_category_edit.php:960`, "Remove unused xml tag"); without this entry a sender's
 > never-re-saved group would make every receiver refuse the snapshot. Separately, a payload key that is
-> not a lower-case XML element name (`^[a-z_][a-z0-9_.-]*$`; a digit-only key only as a list position) is
+> not a lower-case XML element name (`^[a-z_][a-z0-9_.-]*$`; a list position takes only a digit-only key) is
 > unclassifiable, because core lower-cases element names on reload and writes them unescaped, and is
 > ignored at every depth under the step 3 rule for a leaf the receiver cannot classify. Step 1 identity
 > rules: an aliasname follows the category editor (not `0`, no `\W`, at most 24 characters for IPv4 and

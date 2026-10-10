@@ -21792,8 +21792,9 @@ function pfb_sync_policy_merge(array $incoming, array $current): array {
 	// Settings sections are an allowlist over config/0; the rest share the projection's deny list.
 	$is_local = static function (string $s, array $p) use ($local, $settings, $registry, $container): bool {
 		// Core lower-cases element names on reload and writes them unescaped: anything else cannot be classified.
+		// List children (config/N, config/N/row/M, item/N: even depth at a container) are positional only.
 		$key = (string) end($p);
-		if (preg_match('/^[a-z_][a-z0-9_.-]*$/D', $key) !== 1 && !(ctype_digit($key) && $container($s, $p))) {
+		if ($container($s, $p) && count($p) % 2 === 0 ? !ctype_digit($key) : preg_match('/^[a-z_][a-z0-9_.-]*$/D', $key) !== 1) {
 			return TRUE;
 		}
 		if (!isset($settings[$s])) {

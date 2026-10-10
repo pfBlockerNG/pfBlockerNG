@@ -289,8 +289,6 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 	{
 		$feed = self::snapshot(FALSE);
 		$feed['pfblockerngglobal']['feed_evilvalue'] = 1;
-		$row = self::snapshot(FALSE);
-		$row['pfblockernglistsv4']['config']['row-evilvalue'] = ['action' => 'Deny_Inbound'];
 		$idx = self::snapshot(FALSE);
 		$idx['pfblockernglistsv4']['config'][1] = ['action' => 'Deny_Inbound'];
 		$leaf = self::snapshot(FALSE);
@@ -298,7 +296,6 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 
 		$expected = [
 			'global key' => [$feed, 'pfblockerngglobal/*'],
-			'row key'    => [$row, 'pfblockernglistsv4/*/*'],
 			'row index'  => [$idx, 'pfblockernglistsv4/*/1'],
 			'row leaf'   => [$leaf, 'pfblockernglistsv4/*/0/*'],
 		];
