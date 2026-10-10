@@ -12596,6 +12596,37 @@
             }
         ]
     },
+    "pfb_sync_local_paths": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_sync_policy_digest": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "projection",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_policy_projection": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_sync_run_plan": {
         "returnsRef": false,
         "returnType": "array",

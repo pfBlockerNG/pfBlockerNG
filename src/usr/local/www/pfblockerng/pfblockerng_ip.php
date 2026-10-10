@@ -64,25 +64,25 @@ $pconfig['suppression']		= PfbConfig::read('ip/suppression');
 
 $pconfig['enable_log']		= PfbConfig::read('ip/enable_log');
 $pconfig['enable_rdns']		= PfbConfig::read('ip/enable_rdns');
-$pconfig['ip_placeholder']	= $pfb['iconfig']['ip_placeholder']			?: '127.1.7.7';
-$pconfig['maxmind_locale']	= $pfb['iconfig']['maxmind_locale']			?: 'en';
-$pconfig['asn_reporting']	= $pfb['iconfig']['asn_reporting']			?: 'disabled';
+$pconfig['ip_placeholder']	= PfbConfig::read('ip/ip_placeholder');
+$pconfig['maxmind_locale']	= PfbConfig::read('ip/maxmind_locale');
+$pconfig['asn_reporting']	= PfbConfig::read('ip/asn_reporting');
 // issue #2922: asn_token is masked/write-only; never load the stored token into the form.
 $pconfig['asn_token']		= $_POST['asn_token'] ?? '';
 $pconfig['database_cc']		= PfbConfig::read('ip/database_cc');
-$pconfig['maxmind_account']	= $pfb['iconfig']['maxmind_account']			?: '';
+$pconfig['maxmind_account']	= PfbConfig::read('ip/maxmind_account');
 // issue #924: maxmind_key is masked/write-only -- never populate it from the stored value.
 // A GET renders blank; a validation-error redisplay preserves the just-typed $_POST value
 // (like every other field), never PfbConfig/iconfig.
 $pconfig['maxmind_key']		= $_POST['maxmind_key'] ?? '';
-$pconfig['inbound_interface']	= pfb_csv_list($pfb['iconfig']['inbound_interface'] ?? NULL);
-$pconfig['inbound_deny_action']	= $pfb['iconfig']['inbound_deny_action']		?: 'block';
-$pconfig['outbound_interface']	= pfb_csv_list($pfb['iconfig']['outbound_interface'] ?? NULL);
-$pconfig['outbound_deny_action']= $pfb['iconfig']['outbound_deny_action']		?: 'reject';
+$pconfig['inbound_interface']	= pfb_csv_list(PfbConfig::read('ip/inbound_interface'));
+$pconfig['inbound_deny_action']	= PfbConfig::read('ip/inbound_deny_action');
+$pconfig['outbound_interface']	= pfb_csv_list(PfbConfig::read('ip/outbound_interface'));
+$pconfig['outbound_deny_action']= PfbConfig::read('ip/outbound_deny_action');
 $pconfig['enable_float']	= PfbConfig::read('ip/enable_float');
 $pconfig['fw_self_outbound']	= PfbConfig::read('ip/fw_self_outbound');
-$pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
-$pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
+$pconfig['pass_order']		= PfbConfig::read('ip/pass_order');
+$pconfig['autorule_suffix']	= PfbConfig::read('ip/autorule_suffix');
 $pconfig['killstates']		= PfbConfig::read('ip/killstates');
 $pconfig['v4suppression']	= pfb_b64_text(PfbConfig::read('ip/v4suppression'));
 // v6suppression may remain absent until the first post-upgrade save; the registered

@@ -92,8 +92,9 @@ final class Issue1792SweepSitesTest extends TestCase
 
 	public function testZeroIsARealCsvEntryNotAnAbsence(): void
 	{
+		// The page reads the gateway (issue #3450), so the stored "0" is seeded as config state.
+		PfbConfig::writeSystem('ip/inbound_interface', '0');
 		$out = pfb_test_1792_eval_site(self::IP_PAGE, "\$pconfig['inbound_interface']", [
-			'pfb'     => ['iconfig' => ['inbound_interface' => '0']],
 			'pconfig' => [],
 		]);
 		$this->assertSame(['0'], $out['pconfig']['inbound_interface']);

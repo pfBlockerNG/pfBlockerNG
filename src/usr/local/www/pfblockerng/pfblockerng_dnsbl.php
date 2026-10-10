@@ -119,21 +119,21 @@ $pconfig['aliaslog']		= PfbConfig::read('dnsbl/aliaslog');
 // adapter -- that call is the POST-redisplay adapter, not a second default.
 $pconfig['autoaddrnot_in']	= PfbConfig::read('dnsbl/autoaddrnot_in');
 $pconfig['autoports_in']	= PfbConfig::read('dnsbl/autoports_in');
-$pconfig['aliasports_in']	= $pfb['dconfig']['aliasports_in']			?: '';
+$pconfig['aliasports_in']	= PfbConfig::read('dnsbl/aliasports_in');
 $pconfig['autoaddr_in']		= PfbConfig::read('dnsbl/autoaddr_in');
 $pconfig['autonot_in']		= PfbConfig::read('dnsbl/autonot_in');
-$pconfig['aliasaddr_in']	= $pfb['dconfig']['aliasaddr_in']			?: '';
-$pconfig['autoproto_in']	= $pfb['dconfig']['autoproto_in']			?: 'any';
-$pconfig['agateway_in']		= $pfb['dconfig']['agateway_in']			?: 'default';
+$pconfig['aliasaddr_in']	= PfbConfig::read('dnsbl/aliasaddr_in');
+$pconfig['autoproto_in']	= PfbConfig::read('dnsbl/autoproto_in');
+$pconfig['agateway_in']		= PfbConfig::read('dnsbl/agateway_in');
 
 $pconfig['autoaddrnot_out']	= PfbConfig::read('dnsbl/autoaddrnot_out');
 $pconfig['autoports_out']	= PfbConfig::read('dnsbl/autoports_out');
-$pconfig['aliasports_out']	= $pfb['dconfig']['aliasports_out']			?: '';
+$pconfig['aliasports_out']	= PfbConfig::read('dnsbl/aliasports_out');
 $pconfig['autoaddr_out']	= PfbConfig::read('dnsbl/autoaddr_out');
 $pconfig['autonot_out']		= PfbConfig::read('dnsbl/autonot_out');
-$pconfig['aliasaddr_out']	= $pfb['dconfig']['aliasaddr_out']			?: '';
-$pconfig['autoproto_out']	= $pfb['dconfig']['autoproto_out']			?: 'any';
-$pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
+$pconfig['aliasaddr_out']	= PfbConfig::read('dnsbl/aliasaddr_out');
+$pconfig['autoproto_out']	= PfbConfig::read('dnsbl/autoproto_out');
+$pconfig['agateway_out']	= PfbConfig::read('dnsbl/agateway_out');
 
 $pconfig['whitelist']		= pfb_b64_text(PfbConfig::read('dnsbl/whitelist'));
 

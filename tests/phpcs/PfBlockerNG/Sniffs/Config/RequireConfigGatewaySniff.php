@@ -273,6 +273,28 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngglobal/alertrefresh',
 		// issue #2123: installedpackages/pfblockerngsync/config/0
 		'installedpackages/pfblockerngsync/config/0/syncinterfaces',
+		// issue #3450: IP-page scalars registered as plain strings
+		'installedpackages/pfblockerngipsettings/config/0/ip_placeholder',
+		'installedpackages/pfblockerngipsettings/config/0/maxmind_locale',
+		'installedpackages/pfblockerngipsettings/config/0/maxmind_account',
+		'installedpackages/pfblockerngipsettings/config/0/maxmind_key',
+		'installedpackages/pfblockerngipsettings/config/0/asn_reporting',
+		'installedpackages/pfblockerngipsettings/config/0/asn_token',
+		'installedpackages/pfblockerngipsettings/config/0/inbound_interface',
+		'installedpackages/pfblockerngipsettings/config/0/inbound_deny_action',
+		'installedpackages/pfblockerngipsettings/config/0/outbound_interface',
+		'installedpackages/pfblockerngipsettings/config/0/outbound_deny_action',
+		'installedpackages/pfblockerngipsettings/config/0/pass_order',
+		'installedpackages/pfblockerngipsettings/config/0/autorule_suffix',
+		// issue #3450: DNSBL Advanced In/Outbound rule scalars registered as plain strings
+		'installedpackages/pfblockerngdnsblsettings/config/0/agateway_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/agateway_out',
+		'installedpackages/pfblockerngdnsblsettings/config/0/aliasaddr_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/aliasaddr_out',
+		'installedpackages/pfblockerngdnsblsettings/config/0/aliasports_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/aliasports_out',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoproto_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoproto_out',
 	];
 
 	/**

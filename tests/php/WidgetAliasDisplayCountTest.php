@@ -15,34 +15,45 @@ use PHPUnit\Framework\TestCase;
 final class WidgetAliasDisplayCountTest extends TestCase
 {
 	private string $file;
+	private bool $hadConfig = FALSE;
+	private mixed $savedConfig = NULL;
 
 	protected function setUp(): void
 	{
 		$this->file = sys_get_temp_dir() . '/pfb_ph_' . uniqid() . '.txt';
+		$this->hadConfig   = array_key_exists('config', $GLOBALS);
+		$this->savedConfig = $GLOBALS['config'] ?? NULL;
+		$GLOBALS['config'] = [];
 	}
 
 	protected function tearDown(): void
 	{
 		@unlink($this->file);
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->savedConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 	}
 
+	// issue #3450: the placeholder is a registered gateway scalar, so it is seeded as config state.
 	public function testPlaceholderReadsIpconfigNotApplyOnlyIpPh(): void
 	{
 		unset($GLOBALS['pfb']['ip_ph']);
-		$GLOBALS['pfb']['ipconfig']['ip_placeholder'] = '10.9.8.7';
+		PfbConfig::writeSystem('ip/ip_placeholder', '10.9.8.7');
 		$got = pfb_ip_placeholder();
 		$this->assertSame(
 			'10.9.8.7',
 			$got,
 			"expected: IP-tab ip_placeholder;\nactual: {$got}"
 		);
-		unset($GLOBALS['pfb']['ipconfig']['ip_placeholder']);
+		PfbConfig::delete('ip/ip_placeholder');
 		$this->assertSame('127.1.7.7', pfb_ip_placeholder());
 	}
 
 	public function testPlaceholderRejectsInvalidConfig(): void
 	{
-		$GLOBALS['pfb']['ipconfig']['ip_placeholder'] = 'not-an-ip';
+		PfbConfig::writeSystem('ip/ip_placeholder', 'not-an-ip');
 		$this->assertSame('127.1.7.7', pfb_ip_placeholder());
 	}
 

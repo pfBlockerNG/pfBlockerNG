@@ -18,12 +18,13 @@
 
 function pfb_gateway_compliant_foreign_key()
 {
-	// Foreign key — pfblockerngipsettings/ip_placeholder is NOT in the registry.
-	// (v4suppression, the ADR-53 sibling in this same section, IS registered — see
-	// pfb_gateway_compliant_v4suppression_via_gateway() below — and issue #2123
-	// registered the section's seven checkbox keys, so this example uses a key that
-	// is still genuinely foreign.)
-	$dup = config_get_path('installedpackages/pfblockerngipsettings/config/0/ip_placeholder');
+	// Foreign key — pfblockerngdnsblsettings/dnsbl_webpage is NOT in the registry (ADR-29
+	// §2.5: written directly by pfblockerng_dnsbl.php, read via pfb_dnsbl_webpage()).
+	// (v4suppression, the ADR-53 sibling in the IP section, IS registered — see
+	// pfb_gateway_compliant_v4suppression_via_gateway() below — and issues #2123 and #3450
+	// registered every other IP-page scalar, so this example uses a key that is still
+	// genuinely foreign.)
+	$dup = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage');
 
 	// Foreign dynamic per-row key — not in the registered path set.
 	$row = 0;

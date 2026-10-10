@@ -1369,20 +1369,9 @@ final class CfgGatewayTest extends TestCase
 			// These are read with dynamic paths; not individual static fields.
 			'pfbextdns',
 
-			// pfblockerngipsettings — section read + sub-keys.
-			// (v4suppression is registered -- ADR-53 -- and lives in the registry, not here.
-			// issue #2123 moved enable_dup / enable_agg / enable_log / enable_rdns /
-			// database_cc / enable_float / killstates off this list into the registry.)
-			'maxmind_key',
-			'maxmind_locale',
-			'asn_reporting',
-			'asn_token',
-			'maxmind_account',
-			'inbound_deny_action',
-			'outbound_deny_action',
-			'pass_order',
-			'autorule_suffix',
-			'ip_placeholder',
+			// pfblockerngipsettings — every settings scalar is registered now: v4suppression
+			// (ADR-53), issue #2123's checkboxes and issue #3450's remaining twelve live in the
+			// registry, so nothing in this section stays out of scope.
 
 			// pfblockerngreputation sub-keys.
 			'et_header',
@@ -1531,6 +1520,15 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl_dot_block_exclude',
 			'dnsbl_dot_block_action',
 			'dnsbl_dot_block_floating',
+			// issue #3450: Advanced In/Outbound rule scalars (alias, protocol, gateway)
+			'agateway_in',
+			'agateway_out',
+			'aliasaddr_in',
+			'aliasaddr_out',
+			'aliasports_in',
+			'aliasports_out',
+			'autoproto_in',
+			'autoproto_out',
 
 			// pfblockerngsafesearch scalars
 			'safesearch_enable',
@@ -1541,6 +1539,19 @@ final class CfgGatewayTest extends TestCase
 			// pfblockerngipsettings/config/0 scalars (ADR-53)
 			'v4suppression',
 			'v6suppression',
+			// issue #3450: the remaining IP-page scalars
+			'ip_placeholder',
+			'maxmind_locale',
+			'maxmind_account',
+			'maxmind_key',
+			'asn_reporting',
+			'asn_token',
+			'inbound_interface',
+			'inbound_deny_action',
+			'outbound_interface',
+			'outbound_deny_action',
+			'pass_order',
+			'autorule_suffix',
 
 			// pfblockerngreputation/config/0 scalars (issue #1896)
 			'enable_rep',
@@ -1558,23 +1569,13 @@ final class CfgGatewayTest extends TestCase
 			'blacklist_selected',
 			'item',
 			'pfbextdns',
-			'maxmind_key',
-			'maxmind_locale',
 			'database_cc',
-			'asn_reporting',
-			'asn_token',
-			'maxmind_account',
-			'inbound_deny_action',
-			'outbound_deny_action',
 			'enable_float',
 			'fw_self_outbound',
 			'enable_dup',
 			'enable_agg',
-			'pass_order',
 			'enable_log',
-			'autorule_suffix',
 			'killstates',
-			'ip_placeholder',
 			'et_header',
 			'syncinterfaces',
 			'varsynconchanges',

@@ -210,4 +210,43 @@ final class DnsblFreshPconfigTest extends TestCase
 		$this->assertSame("one\ntwo", $pconfig['tld_wildcard_exclusion']);
 		$this->assertSame('', $pconfig['tld_wildcard_blacklist'], 'a missing textarea remains empty');
 	}
+
+	/**
+	 * Issue #3450: the eight Advanced In/Outbound rule scalars (alias, protocol, gateway)
+	 * resolve through the gateway, so the registry owns their defaults and a stale
+	 * $pfb['dconfig'] mirror can no longer outvote the stored section.
+	 */
+	public function testAdvancedRuleFieldsUseAuthoritativeGatewayValues(): void
+	{
+		$mirror = [
+			'aliasports_in'  => 'mirror', 'aliasaddr_in'  => 'mirror', 'autoproto_in'  => 'mirror', 'agateway_in'  => 'mirror',
+			'aliasports_out' => 'mirror', 'aliasaddr_out' => 'mirror', 'autoproto_out' => 'mirror', 'agateway_out' => 'mirror',
+		];
+		$stored = [
+			'aliasports_in'  => 'Web_ports',    'aliasaddr_in'  => 'LAN_hosts',    'autoproto_in'  => 'tcp/udp', 'agateway_in'  => 'WAN_DHCP',
+			'aliasports_out' => 'DNS_ports',    'aliasaddr_out' => 'Trusted_Addr', 'autoproto_out' => 'udp',     'agateway_out' => 'VPN_GW',
+		];
+		$default_tlds = ['arpa', 'corp', 'com', 'net'];
+
+		[$pconfig, $diagnostics] = $this->runCapturingDiagnostics($mirror, $default_tlds, $stored);
+
+		$this->assertSame([], self::nullDeprecationsOnly($diagnostics));
+		foreach ($stored as $field => $value) {
+			$this->assertSame($value, $pconfig[$field], "stored {$field} must win over the stale mirror");
+		}
+
+		// Absent in the authoritative section: the registered defaults, whatever the mirror says.
+		[$absent] = $this->runCapturingDiagnostics($mirror, $default_tlds, []);
+		foreach (['aliasports_in', 'aliasaddr_in', 'aliasports_out', 'aliasaddr_out'] as $field) {
+			$this->assertSame('', $absent[$field], "absent {$field} resolves to no alias");
+		}
+		// Unset, not 'any': the select still renders its first option (Any), and the rule builder
+		// keeps leaving the protocol unset so pfSense derives proto tcp from a port.
+		foreach (['autoproto_in', 'autoproto_out'] as $field) {
+			$this->assertSame('', $absent[$field], "absent {$field} stays an unset protocol");
+		}
+		foreach (['agateway_in', 'agateway_out'] as $field) {
+			$this->assertSame('default', $absent[$field], "absent {$field} resolves to the default gateway");
+		}
+	}
 }

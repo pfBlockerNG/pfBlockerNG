@@ -1091,19 +1091,19 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['weblocal'] .= "://127.0.0.1:{$pfb['port']}/pfblockerng/pfblockerng.php";
 
 	// Define Inbound/Outbound action is not user selected.
-	$pfb['deny_action_inbound']  = $pfb['ipconfig']['inbound_deny_action']	?: 'block';
-	$pfb['deny_action_outbound'] = $pfb['ipconfig']['outbound_deny_action']	?: 'reject';
+	$pfb['deny_action_inbound']  = PfbConfig::read('ip/inbound_deny_action');
+	$pfb['deny_action_outbound'] = PfbConfig::read('ip/outbound_deny_action');
 
 	$pfb['float']		= PfbConfig::read('ip/enable_float');				// Enable/Disable floating autorules
 	$pfb['fw_self']		= PfbConfig::read('ip/fw_self_outbound');			// Also apply outbound autorules to the firewall's own traffic
 	$pfb['dup']		= PfbConfig::read('ip/enable_dup');				// Enable remove of duplicate IPs utilizing grepcidr
 	$pfb['agg']		= PfbConfig::read('ip/enable_agg');				// Enable aggregation of CIDRs
-	$pfb['order']		= $pfb['ipconfig']['pass_order'] ?: 'order_0';			// Order of the autorules (default order_0, matching the IP-settings UI; an empty value drops user pass-rules on a managed interface — issue #532)
+	$pfb['order']		= PfbConfig::read('ip/pass_order');				// Order of the autorules (registry default order_0, matching the IP-settings UI; an empty value drops user pass-rules on a managed interface — issue #532)
 	$pfb['global_log']	= PfbConfig::read('ip/enable_log');				// Enable Global IP logging
-	$pfb['suffix']		= $pfb['ipconfig']['autorule_suffix'];				// Suffix used for autorules
+	$pfb['suffix']		= PfbConfig::read('ip/autorule_suffix');			// Suffix used for autorules
 	$pfb['kstates'] 	= PfbConfig::read('ip/killstates');				// Firewall states removal
 
-	$pfb['ip_ph']		= pfb_filter($pfb['ipconfig']['ip_placeholder'], PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');	// Placeholder IP Address
+	$pfb['ip_ph']		= pfb_filter(PfbConfig::read('ip/ip_placeholder'), PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');	// Placeholder IP Address
 	// issue #3140/#3144: pfblockerng.sh init prefers the PHP-exported values; its shell
 	// config.xml fallbacks remain for boot and hand-run invocations.
 	putenv("PFB_IP_PLACEHOLDER={$pfb['ip_ph']}"); putenv('PFB_REENTRY_TIMEOUT=' . pfb_reentry_budget(NULL));
@@ -1289,8 +1289,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	foreach (array('inbound', 'outbound') as $type) {
 		$pfb["{$type}_interfaces"] = $pfb["{$type}_floating"] = array();
 
-		if (!empty($pfb['ipconfig']["{$type}_interface"])) {
-			$interfaces = explode(',', $pfb['ipconfig']["{$type}_interface"]);
+		$configured = PfbConfig::read("ip/{$type}_interface");
+		if (!empty($configured)) {
+			$interfaces = explode(',', $configured);
 
 			// CSV string for 'pfB_' match rules
 			$pfb["{$type}_floating"]		= ltrim(implode(',', $interfaces), ',');

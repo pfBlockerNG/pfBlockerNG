@@ -908,7 +908,7 @@ $ufound = FALSE;
 
 $pfb_maxmind_gen = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 $pfb_maxmind_ip  = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
-// maxmind_key is unregistered; absence is checked via section read
+// raw section read: this legacy move must see a pre-pass absent maxmind_key, before the registry pass seeds it
 if (!empty($pfb_maxmind_gen) && !isset($pfb_maxmind_ip['maxmind_key'])) {
 	$maxmind_config = $pfb_maxmind_gen;
 	foreach (array('maxmind_key', 'maxmind_locale', 'database_cc') as $m_setting) {

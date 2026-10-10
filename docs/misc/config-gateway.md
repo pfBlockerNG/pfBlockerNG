@@ -36,6 +36,27 @@ or checking foreign-key exclusions.
 - **No `write_config()` inside gateway** — caller decide when to flush. Registry
   (`pfb_cfg_registry()`) read-only after boot.
 
+### Sync ownership (issue #3450)
+
+Every registry entry carries `'sync' => 'policy'|'local'`, with no default, so a new field
+cannot inherit a scope silently. `tests/php/SyncPolicyOwnershipTest.php` fails the suite on
+a missing or unknown value and pins the local set by name.
+
+- `policy` entries sync in policy scope; `local` entries never leave the node. Local means an
+  interface, VIP, listener port, gateway, filesystem or script reference, credential,
+  runtime or one-shot marker, log, display, or per-node performance tuning value.
+- The settings sections (`gen`, `ip`, `dnsbl`) are an **allowlist**: a key syncs if and only
+  if its registry entry says `policy`. An unregistered key there (`dnsbl_webpage`, the
+  retired markers, the `hooks` subtree) never syncs.
+- Every other synced section is a **deny list**: `pfb_sync_local_paths()`, beside the
+  registry, names the row leaves, section paths and `pfblockerngglobal` prefixes that stay
+  local, and everything else is policy. `pfb_sync_policy_projection()` applies both rules to
+  stored sections; `pfb_sync_policy_digest()` hashes the result.
+- Credentials are local: `ip/maxmind_account`, `ip/maxmind_key`, `ip/asn_token`,
+  `dnsbl/top1m_token`, and the Blacklist rows' `item/*/username` and `item/*/password`.
+
+Spec: `docs/specs/xmlrpc-per-field-sync.md`, "Ownership classification".
+
 ## Write authorization (issue #1895)
 
 Authorization = property of **write**, not call site (generalises
@@ -246,6 +267,11 @@ Authorization = property of **write**, not call site (generalises
 5. Classify grandfathering decision on entry itself — `grandfather` map or
    `no_grandfather` reason (issue #1921; trigger question under "Forward-upgrade
    contract"). `CfgRegistryGrandfatherGateTest` fails suite on unclassified entry.
+6. Classify the entry's `sync` ownership: `'policy'` when it decides what is blocked,
+   permitted, logged or transformed, `'local'` when it names an interface, VIP, port,
+   gateway, path, script, credential, marker, log, display or per-node tuning value (see
+   "Sync ownership" above). `SyncPolicyOwnershipTest` fails the suite on an entry with no
+   class and pins the local set, so a new local key is added to that list too.
 
 When adding registered key, also add its full path to `$registeredPaths` property in
 `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php` (enforcement sniff).
@@ -322,6 +348,7 @@ Gateway preserves existing behaviour while configurations move forward:
   | `gen/pfb_keep` | `[ABSENT => 'on']` | #281 upgrade keeps settings; #2120's runtime adapter owns the legacy `''` uncheck |
   | `gen/pfb_alias_delta_mode` | `[ABSENT => 'replace']` | ADR-40 — an upgrade keeps the pre-ADR-40 full replace |
   | `dnsbl/pfb_dnsbl_lenient` | `[ABSENT => 'on']` | ADR-22 — an upgrade keeps permissive parsing |
+  | `ip/autorule_suffix` | `[ABSENT => 'standard', '' => 'standard']` | #3450 — the runtime read the raw value with no default, so an absent or `''` suffix generated none; an upgrade keeps that, a fresh install takes the page default `autorule` |
 
   **Every entry carries its decision.** Exactly one of `grandfather` map or
   `no_grandfather` reason string per registry entry, with two exceptions carrying neither:

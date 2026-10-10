@@ -3583,13 +3583,13 @@ function pfb_global() {
 
 	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
 	$pfb['cc']		= PfbConfig::read('ip/database_cc') === PfbToggle::On;	// Disable Country database CRON updates
-	$pfb['maxmind_locale']	= $pfb['ipconfig']['maxmind_locale']	?: 'en';	// MaxMind Localized Language setting
-	$pfb['asn_reporting']	= $pfb['ipconfig']['asn_reporting']	?: 'disabled';	// ASN Reporting
-	$pfb['asn_token']	= $pfb['ipconfig']['asn_token']		?: '';		// ASN Token (IPinfo)
+	$pfb['maxmind_locale']	= PfbConfig::read('ip/maxmind_locale');	// MaxMind Localized Language setting
+	$pfb['asn_reporting']	= PfbConfig::read('ip/asn_reporting');	// ASN Reporting
+	$pfb['asn_token']	= PfbConfig::read('ip/asn_token');	// ASN Token (IPinfo)
 	$pfb['rdns']		= pfb_resolve_enabled();					// Reverse-DNS lookup for block-log entries (issue #336)
 
-	$pfb['maxmind_account']	= pfb_filter($pfb['ipconfig']['maxmind_account'], PFB_FILTER_WORD, 'pfb_global')	?: '';		// Maxmind Account ID
-	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'maxmind_key')		?: '';		// Maxmind License Key (issue #924: log-safe reference -- a rejected key is never logged on this consumer path either)
+	$pfb['maxmind_account']	= pfb_filter(PfbConfig::read('ip/maxmind_account'), PFB_FILTER_WORD, 'pfb_global')	?: '';		// Maxmind Account ID
+	$pfb['maxmind_key']	= pfb_filter(PfbConfig::read('ip/maxmind_key'), PFB_FILTER_WORD, 'maxmind_key')		?: '';		// Maxmind License Key (issue #924: log-safe reference -- a rejected key is never logged on this consumer path either)
 
 	$pfb['dnsbl']		= PfbConfig::read('dnsbl/pfb_dnsbl');							// Enabled state of DNSBL
 	$pfb['dnsbl_vip_auto']	= PfbConfig::read('dnsbl/pfb_dnsvip_auto');						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
@@ -7448,29 +7448,30 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 			}
 			return pfb_dnsbl_toggle_enabled($conf_config[$field] ?? '');
 		};
+		$conf_value	= static function (string $field) use ($conf_config, $registered): mixed {
+			return $registered ? PfbConfig::read("dnsbl/{$field}") : $conf_config[$field];
+		};
 		$autotype	= array( 'autoports' => 'aliasports', 'autoaddr' => 'aliasaddr');
 
 		foreach (array('_out', '_in') as $dir) {
 
-			$pfbarr['aproto' . $dir]	= $conf_config['autoproto' . $dir];
+			$pfbarr['aproto' . $dir]	= $conf_value('autoproto' . $dir);
 			$pfbarr['anot' . $dir]		= $toggle_enabled('autonot' . $dir) ? 'on' : '';
 			$pfbarr['aaddrnot' . $dir]	= $toggle_enabled('autoaddrnot' . $dir) ? 'on' : '';
-			$pfbarr['agateway' . $dir]	= $conf_config['agateway' . $dir];
+			$pfbarr['agateway' . $dir]	= $conf_value('agateway' . $dir);
 
 			foreach ($autotype as $akey => $atype) {
 				if ($toggle_enabled($akey . $dir)) {
+					$alias_name = $conf_value($atype . $dir);
 					foreach (config_get_path('aliases/alias', []) as $palias) {
-						if ($palias['name'] == $conf_config[$atype . $dir]) {
+						if ($palias['name'] == $alias_name) {
 							if (!empty($palias['address'])) {
-								$dalias = "{$atype}{$dir}";
 								switch($akey) {
 									case 'autoports':
-										$ctype = "aports{$dir}";
-										$pfbarr[$ctype] = $conf_config[$dalias];
+										$pfbarr["aports{$dir}"] = $alias_name;
 										break;
 									case 'autoaddr':
-										$ctype = "aaddr{$dir}";
-										$pfbarr[$ctype] = $conf_config[$dalias];
+										$pfbarr["aaddr{$dir}"] = $alias_name;
 										break;
 								}
 							}
@@ -7575,10 +7576,9 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 
 
 // Widget requests do not run apply.inc, so $pfb['ip_ph'] is unset —
-// read and filter the IP-tab value pfb_global() loads (default 127.1.7.7).
+// read the IP-tab value through the gateway (default 127.1.7.7) and filter it.
 function pfb_ip_placeholder(): string {
-	global $pfb;
-	$raw = $pfb['ipconfig']['ip_placeholder'] ?? '';
+	$raw = PfbConfig::read('ip/ip_placeholder');
 	$filtered = pfb_filter($raw, PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');
 	if (!is_string($filtered) || $filtered === '') {
 		return '127.1.7.7';
@@ -21511,6 +21511,183 @@ function pfblockerng_sync_sections($include_interfaces) {
 		'pfblockerngglobal',
 		'pfblockerngsafesearch'
 	]);
+}
+
+/**
+ * pfb_sync_policy_projection — the ordered policy leaves of a node's synced sections
+ * (issue #3450; docs/specs/xmlrpc-per-field-sync.md, "Policy projection").
+ *
+ * Input: bare section name => stored subtree. Output: 'installedpackages/<section>/<key
+ * path>' => leaf, in pfblockerng_sync_sections(TRUE) order and stored order within a
+ * section, row indices kept verbatim. A leaf is a non-array value or an empty array; NULL
+ * counts as absent. Values are copied as stored: normalising them for the wire belongs to
+ * the manual builder.
+ *
+ * Settings sections are an allowlist: only a key of config/0 whose registry entry says
+ * 'policy' projects. Every other synced section is a deny list (pfb_sync_local_paths()).
+ * Anything outside the 19 sections, pfblockerngsync included, contributes nothing.
+ *
+ * Pure: reads only pfb_cfg_registry(), PFB_SECTIONS and the two section/schema functions.
+ *
+ * @param  array<string,mixed> $sections
+ * @return array<string,mixed>
+ */
+function pfb_sync_policy_projection(array $sections): array {
+
+	$registry = pfb_cfg_registry();
+	$local    = pfb_sync_local_paths();
+
+	// Bare section name => [registry alias, path of the settings map inside the section].
+	$settings = array();
+	foreach (array('gen', 'ip', 'dnsbl') as $alias) {
+		[, $name, $prefix] = explode('/', PFB_SECTIONS[$alias], 3);
+		$settings[$name]   = array($alias, explode('/', $prefix));
+	}
+
+	$out    = array();
+	$leaves = static function (string $path, mixed $value) use (&$leaves, &$out): void {
+		if (is_array($value) && $value !== array()) {
+			foreach ($value as $key => $child) {
+				$leaves($path . '/' . $key, $child);
+			}
+		} elseif ($value !== NULL) {
+			$out[$path] = $value;
+		}
+	};
+
+	// $rel is the section-relative key path of the node being visited.
+	$is_local = static function (string $section, array $rel) use ($local): bool {
+		if (isset($local['policy_only'][$section])) {
+			foreach ($local['policy_only'][$section] as $prefix) {
+				if (str_starts_with($rel[0], $prefix)) {
+					return FALSE;
+				}
+			}
+			return TRUE;
+		}
+		if (count($rel) >= 3 && $rel[0] === 'config' && in_array($rel[2], $local['row'], TRUE)) {
+			return TRUE;
+		}
+		foreach ($local['section'][$section] ?? array() as $pattern) {
+			$segments = explode('/', $pattern);
+			if (count($segments) > count($rel)) {
+				continue;
+			}
+			foreach ($segments as $i => $segment) {
+				if ($segment !== '*' && $segment !== $rel[$i]) {
+					continue 2;
+				}
+			}
+			return TRUE;
+		}
+		return FALSE;
+	};
+
+	$rel  = array();
+	$walk = static function (string $section, array $node) use (&$walk, &$rel, &$out, $is_local): void {
+		foreach ($node as $key => $value) {
+			$rel[] = (string) $key;
+			if (!$is_local($section, $rel)) {
+				if (is_array($value) && $value !== array()) {
+					$walk($section, $value);
+				} elseif ($value !== NULL) {
+					$out['installedpackages/' . $section . '/' . implode('/', $rel)] = $value;
+				}
+			}
+			array_pop($rel);
+		}
+	};
+
+	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+		$blob = $sections[$section] ?? NULL;
+		if (!is_array($blob)) {
+			continue;
+		}
+
+		if (!isset($settings[$section])) {
+			$walk($section, $blob);
+			continue;
+		}
+
+		[$alias, $prefix] = $settings[$section];
+		$node = $blob;
+		foreach ($prefix as $segment) {
+			$node = $node[$segment] ?? NULL;
+		}
+		if (!is_array($node)) {
+			continue;
+		}
+		foreach ($node as $key => $value) {
+			if (($registry["{$alias}/{$key}"]['sync'] ?? NULL) === 'policy') {
+				$leaves('installedpackages/' . $section . '/' . implode('/', $prefix) . '/' . $key, $value);
+			}
+		}
+	}
+
+	return $out;
+}
+
+
+/**
+ * pfb_sync_policy_digest — a stable sha256 of a policy projection (issue #3450).
+ *
+ * The projection is rebuilt into a tree over the 19 synced sections (paths outside them are
+ * ignored; an array leaf counts as the empty string) and canonicalised below the section
+ * level: an array with only integer keys is a list kept in position order with its indices
+ * renumbered, any other array is a map sorted by key. Two nodes with the same policy
+ * therefore agree, whatever their key order or row-index gaps; a changed value, row order or
+ * leaf moves the digest.
+ *
+ * @param  array<string,mixed> $projection  pfb_sync_policy_projection() output.
+ * @return string                           64 lowercase hex characters.
+ */
+function pfb_sync_policy_digest(array $projection): string {
+
+	$tree = array_fill_keys(pfblockerng_sync_sections(TRUE), array());
+
+	foreach ($projection as $path => $value) {
+		$segments = explode('/', (string) $path);
+		if (count($segments) < 3 || $segments[0] !== 'installedpackages' || !array_key_exists($segments[1], $tree)) {
+			continue;
+		}
+		$last = array_pop($segments);
+		$node = &$tree[$segments[1]];
+		foreach (array_slice($segments, 2) as $segment) {
+			if (!is_array($node[$segment] ?? NULL)) {
+				$node[$segment] = array();
+			}
+			$node = &$node[$segment];
+		}
+		$node[$last] = is_array($value) ? '' : (string) $value;
+		unset($node);
+	}
+
+	$canonical = static function (array $node) use (&$canonical): array {
+		$is_list = TRUE;
+		foreach (array_keys($node) as $key) {
+			if (!is_int($key)) {
+				$is_list = FALSE;
+				break;
+			}
+		}
+		if ($is_list) {
+			$node = array_values($node);
+		} else {
+			ksort($node, SORT_STRING);
+		}
+		foreach ($node as $key => $child) {
+			if (is_array($child)) {
+				$node[$key] = $canonical($child);
+			}
+		}
+		return $node;
+	};
+
+	foreach ($tree as $section => $node) {
+		$tree[$section] = $canonical($node);
+	}
+
+	return hash('sha256', serialize($tree));
 }
 
 // issue #3441: TRUE when pfSense HA copies this node's pfB_DNSBLIP_* rules to a peer whose

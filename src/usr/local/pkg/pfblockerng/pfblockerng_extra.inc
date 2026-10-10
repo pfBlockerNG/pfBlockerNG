@@ -918,7 +918,10 @@ const PFB_GF_ABSENT = "\0absent";
  * keys CfgRegistryGrandfatherGateTest::EXCEPTIONS documents (a mode instrument and a
  * cross-key bespoke seed), which carry neither.
  *
- * @return array<string,array{default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string,old_name?:string,grandfather?:array<string,string>,no_grandfather?:string}>
+ * Required 'sync': spec ownership class; `policy` syncs in policy scope, `local` never
+ * leaves this node (issue #3450).
+ *
+ * @return array<string,array{default:string,read_adapter:callable|null,write_adapter:callable|null,sync:'policy'|'local',write_priv?:string,old_name?:string,grandfather?:array<string,string>,no_grandfather?:string}>
  */
 function pfb_cfg_registry(): array
 {
@@ -938,6 +941,7 @@ function pfb_cfg_registry(): array
 			'default'       => '3.2',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 		],
 
 		// Master enable/disable: 'on' | '' (checkbox).
@@ -945,6 +949,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -956,6 +961,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'grandfather'   => [PFB_GF_ABSENT => 'on'],
 		],
 
@@ -965,24 +971,28 @@ function pfb_cfg_registry(): array
 			'default'        => 'on',
 			'read_adapter'   => 'pfb_cfg_toggle_read',
 			'write_adapter'  => 'pfb_cfg_toggle_write',
+			'sync'           => 'policy',
 			'no_grandfather' => '#2308 upgrade migration maps pfb_interval',
 		],
 		'gen/pfb_schedule_weekday' => [
 			'default'        => '7',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'no_grandfather' => '#2308 upgrade migration maps legacy schedule controls',
 		],
 		'gen/pfb_schedule_hour' => [
 			'default'        => '0',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'no_grandfather' => '#2308 upgrade migration maps legacy schedule controls',
 		],
 		'gen/pfb_schedule_minute' => [
 			'default'        => '0',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'no_grandfather' => '#2308 upgrade migration maps legacy schedule controls',
 		],
 
@@ -991,6 +1001,7 @@ function pfb_cfg_registry(): array
 			'default'       => '3',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'grandfather'   => [PFB_GF_ABSENT => '0'],
 		],
 
@@ -999,6 +1010,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-11 opt-in aggregate aliases; new 4.0 field, \'\' = feature off = pre-4.0 behaviour',
 		],
 
@@ -1007,66 +1019,77 @@ function pfb_cfg_registry(): array
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_errlog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_extraslog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_ip_blocklog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_ip_permitlog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_ip_matchlog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_ip_parse_err' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => '#1004 new 4.0 log sink; no pre-4.0 counterpart, default matches siblings',
 		],
 		'gen/log_max_dnslog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_dnsbl_parse_err' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_dnsreplylog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 		'gen/log_max_unilog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 	];
@@ -1083,6 +1106,7 @@ function pfb_cfg_registry(): array
 			'default'        => '0',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'local',
 			'no_grandfather' => 'ADR-60 age cap; new 4.0 field, \'0\' = off = pre-ADR-60 behaviour',
 		];
 	}
@@ -1095,6 +1119,7 @@ function pfb_cfg_registry(): array
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => '#1109 hysteresis margin; new 4.0 field, \'0\' = exact trim = prior behaviour',
 		],
 
@@ -1107,6 +1132,7 @@ function pfb_cfg_registry(): array
 			'default'       => '1800',
 			'read_adapter'  => 'pfb_cfg_reentry_timeout_adapter',
 			'write_adapter' => 'pfb_cfg_reentry_timeout_adapter',
+			'sync'          => 'local',
 			'no_grandfather' => '#2851 exposes #2016\'s hardcoded 1800s budget; the absent default IS that budget, so an upgrade\'s wait is unchanged',
 		],
 
@@ -1118,6 +1144,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			// issue #1895: the #485 Software-page secondary gate -- this field's write
 			// authorization is 'pkg_mgr_installed.php', not the package's own general page.
 			'write_priv'    => 'pkg_mgr_installed.php',
@@ -1130,6 +1157,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'legacy absent state now matches the registered default',
 		],
 
@@ -1138,6 +1166,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => '#1770 companion; \'\' = no exemptions, no pre-4.0 behaviour',
 		],
 
@@ -1147,6 +1176,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',                       // absent -> Off (new-install default too)
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-49 opt-in sanity scan; new 4.0 field, \'\' = off = prior behaviour',
 		],
 
@@ -1155,6 +1185,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1168,6 +1199,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'auto',
 			'read_adapter'  => 'pfb_cfg_alias_delta_mode_read',
 			'write_adapter' => 'pfb_cfg_alias_delta_mode_write',
+			'sync'          => 'local',
 			'grandfather'   => [PFB_GF_ABSENT => 'replace'],
 		],
 
@@ -1178,6 +1210,7 @@ function pfb_cfg_registry(): array
 			'default'       => '512',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'ADR-40 companion; delta mode is new in 4.0, grandfathered installs run \'replace\' where batch is inert',
 		],
 
@@ -1189,6 +1222,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-43 opt-in apply-on-change window; new 4.0 field, \'\' = no window',
 		],
 
@@ -1203,6 +1237,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => '#1669 new 4.0 UI editor highlighting, cosmetic only, on-for-all at introduction',
 		],
 
@@ -1215,6 +1250,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1223,6 +1259,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => 'ADR-13 opt-in auto-VIP; new 4.0 field, \'\' = manual VIP handling = prior behaviour',
 		],
 
@@ -1232,6 +1269,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#381 opt-OUT toggle; new 4.0 field, \'\' = NAT rules generated = prior behaviour',
 		],
 
@@ -1240,6 +1278,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'lo0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1248,6 +1287,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1256,6 +1296,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1266,6 +1307,7 @@ function pfb_cfg_registry(): array
 			'default'       => '8081',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => '#2994 page/save default 8081 is the operator-visible contract; absent already rendered 8081; a fresh install now seeds it',
 		],
 
@@ -1274,6 +1316,7 @@ function pfb_cfg_registry(): array
 			'default'       => '8443',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => '#2994 page/save default 8443 is the operator-visible contract; absent already rendered 8443; a fresh install now seeds it',
 		],
 
@@ -1282,6 +1325,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'old_name'      => 'alexa_enable',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as alexa_enable)',
 		],
@@ -1294,6 +1338,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'tranco',
 			'read_adapter'  => 'pfb_cfg_top1m_source_read',
 			'write_adapter' => 'pfb_cfg_top1m_source_write',
+			'sync'          => 'policy',
 			'old_name'      => 'alexa_type',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as alexa_type)',
 		],
@@ -1303,6 +1348,7 @@ function pfb_cfg_registry(): array
 			'default'       => '1000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'old_name'      => 'alexa_count',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as alexa_count)',
 		],
@@ -1312,6 +1358,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'old_name'      => 'alexa_inclusion',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as alexa_inclusion)',
 		],
@@ -1327,6 +1374,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'ADR-59 Cloudflare Radar credential; new 4.0 field, \'\' = none',
 		],
 
@@ -1337,6 +1385,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
@@ -1345,6 +1394,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => 'the post-swap flush exists only in the 4.0 no-reload pipeline; latency delta is the accepted zero-downtime redesign itself, not this default; default-off is a uniform decision at introduction',
 		],
 
@@ -1355,6 +1405,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'disabled_log',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'grandfather'   => [PFB_GF_ABSENT => 'enabled', '' => 'enabled'],
 		],
 
@@ -1365,6 +1416,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'default',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 		],
 
 		// ADR-22: scheme-parsing leniency: 'on' | ''. Default 'off'.
@@ -1373,6 +1425,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'off',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'grandfather'   => [PFB_GF_ABSENT => 'on'],
 		],
 
@@ -1384,6 +1437,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
@@ -1396,6 +1450,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
@@ -1410,6 +1465,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_idn_mode_read',
 			'write_adapter' => 'pfb_cfg_idn_mode_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1419,6 +1475,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
@@ -1427,6 +1484,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-08 opt-in sub-toggle; homoglyph feature has no 3.2 counterpart, \'\' = no escalation',
 		],
 
@@ -1435,6 +1493,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1443,6 +1502,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1451,6 +1511,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-07 opt-in cap; \'\' = uncapped = prior behaviour',
 		],
 
@@ -1459,6 +1520,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1467,6 +1529,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'old_name'      => 'pfb_pytld',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as pfb_pytld)',
 		],
@@ -1478,6 +1541,7 @@ function pfb_cfg_registry(): array
 			'default'        => 'on',
 			'read_adapter'   => 'pfb_cfg_toggle_read',
 			'write_adapter'  => 'pfb_cfg_toggle_write',
+			'sync'           => 'policy',
 			'no_grandfather' => 'new PSL PRIVATE policy; absent uses the default ON',
 		],
 
@@ -1486,6 +1550,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => 'pfb_cfg_toggle_read',
 			'write_adapter'  => 'pfb_cfg_toggle_write',
+			'sync'           => 'policy',
 			'no_grandfather' => 'new PSL PRIVATE TLD-Allow policy; absent uses the default OFF',
 		],
 
@@ -1500,6 +1565,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => 'pfb_cfg_feed_suffix_policy_read',
 			'write_adapter'  => 'pfb_cfg_feed_suffix_policy_write',
+			'sync'           => 'policy',
 			'no_grandfather' => 'new FEED-suffix policy (#2371); absent/empty reads Honor (current pre-#2371 behaviour) on every upgrade -- the fresh-install apex/apex seed is a one-time install-time write (pfb_psl_feed_policy_is_fresh_install()), deliberately NOT a registry grandfather map, since issue #1921\'s ABSENT map is OLDCFG-only and would wrongly also apply to a genuinely-fresh install',
 		],
 
@@ -1509,6 +1575,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => 'pfb_cfg_feed_suffix_policy_read',
 			'write_adapter'  => 'pfb_cfg_feed_suffix_policy_write',
+			'sync'           => 'policy',
 			'no_grandfather' => 'new FEED-suffix policy (#2371); absent/empty reads Honor (current pre-#2371 behaviour) on every upgrade -- the fresh-install apex/apex seed is a one-time install-time write (pfb_psl_feed_policy_is_fresh_install()), deliberately NOT a registry grandfather map, since issue #1921\'s ABSENT map is OLDCFG-only and would wrongly also apply to a genuinely-fresh install',
 		],
 
@@ -1519,6 +1586,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'old_name'       => 'pfb_pytld_sort',
 			'no_grandfather' => '3.2-era field; v3.2.16 absent fallback equals default; registered for old_name parity (#1921)',
 		],
@@ -1528,6 +1596,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'old_name'       => 'pfb_pytlds_gtld',
 			'no_grandfather' => '3.2-era field; v3.2.16 absent fallback equals default; registered for old_name parity (#1921)',
 		],
@@ -1537,6 +1606,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'old_name'       => 'pfb_pytlds_cctld',
 			'no_grandfather' => '3.2-era field; v3.2.16 absent fallback equals default; registered for old_name parity (#1921)',
 		],
@@ -1546,6 +1616,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'old_name'       => 'pfb_pytlds_itld',
 			'no_grandfather' => '3.2-era field; v3.2.16 absent fallback equals default; registered for old_name parity (#1921)',
 		],
@@ -1555,6 +1626,7 @@ function pfb_cfg_registry(): array
 			'default'        => '',
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
+			'sync'           => 'policy',
 			'old_name'       => 'pfb_pytlds_bgtld',
 			'no_grandfather' => '3.2-era field; v3.2.16 absent fallback equals default; registered for old_name parity (#1921)',
 		],
@@ -1564,6 +1636,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1572,6 +1645,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1580,6 +1654,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1588,6 +1663,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1596,6 +1672,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1604,6 +1681,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'old_name'      => 'tldblacklist',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as tldblacklist)',
 		],
@@ -1613,6 +1691,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'old_name'      => 'tldexclusion',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as tldexclusion)',
 		],
@@ -1622,6 +1701,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'old_name'      => 'suppression',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (dnsbl-section whitelist blob, as suppression)',
 		],
@@ -1631,6 +1711,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1639,6 +1720,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1647,6 +1729,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1655,6 +1738,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1663,6 +1747,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 		],
 
 		// Python cache max (numeric string). Default '' (unlimited).
@@ -1670,6 +1755,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'the 10000 cap it bounds is a 4.0-only construct; \'\'/absent resolve to that cap everywhere -- uniform decision at introduction',
 		],
 
@@ -1678,6 +1764,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'old_name'      => 'pfb_tld',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as pfb_tld)',
 		],
@@ -1689,6 +1776,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'enabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => '#2994 page select/help/save default enabled; a fresh install now seeds it so apply logs',
 		],
 
@@ -1697,6 +1785,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-36 opt-in DNS-redirect feature; \'\' = no redirect rules = prior behaviour',
 		],
 
@@ -1705,6 +1794,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'ADR-36 companion; inert while dnsbl_redir is off',
 		],
 
@@ -1713,6 +1803,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-36 companion; inert while dnsbl_redir is off',
 		],
 
@@ -1721,6 +1812,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-37 opt-in DoT/DoQ block feature; \'\' = no block rules = prior behaviour',
 		],
 
@@ -1729,6 +1821,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'local',
 			'no_grandfather' => 'ADR-37 companion; inert while dnsbl_dot_block is off',
 		],
 
@@ -1737,6 +1830,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-37 companion; inert while dnsbl_dot_block is off',
 		],
 
@@ -1747,6 +1841,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'reject',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'sub-setting of the off-by-default ADR-37 feature; a 3.2 upgrader has the feature off, so \'reject\' cannot change established behaviour',
 		],
 
@@ -1757,6 +1852,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'ADR-37 companion; inert while dnsbl_dot_block is off',
 		],
 
@@ -1774,6 +1870,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:111\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1781,6 +1878,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:112\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1788,6 +1886,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:114\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1795,6 +1894,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:115\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1802,6 +1902,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:120\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1809,6 +1910,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:121\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1816,6 +1918,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:123\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1823,7 +1926,67 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:124\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		// issue #3450: Advanced In/Outbound rule scalars (alias, protocol, gateway). Each default
+		// generates the same rule an absent key did; agateway_* never leaves the node.
+		'dnsbl/agateway_in' => [
+			'default'        => 'default',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'pfb_firewall_rule() treats an absent gateway and \'default\' alike',
+		],
+		'dnsbl/agateway_out' => [
+			'default'        => 'default',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'pfb_firewall_rule() treats an absent gateway and \'default\' alike',
+		],
+		'dnsbl/aliasaddr_in' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already read as no alias',
+		],
+		'dnsbl/aliasaddr_out' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already read as no alias',
+		],
+		'dnsbl/aliasports_in' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already read as no alias',
+		],
+		'dnsbl/aliasports_out' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already read as no alias',
+		],
+		'dnsbl/autoproto_in' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already left the rule protocol unset, so pfSense derives proto tcp from a port (filter.inc:4497-4500); \'any\' would not',
+		],
+		'dnsbl/autoproto_out' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already left the rule protocol unset, so pfSense derives proto tcp from a port (filter.inc:4497-4500); \'any\' would not',
 		],
 
 		// -------------------------------------------------------------------
@@ -1841,6 +2004,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => 'ADR-38 opt-in syslog export; v3.2.16 had no syslog export, \'\' = off',
 		],
 
@@ -1853,6 +2017,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1861,6 +2026,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1869,6 +2035,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1877,6 +2044,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1894,6 +2062,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 textarea decode, absent = empty; ADR-53 conversion keys on literal absence and stays ordered before the registry pass',
 		],
 
@@ -1903,6 +2072,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+			'sync'          => 'policy',
 			'no_grandfather' => '#760 new 4.0 v6 leg; \'\' = empty list, no pre-4.0 v6 suppression existed',
 		],
 
@@ -1914,6 +2084,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
@@ -1928,6 +2099,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:39\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1935,6 +2107,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:40\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1942,6 +2115,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:59\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1956,6 +2130,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => '#336 upgrade preservation is the cross-section pfb_rdns_seed_value() seed, ordered before the registry pass and protected by the installer correcting the captured IP mode to OLDCFG; a per-section map cannot see the General section it keys on',
 		],
 
@@ -1963,6 +2138,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:65\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1970,6 +2146,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:75\'s own off default into the registry; absent behaviour unchanged',
 		],
 
@@ -1979,6 +2156,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'new opt-in setting (#3382); absent on upgrade reads Off, the behaviour before the setting existed',
 		],
 
@@ -1986,7 +2164,97 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:78\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		// issue #3450: IP-page scalars; defaults are the page/save producer defaults.
+		// maxmind_key and asn_token stay write-only on the page (masked, never repopulated).
+		'ip/ip_placeholder' => [
+			'default'        => '127.1.7.7',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'pfblockerng_ip.php and pfblockerng_apply.inc already resolve absence to 127.1.7.7',
+		],
+		'ip/maxmind_locale' => [
+			'default'        => 'en',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'page and pfb_global() already resolve absence to en',
+		],
+		'ip/maxmind_account' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'absence already read as an empty string',
+		],
+		'ip/maxmind_key' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'absence already read as an empty string',
+		],
+		'ip/asn_reporting' => [
+			'default'        => 'disabled',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'absence already read as disabled',
+		],
+		'ip/asn_token' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'absence already read as an empty string',
+		],
+		'ip/inbound_interface' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'absence already read as no interface',
+		],
+		'ip/inbound_deny_action' => [
+			'default'        => 'block',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already read as block',
+		],
+		'ip/outbound_interface' => [
+			'default'        => '',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'local',
+			'no_grandfather' => 'absence already read as no interface',
+		],
+		'ip/outbound_deny_action' => [
+			'default'        => 'reject',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already read as reject',
+		],
+		'ip/pass_order' => [
+			'default'        => 'order_0',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'sync'           => 'policy',
+			'no_grandfather' => 'absence already read as order_0 (issue #532)',
+		],
+		// Absent or '' generated no suffix before (the 'standard' branch): an upgrade keeps that,
+		// a fresh install takes the page default 'autorule'.
+		'ip/autorule_suffix' => [
+			'default'       => 'autorule',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'grandfather'   => [PFB_GF_ABSENT => 'standard', '' => 'standard'],
 		],
 
 		// -------------------------------------------------------------------
@@ -1998,6 +2266,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -2007,6 +2276,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -2016,6 +2286,7 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'policy',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -2037,6 +2308,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => '#2123 relocated pfblockerng_alerts.php:41\'s own ON default into the registry; absent still reads On and a stored \'\' still reads Off',
 		],
 
@@ -2052,11 +2324,38 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
 			'no_grandfather' => '#2123 relocated pfblockerng_sync.php:35\'s own off default into the registry; absent behaviour unchanged',
 		],
 	];
 
 	return $registry;
+}
+
+/**
+ * pfb_sync_local_paths — the deny-list schema for the synced sections that are NOT settings
+ * sections (issue #3450; docs/specs/xmlrpc-per-field-sync.md, "Ownership classification").
+ *
+ * The settings sections (pfblockerng, pfblockerngipsettings, pfblockerngdnsblsettings) are not
+ * in this schema: they are an allowlist, and a key syncs there if and only if its registry
+ * entry says 'sync' => 'policy'. Every other synced section is policy except what is listed:
+ *
+ *   'row'         leaf keys that are local in every group row `config/<N>/<key>`.
+ *   'section'     section-relative key paths that are local; '*' matches exactly one path
+ *                 segment (any list index). A matching path's whole subtree is local.
+ *   'policy_only' section => key prefixes. In that section only top-level keys starting with
+ *                 a listed prefix are policy ('feed_' covers 'feed_alt_'); every other key
+ *                 is local.
+ *
+ * @return array{row:list<string>,section:array<string,list<string>>,policy_only:array<string,list<string>>}
+ */
+function pfb_sync_local_paths(): array
+{
+	return [
+		'row'         => ['srcint', 'script_pre', 'script_post', 'agateway_in', 'agateway_out'],
+		'section'     => ['pfblockerngblacklist' => ['item/*/username', 'item/*/password']],
+		'policy_only' => ['pfblockerngglobal' => ['feed_']],
+	];
 }
 
 // Read the configured DNSBL block-page template filename. issue #713: this is a FOREIGN key

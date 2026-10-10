@@ -19,11 +19,10 @@ final class IpRuleOrderLayoutUiTest extends TestCase
 	public function testRuleOrderKeepsFiveDistinctValuesAndOrderZeroDefault(): void
 	{
 		$source = self::source();
-		$this->assertMatchesRegularExpression(
-			'/\$pconfig\[\'pass_order\'\]\s*=.*\?:\s*\'order_0\';/',
-			$source,
-			'Firewall Auto Rule Order must keep order_0 as its fallback default'
-		);
+		// The default moved from the page's `?:` into the registry (issue #3450); the page
+		// reads it through the gateway (IpPagePconfigGatewayReadTest pins the render value).
+		$this->assertSame('order_0', pfb_cfg_registry()['ip/pass_order']['default'],
+			'Firewall Auto Rule Order must keep order_0 as its fallback default');
 		$this->assertSame(1, preg_match('/\\$options_pass_order\\s*=\\s*\\[(.*?)\\];/s', $source, $block),
 			'could not locate the Firewall Auto Rule Order options');
 		preg_match_all("/'(order_\\d+)'\\s*=>\\s*'([^']+)'/", $block[1], $options, PREG_SET_ORDER);

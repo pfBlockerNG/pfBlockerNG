@@ -42,6 +42,12 @@ $toggle_enabled = static function (string $field) use ($conf_config, $registered
 $pfbarr['anot' . $dir] = $toggle_enabled('autonot' . $dir) ? 'on' : '';
 $pfbarr['aaddrnot' . $dir] = $toggle_enabled('autoaddrnot' . $dir) ? 'on' : '';
 if ($toggle_enabled($akey . $dir)) {}
+$conf_value = static function (string $field) use ($conf_config, $registered): mixed {
+	return $registered ? PfbConfig::read("dnsbl/{$field}") : $conf_config[$field];
+};
+$pfbarr['aproto' . $dir] = $conf_value('autoproto' . $dir);
+$pfbarr['agateway' . $dir] = $conf_value('agateway' . $dir);
+$alias_name = $conf_value($atype . $dir);
 PHP
 		);
 		$this->assertIsArray($expected);
@@ -49,6 +55,10 @@ PHP
 		$toggleAssignments = $finder->find($function->stmts, static fn (Node $node): bool =>
 			$node instanceof Expr\Assign && self::isVariable($node->var, 'toggle_enabled'));
 		$this->assertCount(1, $toggleAssignments, 'the selected reader must have exactly one definition and no reassignment');
+
+		$valueAssignments = $finder->find($function->stmts, static fn (Node $node): bool =>
+			$node instanceof Expr\Assign && self::isVariable($node->var, 'conf_value'));
+		$this->assertCount(1, $valueAssignments, 'the plain-scalar reader must have exactly one definition and no reassignment');
 
 		$registeredAssignments = $finder->find($function->stmts, static fn (Node $node): bool =>
 			$node instanceof Expr\Assign && self::isVariable($node->var, 'registered'));
@@ -59,6 +69,10 @@ PHP
 		self::assertOneMatchingNode($expressions, $expected[1], 'the complete selected-reader closure');
 		self::assertOneMatchingNode($expressions, $expected[2], 'the complete autonot consumer expression');
 		self::assertOneMatchingNode($expressions, $expected[3], 'the complete autoaddrnot consumer expression');
+		self::assertOneMatchingNode($expressions, $expected[5], 'the complete plain-scalar reader closure');
+		self::assertOneMatchingNode($expressions, $expected[6], 'the complete autoproto consumer expression');
+		self::assertOneMatchingNode($expressions, $expected[7], 'the complete agateway consumer expression');
+		self::assertOneMatchingNode($expressions, $expected[8], 'the complete alias-name consumer expression');
 
 		$expectedCondition = $expected[4] instanceof Stmt\If_ ? $expected[4]->cond : NULL;
 		$this->assertInstanceOf(Expr::class, $expectedCondition);
@@ -70,13 +84,17 @@ PHP
 			$node instanceof Expr\FuncCall && self::isVariable($node->name, 'toggle_enabled'));
 		$this->assertCount(3, $toggleCalls, 'the selected reader must feed exactly the three advanced-field consumers');
 
+		$valueCalls = $finder->find($function->stmts, static fn (Node $node): bool =>
+			$node instanceof Expr\FuncCall && self::isVariable($node->name, 'conf_value'));
+		$this->assertCount(3, $valueCalls, 'the plain-scalar reader must feed exactly the protocol, gateway and alias consumers');
+
 		$gatewayCalls = $finder->find($function->stmts, static fn (Node $node): bool =>
 			$node instanceof Expr\StaticCall
 			&& $node->class instanceof Node\Name
 			&& $node->class->toString() === 'PfbConfig'
 			&& $node->name instanceof Node\Identifier
 			&& $node->name->toString() === 'read');
-		$this->assertCount(1, $gatewayCalls, 'PfbConfig may appear only in the registered branch of the selected reader');
+		$this->assertCount(2, $gatewayCalls, 'PfbConfig may appear only in the registered branch of the two selected readers');
 
 		$dynamicCalls = $finder->find($function->stmts, static fn (Node $node): bool =>
 			$node instanceof Expr\FuncCall

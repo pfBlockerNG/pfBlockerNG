@@ -56,6 +56,12 @@ final class RuntimeToggleOwnershipExecutionTest extends TestCase
 		'autonot_out', 'autoaddrnot_out', 'autoports_out', 'autoaddr_out',
 		'autonot_in', 'autoaddrnot_in', 'autoports_in', 'autoaddr_in',
 	];
+	// Every field the registered home reads through the gateway, in call order: the three
+	// toggle consumers plus, since issue #3450, the plain protocol and gateway scalars.
+	private const GATEWAY_FIELDS = [
+		'autoproto_out', 'autonot_out', 'autoaddrnot_out', 'agateway_out', 'autoports_out', 'autoaddr_out',
+		'autoproto_in', 'autonot_in', 'autoaddrnot_in', 'agateway_in', 'autoports_in', 'autoaddr_in',
+	];
 	/** @var array<string,array{bool,mixed}> */
 	private array $savedGlobals = [];
 
@@ -120,7 +126,7 @@ final class RuntimeToggleOwnershipExecutionTest extends TestCase
 		$this->assertSame('on', $result['aaddrnot_in'], "{$label}: enabled invert verdict");
 		if ($registered) {
 			$this->assertSame(
-				array_map(static fn (string $field): string => "dnsbl/{$field}", self::EXPECTED_FIELDS),
+				array_map(static fn (string $field): string => "dnsbl/{$field}", self::GATEWAY_FIELDS),
 				SpyState::$gatewayKeys,
 				"{$label}: exact registered gateway keys"
 			);
