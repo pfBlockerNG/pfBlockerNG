@@ -11,19 +11,21 @@
 # nothing (check-then-act throughout). Four near-identical per-channel wrapper
 # scripts added nothing but drift risk over a single --channel argument.
 #
-# WHY EVERY pkg(8) CALL REDIRECTS STDIN FROM /dev/null: a leftover pipe user
-# (`fetch | sh`) still exists in the wild, and under that form the script's own
-# stdin IS the script text — any child that reads stdin without redirection would
-# consume trailing script bytes and corrupt the run. The documented form is
-# mktemp + fetch-to-file (issue #2754): a POSIX pipeline's status is the last
-# command, so `fetch | sh` exits 0 when fetch delivers zero bytes (`sh` on empty
-# stdin succeeds). `[ -s "$t" ]` also refuses a successful empty write.
+# WHY EVERY pkg(8) CALL REDIRECTS STDIN FROM /dev/null: the published one-liner is
+# `fetch | sh` (issue #3470), and under that form the script's own stdin IS the
+# script text — any child that reads stdin without redirection would consume
+# trailing script bytes and corrupt the run. A POSIX pipeline's status is the last
+# command, so `fetch | sh` exits 0 when fetch delivers zero bytes (issue #2754);
+# unattended callers use the documented mktemp + fetch-to-file form, whose
+# `[ -s "$t" ]` also refuses a successful empty write.
 #
 # Usage:
 #   install.sh --channel <stable|testing|edge|nightly>   subscribe + install/converge
 #   install.sh -h|--help                                  this text
 #
 # Published at https://${PFB_REPO_HOST}/install.sh; run ON the box:
+#   fetch -qo - https://${PFB_REPO_HOST}/install.sh | sh -s -- --channel stable
+# Unattended (exits non-zero on a failed or empty fetch):
 #   t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://${PFB_REPO_HOST}/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel stable; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
 #
 # Env (all overridable; forks/staging/tests set these):
@@ -354,6 +356,8 @@ Usage:
   install.sh -h|--help                                  this text
 
 Published at https://${PFB_REPO_HOST}/install.sh; run ON the box:
+  fetch -qo - https://${PFB_REPO_HOST}/install.sh | sh -s -- --channel <stable|testing|edge|nightly>
+Unattended (exits non-zero on a failed or empty fetch):
 USAGE
     # Single-quoted format: dash/set -u must not expand $t or $(mktemp) while
     # printing help. ${PFB_REPO_HOST} is the %s argument (issue #2756).
