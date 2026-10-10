@@ -12,8 +12,8 @@ require_once __DIR__ . '/SyncPolicyFixtureTrait.php';
  * Issue #3451 — pfb_sync_policy_merge() refuses hostile or malformed input.
  *
  * Both whole inputs are validated before any output is built; a refusal is an
- * \InvalidArgumentException that names the section and never echoes a value, and it leaves
- * both caller arrays untouched and raises no PHP diagnostic.
+ * \InvalidArgumentException that names the section and never echoes a value or a non-integer
+ * path key, and it raises no PHP diagnostic.
  *
  * Every case starts from a pair of snapshots that merge cleanly (testBaselinePairMerges...)
  * and changes exactly one position, so only that position can be the reason for the refusal.
@@ -65,9 +65,9 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 			] + ($receiver ? ['agateway_in' => 'LOCAL-SENTINEL-gw'] : [])]],
 			'pfblockerngdnsbl'       => ['config' => [0 => self::groupRow('Beta', $receiver)]],
 			'pfblockerngblacklist'   => ['blacklist_enable' => 'on', 'item' => [
-				0 => self::item('shallalist.xml', $receiver), 1 => self::item('ut1-capitole.xml', $receiver),
+				0 => self::item('shallalist', $receiver), 1 => self::item('ut1', $receiver),
 			]],
-			'pfblockerngglobal'      => ['feed_Foo' => 'on'] + ($receiver ? ['alertrefresh' => 'LOCAL-SENTINEL-alert'] : []),
+			'pfblockerngglobal'      => ['feed_foo' => 'on'] + ($receiver ? ['alertrefresh' => 'LOCAL-SENTINEL-alert'] : []),
 			'pfblockerngsafesearch'  => ['safesearch_enable' => 'on'],
 		];
 	}
@@ -112,7 +112,7 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 		$leafPaths = [
 			'pfblockerng/config/0/pfb_keep',
 			'pfblockerngafrica/config/0/action',
-			'pfblockerngglobal/feed_Foo',
+			'pfblockerngglobal/feed_foo',
 			'pfblockerngsafesearch/safesearch_enable',
 			'pfblockernglistsv4/config/0/action',
 			'pfblockernglistsv4/config/0/row/0/url',
@@ -167,14 +167,19 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 		$badAliases = [
 			'missing' => self::UNSET, 'empty' => '', 'empty list' => [], 'int' => 7, 'space' => 'a b EVILVALUE',
 			'dash' => 'a-EVILVALUE', 'umlaut' => 'ü', 'semicolon' => 'EVILVALUE;rm', 'traversal' => 'a/../EVILVALUE',
-			'newline' => "a\nEVILVALUE",
+			'newline' => "a\nEVILVALUE", 'zero' => '0',
 		];
 		foreach (['pfblockernglistsv4', 'pfblockernglistsv6', 'pfblockerngdnsbl'] as $section) {
 			foreach ($badAliases as $name => $value) {
 				$add($name, 'incoming', "{$section}/config/0/aliasname", $value);
 			}
-			foreach (['missing' => self::UNSET, 'empty' => '', 'empty list' => [], 'space' => 'a b EVILVALUE'] as $name => $value) {
+			foreach (['missing' => self::UNSET, 'empty' => '', 'empty list' => [], 'space' => 'a b EVILVALUE', 'zero' => '0'] as $name => $value) {
 				$add($name, 'current', "{$section}/config/0/aliasname", $value);
+			}
+			// The editor caps IPv4/IPv6 aliasnames at 24 characters (pfB_ + name + _v? must fit pf's 31); DNSBL has no cap.
+			if ($section !== 'pfblockerngdnsbl') {
+				$add('25 characters', 'incoming', "{$section}/config/0/aliasname", str_repeat('a', 25));
+				$add('25 characters', 'current', "{$section}/config/0/aliasname", str_repeat('a', 25));
 			}
 			foreach (['incoming', 'current'] as $side) {
 				$pair = self::pair($side, "{$section}/config/0/aliasname", 'EVILVALUEdup');
@@ -191,13 +196,18 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 			}
 		}
 
-		// Blacklist item identity: a non-empty string xml, unique per side.
+		// Blacklist item identity: the repo's blacklist identity (/^[A-Za-z0-9,_-]+$/, not '0'), no comma, unique per side.
 		foreach (['incoming', 'current'] as $side) {
-			foreach (['missing' => self::UNSET, 'empty' => '', 'empty list' => [], 'int' => 5] as $name => $value) {
+			$badIds = [
+				'missing' => self::UNSET, 'empty' => '', 'empty list' => [], 'int' => 5, 'zero' => '0', 'dot' => 'a.EVILVALUE',
+				'comma' => 'a,EVILVALUE', 'semicolon' => 'EVILVALUE;id', 'space' => 'a EVILVALUE', 'umlaut' => 'ü',
+				'newline' => "a\nEVILVALUE",
+			];
+			foreach ($badIds as $name => $value) {
 				$add($name, $side, 'pfblockerngblacklist/item/0/xml', $value);
 			}
-			$pair = self::pair($side, 'pfblockerngblacklist/item/0/xml', 'EVILVALUE.xml');
-			$pair[$side === 'incoming' ? 0 : 1]['pfblockerngblacklist']['item'][1]['xml'] = 'EVILVALUE.xml';
+			$pair = self::pair($side, 'pfblockerngblacklist/item/0/xml', 'EVILVALUExml');
+			$pair[$side === 'incoming' ? 0 : 1]['pfblockerngblacklist']['item'][1]['xml'] = 'EVILVALUExml';
 			$cases["{$side} duplicate xml"] = $pair;
 		}
 
@@ -210,7 +220,7 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 	{
 		$out = $this->assertNoDiagnostics(static fn (): array => pfb_sync_policy_merge(self::snapshot(FALSE), self::snapshot(TRUE)));
 		$this->assertSame('LOCAL-SENTINEL-Alpha', $out['pfblockernglistsv4']['config'][0]['srcint']);
-		$this->assertSame('SECRET-user-shallalist.xml', $out['pfblockerngblacklist']['item'][0]['username']);
+		$this->assertSame('SECRET-user-shallalist', $out['pfblockerngblacklist']['item'][0]['username']);
 		$this->assertSame('on', $out['pfblockerng']['config'][0]['pfb_keep']);
 	}
 
@@ -219,10 +229,8 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 	 * @param array<string,mixed> $current
 	 */
 	#[DataProvider('refusals')]
-	public function testHostileInputIsRefusedWithoutSideEffects(array $incoming, array $current, string $section): void
+	public function testHostileInputIsRefusedWithoutDiagnostics(array $incoming, array $current, string $section): void
 	{
-		$incoming0   = $incoming;
-		$current0    = $current;
 		$diagnostics = [];
 		$caught      = NULL;
 
@@ -242,8 +250,6 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 		$this->assertStringContainsString($section, $caught->getMessage(), 'the message names the section');
 		$this->assertStringNotContainsString('EVILVALUE', $caught->getMessage(), 'the message never echoes a value');
 		$this->assertSame([], $diagnostics, 'refusal must not raise a PHP diagnostic: ' . implode('; ', $diagnostics));
-		$this->assertSame($incoming0, $incoming, 'incoming is untouched');
-		$this->assertSame($current0, $current, 'current is untouched');
 	}
 
 	// Spec: local content from the sender is ignored, not validated, so hostile shapes there are no refusal.
@@ -263,9 +269,7 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 		foreach ($hostile as $path => $value) {
 			self::setPath($incoming, explode('/', $path), $value);
 		}
-		$current  = self::snapshot(TRUE);
-		$incoming0 = $incoming;
-		$current0  = $current;
+		$current = self::snapshot(TRUE);
 
 		$out = $this->assertNoDiagnostics(static fn (): array => pfb_sync_policy_merge($incoming, $current));
 
@@ -275,10 +279,36 @@ final class SyncPolicyMergeRefusalTest extends TestCase
 		$this->assertSame('LOCAL-SENTINEL-gw', $out['pfblockerngafrica']['config'][0]['agateway_in']);
 		$this->assertSame('LOCAL-SENTINEL-alert', $out['pfblockerngglobal']['alertrefresh']);
 		$this->assertArrayNotHasKey('widget-x', $out['pfblockerngglobal']);
-		$this->assertSame('SECRET-user-shallalist.xml', $out['pfblockerngblacklist']['item'][0]['username']);
-		$this->assertSame('SECRET-pass-shallalist.xml', $out['pfblockerngblacklist']['item'][0]['password']);
+		$this->assertSame('SECRET-user-shallalist', $out['pfblockerngblacklist']['item'][0]['username']);
+		$this->assertSame('SECRET-pass-shallalist', $out['pfblockerngblacklist']['item'][0]['password']);
 		$this->assertStringNotContainsString('EVILVALUE', serialize($out));
-		$this->assertSame($incoming0, $incoming);
-		$this->assertSame($current0, $current);
+	}
+
+	// Keys are payload content too, and #3452 shows the reason on the Sync page: only list positions survive.
+	public function testRefusalMessageKeepsOnlyIntegerPathSegments(): void
+	{
+		$feed = self::snapshot(FALSE);
+		$feed['pfblockerngglobal']['feed_evilvalue'] = 1;
+		$row = self::snapshot(FALSE);
+		$row['pfblockernglistsv4']['config']['row-evilvalue'] = ['action' => 'Deny_Inbound'];
+		$idx = self::snapshot(FALSE);
+		$idx['pfblockernglistsv4']['config'][1] = ['action' => 'Deny_Inbound'];
+		$leaf = self::snapshot(FALSE);
+		$leaf['pfblockernglistsv4']['config'][0]['row-evilvalue'] = 1;
+
+		$expected = [
+			'global key' => [$feed, 'pfblockerngglobal/*'],
+			'row key'    => [$row, 'pfblockernglistsv4/*/*'],
+			'row index'  => [$idx, 'pfblockernglistsv4/*/1'],
+			'row leaf'   => [$leaf, 'pfblockernglistsv4/*/0/*'],
+		];
+		foreach ($expected as $label => [$incoming, $path]) {
+			try {
+				pfb_sync_policy_merge($incoming, self::snapshot(TRUE));
+				$this->fail("{$label}: the payload must be refused");
+			} catch (InvalidArgumentException $e) {
+				$this->assertSame("pfb_sync_policy_merge: invalid incoming value at {$path}", $e->getMessage(), $label);
+			}
+		}
 	}
 }

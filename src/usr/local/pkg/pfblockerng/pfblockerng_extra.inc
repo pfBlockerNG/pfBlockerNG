@@ -2375,7 +2375,7 @@ function pfb_cfg_registry(): array
 function pfb_sync_local_paths(): array
 {
 	return [
-		'row'         => ['srcint', 'script_pre', 'script_post', 'agateway_in', 'agateway_out'],
+		'row'         => ['srcint', 'script_pre', 'script_post', 'agateway_in', 'agateway_out', 'infolists'],
 		'section'     => ['pfblockerngblacklist' => ['item/*/username', 'item/*/password']],
 		'policy_only' => ['pfblockerngglobal' => ['feed_']],
 	];
@@ -5571,6 +5571,17 @@ function pfb_schedule_runtime_model(
 	];
 }
 
+/**
+ * pfb_blacklist_identity_valid -- the repo's blacklist identity rule: a non-empty token of
+ * [A-Za-z0-9,_-] that is not '0'. Used for the comma-joined blacklist_selected list and, with
+ * the comma additionally excluded, for each item `xml` (schedule runtime, sync receive merge).
+ */
+function pfb_blacklist_identity_valid(mixed $value): bool
+{
+	return is_string($value) && $value !== '' && $value !== '0'
+		&& preg_match('/^[a-zA-Z0-9,_-]+$/D', $value) === 1;
+}
+
 /** Build the scheduled-feed runtime image from the config gateway. */
 function pfb_schedule_runtime_config(): ?array
 {
@@ -5580,9 +5591,6 @@ function pfb_schedule_runtime_config(): ?array
 			LOG_PREFIX_PKG_PFBLOCKERNG);
 		return NULL;
 	};
-	$valid_blacklist_identity = static fn (mixed $value): bool =>
-		is_string($value) && $value !== '' && $value !== '0'
-		&& preg_match('/^[a-zA-Z0-9,_-]+$/D', $value) === 1;
 	$scheduled = PfbConfig::read('gen/pfb_scheduled_feed_updates');
 	if ($scheduled instanceof PfbToggle) {
 		$scheduled = $scheduled->toStored();
@@ -5602,7 +5610,7 @@ function pfb_schedule_runtime_config(): ?array
 	$blacklist_frequency = $blacklist['blacklist_freq'] ?? 'Never';
 	$blacklist_selected = $blacklist['blacklist_selected'] ?? '';
 	if (!is_string($blacklist_selected)
-		|| ($blacklist_selected !== '' && !$valid_blacklist_identity($blacklist_selected))) {
+		|| ($blacklist_selected !== '' && !pfb_blacklist_identity_valid($blacklist_selected))) {
 		return $reject('blacklist: blacklist_selected is not a valid identity list');
 	}
 	$selected = array_flip(explode(',', $blacklist_selected));
@@ -5611,7 +5619,7 @@ function pfb_schedule_runtime_config(): ?array
 			$xml = $item['xml'] ?? NULL;
 			if (!is_array($item)
 				|| !is_string($xml) || $xml === '' || str_contains($xml, ',')
-				|| !$valid_blacklist_identity($xml)
+				|| !pfb_blacklist_identity_valid($xml)
 				|| !is_string($item['title'] ?? NULL)
 				|| !is_string($item['feed'] ?? NULL)) {
 				return $reject('blacklist: an item carries an invalid xml/title/feed field');

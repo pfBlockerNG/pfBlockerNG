@@ -138,7 +138,7 @@ final class SyncPolicyOwnershipTest extends TestCase
 	public function testLocalPathsSchemaIsExact(): void
 	{
 		$this->assertSame([
-			'row'         => ['srcint', 'script_pre', 'script_post', 'agateway_in', 'agateway_out'],
+			'row'         => ['srcint', 'script_pre', 'script_post', 'agateway_in', 'agateway_out', 'infolists'],
 			'section'     => ['pfblockerngblacklist' => ['item/*/username', 'item/*/password']],
 			'policy_only' => ['pfblockerngglobal' => ['feed_']],
 		], pfb_sync_local_paths());

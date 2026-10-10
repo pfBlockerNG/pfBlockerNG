@@ -178,6 +178,14 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 - Each node applies its own classification. The sender's classification never decides what the
   receiver keeps.
 
+> **Amendment 2026-10-10 (#3451 review).** `infolists` is a row-local key: `pfb_sync_local_paths()['row']`
+> lists it beside `srcint`, `script_pre`, `script_post`, `agateway_in` and `agateway_out`, and its whole
+> subtree stays local. It is the legacy v1 tag the category editor deletes on save
+> (`pfblockerng_category_edit.php:960`, "Remove unused xml tag"); without this entry a sender's
+> never-re-saved group would make every receiver refuse the snapshot. Separately, a payload key outside
+> `[a-z0-9_.-]` is unclassifiable (core lower-cases element names on reload) and is ignored at every depth
+> under the step 3 rule for a leaf the receiver cannot classify.
+
 ### Policy projection
 
 A node's **policy projection** is the ordered list of its stored policy leaves in the 19 sections,

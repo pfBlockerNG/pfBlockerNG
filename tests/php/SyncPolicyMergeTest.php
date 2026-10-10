@@ -82,7 +82,7 @@ final class SyncPolicyMergeTest extends TestCase
 				'fixed' => ['aliasname' => 'GRP'],
 			],
 			'pfblockerngglobal' => [
-				'keys' => ['feed_Foo', 'feed_alt_Foo', 'feed_Bar', 'feed_alt_Bar', 'feed_Baz', 'feed_alt_Baz', 'feed_Qux'],
+				'keys' => ['feed_foo', 'feed_alt_foo', 'feed_bar', 'feed_alt_bar', 'feed_baz', 'feed_alt_baz', 'feed_qux'],
 				'head' => ['alertrefresh'], 'tail' => ['widget-pfblockerng'], 'fixed' => [],
 			],
 			'pfblockerngsafesearch' => [
@@ -309,6 +309,99 @@ final class SyncPolicyMergeTest extends TestCase
 		$this->assertStringNotContainsString('rm -rf', serialize($out));
 	}
 
+	// ---- key names are payload content: only canonical keys can be classified -----------------
+
+	// Core lower-cases element names on reload, so `Username` would become the receiver's `username`.
+	public function testCaseVariantsOfLocalKeysAreIgnoredAndNeverCreated(): void
+	{
+		$row = static fn (array $extra): array => ['aliasname' => 'GRP', 'action' => 'Deny_Inbound'] + $extra;
+		$cur = [
+			'pfblockernglistsv4'   => self::gsec([0 => $row(['srcint' => 'LOCAL-SENTINEL-srcint'])]),
+			'pfblockernglistsv6'   => self::gsec([0 => $row([])]),
+			'pfblockerngblacklist' => self::blCurrent()['pfblockerngblacklist'],
+			'pfblockerngglobal'    => ['alertrefresh' => 'LOCAL-SENTINEL-alert'],
+		];
+		$inc = [
+			'pfblockernglistsv4'   => self::gsec([0 => $row(['SRCINT' => 'EVIL-iface', 'Script_Pre' => 'EVIL-script'])]),
+			'pfblockernglistsv6'   => self::gsec([0 => $row(['SRCINT' => 'EVIL-iface'])]),
+			'pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
+				0 => self::bitem('shallalist', '', ['Username' => 'EVIL-user', 'PASSWORD' => 'EVIL-pass']),
+				1 => self::bitem('ut1'),
+				2 => self::bitem('newlist', '', ['USERNAME' => 'EVIL-user']),
+			]],
+			'pfblockerngglobal'    => ['ALERTREFRESH' => 'EVIL-alert', 'FEED_UPPER' => 'EVIL-feed', 'feed_a' => 'on'],
+		];
+
+		$out = $this->merge($inc, $cur);
+		$this->assertSame([
+			'pfblockernglistsv4'   => self::gsec([0 => $row(['srcint' => 'LOCAL-SENTINEL-srcint'])]),
+			'pfblockernglistsv6'   => self::gsec([0 => $row([])]),
+			'pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
+				0 => self::bitem('shallalist', '', self::secrets('shalla')),
+				1 => self::bitem('ut1', '', self::secrets('ut1')),
+				2 => self::bitem('newlist', '', ['username' => '', 'password' => '']),
+			]],
+			'pfblockerngglobal'    => ['alertrefresh' => 'LOCAL-SENTINEL-alert', 'feed_a' => 'on'],
+		], $out);
+		$this->assertStringNotContainsString('EVIL', serialize($out));
+	}
+
+	/** @return array<string,array{string}> */
+	public static function hostileKeySuffixes(): array
+	{
+		return [
+			'angle brackets' => ['<x>'], 'tag close' => ['</feed_a></pfblockerngglobal><pfblockerngsync><syncscope>x'],
+			'space' => [' x'], 'ampersand' => ['&x'], 'newline' => ["\nx"], 'uppercase' => ['X'], 'slash' => ['/x'],
+			'quote' => ['"x'], 'umlaut' => ['é'], 'nul byte' => ["\0x"],
+		];
+	}
+
+	/** @return array<string,mixed> */
+	private static function keyFixture(bool $receiver): array
+	{
+		$row = ['aliasname' => 'GRP', 'action' => 'Deny_Inbound', 'row' => [0 => ['format' => 'auto', 'url' => 'https://feeds.example/x']]];
+		return [
+			'pfblockernglistsv4'    => self::gsec([0 => $row + ($receiver ? ['srcint' => 'LOCAL-SENTINEL-srcint'] : [])]),
+			'pfblockerngafrica'     => ['config' => [0 => ['action' => 'Deny_Inbound']]],
+			'pfblockerngblacklist'  => ['blacklist_enable' => 'on', 'item' => [0 => self::bitem('shallalist', '', $receiver ? self::secrets('shalla') : [])]],
+			'pfblockerngglobal'     => ['feed_a' => 'on'],
+			'pfblockerngsafesearch' => ['safesearch_enable' => 'on'],
+		];
+	}
+
+	// Spec step 3: a payload key the receiver cannot classify is ignored. Anything outside [a-z0-9_.-] is
+	// unclassifiable at every depth, whatever the key is prefixed with and whatever it carries.
+	#[DataProvider('hostileKeySuffixes')]
+	public function testNonCanonicalKeysAreIgnoredAtEveryDepth(string $suffix): void
+	{
+		$row = ['aliasname' => 'OTHER', 'action' => 'Deny_Inbound'];
+		// [section, parent path, key prefix, value]
+		$positions = [
+			['pfblockerngglobal', [], 'feed_', 'EVILVALUE'],
+			['pfblockerngsafesearch', [], 'safesearch_', 'EVILVALUE'],
+			['pfblockerngblacklist', [], 'blacklist_', 'EVILVALUE'],
+			['pfblockerngblacklist', ['item', 0], 'ti', 'EVILVALUE'],
+			['pfblockerngblacklist', ['item'], 'r', self::bitem('evilvalue')],
+			['pfblockernglistsv4', ['config', 0], 'act', 'EVILVALUE'],
+			['pfblockernglistsv4', ['config', 0, 'row', 0], 'ur', 'EVILVALUE'],
+			['pfblockernglistsv4', ['config'], 'r', $row],
+			['pfblockerngafrica', ['config', 0], 'act', 'EVILVALUE'],
+		];
+		$cur  = self::keyFixture(TRUE);
+		$base = $this->merge(self::keyFixture(FALSE), $cur);
+
+		foreach ($positions as [$section, $path, $prefix, $value]) {
+			$key = $prefix . $suffix;
+			$inc = self::keyFixture(FALSE);
+			self::setPath($inc, array_merge([$section], $path, [$key]), $value);
+
+			$out = $this->merge($inc, $cur);
+			$this->assertSame($base, $out, "{$section}/" . implode('/', $path) . ": key {$key} must not change the result");
+			$this->assertStringNotContainsString($key, serialize($out));
+			$this->assertStringNotContainsString('EVILVALUE', serialize($out));
+		}
+	}
+
 	// ---- row 3: G sections ------------------------------------------------------------------
 
 	/** @return array<string,mixed> */
@@ -529,20 +622,20 @@ final class SyncPolicyMergeTest extends TestCase
 	public function testGlobalFeedKeysArePolicyEverythingElseIsLocalAndNeverCreated(): void
 	{
 		$cur = ['pfblockerngglobal' => [
-			'alertrefresh' => 'LOCAL-SENTINEL-alert', 'feed_Foo' => 'old', 'widget-pfblockerng' => 'LOCAL-SENTINEL-widget',
-			'feed_alt_Foo' => 'old-alt', 'pfbextdns' => 'LOCAL-SENTINEL-ext', 'feed_Gone' => 'old-gone',
+			'alertrefresh' => 'LOCAL-SENTINEL-alert', 'feed_foo' => 'old', 'widget-pfblockerng' => 'LOCAL-SENTINEL-widget',
+			'feed_alt_foo' => 'old-alt', 'pfbextdns' => 'LOCAL-SENTINEL-ext', 'feed_gone' => 'old-gone',
 		]];
 		$inc = ['pfblockerngglobal' => [
-			'feed_Foo' => 'NEW-Foo', 'alertrefresh' => 'EVIL-alert', 'feed_alt_Foo' => 'NEW-alt-Foo',
-			'feed_Add' => 'NEW-Add', 'feed_alt_Add' => 'NEW-alt-Add', 'widget-x' => 'EVIL-widget-x',
+			'feed_foo' => 'NEW-Foo', 'alertrefresh' => 'EVIL-alert', 'feed_alt_foo' => 'NEW-alt-Foo',
+			'feed_add' => 'NEW-Add', 'feed_alt_add' => 'NEW-alt-Add', 'widget-x' => 'EVIL-widget-x',
 			'zz_new' => 'EVIL-new', 'pfbextdns' => 'EVIL-ext',
 		]];
 
 		$out = $this->merge($inc, $cur);
 		$this->assertSame(['pfblockerngglobal' => [
-			'alertrefresh' => 'LOCAL-SENTINEL-alert', 'feed_Foo' => 'NEW-Foo', 'widget-pfblockerng' => 'LOCAL-SENTINEL-widget',
-			'feed_alt_Foo' => 'NEW-alt-Foo', 'pfbextdns' => 'LOCAL-SENTINEL-ext',
-			'feed_Add' => 'NEW-Add', 'feed_alt_Add' => 'NEW-alt-Add',
+			'alertrefresh' => 'LOCAL-SENTINEL-alert', 'feed_foo' => 'NEW-Foo', 'widget-pfblockerng' => 'LOCAL-SENTINEL-widget',
+			'feed_alt_foo' => 'NEW-alt-Foo', 'pfbextdns' => 'LOCAL-SENTINEL-ext',
+			'feed_add' => 'NEW-Add', 'feed_alt_add' => 'NEW-alt-Add',
 		]], $out);
 		$this->assertStringNotContainsString('EVIL', serialize($out));
 	}
@@ -567,19 +660,19 @@ final class SyncPolicyMergeTest extends TestCase
 		return ['pfblockerngblacklist' => [
 			'blacklist_enable' => 'on',
 			'item' => [
-				0 => self::bitem('shallalist.xml', '', self::secrets('shalla')),
-				1 => self::bitem('ut1-capitole.xml', '', self::secrets('ut1')),
+				0 => self::bitem('shallalist', '', self::secrets('shalla')),
+				1 => self::bitem('ut1', '', self::secrets('ut1')),
 			],
 		]];
 	}
 
 	public function testBlacklistFlatKeysAreDenyListPolicy(): void
 	{
-		$cur = ['pfblockerngblacklist' => ['blacklist_enable' => 'old', 'blacklist_freq' => 'old', 'item' => [0 => self::bitem('shallalist.xml', '', self::secrets('shalla'))]]];
-		$inc = ['pfblockerngblacklist' => ['blacklist_freq' => self::NEW1, 'blacklist_lang' => self::NEW2, 'item' => [0 => self::bitem('shallalist.xml')]]];
+		$cur = ['pfblockerngblacklist' => ['blacklist_enable' => 'old', 'blacklist_freq' => 'old', 'item' => [0 => self::bitem('shallalist', '', self::secrets('shalla'))]]];
+		$inc = ['pfblockerngblacklist' => ['blacklist_freq' => self::NEW1, 'blacklist_lang' => self::NEW2, 'item' => [0 => self::bitem('shallalist')]]];
 
 		$this->assertSame(['pfblockerngblacklist' => [
-			'blacklist_freq' => ' lead/trail space ', 'item' => [0 => self::bitem('shallalist.xml', '', self::secrets('shalla'))],
+			'blacklist_freq' => ' lead/trail space ', 'item' => [0 => self::bitem('shallalist', '', self::secrets('shalla'))],
 			'blacklist_lang' => '007',
 		]], $this->merge($inc, $cur));
 	}
@@ -587,26 +680,26 @@ final class SyncPolicyMergeTest extends TestCase
 	public function testBlacklistReorderKeepsEachProvidersCredentials(): void
 	{
 		$inc = ['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
-			5 => self::bitem('ut1-capitole.xml'), 2 => self::bitem('shallalist.xml'),
+			5 => self::bitem('ut1'), 2 => self::bitem('shallalist'),
 		]]];
 
 		$this->assertSame(['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
-			5 => self::bitem('ut1-capitole.xml', '', self::secrets('ut1')),
-			2 => self::bitem('shallalist.xml', '', self::secrets('shalla')),
+			5 => self::bitem('ut1', '', self::secrets('ut1')),
+			2 => self::bitem('shallalist', '', self::secrets('shalla')),
 		]]], $this->merge($inc, self::blCurrent()));
 	}
 
 	public function testBlacklistUpdateKeepsCredentialsAndIgnoresInjectedOnes(): void
 	{
 		$inc = ['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
-			0 => self::bitem('shallalist.xml', '-v2', ['username' => 'EVIL-user', 'password' => 'EVIL-pass']),
-			1 => self::bitem('ut1-capitole.xml'),
+			0 => self::bitem('shallalist', '-v2', ['username' => 'EVIL-user', 'password' => 'EVIL-pass']),
+			1 => self::bitem('ut1'),
 		]]];
 
 		$out = $this->merge($inc, self::blCurrent());
 		$this->assertSame(['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
-			0 => self::bitem('shallalist.xml', '-v2', self::secrets('shalla')),
-			1 => self::bitem('ut1-capitole.xml', '', self::secrets('ut1')),
+			0 => self::bitem('shallalist', '-v2', self::secrets('shalla')),
+			1 => self::bitem('ut1', '', self::secrets('ut1')),
 		]]], $out);
 		$this->assertStringNotContainsString('EVIL', serialize($out));
 	}
@@ -614,27 +707,27 @@ final class SyncPolicyMergeTest extends TestCase
 	public function testBlacklistNewProviderGetsEmptyCredentialsNotTheSenders(): void
 	{
 		$inc = ['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
-			0 => self::bitem('shallalist.xml'),
-			1 => self::bitem('ut1-capitole.xml'),
-			2 => self::bitem('a.b-c.xml', '', ['username' => 'SENDER-user', 'password' => 'SENDER-pass']),
+			0 => self::bitem('shallalist'),
+			1 => self::bitem('ut1'),
+			2 => self::bitem('a_b-c', '', ['username' => 'SENDER-user', 'password' => 'SENDER-pass']),
 		]]];
 
 		$out = $this->merge($inc, self::blCurrent());
 		$this->assertSame(['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
-			0 => self::bitem('shallalist.xml', '', self::secrets('shalla')),
-			1 => self::bitem('ut1-capitole.xml', '', self::secrets('ut1')),
-			2 => self::bitem('a.b-c.xml', '', ['username' => '', 'password' => '']),
+			0 => self::bitem('shallalist', '', self::secrets('shalla')),
+			1 => self::bitem('ut1', '', self::secrets('ut1')),
+			2 => self::bitem('a_b-c', '', ['username' => '', 'password' => '']),
 		]]], $out);
 		$this->assertStringNotContainsString('SENDER-', serialize($out));
 	}
 
 	public function testBlacklistRemovedProviderCredentialsAreGone(): void
 	{
-		$inc = ['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [0 => self::bitem('ut1-capitole.xml')]]];
+		$inc = ['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [0 => self::bitem('ut1')]]];
 
 		$out = $this->merge($inc, self::blCurrent());
 		$this->assertSame(['pfblockerngblacklist' => ['blacklist_enable' => 'on', 'item' => [
-			0 => self::bitem('ut1-capitole.xml', '', self::secrets('ut1')),
+			0 => self::bitem('ut1', '', self::secrets('ut1')),
 		]]], $out);
 		$this->assertStringNotContainsString('SECRET-user-shalla', serialize($out));
 		$this->assertStringNotContainsString('SECRET-pass-shalla', serialize($out));
@@ -664,8 +757,8 @@ final class SyncPolicyMergeTest extends TestCase
 			}
 			if ($section === 'pfblockerngblacklist') {
 				$out[$section]['item'] = $incoming
-					? [0 => self::bitem('shallalist.xml'), 1 => self::bitem('new-list.xml')]
-					: [0 => self::bitem('ut1-capitole.xml', '', self::secrets('ut1')), 1 => self::bitem('shallalist.xml', '-old', self::secrets('shalla'))];
+					? [0 => self::bitem('shallalist'), 1 => self::bitem('new-list')]
+					: [0 => self::bitem('ut1', '', self::secrets('ut1')), 1 => self::bitem('shallalist', '-old', self::secrets('shalla'))];
 			}
 		}
 		return $out;
@@ -721,12 +814,59 @@ final class SyncPolicyMergeTest extends TestCase
 		$this->assertSame([], $this->merge([], []));
 
 		$out = $this->merge([], ['pfblockerngglobal' => [], 'pfblockerngsafesearch' => '']);
-		$this->assertSame(['pfblockerngglobal', 'pfblockerngsafesearch'], array_keys($out));
+		$this->assertSame(['pfblockerngglobal' => [], 'pfblockerngsafesearch' => ''], $out, 'a stored empty section keeps its stored form');
 
 		$this->assertSame(
-			['pfblockerngglobal' => ['feed_Foo' => 'on']],
-			$this->merge(['pfblockerngglobal' => ['feed_Foo' => 'on']], ['pfblockerngglobal' => ''])
+			['pfblockerngglobal' => ['feed_foo' => 'on']],
+			$this->merge(['pfblockerngglobal' => ['feed_foo' => 'on']], ['pfblockerngglobal' => ''])
 		);
+	}
+
+	// A settings section is an allowlist over config/0 only: a later config/N is never policy.
+	public function testSettingsConfigPositionOtherThanZeroIsIgnored(): void
+	{
+		$cur = ['pfblockerng' => ['config' => [0 => ['pfb_keep' => 'old']]]];
+		$inc = ['pfblockerng' => ['config' => [0 => ['pfb_keep' => 'on'], 1 => ['pfb_keep' => 'EVIL-second', 'pfb_agg_types' => 'EVIL-agg']]]];
+
+		$out = $this->merge($inc, $cur);
+		$this->assertSame(['pfblockerng' => ['config' => [0 => ['pfb_keep' => 'on']]]], $out);
+		$this->assertStringNotContainsString('EVIL', serialize($out));
+	}
+
+	// The editor caps IPv4/IPv6 aliasnames at 24 characters (pfB_ + name + _v? must fit pf's 31), DNSBL has no cap.
+	public function testAliasnameLengthCapAppliesToIpGroupsOnly(): void
+	{
+		$ip   = str_repeat('a', 24);
+		$dns  = str_repeat('b', 40);
+		$inc  = [
+			'pfblockernglistsv4' => self::gsec([0 => ['aliasname' => $ip]]),
+			'pfblockernglistsv6' => self::gsec([0 => ['aliasname' => $ip]]),
+			'pfblockerngdnsbl'   => self::gsec([0 => ['aliasname' => $dns]]),
+		];
+
+		$out = $this->merge($inc, []);
+		$this->assertSame($ip, $out['pfblockernglistsv4']['config'][0]['aliasname']);
+		$this->assertSame($ip, $out['pfblockernglistsv6']['config'][0]['aliasname']);
+		$this->assertSame($dns, $out['pfblockerngdnsbl']['config'][0]['aliasname']);
+	}
+
+	// The legacy `infolists` tag is deleted by the category editor: row-local, so neither side's subtree travels.
+	public function testLegacyInfolistsSubtreeIsRowLocalIgnoredFromSenderKeptOnReceiver(): void
+	{
+		$legacy = ['row' => [0 => ['EVIL-legacy' => 'EVIL-value']]];
+		foreach (['pfblockernglistsv4', 'pfblockerngafrica'] as $section) {
+			$row = static fn (array $extra): array => ['aliasname' => 'GRP', 'action' => 'Deny_Inbound'] + $extra;
+
+			$kept = $this->merge(
+				[$section => self::gsec([0 => $row(['infolists' => $legacy])])],
+				[$section => self::gsec([0 => $row(['infolists' => 'LOCAL-SENTINEL-infolists'])])]
+			);
+			$this->assertSame([$section => self::gsec([0 => $row(['infolists' => 'LOCAL-SENTINEL-infolists'])])], $kept, $section);
+
+			$absent = $this->merge([$section => self::gsec([0 => $row(['infolists' => $legacy])])], [$section => self::gsec([0 => $row([])])]);
+			$this->assertSame([$section => self::gsec([0 => $row([])])], $absent, $section);
+			$this->assertStringNotContainsString('EVIL', serialize([$kept, $absent]));
+		}
 	}
 
 	public function testInputsAreNotModified(): void

@@ -774,6 +774,19 @@
             }
         ]
     },
+    "pfb_blacklist_identity_valid": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_blacklist_tar_finalize_staged": {
         "returnsRef": false,
         "returnType": "int",
@@ -12707,6 +12720,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_sync_settings_sections": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
     },
     "pfb_sync_status_close": {
         "returnsRef": false,
