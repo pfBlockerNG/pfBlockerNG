@@ -2787,11 +2787,7 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		if ($pos === 0) {
 			$anchor = preg_replace('/\^(\$.*)?$/D', '', $rest);
 			// Three octets and a trailing dot ('5.8.67.') name that /24 (#3408), never a short-form fill.
-			if (preg_match('/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.$/D', $anchor, $octets) &&
-			    max((int) $octets[1], (int) $octets[2], (int) $octets[3]) <= 255) {
-				return (int) $octets[1] . '.' . (int) $octets[2] . '.' . (int) $octets[3] . '.0/24';
-			}
-			$ip = pfb_dnsbl_anchor_ip($anchor);
+			$ip = pfb_dnsbl_anchor_ip(preg_match('/^[0-9]{1,3}(\.[0-9]{1,3}){2}\.$/D', $anchor) ? "{$anchor}0/24" : $anchor);
 			if ($ip === FALSE) {
 				pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
 				return FALSE;
