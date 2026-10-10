@@ -21514,6 +21514,57 @@ function pfblockerng_sync_sections($include_interfaces) {
 }
 
 /**
+ * pfb_sync_path_is_local — TRUE when the section-relative key path $rel of a deny-list synced
+ * section is receiver-local under the pfb_sync_local_paths() schema $local (issue #3450). The
+ * projection and the receive merge (issue #3451) share this deny-list rule.
+ *
+ * @param array{row:list<string>,section:array<string,list<string>>,policy_only:array<string,list<string>>} $local
+ * @param list<string> $rel
+ */
+function pfb_sync_path_is_local(array $local, string $section, array $rel): bool {
+	if (isset($local['policy_only'][$section])) {
+		foreach ($local['policy_only'][$section] as $prefix) {
+			if (str_starts_with($rel[0], $prefix)) {
+				return FALSE;
+			}
+		}
+		return TRUE;
+	}
+	if (count($rel) >= 3 && $rel[0] === 'config' && in_array($rel[2], $local['row'], TRUE)) {
+		return TRUE;
+	}
+	foreach ($local['section'][$section] ?? array() as $pattern) {
+		$segments = explode('/', $pattern);
+		if (count($segments) > count($rel)) {
+			continue;
+		}
+		foreach ($segments as $i => $segment) {
+			if ($segment !== '*' && $segment !== $rel[$i]) {
+				continue 2;
+			}
+		}
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/**
+ * pfb_sync_settings_sections — the settings sections of the synced set (issue #3450/#3451): bare
+ * section name => [registry alias, path segments of the settings map inside the section]. The
+ * projection and the receive merge share it.
+ *
+ * @return array<string,array{0:string,1:list<string>}>
+ */
+function pfb_sync_settings_sections(): array {
+	$settings = array();
+	foreach (array('gen', 'ip', 'dnsbl') as $alias) {
+		[, $name, $prefix] = explode('/', PFB_SECTIONS[$alias], 3);
+		$settings[$name]   = array($alias, explode('/', $prefix));
+	}
+	return $settings;
+}
+
+/**
  * pfb_sync_policy_projection — the ordered policy leaves of a node's synced sections
  * (issue #3450; docs/specs/xmlrpc-per-field-sync.md, "Policy projection").
  *
@@ -21537,12 +21588,7 @@ function pfb_sync_policy_projection(array $sections): array {
 	$registry = pfb_cfg_registry();
 	$local    = pfb_sync_local_paths();
 
-	// Bare section name => [registry alias, path of the settings map inside the section].
-	$settings = array();
-	foreach (array('gen', 'ip', 'dnsbl') as $alias) {
-		[, $name, $prefix] = explode('/', PFB_SECTIONS[$alias], 3);
-		$settings[$name]   = array($alias, explode('/', $prefix));
-	}
+	$settings = pfb_sync_settings_sections();
 
 	$out    = array();
 	$leaves = static function (string $path, mixed $value) use (&$leaves, &$out): void {
@@ -21555,39 +21601,11 @@ function pfb_sync_policy_projection(array $sections): array {
 		}
 	};
 
-	// $rel is the section-relative key path of the node being visited.
-	$is_local = static function (string $section, array $rel) use ($local): bool {
-		if (isset($local['policy_only'][$section])) {
-			foreach ($local['policy_only'][$section] as $prefix) {
-				if (str_starts_with($rel[0], $prefix)) {
-					return FALSE;
-				}
-			}
-			return TRUE;
-		}
-		if (count($rel) >= 3 && $rel[0] === 'config' && in_array($rel[2], $local['row'], TRUE)) {
-			return TRUE;
-		}
-		foreach ($local['section'][$section] ?? array() as $pattern) {
-			$segments = explode('/', $pattern);
-			if (count($segments) > count($rel)) {
-				continue;
-			}
-			foreach ($segments as $i => $segment) {
-				if ($segment !== '*' && $segment !== $rel[$i]) {
-					continue 2;
-				}
-			}
-			return TRUE;
-		}
-		return FALSE;
-	};
-
 	$rel  = array();
-	$walk = static function (string $section, array $node) use (&$walk, &$rel, &$out, $is_local): void {
+	$walk = static function (string $section, array $node) use (&$walk, &$rel, &$out, $local): void {
 		foreach ($node as $key => $value) {
 			$rel[] = (string) $key;
-			if (!$is_local($section, $rel)) {
+			if (!pfb_sync_path_is_local($local, $section, $rel)) {
 				if (is_array($value) && $value !== array()) {
 					$walk($section, $value);
 				} elseif ($value !== NULL) {
@@ -21690,6 +21708,233 @@ function pfb_sync_policy_digest(array $projection): string {
 	}
 
 	return hash('sha256', serialize($tree));
+}
+
+/**
+ * pfb_sync_policy_merge — apply a sender's policy snapshot to a receiver's sections
+ * (issue #3451; docs/specs/xmlrpc-per-field-sync.md, "Receive merge").
+ *
+ * Both arguments are bare section name => stored subtree. The result is the receiver's new
+ * subtree for each of the 19 synced sections present on either side, in
+ * pfblockerng_sync_sections(TRUE) order; keys outside those sections (pfblockerngsync
+ * included) are ignored and never returned. A policy leaf takes the incoming string
+ * verbatim ([] becomes ''); a receiver policy key the sender no longer has is deleted; a
+ * receiver-local key (pfb_sync_path_is_local(), plus every non-policy key of a settings
+ * section) is kept as is and an incoming value for it is ignored. Rows of the
+ * aliasname/xml identity lists take the sender's order and keys, matched rows keep the
+ * receiver's local leaves, new rows get the editor's local defaults, absent rows drop with
+ * their locals. When the receiver's policy already equals the incoming one the result is
+ * identical (===) to $current, and merging twice equals merging once.
+ *
+ * Pure: reads no config and writes no log; it consults the registry, the section/schema functions
+ * and pfb_normalize_row_header(), and never modifies the argument arrays. Closing the status ledger
+ * of a removed alias belongs to the receive hook, which diffs the aliasname sets of $current and the
+ * result.
+ *
+ * A payload key that is not a lower-case XML element name (core lower-cases element names on reload
+ * and writes them unescaped) cannot be classified and is ignored at every depth; digit-only keys are
+ * valid only as list positions.
+ *
+ * Both inputs are validated whole before anything is built. A malformed shape, a leaf that is
+ * neither a string nor [], a feed Header that pfb_normalize_row_header() would change, or a missing
+ * or duplicate row identity throws \InvalidArgumentException naming the section path (integer
+ * segments only; every key shows as '*'); the message never carries a value. An aliasname is the
+ * category editor's: not '0', word characters only, at most 24 for IPv4/IPv6 groups. A Blacklist
+ * xml is the schedule runtime's identity (pfb_blacklist_identity_valid()) without the comma.
+ *
+ * @param  array<string,mixed> $incoming  The sender's policy snapshot.
+ * @param  array<string,mixed> $current   The receiver's stored sections.
+ * @return array<string,mixed>
+ * @throws \InvalidArgumentException
+ */
+function pfb_sync_policy_merge(array $incoming, array $current): array {
+
+	$registry = pfb_cfg_registry();
+	$local    = pfb_sync_local_paths();
+
+	// Bare settings section name => [registry alias, path of the shared map]; the map is always config/0.
+	$settings = pfb_sync_settings_sections();
+
+	// Identity lists: section => [list key, identity field, local defaults of a new row]
+	// (pfblockerng_category_edit.php writes agateway_* for IPv4/IPv6 groups only).
+	$ip_row = array('srcint' => '', 'script_pre' => '', 'script_post' => '', 'agateway_in' => 'default', 'agateway_out' => 'default');
+	$lists  = array(
+		'pfblockernglistsv4'   => array('config', 'aliasname', $ip_row),
+		'pfblockernglistsv6'   => array('config', 'aliasname', $ip_row),
+		'pfblockerngdnsbl'     => array('config', 'aliasname', array_slice($ip_row, 0, 3)),
+		'pfblockerngblacklist' => array('item', 'xml', array('username' => '', 'password' => '')),
+	);
+	$flat = array('pfblockerngsafesearch' => TRUE, 'pfblockerngglobal' => TRUE);
+
+	// Only integer path segments are echoed: keys are payload content and the reason is shown to the operator.
+	$bad = static function (string $side, string $section, array $path): never {
+		$path = array_map(static fn (string $key): string => (string) (int) $key === $key ? $key : '*', $path);
+		throw new \InvalidArgumentException("pfb_sync_policy_merge: invalid {$side} value at "
+		    . implode('/', array_merge(array($section), $path)));
+	};
+
+	// Container positions of the schema; every other position is a leaf.
+	$container = static function (string $s, array $p) use ($settings, $flat): bool {
+		$n = count($p);
+		if ($n === 0) {
+			return TRUE;
+		}
+		if ($s === 'pfblockerngblacklist') {
+			return $p[0] === 'item' && $n <= 2;
+		}
+		if (isset($flat[$s]) || $p[0] !== 'config') {
+			return FALSE;
+		}
+		return $n <= 2 || (!isset($settings[$s]) && $p[2] === 'row' && $n <= 4);
+	};
+	$feed = static fn(array $p): bool => count($p) === 4 && $p[0] === 'config' && $p[2] === 'row';
+
+	// Settings sections are an allowlist over config/0; the rest share the projection's deny list.
+	$is_local = static function (string $s, array $p) use ($local, $settings, $registry, $container): bool {
+		// Core lower-cases element names on reload and writes them unescaped: anything else cannot be classified.
+		$key = (string) end($p);
+		if (preg_match('/^[a-z_][a-z0-9_.-]*$/D', $key) !== 1 && !(ctype_digit($key) && $container($s, $p))) {
+			return TRUE;
+		}
+		if (!isset($settings[$s])) {
+			return pfb_sync_path_is_local($local, $s, $p);
+		}
+		if ($p[0] !== 'config' || (isset($p[1]) && $p[1] !== '0')) {
+			return TRUE;
+		}
+		return isset($p[2]) && ($registry["{$settings[$s][0]}/{$p[2]}"]['sync'] ?? NULL) !== 'policy';
+	};
+
+	// Identity list: ids present, unique and valid (the category editor's aliasname rule, the blacklist identity
+	// rule for xml); G rows may be empty elements. An incoming row under an ignored key is not validated.
+	$ids = static function (string $s, array $rows, string $side, array $p) use ($lists, $bad, $is_local): void {
+		[, $id] = $lists[$s];
+		$seen   = array();
+		foreach ($rows as $k => $row) {
+			if ($id === 'aliasname' && ($row === '' || $row === array())) {
+				continue;
+			}
+			if ($side === 'incoming' && $is_local($s, array_merge($p, array((string) $k)))) {
+				continue;
+			}
+			$v  = is_array($row) ? ($row[$id] ?? NULL) : NULL;
+			$ok = is_string($v) && !isset($seen[$v]) && ($id === 'aliasname'
+			    ? $v !== '' && $v !== '0' && preg_match('/\W/', $v) === 0 && (strlen($v) <= 24 || $s === 'pfblockerngdnsbl')
+			    : pfb_blacklist_identity_valid($v) && !str_contains($v, ','));
+			if (!$ok) {
+				$bad($side, $s, array_merge($p, array((string) $k)));
+			}
+			$seen[$v] = TRUE;
+		}
+	};
+
+	$check = static function (string $s, array $p, mixed $v) use (&$check, $container, $feed, $is_local, $ids, $lists, $bad): void {
+		if (!$container($s, $p)) {
+			if (!is_string($v) && $v !== array()) {
+				$bad('incoming', $s, $p);
+			}
+			return;
+		}
+		if (!is_array($v)) {
+			// Empty elements: a feed row, or a G group row (dropped by the merge).
+			if ($v === '' && ($feed($p) || (isset($lists[$s]) && $lists[$s][0] === 'config' && count($p) === 2))) {
+				return;
+			}
+			$bad('incoming', $s, $p);
+		}
+		foreach ($v as $k => $child) {
+			$q = array_merge($p, array((string) $k));
+			if (!$is_local($s, $q)) {
+				$check($s, $q, $child);
+			}
+		}
+		if ($feed($p) && is_string($v['header'] ?? NULL) && pfb_normalize_row_header($v['header'])['changed']) {
+			$bad('incoming', $s, array_merge($p, array('header')));
+		}
+		if (isset($lists[$s]) && $p === array($lists[$s][0])) {
+			$ids($s, $v, 'incoming', $p);
+		}
+	};
+
+	// NULL $iv = absent from incoming, NULL $cv = absent on the receiver, NULL result = omit.
+	$node = static function (string $s, array $p, mixed $iv, mixed $cv) use (&$node, $container, $feed, $is_local, $lists): mixed {
+		if (!$container($s, $p)) {
+			return is_array($iv) ? '' : $iv;
+		}
+		if ($feed($p) && ($iv === '' || $iv === array())) {
+			return '';
+		}
+
+		if (isset($lists[$s]) && $p === array($lists[$s][0])) {
+			[, $id, $defaults] = $lists[$s];
+			$by = array();
+			foreach (is_array($cv) ? $cv : array() as $row) {
+				if (is_array($row) && $row !== array()) {
+					$by[$row[$id]] = $row;
+				}
+			}
+			$rows = array();
+			foreach (is_array($iv) ? $iv : array() as $k => $row) {
+				if (!is_array($row) || $row === array() || $is_local($s, array_merge($p, array((string) $k)))) {
+					continue;
+				}
+				$old      = $by[$row[$id]] ?? NULL;
+				$new      = $node($s, array_merge($p, array((string) $k)), $row, $old);
+				$rows[$k] = $old === NULL ? $new + $defaults : $new;
+			}
+			return $iv === NULL ? NULL : $rows;
+		}
+
+		$in  = is_array($iv) ? $iv : array();
+		$cur = is_array($cv) ? $cv : array();
+		$out = array();
+		foreach ($cur as $k => $value) {
+			$q = array_merge($p, array((string) $k));
+			if ($is_local($s, $q)) {
+				$out[$k] = $value;
+			} elseif (($merged = $node($s, $q, $in[$k] ?? NULL, $value)) !== NULL) {
+				$out[$k] = $merged;
+			}
+		}
+		foreach ($in as $k => $value) {
+			$q = array_merge($p, array((string) $k));
+			if (!array_key_exists($k, $cur) && !$is_local($s, $q) && ($merged = $node($s, $q, $value, NULL)) !== NULL) {
+				$out[$k] = $merged;
+			}
+		}
+		return $out === array() && $iv === NULL ? NULL : $out;
+	};
+
+	$sections = pfblockerng_sync_sections(TRUE);
+	foreach ($sections as $s) {
+		$inc = $incoming[$s] ?? NULL;
+		$cur = $current[$s] ?? NULL;
+		if ($inc !== NULL) {
+			$check($s, array(), $inc);
+		}
+		if ($cur !== NULL && $cur !== '' && !is_array($cur)) {
+			$bad('current', $s, array());
+		}
+		if (isset($lists[$s]) && is_array($cur)) {
+			$list = $cur[$lists[$s][0]] ?? NULL;
+			if (is_array($list)) {
+				$ids($s, $list, 'current', array($lists[$s][0]));
+			} elseif ($list !== NULL && $list !== '') {
+				$bad('current', $s, array($lists[$s][0]));
+			}
+		}
+	}
+
+	$out = array();
+	foreach ($sections as $s) {
+		$inc = $incoming[$s] ?? NULL;
+		$cur = $current[$s] ?? NULL;
+		if ($inc !== NULL || $cur !== NULL) {
+			$out[$s] = $node($s, array(), $inc, $cur) ?? ($cur === '' ? '' : array());
+		}
+	}
+
+	return $out;
 }
 
 // issue #3441: TRUE when pfSense HA copies this node's pfB_DNSBLIP_* rules to a peer whose

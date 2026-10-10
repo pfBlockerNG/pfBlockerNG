@@ -209,6 +209,15 @@ final class SyncPolicyProjectionTest extends TestCase
 		);
 	}
 
+	// The legacy `infolists` tag is deleted by the category editor and is row-local, subtree included.
+	public function testLegacyInfolistsSubtreeInGroupRowsIsNotProjected(): void
+	{
+		$this->assertSame(
+			['installedpackages/pfblockerngafrica/config/0/action' => 'Deny_Inbound'],
+			$this->project(['pfblockerngafrica' => ['config' => [0 => ['action' => 'Deny_Inbound', 'infolists' => ['row' => [0 => ['x' => '1']]]]]]])
+		);
+	}
+
 	// B7 -- in pfblockerngglobal only feed_* (which includes feed_alt_*) is policy.
 	public function testGlobalSectionProjectsOnlyFeedPrefixedKeys(): void
 	{
