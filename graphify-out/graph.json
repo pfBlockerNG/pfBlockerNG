@@ -65162,7 +65162,7 @@
       "file_type": "code",
       "norm_label": "_seed_vm_file()",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3726",
+      "source_location": "L3727",
       "id": "tests_smoke_ui_test_render_smoke_seed_vm_file"
     },
     {
@@ -101642,7 +101642,7 @@
       "file_type": "code",
       "norm_label": "test_pending_changes_banner_tracks_the_marker()",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3750",
+      "source_location": "L3751",
       "id": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker"
     },
     {
@@ -101678,7 +101678,7 @@
       "file_type": "code",
       "norm_label": "test_reputation_page_help_text_names_relocated_matchgen_paths()",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3678",
+      "source_location": "L3679",
       "id": "tests_smoke_ui_test_render_smoke_test_reputation_page_help_text_names_relocated_matchgen_paths"
     },
     {
@@ -329212,7 +329212,7 @@
       "file_type": "code",
       "norm_label": ".noncliverbrequests()",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L75",
+      "source_location": "L71",
       "id": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_noncliverbrequests"
     },
     {
@@ -329224,7 +329224,7 @@
       "file_type": "code",
       "norm_label": ".runcgi()",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L132",
+      "source_location": "L128",
       "id": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_runcgi"
     },
     {
@@ -329248,7 +329248,7 @@
       "file_type": "code",
       "norm_label": ".spawn()",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L154",
+      "source_location": "L150",
       "id": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_spawn"
     },
     {
@@ -329260,7 +329260,7 @@
       "file_type": "code",
       "norm_label": ".teardown()",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L61",
+      "source_location": "L57",
       "id": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_teardown"
     },
     {
@@ -329272,7 +329272,7 @@
       "file_type": "code",
       "norm_label": ".testcliverbstillreachestheincludes()",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L123",
+      "source_location": "L119",
       "id": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testcliverbstillreachestheincludes"
     },
     {
@@ -329284,7 +329284,7 @@
       "file_type": "code",
       "norm_label": ".testnoncliloopbackaliasrequeststillservesthealiastable()",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L102",
+      "source_location": "L98",
       "id": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testnoncliloopbackaliasrequeststillservesthealiastable"
     },
     {
@@ -329296,7 +329296,7 @@
       "file_type": "code",
       "norm_label": ".testnonclirequestexitsbeforeincludesandverbs()",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L85",
+      "source_location": "L81",
       "id": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testnonclirequestexitsbeforeincludesandverbs"
     },
     {
@@ -329365,6 +329365,39 @@
       "source_file": "tests/smoke/ui/test_render_smoke.py",
       "source_location": "L3755",
       "id": "tests_smoke_ui_test_render_smoke_rationale_3755"
+    },
+    {
+      "label": "issue #1250: the Reputation page's ccwhite/ET help text pointed at the machine-\u2026",
+      "_origin": "ast",
+      "community": 28,
+      "community_name": "PhpErrorLogGuard",
+      "file_type": "rationale",
+      "norm_label": "issue #1250: the reputation page's ccwhite/et help text pointed at the machine-...",
+      "source_file": "tests/smoke/ui/test_render_smoke.py",
+      "source_location": "L3682",
+      "id": "tests_smoke_ui_test_render_smoke_rationale_3682"
+    },
+    {
+      "label": "Append *content* to *path* on the guest via ``tee -a``. Uses ``subprocess.run``\u2026",
+      "_origin": "ast",
+      "community": 28,
+      "community_name": "PhpErrorLogGuard",
+      "file_type": "rationale",
+      "norm_label": "append *content* to *path* on the guest via ``tee -a``. uses ``subprocess.run``...",
+      "source_file": "tests/smoke/ui/test_render_smoke.py",
+      "source_location": "L3728",
+      "id": "tests_smoke_ui_test_render_smoke_rationale_3728"
+    },
+    {
+      "label": "The \"pending changes\" banner shows on a settings page iff there are unapplied\u2026",
+      "_origin": "ast",
+      "community": 28,
+      "community_name": "PhpErrorLogGuard",
+      "file_type": "rationale",
+      "norm_label": "the \"pending changes\" banner shows on a settings page iff there are unapplied...",
+      "source_file": "tests/smoke/ui/test_render_smoke.py",
+      "source_location": "L3756",
+      "id": "tests_smoke_ui_test_render_smoke_rationale_3756"
     }
   ],
   "links": [
@@ -385386,7 +385419,7 @@
       "confidence_score": 0.95,
       "context": "parameter_type",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3753",
+      "source_location": "L3754",
       "weight": 0.8,
       "source": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker",
       "target": "tests_smoke_ui_render_oracle_phperrorlogguard"
@@ -385398,7 +385431,7 @@
       "confidence_score": 0.95,
       "context": "parameter_type",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3679",
+      "source_location": "L3680",
       "weight": 0.8,
       "source": "tests_smoke_ui_test_render_smoke_test_reputation_page_help_text_names_relocated_matchgen_paths",
       "target": "tests_smoke_ui_render_oracle_phperrorlogguard"
@@ -391379,7 +391412,7 @@
       "confidence_score": 0.95,
       "context": "parameter_type",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3752",
+      "source_location": "L3753",
       "weight": 0.8,
       "source": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker",
       "target": "tests_smoke_ui_webui_webui"
@@ -391415,7 +391448,7 @@
       "confidence_score": 0.95,
       "context": "parameter_type",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3679",
+      "source_location": "L3680",
       "weight": 0.8,
       "source": "tests_smoke_ui_test_render_smoke_test_reputation_page_help_text_names_relocated_matchgen_paths",
       "target": "tests_smoke_ui_webui_webui"
@@ -482248,7 +482281,7 @@
       "confidence_score": 0.95,
       "context": "parameter_type",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3726",
+      "source_location": "L3727",
       "weight": 0.8,
       "source": "tests_smoke_ui_test_render_smoke_seed_vm_file",
       "target": "tests_smoke_conftest_smokevm"
@@ -482464,7 +482497,7 @@
       "confidence_score": 0.95,
       "context": "parameter_type",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3751",
+      "source_location": "L3752",
       "weight": 0.8,
       "source": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker",
       "target": "tests_smoke_conftest_smokevm"
@@ -604905,7 +604938,7 @@
       "confidence_score": 0.85,
       "context": "call",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L63",
+      "source_location": "L59",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_teardown",
       "target": "tests_php_pfsense_doubles_rmdir_recursive"
@@ -608341,7 +608374,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3734",
+      "source_location": "L3735",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke_seed_vm_file",
       "target": "subprocess"
@@ -608412,7 +608445,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3726",
+      "source_location": "L3727",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke",
       "target": "tests_smoke_ui_test_render_smoke_seed_vm_file"
@@ -608437,6 +608470,17 @@
       "source_location": "L3727",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke_rationale_3727",
+      "target": "tests_smoke_ui_test_render_smoke_seed_vm_file"
+    },
+    {
+      "relation": "rationale_for",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tests/smoke/ui/test_render_smoke.py",
+      "source_location": "L3728",
+      "weight": 1.0,
+      "source": "tests_smoke_ui_test_render_smoke_rationale_3728",
       "target": "tests_smoke_ui_test_render_smoke_seed_vm_file"
     },
     {
@@ -698680,7 +698724,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3774",
+      "source_location": "L3775",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker",
       "target": "tests_smoke_ui_render_oracle_evaluate_render"
@@ -698692,7 +698736,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3695",
+      "source_location": "L3696",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke_test_reputation_page_help_text_names_relocated_matchgen_paths",
       "target": "tests_smoke_ui_render_oracle_evaluate_render"
@@ -702872,7 +702916,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3750",
+      "source_location": "L3751",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke",
       "target": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker"
@@ -702897,6 +702941,17 @@
       "source_location": "L3755",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke_rationale_3755",
+      "target": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker"
+    },
+    {
+      "relation": "rationale_for",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tests/smoke/ui/test_render_smoke.py",
+      "source_location": "L3756",
+      "weight": 1.0,
+      "source": "tests_smoke_ui_test_render_smoke_rationale_3756",
       "target": "tests_smoke_ui_test_render_smoke_test_pending_changes_banner_tracks_the_marker"
     },
     {
@@ -702985,7 +703040,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/smoke/ui/test_render_smoke.py",
-      "source_location": "L3678",
+      "source_location": "L3679",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke",
       "target": "tests_smoke_ui_test_render_smoke_test_reputation_page_help_text_names_relocated_matchgen_paths"
@@ -703010,6 +703065,17 @@
       "source_location": "L3681",
       "weight": 1.0,
       "source": "tests_smoke_ui_test_render_smoke_rationale_3681",
+      "target": "tests_smoke_ui_test_render_smoke_test_reputation_page_help_text_names_relocated_matchgen_paths"
+    },
+    {
+      "relation": "rationale_for",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tests/smoke/ui/test_render_smoke.py",
+      "source_location": "L3682",
+      "weight": 1.0,
+      "source": "tests_smoke_ui_test_render_smoke_rationale_3682",
       "target": "tests_smoke_ui_test_render_smoke_test_reputation_page_help_text_names_relocated_matchgen_paths"
     },
     {
@@ -1019629,7 +1019695,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L102",
+      "source_location": "L98",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testnoncliloopbackaliasrequeststillservesthealiastable"
@@ -1019640,7 +1019706,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L123",
+      "source_location": "L119",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testcliverbstillreachestheincludes"
@@ -1019651,7 +1019717,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L132",
+      "source_location": "L128",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_runcgi"
@@ -1019662,7 +1019728,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L154",
+      "source_location": "L150",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_spawn"
@@ -1019684,7 +1019750,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L61",
+      "source_location": "L57",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_teardown"
@@ -1019695,7 +1019761,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L75",
+      "source_location": "L71",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_noncliverbrequests"
@@ -1019706,7 +1019772,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L85",
+      "source_location": "L81",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testnonclirequestexitsbeforeincludesandverbs"
@@ -1019718,7 +1019784,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L134",
+      "source_location": "L130",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_runcgi",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_spawn"
@@ -1019730,7 +1019796,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L112",
+      "source_location": "L108",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testnoncliloopbackaliasrequeststillservesthealiastable",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_runcgi"
@@ -1019742,7 +1019808,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L88",
+      "source_location": "L84",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testnonclirequestexitsbeforeincludesandverbs",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_runcgi"
@@ -1019754,7 +1019820,7 @@
       "confidence_score": 1.0,
       "context": "call",
       "source_file": "tests/php/PfblockerngSapiGuardTest.php",
-      "source_location": "L125",
+      "source_location": "L121",
       "weight": 1.0,
       "source": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_testcliverbstillreachestheincludes",
       "target": "tests_php_pfblockerngsapiguardtest_pfblockerngsapiguardtest_spawn"
