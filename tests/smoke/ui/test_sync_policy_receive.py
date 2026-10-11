@@ -15,7 +15,8 @@ can apply a change here is the receive-triggered ``pfblockerng.php tick``.
     Given cron is inhibited, the package is on, no apply is pending and the group's alias table does not exist
     When  the payload is received
     Then  the call returns true, the receive record says ``changed`` and the group is stored; once the apply is over
-          the alias table holds the feed address and exactly ONE update pass ran
+          the alias table holds the feed address, exactly ONE update pass ran, the receive record still says
+          ``changed`` and the separate apply record says ``applied``
 
   Scenario: the identical payload is received again (client retry)
     Given the changed payload was received and its apply is over
@@ -280,6 +281,12 @@ def test_changed_policy_receive_applies_exactly_once_with_cron_inhibited(box: _B
     assert helpers.member_present(members, FEED_ADDR), f"table {TABLE}: expected {FEED_ADDR!r} among {members!r}"
     applies = _apply_banners(vm) - banners_before
     assert applies == 1, f"update passes ({APPLY_BANNER!r} in {helpers.PFB_LOG}): expected 1, got {applies}"
+
+    after = _state(vm)
+    _assert_record(after, sent, "changed")  # the receive record still reads accepted, whatever the apply did
+    apply = (after["receive"] or {}).get("apply") or {}
+    assert apply.get("outcome") == "applied", f"apply record: expected 'applied', got {apply!r}"
+    assert apply.get("time", 0) >= sent["t0"], f"apply record is stale: {apply!r} predates the call at {sent['t0']}"
 
 
 def test_identical_retry_is_a_noop(box: _Box) -> None:
