@@ -21425,6 +21425,15 @@ function pfblockerng_sync_on_changes() {
 		return;
 	}
 
+	// issue #3452: targets but no configured scope sends nothing; say so instead of a transport failure.
+	if ($pfb_sync['varsynconchanges'] === 'manual' && isset($pfb_sync['row'])) {
+		$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
+		if ($scope !== 'policy' && $scope !== 'all' && $scope !== 'lists') {
+			logger(LOG_WARNING, localize_text('XMLRPC sync scope is not configured; nothing was sent.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			return;
+		}
+	}
+
 	pfb_logger("\n===[  XMLRPC Sync ]===================================================\n", 1);
 	logger(LOG_NOTICE, localize_text('XMLRPC sync is starting.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 
@@ -22110,9 +22119,10 @@ function pfblockerng_plugin_xmlrpc_send() {
 
 /*
  * Receive state, {$dbdir}/pfb_sync_receive.json (root-only, never a payload value): the digest of the
- * last accepted policy and the last receive outcome. A missing or corrupt file reads as both NULL.
+ * last accepted policy, the last receive outcome and, once a changed receive opened one, the apply
+ * record. A missing or corrupt file reads as both NULL with no apply key.
  *
- * @return array{accepted_digest: ?string, last: ?array<string,mixed>}
+ * @return array{accepted_digest: ?string, last: ?array<string,mixed>, apply?: array<string,mixed>}
  */
 function pfb_sync_receive_state_read(string $dbdir): array {
 	$state = array('accepted_digest' => NULL, 'last' => NULL);
@@ -22121,6 +22131,9 @@ function pfb_sync_receive_state_read(string $dbdir): array {
 	if (is_array($data)) {
 		$state['accepted_digest'] = is_string($data['accepted_digest'] ?? NULL) ? $data['accepted_digest'] : NULL;
 		$state['last']            = is_array($data['last'] ?? NULL) ? $data['last'] : NULL;
+		if (is_array($data['apply'] ?? NULL)) {
+			$state['apply'] = $data['apply'];
+		}
 	}
 	return $state;
 }
@@ -22128,8 +22141,12 @@ function pfb_sync_receive_state_read(string $dbdir): array {
 // shortcut: no lock, a receive and a Sync-page save race only as last-writer-wins; add flock if that ever matters.
 function pfb_sync_receive_state_write(array $state, string $dbdir): void {
 	$path = "{$dbdir}/pfb_sync_receive.json";
-	$tmp  = "{$path}.tmp";
-	if (@file_put_contents($tmp, json_encode($state), LOCK_EX) === FALSE || !@chmod($tmp, 0600) || !@rename($tmp, $path)) {
+	// tempnam() creates a unique 0600 file, so a planted path is never followed.
+	$tmp  = is_dir($dbdir) ? @tempnam($dbdir, 'pfb_sync_receive.') : FALSE;
+	if ($tmp === FALSE) {
+		return;
+	}
+	if (@file_put_contents($tmp, json_encode($state), LOCK_EX) === FALSE || !@rename($tmp, $path)) {
 		@unlink($tmp);
 	}
 }
@@ -22144,10 +22161,14 @@ function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, stri
 	if ($reason !== '') {
 		$last['reason'] = $reason;
 	}
-	pfb_sync_receive_state_write(array(
+	$next = array(
 		'accepted_digest' => $outcome === 'refused' ? $state['accepted_digest'] : $accepted_digest,
 		'last'            => $last,
-	), $dbdir);
+	);
+	if (isset($state['apply'])) {
+		$next['apply'] = $state['apply'];
+	}
+	pfb_sync_receive_state_write($next, $dbdir);
 
 	logger(
 		$outcome === 'refused' ? LOG_WARNING : LOG_NOTICE,
@@ -22156,7 +22177,21 @@ function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, stri
 	);
 }
 
-// Drops the accepted digest (the Sync page save calls this); the last outcome stays.
+/*
+ * Moves the apply record of a received policy (waiting -> failed|applied, with a fixed value-free
+ * reason). Only a changed receive opens one ($open); every other caller moves an OPEN record
+ * (waiting|failed), so a purely local apply never creates or changes it.
+ */
+function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, bool $open = FALSE): void {
+	$state = pfb_sync_receive_state_read($dbdir);
+	if (!$open && !in_array($state['apply']['outcome'] ?? NULL, array('waiting', 'failed'), TRUE)) {
+		return;
+	}
+	$state['apply'] = array('time' => time(), 'outcome' => $outcome) + ($reason === '' ? array() : array('reason' => $reason));
+	pfb_sync_receive_state_write($state, $dbdir);
+}
+
+// Drops the accepted digest (the Sync page save calls this); the last outcome and the apply record stay.
 function pfb_sync_receive_accepted_clear(string $dbdir): void {
 	$state = pfb_sync_receive_state_read($dbdir);
 	if ($state['accepted_digest'] !== NULL) {
@@ -22260,6 +22295,7 @@ function pfblockerng_plugin_xmlrpc_recv_done($unused) {
 	}
 	pfb_sync_receive_changed(FALSE);
 	pfb_mark_pending_changes();
+	pfb_sync_apply_record('waiting', '', $pfb['dbdir'], TRUE);
 	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1");
 }
 

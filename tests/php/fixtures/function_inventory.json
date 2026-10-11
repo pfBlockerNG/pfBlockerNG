@@ -12657,6 +12657,40 @@
             }
         ]
     },
+    "pfb_sync_apply_record": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "outcome",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "reason",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "open",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            }
+        ]
+    },
     "pfb_sync_filter_password": {
         "returnsRef": false,
         "returnType": "string",

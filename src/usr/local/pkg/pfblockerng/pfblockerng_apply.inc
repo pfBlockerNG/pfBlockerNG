@@ -5333,6 +5333,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			);
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_clear_pending_changes();
+			pfb_sync_apply_record('applied', '', $pfb['dbdir']);
+		} else {
+			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir']);
 		}
 
 		if ($pfb['enable'] === PfbToggle::On) {

@@ -6831,6 +6831,7 @@ function pfblockerng_tick(
 
 	if (!$cron_unavailable && $cron_pending && !$in_win) {
 			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_sync_apply_record('waiting', 'outside the apply window', $dbdir);
 	}
 
 	// Active schedule cache and durable markers have one owner: the scheduled process.
@@ -6987,6 +6988,7 @@ function pfblockerng_tick(
 					if (!$manual()) {
 						pfb_mark_pending_changes();
 						pfb_due_ledger_set_pending('cron', $dbdir);
+						pfb_sync_apply_record('failed', 'apply failed; pending changes kept', $dbdir);
 						break;
 					}
 				}
