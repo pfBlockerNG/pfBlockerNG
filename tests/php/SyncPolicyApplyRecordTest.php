@@ -27,7 +27,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	private const REASON_WINDOW = 'outside the apply window';
 	private const REASON_FAILED = 'apply failed; pending changes kept';
 	private const REASON_RELOAD = 'firewall reload not confirmed; pending changes kept';
-	private const REASON_APPLIED = 'update pass completed; firewall reload started';
+	private const REASON_APPLIED = 'update pass completed'; // these passes change no rule, so no reload is launched
 
 	private string $dir = '';
 	private string $stateDir = '';
@@ -355,7 +355,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass cleared the pending marker');
 		$apply = $this->apply();
 		$this->assertSame('applied', $apply['outcome'] ?? NULL);
-		$this->assertSame(self::REASON_APPLIED, $apply['reason'] ?? NULL, 'the record claims only that the reload started');
+		$this->assertSame(self::REASON_APPLIED, $apply['reason'] ?? NULL, 'a pass that launched no reload does not claim one');
 		$this->assertLastStillChanged();
 	}
 

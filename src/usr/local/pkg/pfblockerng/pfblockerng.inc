@@ -22162,7 +22162,8 @@ function pfb_sync_receive_state_update(string $dbdir, callable $mutate, array $i
 
 /*
  * Records one receive and logs one value-free line. A refusal keeps the previous accepted digest;
- * an accepted receive ('changed' or 'unchanged') replaces it with $accepted_digest.
+ * an accepted receive ('changed' or 'unchanged') replaces it with $accepted_digest. An accepted receive
+ * that could not be recorded fails closed, so only the unpublished-state line is logged for it.
  */
 function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir, array $io = []): bool {
 	$published = pfb_sync_receive_state_update($dbdir, static function (array $state) use ($outcome, $accepted_digest, $reason): array {
@@ -22180,11 +22181,13 @@ function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, stri
 		return $next;
 	}, $io);
 
-	logger(
-		$outcome === 'refused' ? LOG_WARNING : LOG_NOTICE,
-		localize_text('XMLRPC policy receive: %s%s.', $outcome, $reason === '' ? '' : " ({$reason})"),
-		LOG_PREFIX_PKG_PFBLOCKERNG
-	);
+	if ($published || $outcome === 'refused') {
+		logger(
+			$outcome === 'refused' ? LOG_WARNING : LOG_NOTICE,
+			localize_text('XMLRPC policy receive: %s%s.', $outcome, $reason === '' ? '' : " ({$reason})"),
+			LOG_PREFIX_PKG_PFBLOCKERNG
+		);
+	}
 	return $published;
 }
 

@@ -426,8 +426,8 @@ node's own classification.
    edit, a restore, or a lost update since the last receive.
 4. **Apply outcome and effective policy.** The receive outcome in item 1 never claims that the
    policy is running. The apply that a changed receive triggers has its own record: waiting for the
-   quiet-hours window, applied (the update pass completed and the firewall reload started; the
-   reload is detached, so the record does not claim it finished), or failed with its reason (a failed apply keeps the pending
+   quiet-hours window, applied (the update pass completed, and when it changed rules the firewall
+   reload started; the reload is detached, so the record does not claim it finished), or failed with its reason (a failed apply keeps the pending
    marker). Once an apply has completed, received policy that cannot take effect locally is
    listed. Examples are DNSBL forced off by VIP validation (`pfblockerng.inc:3563-3585`), the
    existing MaxMind and ASN missing-credential notices (`pfb_maxmind_credential_notice()`,

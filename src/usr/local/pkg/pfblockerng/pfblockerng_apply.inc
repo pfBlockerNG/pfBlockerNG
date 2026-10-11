@@ -5336,7 +5336,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			);
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_clear_pending_changes();
-			pfb_sync_apply_record('applied', 'update pass completed; firewall reload started', $pfb['dbdir'], FALSE, $pfb_pass_started);
+			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
 		} else {
 			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir'], FALSE, $pfb_pass_started);
 		}

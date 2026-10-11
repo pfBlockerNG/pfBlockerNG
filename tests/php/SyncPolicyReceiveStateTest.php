@@ -214,7 +214,19 @@ final class SyncPolicyReceiveStateTest extends TestCase
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'nothing is marked pending');
 		$this->assertFileDoesNotExist("{$this->dir}/pfb_sync_receive.json");
 		$this->assertStringContainsString('XMLRPC policy receive: state not published.', implode("\n", $this->messages()));
+		$this->assertStringNotContainsString('XMLRPC policy receive: changed', implode("\n", $this->messages()), 'an unrecorded receive is not logged as accepted');
 		$this->assertStringNotContainsString(self::SENTINEL, implode("\n", $this->messages()), 'the log line carries no payload value');
+	}
+
+	public function testUnpublishableReceiveThatRemovesAGroupClosesNoLedgerEntry(): void
+	{
+		$GLOBALS['config']['installedpackages']['pfblockernglistsv4'] = ['config' => [0 => ['aliasname' => 'Bravo', 'action' => 'Deny_Inbound']]];
+		pfb_sync_status_open('ip', 'pfB_Bravo_v4', 'download', 'seeded', $this->dir);
+		$this->breakPublication();
+
+		$this->assertSame([], $this->receiveChangedPolicy(), 'the receive that drops Bravo fails closed');
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir), 'the removed group keeps its ledger entry until a receive is recorded');
 	}
 
 	public function testApplyRecordPublicationFailureIsLoggedValueFreeAndChangesNothingElse(): void

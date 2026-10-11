@@ -301,6 +301,9 @@ def test_changed_policy_receive_applies_exactly_once_with_cron_inhibited(box: _B
     _assert_record(after, sent, "changed")  # the receive record still reads accepted, whatever the apply did
     apply = (after["receive"] or {}).get("apply") or {}
     assert apply.get("outcome") == "applied", f"apply record: expected 'applied', got {apply!r}"
+    assert apply.get("reason") == "update pass completed; firewall reload started", (
+        f"apply record: the new group's table needs a reload, got {apply!r}"
+    )
     assert apply.get("time", 0) >= sent["t0"], f"apply record is stale: {apply!r} predates the call at {sent['t0']}"
 
 
