@@ -322,4 +322,32 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		]);
 		$this->assertNull(pfb_schedule_runtime_config());
 	}
+
+	/** Issue #3475: the Blacklist page saves blacklist_selected comma-joined; the comma must stay valid. */
+	public function testCommaJoinedBlacklistSelectionBuildsRuntimeModel(): void
+	{
+		$this->assertTrue(pfb_blacklist_identity_valid('shallalist,ut1'));
+		$this->assertFalse(pfb_blacklist_identity_valid('shallalist;ut1'));
+
+		config_set_path('installedpackages/pfblockerng/config/0', [
+			'pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7',
+			'pfb_schedule_hour' => '1', 'pfb_schedule_minute' => '0',
+		]);
+		config_set_path('installedpackages/pfblockernglistsv4/config', []);
+		config_set_path('installedpackages/pfblockernglistsv6/config', []);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		config_set_path('installedpackages/pfblockerngblacklist', [
+			'blacklist_enable' => 'Enable', 'blacklist_selected' => 'shallalist,ut1', 'blacklist_freq' => 'EveryDay',
+			'item' => [
+				['xml' => 'shallalist', 'selected' => 'yes', 'title' => 'Shallalist', 'feed' => 'https://example.test/shalla'],
+				['xml' => 'ut1', 'selected' => 'yes', 'title' => 'UT1', 'feed' => 'https://example.test/ut1'],
+			],
+		]);
+
+		$model = pfb_schedule_runtime_config();
+
+		$this->assertNotNull($model);
+		// Only the second token (ut1) can enable the job: shallalist is discontinued.
+		$this->assertTrue($model['entries']['extra:bl']['enabled']);
+	}
 }
