@@ -5337,6 +5337,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_clear_pending_changes();
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
+			// A receive that opened its record after this pass started was not applied by it: keep it pending.
+			$apply = pfb_sync_receive_state_read($pfb['dbdir'])['apply'] ?? NULL;
+			if (($apply['outcome'] ?? NULL) === 'waiting' && ($apply['opened'] ?? $apply['time'] ?? 0) > $pfb_pass_started) {
+				pfb_mark_pending_changes();
+			}
 		} else {
 			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir'], FALSE, $pfb_pass_started);
 		}

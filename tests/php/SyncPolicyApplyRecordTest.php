@@ -450,12 +450,16 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->seedRecord('waiting', '', 100);
 		$this->seedApplyEnvironment();
 		$unconfirmed && $this->breakTheDueLedger();
-		$probe = $this->duringPass(fn () => pfb_sync_apply_record('waiting', '', $this->dir, TRUE));
+		// recv_done's order: mark pending, then open the record.
+		$probe = $this->duringPass(function (): void {
+			pfb_mark_pending_changes();
+			pfb_sync_apply_record('waiting', '', $this->dir, TRUE);
+		});
 
 		sync_package_pfblockerng();
 
 		$this->assertTrue($probe['fired'], 'before-state check: the receive reopened the record inside the pass');
-		$this->assertSame($unconfirmed, is_file($GLOBALS['pfb']['pending_marker']), 'before-state check: the pass ended as the case says');
+		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'the receive the pass did not apply stays pending, so the next tick applies it');
 		$this->assertSame(['outcome' => 'waiting'], $this->settled(), 'the pass did not apply that receive');
 		$this->assertLastStillChanged();
 	}
