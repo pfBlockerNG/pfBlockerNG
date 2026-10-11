@@ -698,8 +698,9 @@ pfb_channel_install() {
         printf '==> Already up to date: %s-%s (repo %s) — nothing to do.\n' "${CANONICAL_PKG}" "${_canon_ver}" "${REPO_NAME}"
     elif [ -n "${_canon_ver}" ]; then
         # 9c. Canonical installed from another repo, or another version of this repo —
-        #     a repository-qualified force reinstall (ordinary `pkg upgrade` refuses a
-        #     same-or-older version; crossing repos or channels needs -f by design).
+        #     a forced reinstall (ordinary `pkg upgrade` refuses a same-or-older version;
+        #     crossing repos or channels needs -f by design). No -r: it would confine the
+        #     RUN_DEPENDS to this repo too (issue #3484); our priority picks the build, step 10 proves it.
         _order="$(_pkg version -t "${OFFERED}" "${_canon_ver}" 2>/dev/null || true)"
         if [ "${_order}" = "<" ]; then
             _fam_offered="$(printf '%s' "${OFFERED}" | cut -d. -f1,2)"
@@ -713,14 +714,14 @@ pfb_channel_install() {
                 } >&2
             fi
         fi
-        printf '==> Reinstalling %s from %s (repository-qualified)\n' "${CANONICAL_PKG}" "${REPO_NAME}"
-        _pkg_mutate 5 "\`pkg install -f -r ${REPO_NAME} ${CANONICAL_PKG}-${OFFERED}\` failed — the previous build is still installed" \
-            install -y -f -r "${REPO_NAME}" "${CANONICAL_PKG}-${OFFERED}"
+        printf '==> Reinstalling %s from %s\n' "${CANONICAL_PKG}" "${REPO_NAME}"
+        _pkg_mutate 5 "\`pkg install -f ${CANONICAL_PKG}-${OFFERED}\` failed — the previous build is still installed" \
+            install -y -f "${CANONICAL_PKG}-${OFFERED}"
     else
-        # 9d. Nothing canonical installed (fresh box, or right after 9a's deletes).
+        # 9d. Nothing canonical installed (fresh box, or right after 9a's deletes); no -r, as in 9c.
         printf '==> Installing %s from %s\n' "${CANONICAL_PKG}" "${REPO_NAME}"
-        _pkg_mutate 5 "\`pkg install -r ${REPO_NAME} ${CANONICAL_PKG}\` failed — no pfBlockerNG is currently installed; fix the cause, then finish with: ${PKG_BIN} install -y -r ${REPO_NAME} ${CANONICAL_PKG}" \
-            install -y -r "${REPO_NAME}" "${CANONICAL_PKG}"
+        _pkg_mutate 5 "\`pkg install ${CANONICAL_PKG}\` failed — no pfBlockerNG is currently installed; fix the cause, then finish with: ${PKG_BIN} install -y ${CANONICAL_PKG}" \
+            install -y "${CANONICAL_PKG}"
     fi
 
     # 10. Prove the result — every claim is re-read from pkg after the fact.

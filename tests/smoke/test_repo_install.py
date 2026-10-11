@@ -2540,8 +2540,8 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
 #   * The installed package NAME can no longer identify the channel, so the    #
 #     repository it came from (`pkg query '%R'`) is the only authority — and   #
 #     `pkg` never moves an installed package across repositories on its own,   #
-#     which is why install.sh's converge step is repository-                  #
-#     qualified.                                                              #
+#     which is why install.sh's converge step forces the reinstall and then    #
+#     re-reads the repository from pkg before it reports success.              #
 #                                                                              #
 # Marker: @pytest.mark.repo (inherited from pytestmark).                       #
 # Dispatch: gh workflow run smoke-single.yml -f pytest_marker=repo             #
@@ -2581,7 +2581,7 @@ INSTALL_SH = Path(__file__).resolve().parents[2] / "scripts" / "install.sh"
 CHANNEL_REVISIONS = {"stable": "_1", "testing": "_2", "edge": "_3", "nightly": "_4"}
 EDGE_ROLLBACK_REVISION = CHANNEL_REVISIONS["stable"]
 # The legacy `-devel` build sits ABOVE every channel build, so nothing about a migration
-# off it can be explained by ordinary version ordering — only by the repository-qualified
+# off it can be explained by ordinary version ordering — only by the delete-and-install
 # replacement install.sh performs.
 LEGACY_REVISION = "_9"
 # Which slower channels' builds each catalogue ALSO carries. Strict containment

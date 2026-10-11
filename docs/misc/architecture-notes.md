@@ -1210,8 +1210,10 @@ Full design: ADR-39.
   (never catalogue order, issue #2393 residual — the same comparator `pkg install`
   itself uses); only once that target is proven reachable, retire every OTHER project
   conf and delete any OTHER installed identity (legacy suffix, a fork); install or
-  repository-qualified reinstall (`-r <repo>`, `-f` for a reinstall/downgrade — crossing
-  release families prints a WARNING and proceeds); then re-read every claim from `pkg`
+  force-reinstall (`-f` for a reinstall/downgrade — crossing release families prints a
+  WARNING and proceeds) with NO `-r`, so the package's RUN_DEPENDS resolve from every
+  enabled repository and the channel repo's priority (100) picks the build (issue #3484);
+  then re-read every claim from `pkg`
   and verify identity, `%R`, version, the `pkg info -l` payload, and the surviving
   `installedpackages/pfblockerng` section. A converged box re-run performs zero pkg
   mutations (byte-identical conf + hook). Exit codes: 0 ok (including a reported no-op),

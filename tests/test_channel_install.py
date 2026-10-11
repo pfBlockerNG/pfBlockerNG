@@ -56,7 +56,11 @@ _CA_ENV_VARS = (
 # and captures up to one byte of its own stdin (proving the caller redirected
 # </dev/null rather than leaving the piped script text on the fd). State lives under
 # PFB_TEST_ROOT/pkgstate/<name>/{version,repo}; catalogues under
-# PFB_TEST_ROOT/catalog/<repo>, one offered version per line in catalogue order.
+# PFB_TEST_ROOT/catalog/<repo>, one offered version per line in catalogue order. Resolution
+# models pkg's: `install` takes each name from the highest-priority catalogue offering it
+# (offers/<repo>/<name> for non-canonical packages, priority/<repo> else the generated
+# repo conf's `priority:`), `install -r R` only from R — dependencies (deps/<name>)
+# included — and fails with "Missing dependency" before installing anything.
 _PKG_STUB = r"""#!/bin/sh
 # fake pkg(8) stub for tests/test_channel_install.py — see module docstring.
 ROOT="${PFB_TEST_ROOT}"
@@ -69,6 +73,57 @@ printf '%s' "${_stub_byte}" >> "${ROOT}/pkg-stdin"
 
 STATE="${ROOT}/pkgstate"
 CATALOG="${ROOT}/catalog"
+
+# _offered REPO NAME — versions of NAME that catalogue REPO offers. The canonical
+# package's versions are the catalog/<repo> file itself; anything else is the single
+# version in offers/<repo>/<name>.
+_offered() {
+    if [ "$2" = "pfSense-pkg-pfBlockerNG" ]; then
+        [ -f "${CATALOG}/$1" ] && cat "${CATALOG}/$1"
+    elif [ -f "${ROOT}/offers/$1/$2" ]; then
+        cat "${ROOT}/offers/$1/$2"
+    fi
+    return 0
+}
+
+# _priority REPO — priority/<repo> if seeded, else the `priority:` of the repo conf the
+# script wrote (so pfBlockerNG's own repo ranks exactly as it does on a box), else 0.
+_priority() {
+    if [ -f "${ROOT}/priority/$1" ]; then
+        cat "${ROOT}/priority/$1"
+        return 0
+    fi
+    _p="$(sed -n 's/^[[:space:]]*priority:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+        "${ROOT}/usr/local/etc/pkg/repos/$1.conf" 2>/dev/null | head -n1)"
+    printf '%s\n' "${_p:-0}"
+}
+
+# _resolve NAME VERSION RESTRICT — pkg's candidate choice: the highest-priority catalogue
+# offering NAME (at VERSION when given, else its newest), regardless of version across
+# catalogues, and only catalogue RESTRICT when given. Sets _res_repo/_res_ver; fails when
+# no catalogue offers it.
+_resolve() {
+    _res_repo=""
+    _res_ver=""
+    _res_prio=0
+    for _r in $( (ls "${CATALOG}"; ls "${ROOT}/offers") 2>/dev/null | sort -u); do
+        [ -z "$3" ] || [ "$3" = "${_r}" ] || continue
+        if [ -n "$2" ]; then
+            _offered "${_r}" "$1" | grep -qFx "$2" || continue
+            _v="$2"
+        else
+            _v="$(_offered "${_r}" "$1" | sort -V | tail -n1)"
+            [ -n "${_v}" ] || continue
+        fi
+        _pr="$(_priority "${_r}")"
+        if [ -z "${_res_repo}" ] || [ "${_pr}" -gt "${_res_prio}" ]; then
+            _res_repo="${_r}"
+            _res_ver="${_v}"
+            _res_prio="${_pr}"
+        fi
+    done
+    [ -n "${_res_repo}" ]
+}
 
 case "$1" in
 version)
@@ -160,11 +215,11 @@ install)
             _wait_i=$((_wait_i + 1))
         done
     fi
-    _repo=""
+    _restrict=""
     _spec=""
     _prev=""
     for _a in "$@"; do
-        [ "${_prev}" = "-r" ] && _repo="${_a}"
+        [ "${_prev}" = "-r" ] && _restrict="${_a}"
         _spec="${_a}"
         _prev="${_a}"
     done
@@ -176,20 +231,33 @@ install)
             _name="pfSense-pkg-pfBlockerNG"
             ;;
     esac
-    if [ -z "${_ver}" ] && [ -f "${CATALOG}/${_repo}" ]; then
-        while IFS= read -r _cver; do
-            [ -n "${_cver}" ] || continue
-            if [ -z "${_ver}" ]; then
-                _ver="${_cver}"
-                continue
-            fi
-            _first="$(printf '%s\n%s\n' "${_cver}" "${_ver}" | sort -V | head -n1)"
-            [ "${_first}" = "${_ver}" ] && _ver="${_cver}"
-        done < "${CATALOG}/${_repo}"
+    # The package and every dependency not yet installed resolve the SAME way, so `-r R`
+    # confines the dependencies to R too; nothing is installed unless all of it resolves.
+    if ! _resolve "${_name}" "${_ver}" "${_restrict}"; then
+        printf "pkg: No packages available to install matching '%s' have been found in the repositories\n" \
+            "${_spec}" >&2
+        exit 1
     fi
-    mkdir -p "${STATE}/${_name}"
-    printf '%s' "${_ver}" > "${STATE}/${_name}/version"
-    printf '%s' "${_repo}" > "${STATE}/${_name}/repo"
+    _plan="${_name} ${_res_repo} ${_res_ver}
+"
+    if [ -f "${ROOT}/deps/${_name}" ]; then
+        while IFS= read -r _dep; do
+            [ -n "${_dep}" ] || continue
+            [ -d "${STATE}/${_dep}" ] && continue
+            if ! _resolve "${_dep}" "" "${_restrict}"; then
+                printf "pkg: Missing dependency '%s'\n" "${_dep}" >&2
+                exit 1
+            fi
+            _plan="${_plan}${_dep} ${_res_repo} ${_res_ver}
+"
+        done < "${ROOT}/deps/${_name}"
+    fi
+    printf '%s' "${_plan}" | while read -r _pname _prepo _pver; do
+        [ -n "${_pname}" ] || continue
+        mkdir -p "${STATE}/${_pname}"
+        printf '%s' "${_pver}" > "${STATE}/${_pname}/version"
+        printf '%s' "${_prepo}" > "${STATE}/${_pname}/repo"
+    done
     if [ -n "${PFB_STUB_DELETE_CONFIG_XML:-}" ]; then
         rm -f "${PFB_STUB_DELETE_CONFIG_XML}"
     fi
@@ -403,6 +471,41 @@ def _seed_conf_file(root: str, conf_name: str, content: str = "# stub\n") -> Pat
     return p
 
 
+def _seed_offer(root: str, repo: str, name: str, version: str) -> None:
+    """Catalogue ``repo`` offers package ``name`` (any but the canonical one, whose
+    versions ``_seed_catalog`` seeds) at ``version``."""
+    offer_dir = os.path.join(root, "offers", repo)
+    os.makedirs(offer_dir, exist_ok=True)
+    with open(os.path.join(offer_dir, name), "w") as fh:
+        fh.write(version + "\n")
+
+
+def _seed_deps(root: str, name: str, deps: tuple[str, ...]) -> None:
+    """``name``'s RUN_DEPENDS, one package name per line."""
+    deps_dir = os.path.join(root, "deps")
+    os.makedirs(deps_dir, exist_ok=True)
+    with open(os.path.join(deps_dir, name), "w") as fh:
+        fh.writelines(dep + "\n" for dep in deps)
+
+
+def _seed_priority(root: str, repo: str, priority: int) -> None:
+    priority_dir = os.path.join(root, "priority")
+    os.makedirs(priority_dir, exist_ok=True)
+    with open(os.path.join(priority_dir, repo), "w") as fh:
+        fh.write(f"{priority}\n")
+
+
+def _installed(root: str, name: str) -> tuple[str, str] | None:
+    """(version, repo) pkg records for ``name``, or None when it is not installed."""
+    state_dir = Path(root, "pkgstate", name)
+    if not state_dir.is_dir():
+        return None
+    return (
+        state_dir.joinpath("version").read_text(),
+        state_dir.joinpath("repo").read_text(),
+    )
+
+
 def _seed_payload(root: str, rel_path: str) -> None:
     p = Path(root + rel_path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -604,7 +707,7 @@ def test_fresh_box_bootstraps_hook_conf_and_installs(channel: str) -> None:
         log = _pkg_log(root).read_text()
         assert re.search(rf"(?m)^update -f -r {re.escape(_repo_name(channel))}$", log), log
         installs = [ln for ln in log.splitlines() if ln.startswith("install")]
-        assert installs == [f"install -y -r {_repo_name(channel)} {_CANONICAL}"], installs
+        assert installs == [f"install -y {_CANONICAL}"], installs
         assert _mutating_lines(log) == installs, "a fresh box must delete nothing"
 
 
@@ -662,7 +765,7 @@ def test_up_to_date_hook_gets_chmod_755_even_when_bytes_are_identical() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 3. Same repo, older version — forced repo-qualified reinstall
+# 3. Same repo, older version — forced reinstall
 # --------------------------------------------------------------------------- #
 
 
@@ -674,7 +777,7 @@ def test_same_repo_older_version_forces_qualified_reinstall() -> None:
 
         assert proc.returncode == 0, proc.stdout + proc.stderr
         log = _pkg_log(root).read_text()
-        assert _mutating_lines(log) == [f"install -y -f -r pfblockerng-stable {_CANONICAL}-4.0.0"]
+        assert _mutating_lines(log) == [f"install -y -f {_CANONICAL}-4.0.0"]
 
 
 # --------------------------------------------------------------------------- #
@@ -690,7 +793,7 @@ def test_canonical_from_netgate_repo_forces_qualified_install() -> None:
 
         assert proc.returncode == 0, proc.stdout + proc.stderr
         log = _pkg_log(root).read_text()
-        assert _mutating_lines(log) == [f"install -y -f -r pfblockerng-stable {_CANONICAL}-4.0.0"]
+        assert _mutating_lines(log) == [f"install -y -f {_CANONICAL}-4.0.0"]
         assert Path(root, "pkgstate", _CANONICAL, "repo").read_text() == "pfblockerng-stable"
 
 
@@ -711,7 +814,7 @@ def test_canonical_from_another_channel_retires_that_conf_and_reinstalls() -> No
         assert not _conf_path(root, "nightly").exists()
         assert _conf_path(root, "stable").exists()
         log = _pkg_log(root).read_text()
-        assert _mutating_lines(log) == [f"install -y -f -r pfblockerng-stable {_CANONICAL}-4.0.0"]
+        assert _mutating_lines(log) == [f"install -y -f {_CANONICAL}-4.0.0"]
 
 
 # --------------------------------------------------------------------------- #
@@ -731,7 +834,7 @@ def test_legacy_devel_identity_deleted_then_canonical_installed() -> None:
         deletes = [ln for ln in log.splitlines() if ln.startswith("delete")]
         installs = [ln for ln in log.splitlines() if ln.startswith("install")]
         assert deletes == [f"delete -y {_CANONICAL}-devel"]
-        assert installs == [f"install -y -r pfblockerng-stable {_CANONICAL}"]
+        assert installs == [f"install -y {_CANONICAL}"]
         assert not _conf_file_path(root, _LEGACY_CONF).exists(), "the legacy conf must be retired"
         assert "Retiring" in proc.stdout
 
@@ -753,7 +856,7 @@ def test_two_installed_identities_devel_deleted_canonical_reinstalled() -> None:
         deletes = [ln for ln in log.splitlines() if ln.startswith("delete")]
         installs = [ln for ln in log.splitlines() if ln.startswith("install")]
         assert deletes == [f"delete -y {_CANONICAL}-devel"]
-        assert installs == [f"install -y -f -r pfblockerng-stable {_CANONICAL}-4.0.0"]
+        assert installs == [f"install -y -f {_CANONICAL}-4.0.0"]
 
         remaining = sorted(os.listdir(os.path.join(root, "pkgstate")))
         assert remaining == [_CANONICAL], f"exactly the canonical identity must remain, found {remaining}"
@@ -773,7 +876,7 @@ def test_downgrade_across_release_families_warns_before_install() -> None:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "WARNING" in proc.stderr, proc.stderr
         log = _pkg_log(root).read_text()
-        assert _mutating_lines(log) == [f"install -y -f -r pfblockerng-stable {_CANONICAL}-3.3.2"]
+        assert _mutating_lines(log) == [f"install -y -f {_CANONICAL}-3.3.2"]
 
 
 def test_same_family_backward_move_prints_no_warning() -> None:
@@ -785,7 +888,7 @@ def test_same_family_backward_move_prints_no_warning() -> None:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "WARNING" not in proc.stderr, proc.stderr
         log = _pkg_log(root).read_text()
-        assert _mutating_lines(log) == [f"install -y -f -r pfblockerng-stable {_CANONICAL}-3.4.0"]
+        assert _mutating_lines(log) == [f"install -y -f {_CANONICAL}-3.4.0"]
 
 
 # --------------------------------------------------------------------------- #
@@ -843,7 +946,7 @@ def test_resume_with_conf_present_but_hook_absent() -> None:
         assert _hook_path(root).exists() and _hook_path(root).stat().st_size > 0
         assert "Installed boot-time generator hook" in proc.stdout
         log = _pkg_log(root).read_text()
-        assert _mutating_lines(log) == [f"install -y -r pfblockerng-{channel} {_CANONICAL}"]
+        assert _mutating_lines(log) == [f"install -y {_CANONICAL}"]
 
 
 def test_stale_foreign_conf_rejected_when_detection_fails() -> None:
@@ -1747,9 +1850,29 @@ def test_nonzero_pkg_install_exit_is_fatal() -> None:
 
         assert proc.returncode == 5, proc.stdout + proc.stderr
         assert "Done" not in proc.stdout
-        assert "pkg install -r pfblockerng-stable" in proc.stderr, proc.stderr
+        # The command the operator is told to finish with is the one install.sh runs: no -r
+        # (which would confine the dependencies to the pfBlockerNG repo; issue #3484).
+        assert f"finish with: {root}/bin/pkg install -y {_CANONICAL}" in proc.stderr, proc.stderr
+        assert "-r pfblockerng-stable" not in proc.stderr, proc.stderr
         # The failing call's own output still reaches the operator.
         assert "pkg: some transport failure" in proc.stdout + proc.stderr
+
+
+def test_nonzero_pkg_reinstall_exit_names_the_unqualified_command() -> None:
+    """Same contract on the step-9c reinstall: the command the failure message names is
+    the corrected one (issue #3484 R5), and the previous build is left in place."""
+    with tempfile.TemporaryDirectory() as root:
+        _seed_installed(root, _CANONICAL, "3.8.0", "pfSense")
+
+        proc = _run_install(root, "stable", extra_env={"PFB_STUB_MUTATE_RC": "7"})
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        assert "Done" not in proc.stdout
+        assert f"`pkg install -f {_CANONICAL}-4.0.0` failed — the previous build is still installed" in proc.stderr, (
+            proc.stderr
+        )
+        assert "-r pfblockerng-stable" not in proc.stderr, proc.stderr
+        assert Path(root, "pkgstate", _CANONICAL, "version").read_text() == "3.8.0"
 
 
 def test_nonzero_pkg_delete_exit_is_fatal() -> None:
@@ -2420,3 +2543,87 @@ def test_usage_documents_the_repository_repair_sequence() -> None:
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert _REPAIR_COMMAND in proc.stdout, proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# 25. Dependencies resolve from every enabled repository (issue #3484)
+# --------------------------------------------------------------------------- #
+
+_FOREIGN_REPO = "pfSense"
+_FOREIGN_DEP = "lighttpd"
+
+
+def _seed_foreign_only_dep(root: str) -> None:
+    """The box of the #3484 lab run: pfBlockerNG needs ``lighttpd``, which only Netgate's
+    ``pfSense`` repo offers, and that repo also carries an older pfBlockerNG build — so the
+    build only comes from pfBlockerNG's own repo because that repo's priority (100, from the
+    conf install.sh writes) outranks Netgate's."""
+    _seed_catalog(root, _FOREIGN_REPO, ("3.2.14",))
+    _seed_offer(root, _FOREIGN_REPO, _FOREIGN_DEP, "1.4.76")
+    _seed_deps(root, _CANONICAL, (_FOREIGN_DEP,))
+    assert _installed(root, _FOREIGN_DEP) is None, "before-state: the dependency is not installed"
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_fresh_install_resolves_a_dependency_only_another_repo_offers(
+    channel: str,
+) -> None:
+    """R1: given a fresh box whose pfBlockerNG needs a dependency only Netgate's repo
+    offers, when install.sh --channel <ch> runs, then it succeeds with the dependency
+    taken from that repo and pfBlockerNG itself from the channel's repo."""
+    with tempfile.TemporaryDirectory() as root:
+        _seed_foreign_only_dep(root)
+
+        proc = _run_install(root, channel)
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert _installed(root, _CANONICAL) == ("4.0.0", _repo_name(channel))
+        assert _installed(root, _FOREIGN_DEP) == ("1.4.76", _FOREIGN_REPO)
+
+
+def test_legacy_identity_replacement_resolves_a_dependency_only_another_repo_offers() -> None:
+    """R2: given a box with the legacy -devel identity, when install.sh deletes it and
+    installs the canonical package fresh, then a dependency only Netgate's repo offers
+    still resolves."""
+    with tempfile.TemporaryDirectory() as root:
+        _seed_foreign_only_dep(root)
+        _seed_installed(root, f"{_CANONICAL}-devel", "3.2.14_2", "pfblockerng")
+        _seed_conf_file(root, _LEGACY_CONF, "# legacy release conf\n")
+
+        proc = _run_install(root, "stable")
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert _installed(root, f"{_CANONICAL}-devel") is None
+        assert _installed(root, _CANONICAL) == ("4.0.0", "pfblockerng-stable")
+        assert _installed(root, _FOREIGN_DEP) == ("1.4.76", _FOREIGN_REPO)
+
+
+def test_reinstall_resolves_a_dependency_only_another_repo_offers() -> None:
+    """R3: given the canonical package installed from Netgate's repo, when the channel's
+    build adds a dependency only that repo offers, then the forced reinstall succeeds
+    and leaves the channel's build installed."""
+    with tempfile.TemporaryDirectory() as root:
+        _seed_foreign_only_dep(root)
+        _seed_installed(root, _CANONICAL, "3.2.14", _FOREIGN_REPO)
+
+        proc = _run_install(root, "stable")
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert _mutating_lines(_pkg_log(root).read_text()) == [f"install -y -f {_CANONICAL}-4.0.0"]
+        assert _installed(root, _CANONICAL) == ("4.0.0", "pfblockerng-stable")
+        assert _installed(root, _FOREIGN_DEP) == ("1.4.76", _FOREIGN_REPO)
+
+
+def test_a_repo_outranking_pfblockerng_fails_the_post_install_repo_proof() -> None:
+    """R4: with no -r, the repo priority decides where the build comes from, so step 10's
+    repo check is what refuses a box where another repo outranks pfBlockerNG's — the same
+    box as R1 with Netgate's repo at priority 200."""
+    with tempfile.TemporaryDirectory() as root:
+        _seed_foreign_only_dep(root)
+        _seed_priority(root, _FOREIGN_REPO, 200)
+
+        proc = _run_install(root, "stable")
+
+        assert proc.returncode == 6, proc.stdout + proc.stderr
+        assert f"{_CANONICAL} reports repo '{_FOREIGN_REPO}', expected 'pfblockerng-stable'" in proc.stderr, proc.stderr
+        assert "Done" not in proc.stdout
