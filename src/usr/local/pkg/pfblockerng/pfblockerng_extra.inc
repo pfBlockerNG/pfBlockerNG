@@ -6677,7 +6677,8 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * appliance's host process-table scan. $ss_refresh is an optional test seam; NULL calls
  * the production SafeSearch refresher. $ss_lock_opener and $ss_lock_timeout are test seams
  * for the bounded refresh lock; defaults use fopen() and a 5-second budget. The apply
- * reconciliation callable, lock opener, and timeout are equivalent test seams.
+ * reconciliation callable, lock opener, and timeout are equivalent test seams. $manual_runner
+ * receives sync_package_pfblockerng()'s by-reference deferral reason as its one argument.
  */
 function pfblockerng_tick(
 	?array $ps_lines = NULL,
@@ -6981,14 +6982,19 @@ function pfblockerng_tick(
 						logger(LOG_NOTICE, localize_text('Tick: pending manual apply ledger update failed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 						break;
 					}
-					$manual = $manual_runner ?? static function (): bool {
-						return sync_package_pfblockerng(['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual']);
+					$manual = $manual_runner ?? static function (?string &$deferred_by = NULL): bool {
+						return sync_package_pfblockerng(['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'], $deferred_by);
 					};
 					$dispatched = TRUE;
-					if (!$manual()) {
+					$manual_deferred_by = NULL;
+					if (!$manual($manual_deferred_by)) {
 						pfb_mark_pending_changes();
 						pfb_due_ledger_set_pending('cron', $dbdir);
-						pfb_sync_apply_record('failed', 'apply failed; pending changes kept', $dbdir);
+						pfb_sync_apply_record(
+							$manual_deferred_by === NULL ? 'failed' : 'waiting',
+							$manual_deferred_by === NULL ? 'apply failed; pending changes kept' : 'deferred: another pass is running',
+							$dbdir
+						);
 						break;
 					}
 				}

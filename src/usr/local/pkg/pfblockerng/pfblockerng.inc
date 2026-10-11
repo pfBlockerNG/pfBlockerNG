@@ -21426,12 +21426,10 @@ function pfblockerng_sync_on_changes() {
 	}
 
 	// issue #3452: targets but no configured scope sends nothing; say so instead of a transport failure.
-	if ($pfb_sync['varsynconchanges'] === 'manual' && isset($pfb_sync['row'])) {
-		$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
-		if ($scope !== 'policy' && $scope !== 'all' && $scope !== 'lists') {
-			logger(LOG_WARNING, localize_text('XMLRPC sync scope is not configured; nothing was sent.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			return;
-		}
+	$scope = pfb_sync_stored_scope();
+	if ($pfb_sync['varsynconchanges'] === 'manual' && isset($pfb_sync['row']) && $scope === NULL) {
+		logger(LOG_WARNING, localize_text('XMLRPC sync scope is not configured; nothing was sent.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		return;
 	}
 
 	pfb_logger("\n===[  XMLRPC Sync ]===================================================\n", 1);
@@ -21500,7 +21498,12 @@ function pfblockerng_sync_on_changes() {
 
 						if ($success) {
 							pfb_logger(" done.\n", 1);
-							logger(LOG_NOTICE, localize_text("XMLRPC sync to [ %s ] completed successfully.", "{$sync_to_ip_display}:{$port}"), LOG_PREFIX_PKG_PFBLOCKERNG);
+							if ($scope === 'policy') {
+								// Core returns true for an ignored or refused policy payload too (#3452).
+								logger(LOG_NOTICE, localize_text("XMLRPC policy sync to [ %s ] sent, acceptance unconfirmed.", "{$sync_to_ip_display}:{$port}"), LOG_PREFIX_PKG_PFBLOCKERNG);
+							} else {
+								logger(LOG_NOTICE, localize_text("XMLRPC sync to [ %s ] completed successfully.", "{$sync_to_ip_display}:{$port}"), LOG_PREFIX_PKG_PFBLOCKERNG);
+							}
 						} else {
 							pfb_logger(" Failed!\n", 1);
 						}
@@ -21998,8 +22001,8 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 	$success = TRUE;
 
 	// issue #3452: only the stored leaf selects a scope; the registry default never sends.
-	$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
-	if ($scope !== 'policy' && $scope !== 'all' && $scope !== 'lists') {
+	$scope = pfb_sync_stored_scope();
+	if ($scope === NULL) {
 		return FALSE;
 	}
 
@@ -22011,10 +22014,7 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 	if ($scope === 'policy') {
 		$method = 'restore_config_section';
 
-		$stored = array();
-		foreach (pfblockerng_sync_sections(TRUE) as $section) {
-			$stored[$section] = config_get_path("installedpackages/{$section}");
-		}
+		$stored = pfb_sync_stored_sections();
 
 		// Normalize each leaf as write_config persists it, then build the payload with core's
 		// own expression so both transports put the same array on the wire (#3452).
@@ -22084,15 +22084,11 @@ function pfblockerng_plugin_xmlrpc_send() {
 	}
 
 	// issue #3452: only the stored leaf selects a scope; the registry default never sends.
-	$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
+	$scope = pfb_sync_stored_scope();
 	if ($scope === 'policy') {
-		$stored = [];
-		foreach (pfblockerng_sync_sections(TRUE) as $section) {
-			$stored[$section] = config_get_path("installedpackages/{$section}");
-		}
-		return [PFB_SECTIONS['sync'] . '/syncscope', ...array_keys(pfb_sync_policy_projection($stored))];
+		return [PFB_SECTIONS['sync'] . '/syncscope', ...array_keys(pfb_sync_policy_projection(pfb_sync_stored_sections()))];
 	}
-	if ($scope !== 'all' && $scope !== 'lists') {
+	if ($scope === NULL) {
 		return [];
 	}
 
@@ -22138,17 +22134,8 @@ function pfb_sync_receive_state_read(string $dbdir): array {
 	return $state;
 }
 
-// shortcut: no lock, a receive and a Sync-page save race only as last-writer-wins; add flock if that ever matters.
 function pfb_sync_receive_state_write(array $state, string $dbdir): void {
-	$path = "{$dbdir}/pfb_sync_receive.json";
-	// tempnam() creates a unique 0600 file, so a planted path is never followed.
-	$tmp  = is_dir($dbdir) ? @tempnam($dbdir, 'pfb_sync_receive.') : FALSE;
-	if ($tmp === FALSE) {
-		return;
-	}
-	if (@file_put_contents($tmp, json_encode($state), LOCK_EX) === FALSE || !@rename($tmp, $path)) {
-		@unlink($tmp);
-	}
+	pfb_schedule_atomic_json_publish("{$dbdir}/pfb_sync_receive.json", $state, 'is_array');
 }
 
 /*
@@ -22180,11 +22167,13 @@ function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, stri
 /*
  * Moves the apply record of a received policy (waiting -> failed|applied, with a fixed value-free
  * reason). Only a changed receive opens one ($open); every other caller moves an OPEN record
- * (waiting|failed), so a purely local apply never creates or changes it.
+ * (waiting|failed), so a purely local apply never creates or changes it. With $moved_by set, a record
+ * last moved after that time stays as it is (a pass settles only what it could have applied).
  */
-function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, bool $open = FALSE): void {
+function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, bool $open = FALSE, ?int $moved_by = NULL): void {
 	$state = pfb_sync_receive_state_read($dbdir);
-	if (!$open && !in_array($state['apply']['outcome'] ?? NULL, array('waiting', 'failed'), TRUE)) {
+	if (!$open && (!in_array($state['apply']['outcome'] ?? NULL, array('waiting', 'failed'), TRUE)
+	    || ($moved_by !== NULL && ($state['apply']['time'] ?? 0) > $moved_by))) {
 		return;
 	}
 	$state['apply'] = array('time' => time(), 'outcome' => $outcome) + ($reason === '' ? array() : array('reason' => $reason));
@@ -22209,8 +22198,14 @@ function pfb_sync_receive_changed(?bool $set = NULL): bool {
 	return $changed;
 }
 
-// The receiver's stored synced sections, bare section name => subtree; absent sections are omitted.
-function pfb_sync_receive_sections(): array {
+// The stored scope of this node's sync ('policy', 'all' or 'lists'); NULL for anything else, so the registry default never sends.
+function pfb_sync_stored_scope(): ?string {
+	$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
+	return in_array($scope, array('policy', 'all', 'lists'), TRUE) ? $scope : NULL;
+}
+
+// This node's stored synced sections, bare section name => subtree; absent sections are omitted.
+function pfb_sync_stored_sections(): array {
 	$sections = array();
 	foreach (pfblockerng_sync_sections(TRUE) as $section) {
 		$stored = config_get_path("installedpackages/{$section}");
@@ -22221,13 +22216,49 @@ function pfb_sync_receive_sections(): array {
 	return $sections;
 }
 
+/*
+ * The value pfSense settles on for $value once write_config() wrote it and later requests reread
+ * config.xml (xmlparse.inc @9363ac5b, dump_xml_config_sub(), startElement() and endElement()); NULL
+ * when nothing is written. Keys read back lowercased, FALSE is not written, TRUE and an empty
+ * container read back as '', and a listtag key keeps only its non-empty entries and is not written
+ * without one.
+ * shortcut: text is kept as is, while the parser trims tabs and newlines at its ends; trim too if a synced leaf ever carries them.
+ */
+function pfb_sync_persisted_shape(mixed $value): mixed {
+	static $listtags = NULL;
+	$listtags ??= listtags();
+
+	if (!is_array($value)) {
+		return $value === FALSE ? NULL : ($value === TRUE ? '' : (string) $value);
+	}
+	$shape = array();
+	foreach ($value as $key => $child) {
+		$key = strtolower((string) $key);
+		if (!isset($listtags[$key])) {
+			$child = pfb_sync_persisted_shape($child);
+			if ($child !== NULL) {
+				$shape[$key] = $child;
+			}
+			continue;
+		}
+		foreach (is_array($child) ? $child : array($child) as $entry) {
+			$entry = pfb_sync_persisted_shape($entry);
+			if ($entry !== NULL && $entry !== '') {
+				$shape[$key][] = $entry;
+			}
+		}
+	}
+	return $shape === array() ? '' : $shape;
+}
+
 // TRUE while this node's policy still equals the last accepted received one (it must not echo it back).
 function pfb_sync_receive_suppressed(): bool {
 	global $pfb;
 
 	$accepted = pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'];
-	return $accepted !== NULL
-	    && $accepted === pfb_sync_policy_digest(pfb_sync_policy_projection(pfb_sync_receive_sections()));
+	return $accepted !== NULL && $accepted === pfb_sync_policy_digest(
+		pfb_sync_policy_projection(array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections()))
+	);
 }
 
 /*
@@ -22242,7 +22273,7 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 		return array();
 	}
 
-	$current = pfb_sync_receive_sections();
+	$current = pfb_sync_stored_sections();
 	try {
 		$merged = pfb_sync_policy_merge($new_sections['installedpackages'], $current);
 	} catch (\InvalidArgumentException $e) {
@@ -22250,9 +22281,12 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 		return array();
 	}
 
+	// Compare and digest the shape pfSense persists, so a reread empty container is no change.
 	$changed = array();
+	$settled = array();
 	foreach ($merged as $section => $value) {
-		if ($value !== ($current[$section] ?? NULL)) {
+		$settled[$section] = pfb_sync_persisted_shape($value);
+		if ($settled[$section] !== (isset($current[$section]) ? pfb_sync_persisted_shape($current[$section]) : NULL)) {
 			$changed["installedpackages/{$section}"] = $value;
 		}
 	}
@@ -22275,7 +22309,7 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 
 	pfb_sync_receive_record(
 		$changed === array() ? 'unchanged' : 'changed',
-		pfb_sync_policy_digest(pfb_sync_policy_projection($merged)),
+		pfb_sync_policy_digest(pfb_sync_policy_projection($settled)),
 		'',
 		$pfb['dbdir']
 	);

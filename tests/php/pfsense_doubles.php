@@ -1621,3 +1621,38 @@ function array_set_path(array &$arr, string $path, $value, $default = null) {
 	return ($value);
 }
 }
+
+// listtags(): verbatim pfsense/pfsense xmlparse.inc body at 9363ac5b
+// (src/etc/inc/xmlparse.inc:28-57), the tags write_config() treats as lists (issue #3452).
+if (!function_exists('listtags')) {
+/* The following items will be treated as arrays in config.xml */
+function listtags() {
+	/*
+	 * Please keep this list alpha sorted and no longer than 80 characters
+	 * I know it's a pain, but it's a pain to find stuff too if it's not
+	 */
+	$ret = array(
+		'acls', 'alias', 'aliasurl', 'allowedip', 'allowedhostname', 'authserver',
+		'bridged', 'build_port_path',
+		'ca', 'cacert', 'cert', 'crl', 'clone', 'config',
+		'container', 'columnitem', 'checkipservice',
+		'depends_on_package', 'disk', 'dnsserver', 'dnsupdate', 'domainoverrides', 'dyndns',
+		'earlyshellcmd', 'element', 'encryption-algorithm-option',
+		'field', 'fieldname',
+		'gateway_item', 'gateway_group', 'gif', 'gre', 'group',
+		'hash-algorithm-option', 'hosts', 'ifgroupentry', 'igmpentry', 'interface_array', 'item', 'key',
+		'lagg', 'laggroup', 'lbaction', 'lbpool', 'l7rules', 'lbprotocol',
+		'member', 'menu', 'tab', 'mobilekey', 'mobilegroup', 'monitor_type', 'mount',
+		'npt', 'ntpserver',
+		'onetoone', 'openvpn-server', 'openvpn-client', 'openvpn-csc', 'option',
+		'package', 'passthrumac', 'phase1', 'phase2', 'ppp', 'pppoe', 'priv', 'proxyarpnet', 'pool',
+		'qinqentry', 'queue',
+		'pages', 'pipe', 'radnsserver', 'roll', 'route', 'row', 'rrddatafile', 'rule',
+		'schedule', 'service', 'servernat', 'servers', 'sshkeyfile',
+		'serversdisabled', 'shellcmd', 'staticmap', 'subqueue', 'switch', 'swport',
+		'timerange', 'tunnel', 'user', 'vip', 'virtual_server', 'vlan', 'vlangroup', 'voucherdbfile',
+		'vxlan', 'wgpeer', 'winsserver', 'wolentry', 'widget', 'xmldatafile'
+	);
+	return array_flip($ret);
+}
+}

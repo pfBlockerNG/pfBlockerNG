@@ -92,7 +92,7 @@ final class SyncPolicyReceiveOrderTest extends TestCase
 		return $result;
 	}
 
-	// M1: the marker is already on disk when the tick is started.
+	// M1: the marker is already on disk, and the apply record already reads 'waiting', when the tick is started.
 	public function testPendingMarkerExistsBeforeTheTickIsStarted(): void
 	{
 		$this->seedNode();
@@ -101,11 +101,14 @@ final class SyncPolicyReceiveOrderTest extends TestCase
 		$this->assertFileDoesNotExist($marker, 'before-state: the receive itself marks nothing');
 
 		$seen = [];
-		$GLOBALS['pfb_test_mwexec_bg'] = new class ($seen, $marker) implements ArrayAccess {
-			public function __construct(private array &$seen, private string $marker) {}
+		$GLOBALS['pfb_test_mwexec_bg'] = new class ($seen, $marker, $this->dir) implements ArrayAccess {
+			public function __construct(private array &$seen, private string $marker, private string $dir) {}
 			public function offsetExists(mixed $o): bool { return FALSE; }
 			public function offsetGet(mixed $o): mixed { return NULL; }
-			public function offsetSet(mixed $o, mixed $v): void { $this->seen[] = [$v, file_exists($this->marker)]; }
+			public function offsetSet(mixed $o, mixed $v): void
+			{
+				$this->seen[] = [$v, file_exists($this->marker), pfb_sync_receive_state_read($this->dir)['apply']['outcome'] ?? NULL];
+			}
 			public function offsetUnset(mixed $o): void {}
 		};
 
@@ -113,6 +116,7 @@ final class SyncPolicyReceiveOrderTest extends TestCase
 
 		$this->assertCount(1, $seen, 'exactly one tick is started');
 		$this->assertTrue($seen[0][1], 'the pending marker must exist when mwexec_bg() starts the tick');
+		$this->assertSame('waiting', $seen[0][2], 'the apply record must read waiting when mwexec_bg() starts the tick');
 	}
 
 	// M2: a suppressed manual sync returns before it announces itself.

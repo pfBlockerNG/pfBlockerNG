@@ -469,6 +469,46 @@ final class SyncPolicyReceiveTest extends TestCase
 		$this->assertStringContainsString(': unchanged', $this->loggedText());
 	}
 
+	/**
+	 * Emulates write_config() plus the next request's reparse for the two empty list containers the
+	 * scenario below stores (pfsense/pfsense xmlparse.inc @9363ac5b): an empty listtag array is
+	 * written as nothing (:264-268), and a section left without a child element reads back as ''
+	 * (:105-111).
+	 */
+	private function persistEmptyListContainers(): void
+	{
+		$this->assertSame([], config_get_path('installedpackages/pfblockernglistsv4/config/1/row'), 'precondition: Foxtrot stored an empty row list');
+		$this->assertSame(['config' => []], config_get_path('installedpackages/pfblockernglistsv6'), 'precondition: v6 stored an empty group list');
+		unset($GLOBALS['config']['installedpackages']['pfblockernglistsv4']['config'][1]['row']);
+		$GLOBALS['config']['installedpackages']['pfblockernglistsv6'] = '';
+	}
+
+	/**
+	 * Scenario: the sender's disk still holds an empty <config></config> and a group's <row></row>.
+	 * Given the receiver stored the first receive and pfSense rewrote and reread its config.xml,
+	 * When the same payload arrives again (the client's retry or the next sync),
+	 * Then nothing is reported changed, no apply starts, and the node keeps suppressing its echo.
+	 */
+	public function testEmptyListContainersSettleOnceTheStoredReceiveIsReread(): void
+	{
+		$payload = self::senderSections();
+		$payload['pfblockernglistsv6'] = ['config' => []];
+		$payload['pfblockernglistsv4']['config'][1]['row'] = [];
+		$this->assertNotSame([], $this->receive($payload), 'before-state: the first receive changes the receiver');
+		pfblockerng_plugin_xmlrpc_recv_done(NULL);
+		$GLOBALS['pfb_test_mwexec_bg'] = [];
+		unlink($GLOBALS['pfb']['pending_marker']);
+
+		$this->persistEmptyListContainers();
+		$this->assertTrue(pfb_sync_receive_suppressed(), 'the reread policy still equals the accepted one');
+		$GLOBALS['pfb_test_logger_calls'] = [];
+
+		$this->assertSame([], $this->receive($payload), 'the repeated receive changes nothing');
+		$this->assertSame('unchanged', $this->state()['last']['outcome']);
+		$this->assertNoApply();
+		$this->assertTrue(pfb_sync_receive_suppressed(), 'the repeated receive keeps the suppression');
+	}
+
 	public function testChangedPolicyReceiveRecordsTheAcceptedDigestAndLogsOneValueFreeLine(): void
 	{
 		$payload = self::senderSections();
@@ -759,7 +799,11 @@ final class SyncPolicyReceiveTest extends TestCase
 		$file = "{$this->dir}/pfb_sync_receive.json";
 		$this->assertFileExists($file);
 		$this->assertSame(0600, fileperms($file) & 0777);
-		$this->assertSame([$file], glob("{$this->dir}/pfb_sync_receive.json*"), 'the atomic write leaves no temp file behind');
+		$this->assertSame(
+			[$file],
+			array_values(array_diff(glob("{$this->dir}/{.pfb_schedule.,pfb_sync_receive}*", GLOB_BRACE) ?: [], ["{$file}.lock"])),
+			'the atomic write leaves no temp file behind (the empty lock sidecar is not one)'
+		);
 
 		$text = (string) file_get_contents($file);
 		foreach (['POLICYSENTINEL-9f3a', 'LOCALSENTINEL-9f3a', 'EVIL', 'SECRET', 'LOCAL-SENTINEL', 'target-pass', self::NEW1, self::NEW3] as $needle) {

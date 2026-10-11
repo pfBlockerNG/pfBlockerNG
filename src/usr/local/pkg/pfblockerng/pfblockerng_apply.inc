@@ -846,6 +846,9 @@ function pfb_filter_reload_exec(): int {
 function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool {
 	global $g, $pfb, $pfbarr;
 	$deferred_by = NULL;
+	// A received policy's apply record moved after this point is left for the next pass.
+	// shortcut: second resolution, a receive in the pass's first second still settles; the root fix is #3481.
+	$pfb_pass_started = time();
 	pfb_global();
 
 	// Preserve the internal bool contract: an unattended trigger=cron force=false
@@ -5333,9 +5336,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			);
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_clear_pending_changes();
-			pfb_sync_apply_record('applied', '', $pfb['dbdir']);
+			pfb_sync_apply_record('applied', '', $pfb['dbdir'], FALSE, $pfb_pass_started);
 		} else {
-			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir']);
+			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir'], FALSE, $pfb_pass_started);
 		}
 
 		if ($pfb['enable'] === PfbToggle::On) {

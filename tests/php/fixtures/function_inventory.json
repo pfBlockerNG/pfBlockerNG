@@ -12688,6 +12688,13 @@
                 "variadic": false,
                 "type": "bool",
                 "default": "false"
+            },
+            {
+                "name": "moved_by",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
             }
         ]
     },
@@ -12732,6 +12739,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_persisted_shape": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
                 "default": null
             }
         ]
@@ -12861,11 +12881,6 @@
                 "default": null
             }
         ]
-    },
-    "pfb_sync_receive_sections": {
-        "returnsRef": false,
-        "returnType": "array",
-        "params": []
     },
     "pfb_sync_receive_state_read": {
         "returnsRef": false,
@@ -13193,6 +13208,16 @@
                 "default": null
             }
         ]
+    },
+    "pfb_sync_stored_scope": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": []
+    },
+    "pfb_sync_stored_sections": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
     },
     "pfb_syslog_emit": {
         "returnsRef": false,

@@ -460,6 +460,30 @@ final class SyncPolicyTransportTest extends TestCase
 		$this->assertSame([], $this->dialled(), 'no client is even pointed at a peer');
 	}
 
+	/** @return iterable<string,array{0:string,1:string}> scope => the per-target status line format */
+	public static function statusLineProvider(): iterable
+	{
+		yield 'policy: core returns true whatever the peer did' => ['policy', 'XMLRPC policy sync to [ %s ] sent, acceptance unconfirmed.'];
+		yield 'all: the legacy line, byte-exact'                  => ['all', 'XMLRPC sync to [ %s ] completed successfully.'];
+		yield 'lists: the legacy line, byte-exact'                => ['lists', 'XMLRPC sync to [ %s ] completed successfully.'];
+	}
+
+	#[DataProvider('statusLineProvider')]
+	public function testManualSyncStatusLineNeverClaimsPolicyAcceptance(string $scope, string $format): void
+	{
+		$fx = self::node();
+		$this->seed($fx['sections'], $scope, 'manual');
+		$GLOBALS['pfb_test_logger_calls'] = [];
+
+		$this->runManual();
+
+		$lines = array_values(array_filter(
+			array_column($GLOBALS['pfb_test_logger_calls'], 'message'),
+			static fn (string $message): bool => str_contains($message, ' sync to [ ')
+		));
+		$this->assertSame([sprintf($format, self::ENABLED_IPS[0] . ':443'), sprintf($format, self::ENABLED_IPS[1] . ':8443')], $lines);
+	}
+
 	// --- both transports derive from one path list ------------------------------
 
 	public function testCoreDefaultBranchOverTheAutoPathsBuildsTheManualPayload(): void
