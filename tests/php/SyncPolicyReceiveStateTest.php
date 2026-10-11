@@ -229,6 +229,20 @@ final class SyncPolicyReceiveStateTest extends TestCase
 		$this->assertCount(1, pfb_sync_status_list_open($this->dir), 'the removed group keeps its ledger entry until a receive is recorded');
 	}
 
+	public function testRefusalIsLoggedEvenWhenItCannotBeRecorded(): void
+	{
+		$this->breakPublication();
+
+		$result = pfblockerng_plugin_xmlrpc_recv(['installedpackages' => [
+			'pfblockerngsafesearch' => ['safesearch_enable' => self::SENTINEL],
+			'pfblockerngsync'       => ['config' => [0 => ['syncscope' => 'all', 'varsynconchanges' => 'auto']]],
+		]]);
+
+		$this->assertSame([], $result);
+		$this->assertStringContainsString('XMLRPC policy receive: refused', implode("\n", $this->messages()), 'a refusal stays visible in the log');
+		$this->assertStringNotContainsString(self::SENTINEL, implode("\n", $this->messages()));
+	}
+
 	public function testApplyRecordPublicationFailureIsLoggedValueFreeAndChangesNothingElse(): void
 	{
 		$state = ['accepted_digest' => self::DIGEST_A, 'last' => ['time' => 1, 'outcome' => 'changed']];
