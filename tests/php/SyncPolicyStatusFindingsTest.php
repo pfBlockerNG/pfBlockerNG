@@ -295,6 +295,12 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		$this->assertSame(['license key', 'account ID'], $this->gather()['maxmind_missing']);
 	}
 
+	public function testContinentWithAnActionTheRuntimeRejectsIsNotAGeoipRow(): void
+	{
+		config_set_path('installedpackages/pfblockerngeurope/config/0/action', 'bogus');
+		$this->assertSame([], $this->gather()['maxmind_missing']);
+	}
+
 	public function testTop1mTokenFindingNeedsAnAuthProviderAndAnEmptyToken(): void
 	{
 		$GLOBALS['pfb']['dnsbl_top1m']      = PfbToggle::On;
@@ -340,12 +346,14 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		$this->assertSame(0600, fileperms($this->dir . '/pfb_sync_findings.json') & 0777, 'root-only state file');
 
 		$bytes = $this->stateBytes();
+		$inode = fileinode($this->dir . '/pfb_sync_findings.json');
 		$mtime = filemtime($this->dir . '/pfb_sync_findings.json');
 		clearstatcache();
 		$this->assertTrue(pfb_sync_findings_record($a, $this->dir));
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'repeat: no second notice');
 		$this->assertCount(1, $GLOBALS['pfb_test_logger_calls'], 'repeat: no second log line');
 		$this->assertSame($bytes, $this->stateBytes(), 'repeat: file untouched');
+		$this->assertSame($inode, fileinode($this->dir . '/pfb_sync_findings.json'), 'repeat: file not rewritten');
 		$this->assertSame($mtime, filemtime($this->dir . '/pfb_sync_findings.json'));
 
 		$this->assertTrue(pfb_sync_findings_record($b, $this->dir));
@@ -452,5 +460,30 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl']);
 		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_disabled'], 'valid VIP: flag unset');
 		$this->assertNotContains(self::VIP_FINDING, pfb_sync_effective_findings($this->gather()));
+	}
+
+	// The apply site is not executable here, so pin where the facts are captured and the findings recorded.
+	public function testApplyPassCapturesFactsBeforeTheNoticeAndRecordsOnlyOnTheAppliedBranch(): void
+	{
+		$source = php_strip_whitespace(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotSame('', $source);
+		$skip     = strpos($source, '$pfb_reserved_skips[] =');
+		$capture  = strpos($source, '$pfb[\'reserved_header_skips\'] = $pfb_reserved_skips;');
+		$notice   = strpos($source, 'file_notice(\'pfBlockerNG Header\'');
+		$applied  = strpos($source, 'pfb_sync_apply_record(\'applied\'');
+		$failed   = strpos($source, 'pfb_sync_apply_record(\'failed\'');
+		$record   = strpos($source, 'pfb_sync_findings_record(');
+		$this->assertNotFalse($skip);
+		$this->assertNotFalse($capture, 'reserved header skips must reach $pfb for the facts');
+		$this->assertNotFalse($notice);
+		$this->assertNotFalse($applied);
+		$this->assertNotFalse($failed);
+		$this->assertNotFalse($record, 'the apply pass must record the findings');
+		$this->assertGreaterThan($skip, $capture);
+		$this->assertLessThan($notice, $capture);
+		$this->assertGreaterThan($applied, $record);
+		$this->assertLessThan(strpos($source, '} else {', $applied), $record, 'recorded on the applied branch');
+		$this->assertLessThan($failed, $record, 'never after the failed record');
+		$this->assertSame(1, substr_count($source, 'pfb_sync_findings_record('));
 	}
 }

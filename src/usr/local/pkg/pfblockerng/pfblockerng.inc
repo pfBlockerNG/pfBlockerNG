@@ -22189,7 +22189,7 @@ function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblocker
 		}
 		foreach (array_keys($pfb['continents'] ?? array()) as $continent) {
 			$action = config_get_path('installedpackages/pfblockerng' . strtolower(str_replace(' ', '', $continent)) . '/config/0/action', 'Disabled');
-			if ($action !== 'Disabled' && $action !== '') {
+			if ($action !== 'Disabled' && pfb_group_action_valid($action, 'geoip')) {
 				$formats['geoip'] = TRUE;
 			}
 		}
@@ -22292,19 +22292,17 @@ function pfb_sync_findings_read(string $dbdir): array {
  */
 function pfb_sync_findings_record(array $findings, string $dbdir, array $io = array()): bool {
 	$findings  = array_values($findings);
-	$changed   = FALSE;
 	$untouched = FALSE;
 	$published = pfb_schedule_atomic_json_publish(
 		"{$dbdir}/pfb_sync_findings.json",
-		static function () use ($findings, $dbdir, &$changed, &$untouched): ?array {
+		static function () use ($findings, $dbdir, &$untouched): ?array {
 			$untouched = pfb_sync_findings_read($dbdir)['findings'] === $findings;
-			$changed   = !$untouched;
 			return $untouched ? NULL : array('time' => time(), 'findings' => $findings);
 		},
 		'is_array',
 		$io
 	);
-	if ($published && $changed && $findings !== array()) {
+	if ($published && $findings !== array()) {
 		$text = 'Policy that cannot take effect on this node: ' . implode('; ', $findings);
 		file_notice('pfBlockerNG Sync', $text, 'pfBlockerNG', '/pfblockerng/pfblockerng_sync.php', 2);
 		logger(LOG_WARNING, $text, LOG_PREFIX_PKG_PFBLOCKERNG);
