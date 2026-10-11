@@ -61,6 +61,9 @@ $pconfig['pfb_alias_delta_batch']	= pfb_alias_delta_batch_clamp((string) PfbConf
 // Default 'on' owned by the registry (ADR-29, issue #1907); PfbConfig::read applies it
 // when absent.
 $pconfig['suppression']		= PfbConfig::read('ip/suppression');
+// issue #3413: global Suppression CIDR Limit, absent -> Disabled by the registry default.
+$pconfig['suppression_cidr']	= PfbConfig::read('ip/suppression_cidr');
+$pconfig['suppression_cidr_v6']	= PfbConfig::read('ip/suppression_cidr_v6');
 
 $pconfig['enable_log']		= PfbConfig::read('ip/enable_log');
 $pconfig['enable_rdns']		= PfbConfig::read('ip/enable_rdns');
@@ -111,6 +114,8 @@ $options_pass_order		= [	'order_0' => '| pfB_Pass/Match/Block/Reject | All other
 					'order_4' => '| pfB_Pass/Match | pfB_Block/Reject | pfSense Block/Reject | pfSense Pass/Match |' ];
 
 $options_autorule_suffix = [ 'autorule' => 'auto rule', 'standard' => 'Null (no suffix)', 'ar' => 'AR' ];
+$options_suppression_cidr	= [ 'Disabled' => 'Disabled' ] + array_combine(range(1, 17, 1), range(1, 17, 1));
+$options_suppression_cidr_v6	= [ 'Disabled' => 'Disabled' ] + array_combine(range(1, 64, 1), range(1, 64, 1));
 
 // $input_errors is read unconditionally in the render section below, so it must be
 // defined on every request path (incl. a POST without 'save'). Initialise it once.
@@ -156,7 +161,9 @@ if ($_POST) {
 						'inbound_deny_action'	=> 'block',
 						'outbound_deny_action'	=> 'reject',
 						'pass_order'		=> 'order_0', 
-						'autorule_suffix'	=> 'autorule'
+						'autorule_suffix'	=> 'autorule',
+						'suppression_cidr'	=> 'Disabled',
+						'suppression_cidr_v6'	=> 'Disabled'
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
@@ -267,6 +274,8 @@ if ($_POST) {
 			$pfb['iconfig']['enable_dup']		= pfb_filter($_POST['enable_dup'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['enable_agg']		= pfb_filter($_POST['enable_agg'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['suppression']		= pfb_filter($_POST['suppression'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
+			$pfb['iconfig']['suppression_cidr']	= $_POST['suppression_cidr']					?: 'Disabled';
+			$pfb['iconfig']['suppression_cidr_v6']	= $_POST['suppression_cidr_v6']					?: 'Disabled';
 			$pfb['iconfig']['enable_log']		= pfb_filter($_POST['enable_log'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['enable_rdns']		= pfb_filter($_POST['enable_rdns'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['ip_placeholder']	= $_POST['ip_placeholder']					?: '127.1.7.7';
@@ -417,6 +426,28 @@ $section->addInput(new Form_Checkbox(
 	. 'Only \'Deny\' type Aliases can be suppressed!'
 	. '</div>'
 );
+
+$group = new Form_Group('Suppression CIDR Limit');
+$group->add(new Form_Select(
+	'suppression_cidr',
+	'IPv4',
+	$pconfig['suppression_cidr'],
+	$options_suppression_cidr
+))->setHelp('Default: <strong>8</strong> on a new install, <strong>Disabled</strong> after an upgrade<br />'
+	. 'Reduces an IPv4 range broader than this limit to a single address, for the DNSBL IPs alias (pfB_DNSBLIP_v4) and every IPv4 list without its own '
+	. 'Suppression CIDR Limit (Advanced Settings). Applies only when Suppression is enabled. Not applied to GeoIP feeds.')
+  ->setAttribute('style', 'width: auto');
+
+$group->add(new Form_Select(
+	'suppression_cidr_v6',
+	'IPv6',
+	$pconfig['suppression_cidr_v6'],
+	$options_suppression_cidr_v6
+))->setHelp('Default: <strong>32</strong> on a new install, <strong>Disabled</strong> after an upgrade<br />'
+	. 'Reduces an IPv6 range broader than this limit to a single address, for the DNSBL IPs alias (pfB_DNSBLIP_v6) and every IPv6 list. '
+	. 'Applies only when Suppression is enabled. Not applied to GeoIP feeds.')
+  ->setAttribute('style', 'width: auto');
+$section->add($group);
 
 $section->addInput(new Form_Checkbox(
 	'enable_log',

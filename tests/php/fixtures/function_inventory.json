@@ -6319,6 +6319,33 @@
             }
         ]
     },
+    "pfb_install_suppression_cidr_seed": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "modes",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "write",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "flush",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_ip_anchor_layout_render": {
         "returnsRef": false,
         "returnType": "array",
@@ -7991,6 +8018,40 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'/usr/bin/timeout'"
+            }
+        ]
+    },
+    "pfb_list_cidr_floors": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "list",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "format",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "global_v4",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "global_v6",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },

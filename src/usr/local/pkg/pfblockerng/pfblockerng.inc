@@ -151,6 +151,29 @@ function pfb_install_psl_feed_policy_seed(
 	$flush('pfBlockerNG: seeded feed-at-suffix PSL policy defaults for fresh install (issue #2371)');
 }
 
+/**
+ * issue #3413: seed the fresh-install global Suppression CIDR Limit (IPv4 8, IPv6 32) after the registry pass, the
+ * way pfb_install_psl_feed_policy_seed() seeds its PSL policy. $modes is the installer's pre-migration section modes
+ * (already corrected to OLDCFG for a General-tab upgrade): only a NEWCFG IP section is fresh, and any other install
+ * keeps both keys at the registry default Disabled, so an upgrade changes no alias.
+ *
+ * @param array<string,string> $modes
+ */
+function pfb_install_suppression_cidr_seed(
+	array $modes,
+	?callable $write = NULL,
+	?callable $flush = NULL
+): void {
+	if (($modes[PFB_SECTIONS['ip']] ?? 'OLDCFG') !== 'NEWCFG') {
+		return;
+	}
+	$write ??= 'PfbConfig::writeSystem';
+	$flush ??= 'write_config';
+	$write('ip/suppression_cidr', '8');
+	$write('ip/suppression_cidr_v6', '32');
+	$flush('pfBlockerNG: seeded the global Suppression CIDR Limit defaults for fresh install (issue #3413)');
+}
+
 function pfb_install_probe_cleanup(?callable $purge = NULL): void {
 	$purge ??= 'pfb_purge_probe_bodies';
 	$purge();
@@ -3582,6 +3605,8 @@ function pfb_global() {
 					array_filter(explode(',', PfbConfig::read('gen/pfb_agg_types')))));
 
 	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
+	$pfb['supp_cidr']	= PfbConfig::read('ip/suppression_cidr');				// Global Suppression CIDR Limit, IPv4 (issue #3413)
+	$pfb['supp_cidr_v6']	= PfbConfig::read('ip/suppression_cidr_v6');				// Global Suppression CIDR Limit, IPv6
 	$pfb['cc']		= PfbConfig::read('ip/database_cc') === PfbToggle::On;	// Disable Country database CRON updates
 	$pfb['maxmind_locale']	= PfbConfig::read('ip/maxmind_locale');	// MaxMind Localized Language setting
 	$pfb['asn_reporting']	= PfbConfig::read('ip/asn_reporting');	// ASN Reporting

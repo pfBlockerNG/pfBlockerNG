@@ -27,11 +27,12 @@ Scenario H. Scenario B below still injects a companion v4 Deny alias alongside
 the v6 target -- now exercising the MIXED-family case (both families active
 in the same pass), not working around the fixed bug.
 
-Scenarios D and E cover a THIRD mechanism gated by the same Suppression checkbox
+Scenarios D, E and F cover a THIRD mechanism gated by the same Suppression checkbox
 (``$pfb['supp'] == 'on'``) but otherwise unrelated to the carve engines above --
 ``sanitize_ipaddr()``/``pfb_sanitize_ipaddr_v6()``'s per-line reserved-class drop and
-the per-category IPv6 CIDR floor (issue #760 §1/§3). They reuse this module's
-``deployed_vm``/``_clean_suppression`` infra (the Suppression checkbox + the
+the Suppression CIDR Limit: the IP tab's global IPv6 limit on an IP list (issue #760 §3,
+#3413) and the same global IPv4 limit on the synthesized DNSBLIP list (#3413). They reuse
+this module's ``deployed_vm``/``_clean_suppression`` infra (the Suppression checkbox + the
 ``IpCase``/``inject_ip_lists`` plumbing) rather than a new module, since that
 infra is exactly what they need and duplicating it would buy nothing.
 
@@ -140,40 +141,43 @@ def _wipe_suppression(vm: SmokeVM) -> None:
         )
 
 
-def _set_suppression_cidr_v6(vm: SmokeVM, value: str) -> None:
-    """Set the per-category ``suppression_cidr_v6`` floor (issue #760 §3) on the SINGLE
-    v6 list-group the module's own ``h.inject()``/``h.inject_ip_lists()`` just wrote
-    (index 0 -- both write a fresh single-element list-group array per family root, so
-    this always targets the right row without a lookup). ``value`` is a mask-width
-    string (``'1'``..``'64'``) or ``'Disabled'``.
+_CIDR_LIMIT_KEYS = ("suppression_cidr", "suppression_cidr_v6")
+
+
+def _set_suppression_cidr_limits(vm: SmokeVM, *, v4: str | None = None, v6: str | None = None) -> None:
+    """Set the IP tab's GLOBAL Suppression CIDR Limit (issue #3413) -- IPv4 and/or IPv6.
+
+    ``v4``/``v6`` are a mask-width string (``'1'``..``'17'`` / ``'1'``..``'64'``) or ``'Disabled'``;
+    ``None`` leaves that family's key untouched. The limit reaches every IP list without its own
+    IPv4 value and the synthesized DNSBLIP list, and only while Suppression is on.
     """
-    snippet = (
-        f"$lists = config_get_path({h._php_str(h.CFG_IP_V6_LISTS)}, array());\n"
-        f"$lists[0]['suppression_cidr_v6'] = {h._php_str(value)};\n"
-        f"config_set_path({h._php_str(h.CFG_IP_V6_LISTS)}, $lists);\n"
-        "write_config('pfBlockerNG smoke: issue #760 v6 CIDR floor');\n"
-        "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"_set_suppression_cidr_v6 failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
+    for key, value in zip(_CIDR_LIMIT_KEYS, (v4, v6), strict=True):
+        if value is not None:
+            h.config_set(vm, f"{CFG_IP_SETTINGS}/{key}", value)
 
 
 @pytest.fixture(autouse=True)
 def _clean_suppression(deployed_vm: SmokeVM) -> Iterator[None]:
-    """Wipe both suppression customlists before AND after every test in this module.
+    """Wipe both suppression customlists and the global CIDR limits before AND after every test.
 
     Each test injects its OWN uniquely-named alias, so there is no pf-table
-    collision between tests; the v4suppression/v6suppression config nodes are
-    the only state that could otherwise leak test-to-test. Teardown also drops
-    the finishing test's derived pf/sqlite state (``helpers.reset``) so the
-    next test's BEFORE-state assertion starts from a genuinely clean table.
+    collision between tests; the v4suppression/v6suppression config nodes and the
+    global Suppression CIDR Limit (a fresh install seeds 8 / 32, issue #3413) are
+    the only state that could otherwise leak test-to-test. The limits are set to
+    ``Disabled`` for the test and the box's own values restored afterwards, failing
+    LOUDLY if either write did not take. Teardown also drops the finishing test's
+    derived pf/sqlite state (``helpers.reset``) so the next test's BEFORE-state
+    assertion starts from a genuinely clean table.
     """
+    saved = {key: h.config_get_state(deployed_vm, f"{CFG_IP_SETTINGS}/{key}") for key in _CIDR_LIMIT_KEYS}
     _wipe_suppression(deployed_vm)
+    _set_suppression_cidr_limits(deployed_vm, v4="Disabled", v6="Disabled")
+    limits = [h.config_get(deployed_vm, f"{CFG_IP_SETTINGS}/{key}") for key in _CIDR_LIMIT_KEYS]
+    assert limits == ["Disabled", "Disabled"], f"reset of the global CIDR limits did not take: {limits!r}"
     yield
     _wipe_suppression(deployed_vm)
+    for key, state in saved.items():
+        h.config_restore_state(deployed_vm, f"{CFG_IP_SETTINGS}/{key}", state)
     h.reset(deployed_vm)
 
 
@@ -529,24 +533,24 @@ def test_suppression_drops_reserved_classes_keeps_public(deployed_vm: SmokeVM) -
 
 
 # --------------------------------------------------------------------------- #
-# Scenario E -- v6 Suppression CIDR floor clamps a wide range (issue #760 §3)
+# Scenario E -- the global IPv6 Suppression CIDR Limit clamps a wide range (issue #760 §3, #3413)
 # --------------------------------------------------------------------------- #
 
 
 def test_suppression_cidr_v6_floor_clamps_wide_cidr_to_bare_host(deployed_vm: SmokeVM) -> None:
-    """The per-category IPv6 "Suppression CIDR Limit" (``suppression_cidr_v6``,
-    issue #760 §3) clamps a feed CIDR narrower than the floor down to a bare
-    host -- never a silent full-range load -- while an unrelated host entry is
+    """The IP tab's global IPv6 "Suppression CIDR Limit" (``suppression_cidr_v6``, issue #3413;
+    the per-list IPv6 field of issue #760 §3 is gone) clamps a feed CIDR wider than the limit
+    down to a bare host -- never a silent full-range load -- while an unrelated host entry is
     left untouched.
 
     Given: a v6 feed with a network-aligned /48 (``2606:4700:aaaa::/48``) and a
     separate bare host (``2606:4700:bbbb::99``) in a different /48; Suppression
-    is enabled (module default) with ``suppression_cidr_v6`` left at its absent
-    default (``Disabled``) for the settling update.
+    is enabled (module default) with the global IPv6 limit ``Disabled`` for the settling
+    update.
 
-    When: BEFORE -- the floor is absent, so the /48 loads as-is (an address
-    inside it matches). AFTER -- ``suppression_cidr_v6`` is set to 56 (wider
-    than the feed's /48) and a second update runs.
+    When: BEFORE -- the limit is Disabled, so the /48 loads as-is (an address
+    inside it matches). AFTER -- the global IPv6 limit is set to 56 (a /48 is wider
+    than that) and a second update runs.
 
     Then: the address that matched inside the /48 no longer matches (the range
     collapsed); the /48's own base address now matches as a BARE host (clamped,
@@ -565,7 +569,7 @@ def test_suppression_cidr_v6_floor_clamps_wide_cidr_to_bare_host(deployed_vm: Sm
     h.reload(deployed_vm, "updateip", wait_unbound=False)
     h.apply_filter_sync(deployed_vm)
 
-    # BEFORE: the floor is absent (Disabled) -- the /48 loads unclamped.
+    # BEFORE: the limit is Disabled -- the /48 loads unclamped.
     members = h.pfctl_table_members(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, inside_cidr)
@@ -573,8 +577,8 @@ def test_suppression_cidr_v6_floor_clamps_wide_cidr_to_bare_host(deployed_vm: Sm
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, sibling)
     assert matched, f"expected {sibling} to MATCH {spec.alias} before the floor is set; pfctl said: {raw!r}"
 
-    # WHEN: set the floor above the feed's /48, then re-run.
-    _set_suppression_cidr_v6(deployed_vm, "56")
+    # WHEN: set the global limit above the feed's /48, then re-run.
+    _set_suppression_cidr_limits(deployed_vm, v6="56")
     h.reload(deployed_vm, "updateip", wait_unbound=False)
     h.apply_filter_sync(deployed_vm)
 
@@ -588,3 +592,60 @@ def test_suppression_cidr_v6_floor_clamps_wide_cidr_to_bare_host(deployed_vm: Sm
     assert matched, f"expected the clamped bare host {cidr_base} to STILL match {spec.alias}; pfctl said: {raw!r}"
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, sibling)
     assert matched, f"expected {sibling} to remain unaffected by the CIDR floor; pfctl said: {raw!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario F -- the global Suppression CIDR Limit clamps a DNSBL feed range in DNSBLIP (issue #3413)
+# --------------------------------------------------------------------------- #
+
+
+def test_dnsblip_global_suppression_cidr_limit_clamps_wide_dnsbl_feed_range(deployed_vm: SmokeVM) -> None:
+    """The IP tab's global IPv4 "Suppression CIDR Limit" (issue #3413) clamps a range a DNSBL feed
+    adds to ``pfB_DNSBLIP_v4`` down to a bare host, through the real IP download loop (the hop the
+    PHPUnit tests, which parse DNSBLIP lines directly, do not cover).
+
+    Given: a DNSBL feed with a wide ``83.246.7.0/16`` line, List Action ``Deny_Both`` and Suppression
+    on (module default); the global IPv4 limit ``Disabled`` for the settling update.
+
+    When: BEFORE -- the limit is Disabled, so the /16 loads as written (an address inside it matches).
+    AFTER -- the global IPv4 limit is set to 17 (the widest the select offers; a /16 is wider) and an IP-scope force
+    update runs (the IP-tab limit is applied by the IP reparse, which re-filters DNSBLIP too).
+
+    Then: the address that matched inside the /16 no longer matches; the line's own base address
+    ``83.246.7.0`` now matches as a bare host (clamped, never dropped).
+    """
+    vm = deployed_vm
+    inside, base = "83.246.200.9", "83.246.7.0"
+    h.ensure_dnsbl_vip(vm)
+    feed_url = h.write_local_feed(
+        vm, "smoke_issue3413_dnsblip_cidr.txt", f"{base}/16\n{h.unique_domain('dnsblipcidr')}\n"
+    )
+    spec = h.DnsblCase(
+        aliasname="issue3413dnsblip",
+        feed_url=feed_url,
+        header="issue3413dnsblip",
+        mode=h.DnsblMode.VIP,
+        dnsbl_ip_action="Deny_Both",
+    )
+    table = "pfB_DNSBLIP_v4"
+    try:
+        h.inject(vm, spec)
+        h.reload(vm, "update")
+        h.apply_filter_sync(vm)
+
+        matched, raw = h.pfctl_table_test_raw(vm, table, inside)
+        assert matched, f"expected {inside} (inside the un-limited /16) to MATCH {table}; pfctl said: {raw!r}"
+
+        _set_suppression_cidr_limits(vm, v4="17")
+        h.reload(vm, "updateip", wait_unbound=False)
+        h.apply_filter_sync(vm)
+
+        matched, raw = h.pfctl_table_test_raw(vm, table, inside)
+        assert not matched, (
+            f"expected {inside} to NO LONGER match {table} once the /16 is limit-clamped; pfctl said: {raw!r}"
+        )
+        matched, raw = h.pfctl_table_test_raw(vm, table, base)
+        assert matched, f"expected the clamped bare host {base} to STILL match {table}; pfctl said: {raw!r}"
+    finally:
+        h.clear_dnsbl_settings(vm)
+        vm.ssh("/bin/rm", "-f", feed_url)

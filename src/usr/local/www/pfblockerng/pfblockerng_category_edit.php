@@ -453,7 +453,6 @@ $options_logging	= [	'default'	=> 'Default',
 $options_row_action	= [ 'Deny' => 'Deny', 'Permit' => 'Permit' ];
 
 $options_suppression_cidr	= [ 'Disabled' => 'Disabled' ] + array_combine(range(1, 17, 1), range(1, 17, 1));
-$options_suppression_cidr_v6	= [ 'Disabled' => 'Disabled' ] + array_combine(range(1, 64, 1), range(1, 64, 1));
 
 $interfaces_list		= get_configured_interface_list_by_realif();
 $src_interfaces			= array('lo0' => 'Localhost');
@@ -565,7 +564,6 @@ if ($_POST && isset($_POST['save'])) {
 					'order'			=> 'default',
 					'logging'		=> $pfb_logging_default,
 					'suppression_cidr'	=> 'Disabled',
-					'suppression_cidr_v6'	=> 'Disabled',
 					'srcint'		=> '',
 					'script_pre'		=> '',
 					'script_post'		=> ''
@@ -602,11 +600,6 @@ if ($_POST && isset($_POST['save'])) {
 	// Validate CIDR Limit
 	if ($gtype == 'ipv4') {
 		if ($_POST['suppression_cidr'] != 'Disabled' && !ctype_digit($_POST['suppression_cidr'])) {
-			$input_errors[] = 'Advanced Settings - Suppression CIDR Limit invalid';
-		}
-	}
-	if ($gtype == 'ipv6') {
-		if ($_POST['suppression_cidr_v6'] != 'Disabled' && !ctype_digit($_POST['suppression_cidr_v6'])) {
 			$input_errors[] = 'Advanced Settings - Suppression CIDR Limit invalid';
 		}
 	}
@@ -898,9 +891,6 @@ if ($_POST && isset($_POST['save'])) {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/agateway_out", $_POST['agateway_out'] ?: 'default');
 
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/suppression_cidr", $_POST['suppression_cidr'] ?: 'Disabled');
-			if ($gtype == 'ipv6') {
-				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/suppression_cidr_v6", $_POST['suppression_cidr_v6'] ?: 'Disabled');
-			}
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/whois_convert", pfb_filter($_POST['whois_convert'], PFB_FILTER_ON_OFF, 'Category_edit'));
 		}
 		else {
@@ -1049,7 +1039,6 @@ else {
 		$pconfig['agateway_out']	= $rowdata[$rowid]['agateway_out'] ?? 'default';
 
 		$pconfig['suppression_cidr']	= $rowdata[$rowid]['suppression_cidr'] ?? 'Disabled';
-		$pconfig['suppression_cidr_v6']	= $rowdata[$rowid]['suppression_cidr_v6'] ?? 'Disabled';
 		$pconfig['whois_convert']	= $rowdata[$rowid]['whois_convert'] ?? '';
 	}
 	else {
@@ -1757,19 +1746,7 @@ if ($gtype == 'ipv4') {
 		$pconfig['suppression_cidr'],
 		$options_suppression_cidr
 	))->setHelp('When suppression is enabled, this option will limit the CIDR block for this entire IPv4 Alias'
-		. '(Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (No CIDR limit)')
-	  ->setAttribute('style', 'width: auto');
-}
-
-if ($gtype == 'ipv6') {
-
-	$section->addInput(new Form_Select(
-		'suppression_cidr_v6',
-		'Suppression CIDR Limit',
-		$pconfig['suppression_cidr_v6'],
-		$options_suppression_cidr_v6
-	))->setHelp('When suppression is enabled, this option will limit the CIDR block for this entire IPv6 Alias'
-		. '(Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (No CIDR limit)')
+		. '(Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (Use the Suppression CIDR Limit set in the IP Tab; GeoIP feeds are not limited)')
 	  ->setAttribute('style', 'width: auto');
 }
 

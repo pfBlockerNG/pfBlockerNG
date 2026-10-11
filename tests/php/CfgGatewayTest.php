@@ -1282,6 +1282,43 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('ip/fw_self_outbound'));
 	}
 
+	/** @return iterable<string,array{0:string,1:string}> */
+	public static function suppressionCidrKeys(): iterable
+	{
+		yield 'IPv4' => ['ip/suppression_cidr', 'installedpackages/pfblockerngipsettings/config/0/suppression_cidr'];
+		yield 'IPv6' => ['ip/suppression_cidr_v6', 'installedpackages/pfblockerngipsettings/config/0/suppression_cidr_v6'];
+	}
+
+	/**
+	 * issue #3413: the global Suppression CIDR Limit keys are plain scalars registered with no grandfather,
+	 * because an absent key already means Disabled, which is today's behaviour; a fresh install is seeded
+	 * 8 / 32 by the installer's seed seam instead (SuppressionCidrLimitInstallTest).
+	 *
+	 * Scenario:
+	 *   Given the key was never stored (an install upgrading from before the setting).
+	 *   Then it reads 'Disabled', so the upgrade clamps nothing.
+	 *   When a limit is written through the gateway, Then that string is stored and reads back.
+	 */
+	#[DataProvider('suppressionCidrKeys')]
+	public function testSuppressionCidrDefaultsDisabledAndRoundTrips(string $key, string $path): void
+	{
+		$entry = pfb_cfg_registry()[$key] ?? NULL;
+		$this->assertIsArray($entry, "{$key} must be registered");
+		$this->assertSame('Disabled', $entry['default']);
+		$this->assertNull($entry['read_adapter'], 'plain scalar');
+		$this->assertNull($entry['write_adapter'], 'plain scalar');
+		$this->assertSame('policy', $entry['sync'], 'the limit decides what is blocked');
+		$this->assertArrayNotHasKey('grandfather', $entry);
+		$this->assertNotSame('', $entry['no_grandfather'] ?? '', 'the entry records why no grandfather is needed');
+
+		$this->assertNull(config_get_path($path), 'before: the key must be absent');
+		$this->assertSame('Disabled', PfbConfig::read($key), 'absent -> Disabled');
+
+		PfbConfig::write($key, '12');
+		$this->assertSame('12', config_get_path($path), 'the limit is stored verbatim');
+		$this->assertSame('12', PfbConfig::read($key));
+	}
+
 	// -----------------------------------------------------------------------
 	// C — Inventory completeness
 	// -----------------------------------------------------------------------
@@ -1510,6 +1547,9 @@ final class CfgGatewayTest extends TestCase
 			'pfb_py_cache_max',
 			'tld_wildcard',
 			'aliaslog',
+			// issue #3413: global Suppression CIDR Limit (IPv4 / IPv6), IP settings section
+			'suppression_cidr',
+			'suppression_cidr_v6',
 			// ADR-36: NAT DNS-redirect fields
 			'dnsbl_redir',
 			'dnsbl_redir_int',

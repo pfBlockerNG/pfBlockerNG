@@ -991,6 +991,8 @@ foreach (PFB_SECTIONS as $pfb_registry_section) {
 	$pfb_registry_sections[$pfb_registry_section] = PfbConfig::readSection($pfb_registry_section);
 }
 pfb_install_registry_writeback($pfb_registry_sections, $pfb_registry_modes);
+// issue #3413: the fresh-install global Suppression CIDR Limit, from the same pre-migration modes the pass used.
+pfb_install_suppression_cidr_seed($pfb_registry_modes);
 unset($pfb_registry_sections, $pfb_registry_section, $pfb_registry_modes);
 update_status(" done.\n");
 

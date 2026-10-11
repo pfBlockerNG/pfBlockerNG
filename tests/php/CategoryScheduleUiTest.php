@@ -22,10 +22,10 @@ final class CategoryScheduleUiTest extends TestCase
 			. ' $_POST = array_merge(['
 			. "'aliasname' => 'validname', 'action' => 'Disabled', 'gtype' => 'ipv4',"
 			. "'autoaddrnot_in' => '', 'autoaddrnot_out' => '', 'custom' => '', 'whois_convert' => '',"
-			. "'suppression_cidr' => 'Disabled', 'suppression_cidr_v6' => 'Disabled',"
+			. "'suppression_cidr' => 'Disabled',"
 			. "'format-0' => 'auto', 'state-0' => 'Disabled', 'url-0' => '', 'header-0' => ''], \$post);"
 			. ' $gtype = "ipv4"; $type = "IP"; $input_errors = []; $write_count = 0;'
-			. ' $options_action = []; $options_suppression_cidr = []; $options_suppression_cidr_v6 = []; $line = 1;'
+			. ' $options_action = []; $options_suppression_cidr = []; $line = 1;'
 			. ' $pfb_schedule_stored = []; $pfb_schedule_general_input = ['
 			. "'pfb_schedule_weekday' => '4', 'pfb_schedule_hour' => '6', 'pfb_schedule_minute' => '30'];"
 			. ' $pfb_schedule_active_rows = TRUE;'

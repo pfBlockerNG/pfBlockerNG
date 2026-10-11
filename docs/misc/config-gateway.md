@@ -263,6 +263,18 @@ Authorization = property of **write**, not call site (generalises
     round-trip, just identity pass-through like any other plain field. Validated on POST
     by `PFB_FILTER_TOKEN` (`pfblockerng.inc`) — base64url/JWT charset
     (`[A-Za-z0-9._~+/=-]`), NOT `PFB_FILTER_WORD` (which would reject real token).
+  - **`suppression_cidr` / `suppression_cidr_v6`** (issue #3413, plain strings — `NULL`/`NULL`
+    adapters): the IP tab's global Suppression CIDR Limit, IPv4 `Disabled` or 1-17 and IPv6
+    `Disabled` or 1-64. Default `Disabled`, so an absent key keeps an existing install's behaviour
+    (`no_grandfather`); a fresh install is seeded `8` / `32` by `pfb_install_suppression_cidr_seed()`
+    (below). `pfb_global()` publishes them as `$pfb['supp_cidr']` / `$pfb['supp_cidr_v6']`, and the IP
+    download loop resolves each row's limits with `pfb_list_cidr_floors($list, $format, $v4, $v6)`: the
+    list's own numeric `suppression_cidr` (a 3.3 per-list IPv4 field, unchanged) wins over the global IPv4
+    limit; IPv6 is global only (the devel-only per-list `suppression_cidr_v6` is no longer read, written or
+    rendered, and a stale stored key is ignored); a `geoip` row ignores both global limits but keeps an
+    explicit per-list IPv4 value. The synthesized DNSBLIP list has no row of its own, so it takes the
+    global limits. The shared parser applies them only while IP-tab Suppression is on, and a changed
+    limit takes effect on the next IP reparse (Run Now with Force: Parse, scope IP or Both).
 - **Python** (`pfb_unbound.py`): **`IdnMode` enum** keeps internal cases
   `All = 'on'`, `Confusable = 'confusable'`, `Off = 'off'`. Present empty or legacy
   `'off'` ini value reads Off; absent `idn_mode` and unrecognised junk retain legacy
@@ -499,6 +511,7 @@ pass call in installer) and raw-bystander regression in
 | ADR-02 python-mode force | not a grandfather — forces unregistered keys regardless of value | migration, after the #1907 exception |
 | Row rename `filter_alexa` → `filter_top1m` | feed rows are not registered scalars | the residual `issue1898-legacy-key-rename` migration |
 | `gen/settings_family` | the mode instrument, valued by the installing package | recorded by `pfb_settings_family_record()`; the pass skips it entirely |
+| Fresh-install Suppression CIDR Limit seed (`ip/suppression_cidr`, `ip/suppression_cidr_v6`) | same reason as the PSL feed policy seed: an ABSENT grandfather map is OLDCFG-only, and a seeded IP section would flip the pass's mode for the section's other fields | `pfb_install_suppression_cidr_seed()` (`pfblockerng.inc`), called by the installer after `pfb_install_registry_writeback()` with the installer's pre-migration section modes (a General-tab upgrade is corrected to OLDCFG first, so it is never seeded); the setup wizard writes `8` / `32` itself because it rebuilds the IP section |
 
 **Consequence for future fields:** after pass, bare `!isset($cfg[$key])` no longer means
 "existing install that predates this setting". New grandfather decides from *value*

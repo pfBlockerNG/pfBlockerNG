@@ -61,7 +61,7 @@ final class SyncPolicyOwnershipTest extends TestCase
 	public function testEveryRegistryEntryDeclaresPolicyOrLocal(): void
 	{
 		$registry = pfb_cfg_registry();
-		$this->assertCount(152, $registry, 'vacuity guard: 132 existing + 20 newly registered entries');
+		$this->assertCount(154, $registry, 'vacuity guard: 132 existing + 20 registered by #3450 + 2 by #3413');
 
 		$this->assertSame([], self::unclassifiedSyncEntries($registry),
 			"every pfb_cfg_registry() entry must declare 'sync' => 'policy'|'local'");
@@ -109,7 +109,7 @@ final class SyncPolicyOwnershipTest extends TestCase
 
 		$policy = self::keysClassified('policy');
 		$this->assertSame($expected, $policy, 'policy must be exactly the registry minus the local set');
-		$this->assertCount(92, $policy);
+		$this->assertCount(94, $policy);
 
 		$byAlias = [];
 		foreach ($policy as $key) {
@@ -117,7 +117,7 @@ final class SyncPolicyOwnershipTest extends TestCase
 			$byAlias[$alias] = ($byAlias[$alias] ?? 0) + 1;
 		}
 		ksort($byAlias);
-		$this->assertSame(['dnsbl' => 58, 'gen' => 12, 'ip' => 15, 'rep' => 3, 'ss' => 4], $byAlias);
+		$this->assertSame(['dnsbl' => 58, 'gen' => 12, 'ip' => 17, 'rep' => 3, 'ss' => 4], $byAlias);
 	}
 
 	// A5 -- every credential leaf is local.

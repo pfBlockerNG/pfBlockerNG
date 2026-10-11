@@ -13,8 +13,7 @@ use PHPUnit\Framework\TestCase;
  * unguarded read emits an "Undefined array key" warning (and the unguarded
  * 'custom' read feeds base64_decode(null), a Deprecated notice). The fix
  * guards all 33 reads with a `??` default taken from that field's own
- * save-path fallback (:743-790); :904's suppression_cidr_v6 was already
- * guarded and is left untouched.
+ * save-path fallback (:743-790).
  *
  * The page carries top-level execution and cannot be require()d
  * off-appliance, so the $pconfig block is eval-extracted verbatim from the
@@ -140,7 +139,7 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		$this->assertSame('any', $pconfig['autoproto_out']);
 		$this->assertSame('default', $pconfig['agateway_out']);
 		$this->assertSame('Disabled', $pconfig['suppression_cidr']);
-		$this->assertSame('Disabled', $pconfig['suppression_cidr_v6']);
+		$this->assertArrayNotHasKey('suppression_cidr_v6', $pconfig, 'IPv6 has no per-list limit (issue #3413)');
 		$this->assertSame('', $pconfig['whois_convert']);
 	}
 
@@ -248,7 +247,6 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			'autoproto_out'        => 'udp',
 			'agateway_out'         => 'WAN_GW',
 			'suppression_cidr'     => '24',
-			'suppression_cidr_v6'  => '64',
 			'whois_convert'        => 'on',
 			'custom'               => base64_encode('192.0.2.99 # existing'),
 		]];
@@ -266,6 +264,27 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			$this->assertSame($value, $pconfig[$key], "populated key '{$key}' must pass through unchanged");
 		}
 		$this->assertSame('192.0.2.99 # existing', $pconfig['custom']);
+	}
+
+	/**
+	 * A devel-only per-list `suppression_cidr_v6` key left in an existing row (issue #3413 removed the field) is
+	 * never loaded into the form, and its presence raises no diagnostic.
+	 */
+	public function testStaleStoredPerListIpv6LimitIsNotLoadedIntoTheForm(): void
+	{
+		$rowdata = [4 => [
+			'aliasname'           => 'ExistingV6Alias',
+			'description'         => 'd',
+			'cron'                => 'EveryDay',
+			'action'              => 'Deny_Both',
+			'suppression_cidr'    => 'Disabled',
+			'suppression_cidr_v6' => '48',
+		]];
+
+		$pconfig = $this->runExpectingNoDiagnostics($rowdata, 4, 'ipv6');
+
+		$this->assertArrayNotHasKey('suppression_cidr_v6', $pconfig);
+		$this->assertSame('Disabled', $pconfig['suppression_cidr']);
 	}
 
 	// --- Axis 2: populated-key, gtype=dnsbl -- guards are no-ops --------------

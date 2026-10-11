@@ -1325,6 +1325,74 @@ def test_ip_asn_reporting_select_coerces_bogus_to_disabled(
         webui.post(IP_PAGE, {"asn_reporting": "disabled"}, timeout=SAVE_TIMEOUT)
 
 
+@pytest.mark.parametrize(
+    ("field", "valid", "top", "above"),
+    [
+        ("suppression_cidr", "12", "17", "18"),
+        ("suppression_cidr_v6", "48", "64", "65"),
+    ],
+    ids=["suppression_cidr", "suppression_cidr_v6"],
+)
+def test_ip_global_suppression_cidr_limit_round_trips_and_coerces_out_of_range(
+    field: str,
+    valid: str,
+    top: str,
+    above: str,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The IP tab's global 'Suppression CIDR Limit' selects persist a value and coerce out-of-range ones.
+
+    Scenario (issue #3413): one limit for every IP list and DNSBLIP, so it must reach config.xml.
+      Given the key holds neither probe value,
+      When ``valid`` is POSTed Then it is stored verbatim, and the range's top (17 for IPv4, 64 for
+      IPv6) is stored too -- the boundary is a real option, not just a mid-range value,
+      When a value above the range, ``0`` or junk is POSTed Then the select whitelist coerces it to
+      the default ``Disabled`` (the save succeeds; the bogus value is never stored).
+    The IP save write_config()s, so config.xml is the oracle; the original (including genuine
+    absence) is restored at the end.
+    """
+    cfg = f"installedpackages/pfblockerngipsettings/config/0/{field}"
+    original_state = helpers.config_get_state(smoke_vm, cfg)
+    try:
+        before = helpers.config_get(smoke_vm, cfg)
+        assert before not in (valid, top), f"{field} already {before!r} before the valid POST"
+        assert _post_and_get(webui, smoke_vm, IP_PAGE, {field: valid}, cfg) == valid
+        assert _post_and_get(webui, smoke_vm, IP_PAGE, {field: top}, cfg) == top
+        for bogus in (above, "0", "abc"):
+            got = _post_and_get(webui, smoke_vm, IP_PAGE, {field: bogus}, cfg)
+            assert got == "Disabled", f"{field}: POSTing {bogus!r} must coerce to 'Disabled', stored {got!r}"
+    finally:
+        helpers.config_restore_state(smoke_vm, cfg, original_state)
+
+
+def test_ip_global_suppression_cidr_limits_are_independent_per_family(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Saving one family's limit never changes the other's.
+
+    Scenario (issue #3413): the IPv4 and IPv6 selects are separate fields with separate keys.
+      Given both limits are Disabled,
+      When IPv4 is saved as 8 Then IPv6 is still Disabled,
+      When IPv6 is then saved as 48 Then IPv4 is still 8.
+    """
+    base = "installedpackages/pfblockerngipsettings/config/0"
+    v4, v6 = f"{base}/suppression_cidr", f"{base}/suppression_cidr_v6"
+    saved = {path: helpers.config_get_state(smoke_vm, path) for path in (v4, v6)}
+    both_disabled = {"suppression_cidr": "Disabled", "suppression_cidr_v6": "Disabled"}
+    try:
+        assert _post_and_get(webui, smoke_vm, IP_PAGE, both_disabled, v4) == "Disabled"
+        assert helpers.config_get(smoke_vm, v6) == "Disabled"
+        assert _post_and_get(webui, smoke_vm, IP_PAGE, {"suppression_cidr": "8"}, v4) == "8"
+        assert helpers.config_get(smoke_vm, v6) == "Disabled"
+        assert _post_and_get(webui, smoke_vm, IP_PAGE, {"suppression_cidr_v6": "48"}, v6) == "48"
+        assert helpers.config_get(smoke_vm, v4) == "8"
+    finally:
+        for path, state in saved.items():
+            helpers.config_restore_state(smoke_vm, path, state)
+
+
 def test_ip_inbound_interface_multiselect_comma_join_and_empty_clear(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,

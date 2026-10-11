@@ -286,6 +286,9 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngipsettings/config/0/outbound_deny_action',
 		'installedpackages/pfblockerngipsettings/config/0/pass_order',
 		'installedpackages/pfblockerngipsettings/config/0/autorule_suffix',
+		// issue #3413: global Suppression CIDR Limit
+		'installedpackages/pfblockerngipsettings/config/0/suppression_cidr',
+		'installedpackages/pfblockerngipsettings/config/0/suppression_cidr_v6',
 		// issue #3450: DNSBL Advanced In/Outbound rule scalars registered as plain strings
 		'installedpackages/pfblockerngdnsblsettings/config/0/agateway_in',
 		'installedpackages/pfblockerngdnsblsettings/config/0/agateway_out',

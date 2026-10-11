@@ -134,6 +134,22 @@ function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_num
 	];
 }
 
+/**
+ * The IPv4 and IPv6 Suppression CIDR Limit in effect for one row of $list (issue #3413): the list's own numeric IPv4
+ * limit, else the IP tab's global one; IPv6 is global only. A GeoIP row ignores the global limits but keeps an
+ * explicit own IPv4 limit. Anything that is not numeric is 'Disabled'.
+ *
+ * @return array{0:string,1:string}
+ */
+function pfb_list_cidr_floors(array $list, string $format, string $global_v4, string $global_v6): array {
+	$numeric = static fn(mixed $limit): string => is_numeric($limit) ? "{$limit}" : 'Disabled';
+	$own_v4 = $numeric($list['suppression_cidr'] ?? NULL);
+	if ($format === 'geoip') {
+		return [$own_v4, 'Disabled'];
+	}
+	return [$own_v4 !== 'Disabled' ? $own_v4 : $numeric($global_v4), $numeric($global_v6)];
+}
+
 function pfb_ip_recompute_order_scope(mixed $save, bool $enabled, bool $dup_on, bool $drep_on,
     bool $prep_on): bool {
 	return !$save && $enabled && pfb_cross_list_scope($dup_on, $drep_on || $prep_on);
@@ -3812,17 +3828,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							$asn_run_once = FALSE;
 						}
 
-						// IPv4 Advanced Tunables
-						$pfbcidr = 'Disabled';
-						if (isset($list['suppression_cidr']) && $list['suppression_cidr'] != 'Disabled' && is_numeric($list['suppression_cidr'])) {
-							$pfbcidr = "{$list['suppression_cidr']}";
-						}
-
-						// IPv6 Advanced Tunables (issue #760 §3)
-						$pfbcidr_v6 = 'Disabled';
-						if (isset($list['suppression_cidr_v6']) && $list['suppression_cidr_v6'] != 'Disabled' && is_numeric($list['suppression_cidr_v6'])) {
-							$pfbcidr_v6 = "{$list['suppression_cidr_v6']}";
-						}
+						// IPv4 / IPv6 Advanced Tunables: Suppression CIDR Limit (issue #760 §3, #3413)
+						[$pfbcidr, $pfbcidr_v6] = pfb_list_cidr_floors($list, (string) $row['format'], $pfb['supp_cidr'], $pfb['supp_cidr_v6']);
 
 						// cURL Source Interface (sets CURLOPT_INTERFACE)
 						$srcint = $list['srcint'] ?: FALSE;

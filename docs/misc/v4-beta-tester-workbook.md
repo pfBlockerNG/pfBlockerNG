@@ -281,6 +281,16 @@ list (`/32` through `/128`), below IPv4 Suppression.
 The **+** icon on Reports still adds the matching family (IPv4 or IPv6) to
 the right list.
 
+### Suppression CIDR Limit
+
+**Suppression CIDR Limit** sits beside the **Suppression** setting (checkbox **Enable**) on
+the IP page.
+
+- [ ] Set the IPv4 **Suppression CIDR Limit** to 8, save, then **Update → Run Now**,
+      Force **Parse**, Scope **IP**
+- [ ] A feed range such as `1.2.3.0/1` now shows as the single address `1.2.3.0/32`
+      in the list's alias, and in `pfB_DNSBLIP_v4` when a DNSBL feed listed it
+
 ### Force Global IP Logging (IP Configuration)
 
 **Force Global IP Logging** turns logging **on** for every IP alias. It
@@ -826,6 +836,7 @@ window — that is not a bug.
 - [ ] IPv4, IPv6, GeoIP, and Reputation sub-tabs open
 - [ ] Your old IPv4 lists are still listed
 - [ ] IPv6 suppression saves (empty is fine)
+- [ ] Suppression CIDR Limit (IPv4 and IPv6) saves and comes back after reload
 - [ ] Force Global IP Logging is in the state you expect
 
 ### DNSBL

@@ -1097,21 +1097,18 @@ def test_ipv4_invert_toggles_persist_with_alias_native(
 
 
 # --------------------------------------------------------------------------- #
-# IPv6 alias: the issue-#760 §3 "Suppression CIDR Limit" select persists and
-# reloads, and is genuinely gtype-gated (v6-only, never rendered on the v4 page;
-# the v4-only sibling field never rendered on the v6 page).
+# IPv6 alias: the per-list "Suppression CIDR Limit" is IPv4-only. The IPv6 limit is
+# the IP tab's global one (issue #3413), so the v6 edit page carries no limit select and a
+# stale per-list ``suppression_cidr_v6`` is never written, read or rendered.
 # --------------------------------------------------------------------------- #
 
 
 def _ipv6_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str]:
     """A complete IPv6 alias save payload (one Disabled placeholder row).
 
-    Mirrors ``_ipv4_payload``: IPv6 shares the same Advanced In/Out fields (the
-    save handler's ``if ($gtype == 'ipv4' || $gtype == 'ipv6')`` block writes
-    both ``suppression_cidr`` -- unconditionally, the v4-only field -- and the
-    new issue-#760 §3 ``suppression_cidr_v6`` -- gated ``if ($gtype ==
-    'ipv6')``). Both are supplied here, same "every field the handler reads
-    gets a value" convention as ``_ipv4_payload``'s own placeholder-row fields.
+    Mirrors ``_ipv4_payload``: IPv6 shares the same Advanced In/Out fields. The v4-only
+    ``suppression_cidr`` is supplied like ``_ipv4_payload``'s own placeholder-row fields; no
+    per-list IPv6 limit exists to supply.
     """
     payload = {
         "type": "ipv6",
@@ -1132,7 +1129,6 @@ def _ipv6_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str
         "autoproto_out": "any",
         "agateway_out": "default",
         "suppression_cidr": "Disabled",
-        "suppression_cidr_v6": "Disabled",
         "srcint": "",
         "script_pre": "",
         "script_post": "",
@@ -1146,55 +1142,38 @@ def _ipv6_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str
     return payload
 
 
-def test_ipv6_suppression_cidr_select_persists_and_reloads(
+def test_ipv6_alias_has_no_per_list_suppression_cidr_limit(
     webui: "WebUI",
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """The issue-#760 §3 IPv6 Suppression CIDR Limit select round-trips.
+    """The IPv6 alias editor has no Suppression CIDR Limit select; a posted per-list value is ignored.
 
-    Scenario: saving an IPv6 alias with ``suppression_cidr_v6`` at its
-    documented default persists it, flipping to a numeric floor persists AND
-    reloads selected, and restoring to the default round-trips back. The field
-    is v6-only (gtype-gated in render/validation/save), so the reloaded v6 page
-    must never render the v4-only ``suppression_cidr`` select, and the v4 page
-    must never render this new v6-only select.
+    Scenario (issue #3413): IPv6 is limited globally (IP tab) only, so the devel-only per-list
+    ``suppression_cidr_v6`` field is gone, while the IPv4 per-list select (shipped in 3.3) stays on the
+    IPv4 editor.
 
     Given:
-        The target IPv6 rowid is free (``suppression_cidr_v6`` reads '').
+        The target IPv6 rowid is free.
     When:
-        A valid Deny_Both alias is saved with ``suppression_cidr_v6='Disabled'``
-        (the documented default, asserted first), then re-saved with
-        ``suppression_cidr_v6='32'`` (a real transition), then restored to
-        ``'Disabled'`` (the reverse transition).
+        A valid Deny_Both alias is saved while the POST also carries a crafted ``suppression_cidr_v6='32'``.
     Then:
-        - config.xml holds each value in turn -- each POST CAUSED the change.
-        - The reloaded v6 edit page renders '32' as the selected option, with no
-          PHP error in the body.
-        - The v6 page never renders a 'suppression_cidr' <select> (v4-only);
-          the v4 page (re-opened on an EXISTING row, so the shared GET-render
-          block actually reads that row's absent 'suppression_cidr_v6' key)
-          never renders a 'suppression_cidr_v6' <select> (v6-only) and stays
-          free of PHP errors -- pins the review fix for the undefined-array-key
-          Warning that an unguarded read of a v6-only key would raise on a v4
-          row (`?? 'Disabled'` in the GET-render block).
+        - the save succeeds and config.xml never gains a ``suppression_cidr_v6`` node on the row (the
+          crafted value is ignored, not persisted);
+        - the reloaded IPv6 edit page renders neither a ``suppression_cidr_v6`` nor a ``suppression_cidr``
+          select and carries no PHP diagnostic;
+        - an IPv4 edit page still renders the ``suppression_cidr`` select and no ``suppression_cidr_v6`` one.
     """
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_IPV6)
+    name_cfg = f"{CFG_IPV6}/{rowid}/aliasname"
     cfg = f"{CFG_IPV6}/{rowid}/suppression_cidr_v6"
     try:
-        # BEFORE: free slot, no value stored (the save must CAUSE it).
-        assert helpers.config_get(vm, cfg) == "", f"ipv6 rowid {rowid} not free (suppression_cidr_v6 already set)"
+        assert helpers.config_get(vm, name_cfg) == "", f"ipv6 rowid {rowid} not free"
 
-        # Create the alias at the documented default.
-        _post_form(webui, _ipv6_payload(rowid, "smokeip6cidr", suppression_cidr_v6="Disabled"))
-        assert helpers.config_get(vm, cfg) == "Disabled", "suppression_cidr_v6 not stored as 'Disabled'"
+        _post_form(webui, _ipv6_payload(rowid, "smokeip6nocidr", suppression_cidr_v6="32"))
+        assert helpers.config_get(vm, name_cfg) == "smokeip6nocidr", "the IPv6 alias save did not persist"
+        assert helpers.config_get(vm, cfg) == "", "a posted per-list suppression_cidr_v6 must never be stored"
 
-        # WHEN: a real transition to a numeric floor.
-        _post_form(webui, _ipv6_payload(rowid, "smokeip6cidr", suppression_cidr_v6="32"))
-        assert helpers.config_get(vm, cfg) == "32", "suppression_cidr_v6 not persisted as '32'"
-
-        # THEN: the reloaded v6 edit page renders '32' selected, and the field
-        # is genuinely gtype-gated both ways.
         reload_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv6", "rowid": str(rowid)})
         assert not looks_like_login_page(reload_resp.text), (
             "category GET (reload) returned the login form (session lost)"
@@ -1202,36 +1181,22 @@ def test_ipv6_suppression_cidr_select_persists_and_reloads(
         body = reload_resp.text
         diag = body_has_php_error(body)
         assert diag is None, f"reloaded v6 edit page contains PHP diagnostic: {diag!r}"
-        assert 'name="suppression_cidr_v6"' in body, "reloaded v6 form has no suppression_cidr_v6 select"
-        assert _option_selected(body, "32"), (
-            "reloaded v6 form did not render suppression_cidr_v6 option '32' as selected"
-        )
-        assert 'name="suppression_cidr"' not in body, (
-            "v6 edit page must not render the v4-only 'suppression_cidr' select"
-        )
+        assert 'name="suppression_cidr_v6"' not in body, "v6 edit page must not render a per-list IPv6 limit select"
+        assert 'name="suppression_cidr"' not in body, "v6 edit page must not render the v4-only limit select"
 
-        # v4-page symmetry: re-open an EXISTING v4 row (not a blank/new-row
-        # form) so the shared GET-render block actually reads that row's
-        # 'suppression_cidr_v6' key -- absent on every v4 row, since the save
-        # handler only ever writes it for gtype=='ipv6'. Pre-fix, this read
-        # was unconditional (no `?? 'Disabled'`), so PHP emits an undefined-
-        # array-key Warning on every existing-row v4 edit.
         v4_rowid = _free_rowid(vm, CFG_IPV4)
         try:
-            _post_form(webui, _ipv4_payload(v4_rowid, "smokeip4sym", action="Deny_Both"))
+            _post_form(webui, _ipv4_payload(v4_rowid, "smokeip4keep", action="Deny_Both"))
             v4_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4", "rowid": str(v4_rowid)})
             assert not looks_like_login_page(v4_resp.text), "v4 category GET returned the login form (session lost)"
             v4_diag = body_has_php_error(v4_resp.text)
             assert v4_diag is None, f"existing-row v4 edit page contains PHP diagnostic: {v4_diag!r}"
+            assert 'name="suppression_cidr"' in v4_resp.text, "v4 edit page must keep its per-list limit select"
             assert 'name="suppression_cidr_v6"' not in v4_resp.text, (
-                "v4 edit page must not render the v6-only 'suppression_cidr_v6' select"
+                "v4 edit page must not render a per-list IPv6 limit select"
             )
         finally:
             _del_rowid(vm, CFG_IPV4, v4_rowid)
-
-        # Restore to the default (the reverse transition).
-        _post_form(webui, _ipv6_payload(rowid, "smokeip6cidr", suppression_cidr_v6="Disabled"))
-        assert helpers.config_get(vm, cfg) == "Disabled", "suppression_cidr_v6 not restored to 'Disabled'"
     finally:
         _del_rowid(vm, CFG_IPV6, rowid)
 

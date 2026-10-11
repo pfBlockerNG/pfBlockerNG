@@ -62,6 +62,8 @@ PAGES: dict[str, tuple[str, str, str, dict[str, tuple[str, str]]]] = {
             "outbound_deny_action": ("select", "block"),
             "pass_order": ("select", "order_3"),
             "autorule_suffix": ("select", "ar"),
+            "suppression_cidr": ("select", "12"),
+            "suppression_cidr_v6": ("select", "48"),
         },
     ),
     "dnsbl": (

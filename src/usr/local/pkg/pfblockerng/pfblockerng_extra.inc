@@ -2101,6 +2101,24 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
+		// issue #3413: global Suppression CIDR Limit -- IPv4 Disabled or 1-17, IPv6 Disabled or 1-64 -- for the DNSBLIP
+		// alias and every IP list without its own IPv4 value, applied only while Suppression is on. Absent reads Disabled
+		// (an upgrade's behaviour); a fresh install is seeded 8 / 32 by pfb_install_suppression_cidr_seed().
+		'ip/suppression_cidr' => [
+			'default'       => 'Disabled',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => '#3413 new global limit; absent = Disabled = no limit, the behaviour every upgrader already has',
+		],
+		'ip/suppression_cidr_v6' => [
+			'default'       => 'Disabled',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => '#3413 new global limit; absent = Disabled = no limit, the behaviour every upgrader already has',
+		],
+
 		// issue #2123 -- the seven IP-page checkboxes whose default used to be declared
 		// by pfblockerng_ip.php's own `?: ''` at the top of the file and whose stored
 		// vocabulary was decided at its save site. All seven were off-by-default there,

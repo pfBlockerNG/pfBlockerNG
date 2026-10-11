@@ -70,7 +70,7 @@ final class CategoryEditPostGuardTest extends TestCase
 				throw new RuntimeException('test bootstrap: aliasname/CIDR executable region not found');
 			}
 			if (strpos($guard[1], 'pfb_sanitize_text_area') === FALSE ||
-			    strpos($m[1], 'suppression_cidr_v6') === FALSE) {
+			    strpos($m[1], 'Suppression CIDR Limit invalid') === FALSE) {
 				throw new RuntimeException('test bootstrap: aliasname ingress executable region incomplete');
 			}
 			eval(
@@ -207,6 +207,28 @@ final class CategoryEditPostGuardTest extends TestCase
 				. ' }'
 			);
 		}
+
+		// Region 8: the IP-family list-settings save (issue #3413: no per-list IPv6 limit is written),
+		// bounded by its executable gtype condition and the dnsbl-only else branch.
+		if (!function_exists('pfb_category_oracle_ip_family_save')) {
+			if (!preg_match(
+				'/(if \(\$gtype == \x27ipv4\x27 \|\| \$gtype == \x27ipv6\x27\) \{\s*'
+				. 'config_set_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/aliaslog".*?\})'
+				. '\s*else \{/s',
+				$src,
+				$m
+			)) {
+				throw new RuntimeException('test bootstrap: IP-family save executable region not found');
+			}
+			if (strpos($m[1], 'whois_convert') === FALSE || strpos($m[1], '/suppression_cidr"') === FALSE) {
+				throw new RuntimeException('test bootstrap: IP-family save executable region incomplete');
+			}
+			eval(
+				'function pfb_category_oracle_ip_family_save(string $gtype, string $conf_type, int $rowid): void {'
+				. ' ' . $m[1]
+				. ' }'
+			);
+		}
 	}
 
 	protected function setUp(): void
@@ -298,6 +320,80 @@ final class CategoryEditPostGuardTest extends TestCase
 		}
 		$this->assertNotEmpty($errors);
 		$this->assertSame('', $_POST['aliasname']);
+	}
+
+	// --- issue #3413: the per-list Suppression CIDR Limit is IPv4-only (IPv6 is the global IP-tab limit) ---
+
+	/** @return iterable<string,array{0:string,1:string}> posted per-list IPv4 limit, expected to raise the error */
+	public static function ipv4LimitProvider(): iterable
+	{
+		yield 'Disabled'  => ['Disabled', ''];
+		yield 'numeric'   => ['17', ''];
+		yield 'junk'      => ['abc', 'Suppression CIDR Limit invalid'];
+		yield 'injection' => ['8;rm', 'Suppression CIDR Limit invalid'];
+	}
+
+	/** The per-list IPv4 limit stays validated: a non-numeric value is an input error, Disabled and digits are not. */
+	#[DataProvider('ipv4LimitProvider')]
+	public function testIpv4ListLimitIsStillValidated(string $posted, string $expectedError): void
+	{
+		$_POST = ['aliasname' => 'validname', 'suppression_cidr' => $posted];
+		$errors = array_values(array_filter(
+			pfb_category_oracle_aliasname_region('ipv4'),
+			static fn (string $e): bool => str_contains($e, 'Suppression CIDR Limit')
+		));
+		$this->assertSame($expectedError === '' ? [] : [$expectedError], array_map(
+			static fn (string $e): string => str_replace('Advanced Settings - ', '', $e),
+			$errors
+		));
+	}
+
+	/**
+	 * Scenario: an IPv6 list has no per-list limit any more.
+	 *   Given a (stale or crafted) POST carrying a junk `suppression_cidr_v6` for an IPv6 list,
+	 *   When the page validates it, Then it raises no CIDR error: the field is not read at all.
+	 */
+	public function testIpv6ListLimitFieldIsNoLongerValidated(): void
+	{
+		$_POST = ['aliasname' => 'validname', 'suppression_cidr_v6' => 'abc'];
+		$errors = array_filter(
+			pfb_category_oracle_aliasname_region('ipv6'),
+			static fn (string $e): bool => str_contains($e, 'Suppression CIDR Limit')
+		);
+		$this->assertSame([], array_values($errors));
+	}
+
+	/** @return iterable<string,array{0:string,1:string,2:string,3:string}> gtype, config section, posted IPv4 limit, expected stored IPv4 limit */
+	public static function ipFamilySaveProvider(): iterable
+	{
+		yield 'ipv4' => ['ipv4', 'pfblockernglistsv4', '16', '16'];
+		yield 'ipv6' => ['ipv6', 'pfblockernglistsv6', '', 'Disabled'];
+	}
+
+	/**
+	 * Scenario: saving an IP list never stores a per-list IPv6 limit (issue #3413).
+	 *   Given a crafted POST carrying `suppression_cidr_v6` for an IPv4 or an IPv6 list,
+	 *   When the page saves the list, Then the per-list IPv4 limit is stored (the save ran) and no
+	 *        `suppression_cidr_v6` key is written for either family.
+	 */
+	#[DataProvider('ipFamilySaveProvider')]
+	public function testIpListSaveWritesNoPerListIpv6Limit(string $gtype, string $conf_type, string $posted_v4, string $stored_v4): void
+	{
+		$GLOBALS['config'] = [];
+		$_POST = array_merge(
+			array_fill_keys([
+				'aliaslog', 'stateremoval', 'whois_convert',
+				'autoaddrnot_in', 'autoports_in', 'aliasports_in', 'autoaddr_in', 'autonot_in', 'aliasaddr_in', 'autoproto_in', 'agateway_in',
+				'autoaddrnot_out', 'autoports_out', 'aliasports_out', 'autoaddr_out', 'autonot_out', 'aliasaddr_out', 'autoproto_out', 'agateway_out',
+			], ''),
+			['suppression_cidr' => $posted_v4, 'suppression_cidr_v6' => '48']
+		);
+
+		pfb_category_oracle_ip_family_save($gtype, $conf_type, 0);
+
+		$this->assertSame($stored_v4, config_get_path("installedpackages/{$conf_type}/config/0/suppression_cidr"),
+			'before: the save block ran and stored the per-list IPv4 limit');
+		$this->assertNull(config_get_path("installedpackages/{$conf_type}/config/0/suppression_cidr_v6"));
 	}
 
 	// --- R15: Lmove is retired -- no longer exempt, rejected like any array field ---

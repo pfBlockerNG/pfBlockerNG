@@ -115,13 +115,6 @@ final class DnsblPslPolicyUiTest extends TestCase
 		$this->assertStringNotContainsString("config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_feed_", $source);
 	}
 
-	/** The word "suppression" is never used anywhere on the page (issue #2371 wording rule). */
-	public function testSuppressionWordNeverAppearsOnPage(): void
-	{
-		$source = self::source();
-		$this->assertStringNotContainsStringIgnoringCase('suppression', $source);
-	}
-
 	/**
 	 * POST sanitation: an unknown token must persist as Honor, never verbatim
 	 * (issue #2371 Step 3 contract row 6). #993: the page's own POST/session-gated

@@ -198,6 +198,8 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['outbound_deny_action']	= 'reject';	
 	$new_config['pfblockerngipsettings']['config'][0]['pass_order']			= 'order_0';
 	$new_config['pfblockerngipsettings']['config'][0]['autorule_suffix']		= 'autorule';	// the registry fresh-install default, written so the upgrade grandfather pass cannot flip it
+	$new_config['pfblockerngipsettings']['config'][0]['suppression_cidr']		= '8';	// the fresh-install limits (issue #3413): the wizard rebuilds this section after the installer seeded them
+	$new_config['pfblockerngipsettings']['config'][0]['suppression_cidr_v6']	= '32';
 
 	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
 	$pfb_auto_wiz = (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')) === PfbToggle::On);

@@ -104,6 +104,8 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Aggregated Aliases",
             "Alias Table Apply Mode",
             "IPv6 Suppression",
+            # issue #3413: the global Suppression CIDR Limit (IPv4 and IPv6 selects) beside the toggle.
+            "Suppression CIDR Limit",
         ),
     ),
     # "DNS Redirect" is the ADR-36 section title added to this page (Phase 3).
@@ -131,6 +133,8 @@ PAGE_TABLE: tuple[Page, ...] = (
             # Reload required" claim; toggling now applies on the next DNSBL update.
             "Enabling or disabling this option takes effect on the next DNSBL update",
             "pfB_DNSBLIP_v4",  # DNSBL IPs help text names the real alias (was stale 'pfB_DNSBL_IP')
+            # issue #3413: the DNSBL IPs help points at the IP Tab limit that clamps pfB_DNSBLIP ranges.
+            "IP Tab Suppression CIDR Limit",
             # Permit-rules help renders as one flowing sentence — a stray <br /> split
             # "...to access<br />the DNSBL Webserver", so this space-joined phrase is the
             # red→green guard (absent with the <br />, present once it is a space).
@@ -215,6 +219,7 @@ PAGE_TABLE: tuple[Page, ...] = (
         "category_edit_ip",
         "/pfblockerng/pfblockerng_category_edit.php?type=ipv4",
         (
+            "Suppression CIDR Limit",  # issue #3413: the per-list IPv4 override of the IP tab's global limit
             "Override Default Schedule",
             "schedule_override",
             "schedule_weekday",
@@ -238,14 +243,13 @@ PAGE_TABLE: tuple[Page, ...] = (
             "schedule_minute",
         ),
     ),
-    # ?type=ipv6 renders the issue-#760 §3 "Suppression CIDR Limit" select block (gated
-    # `if ($gtype == 'ipv6')`, a code path the ipv4/dnsbl entries above never exercise) --
-    # this entry guards it against a PHP render regression.
+    # ?type=ipv6 renders the IPv6 editor, which carries no per-list "Suppression CIDR Limit"
+    # (issue #3413: IPv6 is limited by the IP tab's global select only) -- the select renders on
+    # the ipv4 entry above; this entry guards the ipv6-gated blocks against a PHP render regression.
     Page(
         "category_edit_ipv6",
         "/pfblockerng/pfblockerng_category_edit.php?type=ipv6",
         (
-            "Suppression CIDR Limit",
             "Override Default Schedule",
             "schedule_override",
             "schedule_weekday",

@@ -127,12 +127,12 @@ throughout, per the issue #760 exception above.
 
 Scenarios D/E of the same module -- a THIRD Suppression-gated mechanism, distinct from the
 carve engine above: `sanitize_ipaddr()`/`pfb_sanitize_ipaddr_v6()`'s unconditional reserved-class
-drop (§1) and the per-category IPv6 CIDR floor `suppression_cidr_v6` (§3).
+drop (§1) and the global IPv6 Suppression CIDR Limit `suppression_cidr_v6` (§3, #3413).
 
 | File | Contents | Purpose |
 | --- | --- | --- |
 | `ip_suppress_reserved_v6.txt` | One public entry (`2606:4700:7777::1111`) + one each of documentation (`2001:db8::1`), multicast (`ff02::1`), NAT64 (`64:ff9b::1`) | Proves the public entry loads while every reserved class is dropped outright |
-| `ip_suppress_cidr_floor_v6.txt` | A network-aligned public `/48` (`2606:4700:aaaa::/48`) + a separate bare host (`2606:4700:bbbb::99`) | Proves a floor narrower than the feed's mask clamps the `/48` to its bare base address, leaving the sibling host untouched |
+| `ip_suppress_cidr_floor_v6.txt` | A network-aligned public `/48` (`2606:4700:aaaa::/48`) + a separate bare host (`2606:4700:bbbb::99`) | Proves a global IPv6 limit narrower than the feed's mask clamps the `/48` to its bare base address, leaving the sibling host untouched |
 
 The v4 companion for the reserved-class test (`82.165.5.5` public + `100.64.0.1` CGN) is a
 two-line inline body written directly by the test (mirrors the Scenario B companion above) --
