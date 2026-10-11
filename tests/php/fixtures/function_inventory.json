@@ -12748,6 +12748,129 @@
             }
         ]
     },
+    "pfb_sync_receive_accepted_clear": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_receive_changed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "set",
+                "byRef": false,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_sync_receive_policy": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "new_sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "gate",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_receive_record": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "outcome",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "accepted_digest",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "reason",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_receive_sections": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_sync_receive_state_read": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_receive_state_write": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_receive_suppressed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_sync_run_plan": {
         "returnsRef": false,
         "returnType": "array",
@@ -15305,6 +15428,19 @@
         "params": [
             {
                 "name": "new_sections",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfblockerng_plugin_xmlrpc_recv_done": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "unused",
                 "byRef": false,
                 "variadic": false,
                 "type": null,

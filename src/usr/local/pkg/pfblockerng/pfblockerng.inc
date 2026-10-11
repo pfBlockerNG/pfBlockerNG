@@ -21420,6 +21420,11 @@ function pfblockerng_sync_on_changes() {
 		return;
 	}
 
+	// A policy received from a peer is never echoed back while this node's policy still equals it.
+	if (pfb_sync_receive_suppressed()) {
+		return;
+	}
+
 	pfb_logger("\n===[  XMLRPC Sync ]===================================================\n", 1);
 	logger(LOG_NOTICE, localize_text('XMLRPC sync is starting.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 
@@ -22098,7 +22103,168 @@ function pfblockerng_plugin_xmlrpc_send() {
 	return $section_paths;
 }
 
+/*
+ * Receive state, {$dbdir}/pfb_sync_receive.json (root-only, never a payload value): the digest of the
+ * last accepted policy and the last receive outcome. A missing or corrupt file reads as both NULL.
+ *
+ * @return array{accepted_digest: ?string, last: ?array<string,mixed>}
+ */
+function pfb_sync_receive_state_read(string $dbdir): array {
+	$state = array('accepted_digest' => NULL, 'last' => NULL);
+	$path  = "{$dbdir}/pfb_sync_receive.json";
+	$data  = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
+	if (is_array($data)) {
+		$state['accepted_digest'] = is_string($data['accepted_digest'] ?? NULL) ? $data['accepted_digest'] : NULL;
+		$state['last']            = is_array($data['last'] ?? NULL) ? $data['last'] : NULL;
+	}
+	return $state;
+}
+
+// shortcut: no lock, a receive and a Sync-page save race only as last-writer-wins; add flock if that ever matters.
+function pfb_sync_receive_state_write(array $state, string $dbdir): void {
+	$path = "{$dbdir}/pfb_sync_receive.json";
+	$tmp  = "{$path}.tmp";
+	if (@file_put_contents($tmp, json_encode($state), LOCK_EX) === FALSE || !@chmod($tmp, 0600) || !@rename($tmp, $path)) {
+		@unlink($tmp);
+	}
+}
+
+/*
+ * Records one receive and logs one value-free line. A refusal keeps the previous accepted digest;
+ * an accepted receive ('changed' or 'unchanged') replaces it with $accepted_digest.
+ */
+function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir): void {
+	$state = pfb_sync_receive_state_read($dbdir);
+	$last  = array('time' => time(), 'outcome' => $outcome);
+	if ($reason !== '') {
+		$last['reason'] = $reason;
+	}
+	pfb_sync_receive_state_write(array(
+		'accepted_digest' => $outcome === 'refused' ? $state['accepted_digest'] : $accepted_digest,
+		'last'            => $last,
+	), $dbdir);
+
+	logger(
+		$outcome === 'refused' ? LOG_WARNING : LOG_NOTICE,
+		localize_text('XMLRPC policy receive: %s%s.', $outcome, $reason === '' ? '' : " ({$reason})"),
+		LOG_PREFIX_PKG_PFBLOCKERNG
+	);
+}
+
+// Drops the accepted digest (the Sync page save calls this); the last outcome stays.
+function pfb_sync_receive_accepted_clear(string $dbdir): void {
+	$state = pfb_sync_receive_state_read($dbdir);
+	if ($state['accepted_digest'] !== NULL) {
+		$state['accepted_digest'] = NULL;
+		pfb_sync_receive_state_write($state, $dbdir);
+	}
+}
+
+// Request-local: set by a policy receive that changed configuration, consumed by plugin_xmlrpc_recv_done.
+function pfb_sync_receive_changed(?bool $set = NULL): bool {
+	static $changed = FALSE;
+	if ($set !== NULL) {
+		$changed = $set;
+	}
+	return $changed;
+}
+
+// The receiver's stored synced sections, bare section name => subtree; absent sections are omitted.
+function pfb_sync_receive_sections(): array {
+	$sections = array();
+	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+		$stored = config_get_path("installedpackages/{$section}");
+		if ($stored !== NULL) {
+			$sections[$section] = $stored;
+		}
+	}
+	return $sections;
+}
+
+// TRUE while this node's policy still equals the last accepted received one (it must not echo it back).
+function pfb_sync_receive_suppressed(): bool {
+	global $pfb;
+
+	$accepted = pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'];
+	return $accepted !== NULL
+	    && $accepted === pfb_sync_policy_digest(pfb_sync_policy_projection(pfb_sync_receive_sections()));
+}
+
+/*
+ * Policy-gated receive (docs/specs/xmlrpc-per-field-sync.md, "Receive merge"): returns only the
+ * changed installedpackages/<section> paths. $new_sections is an array here, as the gate leaf was found in it.
+ */
+function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
+	global $pfb;
+
+	if ($gate !== 'policy') {
+		pfb_sync_receive_record('refused', NULL, 'syncscope is not policy', $pfb['dbdir']);
+		return array();
+	}
+
+	$current = pfb_sync_receive_sections();
+	try {
+		$merged = pfb_sync_policy_merge($new_sections['installedpackages'], $current);
+	} catch (\InvalidArgumentException $e) {
+		pfb_sync_receive_record('refused', NULL, $e->getMessage(), $pfb['dbdir']);
+		return array();
+	}
+
+	$changed = array();
+	foreach ($merged as $section => $value) {
+		if ($value !== ($current[$section] ?? NULL)) {
+			$changed["installedpackages/{$section}"] = $value;
+		}
+	}
+
+	// A removed alias closes its ledger entries once, after the whole payload was accepted.
+	$aliases = static function (mixed $section): array {
+		$names = array();
+		foreach (is_array($section['config'] ?? NULL) ? $section['config'] : array() as $row) {
+			if (is_array($row) && is_string($row['aliasname'] ?? NULL) && $row['aliasname'] !== '') {
+				$names[] = $row['aliasname'];
+			}
+		}
+		return $names;
+	};
+	foreach (array('pfblockernglistsv4' => 'ipv4', 'pfblockernglistsv6' => 'ipv6', 'pfblockerngdnsbl' => 'dnsbl') as $section => $gtype) {
+		foreach (array_diff($aliases($current[$section] ?? NULL), $aliases($merged[$section] ?? NULL)) as $name) {
+			pfb_sync_status_close_removed_alias($gtype, $name, $pfb['dbdir']);
+		}
+	}
+
+	pfb_sync_receive_record(
+		$changed === array() ? 'unchanged' : 'changed',
+		pfb_sync_policy_digest(pfb_sync_policy_projection($merged)),
+		'',
+		$pfb['dbdir']
+	);
+	if ($changed !== array()) {
+		pfb_sync_receive_changed(TRUE);
+	}
+
+	return $changed;
+}
+
+// Core calls this after a receive wrote its paths and reloaded the filter, in the same request.
+function pfblockerng_plugin_xmlrpc_recv_done($unused) {
+	global $pfb;
+
+	if (!pfb_sync_receive_changed()) {
+		return;
+	}
+	pfb_sync_receive_changed(FALSE);
+	pfb_mark_pending_changes();
+	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1");
+}
+
 function pfblockerng_plugin_xmlrpc_recv($new_sections) {
+	// A present gate leaf is a policy payload: any value but 'policy' is refused, never merged as legacy.
+	$gate = array_get_path($new_sections, PFB_SECTIONS['sync'] . '/syncscope');
+	if ($gate !== NULL) {
+		return pfb_sync_receive_policy($new_sections, $gate);
+	}
+
 	if (array_get_path($new_sections, 'installedpackages/pfblockerngsync/config/0/varsynconchanges') != 'auto') {
 		return [];
 	}

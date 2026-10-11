@@ -1084,6 +1084,16 @@ if (!function_exists('logger')) {
 	}
 }
 
+// --- mwexec_bg() capture double (issue #3452) ---
+//
+// Records each backgrounded command instead of spawning it, so tests can assert what the package
+// would have started. UpdateRunNowScheduleOwnershipTest declares the same guarded double.
+if (!function_exists('mwexec_bg')) {
+	function mwexec_bg($command, $clearsigmask = false): void {
+		$GLOBALS['pfb_test_mwexec_bg'][] = $command;
+	}
+}
+
 // --- pfb_tracker() doubles (#482) ---
 //
 // pfb_tracker() calls four pfSense interface helpers that have no off-appliance
