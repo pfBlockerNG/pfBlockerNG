@@ -22229,6 +22229,7 @@ function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblocker
 					&& (string) PfbConfig::read('dnsbl/top1m_token') === '',
 		'reserved_headers'    => array_values($pfb['reserved_header_skips'] ?? array()),
 		'blacklist_missing'   => $blacklist_missing,
+		'drift'               => pfb_sync_receive_drift($pfb['dbdir']) === TRUE,
 	);
 }
 
@@ -22257,6 +22258,9 @@ function pfb_sync_effective_findings(array $facts): array {
 	}
 	foreach (($facts['blacklist_missing'] ?? array()) as $xml) {
 		$findings[] = "Blacklist {$xml}: username or password missing";
+	}
+	if (!empty($facts['drift'])) {
+		$findings[] = 'Policy changed locally since the last accepted receive';
 	}
 	$findings = array_values(array_unique($findings));
 	sort($findings, SORT_STRING);

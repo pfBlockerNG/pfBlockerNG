@@ -486,4 +486,62 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		$this->assertLessThan($failed, $record, 'never after the failed record');
 		$this->assertSame(1, substr_count($source, 'pfb_sync_findings_record('));
 	}
+
+	// ---- 8. receiver drift --------------------------------------------------------------
+
+	private const DRIFT_FINDING = 'Policy changed locally since the last accepted receive';
+
+	/** @return array<string,array{0:array<string,mixed>,1:list<string>}> */
+	public static function driftProvider(): array
+	{
+		return [
+			'drift'   => [['drift' => TRUE], [self::DRIFT_FINDING]],
+			'no drift' => [['drift' => FALSE], []],
+			'absent'  => [[], []],
+		];
+	}
+
+	/** @param array<string,mixed> $facts @param list<string> $expected */
+	#[DataProvider('driftProvider')]
+	public function testDriftFactMapsToItsFinding(array $facts, array $expected): void
+	{
+		$this->assertSame($expected, pfb_sync_effective_findings($facts));
+	}
+
+	private function acceptDigest(?string $digest): void
+	{
+		$GLOBALS['pfb']['dbdir'] = $this->dir;
+		if ($digest !== NULL) {
+			file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => $digest]));
+		}
+	}
+
+	public function testFactsReportDriftWhenAcceptedDigestDiffersFromCurrent(): void
+	{
+		$this->acceptDigest(str_repeat('0', 64));
+		$this->assertTrue($this->gather()['drift']);
+	}
+
+	public function testFactsReportNoDriftWhenAcceptedDigestIsCurrent(): void
+	{
+		$this->acceptDigest(pfb_sync_policy_current_digest());
+		$this->assertFalse($this->gather()['drift']);
+	}
+
+	public function testFactsReportNoDriftWithoutStateFile(): void
+	{
+		$this->acceptDigest(NULL);
+		$this->assertFalse($this->gather()['drift']);
+	}
+
+	public function testDriftNoticeFiresOnceAndNotAgainWhenCleared(): void
+	{
+		$drift = [self::DRIFT_FINDING];
+		$this->assertTrue(pfb_sync_findings_record($drift, $this->dir));
+		$this->assertSame([self::NOTICE_PREFIX . self::DRIFT_FINDING], $this->noticeTexts());
+		$this->assertTrue(pfb_sync_findings_record($drift, $this->dir));
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'repeat: no second notice');
+		$this->assertTrue(pfb_sync_findings_record([], $this->dir));
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'cleared: no notice');
+	}
 }
