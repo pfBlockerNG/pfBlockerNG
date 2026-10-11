@@ -3275,6 +3275,146 @@ def test_channel_installer_fresh_box_installs_from_the_channel(
     )
 
 
+def _installed_pkg_names(vm: SmokeVM) -> set[str]:
+    """Every installed package name on the guest — the blast-radius oracle for a ``pkg delete``."""
+    return {line.strip() for line in _ssh_check(vm, "pkg", "query", "%n").stdout.splitlines() if line.strip()}
+
+
+def _netgate_leaf_dependency(vm: SmokeVM, branch_pkg: Path) -> str:
+    """A RUN_DEPENDS of the branch package that ONLY the real Netgate repo can supply, and that
+    can be deleted on its own.
+
+    Derived at run time from the package's own declared deps, never from a hardcoded name —
+    which deps exist (and which the box carries) varies per edition and matrix leg. A
+    candidate qualifies when it is
+
+      * NOT shipped in the project catalogues via ``SMOKE_DEP_PKGS`` (those resolve from the
+        project repo itself, which would prove nothing about a second repository),
+      * installed on the box (the image bakes the deps),
+      * a leaf — nothing installed requires it, so deleting it removes it alone, and
+      * offered by the real ``pfSense`` repo (``pkg rquery -r pfSense``).
+
+    The first qualifying name in sorted order wins. None qualifying fails loudly with the
+    reason each declared dep was rejected.
+    """
+    declared = read_compact_manifest(branch_pkg).get("deps")
+    assert isinstance(declared, dict) and declared, f"{branch_pkg.name}: +COMPACT_MANIFEST declares no deps"
+    shipped_by_project = {read_compact_manifest(dep).get("name") for dep in _smoke_dep_pkg_paths()}
+    rejected: dict[str, str] = {}
+    for dep in sorted(set(declared) - shipped_by_project):
+        if pkg_installed_version_of(vm, dep) is None:
+            rejected[dep] = "not installed"
+            continue
+        dependents = vm.ssh("pkg", "query", "%rn", dep)
+        if dependents.returncode != 0 or dependents.stdout.strip():
+            rejected[dep] = f"not a leaf (rc={dependents.returncode}, dependents: {dependents.stdout.split()})"
+            continue
+        offered = vm.ssh("pkg", "rquery", "-r", NETGATE_REPO_NAME, "%n", dep)
+        if offered.returncode != 0 or offered.stdout.strip() != dep:
+            rejected[dep] = f"not offered by {NETGATE_REPO_NAME} (rc={offered.returncode}, got {offered.stdout!r})"
+            continue
+        return dep
+    pytest.fail(
+        f"no declared dep of {branch_pkg.name} is an installed leaf offered by {NETGATE_REPO_NAME} "
+        f"and not shipped via SMOKE_DEP_PKGS; rejected: {rejected}"
+    )
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("channel", ["stable"])
+def test_channel_installer_fresh_box_resolves_missing_dependency_from_other_repo(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+    channel: str,
+    tmp_path: Path,
+) -> None:
+    """FRESH BOX, MISSING DEPENDENCY (issue #3484): the published ``install.sh --channel
+    <channel>`` installs the package on a box that lacks one of its RUN_DEPENDS, taking that
+    dependency from ANOTHER repository (the real Netgate ``pfSense`` repo) — the project
+    catalogue carries only the package itself.
+
+    A pristine firewall is exactly this box: the runtime dependencies are not installed, the
+    project repo does not serve them, and the install must still converge. The fresh-box case
+    above cannot see this, because the image bakes every dependency, so a repo-restricted
+    ``pkg install -r`` never has anything to resolve elsewhere.
+
+    Scenario: a fresh box missing a dependency subscribes and installs via the one-file installer.
+
+    Given nothing pfBlockerNG-shaped is installed, no project conf exists, and one RUN_DEPENDS
+      of the package — a leaf the real ``pfSense`` repo offers and the project catalogue does
+      NOT — has been deleted (BEFORE asserted: package, conf and dependency all absent, and
+      the delete removed nothing else),
+    When  ``env PFB_BASE_URL=<file://catalogue> /bin/sh -c
+      "fetch -qo - file://install.sh | /bin/sh -s -- --channel <channel>"`` runs, piped,
+    Then  it exits 0, reports ``==> Done``, the box carries EXACTLY the canonical identity at
+      the version this channel's catalogue serves, from this channel's repository,
+    And   the deleted dependency is installed again, from a repository that is NOT a project
+      repo.
+
+    The dependency is reinstalled in ``finally`` so later cases sharing this guest keep the
+    baked dependency set.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+
+    reset_channel_subscription(repo_vm)
+    dependency: str | None = None
+    try:
+        # GIVEN: nothing installed, no project conf, and a fresh view of the real repo's catalogue.
+        pkg_update(repo_vm)
+        names_before = installed_pfblockerng_names(repo_vm)
+        assert names_before == [], f"BEFORE: expected nothing installed, found {names_before}"
+        confs_before = project_confs_present(repo_vm)
+        assert confs_before == set(), f"BEFORE: expected no project conf, found {sorted(confs_before)}"
+
+        # GIVEN: one dependency only another repository can supply, deleted ALONE.
+        dependency = _netgate_leaf_dependency(repo_vm, Path(pkg))
+        installed_before_delete = _installed_pkg_names(repo_vm)
+        deleted = _pkg_retry(repo_vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", dependency, timeout=300.0)
+        assert deleted.returncode == 0, (
+            f"BEFORE: pkg delete -y {dependency} exited {deleted.returncode}\n"
+            f"stdout:\n{deleted.stdout}\nstderr:\n{deleted.stderr}"
+        )
+        dependency_before = pkg_installed_version_of(repo_vm, dependency)
+        assert dependency_before is None, f"BEFORE: dependency {dependency} still installed ({dependency_before!r})"
+        removed = installed_before_delete - _installed_pkg_names(repo_vm)
+        assert removed == {dependency}, f"BEFORE: deleting {dependency} removed {sorted(removed)}, expected only it"
+
+        # WHEN: the published installer, piped.
+        proc = run_channel_installer(repo_vm, channel, channel_catalogs.base_url, tmp_path)
+
+        # THEN: converged onto the channel, the missing dependency supplied by another repo.
+        assert proc.returncode == 0, (
+            f"install-{channel}.sh exited {proc.returncode} with {dependency} missing\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+        assert "==> Done" in proc.stdout, f"install-{channel}.sh did not report completion:\n{proc.stdout}"
+        names_after, version_after, repo_after = _pkg_state(repo_vm)
+        assert names_after == [CANONICAL_PKG_NAME], f"AFTER: expected only {CANONICAL_PKG_NAME}, found {names_after}"
+        assert version_after == channel_catalogs.versions[channel], (
+            f"AFTER: installed version {version_after!r}, expected {channel_catalogs.versions[channel]!r}"
+        )
+        assert repo_after == channel_repo_name(channel), (
+            f"AFTER: installed from {repo_after!r}, expected {channel_repo_name(channel)!r}"
+        )
+        dependency_repo = pkg_repo_origin_of(repo_vm, dependency)
+        assert dependency_repo is not None, f"AFTER: dependency {dependency} was not installed"
+        assert not dependency_repo.startswith("pfblockerng"), (
+            f"AFTER: dependency {dependency} came from the project repo {dependency_repo!r}; "
+            f"this case needs a dependency only another repository ({NETGATE_REPO_NAME}) supplies"
+        )
+    finally:
+        if dependency is not None:
+            reinstalled = _pkg_retry(
+                repo_vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", dependency, timeout=600.0
+            )
+            if reinstalled.returncode != 0 or pkg_installed_version_of(repo_vm, dependency) is None:
+                raise RuntimeError(
+                    f"restoring dependency {dependency} failed: rc={reinstalled.returncode}\n"
+                    f"stdout:\n{reinstalled.stdout}\nstderr:\n{reinstalled.stderr}"
+                )
+
+
 @pytest.mark.timeout(1800)
 def test_channel_installer_replaces_the_legacy_devel_identity(
     repo_vm: SmokeVM,
