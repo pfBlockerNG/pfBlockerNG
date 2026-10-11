@@ -6,11 +6,15 @@
 # `PYTHONHASHSEED=0 graphify update <root>` through the shared launcher resolver.
 # Check mode saves graphify-out/graph.json aside, rebuilds, compares bytes, and puts
 # the saved copy back whenever the tree would otherwise be left changed: a stale,
-# failed, or interrupted rebuild. --refresh keeps the rebuilt graph. One run per
-# worktree at a time (graphify-out/.check-graph-fresh.lock).
+# failed, or interrupted rebuild. --refresh keeps the rebuilt graph. Graphify writes
+# indented JSON (~1M lines); the rebuild is rewritten as one compact line before the
+# compare, so a PR that moves the graph counts one changed line and an indented
+# tracked graph reads as stale (issue #3477). One run per worktree at a time
+# (graphify-out/.check-graph-fresh.lock).
 #
 # Exit: 0 fresh or refreshed, 1 stale, rebuild failed, or worktree locked,
-# 2 usage/precondition, 4 Graphify launcher or cmp missing (agent_env.sh convention).
+# 2 usage/precondition, 4 Graphify launcher, cmp, or python3 missing (agent_env.sh
+# convention).
 
 set -u
 
@@ -27,6 +31,7 @@ main() {
 	scrub_git_env "$0"
 	require_tool git
 	require_tool cmp
+	require_tool python3
 
 	refresh=0
 	case "${1:-}" in
@@ -82,6 +87,17 @@ main() {
 		echo "check-graph-fresh.sh: rebuild failed (graphify update exited $rc); graphify-out/graph.json restored" >&2
 		exit 1
 	fi
+	python3 -c '
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except ValueError as exc:
+    sys.exit(f"check-graph-fresh.sh: rebuild failed (output is not JSON: {exc}); graphify-out/graph.json restored")
+with open(path, "w", encoding="utf-8") as f:
+    f.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
+' "$graph" || exit 1
 
 	if [ "$refresh" = 1 ]; then
 		restore=0
@@ -97,7 +113,7 @@ main() {
 		echo 'check-graph-fresh.sh: graph is fresh' >&2
 		exit 0
 	fi
-	echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'PYTHONHASHSEED=0 graphify update .' and commit graphify-out/graph.json" >&2
+	echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a compact rebuild of this tree; run 'sh scripts/agent/check-graph-fresh.sh --refresh' and commit graphify-out/graph.json" >&2
 	exit 1
 }
 

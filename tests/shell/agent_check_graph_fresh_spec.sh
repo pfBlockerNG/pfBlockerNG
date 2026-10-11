@@ -17,7 +17,7 @@ Describe 'check-graph-fresh.sh'
     graph="$worktree/graphify-out/graph.json"
     git_fixture init -q "$worktree" || return 1
     mkdir -p "$worktree/graphify-out"
-    printf 'committed graph\n' > "$graph"
+    printf '{"graph":"committed"}\n' > "$graph"
     git_fixture -C "$worktree" add graphify-out/graph.json
     git_fixture -C "$worktree" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
       commit -q -m graph || return 1
@@ -40,7 +40,7 @@ GRAPHIFY
     no_graphify="$fixture/no-graphify"
     no_cmp="$fixture/no-cmp"
     mkdir -p "$no_graphify" "$no_cmp"
-    for tool in sh dirname git mktemp cp cmp rm mkdir; do
+    for tool in sh dirname git mktemp cp cmp rm mkdir python3; do
       ln -s "$(command -v "$tool")" "$no_graphify/$tool"
       [ "$tool" = cmp ] || ln -s "$(command -v "$tool")" "$no_cmp/$tool"
     done
@@ -61,17 +61,17 @@ GRAPHIFY
   graph_status() { git_fixture -C "$worktree" status --porcelain -- graphify-out; }
 
   It 'reports a fresh graph under a seeded rebuild of the spaced root and leaves nothing behind'
-    export GRAPHIFY_STUB_GRAPH='committed graph'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"committed"}'
     When run sh "$script_abs" "$worktree"
     The status should equal 0
     The stderr should include 'graph is fresh'
     The contents of file "$graphify_log" should equal "update:$worktree:hashseed=0"
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
     The result of function leftovers should equal ''
   End
 
   It 'defaults to the current directory'
-    export GRAPHIFY_STUB_GRAPH='committed graph'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"committed"}'
     When run sh -c 'cd "$1" && sh "$2"' _ "$worktree" "$script_abs"
     The status should equal 0
     The stderr should include 'graph is fresh'
@@ -79,20 +79,20 @@ GRAPHIFY
   End
 
   It 'overrides a PYTHONHASHSEED inherited from the caller'
-    export GRAPHIFY_STUB_GRAPH='committed graph'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"committed"}'
     When run env PYTHONHASHSEED=7 sh "$script_abs" "$worktree"
     The status should equal 0
     The stderr should include 'graph is fresh'
     The contents of file "$graphify_log" should equal "update:$worktree:hashseed=0"
   End
 
-  It 'refuses a stale graph, names the rebuild command, and restores the committed bytes'
-    export GRAPHIFY_STUB_GRAPH='rebuilt graph'
+  It 'refuses a stale graph, names the refresh command, and restores the committed bytes'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"rebuilt"}'
     When run sh "$script_abs" "$worktree"
     The status should equal 1
     The stderr should include 'STALE'
-    The stderr should include "PYTHONHASHSEED=0 graphify update ."
-    The contents of file "$graph" should equal 'committed graph'
+    The stderr should include "sh scripts/agent/check-graph-fresh.sh --refresh"
+    The contents of file "$graph" should equal '{"graph":"committed"}'
     The result of function graph_status should equal ''
     The result of function leftovers should equal ''
   End
@@ -102,7 +102,7 @@ GRAPHIFY
     git_fixture -C "$worktree" add graphify-out/graph.json
     git_fixture -C "$worktree" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
       commit -q -m broken
-    export GRAPHIFY_STUB_GRAPH='rebuilt graph'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"rebuilt"}'
     When run sh "$script_abs" "$worktree"
     The status should equal 1
     The stderr should include 'STALE'
@@ -110,12 +110,39 @@ GRAPHIFY
     The result of function graph_status should equal ''
   End
 
+  # Graphify writes indented JSON; the tracked graph is one compact line so a PR
+  # that moves it counts one changed line, not ~150k (issue #3477).
+  It 'reports an indented tracked graph as stale even when Graphify rebuilds the same bytes'
+    indented='{
+  "graph": "committed"
+}'
+    printf '%s\n' "$indented" > "$graph"
+    git_fixture -C "$worktree" add graphify-out/graph.json
+    git_fixture -C "$worktree" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+      commit -q -m indented
+    export GRAPHIFY_STUB_GRAPH="$indented"
+    When run sh "$script_abs" "$worktree"
+    The status should equal 1
+    The stderr should include 'STALE'
+    The contents of file "$graph" should equal "$indented"
+    The result of function graph_status should equal ''
+  End
+
+  It 'fails a rebuild whose output is not JSON and restores the committed bytes'
+    export GRAPHIFY_STUB_GRAPH='partial graph'
+    When run sh "$script_abs" --refresh "$worktree"
+    The status should equal 1
+    The stderr should include 'not JSON'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
+    The result of function leftovers should equal ''
+  End
+
   It 'restores the committed bytes when the rebuild fails'
     export GRAPHIFY_STUB_GRAPH='partial graph' GRAPHIFY_RC=3
     When run sh "$script_abs" "$worktree"
     The status should equal 1
     The stderr should include 'rebuild failed'
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
     The result of function graph_status should equal ''
     The result of function leftovers should equal ''
   End
@@ -124,7 +151,7 @@ GRAPHIFY
     export GRAPHIFY_STUB_GRAPH='partial graph' GRAPHIFY_STUB_SIGNAL=TERM
     When run sh "$script_abs" "$worktree"
     The status should equal 1
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
     The result of function graph_status should equal ''
     The result of function leftovers should equal ''
   End
@@ -151,11 +178,11 @@ STUB
 
     It "exits before rebuilding when $1 lands while the lock is taken"
       signal_after mkdir "$1" "$lock"
-      export GRAPHIFY_STUB_GRAPH='rebuilt graph'
+      export GRAPHIFY_STUB_GRAPH='{"graph":"rebuilt"}'
       When run sh "$script_abs" "$worktree"
       The status should equal 1
       The file "$graphify_log" should not be exist
-      The contents of file "$graph" should equal 'committed graph'
+      The contents of file "$graph" should equal '{"graph":"committed"}'
       The result of function leftovers should equal ''
     End
 
@@ -164,7 +191,7 @@ STUB
       export GRAPHIFY_STUB_GRAPH='partial graph' GRAPHIFY_STUB_SIGNAL="$1"
       When run sh "$script_abs" "$worktree"
       The status should equal 1
-      The contents of file "$graph" should equal 'committed graph'
+      The contents of file "$graph" should equal '{"graph":"committed"}'
       The result of function graph_status should equal ''
       The result of function leftovers should equal ''
     End
@@ -172,31 +199,36 @@ STUB
 
   It 'exits 1 naming the lock, rebuilds nothing and touches nothing while another checker holds the worktree'
     mkdir "$lock"
-    export GRAPHIFY_STUB_GRAPH='rebuilt graph'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"rebuilt"}'
     When run sh "$script_abs" "$worktree"
     The status should equal 1
     The stderr should include "$lock"
     The file "$graphify_log" should not be exist
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
     The result of function leftovers should equal "$lock"
   End
 
-  It '--refresh keeps a changed rebuild in place and says so'
-    export GRAPHIFY_STUB_GRAPH='rebuilt graph'
+  It '--refresh keeps a changed rebuild in place as one line of compact JSON and says so'
+    export GRAPHIFY_STUB_GRAPH='{
+  "graph": "rebuilt",
+  "nodes": [
+    "é"
+  ]
+}'
     When run sh "$script_abs" --refresh "$worktree"
     The status should equal 0
     The stderr should include 'refreshed (changed)'
     The contents of file "$graphify_log" should equal "update:$worktree:hashseed=0"
-    The contents of file "$graph" should equal 'rebuilt graph'
+    The contents of file "$graph" should equal '{"graph":"rebuilt","nodes":["é"]}'
     The result of function leftovers should equal ''
   End
 
   It '--refresh reports an unchanged rebuild'
-    export GRAPHIFY_STUB_GRAPH='committed graph'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"committed"}'
     When run sh "$script_abs" --refresh "$worktree"
     The status should equal 0
     The stderr should include 'refreshed (unchanged)'
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
   End
 
   It '--refresh fails and restores the committed bytes when the rebuild fails'
@@ -204,7 +236,7 @@ STUB
     When run sh "$script_abs" --refresh "$worktree"
     The status should equal 1
     The stderr should include 'rebuild failed'
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
     The result of function leftovers should equal ''
   End
 
@@ -243,15 +275,26 @@ STUB
     The status should equal 4
     The stderr should include 'graphify'
     The file "$graphify_log" should not be exist
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
   End
 
   It 'exits 4 and names cmp when the byte compare tool is missing: never a false verdict'
-    export GRAPHIFY_STUB_GRAPH='committed graph'
+    export GRAPHIFY_STUB_GRAPH='{"graph":"committed"}'
     When run env PATH="$no_cmp" sh "$script_abs" "$worktree"
     The status should equal 4
     The stderr should include 'TOOL-MISSING: cmp'
     The file "$graphify_log" should not be exist
-    The contents of file "$graph" should equal 'committed graph'
+    The contents of file "$graph" should equal '{"graph":"committed"}'
+  End
+
+  It 'exits 4 and names python3 when the compactor is missing: never a false verdict'
+    rm "$no_cmp/python3"
+    ln -s "$(command -v cmp)" "$no_cmp/cmp"
+    export GRAPHIFY_STUB_GRAPH='{"graph":"committed"}'
+    When run env PATH="$no_cmp" sh "$script_abs" "$worktree"
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: python3'
+    The file "$graphify_log" should not be exist
+    The contents of file "$graph" should equal '{"graph":"committed"}'
   End
 End
