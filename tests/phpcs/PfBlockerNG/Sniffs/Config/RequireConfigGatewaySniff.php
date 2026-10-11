@@ -271,8 +271,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/autonot_out',
 		// issue #2123: installedpackages/pfblockerngglobal (flat section, no /config/0)
 		'installedpackages/pfblockerngglobal/alertrefresh',
-		// issue #2123: installedpackages/pfblockerngsync/config/0
-		'installedpackages/pfblockerngsync/config/0/syncinterfaces',
+		// issue #3452: installedpackages/pfblockerngsync/config/0 (replaces the issue #2123 syncinterfaces checkbox)
+		'installedpackages/pfblockerngsync/config/0/syncscope',
 		// issue #3450: IP-page scalars registered as plain strings
 		'installedpackages/pfblockerngipsettings/config/0/ip_placeholder',
 		'installedpackages/pfblockerngipsettings/config/0/maxmind_locale',

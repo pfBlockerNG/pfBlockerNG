@@ -172,12 +172,13 @@ Authorization = property of **write**, not call site (generalises
     both sides scalar (`''`, not the enum's backing `'off'`).
     Registered checkbox fields still on `NULL`/`NULL` adapters, such as
     `tld_wildcard`, keep raw storage until all their consumers adopt the pair.
-  - **The seventeen #2123 relocations.** `PFB_FILTER_ON_OFF` save sites whose default,
+  - **The sixteen remaining #2123 relocations** (a seventeenth, `sync/syncinterfaces`, was
+    replaced in #3452, below). `PFB_FILTER_ON_OFF` save sites whose default,
     stored vocabulary and render comparison were still declared in the page (the 3.2
     arrangement) now read through the registry: `ip/{enable_dup,enable_agg,enable_log,`
     `enable_rdns,database_cc,enable_float,killstates}`,
     `dnsbl/auto{addrnot,ports,addr,not}_{in,out}` (the DNSBL page's two Advanced
-    Firewall Rule panels), `sync/syncinterfaces`, and `global/alertrefresh`. Sixteen
+    Firewall Rule panels), and `global/alertrefresh`. Fifteen
     default `''`; `alertrefresh` defaults `'on'`, so absence reads On while an
     operator's stored `''` reads Off — the same shape as the nine below. Each save site
     keeps its `pfb_filter(…, PFB_FILTER_ON_OFF, …) ?: ''` (transport normalisation of a
@@ -187,6 +188,12 @@ Authorization = property of **write**, not call site (generalises
     settings-section `auto*` branch use `PfbConfig::read()`. Identically named
     per-feed-row and per-continent fields remain foreign; their direct reads pass
     through `pfb_dnsbl_toggle_enabled()` so they share the registered vocabulary.
+  - **`sync/syncscope` (issue #3452).** The Sync page's opt-out checkbox became a plain-string
+    select, `policy` | `all` | `lists`, default `policy`, `sync => 'local'`. Migration
+    `issue3452-sync-scope-migrate` maps a stored `syncinterfaces` (toggle read: a case variant
+    of `on` → `lists`, anything else or absent → `all`) and deletes it; a node with no saved
+    Sync section takes the default. Both send transports read the stored leaf, never the
+    default: an unstored or unknown value sends nothing.
   - **Ten adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
     `pfb_feed_internal_filter`, `pfb_syntax_highlight`, `pfb_cache`, `pfb_py_reply`,
     `pfb_hsts`, `pfb_idn_block_malicious`, ip-section `suppression`, and (since #2123)
@@ -573,7 +580,7 @@ registered path set). Each annotation committed in relevant source file.
 | `pfblockernglistsv4/v6/config/{row}/auto{addrnot,ports,addr,not}_{in,out}` | Dynamic per-row keys (issue #2123: same bare names as the registered `dnsbl/auto*` scalars; `pfblockerng_category_edit.php` writes them at `installedpackages/{$conf_type}/config/{$rowid}/…`, a path no exact-path registry entry can address). Runtime reads stay direct and normalize through `pfb_dnsbl_toggle_enabled()` (#2817). |
 | `pfblockernglistsv4/v6/config/{row}/whois_convert` + `filter_top1m` | Dynamic per-row `PFB_FILTER_ON_OFF` keys, same reason |
 | `pfblockerng{continent}/config/0/auto*` | Dynamic per-continent structure (issue #2123: `pfblockerng_geoip.inc` writes the same bare names per continent). Runtime reads stay direct and normalize through `pfb_dnsbl_toggle_enabled()` (#2817). |
-| `pfblockerngsync/config/0/{varsynconchanges,varsynctimeout}` | Foreign siblings of the registered `sync/syncinterfaces` |
+| `pfblockerngsync/config/0/{varsynconchanges,varsynctimeout}` | Foreign siblings of the registered `sync/syncscope` |
 | `pfblockerngglobal/*` except `alertrefresh` | Foreign siblings of the registered `global/alertrefresh` (display prefs, `pfbextdns`, and the dynamic `feed_*`/`widget-*` keys) |
 
 ## Sniff file-scope exclusion — `pfblockerng_extra.inc` / `pfblockerng_migrate.inc`

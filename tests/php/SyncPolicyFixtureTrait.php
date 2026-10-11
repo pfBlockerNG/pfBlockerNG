@@ -76,7 +76,7 @@ trait SyncPolicyFixtureTrait
 			'dnsbl/top1m_token',
 
 			'global/alertrefresh',
-			'sync/syncinterfaces',
+			'sync/syncscope',
 		]);
 	}
 

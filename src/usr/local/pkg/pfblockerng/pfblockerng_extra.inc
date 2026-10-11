@@ -2357,16 +2357,15 @@ function pfb_cfg_registry(): array
 		// XMLRPC sync section (pfblockerngsync/config/0)
 		// -------------------------------------------------------------------
 
-		// issue #2123: "Sync interfaces" -- when On, the XMLRPC replication set drops the
-		// interface-bearing sections (pfblockerng_sync_sections()). Off by default, which
-		// pfblockerng_sync.php:35 declared with its own `?: ''`. The section's dynamic
-		// destination row blob (row/*) and its credentials stay foreign and unregistered.
-		'sync/syncinterfaces' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
+		// issue #3452: XMLRPC send scope, 'policy' | 'all' | 'lists' (replaces the issue #2123
+		// "Sync interfaces" checkbox). Transports read the stored leaf, never this default.
+		// The section's dynamic destination row blob (row/*) and its credentials stay foreign.
+		'sync/syncscope' => [
+			'default'       => 'policy',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
 			'sync'          => 'local',
-			'no_grandfather' => '#2123 relocated pfblockerng_sync.php:35\'s own off default into the registry; absent behaviour unchanged',
+			'no_grandfather' => 'migration issue3452 runs before the registry pass; absent with no sync section = fresh/never-saved = policy',
 		],
 	];
 
@@ -3531,6 +3530,27 @@ function pfb_schedule_migrate(array $sections, ?callable $entropy = NULL): ?arra
 }
 
 /**
+ * Issue #3452: map the retired `syncinterfaces` checkbox to `syncscope` and drop it. A case
+ * variant of 'on' (the checked box) keeps the lists-only scope; every other stored value and
+ * an absent key kept all settings syncing. No saved section means sync was never enabled, so
+ * the registry default applies. An existing `syncscope` is never rewritten.
+ *
+ * @param  array<string,mixed> $cfg the stored Sync section
+ * @return array<string,mixed>|null the migrated section, NULL when there is nothing to do
+ */
+function pfb_sync_scope_migrate(array $cfg): ?array
+{
+	if ($cfg === [] || array_key_exists('syncscope', $cfg)) {
+		return NULL;
+	}
+
+	$cfg['syncscope'] = pfb_cfg_toggle_read($cfg['syncinterfaces'] ?? NULL) === PfbToggle::On ? 'lists' : 'all';
+	unset($cfg['syncinterfaces']);
+
+	return $cfg;
+}
+
+/**
  * pfb_migration_registry — the ordered list of upgrade migrations.
  *
  * Returns an array of migration descriptor maps, in the order they must run.
@@ -3609,6 +3629,14 @@ function pfb_migration_registry(): array
 			],
 			'apply'   => 'pfb_schedule_migrate',
 			'message' => 'pfBlockerNG: migrated quarter-hour feed schedule settings (issue #2308)',
+			'since'   => '4.0.0',
+		],
+		// 6. issue #3452: the Sync page's opt-out checkbox becomes the 'policy'|'all'|'lists' select.
+		[
+			'id'      => 'issue3452-sync-scope-migrate',
+			'section' => PFB_SECTIONS['sync'],
+			'apply'   => 'pfb_sync_scope_migrate',
+			'message' => 'pfBlockerNG: migrated the Sync tab-settings opt-out to the sync scope (issue #3452)',
 			'since'   => '4.0.0',
 		],
 	];

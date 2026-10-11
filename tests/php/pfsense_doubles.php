@@ -1505,13 +1505,16 @@ if (!function_exists('install_cron_job')) {
 // $GLOBALS['pfb_test_xmlrpc_connection'] instead of making a real network call,
 // so XmlrpcSyncIdnTargetTest can call the REAL pfblockerng_sync_on_changes() end
 // to end and assert exactly what reaches the connection -- no eval-extraction of
-// the caller needed. xmlrpc_method() returns a truthy stub response so the
+// the caller needed. Every connection and call is also appended, in order, to
+// $GLOBALS['pfb_test_xmlrpc_connections'] and ['pfb_test_xmlrpc_calls'] ([method, params,
+// timeout]; tests reset both) so a transport test can assert exactly what a real client
+// would be asked to send. xmlrpc_method() returns a truthy stub response so the
 // caller's isset($resp) success branch runs (pfb_logger " done." vs " Failed!").
 
 if (!class_exists('pfsense_xmlrpc_client')) {
 	class pfsense_xmlrpc_client {
 		public function setConnectionData($ip, $port, $username, $password, $protocol) {
-			$GLOBALS['pfb_test_xmlrpc_connection'] = [
+			$GLOBALS['pfb_test_xmlrpc_connection'] = $GLOBALS['pfb_test_xmlrpc_connections'][] = [
 				'ip'       => $ip,
 				'port'     => $port,
 				'username' => $username,
@@ -1521,7 +1524,90 @@ if (!class_exists('pfsense_xmlrpc_client')) {
 		}
 
 		public function xmlrpc_method($method, $params, $timeout = null) {
+			$GLOBALS['pfb_test_xmlrpc_calls'][] = [$method, $params, $timeout];
 			return ['status' => 'ok'];
 		}
 	}
+}
+
+// array_get_path()/array_set_path(): verbatim pfsense/pfsense util.inc bodies at 9363ac5b
+// (src/etc/inc/util.inc:4645-4664, :4726-4779), incl. the empty-string rule (issue #3452).
+if (!function_exists('array_get_path')) {
+function array_get_path(array &$arr, string $path, $default = null) {
+	$vpath = explode('/', $path);
+	$el = $arr;
+	foreach ($vpath as $key) {
+		if (mb_strlen($key) == 0) {
+			continue;
+		}
+		if (is_array($el) && array_key_exists($key, $el)) {
+			$el = $el[$key];
+		} else {
+			return ($default);
+		}
+	}
+
+	if (($default !== null) && ($el === '')) {
+		return ($default);
+	}
+
+	return ($el);
+}
+}
+
+if (!function_exists('array_set_path')) {
+function array_set_path(array &$arr, string $path, $value, $default = null) {
+	$vpath = explode('/', $path);
+	// check for trailing forward-slash
+	if (($path != '') && ($vpath[array_key_last($vpath)] === '')) {
+		$append = true;
+	} else {
+		$append = false;
+	}
+
+	// get the path's leaf node; ignore trailing and contiguous forward-slashes
+	do {
+		$vkey = array_pop($vpath);
+	} while (isset($vkey) && (mb_strlen($vkey) == 0));
+
+	// path is root, make sure $arr is always an array
+	if ($vkey == null) {
+		// avoid creating a single-element root (e.g. [0 => []])
+		if ($append) {
+			$arr[] = (is_array($value)) ? $value : [$value];
+		} else {
+			$arr = (is_array($value)) ? $value : [$value];
+		}
+		return ($value);
+	}
+
+	// traverse the array and get reference to the leaf node
+	$el =& $arr;
+	foreach ($vpath as $key) {
+		if (mb_strlen($key) == 0) {
+			continue;
+		}
+		if (array_key_exists($key, $el) && !empty($el[$key])) {
+			if (!is_array($el[$key])) {
+				return ($default);
+			}
+		} else {
+			$el[$key] = [];
+		}
+		$el =& $el[$key];
+	}
+
+	// set the leaf node value
+	if ($append) {
+		if (is_array($el[$vkey])) {
+			$el[$vkey][] = $value;
+		} else {
+			$el[$vkey] = [$value];
+		}
+	} else {
+		$el[$vkey] = $value;
+	}
+	
+	return ($value);
+}
 }

@@ -14,7 +14,7 @@ below depend on these; they are not guessed):
 
 * The handler runs only under ``isset($_POST['save'])`` and writes the sync
   config under ``installedpackages/pfblockerngsync/config/0``: the scalars
-  ``varsynconchanges`` / ``varsynctimeout`` / ``syncinterfaces`` and a per-target
+  ``varsynconchanges`` / ``varsynctimeout`` / ``syncscope`` and a per-target
   row map ``row/<index>/<field>`` (fields ``varsyncprotocol`` /
   ``varsyncipaddress`` / ``varsyncport`` / ``varsyncusername`` /
   ``varsyncpassword`` / ``varsyncdestinenable``).
@@ -59,9 +59,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
+from .test_sync_dnsblip_warning import GUARD_CONFIG, WARNING_MARKER
+from .test_toggle_registry_default_render import _select_selected_values
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from .webui import WebUI
 
 pytestmark = pytest.mark.ui_e2e
@@ -71,7 +75,8 @@ SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 CFG_SYNC = "installedpackages/pfblockerngsync/config/0"
 CFG_SYNC_MODE = f"{CFG_SYNC}/varsynconchanges"
 CFG_SYNC_TIMEOUT = f"{CFG_SYNC}/varsynctimeout"
-CFG_SYNC_IFACE = f"{CFG_SYNC}/syncinterfaces"
+CFG_SYNC_SCOPE = f"{CFG_SYNC}/syncscope"
+CFG_SYNC_LEGACY_IFACE = f"{CFG_SYNC}/syncinterfaces"
 
 
 def _row_path(index: int, field: str) -> str:
@@ -122,7 +127,8 @@ def _seed_sync(vm: helpers.SmokeVM, *, timeout: float = 60.0) -> None:
         f"$c = config_get_path({helpers._php_str(CFG_SYNC)}, array());\n"
         "$c['varsynconchanges'] = 'disabled';\n"
         "$c['varsynctimeout'] = '150';\n"
-        "$c['syncinterfaces'] = '';\n"
+        "$c['syncscope'] = 'policy';\n"
+        "unset($c['syncinterfaces']);\n"
         "unset($c['row']);\n"
         f"config_set_path({helpers._php_str(CFG_SYNC)}, $c);\n"
         "write_config('pfBlockerNG smoke: seed sync baseline');\n"
@@ -170,10 +176,10 @@ def test_sync_timeout_scalar_round_trip(webui: WebUI, smoke_vm: helpers.SmokeVM)
     try:
         assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "150", "seeded timeout baseline not 150"
 
-        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "300", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "300", "syncscope": "policy"})
         assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "300", "timeout 300 not persisted to config.xml"
 
-        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "150", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "150", "syncscope": "policy"})
         assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "150", "timeout did not return to 150"
     finally:
         _seed_sync(vm)
@@ -191,7 +197,7 @@ def test_sync_timeout_clamped_to_max(webui: WebUI, smoke_vm: helpers.SmokeVM) ->
     try:
         assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "150", "seeded timeout baseline not 150"
 
-        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "99999", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "99999", "syncscope": "policy"})
         assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "5000", "over-range timeout not clamped to 5000"
     finally:
         _seed_sync(vm)
@@ -209,7 +215,7 @@ def test_sync_mode_select_valid_and_normalised(webui: WebUI, smoke_vm: helpers.S
       reset to '' (NOT an input error): BEFORE 'manual', POST 'bogus' -> config
       holds '' (proving the reset path), not 'bogus' and not 'manual'.
 
-    ``syncinterfaces`` is sent empty and ``varsynctimeout`` at its baseline so the
+    ``syncscope`` is sent as ``policy`` and ``varsynctimeout`` at its baseline so the
     only delta is the select; no target rows are posted, so the empty-IP
     placeholder cannot trip the hostname validator.
     """
@@ -219,41 +225,172 @@ def test_sync_mode_select_valid_and_normalised(webui: WebUI, smoke_vm: helpers.S
         assert helpers.config_get(vm, CFG_SYNC_MODE) == "disabled", "seeded mode baseline not 'disabled'"
 
         # VALID: drive to 'manual'.
-        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncscope": "policy"})
         assert helpers.config_get(vm, CFG_SYNC_MODE) == "manual", "valid select value 'manual' not persisted"
 
         # Reverse VALID: back to 'disabled'.
-        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "150", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "150", "syncscope": "policy"})
         assert helpers.config_get(vm, CFG_SYNC_MODE) == "disabled", "select did not return to 'disabled'"
 
         # NORMALISE: an out-of-set value is reset to '' (re-seed to 'manual' first
         # so the change away from a NON-empty value is observable).
-        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncscope": "policy"})
         assert helpers.config_get(vm, CFG_SYNC_MODE) == "manual", "pre-normalise seed to 'manual' failed"
-        _post_sync(webui, {"varsynconchanges": "bogus", "varsynctimeout": "150", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "bogus", "varsynctimeout": "150", "syncscope": "policy"})
         assert helpers.config_get(vm, CFG_SYNC_MODE) == "", "invalid select value not normalised to ''"
     finally:
         _seed_sync(vm)
 
 
-def test_sync_disable_interfaces_checkbox_toggle(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """The 'Disable tab settings sync' checkbox stores 'on' and clears, both ways.
+def _sync_page_html(webui: WebUI) -> str:
+    """The rendered Sync page (a reload after whatever the test just saved)."""
+    page = webui.get(SYNC_PAGE)
+    assert not looks_like_login_page(page.text), "GET of the Sync page returned the login form (session lost)"
+    return page.text
 
-    ``syncinterfaces`` is a PFB_FILTER_ON_OFF checkbox: present+``on`` -> 'on',
-    absent (a browser omits an unchecked box) -> ''. BEFORE '', POST with the box
-    -> 'on'; POST without it -> '' again. Both branches of the toggle exercised.
+
+def test_sync_scope_select_round_trips_every_token(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """The Sync scope SELECT stores each of its three tokens and the page reloads on it.
+
+    True transition: BEFORE ``policy`` (the seeded baseline, also the selected option), POST
+    ``lists`` -> config.xml and the reloaded select hold ``lists``; then ``all``; then back to
+    ``policy``. Every token is a real storage change, never an already-held value.
     """
     vm = smoke_vm
     _seed_sync(vm)
     try:
-        assert helpers.config_get(vm, CFG_SYNC_IFACE) == "", "seeded syncinterfaces baseline not empty"
+        assert helpers.config_get(vm, CFG_SYNC_SCOPE) == "policy", "seeded scope baseline not 'policy'"
+        assert _select_selected_values(_sync_page_html(webui), "syncscope") == {"policy"}, "before: not 'policy'"
 
-        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "150", "syncinterfaces": "on"})
-        assert helpers.config_get(vm, CFG_SYNC_IFACE) == "on", "checkbox 'on' not persisted"
+        for token in ("lists", "all", "policy"):
+            _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "150", "syncscope": token})
+            assert helpers.config_get(vm, CFG_SYNC_SCOPE) == token, f"scope {token!r} not persisted to config.xml"
+            assert _select_selected_values(_sync_page_html(webui), "syncscope") == {token}, (
+                f"reloaded select does not keep {token!r}"
+            )
+    finally:
+        _seed_sync(vm)
 
-        # Omit the field entirely -- a browser sends nothing for an unchecked box.
-        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "150"})
-        assert helpers.config_get(vm, CFG_SYNC_IFACE) == "", "checkbox did not clear when omitted"
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        {"syncscope": ""},
+        {"syncscope": "POLICY"},
+        {"syncscope": "policy "},
+        {"syncscope": "all<script>"},
+        {"syncscope[]": "x"},
+        {},
+    ],
+    ids=["empty", "case", "trailing-space", "markup", "array", "absent"],
+)
+def test_sync_scope_invalid_value_rejected_config_unchanged(
+    webui: WebUI, smoke_vm: helpers.SmokeVM, hostile: dict[str, str]
+) -> None:
+    """A scope outside {policy, all, lists} is an INPUT ERROR and nothing is persisted.
+
+    Paired with a VALID control (``lists`` + timeout 200 persists) so the reject is a proven
+    branch: the hostile POST carries a would-be scalar change (timeout 1234) that must NOT land,
+    and the scope must stay ``lists`` -- not be normalised to the default and not be dropped.
+    """
+    vm = smoke_vm
+    _seed_sync(vm)
+    try:
+        _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "200", "syncscope": "lists"})
+        assert helpers.config_get(vm, CFG_SYNC_SCOPE) == "lists", "valid control scope not persisted"
+        assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "200", "valid control timeout not persisted"
+
+        body = _post_sync(webui, {"varsynconchanges": "disabled", "varsynctimeout": "1234", **hostile})
+        assert "The Sync scope is invalid." in body, "the rejected save did not report an input error"
+        assert helpers.config_get(vm, CFG_SYNC_SCOPE) == "lists", "hostile scope altered the stored scope"
+        assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "200", "hostile scope POST persisted a scalar change"
+    finally:
+        _seed_sync(vm)
+
+
+@pytest.fixture
+def dnsblip_warning_guards(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
+    """Seed every stored condition of the #3441 warning but the scope and mode, then restore them."""
+    saved = {path: helpers.config_get_state(smoke_vm, path) for path in GUARD_CONFIG}
+    for path, value in GUARD_CONFIG.items():
+        helpers.config_set(smoke_vm, path, value)
+
+    yield
+
+    for path, state in saved.items():
+        helpers.config_restore_state(smoke_vm, path, state)
+        restored = helpers.config_get_state(smoke_vm, path)
+        assert restored == state, f"restore failed for {path}: expected {state!r}, found {restored!r}"
+
+
+def test_sync_scope_transition_drives_the_dnsblip_warning(
+    webui: WebUI, smoke_vm: helpers.SmokeVM, dnsblip_warning_guards: None
+) -> None:
+    """Saving the scope through the page shows the #3441 warning for ``lists`` only.
+
+    Every other guard holds (DNSBL IP rules, HA rule sync, automatic sync), so the scope alone
+    moves the warning: ``policy`` -> hidden, ``lists`` -> shown, ``all`` -> hidden. Each saved
+    scope is the select's reloaded value.
+    """
+    vm = smoke_vm
+    _seed_sync(vm)
+    try:
+        for token, warned in (("policy", False), ("lists", True), ("all", False)):
+            _post_sync(webui, {"varsynconchanges": "auto", "varsynctimeout": "150", "syncscope": token})
+            assert helpers.config_get(vm, CFG_SYNC_SCOPE) == token, f"scope {token!r} not persisted"
+            html = _sync_page_html(webui)
+            assert _select_selected_values(html, "syncscope") == {token}, f"reloaded select does not keep {token!r}"
+            assert (WARNING_MARKER in html) is warned, (
+                f"scope {token!r}: expected the HA warning {'shown' if warned else 'hidden'}"
+            )
+    finally:
+        _seed_sync(vm)
+
+
+@pytest.mark.parametrize(
+    ("legacy", "scope"),
+    [("on", "lists"), ("", "all"), (None, "all")],
+    ids=["checked", "unchecked", "never-set"],
+)
+def test_sync_legacy_opt_out_migrates_to_the_scope_the_page_renders(
+    webui: WebUI, smoke_vm: helpers.SmokeVM, legacy: str | None, scope: str
+) -> None:
+    """An upgrade maps the old checkbox to a scope and the Sync page renders it.
+
+    Given a saved Sync section with the old ``syncinterfaces`` value and NO ``syncscope``.
+    When the installer's migrations run (``pfb_run_migrations()`` on the guest).
+    Then config.xml holds the mapped scope, the old key is gone, and the select shows it.
+    """
+    vm = smoke_vm
+    _seed_sync(vm)
+    legacy_line = "" if legacy is None else f"$c['syncinterfaces'] = {helpers._php_str(legacy)};\n"
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        f"$c = config_get_path({helpers._php_str(CFG_SYNC)}, array());\n"
+        "unset($c['syncscope'], $c['syncinterfaces']);\n"
+        f"{legacy_line}"
+        f"config_set_path({helpers._php_str(CFG_SYNC)}, $c);\n"
+        "write_config('pfBlockerNG smoke #3452: legacy sync opt-out image');\n"
+        "echo 'SEED-OK';"
+    )
+    try:
+        seeded = helpers.php_eval(vm, snippet)
+        assert seeded.returncode == 0 and "SEED-OK" in seeded.stdout, f"legacy seed failed: {seeded.stderr!r}"
+        assert helpers.config_get_state(vm, CFG_SYNC_SCOPE) == (False, ""), "before: syncscope must be absent"
+
+        migrated = helpers.php_eval(
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+            "pfb_global();\n"
+            "pfb_run_migrations();\n"
+            "echo 'MIGRATED';",
+        )
+        assert migrated.returncode == 0 and "MIGRATED" in migrated.stdout, f"migration failed: {migrated.stderr!r}"
+
+        assert helpers.config_get(vm, CFG_SYNC_SCOPE) == scope, f"legacy {legacy!r} must migrate to {scope!r}"
+        assert helpers.config_get_state(vm, CFG_SYNC_LEGACY_IFACE) == (False, ""), "the old key must be removed"
+        assert _select_selected_values(_sync_page_html(webui), "syncscope") == {scope}, "the page must show the scope"
     finally:
         _seed_sync(vm)
 
@@ -297,7 +434,7 @@ def test_sync_target_row_add_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -
     try:
         assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == "", "row/0 already present before add"
 
-        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncinterfaces": "", **row})
+        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncscope": "policy", **row})
 
         assert helpers.config_get(vm, _row_path(0, "varsyncprotocol")) == "https", "row protocol not persisted"
         assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == host, "row hostname not persisted"
@@ -317,7 +454,7 @@ def test_sync_target_row_add_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -
             {
                 "varsynconchanges": "manual",
                 "varsynctimeout": "150",
-                "syncinterfaces": "",
+                "syncscope": "policy",
                 **{k: v for k, v in row.items() if k != "varsyncdestinenable-0"},
             },
         )
@@ -329,7 +466,7 @@ def test_sync_target_row_add_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -
         )
 
         # Reverse: omit the row keys -> the undefined-row prune deletes row/0.
-        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncscope": "policy"})
         assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == "", "row/0 not pruned after omission"
     finally:
         _seed_sync(vm)
@@ -355,7 +492,7 @@ def test_sync_free_text_row_fields_sanitize_before_validation_and_persist(
             {
                 "varsynconchanges": "manual",
                 "varsynctimeout": "150",
-                "syncinterfaces": "",
+                "syncscope": "policy",
                 "varsyncprotocol-0": "https",
                 "varsyncipaddress-0": " example.com ",
                 "varsyncport-0": "443",
@@ -404,7 +541,7 @@ def test_sync_undefined_row_pruned_on_save(webui: WebUI, smoke_vm: helpers.Smoke
         )
 
         # POST with NO row keys -> prune row/0; a scalar delta proves the save ran.
-        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "250", "syncinterfaces": ""})
+        _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "250", "syncscope": "policy"})
 
         assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == "", "undefined row/0 not pruned"
         assert helpers.config_get(vm, CFG_SYNC_TIMEOUT) == "250", "scalar save did not run alongside the prune"
@@ -436,7 +573,7 @@ def test_sync_bad_port_rejected_config_unchanged(webui: WebUI, smoke_vm: helpers
     host = "valid-target.example-sync.com"
     base = {
         "varsynconchanges": "manual",
-        "syncinterfaces": "",
+        "syncscope": "policy",
         "varsyncprotocol-0": "https",
         "varsyncipaddress-0": host,
         "varsyncusername-0": "syncuser",
@@ -476,7 +613,7 @@ def test_sync_bad_username_rejected_config_unchanged(webui: WebUI, smoke_vm: hel
     host = "valid-target.example-sync.com"
     base = {
         "varsynconchanges": "manual",
-        "syncinterfaces": "",
+        "syncscope": "policy",
         "varsyncprotocol-0": "https",
         "varsyncipaddress-0": host,
         "varsyncport-0": "8443",

@@ -89,20 +89,20 @@ final class MigrationRegistryTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Registry returns exactly six entries in the correct declared order. issue
+	 * Registry returns exactly seven entries in the correct declared order. issue
 	 * #3288's DNSBL policy migration is PREPENDED first (fresh-install-inert, same
 	 * shape as every other DNSBL-section entry here -- ordering position is
 	 * maximally defensive, not load-bearing against these siblings). issue #1921
 	 * S2: the other four migrations folded into pfb_registry_pass(); issue #1907
 	 * adds the bespoke python-gated-toggles migration, positioned immediately
 	 * before ADR-02 -- it must run while dnsbl_mode still evidences pre-upgrade
-	 * Unbound mode, which ADR-02 overwrites.
+	 * Unbound mode, which ADR-02 overwrites. issue #3452's Sync scope migration is appended last.
 	 */
-	public function testRegistryHasSixEntriesInOrder(): void
+	public function testRegistryHasSevenEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(6, $registry);
+		$this->assertCount(7, $registry);
 
 		// issue #3288: the DNSBL Default/Override policy migration runs first.
 		$this->assertSame('issue3288-dnsbl-policy-migrate', $registry[0]['id']);
@@ -117,6 +117,8 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertSame('adr02-dnsbl-python-mode',    $registry[3]['id']);
 		$this->assertSame('pfbl03-control-legacy-seed', $registry[4]['id']);
 		$this->assertSame('issue2308-quarter-hour-schedule', $registry[5]['id']);
+		// issue #3452: the Sync scope migration reads only the Sync section.
+		$this->assertSame('issue3452-sync-scope-migrate', $registry[6]['id']);
 	}
 
 	/**

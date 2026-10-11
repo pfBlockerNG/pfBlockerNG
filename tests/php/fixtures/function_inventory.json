@@ -12782,6 +12782,19 @@
             }
         ]
     },
+    "pfb_sync_scope_migrate": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "cfg",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_sync_settings_sections": {
         "returnsRef": false,
         "returnType": "array",
@@ -15355,10 +15368,10 @@
         "returnType": "bool",
         "params": [
             {
-                "name": "syncinterfaces",
+                "name": "scope",
                 "byRef": false,
                 "variadic": false,
-                "type": "PfbToggle",
+                "type": "string",
                 "default": null
             },
             {

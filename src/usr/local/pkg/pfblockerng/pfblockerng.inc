@@ -21965,10 +21965,11 @@ function pfb_sync_policy_merge(array $incoming, array $current): array {
 
 // issue #3441: TRUE when pfSense HA copies this node's pfB_DNSBLIP_* rules to a peer whose
 // DNSBL settings are excluded from pfBlockerNG sync, so the peer can serve an empty alias.
-function pfblockerng_sync_dnsblip_mismatch(PfbToggle $syncinterfaces, mixed $synconchanges, PfbToggle $enable,
+// issue #3452: only the 'lists' scope excludes them; 'all' and 'policy' carry DNSBL policy.
+function pfblockerng_sync_dnsblip_mismatch(string $scope, mixed $synconchanges, PfbToggle $enable,
 	PfbToggle $dnsbl, mixed $dnsbl_ip_action, mixed $hasync_rules): bool {
 	$dnsbl_ip_action = pfb_dnsblip_action_value($dnsbl_ip_action);
-	return $syncinterfaces === PfbToggle::On
+	return $scope === 'lists'
 	    && in_array($synconchanges, ['auto', 'manual'], TRUE)
 	    && $enable === PfbToggle::On
 	    && $dnsbl === PfbToggle::On
@@ -21982,25 +21983,59 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 	global $g;
 	$success = TRUE;
 
+	// issue #3452: only the stored leaf selects a scope; the registry default never sends.
+	$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
+	if ($scope !== 'policy' && $scope !== 'all' && $scope !== 'lists') {
+		return FALSE;
+	}
+
 	// Take care of IPv6 literal address
 	if (is_ipaddrv6($sync_to_ip)) {
 		$sync_to_ip = "[{$sync_to_ip}]";
 	}
 
-	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync.
-	// issue #2123: read through the gateway, so the registered default and the
-	// case-insensitive toggle vocabulary apply here as on the Sync page.
-	$sections = pfblockerng_sync_sections(PfbConfig::read('sync/syncinterfaces') !== PfbToggle::On);
+	if ($scope === 'policy') {
+		$method = 'restore_config_section';
 
-	/* xml will hold the sections to sync */
-	$xml = array();
-
-	foreach ($sections as $section) {
-		$section_config = config_get_path("installedpackages/{$section}");
-		if (!isset($section_config)) {
-			continue;
+		$stored = array();
+		foreach (pfblockerng_sync_sections(TRUE) as $section) {
+			$stored[$section] = config_get_path("installedpackages/{$section}");
 		}
-		$xml[$section] = $section_config;
+
+		// Normalize each leaf as write_config persists it, then build the payload with core's
+		// own expression so both transports put the same array on the wire (#3452).
+		$gate       = PFB_SECTIONS['sync'] . '/syncscope';
+		$normalized = array();
+		$paths      = array($gate);
+		array_set_path($normalized, $gate, 'policy');
+		foreach (pfb_sync_policy_projection($stored) as $path => $leaf) {
+			if ($leaf === FALSE) {
+				continue;
+			}
+			array_set_path($normalized, $path, is_array($leaf) ? $leaf : ($leaf === TRUE ? '' : (string) $leaf));
+			$paths[] = $path;
+		}
+
+		$xml = array();
+		foreach ($paths as $path) {
+			array_set_path($xml, $path, array_get_path($normalized, $path, array()));
+		}
+	} else {
+		$method = 'merge_installedpackages_section';
+
+		// 'lists' removes the General/IP/DNSBL tab sections from the sync (#2123).
+		$sections = pfblockerng_sync_sections($scope === 'all');
+
+		/* xml will hold the sections to sync */
+		$xml = array();
+
+		foreach ($sections as $section) {
+			$section_config = config_get_path("installedpackages/{$section}");
+			if (!isset($section_config)) {
+				continue;
+			}
+			$xml[$section] = $section_config;
+		}
 	}
 
 	require_once('xmlrpc_client.inc');
@@ -22015,7 +22050,7 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 	$synctimeout = intval($synctimeout);
 	$rpc_client = new pfsense_xmlrpc_client();
 	$rpc_client->setConnectionData($sync_to_ip, $port, $username, $password, $protocol);
-	$resp = $rpc_client->xmlrpc_method('merge_installedpackages_section', $xml, $synctimeout);
+	$resp = $rpc_client->xmlrpc_method($method, $xml, $synctimeout);
 
 	if (!isset($resp)) {
 		return FALSE;
@@ -22029,11 +22064,24 @@ function pfblockerng_plugin_xmlrpc_send() {
 		return [];
 	}
 
+	// issue #3452: only the stored leaf selects a scope; the registry default never sends.
+	$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
+	if ($scope === 'policy') {
+		$stored = [];
+		foreach (pfblockerng_sync_sections(TRUE) as $section) {
+			$stored[$section] = config_get_path("installedpackages/{$section}");
+		}
+		return [PFB_SECTIONS['sync'] . '/syncscope', ...array_keys(pfb_sync_policy_projection($stored))];
+	}
+	if ($scope !== 'all' && $scope !== 'lists') {
+		return [];
+	}
+
 	$section_paths_temp = [
 		'installedpackages/pfblockerngsync/config/0/varsynconchanges'
 	];
-	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync (#2123).
-	$sections = pfblockerng_sync_sections(PfbConfig::read('sync/syncinterfaces') !== PfbToggle::On);
+	// 'lists' removes the General/IP/DNSBL tab sections from the sync (#2123).
+	$sections = pfblockerng_sync_sections($scope === 'all');
 	foreach ($sections as $section) {
 		$section_paths_temp[] = "installedpackages/{$section}";
 	}

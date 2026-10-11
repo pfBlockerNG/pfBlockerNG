@@ -144,10 +144,11 @@ final class RegistryPassTest extends TestCase
 		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['aliaslog'] ?? NULL);
 		$this->assertSame('', $result[self::IP_SECTION]['v6suppression'] ?? NULL);
 		$this->assertSame('', $result[self::REP_SECTION]['enable_rep'] ?? NULL);
-		// issue #2123: alertrefresh is the only default-ON key among the seventeen, so a
-		// fresh install must seed 'on' there and '' for syncinterfaces.
+		// issue #2123: alertrefresh is the only default-ON key among the sixteen, so a
+		// fresh install must seed 'on' there; issue #3452: a fresh Sync section seeds 'policy'.
 		$this->assertSame('on', $result[self::GLOBAL_SECTION]['alertrefresh'] ?? NULL);
-		$this->assertSame('', $result[self::SYNC_SECTION]['syncinterfaces'] ?? NULL);
+		$this->assertSame('policy', $result[self::SYNC_SECTION]['syncscope'] ?? NULL);
+		$this->assertArrayNotHasKey('syncinterfaces', $result[self::SYNC_SECTION]);
 		$this->assertSame('', $result[self::IP_SECTION]['enable_dup'] ?? NULL);
 		$this->assertSame('', $result[self::DNSBL_SECTION]['autoaddrnot_in'] ?? NULL);
 

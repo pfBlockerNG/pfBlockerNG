@@ -1,7 +1,8 @@
 """Tier-A ``ui_render`` coverage for issue #2123: the registry, not the page, decides
 what a toggle checkbox renders as when its key is absent from ``config.xml``.
 
-#2123 deleted seventeen page-level default declarations and replaced them with
+#2123 deleted seventeen page-level default declarations (the Sync page's checkbox among them,
+replaced by the ``syncscope`` select in #3452) and replaced them with
 ``PfbConfig::read('<alias>/<key>')``. The observable consequence is the rendered
 ``checked`` state of a checkbox on a configuration that has never stored the key, so
 that is what these tests assert, against the real pages over the authenticated
@@ -9,8 +10,8 @@ webConfigurator session.
 
 Two directions matter, and they are opposites:
 
-* the sixteen off-by-default keys (here: the IP page's ``enable_dup`` and the Sync
-  page's ``syncinterfaces``) must render UNCHECKED when absent;
+* the fifteen off-by-default keys (here: the IP page's ``enable_dup``) must render UNCHECKED
+  when absent;
 * ``alertrefresh`` must render CHECKED when absent — its page-level default was ``on``
   (``pfblockerng_alerts.php:41``'s ``isset(...) ? ... : 'on'``), and a registered
   default of ``''`` would silently switch the Alerts page's auto-refresh off for every
@@ -56,7 +57,7 @@ SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 CFG_ENABLE_DUP = "installedpackages/pfblockerngipsettings/config/0/enable_dup"
 CFG_FW_SELF = "installedpackages/pfblockerngipsettings/config/0/fw_self_outbound"
 CFG_ALERTREFRESH = "installedpackages/pfblockerngglobal/alertrefresh"
-CFG_SYNCINTERFACES = "installedpackages/pfblockerngsync/config/0/syncinterfaces"
+CFG_SYNCSCOPE = "installedpackages/pfblockerngsync/config/0/syncscope"
 
 
 def _checkbox_is_checked(html: str, name: str) -> bool:
@@ -252,25 +253,47 @@ def test_absent_alertrefresh_renders_checked_and_a_stored_uncheck_stays_off(
     )
 
 
-def test_absent_syncinterfaces_renders_unchecked_from_the_registered_default(
+@pytest.mark.parametrize("scope", ["policy", "all", "lists"])
+def test_sync_page_renders_each_stored_scope_as_the_selected_option(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None], scope: str
+) -> None:
+    """Scenario: the Sync page's scope select (issue #3452).
+
+    Given the stored ``syncscope`` is a different token.
+    When the Sync page renders, Then that token is the selected option.
+    And given the stored scope is ``scope``, Then exactly that option is selected and all three
+      options are offered.
+    """
+    other = "all" if scope == "policy" else "policy"
+    node_state(CFG_SYNCSCOPE, other)
+    html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
+    assert _select_selected_values(html, "syncscope") == {other}, f"before: stored {other!r} must be selected"
+
+    node_state(CFG_SYNCSCOPE, scope)
+    html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
+    assert _select_selected_values(html, "syncscope") == {scope}, f"stored {scope!r} must be the selected option"
+    select = re.search(r'<select[^>]*\bname="syncscope"[^>]*>(.*?)</select>', html, re.DOTALL)
+    assert select is not None, 'select name="syncscope" not found in the rendered page'
+    assert re.findall(r'<option[^>]*\bvalue="([^"]*)"', select.group(1)) == ["policy", "all", "lists"]
+
+
+def test_absent_syncscope_renders_the_registered_default_policy(
     smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
 ) -> None:
-    """Scenario: the Sync page's settings-sync opt-out checkbox.
+    """Scenario: a Sync section that never stored a scope (a fresh install).
 
-    Given ``syncinterfaces`` is absent from config.xml.
+    Given ``syncscope`` is absent from config.xml.
     When the Sync page renders.
-    Then the checkbox is unchecked, so General/IP/DNSBL settings keep syncing —
-      the behaviour ``pfblockerng_sync.php:35``'s deleted ``?: ''`` produced.
+    Then ``policy`` is selected -- the registry default, not an option the page restates.
     """
-    node_state(CFG_SYNCINTERFACES, "on")
+    node_state(CFG_SYNCSCOPE, "lists")
     html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
-    assert _checkbox_is_checked(html, "syncinterfaces"), "before: a stored 'on' syncinterfaces must render checked"
+    assert _select_selected_values(html, "syncscope") == {"lists"}, "before: a stored 'lists' must be selected"
 
-    node_state(CFG_SYNCINTERFACES, None)
+    node_state(CFG_SYNCSCOPE, None)
     html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
-    assert not _checkbox_is_checked(html, "syncinterfaces"), (
-        "an absent syncinterfaces must render UNCHECKED -- the registered '' default "
-        "must reproduce the page default #2123 deleted"
+    assert _select_selected_values(html, "syncscope") == {"policy"}, (
+        "an absent syncscope must render the registered 'policy' default"
     )
 
 

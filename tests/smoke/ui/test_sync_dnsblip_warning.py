@@ -23,9 +23,9 @@ DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 WARNING_MARKER = "DNSBL IP rules may be skipped on the High Availability peer"
 WARNING_HINT = "re-select the DNSBL Virtual IP on the peer"
 
-CONFIG = {
-    "installedpackages/pfblockerngsync/config/0/syncinterfaces": "on",
-    "installedpackages/pfblockerngsync/config/0/varsynconchanges": "auto",
+# Every stored condition of the warning except the Sync scope and mode, so a Tier-B flow can
+# drive those two through the Sync page's own save.
+GUARD_CONFIG = {
     "installedpackages/pfblockerng/config/0/enable_cb": "on",
     "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl": "on",
     "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto": "",
@@ -33,6 +33,11 @@ CONFIG = {
     "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4": "_vip_test_missing",
     "installedpackages/pfblockerngdnsblsettings/config/0/action": "Deny_Both",
     "hasync/synchronizerules": "on",
+}
+CONFIG = {
+    "installedpackages/pfblockerngsync/config/0/syncscope": "lists",
+    "installedpackages/pfblockerngsync/config/0/varsynconchanges": "auto",
+    **GUARD_CONFIG,
 }
 
 

@@ -65,7 +65,7 @@ final class SyncPageAbsentSectionRenderTest extends TestCase
 				throw new RuntimeException("test bootstrap: extract missing {$needle}");
 			}
 		}
-		if (str_contains($snippet, 'syncinterfaces') || str_contains($snippet, '$_POST')) {
+		if (str_contains($snippet, 'syncscope') || str_contains($snippet, '$_POST')) {
 			throw new RuntimeException('test bootstrap: extract left the GET render reads');
 		}
 

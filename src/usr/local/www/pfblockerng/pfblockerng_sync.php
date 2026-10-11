@@ -32,13 +32,12 @@ $pfb['sconfig'] = PfbConfig::readSection('installedpackages/pfblockerngsync/conf
 $pconfig = array();
 $pconfig['varsynconchanges']	= ($pfb['sconfig']['varsynconchanges'] ?? '') ?: '';
 $pconfig['varsynctimeout']	= ($pfb['sconfig']['varsynctimeout'] ?? 150) ?: 150;
-// issue #2123: default owned by the registry (ADR-29). This page never replaces
-// $pconfig with raw $_POST -- a save either redirects or re-renders from the section
-// read above -- so the value stays a PfbToggle all the way to the render.
-$pconfig['syncinterfaces']	= PfbConfig::read('sync/syncinterfaces');
+// issue #3452: the registry owns the default; the page stores one of the three scope tokens.
+$pconfig['syncscope']	= PfbConfig::read('sync/syncscope');
 
 // Select field options
 $options_varsynconchanges	= [ 'disabled' => 'Do not sync this package configuration', 'auto' => 'Sync to configured system backup server', 'manual' => 'Sync to host(s) defined below' ];
+$options_syncscope		= [ 'policy' => 'Policy and lists (local settings stay local)', 'all' => 'All settings (legacy)', 'lists' => 'Lists and global settings only (legacy)' ];
 
 // $input_errors is read unconditionally in the render section below, so it must be
 // defined on every request path. Initialise it once.
@@ -64,6 +63,11 @@ if ($_POST) {
 			}
 		}
 
+		// The scope is a closed vocabulary: anything else is an input error, never normalized.
+		if (!is_string($_POST['syncscope'] ?? NULL) || !array_key_exists($_POST['syncscope'], $options_syncscope)) {
+			$input_errors[] = gettext('The Sync scope is invalid.');
+		}
+
 		$rowhelper_exist = array();
 		foreach ($_POST as $key => $value) {
 
@@ -78,13 +82,6 @@ if ($_POST) {
 				$rowhelper_exist[$k_field[1]] = '';
 
 				switch ($k_field[0]) {
-					case 'syncinterfaces':
-						if ($value == 'on' || $value == '') {
-							//
-						} else {
-							$input_errors[] = gettext('Invalid XMLRPC Replication target enabled');
-						}
-						break;
 					case 'varsyncusername':
 						// Validate Username field
 						if (preg_match("/[^a-zA-Z0-9\._-]/", $value)) {
@@ -159,7 +156,8 @@ if ($_POST) {
 
 			$pfb['sconfig']['varsynconchanges']	= $_POST['varsynconchanges']						?: '';
 			$pfb['sconfig']['varsynctimeout']	= $_POST['varsynctimeout']						?: '';
-			$pfb['sconfig']['syncinterfaces']	= pfb_filter($_POST['syncinterfaces'] ?? '', PFB_FILTER_ON_OFF, 'Sync')	?: '';
+			$pfb['sconfig']['syncscope']		= $_POST['syncscope'];
+			unset($pfb['sconfig']['syncinterfaces']);
 
 			PfbConfig::writeSection('installedpackages/pfblockerngsync/config/0', $pfb['sconfig']);
 			write_config('[pfBlockerNG] save XMLRPC sync settings');
@@ -195,9 +193,9 @@ display_top_tabs($tab_array, TRUE);
 pfb_print_pending_changes_box();
 
 // foreign key: hasync/synchronizerules is a pfSense core key, not in registry
-if (pfblockerng_sync_dnsblip_mismatch($pconfig['syncinterfaces'], $pconfig['varsynconchanges'], PfbConfig::read('gen/enable_cb'),
+if (pfblockerng_sync_dnsblip_mismatch($pconfig['syncscope'], $pconfig['varsynconchanges'], PfbConfig::read('gen/enable_cb'),
 	PfbConfig::read('dnsbl/pfb_dnsbl'), PfbConfig::read('dnsbl/action'), config_get_path('hasync/synchronizerules'))) {
-	print_info_box(gettext('<strong>DNSBL IP rules may be skipped on the High Availability peer.</strong> System &gt; High Availability Sync copies this firewall\'s rules, including the pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 auto rules, to the peer, but "Disable General/IP/DNSBL tab settings sync" keeps this firewall\'s DNSBL settings off the peer. Unless DNSBL and DNSBL IP are enabled there, the peer\'s pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 aliases stay empty and pfSense skips those rules as "Unresolvable alias". Enable DNSBL with the same DNSBL IP settings on both nodes, or untick "Disable General/IP/DNSBL tab settings sync". If the peer\'s pfBlockerNG log still shows "DNSBL disabled", re-select the DNSBL Virtual IP on the peer: a VIP that was deleted and re-created keeps a stale reference until it is selected again.'), 'warning');
+	print_info_box(gettext('<strong>DNSBL IP rules may be skipped on the High Availability peer.</strong> System &gt; High Availability Sync copies this firewall\'s rules, including the pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 auto rules, to the peer, but the "Lists and global settings only (legacy)" sync scope keeps this firewall\'s DNSBL settings off the peer. Unless DNSBL and DNSBL IP are enabled there, the peer\'s pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 aliases stay empty and pfSense skips those rules as "Unresolvable alias". Enable DNSBL with the same DNSBL IP settings on both nodes, or choose the "Policy and lists" or "All settings (legacy)" sync scope. If the peer\'s pfBlockerNG log still shows "DNSBL disabled", re-select the DNSBL Virtual IP on the peer: a VIP that was deleted and re-created keeps a stale reference until it is selected again.'), 'warning');
 }
 
 $form = new Form('Save XMLRPC sync settings');
@@ -232,13 +230,13 @@ $section->addInput(new Form_Input(
 	[ 'min' => 0, 'max' => 5000, 'step' => 50, 'placeholder' => 'Enter timeout in seconds' ]
 ));
 
-$section->addInput(new Form_Checkbox(
-	'syncinterfaces',
-	'Disable General/IP/DNSBL tab settings sync',
-	NULL,
-	$pconfig['syncinterfaces'] === PfbToggle::On,
-	'on'
-))->setHelp('When selected, the \'General\', \'IP\', and \'DNSBL\' tab customizations will not be sync\'d'
+$section->addInput(new Form_Select(
+	'syncscope',
+	'Sync Scope',
+	$pconfig['syncscope'],
+	$options_syncscope
+))->setHelp('<b>Policy and lists</b> sends what this firewall blocks, permits, logs or transforms; its interfaces, VIPs, ports, gateways, credentials and other local settings stay local. '
+		. '<b>All settings (legacy)</b> sends every pfBlockerNG tab whole. <b>Lists and global settings only (legacy)</b> leaves out the \'General\', \'IP\', and \'DNSBL\' tabs.'
 		. '<br /><br /><b>Note:</b> When System &gt; High Availability Sync also synchronizes Firewall rules, enable DNSBL with the same DNSBL IP settings on both nodes. Otherwise the peer skips the pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 auto rules as "Unresolvable alias".');
 $form->add($section);
 

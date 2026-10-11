@@ -200,7 +200,7 @@ def test_registry_parse_finds_every_alias_and_registered_key() -> None:
 
     assert ("ip", "enable_dup") in keys
     assert ("global", "alertrefresh") in keys
-    assert ("sync", "syncinterfaces") in keys
+    assert ("sync", "syncscope") in keys
     assert ("dnsbl", "autoaddrnot_in") in keys
     assert ("ip", "v4suppression") in keys
 

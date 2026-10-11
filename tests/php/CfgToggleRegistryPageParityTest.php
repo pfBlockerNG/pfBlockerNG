@@ -6,7 +6,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #2123 — the 17 PFB_FILTER_ON_OFF toggles whose default used to be declared in
+ * issue #2123 — the 16 PFB_FILTER_ON_OFF toggles (17 originally; issue #3452 replaced the Sync
+ * checkbox `sync/syncinterfaces` with the select `sync/syncscope`) whose default used to be declared in
  * the page rather than in pfb_cfg_registry().
  *
  * The claim these tests have to make checkable is a PARITY claim, not a preference:
@@ -47,7 +48,7 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 	private const SHAPE_ISSET_ON = 'isset_on';
 
 	/**
-	 * The 17 fields: registry path key => [config.xml section path, pre-#2123 page
+	 * The 16 fields: registry path key => [config.xml section path, pre-#2123 page
 	 * expression site, expression shape].
 	 *
 	 * @var array<string,array{0:string,1:string,2:string}>
@@ -73,9 +74,6 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 		'dnsbl/autoports_out'   => ['installedpackages/pfblockerngdnsblsettings/config/0', 'pfblockerng_dnsbl.php:121', self::SHAPE_FALSY_EMPTY],
 		'dnsbl/autoaddr_out'    => ['installedpackages/pfblockerngdnsblsettings/config/0', 'pfblockerng_dnsbl.php:123', self::SHAPE_FALSY_EMPTY],
 		'dnsbl/autonot_out'     => ['installedpackages/pfblockerngdnsblsettings/config/0', 'pfblockerng_dnsbl.php:124', self::SHAPE_FALSY_EMPTY],
-
-		// pfblockerng_sync.php — XMLRPC-sync section scalar.
-		'sync/syncinterfaces' => ['installedpackages/pfblockerngsync/config/0', 'pfblockerng_sync.php:35', self::SHAPE_FALSY_EMPTY],
 
 		// pfblockerng_alerts.php — the default-On survivor of the 3.2 arrangement.
 		'global/alertrefresh' => ['installedpackages/pfblockerngglobal', 'pfblockerng_alerts.php:41', self::SHAPE_ISSET_ON],
@@ -133,7 +131,7 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 	/**
 	 * Scenario:
 	 *   Background: a configuration written before #2123 registered these keys.
-	 *   Given one of the 17 keys holds raw stored value v (or is absent).
+	 *   Given one of the 16 keys holds raw stored value v (or is absent).
 	 *   When PfbConfig::read('<alias>/<key>') resolves it.
 	 *   Then the result equals what the page's own pre-registration expression
 	 *        produced for the same v — the registry took over the declaration
@@ -199,58 +197,11 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 	}
 
 	/**
-	 * The one runtime consumer that compared the stored token by hand
-	 * (pfblockerng.inc's XMLRPC sync section chooser, twice) keeps its verdict.
-	 *
-	 * Scenario:
-	 *   Given the pre-#2123 test was config_get_path(...) != 'on'.
-	 *   When the same raw state is read through the gateway as
-	 *     PfbConfig::read('sync/syncinterfaces') !== PfbToggle::On.
-	 *   Then the boolean matches for every token pfSense or the package writes,
-	 *     and differs ONLY for a case variant of 'on' — which #1887 deliberately
-	 *     accepts so a hand-edited or HA-synced 'On' cannot silently disable a
-	 *     feature the operator enabled.
-	 */
-	public function testSyncInterfacesGatewayReadMatchesTheHandWrittenTokenTest(): void
-	{
-		$path = 'installedpackages/pfblockerngsync/config/0/syncinterfaces';
-
-		// [raw, pre-#2123 (raw != 'on'), gateway (read !== On)]
-		$rows = [
-			['absent',     NULL,  TRUE,  TRUE],
-			['empty',      '',    TRUE,  TRUE],
-			['canonical',  'on',  FALSE, FALSE],
-			['legacy_off', 'off', TRUE,  TRUE],
-			['junk',       'yes', TRUE,  TRUE],
-		];
-
-		foreach ($rows as [$label, $raw, $legacy, $gateway]) {
-			$GLOBALS['config'] = [];
-			if ($raw !== NULL) {
-				config_set_path($path, $raw);
-			}
-			$this->assertSame($legacy, config_get_path($path) != 'on',
-				"{$label}: pre-#2123 token comparison");
-			$this->assertSame($gateway, PfbConfig::read('sync/syncinterfaces') !== PfbToggle::On,
-				"{$label}: gateway read must agree with the pre-#2123 comparison");
-		}
-
-		// The single deliberate divergence, recorded rather than hidden.
-		$GLOBALS['config'] = [];
-		config_set_path($path, 'On');
-		$this->assertTrue(config_get_path($path) != 'on',
-			"pre-#2123: a hand-edited 'On' read as NOT enabled");
-		$this->assertSame(PfbToggle::On, PfbConfig::read('sync/syncinterfaces'),
-			"'On' now reads On — issue #1887's case-insensitive toggle read reaches "
-			. 'this consumer once the key is registered, deliberately');
-	}
-
-	/**
-	 * Every one of the 17 is registered, adapter-bearing, and classified. Guards the
+	 * Every one of the 16 is registered, adapter-bearing, and classified. Guards the
 	 * shape of the entry, not just its presence: a plain-scalar entry would leave a
 	 * stored '' resolving to the default, which is the #2120 inversion again.
 	 */
-	public function testAllSeventeenAreRegisteredAsClassifiedToggles(): void
+	public function testAllSixteenAreRegisteredAsClassifiedToggles(): void
 	{
 		$registry = pfb_cfg_registry();
 
@@ -299,12 +250,11 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 			'dnsbl/autoports_out'   => '',
 			'dnsbl/autoaddr_out'    => '',
 			'dnsbl/autonot_out'     => '',
-			'sync/syncinterfaces'   => '',
 			'global/alertrefresh'   => 'on',
 		];
 
 		$this->assertSame(array_keys(self::FIELDS), array_keys($expected),
-			'the default table must cover exactly the 17 fields under test');
+			'the default table must cover exactly the 16 fields under test');
 
 		$registry = pfb_cfg_registry();
 		foreach ($expected as $path_key => $default) {

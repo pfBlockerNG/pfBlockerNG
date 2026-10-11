@@ -1357,7 +1357,7 @@ final class CfgGatewayTest extends TestCase
 	 *     All three are NOT on this out-of-scope list; only their still-foreign
 	 *     ipsettings siblings are.
 	 *   - pfblockerngreputation sub-keys: et_header
-	 *   - pfblockerngsync sub-keys: syncinterfaces, varsynconchanges, row/*
+	 *   - pfblockerngsync sub-keys: varsynconchanges, row/*
 	 *   - pfblockerngblacklist sub-keys: blacklist_enable, blacklist_freq,
 	 *     blacklist_lang, blacklist_logging, blacklist_selected, item
 	 *   - pfblockerngdnsblsettings foreign key: dnsbl_webpage (written directly by
@@ -1413,8 +1413,8 @@ final class CfgGatewayTest extends TestCase
 			// pfblockerngreputation sub-keys.
 			'et_header',
 
-			// pfblockerngsync sub-keys. (issue #2123 registered 'syncinterfaces' as
-			// 'sync/syncinterfaces'; its siblings here stay foreign.)
+			// pfblockerngsync sub-keys. (issue #3452 registered 'syncscope' as 'sync/syncscope';
+			// its siblings here stay foreign.)
 			'varsynconchanges',
 			'varsynctimeout',
 			'varsyncdestinenable',
@@ -1617,7 +1617,7 @@ final class CfgGatewayTest extends TestCase
 			'enable_log',
 			'killstates',
 			'et_header',
-			'syncinterfaces',
+			'syncscope',
 			'varsynconchanges',
 			'varsynctimeout',
 			'varsyncdestinenable',

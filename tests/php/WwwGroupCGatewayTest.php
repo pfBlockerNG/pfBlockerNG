@@ -320,7 +320,7 @@ final class WwwGroupCGatewayTest extends TestCase
 		$data = [
 			'varsynconchanges' => 'manual',
 			'varsynctimeout'   => '150',
-			'syncinterfaces'   => '',
+			'syncscope'        => 'policy',
 			'row'              => [
 				0 => [
 					'varsyncdestinenable' => 'on',
@@ -358,8 +358,8 @@ final class WwwGroupCGatewayTest extends TestCase
 	{
 		$section = 'installedpackages/pfblockerngsync/config/0';
 
-		$disabled = ['varsynconchanges' => 'disabled', 'varsynctimeout' => '150', 'syncinterfaces' => ''];
-		$auto     = ['varsynconchanges' => 'auto',     'varsynctimeout' => '300', 'syncinterfaces' => 'on'];
+		$disabled = ['varsynconchanges' => 'disabled', 'varsynctimeout' => '150', 'syncscope' => 'policy'];
+		$auto     = ['varsynconchanges' => 'auto',     'varsynctimeout' => '300', 'syncscope' => 'lists'];
 
 		// Before: absent → empty.
 		$this->assertSame([], PfbConfig::readSection($section), 'absent before write');

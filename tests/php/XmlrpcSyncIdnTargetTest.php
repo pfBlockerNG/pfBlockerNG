@@ -55,6 +55,7 @@ final class XmlrpcSyncIdnTargetTest extends TestCase
 				'pfblockerngsync' => [
 					'config' => [
 						0 => [
+							'syncscope'        => 'all', // issue #3452: an unstored scope sends nothing
 							'varsynconchanges' => 'manual',
 							'varsynctimeout'   => 5,
 							'row' => [
