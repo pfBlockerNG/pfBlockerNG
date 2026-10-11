@@ -683,6 +683,15 @@ function pfb_remove_managed_obj(string $section, string $marker, ?callable $guar
 	return $removed;
 }
 
+// The rows pfb_remove_managed_obj($section, $marker) would remove, read before it does so a writer can still compare them.
+function pfb_managed_obj_rows(string $section, string $marker): array {
+	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
+	return array_values(array_filter(config_get_path($section, []), static function ($row) use ($marker, $use_prefix): bool {
+		$descr = $row['descr'] ?? '';
+		return pfb_is_managed_obj($descr) && ($use_prefix ? str_starts_with($descr, $marker) : str_contains($descr, $marker));
+	}));
+}
+
 // Shared interface-allowlist + exception-alias validation for the DNSBL settings POST
 // forms — DNS Redirect and DoT/DoQ Block apply identical rules, differing only in the
 // $label prefix on each error message.
@@ -9400,7 +9409,8 @@ function pfb_create_dnsbl($mode) {
 		} else {
 			// DISABLE: strip pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
 			// rules and returns TRUE iff anything was removed.
-			pfb_sync_copied_check('dnsbl_nat', [], [], $pfb['dbdir']);
+			$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX);
+			pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX)) {
 				$pfbupdate = TRUE;
 			}
@@ -22628,67 +22638,87 @@ function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
 }
 
 /*
- * Copied pfB object detector (#3453, owner fork 1 of #3443): a pfB-managed alias or rule that another
- * writer (pfSense HA copy, manual edit) changed after this node wrote it is REPORTED, never re-owned,
- * and the apply writes what it always wrote. {$dbdir}/pfb_sync_copied.json keeps digests and attribute
- * NAMES only, never a value.
+ * Copied pfB object detector (#3453, owner fork 1 of #3443): reports a pfB-managed object that another writer
+ * changed after this node wrote it, never re-owns it; the state file keeps digests and attribute names, never a value.
  */
 
-// Object leaves as config.xml settles them, volatile created/updated dropped: path (segments joined by NUL) => string.
-function pfb_sync_copied_leaves(array $node, string $prefix = ''): array {
-	$leaves = array();
+// Every level key-sorted so equal rows serialize equal.
+function pfb_sync_copied_sorted(array $node): array {
+	ksort($node, SORT_STRING);
 	foreach ($node as $key => $child) {
-		$path = $prefix === '' ? (string) $key : "{$prefix}\0{$key}";
-		$leaves += is_array($child) ? pfb_sync_copied_leaves($child, $path) : array($path => $child);
+		if (is_array($child)) {
+			$node[$key] = pfb_sync_copied_sorted($child);
+		}
 	}
-	return $leaves;
+	return $node;
 }
 
-/*
- * Identity => leaves. An alias is identified by its name; a rule by its descr plus the occurrence index among
- * the same-descr rules of the list, so per-interface rules sharing a descr pair up positionally. An identity
- * is a label for notices and state, so anything outside [A-Za-z0-9_. -] becomes '?'.
+/**
+ * Identity hash => [display label, raw row without created/updated, key-sorted]. An alias is identified by its name,
+ * a rule by its descr plus the occurrence index among same-descr rules, so per-interface rules pair up positionally.
+ * The hash keeps identities whose labels collide apart; the label is [A-Za-z0-9_. -] with '?' for the rest.
  *
  * @param list<array<string,mixed>> $objects
- * @return array<string,array<string,string>>
+ * @return array<string,array{string,array<string,mixed>}>
  */
 function pfb_sync_copied_index(array $objects): array {
 	$index = $seen = array();
 	foreach ($objects as $object) {
-		$shape = pfb_sync_persisted_shape($object);
-		if (!is_array($shape)) {
+		if (!is_array($object)) {
 			continue;
 		}
-		unset($shape['created'], $shape['updated']);
-		$identity = $shape['name'] ?? $shape['descr'] ?? '';
-		$identity = preg_replace('/[^A-Za-z0-9_. -]/', '?', is_string($identity) ? $identity : '');
-		$key      = isset($shape['name']) ? $identity : $identity . '#' . ($seen[$identity] = ($seen[$identity] ?? -1) + 1);
+		unset($object['created'], $object['updated']);
+		$name   = $object['name'] ?? NULL;
+		$raw    = is_string($name) ? $name : (is_string($object['descr'] ?? NULL) ? $object['descr'] : '');
+		$suffix = is_string($name) ? '' : '#' . ($seen[$raw] = ($seen[$raw] ?? -1) + 1);
 
-		$leaves = pfb_sync_copied_leaves($shape);
-		ksort($leaves, SORT_STRING);
-		$index[$key] = $leaves;
+		$index[hash('sha256', $raw . $suffix)] = array(preg_replace('/[^A-Za-z0-9_. -]/', '?', $raw) . $suffix, pfb_sync_copied_sorted($object));
 	}
 	return $index;
 }
 
-function pfb_sync_copied_digest(array $leaves): string {
-	return hash('sha256', serialize($leaves));
+function pfb_sync_copied_digest(array $row): string {
+	return hash('sha256', serialize($row));
 }
 
 /**
- * Identity => digest of the objects, what a writer records about the objects it leaves in config.
+ * Identity hash => digest, what a writer records about the objects it leaves in config.
  *
  * @param list<array<string,mixed>> $objects
  * @return array<string,string>
  */
 function pfb_sync_copied_digests(array $objects): array {
-	return array_map('pfb_sync_copied_digest', pfb_sync_copied_index($objects));
+	$digests = array_map(static fn (array $entry): string => pfb_sync_copied_digest($entry[1]), pfb_sync_copied_index($objects));
+	ksort($digests, SORT_STRING);
+	return $digests;
 }
 
 /**
- * Copied objects: identity => the differing attribute paths (never values). An object is reported only when
- * it is not what this node recorded writing AND not what it generates now; NULL $recorded (first run, lost
- * state) reports nothing.
+ * Attribute paths where two canonical rows differ, never a value; a segment outside [A-Za-z0-9_.-] (NUL included) is '*'.
+ *
+ * @param array<string,mixed> $current
+ * @param array<string,mixed> $expected
+ * @return list<string>
+ */
+function pfb_sync_copied_paths(array $current, array $expected, string $prefix = ''): array {
+	$paths = array();
+	foreach (array_keys($current + $expected) as $key) {
+		$name = (string) $key;
+		$path = $prefix . (preg_match('/^[A-Za-z0-9_.-]+$/D', $name) === 1 ? $name : '*');
+		if (!array_key_exists($name, $current) || !array_key_exists($name, $expected)) {
+			$paths[] = $path;
+		} elseif (is_array($current[$name]) && is_array($expected[$name])) {
+			$paths = array_merge($paths, pfb_sync_copied_paths($current[$name], $expected[$name], "{$path}/"));
+		} elseif ($current[$name] !== $expected[$name]) {
+			$paths[] = $path;
+		}
+	}
+	return $paths;
+}
+
+/**
+ * Copied objects: label => differing attribute paths. An object is reported only when it is not what this node
+ * recorded writing AND not what it generates now; NULL $recorded (first run, lost state) reports nothing.
  *
  * @param ?array<string,string> $recorded
  * @param list<array<string,mixed>> $current
@@ -22702,62 +22732,80 @@ function pfb_sync_copied_diff(?array $recorded, array $current, array $expected)
 	$now      = pfb_sync_copied_index($current);
 	$wanted   = pfb_sync_copied_index($expected);
 	$findings = array();
-	foreach (array_keys($now + $wanted) as $key) {
-		$key = (string) $key;
-		$c   = $now[$key] ?? NULL;
-		$e   = $wanted[$key] ?? NULL;
-		if ($c === NULL) {
+	foreach (array_keys($now + $wanted) as $id) {
+		$want = $wanted[$id][1] ?? NULL;
+		[$label, $row] = $now[$id] ?? array($wanted[$id][0], NULL);
+		if ($row === NULL) {
 			// An object this node never wrote is not an external change when absent.
-			if (isset($recorded[$key])) {
-				$findings[$key] = array('(missing)');
-			}
+			$attrs = isset($recorded[$id]) ? array('(missing)') : array();
+		} elseif ($row === $want || pfb_sync_copied_digest($row) === ($recorded[$id] ?? NULL)) {
 			continue;
+		} else {
+			$attrs = $want === NULL ? array('(unexpected)') : pfb_sync_copied_paths($row, $want);
 		}
-		if ($c === $e || pfb_sync_copied_digest($c) === ($recorded[$key] ?? NULL)) {
-			continue;
+		if ($attrs !== array()) {
+			$findings[$label] = array_merge($findings[$label] ?? array(), $attrs);
 		}
-		if ($e === NULL) {
-			$findings[$key] = array('(unexpected)');
-			continue;
-		}
-		$attrs = array();
-		foreach (array_keys($c + $e) as $path) {
-			if (($c[$path] ?? NULL) !== ($e[$path] ?? NULL)) {
-				$segments = array_map(
-					static fn (string $segment): string => preg_match('/^[A-Za-z0-9_.-]+$/D', $segment) === 1 ? $segment : '*',
-					explode("\0", (string) $path)
-				);
-				$attrs[] = implode('/', $segments);
-			}
-		}
-		sort($attrs, SORT_STRING);
-		$findings[$key] = array_values(array_unique($attrs));
 	}
 	ksort($findings, SORT_STRING);
-	return $findings;
+	return array_map(static function (array $attrs): array {
+		sort($attrs, SORT_STRING);
+		return array_values(array_unique($attrs));
+	}, $findings);
 }
 
-/*
- * The copied-object state, {$dbdir}/pfb_sync_copied.json (root-only): recorded = kind => identity => digest
- * of what the last writer left in config, findings = kind => identity => differing attribute names.
- * A missing or corrupt file reads as empty.
+// TRUE for exactly {recorded: kind => key => sha256 hex, findings: kind => label => list of attribute paths}, so nothing else is ever shown.
+function pfb_sync_copied_well_formed(mixed $data): bool {
+	if (!is_array($data) || !is_array($data['recorded'] ?? NULL) || !is_array($data['findings'] ?? NULL)) {
+		return FALSE;
+	}
+	$kinds   = array('aliases', 'filter', 'nat', 'dnsbl_nat', 'dot_filter');
+	$segment = '(?:[A-Za-z0-9_.-]+|\*)';
+	foreach ($data['recorded'] as $kind => $digests) {
+		if (!in_array($kind, $kinds, TRUE) || !is_array($digests)) {
+			return FALSE;
+		}
+		foreach ($digests as $digest) {
+			if (!is_string($digest) || preg_match('/^[0-9a-f]{64}$/D', $digest) !== 1) {
+				return FALSE;
+			}
+		}
+	}
+	foreach ($data['findings'] as $kind => $found) {
+		if (!in_array($kind, $kinds, TRUE) || !is_array($found)) {
+			return FALSE;
+		}
+		foreach ($found as $label => $attrs) {
+			if (preg_match('/^[A-Za-z0-9_. -]*(?:#[0-9]+)?$/D', (string) $label) !== 1 || !is_array($attrs) || !array_is_list($attrs)) {
+				return FALSE;
+			}
+			foreach ($attrs as $attr) {
+				if (!is_string($attr) || preg_match("~^(?:\((?:unexpected|missing)\)|{$segment}(?:/{$segment})*)\$~D", $attr) !== 1) {
+					return FALSE;
+				}
+			}
+		}
+	}
+	return TRUE;
+}
+
+/**
+ * The copied-object state, {$dbdir}/pfb_sync_copied.json (root-only); a missing, corrupt or malformed file reads as empty.
  *
  * @return array{recorded: array<string,mixed>, findings: array<string,mixed>}
  */
 function pfb_sync_copied_read(string $dbdir): array {
 	$path = "{$dbdir}/pfb_sync_copied.json";
 	$data = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
-	return array(
-		'recorded' => is_array($data) && is_array($data['recorded'] ?? NULL) ? $data['recorded'] : array(),
-		'findings' => is_array($data) && is_array($data['findings'] ?? NULL) ? $data['findings'] : array(),
-	);
+	return pfb_sync_copied_well_formed($data)
+		? array('recorded' => $data['recorded'], 'findings' => $data['findings'])
+		: array('recorded' => array(), 'findings' => array());
 }
 
-/*
- * Called by each writer of pfB-managed objects after $current (what config holds) and $expected (what the
- * writer is about to leave) are both built and before its write decision; it never changes either.
- * $kind is aliases, filter, nat, dnsbl_nat or dot_filter. Records $expected, stores this kind's findings
- * and raises ONE notice when the findings changed to something non-empty.
+/**
+ * Called by each writer of pfB-managed objects with $current read BEFORE any removal and $expected as it will
+ * leave them; records $expected, stores this kind's findings and raises ONE notice when the findings changed to
+ * something non-empty. $kind is aliases, filter, nat, dnsbl_nat or dot_filter.
  *
  * @param list<array<string,mixed>> $current
  * @param list<array<string,mixed>> $expected
@@ -22781,8 +22829,8 @@ function pfb_sync_copied_check(string $kind, array $current, array $expected, st
 			if ($findings !== $state['findings'] && $findings !== array()) {
 				$parts = array();
 				foreach ($findings as $found) {
-					foreach ($found as $key => $attrs) {
-						$parts[] = "{$key} (" . implode(', ', $attrs) . ')';
+					foreach ($found as $label => $attrs) {
+						$parts[] = "{$label} (" . implode(', ', $attrs) . ')';
 					}
 				}
 				$report = localize_text("Copied pfB objects differ from this node's generated objects: %s", implode('; ', $parts));

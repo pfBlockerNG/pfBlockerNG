@@ -3186,9 +3186,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$redir_toggle  = PfbConfig::read('dnsbl/dnsbl_redir');
 		$redir_enabled = ($mode === 'enabled') && ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
 
+		// Read before any removal below: the detector must still see an external row the writer erases.
+		$redir_current = pfb_managed_obj_rows('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX);
+
 		if (!$redir_enabled) {
 			// DISABLED: remove all pfB_DNS_Redirect_* NAT rules.
-			pfb_sync_copied_check('nat', [], [], $pfb['dbdir']);
+			pfb_sync_copied_check('nat', $redir_current, [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
 				$redir_changed = TRUE;
 			}
@@ -3213,7 +3216,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			if (empty($redir_ifaces)) {
 				// No valid interfaces remain — remove all rules.
-				pfb_sync_copied_check('nat', [], [], $pfb['dbdir']);
+				pfb_sync_copied_check('nat', $redir_current, [], $pfb['dbdir']);
 				if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
 					$redir_changed = TRUE;
 				}
@@ -3256,7 +3259,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					}
 				}
 
-				pfb_sync_copied_check('nat', $redir_ex_owned, $redir_new_owned, $pfb['dbdir']);
+				pfb_sync_copied_check('nat', $redir_current, $redir_new_owned, $pfb['dbdir']);
 
 				if ($redir_ex_owned !== $redir_new_owned) {
 					$redir_changed = TRUE;
@@ -3284,9 +3287,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$dot_toggle  = PfbConfig::read('dnsbl/dnsbl_dot_block');
 		$dot_enabled = ($mode === 'enabled') && ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
 
+		// Read before any removal below: the detector must still see an external row the writer erases.
+		$dot_current = pfb_managed_obj_rows('filter/rule', PFB_DOT_BLOCK_DESCR_PFX);
+
 		if (!$dot_enabled) {
 			// DISABLED: remove all pfB_DoT_Block_* filter rules.
-			pfb_sync_copied_check('dot_filter', [], [], $pfb['dbdir']);
+			pfb_sync_copied_check('dot_filter', $dot_current, [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
 				$dot_changed = TRUE;
 			}
@@ -3314,7 +3320,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			if (empty($dot_ifaces)) {
 				// No valid interfaces remain — remove all rules.
-				pfb_sync_copied_check('dot_filter', [], [], $pfb['dbdir']);
+				pfb_sync_copied_check('dot_filter', $dot_current, [], $pfb['dbdir']);
 				if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
 					$dot_changed = TRUE;
 				}
@@ -3390,7 +3396,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					}
 				}
 
-				pfb_sync_copied_check('dot_filter', $dot_ex_owned, $dot_new_owned, $pfb['dbdir']);
+				pfb_sync_copied_check('dot_filter', $dot_current, $dot_new_owned, $pfb['dbdir']);
 
 				if ($dot_ex_owned !== $dot_new_owned) {
 					$dot_changed = TRUE;
@@ -4900,7 +4906,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			// Copied-object detector: only the pfB-owned rules, before the write decision below.
 			$pfb_rules_current  = array_values(array_filter($rules, 'pfb_rule_is_pfb_owned'));
-			$pfb_rules_expected = array_values(array_filter($new_rules, 'pfb_rule_is_pfb_owned'));
+			// pfb_tracker() builds int trackers and a config reread returns strings, so compare the tracker as a string.
+			$pfb_rules_expected = array_map(
+				static fn (array $rule): array => isset($rule['tracker']) ? array_replace($rule, array('tracker' => (string) $rule['tracker'])) : $rule,
+				array_values(array_filter($new_rules, 'pfb_rule_is_pfb_owned'))
+			);
 			pfb_sync_copied_check('filter', $pfb_rules_current, $pfb_rules_expected, $pfb['dbdir']);
 
 			unset($pfb['permit_inbound'], $pfb['permit_outbound'], $pfb['deny_inbound'],

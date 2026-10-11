@@ -9280,6 +9280,26 @@
             }
         ]
     },
+    "pfb_managed_obj_rows": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "section",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "marker",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_managed_rule_tracker": {
         "returnsRef": false,
         "returnType": "int",
@@ -12797,7 +12817,7 @@
         "returnType": "string",
         "params": [
             {
-                "name": "leaves",
+                "name": "row",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
@@ -12831,12 +12851,19 @@
             }
         ]
     },
-    "pfb_sync_copied_leaves": {
+    "pfb_sync_copied_paths": {
         "returnsRef": false,
         "returnType": "array",
         "params": [
             {
-                "name": "node",
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "expected",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
@@ -12860,6 +12887,32 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_copied_sorted": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "node",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_copied_well_formed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "data",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
                 "default": null
             }
         ]

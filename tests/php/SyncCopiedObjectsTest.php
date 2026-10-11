@@ -20,9 +20,10 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_sync_copied_check')]
 #[CoversFunction('pfb_sync_copied_read')]
 #[CoversFunction('pfb_create_dnsbl')]
+#[CoversFunction('pfb_managed_obj_rows')]
 final class SyncCopiedObjectsTest extends TestCase
 {
-	private const SENTINELS = ['LEAK_IFACE_SENTINEL', 'LEAK_ADDR_SENTINEL', 'LEAK_DEST_SENTINEL', 'LEAK_LOCAL_SENTINEL'];
+	private const SENTINELS = ['LEAK_IFACE_SENTINEL', 'LEAK_ADDR_SENTINEL', 'LEAK_DEST_SENTINEL', 'LEAK_LOCAL_SENTINEL', 'LEAK_GENERATED_SENTINEL'];
 
 	private string $dir;
 	private mixed $savedConfig;
@@ -138,6 +139,42 @@ final class SyncCopiedObjectsTest extends TestCase
 		return $kind === 'aliases' ? $name : "{$name}#{$occurrence}";
 	}
 
+	/** The identity hash a digest map is stored under, computed independently of production. */
+	private static function id(string $kind, int $occurrence = 0): string
+	{
+		$base = self::base($kind);
+		return hash('sha256', $kind === 'aliases' ? $base['name'] : "{$base['descr']}#{$occurrence}");
+	}
+
+	/**
+	 * @param array<string,mixed> $row
+	 * @return array<string,mixed> the raw row without created/updated, every level key-sorted
+	 */
+	private static function canonical(array $row): array
+	{
+		unset($row['created'], $row['updated']);
+		$sort = static function (array $node) use (&$sort): array {
+			ksort($node, SORT_STRING);
+			return array_map(static fn (mixed $child): mixed => is_array($child) ? $sort($child) : $child, $node);
+		};
+		return $sort($row);
+	}
+
+	/** @param array<string,mixed> $row */
+	private static function digestOf(array $row): string
+	{
+		return hash('sha256', serialize(self::canonical($row)));
+	}
+
+	/**
+	 * @param array<string,mixed> $node
+	 * @return array<string,mixed> the same node with every level's key order reversed
+	 */
+	private static function reversed(array $node): array
+	{
+		return array_map(static fn (mixed $child): mixed => is_array($child) ? self::reversed($child) : $child, array_reverse($node, TRUE));
+	}
+
 	/** @return array<string,list<string>> */
 	private static function externalAttrs(string $kind): array
 	{
@@ -246,10 +283,8 @@ final class SyncCopiedObjectsTest extends TestCase
 		$base     = self::base($kind);
 		$extra    = ['descr' => 'pfB_Extra', 'name' => 'pfB_Extra'] + $base;
 		$recorded = pfb_sync_copied_digests([$base]);
-		$extraKey = pfb_sync_copied_digests([$extra]);
-		$extraKey = array_key_first($extraKey);
 
-		$this->assertSame([$extraKey => ['(unexpected)']], pfb_sync_copied_diff($recorded, [$base, $extra], [$base]));
+		$this->assertSame(['pfB_Extra' => ['(unexpected)']], pfb_sync_copied_diff($recorded, [$base, $extra], [$base]));
 		$this->assertSame([self::key($kind) => ['(missing)']], pfb_sync_copied_diff($recorded, [], [$base]));
 		$this->assertSame([], pfb_sync_copied_diff($recorded, [$base], [$base, $extra]), 'an expected-only object that was never recorded is not an external change');
 		$this->assertSame([], pfb_sync_copied_diff($recorded, [], [$extra]), 'a missing object that was never written is not an external change');
@@ -261,7 +296,9 @@ final class SyncCopiedObjectsTest extends TestCase
 		$opt1 = ['interface' => 'opt1'] + $wan;
 
 		$recorded = pfb_sync_copied_digests([$wan, $opt1]);
-		$this->assertSame(['pfB_Alpha auto rule#0', 'pfB_Alpha auto rule#1'], array_keys($recorded));
+		$ids      = [self::id('filter', 0), self::id('filter', 1)];
+		sort($ids, SORT_STRING);
+		$this->assertSame($ids, array_keys($recorded));
 
 		$moved = ['interface' => 'LEAK_IFACE_SENTINEL'] + $opt1;
 		$this->assertSame(
@@ -295,6 +332,112 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertCount(1, $this->copiedNotices(), 'the finding itself is still reported');
 	}
 
+	public function testIdentityLabelsKeepOnlyTheDocumentedGrammar(): void
+	{
+		$cases = [
+			"pfB_1\0x"       => 'pfB_1?x#0',
+			"pfB_2\nx"       => 'pfB_2?x#0',
+			'pfB_3<script>'  => 'pfB_3?script?#0',
+			'pfB_4+5'        => 'pfB_4?5#0',
+			"pfB_5\u{e9}"    => 'pfB_5??#0',
+			'pfB_6a b.c-d_e' => 'pfB_6a b.c-d_e#0',
+		];
+		$objects = array_map(static fn (string $descr): array => ['descr' => $descr] + self::base('filter'), array_keys($cases));
+
+		$this->assertSame(array_fill_keys(array_values($cases), ['(unexpected)']), pfb_sync_copied_diff([], $objects, []));
+	}
+
+	public function testIdentitiesThatShareALabelAreTrackedIndependently(): void
+	{
+		$first    = ['name' => 'pfB_<x>', 'address' => 'a'] + self::base('aliases');
+		$second   = ['name' => 'pfB_>x<', 'address' => 'b'] + self::base('aliases');
+		$recorded = pfb_sync_copied_digests([$first, $second]);
+		$this->assertCount(2, $recorded, 'two identities that sanitize to one label keep two digests');
+
+		$firstMoved  = ['address' => 'LEAK_ADDR_SENTINEL'] + $first;
+		$secondMoved = ['type' => 'host'] + $second;
+		$this->assertSame(['pfB_?x?' => ['address']], pfb_sync_copied_diff($recorded, [$firstMoved, $second], [$first, $second]), 'a change to the first is reported');
+		$this->assertSame(['pfB_?x?' => ['type']], pfb_sync_copied_diff($recorded, [$first, $secondMoved], [$first, $second]), 'a change to the second is reported');
+		$this->assertSame(['pfB_?x?' => ['address', 'type']], pfb_sync_copied_diff($recorded, [$firstMoved, $secondMoved], [$first, $second]));
+		$this->assertSame([], pfb_sync_copied_diff($recorded, [$first, $second], [$first, $second]));
+	}
+
+	public function testNulAndControlBytesInAttributeKeysAreMaskedAndNeverCollideWithNestedPaths(): void
+	{
+		$base     = self::base('nat');
+		$recorded = pfb_sync_copied_digests([$base]);
+
+		$hostile = $base + ["LEAK_LOCAL_SENTINEL\0safe" => 'x', "bad\nkey" => 'x', "destination\0address" => 'safe'];
+		$hostile['destination']['address'] = 'LEAK_DEST_SENTINEL';
+		$diff = pfb_sync_copied_diff($recorded, [$hostile], [$base]);
+		$this->assertSame([self::key('nat') => ['*', 'destination/address']], $diff);
+		$this->assertNoValueLeak($diff);
+
+		$flat = $base + ["destination\0address" => 'x'];
+		$this->assertSame([self::key('nat') => ['*']], pfb_sync_copied_diff($recorded, [$flat], [$base]), 'a flat NUL key is neither the nested path nor lost');
+	}
+
+	// ---- raw rows: digest and compare what config holds, no normalization -----------------------
+
+	#[DataProvider('kinds')]
+	public function testDigestIsTheHashOfTheRawKeySortedRowWithoutTimestamps(string $kind): void
+	{
+		$this->assertSame(
+			[self::id($kind) => self::digestOf(self::base($kind))],
+			pfb_sync_copied_digests([self::reversed(self::base($kind, 555))])
+		);
+	}
+
+	/** @return array<string,array{array<string,mixed>,array<string,mixed>,list<string>}> */
+	public static function rawDifferences(): array
+	{
+		$base = self::base('filter');
+		return [
+			'key case'        => [$base + ['MixedCase' => 'x'], $base + ['mixedcase' => 'x'], ['MixedCase', 'mixedcase']],
+			'FALSE vs absent' => [$base + ['disabled' => FALSE], $base, ['disabled']],
+			'int vs string'   => [['tracker' => 1770000001] + $base, $base, ['tracker']],
+			'union order'     => [$base + ['zeta' => 'x'], $base + ['alpha' => 'x'], ['alpha', 'zeta']],
+		];
+	}
+
+	/**
+	 * @param array<string,mixed> $current
+	 * @param array<string,mixed> $expected
+	 * @param list<string>        $attrs
+	 */
+	#[DataProvider('rawDifferences')]
+	public function testRawRowDifferencesAreDetected(array $current, array $expected, array $attrs): void
+	{
+		$this->assertNotSame(pfb_sync_copied_digests([$current]), pfb_sync_copied_digests([$expected]));
+		$this->assertSame(
+			[self::key('filter') => $attrs],
+			pfb_sync_copied_diff(pfb_sync_copied_digests([self::base('filter')]), [$current], [$expected])
+		);
+	}
+
+	// ---- order: nothing depends on how objects or keys are listed -----------------------------
+
+	public function testObjectAndKeyOrderNeverChangeDigestsOrFindings(): void
+	{
+		$a = ['name' => 'pfB_A', 'address' => '1'] + self::base('aliases');
+		$b = ['name' => 'pfB_B', 'address' => '2'] + self::base('aliases');
+
+		$digests = pfb_sync_copied_digests([$a, $b]);
+		$ids     = array_keys($digests);
+		$sorted  = $ids;
+		sort($sorted, SORT_STRING);
+		$this->assertSame($sorted, $ids, 'the digest map is stored in key order');
+		$this->assertSame($digests, pfb_sync_copied_digests([$b, $a]));
+		$this->assertSame($digests, pfb_sync_copied_digests([self::reversed($b), self::reversed($a)]));
+
+		$aMoved   = ['type' => 'host', 'address' => 'LEAK_ADDR_SENTINEL'] + $a;
+		$bMoved   = ['type' => 'host', 'address' => 'LEAK_ADDR_SENTINEL'] + $b;
+		$findings = ['pfB_A' => ['address', 'type'], 'pfB_B' => ['address', 'type']];
+		$this->assertSame($findings, pfb_sync_copied_diff($digests, [$aMoved, $bMoved], [$a, $b]));
+		$this->assertSame($findings, pfb_sync_copied_diff($digests, [$bMoved, $aMoved], [$b, $a]));
+		$this->assertSame($findings, pfb_sync_copied_diff($digests, [self::reversed($bMoved), self::reversed($aMoved)], [self::reversed($b), self::reversed($a)]));
+	}
+
 	// ---- check(): rows 3-5, 9 ----------------------------------------------------------------
 
 	#[DataProvider('kinds')]
@@ -314,7 +457,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		pfb_sync_copied_check($kind, [self::external($kind)], [self::base($kind)], $this->dir);
 
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'first run is silent');
-		$this->assertSame([self::key($kind) => pfb_sync_copied_digests([self::base($kind)])[self::key($kind)]], pfb_sync_copied_read($this->dir)['recorded'][$kind]);
+		$this->assertSame([self::id($kind) => self::digestOf(self::base($kind))], pfb_sync_copied_read($this->dir)['recorded'][$kind]);
 		$this->assertSame([], pfb_sync_copied_read($this->dir)['findings']);
 
 		pfb_sync_copied_check($kind, [self::external($kind)], [self::base($kind)], $this->dir);
@@ -323,6 +466,32 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertCount(1, $this->copiedNotices());
 		$this->assertStringContainsString(self::key($kind), $this->copiedNotices()[0]);
 		$this->assertStringContainsString('(' . implode(', ', self::externalAttrs($kind)[self::key($kind)]) . ')', $this->copiedNotices()[0]);
+		$this->assertNoValueLeak();
+	}
+
+	public function testStoredStateIsExactlyDigestsAndAttributeNames(): void
+	{
+		$recorded = ['filter' => [self::id('filter') => self::digestOf(self::base('filter'))]];
+
+		pfb_sync_copied_check('filter', [self::base('filter')], [self::base('filter')], $this->dir);
+		$this->assertSame(['recorded' => $recorded, 'findings' => []], json_decode($this->stateBytes(), TRUE));
+
+		pfb_sync_copied_check('filter', [self::external('filter')], [self::base('filter')], $this->dir);
+		$this->assertSame(
+			['recorded' => $recorded, 'findings' => ['filter' => ['pfB_Alpha auto rule#0' => ['interface']]]],
+			json_decode($this->stateBytes(), TRUE)
+		);
+	}
+
+	#[DataProvider('kinds')]
+	public function testGeneratedLocalValuesNeverReachStateNoticeOrLog(string $kind): void
+	{
+		$generated = array_replace(self::base($kind), ['interface' => 'LEAK_GENERATED_SENTINEL', 'address' => 'LEAK_GENERATED_SENTINEL']);
+
+		pfb_sync_copied_check($kind, [$generated], [$generated], $this->dir);
+		pfb_sync_copied_check($kind, [self::external($kind)], [$generated], $this->dir);
+
+		$this->assertCount(1, $this->copiedNotices(), 'the external copy is still reported');
 		$this->assertNoValueLeak();
 	}
 
@@ -399,6 +568,70 @@ final class SyncCopiedObjectsTest extends TestCase
 	public function testReadHelperReturnsEmptyShapeForMissingState(): void
 	{
 		$this->assertSame(['recorded' => [], 'findings' => []], pfb_sync_copied_read($this->dir));
+	}
+
+	// ---- state file: a syntactically valid but malformed file is lost state ---------------------
+
+	/** @return array<string,array{array<string,mixed>}> */
+	public static function malformedStates(): array
+	{
+		$hex   = str_repeat('a', 64);
+		$valid = ['filter' => [$hex => $hex]];
+		return [
+			'recorded is a scalar'     => [['recorded' => 'x', 'findings' => []]],
+			'findings is missing'      => [['recorded' => $valid]],
+			'unknown recorded kind'    => [['recorded' => $valid + ['other' => [$hex => $hex]], 'findings' => []]],
+			'unknown findings kind'    => [['recorded' => $valid, 'findings' => ['other' => ['pfB_x#0' => ['interface']]]]],
+			'recorded kind is a scalar' => [['recorded' => ['filter' => 'x'], 'findings' => []]],
+			'findings kind is a scalar' => [['recorded' => $valid, 'findings' => ['nat' => 'x']]],
+			'digest is not hex'        => [['recorded' => ['filter' => [$hex => 'LEAK_LOCAL_SENTINEL']], 'findings' => []]],
+			'digest is too short'      => [['recorded' => ['filter' => [$hex => 'abc']], 'findings' => []]],
+			'label carries markup'     => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_<script>LEAK_LOCAL_SENTINEL</script>' => ['interface']]]]],
+			'attribute carries markup' => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => ['LEAK_DEST_SENTINEL<b>']]]]],
+			'attribute has a space'    => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => ['bad key']]]]],
+			'attribute is not text'    => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => [1]]]]],
+			'attribute list is a map'  => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => ['k' => 'interface']]]]],
+			'attribute list is text'   => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => 'interface']]]],
+		];
+	}
+
+	/** @param array<string,mixed> $state */
+	#[DataProvider('malformedStates')]
+	public function testMalformedStateReadsAsLostState(array $state): void
+	{
+		file_put_contents($this->stateFile(), json_encode($state, JSON_THROW_ON_ERROR));
+
+		$this->assertSame(['recorded' => [], 'findings' => []], pfb_sync_copied_read($this->dir));
+	}
+
+	public function testWellFormedStateReadsBackUnchanged(): void
+	{
+		$hex   = str_repeat('a', 64);
+		$state = [
+			'recorded' => ['filter' => [$hex => $hex], 'nat' => []],
+			'findings' => ['nat' => ['pfB_x y.z-1#12' => ['(unexpected)', '(missing)', '*', 'a/b_c.d-e/*']], 'aliases' => ['pfB_Alpha_v4' => ['address']]],
+		];
+		file_put_contents($this->stateFile(), json_encode($state, JSON_THROW_ON_ERROR));
+
+		$this->assertSame($state, pfb_sync_copied_read($this->dir));
+	}
+
+	public function testMalformedStateNeverLeaksIntoANoticeOrLog(): void
+	{
+		// A genuine filter change while another kind's state is hostile: the hostile text must not ride along.
+		file_put_contents($this->stateFile(), json_encode([
+			'recorded' => ['filter' => pfb_sync_copied_digests([self::base('filter')])],
+			'findings' => ['nat' => ['pfB_<script>LEAK_LOCAL_SENTINEL</script>' => ['LEAK_DEST_SENTINEL<b>']]],
+		], JSON_THROW_ON_ERROR));
+
+		pfb_sync_copied_check('filter', [self::external('filter')], [self::base('filter')], $this->dir);
+		pfb_sync_copied_check('filter', [self::external('filter')], [self::base('filter')], $this->dir);
+
+		$this->assertSame(["Copied pfB objects differ from this node's generated objects: pfB_Alpha auto rule#0 (interface)"], $this->copiedNotices());
+		$this->assertNoValueLeak();
+		foreach ($this->emitted() as $text) {
+			$this->assertStringNotContainsString('<', $text);
+		}
 	}
 
 	// ---- row 10: acceptance 12, the apply writes the same bytes -------------------------------
@@ -487,15 +720,145 @@ final class SyncCopiedObjectsTest extends TestCase
 			$this->assertSame(['pfB DNSBL - DO NOT EDIT#0'], array_keys(pfb_sync_copied_read($stateDir)['findings']['dnsbl_nat'] ?? []), 'the divergent run reported the copy');
 			$this->assertCount(1, $this->copiedNotices());
 			$this->assertNoValueLeak();
-			foreach (self::SENTINELS as $sentinel) {
-				$this->assertStringNotContainsString($sentinel, (string) file_get_contents($this->stateFile($stateDir)));
+			// opt-double and the VIP are generated-local values: the interface double binds the first, the VIP list the second.
+			foreach ([...self::SENTINELS, 'opt-double', '203.0.113.10'] as $value) {
+				foreach ([$cleanDir, $stateDir] as $dir) {
+					$this->assertStringNotContainsString($value, (string) file_get_contents($this->stateFile($dir)));
+				}
+				foreach ($this->emitted() as $text) {
+					$this->assertStringNotContainsString($value, $text);
+				}
 			}
 			$this->assertSame('user rule', $divergent['nat'][0]['descr'], 'user NAT rules are untouched');
 			$this->assertSame('opt-double', $divergent['nat'][1]['interface'], 'the copy is overwritten as before, never re-owned or skipped');
+
+			$written = array_slice($divergent['nat'], 1);
+			$this->assertCount(2, $written);
+			$recorded = [];
+			foreach ($written as $n => $row) {
+				$recorded[hash('sha256', "pfB DNSBL - DO NOT EDIT#{$n}")] = self::digestOf($row);
+			}
+			ksort($recorded, SORT_STRING);
+			$this->assertSame($recorded, pfb_sync_copied_read($stateDir)['recorded']['dnsbl_nat'], 'the state records exactly the digests of what the writer left in config');
 		} finally {
 			$this->removeDir($cleanDir);
 			$this->removeDir($stateDir);
 		}
+	}
+
+	// ---- removal writers: the managed rows are read before anything removes them ---------------
+
+	public function testManagedRowsAreExactlyWhatTheRemovalWouldRemove(): void
+	{
+		$rows = [
+			['descr' => 'user rule'],
+			['descr' => 'a pfB DNSBL note'],
+			['descr' => 'pfB DNSBL - DO NOT EDIT'],
+			['descr' => 'pfB_DNS_Redirect_lan_v4'],
+			['descr' => 'pfB_DoT_Block_lan'],
+			['interface' => 'wan'],
+		];
+		foreach ([PFB_MANAGED_NAT_LEGACY_PFX, PFB_DNS_REDIR_DESCR_V4_PFX, PFB_DOT_BLOCK_DESCR_PFX] as $marker) {
+			$GLOBALS['config'] = [];
+			config_set_path('nat/rule', $rows);
+
+			$managed = pfb_managed_obj_rows('nat/rule', $marker);
+
+			$this->assertNotSame([], $managed, $marker);
+			$this->assertSame($rows, config_get_path('nat/rule'), 'reading removes nothing');
+			pfb_remove_managed_obj('nat/rule', $marker);
+			$this->assertSame(
+				array_values(array_filter($rows, static fn (array $row): bool => !in_array($row, $managed, TRUE))),
+				config_get_path('nat/rule'),
+				"{$marker}: the removal takes exactly the snapshot"
+			);
+		}
+	}
+
+	public function testDisabledDnsblWriterReportsTheExternalRowItRemoves(): void
+	{
+		file_put_contents($this->stateFile(), json_encode([
+			'recorded' => ['dnsbl_nat' => pfb_sync_copied_digests([self::base('dnsbl_nat')])],
+			'findings' => [],
+		], JSON_THROW_ON_ERROR));
+		$this->seedNatWriter($this->dir);
+
+		pfb_create_dnsbl('disabled');
+
+		$this->assertSame(['user rule'], array_column(config_get_path('nat/rule'), 'descr'), 'the removal itself is unchanged');
+		$this->assertSame(['dnsbl_nat' => ['pfB DNSBL - DO NOT EDIT#0' => ['(unexpected)']]], pfb_sync_copied_read($this->dir)['findings']);
+		$this->assertSame(['dnsbl_nat' => []], pfb_sync_copied_read($this->dir)['recorded'], 'a disabled writer records an empty expectation');
+		$this->assertCount(1, $this->copiedNotices());
+		$this->assertNoValueLeak();
+	}
+
+	/** @return array<string,mixed> */
+	private static function writerSpec(string $writer): array
+	{
+		return $writer === 'redirect' ? [
+			'from' => "\t\t\$redir_changed = FALSE;", 'to' => "\n\t}\n\n\t// Sync DoT/DoQ block filter rules",
+			'kind' => 'nat', 'section' => 'nat/rule', 'toggle' => 'dnsbl/dnsbl_redir', 'ifaces' => 'dnsbl/dnsbl_redir_int',
+			'stale' => 'pfB_DNS_Redirect_opt1_v4', 'kept' => ['pfB_DNS_Redirect_lan_v4', 'pfB_DNS_Redirect_lan_v6'],
+		] : [
+			'from' => "\t\t\$dot_changed = FALSE;", 'to' => "\n\t}\n\n\t// Fingerprint the loaded input files",
+			'kind' => 'dot_filter', 'section' => 'filter/rule', 'toggle' => 'dnsbl/dnsbl_dot_block', 'ifaces' => 'dnsbl/dnsbl_dot_block_int',
+			'stale' => 'pfB_DoT_Block_opt1', 'kept' => ['pfB_DoT_Block_lan'],
+		];
+	}
+
+	/** Runs the real inline writer block of pfblockerng_apply.inc between two source markers (it is not a function). */
+	private function runApplyBlock(string $from, string $to, string $mode): void
+	{
+		$apply = self::source('pfblockerng_apply.inc');
+		$start = $this->pos($apply, $from);
+		$end   = $this->pos($apply, $to);
+
+		$writer = eval('return static function (string $mode): void { global $pfb; ' . substr($apply, $start, $end - $start) . ' };');
+		$writer($mode);
+	}
+
+	/** @return array<string,array{string,string}> */
+	public static function removalWriterScenarios(): array
+	{
+		$cases = [];
+		foreach (['redirect', 'dot'] as $writer) {
+			foreach (['disabled', 'no valid interface', 'stale interface'] as $scenario) {
+				$cases["{$writer}: {$scenario}"] = [$writer, $scenario];
+			}
+		}
+		return $cases;
+	}
+
+	#[DataProvider('removalWriterScenarios')]
+	public function testRemovalWritersReportAnExternalRowBeforeTheyRemoveIt(string $writer, string $scenario): void
+	{
+		global $pfb;
+
+		$spec     = self::writerSpec($writer);
+		$original = ['descr' => $spec['stale'], 'interface' => 'opt1'] + self::base($spec['kind']);
+		$external = ['interface' => 'LEAK_IFACE_SENTINEL'] + $original;
+		file_put_contents($this->stateFile(), json_encode([
+			'recorded' => [$spec['kind'] => pfb_sync_copied_digests([$original])],
+			'findings' => [],
+		], JSON_THROW_ON_ERROR));
+
+		$GLOBALS['config'] = [];
+		$pfb['dbdir']      = $this->dir;
+		PfbConfig::write($spec['toggle'], $scenario === 'disabled' ? '' : 'on');
+		PfbConfig::write($spec['ifaces'], $scenario === 'stale interface' ? 'lan' : '');
+		config_set_path($spec['section'], [['descr' => 'user rule', 'interface' => 'wan'], $external]);
+
+		$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+
+		$this->assertSame(
+			$scenario === 'stale interface' ? ['user rule', ...$spec['kept']] : ['user rule'],
+			array_column(config_get_path($spec['section']), 'descr'),
+			'the writer removes and writes what it always did'
+		);
+		$this->assertSame([$spec['kind'] => ["{$spec['stale']}#0" => ['(unexpected)']]], pfb_sync_copied_read($this->dir)['findings']);
+		$this->assertCount(1, $this->copiedNotices());
+		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertNoValueLeak();
 	}
 
 	// ---- wiring: writers that tests cannot drive end to end (reported as a deviation) ----------
@@ -505,6 +868,13 @@ final class SyncCopiedObjectsTest extends TestCase
 		return (string) file_get_contents(dirname(__DIR__, 2) . "/src/usr/local/pkg/pfblockerng/{$file}");
 	}
 
+	private function pos(string $haystack, string $needle): int
+	{
+		$pos = strpos($haystack, $needle);
+		$this->assertIsInt($pos, "missing in source: {$needle}");
+		return $pos;
+	}
+
 	public function testEveryWriterCallsTheDetectorWithPlainVariablesBeforeItsWriteDecision(): void
 	{
 		$apply = self::source('pfblockerng_apply.inc');
@@ -512,17 +882,25 @@ final class SyncCopiedObjectsTest extends TestCase
 
 		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('aliases', \\$\\w+, \\$\\w+, \\\$pfb\['dbdir'\]\);/", $apply));
 		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('filter', \\$\\w+, \\$\\w+, \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('nat', \\\$redir_ex_owned, \\\$redir_new_owned, \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(2, preg_match_all("/pfb_sync_copied_check\('nat', \[\], \[\], \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dot_filter', \\\$dot_ex_owned, \\\$dot_new_owned, \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(2, preg_match_all("/pfb_sync_copied_check\('dot_filter', \[\], \[\], \\\$pfb\['dbdir'\]\);/", $apply));
+		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('nat', \\\$redir_current, \\\$redir_new_owned, \\\$pfb\['dbdir'\]\);/", $apply));
+		$this->assertSame(2, preg_match_all("/pfb_sync_copied_check\('nat', \\\$redir_current, \[\], \\\$pfb\['dbdir'\]\);/", $apply));
+		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dot_filter', \\\$dot_current, \\\$dot_new_owned, \\\$pfb\['dbdir'\]\);/", $apply));
+		$this->assertSame(2, preg_match_all("/pfb_sync_copied_check\('dot_filter', \\\$dot_current, \[\], \\\$pfb\['dbdir'\]\);/", $apply));
 		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dnsbl_nat', \\\$dnsbl_ex_nat, \\\$dnsbl_new_nat, \\\$pfb\['dbdir'\]\);/", $core));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dnsbl_nat', \[\], \[\], \\\$pfb\['dbdir'\]\);/", $core));
+		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dnsbl_nat', \\\$dnsbl_ex_nat, \[\], \\\$pfb\['dbdir'\]\);/", $core));
 
 		// The call comes before the write decision it must not influence.
-		$this->assertLessThan(strpos($apply, "config_set_path('filter/rule', \$new_rules);"), strpos($apply, "pfb_sync_copied_check('filter'"));
-		$this->assertLessThan(strpos($apply, "config_set_path('aliases/alias', \$new_aliases);"), strpos($apply, "pfb_sync_copied_check('aliases'"));
-		$this->assertLessThan(strpos($apply, "config_set_path('nat/rule', array_merge(\$redir_ex_other"), strpos($apply, "pfb_sync_copied_check('nat', \$redir_ex_owned"));
-		$this->assertLessThan(strpos($apply, "config_set_path('filter/rule', array_merge(\$dot_ex_other"), strpos($apply, "pfb_sync_copied_check('dot_filter', \$dot_ex_owned"));
+		$this->assertLessThan($this->pos($apply, "config_set_path('filter/rule', \$new_rules);"), $this->pos($apply, "pfb_sync_copied_check('filter'"));
+		$this->assertLessThan($this->pos($apply, "config_set_path('aliases/alias', \$new_aliases);"), $this->pos($apply, "pfb_sync_copied_check('aliases'"));
+		$this->assertLessThan($this->pos($apply, "config_set_path('nat/rule', array_merge(\$redir_ex_other"), $this->pos($apply, "pfb_sync_copied_check('nat', \$redir_current, \$redir_new_owned"));
+		$this->assertLessThan($this->pos($apply, "config_set_path('filter/rule', array_merge(\$dot_ex_other"), $this->pos($apply, "pfb_sync_copied_check('dot_filter', \$dot_current, \$dot_new_owned"));
+
+		// The managed rows are read before the first removal that would erase the evidence.
+		$this->assertLessThan($this->pos($apply, "pfb_remove_managed_obj('nat/rule'"), $this->pos($apply, "\$redir_current = pfb_managed_obj_rows('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX);"));
+		$this->assertLessThan($this->pos($apply, "pfb_remove_managed_obj('filter/rule'"), $this->pos($apply, "\$dot_current = pfb_managed_obj_rows('filter/rule', PFB_DOT_BLOCK_DESCR_PFX);"));
+		$this->assertLessThan($this->pos($core, "pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX)"), $this->pos($core, "\$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX);"));
+
+		// pfb_tracker() builds int trackers and a config reread returns strings: compare them as strings.
+		$this->assertStringContainsString("array_replace(\$rule, array('tracker' => (string) \$rule['tracker']))", $apply);
 	}
 }
