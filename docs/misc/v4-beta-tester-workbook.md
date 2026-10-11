@@ -288,7 +288,7 @@ the IP page.
 
 - [ ] Set the IPv4 **Suppression CIDR Limit** to 8, save, then **Update → Run Now**,
       Force **Parse**, Scope **IP**
-- [ ] A feed range such as `1.2.3.0/1` now shows as the single address `1.2.3.0/32`
+- [ ] A feed range such as `8.8.8.8/1` now shows as the single address `8.8.8.8/32`
       in the list's alias, and in `pfB_DNSBLIP_v4` when a DNSBL feed listed it
 
 ### Force Global IP Logging (IP Configuration)
