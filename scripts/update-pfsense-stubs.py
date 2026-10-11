@@ -48,7 +48,7 @@ STUB_SOURCE_VERSION = "2.7.2"
 # A bare filename resolves under src/etc/inc/; an entry containing '/' is taken
 # as a full src-relative path (e.g. usr/local/www/guiconfig.inc).
 STUB_MODULES: dict[str, list[str]] = {
-    "config.php": ["config.lib.inc"],
+    "config.php": ["config.lib.inc", "xmlparse.inc"],
     "util.php": ["util.inc", "pfsense-utils.inc", "globals.inc"],
     "services.php": ["services.inc", "service-utils.inc", "pkg-utils.inc"],
     "system.php": ["functions.inc", "filter.inc", "system.inc"],

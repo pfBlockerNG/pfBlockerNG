@@ -7,6 +7,7 @@
  *
  * Source files:
  *   config.lib.inc
+ *   xmlparse.inc
  *
  * Do NOT edit manually — re-run the script after a pfSense version bump.
  * These files are in stubs/ which is excluded from release archives.
@@ -121,3 +122,42 @@ function config_path_enabled(string $path, $enable_key = "enable") {}
 
 /** @return mixed */
 function config_del_path(string $path) {}
+
+/** @return mixed */
+function listtags() {}
+
+/** @return mixed */
+function listtags_pkg() {}
+
+/** @return mixed */
+function startElement($parser, $name, $attrs) {}
+
+/** @return mixed */
+function endElement($parser, $name) {}
+
+/** @return mixed */
+function cData($parser, $data) {}
+
+/** @return mixed */
+function parse_xml_config($cffile, $rootobj, $isstring = "false") {}
+
+/** @return mixed */
+function parse_xml_config_pkg($cffile, $rootobj, $isstring = "false") {}
+
+/** @return mixed */
+function parse_xml_config_raw($cffile, $rootobj, $isstring = "false") {}
+
+/** @return mixed */
+function is_cdata_entity($ent) {}
+
+/** @return mixed */
+function dump_xml_config_sub($arr, $indent) {}
+
+/** @return mixed */
+function dump_xml_config($arr, $rootobj) {}
+
+/** @return mixed */
+function dump_xml_config_pkg($arr, $rootobj) {}
+
+/** @return mixed */
+function dump_xml_config_raw($arr, $rootobj) {}
