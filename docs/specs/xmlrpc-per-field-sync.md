@@ -86,6 +86,24 @@ never claims that a peer supports, accepted, or applied a payload.
     (`xmlrpc.php:199-233`); the sender strips only entries flagged `nosync`
     (`rc.filter_synchronize:110-129`).
 
+> **Amendment 2026-10-11 (#3480 review).** The `''`/`[]` sentence above holds only for an element
+> that is not a listtag. Under a listtag key (`config`, `row`, `item`, …: `listtags()`,
+> `xmlparse.inc:28-57`) the writer emits nothing for an empty array and `<k></k>` only for an empty
+> entry (`:264-292`), and the parser drops an entry that reads back empty (`:115-126`): a stored
+> `<config></config>` reparses as `config => []`, which the next write emits as nothing, and a map left
+> without a child element then reads back as `''`. Element names also read back lower-cased
+> (`:69-77`). The policy receive therefore compares and digests the settled persisted shape
+> (`pfb_sync_persisted_shape()`), never the in-memory merge result, so a repeated payload that holds
+> an empty list container is `unchanged` and the accepted digest still matches the reread config.
+> Separately, the manual `policy` transport has more receiver side effects than `filter_configure()`.
+> A policy payload carries no `staticroutes`, so `restore_config_section` passes every receiver
+> static route to `delete_static_route($idx, true)` and immediately runs the queued `route delete`
+> commands (`xmlrpc.php:437-462`, `system.inc:1846`); its `filter_configure()` wrapper then runs
+> `system_routing_configure()`, which re-adds them, and `setup_gateways_monitor()`
+> (`xmlrpc.php:712`, `:775-780`). pfSense's own automatic HA sync without "Static Routes" ticked
+> does the same. This is the owner-approved transport, and the effects are stated here for the HA
+> proof (#3455) and the operator documentation.
+
 ## Decisions
 
 ### Scopes and migration
