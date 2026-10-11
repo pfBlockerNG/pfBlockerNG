@@ -1495,6 +1495,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			write_config('pfBlockerNG: Remove spaces/special characters in Alias/Header names');
 		}
 
+		$pfb['reserved_header_skips'] = $pfb_reserved_skips;	// #3453: effective-policy facts
+
 		// issue #1270: one batched notice for every header skipped as reserved this pass
 		if (!empty($pfb_reserved_skips)) {
 			$pfb_reserved_msg = 'pfBlockerNG: skipped reserved header(s) (collides with a package-owned name): ' . implode(', ', $pfb_reserved_skips);
@@ -5337,6 +5339,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_clear_pending_changes();
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
+			pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
 			// A receive that opened its record after this pass started was not applied by it: keep it pending.
 			$apply = pfb_sync_receive_state_read($pfb['dbdir'])['apply'] ?? NULL;
 			if (($apply['outcome'] ?? NULL) === 'waiting' && ($apply['opened'] ?? $apply['time'] ?? 0) > $pfb_pass_started) {

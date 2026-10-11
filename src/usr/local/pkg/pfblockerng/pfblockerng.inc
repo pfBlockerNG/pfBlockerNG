@@ -3622,6 +3622,9 @@ function pfb_global() {
 	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl/dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
+	// Effective-policy facts (#3453): reset each pass so a past force-disable or skip never leaks into the next.
+	$pfb['dnsbl_vip_disabled']	= FALSE;
+	$pfb['reserved_header_skips']	= [];
 	if ($pfb['dnsbl'] === PfbToggle::On) {
 		// VIP validation: force-disable DNSBL on a genuinely invalid/missing/overlapping
 		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
@@ -3639,6 +3642,7 @@ function pfb_global() {
 			} else {
 				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
 				$pfb['dnsbl'] = PfbToggle::Off;
+				$pfb['dnsbl_vip_disabled'] = TRUE;
 				$vip_notice = "DNSBL disabled: {$vips_valid_result[1]}";
 				pfb_logger("\n{$vip_notice}", 1);
 				// issue #331: this was log-only, invisible in the GUI. Surface it like
@@ -22132,6 +22136,182 @@ function pfblockerng_plugin_xmlrpc_send() {
 	}
 
 	return $section_paths;
+}
+
+/*
+ * Blacklist providers that need a username/password: those whose '*_global_usage' file carries a 'REG:'
+ * line, the same source the Blacklist page reads. Keys are the sanitised XML identity.
+ *
+ * @return array<string,true>
+ */
+function pfb_blacklist_reg_providers(string $usage_glob = '/usr/local/pkg/pfblockerng/*_global_usage'): array {
+	$providers = array();
+	foreach (glob($usage_glob) ?: array() as $file) {
+		$xml = NULL;
+		$reg = FALSE;
+		foreach (file($file, FILE_SKIP_EMPTY_LINES | FILE_IGNORE_NEW_LINES) ?: array() as $line) {
+			if (preg_match('/^\s*XML\s*:\s*(.*)$/', $line, $match)) {
+				$xml ??= strtolower((string) preg_replace('/\W/', '', $match[1]));	// same sanitising as the Blacklist page
+			} elseif (preg_match('/^\s*REG\s*:/', $line)) {
+				$reg = TRUE;
+			}
+		}
+		if ($reg && $xml !== NULL && $xml !== '') {
+			$providers[$xml] = TRUE;
+		}
+	}
+	return $providers;
+}
+
+/*
+ * Facts about received policy that cannot take effect on this node, read from the state the apply pass
+ * just used. Names and flags only, never a credential, VIP address or interface.
+ *
+ * @return array{vip_disabled: bool, maxmind_missing: list<string>, asn_token_missing: bool, top1m_token_missing: bool, reserved_headers: list<string>, blacklist_missing: list<string>}
+ */
+function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblockerng/*_global_usage'): array {
+	global $pfb;
+
+	// Formats of the enabled list rows (and enabled continents, which are MaxMind lists too).
+	$formats = array();
+	if (($pfb['enable'] ?? NULL) === PfbToggle::On) {
+		foreach (array('pfblockernglistsv4', 'pfblockernglistsv6') as $section) {
+			foreach (config_get_path("installedpackages/{$section}/config", array()) as $list) {
+				if (($list['action'] ?? 'Disabled') === 'Disabled') {
+					continue;
+				}
+				foreach (($list['row'] ?? array()) as $row) {
+					if (!empty($row['url']) && ($row['state'] ?? '') !== 'Disabled') {
+						$formats[(string) ($row['format'] ?? '')] = TRUE;
+					}
+				}
+			}
+		}
+		foreach (array_keys($pfb['continents'] ?? array()) as $continent) {
+			$action = config_get_path('installedpackages/pfblockerng' . strtolower(str_replace(' ', '', $continent)) . '/config/0/action', 'Disabled');
+			if ($action !== 'Disabled' && $action !== '') {
+				$formats['geoip'] = TRUE;
+			}
+		}
+	}
+
+	$maxmind_missing = array();
+	if (isset($formats['geoip'])) {
+		if (($pfb['maxmind_key'] ?? '') === '') {
+			$maxmind_missing[] = 'license key';
+		}
+		if (($pfb['maxmind_account'] ?? '') === '') {
+			$maxmind_missing[] = 'account ID';
+		}
+	}
+
+	$blacklist_missing = array();
+	$blacklist         = PfbConfig::readSection('installedpackages/pfblockerngblacklist');
+	$bl_enable         = (string) ($blacklist['blacklist_enable'] ?? '');
+	if ($bl_enable !== '' && $bl_enable !== 'Disable') {
+		$selected  = array_flip(explode(',', (string) ($blacklist['blacklist_selected'] ?? '')));
+		$providers = pfb_blacklist_reg_providers($usage_glob);
+		foreach (($blacklist['item'] ?? array()) as $item) {
+			$xml = is_array($item) ? (string) ($item['xml'] ?? '') : '';
+			if (isset($providers[$xml], $selected[$xml]) && !empty($item['selected'])
+			    && (($item['username'] ?? '') === '' || ($item['password'] ?? '') === '')) {
+				$blacklist_missing[] = $xml;
+			}
+		}
+	}
+
+	return array(
+		'vip_disabled'        => !empty($pfb['dnsbl_vip_disabled']),
+		'maxmind_missing'     => $maxmind_missing,
+		'asn_token_missing'   => isset($formats['asn']) && empty($pfb['asn_token']),
+		'top1m_token_missing' => ($pfb['dnsbl_top1m'] ?? NULL) === PfbToggle::On
+					&& is_array(pfb_top1m_active_provider()['auth'] ?? NULL)
+					&& (string) PfbConfig::read('dnsbl/top1m_token') === '',
+		'reserved_headers'    => array_values($pfb['reserved_header_skips'] ?? array()),
+		'blacklist_missing'   => $blacklist_missing,
+	);
+}
+
+/*
+ * Maps the facts to fixed, value-free finding strings: sorted, unique.
+ *
+ * @param array<string,mixed> $facts
+ * @return list<string>
+ */
+function pfb_sync_effective_findings(array $facts): array {
+	$findings = array();
+	if (!empty($facts['vip_disabled'])) {
+		$findings[] = 'DNSBL disabled: the DNSBL VIP failed validation';
+	}
+	foreach (($facts['maxmind_missing'] ?? array()) as $field) {
+		$findings[] = "MaxMind: {$field} missing";
+	}
+	if (!empty($facts['asn_token_missing'])) {
+		$findings[] = 'ASN: IPinfo token missing';
+	}
+	if (!empty($facts['top1m_token_missing'])) {
+		$findings[] = 'TOP1M: provider token missing';
+	}
+	foreach (($facts['reserved_headers'] ?? array()) as $header) {
+		$findings[] = "Header skipped as reserved: {$header}";
+	}
+	foreach (($facts['blacklist_missing'] ?? array()) as $xml) {
+		$findings[] = "Blacklist {$xml}: username or password missing";
+	}
+	$findings = array_values(array_unique($findings));
+	sort($findings, SORT_STRING);
+	return $findings;
+}
+
+/*
+ * Findings state, {$dbdir}/pfb_sync_findings.json (root-only, finding strings only). Kept apart from the
+ * receive state, whose writer rebuilds that file from its own keys. A missing or corrupt file reads as no
+ * findings; non-string entries are dropped.
+ *
+ * @return array{time: ?int, findings: list<string>}
+ */
+function pfb_sync_findings_read(string $dbdir): array {
+	$state = array('time' => NULL, 'findings' => array());
+	$path  = "{$dbdir}/pfb_sync_findings.json";
+	$data  = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
+	if (is_array($data)) {
+		$state['time'] = is_int($data['time'] ?? NULL) ? $data['time'] : NULL;
+		if (is_array($data['findings'] ?? NULL)) {
+			$state['findings'] = array_values(array_filter($data['findings'], 'is_string'));
+		}
+	}
+	return $state;
+}
+
+/*
+ * Stores the findings and raises ONE notice and log line when the list changed; an unchanged list touches
+ * nothing and a cleared list is stored without a notice. FALSE = not published (one value-free log line).
+ * $io is the publisher's test-only seam.
+ *
+ * @param list<string> $findings
+ */
+function pfb_sync_findings_record(array $findings, string $dbdir, array $io = array()): bool {
+	$findings  = array_values($findings);
+	$changed   = FALSE;
+	$untouched = FALSE;
+	$published = pfb_schedule_atomic_json_publish(
+		"{$dbdir}/pfb_sync_findings.json",
+		static function () use ($findings, $dbdir, &$changed, &$untouched): ?array {
+			$untouched = pfb_sync_findings_read($dbdir)['findings'] === $findings;
+			$changed   = !$untouched;
+			return $untouched ? NULL : array('time' => time(), 'findings' => $findings);
+		},
+		'is_array',
+		$io
+	);
+	if ($published && $changed && $findings !== array()) {
+		$text = 'Policy that cannot take effect on this node: ' . implode('; ', $findings);
+		file_notice('pfBlockerNG Sync', $text, 'pfBlockerNG', '/pfblockerng/pfblockerng_sync.php', 2);
+		logger(LOG_WARNING, $text, LOG_PREFIX_PKG_PFBLOCKERNG);
+	} elseif (!$published && !$untouched) {
+		logger(LOG_WARNING, 'XMLRPC policy findings: state not published.', LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
+	return $published || $untouched;
 }
 
 /*
