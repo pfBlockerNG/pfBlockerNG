@@ -9388,6 +9388,8 @@ function pfb_create_dnsbl($mode) {
 				}
 			}
 
+			pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, $dnsbl_new_nat, $pfb['dbdir']);
+
 			// Compare existing to new and if they are not identical update
 			if ($dnsbl_ex_nat !== $dnsbl_new_nat) {
 				$pfbupdate = TRUE;
@@ -9398,6 +9400,7 @@ function pfb_create_dnsbl($mode) {
 		} else {
 			// DISABLE: strip pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
 			// rules and returns TRUE iff anything was removed.
+			pfb_sync_copied_check('dnsbl_nat', [], [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX)) {
 				$pfbupdate = TRUE;
 			}
@@ -20919,6 +20922,14 @@ function pfb_diff_managed_rules(array $old_rules, array $new_rules): array {
 	return ['created' => $created, 'modified' => $modified, 'removed' => $removed, 'reordered' => $reordered];
 }
 
+// A pfB-owned filter rule: descr starts 'pfB_', except the DNS-redirect / DoT-block bypass rules, which keep the prefix but stay user-managed.
+function pfb_rule_is_pfb_owned(array $rule): bool {
+	$descr = $rule['descr'] ?? '';
+	return str_starts_with($descr, 'pfB_')
+		&& !str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)
+		&& !str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
+}
+
 /**
  * pfb_build_autorule_list() — pure emission helper extracted from sync_package_pfblockerng().
  *
@@ -21011,11 +21022,7 @@ function pfb_build_autorule_list(
 	$fother  = [];   // user floating other  (float-on block/reject; ALL floating user rules when float off)
 
 	foreach ($existing_rules as $rule) {
-		$descr     = $rule['descr'] ?? '';
-		$is_bypass = str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
-		             str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
-
-		if (str_starts_with($descr, 'pfB_') && !$is_bypass) {
+		if (pfb_rule_is_pfb_owned($rule)) {
 			continue;  // pfB-owned — regenerated below
 		}
 
@@ -22618,6 +22625,181 @@ function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
 		$state['accepted_digest'] = NULL;
 		return $state;
 	}, $io);
+}
+
+/*
+ * Copied pfB object detector (#3453, owner fork 1 of #3443): a pfB-managed alias or rule that another
+ * writer (pfSense HA copy, manual edit) changed after this node wrote it is REPORTED, never re-owned,
+ * and the apply writes what it always wrote. {$dbdir}/pfb_sync_copied.json keeps digests and attribute
+ * NAMES only, never a value.
+ */
+
+// Object leaves as config.xml settles them, volatile created/updated dropped: path (segments joined by NUL) => string.
+function pfb_sync_copied_leaves(array $node, string $prefix = ''): array {
+	$leaves = array();
+	foreach ($node as $key => $child) {
+		$path = $prefix === '' ? (string) $key : "{$prefix}\0{$key}";
+		$leaves += is_array($child) ? pfb_sync_copied_leaves($child, $path) : array($path => $child);
+	}
+	return $leaves;
+}
+
+/*
+ * Identity => leaves. An alias is identified by its name; a rule by its descr plus the occurrence index among
+ * the same-descr rules of the list, so per-interface rules sharing a descr pair up positionally. An identity
+ * is a label for notices and state, so anything outside [A-Za-z0-9_. -] becomes '?'.
+ *
+ * @param list<array<string,mixed>> $objects
+ * @return array<string,array<string,string>>
+ */
+function pfb_sync_copied_index(array $objects): array {
+	$index = $seen = array();
+	foreach ($objects as $object) {
+		$shape = pfb_sync_persisted_shape($object);
+		if (!is_array($shape)) {
+			continue;
+		}
+		unset($shape['created'], $shape['updated']);
+		$identity = $shape['name'] ?? $shape['descr'] ?? '';
+		$identity = preg_replace('/[^A-Za-z0-9_. -]/', '?', is_string($identity) ? $identity : '');
+		$key      = isset($shape['name']) ? $identity : $identity . '#' . ($seen[$identity] = ($seen[$identity] ?? -1) + 1);
+
+		$leaves = pfb_sync_copied_leaves($shape);
+		ksort($leaves, SORT_STRING);
+		$index[$key] = $leaves;
+	}
+	return $index;
+}
+
+function pfb_sync_copied_digest(array $leaves): string {
+	return hash('sha256', serialize($leaves));
+}
+
+/**
+ * Identity => digest of the objects, what a writer records about the objects it leaves in config.
+ *
+ * @param list<array<string,mixed>> $objects
+ * @return array<string,string>
+ */
+function pfb_sync_copied_digests(array $objects): array {
+	return array_map('pfb_sync_copied_digest', pfb_sync_copied_index($objects));
+}
+
+/**
+ * Copied objects: identity => the differing attribute paths (never values). An object is reported only when
+ * it is not what this node recorded writing AND not what it generates now; NULL $recorded (first run, lost
+ * state) reports nothing.
+ *
+ * @param ?array<string,string> $recorded
+ * @param list<array<string,mixed>> $current
+ * @param list<array<string,mixed>> $expected
+ * @return array<string,list<string>>
+ */
+function pfb_sync_copied_diff(?array $recorded, array $current, array $expected): array {
+	if ($recorded === NULL) {
+		return array();
+	}
+	$now      = pfb_sync_copied_index($current);
+	$wanted   = pfb_sync_copied_index($expected);
+	$findings = array();
+	foreach (array_keys($now + $wanted) as $key) {
+		$key = (string) $key;
+		$c   = $now[$key] ?? NULL;
+		$e   = $wanted[$key] ?? NULL;
+		if ($c === NULL) {
+			// An object this node never wrote is not an external change when absent.
+			if (isset($recorded[$key])) {
+				$findings[$key] = array('(missing)');
+			}
+			continue;
+		}
+		if ($c === $e || pfb_sync_copied_digest($c) === ($recorded[$key] ?? NULL)) {
+			continue;
+		}
+		if ($e === NULL) {
+			$findings[$key] = array('(unexpected)');
+			continue;
+		}
+		$attrs = array();
+		foreach (array_keys($c + $e) as $path) {
+			if (($c[$path] ?? NULL) !== ($e[$path] ?? NULL)) {
+				$segments = array_map(
+					static fn (string $segment): string => preg_match('/^[A-Za-z0-9_.-]+$/D', $segment) === 1 ? $segment : '*',
+					explode("\0", (string) $path)
+				);
+				$attrs[] = implode('/', $segments);
+			}
+		}
+		sort($attrs, SORT_STRING);
+		$findings[$key] = array_values(array_unique($attrs));
+	}
+	ksort($findings, SORT_STRING);
+	return $findings;
+}
+
+/*
+ * The copied-object state, {$dbdir}/pfb_sync_copied.json (root-only): recorded = kind => identity => digest
+ * of what the last writer left in config, findings = kind => identity => differing attribute names.
+ * A missing or corrupt file reads as empty.
+ *
+ * @return array{recorded: array<string,mixed>, findings: array<string,mixed>}
+ */
+function pfb_sync_copied_read(string $dbdir): array {
+	$path = "{$dbdir}/pfb_sync_copied.json";
+	$data = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
+	return array(
+		'recorded' => is_array($data) && is_array($data['recorded'] ?? NULL) ? $data['recorded'] : array(),
+		'findings' => is_array($data) && is_array($data['findings'] ?? NULL) ? $data['findings'] : array(),
+	);
+}
+
+/*
+ * Called by each writer of pfB-managed objects after $current (what config holds) and $expected (what the
+ * writer is about to leave) are both built and before its write decision; it never changes either.
+ * $kind is aliases, filter, nat, dnsbl_nat or dot_filter. Records $expected, stores this kind's findings
+ * and raises ONE notice when the findings changed to something non-empty.
+ *
+ * @param list<array<string,mixed>> $current
+ * @param list<array<string,mixed>> $expected
+ */
+function pfb_sync_copied_check(string $kind, array $current, array $expected, string $dbdir): void {
+	$report    = '';
+	$published = pfb_schedule_atomic_json_publish(
+		"{$dbdir}/pfb_sync_copied.json",
+		static function () use ($kind, $current, $expected, $dbdir, &$report): array {
+			$state = pfb_sync_copied_read($dbdir);
+			ksort($state['findings'], SORT_STRING);
+
+			$recorded = $state['recorded'][$kind] ?? NULL;
+			$diff     = pfb_sync_copied_diff(is_array($recorded) ? $recorded : NULL, $current, $expected);
+			$findings = $state['findings'];
+			if ($diff === array()) {
+				unset($findings[$kind]);
+			} else {
+				$findings[$kind] = $diff;
+			}
+			if ($findings !== $state['findings'] && $findings !== array()) {
+				$parts = array();
+				foreach ($findings as $found) {
+					foreach ($found as $key => $attrs) {
+						$parts[] = "{$key} (" . implode(', ', $attrs) . ')';
+					}
+				}
+				$report = localize_text("Copied pfB objects differ from this node's generated objects: %s", implode('; ', $parts));
+			}
+			$state['findings']        = $findings;
+			$state['recorded'][$kind] = pfb_sync_copied_digests($expected);
+			return $state;
+		},
+		'is_array'
+	);
+
+	if (!$published) {
+		logger(LOG_WARNING, 'Copied pfB objects: state not published.', LOG_PREFIX_PKG_PFBLOCKERNG);
+	} elseif ($report !== '') {
+		file_notice('pfBlockerNG Sync', $report, 'pfBlockerNG', '/pfblockerng/pfblockerng_sync.php', 2);
+		logger(LOG_WARNING, $report, LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
 }
 
 // Request-local: set by a policy receive that changed configuration, consumed by plugin_xmlrpc_recv_done.

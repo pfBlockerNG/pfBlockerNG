@@ -3188,6 +3188,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 		if (!$redir_enabled) {
 			// DISABLED: remove all pfB_DNS_Redirect_* NAT rules.
+			pfb_sync_copied_check('nat', [], [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
 				$redir_changed = TRUE;
 			}
@@ -3212,6 +3213,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			if (empty($redir_ifaces)) {
 				// No valid interfaces remain — remove all rules.
+				pfb_sync_copied_check('nat', [], [], $pfb['dbdir']);
 				if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
 					$redir_changed = TRUE;
 				}
@@ -3254,6 +3256,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					}
 				}
 
+				pfb_sync_copied_check('nat', $redir_ex_owned, $redir_new_owned, $pfb['dbdir']);
+
 				if ($redir_ex_owned !== $redir_new_owned) {
 					$redir_changed = TRUE;
 					config_set_path('nat/rule', array_merge($redir_ex_other, $redir_new_owned));
@@ -3282,6 +3286,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 		if (!$dot_enabled) {
 			// DISABLED: remove all pfB_DoT_Block_* filter rules.
+			pfb_sync_copied_check('dot_filter', [], [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
 				$dot_changed = TRUE;
 			}
@@ -3309,6 +3314,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			if (empty($dot_ifaces)) {
 				// No valid interfaces remain — remove all rules.
+				pfb_sync_copied_check('dot_filter', [], [], $pfb['dbdir']);
 				if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
 					$dot_changed = TRUE;
 				}
@@ -3383,6 +3389,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$dot_new_owned[] = $dot_rule;
 					}
 				}
+
+				pfb_sync_copied_check('dot_filter', $dot_ex_owned, $dot_new_owned, $pfb['dbdir']);
 
 				if ($dot_ex_owned !== $dot_new_owned) {
 					$dot_changed = TRUE;
@@ -4733,6 +4741,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	config_read_file(FALSE, TRUE);
 
 	$exist_aliases = config_get_path('aliases/alias', []);
+
+	// Copied-object detector: only the pfB aliases, before the non-pfB ones are appended below.
+	$pfb_alias_is_managed = static fn (array $alias): bool => str_starts_with($alias['name'], 'pfB_');
+	$pfb_aliases_current  = array_values(array_filter($exist_aliases, $pfb_alias_is_managed));
+	$pfb_aliases_expected = array_values(array_filter($new_aliases, $pfb_alias_is_managed));
+	pfb_sync_copied_check('aliases', $pfb_aliases_current, $pfb_aliases_expected, $pfb['dbdir']);
+
 	foreach ($exist_aliases as $cbalias) {
 
 		if (str_starts_with($cbalias['name'], 'pfB_')) {
@@ -4882,6 +4897,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				$pfb['inbound_interfaces']  ?? [],
 				$pfb['outbound_interfaces'] ?? []
 			);
+
+			// Copied-object detector: only the pfB-owned rules, before the write decision below.
+			$pfb_rules_current  = array_values(array_filter($rules, 'pfb_rule_is_pfb_owned'));
+			$pfb_rules_expected = array_values(array_filter($new_rules, 'pfb_rule_is_pfb_owned'));
+			pfb_sync_copied_check('filter', $pfb_rules_current, $pfb_rules_expected, $pfb['dbdir']);
 
 			unset($pfb['permit_inbound'], $pfb['permit_outbound'], $pfb['deny_inbound'],
 			    $pfb['deny_outbound'], $pfb['match_inbound'], $pfb['match_outbound'],

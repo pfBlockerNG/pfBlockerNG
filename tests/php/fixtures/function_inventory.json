@@ -10945,6 +10945,19 @@
             }
         ]
     },
+    "pfb_rule_is_pfb_owned": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "rule",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_run_hooks": {
         "returnsRef": false,
         "returnType": null,
@@ -12715,6 +12728,139 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
+            }
+        ]
+    },
+    "pfb_sync_copied_check": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "expected",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_copied_diff": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "recorded",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": null
+            },
+            {
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "expected",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_copied_digest": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "leaves",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_copied_digests": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "objects",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_copied_index": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "objects",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_copied_leaves": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "node",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "prefix",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
+            }
+        ]
+    },
+    "pfb_sync_copied_read": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },
