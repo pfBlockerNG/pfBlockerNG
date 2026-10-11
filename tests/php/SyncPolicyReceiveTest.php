@@ -509,6 +509,23 @@ final class SyncPolicyReceiveTest extends TestCase
 		$this->assertTrue(pfb_sync_receive_suppressed(), 'the repeated receive keeps the suppression');
 	}
 
+	/**
+	 * A group whose row list holds one empty entry reads back from config.xml once as `row => []`
+	 * with the key present (pfsense/pfsense xmlparse.inc @9363ac5b), not as the settled shape; the
+	 * suppression digest must normalise what the node stores, not hash it raw.
+	 */
+	public function testSuppressionHoldsAfterASingleReparseOfAnEmptyRowEntry(): void
+	{
+		$payload = self::senderSections();
+		$payload['pfblockernglistsv4']['config'][1]['row'] = [0 => []];
+		$this->assertNotSame([], $this->receive($payload), 'before-state: the first receive changes the receiver');
+		$this->assertTrue(pfb_sync_receive_suppressed(), 'before-state: suppressed right after the receive');
+
+		$GLOBALS['config']['installedpackages']['pfblockernglistsv4']['config'][1]['row'] = [];
+
+		$this->assertTrue(pfb_sync_receive_suppressed(), 'the reparsed policy still equals the accepted one');
+	}
+
 	public function testChangedPolicyReceiveRecordsTheAcceptedDigestAndLogsOneValueFreeLine(): void
 	{
 		$payload = self::senderSections();

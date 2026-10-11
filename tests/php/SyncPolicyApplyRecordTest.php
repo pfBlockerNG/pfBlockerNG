@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  * OPEN record, so a purely local apply never creates or changes one. The receive record (`last`)
  * keeps its own vocabulary whatever the apply does.
  *
- * Also pins the state file write: a unique 0600 temp file, never a followed symlink.
+ * Also pins the state file write: an owner-only (0600) regular file, no temp file left behind.
  */
 #[CoversFunction('pfb_sync_receive_state_read')]
 #[CoversFunction('pfb_sync_receive_state_write')]
@@ -27,7 +27,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	private const REASON_WINDOW = 'outside the apply window';
 	private const REASON_FAILED = 'apply failed; pending changes kept';
 	private const REASON_RELOAD = 'firewall reload not confirmed; pending changes kept';
-	private const REASON_DEFERRED = 'deferred: another pass is running';
 
 	private string $dir = '';
 	private string $stateDir = '';
@@ -313,34 +312,6 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertLastStillChanged();
 	}
 
-	/** @return iterable<string,array{0:string}> */
-	public static function deferralCauses(): iterable
-	{
-		yield 'dispatcher lock held' => ['dispatcher-lock'];
-		yield 'feed-pass lock held'  => ['feed-pass-lock'];
-	}
-
-	#[DataProvider('deferralCauses')]
-	public function testManualApplyDeferredByAnotherPassKeepsTheRecordWaiting(string $cause): void
-	{
-		$this->seedRecord('waiting');
-		$this->seedPendingCron(FALSE);
-		$manualRuns = 0;
-
-		$this->tick(static function (?string &$deferred_by = NULL) use (&$manualRuns, $cause): bool {
-			$manualRuns++;
-			$deferred_by = $cause;
-			return FALSE;
-		});
-
-		$this->assertSame(1, $manualRuns, 'the apply was dispatched');
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'the pending marker is kept for the next tick');
-		$apply = $this->apply();
-		$this->assertSame('waiting', $apply['outcome'] ?? NULL, 'a deferral is not a failure');
-		$this->assertSame(self::REASON_DEFERRED, $apply['reason'] ?? NULL);
-		$this->assertLastStillChanged();
-	}
-
 	// ---- (d) a completed apply: the real end of sync_package_pfblockerng() ---------------
 
 	private function seedApplyEnvironment(): void
@@ -400,33 +371,118 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertLastStillChanged();
 	}
 
-	// A receive that opened its record after this pass started is not applied by it (PR #3480 N1).
-	public function testCompletedPassLeavesARecordOpenedAfterItStartedWaiting(): void
+	/** The pass's own apply reconciliation fails to clear the pending marker, as an unconfirmed reload does. */
+	private function breakTheDueLedger(): void
 	{
-		$time = $this->seedRecord('waiting', '', -60);
-		$this->seedApplyEnvironment();
-
-		sync_package_pfblockerng();
-
-		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass completed and cleared the pending marker');
-		$this->assertSame(['time' => $time, 'outcome' => 'waiting'], $this->apply());
-		$this->assertLastStillChanged();
-	}
-
-	public function testUnconfirmedPassLeavesARecordOpenedAfterItStartedWaiting(): void
-	{
-		$time = $this->seedRecord('waiting', '', -60);
-		$this->seedApplyEnvironment();
 		$this->assertTrue(pfb_due_ledger_write_entry('cron', ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE], $this->dir));
 		$ledger = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 		$ledger['dcc'] = 'not-an-entry';
 		file_put_contents($this->dir . '/pfb_due_ledger.json', json_encode($ledger));
+	}
+
+	/**
+	 * Runs $action once from inside the next pass, in a later second than the pass started in; the
+	 * logger double is the pass's first observable call after it captured its start.
+	 */
+	private function duringPass(callable $action): ArrayObject
+	{
+		$probe = new ArrayObject(['fired' => FALSE]);
+		$GLOBALS['pfb_test_logger_calls'] = new class ($action, $probe) implements ArrayAccess {
+			public function __construct(private $action, private ArrayObject $probe) {}
+			public function offsetExists(mixed $o): bool { return FALSE; }
+			public function offsetGet(mixed $o): mixed { return NULL; }
+			public function offsetSet(mixed $o, mixed $v): void
+			{
+				if (!$this->probe['fired']) {
+					$this->probe['fired'] = TRUE;
+					time_sleep_until(floor(microtime(TRUE)) + 1);
+					($this->action)();
+				}
+			}
+			public function offsetUnset(mixed $o): void {}
+		};
+
+		return $probe;
+	}
+
+	/** @return array<string,mixed> outcome and reason of the apply record, nothing else */
+	private function settled(): array
+	{
+		return array_intersect_key($this->apply() ?? [], ['outcome' => 1, 'reason' => 1]);
+	}
+
+	/** @return iterable<string,array{0:bool,1:array<string,string>}> */
+	public static function passKinds(): iterable
+	{
+		yield 'completed pass'   => [FALSE, ['outcome' => 'applied']];
+		yield 'unconfirmed pass' => [TRUE, ['outcome' => 'failed', 'reason' => self::REASON_RELOAD]];
+	}
+
+	/** @param array<string,string> $settled */
+	#[DataProvider('passKinds')]
+	public function testTickRestampDuringAPassDoesNotHideThatThePassSettledTheRecord(bool $unconfirmed, array $settled): void
+	{
+		// The tick re-stamps an open record as waiting (outside the window) on every run, before it takes any lock.
+		$this->seedRecord('waiting', '', 100);
+		$this->seedApplyEnvironment();
+		$unconfirmed && $this->breakTheDueLedger();
+		$probe = $this->duringPass(fn () => pfb_sync_apply_record('waiting', self::REASON_WINDOW, $this->dir));
 
 		sync_package_pfblockerng();
 
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass kept the pending marker');
-		$this->assertSame(['time' => $time, 'outcome' => 'waiting'], $this->apply());
+		$this->assertTrue($probe['fired'], 'before-state check: the re-stamp ran inside the pass');
+		$this->assertSame($unconfirmed, is_file($GLOBALS['pfb']['pending_marker']), 'before-state check: the pass ended as the case says');
+		$this->assertSame($settled, $this->settled());
 		$this->assertLastStillChanged();
+	}
+
+	/** @param array<string,string> $settled */
+	#[DataProvider('passKinds')]
+	public function testPassLeavesARecordReopenedAfterItStartedWaiting(bool $unconfirmed, array $settled): void
+	{
+		$this->seedRecord('waiting', '', 100);
+		$this->seedApplyEnvironment();
+		$unconfirmed && $this->breakTheDueLedger();
+		$probe = $this->duringPass(fn () => pfb_sync_apply_record('waiting', '', $this->dir, TRUE));
+
+		sync_package_pfblockerng();
+
+		$this->assertTrue($probe['fired'], 'before-state check: the receive reopened the record inside the pass');
+		$this->assertSame($unconfirmed, is_file($GLOBALS['pfb']['pending_marker']), 'before-state check: the pass ended as the case says');
+		$this->assertSame(['outcome' => 'waiting'], $this->settled(), 'the pass did not apply that receive');
+		$this->assertLastStillChanged();
+	}
+
+	// The settle compares the record's OPEN time with the pass start: opened in the pass's own second still settles.
+	public function testSettleBoundaryIsTheSecondTheRecordWasOpenedIn(): void
+	{
+		$passStarted = time() - 10;
+		$seed = fn (int $opened) => pfb_sync_receive_state_write([
+			'accepted_digest' => NULL,
+			'last'            => NULL,
+			'apply'           => ['time' => $passStarted + 5, 'opened' => $opened, 'outcome' => 'waiting'],
+		], $this->dir);
+
+		$seed($passStarted);
+		pfb_sync_apply_record('applied', '', $this->dir, FALSE, $passStarted);
+		$this->assertSame(['outcome' => 'applied'], $this->settled(), 'opened in the pass start second, last moved later');
+
+		$seed($passStarted + 1);
+		pfb_sync_apply_record('applied', '', $this->dir, FALSE, $passStarted);
+		$this->assertSame(['outcome' => 'waiting'], $this->settled(), 'opened the second after the pass started');
+	}
+
+	public function testLaterMovesKeepTheOpenTimeAndReopeningResetsIt(): void
+	{
+		$opened = time() - 100;
+		pfb_sync_receive_state_write(['accepted_digest' => NULL, 'last' => NULL, 'apply' => ['time' => $opened, 'opened' => $opened, 'outcome' => 'waiting']], $this->dir);
+
+		pfb_sync_apply_record('failed', self::REASON_FAILED, $this->dir);
+		$this->assertSame($opened, $this->apply()['opened'] ?? NULL, 'a move keeps when the record was opened');
+		$this->assertGreaterThan($opened, $this->apply()['time'] ?? 0);
+
+		pfb_sync_apply_record('waiting', '', $this->dir, TRUE);
+		$this->assertGreaterThan($opened, $this->apply()['opened'] ?? 0, 'opening again restarts it');
 	}
 
 	private function resetEnvironment(): void
@@ -505,15 +561,10 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 	// ---- state file write ---------------------------------------------------------------
 
-	public function testStateWriteNeverFollowsAPlantedTempSymlink(): void
+	public function testStateWriteIsAnOwnerOnlyRegularFile(): void
 	{
-		$sentinel = $this->dir . '/sentinel.txt';
-		file_put_contents($sentinel, 'SENTINEL-UNTOUCHED');
-		$this->assertTrue(symlink($sentinel, $this->dir . '/pfb_sync_receive.json.tmp'));
-
 		pfb_sync_receive_record('unchanged', str_repeat('d', 64), '', $this->dir);
 
-		$this->assertSame('SENTINEL-UNTOUCHED', file_get_contents($sentinel), 'the symlink target is never written');
 		$path = $this->dir . '/pfb_sync_receive.json';
 		$this->assertFalse(is_link($path));
 		$this->assertTrue(is_file($path));

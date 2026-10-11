@@ -22167,16 +22167,20 @@ function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, stri
 /*
  * Moves the apply record of a received policy (waiting -> failed|applied, with a fixed value-free
  * reason). Only a changed receive opens one ($open); every other caller moves an OPEN record
- * (waiting|failed), so a purely local apply never creates or changes it. With $moved_by set, a record
- * last moved after that time stays as it is (a pass settles only what it could have applied).
+ * (waiting|failed), so a purely local apply never creates or changes it. The record keeps the time it
+ * was opened ('opened'; a record without one falls back to its last move). With $moved_by set, a record
+ * opened after that time stays as it is (a pass settles only what it could have applied); a later
+ * move of an older record, such as the tick's waiting re-stamp, does not hide it from the pass.
  */
 function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, bool $open = FALSE, ?int $moved_by = NULL): void {
-	$state = pfb_sync_receive_state_read($dbdir);
+	$state  = pfb_sync_receive_state_read($dbdir);
+	$opened = $state['apply']['opened'] ?? $state['apply']['time'] ?? 0;
 	if (!$open && (!in_array($state['apply']['outcome'] ?? NULL, array('waiting', 'failed'), TRUE)
-	    || ($moved_by !== NULL && ($state['apply']['time'] ?? 0) > $moved_by))) {
+	    || ($moved_by !== NULL && $opened > $moved_by))) {
 		return;
 	}
-	$state['apply'] = array('time' => time(), 'outcome' => $outcome) + ($reason === '' ? array() : array('reason' => $reason));
+	$now = time();
+	$state['apply'] = array('time' => $now, 'opened' => $open ? $now : $opened, 'outcome' => $outcome) + ($reason === '' ? array() : array('reason' => $reason));
 	pfb_sync_receive_state_write($state, $dbdir);
 }
 
