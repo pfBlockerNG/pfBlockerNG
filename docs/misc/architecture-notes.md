@@ -1212,8 +1212,9 @@ Full design: ADR-39.
   conf and delete any OTHER installed identity (legacy suffix, a fork); install or
   force-reinstall (`-f` for a reinstall/downgrade — crossing release families prints a
   WARNING and proceeds) with NO `-r`, so the package's RUN_DEPENDS resolve from every
-  enabled repository and the channel repo's priority (100) picks the build (issue #3484);
-  then re-read every claim from `pkg`
+  enabled repository and the channel repo's priority (100) picks the build (issue #3484;
+  `pkg` therefore also refreshes every enabled catalogue and may upgrade out-of-date
+  dependencies); then re-read every claim from `pkg`
   and verify identity, `%R`, version, the `pkg info -l` payload, and the surviving
   `installedpackages/pfblockerng` section. A converged box re-run performs zero pkg
   mutations (byte-identical conf + hook). Exit codes: 0 ok (including a reported no-op),

@@ -2555,10 +2555,10 @@ _FOREIGN_DEP = "lighttpd"
 
 def _seed_foreign_only_dep(root: str) -> None:
     """The box of the #3484 lab run: pfBlockerNG needs ``lighttpd``, which only Netgate's
-    ``pfSense`` repo offers, and that repo also carries an older pfBlockerNG build — so the
+    ``pfSense`` repo offers, and that repo also carries a HIGHER pfBlockerNG version — so the
     build only comes from pfBlockerNG's own repo because that repo's priority (100, from the
-    conf install.sh writes) outranks Netgate's."""
-    _seed_catalog(root, _FOREIGN_REPO, ("3.2.14",))
+    conf install.sh writes) outranks Netgate's, version notwithstanding."""
+    _seed_catalog(root, _FOREIGN_REPO, ("9.9.9",))
     _seed_offer(root, _FOREIGN_REPO, _FOREIGN_DEP, "1.4.76")
     _seed_deps(root, _CANONICAL, (_FOREIGN_DEP,))
     assert _installed(root, _FOREIGN_DEP) is None, "before-state: the dependency is not installed"
