@@ -3659,7 +3659,10 @@ def test_pfblockerng_tick_delegates_safesearch_to_due_ledger() -> None:
     assert "pfblockerng_ss_refresh" not in tick_branch
 
 
-def test_pfblockerng_dispatcher_answers_a_verb_query_over_http_with_nothing(webui: WebUI) -> None:
+def test_pfblockerng_dispatcher_answers_a_verb_query_over_http_with_nothing(
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
     """issue #3469: the root-privileged CLI verb dispatcher sits in the webConfigurator docroot.
 
     Scenario: a verb-shaped request over HTTP answers with nothing.
