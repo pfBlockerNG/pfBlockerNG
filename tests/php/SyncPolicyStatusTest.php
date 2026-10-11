@@ -225,6 +225,28 @@ final class SyncPolicyStatusTest extends TestCase
 		$this->assertSame(0, $last['ignored_count'] ?? NULL);
 	}
 
+	public function testEmptyRowsKeepIncomingAndAcceptedDigestsEqual(): void
+	{
+		$payload = self::cleanPayload();
+		$payload['pfblockernglistsv4']['config'][1]                = '';
+		$payload['pfblockernglistsv4']['config'][0]['row'][1]      = '';
+		$this->receive($payload);
+
+		$last = $this->last();
+		$this->assertSame($last['accepted_digest'], $last['incoming_digest']);
+		$this->assertSame([], $last['ignored'] ?? NULL);
+	}
+
+	public function testOverLongKeyIsRecordedAsAStarSegmentAndKeepsTheStateSmall(): void
+	{
+		$payload = self::cleanPayload();
+		$payload['pfblockerng']['config'][0][str_repeat('a', 100000)] = 'x';
+		$this->receive($payload);
+
+		$this->assertSame(['installedpackages/pfblockerng/config/0/*'], $this->last()['ignored'] ?? NULL);
+		$this->assertLessThan(65536, strlen($this->rawState()));
+	}
+
 	// ---- 2 ----------------------------------------------------------------------------
 
 	public function testInjectedLocalLeavesAreIgnoredAndListedExactly(): void

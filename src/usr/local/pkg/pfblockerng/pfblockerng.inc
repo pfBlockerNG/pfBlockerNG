@@ -21883,7 +21883,7 @@ function pfb_sync_policy_merge(array $incoming, array $current, ?array &$ignored
 			}
 			return;
 		}
-		$safe = array_map(static fn (string $key): string => ctype_digit($key) || preg_match('/^[a-z_][a-z0-9_.-]*$/D', $key) === 1 ? $key : '*', $p);
+		$safe = array_map(static fn (string $key): string => strlen($key) <= 64 && (ctype_digit($key) || preg_match('/^[a-z_][a-z0-9_.-]*$/D', $key) === 1) ? $key : '*', $p);
 		$skipped['installedpackages/' . implode('/', array_merge(array($s), $safe))] = TRUE;
 	};
 
