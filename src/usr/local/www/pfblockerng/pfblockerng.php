@@ -50,6 +50,10 @@ if ($_SERVER['REMOTE_ADDR'] == '127.0.0.1' && $_REQUEST && $_REQUEST['pfb']) {
 	return;
 }
 
+// CLI-only verb dispatcher served from the docroot; only the CLI SAPI fills the $argv global (issue #3469).
+if (PHP_SAPI !== 'cli') {
+	exit;
+}
 
 require_once('util.inc');
 require_once('functions.inc');
