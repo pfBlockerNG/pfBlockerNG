@@ -377,6 +377,33 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertSame([self::key('nat') => ['*']], pfb_sync_copied_diff($recorded, [$flat], [$base]), 'a flat NUL key is neither the nested path nor lost');
 	}
 
+	public function testMissingSubtreeReportsEachLeafPathOfTheSideThatHasIt(): void
+	{
+		$base    = self::base('nat');
+		$without = array_diff_key($base, ['destination' => TRUE]);
+		$key     = self::key('nat');
+
+		$this->assertSame([$key => ['destination/address', 'destination/port']], pfb_sync_copied_diff([], [$without], [$base]), 'the copy lacks the subtree');
+		$this->assertSame([$key => ['destination/address', 'destination/port']], pfb_sync_copied_diff([], [$base], [$without]), 'the copy adds the subtree');
+
+		$deep = $without + ['destination' => ['address' => 'LEAK_DEST_SENTINEL', "bad\0key" => ['inner' => 'x'], 'sub' => ['k' => 'y'], 'empty' => []]];
+		$diff = pfb_sync_copied_diff([], [$deep], [$without]);
+		$this->assertSame([$key => ['destination/*/inner', 'destination/address', 'destination/empty', 'destination/sub/k']], $diff, 'nested leaves, masked segments, an empty array is itself a leaf');
+		$this->assertNoValueLeak($diff);
+	}
+
+	public function testAScalarAgainstASubtreeReportsTheSubtreeLeavesAndAMissingScalarItsOwnPath(): void
+	{
+		$base   = self::base('nat');
+		$scalar = ['destination' => 'LEAK_DEST_SENTINEL'] + $base;
+		$key    = self::key('nat');
+
+		$this->assertSame([$key => ['destination/address', 'destination/port']], pfb_sync_copied_diff([], [$scalar], [$base]));
+		$this->assertSame([$key => ['destination/address', 'destination/port']], pfb_sync_copied_diff([], [$base], [$scalar]));
+		$this->assertSame([$key => ['target']], pfb_sync_copied_diff([], [array_diff_key($base, ['target' => TRUE])], [$base]), 'a missing scalar');
+		$this->assertSame([$key => ['extra']], pfb_sync_copied_diff([], [$base + ['extra' => 'LEAK_LOCAL_SENTINEL']], [$base]), 'an extra scalar');
+	}
+
 	// ---- raw rows: digest and compare what config holds, no normalization -----------------------
 
 	#[DataProvider('kinds')]
@@ -592,6 +619,9 @@ final class SyncCopiedObjectsTest extends TestCase
 			'attribute is not text'    => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => [1]]]]],
 			'attribute list is a map'  => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => ['k' => 'interface']]]]],
 			'attribute list is text'   => [['recorded' => $valid, 'findings' => ['nat' => ['pfB_x#0' => 'interface']]]],
+			'recorded key is markup'   => [['recorded' => ['nat' => ['<script>LEAK_LOCAL_SENTINEL</script>' => $hex]], 'findings' => []]],
+			'recorded key is too short' => [['recorded' => ['nat' => [substr($hex, 1) => $hex]], 'findings' => []]],
+			'recorded key is upper case' => [['recorded' => ['nat' => [strtoupper($hex) => $hex]], 'findings' => []]],
 		];
 	}
 
@@ -632,6 +662,46 @@ final class SyncCopiedObjectsTest extends TestCase
 		foreach ($this->emitted() as $text) {
 			$this->assertStringNotContainsString('<', $text);
 		}
+	}
+
+	public function testMaskedIdentityFindingSurvivesRereadAndIsNeverRenotified(): void
+	{
+		$managed = ['descr' => 'pfB_A+B'] + self::base('filter');
+		$copy    = ['interface' => 'LEAK_IFACE_SENTINEL'] + $managed;
+
+		pfb_sync_copied_check('filter', [$managed], [$managed], $this->dir);
+		for ($run = 1; $run <= 5; $run++) {
+			pfb_sync_copied_check('filter', [$copy], [$managed], $this->dir);
+
+			$this->assertSame(['filter' => ['pfB_A?B#0' => ['interface']]], pfb_sync_copied_read($this->dir)['findings'], "run {$run}: the finding is read back");
+			$this->assertCount(1, $this->copiedNotices(), "run {$run}: one notice in total");
+		}
+		$this->assertNoValueLeak();
+	}
+
+	public function testEveryLabelTheIndexerProducesReadsBack(): void
+	{
+		$objects  = array_map(static fn (int $byte): array => ['descr' => 'pfB_' . chr($byte) . "x{$byte}"] + self::base('filter'), range(0, 255));
+		$findings = pfb_sync_copied_diff([], $objects, []);
+		$state    = ['recorded' => [], 'findings' => ['filter' => $findings]];
+		file_put_contents($this->stateFile(), json_encode($state, JSON_THROW_ON_ERROR));
+
+		$this->assertCount(256, $findings);
+		$this->assertSame($state, pfb_sync_copied_read($this->dir));
+	}
+
+	public function testMalformedRecordedKeyIsLostStateAndNeverRepublishedByAnotherKind(): void
+	{
+		file_put_contents($this->stateFile(), json_encode([
+			'recorded' => ['nat' => ['<script>LEAK_LOCAL_SENTINEL</script>' => str_repeat('a', 64)], 'filter' => pfb_sync_copied_digests([self::base('filter')])],
+			'findings' => [],
+		], JSON_THROW_ON_ERROR));
+		$this->assertSame(['recorded' => [], 'findings' => []], pfb_sync_copied_read($this->dir));
+
+		pfb_sync_copied_check('filter', [self::base('filter')], [self::base('filter')], $this->dir);
+
+		$this->assertStringNotContainsString('LEAK_LOCAL_SENTINEL', $this->stateBytes());
+		$this->assertSame(['filter'], array_keys(pfb_sync_copied_read($this->dir)['recorded']));
 	}
 
 	// ---- row 10: acceptance 12, the apply writes the same bytes -------------------------------
@@ -859,6 +929,47 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertCount(1, $this->copiedNotices());
 		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
 		$this->assertNoValueLeak();
+	}
+
+	public function testFilterAutoruleWriteKeepsTheRawTrackerAndOnlyTheCheckedCopyIsCast(): void
+	{
+		global $pfb;
+
+		$block = ['permit_inbound', 'permit_outbound', 'deny_inbound', 'deny_outbound', 'match_inbound', 'match_outbound', 'permit_self', 'deny_self', 'match_self'];
+		$rule  = ['descr' => 'pfB_Beta auto rule', 'type' => 'block', 'ipprotocol' => 'inet', 'source' => ['address' => 'pfB_Beta_v4'], 'destination' => ['any' => '']];
+		$user  = ['descr' => 'user rule', 'type' => 'pass', 'interface' => 'wan', 'tracker' => 1700000001];
+		$pfb   = [
+			'dbdir' => $this->dir, 'autorules' => TRUE, 'enable' => PfbToggle::On, 'remove' => FALSE, 'dnsbl' => PfbToggle::Off,
+			'order' => 'order_0', 'float' => PfbToggle::Off, 'inbound_interfaces' => ['lan'], 'outbound_interfaces' => [],
+			'trackerids' => [], 'foreign_trackerids' => [], 'deny_inbound' => [$rule],
+		];
+		$generated = array_fill_keys($block, []) + ['inbound_floating' => '', 'outbound_floating' => '', 'dnsbl_float' => []];
+		$generated['deny_inbound'] = [$rule];
+		$oracle = pfb_build_autorule_list([$user], $generated, 'order_0', PfbToggle::Off, ['lan'], []);
+		$pfb['trackerids'] = [];
+
+		$GLOBALS['config'] = [];
+		config_set_path('filter/rule', [$user]);
+		$this->runApplyBlock(
+			"\tif (\$pfb['autorules'] || \$pfb['enable'] !== PfbToggle::On || \$pfb['remove']) {",
+			"\t#################################\n\t#\tpfSense Integration",
+			'enabled'
+		);
+
+		$written = config_get_path('filter/rule');
+		$this->assertSame($oracle, $written, 'the written rules are exactly what the builder returned, tracker types included');
+		$this->assertSame(['pfB_Beta auto rule', 'user rule'], array_column($written, 'descr'));
+		$this->assertIsInt($written[0]['tracker'], 'the written pfB tracker stays an integer');
+		$this->assertSame(1700000001, $written[1]['tracker']);
+		$this->assertSame(['pfBlockerNG: saving Firewall rules'], $GLOBALS['pfb_test_write_config_calls']);
+
+		// Only the check's own expected copy compares the tracker as a string, as a config reread returns it.
+		$cast = array_replace($written[0], ['tracker' => (string) $written[0]['tracker']]);
+		$this->assertSame(
+			[hash('sha256', 'pfB_Beta auto rule#0') => self::digestOf($cast)],
+			pfb_sync_copied_read($this->dir)['recorded']['filter']
+		);
+		$this->assertNotSame(self::digestOf($written[0]), self::digestOf($cast));
 	}
 
 	// ---- wiring: writers that tests cannot drive end to end (reported as a deviation) ----------

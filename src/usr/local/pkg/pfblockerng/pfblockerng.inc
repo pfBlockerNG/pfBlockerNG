@@ -22642,6 +22642,9 @@ function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
  * changed after this node wrote it, never re-owns it; the state file keeps digests and attribute names, never a value.
  */
 
+// A display label is made of these bytes; the sanitizer masks every other byte to '?', which is in the class so a label reads back.
+define('PFB_SYNC_COPIED_LABEL_CLASS', 'A-Za-z0-9_. ?-');
+
 // Every level key-sorted so equal rows serialize equal.
 function pfb_sync_copied_sorted(array $node): array {
 	ksort($node, SORT_STRING);
@@ -22672,7 +22675,7 @@ function pfb_sync_copied_index(array $objects): array {
 		$raw    = is_string($name) ? $name : (is_string($object['descr'] ?? NULL) ? $object['descr'] : '');
 		$suffix = is_string($name) ? '' : '#' . ($seen[$raw] = ($seen[$raw] ?? -1) + 1);
 
-		$index[hash('sha256', $raw . $suffix)] = array(preg_replace('/[^A-Za-z0-9_. -]/', '?', $raw) . $suffix, pfb_sync_copied_sorted($object));
+		$index[hash('sha256', $raw . $suffix)] = array(preg_replace('/[^' . PFB_SYNC_COPIED_LABEL_CLASS . ']/', '?', $raw) . $suffix, pfb_sync_copied_sorted($object));
 	}
 	return $index;
 }
@@ -22694,7 +22697,8 @@ function pfb_sync_copied_digests(array $objects): array {
 }
 
 /**
- * Attribute paths where two canonical rows differ, never a value; a segment outside [A-Za-z0-9_.-] (NUL included) is '*'.
+ * Attribute paths where two canonical rows differ, never a value; a subtree one side lacks reports each of its
+ * leaves, and a segment outside [A-Za-z0-9_.-] (NUL included) is '*'.
  *
  * @param array<string,mixed> $current
  * @param array<string,mixed> $expected
@@ -22705,11 +22709,11 @@ function pfb_sync_copied_paths(array $current, array $expected, string $prefix =
 	foreach (array_keys($current + $expected) as $key) {
 		$name = (string) $key;
 		$path = $prefix . (preg_match('/^[A-Za-z0-9_.-]+$/D', $name) === 1 ? $name : '*');
-		if (!array_key_exists($name, $current) || !array_key_exists($name, $expected)) {
-			$paths[] = $path;
-		} elseif (is_array($current[$name]) && is_array($expected[$name])) {
-			$paths = array_merge($paths, pfb_sync_copied_paths($current[$name], $expected[$name], "{$path}/"));
-		} elseif ($current[$name] !== $expected[$name]) {
+		$here = is_array($current[$name] ?? NULL) ? $current[$name] : array();
+		$want = is_array($expected[$name] ?? NULL) ? $expected[$name] : array();
+		if ($here !== array() || $want !== array()) {
+			$paths = array_merge($paths, pfb_sync_copied_paths($here, $want, "{$path}/"));
+		} elseif (!array_key_exists($name, $current) || !array_key_exists($name, $expected) || $current[$name] !== $expected[$name]) {
 			$paths[] = $path;
 		}
 	}
@@ -22765,8 +22769,8 @@ function pfb_sync_copied_well_formed(mixed $data): bool {
 		if (!in_array($kind, $kinds, TRUE) || !is_array($digests)) {
 			return FALSE;
 		}
-		foreach ($digests as $digest) {
-			if (!is_string($digest) || preg_match('/^[0-9a-f]{64}$/D', $digest) !== 1) {
+		foreach ($digests as $id => $digest) {
+			if (preg_match('/^[0-9a-f]{64}$/D', (string) $id) !== 1 || !is_string($digest) || preg_match('/^[0-9a-f]{64}$/D', $digest) !== 1) {
 				return FALSE;
 			}
 		}
@@ -22776,7 +22780,7 @@ function pfb_sync_copied_well_formed(mixed $data): bool {
 			return FALSE;
 		}
 		foreach ($found as $label => $attrs) {
-			if (preg_match('/^[A-Za-z0-9_. -]*(?:#[0-9]+)?$/D', (string) $label) !== 1 || !is_array($attrs) || !array_is_list($attrs)) {
+			if (preg_match('/^[' . PFB_SYNC_COPIED_LABEL_CLASS . ']*(?:#[0-9]+)?$/D', (string) $label) !== 1 || !is_array($attrs) || !array_is_list($attrs)) {
 				return FALSE;
 			}
 			foreach ($attrs as $attr) {
