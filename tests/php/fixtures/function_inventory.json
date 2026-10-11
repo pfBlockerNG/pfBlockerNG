@@ -12695,6 +12695,13 @@
                 "variadic": false,
                 "type": "?int",
                 "default": "NULL"
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
@@ -12812,6 +12819,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
@@ -12850,7 +12864,7 @@
     },
     "pfb_sync_receive_record": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": [
             {
                 "name": "outcome",
@@ -12879,6 +12893,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
@@ -12895,23 +12916,30 @@
             }
         ]
     },
-    "pfb_sync_receive_state_write": {
+    "pfb_sync_receive_state_update": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": [
-            {
-                "name": "state",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            },
             {
                 "name": "dbdir",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "mutate",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },

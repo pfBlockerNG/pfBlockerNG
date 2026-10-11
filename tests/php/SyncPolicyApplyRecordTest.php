@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  * Also pins the state file write: an owner-only (0600) regular file, no temp file left behind.
  */
 #[CoversFunction('pfb_sync_receive_state_read')]
-#[CoversFunction('pfb_sync_receive_state_write')]
+#[CoversFunction('pfb_sync_apply_record')]
 #[CoversFunction('pfb_sync_receive_record')]
 #[CoversFunction('pfb_sync_receive_accepted_clear')]
 #[CoversFunction('pfblockerng_plugin_xmlrpc_recv_done')]
@@ -27,6 +27,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	private const REASON_WINDOW = 'outside the apply window';
 	private const REASON_FAILED = 'apply failed; pending changes kept';
 	private const REASON_RELOAD = 'firewall reload not confirmed; pending changes kept';
+	private const REASON_APPLIED = 'update pass completed; firewall reload started';
 
 	private string $dir = '';
 	private string $stateDir = '';
@@ -135,16 +136,22 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		return $this->state()['apply'] ?? NULL;
 	}
 
+	/** Seeds the state file as a peer's earlier publication. */
+	private function seedState(array $state): void
+	{
+		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode($state));
+	}
+
 	/** Seeds the state as a prior changed receive that opened an apply record $age seconds ago. */
 	private function seedRecord(string $outcome, string $reason = '', int $age = 100): int
 	{
 		$time  = time() - $age;
 		$apply = ['time' => $time, 'outcome' => $outcome] + ($reason === '' ? [] : ['reason' => $reason]);
-		pfb_sync_receive_state_write([
+		$this->seedState([
 			'accepted_digest' => 'ab' . str_repeat('0', 62),
 			'last'            => ['time' => $time, 'outcome' => 'changed'],
 			'apply'           => $apply,
-		], $this->dir);
+		]);
 
 		return $time;
 	}
@@ -240,7 +247,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	{
 		$this->receive(self::policyPayload());
 		pfblockerng_plugin_xmlrpc_recv_done(NULL);
-		pfb_sync_receive_state_write(['apply' => NULL] + $this->state(), $this->dir);
+		$this->seedState(['apply' => NULL] + $this->state());
 		$this->assertSame([], $this->receive(self::policyPayload()), 'before-state: the second receive changes nothing');
 
 		pfblockerng_plugin_xmlrpc_recv_done(NULL);
@@ -348,7 +355,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass cleared the pending marker');
 		$apply = $this->apply();
 		$this->assertSame('applied', $apply['outcome'] ?? NULL);
-		$this->assertArrayNotHasKey('reason', $apply ?? []);
+		$this->assertSame(self::REASON_APPLIED, $apply['reason'] ?? NULL, 'the record claims only that the reload started');
 		$this->assertLastStillChanged();
 	}
 
@@ -414,7 +421,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	/** @return iterable<string,array{0:bool,1:array<string,string>}> */
 	public static function passKinds(): iterable
 	{
-		yield 'completed pass'   => [FALSE, ['outcome' => 'applied']];
+		yield 'completed pass'   => [FALSE, ['outcome' => 'applied', 'reason' => self::REASON_APPLIED]];
 		yield 'unconfirmed pass' => [TRUE, ['outcome' => 'failed', 'reason' => self::REASON_RELOAD]];
 	}
 
@@ -457,11 +464,11 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	public function testSettleBoundaryIsTheSecondTheRecordWasOpenedIn(): void
 	{
 		$passStarted = time() - 10;
-		$seed = fn (int $opened) => pfb_sync_receive_state_write([
+		$seed = fn (int $opened) => $this->seedState([
 			'accepted_digest' => NULL,
 			'last'            => NULL,
 			'apply'           => ['time' => $passStarted + 5, 'opened' => $opened, 'outcome' => 'waiting'],
-		], $this->dir);
+		]);
 
 		$seed($passStarted);
 		pfb_sync_apply_record('applied', '', $this->dir, FALSE, $passStarted);
@@ -475,7 +482,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	public function testLaterMovesKeepTheOpenTimeAndReopeningResetsIt(): void
 	{
 		$opened = time() - 100;
-		pfb_sync_receive_state_write(['accepted_digest' => NULL, 'last' => NULL, 'apply' => ['time' => $opened, 'opened' => $opened, 'outcome' => 'waiting']], $this->dir);
+		$this->seedState(['accepted_digest' => NULL, 'last' => NULL, 'apply' => ['time' => $opened, 'opened' => $opened, 'outcome' => 'waiting']]);
 
 		pfb_sync_apply_record('failed', self::REASON_FAILED, $this->dir);
 		$this->assertSame($opened, $this->apply()['opened'] ?? NULL, 'a move keeps when the record was opened');

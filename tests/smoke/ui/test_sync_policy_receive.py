@@ -60,6 +60,7 @@ V4_LISTS = "installedpackages/pfblockernglistsv4/config"
 APPLY_BANNER = "UPDATE PROCESS START"
 # Salvage cap for the receive-triggered apply (an update pass + filter reload), never an assertion.
 SETTLE_TIMEOUT = 300.0
+MEMBER_TIMEOUT = 60.0  # the apply's own filter reload is detached; the table fills a few seconds after the pass ends
 
 _OPEN, _CLOSE = "<<<PFB3452>>>", "<<<END3452>>>"
 # `global $pfb` binds the package globals whichever scope pfSsh.php evals the buffer in.
@@ -221,12 +222,27 @@ def _table_members(vm: helpers.SmokeVM) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _await_member(vm: helpers.SmokeVM) -> list[str]:
+    """Poll the group's table until ``FEED_ADDR`` is in it (cap ``MEMBER_TIMEOUT``); return the members seen last."""
+    seen: list[str] = []
+
+    def present() -> bool:
+        seen[:] = _table_members(vm)
+        return helpers.member_present(seen, FEED_ADDR)
+
+    try:
+        helpers.wait_until(present, timeout=MEMBER_TIMEOUT, interval=2.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}; table {TABLE}: expected {FEED_ADDR!r} among {seen!r}") from exc
+    return seen
+
+
 def _receive_and_apply(box: _Box) -> dict[str, Any]:
     """Given-step of the no-op scenarios: receive the changed payload and wait until its apply is over."""
     payload = _changed_payload(box)
     _send(box, payload)
     _settle(box)
-    helpers.apply_filter_sync(box.vm)  # the apply's own filter reload is detached; make the next pfctl read exact
+    _await_member(box.vm)  # the apply's own filter reload is detached: the table is filled once it lands
     return payload
 
 
@@ -276,8 +292,7 @@ def test_changed_policy_receive_applies_exactly_once_with_cron_inhibited(box: _B
     )
 
     _settle(box)
-    helpers.apply_filter_sync(vm)
-    members = _table_members(vm)
+    members = _await_member(vm)
     assert helpers.member_present(members, FEED_ADDR), f"table {TABLE}: expected {FEED_ADDR!r} among {members!r}"
     applies = _apply_banners(vm) - banners_before
     assert applies == 1, f"update passes ({APPLY_BANNER!r} in {helpers.PFB_LOG}): expected 1, got {applies}"

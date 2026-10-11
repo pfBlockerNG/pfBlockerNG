@@ -22134,34 +22134,58 @@ function pfb_sync_receive_state_read(string $dbdir): array {
 	return $state;
 }
 
-function pfb_sync_receive_state_write(array $state, string $dbdir): void {
-	pfb_schedule_atomic_json_publish("{$dbdir}/pfb_sync_receive.json", $state, 'is_array');
+/*
+ * Read-modify-write of the receive state under the publisher's sidecar lock, so a receive and a settling
+ * tick can never publish over each other. $mutate gets the state read INSIDE the lock and returns the
+ * next one, or NULL to leave the file alone. FALSE = the update was not published (one value-free log line).
+ * $io is the publisher's test-only seam.
+ *
+ * @param callable(array<string,mixed>): ?array<string,mixed> $mutate
+ */
+function pfb_sync_receive_state_update(string $dbdir, callable $mutate, array $io = []): bool {
+	$untouched = FALSE;
+	$published = pfb_schedule_atomic_json_publish(
+		"{$dbdir}/pfb_sync_receive.json",
+		static function () use ($dbdir, $mutate, &$untouched): ?array {
+			$next      = $mutate(pfb_sync_receive_state_read($dbdir));
+			$untouched = $next === NULL;
+			return $next;
+		},
+		'is_array',
+		$io
+	);
+	if (!$published && !$untouched) {
+		logger(LOG_WARNING, 'XMLRPC policy receive: state not published.', LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
+	return $published || $untouched;
 }
 
 /*
  * Records one receive and logs one value-free line. A refusal keeps the previous accepted digest;
  * an accepted receive ('changed' or 'unchanged') replaces it with $accepted_digest.
  */
-function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir): void {
-	$state = pfb_sync_receive_state_read($dbdir);
-	$last  = array('time' => time(), 'outcome' => $outcome);
-	if ($reason !== '') {
-		$last['reason'] = $reason;
-	}
-	$next = array(
-		'accepted_digest' => $outcome === 'refused' ? $state['accepted_digest'] : $accepted_digest,
-		'last'            => $last,
-	);
-	if (isset($state['apply'])) {
-		$next['apply'] = $state['apply'];
-	}
-	pfb_sync_receive_state_write($next, $dbdir);
+function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir, array $io = []): bool {
+	$published = pfb_sync_receive_state_update($dbdir, static function (array $state) use ($outcome, $accepted_digest, $reason): array {
+		$last = array('time' => time(), 'outcome' => $outcome);
+		if ($reason !== '') {
+			$last['reason'] = $reason;
+		}
+		$next = array(
+			'accepted_digest' => $outcome === 'refused' ? $state['accepted_digest'] : $accepted_digest,
+			'last'            => $last,
+		);
+		if (isset($state['apply'])) {
+			$next['apply'] = $state['apply'];
+		}
+		return $next;
+	}, $io);
 
 	logger(
 		$outcome === 'refused' ? LOG_WARNING : LOG_NOTICE,
 		localize_text('XMLRPC policy receive: %s%s.', $outcome, $reason === '' ? '' : " ({$reason})"),
 		LOG_PREFIX_PKG_PFBLOCKERNG
 	);
+	return $published;
 }
 
 /*
@@ -22172,25 +22196,28 @@ function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, stri
  * opened after that time stays as it is (a pass settles only what it could have applied); a later
  * move of an older record, such as the tick's waiting re-stamp, does not hide it from the pass.
  */
-function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, bool $open = FALSE, ?int $moved_by = NULL): void {
-	$state  = pfb_sync_receive_state_read($dbdir);
-	$opened = $state['apply']['opened'] ?? $state['apply']['time'] ?? 0;
-	if (!$open && (!in_array($state['apply']['outcome'] ?? NULL, array('waiting', 'failed'), TRUE)
-	    || ($moved_by !== NULL && $opened > $moved_by))) {
-		return;
-	}
-	$now = time();
-	$state['apply'] = array('time' => $now, 'opened' => $open ? $now : $opened, 'outcome' => $outcome) + ($reason === '' ? array() : array('reason' => $reason));
-	pfb_sync_receive_state_write($state, $dbdir);
+function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, bool $open = FALSE, ?int $moved_by = NULL, array $io = []): void {
+	pfb_sync_receive_state_update($dbdir, static function (array $state) use ($outcome, $reason, $open, $moved_by): ?array {
+		$opened = $state['apply']['opened'] ?? $state['apply']['time'] ?? 0;
+		if (!$open && (!in_array($state['apply']['outcome'] ?? NULL, array('waiting', 'failed'), TRUE)
+		    || ($moved_by !== NULL && $opened > $moved_by))) {
+			return NULL;
+		}
+		$now = time();
+		$state['apply'] = array('time' => $now, 'opened' => $open ? $now : $opened, 'outcome' => $outcome) + ($reason === '' ? array() : array('reason' => $reason));
+		return $state;
+	}, $io);
 }
 
 // Drops the accepted digest (the Sync page save calls this); the last outcome and the apply record stay.
-function pfb_sync_receive_accepted_clear(string $dbdir): void {
-	$state = pfb_sync_receive_state_read($dbdir);
-	if ($state['accepted_digest'] !== NULL) {
+function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
+	pfb_sync_receive_state_update($dbdir, static function (array $state): ?array {
+		if ($state['accepted_digest'] === NULL) {
+			return NULL;
+		}
 		$state['accepted_digest'] = NULL;
-		pfb_sync_receive_state_write($state, $dbdir);
-	}
+		return $state;
+	}, $io);
 }
 
 // Request-local: set by a policy receive that changed configuration, consumed by plugin_xmlrpc_recv_done.
@@ -22295,6 +22322,16 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 		}
 	}
 
+	// The accepted digest suppresses the echo of this policy: a receive whose record cannot be published fails closed, applying nothing.
+	if (!pfb_sync_receive_record(
+		$changed === array() ? 'unchanged' : 'changed',
+		pfb_sync_policy_digest(pfb_sync_policy_projection($settled)),
+		'',
+		$pfb['dbdir']
+	)) {
+		return array();
+	}
+
 	// A removed alias closes its ledger entries once, after the whole payload was accepted.
 	$aliases = static function (mixed $section): array {
 		$names = array();
@@ -22311,12 +22348,6 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 		}
 	}
 
-	pfb_sync_receive_record(
-		$changed === array() ? 'unchanged' : 'changed',
-		pfb_sync_policy_digest(pfb_sync_policy_projection($settled)),
-		'',
-		$pfb['dbdir']
-	);
 	if ($changed !== array()) {
 		pfb_sync_receive_changed(TRUE);
 	}
