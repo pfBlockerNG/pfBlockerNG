@@ -31,7 +31,7 @@ override-dependencies = ["pyjwt[crypto]>=2.15.1"]
 # path is the machine-level `uv tool install --upgrade serena-agent` in
 # scripts/agent/setup-agent-tools.sh, which is decoupled from this lock (#3414).
 tools = [
-    "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@ff80347d986a7fd25864dd7aa5c1fb14dc5e2a18",
+    "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@61354f59626c0add974edc5e06272dc42001b1cf",
     "ast-grep-cli",
     "semgrep",
 ]
