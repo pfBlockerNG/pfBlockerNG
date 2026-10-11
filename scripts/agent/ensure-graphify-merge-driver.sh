@@ -45,7 +45,9 @@ main() {
 			exit 1
 			;;
 	esac
-	driver="\"$graphify_bin\" merge-driver %O %A %B"
+	# Graphify writes the union indented; the tracked graph is one compact JSON line
+	# (issue #3477). json.tool reads %A whole before writing it, so in place is safe.
+	driver="\"$graphify_bin\" merge-driver %O %A %B && python3 -m json.tool --compact --no-ensure-ascii %A %A"
 	{
 		git -C "$root" config merge.graphify.name 'graphify graph.json union merge' &&
 			git -C "$root" config merge.graphify.driver "$driver"

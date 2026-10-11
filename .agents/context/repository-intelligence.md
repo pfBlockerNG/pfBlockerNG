@@ -82,8 +82,8 @@ Load when: every agent session, from `AGENTS.md`.
   `scripts/agent/ensure-graphify-merge-driver.sh` installs Graphify,
   registers `merge.graphify.driver` with `git config`, and verifies the registration.
   Without it a merge leaves conflict markers in the graph instead of union-merging it;
-  the driver's output is never trusted, because the push gate rebuilds. The driver
-  writes indented JSON, so refresh the graph after any merge or rebase that touched it.
+  the driver's output is never trusted, because the push gate rebuilds. The registered
+  driver compacts Graphify's merged output back to one JSON line.
 - **CodeGraph owns purely code-related questions**, and is the first call for them:
   indexed code discovery, a named symbol's verbatim source, call paths, flows,
   cross-file structure, and blast radius. Use `codegraph_explore` or

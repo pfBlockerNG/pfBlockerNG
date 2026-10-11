@@ -49,6 +49,12 @@ if [ "$*" = 'install --platform agents' ]; then
   [ "${GRAPHIFY_SKILL_FAIL:-0}" = 0 ] || exit 92
   exit 0
 fi
+# Graphify's real merge driver writes the union indented, like `graphify update`.
+if [ "${1:-}" = merge-driver ]; then
+  [ "${GRAPHIFY_MERGE_FAIL:-0}" = 0 ] || exit 1
+  printf '{\n  "merged": [\n    "\303\251"\n  ]\n}\n' > "$3"
+  exit 0
+fi
 hooks_dir=$(git rev-parse --git-path hooks) && mkdir -p "$hooks_dir" && # git-env-scrub-guard: the stub mimics the real CLI, which resolves the hooks dir of the tree under test
   true > "$hooks_dir/post-commit" && true > "$hooks_dir/post-checkout"
 exit 91
@@ -75,13 +81,46 @@ GIT
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
+  # Two branches that both rebuilt the tracked graph, merged through the registered driver.
+  merge_graph() {
+    mkdir -p "$repo/graphify-out"
+    printf '%s\n' 'graphify-out/graph.json merge=graphify' > "$repo/.gitattributes"
+    printf '%s\n' '{"base":1}' > "$repo/graphify-out/graph.json"
+    commit_all base && git_fixture -C "$repo" checkout -q -b side &&
+      printf '%s\n' '{"side":1}' > "$repo/graphify-out/graph.json" && commit_all side &&
+      git_fixture -C "$repo" checkout -q - &&
+      printf '%s\n' '{"main":1}' > "$repo/graphify-out/graph.json" && commit_all main &&
+      git_fixture -C "$repo" -c user.email=t@t -c user.name=t -c commit.gpgsign=false merge -q --no-edit side
+  }
+  commit_all() {
+    git_fixture -C "$repo" add -A &&
+      git_fixture -C "$repo" -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q -m "$1"
+  }
+
+  # The tracked graph is one compact JSON line so a PR moving it counts one changed
+  # line (issue #3477); a merge must not hand back Graphify's indented form.
+  It 'leaves a merged graph as one line of compact JSON'
+    sh "$script_abs" "$repo" >/dev/null 2>&1
+    When call merge_graph
+    The status should equal 0
+    The output should include 'Auto-merging graphify-out/graph.json'
+    The contents of file "$repo/graphify-out/graph.json" should equal '{"merged":["é"]}'
+  End
+
+  It 'still reports a conflict when Graphify cannot merge the graph'
+    sh "$script_abs" "$repo" >/dev/null 2>&1
+    export GRAPHIFY_MERGE_FAIL=1
+    When call merge_graph
+    The status should not equal 0
+    The output should include 'CONFLICT'
+  End
   It 'installs the pinned Graphify fork and registers its launcher as the union merge driver of the requested Git root'
     When run sh "$script_abs" "$repo"
     The status should equal 0
     The contents of file "$uv_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
     The contents of file "$graphify_log" should include 'install --platform agents'
     The value "$(git_fixture -C "$repo" config --get merge.graphify.name)" should equal 'graphify graph.json union merge'
-    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should start with "\"$stubdir/graphify\" merge-driver %O %A %B"
   End
 
   It 'uses the uv-owned launcher even when another Graphify executable shadows it on PATH'
@@ -95,7 +134,7 @@ SHADOW
     chmod +x "$stubdir/graphify"
     When run env UV_TOOL_BIN_FIXTURE="$uv_tool_bin" sh "$script_abs" "$repo"
     The status should equal 0
-    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$uv_tool_bin/graphify\" merge-driver %O %A %B"
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should start with "\"$uv_tool_bin/graphify\" merge-driver %O %A %B"
   End
 
   It 'leaves .githooks/post-commit and .githooks/post-checkout absent: registration never runs `graphify hook install` (issue #3139)'
@@ -106,7 +145,7 @@ SHADOW
     The path "$repo/.githooks/post-commit" should not be exist
     The path "$repo/.githooks/post-checkout" should not be exist
     The contents of file "$graphify_log" should include 'install --platform agents'
-    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should start with "\"$stubdir/graphify\" merge-driver %O %A %B"
   End
 
   It 'fails before merge-driver registration when the pinned launcher cannot refresh the agents skill'
