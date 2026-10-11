@@ -3806,6 +3806,9 @@ define('PFB_EXIT_LOCKED', 75);
 // Seconds a package install/uninstall waits for an in-flight feed pass before it proceeds anyway.
 define('PFB_INSTALL_FEED_PASS_WAIT', 300.0);
 
+// Copied-object display label bytes; the sanitizer masks every other byte to '?', which is in the class so a label reads back.
+const PFB_SYNC_COPIED_LABEL_CLASS = 'A-Za-z0-9_. ?-';
+
 // Function to get pfBlockerNG package version
 function pfb_pkg_ver() {
 	$pkg_ver = 'v??';
@@ -22641,9 +22644,6 @@ function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
  * Copied pfB object detector (#3453, owner fork 1 of #3443): reports a pfB-managed object that another writer
  * changed after this node wrote it, never re-owns it; the state file keeps digests and attribute names, never a value.
  */
-
-// A display label is made of these bytes; the sanitizer masks every other byte to '?', which is in the class so a label reads back.
-define('PFB_SYNC_COPIED_LABEL_CLASS', 'A-Za-z0-9_. ?-');
 
 // Every level key-sorted so equal rows serialize equal.
 function pfb_sync_copied_sorted(array $node): array {
