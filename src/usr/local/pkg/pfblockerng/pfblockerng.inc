@@ -21784,12 +21784,15 @@ function pfb_sync_policy_digest(array $projection): string {
  * category editor's: not '0', word characters only, at most 24 for IPv4/IPv6 groups. A Blacklist
  * xml is the schedule runtime's identity (pfb_blacklist_identity_valid()) without the comma.
  *
- * @param  array<string,mixed> $incoming  The sender's policy snapshot.
- * @param  array<string,mixed> $current   The receiver's stored sections.
+ * @param array<string,mixed> $incoming  The sender's policy snapshot.
+ * @param array<string,mixed> $current   The receiver's stored sections.
+ * @param ?array<int,string>  $ignored   Out: sorted unique 'installedpackages/<section>/<path>' of every incoming leaf under a key
+ *                                       skipped as receiver-local or unknown (an empty array is a leaf); a segment that is neither
+ *                                       a list position nor a lower-case element name is written '*'. Left untouched on a throw.
  * @return array<string,mixed>
  * @throws \InvalidArgumentException
  */
-function pfb_sync_policy_merge(array $incoming, array $current): array {
+function pfb_sync_policy_merge(array $incoming, array $current, ?array &$ignored = NULL): array {
 
 	$registry = pfb_cfg_registry();
 	$local    = pfb_sync_local_paths();
@@ -21871,7 +21874,20 @@ function pfb_sync_policy_merge(array $incoming, array $current): array {
 		}
 	};
 
-	$check = static function (string $s, array $p, mixed $v) use (&$check, $container, $feed, $is_local, $ids, $lists, $bad): void {
+	// Leaves of an incoming subtree the merge skips; keys are payload content, so only a safe segment is echoed.
+	$skipped = array();
+	$collect = static function (string $s, array $p, mixed $v) use (&$collect, &$skipped): void {
+		if (is_array($v) && $v !== array()) {
+			foreach ($v as $k => $child) {
+				$collect($s, array_merge($p, array((string) $k)), $child);
+			}
+			return;
+		}
+		$safe = array_map(static fn (string $key): string => ctype_digit($key) || preg_match('/^[a-z_][a-z0-9_.-]*$/D', $key) === 1 ? $key : '*', $p);
+		$skipped['installedpackages/' . implode('/', array_merge(array($s), $safe))] = TRUE;
+	};
+
+	$check = static function (string $s, array $p, mixed $v) use (&$check, $container, $feed, $is_local, $ids, $lists, $bad, $collect): void {
 		if (!$container($s, $p)) {
 			if (!is_string($v) && $v !== array()) {
 				$bad('incoming', $s, $p);
@@ -21887,7 +21903,9 @@ function pfb_sync_policy_merge(array $incoming, array $current): array {
 		}
 		foreach ($v as $k => $child) {
 			$q = array_merge($p, array((string) $k));
-			if (!$is_local($s, $q)) {
+			if ($is_local($s, $q)) {
+				$collect($s, $q, $child);
+			} else {
 				$check($s, $q, $child);
 			}
 		}
@@ -21976,6 +21994,9 @@ function pfb_sync_policy_merge(array $incoming, array $current): array {
 			$out[$s] = $node($s, array(), $inc, $cur) ?? ($cur === '' ? '' : array());
 		}
 	}
+
+	$ignored = array_keys($skipped);
+	sort($ignored, SORT_STRING);
 
 	return $out;
 }
@@ -22164,16 +22185,17 @@ function pfb_sync_receive_state_update(string $dbdir, callable $mutate, array $i
  * Records one receive and logs one value-free line. A refusal keeps the previous accepted digest;
  * an accepted receive ('changed' or 'unchanged') replaces it with $accepted_digest. An accepted receive
  * that could not be recorded fails closed, so only the unpublished-state line is logged for it.
+ * $detail (digests, ignored paths) joins the last record; it is never logged and never overrides time/outcome/reason.
  */
-function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir, array $io = []): bool {
-	$published = pfb_sync_receive_state_update($dbdir, static function (array $state) use ($outcome, $accepted_digest, $reason): array {
+function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir, array $io = [], array $detail = []): bool {
+	$published = pfb_sync_receive_state_update($dbdir, static function (array $state) use ($outcome, $accepted_digest, $reason, $detail): array {
 		$last = array('time' => time(), 'outcome' => $outcome);
 		if ($reason !== '') {
 			$last['reason'] = $reason;
 		}
 		$next = array(
 			'accepted_digest' => $outcome === 'refused' ? $state['accepted_digest'] : $accepted_digest,
-			'last'            => $last,
+			'last'            => $last + $detail,
 		);
 		if (isset($state['apply'])) {
 			$next['apply'] = $state['apply'];
@@ -22285,14 +22307,25 @@ function pfb_sync_persisted_shape(mixed $value): mixed {
 	return $shape === array() ? '' : $shape;
 }
 
+// The policy digest of this node's stored sections, in the persisted shape the accepted digest is taken in.
+function pfb_sync_policy_current_digest(): string {
+	return pfb_sync_policy_digest(
+		pfb_sync_policy_projection(array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections()))
+	);
+}
+
 // TRUE while this node's policy still equals the last accepted received one (it must not echo it back).
 function pfb_sync_receive_suppressed(): bool {
 	global $pfb;
 
 	$accepted = pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'];
-	return $accepted !== NULL && $accepted === pfb_sync_policy_digest(
-		pfb_sync_policy_projection(array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections()))
-	);
+	return $accepted !== NULL && $accepted === pfb_sync_policy_current_digest();
+}
+
+// NULL without an accepted digest, else whether this node's policy has moved off it.
+function pfb_sync_receive_drift(string $dbdir): ?bool {
+	$accepted = pfb_sync_receive_state_read($dbdir)['accepted_digest'];
+	return $accepted === NULL ? NULL : $accepted !== pfb_sync_policy_current_digest();
 }
 
 /*
@@ -22309,7 +22342,7 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 
 	$current = pfb_sync_stored_sections();
 	try {
-		$merged = pfb_sync_policy_merge($new_sections['installedpackages'], $current);
+		$merged = pfb_sync_policy_merge($new_sections['installedpackages'], $current, $ignored);
 	} catch (\InvalidArgumentException $e) {
 		pfb_sync_receive_record('refused', NULL, $e->getMessage(), $pfb['dbdir']);
 		return array();
@@ -22325,12 +22358,37 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 		}
 	}
 
+	// Every payload leaf of the synced sections in the persisted shape: it differs from the accepted digest only by ignored leaves.
+	$flat = array();
+	$walk = static function (string $path, mixed $value) use (&$walk, &$flat): void {
+		if (is_array($value) && $value !== array()) {
+			foreach ($value as $key => $child) {
+				$walk("{$path}/{$key}", $child);
+			}
+		} else {
+			$flat[$path] = $value;
+		}
+	};
+	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+		if (isset($new_sections['installedpackages'][$section])) {
+			$walk("installedpackages/{$section}", pfb_sync_persisted_shape($new_sections['installedpackages'][$section]));
+		}
+	}
+	$accepted = pfb_sync_policy_digest(pfb_sync_policy_projection($settled));
+
 	// The accepted digest suppresses the echo of this policy: a receive whose record cannot be published fails closed, applying nothing.
 	if (!pfb_sync_receive_record(
 		$changed === array() ? 'unchanged' : 'changed',
-		pfb_sync_policy_digest(pfb_sync_policy_projection($settled)),
+		$accepted,
 		'',
-		$pfb['dbdir']
+		$pfb['dbdir'],
+		array(),
+		array(
+			'incoming_digest' => pfb_sync_policy_digest($flat),
+			'accepted_digest' => $accepted,
+			'ignored'         => array_slice($ignored, 0, 100),
+			'ignored_count'   => count($ignored),
+		)
 	)) {
 		return array();
 	}

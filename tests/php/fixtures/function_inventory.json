@@ -12763,6 +12763,11 @@
             }
         ]
     },
+    "pfb_sync_policy_current_digest": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
     "pfb_sync_policy_digest": {
         "returnsRef": false,
         "returnType": "string",
@@ -12793,6 +12798,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "ignored",
+                "byRef": true,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -12839,6 +12851,19 @@
                 "variadic": false,
                 "type": "?bool",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_sync_receive_drift": {
+        "returnsRef": false,
+        "returnType": "?bool",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },
@@ -12896,6 +12921,13 @@
             },
             {
                 "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "detail",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
