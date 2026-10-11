@@ -359,6 +359,9 @@ $section->add($group);
 
 $form->add($section);
 print ($form);
+print pfb_sync_receiver_panel(pfb_sync_receive_state_read($pfb['dbdir']), pfb_sync_receive_drift($pfb['dbdir']), pfb_sync_findings_read($pfb['dbdir']),
+	function_exists('pfb_sync_copied_read') ? pfb_sync_copied_read($pfb['dbdir']) : array());	// slice C lands the reader
+print pfb_sync_sender_panel(pfb_sync_send_state_read($pfb['dbdir']));
 print_callout('<strong>Sync settings are used by the XMLRPC engine on each sync: automatically on configuration changes, or after each update pass (Manual mode).</strong>');
 
 include('foot.inc');

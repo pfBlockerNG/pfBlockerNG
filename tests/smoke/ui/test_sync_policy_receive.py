@@ -29,6 +29,14 @@ can apply a change here is the receive-triggered ``pfblockerng.php tick``.
     When  the payload is received
     Then  core still returns true, the record says ``refused`` with a reason; nothing is stored, pending or applied
 
+  Scenario: the Sync page after a real receive (#3453)
+    Given the real refusal above, and the real changed receive once its apply is over
+    Then  the receiver panel shows the state file's own values (outcome wording, digests, reason escaped) and the
+          apply row apart from the receipt; no peer check control is on the page
+
+  Scenario: a real manual policy sync to a closed local port and to the box's own webGUI (#3453)
+    Then  the sender panel lists each target with its own result and the state file's digest; no secret is in it
+
 Completion is synchronized on records -- the pending marker, the tick process, the receive state file -- never on
 sleeps. The only wait is the bounded poll for the apply to finish. The password travels only in the stdin snippet
 and is redacted from every message.
@@ -38,15 +46,37 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from .. import helpers
 from .conftest import _redact_values_from_env
+from .test_sync import CFG_SYNC, _seed_sync
+from .test_sync_status_panels import (
+    DASH,
+    SEND,
+    TIME,
+    _receiver,
+    _sender,
+    assert_no_peer_check,
+    assert_row,
+    php_escape,
+    plain,
+    preserved_state,
+    read_state,
+    receiver_cell,
+    render_sync_page,
+    seed,
+    sender_rows,
+)
+
+if TYPE_CHECKING:
+    from .webui import WebUI
 
 pytestmark = pytest.mark.ui_e2e
 
@@ -61,6 +91,7 @@ APPLY_BANNER = "UPDATE PROCESS START"
 # Salvage cap for the receive-triggered apply (an update pass + filter reload), never an assertion.
 SETTLE_TIMEOUT = 300.0
 MEMBER_TIMEOUT = 60.0  # the apply's own filter reload is detached; the table fills a few seconds after the pass ends
+SYNC_TIMEOUT = 300.0  # cap for a whole sync pass: the dead target's client retries, then the self-send
 
 _OPEN, _CLOSE = "<<<PFB3452>>>", "<<<END3452>>>"
 # `global $pfb` binds the package globals whichever scope pfSsh.php evals the buffer in.
@@ -97,9 +128,9 @@ def _emit(expr: str) -> str:
     return f"echo {helpers._php_str(_OPEN)} . json_encode({expr}) . {helpers._php_str(_CLOSE)};"
 
 
-def _guest_json(vm: helpers.SmokeVM, php: str, *, secret: str = "") -> Any:
+def _guest_json(vm: helpers.SmokeVM, php: str, *, secret: str = "", timeout: float = 120.0) -> Any:
     """Run ``php`` after the package prelude and return the JSON it emitted; never leak ``secret``."""
-    result = helpers.php_eval(vm, _PRELUDE + php, timeout=120.0)
+    result = helpers.php_eval(vm, _PRELUDE + php, timeout=timeout)
     out = result.stdout
     start, end = out.find(_OPEN), out.find(_CLOSE)
     assert result.returncode == 0 and start != -1 and end != -1, _redact(
@@ -348,3 +379,197 @@ def test_refused_payload_stores_nothing_and_applies_nothing(box: _Box) -> None:
     )
     assert in_flight == [], f"refused receive left an apply in flight: expected [], got {in_flight!r}"
     assert _apply_banners(vm) == banners_before, f"update passes after the refusal: expected {banners_before}"
+
+
+# The panels' oracle is the state the package itself wrote, read with its own readers; times are formatted guest-side.
+_PANEL_STATE_PHP = "$r = pfb_sync_receive_state_read($pfb['dbdir']);\n" + _emit(
+    "array('receive' => $r, "
+    "'drift' => pfb_sync_receive_drift($pfb['dbdir']), "
+    "'findings' => pfb_sync_findings_read($pfb['dbdir'])['findings'], "
+    "'receive_at' => date('Y-m-d H:i:s', (int) ($r['last']['time'] ?? 0)), "
+    "'apply_at' => date('Y-m-d H:i:s', (int) ($r['apply']['time'] ?? 0)))"
+)
+_DRIFT_WORDING = {
+    True: "policy changed locally since the last accepted receive",
+    False: "none",
+    None: "no accepted digest to compare",
+}
+_APPLY_WORDING = {
+    "applied": "applied: the update pass completed",
+    "failed": "failed",
+    "waiting": "waiting for the quiet-hours window",
+}
+
+
+def _panel_state(vm: helpers.SmokeVM) -> dict[str, Any]:
+    """Receive record, drift, findings and the guest-formatted receive/apply times, as the package reads them."""
+    state: dict[str, Any] = _guest_json(vm, _PANEL_STATE_PHP)
+    return state
+
+
+def _flat(text: str) -> str:
+    """A stored string as the page shows it: escaped, tags gone, whitespace collapsed."""
+    return re.escape(plain(php_escape(text)))
+
+
+def _assert_apply_and_context_rows(receiver: str, state: dict[str, Any]) -> None:
+    """The apply, drift, effective-policy and copied rows reflect the state, whatever earlier tests left in it."""
+    apply = state["receive"].get("apply")
+    if apply is None:
+        assert_row(receiver, "apply", "no apply record")
+    else:
+        text = plain(receiver_cell(receiver, "apply"))
+        assert text.startswith(_APPLY_WORDING[apply["outcome"]]), (
+            f"apply row: expected {_APPLY_WORDING[apply['outcome']]!r} first for {apply!r}, got {text!r}"
+        )
+        if apply["outcome"] in ("applied", "failed"):
+            assert text.endswith(f"({state['apply_at']})"), (
+                f"apply row: expected ({state['apply_at']}) last, got {text!r}"
+            )
+        if apply["outcome"] == "failed" and apply.get("reason"):
+            assert plain(php_escape(apply["reason"])) in text, f"apply row: expected the escaped reason, got {text!r}"
+    assert_row(receiver, "drift", re.escape(_DRIFT_WORDING[state["drift"]]))
+    findings = state["findings"]
+    assert_row(receiver, "findings", " ".join(_flat(f) for f in findings) if findings else "none")
+    assert plain(receiver_cell(receiver, "copied")), "copied row is empty"
+
+
+def test_refused_receive_shows_on_the_sync_page(box: _Box, webui: WebUI) -> None:
+    """The real refusal reads as a refusal with its reason, and claims no digest of its own.
+
+    Red when: the receive row says accepted for a refusal; the reason differs from the state file's (or is not
+    escaped); the incoming/accepted rows show a digest the refused record never carried; the apply row stops
+    mirroring the (older) apply record or drift/findings stop mirroring the state; a peer check control appears.
+    """
+    payload = _changed_payload(box)
+    rows = payload["installedpackages"]["pfblockernglistsv4"]["config"]
+    rows.append(copy.deepcopy(rows[0]))  # two groups named ALIAS: the receiver's identity check refuses the snapshot
+    sent = _send(box, payload)
+    state = _panel_state(box.vm)
+    last = _assert_record(state, sent, "refused")
+    reason = last.get("reason")
+    assert isinstance(reason, str) and reason.strip(), f"refusal must say why: got {last!r}"
+
+    html = render_sync_page(box.vm, webui)
+    receiver = _receiver(html)
+    assert_row(receiver, "receive", f"{re.escape(state['receive_at'])} {DASH} refused: {_flat(reason)}")
+    assert_row(receiver, "incoming", DASH)
+    assert_row(receiver, "accepted", DASH)
+    assert_row(receiver, "ignored", "none")
+    _assert_apply_and_context_rows(receiver, state)
+    assert_no_peer_check(html)
+
+
+def test_changed_receive_shows_on_the_sync_page_with_its_apply_apart(box: _Box, webui: WebUI) -> None:
+    """The real changed receive reads accepted with the state file's digests, and its apply is a row of its own.
+
+    Red when: the receive row stops saying "accepted with changes"; the incoming or accepted digest on the page
+    differs from the state file's; ignored paths are not listed (escaped); the apply row stops following the apply
+    record that the settled pass wrote (applied/failed with its time); drift or findings stop mirroring the state.
+    """
+    sent = _send(box, _changed_payload(box))
+    _settle(box)
+    state = _panel_state(box.vm)
+    last = _assert_record(state, sent, "changed")
+    apply = state["receive"].get("apply") or {}
+    assert apply.get("outcome") in ("applied", "failed"), f"apply record after the settle: got {apply!r}"
+    for key in ("incoming_digest", "accepted_digest"):
+        assert re.fullmatch(r"[0-9a-f]{64}", str(last.get(key))), f"receive record {key}: expected 64 hex, got {last!r}"
+
+    html = render_sync_page(box.vm, webui)
+    receiver = _receiver(html)
+    assert_row(receiver, "receive", f"{re.escape(state['receive_at'])} {DASH} accepted with changes")
+    assert_row(receiver, "incoming", last["incoming_digest"])
+    assert_row(receiver, "accepted", last["accepted_digest"])
+    ignored = [path for path in last.get("ignored", []) if isinstance(path, str)]
+    count = last.get("ignored_count", len(ignored))
+    assert_row(
+        receiver,
+        "ignored",
+        " ".join([rf"{count} ignored path\(s\)", *(_flat(path) for path in ignored)]) if count else "none",
+    )
+    _assert_apply_and_context_rows(receiver, state)
+    assert_no_peer_check(html)
+
+
+def _seed_targets(box: _Box) -> int:
+    """Store a manual ``policy`` sync with two enabled targets and return the closed port of the first.
+
+    Target one is a loopback port that was bound and released, so nothing listens there; target two is this box's own
+    webGUI under the admin credentials. The password only travels in the stdin snippet.
+    """
+    protocol, user, password = (helpers._php_str(v) for v in (box.protocol, box.user, box.password))
+    php = (
+        "$server = stream_socket_server('tcp://127.0.0.1:0');\n"
+        "$dead = (int) substr(strrchr(stream_socket_get_name($server, FALSE), ':'), 1);\n"
+        "fclose($server);\n"
+        f"$c = config_get_path({helpers._php_str(CFG_SYNC)}, array());\n"
+        "$c['varsynconchanges'] = 'manual';\n"
+        "$c['varsynctimeout'] = '20';\n"
+        "$c['syncscope'] = 'policy';\n"
+        "$c['row'] = array(\n"
+        "    array('varsyncprotocol' => 'http', 'varsyncipaddress' => '127.0.0.1', 'varsyncport' => (string) $dead, "
+        "'varsyncusername' => 'admin', 'varsyncpassword' => 'unreachable', 'varsyncdestinenable' => 'on'),\n"
+        f"    array('varsyncprotocol' => {protocol}, 'varsyncipaddress' => '127.0.0.1', 'varsyncport' => '{box.port}', "
+        f"'varsyncusername' => {user}, 'varsyncpassword' => {password}, 'varsyncdestinenable' => 'on'),\n"
+        ");\n"
+        f"config_set_path({helpers._php_str(CFG_SYNC)}, $c);\n"
+        "write_config('pfBlockerNG smoke #3453: sender panel targets');\n" + _emit("$dead")
+    )
+    dead: int = _guest_json(box.vm, php, secret=box.password)
+    return dead
+
+
+def test_sender_panel_lists_each_target_of_a_real_manual_sync(box: _Box, webui: WebUI) -> None:
+    """A real manual policy sync records one attempt per target; the page shows each, and no secret.
+
+    The first target's port is closed, the second is this box's own webGUI. The self-send makes the box record its
+    own receive too, so the receive, findings and send files are kept and put back.
+
+    Red when: one target hides the other (the dead target must not stop the pass); the live target is not
+    "sent, acceptance unconfirmed" with the state file's 64-hex digest; the dead target is not "failed:" followed by
+    the client's own error (never the fallback text); the page differs from pfb_sync_send.json; the admin password
+    is in pfb_sync_send.json or in the sender panel. The whole page is not scanned for the password: the page's own
+    Replication Targets form takes each stored password as an input value, which the panel does not control.
+    """
+    vm = box.vm
+    with preserved_state(vm):
+        try:
+            seed(vm, receive=None, findings=None, send=None)  # no accepted digest: nothing suppresses the pass
+            dead = _seed_targets(box)
+            _guest_json(
+                vm, "pfblockerng_sync_on_changes();\n" + _emit("TRUE"), secret=box.password, timeout=SYNC_TIMEOUT
+            )
+            _settle(box)  # a self-receive that changed anything would start an apply
+
+            raw = read_state(vm, SEND)
+            assert raw is not None, "the sync pass recorded nothing: pfb_sync_send.json is absent"
+            attempts = json.loads(raw)["attempts"]
+            dead_target, own_target = f"127.0.0.1:{dead}", f"127.0.0.1:{box.port}"
+            assert [a["target"] for a in attempts] == [dead_target, own_target], f"attempts: got {attempts!r}"
+            failed, sent = attempts
+            digest = _guest_json(vm, _emit("pfb_sync_policy_current_digest()"))
+            assert re.fullmatch(r"[0-9a-f]{64}", digest), f"policy digest: expected 64 hex, got {digest!r}"
+            assert sent["outcome"] == "sent" and sent.get("digest") == digest, f"own webGUI attempt: got {sent!r}"
+            error = failed.get("error")
+            assert failed["outcome"] == "failed" and failed.get("digest") == digest, f"dead target: got {failed!r}"
+            assert isinstance(error, str) and error.strip(), (
+                f"dead target must carry the client's error: got {failed!r}"
+            )
+            assert error != "no response from the XMLRPC client", (
+                "dead target recorded the fallback, not the client error"
+            )
+            assert helpers.redact_values(raw, [box.password]) == raw, "the admin password is in pfb_sync_send.json"
+
+            html = render_sync_page(vm, webui)
+            sender = _sender(html)
+            rows = sender_rows(sender)
+            assert [row[0] for row in rows] == [dead_target, own_target], f"sender rows: got {rows!r}"
+            assert [len(row) for row in rows] == [4, 4], f"expected rows of Target|Time|Digest|Result, got {rows!r}"
+            assert all(re.fullmatch(TIME, row[1]) for row in rows), f"sender times: got {rows!r}"
+            assert rows[0][2:] == [digest, f"failed: {plain(php_escape(error))}"], f"dead target row: got {rows[0]!r}"
+            assert rows[1][2:] == [digest, "sent, acceptance unconfirmed"], f"own webGUI row: got {rows[1]!r}"
+            assert helpers.redact_values(sender, [box.password]) == sender, "the admin password is in the sender panel"
+            assert_no_peer_check(html)
+        finally:
+            _seed_sync(vm)

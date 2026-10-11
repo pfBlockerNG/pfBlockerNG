@@ -13059,6 +13059,40 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_sync_receiver_panel": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "receive",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "drift",
+                "byRef": false,
+                "variadic": false,
+                "type": "?bool",
+                "default": null
+            },
+            {
+                "name": "findings",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "copied",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_sync_run_plan": {
         "returnsRef": false,
         "returnType": "array",
@@ -13099,6 +13133,59 @@
         "params": [
             {
                 "name": "cfg",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_send_record": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "attempts",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            }
+        ]
+    },
+    "pfb_sync_send_state_read": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_sender_panel": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "send",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
@@ -15599,6 +15686,13 @@
                 "variadic": false,
                 "type": null,
                 "default": null
+            },
+            {
+                "name": "error",
+                "byRef": true,
+                "variadic": false,
+                "type": null,
+                "default": "NULL"
             }
         ]
     },

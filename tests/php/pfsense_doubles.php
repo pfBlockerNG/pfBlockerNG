@@ -1520,10 +1520,16 @@ if (!function_exists('install_cron_job')) {
 // timeout]; tests reset both) so a transport test can assert exactly what a real client
 // would be asked to send. xmlrpc_method() returns a truthy stub response so the
 // caller's isset($resp) success branch runs (pfb_logger " done." vs " Failed!").
+// Opt-in failure (issue #3453): $GLOBALS['pfb_test_xmlrpc_fail'][<ip as passed to
+// setConnectionData>] = '<error text>' makes xmlrpc_method() return NULL (the real
+// client's failure result) and get_error() return that text; the call is still recorded.
 
 if (!class_exists('pfsense_xmlrpc_client')) {
 	class pfsense_xmlrpc_client {
+		private $ip = null;
+
 		public function setConnectionData($ip, $port, $username, $password, $protocol) {
+			$this->ip = $ip;
 			$GLOBALS['pfb_test_xmlrpc_connection'] = $GLOBALS['pfb_test_xmlrpc_connections'][] = [
 				'ip'       => $ip,
 				'port'     => $port,
@@ -1535,7 +1541,11 @@ if (!class_exists('pfsense_xmlrpc_client')) {
 
 		public function xmlrpc_method($method, $params, $timeout = null) {
 			$GLOBALS['pfb_test_xmlrpc_calls'][] = [$method, $params, $timeout];
-			return ['status' => 'ok'];
+			return isset($GLOBALS['pfb_test_xmlrpc_fail'][$this->ip]) ? null : ['status' => 'ok'];
+		}
+
+		public function get_error() {
+			return (string) ($GLOBALS['pfb_test_xmlrpc_fail'][$this->ip] ?? '');
 		}
 	}
 }

@@ -182,6 +182,8 @@ final class SyncPolicyTransportTest extends TestCase
 		global $pfb;
 		// The sync run logs through pfb_logger(); a missing log dir would raise a diagnostic.
 		@mkdir($pfb['logdir'], 0777, TRUE);
+		// The pass records its attempts under dbdir; a missing dir would raise a diagnostic.
+		@mkdir($pfb['dbdir'], 0777, TRUE);
 		$this->hadConfig   = array_key_exists('config', $GLOBALS);
 		$this->savedConfig = $GLOBALS['config'] ?? NULL;
 		$this->resetClientRecords();

@@ -21413,6 +21413,8 @@ function pfb_remove_config_settings() {
 
 /* Uses XMLRPC to synchronize the changes to a remote node */
 function pfblockerng_sync_on_changes() {
+	global $pfb;
+
 	// Create array of sync settings and exit if sync is disabled.
 	$pfb_sync = config_get_path('installedpackages/pfblockerngsync/config/0', []);
 	if (!empty($pfb_sync)) {
@@ -21454,6 +21456,9 @@ function pfblockerng_sync_on_changes() {
 				break;
 		}
 		if (isset($rs)) {
+			// Every entry carries the digest of the payload this pass sent; the legacy scopes have none.
+			$attempts = array();
+			$digest   = $scope === 'policy' ? pfb_sync_policy_current_digest() : NULL;
 			foreach ($rs as $sh) {
 				// Only sync enabled replication targets
 				if ($sh['varsyncdestinenable']) {
@@ -21498,7 +21503,13 @@ function pfblockerng_sync_on_changes() {
 
 					if ($validate) {
 						pfb_logger("\n Sync with [ {$protocol}://{$sync_to_ip_display}:{$port} ] ...", 1);
-						$success = pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout);
+						$client_error = NULL;
+						$success = pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout, $client_error);
+						$attempt = array('target' => "{$sync_to_ip_display}:{$port}", 'time' => time(), 'outcome' => $success ? 'sent' : 'failed');
+						if (!$success) {
+							$attempt['error'] = (string) $client_error;
+						}
+						$attempts[] = $attempt + ($digest === NULL ? array() : array('digest' => $digest));
 
 						if ($success) {
 							pfb_logger(" done.\n", 1);
@@ -21514,8 +21525,12 @@ function pfblockerng_sync_on_changes() {
 					} else {
 						pfb_logger(" terminated due to the following error(s): {$error}", 1);
 						logger(LOG_ERR, localize_text("XMLRPC sync to [ %s:%s ] terminated due to the following error(s): %s", $sync_to_ip_display, $port, $error), LOG_PREFIX_PKG_PFBLOCKERNG);
+						$attempts[] = array('target' => "{$sync_to_ip_display}:{$port}", 'time' => time(), 'outcome' => 'failed', 'error' => trim($error, '| '));
 					}
 				}
+			}
+			if ($attempts !== array()) {
+				pfb_sync_send_record($attempts, $pfb['dbdir']);
 			}
 		}
 	}
@@ -22021,7 +22036,7 @@ function pfblockerng_sync_dnsblip_mismatch(string $scope, mixed $synconchanges, 
 }
 
 /* Do the actual XMLRPC sync */
-function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout) {
+function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout, &$error = NULL) {
 	global $g;
 	$success = TRUE;
 
@@ -22092,6 +22107,14 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 	$resp = $rpc_client->xmlrpc_method($method, $xml, $synctimeout);
 
 	if (!isset($resp)) {
+		// The client text can carry the password (in the URL) and peer-controlled bytes: scrub, then strip the secret before it is stored.
+		$error = mb_scrub((string) $rpc_client->get_error());
+		if (is_string($password) && $password !== '') {
+			$error = str_replace(array(rawurlencode($password), $password), '********', $error);
+		}
+		if ($error === '') {
+			$error = 'no response from the XMLRPC client';
+		}
 		return FALSE;
 	} else {
 		return TRUE;
@@ -22099,6 +22122,8 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 }
 
 function pfblockerng_plugin_xmlrpc_send() {
+	global $pfb;
+
 	if (config_get_path('installedpackages/pfblockerngsync/config/0/varsynconchanges') != 'auto') {
 		return [];
 	}
@@ -22111,7 +22136,9 @@ function pfblockerng_plugin_xmlrpc_send() {
 	// issue #3452: only the stored leaf selects a scope; the registry default never sends.
 	$scope = pfb_sync_stored_scope();
 	if ($scope === 'policy') {
-		return [PFB_SECTIONS['sync'] . '/syncscope', ...array_keys(pfb_sync_policy_projection(pfb_sync_stored_sections()))];
+		$paths = [PFB_SECTIONS['sync'] . '/syncscope', ...array_keys(pfb_sync_policy_projection(pfb_sync_stored_sections()))];
+		pfb_sync_send_record(array(array('target' => 'pfSense HA sync', 'time' => time(), 'outcome' => 'handed', 'digest' => pfb_sync_policy_current_digest())), $pfb['dbdir']);
+		return $paths;
 	}
 	if ($scope === NULL) {
 		return [];
@@ -22135,6 +22162,9 @@ function pfblockerng_plugin_xmlrpc_send() {
 		$section_paths[] = $path;
 	}
 
+	if ($section_paths !== array()) {
+		pfb_sync_send_record(array(array('target' => 'pfSense HA sync', 'time' => time(), 'outcome' => 'handed')), $pfb['dbdir']);
+	}
 	return $section_paths;
 }
 
@@ -22314,6 +22344,163 @@ function pfb_sync_findings_record(array $findings, string $dbdir, array $io = ar
 		logger(LOG_WARNING, 'XMLRPC policy findings: state not published.', LOG_PREFIX_PKG_PFBLOCKERNG);
 	}
 	return $published || $untouched;
+}
+
+/*
+ * Send state, {$dbdir}/pfb_sync_send.json (root-only, never a secret): the last sync pass, one entry per
+ * target, so one unreachable target never hides the others. A missing or corrupt file reads as no attempts;
+ * an entry that is not well formed is dropped whole, and a non-string digest or error is dropped from its entry.
+ *
+ * @return array{time: ?int, attempts: list<array{target: string, time: int, outcome: string, digest?: string, error?: string}>}
+ */
+function pfb_sync_send_state_read(string $dbdir): array {
+	$state = array('time' => NULL, 'attempts' => array());
+	$path  = "{$dbdir}/pfb_sync_send.json";
+	$data  = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
+	if (!is_array($data)) {
+		return $state;
+	}
+	$state['time'] = is_int($data['time'] ?? NULL) ? $data['time'] : NULL;
+	foreach (is_array($data['attempts'] ?? NULL) ? $data['attempts'] : array() as $entry) {
+		if (!is_array($entry) || !is_string($entry['target'] ?? NULL) || !is_int($entry['time'] ?? NULL)
+		    || !in_array($entry['outcome'] ?? NULL, array('sent', 'failed', 'handed'), TRUE)) {
+			continue;
+		}
+		$attempt = array('target' => $entry['target'], 'time' => $entry['time'], 'outcome' => $entry['outcome']);
+		foreach (array('digest', 'error') as $key) {
+			if (is_string($entry[$key] ?? NULL)) {
+				$attempt[$key] = $entry[$key];
+			}
+		}
+		$state['attempts'][] = $attempt;
+	}
+	return $state;
+}
+
+/*
+ * Replaces the send state with one sync pass: $attempts in order, one entry per target. FALSE = not published
+ * (one value-free log line). $io is the publisher's test-only seam.
+ *
+ * @param list<array<string,mixed>> $attempts
+ */
+function pfb_sync_send_record(array $attempts, string $dbdir, array $io = array()): bool {
+	$published = pfb_schedule_atomic_json_publish(
+		"{$dbdir}/pfb_sync_send.json",
+		static fn (): array => array('time' => time(), 'attempts' => array_values($attempts)),
+		'is_array',
+		$io
+	);
+	if (!$published) {
+		logger(LOG_WARNING, 'XMLRPC sync attempts: state not published.', LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
+	return $published;
+}
+
+/*
+ * The Sync page's receiver panel: only what this node recorded when a peer sent it a policy. '' without a
+ * receive record, so a peer that never sent one (or cannot) is never labeled accepted. The apply record has
+ * its own row and never changes the receipt wording. Every stored value is escaped; a wrong-typed one reads as absent.
+ *
+ * @param array<string,mixed> $receive  pfb_sync_receive_state_read() result.
+ * @param array<string,mixed> $findings pfb_sync_findings_read() result.
+ * @param array<string,mixed> $copied   pfb_sync_copied_read() result, or array().
+ */
+function pfb_sync_receiver_panel(array $receive, ?bool $drift, array $findings, array $copied): string {
+	$last = $receive['last'] ?? NULL;
+	if (!is_array($last)) {
+		return '';
+	}
+	$e    = static fn (mixed $value): string => htmlspecialchars(is_string($value) ? $value : '', ENT_QUOTES);
+	$when = static fn (mixed $time): string => is_int($time) ? date('Y-m-d H:i:s', $time) : 'unknown time';
+	$ul   = static fn (array $escaped): string => '<ul><li>' . implode('</li><li>', $escaped) . '</li></ul>';
+	$strs = static fn (mixed $values): array => array_values(array_filter(is_array($values) ? $values : array(), 'is_string'));
+	$why  = static fn (mixed $reason): string => is_string($reason) && $reason !== '' ? ': ' . htmlspecialchars($reason, ENT_QUOTES) : '';
+
+	$received = match ($last['outcome'] ?? NULL) {
+		'changed'   => 'accepted with changes',
+		'unchanged' => 'accepted unchanged',
+		'refused'   => 'refused' . $why($last['reason'] ?? NULL),
+		default     => 'unknown outcome',
+	};
+
+	$ignored = $strs($last['ignored'] ?? NULL);
+	$count   = is_int($last['ignored_count'] ?? NULL) ? $last['ignored_count'] : count($ignored);
+
+	$apply = $receive['apply'] ?? NULL;
+	if (!is_array($apply)) {
+		$applied = 'no apply record';
+	} else {
+		$applied = match ($apply['outcome'] ?? NULL) {
+			'waiting' => 'waiting for the quiet-hours window (opened ' . $when($apply['opened'] ?? $apply['time'] ?? NULL) . ')',
+			'failed'  => 'failed' . $why($apply['reason'] ?? NULL) . ' (' . $when($apply['time'] ?? NULL) . ')',
+			'applied' => 'applied: the update pass completed (' . $when($apply['time'] ?? NULL) . ')',
+			default   => 'unknown apply state',
+		};
+	}
+
+	$found = $strs($findings['findings'] ?? NULL);
+
+	$objects = array();
+	foreach (is_array($copied['findings'] ?? NULL) ? $copied['findings'] : array() as $kind => $labels) {
+		foreach (is_array($labels) ? $labels : array() as $label => $attrs) {
+			$attrs     = $strs($attrs);
+			$objects[] = htmlspecialchars("{$kind}: {$label}", ENT_QUOTES) . ($attrs === array() ? '' : ' (' . implode(', ', array_map($e, $attrs)) . ')');
+		}
+	}
+
+	$rows = array(
+		'receive'  => array('Last receive', $when($last['time'] ?? NULL) . ' — ' . $received),
+		'incoming' => array('Incoming digest', is_string($last['incoming_digest'] ?? NULL) ? $e($last['incoming_digest']) : '—'),
+		'accepted' => array('Accepted digest', is_string($last['accepted_digest'] ?? NULL) ? $e($last['accepted_digest']) : '—'),
+		'ignored'  => array('Ignored paths', $count > 0 ? "{$count} ignored path(s)" . ($ignored === array() ? '' : $ul(array_map($e, $ignored))) : 'none'),
+		'apply'    => array('Apply', $applied),
+		'drift'    => array('Drift', match ($drift) {
+			TRUE    => 'policy changed locally since the last accepted receive',
+			FALSE   => 'none',
+			NULL    => 'no accepted digest to compare',
+		}),
+		'findings' => array('Effective policy', $found === array() ? 'none' : $ul(array_map($e, $found))),
+		'copied'   => array('Copied pfB objects', $objects === array() ? 'none' : $ul($objects)),
+	);
+
+	$html = '<div class="panel panel-default" id="pfb-sync-receiver"><div class="panel-heading"><h2 class="panel-title">Receiver: last policy receive</h2></div><div class="panel-body"><table class="table table-condensed">';
+	foreach ($rows as $key => $row) {
+		$html .= "<tr id=\"pfb-sync-receiver-{$key}\"><th>{$row[0]}</th><td>{$row[1]}</td></tr>";
+	}
+	return $html . '</table></div></div>';
+}
+
+/*
+ * The Sync page's sender panel: what this node did on its last sync pass, one row per target. A returned
+ * call proves nothing about the peer, so the panel never says what the peer made of it; '' without attempts.
+ *
+ * @param array<string,mixed> $send pfb_sync_send_state_read() result.
+ */
+function pfb_sync_sender_panel(array $send): string {
+	$e    = static fn (mixed $value): string => htmlspecialchars(is_string($value) ? $value : '', ENT_QUOTES);
+	$rows = '';
+	foreach (is_array($send['attempts'] ?? NULL) ? $send['attempts'] : array() as $attempt) {
+		if (!is_array($attempt)) {
+			continue;
+		}
+		$error  = $attempt['error'] ?? NULL;
+		$result = match ($attempt['outcome'] ?? NULL) {
+			'sent'   => 'sent, acceptance unconfirmed',
+			'failed' => 'failed' . (is_string($error) && $error !== '' ? ': ' . $e($error) : ''),
+			'handed' => 'handed to pfSense HA sync',
+			default  => 'unknown result',
+		};
+		$digest = $attempt['digest'] ?? NULL;
+		$rows  .= '<tr><td>' . $e($attempt['target'] ?? NULL) . '</td><td>'
+		    . (is_int($attempt['time'] ?? NULL) ? date('Y-m-d H:i:s', $attempt['time']) : 'unknown time') . '</td><td>'
+		    . (is_string($digest) && $digest !== '' ? $e($digest) : 'n/a') . "</td><td>{$result}</td></tr>";
+	}
+	if ($rows === '') {
+		return '';
+	}
+	return '<div class="panel panel-default" id="pfb-sync-sender"><div class="panel-heading"><h2 class="panel-title">Sender: last sync attempts</h2></div><div class="panel-body">'
+	    . '<table class="table table-condensed"><thead><tr><th>Target</th><th>Time</th><th>Payload digest</th><th>Result</th></tr></thead><tbody>' . $rows . '</tbody></table>'
+	    . '<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own Sync page shows its receive.</p></div></div>';
 }
 
 /*
