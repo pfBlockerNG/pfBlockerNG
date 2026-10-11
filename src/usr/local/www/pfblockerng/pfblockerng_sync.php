@@ -161,6 +161,8 @@ if ($_POST) {
 
 			PfbConfig::writeSection('installedpackages/pfblockerngsync/config/0', $pfb['sconfig']);
 			write_config('[pfBlockerNG] save XMLRPC sync settings');
+			// Saving the Sync page is the deliberate role flip: this node may send its policy again (#3452).
+			pfb_sync_receive_accepted_clear($pfb['dbdir']);
 			header('Location: /pfblockerng/pfblockerng_sync.php');
 			exit;
 		}

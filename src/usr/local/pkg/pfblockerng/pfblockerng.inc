@@ -22069,6 +22069,11 @@ function pfblockerng_plugin_xmlrpc_send() {
 		return [];
 	}
 
+	// issue #3452: a node whose policy still equals the last accepted received one must not echo it back.
+	if (pfb_sync_receive_suppressed()) {
+		return [];
+	}
+
 	// issue #3452: only the stored leaf selects a scope; the registry default never sends.
 	$scope = PfbConfig::readSection(PFB_SECTIONS['sync'])['syncscope'] ?? NULL;
 	if ($scope === 'policy') {
