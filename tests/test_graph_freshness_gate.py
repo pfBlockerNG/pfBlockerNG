@@ -112,6 +112,10 @@ def assert_red_canary_precedes_the_real_check(text: str) -> None:
         f"{JOB}: the canary must require exit 1, got:\n{verdict}"
     )
     assert "exit 1" in verdict, f"{JOB}: a canary that is not reported stale must fail the job"
+    # Exit 1 also covers a failed rebuild or compaction (issue #3477); only STALE is the red path.
+    assert re.search(r'grep -q STALE "\$RUNNER_TEMP/canary\.log" \|\|', verdict), (
+        f"{JOB}: the canary must require the STALE verdict, got:\n{verdict}"
+    )
 
 
 def assert_all_tests_passed_needs_the_job(text: str) -> None:
@@ -188,6 +192,11 @@ def _in_job(job: str, old: str, new: str) -> Callable[[str], str]:
             assert_red_canary_precedes_the_real_check,
             "add a symbol",
         ),
+        (
+            _in_job(JOB, 'grep -q STALE "$RUNNER_TEMP/canary.log" ||', "true ||"),
+            assert_red_canary_precedes_the_real_check,
+            "require the STALE verdict",
+        ),
         (_in_job("all-tests-passed", f", {JOB}", ""), assert_all_tests_passed_needs_the_job, f"does not need {JOB}"),
     ],
     ids=[
@@ -197,6 +206,7 @@ def _in_job(job: str, old: str, new: str) -> Callable[[str], str]:
         "installer-dropped",
         "canary-accepts-fresh",
         "canary-comment-only",
+        "canary-accepts-any-exit-1",
         "fan-in-drops-job",
     ],
 )

@@ -1261,8 +1261,11 @@ jobs:
           cp -a . "$canary"
           printf '\nfunction pfb_graph_freshness_canary() {\n\treturn 1;\n}\n' >> "$canary/src/usr/local/pkg/pfblockerng/pfblockerng.inc"
           echo "Red canary: the STALE verdict below is expected."
-          sh scripts/agent/check-graph-fresh.sh "$canary" && :; canary_status=$?
+          sh scripts/agent/check-graph-fresh.sh "$canary" 2>"$RUNNER_TEMP/canary.log" && :; canary_status=$?
+          cat "$RUNNER_TEMP/canary.log" >&2
           [ "$canary_status" -eq 1 ] || { echo "::error::graph-freshness red canary failed: a tree with an added function was not reported stale (checker exit $canary_status, expected 1)"; exit 1; }
+          # Exit 1 also covers a failed rebuild or compaction; only STALE proves the red path.
+          grep -q STALE "$RUNNER_TEMP/canary.log" || { echo "::error::graph-freshness red canary failed: the checker exited 1 without a STALE verdict"; exit 1; }
           sh scripts/agent/check-graph-fresh.sh .
 
   # Single stable job name for branch-protection required-status-checks.

@@ -49,7 +49,7 @@ if [ -z "$rc" ]; then
 fi
 case "$rc" in
   0) echo 'check-graph-fresh.sh: graph is fresh' >&2 ;;
-  1) echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'PYTHONHASHSEED=0 graphify update .' and commit graphify-out/graph.json" >&2 ;;
+  1) echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a compact rebuild of this tree; run 'sh scripts/agent/check-graph-fresh.sh --refresh' and commit graphify-out/graph.json" >&2 ;;
   2) echo 'check-graph-fresh.sh: no root graph; run /graphify' >&2 ;;
   4) echo 'TOOL-MISSING: graphify' >&2 ;;
 esac
@@ -129,7 +129,7 @@ CHECK
     When run human_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
     The status should equal 1
     The stderr should include 'STALE'
-    The stderr should include "PYTHONHASHSEED=0 graphify update ."
+    The stderr should include "sh scripts/agent/check-graph-fresh.sh --refresh"
     The result of function scratch_leftovers should equal ''
   End
 

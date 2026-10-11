@@ -82,7 +82,8 @@ Load when: every agent session, from `AGENTS.md`.
   `scripts/agent/ensure-graphify-merge-driver.sh` installs Graphify,
   registers `merge.graphify.driver` with `git config`, and verifies the registration.
   Without it a merge leaves conflict markers in the graph instead of union-merging it;
-  the driver's output is never trusted, because the push gate rebuilds.
+  the driver's output is never trusted, because the push gate rebuilds. The driver
+  writes indented JSON, so refresh the graph after any merge or rebase that touched it.
 - **CodeGraph owns purely code-related questions**, and is the first call for them:
   indexed code discovery, a named symbol's verbatim source, call paths, flows,
   cross-file structure, and blast radius. Use `codegraph_explore` or
@@ -108,7 +109,9 @@ Load when: every agent session, from `AGENTS.md`.
   Read `graphify-out/GRAPH_REPORT.md` only for broad architecture
   review, and `graphify-out/wiki/index.md`, when present, for navigation. Run
   `PYTHONHASHSEED=0 graphify update .` after modifying code (AST only, no API cost) to
-  query the current tree; the next commit rebuilds and stages the graph either way, so a
+  query the current tree; it writes indented JSON, so never commit that output alone --
+  `sh scripts/agent/check-graph-fresh.sh --refresh` makes it committable, and the next
+  code commit rebuilds and stages the graph either way, so a
   modified `graphify-out/graph.json` in between is expected and is not a reason to skip
   Graphify. Skip it only when the task is about stale or incorrect graph output.
 - Close the loop on every query: record it with `graphify save-result --question … --answer …

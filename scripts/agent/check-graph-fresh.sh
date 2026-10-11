@@ -87,17 +87,11 @@ main() {
 		echo "check-graph-fresh.sh: rebuild failed (graphify update exited $rc); graphify-out/graph.json restored" >&2
 		exit 1
 	fi
-	python3 -c '
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-except ValueError as exc:
-    sys.exit(f"check-graph-fresh.sh: rebuild failed (output is not JSON: {exc}); graphify-out/graph.json restored")
-with open(path, "w", encoding="utf-8") as f:
-    f.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
-' "$graph" || exit 1
+	python3 -m json.tool --compact --no-ensure-ascii "$graph" "$scratch/compact.json" || {
+		echo 'check-graph-fresh.sh: rebuild failed (output is not JSON); graphify-out/graph.json restored' >&2
+		exit 1
+	}
+	cp "$scratch/compact.json" "$graph" || exit 1
 
 	if [ "$refresh" = 1 ]; then
 		restore=0
