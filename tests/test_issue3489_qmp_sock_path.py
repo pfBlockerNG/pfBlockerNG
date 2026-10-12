@@ -10,6 +10,7 @@ anchored under RUNNER_TEMP or /tmp rather than pytest's deep tmp_path tree.
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import os
 import shutil
@@ -55,3 +56,53 @@ def test_qmp_socket_path_fits_sun_path_under_the_tmp_fallback(monkeypatch: pytes
         # Only ever remove the directory this call made; never a shared base like /tmp itself.
         if parent.name.startswith("pfb-qmp-"):
             shutil.rmtree(parent, ignore_errors=True)
+
+
+class _FakeQemu:
+    pid = 4321
+
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def poll(self) -> int | None:
+        return 0 if self.stopped else None
+
+    def terminate(self) -> None:
+        self.stopped = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+
+def _boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, ready_rc: int) -> smoke_conftest.BootHandle:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner-temp"))
+    (tmp_path / "runner-temp").mkdir()
+    monkeypatch.setattr(smoke_conftest.subprocess, "Popen", lambda *a, **k: _FakeQemu())
+    monkeypatch.setattr(
+        smoke_conftest.subprocess,
+        "run",
+        lambda argv, **k: smoke_conftest.subprocess.CompletedProcess(argv, ready_rc, "", "never ready"),
+    )
+    monkeypatch.setattr(smoke_conftest, "_capture_boot_failure", lambda *a, **k: None)
+    live_helpers = importlib.import_module("tests.smoke.helpers")
+    for name in ("wait_boot_complete", "_write_cron_disable_flag"):
+        monkeypatch.setattr(live_helpers, name, lambda vm: None)
+    monkeypatch.setattr(smoke_conftest, "_log_guest_identity", lambda vm: None, raising=False)
+    return smoke_conftest.boot_and_probe(Path("base.qcow2"), "key", log_path=tmp_path / "vm.log")
+
+
+def test_a_failed_boot_removes_its_qmp_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="never became ready"):
+        _boot(monkeypatch, tmp_path, ready_rc=1)
+
+    assert list((tmp_path / "runner-temp").iterdir()) == [], "a failed boot must not leave its QMP directory behind"
+
+
+def test_stopping_a_booted_vm_removes_its_qmp_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handle = _boot(monkeypatch, tmp_path, ready_rc=0)
+    handle.log_file.close()
+    assert len(list((tmp_path / "runner-temp").iterdir())) == 1, "the running VM owns one QMP directory"
+
+    smoke_conftest._kill(handle.process, handle.qmp_sock)
+
+    assert list((tmp_path / "runner-temp").iterdir()) == [], "stopping the VM must remove its QMP directory"

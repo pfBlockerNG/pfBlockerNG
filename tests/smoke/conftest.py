@@ -341,6 +341,7 @@ class BootHandle:
     process: subprocess.Popen[bytes]
     vm: SmokeVM
     log_file: BinaryIO = field(repr=False)
+    qmp_sock: str
 
 
 def _abi_os_major(abi: str) -> str:
@@ -519,13 +520,13 @@ def boot_and_probe(
         )
     except Exception:
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
-        _kill(process)
+        _kill(process, qmp_sock)
         log_file.close()
         raise
 
     if result.returncode != 0:
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
-        _kill(process)
+        _kill(process, qmp_sock)
         log_file.close()
         tail = _tail(log_path)
         raise RuntimeError(
@@ -553,22 +554,23 @@ def boot_and_probe(
         # SAME cleanup as a wait_ready failure: capture diagnostics, kill qemu, close the log --
         # otherwise a never-completing boot leaks the VM and produces no screendump/log tail.
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
-        _kill(process)
+        _kill(process, qmp_sock)
         log_file.close()
         raise
-    return BootHandle(process=process, vm=vm, log_file=log_file)
+    return BootHandle(process=process, vm=vm, log_file=log_file, qmp_sock=qmp_sock)
 
 
-def _kill(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        with contextlib.suppress(Exception):
+def _kill(process: subprocess.Popen[bytes], qmp_sock: str) -> None:
+    """Stop qemu, then remove the private directory ``_qmp_sock_path`` made for its socket."""
+    if process.poll() is None:
+        process.terminate()
+        try:
             process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            with contextlib.suppress(Exception):
+                process.wait(timeout=15)
+    shutil.rmtree(os.path.dirname(qmp_sock), ignore_errors=True)
 
 
 def _tail(path: Path, lines: int = 40) -> str:
@@ -742,7 +744,7 @@ def smoke_vm(
         yield handle.vm
     finally:
         request.session.stash[SMOKE_VM_KEY] = None
-        _kill(handle.process)
+        _kill(handle.process, handle.qmp_sock)
         with contextlib.suppress(Exception):
             handle.log_file.close()
         # The overlay is mktemp'd inside boot_vm.sh and removed on its clean
@@ -857,13 +859,13 @@ def client_vm(
         )
     except Exception:
         _capture_boot_failure("civm", qmp_sock, log_path, process)
-        _kill(process)
+        _kill(process, qmp_sock)
         log_file.close()
         raise
 
     if result.returncode != 0:
         _capture_boot_failure("civm", qmp_sock, log_path, process)
-        _kill(process)
+        _kill(process, qmp_sock)
         log_file.close()
         tail = _tail(log_path)
         raise RuntimeError(
@@ -884,7 +886,7 @@ def client_vm(
     try:
         yield vm
     finally:
-        _kill(process)
+        _kill(process, qmp_sock)
         with contextlib.suppress(Exception):
             log_file.close()
 
