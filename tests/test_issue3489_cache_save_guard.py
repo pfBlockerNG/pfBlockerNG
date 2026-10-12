@@ -58,4 +58,4 @@ def test_uv_cache_is_not_saved_for_a_caller_named_ref(workflow: str, job: str) -
 @JOBS
 def test_no_combined_restore_and_save_cache_step(workflow: str, job: str) -> None:
     """``actions/cache@`` saves implicitly in its post step, bypassing the guarded save steps."""
-    assert [s["name"] for s in _steps(workflow, job, "actions/cache@")] == []
+    assert [s.get("name", s["uses"]) for s in _steps(workflow, job, "actions/cache@")] == []

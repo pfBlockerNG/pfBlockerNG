@@ -413,6 +413,7 @@ def test_boot_and_probe_logs_identity_after_boot_completion(monkeypatch: pytest.
         assert argv[0:2] == ["sh", str(smoke_conftest.WAIT_READY_SH)]
         return subprocess.CompletedProcess(argv, 0, "boot-to-ready: 1 second\n", "")
 
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))  # _qmp_sock_path mkdtemps here, not in /tmp
     monkeypatch.setattr(smoke_conftest.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     monkeypatch.setattr(smoke_conftest.subprocess, "run", fake_run)
     monkeypatch.setattr(live_helpers, "wait_boot_complete", lambda vm: events.append("boot-complete"))

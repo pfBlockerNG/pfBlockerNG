@@ -573,6 +573,7 @@ jobs:
           set -eu
           sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
 
+      # A caller-named checkout_ref run must not write the cache trusted runs restore (issue #3489).
       - name: Save civm image to cache
         if: steps.civmcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
         uses: actions/cache/save@v6
