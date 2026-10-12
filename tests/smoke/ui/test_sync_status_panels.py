@@ -207,25 +207,45 @@ def read_state(vm: SmokeVM, name: str) -> str | None:
     return result.stdout
 
 
+def read_mode(vm: SmokeVM, name: str) -> str | None:
+    """The guest state file's octal permission bits (FreeBSD ``stat -f %Lp``); ``None`` while it does not exist."""
+    path = f"{helpers.PFB_DBDIR}/{name}"
+    if vm.ssh("/bin/test", "-e", path).returncode != 0:
+        return None
+    result = vm.ssh("/usr/bin/stat", "-f", "%Lp", path)
+    assert result.returncode == 0, f"stat {path}: rc={result.returncode} stderr={result.stderr!r}"
+    return result.stdout.strip()
+
+
+def _chmod(vm: SmokeVM, name: str, mode: str) -> None:
+    path = f"{helpers.PFB_DBDIR}/{name}"
+    done = vm.ssh("/bin/chmod", mode, path)
+    assert done.returncode == 0, f"chmod {mode} {path}: rc={done.returncode} stderr={done.stderr!r}"
+
+
 def seed(vm: SmokeVM, *, receive: str | None, findings: str | None, send: str | None) -> None:
-    """Write each state file's text on the guest; ``None`` removes the file, so absence is arranged, not assumed."""
+    """Write each state file's text on the guest, root-only (0600) like the package's own; ``None`` removes it."""
     for name, text in ((RECEIVE, receive), (FINDINGS, findings), (SEND, send)):
         if text is None:
             removed = vm.ssh("/bin/rm", "-f", f"{helpers.PFB_DBDIR}/{name}")
             assert removed.returncode == 0, f"rm {name}: rc={removed.returncode} stderr={removed.stderr!r}"
         else:
             helpers.write_local_feed(vm, name, text)
+            _chmod(vm, name, "600")
 
 
 @contextmanager
 def preserved_state(vm: SmokeVM) -> Iterator[None]:
-    """Keep the guest's own receive, findings and send records across a test, byte for byte."""
-    saved = {name: read_state(vm, name) for name in STATE_FILES}
+    """Keep the guest's own receive, findings and send records across a test, byte for byte and mode for mode."""
+    saved = {name: (read_state(vm, name), read_mode(vm, name)) for name in STATE_FILES}
     try:
         yield
     finally:
-        seed(vm, receive=saved[RECEIVE], findings=saved[FINDINGS], send=saved[SEND])
-        restored = {name: read_state(vm, name) for name in STATE_FILES}
+        seed(vm, receive=saved[RECEIVE][0], findings=saved[FINDINGS][0], send=saved[SEND][0])
+        for name, (text, mode) in saved.items():
+            if text is not None and mode is not None:
+                _chmod(vm, name, mode)
+        restored = {name: (read_state(vm, name), read_mode(vm, name)) for name in STATE_FILES}
         assert restored == saved, f"restore failed: expected {saved!r}, found {restored!r}"
 
 

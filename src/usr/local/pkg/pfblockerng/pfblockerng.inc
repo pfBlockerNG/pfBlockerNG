@@ -22107,14 +22107,17 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 	$resp = $rpc_client->xmlrpc_method($method, $xml, $synctimeout);
 
 	if (!isset($resp)) {
-		// The client text can carry the password (in the URL) and peer-controlled bytes: scrub, then strip the secret before it is stored.
-		$error = mb_scrub((string) $rpc_client->get_error());
-		if (is_string($password) && $password !== '') {
-			$error = str_replace(array(rawurlencode($password), $password), '********', $error);
-		}
-		if ($error === '') {
-			$error = 'no response from the XMLRPC client';
-		}
+		// The client's own message (peer-controlled for a fault) stays in the system log where pfSense writes it; the state keeps only its class.
+		$text  = (string) $rpc_client->get_error();
+		$error = match (TRUE) {
+			$text === ''                                                            => 'no response from the XMLRPC client',
+			preg_match('/authentication/i', $text) === 1                            => 'authentication failed',
+			preg_match('/^Exception calling XMLRPC method \S+ #-?\d+ : /', $text) === 1 => 'the peer returned an XMLRPC fault',
+			preg_match('/timed? ?out/i', $text) === 1                               => 'timeout',
+			preg_match('/\b(?:ssl|tls)\b|certificate/i', $text) === 1               => 'TLS error',
+			preg_match('/communications error|CurlException/i', $text) === 1        => 'connection error',
+			default                                                                 => 'transport error',
+		};
 		return FALSE;
 	} else {
 		return TRUE;
@@ -22442,6 +22445,9 @@ function pfb_sync_receiver_panel(array $receive, ?bool $drift, array $findings, 
 
 	$objects = array();
 	foreach (is_array($copied['findings'] ?? NULL) ? $copied['findings'] : array() as $kind => $labels) {
+		if (!is_string($kind)) {
+			continue;
+		}
 		foreach (is_array($labels) ? $labels : array() as $label => $attrs) {
 			$attrs     = $strs($attrs);
 			$objects[] = htmlspecialchars("{$kind}: {$label}", ENT_QUOTES) . ($attrs === array() ? '' : ' (' . implode(', ', array_map($e, $attrs)) . ')');
@@ -22500,7 +22506,7 @@ function pfb_sync_sender_panel(array $send): string {
 	}
 	return '<div class="panel panel-default" id="pfb-sync-sender"><div class="panel-heading"><h2 class="panel-title">Sender: last sync attempts</h2></div><div class="panel-body">'
 	    . '<table class="table table-condensed"><thead><tr><th>Target</th><th>Time</th><th>Payload digest</th><th>Result</th></tr></thead><tbody>' . $rows . '</tbody></table>'
-	    . '<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own Sync page shows its receive.</p></div></div>';
+	    . '<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own Sync page shows its receive. A failure shows its class; the system log keeps the client\'s full message.</p></div></div>';
 }
 
 /*

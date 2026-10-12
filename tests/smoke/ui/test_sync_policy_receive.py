@@ -78,6 +78,16 @@ from .test_sync_status_panels import (
 if TYPE_CHECKING:
     from .webui import WebUI
 
+# The only reasons the sender panel may give for a failed attempt (never the client's raw message).
+FAILURE_CLASSES = (
+    "authentication failed",
+    "the peer returned an XMLRPC fault",
+    "timeout",
+    "TLS error",
+    "connection error",
+    "transport error",
+)
+
 pytestmark = pytest.mark.ui_e2e
 
 ALIAS = "pfbsync3452"
@@ -440,24 +450,27 @@ def test_refused_receive_shows_on_the_sync_page(box: _Box, webui: WebUI) -> None
     Red when: the receive row says accepted for a refusal; the reason differs from the state file's (or is not
     escaped); the incoming/accepted rows show a digest the refused record never carried; the apply row stops
     mirroring the (older) apply record or drift/findings stop mirroring the state; a peer check control appears.
+    The receive, findings and send files are kept and put back, mode included.
     """
-    payload = _changed_payload(box)
-    rows = payload["installedpackages"]["pfblockernglistsv4"]["config"]
-    rows.append(copy.deepcopy(rows[0]))  # two groups named ALIAS: the receiver's identity check refuses the snapshot
-    sent = _send(box, payload)
-    state = _panel_state(box.vm)
-    last = _assert_record(state, sent, "refused")
-    reason = last.get("reason")
-    assert isinstance(reason, str) and reason.strip(), f"refusal must say why: got {last!r}"
+    with preserved_state(box.vm):
+        payload = _changed_payload(box)
+        rows = payload["installedpackages"]["pfblockernglistsv4"]["config"]
+        rows.append(copy.deepcopy(rows[0]))  # two groups named ALIAS: the receiver's identity check refuses it
+        sent = _send(box, payload)
+        _settle(box)
+        state = _panel_state(box.vm)
+        last = _assert_record(state, sent, "refused")
+        reason = last.get("reason")
+        assert isinstance(reason, str) and reason.strip(), f"refusal must say why: got {last!r}"
 
-    html = render_sync_page(box.vm, webui)
-    receiver = _receiver(html)
-    assert_row(receiver, "receive", f"{re.escape(state['receive_at'])} {DASH} refused: {_flat(reason)}")
-    assert_row(receiver, "incoming", DASH)
-    assert_row(receiver, "accepted", DASH)
-    assert_row(receiver, "ignored", "none")
-    _assert_apply_and_context_rows(receiver, state)
-    assert_no_peer_check(html)
+        html = render_sync_page(box.vm, webui)
+        receiver = _receiver(html)
+        assert_row(receiver, "receive", f"{re.escape(state['receive_at'])} {DASH} refused: {_flat(reason)}")
+        assert_row(receiver, "incoming", DASH)
+        assert_row(receiver, "accepted", DASH)
+        assert_row(receiver, "ignored", "none")
+        _assert_apply_and_context_rows(receiver, state)
+        assert_no_peer_check(html)
 
 
 def test_changed_receive_shows_on_the_sync_page_with_its_apply_apart(box: _Box, webui: WebUI) -> None:
@@ -466,30 +479,34 @@ def test_changed_receive_shows_on_the_sync_page_with_its_apply_apart(box: _Box, 
     Red when: the receive row stops saying "accepted with changes"; the incoming or accepted digest on the page
     differs from the state file's; ignored paths are not listed (escaped); the apply row stops following the apply
     record that the settled pass wrote (applied/failed with its time); drift or findings stop mirroring the state.
+    The receive, findings and send files are kept and put back, mode included, once the apply is over.
     """
-    sent = _send(box, _changed_payload(box))
-    _settle(box)
-    state = _panel_state(box.vm)
-    last = _assert_record(state, sent, "changed")
-    apply = state["receive"].get("apply") or {}
-    assert apply.get("outcome") in ("applied", "failed"), f"apply record after the settle: got {apply!r}"
-    for key in ("incoming_digest", "accepted_digest"):
-        assert re.fullmatch(r"[0-9a-f]{64}", str(last.get(key))), f"receive record {key}: expected 64 hex, got {last!r}"
+    with preserved_state(box.vm):
+        sent = _send(box, _changed_payload(box))
+        _settle(box)
+        state = _panel_state(box.vm)
+        last = _assert_record(state, sent, "changed")
+        apply = state["receive"].get("apply") or {}
+        assert apply.get("outcome") in ("applied", "failed"), f"apply record after the settle: got {apply!r}"
+        for key in ("incoming_digest", "accepted_digest"):
+            assert re.fullmatch(r"[0-9a-f]{64}", str(last.get(key))), (
+                f"receive record {key}: expected 64 hex, got {last!r}"
+            )
 
-    html = render_sync_page(box.vm, webui)
-    receiver = _receiver(html)
-    assert_row(receiver, "receive", f"{re.escape(state['receive_at'])} {DASH} accepted with changes")
-    assert_row(receiver, "incoming", last["incoming_digest"])
-    assert_row(receiver, "accepted", last["accepted_digest"])
-    ignored = [path for path in last.get("ignored", []) if isinstance(path, str)]
-    count = last.get("ignored_count", len(ignored))
-    assert_row(
-        receiver,
-        "ignored",
-        " ".join([rf"{count} ignored path\(s\)", *(_flat(path) for path in ignored)]) if count else "none",
-    )
-    _assert_apply_and_context_rows(receiver, state)
-    assert_no_peer_check(html)
+        html = render_sync_page(box.vm, webui)
+        receiver = _receiver(html)
+        assert_row(receiver, "receive", f"{re.escape(state['receive_at'])} {DASH} accepted with changes")
+        assert_row(receiver, "incoming", last["incoming_digest"])
+        assert_row(receiver, "accepted", last["accepted_digest"])
+        ignored = [path for path in last.get("ignored", []) if isinstance(path, str)]
+        count = last.get("ignored_count", len(ignored))
+        assert_row(
+            receiver,
+            "ignored",
+            " ".join([rf"{count} ignored path\(s\)", *(_flat(path) for path in ignored)]) if count else "none",
+        )
+        _assert_apply_and_context_rows(receiver, state)
+        assert_no_peer_check(html)
 
 
 def _seed_targets(box: _Box) -> int:
@@ -527,8 +544,9 @@ def test_sender_panel_lists_each_target_of_a_real_manual_sync(box: _Box, webui: 
     own receive too, so the receive, findings and send files are kept and put back.
 
     Red when: one target hides the other (the dead target must not stop the pass); the live target is not
-    "sent, acceptance unconfirmed" with the state file's 64-hex digest; the dead target is not "failed:" followed by
-    the client's own error (never the fallback text); the page differs from pfb_sync_send.json; the admin password
+    "sent, acceptance unconfirmed" with the state file's 64-hex digest; the dead target is not "failed: " plus one
+    fixed failure class (expected "connection error" for a closed port; the client's raw message or the fallback
+    "no response from the XMLRPC client" is not a class); the page differs from pfb_sync_send.json; the admin password
     is in pfb_sync_send.json or in the sender panel. The whole page is not scanned for the password: the page's own
     Replication Targets form takes each stored password as an input value, which the panel does not control.
     """
@@ -567,7 +585,9 @@ def test_sender_panel_lists_each_target_of_a_real_manual_sync(box: _Box, webui: 
             assert [row[0] for row in rows] == [dead_target, own_target], f"sender rows: got {rows!r}"
             assert [len(row) for row in rows] == [4, 4], f"expected rows of Target|Time|Digest|Result, got {rows!r}"
             assert all(re.fullmatch(TIME, row[1]) for row in rows), f"sender times: got {rows!r}"
-            assert rows[0][2:] == [digest, f"failed: {plain(php_escape(error))}"], f"dead target row: got {rows[0]!r}"
+            assert rows[0][2] == digest, f"dead target digest: got {rows[0]!r}"
+            failure = rows[0][3]
+            assert failure in {f"failed: {cls}" for cls in FAILURE_CLASSES}, f"dead target result: got {failure!r}"
             assert rows[1][2:] == [digest, "sent, acceptance unconfirmed"], f"own webGUI row: got {rows[1]!r}"
             assert helpers.redact_values(sender, [box.password]) == sender, "the admin password is in the sender panel"
             assert_no_peer_check(html)

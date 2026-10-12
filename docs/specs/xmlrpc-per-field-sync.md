@@ -461,11 +461,14 @@ node's own classification.
 > **Amendment 2026-10-11 (#3453).** The sender keeps its panel state in
 > `{$pfb['dbdir']}/pfb_sync_send.json`, published through the same locked writer as the receive
 > state. Each pass replaces the file with one entry per target: the target, the time, the outcome
-> (`sent`, `failed` with the client's error, or `handed` for the automatic hand-over) and, in
-> `policy` scope, the policy digest of the payload. Legacy scopes record no digest, because their
-> payload is whole sections and the policy digest does not describe it. A stored client error has
-> the target's password masked. The receiver panel renders only once a policy receive record
-> exists, so a node that never received a policy payload shows no receiver panel.
+> (`sent`, `failed` with the class of the client's error, or `handed` for the automatic
+> hand-over) and, in `policy` scope, the policy digest of the payload. Legacy scopes record no
+> digest, because their payload is whole sections and the policy digest does not describe it. A
+> failed entry stores only the class of the client's error (authentication, XMLRPC fault, timeout,
+> TLS, connection, or other); the client's own message, which a peer's fault can fill with any
+> text, stays in the system log where pfSense writes it. The receiver panel renders only once a
+> policy receive record exists, so a node that never received a policy payload shows no receiver
+> panel.
 
 ## Acceptance criteria
 

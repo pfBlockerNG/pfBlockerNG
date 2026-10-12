@@ -178,7 +178,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			self::target('192.0.2.11', self::PASSWORD),
 			self::target('192.0.2.12', ''),
 		]);
-		$GLOBALS['pfb_test_xmlrpc_fail']['192.0.2.11'] = 'Error talking to https://admin:' . rawurlencode(self::PASSWORD)
+		$GLOBALS['pfb_test_xmlrpc_fail']['192.0.2.11'] = 'Exception calling XMLRPC method restore_config_section #-1 : https://admin:' . rawurlencode(self::PASSWORD)
 			. '@192.0.2.11:443 with ' . self::PASSWORD . ' ' . self::SCRIPT;
 	}
 
@@ -336,17 +336,53 @@ final class SyncPolicyStatusPanelTest extends TestCase
 
 	// ---- 3. the client error ----------------------------------------------------------------
 
-	public function testClientFailureSetsARedactedErrorAndKeepsTheReturnValue(): void
+	/** @return array<string,array{string,string}> client error text, the class stored for it */
+	public static function clientErrorClassProvider(): array
+	{
+		return [
+			'authentication' => ['An authentication failure occurred while trying to access https://h:443/xmlrpc.php (restore_config_section).', 'authentication failed'],
+			'fault'          => ['Exception calling XMLRPC method restore_config_section #-1 : anything the peer says', 'the peer returned an XMLRPC fault'],
+			'timeout'        => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Operation timed out after 5000 milliseconds', 'timeout'],
+			'tls'            => ['CurlException calling XMLRPC method restore_config_section #SSL certificate problem', 'TLS error'],
+			'connection'     => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Failed to connect', 'connection error'],
+			'unknown'        => ['Exception calling XMLRPC method x # boom', 'transport error'],
+			'empty'          => ['', 'no response from the XMLRPC client'],
+		];
+	}
+
+	#[DataProvider('clientErrorClassProvider')]
+	public function testClientFailureStoresOnlyTheClassOfTheErrorAndKeepsTheReturnValue(string $text, string $class): void
 	{
 		$this->seedNode('manual', 'all', []);
-		$GLOBALS['pfb_test_xmlrpc_fail']['192.0.2.20'] = 'cannot reach https://admin:' . rawurlencode(self::PASSWORD) . '@192.0.2.20 ' . self::PASSWORD . ' ' . self::SCRIPT;
+		$GLOBALS['pfb_test_xmlrpc_fail']['192.0.2.20'] = $text;
 
 		$ok = $this->quiet(static function () use (&$error): bool {
 			return pfblockerng_do_xmlrpc_sync('192.0.2.20', '443', 'https', 'admin', self::PASSWORD, 5, $error);
 		});
 
 		$this->assertFalse($ok);
-		$this->assertSame('cannot reach https://admin:********@192.0.2.20 ******** ' . self::SCRIPT, $error);
+		$this->assertSame($class, $error);
+	}
+
+	public function testAHostileFaultEchoReachesNeitherTheStateNorThePanel(): void
+	{
+		$key = 'MMKEY-0123456789abcdef';
+		$this->seedNode('manual', 'all', [self::target('192.0.2.20', self::PASSWORD)]);
+		$GLOBALS['pfb_test_xmlrpc_fail']['192.0.2.20'] = 'Exception calling XMLRPC method restore_config_section #-1 : ' . $key . ' ' . self::PASSWORD . ' '
+			. rawurlencode(self::PASSWORD) . ' ' . self::SCRIPT . ' accepted but not applied in sync';
+
+		$this->runPass();
+
+		$state = pfb_sync_send_state_read($this->dir);
+		$raw   = $this->sendBytes();
+		$panel = $this->senderPanel($state);
+		$this->assertSame('the peer returned an XMLRPC fault', $state['attempts'][0]['error']);
+		foreach ([$key, self::PASSWORD, rawurlencode(self::PASSWORD), '<script>', 'script&gt;', 'accepted', 'applied', 'in sync'] as $sentinel) {
+			$this->assertStringNotContainsString($sentinel, $raw, "{$sentinel} never reaches the state file");
+			$this->assertStringNotContainsString($sentinel, $panel, "{$sentinel} never reaches the sender panel");
+		}
+		$this->assertSame(0, preg_match(self::BANNED, $panel));
+		$this->assertSame(0, preg_match(self::IN_SYNC, $panel));
 	}
 
 	public function testClientSuccessLeavesTheErrorUnset(): void
@@ -362,30 +398,6 @@ final class SyncPolicyStatusPanelTest extends TestCase
 		$this->assertNull($error);
 	}
 
-	public function testEmptyClientErrorGetsAFixedText(): void
-	{
-		$this->seedNode('manual', 'all', []);
-		$GLOBALS['pfb_test_xmlrpc_fail']['192.0.2.20'] = '';
-
-		$this->quiet(static function () use (&$error): void {
-			pfblockerng_do_xmlrpc_sync('192.0.2.20', '443', 'https', 'admin', self::PASSWORD, 5, $error);
-		});
-
-		$this->assertSame('no response from the XMLRPC client', $error);
-	}
-
-	public function testAnEmptyPasswordRedactsNothing(): void
-	{
-		$this->seedNode('manual', 'all', []);
-		$GLOBALS['pfb_test_xmlrpc_fail']['192.0.2.20'] = 'boom';
-
-		$this->quiet(static function () use (&$error): void {
-			pfblockerng_do_xmlrpc_sync('192.0.2.20', '443', 'https', 'admin', '', 5, $error);
-		});
-
-		$this->assertSame('boom', $error);
-	}
-
 	public function testAnInvalidUtf8ClientErrorStillPublishesEveryTarget(): void
 	{
 		$this->seedThreeTargets('manual', 'policy');
@@ -395,9 +407,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 
 		$attempts = pfb_sync_send_state_read($this->dir)['attempts'];
 		$this->assertSame(['192.0.2.10:443', '192.0.2.11:443', '192.0.2.12:443'], array_column($attempts, 'target'), 'a peer text JSON cannot encode never hides the other targets');
-		$this->assertTrue(mb_check_encoding($attempts[1]['error'], 'UTF-8'));
-		$this->assertStringStartsWith('fault ', $attempts[1]['error']);
-		$this->assertStringEndsWith(' end', $attempts[1]['error']);
+		$this->assertSame('transport error', $attempts[1]['error']);
 	}
 
 	// ---- 4. the manual pass records every target -------------------------------------------
@@ -426,7 +436,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 
 		$this->assertSame('failed', $b['outcome']);
 		$this->assertSame($digest, $b['digest']);
-		$this->assertSame('Error talking to https://admin:********@192.0.2.11:443 with ******** ' . self::SCRIPT, $b['error']);
+		$this->assertSame('the peer returned an XMLRPC fault', $b['error']);
 
 		$this->assertSame('failed', $c['outcome']);
 		$this->assertSame('Password parameter missing.', $c['error']);
@@ -754,6 +764,15 @@ final class SyncPolicyStatusPanelTest extends TestCase
 		);
 	}
 
+	public function testCopiedObjectsSkipANonStringKindAndRenderAnIntLabelAsAString(): void
+	{
+		$copied = ['recorded' => [], 'findings' => [
+			7        => ['Alpha' => ['srcint']],
+			'aliases' => [5 => ['srcint']],
+		]];
+		$this->assertSame('<ul><li>aliases: 5 (srcint)</li></ul>', $this->cell($this->receiverPanel(self::receive(), NULL, [], $copied), 'copied'));
+	}
+
 	public function testCopiedObjectFindings(): void
 	{
 		$this->assertSame('none', $this->cell($this->receiverPanel(self::receive()), 'copied'));
@@ -883,7 +902,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			['192.0.2.12:443', '2023-11-14 22:13:22', 'n/a', 'failed'],
 			['pfSense HA sync', '2023-11-14 22:13:23', 'n/a', 'handed to pfSense HA sync'],
 		], $this->senderRows($html));
-		$this->assertStringEndsWith('<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own Sync page shows its receive.</p></div></div>', $html);
+		$this->assertStringEndsWith('<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own Sync page shows its receive. A failure shows its class; the system log keeps the client\'s full message.</p></div></div>', $html);
 	}
 
 	public function testSenderPanelEscapesEveryStoredValue(): void

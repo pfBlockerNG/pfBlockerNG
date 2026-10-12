@@ -28,7 +28,7 @@ function isAllowedPage($page) {}
 /**
  * HA/XMLRPC config-sync client (etc/inc/xmlrpc_client.inc; stable CE 2.8.0..master,
  * dated commit ed6c2eb8 2025-05-28 — mirror carries no RELENG_2_8_0 ref). Upstream
- * has more members (xmlrpc_exec_php/get_error/getUrl); only what pfBlockerNG
+ * has more members (xmlrpc_exec_php/getUrl); only what pfBlockerNG
  * calls is declared.
  */
 class pfsense_xmlrpc_client
@@ -38,6 +38,8 @@ class pfsense_xmlrpc_client
     public function setConnectionData(mixed $syncip, mixed $port, mixed $username, mixed $password, mixed $scheme = ''): void {}
 
     public function xmlrpc_method(string $method, mixed $parameter = '', int $timeout = 240): mixed {}
+
+    public function get_error(): ?string { return null; }
 }
 
 /**
