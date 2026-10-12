@@ -791,6 +791,26 @@ final class SyncPolicyStatusPanelTest extends TestCase
 		);
 	}
 
+	public function testCopiedObjectFindingsFromTheStateFileRenderThroughTheRealReader(): void
+	{
+		$digest = hash('sha256', 'pfb3453');
+		file_put_contents("{$this->dir}/pfb_sync_copied.json", json_encode([
+			'recorded' => ['aliases' => [$digest => $digest], 'nat' => [$digest => $digest]],
+			'findings' => [
+				'aliases' => ['pfB_Alpha' => ['address', '(unexpected)']],
+				'nat'     => ['pfB_Beta#2' => ['destination/port', '(missing)']],
+			],
+		]));
+
+		$copied = pfb_sync_copied_read($this->dir);
+
+		$this->assertSame(['pfB_Alpha' => ['address', '(unexpected)']], $copied['findings']['aliases'], 'before-state: the reader returns the seeded findings');
+		$this->assertSame(
+			'<ul><li>aliases: pfB_Alpha (address, (unexpected))</li><li>nat: pfB_Beta#2 (destination/port, (missing))</li></ul>',
+			$this->cell($this->receiverPanel(self::receive(), NULL, [], $copied), 'copied')
+		);
+	}
+
 	/** @return array<string,array{string}> */
 	public static function hostileFieldProvider(): array
 	{
@@ -968,7 +988,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 		$page = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_sync.php');
 
 		$form     = strpos($page, 'print ($form);');
-		$receiver = strpos($page, "print pfb_sync_receiver_panel(pfb_sync_receive_state_read(\$pfb['dbdir']), pfb_sync_receive_drift(\$pfb['dbdir']), pfb_sync_findings_read(\$pfb['dbdir']),\n\tfunction_exists('pfb_sync_copied_read') ? pfb_sync_copied_read(\$pfb['dbdir']) : array());");
+		$receiver = strpos($page, "print pfb_sync_receiver_panel(pfb_sync_receive_state_read(\$pfb['dbdir']), pfb_sync_receive_drift(\$pfb['dbdir']), pfb_sync_findings_read(\$pfb['dbdir']), pfb_sync_copied_read(\$pfb['dbdir']));");
 		$sender   = strpos($page, "print pfb_sync_sender_panel(pfb_sync_send_state_read(\$pfb['dbdir']));");
 
 		$this->assertNotFalse($form);
