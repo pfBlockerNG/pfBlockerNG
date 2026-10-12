@@ -595,11 +595,13 @@ def _qmp_sock_path(tag: str) -> str:
     """A short unix-socket path for QEMU's QMP control channel.
 
     Unix socket paths are capped at ~108 bytes, so we anchor under RUNNER_TEMP
-    (or /tmp), NOT pytest's deep tmp_path_factory dir. boot_vm.sh ``rm -f``s and
-    recreates it; we only need a unique, short name.
+    (or /tmp), NOT pytest's deep tmp_path_factory dir. The socket sits in a fresh
+    0700 directory (``mkdtemp``, never the racy ``mktemp``) so no other local user
+    can claim the name; boot_vm.sh ``rm -f``s the absent socket and QEMU binds it.
     """
     base = os.environ.get("RUNNER_TEMP") or "/tmp"
-    return tempfile.mktemp(prefix=f"pfb-qmp-{tag}-", suffix=".sock", dir=base)
+    sock_dir = tempfile.mkdtemp(prefix=f"pfb-qmp-{tag}-", dir=base)
+    return os.path.join(sock_dir, "qmp.sock")
 
 
 def _capture_boot_failure(tag: str, qmp_sock: str | None, log_path: Path, process: subprocess.Popen[bytes]) -> None:
