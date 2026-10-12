@@ -255,4 +255,17 @@ final class SyncPolicyReceiveStateTest extends TestCase
 		$this->assertStringContainsString('XMLRPC policy receive: state not published.', implode("\n", $this->messages()));
 		$this->assertStringNotContainsString(self::DIGEST_A, implode("\n", $this->messages()));
 	}
+
+	public function testAFailedSyncSaveClearKeepsTheFindingsOfTheStillAcceptingReceiver(): void
+	{
+		$state = ['accepted_digest' => self::DIGEST_A, 'last' => ['time' => 1, 'outcome' => 'changed']];
+		$this->publish($state);
+		file_put_contents("{$this->dir}/pfb_sync_findings.json", json_encode(['time' => 1, 'findings' => ['MaxMind: license key missing']]));
+		$this->breakPublication();
+
+		pfb_sync_receive_accepted_clear($this->dir);
+
+		$this->assertSame(self::DIGEST_A, pfb_sync_receive_state_read($this->dir)['accepted_digest'], 'before-state check: the clear did not land');
+		$this->assertFileExists("{$this->dir}/pfb_sync_findings.json", 'a node that still accepts keeps its findings');
+	}
 }

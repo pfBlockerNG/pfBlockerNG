@@ -22607,14 +22607,17 @@ function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, b
 
 // Drops the accepted digest and the stored findings (the Sync page save calls this); the last outcome and the apply record stay.
 function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
-	pfb_sync_receive_state_update($dbdir, static function (array $state): ?array {
+	$cleared = pfb_sync_receive_state_update($dbdir, static function (array $state): ?array {
 		if ($state['accepted_digest'] === NULL) {
 			return NULL;
 		}
 		$state['accepted_digest'] = NULL;
 		return $state;
 	}, $io);
-	@unlink("{$dbdir}/pfb_sync_findings.json");
+	// A failed clear leaves the node accepting, so its findings stay.
+	if ($cleared) {
+		@unlink("{$dbdir}/pfb_sync_findings.json");
+	}
 }
 
 /*
