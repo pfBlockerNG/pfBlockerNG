@@ -127,7 +127,8 @@ _FUNC_START_RE = re.compile(
 
 # Matches an optional return-type annotation followed by the opening brace.
 # Handles nullable (?T), union (A|B), intersection (A&B), and namespaced types.
-_RETURN_TYPE_RE = re.compile(r"\s*(?::\s*([\?\\a-zA-Z0-9_|&\[\]]+(?:\|[\?\\a-zA-Z0-9_|&\[\]]+)*))?\s*\{")
+# The class already contains "|": never add a separate (?:\|...)* tail, it backtracks exponentially (#3489).
+_RETURN_TYPE_RE = re.compile(r"\s*(?::\s*([\?\\a-zA-Z0-9_|&\[\]]+))?\s*\{")
 
 
 def _collect_params(source: str, open_paren: int) -> int | None:
