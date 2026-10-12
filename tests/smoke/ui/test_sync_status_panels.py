@@ -472,7 +472,8 @@ def test_wrong_types_render_clean_and_unknown_outcome_is_not_accepted(
     assert_row(receiver, "ignored", "none")
     assert_row(receiver, "apply", "unknown apply state")
     assert_row(receiver, "drift", "no accepted digest to compare")
-    assert_row(receiver, "findings", "keep-me")
+    assert_row(receiver, "findings", "none")  # a wrong-typed accepted digest is no accepted digest: no findings
+    assert "keep-me" not in receiver, "findings listed for a node that holds no accepted digest"
     assert "Array" not in receiver, "a non-string value was printed as 'Array'"
     assert "<b>x</b>" not in receiver, "the stored outcome markup is in the panel raw"
     assert 'id="pfb-sync-sender' not in html, "a non-list attempts field must show no sender panel"
