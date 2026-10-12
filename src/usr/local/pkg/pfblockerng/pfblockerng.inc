@@ -22437,7 +22437,8 @@ function pfb_sync_receiver_panel(array $receive, ?bool $drift, array $findings, 
 		};
 	}
 
-	$found = $strs($findings['findings'] ?? NULL);
+	// Only an accepting receiver reports findings; a write that raced a Sync save is not shown.
+	$found = ($receive['accepted_digest'] ?? NULL) !== NULL ? $strs($findings['findings'] ?? NULL) : array();
 
 	$objects = array();
 	foreach (is_array($copied['findings'] ?? NULL) ? $copied['findings'] : array() as $kind => $labels) {

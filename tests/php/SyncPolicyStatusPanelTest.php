@@ -192,7 +192,13 @@ final class SyncPolicyStatusPanelTest extends TestCase
 	/** @return array<string,mixed> the receive record of a changed receive */
 	private static function receive(array $last = [], array $extra = []): array
 	{
-		return ['accepted_digest' => NULL, 'last' => $last + ['time' => self::T0, 'outcome' => 'changed']] + $extra;
+		return $extra + ['accepted_digest' => NULL, 'last' => $last + ['time' => self::T0, 'outcome' => 'changed']];
+	}
+
+	/** A receiver that holds an accepted digest: only it reports effective-policy findings. */
+	private static function accepting(): array
+	{
+		return ['accepted_digest' => str_repeat('c', 64)] + self::receive();
 	}
 
 	/** @return array{time:?int,findings:list<string>} */
@@ -760,7 +766,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 		$this->assertSame('none', $this->cell($this->receiverPanel(self::receive(), NULL, ['findings' => 'junk']), 'findings'));
 		$this->assertSame(
 			'<ul><li>MaxMind: license key missing</li><li>ASN: IPinfo token missing</li></ul>',
-			$this->cell($this->receiverPanel(self::receive(), NULL, ['time' => 1, 'findings' => ['MaxMind: license key missing', ['x'], 5, NULL, 'ASN: IPinfo token missing']]), 'findings')
+			$this->cell($this->receiverPanel(self::accepting(), NULL, ['time' => 1, 'findings' => ['MaxMind: license key missing', ['x'], 5, NULL, 'ASN: IPinfo token missing']]), 'findings')
 		);
 	}
 
@@ -850,6 +856,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 				break;
 			case 'finding':
 				$findings = self::findings($raw);
+				$extra['accepted_digest'] = str_repeat('c', 64); // only an accepting receiver lists findings
 				break;
 			case 'copied label':
 				$copied = ['findings' => ['aliases' => [$raw => ['srcint']]]];

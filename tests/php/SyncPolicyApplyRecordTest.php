@@ -466,6 +466,20 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertStringNotContainsString('failed validation', $panel, 'and it lists no findings');
 	}
 
+	// A pass that saw the accepted digest just before a Sync save can write the findings after the save removed them.
+	public function testAFormerReceiverShowsNoFindingsAnApplyWroteAfterTheSyncSave(): void
+	{
+		$this->seedRecord('waiting');
+		pfb_sync_receive_accepted_clear($this->dir);
+		pfb_sync_findings_record(['DNSBL disabled: the DNSBL VIP failed validation'], $this->dir);
+		$this->assertFileExists($this->dir . '/pfb_sync_findings.json', 'before-state check: the late write landed');
+
+		$panel = pfb_sync_receiver_panel(pfb_sync_receive_state_read($this->dir), NULL, pfb_sync_findings_read($this->dir), []);
+
+		$this->assertNotSame('', $panel, 'the receive record keeps the panel');
+		$this->assertStringNotContainsString('failed validation', $panel, 'a node that no longer accepts policy lists no findings');
+	}
+
 	public function testCompletedApplyRecordsTheCopiedAliasAndFilterState(): void
 	{
 		$this->seedApplyEnvironment();
