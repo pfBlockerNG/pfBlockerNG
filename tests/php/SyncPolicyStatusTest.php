@@ -237,6 +237,19 @@ final class SyncPolicyStatusTest extends TestCase
 		$this->assertSame([], $last['ignored'] ?? NULL);
 	}
 
+	public function testGappedRowKeysKeepIncomingAndAcceptedDigestsEqual(): void
+	{
+		$payload = self::cleanPayload();
+		$second  = ['aliasname' => 'Beta', 'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'row' => [0 => self::feedRow()]];
+		$payload['pfblockernglistsv4']['config'] = [0 => $payload['pfblockernglistsv4']['config'][0], 2 => $second];
+		$this->receive($payload);
+
+		$last = $this->last();
+		$this->assertSame('changed', $last['outcome']);
+		$this->assertSame([], $last['ignored'] ?? NULL, 'before-state: nothing was ignored');
+		$this->assertSame($last['accepted_digest'], $last['incoming_digest'], 'row keys as sent must not split the digests');
+	}
+
 	public function testOverLongKeyIsRecordedAsAStarSegmentAndKeepsTheStateSmall(): void
 	{
 		$payload = self::cleanPayload();

@@ -65,6 +65,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$GLOBALS['pfb']['php']       = $this->dir . '/php-recorder';
 		$GLOBALS['pfb_test_mwexec_bg']    = [];
 		$GLOBALS['pfb_test_logger_calls'] = [];
+		$GLOBALS['pfb_test_file_notices'] = [];
 		$GLOBALS['config'] = [];
 		pfb_sync_receive_changed(FALSE);
 
@@ -103,7 +104,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		} else {
 			$GLOBALS['g'] = $this->originalG;
 		}
-		unset($GLOBALS['pfb_test_mwexec_bg'], $GLOBALS['pfb_test_logger_calls']);
+		unset($GLOBALS['pfb_test_mwexec_bg'], $GLOBALS['pfb_test_logger_calls'], $GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_vip_list']);
 		pfb_sync_receive_changed(FALSE);
 		$this->remove($this->dir);
 	}
@@ -376,6 +377,71 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertSame(self::REASON_RELOAD, $apply['reason'] ?? NULL);
 		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'the pending marker survives');
 		$this->assertLastStillChanged();
+	}
+
+	// ---- (d2) what a completed pass records for the receiver (#3453) ---------------------
+
+	/** Manual VIP mode with a VIP that fails validation: pfb_global() force-disables DNSBL (#331). */
+	private function seedInvalidVip(): void
+	{
+		$GLOBALS['pfb_test_vip_list'] = [];
+		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
+		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_missing');
+	}
+
+	/** @return list<string> */
+	private function noticeTitles(): array
+	{
+		return array_column($GLOBALS['pfb_test_file_notices'], 'id');
+	}
+
+	public function testLocalApplyWithoutAReceiveRecordRecordsNoFindings(): void
+	{
+		$this->seedApplyEnvironment();
+		$this->seedInvalidVip();
+
+		sync_package_pfblockerng();
+
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass completed');
+		$this->assertContains('pfBlockerNG DNSBL', $this->noticeTitles(), 'before-state check: the VIP failed validation');
+		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never received policy raises no Sync notice');
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_receive.json', 'and no receive record is created');
+	}
+
+	public function testCompletedApplyWithAReceiveRecordRecordsTheFindingsOnce(): void
+	{
+		$this->seedRecord('waiting');
+		$this->seedApplyEnvironment();
+		$this->seedInvalidVip();
+		config_set_path('installedpackages/pfblockernglistsv4/config', [[
+			'aliasname' => 'Top', 'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'autoproto_in' => '', 'autoproto_out' => '', 'agateway_in' => 'default', 'agateway_out' => 'default',
+			'row'       => [['format' => 'auto', 'state' => 'Enabled', 'url' => 'https://feeds.example/top', 'header' => 'DNSBLIP']],
+		]]);
+
+		sync_package_pfblockerng();
+		$this->seedApplyEnvironment();
+		sync_package_pfblockerng();
+
+		$findings = pfb_sync_findings_read($this->dir)['findings'];
+		$this->assertContains('DNSBL disabled: the DNSBL VIP failed validation', $findings);
+		$this->assertContains('Header skipped as reserved: DNSBLIP (pfblockernglistsv4)', $findings, 'the pass captured its reserved-header skips');
+		$this->assertSame(1, count(array_keys($this->noticeTitles(), 'pfBlockerNG Sync', TRUE)), 'one notice for unchanged findings');
+	}
+
+	public function testCompletedApplyRecordsTheCopiedAliasAndFilterState(): void
+	{
+		$this->seedApplyEnvironment();
+		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', ''); // a disabled pass still reconciles both writers
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_copied.json', 'before-state check');
+
+		sync_package_pfblockerng();
+
+		$recorded = pfb_sync_copied_read($this->dir)['recorded'];
+		$this->assertArrayHasKey('aliases', $recorded, 'the alias writer ran the detector');
+		$this->assertArrayHasKey('filter', $recorded, 'the filter writer ran the detector');
 	}
 
 	/** The pass's own apply reconciliation fails to clear the pending marker, as an unconfirmed reload does. */

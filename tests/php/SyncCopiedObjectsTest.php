@@ -928,6 +928,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertSame([$spec['kind'] => ["{$spec['stale']}#0" => ['(unexpected)']]], pfb_sync_copied_read($this->dir)['findings']);
 		$this->assertCount(1, $this->copiedNotices());
 		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertCount($scenario === 'stale interface' ? count($spec['kept']) : 0, pfb_sync_copied_read($this->dir)['recorded'][$spec['kind']] ?? [], 'it records what it left');
 		$this->assertNoValueLeak();
 	}
 
@@ -972,7 +973,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertNotSame(self::digestOf($written[0]), self::digestOf($cast));
 	}
 
-	// ---- wiring: writers that tests cannot drive end to end (reported as a deviation) ----------
+	// ---- helpers for the inline writer blocks ------------------------------------------------
 
 	private static function source(string $file): string
 	{
@@ -986,32 +987,32 @@ final class SyncCopiedObjectsTest extends TestCase
 		return $pos;
 	}
 
-	public function testEveryWriterCallsTheDetectorWithPlainVariablesBeforeItsWriteDecision(): void
+	// ---- a corrupt filter/rule entry and the deinstall sweep ---------------------------------
+
+	public function testANonArrayRuleEntryIsAUserRuleNotAFatal(): void
 	{
-		$apply = self::source('pfblockerng_apply.inc');
-		$core  = self::source('pfblockerng.inc');
+		$this->assertFalse(pfb_rule_is_pfb_owned(''));
+		$block     = ['permit_inbound', 'permit_outbound', 'deny_inbound', 'deny_outbound', 'match_inbound', 'match_outbound', 'permit_self', 'deny_self', 'match_self'];
+		$generated = array_fill_keys($block, []) + ['inbound_floating' => '', 'outbound_floating' => '', 'dnsbl_float' => []];
+		$user      = ['descr' => 'user rule', 'type' => 'pass', 'interface' => 'wan'];
 
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('aliases', \\$\\w+, \\$\\w+, \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('filter', \\$\\w+, \\$\\w+, \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('nat', \\\$redir_current, \\\$redir_new_owned, \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(2, preg_match_all("/pfb_sync_copied_check\('nat', \\\$redir_current, \[\], \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dot_filter', \\\$dot_current, \\\$dot_new_owned, \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(2, preg_match_all("/pfb_sync_copied_check\('dot_filter', \\\$dot_current, \[\], \\\$pfb\['dbdir'\]\);/", $apply));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dnsbl_nat', \\\$dnsbl_ex_nat, \\\$dnsbl_new_nat, \\\$pfb\['dbdir'\]\);/", $core));
-		$this->assertSame(1, preg_match_all("/pfb_sync_copied_check\('dnsbl_nat', \\\$dnsbl_ex_nat, \[\], \\\$pfb\['dbdir'\]\);/", $core));
+		$this->assertSame([$user, ''], pfb_build_autorule_list([$user, ''], $generated, 'order_0', PfbToggle::Off, ['lan'], []));
+	}
 
-		// The call comes before the write decision it must not influence.
-		$this->assertLessThan($this->pos($apply, "config_set_path('filter/rule', \$new_rules);"), $this->pos($apply, "pfb_sync_copied_check('filter'"));
-		$this->assertLessThan($this->pos($apply, "config_set_path('aliases/alias', \$new_aliases);"), $this->pos($apply, "pfb_sync_copied_check('aliases'"));
-		$this->assertLessThan($this->pos($apply, "config_set_path('nat/rule', array_merge(\$redir_ex_other"), $this->pos($apply, "pfb_sync_copied_check('nat', \$redir_current, \$redir_new_owned"));
-		$this->assertLessThan($this->pos($apply, "config_set_path('filter/rule', array_merge(\$dot_ex_other"), $this->pos($apply, "pfb_sync_copied_check('dot_filter', \$dot_current, \$dot_new_owned"));
+	public function testDeinstallSweepRemovesTheOwnedRowsAndForgetsTheCopiedState(): void
+	{
+		global $pfb;
 
-		// The managed rows are read before the first removal that would erase the evidence.
-		$this->assertLessThan($this->pos($apply, "pfb_remove_managed_obj('nat/rule'"), $this->pos($apply, "\$redir_current = pfb_managed_obj_rows('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX);"));
-		$this->assertLessThan($this->pos($apply, "pfb_remove_managed_obj('filter/rule'"), $this->pos($apply, "\$dot_current = pfb_managed_obj_rows('filter/rule', PFB_DOT_BLOCK_DESCR_PFX);"));
-		$this->assertLessThan($this->pos($core, "pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX)"), $this->pos($core, "\$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX);"));
+		$pfb['dbdir']      = $this->dir;
+		$GLOBALS['config'] = [];
+		$owned             = ['descr' => 'pfB_Beta auto rule', 'type' => 'block'];
+		config_set_path('filter/rule', [$owned, ['descr' => 'user rule', 'type' => 'pass']]);
+		file_put_contents($this->stateFile(), json_encode(['recorded' => ['filter' => pfb_sync_copied_digests([$owned])], 'findings' => []], JSON_THROW_ON_ERROR));
 
-		// pfb_tracker() builds int trackers and a config reread returns strings: compare them as strings.
-		$this->assertStringContainsString("array_replace(\$rule, array('tracker' => (string) \$rule['tracker']))", $apply);
+		pfb_deinstall_sweep_managed_objects();
+
+		$this->assertSame(['user rule'], array_column(config_get_path('filter/rule'), 'descr'));
+		$this->assertSame(['pfBlockerNG: sweep orphan firewall objects on deinstall'], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertFileDoesNotExist($this->stateFile(), 'a reinstall must not report the swept rules as missing copies');
 	}
 }

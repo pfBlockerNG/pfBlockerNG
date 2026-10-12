@@ -462,31 +462,6 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		$this->assertNotContains(self::VIP_FINDING, pfb_sync_effective_findings($this->gather()));
 	}
 
-	// The apply site is not executable here, so pin where the facts are captured and the findings recorded.
-	public function testApplyPassCapturesFactsBeforeTheNoticeAndRecordsOnlyOnTheAppliedBranch(): void
-	{
-		$source = php_strip_whitespace(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertNotSame('', $source);
-		$skip     = strpos($source, '$pfb_reserved_skips[] =');
-		$capture  = strpos($source, '$pfb[\'reserved_header_skips\'] = $pfb_reserved_skips;');
-		$notice   = strpos($source, 'file_notice(\'pfBlockerNG Header\'');
-		$applied  = strpos($source, 'pfb_sync_apply_record(\'applied\'');
-		$failed   = strpos($source, 'pfb_sync_apply_record(\'failed\'');
-		$record   = strpos($source, 'pfb_sync_findings_record(');
-		$this->assertNotFalse($skip);
-		$this->assertNotFalse($capture, 'reserved header skips must reach $pfb for the facts');
-		$this->assertNotFalse($notice);
-		$this->assertNotFalse($applied);
-		$this->assertNotFalse($failed);
-		$this->assertNotFalse($record, 'the apply pass must record the findings');
-		$this->assertGreaterThan($skip, $capture);
-		$this->assertLessThan($notice, $capture);
-		$this->assertGreaterThan($applied, $record);
-		$this->assertLessThan(strpos($source, '} else {', $applied), $record, 'recorded on the applied branch');
-		$this->assertLessThan($failed, $record, 'never after the failed record');
-		$this->assertSame(1, substr_count($source, 'pfb_sync_findings_record('));
-	}
-
 	// ---- 8. receiver drift --------------------------------------------------------------
 
 	private const DRIFT_FINDING = 'Policy changed locally since the last accepted receive';
