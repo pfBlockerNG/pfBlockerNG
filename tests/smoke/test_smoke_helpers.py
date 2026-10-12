@@ -299,9 +299,10 @@ def test_abp_inject_snippet_emits_custom_list() -> None:
         custom_domains=["evil.example.com", "ads.example.net"],
     )
     snippet = h._dnsbl_inject_snippet(spec)
-    assert "$list['custom'] = base64_encode(" in snippet
-    # The domains ride along CRLF-joined inside the base64-encoded literal.
-    assert "evil.example.com" in snippet
+    # The domains ride along CRLF-joined (the shape pfb_text_area_decode splits on)
+    # inside the base64-encoded literal.
+    crlf_literal = h._php_str("evil.example.com\r\nads.example.net")
+    assert f"$list['custom'] = base64_encode({crlf_literal});" in snippet
 
 
 # --------------------------------------------------------------------------- #
