@@ -525,8 +525,9 @@ jobs:
 
       # Save right after the pull (before the run) so the image is cached even if
       # a later step fails. Key = the resolved digest, so it never serves stale.
+      # A caller-named checkout_ref run must not write the cache trusted runs restore (issue #3489).
       - name: Save pfSense image to cache
-        if: steps.pfcache.outputs.cache-hit != 'true'
+        if: steps.pfcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
         uses: actions/cache/save@v6
         with:
           path: image
@@ -573,7 +574,7 @@ jobs:
           sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
 
       - name: Save civm image to cache
-        if: steps.civmcache.outputs.cache-hit != 'true'
+        if: steps.civmcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
         uses: actions/cache/save@v6
         with:
           path: client-image
@@ -652,9 +653,12 @@ jobs:
         # activate-environment puts the project environment on PATH, so the `python3`
         # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
         # pins the same minor the appliance carries).
+        # save-cache is off for a caller-named checkout_ref: that run must not write the
+        # uv cache trusted runs restore (issue #3489).
         uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
+          save-cache: ${{ inputs.checkout_ref == '' }}
           activate-environment: true
 
       - name: Install the smoke harness Python deps
