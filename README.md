@@ -62,7 +62,7 @@ sync on top.
 Run this **on the firewall** over SSH (as root), picking the channel you want:
 
 ```sh
-t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel stable; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
+fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel stable
 ```
 
 One command from **any** starting state: a fresh firewall, an existing Netgate
@@ -76,6 +76,14 @@ package catalog, and keeps it correct automatically across pfSense OS upgrades.
 The repository takes precedence over the Netgate catalog, so the
 webConfigurator's **Install**/**Update** buttons pick up its builds too.
 
+Scripts and configuration management should use the form below instead of the
+one-liner. It exits non-zero when the download fails or comes back empty, which
+the piped form cannot report:
+
+```sh
+t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel stable; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
+```
+
 Four channels are available, selected with `--channel`. They all publish the
 **same** package name — `pfSense-pkg-pfBlockerNG` — from separate catalogs, so
 a firewall subscribes to **exactly one** channel and the script removes any
@@ -86,7 +94,7 @@ other pfBlockerNG repository it finds:
 | **Stable** | `stable` | Production use |
 | **Testing** | `testing` | Prereleases validating the next stable |
 | **Edge** | `edge` | Prereleases opening the next release family |
-| **Nightly** | `nightly` | Bleeding edge, rebuilt from the development tip |
+| **Nightly** | `nightly` | Bleeding edge, not for daily use: snapshot builds of the development tip |
 
 Choose **stable** unless you specifically want to track prerelease builds.
 
@@ -103,7 +111,7 @@ Run the same one-liner as [Installation](#installation), just with a
 different `--channel`:
 
 ```sh
-t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel edge; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
+fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel edge
 ```
 
 It moves the subscription, moves the installed package onto it, replaces a

@@ -1,13 +1,12 @@
-"""The published install one-liner must fail when fetch fails (issue #2754).
+"""Published install commands: the landing page's pipe, plus a fail-closed variant.
 
-A POSIX pipeline's status is the last command. ``fetch | sh`` therefore exits 0
-when fetch delivers zero bytes — ``sh`` on empty stdin is a success. Measured
-on FreeBSD /bin/sh on a live pfSense clone: NXDOMAIN, HTTPS timeout, and
-``sh </dev/null`` all returned 0 and left the package unchanged.
+Interactive installs use the pipe from pkg.pfblockerng.com (issue #3470). A POSIX
+pipeline's status is the last command, so ``fetch | sh`` exits 0 when fetch delivers
+zero bytes (issue #2754); an operator still sees fetch's error and no ``==> Done``.
 
-The documented form is mktemp + fetch-to-file + non-empty gate + ``sh``, then
-cleanup that preserves the fetch/sh status, so an empty or failed fetch cannot
-report success.
+Unattended callers need the exit status, so the README and ``install.sh --help``
+also document mktemp + fetch-to-file + non-empty gate + ``sh``, then cleanup that
+preserves the fetch/sh status, so an empty or failed fetch cannot report success.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "scripts" / "install.sh"
 README = ROOT / "README.md"
 
-# Exact published recipe (README uses the public host; usage() templates it).
+# Exact published commands (README uses the public host; usage() templates it).
 _FETCH_TO_FILE = (
     't=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && '
     'fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && '
@@ -30,37 +29,31 @@ _FETCH_TO_FILE = (
 )
 _STATUS_CLEANUP = '; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)'
 _PIPE_FORM = "fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel"
-# usage() prints the recipe via a single-quoted printf so set -u cannot
-# expand $t. Pin that format string, not an unquoted heredoc body.
-_USAGE_PRINTF = (
-    'printf \'  t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && '
-    'fetch -T 60 -o "$t" https://%s/install.sh && '
-    '[ -s "$t" ] && '
-    '/bin/sh "$t" --channel <stable|testing|edge|nightly>; '
-    'e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)\\n\' '
-    '"${PFB_REPO_HOST}"'
-)
+_ANY_CHANNEL = "<stable|testing|edge|nightly>"
 
 
 def _recipe(channel: str) -> str:
     return f"{_FETCH_TO_FILE} {channel}{_STATUS_CLEANUP}"
 
 
-def _readme_sh_fence(channel: str) -> str:
-    """Return the README ``sh`` fence that installs ``channel``.
-
-    The executable pins run THIS text, not a parallel copy of the recipe, so a
-    documented pipe form cannot stay green behind a hardcoded fetch-to-file stub.
-    """
-    text = README.read_text(encoding="utf-8")
+def _readme_sh_fences() -> list[str]:
+    rest = README.read_text(encoding="utf-8")
     fences: list[str] = []
-    rest = text
     while "```sh" in rest:
         rest = rest.split("```sh", 1)[1]
         block, rest = rest.split("```", 1)
         fences.append(block.strip())
-    matches = [block for block in fences if f"--channel {channel}" in block]
-    assert matches, f"no README sh fence for --channel {channel}"
+    return fences
+
+
+def _readme_automation_fence() -> str:
+    """Return the README's fetch-to-file fence.
+
+    The executable pins run THIS text, not a parallel copy of the recipe, so a
+    broken documented variant cannot stay green behind a hardcoded stub.
+    """
+    matches = [block for block in _readme_sh_fences() if block.startswith("t=$(mktemp ")]
+    assert len(matches) == 1, matches
     return matches[0]
 
 
@@ -69,9 +62,8 @@ def _run_recipe(
     *,
     body: bytes,
     fetch_rc: int,
-    channel: str = "stable",
 ) -> subprocess.CompletedProcess[str]:
-    """Execute the README recipe with a stub ``fetch`` on PATH."""
+    """Execute the README automation recipe with a stub ``fetch`` on PATH."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     body_file = tmp_path / "fetch-body"
@@ -106,7 +98,7 @@ def _run_recipe(
     env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
     env["TMPDIR"] = str(tmp_path)
     return subprocess.run(
-        ["dash", "-c", _readme_sh_fence(channel)],
+        ["dash", "-c", _readme_automation_fence()],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -115,27 +107,22 @@ def _run_recipe(
     )
 
 
-def test_readme_install_recipes_are_fetch_to_file_not_a_pipe() -> None:
-    """Given the README install recipes
-    When a reader copies them onto a firewall
-    Then they gate on fetch's exit and a non-empty body, not on sh reading empty stdin.
+def test_readme_install_fences_are_the_landing_page_pipe() -> None:
+    """Given the README install and channel-switch fences
+    When a reader compares them with pkg.pfblockerng.com
+    Then each is exactly the landing page's piped one-liner.
     """
-    text = README.read_text(encoding="utf-8")
-    assert _PIPE_FORM not in text
-    assert _recipe("stable") in text
-    assert _recipe("edge") in text
+    fences = _readme_sh_fences()
+    assert f"{_PIPE_FORM} stable" in fences
+    assert f"{_PIPE_FORM} edge" in fences
 
 
-def test_install_sh_usage_documents_fetch_to_file_not_a_pipe() -> None:
-    """Given install.sh usage()
-    When an operator reads the published one-liner
-    Then it is mktemp + fetch-to-file + a non-empty gate, not the fail-open pipe.
+def test_readme_documents_the_fail_closed_automation_recipe() -> None:
+    """Given the README
+    When an unattended caller needs a meaningful exit status
+    Then the fetch-to-file recipe is documented as its own fence.
     """
-    text = INSTALL_SH.read_text(encoding="utf-8")
-    fn = text.split("usage() {", 1)[1].split("pfb_emit_embedded_hook", 1)[0]
-    assert "fetch -qo - https://" not in fn
-    assert " | sh -s -- --channel" not in fn
-    assert _USAGE_PRINTF in fn
+    assert _readme_automation_fence() == _recipe("stable")
 
 
 def test_published_form_fails_closed_on_empty_fetch_body(tmp_path: Path) -> None:
@@ -165,9 +152,11 @@ def test_published_form_runs_sh_on_nonempty_body(tmp_path: Path) -> None:
     assert result.returncode == 42, result.stderr
 
 
-def test_help_prints_usage_without_running_the_documented_mktemp(tmp_path: Path) -> None:
-    """The documented one-liner is printed via single-quoted printf.
-    An unquoted heredoc body dies under ``set -u`` and would create a temp file.
+def test_help_prints_both_published_forms_without_running_mktemp(tmp_path: Path) -> None:
+    """Given ``install.sh --help``
+    When an operator reads the published commands
+    Then it prints the landing page's pipe and the literal fail-closed recipe;
+    an expanded ``$(mktemp ...)`` would differ and leave a temp file behind.
     """
     env = os.environ.copy()
     env["TMPDIR"] = str(tmp_path)
@@ -181,5 +170,6 @@ def test_help_prints_usage_without_running_the_documented_mktemp(tmp_path: Path)
     leftovers = sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("pfb-install"))
     assert proc.returncode == 0, proc.stderr
     assert "Usage:" in proc.stdout
-    assert "https://pkg.pfblockerng.com/install.sh" in proc.stdout
+    assert f"  {_PIPE_FORM} {_ANY_CHANNEL}\n" in proc.stdout
+    assert f"  {_recipe(_ANY_CHANNEL)}\n" in proc.stdout
     assert leftovers == [], leftovers
