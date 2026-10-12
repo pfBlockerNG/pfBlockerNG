@@ -74,32 +74,43 @@ class _FakeQemu:
         return 0
 
 
-def _boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, ready_rc: int) -> smoke_conftest.BootHandle:
+def _raise(*a: object, **k: object) -> None:
+    raise OSError("simulated boot failure")
+
+
+def _boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str | None = None) -> smoke_conftest.BootHandle:
+    """Boot with faked qemu; ``failure`` picks which boot_and_probe failure path fires."""
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner-temp"))
     (tmp_path / "runner-temp").mkdir()
     monkeypatch.setattr(smoke_conftest.subprocess, "Popen", lambda *a, **k: _FakeQemu())
+    ready_rc = 1 if failure == "wait_ready_exit" else 0
     monkeypatch.setattr(
         smoke_conftest.subprocess,
         "run",
-        lambda argv, **k: smoke_conftest.subprocess.CompletedProcess(argv, ready_rc, "", "never ready"),
+        _raise
+        if failure == "wait_ready_raises"
+        else lambda argv, **k: smoke_conftest.subprocess.CompletedProcess(argv, ready_rc, "", "never ready"),
     )
     monkeypatch.setattr(smoke_conftest, "_capture_boot_failure", lambda *a, **k: None)
     live_helpers = importlib.import_module("tests.smoke.helpers")
-    for name in ("wait_boot_complete", "_write_cron_disable_flag"):
-        monkeypatch.setattr(live_helpers, name, lambda vm: None)
+    monkeypatch.setattr(
+        live_helpers, "wait_boot_complete", _raise if failure == "boot_complete_raises" else lambda vm: None
+    )
+    monkeypatch.setattr(live_helpers, "_write_cron_disable_flag", lambda vm: None)
     monkeypatch.setattr(smoke_conftest, "_log_guest_identity", lambda vm: None, raising=False)
     return smoke_conftest.boot_and_probe(Path("base.qcow2"), "key", log_path=tmp_path / "vm.log")
 
 
-def test_a_failed_boot_removes_its_qmp_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="never became ready"):
-        _boot(monkeypatch, tmp_path, ready_rc=1)
+@pytest.mark.parametrize("failure", ["wait_ready_exit", "wait_ready_raises", "boot_complete_raises"])
+def test_a_failed_boot_removes_its_qmp_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str) -> None:
+    with pytest.raises((RuntimeError, OSError)):
+        _boot(monkeypatch, tmp_path, failure)
 
     assert list((tmp_path / "runner-temp").iterdir()) == [], "a failed boot must not leave its QMP directory behind"
 
 
 def test_stopping_a_booted_vm_removes_its_qmp_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    handle = _boot(monkeypatch, tmp_path, ready_rc=0)
+    handle = _boot(monkeypatch, tmp_path)
     handle.log_file.close()
     assert len(list((tmp_path / "runner-temp").iterdir())) == 1, "the running VM owns one QMP directory"
 
