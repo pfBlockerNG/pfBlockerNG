@@ -1647,6 +1647,11 @@
         "returnType": "void",
         "params": []
     },
+    "pfb_deinstall_sweep_managed_objects": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
     "pfb_determine_list_detail": {
         "returnsRef": false,
         "returnType": null,
@@ -9280,6 +9285,26 @@
             }
         ]
     },
+    "pfb_managed_obj_match": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "row",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "marker",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_managed_obj_rows": {
         "returnsRef": false,
         "returnType": "array",
@@ -10973,7 +10998,7 @@
                 "name": "rule",
                 "byRef": false,
                 "variadic": false,
-                "type": "array",
+                "type": "mixed",
                 "default": null
             }
         ]
@@ -12993,6 +13018,19 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
+            }
+        ]
+    },
+    "pfb_sync_json_read": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },

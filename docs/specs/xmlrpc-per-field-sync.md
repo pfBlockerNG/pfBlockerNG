@@ -469,6 +469,20 @@ node's own classification.
 > text, stays in the system log where pfSense writes it. The receiver panel renders only once a
 > policy receive record exists, so a node that never received a policy payload shows no receiver
 > panel.
+>
+> Three root-only state files under `{$pfb['dbdir']}` back the panels:
+> `pfb_sync_send.json` (above), `pfb_sync_findings.json` (the effective-policy findings, fixed
+> value-free strings; recorded after a completed apply only on a node that holds a policy receive
+> record, so a node that never received policy raises no `pfBlockerNG Sync` notice) and
+> `pfb_sync_copied.json` (per object kind, the digests this node last wrote and the copied-object
+> findings; the deinstall sweep removes it with the objects it describes). A copied-object finding
+> names the object by a label and lists attribute names, never values: the label is the alias name,
+> or a rule's description followed by `#n` (its 0-based position among rules with that
+> description), with every character outside `[A-Za-z0-9_. ?-]` replaced by `?`. Two synthetic
+> attribute tokens stand for a whole object: `(missing)` for an object this node wrote that is
+> gone, and `(unexpected)` for an object present that this node's writer does not expect. The
+> error classes of a failed send are derived from pfSense core's English client messages; on a
+> localized pfSense a failure with a message falls back to `transport error`.
 
 ## Acceptance criteria
 

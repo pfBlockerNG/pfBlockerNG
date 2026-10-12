@@ -1339,6 +1339,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$pfb['sync_master'] = FALSE;
 	}
 
+	$pfb['reserved_header_skips'] = [];	// #3453: this pass's facts; reset here, as pfb_global() also runs mid-pass
+
 	if ($pfb['sync_master']) {
 
 		// Find all enabled Continents lists
@@ -3191,7 +3193,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 		if (!$redir_enabled) {
 			// DISABLED: remove all pfB_DNS_Redirect_* NAT rules.
-			pfb_sync_copied_check('nat', $redir_current, [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
 				$redir_changed = TRUE;
 			}
@@ -3216,7 +3217,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			if (empty($redir_ifaces)) {
 				// No valid interfaces remain — remove all rules.
-				pfb_sync_copied_check('nat', $redir_current, [], $pfb['dbdir']);
 				if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
 					$redir_changed = TRUE;
 				}
@@ -3259,14 +3259,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					}
 				}
 
-				pfb_sync_copied_check('nat', $redir_current, $redir_new_owned, $pfb['dbdir']);
-
 				if ($redir_ex_owned !== $redir_new_owned) {
 					$redir_changed = TRUE;
 					config_set_path('nat/rule', array_merge($redir_ex_other, $redir_new_owned));
 				}
 			}
 		}
+		pfb_sync_copied_check('nat', $redir_current, $redir_new_owned ?? [], $pfb['dbdir']);
 
 		if ($redir_changed) {
 			write_config('pfBlockerNG: saving DNS-redirect rule changes');
@@ -3292,7 +3291,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 		if (!$dot_enabled) {
 			// DISABLED: remove all pfB_DoT_Block_* filter rules.
-			pfb_sync_copied_check('dot_filter', $dot_current, [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
 				$dot_changed = TRUE;
 			}
@@ -3320,7 +3318,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			if (empty($dot_ifaces)) {
 				// No valid interfaces remain — remove all rules.
-				pfb_sync_copied_check('dot_filter', $dot_current, [], $pfb['dbdir']);
 				if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
 					$dot_changed = TRUE;
 				}
@@ -3396,14 +3393,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					}
 				}
 
-				pfb_sync_copied_check('dot_filter', $dot_current, $dot_new_owned, $pfb['dbdir']);
-
 				if ($dot_ex_owned !== $dot_new_owned) {
 					$dot_changed = TRUE;
 					config_set_path('filter/rule', array_merge($dot_ex_other, $dot_new_owned));
 				}
 			}
 		}
+		pfb_sync_copied_check('dot_filter', $dot_current, $dot_new_owned ?? [], $pfb['dbdir']);
 
 		if ($dot_changed) {
 			write_config('pfBlockerNG: saving DoT/DoQ block rule changes');
@@ -5369,7 +5365,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_clear_pending_changes();
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
-			pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
+			if (pfb_sync_receive_state_read($pfb['dbdir'])['last'] !== NULL) {	// only a node that received policy reports what of it cannot take effect
+				pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
+			}
 			// A receive that opened its record after this pass started was not applied by it: keep it pending.
 			$apply = pfb_sync_receive_state_read($pfb['dbdir'])['apply'] ?? NULL;
 			if (($apply['outcome'] ?? NULL) === 'waiting' && ($apply['opened'] ?? $apply['time'] ?? 0) > $pfb_pass_started) {

@@ -619,32 +619,24 @@ function pfb_is_managed_obj(string $descr): bool {
 	return FALSE;
 }
 
-// Reads config_get_path($section, []) and returns the FIRST row whose 'descr'
-// satisfies pfb_is_managed_obj() AND matches $marker:
+// TRUE iff $row's 'descr' satisfies pfb_is_managed_obj() AND matches $marker:
 //   • If $marker starts with PFB_MANAGED_FILTER_PFX ('pfB_'): str_starts_with match.
 //   • Otherwise: str_contains match.
+function pfb_managed_obj_match(mixed $row, string $marker): bool {
+	$descr = $row['descr'] ?? '';
+	return pfb_is_managed_obj($descr)
+		&& (str_starts_with($marker, PFB_MANAGED_FILTER_PFX) ? str_starts_with($descr, $marker) : str_contains($descr, $marker));
+}
+
+// Reads config_get_path($section, []) and returns the FIRST row that satisfies
+// pfb_managed_obj_match($row, $marker).
 // If $guard is provided it is called with the candidate row and must return TRUE to accept.
 // Returns the matching row array, or FALSE if no row matches.
 function pfb_find_managed_obj(string $section, string $marker, ?callable $guard = NULL): array|false {
-	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
 	foreach (config_get_path($section, []) as $row) {
-		$descr = $row['descr'] ?? '';
-		if (!pfb_is_managed_obj($descr)) {
-			continue;
+		if (pfb_managed_obj_match($row, $marker) && ($guard === NULL || $guard($row))) {
+			return $row;
 		}
-		if ($use_prefix) {
-			if (!str_starts_with($descr, $marker)) {
-				continue;
-			}
-		} else {
-			if (!str_contains($descr, $marker)) {
-				continue;
-			}
-		}
-		if ($guard !== NULL && !$guard($row)) {
-			continue;
-		}
-		return $row;
 	}
 	return FALSE;
 }
@@ -654,28 +646,14 @@ function pfb_find_managed_obj(string $section, string $marker, ?callable $guard 
 // When at least one row was removed the filtered array is written back via config_set_path().
 // Returns TRUE if at least one row was removed, FALSE if nothing matched.
 function pfb_remove_managed_obj(string $section, string $marker, ?callable $guard = NULL): bool {
-	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
-	$rows       = config_get_path($section, []);
-	$filtered   = [];
-	$removed    = FALSE;
-	foreach ($rows as $row) {
-		$descr = $row['descr'] ?? '';
-		if (!pfb_is_managed_obj($descr)) {
+	$filtered = [];
+	$removed  = FALSE;
+	foreach (config_get_path($section, []) as $row) {
+		if (pfb_managed_obj_match($row, $marker) && ($guard === NULL || $guard($row))) {
+			$removed = TRUE;
+		} else {
 			$filtered[] = $row;
-			continue;
 		}
-		$marker_match = $use_prefix
-			? str_starts_with($descr, $marker)
-			: str_contains($descr, $marker);
-		if (!$marker_match) {
-			$filtered[] = $row;
-			continue;
-		}
-		if ($guard !== NULL && !$guard($row)) {
-			$filtered[] = $row;
-			continue;
-		}
-		$removed = TRUE;
 	}
 	if ($removed) {
 		config_set_path($section, $filtered);
@@ -685,11 +663,7 @@ function pfb_remove_managed_obj(string $section, string $marker, ?callable $guar
 
 // The rows pfb_remove_managed_obj($section, $marker) would remove, read before it does so a writer can still compare them.
 function pfb_managed_obj_rows(string $section, string $marker): array {
-	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
-	return array_values(array_filter(config_get_path($section, []), static function ($row) use ($marker, $use_prefix): bool {
-		$descr = $row['descr'] ?? '';
-		return pfb_is_managed_obj($descr) && ($use_prefix ? str_starts_with($descr, $marker) : str_contains($descr, $marker));
-	}));
+	return array_values(array_filter(config_get_path($section, []), static fn ($row): bool => pfb_managed_obj_match($row, $marker)));
 }
 
 // Shared interface-allowlist + exception-alias validation for the DNSBL settings POST
@@ -3631,9 +3605,8 @@ function pfb_global() {
 	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl/dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
-	// Effective-policy facts (#3453): reset each pass so a past force-disable or skip never leaks into the next.
+	// Effective-policy facts (#3453): reset each pass so a past force-disable never leaks into the next.
 	$pfb['dnsbl_vip_disabled']	= FALSE;
-	$pfb['reserved_header_skips']	= [];
 	if ($pfb['dnsbl'] === PfbToggle::On) {
 		// VIP validation: force-disable DNSBL on a genuinely invalid/missing/overlapping
 		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
@@ -20936,8 +20909,8 @@ function pfb_diff_managed_rules(array $old_rules, array $new_rules): array {
 }
 
 // A pfB-owned filter rule: descr starts 'pfB_', except the DNS-redirect / DoT-block bypass rules, which keep the prefix but stay user-managed.
-function pfb_rule_is_pfb_owned(array $rule): bool {
-	$descr = $rule['descr'] ?? '';
+function pfb_rule_is_pfb_owned(mixed $rule): bool {
+	$descr = is_array($rule) ? ($rule['descr'] ?? '') : '';	// a corrupt non-array entry is a user rule, never a fatal
 	return str_starts_with($descr, 'pfB_')
 		&& !str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)
 		&& !str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
@@ -21180,6 +21153,45 @@ require_once __DIR__ . '/pfblockerng_apply.inc';
 require_once __DIR__ . '/pfblockerng_cron.inc';
 require_once __DIR__ . '/pfblockerng_geoip.inc';
 
+// Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config reference data is
+// wiped by pfb_remove_config_settings(). Catches orphans that the normal disable teardown missed.
+// Idempotent — no write when nothing found.
+function pfb_deinstall_sweep_managed_objects(): void {
+	global $pfb;
+
+	$swept = FALSE;
+	// Sweep all pfB_-owned VIPs, NAT rules, and filter rules.
+	foreach (['virtualip/vip', 'nat/rule', 'filter/rule'] as $deinstall_section) {
+		$deinstall_rows     = config_get_path($deinstall_section, []);
+		$deinstall_filtered = [];
+		$deinstall_removed  = FALSE;
+		foreach ($deinstall_rows as $deinstall_row) {
+			if (pfb_is_managed_obj($deinstall_row['descr'] ?? '')) {
+				$deinstall_removed = TRUE;
+			} else {
+				$deinstall_filtered[] = $deinstall_row;
+			}
+		}
+		if ($deinstall_removed) {
+			config_set_path($deinstall_section, $deinstall_filtered);
+			$swept = TRUE;
+		}
+	}
+	// Also explicitly remove DNS-redirect NAT rules and DoT/DoQ block filter rules
+	// by marker prefix (covers the inline-managed objects).
+	if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+		$swept = TRUE;
+	}
+	if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
+		$swept = TRUE;
+	}
+
+	if ($swept) {
+		write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
+	}
+	// The recorded objects are gone: a keep-settings reinstall must not report its own rewrite as missing copies.
+	unlink_if_exists("{$pfb['dbdir']}/pfb_sync_copied.json");
+}
 
 // Function to De-Install pfBlockerNG
 function pfblockerng_php_pre_deinstall_command() {
@@ -21282,39 +21294,7 @@ function pfblockerng_php_pre_deinstall_command() {
 		}
 	}
 
-	// Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config
-	// reference data is wiped by pfb_remove_config_settings(). Catches orphans that
-	// the normal disable teardown missed. Idempotent — no write when nothing found.
-	$swept = FALSE;
-	// Sweep all pfB_-owned VIPs, NAT rules, and filter rules.
-	foreach (['virtualip/vip', 'nat/rule', 'filter/rule'] as $deinstall_section) {
-		$deinstall_rows     = config_get_path($deinstall_section, []);
-		$deinstall_filtered = [];
-		$deinstall_removed  = FALSE;
-		foreach ($deinstall_rows as $deinstall_row) {
-			if (pfb_is_managed_obj($deinstall_row['descr'] ?? '')) {
-				$deinstall_removed = TRUE;
-			} else {
-				$deinstall_filtered[] = $deinstall_row;
-			}
-		}
-		if ($deinstall_removed) {
-			config_set_path($deinstall_section, $deinstall_filtered);
-			$swept = TRUE;
-		}
-	}
-	// Also explicitly remove DNS-redirect NAT rules and DoT/DoQ block filter rules
-	// by marker prefix (covers the inline-managed objects).
-	if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
-		$swept = TRUE;
-	}
-	if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
-		$swept = TRUE;
-	}
-
-	if ($swept) {
-		write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
-	}
+	pfb_deinstall_sweep_managed_objects();
 
 	unlink_if_exists("{$pfb['dnsbl_conf']}");
 	unlink_if_exists("{$pfb['dnsbl_cert']}");
@@ -22320,6 +22300,12 @@ function pfb_sync_effective_findings(array $facts): array {
 	return $findings;
 }
 
+// The decoded JSON object or array at $path; NULL when the file is missing, unreadable or holds anything else.
+function pfb_sync_json_read(string $path): ?array {
+	$data = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
+	return is_array($data) ? $data : NULL;
+}
+
 /*
  * Findings state, {$dbdir}/pfb_sync_findings.json (root-only, finding strings only). Kept apart from the
  * receive state, whose writer rebuilds that file from its own keys. A missing or corrupt file reads as no
@@ -22329,9 +22315,8 @@ function pfb_sync_effective_findings(array $facts): array {
  */
 function pfb_sync_findings_read(string $dbdir): array {
 	$state = array('time' => NULL, 'findings' => array());
-	$path  = "{$dbdir}/pfb_sync_findings.json";
-	$data  = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
-	if (is_array($data)) {
+	$data  = pfb_sync_json_read("{$dbdir}/pfb_sync_findings.json");
+	if ($data !== NULL) {
 		$state['time'] = is_int($data['time'] ?? NULL) ? $data['time'] : NULL;
 		if (is_array($data['findings'] ?? NULL)) {
 			$state['findings'] = array_values(array_filter($data['findings'], 'is_string'));
@@ -22378,9 +22363,8 @@ function pfb_sync_findings_record(array $findings, string $dbdir, array $io = ar
  */
 function pfb_sync_send_state_read(string $dbdir): array {
 	$state = array('time' => NULL, 'attempts' => array());
-	$path  = "{$dbdir}/pfb_sync_send.json";
-	$data  = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
-	if (!is_array($data)) {
+	$data  = pfb_sync_json_read("{$dbdir}/pfb_sync_send.json");
+	if ($data === NULL) {
 		return $state;
 	}
 	$state['time'] = is_int($data['time'] ?? NULL) ? $data['time'] : NULL;
@@ -22538,9 +22522,8 @@ function pfb_sync_sender_panel(array $send): string {
  */
 function pfb_sync_receive_state_read(string $dbdir): array {
 	$state = array('accepted_digest' => NULL, 'last' => NULL);
-	$path  = "{$dbdir}/pfb_sync_receive.json";
-	$data  = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
-	if (is_array($data)) {
+	$data  = pfb_sync_json_read("{$dbdir}/pfb_sync_receive.json");
+	if ($data !== NULL) {
 		$state['accepted_digest'] = is_string($data['accepted_digest'] ?? NULL) ? $data['accepted_digest'] : NULL;
 		$state['last']            = is_array($data['last'] ?? NULL) ? $data['last'] : NULL;
 		if (is_array($data['apply'] ?? NULL)) {
@@ -22799,8 +22782,7 @@ function pfb_sync_copied_well_formed(mixed $data): bool {
  * @return array{recorded: array<string,mixed>, findings: array<string,mixed>}
  */
 function pfb_sync_copied_read(string $dbdir): array {
-	$path = "{$dbdir}/pfb_sync_copied.json";
-	$data = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
+	$data = pfb_sync_json_read("{$dbdir}/pfb_sync_copied.json");
 	return pfb_sync_copied_well_formed($data)
 		? array('recorded' => $data['recorded'], 'findings' => $data['findings'])
 		: array('recorded' => array(), 'findings' => array());
