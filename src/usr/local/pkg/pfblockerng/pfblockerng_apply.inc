@@ -5365,7 +5365,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_clear_pending_changes();
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
-			if (pfb_sync_receive_state_read($pfb['dbdir'])['last'] !== NULL) {	// only a node that received policy reports what of it cannot take effect
+			if (pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'] !== NULL) {	// only a node holding an accepted policy reports what of it cannot take effect
 				pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
 			}
 			// A receive that opened its record after this pass started was not applied by it: keep it pending.

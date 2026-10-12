@@ -3197,22 +3197,14 @@ function pfb_unbound_listens_v6(): bool {
 }
 
 // [ADR-13] Locate the index of the auto-managed DNSBL VIP this package owns inside a
-// virtualip/vip array. Pure. Ownership requires BOTH: (1) MARKER — pfb_is_managed_obj($descr)
-// AND a prefix/contains match against PFB_AUTO_VIP_DESCR_V4/V6 (same logic as
-// pfb_find_managed_obj); (2) IP MATCH — when $match_ip is non-empty, $vip['subnet'] must equal
+// virtualip/vip array. Pure. Ownership requires BOTH: (1) MARKER — pfb_managed_obj_match($vip,
+// $marker) (pfb_is_managed_obj($descr) AND a prefix/contains match against PFB_AUTO_VIP_DESCR_V4/V6);
+// (2) IP MATCH — when $match_ip is non-empty, $vip['subnet'] must equal
 // it (binds delete to the address currently resolved from stored config, so a marked VIP whose
 // address no longer matches is never deleted). Pass null to match on the marker alone (create).
 function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_ip): ?int {
-	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
 	foreach ($vips_config as $idx => $vip) {
-		$descr = $vip['descr'] ?? '';
-		if (!pfb_is_managed_obj($descr)) {
-			continue;
-		}
-		$marker_match = $use_prefix
-			? str_starts_with($descr, $marker)
-			: str_contains($descr, $marker);
-		if (!$marker_match) {
+		if (!pfb_managed_obj_match($vip, $marker)) {
 			continue;
 		}
 		if ($match_ip !== null && $match_ip !== '' && ($vip['subnet'] ?? '') !== $match_ip) {
@@ -22612,7 +22604,7 @@ function pfb_sync_apply_record(string $outcome, string $reason, string $dbdir, b
 	}, $io);
 }
 
-// Drops the accepted digest (the Sync page save calls this); the last outcome and the apply record stay.
+// Drops the accepted digest and the stored findings (the Sync page save calls this); the last outcome and the apply record stay.
 function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
 	pfb_sync_receive_state_update($dbdir, static function (array $state): ?array {
 		if ($state['accepted_digest'] === NULL) {
@@ -22621,6 +22613,7 @@ function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
 		$state['accepted_digest'] = NULL;
 		return $state;
 	}, $io);
+	@unlink("{$dbdir}/pfb_sync_findings.json");
 }
 
 /*

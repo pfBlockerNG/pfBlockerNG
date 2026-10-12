@@ -431,6 +431,41 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertSame(1, count(array_keys($this->noticeTitles(), 'pfBlockerNG Sync', TRUE)), 'one notice for unchanged findings');
 	}
 
+	public function testARefusedOnlyReceiveRecordRecordsNoFindings(): void
+	{
+		$this->seedState(['accepted_digest' => NULL, 'last' => ['time' => time() - 100, 'outcome' => 'refused', 'reason' => 'syncscope is not policy']]);
+		$this->seedApplyEnvironment();
+		$this->seedInvalidVip();
+
+		sync_package_pfblockerng();
+
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass completed');
+		$this->assertContains('pfBlockerNG DNSBL', $this->noticeTitles(), 'before-state check: the VIP failed validation');
+		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never accepted a policy raises no Sync notice');
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
+	}
+
+	public function testTheSyncPageSaveStopsTheFindingsAndForgetsTheRecordedOnes(): void
+	{
+		$this->seedRecord('waiting');
+		$this->seedApplyEnvironment();
+		$this->seedInvalidVip();
+		sync_package_pfblockerng();
+		$this->assertFileExists($this->dir . '/pfb_sync_findings.json', 'before-state check: an accepting receiver records them');
+
+		pfb_sync_receive_accepted_clear($this->dir);
+
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json', 'the role flip forgets the stored findings');
+		$this->seedApplyEnvironment();
+		sync_package_pfblockerng();
+
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json', 'a former receiver records nothing on the next pass');
+		$this->assertSame(1, count(array_keys($this->noticeTitles(), 'pfBlockerNG Sync', TRUE)), 'and raises no further Sync notice');
+		$panel = pfb_sync_receiver_panel(pfb_sync_receive_state_read($this->dir), NULL, pfb_sync_findings_read($this->dir), []);
+		$this->assertNotSame('', $panel, 'the receive record keeps the panel');
+		$this->assertStringNotContainsString('failed validation', $panel, 'and it lists no findings');
+	}
+
 	public function testCompletedApplyRecordsTheCopiedAliasAndFilterState(): void
 	{
 		$this->seedApplyEnvironment();

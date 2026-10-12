@@ -1015,4 +1015,13 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertSame(['pfBlockerNG: sweep orphan firewall objects on deinstall'], $GLOBALS['pfb_test_write_config_calls']);
 		$this->assertFileDoesNotExist($this->stateFile(), 'a reinstall must not report the swept rules as missing copies');
 	}
+
+	public function testMarkerMatchIsPrefixForPfbMarkersAndContainsOtherwise(): void
+	{
+		$GLOBALS['config'] = [];
+		config_set_path('nat/rule', [['descr' => 'a pfB DNSBL note'], ['descr' => 'pfB DNSBL - DO NOT EDIT'], ['descr' => 'pfB_DNS_Redirect_lan_v4'], ['descr' => 'pfB_X pfB_DNS_Redirect_lan_v4'], ['descr' => 'pfB DNSBL pfB_DoT_Block_lan']]);
+		$this->assertSame(['a pfB DNSBL note', 'pfB DNSBL - DO NOT EDIT', 'pfB DNSBL pfB_DoT_Block_lan'], array_column(pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX), 'descr'), 'a non-pfB_ marker matches anywhere');
+		$this->assertSame(['pfB_DNS_Redirect_lan_v4'], array_column(pfb_managed_obj_rows('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX), 'descr'), 'a pfB_ marker matches only as the prefix');
+		$this->assertSame([], pfb_managed_obj_rows('nat/rule', PFB_DOT_BLOCK_DESCR_PFX));
+	}
 }

@@ -483,6 +483,14 @@ node's own classification.
 > gone, and `(unexpected)` for an object present that this node's writer does not expect. The
 > error classes of a failed send are derived from pfSense core's English client messages; on a
 > localized pfSense a failure with a message falls back to `transport error`.
+>
+> **Correction 2026-10-12 (#3453 review).** The findings gate above is tighter than "holds a policy
+> receive record": findings are recorded only while the receive state holds an accepted policy
+> digest, so a node that only ever refused a payload records none and raises no `pfBlockerNG Sync`
+> notice. The Sync page save, which drops the accepted digest as the role flip, also deletes
+> `pfb_sync_findings.json`, so a former receiver neither reports nor shows stale findings. The
+> receiver panel still renders from the receive record's last outcome; with no findings file it
+> lists none.
 
 ## Acceptance criteria
 
