@@ -76,11 +76,10 @@ final class DnsblMarkedVipTest extends TestCase
 		$this->assertSame(1, pfb_find_marked_vip($this->vips(), PFB_AUTO_VIP_DESCR_V4, ''));
 	}
 
-	public function testMarkerMatchIsPrefixForPfbMarkersAndContainsOtherwise(): void
+	public function testMarkerMatchIsPrefixOnly(): void
 	{
 		$vips = [['descr' => 'pfB_X ' . PFB_AUTO_VIP_DESCR_V4, 'subnet' => '10.0.0.1'], ['descr' => 'a pfB DNSBL note', 'subnet' => '10.0.0.2'], ['descr' => PFB_AUTO_VIP_DESCR_V4, 'subnet' => '10.0.0.3']];
 		$this->assertSame(2, pfb_find_marked_vip($vips, PFB_AUTO_VIP_DESCR_V4, null), 'a pfB_ marker matches only as the prefix');
-		$this->assertSame(1, pfb_find_marked_vip($vips, PFB_MANAGED_NAT_LEGACY_PFX, null), 'a non-pfB_ marker matches anywhere');
 	}
 
 	public function testNoMarkedVipReturnsNull(): void

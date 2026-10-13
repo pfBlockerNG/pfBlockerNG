@@ -164,15 +164,17 @@ final class ForeignTrackerCollectionTest extends TestCase
 		);
 	}
 
-	public function testPfbOwnedRowWithLegacyDnsblMarkerIsExcluded(): void
+	public function testOnlyTheExactDnsblNatDescrIsExcludedALookalikeIsForeign(): void
 	{
-		// GIVEN a row whose descr contains 'pfB DNSBL' (the legacy NAT marker),
-		$pfbTracker     = 1760000002;
-		$foreignTracker = 7771234567;
+		// GIVEN the exact DNSBL NAT descr and a row whose descr merely contains 'pfB DNSBL',
+		$pfbTracker       = 1760000002;
+		$lookalikeTracker = 1760000003;
+		$foreignTracker   = 7771234567;
 		$GLOBALS['config'] = [
 			'filter' => [
 				'rule' => [
-					['descr' => 'some pfB DNSBL rule',  'tracker' => (string) $pfbTracker],
+					['descr' => PFB_MANAGED_NAT_DESCR,  'tracker' => (string) $pfbTracker],
+					['descr' => 'some pfB DNSBL rule',  'tracker' => (string) $lookalikeTracker],
 					['descr' => 'GUI WAN out',           'tracker' => (string) $foreignTracker],
 				],
 			],
@@ -180,11 +182,19 @@ final class ForeignTrackerCollectionTest extends TestCase
 
 		$result = pfb_collect_foreign_trackers();
 
+		// THEN the exact-descr row is owned and excluded,
 		$this->assertNotContains(
 			$pfbTracker,
 			$result,
-			'Legacy pfB DNSBL row should be excluded; got: ' . json_encode($result)
+			'Exact DNSBL NAT descr row should be excluded; got: ' . json_encode($result)
 		);
+		// AND the lookalike is not owned, so its tracker is foreign,
+		$this->assertContains(
+			$lookalikeTracker,
+			$result,
+			'A descr merely containing pfB DNSBL should be foreign; got: ' . json_encode($result)
+		);
+		// AND the foreign tracker is present.
 		$this->assertContains(
 			$foreignTracker,
 			$result,

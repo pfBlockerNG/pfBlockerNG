@@ -1331,8 +1331,10 @@ A small shared ownership-and-teardown layer for pfBlockerNG-managed objects in p
 ADR-35's `pfblockerng_fwobj.inc`, since folded into the main include — there is no separate file).
 A pfBlockerNG object is **owned** if and only if its `descr` carries a recognised marker. Marker
 recognition is the union of the `pfB_` prefix (new convention, already in use on the filter side) plus
-the exact legacy strings (`pfB_AUTO_VIP_v4`, `pfB_AUTO_VIP_v6`, `pfB DNSBL`, `pfB DNSBL - DO NOT EDIT`)
-— never rewritten, because stored values are frozen (ADR-28). Three pure helpers express the layer:
+the exact legacy strings (`pfB_AUTO_VIP_v4`, `pfB_AUTO_VIP_v6`, `pfB DNSBL - DO NOT EDIT`)
+— never rewritten, because stored values are frozen (ADR-28). NAT ownership is the exact `descr`
+`pfB DNSBL - DO NOT EDIT`: a NAT rule whose `descr` merely contains `pfB DNSBL` is a user rule and is never
+rebuilt or removed. Three pure helpers express the layer:
 `pfb_is_managed_obj()` is the single recognition predicate; `pfb_find_managed_obj($section, $marker,
 $guard?)` returns the first owned row matching a marker, with an optional secondary guard (e.g. the
 VIP's `subnet == stored IP`); `pfb_remove_managed_obj($section, $marker, $guard?)` filters OUT every

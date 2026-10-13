@@ -581,11 +581,9 @@ define('PFB_AUTO_VIP_DESCR_V6', 'pfB_AUTO_VIP_v6');
 // Firewall-object ownership/marker constants.
 // Filter-rule prefix: any rule descr that starts with this prefix is owned by pfBlockerNG.
 define('PFB_MANAGED_FILTER_PFX', 'pfB_');
-// Full NAT rule description written by pfBlockerNG for DNSBL.
+// Full NAT rule description written by pfBlockerNG for DNSBL. A NAT rule is owned only when its
+// descr is EXACTLY this string: user rules that merely contain it are never touched.
 define('PFB_MANAGED_NAT_DESCR', 'pfB DNSBL - DO NOT EDIT');
-// Legacy NAT prefix: any descr containing this prefix is owned (covers bare 'pfB DNSBL'
-// and any variant suffixed with extra text, e.g. the ' - DO NOT EDIT' form above).
-define('PFB_MANAGED_NAT_LEGACY_PFX', 'pfB DNSBL');
 
 // NAT rdr rule descr prefix for inet (IPv4) DNS-redirect rules.
 // Pattern: pfB_DNS_Redirect_<iface>_v4
@@ -604,8 +602,8 @@ define('PFB_DOT_BLOCK_FLOATING_DESCR', PFB_DOT_BLOCK_DESCR_PFX . 'Floating');
 
 // Returns TRUE iff $descr indicates pfBlockerNG ownership.
 // Recognised patterns (UNION — any one match → owned):
-//   • str_starts_with($descr, 'pfB_')    — new prefix (covers PFB_AUTO_VIP_DESCR_V4/V6)
-//   • str_contains($descr, 'pfB DNSBL') — legacy NAT marker
+//   • str_starts_with($descr, 'pfB_')  — prefix (covers PFB_AUTO_VIP_DESCR_V4/V6)
+//   • $descr === PFB_MANAGED_NAT_DESCR — the exact DNSBL NAT descr
 function pfb_is_managed_obj(string $descr): bool {
 	if ($descr === '') {
 		return FALSE;
@@ -613,19 +611,14 @@ function pfb_is_managed_obj(string $descr): bool {
 	if (str_starts_with($descr, PFB_MANAGED_FILTER_PFX)) {
 		return TRUE;
 	}
-	if (str_contains($descr, PFB_MANAGED_NAT_LEGACY_PFX)) {
-		return TRUE;
-	}
-	return FALSE;
+	return $descr === PFB_MANAGED_NAT_DESCR;
 }
 
-// TRUE iff $row's 'descr' satisfies pfb_is_managed_obj() AND matches $marker:
-//   • If $marker starts with PFB_MANAGED_FILTER_PFX ('pfB_'): str_starts_with match.
-//   • Otherwise: str_contains match.
+// TRUE iff $row's 'descr' satisfies pfb_is_managed_obj() AND starts with $marker
+// (a pfB_ prefix such as PFB_AUTO_VIP_DESCR_V4, or PFB_MANAGED_NAT_DESCR for the exact NAT descr).
 function pfb_managed_obj_match(mixed $row, string $marker): bool {
 	$descr = $row['descr'] ?? '';
-	return pfb_is_managed_obj($descr)
-		&& (str_starts_with($marker, PFB_MANAGED_FILTER_PFX) ? str_starts_with($descr, $marker) : str_contains($descr, $marker));
+	return pfb_is_managed_obj($descr) && str_starts_with($descr, $marker);
 }
 
 // Reads config_get_path($section, []) and returns the FIRST row that satisfies
@@ -3200,7 +3193,7 @@ function pfb_unbound_listens_v6(): bool {
 
 // [ADR-13] Locate the index of the auto-managed DNSBL VIP this package owns inside a
 // virtualip/vip array. Pure. Ownership requires BOTH: (1) MARKER — pfb_managed_obj_match($vip,
-// $marker) (pfb_is_managed_obj($descr) AND a prefix/contains match against PFB_AUTO_VIP_DESCR_V4/V6);
+// $marker) (pfb_is_managed_obj($descr) AND a prefix match against PFB_AUTO_VIP_DESCR_V4/V6);
 // (2) IP MATCH — when $match_ip is non-empty, $vip['subnet'] must equal
 // it (binds delete to the address currently resolved from stored config, so a marked VIP whose
 // address no longer matches is never deleted). Pass null to match on the marker alone (create).
@@ -9358,10 +9351,10 @@ function pfb_create_dnsbl($mode) {
 		if ($mode == 'enabled') {
 			// Collect existing pfSense NAT rules for comparison.
 			foreach (config_get_path('nat/rule', []) as $ex_nat) {
-				// Bucket only DNSBL-owned NAT (descr carries 'pfB DNSBL') for rebuild,
-				// matching the original strpos() detection — other pfBlockerNG-owned
-				// NAT (e.g. a future managed rule) stays in the preserved 'other' bucket.
-				if (str_contains($ex_nat['descr'] ?? '', PFB_MANAGED_NAT_LEGACY_PFX)) {
+				// Bucket only the exact DNSBL NAT descr for rebuild — a user rule whose descr merely
+				// contains it, and other pfBlockerNG-owned NAT (e.g. DNS redirect), stay in the
+				// preserved 'other' bucket.
+				if (pfb_managed_obj_match($ex_nat, PFB_MANAGED_NAT_DESCR)) {
 					// Collect DNSBL NAT rules
 					$dnsbl_ex_nat[] = $ex_nat;
 				} else {
@@ -9382,7 +9375,7 @@ function pfb_create_dnsbl($mode) {
 									'target'		=> '127.0.0.1',
 									'local-port'		=> "{$port}",
 									'interface'		=> "{$pfb['dnsbl_iface']}",
-									'descr'			=> 'pfB DNSBL - DO NOT EDIT',
+									'descr'			=> PFB_MANAGED_NAT_DESCR,
 									'associated-rule-id'	=> 'pass',
 									'natreflection'		=> 'purenat'
 									);
@@ -9400,11 +9393,11 @@ function pfb_create_dnsbl($mode) {
 				$new_nat = array_merge($pfb_ex_nat, $dnsbl_ex_nat);
 			}
 		} else {
-			// DISABLE: strip pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
+			// DISABLE: strip the exact pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
 			// rules and returns TRUE iff anything was removed.
-			$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX);
+			$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_DESCR);
 			pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, [], $pfb['dbdir']);
-			if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX)) {
+			if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_DESCR)) {
 				$pfbupdate = TRUE;
 			}
 		}
