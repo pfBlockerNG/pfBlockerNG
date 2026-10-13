@@ -714,10 +714,14 @@ CHECK
     signal_ready="$stubdir/signal-ready"
     cat > "$graph_check" <<CHECK
 #!/bin/sh
-trap 'rm -f "$signal_lock" "$signal_scratch"' EXIT
-trap 'exit 1' HUP INT TERM
+# issue #3432: the stall makes a runner that signals without waiting exit first.
+trap 'sleep 1; rm -f "$signal_lock" "$signal_scratch"' EXIT
+# timeout rebroadcasts TERM to the group; a second one must not abort the EXIT trap.
+trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM
 touch "$signal_lock" "$signal_scratch" "$signal_ready"
-sleep 300
+# A foreground sleep would defer the trap until it exits.
+sleep 300 &
+wait
 CHECK
     sh "$script" --worktree "$repo" --diff "$base_sha" >/dev/null 2>&1 &
     runner_pid=$!
