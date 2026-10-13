@@ -715,9 +715,11 @@ CHECK
     cat > "$graph_check" <<CHECK
 #!/bin/sh
 trap 'rm -f "$signal_lock" "$signal_scratch"' EXIT
-trap 'exit 1' HUP INT TERM
+trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM
 touch "$signal_lock" "$signal_scratch" "$signal_ready"
-sleep 300
+# issue #3432: background sleep + wait lets the trap run at once; a foreground sleep defers it.
+sleep 300 &
+wait
 CHECK
     sh "$script" --worktree "$repo" --diff "$base_sha" >/dev/null 2>&1 &
     runner_pid=$!
