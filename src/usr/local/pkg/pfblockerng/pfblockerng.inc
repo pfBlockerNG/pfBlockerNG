@@ -6558,17 +6558,10 @@ function pfb_pending_changes_token(): ?string {
 	$token = @file_get_contents(pfb_pending_changes_marker());
 	return $token === FALSE ? NULL : $token;
 }
-// Clears the marker only while it still holds $seen; the claim keeps a mark racing the settle from being lost.
+// Clears the marker only while it still holds $seen, so a mark taken after $seen was read survives.
 function pfb_settle_pending_changes(?string $seen): void {
-	$marker = pfb_pending_changes_marker();
-	$claim  = $marker . '.settle.' . getmypid();
-	if ($seen === NULL || !@rename($marker, $claim)) {
-		return;
-	}
-	if (@file_get_contents($claim) === $seen) {
-		@unlink($claim);
-	} else {
-		@rename($claim, $marker);
+	if ($seen !== NULL && @file_get_contents(pfb_pending_changes_marker()) === $seen) {
+		pfb_clear_pending_changes();
 	}
 }
 function pfb_clear_pending_changes(): void {

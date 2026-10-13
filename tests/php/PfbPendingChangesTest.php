@@ -113,12 +113,6 @@ final class PfbPendingChangesTest extends TestCase
 		return array_values(array_diff(scandir($this->tmpdir), ['.', '..']));
 	}
 
-	/** @return list<string> leftovers of the settle's claim, beside the marker */
-	private function claimFiles(): array
-	{
-		return glob($this->marker . '.settle.*') ?: [];
-	}
-
 	/**
 	 * Given two marks
 	 * When each is read back
@@ -154,7 +148,6 @@ final class PfbPendingChangesTest extends TestCase
 		pfb_settle_pending_changes($seen);
 
 		$this->assertFileDoesNotExist($this->marker, 'the marker still held the seen token, so it is cleared');
-		$this->assertSame([], $this->claimFiles(), 'the settle leaves no claim file behind');
 	}
 
 	public function testSettleKeepsTheMarkerAMarkReplacedAfterTheToken(): void
@@ -169,7 +162,6 @@ final class PfbPendingChangesTest extends TestCase
 
 		$this->assertFileExists($this->marker, 'a mark taken after the seen token must survive the settle');
 		$this->assertSame($newer, pfb_pending_changes_token(), 'and it still holds the newer token');
-		$this->assertSame([], $this->claimFiles(), 'the settle leaves no claim file behind');
 	}
 
 	public function testSettleWithoutASeenTokenKeepsTheMarker(): void
@@ -180,7 +172,6 @@ final class PfbPendingChangesTest extends TestCase
 		pfb_settle_pending_changes(NULL);
 
 		$this->assertSame($token, pfb_pending_changes_token(), 'a pass that saw no mark clears none');
-		$this->assertSame([], $this->claimFiles(), 'and creates no claim file');
 	}
 
 	public function testSettleWithoutAMarkerChangesNothing(): void
@@ -189,7 +180,7 @@ final class PfbPendingChangesTest extends TestCase
 
 		pfb_settle_pending_changes('gone');
 
-		$this->assertSame([], $this->entries(), 'a marker removed between the read and the settle is not recreated, and no claim file is left');
+		$this->assertSame([], $this->entries(), 'a marker removed between the read and the settle is not recreated');
 	}
 
 	public function testSettleClearsAnUnchangedLegacyEmptyMarker(): void
