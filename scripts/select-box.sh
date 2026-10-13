@@ -101,23 +101,6 @@ _sb_jitter_sleep() {
     sleep "$(( (_sbj % 3) + 1 ))"
 }
 
-# _sb_publish_owner <box> <lockdir> <runid>
-# Atomically write owner file: write temp then mv onto owner.
-# A reader never sees a half-written owner (write-then-rename = atomic publish).
-# NOTE: used only by the deliberately-broken badrmdir test hook now — the live
-# acquire/reclaim paths create the lock + .created + owner in one ssh call via
-# _sb_claim_lock so a lock is never observable without its .created and owner.
-_sb_publish_owner() {
-    _sbpb="$1"
-    _sbpl="$2"
-    _sbpr="$3"
-    _sbph="$(hostname)"
-    _sbpe="$(date +%s)"
-    _sb_ssh "$_sbpb" \
-        "printf '%s %s %s\n' '${_sbpr}' '${_sbph}' '${_sbpe}' \
-         > '${_sbpl}/owner.tmp' && mv '${_sbpl}/owner.tmp' '${_sbpl}/owner'"
-}
-
 # _sb_claim_lock <box> <lockdir> <runid>
 # Create the lock AND publish its .created + owner in ONE ssh call, in order:
 #   mkdir → .created → owner.tmp → mv owner.tmp owner
@@ -194,21 +177,6 @@ _sb_maybe_reclaim() {
     fi
 
     [ "$_sbmrclaimable" -eq 0 ] && return 1
-
-    # ── TEST HOOK ────────────────────────────────────────────────────────────
-    # _PFB_TEST_RECLAIM=badrmdir enables a racy rm-rf+mkdir path used ONLY in
-    # tests/shell/select_box_spec.sh to produce the red-before evidence for the
-    # two-concurrent-reclaimers case. This path is intentionally broken (ignores
-    # the mkdir return code) so that two concurrent reclaimers both 'win', proving
-    # the rename-capture approach is necessary. Never set this in production.
-    if [ "${_PFB_TEST_RECLAIM:-rename}" = "badrmdir" ]; then
-        _sb_ssh "$_sbmrb" "rm -rf '${_sbmrl}'"  2>/dev/null || true
-        _sb_ssh "$_sbmrb" "mkdir '${_sbmrl}'"   2>/dev/null || true   # BUG: ignores EEXIST
-        _SB_LEASED_BOX="$_sbmrb"
-        RUN_ID="$(pfb_mint_run_id_local "$_sbmrb")"
-        _sb_publish_owner "$_sbmrb" "$_sbmrl" "$RUN_ID"
-        return 0
-    fi
 
     # ── ATOMIC-CAPTURE ───────────────────────────────────────────────────────
     _sbmrreclaim="${_sbmrl}.reclaim.${_sbmrs}"

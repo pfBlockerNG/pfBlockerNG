@@ -26,9 +26,7 @@
 #   missing-owner grace — a lockdir with no owner file, older than PFB_OWNER_GRACE,
 #                         is reclaimed.
 #   two-concurrent-reclaimers (§7 double-grant gap):
-#     GOOD: rename-capture → exactly one wins (winners=1).
-#     BAD:  rmdir+mkdir     → both win (winners=2); the red-before evidence that
-#                             proves rename-capture is NECESSARY.
+#     rename-capture → exactly one wins (winners=1).
 #   release           — --release frees only the matching-owner lock; a mismatched
 #                       RUN_ID does NOT free the lock.
 #   command signals   — INT/TERM/HUP stop the selector before its command completes,
@@ -509,22 +507,17 @@ SSHEOF
   #
   # The critical safety property: when two reclaimers race on ONE stale lock,
   # exactly one must win. This requires the reclaim to be an ATOMIC CAPTURE
-  # (rename), NOT rmdir+mkdir.
+  # (rename), NOT rmdir+mkdir: `rm -rf` is idempotent, so two reclaimers both
+  # pass it, and a mkdir whose EEXIST is ignored lets both publish an owner.
+  # rename(2) on the SAME source is atomic: exactly one caller gets 0, the other
+  # gets ENOENT. The rmdir+mkdir red-before run is recorded in
+  # legacy/ADRs/ADR_47_Local_CI_Execution_Parity/RESULTS/02_Results.txt; it is not
+  # a standing example because its winners=2 depended on scheduling (#3491).
   #
-  # Why rmdir+mkdir breaks:
-  #   - `rm -rf` returns 0 even if the path is already gone (idempotent).
-  #   - Both reclaimers succeed at rm-rf regardless of ordering.
-  #   - mkdir is the only exclusive op, but the bad code ignores its exit code.
-  #   - Result: both publish their owner and return 0 → two winners (double grant).
-  #
-  # Why rename-capture works:
-  #   - rename(2) on the SAME source is atomic: exactly one caller gets 0,
-  #     the other gets ENOENT. No room for two winners.
-  #
-  # Test strategy:
-  #   GOOD (rename-capture, default): two concurrent select-box.sh invocations on
-  #     a single-box pool with one stale lock → winners=1.
-  #   BAD  (_PFB_TEST_RECLAIM=badrmdir):  same setup → winners=2 (red-before).
+  # Test strategy: two concurrent select-box.sh invocations on a single-box pool
+  # with one stale lock → winners=1. Each runs a hold command that keeps the
+  # winner's lease until the loser has exited, so a late reclaimer always sees a
+  # live lock and the outcome never depends on interleaving.
 
   # Shared stale-lock setup: box 23 only (single-box pool forces both to compete).
   # Uses correct token (100023) so select-box.sh finds the pre-built lock dir.
@@ -540,33 +533,24 @@ SSHEOF
 
   two_reclaimers_good_result() {
     _setup_single_stale_lock
-    _o1="${WORK}/rg1.out"
-    _o2="${WORK}/rg2.out"
-    sh "$SCRIPT" > "$_o1" 2>/dev/null &
-    _pg1=$!
-    sh "$SCRIPT" > "$_o2" 2>/dev/null &
-    _pg2=$!
-    wait "$_pg1"; _rg1=$?
-    wait "$_pg2"; _rg2=$?
-    _wins=$(( (_rg1 == 0 ? 1 : 0) + (_rg2 == 0 ? 1 : 0) ))
-    printf 'winners=%d\n' "$_wins"
-  }
-
-  # RED-BEFORE: the bad rmdir+mkdir variant.  Both concurrent invocations return 0
-  # (double grant) because rm-rf is idempotent and the bad code ignores mkdir EEXIST.
-  # This spec MUST produce winners=2 — proving that the rename-capture fix is
-  # necessary, not just incidental.
-  two_reclaimers_bad_result() {
-    _setup_single_stale_lock
-    _o1="${WORK}/rb1.out"
-    _o2="${WORK}/rb2.out"
-    _PFB_TEST_RECLAIM=badrmdir sh "$SCRIPT" > "$_o1" 2>/dev/null &
-    _pb1=$!
-    _PFB_TEST_RECLAIM=badrmdir sh "$SCRIPT" > "$_o2" 2>/dev/null &
-    _pb2=$!
-    wait "$_pb1"; _rb1=$?
-    wait "$_pb2"; _rb2=$?
-    _wins=$(( (_rb1 == 0 ? 1 : 0) + (_rb2 == 0 ? 1 : 0) ))
+    _flag="${WORK}/release.flag"
+    # Only a winner runs this: it holds the lease until the parent touches the flag
+    # (10 s hard cap so a stuck run still ends).
+    _hold="i=0; while [ ! -f '${_flag}' ] && [ \$i -lt 100 ]; do sleep 0.1; i=\$((i+1)); done"
+    ( sh "$SCRIPT" -- "$_hold" > "${WORK}/rg1.out" 2>/dev/null; echo "$?" > "${WORK}/rg1.rc" ) &
+    ( sh "$SCRIPT" -- "$_hold" > "${WORK}/rg2.out" 2>/dev/null; echo "$?" > "${WORK}/rg2.rc" ) &
+    # Barrier: the loser exits right after its single scan; release the winner only then.
+    _i=0
+    while [ ! -f "${WORK}/rg1.rc" ] && [ ! -f "${WORK}/rg2.rc" ] && [ "$_i" -lt 100 ]; do
+      sleep 0.1
+      _i=$(( _i + 1 ))
+    done
+    : > "$_flag"
+    wait
+    _wins=0
+    for _rc in "${WORK}/rg1.rc" "${WORK}/rg2.rc"; do
+      [ "$(cat "$_rc")" = 0 ] && _wins=$(( _wins + 1 ))
+    done
     printf 'winners=%d\n' "$_wins"
   }
 
@@ -575,14 +559,6 @@ SSHEOF
     The status should be success
     # expected: winners=1; if winners=2 the rename-capture logic is broken
     The output should equal 'winners=1'
-  End
-
-  It 'two-concurrent-reclaimers (bad rmdir+mkdir): double-grant allowed (red-before evidence, winners=2)'
-    When call two_reclaimers_bad_result
-    The status should be success
-    # expected: winners=2 — BOTH invocations succeed with the bad code,
-    # proving rmdir+mkdir cannot serialize concurrent reclaimers.
-    The output should equal 'winners=2'
   End
 
   # ── release ────────────────────────────────────────────────────────────────
