@@ -51,6 +51,7 @@ final class PfbPendingChangesTest extends TestCase
 	protected function tearDown(): void
 	{
 		@unlink($this->marker);
+		@unlink($this->marker . '.lock');
 		@rmdir($this->tmpdir);
 		if ($this->savedMarker === null) {
 			unset($GLOBALS['pfb']['pending_marker']);
@@ -180,7 +181,7 @@ final class PfbPendingChangesTest extends TestCase
 
 		pfb_settle_pending_changes('gone');
 
-		$this->assertSame([], $this->entries(), 'a marker removed between the read and the settle is not recreated');
+		$this->assertSame([], array_diff($this->entries(), ['pfb_pending_changes.lock']), 'a marker removed between the read and the settle is not recreated');
 	}
 
 	public function testSettleClearsAnUnchangedLegacyEmptyMarker(): void
@@ -203,5 +204,58 @@ final class PfbPendingChangesTest extends TestCase
 
 		pfb_settle_pending_changes("token\n");
 		$this->assertFileDoesNotExist($this->marker, 'the exact content clears it');
+	}
+
+	/**
+	 * Given a mark in progress (holding the marker's lock, as pfb_mark_pending_changes() does)
+	 * When a pass settles the token it saw at its start
+	 * Then the settle waits for the mark and keeps the marker it wrote, instead of deleting it between its compare and its clear
+	 */
+	public function testSettleWaitsForAMarkInProgressAndKeepsIt(): void
+	{
+		pfb_mark_pending_changes();
+		$seen = pfb_pending_changes_token();
+		$lock = fopen($this->marker . '.lock', 'c');
+		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the mark lock');
+
+		$pid = pcntl_fork();
+		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
+		if ($pid === 0) {
+			pfb_settle_pending_changes($seen);
+			exit(0);
+		}
+		usleep(300000);
+		clearstatcache();
+		$settledEarly = !file_exists($this->marker);
+		file_put_contents($this->marker, 'newer');
+		flock($lock, LOCK_UN);
+		fclose($lock);
+		pcntl_waitpid($pid, $status);
+
+		$this->assertFalse($settledEarly, 'the settle must not clear the marker while a mark holds the lock');
+		$this->assertSame('newer', pfb_pending_changes_token(), 'the mark written under the lock survives the settle');
+	}
+
+	public function testAMarkWaitsForASettleInProgress(): void
+	{
+		file_put_contents($this->marker, 'seen');
+		$lock = fopen($this->marker . '.lock', 'c');
+		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the lock a settle holds');
+
+		$pid = pcntl_fork();
+		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
+		if ($pid === 0) {
+			pfb_mark_pending_changes();
+			exit(0);
+		}
+		usleep(300000);
+		$during = (string) file_get_contents($this->marker);
+		unlink($this->marker);	// the settle's clear
+		flock($lock, LOCK_UN);
+		fclose($lock);
+		pcntl_waitpid($pid, $status);
+
+		$this->assertSame('seen', $during, 'a mark must not write while a settle holds the lock');
+		$this->assertNotNull(pfb_pending_changes_token(), 'the mark lands after the settle, so it survives');
 	}
 }

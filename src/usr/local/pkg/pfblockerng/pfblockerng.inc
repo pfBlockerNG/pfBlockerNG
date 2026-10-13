@@ -6550,19 +6550,31 @@ function pfb_pending_changes_marker(): string {
 	global $pfb;
 	return $pfb['pending_marker'] ?? '/usr/local/etc/pfb_pending_changes';
 }
+// Runs $fn holding the marker's lock (unlocked if the lock cannot be opened), so a settle's compare and clear never straddle a mark.
+function pfb_pending_changes_locked(callable $fn): mixed {
+	$lock = @fopen(pfb_pending_changes_marker() . '.lock', 'c');
+	$lock && flock($lock, LOCK_EX);
+	try {
+		return $fn();
+	} finally {
+		$lock && fclose($lock);
+	}
+}
 function pfb_mark_pending_changes(): void {
-	@file_put_contents(pfb_pending_changes_marker(), bin2hex(random_bytes(8)));
+	pfb_pending_changes_locked(static fn () => @file_put_contents(pfb_pending_changes_marker(), bin2hex(random_bytes(8))));
 }
 // The marker's content, NULL without one; a pre-upgrade empty marker reads '' and is a valid token.
 function pfb_pending_changes_token(): ?string {
-	$token = @file_get_contents(pfb_pending_changes_marker());
+	$token = pfb_pending_changes_locked(static fn () => @file_get_contents(pfb_pending_changes_marker()));
 	return $token === FALSE ? NULL : $token;
 }
 // Clears the marker only while it still holds $seen, so a mark taken after $seen was read survives.
 function pfb_settle_pending_changes(?string $seen): void {
-	if ($seen !== NULL && @file_get_contents(pfb_pending_changes_marker()) === $seen) {
-		pfb_clear_pending_changes();
-	}
+	$seen === NULL || pfb_pending_changes_locked(static function () use ($seen): void {
+		if (@file_get_contents(pfb_pending_changes_marker()) === $seen) {
+			pfb_clear_pending_changes();
+		}
+	});
 }
 function pfb_clear_pending_changes(): void {
 	@unlink(pfb_pending_changes_marker());
@@ -6583,6 +6595,7 @@ function pfb_pending_changes(): bool {
  */
 function pfb_deinstall_clear_pending_changes(): void {
 	pfb_clear_pending_changes();
+	@unlink(pfb_pending_changes_marker() . '.lock');
 }
 
 /*

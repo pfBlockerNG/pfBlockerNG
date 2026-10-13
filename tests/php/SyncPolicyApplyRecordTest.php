@@ -686,11 +686,12 @@ final class SyncPolicyApplyRecordTest extends TestCase
 			public $context;
 			public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool
 			{
-				self::$outcomes[] = pfb_sync_receive_state_read(self::$dir)['apply']['outcome'] ?? NULL;
+				str_ends_with($path, '.lock') || self::$outcomes[] = pfb_sync_receive_state_read(self::$dir)['apply']['outcome'] ?? NULL;
 				return TRUE;
 			}
 			public function stream_write(string $data): int { return strlen($data); }
 			public function stream_close(): void {}
+			public function stream_lock(int $operation): bool { return TRUE; }
 		};
 		$markWriter::$dir = $this->dir;
 		$GLOBALS['pfb']['pending_marker'] = 'pfbmark://marker';
