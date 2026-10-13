@@ -18,7 +18,9 @@
 #                     This is the harness control path.
 #         net2 LAN  — a QEMU `socket` LISTENER (point-to-point L2 "crossover"
 #                     to the civm data NIC); pfSense LAN is 192.168.1.1/24.
-#         net3..7   — unassigned; present only so the 8-NIC image sees no
+#         net3      — HA sync link when SMOKE_SYNC_PORT + SMOKE_SYNC_PEER_PORT are set
+#                     (QEMU UDP point-to-point to the peer guest); else isolated like net4..7.
+#         net4..7   — unassigned; present only so the 8-NIC image sees no
 #                     hardware change. Isolated (restrict=on), no host access.
 #
 #   --role client — the Debian client VM ("civm"), 2 virtio-net NICs:
@@ -52,6 +54,8 @@
 #   - SMOKE_LAN_SOCKET_PORT — TCP port (on 127.0.0.1) for the pfSense<->civm LAN
 #     socket link. pfSense LISTENs, civm CONNECTs; both roles must use the same
 #     port. Default 12340 (a lone pfSense boot just has no LAN carrier).
+#   - SMOKE_SYNC_PORT / SMOKE_SYNC_PEER_PORT — pfsense net3 UDP sync link: this guest's
+#     and the peer's 127.0.0.1 ports (the peer guest swaps them); both or neither, digits only.
 #   - SMOKE_SSH_HOSTPORT / SMOKE_WEB_HOSTPORT — pfSense host-forward ports
 #     (defaults 2222 / 8080). SMOKE_CLIENT_SSH_HOSTPORT — civm ssh host port
 #     (default 2223).
@@ -120,6 +124,8 @@ PFSENSE_MGT_TARGET="${SMOKE_PFSENSE_MGT_TARGET-$PFSENSE_MGMT_IP}"
 
 # pfSense<->civm LAN crossover socket (point-to-point; pfSense listens, civm connects).
 LAN_SOCKET_PORT="${SMOKE_LAN_SOCKET_PORT:-12340}"
+SYNC_PORT="${SMOKE_SYNC_PORT:-}"
+SYNC_PEER_PORT="${SMOKE_SYNC_PEER_PORT:-}"
 
 ROLE=pfsense
 
@@ -141,6 +147,18 @@ case "$ROLE" in
     pfsense|client) ;;
     *) echo "boot_vm: --role must be 'pfsense' or 'client'" >&2; exit 2 ;;
 esac
+
+# Sync link (pfsense only): both ports or neither, digits only so the values cannot
+# smuggle extra -netdev options. Refused before any qemu-img/qemu run.
+if [ "$ROLE" = pfsense ] && { [ -n "$SYNC_PORT" ] || [ -n "$SYNC_PEER_PORT" ]; }; then
+    if [ -z "$SYNC_PORT" ] || [ -z "$SYNC_PEER_PORT" ]; then
+        echo "boot_vm: SMOKE_SYNC_PORT and SMOKE_SYNC_PEER_PORT must be set together" >&2
+        exit 2
+    fi
+    case "${SYNC_PORT}${SYNC_PEER_PORT}" in
+        *[!0-9]*) echo "boot_vm: SMOKE_SYNC_PORT/SMOKE_SYNC_PEER_PORT must be port numbers" >&2; exit 2 ;;
+    esac
+fi
 
 [ "$#" -ge 1 ] || usage
 BASE_IMG="$1"
@@ -237,6 +255,7 @@ if [ "$ROLE" = pfsense ]; then
 
     echo "boot_vm: pfsense hostfwd ssh=${SSH_HOSTPORT}->${PFSENSE_MGT_TARGET}:22 web=${WEB_HOSTPORT}->${PFSENSE_MGT_TARGET}:80 (mgmt net1)" >&2
     echo "boot_vm: pfsense LAN socket LISTEN 127.0.0.1:${LAN_SOCKET_PORT} (net2)" >&2
+    [ -z "$SYNC_PORT" ] || echo "boot_vm: pfsense HA sync UDP 127.0.0.1:${SYNC_PORT} <-> 127.0.0.1:${SYNC_PEER_PORT} (net3)" >&2
 
     i=0
     while [ "$i" -lt 8 ]; do
@@ -257,6 +276,10 @@ if [ "$ROLE" = pfsense ]; then
             # them unassigned so they never get an IP.
             *) netdev="user,id=net${i},net=10.${i}0.0.0/24,restrict=on" ;;
         esac
+        # net3 becomes the HA sync link when requested (QEMU UDP: send to udp=, bind localaddr=).
+        if [ "$i" -eq 3 ] && [ -n "$SYNC_PORT" ]; then
+            netdev="socket,id=net3,udp=127.0.0.1:${SYNC_PEER_PORT},localaddr=127.0.0.1:${SYNC_PORT}"
+        fi
         mac="$(nth_mac "$i")"
         if [ -n "$mac" ]; then
             dev="virtio-net-pci,mac=${mac},netdev=net${i},id=nic${i}"

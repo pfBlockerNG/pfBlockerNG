@@ -36,6 +36,7 @@ QIEOF
     chmod +x "${BIN}/qemu-img"
 
     SMOKE_QEMU_BIN="${BIN}/qemu"
+    unset SMOKE_SYNC_PORT SMOKE_SYNC_PEER_PORT
     SMOKE_QEMU_IMG_BIN="${BIN}/qemu-img"
     export WORK ARGV_FILE IMG_ARGV_FILE BASE OVERLAY SMOKE_QEMU_BIN SMOKE_QEMU_IMG_BIN
   }
@@ -90,6 +91,35 @@ QIEOF
       The status should be success
       The stderr should include 'boot_vm:'
       The contents of file "$ARGV_FILE" should include 'user,id=net3,net=10.30.0.0/24,restrict=on'
+    End
+
+    It 'net3 is the HA sync UDP link when both sync ports are set'
+      When run env SMOKE_SYNC_PORT=12343 SMOKE_SYNC_PEER_PORT=12344 sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
+      The status should be success
+      The stderr should include 'boot_vm: pfsense HA sync UDP 127.0.0.1:12343 <-> 127.0.0.1:12344 (net3)'
+      The contents of file "$ARGV_FILE" should include 'socket,id=net3,udp=127.0.0.1:12344,localaddr=127.0.0.1:12343'
+      The contents of file "$ARGV_FILE" should not include 'user,id=net3'
+    End
+
+    It 'refuses a half-configured sync link before booting'
+      When run env SMOKE_SYNC_PORT=12343 sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
+      The status should equal 2
+      The stderr should include 'SMOKE_SYNC_PORT and SMOKE_SYNC_PEER_PORT must be set together'
+      The path "$ARGV_FILE" should not be exist
+    End
+
+    It 'refuses a sync port that is not a plain port number'
+      When run env SMOKE_SYNC_PORT=12343 'SMOKE_SYNC_PEER_PORT=12344,hostfwd=tcp::22-:22' sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
+      The status should equal 2
+      The stderr should include 'must be port numbers'
+      The path "$ARGV_FILE" should not be exist
+    End
+
+    It 'refuses an empty sync port pair member'
+      When run env SMOKE_SYNC_PORT= SMOKE_SYNC_PEER_PORT=12344 sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
+      The status should equal 2
+      The stderr should include 'SMOKE_SYNC_PORT and SMOKE_SYNC_PEER_PORT must be set together'
+      The path "$ARGV_FILE" should not be exist
     End
 
     It 'emits NO tap backend'
