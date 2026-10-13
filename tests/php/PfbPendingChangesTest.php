@@ -106,6 +106,7 @@ final class PfbPendingChangesTest extends TestCase
 			$marker,
 			'deinstall clear must remove the marker file so a later reinstall starts clean'
 		);
+		$this->assertFileDoesNotExist($marker . '.lock', 'and its lock file, so an uninstall leaves nothing behind');
 	}
 
 	/** @return list<string> every entry in the marker's directory */
@@ -257,5 +258,28 @@ final class PfbPendingChangesTest extends TestCase
 
 		$this->assertSame('seen', $during, 'a mark must not write while a settle holds the lock');
 		$this->assertNotNull(pfb_pending_changes_token(), 'the mark lands after the settle, so it survives');
+	}
+
+	public function testTheTokenReadWaitsForAMarkInProgress(): void
+	{
+		file_put_contents($this->marker, '');	// a mark mid-write: truncated, token not yet written
+		$lock = fopen($this->marker . '.lock', 'c');
+		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the lock a mark holds');
+
+		$pid = pcntl_fork();
+		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
+		if ($pid === 0) {
+			file_put_contents($this->marker . '.out', (string) pfb_pending_changes_token());
+			exit(0);
+		}
+		usleep(300000);
+		file_put_contents($this->marker, 'newer');
+		flock($lock, LOCK_UN);
+		fclose($lock);
+		pcntl_waitpid($pid, $status);
+		$read = (string) file_get_contents($this->marker . '.out');
+		unlink($this->marker . '.out');
+
+		$this->assertSame('newer', $read, 'a pass must not capture a half-written token, which would never settle');
 	}
 }
