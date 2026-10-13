@@ -505,19 +505,11 @@ SSHEOF
 
   # ── two-concurrent-reclaimers (§7 double-grant gap) ───────────────────────
   #
-  # The critical safety property: when two reclaimers race on ONE stale lock,
-  # exactly one must win. This requires the reclaim to be an ATOMIC CAPTURE
-  # (rename), NOT rmdir+mkdir: `rm -rf` is idempotent, so two reclaimers both
-  # pass it, and a mkdir whose EEXIST is ignored lets both publish an owner.
-  # rename(2) on the SAME source is atomic: exactly one caller gets 0, the other
-  # gets ENOENT. The rmdir+mkdir red-before run is recorded in
-  # legacy/ADRs/ADR_47_Local_CI_Execution_Parity/RESULTS/02_Results.txt; it is not
-  # a standing example because its winners=2 depended on scheduling (#3491).
-  #
-  # Test strategy: two concurrent select-box.sh invocations on a single-box pool
-  # with one stale lock → winners=1. Each runs a hold command that keeps the
-  # winner's lease until the loser has exited, so a late reclaimer always sees a
-  # live lock and the outcome never depends on interleaving.
+  # Two reclaimers racing on ONE stale lock: exactly one may win. rename(2) of
+  # the same source is atomic, so the loser gets ENOENT; rm -rf + mkdir has no
+  # such exclusion (red-before record: legacy/ADRs/ADR_47_Local_CI_Execution_Parity/
+  # RESULTS/02_Results.txt). The winner's command holds its lease until the
+  # loser has exited, so a late loser cannot take a released lock (#3491).
 
   # Shared stale-lock setup: box 23 only (single-box pool forces both to compete).
   # Uses correct token (100023) so select-box.sh finds the pre-built lock dir.
@@ -533,19 +525,11 @@ SSHEOF
 
   two_reclaimers_good_result() {
     _setup_single_stale_lock
-    _flag="${WORK}/release.flag"
-    # Only a winner runs this: it holds the lease until the parent touches the flag
-    # (10 s hard cap so a stuck run still ends).
-    _hold="i=0; while [ ! -f '${_flag}' ] && [ \$i -lt 100 ]; do sleep 0.1; i=\$((i+1)); done"
-    ( sh "$SCRIPT" -- "$_hold" > "${WORK}/rg1.out" 2>/dev/null; echo "$?" > "${WORK}/rg1.rc" ) &
-    ( sh "$SCRIPT" -- "$_hold" > "${WORK}/rg2.out" 2>/dev/null; echo "$?" > "${WORK}/rg2.rc" ) &
-    # Barrier: the loser exits right after its single scan; release the winner only then.
-    _i=0
-    while [ ! -f "${WORK}/rg1.rc" ] && [ ! -f "${WORK}/rg2.rc" ] && [ "$_i" -lt 100 ]; do
-      sleep 0.1
-      _i=$(( _i + 1 ))
-    done
-    : > "$_flag"
+    # Only the winner runs this; only the loser's .rc can appear while it holds.
+    # The 30 s cap ends a stuck run.
+    _hold="i=0; while [ ! -f '${WORK}/rg1.rc' ] && [ ! -f '${WORK}/rg2.rc' ] && [ \$i -lt 300 ]; do sleep 0.1; i=\$((i+1)); done"
+    ( sh "$SCRIPT" -- "$_hold" >/dev/null 2>&1; echo "$?" > "${WORK}/rg1.rc" ) &
+    ( sh "$SCRIPT" -- "$_hold" >/dev/null 2>&1; echo "$?" > "${WORK}/rg2.rc" ) &
     wait
     _wins=0
     for _rc in "${WORK}/rg1.rc" "${WORK}/rg2.rc"; do
