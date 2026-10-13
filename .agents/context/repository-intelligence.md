@@ -17,10 +17,10 @@ Load when: every agent session, from `AGENTS.md`.
   installed the same way, never pinned to whatever version the failure happened to name.
 - CodeGraph and Graphify are mandatory. Canonical post-clone setup is
   `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
-  installs or upgrades the pinned org fork declared in `pyproject.toml`
-  before activating `.githooks`. Outside GitHub Actions it keeps an installed uv tool
-  `graphifyy` newer than the pin and says so on stderr (#3339): the higher version
-  wins, then the later commit; an order it cannot establish keeps the installed build.
+  installs or upgrades Graphify from PyPI at or above the `graphifyy[leiden]>=` floor
+  declared in `pyproject.toml` before activating `.githooks`. Outside GitHub Actions it
+  keeps an installed direct-URL (git or local) `graphifyy` build at or above the floor
+  and says so on stderr (#3339, #3495); an unidentifiable install is also kept.
 - `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH`,
   physically absolutizes a relative selection before returning it, and only when none
   exists resolves `uv tool dir --bin/graphify`; an arbitrary PATH wrapper remains
@@ -39,13 +39,12 @@ Load when: every agent session, from `AGENTS.md`.
   hook. `work-branch.sh --worktree` cuts through `wt`, skips the initializer when
   pre-start already left a CodeGraph index, and rolls back a failed cut -- reclaiming
   a tree `wt` left behind when its hook failed.
-- The org fork's tagged package carries Graphify-Labs/graphify#3075 and Graphify-Labs/graphify#3310. Its
-  package-provided `rcfile.py` reads the tracked `.graphifyrc`
+- The PyPI package carries Graphify-Labs/graphify#3075 and Graphify-Labs/graphify#3310
+  since 0.9.89. Its `rcfile.py` reads the tracked `.graphifyrc`
   (`language.inc=php`), so `.inc` files use the PHP extractor; its `leiden` extra
   selects native Leiden on Python 3.13+. The include-node floor in
-  `tests/test_cross_agent_tooling.py` remains the final guard. When upstream #3075
-  and #3310 both ship in a PyPI release, replace the fork pin in `pyproject.toml` with
-  `graphifyy[leiden]>=<that release>` in a deliberate commit.
+  `tests/test_cross_agent_tooling.py` remains the final guard. Raise the
+  `pyproject.toml` floor in a deliberate commit when a newer release is required.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
   verify that its active project root equals `git rev-parse --show-toplevel`; after a

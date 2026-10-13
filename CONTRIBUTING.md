@@ -141,15 +141,16 @@ committed):
 | Malformed or mismatched trailer | push is rejected |
 
 Activate the hooks once after cloning (git cannot auto-apply a committed hooks
-path). This command requires `uv` and installs or upgrades the pinned
-`graphifyy[leiden]` package from the pfBlockerNG fork before enabling the hooks:
+path). This command requires `uv` and installs or upgrades the
+`graphifyy[leiden]` package from PyPI, at or above the floor in `pyproject.toml`,
+before enabling the hooks:
 
 ```sh
 sh scripts/setup-hooks.sh
 ```
 
-The fork package provides the `.inc=php` override and native Leiden extra. When
-upstream issues #3075 and #3310 both ship in a PyPI release, replace the fork pin in a deliberate commit.
+The package provides the `.inc=php` override and native Leiden extra
+(Graphify-Labs/graphify#3075 and Graphify-Labs/graphify#3310, released in 0.9.89).
 These are local client-side guards. CI enforces the same checks (and the tag
 rules) server-side, so anything that bypasses a hook is still caught by GitHub
 Actions.

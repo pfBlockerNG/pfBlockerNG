@@ -75,10 +75,10 @@ GIT
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'installs the pinned Graphify fork and registers its launcher as the union merge driver of the requested Git root'
+  It 'installs Graphify from PyPI and registers its launcher as the union merge driver of the requested Git root'
     When run sh "$script_abs" "$repo"
     The status should equal 0
-    The contents of file "$uv_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
+    The contents of file "$uv_log" should include 'tool install --upgrade graphifyy[leiden]>='
     The contents of file "$graphify_log" should include 'install --platform agents'
     The value "$(git_fixture -C "$repo" config --get merge.graphify.name)" should equal 'graphify graph.json union merge'
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
@@ -155,21 +155,21 @@ SHADOW
     End
   End
 
-  Context 'pin specification parsing hardening (issue #3309)'
+  Context 'pin specification parsing hardening (issues #3309, #3495)'
     It 'strips a trailing comment containing a quote from the extracted pin spec'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
-"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",  # see "notes.md" for context
+"graphifyy[leiden]>=0.9.89",  # see "notes.md" for context
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
     End
 
     It 'fails loudly instead of installing a single-character spec when the pin value is a triple-quoted multi-line string'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
 tools = [
-    """graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4
+    """graphifyy[leiden]>=0.9.89
     """,
 ]
 TOML
@@ -181,7 +181,7 @@ TOML
 
     It 'fails loudly rather than installing a whitespace-only pin spec'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
-    " ",  # relocated: was "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@sha" previously
+    " ",  # relocated: was "graphifyy[leiden]>=0.9.89" previously
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 1
@@ -191,67 +191,82 @@ TOML
 
     It 'skips an earlier comment quoting the bare package name'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
-# TODO(followup): bump "graphifyy[leiden]" once the org fork tags a release
-"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",
+# TODO(followup): bump "graphifyy[leiden]" once upstream tags a release
+"graphifyy[leiden]>=0.9.89",
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
     End
 
-    It 'fails loudly when the git source has no pinned revision'
-      cat > "$fixture/suite/pyproject.toml" <<'TOML'
-"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify",
-TOML
-      When run sh "$script_home/ensure-graphify.sh" "$repo"
-      The status should equal 1
-      The stderr should include 'is not a valid requirement'
-      The file "$uv_log" should not be exist
+    Context 'rejecting a spec that is not a plain PyPI floor'
+      Parameters
+        'a git source'                     'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+        'an unpinned git source'           'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify'
+        'a bare package name'              'graphifyy[leiden]'
+        'an exact version pin'             'graphifyy[leiden]==0.9.89'
+        'a floor without a version'        'graphifyy[leiden]>='
+        'a floor with a pre-release'       'graphifyy[leiden]>=0.9.89rc1'
+        'a floor with a leading dot'       'graphifyy[leiden]>=.9.89'
+        'a floor with a trailing dot'      'graphifyy[leiden]>=0.9.'
+        'a floor with an empty segment'    'graphifyy[leiden]>=0..89'
+        'a floor with spaces'              'graphifyy[leiden] >= 0.9.89'
+        'a floor followed by shell syntax' 'graphifyy[leiden]>=0.9.89; rm -rf $HOME'
+        'a floor with an upper bound'      'graphifyy[leiden]>=0.9.89,<1'
+      End
+
+      It "fails loudly on $1"
+        printf '"%s",\n' "$2" > "$fixture/suite/pyproject.toml"
+        When run sh "$script_home/ensure-graphify.sh" "$repo"
+        The status should equal 1
+        The stderr should include 'is not a valid requirement'
+        The file "$uv_log" should not be exist
+      End
     End
 
     It 'skips an earlier comment containing a complete stale pin'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
-    # Previous pin: "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4"
-    "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@7b1ec6623a5c118a4e71475bd7d920aad6e15bb6",
+    # Previous pin: "graphifyy[leiden]>=0.9.88"
+    "graphifyy[leiden]>=0.9.89",
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@7b1ec6623a5c118a4e71475bd7d920aad6e15bb6'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
     End
 
     It 'strips a trailing comment with no embedded quote from the extracted pin spec (regression)'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
-"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",  # bump pin per issue 1234
+"graphifyy[leiden]>=0.9.89",  # bump pin per issue 1234
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
     End
 
     It 'extracts the clean pin spec around extra surrounding whitespace (regression)'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
-        "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4"   ,
+        "graphifyy[leiden]>=0.9.89"   ,
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
     End
 
     It 'extracts the clean pin spec from a CRLF-terminated line (regression)'
-      printf '%s\r\n' '"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",' > "$fixture/suite/pyproject.toml"
+      printf '%s\r\n' '"graphifyy[leiden]>=0.9.89",' > "$fixture/suite/pyproject.toml"
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
     End
 
     It 'fails loudly on a single-quoted (TOML literal string) pin spec (regression)'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
-    'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4',
+    'graphifyy[leiden]>=0.9.89',
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 1
@@ -259,11 +274,11 @@ TOML
       The file "$uv_log" should not be exist
     End
 
-    It 'extracts the same pin spec as today from the committed pyproject.toml (regression)'
+    It 'extracts the PyPI floor from the committed pyproject.toml (regression)'
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@e8eb76e797bed4f324bf0e1c262984a525aaab3e'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
     End
   End
 End

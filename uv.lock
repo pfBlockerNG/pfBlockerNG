@@ -465,7 +465,7 @@ wheels = [
 [[package]]
 name = "graphifyy"
 version = "0.9.89"
-source = { git = "https://github.com/pfBlockerNG/graphify?rev=e8eb76e797bed4f324bf0e1c262984a525aaab3e#e8eb76e797bed4f324bf0e1c262984a525aaab3e" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "networkx" },
     { name = "numpy" },
@@ -496,6 +496,10 @@ dependencies = [
     { name = "tree-sitter-typescript" },
     { name = "tree-sitter-verilog" },
     { name = "tree-sitter-zig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/fa/fbd10b1b53a7d0fa5e48ce9257023e01e1157a0602303a49ea2109d1daa3/graphifyy-0.9.89.tar.gz", hash = "sha256:17ac9acf8dc41040c74ed2aa497b8491675963fd8dd58c6e6430eda99233b8dc", size = 2766627, upload-time = "2026-10-13T10:44:19.567Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/9a/d6609f7e22ed4ad21610cfcbd0fc179f921b5e45e0421ebd172576454b9a/graphifyy-0.9.89-py3-none-any.whl", hash = "sha256:97d1ead42a7d6a2a052f5b09f732fb1226395a50c2647647e4079b2da74d2346", size = 1657253, upload-time = "2026-10-13T10:44:17.398Z" },
 ]
 
 [package.optional-dependencies]
@@ -1202,7 +1206,7 @@ smoke = [
 ]
 tools = [
     { name = "ast-grep-cli" },
-    { name = "graphifyy", extras = ["leiden"], git = "https://github.com/pfBlockerNG/graphify?rev=e8eb76e797bed4f324bf0e1c262984a525aaab3e" },
+    { name = "graphifyy", extras = ["leiden"], specifier = ">=0.9.89" },
     { name = "semgrep" },
 ]
 

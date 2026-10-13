@@ -76,7 +76,7 @@ CODEGRAPH
     The output should include 'core.hooksPath set to: .githooks'
     The stderr should include 'Initializing CodeGraph'
     The contents of file "$codegraph_log" should equal "init $primary"
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
+    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
     Assert [ -f "$primary/.codegraph/codegraph.db" ]
   End
 
@@ -84,7 +84,7 @@ CODEGRAPH
     When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
     The status should equal 0
     The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
+    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
     The file "$codegraph_log" should not be exist
   End
 
@@ -96,7 +96,7 @@ CODEGRAPH
       sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
     The status should equal 0
     The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
+    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
     The value "$(git_fixture -C "$primary" config --get core.hooksPath)" should equal '.githooks'
   End
 
@@ -144,7 +144,7 @@ CODEGRAPH
     The path "$primary/.githooks/pre-commit" should be exist
     The contents of file "$graphify_log" should not include 'hook install'
     The contents of file "$graphify_log" should not include 'hook uninstall'
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
+    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
   End
 
   It 'leaves a Graphify start marker without its end marker untouched'

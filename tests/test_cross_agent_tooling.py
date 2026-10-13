@@ -486,11 +486,9 @@ def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
     assert findings("--scan-unknown-extensions") > 0, "the documented semgrep flag does not work"
 
 
-def test_graphify_install_uses_org_commit_without_local_patch() -> None:
+def test_graphify_install_uses_pypi_floor_without_local_patch() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@" in pyproject, (
-        "pyproject.toml must declare the pinned graphify org fork dependency"
-    )
+    assert '"graphifyy[leiden]>=' in pyproject, "pyproject.toml must declare the Graphify PyPI floor dependency"
 
     installer_path = "scripts/agent/ensure-graphify.sh"
     installer = (ROOT / installer_path).read_text(encoding="utf-8")
