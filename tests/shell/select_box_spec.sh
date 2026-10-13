@@ -541,7 +541,6 @@ SSHEOF
   It 'two-concurrent-reclaimers (rename-capture): exactly one wins (winners=1)'
     When call two_reclaimers_good_result
     The status should be success
-    # expected: winners=1; if winners=2 the rename-capture logic is broken
     The line 1 of output should equal 'winners=1'
     The line 2 of output should equal 'hold=released'
   End
