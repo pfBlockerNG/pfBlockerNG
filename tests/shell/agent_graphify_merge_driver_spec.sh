@@ -214,6 +214,7 @@ TOML
         'a floor with spaces'              'graphifyy[leiden] >= 0.9.89'
         'a floor followed by shell syntax' 'graphifyy[leiden]>=0.9.89; rm -rf $HOME'
         'a floor with an upper bound'      'graphifyy[leiden]>=0.9.89,<1'
+        'a release number quoted first'    '1.2.3", "graphifyy[leiden]>=0.9.89'
       End
 
       It "fails loudly on $1"

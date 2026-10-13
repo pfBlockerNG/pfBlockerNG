@@ -67,6 +67,7 @@ GRAPHIFY
       '0.10'      '0.9.70' "$vcs"      "$commit" 'a git build of a higher minor release with fewer segments'
       '0.9.90rc1' '0.9.89' "$vcs"      "$commit" 'a git build of a pre-release of a higher release'
       '0.9.89'    '0.9.89' "$vcs"      "$commit" 'a git build of exactly the floor release'
+      '0.9.89.0'  '0.9.89' "$vcs"      "$commit" 'a git build of the floor release with a zero-padded segment'
       '0.9.89'    '0.9.89' "$editable" 'unknown' 'an editable local build of the floor release'
     End
 
@@ -105,6 +106,7 @@ GRAPHIFY
     Parameters
       'two installed dist-info directories' ambiguous
       'metadata without a version'          versionless
+      'a version with no release segment'   garbage
     End
 
     It "keeps the installed build ($1) and says why"
@@ -114,13 +116,14 @@ GRAPHIFY
           installed 0.9.90 "$vcs"
           printf '%s\n' 'Metadata-Version: 2.4' 'Name: graphifyy' > "$dist/METADATA"
           label=unknown@$commit ;;
+        garbage) installed x "$vcs"; label=x@$commit ;;
       esac
       floor 0.9.89
       When run sh "$script_abs" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
       The file "$uv_log" should not be exist
-      The stderr should equal "ensure-graphify.sh: keeping installed Graphify $label over graphifyy[leiden]>=0.9.89 (order unknown)"
+      The stderr should equal "ensure-graphify.sh: keeping installed Graphify $label over graphifyy[leiden]>=0.9.89 (unidentifiable build)"
       The contents of file "$graphify_log" should equal 'install --platform agents'
     End
   End

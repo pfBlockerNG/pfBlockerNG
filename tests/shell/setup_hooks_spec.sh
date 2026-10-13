@@ -1,5 +1,5 @@
 #shellcheck shell=sh
-# setup-hooks.sh installs the pinned Graphify fork before activating hooks, then bootstraps
+# setup-hooks.sh installs Graphify at or above the PyPI floor before activating hooks, then bootstraps
 # CodeGraph for the main checkout when available.
 
 Describe 'setup-hooks.sh contributor bootstrap'

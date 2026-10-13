@@ -1245,7 +1245,7 @@ jobs:
           enable-cache: true
 
       - name: Install Graphify through the shared installer
-        # ensure-graphify.sh installs the immutable org-fork package, whose rcfile
+        # ensure-graphify.sh installs the PyPI package at or above the floor, whose rcfile
         # honors `.graphifyrc` for PHP include files.
         run: sh scripts/agent/ensure-graphify.sh .
 

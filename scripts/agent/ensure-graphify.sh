@@ -6,11 +6,11 @@
 # Under GitHub Actions (GITHUB_ACTIONS set) the floor spec is always installed.
 # Anywhere else -- CI=true alone does not count, agent harnesses export it -- an
 # installed uv tool `graphifyy` that is a direct-URL (git or local) build at or
-# above the floor is kept and one stderr line says why (issues #3339, #3495): a
-# deliberately deployed build is never replaced by PyPI. Versions compare by their
-# PEP 440 release segment. Fail-safe: when the installed build cannot be identified
-# (two dist-info directories, no version), it is kept. An index install is handed
-# to `uv tool install --upgrade`, which upgrades it and never downgrades it.
+# above the floor is kept and one stderr line says why (issues #3339, #3495); a
+# direct-URL build below the floor is replaced. Versions compare by their PEP 440
+# release segment. Fail-safe: when the installed build cannot be identified (two
+# dist-info directories, no release segment in its version), it is kept. An index
+# install is handed to `uv tool install --upgrade`, which never downgrades it.
 
 set -eu
 
@@ -26,9 +26,9 @@ fail() {
 
 # Succeeds, naming why in $keep_reason, when the installed uv tool `graphifyy`
 # must be kept instead of installing $graphify_spec.
-installed_beats_pin() {
+keep_installed() {
 	installed_version='' installed_commit=''
-	keep_reason='order unknown'
+	keep_reason='unidentifiable build'
 	graphify_tools=$(uv tool dir 2>/dev/null) || return 1
 	set -- "$graphify_tools"/graphifyy/lib/python*/site-packages/graphifyy-*.dist-info
 	[ -d "$1" ] || return 1
@@ -36,9 +36,10 @@ installed_beats_pin() {
 	[ -f "$1/direct_url.json" ] || return 1
 	installed_commit=$(sed -n 's/.*"commit_id": *"\([0-9a-f]\{40\}\)".*/\1/p' "$1/direct_url.json")
 	installed_version=$(sed -n '/^Version: /{s///p;q;}' "$1/METADATA" 2>/dev/null)
+	# shortcut: a PEP 440 epoch (`1!…`) reads as release 1; graphify never used one.
 	installed_release=${installed_version%%[!0-9.]*}
 	[ -n "$installed_release" ] || return 0
-	awk -v a="${installed_release%.}" -v b="$pin_floor" 'BEGIN {
+	awk -v a="$installed_release" -v b="$pin_floor" 'BEGIN {
 		n = split(a, x, "."); m = split(b, y, ".")
 		for (i = 1; i <= n || i <= m; i++)
 			if (x[i] + 0 != y[i] + 0) exit x[i] + 0 < y[i] + 0
@@ -91,12 +92,12 @@ main() {
 	# The pin is a PyPI floor of dot-separated release numbers: no git source, exact
 	# pin, upper bound, pre-release, or anything that is not a plain release.
 	pin_floor=${graphify_spec#graphifyy\[leiden\]>=}
-	case "$graphify_spec:$pin_floor" in
-		*:"$graphify_spec" | *: | *:*[!0-9.]* | *:.* | *:*. | *:*..*)
+	case "$pin_floor" in
+		"$graphify_spec" | '' | *[!0-9.]* | .* | *. | *..*)
 			fail "graphify package specification extracted from '$pyproject' is not a valid requirement (got: '$graphify_spec')" ;;
 	esac
 
-	if [ -z "${GITHUB_ACTIONS:-}" ] && installed_beats_pin; then
+	if [ -z "${GITHUB_ACTIONS:-}" ] && keep_installed; then
 		echo "ensure-graphify.sh: keeping installed Graphify ${installed_version:-unknown}@${installed_commit:-unknown} over $graphify_spec ($keep_reason)" >&2
 	else
 		uv tool install --upgrade "$graphify_spec" 1>&2 ||

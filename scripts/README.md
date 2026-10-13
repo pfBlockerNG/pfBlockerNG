@@ -242,10 +242,10 @@ in `read-version-matrix.sh`.
 | --- | --- |
 | [`install-from-repo.sh`](install-from-repo.sh) | **First-time install** onto a clean pfSense from `src/` — no Netgate pkg. |
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
-| [`setup-hooks.sh`](setup-hooks.sh) | Mandatory post-clone setup: install the pinned org-fork Graphify package, point git at `.githooks`, and initialize CodeGraph when installed. |
+| [`setup-hooks.sh`](setup-hooks.sh) | Mandatory post-clone setup: install Graphify from PyPI at or above the `pyproject.toml` floor, point git at `.githooks`, and initialize CodeGraph when installed. |
 | [`agent/setup-agent-tools.sh`](agent/setup-agent-tools.sh) | Bootstrap or refresh a macOS/Debian agent host: install/update uv, Serena, CodeGraph, Graphify, Worktrunk and configure detected clients (`.agents/context/repository-intelligence.md`). |
 | [`agent/init-worktree-tools.sh`](agent/init-worktree-tools.sh) | Initialize repository-intelligence tools for one exact worktree root (runs `ensure-codegraph.sh`; never `graphify update`). |
-| [`agent/ensure-graphify.sh`](agent/ensure-graphify.sh) | Shared Graphify install/upgrade entry point, pinned to the org fork commit with the `leiden` extra; the package provides `.inc` mapping until upstream #3075 and #3310 ship in PyPI. Outside GitHub Actions it never replaces an installed build newer than the pin (#3339). |
+| [`agent/ensure-graphify.sh`](agent/ensure-graphify.sh) | Shared Graphify install/upgrade entry point: installs `graphifyy[leiden]` from PyPI at or above the `pyproject.toml` floor; the package provides the `.inc` mapping (Graphify-Labs/graphify#3075, Graphify-Labs/graphify#3310). Outside GitHub Actions it keeps a direct-URL build at or above the floor (#3339, #3495). |
 | [`agent/resolve-graphify.sh`](agent/resolve-graphify.sh) | Prefer and physically absolutize the PATH-selected Graphify launcher; otherwise resolve uv's direct launcher and validate its owning Python without trusting arbitrary wrappers. |
 | [`agent/ensure-codegraph.sh`](agent/ensure-codegraph.sh) | Idempotently create an exact-root CodeGraph index for one checkout. |
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`legacy/ADRs/`, `docs/`) excluded from its pathspec. |
