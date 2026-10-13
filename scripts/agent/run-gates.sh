@@ -39,7 +39,7 @@
 # Graphify surfaces as the checker's own FAIL, never as a SKIP.
 
 worktree='' base='origin/devel' plan=0 allow_missing=0 gate_timeout=1800
-overall=0 active_gate=''
+overall=0 active_gate='' gate_forking='' pending_signal=''
 
 # Composer refuses to load plugins as root/superuser and aborts before the gate can
 # run (issue #3143); the gate runner itself may be invoked by root.
@@ -206,9 +206,14 @@ run_gate() {
 	gate_exec=$(gate_command "$1")
 	gate_output_file=$skip_report_dir/gate-output
 	rm -f "$gate_output_file"
+	# issue #3432: defer signals until $! is recorded so the trap never misses the gate.
+	gate_forking=1
 	(cd "$worktree" && exec timeout -s KILL "$gate_timeout" sh -c "$gate_exec" < "$gate_input") \
 		> "$gate_output_file" 2>&1 &
 	active_gate=$!
+	gate_forking=''
+	# shellcheck disable=SC2086 # split into handle_signal's two arguments
+	[ -z "$pending_signal" ] || handle_signal $pending_signal
 	wait "$active_gate"
 	gate_status=$?
 	active_gate=''
@@ -283,6 +288,10 @@ main() {
 	# shellcheck disable=SC2329 # invoked by the traps below
 	handle_signal() {
 		signal=$1 signal_status=$2
+		if [ -n "$gate_forking" ]; then
+			pending_signal="$signal $signal_status"
+			return 0
+		fi
 		trap '' HUP INT QUIT TERM
 		if [ -n "$active_gate" ]; then
 			kill "-$signal" "-$active_gate" 2>/dev/null || kill "-$signal" "$active_gate" 2>/dev/null || :
