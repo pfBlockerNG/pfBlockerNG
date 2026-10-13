@@ -44,6 +44,9 @@ final class FilterlogRefreshConfigTest extends TestCase
 		if (is_file($this->configXml)) {
 			unlink($this->configXml);
 		}
+		if (is_file($this->configXml . '.tmp')) {
+			unlink($this->configXml . '.tmp');
+		}
 	}
 
 	private function writeConfig(string $logSyslog, int $mtime): void
@@ -191,36 +194,59 @@ final class FilterlogRefreshConfigTest extends TestCase
 	}
 
 	/**
-	 * Scenario: same-second toggle against the real clock (#3384).
+	 * Scenario: same-second toggle, clock injected (#3384).
 	 *   Given the daemon observed config.xml inside the file's own mtime second
 	 *         (the observation is not settled)
 	 *   When  log_syslog is rewritten within that second (mtime unchanged)
 	 *   Then  the next block event re-reads and reloads $config
-	 * Retries when the wall-clock second rolls mid-attempt, since the scenario
-	 * then no longer holds.
+	 * An observation inside the file's own mtime second is not settled, so a
+	 * same-second rewrite is re-read; the clock is injected so the case is
+	 * deterministic.
 	 */
 	#[RunInSeparateProcess]
-	public function testRealClockSameSecondToggleIsReloaded(): void
+	public function testSameSecondObservationIsNotSettled(): void
 	{
-		for ($attempt = 0; $attempt < 5; $attempt++) {
-			unset($GLOBALS['pfb_daemon_config_seen']);
-			$GLOBALS['pfb_test_config_read_calls'] = [];
-			$t = time();
-			$this->writeConfig('on', $t);
-			pfb_filterlog_refresh_config($this->configXml);
-			$this->writeConfig('no', $t);
-			pfb_filterlog_refresh_config($this->configXml);
-			if (time() !== $t) {
-				continue;
-			}
-			$this->assertSame(
-				[[FALSE, FALSE]],
-				$this->reloads(),
-				'a rewrite inside the observed mtime second must reload $config'
-			);
-			return;
-		}
-		$this->markTestSkipped('the wall-clock second rolled during every attempt');
+		$t = time() - 60;
+		$this->writeConfig('on', $t);
+		pfb_filterlog_refresh_config($this->configXml, $t);
+		$this->writeConfig('no', $t);
+		pfb_filterlog_refresh_config($this->configXml, $t);
+
+		$this->assertSame(
+			[[FALSE, FALSE]],
+			$this->reloads(),
+			'a rewrite inside the observed mtime second must reload $config'
+		);
+	}
+
+	/**
+	 * Scenario: atomic replacement of a settled config.xml.
+	 *   Given the daemon observed config.xml after its mtime second had closed
+	 *   When  a temp file is renamed over config.xml (pfSense safe_write_file) and
+	 *         carries the old mtime — the rename crossed the second boundary
+	 *   Then  the next block event reloads $config (the new inode is seen)
+	 */
+	#[RunInSeparateProcess]
+	public function testSettledAtomicReplacementIsReloaded(): void
+	{
+		$t = time() - 60;
+		$this->writeConfig('on', $t);
+		pfb_filterlog_refresh_config($this->configXml);
+
+		$tmp = $this->configXml . '.tmp';
+		$xml = "<pfsense><installedpackages><pfblockerng><config>"
+			. "<log_syslog>no</log_syslog>"
+			. "</config></pfblockerng></installedpackages></pfsense>\n";
+		$this->assertNotFalse(file_put_contents($tmp, $xml), 'test setup: temp write failed');
+		$this->assertTrue(touch($tmp, $t), 'test setup: temp mtime pin failed');
+		$this->assertTrue(rename($tmp, $this->configXml), 'test setup: atomic rename failed');
+		pfb_filterlog_refresh_config($this->configXml);
+
+		$this->assertSame(
+			[[FALSE, FALSE]],
+			$this->reloads(),
+			'an atomic rename publishing new content under the observed mtime must reload $config'
+		);
 	}
 
 	/**

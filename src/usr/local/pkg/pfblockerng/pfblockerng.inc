@@ -18961,19 +18961,24 @@ function pfb_local_feed_changed($source_path, $orig_path) {
 // (GUI save / CLI) writes config.xml, but the daemon's in-memory $config is stale,
 // so the syslog gate would not change until a restart (a bug: enabled+syslog-on
 // must emit; enabled+syslog-off must not, with no restart).
-// Reload $config from disk ONLY when config.xml's content changes. mtime alone is
-// second-granular, so a same-second toggle (#3384) would be missed; content is hashed
-// (xxh128) only when the mtime moved or is still racy, so the steady-state cost per
-// block event is one stat. The first call records the baseline and never reloads.
-function pfb_filterlog_refresh_config(string $path = '/conf/config.xml') {
-	$now = time();
-	$mtime = pfb_file_mtime($path);
+// Reload $config from disk ONLY when config.xml's content changes. The observation is
+// mtime + inode: mtime alone is second-granular, so a same-second toggle (#3384) would be
+// missed, and an atomic rename (temp file renamed over config.xml) publishes a new inode
+// under a possibly unchanged mtime. Content is hashed (xxh128) only when the mtime or
+// inode moved or the mtime is still racy, so the steady-state cost per block event is one
+// stat. The first call records the baseline and never reloads.
+function pfb_filterlog_refresh_config(string $path = '/conf/config.xml', ?int $now = NULL) {
+	$now ??= time();
+	clearstatcache(TRUE, $path);
+	$st = @stat($path);
+	$mtime = $st === FALSE ? FALSE : $st['mtime'];
+	$ino = $st === FALSE ? FALSE : $st['ino'];
 	$seen = $GLOBALS['pfb_daemon_config_seen'] ?? NULL;
 	// Racy-mtime rule (as git's index): a same-mtime rewrite is only possible while the
 	// last look fell inside the file's own mtime second, so only then is content re-read.
-	// shortcut: an mtime-preserving substitution (cp -p, touch -r) into an already-settled
-	// second is not detected; hash every call if that ever matters.
-	if ($seen !== NULL && $mtime === $seen['mtime'] && $seen['settled']) {
+	// shortcut: an in-place mtime-preserving rewrite (cp -p, touch -r) of a settled file
+	// keeps mtime and inode and is not detected; hash every call if that ever matters.
+	if ($seen !== NULL && $mtime === $seen['mtime'] && $ino === $seen['ino'] && $seen['settled']) {
 		return;
 	}
 	$hash = pfb_content_hash($path);
@@ -18981,7 +18986,7 @@ function pfb_filterlog_refresh_config(string $path = '/conf/config.xml') {
 		return;
 	}
 	// $now precedes the read: any write stamped with an mtime before $now landed before it.
-	$GLOBALS['pfb_daemon_config_seen'] = array('mtime' => $mtime, 'hash' => $hash, 'settled' => $now > $mtime);
+	$GLOBALS['pfb_daemon_config_seen'] = array('mtime' => $mtime, 'ino' => $ino, 'hash' => $hash, 'settled' => $now > $mtime);
 	if ($seen !== NULL && $hash !== $seen['hash']) {
 		// Read config.xml itself so the reload never depends on config.cache freshness.
 		config_read_file(FALSE, FALSE);
