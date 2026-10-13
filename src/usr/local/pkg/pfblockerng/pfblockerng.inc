@@ -6543,14 +6543,33 @@ function pfb_cron_disabled(?string $path = NULL): bool {
  * stays true across a reboot until a genuine Update clears it.
  *
  * A General save ($pfb['save']=TRUE) neither applies the deferred changes nor clears this flag —
- * only sync_package_pfblockerng() with !$pfb['save'] clears it.
+ * only sync_package_pfblockerng() with !$pfb['save'] clears it, and only the mark it saw when it
+ * started: every mark writes a fresh token, so a mark taken during a pass survives that pass.
  */
 function pfb_pending_changes_marker(): string {
 	global $pfb;
 	return $pfb['pending_marker'] ?? '/usr/local/etc/pfb_pending_changes';
 }
 function pfb_mark_pending_changes(): void {
-	@touch(pfb_pending_changes_marker());
+	@file_put_contents(pfb_pending_changes_marker(), bin2hex(random_bytes(8)));
+}
+// The marker's content, NULL without one; a pre-upgrade empty marker reads '' and is a valid token.
+function pfb_pending_changes_token(): ?string {
+	$token = @file_get_contents(pfb_pending_changes_marker());
+	return $token === FALSE ? NULL : $token;
+}
+// Clears the marker only while it still holds $seen; the claim keeps a mark racing the settle from being lost.
+function pfb_settle_pending_changes(?string $seen): void {
+	$marker = pfb_pending_changes_marker();
+	$claim  = $marker . '.settle.' . getmypid();
+	if ($seen === NULL || !@rename($marker, $claim)) {
+		return;
+	}
+	if (@file_get_contents($claim) === $seen) {
+		@unlink($claim);
+	} else {
+		@rename($claim, $marker);
+	}
 }
 function pfb_clear_pending_changes(): void {
 	@unlink(pfb_pending_changes_marker());
@@ -6561,7 +6580,7 @@ function pfb_pending_changes(): bool {
 
 /*
  * #738 F7: the deinstall-side counterpart of the clear above. The update-end guard
- * (pfb_clear_pending_changes(), just above) is gated on `!$pfb['save']`, and the pre-deinstall
+ * (pfb_settle_pending_changes(), just above) is gated on `!$pfb['save']`, and the pre-deinstall
  * disable pass always sets $pfb['save'] = TRUE before its sync_package_pfblockerng() call, so
  * that guard never fires there -- nothing else unlinked the marker, so it survived `pkg delete`
  * into any later reinstall and re-showed the banner before the first real Update. A thin,
@@ -23023,8 +23042,9 @@ function pfblockerng_plugin_xmlrpc_recv_done($unused) {
 		return;
 	}
 	pfb_sync_receive_changed(FALSE);
-	pfb_mark_pending_changes();
+	// Record before mark: a pass that cleared an earlier mark then still settles this record, and one that missed it leaves both.
 	pfb_sync_apply_record('waiting', '', $pfb['dbdir'], TRUE);
+	pfb_mark_pending_changes();
 	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1");
 }
 

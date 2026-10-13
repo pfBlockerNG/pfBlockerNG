@@ -29,6 +29,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_pending_changes')]
 #[CoversFunction('pfb_pending_changes_marker')]
 #[CoversFunction('pfb_deinstall_clear_pending_changes')]
+#[CoversFunction('pfb_pending_changes_token')]
+#[CoversFunction('pfb_settle_pending_changes')]
 final class PfbPendingChangesTest extends TestCase
 {
 	private string $tmpdir;
@@ -103,5 +105,112 @@ final class PfbPendingChangesTest extends TestCase
 			$marker,
 			'deinstall clear must remove the marker file so a later reinstall starts clean'
 		);
+	}
+
+	/** @return list<string> every entry in the marker's directory */
+	private function entries(): array
+	{
+		return array_values(array_diff(scandir($this->tmpdir), ['.', '..']));
+	}
+
+	/** @return list<string> leftovers of the settle's claim, beside the marker */
+	private function claimFiles(): array
+	{
+		return glob($this->marker . '.settle.*') ?: [];
+	}
+
+	/**
+	 * Given two marks
+	 * When each is read back
+	 * Then every mark wrote its own non-empty token, so a later mark is distinguishable from an earlier one
+	 */
+	public function testEveryMarkWritesItsOwnToken(): void
+	{
+		pfb_mark_pending_changes();
+		$first = (string) file_get_contents($this->marker);
+		pfb_mark_pending_changes();
+		$second = (string) file_get_contents($this->marker);
+
+		$this->assertTrue(pfb_pending_changes(), 'a mark sets the pending flag');
+		$this->assertNotSame('', $first, 'a mark writes a token');
+		$this->assertNotSame($first, $second, 'a second mark writes a different token');
+	}
+
+	public function testTokenIsNullWithoutAMarkerAndEmptyForALegacyMarker(): void
+	{
+		$this->assertNull(pfb_pending_changes_token(), 'no marker, no token');
+
+		touch($this->marker);	// what a pre-upgrade mark left behind
+
+		$this->assertSame('', pfb_pending_changes_token(), 'an empty marker file is a valid token');
+	}
+
+	public function testSettleClearsTheMarkerHoldingTheSeenToken(): void
+	{
+		pfb_mark_pending_changes();
+		$seen = pfb_pending_changes_token();
+		$this->assertNotNull($seen, 'before-state check: the mark was seen');
+
+		pfb_settle_pending_changes($seen);
+
+		$this->assertFileDoesNotExist($this->marker, 'the marker still held the seen token, so it is cleared');
+		$this->assertSame([], $this->claimFiles(), 'the settle leaves no claim file behind');
+	}
+
+	public function testSettleKeepsTheMarkerAMarkReplacedAfterTheToken(): void
+	{
+		pfb_mark_pending_changes();
+		$seen = pfb_pending_changes_token();
+		pfb_mark_pending_changes();
+		$newer = pfb_pending_changes_token();
+		$this->assertNotSame($seen, $newer, 'before-state check: the marker was re-marked since');
+
+		pfb_settle_pending_changes($seen);
+
+		$this->assertFileExists($this->marker, 'a mark taken after the seen token must survive the settle');
+		$this->assertSame($newer, pfb_pending_changes_token(), 'and it still holds the newer token');
+		$this->assertSame([], $this->claimFiles(), 'the settle leaves no claim file behind');
+	}
+
+	public function testSettleWithoutASeenTokenKeepsTheMarker(): void
+	{
+		pfb_mark_pending_changes();
+		$token = pfb_pending_changes_token();
+
+		pfb_settle_pending_changes(NULL);
+
+		$this->assertSame($token, pfb_pending_changes_token(), 'a pass that saw no mark clears none');
+		$this->assertSame([], $this->claimFiles(), 'and creates no claim file');
+	}
+
+	public function testSettleWithoutAMarkerChangesNothing(): void
+	{
+		$this->assertSame([], $this->entries(), 'before-state check: the directory is empty');
+
+		pfb_settle_pending_changes('gone');
+
+		$this->assertSame([], $this->entries(), 'a marker removed between the read and the settle is not recreated, and no claim file is left');
+	}
+
+	public function testSettleClearsAnUnchangedLegacyEmptyMarker(): void
+	{
+		touch($this->marker);
+		$seen = pfb_pending_changes_token();
+		$this->assertSame('', $seen, 'before-state check: the legacy marker reads as the empty token');
+
+		pfb_settle_pending_changes($seen);
+
+		$this->assertFileDoesNotExist($this->marker, 'an unchanged legacy marker is cleared');
+	}
+
+	public function testTheTokenIsComparedVerbatim(): void
+	{
+		file_put_contents($this->marker, "token\n");
+
+		pfb_settle_pending_changes('token');
+		$this->assertFileExists($this->marker, 'trailing bytes are part of the token: no trimming');
+
+		pfb_settle_pending_changes("token\n");
+		$this->assertFileDoesNotExist($this->marker, 'the exact content clears it');
 	}
 }

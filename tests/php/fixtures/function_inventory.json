@@ -9830,6 +9830,11 @@
         "returnType": "string",
         "params": []
     },
+    "pfb_pending_changes_token": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": []
+    },
     "pfb_persist_hook_output": {
         "returnsRef": false,
         "returnType": "void",
@@ -12099,6 +12104,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_settle_pending_changes": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "seen",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
                 "default": null
             }
         ]

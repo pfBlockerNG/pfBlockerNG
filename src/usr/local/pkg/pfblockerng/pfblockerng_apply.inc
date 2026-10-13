@@ -847,7 +847,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	global $g, $pfb, $pfbarr;
 	$deferred_by = NULL;
 	// A received policy's apply record moved after this point is left for the next pass.
-	// shortcut: second resolution, a receive in the pass's first second still settles; the root fix is #3481.
+	// shortcut: second resolution, a receive whose record opens in the pass's first second has it settled here, while its surviving pending mark re-applies it next pass.
+	$pfb_pending_seen = pfb_pending_changes_token();	// before the start time: a mark taken earlier was made no later than the pass's first second
 	$pfb_pass_started = time();
 	pfb_global();
 
@@ -5363,15 +5364,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				$pfb['dbdir']
 			);
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
-			pfb_clear_pending_changes();
+			pfb_settle_pending_changes($pfb_pending_seen);
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
 			if (pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'] !== NULL) {	// only a node holding an accepted policy reports what of it cannot take effect
 				pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
-			}
-			// A receive that opened its record after this pass started was not applied by it: keep it pending.
-			$apply = pfb_sync_receive_state_read($pfb['dbdir'])['apply'] ?? NULL;
-			if (($apply['outcome'] ?? NULL) === 'waiting' && ($apply['opened'] ?? $apply['time'] ?? 0) > $pfb_pass_started) {
-				pfb_mark_pending_changes();
 			}
 		} else {
 			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir'], FALSE, $pfb_pass_started);
