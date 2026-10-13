@@ -100,7 +100,7 @@ gates_for() {
 	fi
 	# issue #3431: suites read files whose removal breaks them, so bucket conditions see
 	# gone paths too; those are never embedded, so the unsafe guard above skips them.
-	suite_files=$(printf '%s\n%s\n' "$files" "${gone_files:-}" | LC_ALL=C grep -v '^legacy/' || true)
+	suite_files=$(printf '%s\n%s\n' "$files" "$gone_files" | LC_ALL=C grep -v '^legacy/' || true)
 	if printf '%s\n' "$suite_files" | LC_ALL=C grep -q '\.py$'; then
 		out="${out}uv run --locked pytest${nl}uv run --locked ruff check .${nl}uv run --locked ruff format --check .${nl}uv run --locked mypy tests/${nl}"
 	# issue #3166: the skip gate READS tests/skip-allowlist.txt, and its checker plus red
