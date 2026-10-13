@@ -1034,6 +1034,97 @@ CHECK
     The line 7 of output should equal 'GATES: PASS'
     The lines of output should equal 7
   End
+
+  # issue #3431: suites read files whose removal breaks them, so deletions and rename
+  # sources select aggregate suites; per-file gates still receive live paths only.
+  # seed PATH... commits each PATH (fresh content) and records seed_sha before it goes.
+  seed() {
+    for p do
+      mkdir -p "$(dirname "$repo/$p")"
+      printf 'seed %s\n' "$p" > "$repo/$p"
+    done
+    gitc add -A; gitc commit -qm seed
+    seed_sha=$(gitc rev-parse HEAD)
+  }
+  # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+  shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
+  reentry_gate='uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+
+  It 'plans ShellSpec for a committed deletion of a config only ShellSpec reads'
+    seed .agents/model-tiers.conf
+    gitc rm -q .agents/model-tiers.conf; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The line 3 of output should equal "$shellspec_gate"
+    The lines of output should equal 3
+  End
+
+  It 'plans the PHP suites, but no php -l, for a staged deletion of a PHP source'
+    seed src/usr/local/pkg/x.inc
+    gitc rm -q src/usr/local/pkg/x.inc
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The output should include 'vendor/bin/phpunit'
+    The output should include 'composer phpstan'
+    The output should not include 'php -l'
+  End
+
+  It 'plans only the two always-on gates for a docs-only Markdown deletion'
+    seed docs/x.md
+    gitc rm -q docs/x.md; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py --name-status-z'
+    The line 2 of output should equal 'sh scripts/agent/check-graph-fresh.sh'
+    The lines of output should equal 2
+  End
+
+  It 'plans the PHP suites for a rename source but per-file gates for its destination only'
+    seed src/a.inc
+    gitc mv src/a.inc src/b.sh
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The output should include 'vendor/bin/phpunit'
+    The output should include 'sh -n src/b.sh'
+    The output should not include 'a.inc'
+  End
+
+  It 'plans the shell suites but no sh -n or shellcheck for a deleted shell script'
+    seed scripts/x.sh
+    gitc rm -q scripts/x.sh; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The line 3 of output should equal "$reentry_gate"
+    The line 4 of output should equal "$shellspec_gate"
+    The lines of output should equal 4
+  End
+
+  It 'keeps a deleted legacy/ path off every suite'
+    seed legacy/old.sh legacy/old.py legacy/old.inc
+    gitc rm -q -r legacy; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The lines of output should equal 2
+  End
+
+  It 'plans pytest for an unstaged working-tree deletion of a Python file'
+    seed tests/test_gone.py
+    rm "$repo/tests/test_gone.py"
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The output should include 'uv run --locked pytest'
+    The output should not include 'test_gone.py'
+  End
+
+  It 'plans suites for a deleted metacharacter-named script without refusing or embedding it'
+    seed 'scripts/a;b.sh'
+    gitc rm -q 'scripts/a;b.sh'; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The output should include "$shellspec_gate"
+    The output should not include 'unsafe filename'
+    The output should not include 'a;b'
+  End
 End
 
 # issue #1865: the GENERIC-gate TOOL-MISSING/SKIP path (as opposed to the Composer

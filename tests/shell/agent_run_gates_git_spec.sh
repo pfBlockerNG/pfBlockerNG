@@ -45,7 +45,12 @@ Describe 'run-gates.sh over a C-quoted path'
     # --reportdir's value is the gate's last argument.
     printf '%s\n' '#!/bin/sh' 'for dir do :; done' \
       'printf "<testsuites/>\\n" > "$dir/results_junit.xml"' > "$stubdir/shellspec"
-    chmod +x "$stubdir/python3" "$stubdir/npx" "$stubdir/shellspec"
+    # issue #3431: a deleted or renamed-away .py now selects the uv-run Python suite; this
+    # stub passes it and writes the pytest JUnit report the skip-set checker reads.
+    printf '%s\n' '#!/bin/sh' \
+      'for arg do case "$arg" in --junitxml=*) report=${arg#*=} ;; esac; done' \
+      '[ -z "${report:-}" ] || printf "<testsuites/>\\n" > "$report"' > "$stubdir/uv"
+    chmod +x "$stubdir/python3" "$stubdir/npx" "$stubdir/shellspec" "$stubdir/uv"
     PATH="$stubdir:$PATH"
   }
   cleanup() { rm -rf "$repo" "$stubdir"; }

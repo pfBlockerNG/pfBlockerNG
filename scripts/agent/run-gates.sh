@@ -74,6 +74,7 @@ git_statuses() {
 
 # Map a touched-file list (stdin, one path per line) to gate commands (stdout, one per
 # line). Per-file gates (php -l, sh -n, shellcheck) emit one command per touched file.
+# $gone_files (newline list of deleted paths and rename sources) selects suites only.
 gates_for() {
 	# issue #3175: every grep here pins LC_ALL=C inline (ADR-26) -- under a UTF-8
 	# locale GNU grep classifies a list carrying an invalid UTF-8 byte as binary and
@@ -97,7 +98,10 @@ gates_for() {
 		files=$(printf '%s\n' "$files" | LC_ALL=C grep -v '[^A-Za-z0-9._/-]' || true)
 		out="${out}printf 'unsafe filename in diff\\n' >&2; false${nl}"
 	fi
-	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.py$'; then
+	# issue #3431: suites read files whose removal breaks them, so bucket conditions see
+	# gone paths too; those are never embedded, so the unsafe guard above skips them.
+	suite_files=$(printf '%s\n%s\n' "$files" "${gone_files:-}" | LC_ALL=C grep -v '^legacy/' || true)
+	if printf '%s\n' "$suite_files" | LC_ALL=C grep -q '\.py$'; then
 		out="${out}uv run --locked pytest${nl}uv run --locked ruff check .${nl}uv run --locked ruff format --check .${nl}uv run --locked mypy tests/${nl}"
 	# issue #3166: the skip gate READS tests/skip-allowlist.txt, and its checker plus red
 	# canary ride the pytest gate, which also carries the two tests that parse the real file.
@@ -105,10 +109,10 @@ gates_for() {
 	# issue #3174: the same gates run their canary against tests/fixtures/skip-allowlist-
 	# canary.xml, so a fixture-only diff must select that gate too or nothing re-proves
 	# the canary red locally.
-	elif printf '%s\n' "$files" | LC_ALL=C grep -qxE 'tests/(skip-allowlist\.txt|fixtures/skip-allowlist-canary\.xml)'; then
+	elif printf '%s\n' "$suite_files" | LC_ALL=C grep -qxE 'tests/(skip-allowlist\.txt|fixtures/skip-allowlist-canary\.xml)'; then
 		out="${out}uv run --locked pytest${nl}"
 	fi
-	if printf '%s\n' "$files" | LC_ALL=C grep -Eq '\.(php|inc)$'; then
+	if printf '%s\n' "$suite_files" | LC_ALL=C grep -Eq '\.(php|inc)$'; then
 		out="${out}uv run --locked python scripts/check_composer_vendor.py${nl}"
 		# issue #2123: the on/off toggle contract belongs to pfb_cfg_registry(), not to
 		# the page. --self-test is the gate's own red canary and runs first.
@@ -122,7 +126,7 @@ gates_for() {
 		done
 		out="${out}vendor/bin/phpunit${nl}composer phpstan${nl}composer phpcs -- --standard=phpcs.xml.dist src/${nl}"
 	fi
-	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.sh$'; then
+	if printf '%s\n' "$suite_files" | LC_ALL=C grep -q '\.sh$'; then
 		if [ "$reentry_emitted" != 1 ]; then
 			out="${out}uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py${nl}"
 		fi
@@ -140,10 +144,11 @@ gates_for() {
 	# agent configs), so select it for every path CI's shell-tests job runs for (all but
 	# Markdown and docs/) plus the Markdown those guards read.
 	# ponytail: the Markdown arm mirrors those specs' scan sets by hand; a new Markdown-reading guard adds its paths here.
-	if printf '%s\n' "$files" | LC_ALL=C grep -Evq '\.md$|^docs/|^$' ||
-		printf '%s\n' "$files" | LC_ALL=C grep -Eq '^((src|scripts|tests)/.*|AGENTS|GROK|CLAUDE|\.github/(copilot-instructions|agents/[^/]+\.agent)|\.(claude|agents)/skills/[^/]+/SKILL|\.agents/(policy/landing|context/[^/]+-adapter))\.md$'; then
+	if printf '%s\n' "$suite_files" | LC_ALL=C grep -Evq '\.md$|^docs/|^$' ||
+		printf '%s\n' "$suite_files" | LC_ALL=C grep -Eq '^((src|scripts|tests)/.*|AGENTS|GROK|CLAUDE|\.github/(copilot-instructions|agents/[^/]+\.agent)|\.(claude|agents)/skills/[^/]+/SKILL|\.agents/(policy/landing|context/[^/]+-adapter))\.md$'; then
 		out="${out}shellspec --shell \$(command -v dash || command -v sh)${nl}"
 	fi
+	# Deleting Markdown cannot add a lint finding, so markdownlint stays live-only.
 	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.md$'; then
 		out="${out}npx markdownlint-cli2${nl}"
 	fi
@@ -318,8 +323,12 @@ main() {
 		printf 'A\0%s\0' "$path"
 	done >> "$status_tmp"
 
-	# Lint/type/test mapping remains live-file-only: deleted ghosts cannot be
-	# passed to per-file tools.
+	# Per-file tools get live paths only (deleted ghosts cannot be linted); issue #3431:
+	# deletions and rename sources (--no-renames splits R into D+A) still select suites.
+	gone_committed=$(git_paths diff --name-only -z --no-renames --diff-filter=D "$base...HEAD") || exit 2
+	gone_staged=$(git_paths diff --name-only -z --no-renames --diff-filter=D --cached) || exit 2
+	gone_unstaged=$(git_paths diff --name-only -z --no-renames --diff-filter=D) || exit 2
+	gone_files=$(printf '%s\n%s\n%s\n' "$gone_committed" "$gone_staged" "$gone_unstaged" | LC_ALL=C sort -u | LC_ALL=C grep -v '^$')
 	committed=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT "$base...HEAD") || exit 2
 	staged=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT --cached) || exit 2
 	unstaged=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT) || exit 2
