@@ -189,4 +189,54 @@ final class FilterlogRefreshConfigTest extends TestCase
 
 		$this->assertSame([], $this->reloads(), 'a settled, unchanged mtime must not trigger a content re-read');
 	}
+
+	/**
+	 * Scenario: same-second toggle against the real clock (#3384).
+	 *   Given the daemon observed config.xml inside the file's own mtime second
+	 *         (the observation is not settled)
+	 *   When  log_syslog is rewritten within that second (mtime unchanged)
+	 *   Then  the next block event re-reads and reloads $config
+	 * Retries when the wall-clock second rolls mid-attempt, since the scenario
+	 * then no longer holds.
+	 */
+	#[RunInSeparateProcess]
+	public function testRealClockSameSecondToggleIsReloaded(): void
+	{
+		for ($attempt = 0; $attempt < 5; $attempt++) {
+			unset($GLOBALS['pfb_daemon_config_seen']);
+			$GLOBALS['pfb_test_config_read_calls'] = [];
+			$t = time();
+			$this->writeConfig('on', $t);
+			pfb_filterlog_refresh_config($this->configXml);
+			$this->writeConfig('no', $t);
+			pfb_filterlog_refresh_config($this->configXml);
+			if (time() !== $t) {
+				continue;
+			}
+			$this->assertSame(
+				[[FALSE, FALSE]],
+				$this->reloads(),
+				'a rewrite inside the observed mtime second must reload $config'
+			);
+			return;
+		}
+		$this->markTestSkipped('the wall-clock second rolled during every attempt');
+	}
+
+	/**
+	 * Scenario: a later write after the baseline has settled.
+	 *   Given the daemon observed config.xml long after its mtime second closed
+	 *   When  a later write moves the mtime and changes the content
+	 *   Then  the next block event reloads $config (live toggle)
+	 */
+	#[RunInSeparateProcess]
+	public function testSettledMtimeMoveIsReloaded(): void
+	{
+		$this->writeConfig('', time() - 60);
+		pfb_filterlog_refresh_config($this->configXml);
+		$this->writeConfig('on', time() - 30);
+		pfb_filterlog_refresh_config($this->configXml);
+
+		$this->assertSame([[FALSE, FALSE]], $this->reloads(), 'an mtime-moving write after a settled baseline must reload $config');
+	}
 }

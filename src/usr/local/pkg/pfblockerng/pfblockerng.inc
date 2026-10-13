@@ -18971,7 +18971,9 @@ function pfb_filterlog_refresh_config(string $path = '/conf/config.xml') {
 	$seen = $GLOBALS['pfb_daemon_config_seen'] ?? NULL;
 	// Racy-mtime rule (as git's index): a same-mtime rewrite is only possible while the
 	// last look fell inside the file's own mtime second, so only then is content re-read.
-	if ($mtime === FALSE || ($seen !== NULL && $mtime === $seen['mtime'] && $seen['settled'])) {
+	// shortcut: an mtime-preserving substitution (cp -p, touch -r) into an already-settled
+	// second is not detected; hash every call if that ever matters.
+	if ($seen !== NULL && $mtime === $seen['mtime'] && $seen['settled']) {
 		return;
 	}
 	$hash = pfb_content_hash($path);
