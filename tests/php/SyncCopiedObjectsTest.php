@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsblNatWriterSeedTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -23,6 +25,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_managed_obj_rows')]
 final class SyncCopiedObjectsTest extends TestCase
 {
+	use DnsblNatWriterSeedTrait;
+
 	private const SENTINELS = ['LEAK_IFACE_SENTINEL', 'LEAK_ADDR_SENTINEL', 'LEAK_DEST_SENTINEL', 'LEAK_LOCAL_SENTINEL', 'LEAK_GENERATED_SENTINEL'];
 
 	private string $dir;
@@ -707,45 +711,11 @@ final class SyncCopiedObjectsTest extends TestCase
 	// ---- row 10: acceptance 12, the apply writes the same bytes -------------------------------
 
 	/**
-	 * Seeds the minimum a manual-mode, valid-VIP DNSBL needs so pfb_create_dnsbl('enabled') reaches
-	 * the NAT generation (mirrors DnsblVipDisableNoticeTest scenario C), with an externally edited
-	 * copy of this node's NAT row in config.
+	 * Seeds the NAT writer with an externally edited copy of this node's NAT row in config.
 	 */
 	private function seedNatWriter(string $dir): void
 	{
-		global $pfb;
-
-		$GLOBALS['config'] = [];
-		$pfb['dbdir']      = $dir;
-		$pfb['dnsbl_conf'] = "{$dir}/lighty.conf";
-		$pfb['dnsbl_cert'] = "{$dir}/cert.pem";
-		touch($pfb['dnsbl_cert']);
-
-		$gen   = 'installedpackages/pfblockerng/config/0';
-		$ip    = 'installedpackages/pfblockerngipsettings/config/0';
-		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		foreach (['pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0'] as $key => $value) {
-			config_set_path("{$gen}/{$key}", $value);
-		}
-		foreach (['suppression' => '', 'database_cc' => '', 'maxmind_locale' => 'en', 'asn_reporting' => 'disabled', 'asn_token' => '', 'maxmind_account' => '', 'maxmind_key' => ''] as $key => $value) {
-			config_set_path("{$ip}/{$key}", $value);
-		}
-		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
-		foreach ([
-			'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443', 'top1m_enable' => '', 'pfb_cache' => '',
-			'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '', 'pfb_cname' => '', 'tld_allow' => '', 'pfb_py_nolog' => '',
-			'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '', 'pfb_gp' => '', 'pfb_gp_bypass_list' => '', 'pfb_dnsvip4' => '_vip_test_valid',
-		] as $key => $value) {
-			config_set_path("{$dnsbl}/{$key}", $value);
-		}
-		$GLOBALS['g']['unbound_chroot_path'] ??= '/var/unbound';
-		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
-		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
-		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
-		$GLOBALS['pfb_test_vip_list'] = ['_vip_test_valid' => '203.0.113.10'];
-		config_set_path('virtualip/vip', [['uniqid' => '_test_valid', 'subnet' => '203.0.113.10']]);
-
-		config_set_path('nat/rule', [
+		$this->seedDnsblNatWriter($dir, [
 			['descr' => 'user rule', 'interface' => 'wan', 'target' => '10.0.0.9'],
 			['descr' => 'pfB DNSBL - DO NOT EDIT', 'interface' => 'LEAK_IFACE_SENTINEL', 'target' => 'LEAK_DEST_SENTINEL'],
 		]);
@@ -756,14 +726,7 @@ final class SyncCopiedObjectsTest extends TestCase
 	{
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$this->seedNatWriter($dir);
-
-		// The restart branch link()s the real lighttpd binary, which the sandbox lacks.
-		set_error_handler(static fn (int $no, string $message): bool => str_starts_with($message, 'link('));
-		try {
-			pfb_create_dnsbl('enabled');
-		} finally {
-			restore_error_handler();
-		}
+		$this->applyDnsblEnabled();
 		return ['nat' => config_get_path('nat/rule'), 'writes' => $GLOBALS['pfb_test_write_config_calls']];
 	}
 
@@ -1007,11 +970,13 @@ final class SyncCopiedObjectsTest extends TestCase
 		$GLOBALS['config'] = [];
 		$owned             = ['descr' => 'pfB_Beta auto rule', 'type' => 'block'];
 		config_set_path('filter/rule', [$owned, ['descr' => 'user rule', 'type' => 'pass']]);
+		config_set_path('nat/rule', [['descr' => PFB_MANAGED_NAT_DESCR], ['descr' => 'my pfB DNSBL test']]);
 		file_put_contents($this->stateFile(), json_encode(['recorded' => ['filter' => pfb_sync_copied_digests([$owned])], 'findings' => []], JSON_THROW_ON_ERROR));
 
 		pfb_deinstall_sweep_managed_objects();
 
 		$this->assertSame(['user rule'], array_column(config_get_path('filter/rule'), 'descr'));
+		$this->assertSame(['my pfB DNSBL test'], array_column(config_get_path('nat/rule'), 'descr'), 'the sweep removes the exact DNSBL NAT and keeps a user rule that merely contains pfB DNSBL');
 		$this->assertSame(['pfBlockerNG: sweep orphan firewall objects on deinstall'], $GLOBALS['pfb_test_write_config_calls']);
 		$this->assertFileDoesNotExist($this->stateFile(), 'a reinstall must not report the swept rules as missing copies');
 	}
