@@ -464,8 +464,8 @@ wheels = [
 
 [[package]]
 name = "graphifyy"
-version = "0.9.87"
-source = { git = "https://github.com/pfBlockerNG/graphify?rev=90ba0cf5f0470347f637077dbad6a82053308a89#90ba0cf5f0470347f637077dbad6a82053308a89" }
+version = "0.9.88"
+source = { git = "https://github.com/pfBlockerNG/graphify?rev=05b7e02e21cb785675d277774d3e8070ffa919e0#05b7e02e21cb785675d277774d3e8070ffa919e0" }
 dependencies = [
     { name = "networkx" },
     { name = "numpy" },
@@ -1202,7 +1202,7 @@ smoke = [
 ]
 tools = [
     { name = "ast-grep-cli" },
-    { name = "graphifyy", extras = ["leiden"], git = "https://github.com/pfBlockerNG/graphify?rev=90ba0cf5f0470347f637077dbad6a82053308a89" },
+    { name = "graphifyy", extras = ["leiden"], git = "https://github.com/pfBlockerNG/graphify?rev=05b7e02e21cb785675d277774d3e8070ffa919e0" },
     { name = "semgrep" },
 ]
 
