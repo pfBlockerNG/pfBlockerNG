@@ -488,8 +488,10 @@ if (!function_exists('config_read_file')) {
 	// lives in $GLOBALS['config'] (seeded per test) — no disk file exists, so
 	// this is a deliberate no-op: pfb_global() calls it to pick up any in-flight
 	// changes, but in tests the caller already seeded $GLOBALS['config'] before
-	// calling pfb_global(). Returning [] matches the stub's declared return type.
+	// calling pfb_global(). Records each call's arguments (so tests can assert
+	// whether, and how, a path reloaded config); returns [] per the stub's type.
 	function config_read_file(bool $use_backup = false, bool $use_cache = true): array {
+		$GLOBALS['pfb_test_config_read_calls'][] = [$use_backup, $use_cache];
 		return [];
 	}
 }

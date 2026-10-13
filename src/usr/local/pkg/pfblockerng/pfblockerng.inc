@@ -18964,10 +18964,10 @@ function pfb_local_feed_changed($source_path, $orig_path) {
 // disk ONLY when config.xml actually changes (mtime-gated) — a cheap
 // pfb_file_mtime() per block event, a full read only on an actual change.
 // Called on the block-emit path (low volume), not per packet.
-function pfb_filterlog_refresh_config() {
+function pfb_filterlog_refresh_config(string $path = '/conf/config.xml') {
 	// pfb_file_mtime() clears PHP's per-process stat cache before stat'ing,
 	// so in this long-lived daemon a later config.xml write is always detected.
-	$cur = pfb_file_mtime('/conf/config.xml');
+	$cur = pfb_file_mtime($path);
 	if ($cur === FALSE) {
 		return;
 	}

@@ -5196,7 +5196,15 @@
     "pfb_filterlog_refresh_config": {
         "returnsRef": false,
         "returnType": null,
-        "params": []
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/conf/config.xml'"
+            }
+        ]
     },
     "pfb_filterlog_skip_count": {
         "returnsRef": false,
