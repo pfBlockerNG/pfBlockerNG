@@ -1089,6 +1089,33 @@ CHECK
     The output should not include 'a.inc'
   End
 
+  It 'plans the PHP suites for a committed rename source but per-file gates for its destination only'
+    seed src/a.inc
+    gitc mv src/a.inc src/b.sh; gitc commit -qm moved
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The output should include 'vendor/bin/phpunit'
+    The output should include 'sh -n src/b.sh'
+    The output should not include 'a.inc'
+  End
+
+  It 'plans ShellSpec for a deleted Markdown file a ShellSpec guard reads'
+    seed AGENTS.md
+    gitc rm -q AGENTS.md; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The line 3 of output should equal "$shellspec_gate"
+    The lines of output should equal 3
+  End
+
+  It 'plans pytest for a deleted skip allowlist'
+    seed tests/skip-allowlist.txt
+    gitc rm -q tests/skip-allowlist.txt; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The line 3 of output should equal 'uv run --locked pytest'
+  End
+
   It 'plans the shell suites but no sh -n or shellcheck for a deleted shell script'
     seed scripts/x.sh
     gitc rm -q scripts/x.sh; gitc commit -qm gone
