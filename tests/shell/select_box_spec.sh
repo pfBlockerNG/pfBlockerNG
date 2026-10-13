@@ -507,9 +507,8 @@ SSHEOF
   #
   # Two reclaimers racing on ONE stale lock: exactly one may win. rename(2) of
   # the same source is atomic, so the loser gets ENOENT; rm -rf + mkdir has no
-  # such exclusion (red-before record: legacy/ADRs/ADR_47_Local_CI_Execution_Parity/
-  # RESULTS/02_Results.txt). The winner's command holds its lease until the
-  # loser has exited, so a late loser cannot take a released lock (#3491).
+  # such exclusion. The winner's command holds its lease until the loser has
+  # exited, so a late loser cannot take a released lock (#3491).
 
   # Shared stale-lock setup: box 23 only (single-box pool forces both to compete).
   # Uses correct token (100023) so select-box.sh finds the pre-built lock dir.
@@ -526,8 +525,8 @@ SSHEOF
   two_reclaimers_good_result() {
     _setup_single_stale_lock
     # Only the winner runs this; only the loser's .rc can appear while it holds.
-    # The 30 s cap ends a stuck run.
-    _hold="i=0; while [ ! -f '${WORK}/rg1.rc' ] && [ ! -f '${WORK}/rg2.rc' ] && [ \$i -lt 300 ]; do sleep 0.1; i=\$((i+1)); done"
+    # Hitting the 30 s cap (a double grant, or a stalled loser) is reported, not hidden.
+    _hold="i=0; while [ ! -f '${WORK}/rg1.rc' ] && [ ! -f '${WORK}/rg2.rc' ] && [ \$i -lt 300 ]; do sleep 0.1; i=\$((i+1)); done; [ \$i -lt 300 ] || touch '${WORK}/hold.timeout'"
     ( sh "$SCRIPT" -- "$_hold" >/dev/null 2>&1; echo "$?" > "${WORK}/rg1.rc" ) &
     ( sh "$SCRIPT" -- "$_hold" >/dev/null 2>&1; echo "$?" > "${WORK}/rg2.rc" ) &
     wait
@@ -536,13 +535,15 @@ SSHEOF
       [ "$(cat "$_rc")" = 0 ] && _wins=$(( _wins + 1 ))
     done
     printf 'winners=%d\n' "$_wins"
+    [ -f "${WORK}/hold.timeout" ] && echo 'hold=timeout' || echo 'hold=released'
   }
 
   It 'two-concurrent-reclaimers (rename-capture): exactly one wins (winners=1)'
     When call two_reclaimers_good_result
     The status should be success
     # expected: winners=1; if winners=2 the rename-capture logic is broken
-    The output should equal 'winners=1'
+    The line 1 of output should equal 'winners=1'
+    The line 2 of output should equal 'hold=released'
   End
 
   # ── release ────────────────────────────────────────────────────────────────
