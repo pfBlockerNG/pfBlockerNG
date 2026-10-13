@@ -6550,16 +6550,16 @@ function pfb_pending_changes_marker(): string {
 	global $pfb;
 	return $pfb['pending_marker'] ?? '/usr/local/etc/pfb_pending_changes';
 }
-// Runs $fn holding the marker's lock (unlocked if the lock cannot be opened), so a settle's compare and clear never straddle a mark.
+// Runs $fn($locked) under the marker's lock (bounded, #1780), so a settle's compare and clear never straddle a mark.
 function pfb_pending_changes_locked(callable $fn): mixed {
 	$lock = @fopen(pfb_pending_changes_marker() . '.lock', 'c');
-	$lock && flock($lock, LOCK_EX);
 	try {
-		return $fn();
+		return $fn($lock !== FALSE && pfb_flock_bounded($lock, LOCK_EX, 5.0));
 	} finally {
 		$lock && fclose($lock);
 	}
 }
+// A mark is written even without the lock: losing it would leave a change unapplied.
 function pfb_mark_pending_changes(): void {
 	pfb_pending_changes_locked(static fn () => @file_put_contents(pfb_pending_changes_marker(), bin2hex(random_bytes(8))));
 }
@@ -6568,10 +6568,11 @@ function pfb_pending_changes_token(): ?string {
 	$token = pfb_pending_changes_locked(static fn () => @file_get_contents(pfb_pending_changes_marker()));
 	return $token === FALSE ? NULL : $token;
 }
-// Clears the marker only while it still holds $seen, so a mark taken after $seen was read survives.
+// Clears the marker only while it still holds $seen, so a mark taken after $seen was read survives;
+// without the lock it clears nothing and the next pass applies the change again.
 function pfb_settle_pending_changes(?string $seen): void {
-	$seen === NULL || pfb_pending_changes_locked(static function () use ($seen): void {
-		if (@file_get_contents(pfb_pending_changes_marker()) === $seen) {
+	$seen === NULL || pfb_pending_changes_locked(static function (bool $locked) use ($seen): void {
+		if ($locked && @file_get_contents(pfb_pending_changes_marker()) === $seen) {
 			pfb_clear_pending_changes();
 		}
 	});

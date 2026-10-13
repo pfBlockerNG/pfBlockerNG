@@ -282,4 +282,30 @@ final class PfbPendingChangesTest extends TestCase
 
 		$this->assertSame('newer', $read, 'a pass must not capture a half-written token, which would never settle');
 	}
+
+	public function testASettleThatCannotTakeTheLockKeepsTheMarker(): void
+	{
+		pfb_mark_pending_changes();
+		$seen = pfb_pending_changes_token();
+		$lock = fopen($this->marker . '.lock', 'c');
+		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the lock past the settle budget');
+
+		$pid = pcntl_fork();
+		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
+		if ($pid === 0) {
+			pfb_settle_pending_changes($seen);
+			exit(0);
+		}
+		$deadline = microtime(TRUE) + 8.0;
+		while (pcntl_waitpid($pid, $status, WNOHANG) === 0 && microtime(TRUE) < $deadline) {
+			usleep(50000);
+		}
+		$gaveUp = !posix_kill($pid, 0);
+		flock($lock, LOCK_UN);
+		fclose($lock);
+		$gaveUp || pcntl_waitpid($pid, $status);
+
+		$this->assertTrue($gaveUp, 'the settle gives up within its bounded wait instead of blocking');
+		$this->assertSame($seen, pfb_pending_changes_token(), 'a settle that could not lock clears nothing: the next pass applies it again');
+	}
 }
