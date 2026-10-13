@@ -18960,24 +18960,28 @@ function pfb_local_feed_changed($source_path, $orig_path) {
 // log_syslog toggle fresh. The daemon loads $config once at start; a live toggle
 // (GUI save / CLI) writes config.xml, but the daemon's in-memory $config is stale,
 // so the syslog gate would not change until a restart (a bug: enabled+syslog-on
-// must emit; enabled+syslog-off must not, with no restart). Reload $config from
-// disk ONLY when config.xml's content hash changes: mtime is second-granular, so a
-// same-second toggle (#3384) would be missed. Cost: one xxh128 of config.xml per
-// block event (block-emit path, low volume), not per packet.
+// must emit; enabled+syslog-off must not, with no restart).
+// Reload $config from disk ONLY when config.xml's content changes. mtime alone is
+// second-granular, so a same-second toggle (#3384) would be missed; content is hashed
+// (xxh128) only when the mtime moved or is still racy, so the steady-state cost per
+// block event is one stat. The first call records the baseline and never reloads.
 function pfb_filterlog_refresh_config(string $path = '/conf/config.xml') {
-	$cur = pfb_content_hash($path);
-	if ($cur === FALSE) {
+	$now = time();
+	$mtime = pfb_file_mtime($path);
+	$seen = $GLOBALS['pfb_daemon_config_seen'] ?? NULL;
+	// Racy-mtime rule (as git's index): a same-mtime rewrite is only possible while the
+	// last look fell inside the file's own mtime second, so only then is content re-read.
+	if ($mtime === FALSE || ($seen !== NULL && $mtime === $seen['mtime'] && $seen['settled'])) {
 		return;
 	}
-	// Defensive: if the baseline was never captured (non-daemon caller), record it.
-	if (!isset($GLOBALS['pfb_daemon_config_hash'])) {
-		$GLOBALS['pfb_daemon_config_hash'] = $cur;
+	$hash = pfb_content_hash($path);
+	if ($hash === FALSE) {
 		return;
 	}
-	if ($cur !== $GLOBALS['pfb_daemon_config_hash']) {
-		$GLOBALS['pfb_daemon_config_hash'] = $cur;
-		// FALSE cache: pfSense trusts /tmp/config.cache when it is not older than
-		// config.xml, so a same-second rewrite could still serve the old toggle.
+	// $now precedes the read: any write stamped with an mtime before $now landed before it.
+	$GLOBALS['pfb_daemon_config_seen'] = array('mtime' => $mtime, 'hash' => $hash, 'settled' => $now > $mtime);
+	if ($seen !== NULL && $hash !== $seen['hash']) {
+		// Read config.xml itself so the reload never depends on config.cache freshness.
 		config_read_file(FALSE, FALSE);
 	}
 }
@@ -19042,10 +19046,10 @@ function pfb_filterlog_skip_count(?int $count): int {
 function pfb_daemon_filterlog() {
 	global $pfb;
 
-	// ADR-38 Amendment 1: baseline content hash for the live log_syslog refresh (see
-	// pfb_filterlog_refresh_config). Captured at daemon start — when $config was
-	// loaded — so any later config.xml change is detected on the block path.
-	$GLOBALS['pfb_daemon_config_hash'] = pfb_content_hash('/conf/config.xml');
+	// ADR-38 Amendment 1: record the config.xml baseline for the live log_syslog
+	// refresh at daemon start, when $config was loaded, so any later change is
+	// detected on the block path.
+	pfb_filterlog_refresh_config();
 
 	// ASN Reporting - cached setting. Unconditional (issue #713): the cache-eviction
 	// use site below runs whenever reporting is enabled OR an ASN token is set, so

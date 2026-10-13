@@ -119,9 +119,8 @@ final class FilterlogRefreshConfigTest extends TestCase
 	 * Scenario: the reload reads config.xml itself.
 	 *   Given a config.xml change the daemon has not loaded yet
 	 *   When  the next block event reloads $config
-	 *   Then  pfSense's config.cache is bypassed — CE 2.8's write_config renames
-	 *         config.xml into place before it refreshes that cache, so a reload in
-	 *         between would load the old toggle and never retry
+	 *   Then  pfSense's config.cache is bypassed, so the reload never depends on
+	 *         that cache having been refreshed after the config.xml write
 	 */
 	#[RunInSeparateProcess]
 	public function testReloadBypassesConfigCache(): void
@@ -136,5 +135,58 @@ final class FilterlogRefreshConfigTest extends TestCase
 			$this->reloads(),
 			'reload must call config_read_file(use_backup: FALSE, use_cache: FALSE)'
 		);
+	}
+
+	/**
+	 * Scenario: an equal-length toggle in the same second.
+	 *   Given the daemon observed config.xml with log_syslog=on
+	 *   When  log_syslog is rewritten to the same-length "no" in that second
+	 *   Then  the next block event reloads $config (size alone cannot see it)
+	 */
+	#[RunInSeparateProcess]
+	public function testSameSecondEqualLengthToggleIsReloaded(): void
+	{
+		$this->writeConfig('on', $this->openSecond);
+		pfb_filterlog_refresh_config($this->configXml);
+		$this->writeConfig('no', $this->openSecond);
+		pfb_filterlog_refresh_config($this->configXml);
+
+		$this->assertSame([[FALSE, FALSE]], $this->reloads(), 'equal-length same-second rewrite must reload $config');
+	}
+
+	/**
+	 * Scenario: config.xml is missing when a block event arrives.
+	 *   Given config.xml does not exist
+	 *   When  block events arrive before and after it reappears
+	 *   Then  nothing reloads — the reappearance is the baseline, not a change
+	 */
+	#[RunInSeparateProcess]
+	public function testMissingConfigIsIgnored(): void
+	{
+		unlink($this->configXml);
+		pfb_filterlog_refresh_config($this->configXml);
+		$this->writeConfig('on', $this->openSecond);
+		pfb_filterlog_refresh_config($this->configXml);
+
+		$this->assertSame([], $this->reloads(), 'a missing config.xml must neither reload nor become a baseline');
+	}
+
+	/**
+	 * Scenario: steady state costs one stat, not a content read.
+	 *   Given the daemon observed config.xml after its mtime second had closed
+	 *   When  its content changes while the mtime stays the same (only a
+	 *         deliberate mtime reset can do that once the second has closed)
+	 *   Then  no reload happens — config.xml is not re-read on every block event
+	 */
+	#[RunInSeparateProcess]
+	public function testSettledMtimeIsNotReread(): void
+	{
+		$settled = time() - 60;
+		$this->writeConfig('', $settled);
+		pfb_filterlog_refresh_config($this->configXml);
+		$this->writeConfig('on', $settled);
+		pfb_filterlog_refresh_config($this->configXml);
+
+		$this->assertSame([], $this->reloads(), 'a settled, unchanged mtime must not trigger a content re-read');
 	}
 }
