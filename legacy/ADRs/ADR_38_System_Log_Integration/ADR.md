@@ -449,7 +449,7 @@ the fidelity gate).
   `system_syslogd_start(TRUE)` (SIGHUP, not a restart) when it is missing — so a CLI reload / redeploy
   can no longer lose it.
 - **Live toggle, no restart.** The long-running filterlog daemon re-reads `log_syslog` on `config.xml`
-  change (`pfb_filterlog_refresh_config`, mtime-gated) and `pfb_syslog_event()` reads the toggle fresh
+  change (`pfb_filterlog_refresh_config`, content-hash-gated (#3384)) and `pfb_syslog_event()` reads the toggle fresh
   per call (no per-process cache). Enabling/disabling syslog takes effect on the next block event with
   no service restart: pfBlockerNG-off ⇒ daemon stopped; syslog-off ⇒ gate emits nothing; both-on ⇒
   events to the dedicated file.

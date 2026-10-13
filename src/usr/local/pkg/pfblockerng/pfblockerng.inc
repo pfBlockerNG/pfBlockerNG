@@ -18961,24 +18961,24 @@ function pfb_local_feed_changed($source_path, $orig_path) {
 // (GUI save / CLI) writes config.xml, but the daemon's in-memory $config is stale,
 // so the syslog gate would not change until a restart (a bug: enabled+syslog-on
 // must emit; enabled+syslog-off must not, with no restart). Reload $config from
-// disk ONLY when config.xml actually changes (mtime-gated) — a cheap
-// pfb_file_mtime() per block event, a full read only on an actual change.
-// Called on the block-emit path (low volume), not per packet.
+// disk ONLY when config.xml's content hash changes: mtime is second-granular, so a
+// same-second toggle (#3384) would be missed. Cost: one xxh128 of config.xml per
+// block event (block-emit path, low volume), not per packet.
 function pfb_filterlog_refresh_config(string $path = '/conf/config.xml') {
-	// pfb_file_mtime() clears PHP's per-process stat cache before stat'ing,
-	// so in this long-lived daemon a later config.xml write is always detected.
-	$cur = pfb_file_mtime($path);
+	$cur = pfb_content_hash($path);
 	if ($cur === FALSE) {
 		return;
 	}
 	// Defensive: if the baseline was never captured (non-daemon caller), record it.
-	if (!isset($GLOBALS['pfb_daemon_config_mtime'])) {
-		$GLOBALS['pfb_daemon_config_mtime'] = $cur;
+	if (!isset($GLOBALS['pfb_daemon_config_hash'])) {
+		$GLOBALS['pfb_daemon_config_hash'] = $cur;
 		return;
 	}
-	if ($cur !== $GLOBALS['pfb_daemon_config_mtime']) {
-		$GLOBALS['pfb_daemon_config_mtime'] = $cur;
-		config_read_file(FALSE, TRUE);
+	if ($cur !== $GLOBALS['pfb_daemon_config_hash']) {
+		$GLOBALS['pfb_daemon_config_hash'] = $cur;
+		// FALSE cache: pfSense trusts /tmp/config.cache when it is not older than
+		// config.xml, so a same-second rewrite could still serve the old toggle.
+		config_read_file(FALSE, FALSE);
 	}
 }
 
@@ -19042,13 +19042,10 @@ function pfb_filterlog_skip_count(?int $count): int {
 function pfb_daemon_filterlog() {
 	global $pfb;
 
-	// ADR-38 Amendment 1: baseline mtime for the live log_syslog refresh (see
+	// ADR-38 Amendment 1: baseline content hash for the live log_syslog refresh (see
 	// pfb_filterlog_refresh_config). Captured at daemon start — when $config was
 	// loaded — so any later config.xml change is detected on the block path.
-	// pfb_file_mtime() clears the stat cache first (#536: without this the
-	// baseline could read a PHP-cached mtime from before the daemon's config load,
-	// defeating the change-detection on the very first reload check).
-	$GLOBALS['pfb_daemon_config_mtime'] = pfb_file_mtime('/conf/config.xml');
+	$GLOBALS['pfb_daemon_config_hash'] = pfb_content_hash('/conf/config.xml');
 
 	// ASN Reporting - cached setting. Unconditional (issue #713): the cache-eviction
 	// use site below runs whenever reporting is enabled OR an ASN token is set, so
