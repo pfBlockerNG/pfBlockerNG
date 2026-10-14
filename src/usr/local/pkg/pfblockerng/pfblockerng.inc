@@ -23049,7 +23049,7 @@ function pfblockerng_plugin_xmlrpc_recv_done($unused) {
 	// Record before mark: a pass that cleared an earlier mark then still settles this record, and one that missed it leaves both.
 	pfb_sync_apply_record('waiting', '', $pfb['dbdir'], TRUE);
 	pfb_mark_pending_changes();
-	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1");
+	// mutant: the receive-triggered tick is suppressed
 }
 
 function pfblockerng_plugin_xmlrpc_recv($new_sections) {
