@@ -727,7 +727,19 @@ CHECK
     tries=0
     while [ ! -e "$signal_ready" ]; do
       tries=$((tries + 1))
-      [ "$tries" -lt 100 ] || { kill -TERM "$runner_pid"; wait "$runner_pid"; echo 'STUCK/ENVIRONMENT: gate never signalled ready'; return 1; }
+      if [ "$tries" -ge 100 ]; then
+        # TERM lets the runner reap its gate; KILL after its 10 s grace bounds a stuck runner.
+        kill -TERM "$runner_pid"
+        tries=0
+        while kill -0 "$runner_pid" 2>/dev/null && [ "$tries" -lt 150 ]; do
+          tries=$((tries + 1))
+          sleep 0.1
+        done
+        kill -KILL "$runner_pid" 2>/dev/null
+        wait "$runner_pid"
+        echo 'STUCK/ENVIRONMENT: gate never signalled ready'
+        return 1
+      fi
       sleep 0.01
     done
     kill -TERM "$runner_pid"
