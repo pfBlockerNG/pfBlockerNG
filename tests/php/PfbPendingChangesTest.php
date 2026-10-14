@@ -6,23 +6,22 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfBlockerNG "pending changes" flag — mark/clear/pending lifecycle.
+ * pfBlockerNG "pending changes" flag — mark/settle/pending lifecycle.
  *
  * A save on a deferred settings page (DNSBL/IP/Feeds) marks pending changes; a real Update pass
- * clears them; the GUI banner shows iff the flag is set. The flag is a PERSISTED marker file at
- * $pfb['pending_marker'] (/usr/local/etc — survives a RAM-disk-/var reboot, since pfBlockerNG
- * restores its cache on boot rather than re-applying config, so a still-unapplied change must stay
- * flagged). This pins the three-state lifecycle (clean -> dirty -> clean) and that the marker
- * really is the file at $pfb['pending_marker'].
+ * applies them; the GUI banner shows iff changes are pending. Each mark writes a fresh version
+ * into the PERSISTED marker file at $pfb['pending_marker'] (/usr/local/etc — survives a
+ * RAM-disk-/var reboot, since pfBlockerNG restores its cache on boot rather than re-applying
+ * config, so a still-unapplied change must stay flagged). A pass records the version it saw at
+ * its start as applied, and changes are pending while the marker holds any other version
+ * (#3481): the pass never deletes the marker, so a save during the pass cannot be lost.
  *
  * Also pins the deinstall-side clear (#738 F7, pfb_deinstall_clear_pending_changes()): the
- * update-end guard above only fires on `!$pfb['save']`, which the pre-deinstall disable pass
- * never satisfies, so nothing else unlinked the marker and it survived `pkg delete` into a later
+ * update-end settle only runs on `!$pfb['save']`, which the pre-deinstall disable pass never
+ * satisfies, so nothing else removed the pending state and it survived `pkg delete` into a later
  * reinstall. pfblockerng_php_pre_deinstall_command() itself cannot be driven off-appliance (it
  * runs a full sync_package_pfblockerng() pass plus pfctl/exec teardown), so this pins the
- * extracted clear helper it calls in isolation; that the helper is actually reached only past the
- * #697 non-delete early return is validated live (issue #738 F7 is a pending live-VM uninstall
- * check).
+ * extracted clear helper it calls in isolation.
  */
 #[CoversFunction('pfb_mark_pending_changes')]
 #[CoversFunction('pfb_clear_pending_changes')]
@@ -50,8 +49,7 @@ final class PfbPendingChangesTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		@unlink($this->marker);
-		@unlink($this->marker . '.lock');
+		array_map('unlink', glob("{$this->tmpdir}/*") ?: []);
 		@rmdir($this->tmpdir);
 		if ($this->savedMarker === null) {
 			unset($GLOBALS['pfb']['pending_marker']);
@@ -60,59 +58,51 @@ final class PfbPendingChangesTest extends TestCase
 		}
 	}
 
+	/** @return list<string> every entry in the marker's directory */
+	private function entries(): array
+	{
+		return array_values(array_diff(scandir($this->tmpdir), ['.', '..']));
+	}
+
 	public function testLifecycleCleanThenDirtyThenClean(): void
 	{
-		$marker = $this->marker;
-
 		// Given no pending changes
 		$this->assertFalse(pfb_pending_changes(), 'flag must start clean');
-		$this->assertFileDoesNotExist($marker, 'no marker file before any save');
 
 		// When a deferred settings save marks pending changes
 		pfb_mark_pending_changes();
 
 		// Then the banner condition is true and the persisted marker exists
 		$this->assertTrue(pfb_pending_changes(), 'mark must set the pending flag');
-		$this->assertFileExists($marker, 'mark must create the persisted marker file');
+		$this->assertFileExists($this->marker, 'mark must create the persisted marker file');
 
-		// When a real Update pass clears it
-		pfb_clear_pending_changes();
+		// When a real Update pass applies the version it saw
+		pfb_settle_pending_changes(pfb_pending_changes_token());
 
-		// Then it is clean again (the deferred changes have been applied)
-		$this->assertFalse(pfb_pending_changes(), 'clear must reset the pending flag');
-		$this->assertFileDoesNotExist($marker, 'clear must remove the marker file');
+		// Then it is clean again
+		$this->assertFalse(pfb_pending_changes(), 'the pass must reset the pending flag');
 	}
 
 	/**
-	 * #738 F7: a stale marker must not survive a genuine uninstall. Before this helper existed,
-	 * nothing on the deinstall path unlinked the marker (the update-end guard is gated on
+	 * #738 F7: stale pending state must not survive a genuine uninstall. Before this helper
+	 * existed, nothing on the deinstall path removed it (the update-end settle is gated on
 	 * `!$pfb['save']`, which the deinstall disable pass never satisfies), so a reinstall showed a
 	 * false "pending changes" banner until the first real Update.
 	 */
 	public function testDeinstallHelperClearsStaleMarker(): void
 	{
-		$marker = $this->marker;
-
-		// Given a pending marker left over from an earlier deferred save
+		// Given an applied version and a newer pending mark
 		pfb_mark_pending_changes();
-		$this->assertFileExists($marker, 'setup: marker must exist before the deinstall clear');
+		pfb_settle_pending_changes(pfb_pending_changes_token());
+		pfb_mark_pending_changes();
+		$this->assertTrue(pfb_pending_changes(), 'setup: a mark must be pending before the deinstall clear');
 
 		// When the deinstall path's clear helper runs
 		pfb_deinstall_clear_pending_changes();
 
-		// Then the marker is gone -- it must never survive a genuine uninstall
+		// Then nothing is left behind -- a later reinstall must start clean
 		$this->assertFalse(pfb_pending_changes(), 'deinstall clear must reset the pending flag');
-		$this->assertFileDoesNotExist(
-			$marker,
-			'deinstall clear must remove the marker file so a later reinstall starts clean'
-		);
-		$this->assertFileDoesNotExist($marker . '.lock', 'and its lock file, so an uninstall leaves nothing behind');
-	}
-
-	/** @return list<string> every entry in the marker's directory */
-	private function entries(): array
-	{
-		return array_values(array_diff(scandir($this->tmpdir), ['.', '..']));
+		$this->assertSame([], $this->entries(), 'deinstall clear must remove every pending-state file');
 	}
 
 	/**
@@ -132,27 +122,41 @@ final class PfbPendingChangesTest extends TestCase
 		$this->assertNotSame($first, $second, 'a second mark writes a different token');
 	}
 
-	public function testTokenIsNullWithoutAMarkerAndEmptyForALegacyMarker(): void
+	public function testTokenIsNullWithoutAMarker(): void
 	{
 		$this->assertNull(pfb_pending_changes_token(), 'no marker, no token');
-
-		touch($this->marker);	// what a pre-upgrade mark left behind
-
-		$this->assertSame('', pfb_pending_changes_token(), 'an empty marker file is a valid token');
 	}
 
-	public function testSettleClearsTheMarkerHoldingTheSeenToken(): void
+	/**
+	 * Given a pre-upgrade (or touched) empty marker
+	 * When a pass reads its token and settles it
+	 * Then the marker is versioned first, so the pass applies it like any other mark
+	 */
+	public function testALegacyEmptyMarkerIsVersionedAndSettles(): void
+	{
+		touch($this->marker);
+		$this->assertTrue(pfb_pending_changes(), 'before-state check: an empty marker is pending');
+
+		$seen = pfb_pending_changes_token();
+		$this->assertNotSame('', $seen, 'the pass reads a real version, never the empty one');
+		pfb_settle_pending_changes($seen);
+
+		$this->assertFalse(pfb_pending_changes(), 'the pass applied it');
+		touch($this->marker);
+		$this->assertFalse(pfb_pending_changes(), 'touching the applied marker changes nothing');
+	}
+
+	public function testSettleAppliesTheSeenVersion(): void
 	{
 		pfb_mark_pending_changes();
 		$seen = pfb_pending_changes_token();
-		$this->assertNotNull($seen, 'before-state check: the mark was seen');
 
 		pfb_settle_pending_changes($seen);
 
-		$this->assertFileDoesNotExist($this->marker, 'the marker still held the seen token, so it is cleared');
+		$this->assertFalse(pfb_pending_changes(), 'the version the pass saw is applied');
 	}
 
-	public function testSettleKeepsTheMarkerAMarkReplacedAfterTheToken(): void
+	public function testSettleKeepsAMarkTakenAfterTheToken(): void
 	{
 		pfb_mark_pending_changes();
 		$seen = pfb_pending_changes_token();
@@ -162,38 +166,35 @@ final class PfbPendingChangesTest extends TestCase
 
 		pfb_settle_pending_changes($seen);
 
-		$this->assertFileExists($this->marker, 'a mark taken after the seen token must survive the settle');
-		$this->assertSame($newer, pfb_pending_changes_token(), 'and it still holds the newer token');
+		$this->assertTrue(pfb_pending_changes(), 'a mark taken after the seen token stays pending');
+		$this->assertSame($newer, pfb_pending_changes_token(), 'and the marker still holds it');
+	}
+
+	public function testAMarkAfterASettleIsPendingAgain(): void
+	{
+		pfb_mark_pending_changes();
+		pfb_settle_pending_changes(pfb_pending_changes_token());
+		$this->assertFalse(pfb_pending_changes(), 'before-state check: settled');
+
+		pfb_mark_pending_changes();
+
+		$this->assertTrue(pfb_pending_changes(), 'a new save is pending again');
 	}
 
 	public function testSettleWithoutASeenTokenKeepsTheMarker(): void
 	{
 		pfb_mark_pending_changes();
-		$token = pfb_pending_changes_token();
 
 		pfb_settle_pending_changes(NULL);
 
-		$this->assertSame($token, pfb_pending_changes_token(), 'a pass that saw no mark clears none');
+		$this->assertTrue(pfb_pending_changes(), 'a pass that saw no mark applies none');
 	}
 
-	public function testSettleWithoutAMarkerChangesNothing(): void
+	public function testSettleWithoutAMarkerLeavesNothingPending(): void
 	{
-		$this->assertSame([], $this->entries(), 'before-state check: the directory is empty');
-
 		pfb_settle_pending_changes('gone');
 
-		$this->assertSame([], array_diff($this->entries(), ['pfb_pending_changes.lock']), 'a marker removed between the read and the settle is not recreated');
-	}
-
-	public function testSettleClearsAnUnchangedLegacyEmptyMarker(): void
-	{
-		touch($this->marker);
-		$seen = pfb_pending_changes_token();
-		$this->assertSame('', $seen, 'before-state check: the legacy marker reads as the empty token');
-
-		pfb_settle_pending_changes($seen);
-
-		$this->assertFileDoesNotExist($this->marker, 'an unchanged legacy marker is cleared');
+		$this->assertFalse(pfb_pending_changes(), 'no marker, nothing pending');
 	}
 
 	public function testTheTokenIsComparedVerbatim(): void
@@ -201,137 +202,135 @@ final class PfbPendingChangesTest extends TestCase
 		file_put_contents($this->marker, "token\n");
 
 		pfb_settle_pending_changes('token');
-		$this->assertFileExists($this->marker, 'trailing bytes are part of the token: no trimming');
+		$this->assertTrue(pfb_pending_changes(), 'trailing bytes are part of the token: no trimming');
 
 		pfb_settle_pending_changes("token\n");
-		$this->assertFileDoesNotExist($this->marker, 'the exact content clears it');
+		$this->assertFalse(pfb_pending_changes(), 'the exact content is applied');
 	}
 
 	/**
-	 * Given a mark in progress (holding the marker's lock, as pfb_mark_pending_changes() does)
-	 * When a pass settles the token it saw at its start
-	 * Then the settle waits for the mark and keeps the marker it wrote, instead of deleting it between its compare and its clear
+	 * Given a pass settling the version it saw at its start
+	 * When a save marks pending right after ANY filesystem step of that settle (a slow disk, a scheduler gap)
+	 * Then the save is still pending afterwards: no step of the settle can discard a newer mark
 	 */
-	public function testSettleWaitsForAMarkInProgressAndKeepsIt(): void
+	public function testAMarkLandingAtAnyStepOfASettleStaysPending(): void
 	{
-		pfb_mark_pending_changes();
-		$seen = pfb_pending_changes_token();
-		$lock = fopen($this->marker . '.lock', 'c');
-		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the mark lock');
+		$GLOBALS['pfb']['pending_marker'] = 'pfbrace://' . $this->marker;
+		stream_wrapper_register('pfbrace', PendingMarkerRaceStream::class);
+		try {
+			for ($step = 1; ; $step++) {
+				array_map('unlink', glob("{$this->tmpdir}/*") ?: []);
+				pfb_mark_pending_changes();
+				$seen = pfb_pending_changes_token();
 
-		$pid = pcntl_fork();
-		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
-		if ($pid === 0) {
-			pfb_settle_pending_changes($seen);
-			exit(0);
+				PendingMarkerRaceStream::arm($step, $this->marker);
+				pfb_settle_pending_changes($seen);
+				if (!PendingMarkerRaceStream::disarm()) {
+					break;
+				}
+				$this->assertTrue(pfb_pending_changes(), "a save landing after step {$step} of the settle must stay pending");
+			}
+		} finally {
+			stream_wrapper_unregister('pfbrace');
 		}
-		usleep(300000);
-		clearstatcache();
-		$settledEarly = !file_exists($this->marker);
-		file_put_contents($this->marker, 'newer');
-		flock($lock, LOCK_UN);
-		fclose($lock);
-		pcntl_waitpid($pid, $status);
+		$this->assertGreaterThan(1, $step, 'before-state check: the settle took at least one filesystem step');
+	}
+}
 
-		$this->assertFalse($settledEarly, 'the settle must not clear the marker while a mark holds the lock');
-		$this->assertSame('newer', pfb_pending_changes_token(), 'the mark written under the lock survives the settle');
+/** Passes pfbrace://<path> through to <path>; when armed, writes a concurrent mark right after the Nth completed step. */
+final class PendingMarkerRaceStream
+{
+	/** @var resource|null */
+	public $context;
+	/** @var resource|null */
+	private $fp;
+	private static int $fireAt = 0;
+	private static int $steps = 0;
+	private static bool $fired = FALSE;
+	private static string $marker = '';
+
+	public static function arm(int $step, string $marker): void
+	{
+		[self::$fireAt, self::$steps, self::$fired, self::$marker] = [$step, 0, FALSE, $marker];
 	}
 
-	public function testAMarkWaitsForASettleInProgress(): void
+	public static function disarm(): bool
 	{
-		file_put_contents($this->marker, 'seen');
-		$lock = fopen($this->marker . '.lock', 'c');
-		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the lock a settle holds');
-
-		$pid = pcntl_fork();
-		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
-		if ($pid === 0) {
-			pfb_mark_pending_changes();
-			exit(0);
-		}
-		usleep(300000);
-		$during = (string) file_get_contents($this->marker);
-		unlink($this->marker);	// the settle's clear
-		flock($lock, LOCK_UN);
-		fclose($lock);
-		pcntl_waitpid($pid, $status);
-
-		$this->assertSame('seen', $during, 'a mark must not write while a settle holds the lock');
-		$this->assertNotNull(pfb_pending_changes_token(), 'the mark lands after the settle, so it survives');
+		self::$fireAt = 0;
+		return self::$fired;
 	}
 
-	public function testTheTokenReadWaitsForAMarkInProgress(): void
+	private static function step(): void
 	{
-		file_put_contents($this->marker, '');	// a mark mid-write: truncated, token not yet written
-		$lock = fopen($this->marker . '.lock', 'c');
-		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the lock a mark holds');
-
-		$pid = pcntl_fork();
-		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
-		if ($pid === 0) {
-			file_put_contents($this->marker . '.out', (string) pfb_pending_changes_token());
-			exit(0);
+		if (self::$fireAt > 0 && ++self::$steps === self::$fireAt) {
+			self::$fired = TRUE;
+			file_put_contents(self::$marker, 'concurrent-save');
 		}
-		usleep(300000);
-		file_put_contents($this->marker, 'newer');
-		flock($lock, LOCK_UN);
-		fclose($lock);
-		pcntl_waitpid($pid, $status);
-		$read = (string) file_get_contents($this->marker . '.out');
-		unlink($this->marker . '.out');
-
-		$this->assertSame('newer', $read, 'a pass must not capture a half-written token, which would never settle');
 	}
 
-	public function testASettleThatCannotTakeTheLockKeepsTheMarker(): void
+	private static function real(string $url): string
 	{
-		pfb_mark_pending_changes();
-		$seen = pfb_pending_changes_token();
-		$lock = fopen($this->marker . '.lock', 'c');
-		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the lock past the settle budget');
-
-		$pid = pcntl_fork();
-		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
-		if ($pid === 0) {
-			pfb_settle_pending_changes($seen);
-			exit(0);
-		}
-		$deadline = microtime(TRUE) + 8.0;
-		while (pcntl_waitpid($pid, $status, WNOHANG) === 0 && microtime(TRUE) < $deadline) {
-			usleep(50000);
-		}
-		$gaveUp = !posix_kill($pid, 0);
-		flock($lock, LOCK_UN);
-		fclose($lock);
-		$gaveUp || pcntl_waitpid($pid, $status);
-
-		$this->assertTrue($gaveUp, 'the settle gives up within its bounded wait instead of blocking');
-		$this->assertSame($seen, pfb_pending_changes_token(), 'a settle that could not lock clears nothing: the next pass applies it again');
+		return substr($url, strlen('pfbrace://'));
 	}
 
-	public function testAMarkThatCannotTakeTheLockIsStillWritten(): void
+	public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool
 	{
-		$lock = fopen($this->marker . '.lock', 'c');
-		$this->assertTrue(flock($lock, LOCK_EX), 'before-state check: the test holds the lock past the mark budget');
+		$this->fp = @fopen(self::real($path), $mode) ?: NULL;
+		return $this->fp !== NULL;
+	}
 
-		$pid = pcntl_fork();
-		$this->assertNotSame(-1, $pid, 'before-state check: fork succeeded');
-		if ($pid === 0) {
-			pfb_mark_pending_changes();
-			exit(0);
-		}
-		$deadline = microtime(TRUE) + 8.0;
-		while (pcntl_waitpid($pid, $status, WNOHANG) === 0 && microtime(TRUE) < $deadline) {
-			usleep(50000);
-		}
-		$gaveUp = !posix_kill($pid, 0);
-		clearstatcache();
-		$written = file_exists($this->marker);
-		flock($lock, LOCK_UN);
-		fclose($lock);
-		$gaveUp || pcntl_waitpid($pid, $status);
+	public function stream_read(int $count): string|false
+	{
+		return fread($this->fp, $count);
+	}
 
-		$this->assertTrue($gaveUp, 'the mark gives up waiting within its bounded wait');
-		$this->assertTrue($written, 'and still writes the marker: dropping it would leave the change unapplied');
+	public function stream_write(string $data): int
+	{
+		return (int) fwrite($this->fp, $data);
+	}
+
+	public function stream_eof(): bool
+	{
+		return feof($this->fp);
+	}
+
+	public function stream_stat(): array|false
+	{
+		return fstat($this->fp);
+	}
+
+	public function stream_lock(int $operation): bool
+	{
+		return flock($this->fp, $operation);
+	}
+
+	public function stream_set_option(int $option, int $arg1, ?int $arg2): bool
+	{
+		return FALSE;
+	}
+
+	public function stream_close(): void
+	{
+		fclose($this->fp);
+		self::step();
+	}
+
+	public function url_stat(string $path, int $flags): array|false
+	{
+		return @stat(self::real($path));
+	}
+
+	public function unlink(string $path): bool
+	{
+		$ok = @unlink(self::real($path));
+		self::step();
+		return $ok;
+	}
+
+	public function rename(string $from, string $to): bool
+	{
+		$ok = @rename(self::real($from), self::real($to));
+		self::step();
+		return $ok;
 	}
 }

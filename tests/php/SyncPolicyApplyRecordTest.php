@@ -313,7 +313,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		});
 
 		$this->assertSame(1, $manualRuns, 'the apply was dispatched');
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'the pending marker is kept for the next tick');
+		$this->assertTrue(pfb_pending_changes(), 'the pending mark is kept for the next tick');
 		$apply = $this->apply();
 		$this->assertSame('failed', $apply['outcome'] ?? NULL);
 		$this->assertSame(self::REASON_FAILED, $apply['reason'] ?? NULL);
@@ -353,7 +353,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 		sync_package_pfblockerng();
 
-		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass cleared the pending marker');
+		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass applied the pending mark');
 		$apply = $this->apply();
 		$this->assertSame('applied', $apply['outcome'] ?? NULL);
 		$this->assertSame(self::REASON_APPLIED, $apply['reason'] ?? NULL, 'a pass that launched no reload does not claim one');
@@ -375,7 +375,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$apply = $this->apply();
 		$this->assertSame('failed', $apply['outcome'] ?? NULL);
 		$this->assertSame(self::REASON_RELOAD, $apply['reason'] ?? NULL);
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'the pending marker survives');
+		$this->assertTrue(pfb_pending_changes(), 'the pending mark survives');
 		$this->assertLastStillChanged();
 	}
 
@@ -404,7 +404,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 		sync_package_pfblockerng();
 
-		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass completed');
+		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass completed');
 		$this->assertContains('pfBlockerNG DNSBL', $this->noticeTitles(), 'before-state check: the VIP failed validation');
 		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never received policy raises no Sync notice');
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
@@ -439,7 +439,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 		sync_package_pfblockerng();
 
-		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass completed');
+		$this->assertFalse(pfb_pending_changes(), 'before-state check: the pass completed');
 		$this->assertContains('pfBlockerNG DNSBL', $this->noticeTitles(), 'before-state check: the VIP failed validation');
 		$this->assertNotContains('pfBlockerNG Sync', $this->noticeTitles(), 'a node that never accepted a policy raises no Sync notice');
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_findings.json');
@@ -553,7 +553,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		sync_package_pfblockerng();
 
 		$this->assertTrue($probe['fired'], 'before-state check: the re-stamp ran inside the pass');
-		$this->assertSame($unconfirmed, is_file($GLOBALS['pfb']['pending_marker']), 'before-state check: the pass ended as the case says');
+		$this->assertSame($unconfirmed, pfb_pending_changes(), 'before-state check: the pass ended as the case says');
 		$this->assertSame($settled, $this->settled());
 		$this->assertLastStillChanged();
 	}
@@ -574,7 +574,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		sync_package_pfblockerng();
 
 		$this->assertTrue($probe['fired'], 'before-state check: the receive reopened the record inside the pass');
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'the receive the pass did not apply stays pending, so the next tick applies it');
+		$this->assertTrue(pfb_pending_changes(), 'the receive the pass did not apply stays pending, so the next tick applies it');
 		$this->assertSame(['outcome' => 'waiting'], $this->settled(), 'the pass did not apply that receive');
 		$this->assertLastStillChanged();
 	}
@@ -596,7 +596,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		sync_package_pfblockerng();
 
 		$this->assertTrue($probe['fired'], 'before-state check: the mark was taken inside the pass');
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'a mark taken during the pass must survive it, so the next tick applies what the pass did not see');
+		$this->assertTrue(pfb_pending_changes(), 'a mark taken during the pass must survive it, so the next tick applies what the pass did not see');
 		$this->assertNotSame($atStart, (string) file_get_contents($GLOBALS['pfb']['pending_marker']), 'and it is the mark of the pass, not the one the pass started with');
 	}
 
@@ -615,17 +615,17 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		sync_package_pfblockerng();
 
 		$this->assertTrue($probe['fired'], 'before-state check: the mark was taken inside the pass');
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'a mark taken during a pass that saw none must survive it');
+		$this->assertTrue(pfb_pending_changes(), 'a mark taken during a pass that saw none must survive it');
 	}
 
-	public function testACompletedPassClearsTheMarkItSawAtItsStart(): void
+	public function testACompletedPassAppliesTheMarkItSawAtItsStart(): void
 	{
 		$this->seedApplyEnvironment();
 		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'before-state check: the pass starts with a mark');
 
 		sync_package_pfblockerng();
 
-		$this->assertFileDoesNotExist($GLOBALS['pfb']['pending_marker'], 'an untouched mark is applied by the pass, so it is cleared');
+		$this->assertFalse(pfb_pending_changes(), 'an untouched mark is applied by the pass');
 	}
 
 	public function testASurvivingMarkDoesNotKeepTheLedgerPending(): void
@@ -637,7 +637,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 		sync_package_pfblockerng();
 
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'before-state check: the mark survived the pass');
+		$this->assertTrue(pfb_pending_changes(), 'before-state check: the mark survived the pass');
 		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir), 'the ledger is settled; the surviving marker alone carries the next apply');
 	}
 
@@ -668,7 +668,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 		sync_package_pfblockerng();
 
-		$this->assertFileExists($GLOBALS['pfb']['pending_marker'], 'a settings-save pass applies no deferred change, so the marker stays');
+		$this->assertTrue(pfb_pending_changes(), 'a settings-save pass applies no deferred change, so it stays pending');
 	}
 
 	/**

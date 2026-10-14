@@ -9825,19 +9825,6 @@
         "returnType": "bool",
         "params": []
     },
-    "pfb_pending_changes_locked": {
-        "returnsRef": false,
-        "returnType": "mixed",
-        "params": [
-            {
-                "name": "fn",
-                "byRef": false,
-                "variadic": false,
-                "type": "callable",
-                "default": null
-            }
-        ]
-    },
     "pfb_pending_changes_marker": {
         "returnsRef": false,
         "returnType": "string",

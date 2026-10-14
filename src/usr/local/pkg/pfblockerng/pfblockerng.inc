@@ -6542,61 +6542,53 @@ function pfb_cron_disabled(?string $path = NULL): bool {
  * /usr/local/etc survives a RAM-disk-/var reboot (only /var + /tmp are volatile), so "pending"
  * stays true across a reboot until a genuine Update clears it.
  *
- * A General save ($pfb['save']=TRUE) neither applies the deferred changes nor clears this flag —
- * only sync_package_pfblockerng() with !$pfb['save'] clears it, and only the mark it saw when it
- * started: every mark writes a fresh token, so a mark taken during a pass survives that pass.
+ * A General save ($pfb['save']=TRUE) applies nothing. Every mark writes a fresh version into the
+ * marker; sync_package_pfblockerng() with !$pfb['save'] records the version it saw at its start as
+ * applied (#3481), and changes are pending while the marker holds any other version. The pass never
+ * deletes the marker, so a save during the pass cannot be lost. A torn read only looks like another
+ * version: at worst one extra pass, never a lost mark.
  */
 function pfb_pending_changes_marker(): string {
 	global $pfb;
 	return $pfb['pending_marker'] ?? '/usr/local/etc/pfb_pending_changes';
 }
-// Runs $fn($locked) under the marker's lock (bounded, #1780), so a settle's compare and clear never straddle a mark.
-function pfb_pending_changes_locked(callable $fn): mixed {
-	$lock = @fopen(pfb_pending_changes_marker() . '.lock', 'c');
-	try {
-		return $fn($lock !== FALSE && pfb_flock_bounded($lock, LOCK_EX, 5.0));
-	} finally {
-		$lock && fclose($lock);
-	}
-}
-// A mark is written even without the lock: losing it would leave a change unapplied.
 function pfb_mark_pending_changes(): void {
-	pfb_pending_changes_locked(static fn () => @file_put_contents(pfb_pending_changes_marker(), bin2hex(random_bytes(8))));
+	@file_put_contents(pfb_pending_changes_marker(), bin2hex(random_bytes(8)));
 }
-// The marker's content, NULL without one; a pre-upgrade empty marker reads '' and is a valid token.
+// The version a pass applies, NULL without a marker. A pre-upgrade or touched empty marker is
+// versioned first; any mark this overwrites saved its config before marking, so the pass applies it.
 function pfb_pending_changes_token(): ?string {
-	$token = pfb_pending_changes_locked(static fn () => @file_get_contents(pfb_pending_changes_marker()));
+	$token = @file_get_contents(pfb_pending_changes_marker());
+	if ($token === '') {
+		pfb_mark_pending_changes();
+		$token = @file_get_contents(pfb_pending_changes_marker());
+	}
 	return $token === FALSE ? NULL : $token;
 }
-// Clears the marker only while it still holds $seen, so a mark taken after $seen was read survives;
-// without the lock it clears nothing and the next pass applies the change again.
 function pfb_settle_pending_changes(?string $seen): void {
-	$seen === NULL || pfb_pending_changes_locked(static function (bool $locked) use ($seen): void {
-		if ($locked && @file_get_contents(pfb_pending_changes_marker()) === $seen) {
-			pfb_clear_pending_changes();
-		}
-	});
+	$seen === NULL || @file_put_contents(pfb_pending_changes_marker() . '.applied', $seen);
 }
 function pfb_clear_pending_changes(): void {
 	@unlink(pfb_pending_changes_marker());
+	@unlink(pfb_pending_changes_marker() . '.applied');
 }
 function pfb_pending_changes(): bool {
-	return file_exists(pfb_pending_changes_marker());
+	$version = @file_get_contents(pfb_pending_changes_marker());
+	return $version !== FALSE && $version !== @file_get_contents(pfb_pending_changes_marker() . '.applied');
 }
 
 /*
- * #738 F7: the deinstall-side counterpart of the clear above. The update-end guard
+ * #738 F7: the deinstall-side counterpart of the settle above. The update-end settle
  * (pfb_settle_pending_changes(), just above) is gated on `!$pfb['save']`, and the pre-deinstall
  * disable pass always sets $pfb['save'] = TRUE before its sync_package_pfblockerng() call, so
- * that guard never fires there -- nothing else unlinked the marker, so it survived `pkg delete`
+ * that settle never runs there -- nothing else removed the pending state, so it survived `pkg delete`
  * into any later reinstall and re-showed the banner before the first real Update. A thin,
  * separately named wrapper (rather than inlining pfb_clear_pending_changes() at the deinstall
  * call site) so the deinstall path stays a CLIENT of this module, not a second owner of the
- * marker file.
+ * marker files.
  */
 function pfb_deinstall_clear_pending_changes(): void {
 	pfb_clear_pending_changes();
-	@unlink(pfb_pending_changes_marker() . '.lock');
 }
 
 /*
