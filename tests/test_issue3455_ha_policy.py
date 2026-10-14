@@ -275,7 +275,7 @@ def test_set_leaves_sends_none_as_a_delete_and_blank_and_empty_list_as_stored_va
 
     (snippet,) = seen
     assert '{"p/del": null, "p/blank": "", "p/list": [], "p/val": "v"}' in snippet
-    assert "config_del_path($p)" in snippet and "write_config('m')" in snippet
+    assert "config_del_path($p)" in snippet and "write_config('m', TRUE, TRUE)" in snippet
 
 
 def test_read_json_file_tells_an_absent_file_from_a_record(hp: ModuleType) -> None:
@@ -538,3 +538,300 @@ def test_sync_once_does_not_wait_for_an_apply_after_an_unchanged_receive(
     pair = SimpleNamespace(primary=object(), secondary=object())
 
     assert hp.sync_once(pair, "automatic").passes == 0
+
+
+# --------------------------------------------------------------------------- #
+# Core's HA sync: a harness write never raises the event, only the tests that ride it turn it on
+# --------------------------------------------------------------------------- #
+
+
+def _recording_php_eval(hp: ModuleType, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    seen: list[str] = []
+
+    def record(_vm: object, snippet: str, **_k: Any) -> subprocess.CompletedProcess[str]:
+        seen.append(snippet)
+        return _done("OK")
+
+    monkeypatch.setattr(hp.h, "php_eval", record)
+    return seen
+
+
+def test_a_harness_write_saves_the_file_only_unless_the_filter_sync_event_is_asked_for(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _recording_php_eval(hp, monkeypatch)
+
+    hp.php_write(object(), "x", "m")
+    hp.php_write(object(), "x", "m", sync=True)
+
+    quiet, noisy = seen
+    assert "write_config('m', TRUE, TRUE);" in quiet, f"default write must be $write_config_only: {quiet!r}"
+    assert "write_config('m', TRUE, FALSE);" in noisy, f"sync=True must leave the event on: {noisy!r}"
+
+
+def test_hasync_section_is_what_ha_pair_stores_on_the_primary(hp: ModuleType) -> None:
+    assert hp.hasync_section("pw") == {
+        "synchronizetoip": "172.30.254.2",
+        "username": "pfbhasync",
+        "password": "pw",
+        "synchronizerules": "on",
+        "synchronizenat": "on",
+        "synchronizealiases": "on",
+    }
+
+
+def _stored_by_configure_sender(hp: ModuleType, monkeypatch: pytest.MonkeyPatch, transport: str, **kw: Any) -> Any:
+    stored: dict[str, Any] = {}
+    monkeypatch.setattr(hp, "set_leaves", lambda vm, leaves, *_a, **_k: stored.update(leaves))
+    hp.configure_sender(SimpleNamespace(primary=object(), sync_password="pw"), transport, **kw)
+    return stored
+
+
+def test_the_automatic_sender_turns_core_sync_on_and_the_manual_one_takes_it_off(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auto = _stored_by_configure_sender(hp, monkeypatch, "automatic")
+    manual = _stored_by_configure_sender(hp, monkeypatch, "manual")
+
+    assert auto["hasync"] == hp.hasync_section("pw") and auto[hp.SYNC]["varsynconchanges"] == "auto"
+    assert manual["hasync"] is None and manual[hp.SYNC]["varsynconchanges"] == "manual"
+
+
+def test_core_sync_can_be_forced_either_way_whatever_the_transport(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    both = _stored_by_configure_sender(hp, monkeypatch, "manual", core_sync=True)
+    none = _stored_by_configure_sender(hp, monkeypatch, "automatic", core_sync=False)
+
+    assert both["hasync"] == hp.hasync_section("pw")
+    assert none["hasync"] is None
+
+
+def test_in_flight_reports_core_sync_run_next_to_the_apply_signals(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: True)
+
+    assert hp.in_flight(_vm({"pgrep": _done("tick\nsync\n")})) == ["pending", "tick", "sync"]
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: False)
+    assert hp.in_flight(_vm({"pgrep": _done("")})) == []
+
+
+# --------------------------------------------------------------------------- #
+# Rows by identity: B's own values are compared per group / provider, never per list position
+# --------------------------------------------------------------------------- #
+
+
+def test_local_by_identity_keys_each_rows_local_leaves_by_alias_or_xml_whatever_its_position(hp: ModuleType) -> None:
+    groups = {
+        "config": [{"aliasname": "k2", "srcint": "wan", "action": "Deny_Both"}, {"aliasname": "k1", "srcint": "lan"}]
+    }
+    items = {"item": [{"xml": "bl_b", "username": "u", "password": "p", "feed": "f"}, {"xml": "bl_a", "username": ""}]}
+
+    assert hp.local_by_identity(groups) == {"k2": {"srcint": "wan"}, "k1": {"srcint": "lan"}}
+    assert hp.local_by_identity(items) == {"bl_b": {"username": "u", "password": "p"}, "bl_a": {"username": ""}}
+    assert hp.identities(groups) == ["k2", "k1"] and hp.identities(items) == ["bl_b", "bl_a"]
+
+
+def test_identities_survive_an_index_gap_an_empty_row_and_a_missing_section(hp: ModuleType) -> None:
+    gapped = {"config": {"0": {"aliasname": "a"}, "2": {"aliasname": "c"}, "3": ""}}
+
+    assert hp.identities(gapped) == ["a", "c"]
+    assert hp.identities(None) == [] and hp.local_by_identity(None) == {}
+
+
+def test_findings_are_the_recorded_strings_and_empty_before_an_apply(hp: ModuleType) -> None:
+    recorded = _vm({"cat": _done(json.dumps({"time": 1, "findings": ["DNSBL disabled: x"]}))})
+
+    assert hp.findings(recorded) == ["DNSBL disabled: x"]
+    assert hp.findings(_vm({"cat": _done("__ABSENT__")})) == []
+
+
+def test_pf_table_is_empty_while_the_table_does_not_exist_and_an_error_otherwise(hp: ModuleType) -> None:
+    members = _vm({"pfctl": _done("   198.51.100.4\n\n   198.51.100.5\n")})
+    missing = _vm({"pfctl": _done("", returncode=1, stderr="pfctl: Table does not exist.")})
+    broken = _vm({"pfctl": _done("", returncode=1, stderr="pfctl: no permission")})
+
+    assert hp.pf_table(members, "g") == ["198.51.100.4", "198.51.100.5"]
+    assert "pfB_g_v4" in members.calls[0]
+    assert hp.pf_table(missing, "g") == []
+    with pytest.raises(AssertionError, match="no permission"):
+        hp.pf_table(broken, "g")
+
+
+def test_policy_payload_is_built_from_the_projection_with_the_gate_leaf(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[str] = []
+
+    def php_json(_vm: object, php: str, **_k: Any) -> dict[str, Any]:
+        seen.append(php)
+        return {"installedpackages": {}}
+
+    monkeypatch.setattr(hp, "php_json", php_json)
+
+    assert hp.policy_payload(object()) == {"installedpackages": {}}
+    (php,) = seen
+    assert "pfb_sync_policy_projection($stored)" in php and "/syncscope'" in php and "'policy'" in php
+
+
+def test_send_payload_is_one_restore_config_section_call_with_the_ha_credentials(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def xmlrpc_call(_pair: object, **kw: Any) -> dict[str, Any]:
+        calls.append(kw)
+        return {"ok": True, "resp": True}
+
+    monkeypatch.setattr(hp, "xmlrpc_call", xmlrpc_call)
+    pair = SimpleNamespace(sync_password="pw")
+
+    assert hp.send_payload(pair, {"installedpackages": {"x": ""}}) == {"ok": True, "resp": True}
+
+    (call,) = calls
+    assert (call["user"], call["password"], call["method"]) == ("pfbhasync", "pw", "restore_config_section")
+    assert '{"installedpackages": {"x": ""}}' in call["params_php"]
+
+
+# --------------------------------------------------------------------------- #
+# The baseline: no stale sync, each node still owns its VIP, a failed apply cannot wedge the reset
+# --------------------------------------------------------------------------- #
+
+
+def test_assert_dnsbl_vip_names_what_a_stale_write_undid(hp: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = {"uniqids": ["pfbhaB3455"], "ref": "_vippfbhaB3455", "dnsbl": "on"}
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: dict(state))
+    hp.assert_dnsbl_vip(object(), "secondary", "pfbhaB3455")
+
+    for broken, message in (
+        ({"uniqids": []}, "not among its virtual IPs"),
+        ({"ref": "_vipother"}, "pfb_dnsvip4"),
+        ({"dnsbl": ""}, "pfb_dnsbl"),
+    ):
+        monkeypatch.setattr(hp, "php_json", lambda *_a, _b=broken, **_k: {**state, **_b})
+        with pytest.raises(AssertionError, match=message):
+            hp.assert_dnsbl_vip(object(), "secondary", "pfbhaB3455")
+
+
+def test_reset_pair_clears_the_pending_mark_before_it_waits_and_checks_each_vip(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log: list[str] = []
+
+    def node(name: str) -> SimpleNamespace:
+        def ssh(*command: str, **_k: Any) -> subprocess.CompletedProcess[str]:
+            log.append(f"{name}:{' '.join(command)}")
+            return _done()
+
+        return SimpleNamespace(ssh=ssh, name=name)
+
+    pair = SimpleNamespace(primary=node("A"), secondary=node("B"))
+    baseline = hp.Baseline("gw", {"primary": "dA", "secondary": "dB"}, "/mark")
+    monkeypatch.setattr(hp, "settle", lambda vm: log.append(f"{vm.name}:settle"))
+    monkeypatch.setattr(hp, "clear_sync_state", lambda vm: log.append(f"{vm.name}:clear"))
+    monkeypatch.setattr(hp, "clear_sshguard", lambda vm: None)
+    monkeypatch.setattr(hp, "in_flight", lambda vm: [])
+    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda vm, name, uniqid: log.append(f"{vm.name}:vip={uniqid}"))
+    monkeypatch.setattr(hp.h, "apply_filter_sync", lambda vm: None)
+    monkeypatch.setattr(hp.h, "pfb_config_digest", lambda vm: {"A": "dA", "B": "dB"}[vm.name])
+
+    hp.reset_pair(pair, baseline)
+
+    b_steps = [line for line in log if line.startswith("B:")]
+    assert (
+        b_steps.index("B:rm -f /mark")
+        < b_steps.index("B:settle")
+        < next(i for i, line in enumerate(b_steps) if "cp -p" in line)
+    )
+    assert log.index("B:vip=pfbhaB3455") < log.index("A:rm -f /mark"), "B first, as ha_pair restores"
+    assert "A:vip=pfbsmokevip" in log
+
+
+def test_reset_pair_fails_loudly_when_the_restore_does_not_take(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vm = SimpleNamespace(ssh=lambda *_a, **_k: _done(), name="B")
+    monkeypatch.setattr(hp, "settle", lambda _vm: None)
+    monkeypatch.setattr(hp, "clear_sync_state", lambda _vm: None)
+    monkeypatch.setattr(hp, "clear_sshguard", lambda _vm: None)
+    monkeypatch.setattr(hp.h, "apply_filter_sync", lambda _vm: None)
+    monkeypatch.setattr(hp.h, "pfb_config_digest", lambda _vm: "moved")
+
+    with pytest.raises(AssertionError, match="did not take"):
+        hp.reset_pair(
+            SimpleNamespace(primary=vm, secondary=vm), hp.Baseline("gw", {"primary": "d", "secondary": "d"}, "/mark")
+        )
+
+
+def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_vips_before_it_snapshots(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log: list[str] = []
+
+    def node(name: str) -> SimpleNamespace:
+        def ssh(*command: str, **_k: Any) -> subprocess.CompletedProcess[str]:
+            log.append(f"{name}:ssh {' '.join(command)}")
+            return _done()
+
+        return SimpleNamespace(ssh=ssh, name=name)
+
+    a, b = node("A"), node("B")
+    monkeypatch.setattr(hp, "set_leaves", lambda vm, leaves, *_a, **_k: log.append(f"{vm.name}:set {sorted(leaves)}"))
+    monkeypatch.setattr(hp, "settle", lambda vm: log.append(f"{vm.name}:settle"))
+    monkeypatch.setattr(hp, "gateway_name", lambda _vm: "gw")
+    monkeypatch.setattr(hp, "write_feed", lambda *_a: "")
+    monkeypatch.setattr(hp, "seed_node", lambda vm, tag, gw: log.append(f"{vm.name}:seed"))
+    monkeypatch.setattr(hp, "php_write", lambda vm, *_a, **_k: log.append(f"{vm.name}:vipwrite"))
+    monkeypatch.setattr(hp, "wait_filter_idle", lambda vm: None)
+    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda vm, name, uniqid: log.append(f"{vm.name}:vip={uniqid}"))
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "/mark")
+    for fn in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled", "reload"):
+        monkeypatch.setattr(hp.h, fn, lambda vm, *_a, **_k: log.append(f"{vm.name}:h"))
+    monkeypatch.setattr(hp.h, "pfb_config_digest", lambda vm: f"digest-{vm.name}")
+
+    baseline = hp.arrange_baseline(SimpleNamespace(primary=a, secondary=b))
+
+    assert log[:2] == ["A:set ['hasync']", "A:settle"], f"core sync must be off before anything else: {log[:4]}"
+    first_snapshot = next(i for i, line in enumerate(log) if "cp -p" in line)
+    assert log.index("A:vip=pfbsmokevip") < first_snapshot and log.index("B:vip=pfbhaB3455") < first_snapshot
+    assert baseline.digests == {"primary": "digest-A", "secondary": "digest-B"} and baseline.marker == "/mark"
+
+
+# --------------------------------------------------------------------------- #
+# Payload surgery and the credential list the R7/R8 greps lean on
+# --------------------------------------------------------------------------- #
+
+
+def test_inject_leaf_sets_a_leaf_in_a_map_and_in_a_list_row_and_creates_missing_maps(hp: ModuleType) -> None:
+    payload: dict[str, Any] = {"installedpackages": {"blacklist": {"item": [{"xml": "a"}, {"xml": "b"}]}}}
+
+    hp.inject_leaf(payload, "installedpackages/blacklist/item/1/password", "x")
+    hp.inject_leaf(payload, "installedpackages/ipsettings/config/0/inbound_interface", "lan")
+
+    assert payload["installedpackages"]["blacklist"]["item"] == [{"xml": "a"}, {"xml": "b", "password": "x"}]
+    assert payload["installedpackages"]["ipsettings"] == {"config": {"0": {"inbound_interface": "lan"}}}
+
+
+def test_inject_leaf_into_a_list_with_a_non_numeric_segment_is_an_error_not_a_silent_miss(hp: ModuleType) -> None:
+    with pytest.raises(ValueError):
+        hp.inject_leaf({"a": {"item": [{"xml": "a"}]}}, "a/item/nope/password", "x")
+
+
+def test_row_key_finds_a_row_by_identity_in_a_list_or_a_map_and_fails_loudly_otherwise(hp: ModuleType) -> None:
+    rows = [{"xml": "bl_gamma"}, "", {"xml": "bl_alpha"}]
+
+    assert hp.row_key(rows, "xml", "bl_alpha") == "2"
+    assert hp.row_key({"3": {"xml": "bl_alpha"}, "7": {"xml": "bl_beta"}}, "xml", "bl_beta") == "7"
+    with pytest.raises(AssertionError, match="no row with xml='bl_none'"):
+        hp.row_key(rows, "xml", "bl_none")
+
+
+def test_credential_values_cover_the_four_scalars_and_each_providers_username_and_password(hp: ModuleType) -> None:
+    values = hp.credential_values("A")
+
+    assert len(values) == len(set(values)) == 4 + 2 * len(hp.BLACKLIST_XML)
+    assert {"PFBHA-A-maxmind_account", "PFBHA-A-maxmind_key", "PFBHA-A-asn_token", "PFBHA-A-top1m_token"} <= set(values)
+    for xml in hp.BLACKLIST_XML:
+        assert f"PFBHA-A-{xml}_user" in values and f"PFBHA-A-{xml}_pass" in values
+    assert not set(values) & set(hp.credential_values("B")), "A's and B's credentials must never coincide"
