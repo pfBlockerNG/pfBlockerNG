@@ -36,9 +36,12 @@ no receive record for them; ``gen/pfb_quiet_hours`` is a policy leaf, so the win
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import socket
+import subprocess
 from collections.abc import Iterator
 from contextlib import ExitStack
 from typing import Any
@@ -62,6 +65,7 @@ from .ha_pair import (
     xmlrpc_call,
 )
 from .ha_policy import (
+    B_VIP_UNIQID,
     DNSBL,
     GEN,
     IP,
@@ -78,6 +82,7 @@ from .ha_policy import (
     assert_receive,
     assert_sent,
     configure_sender,
+    diff_leaves,
     emit,
     feed_path,
     group_local_values,
@@ -189,6 +194,13 @@ def expected_rule_findings(copied: list[dict[str, Any]], generated: list[dict[st
 # --------------------------------------------------------------------------- #
 
 
+def assert_dnsbl_vips(pair: HaPair, when: str) -> None:
+    """Each node still owns the DNSBL VIP object its policy refers to (B's has another uniqid than A's, #3441)."""
+    for name, vm, expected in (("A", pair.primary, h.SMOKE_VIP_UNIQID), ("B", pair.secondary, B_VIP_UNIQID)):
+        owned = php_json(vm, emit("array_column(config_get_path('virtualip/vip', array()), 'uniqid')"))
+        assert expected in owned, f"{when}: node {name} lost its DNSBL VIP {expected!r}; its virtual IPs are {owned!r}"
+
+
 @pytest.fixture(scope="module")
 def baseline(ha_pair: HaPair) -> Baseline:
     """Both nodes at one policy and different local values; A also holds the HA user, so B can send to A (R12).
@@ -198,6 +210,7 @@ def baseline(ha_pair: HaPair) -> Baseline:
     configure_secondary_users(ha_pair.primary, ha_pair.sync_password, ha_pair.nopriv_password)
     base = arrange_baseline(ha_pair)
     reset_pair(ha_pair, base)
+    assert_dnsbl_vips(ha_pair, "at the module baseline")
     return base
 
 
@@ -212,6 +225,7 @@ def undo(ha_pair: HaPair, baseline: Baseline) -> Iterator[ExitStack]:
             stack.close()
         finally:
             reset_pair(ha_pair, baseline)
+            assert_dnsbl_vips(ha_pair, "after the per-test reset")
             wait_carp_state(ha_pair.primary, "MASTER", node="primary")
             wait_carp_state(ha_pair.secondary, "BACKUP", node="secondary")
 
@@ -231,21 +245,74 @@ def json_php(value: Any) -> str:
     return f"json_decode({h._php_str(json.dumps(value))}, TRUE)"
 
 
-def webui(vm: SmokeVM) -> WebUI:
-    """A logged-in webConfigurator session on ``vm`` (the pair serves HTTPS with a self-signed certificate)."""
+@contextlib.contextmanager
+def guest_webui(vm: SmokeVM) -> Iterator[WebUI]:
+    """A logged-in webConfigurator session on ``vm``'s HTTPS port, through an SSH tunnel to the guest's own 443.
+
+    The harness forwards only the guest's port 80, which redirects to HTTPS once the pair serves HTTPS, so a page
+    request reaches the real webConfigurator (self-signed certificate) over a tunnel the test closes itself.
+    """
     action, password = admin_password_decision(os.environ)
     if action == "fail":
         pytest.fail(password)
-    client = WebUI(
-        host=vm.host,
-        port=vm.web_port,
-        username=os.environ.get("SMOKE_ADMIN_USER") or "admin",
-        password=password,
-        scheme="https",
-        verify=False,
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    tunnel = subprocess.Popen(
+        [
+            "ssh",
+            "-i",
+            vm.ssh_key_path,
+            "-p",
+            str(vm.ssh_port),
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "LogLevel=ERROR",
+            "-N",
+            "-L",
+            f"127.0.0.1:{port}:127.0.0.1:443",
+            vm.ssh_target,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
     )
-    client.login()
-    return client
+    try:
+
+        def listening() -> bool:
+            if tunnel.poll() is not None:
+                raise RuntimeError(
+                    f"ssh tunnel to the guest's HTTPS port exited: rc={tunnel.returncode} {tunnel.stderr and tunnel.stderr.read()!r}"
+                )
+            with socket.socket() as sock:
+                sock.settimeout(2.0)
+                return sock.connect_ex(("127.0.0.1", port)) == 0
+
+        h.wait_until(listening, timeout=30.0, interval=0.5)
+        client = WebUI(
+            host="127.0.0.1",
+            port=port,
+            username=os.environ.get("SMOKE_ADMIN_USER") or "admin",
+            password=password,
+            scheme="https",
+            verify=False,
+        )
+        client.login()
+        yield client
+    finally:
+        tunnel.terminate()
+        try:
+            tunnel.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            tunnel.kill()
 
 
 def save_sync_page(client: WebUI, fields: dict[str, str]) -> None:
@@ -334,10 +401,11 @@ def receive_from_a(pair: HaPair, base: Baseline, scope: str, alias: str, address
     show("B's receive record", sync.receive)
     last = assert_receive(sync, "changed")
     assert_applied_once(sync)
-    a_digest = node_state(pair.primary).digest
-    assert last["accepted_digest"] == a_digest == node_state(pair.secondary).digest, (
-        f"B did not end up holding A's policy: A {a_digest}, B accepted {last['accepted_digest']}, "
-        f"B stored {node_state(pair.secondary).digest}"
+    a_state, b_state = node_state(pair.primary), node_state(pair.secondary)
+    moved = diff_leaves(a_state.projection, b_state.projection)
+    assert last["accepted_digest"] == a_state.digest == b_state.digest, (
+        f"B did not end up holding A's policy: A {a_state.digest}, B accepted {last['accepted_digest']}, "
+        f"B stored {b_state.digest}; policy leaves that differ A -> B: {moved!r}; B's send record {send_state(pair.secondary)!r}"
     )
     return sync
 
@@ -508,7 +576,8 @@ def test_invalid_payload_is_refused_whole(ha_pair: HaPair, baseline: Baseline, u
     assert "apply" not in sync.receive, f"a refusal opened an apply record: {sync.receive.get('apply')!r}"
     assert apply_banners(b) == banners and in_flight(b) == [], "a refused receive started an update pass or tick on B"
 
-    page_a = render_sync_page(a, webui(a))
+    with guest_webui(a) as ui_a:
+        page_a = render_sync_page(a, ui_a)
     rows_a = sender_rows(_sender(page_a))
     assert len(rows_a) == 1, f"A's sender panel: expected one attempt row, got {rows_a!r}"
     target, when, shown_digest, result = rows_a[0]
@@ -519,7 +588,8 @@ def test_invalid_payload_is_refused_whole(ha_pair: HaPair, baseline: Baseline, u
     claimed = BANNED.search(_sender(page_a))
     assert claimed is None, f"A's sender panel claims {claimed and claimed.group(0)!r} for a call it cannot see through"
 
-    receiver = _receiver(render_sync_page(b, webui(b)))
+    with guest_webui(b) as ui_b:
+        receiver = _receiver(render_sync_page(b, ui_b))
     assert_row(receiver, "receive", f"{TIME} {DASH} refused: {re.escape(php_escape(reason))}")
     assert_row(receiver, "incoming", DASH)
     assert_row(receiver, "accepted", DASH)
@@ -706,8 +776,10 @@ def test_copied_pfb_rules_report_only_real_differences(
         return
 
     expected = expected_rule_findings(copied["owned"], own["owned"])
-    assert expected and all(attrs == ["interface"] for attrs in expected.values()), (
-        f"premise: the copies and B's own rules must differ in interface only, got {expected!r}"
+    # pfb_tracker() hashes the interface (alias + interface + its address and subnet) into the rule's tracker, so a
+    # different inbound interface moves both attributes; nothing else may differ.
+    assert expected and all(attrs in (["interface"], ["interface", "tracker"]) for attrs in expected.values()), (
+        f"premise: the copies and B's own rules must differ in interface (and the tracker derived from it), got {expected!r}"
     )
     assert findings == {"filter": expected}, (
         f"B's findings: expected exactly {{'filter': {expected!r}}}, got {findings!r}"
@@ -756,15 +828,16 @@ def test_receiver_never_echoes(ha_pair: HaPair, baseline: Baseline, undo: ExitSt
     """
     a, b = ha_pair.primary, ha_pair.secondary
     a_receive = receive_state(a)
-    sent_before = h.count_log_marker(a, h.PFB_LOG, SEND_MARKER)
+    sent_before = {n: h.count_log_marker(vm, h.PFB_LOG, SEND_MARKER) for n, vm in (("A", a), ("B", b))}
 
     receive_from_a(ha_pair, baseline, scope, f"pfbha_e{token()}", "198.51.100.51")
 
     assert send_state(b) == {}, f"B echoed: its send record exists after a received policy: {send_state(b)!r}"
     assert receive_state(a) == a_receive, f"A's receive record moved: {a_receive!r} -> {receive_state(a)!r}"
-    assert h.count_log_marker(b, h.PFB_LOG, SEND_MARKER) == 0, "B's log shows its sender ran"
-    assert h.count_log_marker(a, h.PFB_LOG, SEND_MARKER) > sent_before, (
-        "non-vacuity: A's own log never shows its sender running, so the marker proves nothing"
+    sent_after = {n: h.count_log_marker(vm, h.PFB_LOG, SEND_MARKER) for n, vm in (("A", a), ("B", b))}
+    assert sent_after["B"] == sent_before["B"], f"B's log shows its sender ran: {sent_before!r} -> {sent_after!r}"
+    assert sent_after["A"] > sent_before["A"], (
+        f"non-vacuity: A's own log never shows its sender running, so the marker proves nothing: {sent_before!r} -> {sent_after!r}"
     )
     stored = read_leaves(b, [GATE])[GATE]
     assert stored == scope, f"B's own stored scope: expected {scope!r}, got {stored!r}"
@@ -806,7 +879,8 @@ def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo
         "varsyncpassword-0": ha_pair.sync_password,
         "varsyncdestinenable-0": "on",
     }
-    save_sync_page(webui(b), fields)
+    with guest_webui(b) as ui_b:
+        save_sync_page(ui_b, fields)
     stored = read_leaves(
         b, [f"{SYNC}/varsynconchanges", GATE, f"{SYNC}/row/0/varsyncipaddress", f"{SYNC}/row/0/varsyncpassword"]
     )
@@ -1015,6 +1089,9 @@ def test_apply_window_defers_and_failure_keeps_pending(
     a, b = ha_pair.primary, ha_pair.secondary
     alias, address = f"pfbha_x3{token()}", "198.51.100.41"
     configure_sender(ha_pair, "manual", timeout=SYNC_TIMEOUT)
+    # A's HA sync copies its pfB rules and aliases to B after every filter reload of A: B would then enforce the group
+    # without its own apply having run. This row is about B's own apply, so A is a plain sender here.
+    set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
     window = ""
     if mode == "window":
         window = quiet_window(str(php_json(b, emit("date('H:i')"))))
@@ -1029,11 +1106,18 @@ def test_apply_window_defers_and_failure_keeps_pending(
             restored = b.ssh("/bin/chmod", original, RELOAD_SCRIPT)
             assert restored.returncode == 0, f"chmod {original} {RELOAD_SCRIPT} on B failed: {restored.stderr!r}"
 
+        def drop_pending_mark() -> None:
+            # The failed apply keeps its pending mark on purpose; the baseline reset settles first, so it must go here.
+            dropped = b.ssh("rm", "-f", baseline.marker)
+            assert dropped.returncode == 0, f"could not remove B's pending mark: {dropped.stderr!r}"
+
+        undo.callback(drop_pending_mark)
         undo.callback(restore_script)
         locked = b.ssh("/bin/chmod", "a-x", RELOAD_SCRIPT)
         assert locked.returncode == 0, f"chmod of {RELOAD_SCRIPT} on B failed: {locked.stderr!r}"
     add_group(ha_pair, baseline, alias, address, on=a, tag="A")
     banners = apply_banners(b)
+    mark = log_length(b)
 
     sync = sync_once(ha_pair, "manual", wait=False)
 
@@ -1049,6 +1133,10 @@ def test_apply_window_defers_and_failure_keeps_pending(
         expected = ("failed", "firewall reload not confirmed; pending changes kept")
     apply = state["apply"]
     show("B's receive record", state)
+    show(
+        "B's system log lines about the filter",
+        [x for x in log_since(b, mark) if re.search(r"filter|reload|XMLRPC", x, re.I)],
+    )
     assert (apply.get("outcome"), apply.get("reason")) == expected, (
         f"B's apply record: expected {expected!r}, got {apply!r}"
     )
@@ -1131,8 +1219,19 @@ def test_feed_header_contract_and_effective_findings(
             f"B's refusal of a raw header: expected {reason!r}, got {last.get('reason')!r}"
         )
         assert alias not in aliasnames(b), "B stored a group whose header A's apply had not normalised"
-        h.reload(a, "update", wait_unbound=False)  # the producer's own apply persists the normalisation
+        # The producer's own apply persists the normalisation. Its filter reload would make core sync by itself (the
+        # "filter sync" event), so the pass runs with the HA sync target taken off and put back for the explicit send.
+        hasync = read_leaves(a, ["hasync"])["hasync"]
+        set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
+        h.reload(a, "update", wait_unbound=False)
         settle(a)
+        wait_filter_idle(a)
+        set_leaves(
+            a, {"hasync": hasync}, "pfBlockerNG smoke: HA A core HA sync back", secret_values=[ha_pair.sync_password]
+        )
+    else:
+        # A plain sender: A's core HA sync (rules, NAT, aliases) is not part of this row.
+        set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
 
     sync = sync_once(ha_pair, transport)
     wait_filter_idle(b)
@@ -1144,7 +1243,9 @@ def test_feed_header_contract_and_effective_findings(
     )
     assert_sent(sync, transport, digest)
     assert_receive(sync, "changed", digest)
-    assert_applied_once(sync)
+    apply = sync.receive.get("apply") or {}
+    assert apply.get("outcome") == "applied", f"B's apply record: expected applied, got {apply!r}"
+    show("B's update passes for the receive", sync.passes)
     assert read_leaves(b, headers) == dict(zip(headers, [normalized, reserved], strict=True)), (
         "B did not store the normalised headers"
     )
