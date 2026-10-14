@@ -44,20 +44,23 @@ import socket
 import subprocess
 import tempfile
 import threading
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, BinaryIO, cast
+from typing import TYPE_CHECKING, Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from . import stub_responses
+
+if TYPE_CHECKING:
+    from .ha_pair import HaPair  # type-only: ha_pair imports helpers, which imports this module
 
 # --------------------------------------------------------------------------- #
 # Paths + constants
@@ -156,6 +159,16 @@ DEFAULT_CLIENT_SSH_PORT = _lane_port(int(os.environ.get("SMOKE_CLIENT_SSH_HOSTPO
 # port is now DETERMINISTIC per lane (lane 0 → 12340, lane 1 → 12350, …).
 # The pkill + lane stride on the leased box frees the port before boot.
 DEFAULT_LAN_SOCKET_PORT = _lane_port(int(os.environ.get("SMOKE_LAN_SOCKET_PORT", "12340")), _LANE)
+
+# HA pair (issue #3454): node B's host-forwards and the UDP sync link sit inside the lane's stride-10 block
+# (offsets 3..5; the other series use 0..3), so lanes stay disjoint. Never written to os.environ: only a
+# session that collects an ha_pair test hands the sync ports to boot_vm.sh (see _ha_sync_env).
+PEER_PORT_OFFSET = 5
+DEFAULT_PEER_SSH_PORT = DEFAULT_SSH_PORT + PEER_PORT_OFFSET
+DEFAULT_PEER_WEB_PORT = DEFAULT_WEB_PORT + PEER_PORT_OFFSET
+DEFAULT_PEER_LAN_SOCKET_PORT = DEFAULT_LAN_SOCKET_PORT + PEER_PORT_OFFSET
+DEFAULT_SYNC_PORT = DEFAULT_LAN_SOCKET_PORT + 3  # node A's UDP end of the sync link
+DEFAULT_PEER_SYNC_PORT = DEFAULT_LAN_SOCKET_PORT + 4  # node B's UDP end
 
 # Write the lane-resolved ports back so boot_vm.sh's hostfwd reads the same values SmokeVM uses.
 os.environ["SMOKE_SSH_HOSTPORT"] = str(DEFAULT_SSH_PORT)
@@ -460,6 +473,7 @@ def boot_and_probe(
     dns_port: int = DEFAULT_DNS_PORT,
     boot_timeout: int = DEFAULT_BOOT_TIMEOUT,
     diag_name: str = "pfsense",
+    extra_env: Mapping[str, str] | None = None,
 ) -> BootHandle:
     """Boot ``base_image`` and block until the guest is usable.
 
@@ -474,6 +488,9 @@ def boot_and_probe(
     On readiness, returns a :class:`BootHandle`. On timeout or a dead qemu it
     raises, after killing qemu. Designed to be callable outside pytest (a CE
     image sanity gate).
+
+    ``extra_env`` is layered over ``os.environ`` for ``boot_vm.sh`` only (per-boot knobs such as the HA
+    sync-link ports); it is never written back to this process's environment.
     """
     log_file = log_path.open("wb")
     # Expose a QMP control socket so a wedged, no-serial boot can be screendumped
@@ -486,7 +503,7 @@ def boot_and_probe(
         ["sh", str(BOOT_VM_SH), str(base_image)],
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env={**os.environ, "QMP_SOCK": qmp_sock},
+        env={**os.environ, **(extra_env or {}), "QMP_SOCK": qmp_sock},
     )
 
     vm = SmokeVM(
@@ -659,6 +676,73 @@ def lan_socket_port() -> Iterator[int]:
     yield DEFAULT_LAN_SOCKET_PORT
 
 
+# Node B differs from node A in one NIC: the two ends of the HA sync link must not share a MAC. The list
+# mirrors boot_vm.sh's DEFAULT_CE_MAC (net0..net7); tests/test_issue3454_ha_pair.py pins the two together.
+_CE_DEFAULT_MACS = (
+    "BC:24:11:37:9C:AC",
+    "BC:24:11:80:42:35",
+    "BC:24:11:D6:90:DD",
+    "BC:24:11:FB:41:8A",
+    "BC:24:11:2D:95:0A",
+    "BC:24:11:36:D3:34",
+    "BC:24:11:02:0B:68",
+    "BC:24:11:46:D1:DE",
+)
+PEER_SYNC_MAC = "02:00:00:34:54:02"  # locally administered; replaces net3's MAC on node B
+
+
+def _peer_vm_mac() -> str:
+    """Node B's newline-separated NIC MAC list: node A's list with only net3 (the sync NIC) replaced."""
+    macs = (os.environ.get("SMOKE_VM_MAC") or "\n".join(_CE_DEFAULT_MACS)).splitlines()
+    if len(macs) < 4:
+        raise RuntimeError(f"SMOKE_VM_MAC must list at least 4 NIC MACs (net3 is the HA sync NIC); got {len(macs)}")
+    macs[3] = PEER_SYNC_MAC
+    return "\n".join(macs)
+
+
+def _pfsense_image(work: Path) -> tuple[Path, str]:
+    """Resolve ``(base qcow2, ssh key path)`` for a pfSense boot; skip cleanly when a prerequisite is absent.
+
+    SMOKE_IMAGE_DIR supplies an ALREADY-PULLED image dir (one .qcow2) so the in-fixture ``oras pull`` is
+    skipped — that is what makes the ADR §2 hermetic sequence work: the workflow pulls the image from GHCR
+    FIRST, then BLOCKS the runner's egress, THEN runs pytest, so the fixture must not need the network.
+    Without it, SMOKE_IMAGE_REF is pulled into ``work`` (the local-dev path, before any egress block; one
+    pull per call).
+
+    A developer who accidentally runs ``pytest tests/smoke`` without KVM/secrets gets a clean skip, not an
+    error.
+    """
+    image_dir = os.environ.get("SMOKE_IMAGE_DIR")
+    image_ref = os.environ.get("SMOKE_IMAGE_REF")
+    if not image_dir and not image_ref:
+        pytest.skip("neither SMOKE_IMAGE_DIR nor SMOKE_IMAGE_REF set — no pfSense image")
+
+    ssh_key_path = os.environ.get("SMOKE_SSH_KEY")
+    if not ssh_key_path or not Path(ssh_key_path).is_file():
+        pytest.skip("SMOKE_SSH_KEY not set or not a file — no guest SSH key")
+    ssh_key_path = cast(str, ssh_key_path)
+
+    if not Path("/dev/kvm").exists():
+        pytest.skip("/dev/kvm absent — KVM acceleration required for the smoke VM")
+
+    # `oras` is only needed when we have to pull; a pre-pulled SMOKE_IMAGE_DIR
+    # run (egress blocked) does not require it.
+    required: tuple[str, ...] = ("qemu-system-x86_64", "qemu-img", "ssh")
+    if not image_dir:
+        required = ("oras", *required)
+    for binary in required:
+        if shutil.which(binary) is None:
+            pytest.skip(f"required binary `{binary}` not on PATH")
+
+    if image_dir:
+        qcows = sorted(Path(image_dir).glob("*.qcow2"))
+        if len(qcows) != 1:
+            raise RuntimeError(f"SMOKE_IMAGE_DIR must hold exactly one .qcow2, found {len(qcows)}: {qcows}")
+        return qcows[0], ssh_key_path
+    assert image_ref is not None
+    return oras_pull_image(image_ref, work / "image"), ssh_key_path
+
+
 # --------------------------------------------------------------------------- #
 # Session-scoped VM fixture
 # --------------------------------------------------------------------------- #
@@ -689,49 +773,15 @@ def smoke_vm(
     accidentally runs ``pytest tests/smoke`` without KVM/secrets gets a clean
     skip rather than an error.
     """
-    # SMOKE_IMAGE_DIR lets the caller supply an ALREADY-PULLED image dir (one
-    # .qcow2) so the in-fixture `oras pull` is skipped. This is what makes the
-    # ADR §2 hermetic sequence work: the workflow pulls the image from GHCR
-    # FIRST, then BLOCKS the runner's egress, THEN runs pytest — so the fixture
-    # must not need the network. Without it, fall back to pulling by
-    # SMOKE_IMAGE_REF (the local-dev path, before any egress block).
-    image_dir = os.environ.get("SMOKE_IMAGE_DIR")
-    image_ref = os.environ.get("SMOKE_IMAGE_REF")
-    if not image_dir and not image_ref:
-        pytest.skip("neither SMOKE_IMAGE_DIR nor SMOKE_IMAGE_REF set — no pfSense image")
-
-    ssh_key_path = os.environ.get("SMOKE_SSH_KEY")
-    if not ssh_key_path or not Path(ssh_key_path).is_file():
-        pytest.skip("SMOKE_SSH_KEY not set or not a file — no guest SSH key")
-    ssh_key_path = cast(str, ssh_key_path)
-
-    if not Path("/dev/kvm").exists():
-        pytest.skip("/dev/kvm absent — KVM acceleration required for the smoke VM")
-
-    # `oras` is only needed when we have to pull; a pre-pulled SMOKE_IMAGE_DIR
-    # run (egress blocked) does not require it.
-    required: tuple[str, ...] = ("qemu-system-x86_64", "qemu-img", "ssh")
-    if not image_dir:
-        required = ("oras", *required)
-    for binary in required:
-        if shutil.which(binary) is None:
-            pytest.skip(f"required binary `{binary}` not on PATH")
-
     work = tmp_path_factory.mktemp("smoke-vm")
-    if image_dir:
-        qcows = sorted(Path(image_dir).glob("*.qcow2"))
-        if len(qcows) != 1:
-            raise RuntimeError(f"SMOKE_IMAGE_DIR must hold exactly one .qcow2, found {len(qcows)}: {qcows}")
-        base_image = qcows[0]
-    else:
-        assert image_ref is not None
-        base_image = oras_pull_image(image_ref, work / "image")
+    base_image, ssh_key_path = _pfsense_image(work)
 
     handle = boot_and_probe(
         base_image,
         ssh_key_path,
         log_path=work / "vm.log",
         boot_timeout=DEFAULT_BOOT_TIMEOUT,
+        extra_env=_ha_sync_env(request.session.items),
     )
     # BBcan177: run the VM at the strict PHP error level Netgate uses on its betas,
     # so smoke + UI tests surface every latent notice / warning / deprecated. One-time,
@@ -750,6 +800,65 @@ def smoke_vm(
         # The overlay is mktemp'd inside boot_vm.sh and removed on its clean
         # exit (trap on EXIT/INT/TERM); terminating qemu fires it. The pulled
         # image + logs live under tmp_path_factory, which pytest reaps.
+
+
+@pytest.fixture(scope="session")
+def peer_vm(
+    smoke_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
+) -> Iterator[SmokeVM]:
+    """Node B of the HA pair: a second pfSense guest from the SAME image, joined to ``smoke_vm`` on net3.
+
+    Depends on ``smoke_vm`` (node A, the HA primary) so A is up first and torn down last. Its own SSH/web/LAN
+    host-forwards and sync-link UDP ports sit inside the lane's port block, and its net3 MAC differs from A's
+    (``_peer_vm_mac``). Refuses to boot when A came up without the sync link: that happens only when no
+    collected test requests ``ha_pair`` (``_ha_sync_env``).
+    """
+    if not _ha_sync_env(request.session.items):
+        raise RuntimeError("peer_vm needs the HA sync link, but smoke_vm booted without it (no collected ha_pair test)")
+    work = tmp_path_factory.mktemp("peer-vm")
+    base_image, ssh_key_path = _pfsense_image(work)
+
+    handle = boot_and_probe(
+        base_image,
+        ssh_key_path,
+        log_path=work / "peer-vm.log",
+        ssh_port=DEFAULT_PEER_SSH_PORT,
+        web_port=DEFAULT_PEER_WEB_PORT,
+        diag_name="pfsense-peer",
+        extra_env={
+            "SMOKE_SSH_HOSTPORT": str(DEFAULT_PEER_SSH_PORT),
+            "SMOKE_WEB_HOSTPORT": str(DEFAULT_PEER_WEB_PORT),
+            "SMOKE_LAN_SOCKET_PORT": str(DEFAULT_PEER_LAN_SOCKET_PORT),
+            "SMOKE_SYNC_PORT": str(DEFAULT_PEER_SYNC_PORT),
+            "SMOKE_SYNC_PEER_PORT": str(DEFAULT_SYNC_PORT),
+            "SMOKE_VM_MAC": _peer_vm_mac(),
+        },
+    )
+    try:
+        yield handle.vm
+    finally:
+        _kill(handle.process, handle.qmp_sock)
+        with contextlib.suppress(Exception):
+            handle.log_file.close()
+
+
+@pytest.fixture(scope="module")
+def ha_pair(smoke_vm: SmokeVM, peer_vm: SmokeVM) -> Iterator[HaPair]:
+    """Two real pfSense guests configured as an HA pair (sync NIC, CARP VIP, XMLRPC users, hasync), then restored.
+
+    MODULE-scoped: the pair is configured on top of the session guests and put back to its pre-pair config
+    when the module ends, so later one-node modules see the image they always saw. Both nodes get the branch
+    .pkg first, so the config snapshot the restore returns to already includes it.
+    """
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    from . import ha_pair as ha_pair_mod  # local import: ha_pair imports helpers, which imports this module
+    from . import helpers
+
+    helpers.deploy(smoke_vm)
+    helpers.deploy(peer_vm)
+    with ha_pair_mod.ha_pair_session(smoke_vm, peer_vm) as pair:
+        yield pair
 
 
 # --------------------------------------------------------------------------- #
@@ -1659,6 +1768,21 @@ def _needs_two_vm(fixturenames: list[str] | set[str]) -> bool:
     return bool({"client_vm", "lan_interface"} & set(fixturenames))
 
 
+def _needs_ha_pair(fixturenames: list[str] | set[str]) -> bool:
+    """Return True iff this test runs against the two-node HA pair (``ha_pair`` is in its fixture closure)."""
+    return "ha_pair" in fixturenames
+
+
+def _ha_sync_env(items: Iterable[pytest.Item]) -> dict[str, str]:
+    """Boot env that makes node A's net3 the HA sync UDP link; empty unless a collected test needs ``ha_pair``.
+
+    One-node sessions therefore boot with the byte-identical env (and the isolated net3) they always had.
+    """
+    if not any(_needs_ha_pair(cast(Any, item).fixturenames) for item in items):
+        return {}
+    return {"SMOKE_SYNC_PORT": str(DEFAULT_SYNC_PORT), "SMOKE_SYNC_PEER_PORT": str(DEFAULT_PEER_SYNC_PORT)}
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Auto-apply the ``two_vm`` marker from the fixture closure — never hand-apply it.
 
@@ -1720,11 +1844,20 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
     # dump_diagnostics wants the pfSense SmokeVM, so unwrap to the first element.
     if isinstance(vm, tuple):
         vm = vm[0] if vm else None
+    from . import helpers  # local import: helpers imports from conftest (avoid cycle)
+    from .ha_pair import HaPair  # same cycle: ha_pair imports helpers
+
+    # An ha_pair test requests only the pair, so its primary node is the VM to dump.
+    pair = request.node.funcargs.get("ha_pair")
+    if vm is None and isinstance(pair, HaPair):
+        vm = pair.primary
     if vm is None:
         return
-    from . import helpers  # local import: helpers imports from conftest (avoid cycle)
 
     helpers.dump_diagnostics(vm)
+    if isinstance(pair, HaPair):
+        print("========== HA NODE secondary diagnostics ==========")
+        helpers.dump_diagnostics(pair.secondary)
 
 
 @pytest.fixture(autouse=True)
