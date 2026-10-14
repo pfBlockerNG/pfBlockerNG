@@ -100,3 +100,23 @@ smoke:tests.smoke.test_ha_topology::test_ha_privileged_user_authenticates_over_h
 smoke:tests.smoke.test_ha_topology::test_management_stays_reachable_while_carp_role_changes  # HA pair is CE-only; Plus legs are out of scope (#3454)
 smoke:tests.smoke.test_ha_topology::test_wrong_password_and_unprivileged_user_are_rejected_without_mutation  # HA pair is CE-only; Plus legs are out of scope (#3454)
 
+# smoke -- the HA authority module rides the same CE-only pair (issue #3455).
+smoke:tests.smoke.test_ha_policy_authority::test_apply_window_defers_and_failure_keeps_pending[reload-failure]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_apply_window_defers_and_failure_keeps_pending[window]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_carp_demotion_leaves_b_silent  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_copied_pfb_rules_report_only_real_differences[different]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_copied_pfb_rules_report_only_real_differences[equal]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_feed_header_contract_and_effective_findings[automatic]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_feed_header_contract_and_effective_findings[manual]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_invalid_payload_is_refused_whole  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_malformed_and_unauthenticated_requests_change_nothing  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_one_unreachable_target_does_not_block_the_other  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_receiver_never_echoes[all]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_receiver_never_echoes[lists]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_receiver_never_echoes[policy]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_sync_page_save_flips_the_role[all]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_sync_page_save_flips_the_role[lists]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_sync_page_save_flips_the_role[policy]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_unreachable_peer_is_reported_truthfully[automatic]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+smoke:tests.smoke.test_ha_policy_authority::test_unreachable_peer_is_reported_truthfully[manual]  # HA pair is CE-only; Plus legs are out of scope (#3454)
+
