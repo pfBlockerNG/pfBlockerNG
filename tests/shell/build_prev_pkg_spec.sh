@@ -8,9 +8,9 @@
 # fetch-by-SHA path execute for real.
 #
 # The script copy lives in a fixture repo's scripts/ dir, so its repo root (where it runs
-# git and finds build-leg.sh) is the fixture, never this checkout. PFB_PREV_PKG_REF is the
-# test-only seam that points the pin at a fixture commit (the real pin is a commit this
-# fixture repo cannot contain).
+# git and finds build-leg.sh) is the fixture, never this checkout. The real pin is a commit
+# this fixture repo cannot contain, so install_scripts writes PIN_REF into each fixture
+# copy's `_PIN=` line; the shipped script has no override seam.
 
 Describe 'build-prev-pkg.sh (issue #3455)'
   SCRIPT="${PFB_ROOT}/scripts/build-prev-pkg.sh"
@@ -43,15 +43,16 @@ Describe 'build-prev-pkg.sh (issue #3455)'
     git_fixture -C "$FAKE_ROOT" -c user.name=t -c user.email=t@example.com \
       commit --quiet -m head >/dev/null 2>&1
 
+    PIN_REF="$P1"
     install_scripts "$FAKE_ROOT"
-    PFB_PREV_PKG_REF="$P1"
-    export PFB_PREV_PKG_REF
   }
 
   # The real script and lib, plus a build-leg.sh stub, inside a fixture repo's scripts/.
   install_scripts() {
     mkdir -p "$1/scripts/lib"
-    cp "$SCRIPT" "$1/scripts/build-prev-pkg.sh"
+    # The pin is not overridable in production, so each fixture copy carries PIN_REF as its pin.
+    sed "s/^_PIN=.*/_PIN=${PIN_REF}/" "$SCRIPT" > "$1/scripts/build-prev-pkg.sh"
+    grep -qx "_PIN=${PIN_REF}" "$1/scripts/build-prev-pkg.sh" || return 1
     cp "${PFB_ROOT}/scripts/lib/git-env-scrub.sh" "$1/scripts/lib/"
     cat > "$1/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh
@@ -98,11 +99,33 @@ STUBEOF
       esac
       [ "${#_got}" -eq 40 ] && printf 'ok\n'
     }
-    unset_ref() { unset PFB_PREV_PKG_REF; }
-    BeforeCall 'unset_ref'
     When call check_pin
     The status should be success
     The output should equal 'ok'
+  End
+
+  # The pin is production code, reachable from any environment: no variable may move it.
+  It 'ignores PFB_PREV_PKG_REF: a garbage, empty or foreign value cannot move the pin'
+    check_ignored() {
+      _pin="$(sed -n 's/^_PIN=//p' "$SCRIPT")"
+      for _bad in garbage '' 0000000000000000000000000000000000000000 "$P1"; do
+        _got="$(PFB_PREV_PKG_REF="$_bad" sh "$SCRIPT" --print-ref)" || return 1
+        [ "$_got" = "$_pin" ] || { printf 'override [%s] moved the pin to [%s]\n' "$_bad" "$_got"; return 1; }
+      done
+      printf 'ok\n'
+    }
+    When call check_ignored
+    The status should be success
+    The output should equal 'ok'
+  End
+
+  It 'builds the pinned commit even when PFB_PREV_PKG_REF holds garbage'
+    PFB_PREV_PKG_REF=garbage
+    export PFB_PREV_PKG_REF
+    When call run_prev
+    The status should be success
+    The output should be present
+    The stderr should include "build-prev-pkg: ref=${P1}"
   End
 
   # ── building from P's tree ────────────────────────────────────────────────── #
@@ -204,8 +227,7 @@ STUBEOF
     git_fixture -C "$FAKE_ROOT" add -A >/dev/null 2>&1
     git_fixture -C "$FAKE_ROOT" -c user.name=t -c user.email=t@example.com \
       commit --quiet -m side >/dev/null 2>&1
-    PFB_PREV_PKG_REF="$(git_fixture -C "$FAKE_ROOT" rev-parse HEAD)"
-    export PFB_PREV_PKG_REF
+    PIN_REF="$(git_fixture -C "$FAKE_ROOT" rev-parse HEAD)"
     git_fixture -C "$FAKE_ROOT" checkout --quiet "$_main" >/dev/null 2>&1
     git_fixture init --quiet --bare "$REMOTE" >/dev/null 2>&1
     git_fixture -C "$REMOTE" config uploadpack.allowAnySHA1InWant true
