@@ -50,6 +50,13 @@ exit 0
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh"
 
+    # The previous-devel package build (issue #3455) is not what this spec covers.
+    cat > "${FAKE_ROOT}/scripts/build-prev-pkg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake-prev.pkg
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-prev-pkg.sh"
+
     cat > "${WORK}/bin/oras" <<'STUBEOF'
 #!/bin/sh
 case "$*" in

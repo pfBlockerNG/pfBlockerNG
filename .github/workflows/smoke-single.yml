@@ -701,6 +701,34 @@ jobs:
             --annotate   "commit=${SOURCE_SHA}")"
           echo "SMOKE_NIGHTLY_PKG=$PKG" >> "$GITHUB_ENV"
 
+      # Issue #3455: the two-node HA smoke rows that cover legacy sync install a package built
+      # from the last devel commit BEFORE the per-field sync series on one node
+      # (SMOKE_PREV_PKG). scripts/build-prev-pkg.sh owns that pinned commit and fetches it by
+      # SHA (this checkout is shallow); it builds for the channel the branch .pkg above was
+      # built for, off the SAME ports ref the branch build used, like the nightly step above.
+      # Only the `smoke` marker collects the HA rows. A failed build fails this step, so the
+      # job stops before pytest instead of failing the rows one by one.
+      - name: Build the previous-devel .pkg (HA mixed-version smoke)
+        if: ${{ (inputs.pytest_marker || 'smoke') == 'smoke' }}
+        env:
+          BRANCH_PKG:   ${{ steps.paths.outputs.pkg }}
+          PORTS_REPO:   ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
+          PORTS_REF:    ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
+          PHP_VERSION:  ${{ inputs.php_version }}
+          PY_FLAVOR:    ${{ inputs.py_flavor }}
+          ABI:          ${{ inputs.abi }}
+        run: |
+          set -eu
+          PKG="$(sh scripts/build-prev-pkg.sh \
+            --like "$BRANCH_PKG" \
+            --ports-repo "$PORTS_REPO" \
+            --ports-ref  "$PORTS_REF" \
+            --ports-dir  "$RUNNER_TEMP/prev-pkg-ports" \
+            --abi        "$ABI" \
+            --php        "$PHP_VERSION" \
+            --py-flavor  "$PY_FLAVOR")"
+          echo "SMOKE_PREV_PKG=$PKG" >> "$GITHUB_ENV"
+
       # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
       # uses the public pin (the `mac` input + the CE source-VM uuid). A non-CE
       # (Plus) image is LICENSE/NDI-keyed to its OWN source-VM identity, which is
@@ -785,6 +813,10 @@ jobs:
           # The builder-produced -nightly .pkg (set above for the `repo` marker; the
           # nightly cases SKIP when unset). Propagated via $GITHUB_ENV from that step.
           SMOKE_NIGHTLY_PKG: ${{ env.SMOKE_NIGHTLY_PKG }}
+          # The previous-devel .pkg the HA mixed-version rows install (issue #3455), built by
+          # the step above for the `smoke` marker. The prev_pkg fixture fails, never skips,
+          # when it is missing next to a built SMOKE_PKG.
+          SMOKE_PREV_PKG: ${{ env.SMOKE_PREV_PKG }}
           # Live nightly Pages URL for test_install_from_live_nightly_url (ADR-18 §7).
           # Unset (blank) -> the test SKIPS; set to .../nightly to run it post-deploy.
           SMOKE_NIGHTLY_LIVE_URL: ${{ inputs.smoke_nightly_live_url }}

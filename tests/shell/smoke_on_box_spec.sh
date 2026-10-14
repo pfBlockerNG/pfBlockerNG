@@ -35,6 +35,15 @@ Describe 'smoke-on-box.sh (issue #2223)'
 exit "${SPARSE_EXIT:-0}"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/sparse-clone-ports.sh"
+    # build-prev-pkg.sh builds the previous-devel package (issue #3455); its own spec
+    # covers it. Here it is a stub that records argv and prints a fake package path.
+    cat > "${FAKE_ROOT}/scripts/build-prev-pkg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "${PREV_PKG_ARGV_LOG:-/dev/null}"
+[ "${PREV_PKG_EXIT:-0}" -eq 0 ] || { printf 'build-prev-pkg: build failed\n' >&2; exit "$PREV_PKG_EXIT"; }
+printf '%s\n' "${PREV_PKG_OUT:-/tmp/fake-prev.pkg}"
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-prev-pkg.sh"
     mkdir -p "${WORK}/bin"
     cat > "${WORK}/bin/oras" <<'STUBEOF'
 #!/bin/sh
@@ -594,6 +603,70 @@ STUBEOF
     The status should equal 2
     The stderr should include 'unsafe venv path'
     The contents of file "${FAKE_ROOT}/.venv" should equal 'sentinel'
+  End
+
+  # ── the previous-devel package (issue #3455) ─────────────────────────────── #
+  # The HA mixed-version rows install it on node B; the harness reads it from
+  # SMOKE_PREV_PKG, so a run that cannot build it must stop here, not start pytest.
+
+  prev_pkg_leg() {
+    printf '0\n' > "${WORK}/port-floor"
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake-branch.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'smoke_pkg=%s\nsmoke_prev_pkg=%s\n' "$SMOKE_PKG" "${SMOKE_PREV_PKG-<unset>}"
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
+        "${FAKE_ROOT}/scripts/run-smoke.sh"
+    mkdir -p "${FAKE_ROOT}/.venv/bin"
+    printf '#!/bin/sh\nexit 0\n' > "${FAKE_ROOT}/.venv/bin/python"
+    chmod +x "${FAKE_ROOT}/.venv/bin/python"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    SMOKE_GHCR_TOKEN=test-token
+    SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-ce@sha256:manifest
+    PREV_PKG_ARGV_LOG="${WORK}/prev-pkg-argv"
+    PREV_PKG_OUT="${WORK}/prev dir/prev.pkg"
+    export SMOKE_SSH_KEY SMOKE_GHCR_TOKEN SMOKE_PFSENSE_REF PREV_PKG_ARGV_LOG PREV_PKG_OUT
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+  }
+
+  It 'builds the previous-devel package for the branch package and runs smoke with SMOKE_PREV_PKG set'
+    prev_pkg_leg
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The stdout should include 'smoke_pkg=/tmp/fake-branch.pkg'
+    The stdout should include "smoke_prev_pkg=${WORK}/prev dir/prev.pkg"
+    # The previous package follows the branch package's channel and this leg's
+    # runtime tuple and ports tree, so only the source commit differs.
+    The contents of file "$PREV_PKG_ARGV_LOG" should include '--like /tmp/fake-branch.pkg'
+    The contents of file "$PREV_PKG_ARGV_LOG" should include "--ports-dir ${PFB_ONBOX_PORTS_DIR}"
+    The contents of file "$PREV_PKG_ARGV_LOG" should include '--abi FreeBSD:15:amd64'
+    The contents of file "$PREV_PKG_ARGV_LOG" should include '--php 8.3'
+    The contents of file "$PREV_PKG_ARGV_LOG" should include '--py-flavor py311'
+  End
+
+  It 'stops before the smoke run, naming build-prev-pkg, when the previous package cannot be built'
+    prev_pkg_leg
+    PREV_PKG_EXIT=3
+    export PREV_PKG_EXIT
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should not equal 0
+    The stdout should not include 'smoke_pkg='
+    The stderr should include 'build-prev-pkg failed'
+    The stderr should not include 'running smoke'
   End
 
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #

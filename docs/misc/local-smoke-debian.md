@@ -223,6 +223,18 @@ pfSense guest (2 GiB) from the same image, joined to the first on net3 by a loop
 lane ports +3..+5 (lane 0: peer SSH 2227, web 8085, LAN socket 12345, sync UDP 12343/12344) and runs
 CE legs only, e.g. `scripts/local-smoke.sh --no-two-vm --filter test_ha_topology`.
 
+Rows that cover a mixed-version pair (a node upgraded from the previous build, or one still running it)
+install a second package, the **previous-devel** `.pkg`, on one node. `smoke-on-box.sh` builds it right after
+the branch package and exports it as `SMOKE_PREV_PKG`; `smoke-single.yml` does the same in CI for the `smoke`
+marker. It is built from the last devel commit before the per-field XMLRPC sync series (#3455), where the
+sender still keys off `syncinterfaces`. That commit is pinned in one place, `scripts/build-prev-pkg.sh`;
+`sh scripts/build-prev-pkg.sh --print-ref` prints it. It is fetched by SHA when a shallow checkout or a box
+clone lacks it.
+The same builder, channel (read from the branch package's name), runtime tuple and ports tree build it, so
+only the source differs, and the log carries `build-prev-pkg: ref=<commit> pkg=<file> version=<v>`. A failed
+build stops the run before pytest. Fixture `prev_pkg` fails, never skips, when a leg has `SMOKE_PKG` but no
+`SMOKE_PREV_PKG`.
+
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
 Portable Linux builder reproduces `make package` for this `NO_BUILD` port. For CE 2.8
