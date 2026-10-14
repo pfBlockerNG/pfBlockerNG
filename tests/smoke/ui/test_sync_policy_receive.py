@@ -47,7 +47,6 @@ from __future__ import annotations
 import copy
 import json
 import re
-import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -122,7 +121,6 @@ class _Box:
     port: int
     user: str
     password: str = field(repr=False)
-    marker: str = ""
     feed: str = ""
 
 
@@ -225,19 +223,17 @@ def _assert_record(state: dict[str, Any], sent: dict[str, Any], outcome: str) ->
 
 
 def _in_flight(box: _Box) -> list[str]:
-    """The apply's signals still set: ``pending`` (marker present) and ``tick`` (a tick process alive)."""
+    """The apply's signals still set: ``pending`` (``pfb_pending_changes()``) and ``tick`` (a tick process alive)."""
+    # The marker persists after an apply (#3481), so only the package's own check says whether it is pending.
+    signals = ["pending"] if _guest_json(box.vm, _emit("pfb_pending_changes()")) else []
     # Bracketed `[.]` keeps pgrep -f from matching this probe's own shell command line.
-    probe = (
-        f"if /bin/test -e {shlex.quote(box.marker)}; then echo pending; fi; "
-        "if /bin/pgrep -f 'pfblockerng[.]php tick' >/dev/null 2>&1; then echo tick; fi"
-    )
-    result = box.vm.ssh(probe)
+    result = box.vm.ssh("if /bin/pgrep -f 'pfblockerng[.]php tick' >/dev/null 2>&1; then echo tick; fi")
     assert result.returncode == 0, f"in-flight probe failed: rc={result.returncode} stderr={result.stderr!r}"
-    return result.stdout.split()
+    return signals + result.stdout.split()
 
 
 def _settle(box: _Box) -> None:
-    """Block until the receive-triggered apply is over: marker cleared and no tick process left."""
+    """Block until the receive-triggered apply is over: nothing pending and no tick process left."""
     seen = ["<never probed>"]
 
     def over() -> bool:
@@ -312,7 +308,7 @@ def box(deployed_vm: helpers.SmokeVM, admin_credentials: tuple[str, str], webgui
         assert cleared.returncode == 0, f"could not clear the pending marker {marker}: {cleared.stderr!r}"
 
         user, password = admin_credentials
-        arranged = _Box(vm, webgui_protocol, port, user, password, marker, feed)
+        arranged = _Box(vm, webgui_protocol, port, user, password, feed)
         assert _in_flight(arranged) == [], "before-state: an apply is already pending or a tick is running"
         assert _table_members(vm) == [], f"before-state: table {TABLE} must not exist yet"
         yield arranged

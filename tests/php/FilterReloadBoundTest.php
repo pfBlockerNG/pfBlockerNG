@@ -357,10 +357,21 @@ final class FilterReloadBoundTest extends TestCase
 	{
 		$stripped = php_strip_whitespace(self::APPLY);
 		$scope = $this->syncScope($stripped);
-		$clear = strpos($scope, 'pfb_clear_pending_changes();');
-		$this->assertNotFalse($clear, 'the pass still has a closing pending-marker clear');
+		$clear = strpos($scope, 'pfb_settle_pending_changes(');
+		$this->assertNotFalse($clear, 'the pass still has a closing pending-marker settle');
 		$window = substr($scope, max(0, $clear - 250), 350);
 		$this->assertStringContainsString('$pfb_filter_reload_unknown', $window,
 			'the closing clear must be gated so a launch-failure pending mark survives the rest of the pass');
+	}
+
+	// #3481: the pass applies the version it read; that is only true if every mark it read is in the config it reloads.
+	public function testThePassReadsThePendingVersionBeforeItReloadsTheConfig(): void
+	{
+		$scope = $this->syncScope(php_strip_whitespace(self::APPLY));
+		$read = strpos($scope, 'pfb_pending_changes_token()');
+		$reload = strpos($scope, 'pfb_global()');
+		$this->assertNotFalse($read, 'before-state check: the pass reads the pending version');
+		$this->assertNotFalse($reload, 'before-state check: the pass reloads its config through pfb_global()');
+		$this->assertLessThan($reload, $read, 'the pending version must be read before the config is reloaded');
 	}
 }

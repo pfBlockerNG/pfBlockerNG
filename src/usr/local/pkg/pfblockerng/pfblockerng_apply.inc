@@ -846,8 +846,9 @@ function pfb_filter_reload_exec(): int {
 function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool {
 	global $g, $pfb, $pfbarr;
 	$deferred_by = NULL;
+	$pfb_pending_seen = pfb_pending_changes_token();	// a mark taken after this survives the pass; config is reloaded later, in pfb_global()
 	// A received policy's apply record moved after this point is left for the next pass.
-	// shortcut: second resolution, a receive in the pass's first second still settles; the root fix is #3481.
+	// shortcut: second resolution, a receive whose record opens in the pass's first second has it settled here, while its surviving pending mark re-applies it next pass.
 	$pfb_pass_started = time();
 	pfb_global();
 
@@ -5347,9 +5348,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// the dispatched process exiting (its pidfile), not on this marker, but keeping the
 	// marker last preserves a clean end-of-run boundary in the log.
 	// A real Update pass (NOT a settings-save sync, $pfb['save']) has rebuilt from the current
-	// config, so any deferred-settings changes are now applied: clear the GUI "pending changes"
-	// banner unless this pass's filter reload expired or failed to launch (firewall state
-	// unknown; the pending mark must survive so the next tick re-applies).
+	// config, so the deferred-settings changes it saw at its start are now applied: settle the GUI
+	// "pending changes" mark it saw (a later mark survives) unless this pass's filter reload expired
+	// or failed to launch (firewall state unknown; the pending mark must survive so the next tick re-applies).
 
 	if (!$pfb['save']) {
 		$pending_cleared = !pfb_due_ledger_is_pending('cron', $pfb['dbdir'])
@@ -5363,15 +5364,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				$pfb['dbdir']
 			);
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
-			pfb_clear_pending_changes();
+			pfb_settle_pending_changes($pfb_pending_seen);
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
 			if (pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'] !== NULL) {	// only a node holding an accepted policy reports what of it cannot take effect
 				pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
-			}
-			// A receive that opened its record after this pass started was not applied by it: keep it pending.
-			$apply = pfb_sync_receive_state_read($pfb['dbdir'])['apply'] ?? NULL;
-			if (($apply['outcome'] ?? NULL) === 'waiting' && ($apply['opened'] ?? $apply['time'] ?? 0) > $pfb_pass_started) {
-				pfb_mark_pending_changes();
 			}
 		} else {
 			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir'], FALSE, $pfb_pass_started);
