@@ -30,8 +30,8 @@
 #   TMPDIR             scratch root; the work dir is recreated on every run (one writer).
 #
 # Test-only (env), never set on a box or in CI:
-#   PFB_PREV_PKG_REF   replaces the pin with a fixture commit.
 #   PFB_PREV_PKG_WORK  replaces the work dir (default ${TMPDIR:-/tmp}/pfb-prev-pkg).
+# The pin itself has no override: the specs rewrite the `_PIN=` line of a fixture copy.
 #
 # POSIX sh; shellcheck clean; all expansions quoted.
 
@@ -40,7 +40,7 @@ set -eu
 # P: the last devel commit before the per-field sync series. In P the sender still keys
 # off `syncinterfaces` and `syncscope` does not exist yet.
 _PIN=af7d608dd1123d0f4db40d1ff171bed1d8ea74b4
-_ref="${PFB_PREV_PKG_REF:-$_PIN}"
+_ref="$_PIN"
 
 die() {
     printf 'build-prev-pkg: %s\n' "$*" >&2
