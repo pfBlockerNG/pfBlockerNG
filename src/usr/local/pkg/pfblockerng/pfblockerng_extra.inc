@@ -2392,8 +2392,8 @@ function pfb_cfg_registry(): array
 function pfb_sync_local_paths(): array
 {
 	return [
-		'row'         => ['srcint', 'script_pre', 'script_post', 'agateway_in', 'agateway_out', 'infolists'],
-		'section'     => ['pfblockerngblacklist' => ['item/*/username', 'item/*/password']],
+		'row'         => ['script_pre', 'script_post', 'agateway_in', 'agateway_out', 'infolists'],
+		'section'     => ['pfblockerngblacklist' => []],
 		'policy_only' => ['pfblockerngglobal' => ['feed_']],
 	];
 }
