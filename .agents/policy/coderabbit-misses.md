@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `be317588b`  pkg: keep pending marks made during an update pass  (#3501) — finished review pre-redesign; full review timed out; Codex resolved
 - `b1341ce5`  sync: hint to re-select the DNSBL VIP in the HA warning (3.3)  (#3460) — two quota notices; condensed review, Codex clean
 - `834438b2`  deps: override pyjwt to 2.15.1 past semgrep's ~=2.13.0 pin  (#3399) — two quota notices; condensed review, exact-head CI PASS
 - `654b9f463`  smoke: restore the DNS config at each module end so forwarding no longer leaks  (#3326) — quota twice on the ask.
