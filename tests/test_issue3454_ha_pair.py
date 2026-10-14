@@ -276,7 +276,7 @@ class FakeNode(smoke_conftest.SmokeVM):
     ) -> None:
         super().__init__(ssh_key_path="key")
         self.name = name
-        self.baseline = baseline
+        self.files: set[str] = {BASELINE} if baseline else set()
         self.fail_php = fail_php
         self.fatal_php = fatal_php
         self.interrupt_php = interrupt_php
@@ -289,25 +289,48 @@ class FakeNode(smoke_conftest.SmokeVM):
         self.ssh_calls: list[str] = []
         self.snippets: list[str] = []
 
+    @property
+    def baseline(self) -> bool:
+        return BASELINE in self.files
+
     def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
         cmd = remote[0] if len(remote) == 1 else shlex.join(remote)
         self.ssh_calls.append(cmd)
         if self.fail_ssh and self.fail_ssh in cmd:
             return subprocess.CompletedProcess(remote, 1, "", f"{self.fail_ssh}: I/O error")
-        out = ""
         if "echo present" in cmd:
-            out = "present\n" if self.baseline else "absent\n"
-        elif cmd.startswith("cp -p /conf/config.xml"):
-            if self.interrupt_snapshot:
-                # The link drops mid-copy: only a file under the baseline's FINAL name passes for a snapshot.
-                self.baseline = shlex.split(cmd)[3] == BASELINE
-                return subprocess.CompletedProcess(remote, 255, "", "connection lost")
-            self.baseline = True
-        elif cmd.startswith(f"cp -p {BASELINE} /conf/config.xml"):
-            self.baseline = False
-        elif cmd.startswith("ifconfig"):
-            out = self.ifconfig
-        return subprocess.CompletedProcess(remote, 0, out, "")
+            return subprocess.CompletedProcess(remote, 0, "present\n" if self.baseline else "absent\n", "")
+        # Shell chain semantics: `a && b` skips b after a failure, `a ; b` runs it regardless.
+        steps = re.split(r"\s*(&&|;)\s*", cmd)
+        result = self._run(steps[0])
+        for i in range(1, len(steps), 2):
+            if steps[i] == ";" or result.returncode == 0:
+                result = self._run(steps[i + 1])
+        return subprocess.CompletedProcess(remote, result.returncode, result.stdout, result.stderr)
+
+    def _run(self, step: str) -> subprocess.CompletedProcess[str]:
+        """One simple guest command: only the file operations the harness depends on have effects."""
+        argv = shlex.split(step)
+        ok = subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:2] == ["cp", "-p"]:
+            src, dst = argv[2:4]
+            if src != "/conf/config.xml" and src not in self.files:
+                return subprocess.CompletedProcess(argv, 1, "", f"{src}: No such file or directory")
+            self.files.add(dst)
+            if self.interrupt_snapshot and src == "/conf/config.xml":
+                # The link drops mid-copy: the destination exists, truncated.
+                return subprocess.CompletedProcess(argv, 255, "", "connection lost")
+        elif argv[:1] == ["mv"]:
+            src, dst = argv[1:3]
+            if src not in self.files:
+                return subprocess.CompletedProcess(argv, 1, "", f"{src}: No such file or directory")
+            self.files.discard(src)
+            self.files.add(dst)
+        elif argv[:2] == ["rm", "-f"]:
+            self.files.difference_update(argv[2:])
+        elif argv[:1] == ["ifconfig"]:
+            return subprocess.CompletedProcess(argv, 0, self.ifconfig, "")
+        return ok
 
     def php(self, snippet: str) -> subprocess.CompletedProcess[str]:
         self.snippets.append(snippet)
@@ -656,6 +679,18 @@ def test_an_interrupt_during_setup_restores_both_nodes_secondary_first_and_propa
     assert seams == ["primary", "secondary", "secondary", "primary"], f"filter reload order was {seams}"
 
 
+def test_an_interrupt_stays_an_interrupt_even_when_the_restore_also_fails(ha: ModuleType, seams: list[str]) -> None:
+    restore_copy = f"cp -p {BASELINE} /conf/config.xml"
+    a, b = FakeNode("primary"), FakeNode("secondary", interrupt_php="bcrypt-hash", fail_ssh=restore_copy)
+
+    with pytest.raises(KeyboardInterrupt):
+        with ha.ha_pair_session(a, b):
+            pytest.fail("the session must not yield after an interrupted setup")
+
+    assert any(restore_copy in c for c in b.ssh_calls) and b.baseline, "the secondary's restore must have failed"
+    assert not a.baseline, "the primary must still be restored after the secondary's restore failed"
+
+
 @pytest.mark.parametrize("error", [RuntimeError("body failed"), KeyboardInterrupt()], ids=["error", "interrupt"])
 def test_an_error_in_the_session_body_restores_both_nodes_and_propagates_unchanged(
     ha: ModuleType, seams: list[str], error: BaseException
@@ -778,13 +813,13 @@ def _dump_after_failure(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureF
 _SECONDARY_HEADER = "========== HA NODE secondary diagnostics =========="
 
 
-def test_a_failed_pair_setup_still_dumps_both_guests(
+def test_a_failed_ha_pair_test_finds_the_secondary_through_the_peer_vm_fixture(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # ha_pair never produced a value, so funcargs holds only the guests it depends on.
+    # The dump reads node B from peer_vm itself, so it needs no HaPair among the funcargs.
     node = SimpleNamespace(
         funcargs={"smoke_vm": FakeNode("primary"), "peer_vm": FakeNode("secondary")},
-        _rep_setup=SimpleNamespace(failed=True),
+        _rep_call=SimpleNamespace(failed=True),
     )
 
     assert _dump_after_failure(monkeypatch, capsys, node) == ["dump primary", _SECONDARY_HEADER, "dump secondary"]

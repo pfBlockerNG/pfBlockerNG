@@ -1861,7 +1861,7 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
         return
 
     helpers.dump_diagnostics(vm)
-    # funcargs holds the peer guest even when the ha_pair fixture itself failed to set up.
+    # peer_vm is in funcargs for any ha_pair test (fixture closure).
     peer = request.node.funcargs.get("peer_vm")
     if isinstance(peer, SmokeVM):
         print("========== HA NODE secondary diagnostics ==========")
