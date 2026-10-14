@@ -719,6 +719,8 @@ jobs:
           ABI:          ${{ inputs.abi }}
         run: |
           set -eu
+          # Run-body export, not env: map values are never shell-expanded (issue #2231).
+          export PFB_RUN_ROOT="$RUNNER_TEMP/pfb-runs"
           PKG="$(sh scripts/build-prev-pkg.sh \
             --like "$BRANCH_PKG" \
             --ports-repo "$PORTS_REPO" \

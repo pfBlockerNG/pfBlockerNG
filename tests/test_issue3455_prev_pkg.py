@@ -14,6 +14,7 @@ The on-box path (``smoke-on-box.sh`` -> ``build-prev-pkg.sh``) is covered by
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from pathlib import Path
@@ -27,6 +28,7 @@ from tests.smoke import conftest as smoke_conftest
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_PREV_PKG = ROOT / "scripts" / "build-prev-pkg.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "smoke-single.yml"
+SMOKE_CONFTEST = ROOT / "tests" / "smoke" / "conftest.py"
 FIXTURE_ENV = ("SMOKE_PKG", "SMOKE_PREV_PKG")
 
 
@@ -102,10 +104,16 @@ def test_prev_pkg_returns_the_built_file_and_names_the_pinned_commit_once(
 
 def test_prev_pkg_is_session_scoped() -> None:
     """One build per run: a module-scoped fixture would re-announce (and re-validate) per module."""
-    fixture_def = cast(Any, smoke_conftest.prev_pkg)
-    marker = getattr(fixture_def, "_fixture_function_marker", None)
-    assert marker is not None, "prev_pkg is not a pytest fixture"
-    assert marker.scope == "session"
+    tree = ast.parse(SMOKE_CONFTEST.read_text(encoding="utf-8"))
+    (prev_pkg,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "prev_pkg"]
+    scopes = [
+        kw.value.value
+        for dec in prev_pkg.decorator_list
+        if isinstance(dec, ast.Call) and ast.unparse(dec.func) == "pytest.fixture"
+        for kw in dec.keywords
+        if kw.arg == "scope" and isinstance(kw.value, ast.Constant)
+    ]
+    assert scopes == ["session"], f"prev_pkg must carry @pytest.fixture(scope='session'), found scopes {scopes}"
 
 
 # --------------------------------------------------------------------------- #
@@ -173,7 +181,7 @@ def _run_step(tmp_path: Path, builder_exit: int) -> tuple[subprocess.CompletedPr
     step = _prev_build_step()
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "build-prev-pkg.sh").write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$ARGV_LOG"\n'
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$ARGV_LOG"\nprintf \'%s\\n\' "${PFB_RUN_ROOT-unset}" > "$RUN_ROOT_LOG"\n'
         f"[ {builder_exit} -eq 0 ] || {{ echo 'build-prev-pkg: build failed' >&2; exit {builder_exit}; }}\n"
         "printf '%s\\n' \"$FAKE_PKG_OUT\"\n",
         encoding="utf-8",
@@ -187,6 +195,7 @@ def _run_step(tmp_path: Path, builder_exit: int) -> tuple[subprocess.CompletedPr
         "GITHUB_ENV": str(github_env),
         "RUNNER_TEMP": str(runner_temp),
         "ARGV_LOG": str(tmp_path / "argv"),
+        "RUN_ROOT_LOG": str(tmp_path / "run-root"),
         "FAKE_PKG_OUT": str(tmp_path / "out dir" / "prev.pkg"),
         **{
             name: f"value-of-{name}"
@@ -216,6 +225,8 @@ def test_the_step_exports_the_built_package_path_for_the_pytest_step(tmp_path: P
     assert "--ports-repo pfBlockerNG/FreeBSD-ports" in argv
     assert "--ports-ref pfblockerng/use-github" in argv
     assert "--abi FreeBSD:15:amd64 --php 8.3 --py-flavor py311" in argv
+    # Without the export build-leg.sh falls back to /var/tmp/pfb-runs; like the nightly step, use RUNNER_TEMP.
+    assert (tmp_path / "run-root").read_text(encoding="utf-8") == f"{tmp_path / 'runner temp'}/pfb-runs\n"
 
 
 def test_a_failed_build_fails_the_step_and_exports_nothing(tmp_path: Path) -> None:
