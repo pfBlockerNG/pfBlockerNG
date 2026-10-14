@@ -70,6 +70,7 @@ if TYPE_CHECKING:
 SMOKE_DIR = Path(__file__).resolve().parent
 BOOT_VM_SH = SMOKE_DIR / "boot_vm.sh"
 WAIT_READY_SH = SMOKE_DIR / "wait_ready.sh"
+BUILD_PREV_PKG_SH = SMOKE_DIR.parents[1] / "scripts" / "build-prev-pkg.sh"
 FIXTURES_DIR = SMOKE_DIR / "fixtures"
 
 GUEST_IDENTITY_COMMAND = (
@@ -872,6 +873,34 @@ def ha_pair(smoke_vm: SmokeVM, peer_vm: SmokeVM) -> Iterator[HaPair]:
         helpers.deploy(peer_vm)
     with ha_pair_mod.ha_pair_session(smoke_vm, peer_vm) as pair:
         yield pair
+
+
+@pytest.fixture(scope="session")
+def prev_pkg() -> Path:
+    """The previous-devel .pkg (``SMOKE_PREV_PKG``) the HA mixed-version rows install on a node.
+
+    It is built from one pinned commit by ``scripts/build-prev-pkg.sh``: ``smoke-on-box.sh`` builds it for a local
+    leg and ``smoke-single.yml`` for a CI leg, and a failed build stops that run before pytest. So when a branch
+    .pkg exists and this one does not, the leg is broken and this FAILS: skipping would let the rows that need it
+    read as "not applicable". With no branch .pkg at all (a dev box collecting) there is nothing to deploy, and it
+    skips like ``peer_vm``. Prints ``PFB_PREV_PKG ref=<commit> path=<file>`` once, so the log names what was installed.
+    """
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    raw = os.environ.get("SMOKE_PREV_PKG", "")
+    path = Path(raw)
+    if not raw or not path.is_file():
+        pytest.fail(
+            f"SMOKE_PREV_PKG is {raw!r}, not a file, though SMOKE_PKG is set: the previous-devel package was not "
+            "built. smoke-on-box.sh and smoke-single.yml run scripts/build-prev-pkg.sh for it; fix that step "
+            "(build-prev-pkg) rather than skipping the rows that need it",
+            pytrace=False,
+        )
+    ref = subprocess.run(
+        ["sh", str(BUILD_PREV_PKG_SH), "--print-ref"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    print(f"PFB_PREV_PKG ref={ref} path={path}")
+    return path
 
 
 # --------------------------------------------------------------------------- #
