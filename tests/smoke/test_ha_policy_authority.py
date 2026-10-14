@@ -59,6 +59,7 @@ from .ha_pair import (
     HaPair,
     carp_state,
     clear_sshguard,
+    configure_primary_hasync,
     configure_secondary_users,
     set_carp_maintenance,
     wait_carp_state,
@@ -201,13 +202,22 @@ def assert_dnsbl_vips(pair: HaPair, when: str) -> None:
         assert expected in owned, f"{when}: node {name} lost its DNSBL VIP {expected!r}; its virtual IPs are {owned!r}"
 
 
+def core_ha_on(pair: HaPair) -> None:
+    """Point A's pfSense HA sync (rules, NAT, aliases) at B, as ``ha_pair`` arranged it; a config write, no event."""
+    configure_primary_hasync(pair.primary, pair.sync_password)
+
+
 @pytest.fixture(scope="module")
 def baseline(ha_pair: HaPair) -> Baseline:
     """Both nodes at one policy and different local values; A also holds the HA user, so B can send to A (R12).
 
-    The user joins the baseline snapshot, so every per-test reset keeps it.
+    The user joins the baseline snapshot, so every per-test reset keeps it. A has no core HA sync target in it: core
+    syncs A's rules, NAT and aliases to B after every filter reload of A (the "filter sync" event), and that call
+    lands on B at an unpredictable moment, where its stale write of B's config can undo a harness write (a lost DNSBL
+    VIP on B, a baseline restore that does not stay). The rows that exercise core's sync call :func:`core_ha_on`.
     """
     configure_secondary_users(ha_pair.primary, ha_pair.sync_password, ha_pair.nopriv_password)
+    set_leaves(ha_pair.primary, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
     base = arrange_baseline(ha_pair)
     reset_pair(ha_pair, base)
     assert_dnsbl_vips(ha_pair, "at the module baseline")
@@ -737,6 +747,7 @@ def test_copied_pfb_rules_report_only_real_differences(
     reported, the notice line is missing, or the detector's state changes what B generates.
     """
     a, b = ha_pair.primary, ha_pair.secondary
+    core_ha_on(ha_pair)  # core's HA sync is the copier under test
     seed_node(b, "A", baseline.gateway)
     if inbound == "different":
         set_leaves(b, {f"{IP}/inbound_interface": "wan"}, "pfBlockerNG smoke: HA B inbound interface")
@@ -849,8 +860,9 @@ def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo
     """Saving B's Sync page (a real page POST) lets B's next apply send to A, and so does a later local edit.
 
     Before the save B holds A's accepted policy and stays silent (it would send otherwise: same stored targets,
-    same scope). A leaves the HA primary role first: core's XMLRPC server discards a call from the host it syncs to
-    (``xmlrpc.php`` loop guard), so A would never see B. In ``policy`` scope A's receive record advances
+    same scope). In ``policy`` scope the row first shows that, while A is still the HA primary (core syncs A to B),
+    B's send does not show on A: core's XMLRPC server discards a call from the host it syncs to (``xmlrpc.php``
+    loop guard). A then leaves the HA primary role (the deliberate flip) and A's receive record advances
     (``unchanged``, then ``changed`` with B's new group, applied once). ``all``/``lists`` use core's
     ``merge_installedpackages_section``, which has no package hook: A shows no receive record, and the evidence is
     B's ``sent`` attempt and A's stored sections equal to B's.
@@ -862,12 +874,16 @@ def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo
     receive_from_a(ha_pair, baseline, scope, f"pfbha_f{token()}", "198.51.100.61")
     assert send_state(b) == {}, f"B sent before the Sync page was saved: {send_state(b)!r}"
 
-    # A stops being the HA primary and a plain receiver: the real shape of a role flip.
+    # A's package is a plain receiver for the rest of the row.
     set_leaves(
         a,
-        {"hasync": None, SYNC: {"syncscope": "policy", "varsynconchanges": "disabled"}},
-        "pfBlockerNG smoke: HA A leaves the primary role",
+        {SYNC: {"syncscope": "policy", "varsynconchanges": "disabled"}},
+        "pfBlockerNG smoke: HA A plain receiver",
     )
+    if scope == "policy":
+        # A is the HA primary again (hasync -> B, the spec's topology): core's XMLRPC server on A drops a call from the
+        # host A itself syncs to (xmlrpc.php loop guard), so B's first send below must not show on A.
+        core_ha_on(ha_pair)
     fields = {
         "varsynconchanges": "manual",
         "varsynctimeout": str(SYNC_TIMEOUT),
@@ -910,6 +926,18 @@ def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo
     b_digest = node_state(b).digest
     if scope == "policy":
         assert attempt.get("digest") == b_digest, f"B's digest: expected {b_digest!r}, got {attempt.get('digest')!r}"
+        show("A's receive record while A is the HA primary", receive_state(a))
+        assert receive_state(a) == {}, (
+            f"core's loop guard should have dropped B's call while A syncs to B, yet A recorded {receive_state(a)!r}"
+        )
+        # The deliberate flip: A stops being the HA primary, so B's next send is an ordinary call to a receiver.
+        set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A leaves the primary role")
+        t0_a, sent = b_sends()
+        show("B's send record after A left the primary role", sent)
+        (attempt,) = sent["attempts"]
+        assert (attempt["target"], attempt["outcome"]) == (f"{PRIMARY_SYNC_IP}:443", "sent"), (
+            f"B's attempt: {attempt!r}"
+        )
         last = receive_state(a).get("last") or {}
         show("A's receive record", receive_state(a))
         assert last.get("outcome") == "unchanged" and last.get("time", 0) >= t0_a, (
@@ -1026,6 +1054,8 @@ def test_unreachable_peer_is_reported_truthfully(
     """
     a, b = ha_pair.primary, ha_pair.secondary
     configure_sender(ha_pair, transport, timeout=SYNC_TIMEOUT)
+    if transport == "automatic":
+        core_ha_on(ha_pair)
     b_receive = receive_state(b)
     sync_nic_down(ha_pair, undo)
     mark = log_length(a)
@@ -1089,9 +1119,6 @@ def test_apply_window_defers_and_failure_keeps_pending(
     a, b = ha_pair.primary, ha_pair.secondary
     alias, address = f"pfbha_x3{token()}", "198.51.100.41"
     configure_sender(ha_pair, "manual", timeout=SYNC_TIMEOUT)
-    # A's HA sync copies its pfB rules and aliases to B after every filter reload of A: B would then enforce the group
-    # without its own apply having run. This row is about B's own apply, so A is a plain sender here.
-    set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
     window = ""
     if mode == "window":
         window = quiet_window(str(php_json(b, emit("date('H:i')"))))
@@ -1211,6 +1238,7 @@ def test_feed_header_contract_and_effective_findings(
     )
 
     if transport == "automatic":
+        core_ha_on(ha_pair)
         refused_sync = sync_once(ha_pair, "automatic")
         reason = f"pfb_sync_policy_merge: invalid incoming value at pfblockernglistsv4/*/{index}/*/0/*"
         last = refused(refused_sync)
@@ -1221,17 +1249,11 @@ def test_feed_header_contract_and_effective_findings(
         assert alias not in aliasnames(b), "B stored a group whose header A's apply had not normalised"
         # The producer's own apply persists the normalisation. Its filter reload would make core sync by itself (the
         # "filter sync" event), so the pass runs with the HA sync target taken off and put back for the explicit send.
-        hasync = read_leaves(a, ["hasync"])["hasync"]
         set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
         h.reload(a, "update", wait_unbound=False)
         settle(a)
         wait_filter_idle(a)
-        set_leaves(
-            a, {"hasync": hasync}, "pfBlockerNG smoke: HA A core HA sync back", secret_values=[ha_pair.sync_password]
-        )
-    else:
-        # A plain sender: A's core HA sync (rules, NAT, aliases) is not part of this row.
-        set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
+        core_ha_on(ha_pair)
 
     sync = sync_once(ha_pair, transport)
     wait_filter_idle(b)
