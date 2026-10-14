@@ -493,7 +493,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->assertArrayHasKey('filter', $recorded, 'the filter writer ran the detector');
 	}
 
-	/** The pass's own apply reconciliation fails to clear the pending marker, as an unconfirmed reload does. */
+	/** The pass's own apply reconciliation fails, so it leaves the pending mark unsettled, as an unconfirmed reload does. */
 	private function breakTheDueLedger(): void
 	{
 		$this->assertTrue(pfb_due_ledger_write_entry('cron', ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE], $this->dir));
@@ -686,12 +686,11 @@ final class SyncPolicyApplyRecordTest extends TestCase
 			public $context;
 			public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool
 			{
-				str_ends_with($path, '.lock') || self::$outcomes[] = pfb_sync_receive_state_read(self::$dir)['apply']['outcome'] ?? NULL;
+				self::$outcomes[] = pfb_sync_receive_state_read(self::$dir)['apply']['outcome'] ?? NULL;
 				return TRUE;
 			}
 			public function stream_write(string $data): int { return strlen($data); }
 			public function stream_close(): void {}
-			public function stream_lock(int $operation): bool { return TRUE; }
 		};
 		$markWriter::$dir = $this->dir;
 		$GLOBALS['pfb']['pending_marker'] = 'pfbmark://marker';

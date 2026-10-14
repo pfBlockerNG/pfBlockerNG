@@ -197,6 +197,15 @@ final class PfbPendingChangesTest extends TestCase
 		$this->assertFalse(pfb_pending_changes(), 'no marker, nothing pending');
 	}
 
+	public function testAnEmptyMarkerIsPendingEvenAgainstAnEmptyAppliedVersion(): void
+	{
+		// what two failed writes (full disk) leave: a truncated mark after a truncated settle
+		file_put_contents($this->marker, '');
+		file_put_contents($this->marker . '.applied', '');
+
+		$this->assertTrue(pfb_pending_changes(), 'an unversioned marker is always pending, so a pass versions and applies it');
+	}
+
 	public function testTheTokenIsComparedVerbatim(): void
 	{
 		file_put_contents($this->marker, "token\n");
@@ -304,32 +313,15 @@ final class PendingMarkerRaceStream
 		return flock($this->fp, $operation);
 	}
 
-	public function stream_set_option(int $option, int $arg1, ?int $arg2): bool
-	{
-		return FALSE;
-	}
-
 	public function stream_close(): void
 	{
 		fclose($this->fp);
 		self::step();
 	}
 
-	public function url_stat(string $path, int $flags): array|false
-	{
-		return @stat(self::real($path));
-	}
-
 	public function unlink(string $path): bool
 	{
 		$ok = @unlink(self::real($path));
-		self::step();
-		return $ok;
-	}
-
-	public function rename(string $from, string $to): bool
-	{
-		$ok = @rename(self::real($from), self::real($to));
 		self::step();
 		return $ok;
 	}

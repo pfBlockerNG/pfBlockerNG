@@ -6572,9 +6572,10 @@ function pfb_clear_pending_changes(): void {
 	@unlink(pfb_pending_changes_marker());
 	@unlink(pfb_pending_changes_marker() . '.applied');
 }
+// An empty (unversioned) marker is always pending: a pass versions it before applying it.
 function pfb_pending_changes(): bool {
 	$version = @file_get_contents(pfb_pending_changes_marker());
-	return $version !== FALSE && $version !== @file_get_contents(pfb_pending_changes_marker() . '.applied');
+	return $version === '' || $version !== FALSE && $version !== @file_get_contents(pfb_pending_changes_marker() . '.applied');
 }
 
 /*
