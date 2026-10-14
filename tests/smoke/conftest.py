@@ -815,13 +815,15 @@ def smoke_vm(
         # image + logs live under tmp_path_factory, which pytest reaps.
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def peer_vm(
     smoke_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
 ) -> Iterator[SmokeVM]:
     """Node B of the HA pair: a second pfSense guest from the SAME image, joined to ``smoke_vm`` on net3.
 
-    Depends on ``smoke_vm`` (node A, the HA primary) so A is up first and torn down last. Its own SSH/web/LAN
+    MODULE-scoped like its consumer ``ha_pair``: node B is shut down when the HA module ends (after ``ha_pair``
+    restores both nodes), so later one-node modules don't carry a second guest. Depends on ``smoke_vm`` (node A,
+    the HA primary) so A is up first and torn down last. Its own SSH/web/LAN
     host-forwards and sync-link UDP ports sit inside the lane's port block, and its net3 MAC differs from A's
     (``_peer_vm_mac``). Skips before any boot when no .pkg was built or the leg is not CE (the pair is CE-only),
     and refuses to boot when A came up without the sync link: that happens only when no collected test requests
@@ -857,9 +859,9 @@ def peer_vm(
 def ha_pair(smoke_vm: SmokeVM, peer_vm: SmokeVM) -> Iterator[HaPair]:
     """Two real pfSense guests configured as an HA pair (sync NIC, CARP VIP, XMLRPC users, hasync), then restored.
 
-    MODULE-scoped: the pair is configured on top of the session guests and put back to its pre-pair config
-    when the module ends, so later one-node modules see the image they always saw. Both nodes get the branch
-    .pkg first, so the config snapshot the restore returns to already includes it.
+    MODULE-scoped: the pair is configured on top of node A (session) and node B (module) and put back to its
+    pre-pair config when the module ends, so later one-node modules see the image they always saw. Both nodes get
+    the branch .pkg first, so the config snapshot the restore returns to already includes it.
     """
     from . import ha_pair as ha_pair_mod  # local import: ha_pair imports helpers, which imports this module
     from . import helpers

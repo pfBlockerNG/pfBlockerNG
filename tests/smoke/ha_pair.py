@@ -279,10 +279,14 @@ def ha_pair_session(primary: SmokeVM, secondary: SmokeVM) -> Iterator[HaPair]:
         raise
     try:
         yield pair
-    finally:
+    except BaseException as exc:
         failures = _restore_pair(primary, secondary)
         if failures:
-            raise RuntimeError("; ".join(failures))
+            exc.add_note("ha_pair restore also failed: " + "; ".join(failures))
+        raise
+    failures = _restore_pair(primary, secondary)
+    if failures:
+        raise RuntimeError("; ".join(failures))
 
 
 # --------------------------------------------------------------------------- #

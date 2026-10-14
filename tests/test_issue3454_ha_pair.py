@@ -25,6 +25,8 @@ import pytest
 import tests.smoke as smoke_pkg
 from tests.smoke import conftest as smoke_conftest
 
+pytest_plugins = ["pytester"]
+
 BASELINE = "/root/pfb-smoke-ha-baseline.xml"
 
 # Lane-0 value of every port the HA pair adds; each moves by one stride (10) per lane.
@@ -661,6 +663,60 @@ def test_peer_vm_on_a_ce_leg_boots_node_b_on_its_own_ports_and_the_mirrored_sync
     assert killed == [("process", "qmp.sock")], "node B's qemu was not reaped at teardown"
 
 
+_LIFECYCLE_CONFTEST = """
+import pytest
+
+from tests.smoke.conftest import peer_vm  # noqa: F401 -- the real node-B fixture under test
+
+
+@pytest.fixture(scope="session")
+def smoke_vm():
+    yield object()
+
+
+@pytest.fixture(scope="module")
+def ha_pair(smoke_vm, peer_vm):
+    yield (smoke_vm, peer_vm)
+"""
+
+_LIFECYCLE_TESTS = {
+    "test_a_ha_module": """
+import os, pathlib
+
+def test_pair(ha_pair):
+    assert pathlib.Path(os.environ["PFB_TEST_KILL_LOG"]).read_text() == "", "node B died while its module ran"
+""",
+    "test_b_one_node_module": """
+import os, pathlib
+
+def test_after_the_pair(smoke_vm):
+    killed = pathlib.Path(os.environ["PFB_TEST_KILL_LOG"]).read_text()
+    assert killed == "process\\n", f"node B must be shut down when the HA module ends; kill log {killed!r}"
+""",
+}
+
+
+def test_node_b_is_shut_down_when_the_ha_module_ends_not_at_session_end(
+    monkeypatch: pytest.MonkeyPatch, pytester: pytest.Pytester, tmp_path: Path
+) -> None:
+    _leg(monkeypatch, "2.8", "pkg.pkg")
+    kill_log = tmp_path / "kills"
+    kill_log.write_text("")
+    monkeypatch.setenv("PFB_TEST_KILL_LOG", str(kill_log))
+    handle = SimpleNamespace(vm=object(), process="process", qmp_sock="qmp.sock", log_file=io.StringIO())
+    monkeypatch.setattr(smoke_conftest, "_pfsense_image", lambda work: (Path("base.qcow2"), "key"))
+    monkeypatch.setattr(smoke_conftest, "boot_and_probe", lambda *args, **kwargs: handle)
+    monkeypatch.setattr(
+        smoke_conftest, "_kill", lambda process, qmp_sock: kill_log.write_text(kill_log.read_text() + f"{process}\n")
+    )
+    pytester.makeconftest(_LIFECYCLE_CONFTEST)
+    pytester.makepyfile(**_LIFECYCLE_TESTS)
+
+    result = pytester.runpytest_inprocess("-q", "-p", "no:cacheprovider")
+
+    result.assert_outcomes(passed=2)
+
+
 # --------------------------------------------------------------------------- #
 # ha_pair_session: every way out of setup or the body puts both nodes back
 # --------------------------------------------------------------------------- #
@@ -704,6 +760,34 @@ def test_an_error_in_the_session_body_restores_both_nodes_and_propagates_unchang
     assert caught.value is error, f"expected the body's own exception, got {caught.value!r}"
     assert not a.baseline and not b.baseline, f"baselines left behind: primary={a.baseline} secondary={b.baseline}"
     assert seams[-2:] == ["secondary", "primary"], f"restore order was {seams[2:]}"
+
+
+@pytest.mark.parametrize("error", [RuntimeError("body failed"), KeyboardInterrupt()], ids=["error", "interrupt"])
+def test_a_body_exception_survives_a_failing_restore_and_carries_the_restore_failure(
+    ha: ModuleType, seams: list[str], error: BaseException
+) -> None:
+    restore_copy = f"cp -p {BASELINE} /conf/config.xml"
+    a, b = FakeNode("primary"), FakeNode("secondary", fail_ssh=restore_copy)
+
+    with pytest.raises(type(error)) as caught:
+        with ha.ha_pair_session(a, b):
+            raise error
+
+    assert caught.value is error, f"expected the body's own exception, got {caught.value!r}"
+    notes = "\n".join(getattr(caught.value, "__notes__", []))
+    assert "node=secondary" in notes and "config-restore" in notes, f"restore failure not attached: {notes!r}"
+    assert not a.baseline, "the primary must still be restored after the secondary's restore failed"
+
+
+def test_a_failing_restore_after_a_clean_body_still_raises(ha: ModuleType, seams: list[str]) -> None:
+    restore_copy = f"cp -p {BASELINE} /conf/config.xml"
+    a, b = FakeNode("primary"), FakeNode("secondary", fail_ssh=restore_copy)
+
+    with pytest.raises(RuntimeError, match=r"node=secondary.*config-restore"):
+        with ha.ha_pair_session(a, b):
+            pass
+
+    assert not a.baseline, "the primary must still be restored after the secondary's restore failed"
 
 
 # --------------------------------------------------------------------------- #
