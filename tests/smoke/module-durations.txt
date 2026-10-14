@@ -52,6 +52,7 @@ test_extras_dispatcher_deferral.py::test_verb_release_completes_deterministicall
 test_feed_pass_lock.py 8.36
 test_feed_pass_lock.py::test_cron_verb_proceeds_when_lock_free 3.75
 test_feed_pass_lock.py::test_cron_verb_skips_while_feed_pass_lock_held 4.61
+test_ha_policy_sync.py 1800.00
 test_ha_topology.py 160.00
 test_install_from_repo.py 55.62
 test_install_from_repo.py::test_install_from_repo_registers_canonical_package 55.62

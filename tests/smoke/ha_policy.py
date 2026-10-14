@@ -27,7 +27,7 @@ from typing import Any, Literal
 
 from . import helpers as h
 from .conftest import SmokeVM
-from .ha_pair import HA_USER, SECONDARY_SYNC_IP, HaPair, _redact, clear_sshguard
+from .ha_pair import HA_USER, SECONDARY_SYNC_IP, HaPair, _redact, clear_sshguard, xmlrpc_call
 
 Transport = Literal["automatic", "manual"]
 TRANSPORTS: tuple[Transport, ...] = ("automatic", "manual")
@@ -244,10 +244,22 @@ def php_json(vm: SmokeVM, php: str, *, secret_values: Iterable[str] = (), timeou
 
 
 def php_write(
-    vm: SmokeVM, php: str, message: str, *, secret_values: Iterable[str] = (), timeout: float = 120.0
+    vm: SmokeVM,
+    php: str,
+    message: str,
+    *,
+    secret_values: Iterable[str] = (),
+    timeout: float = 120.0,
+    sync: bool = False,
 ) -> None:
-    """Run ``php`` after the package prelude, then ``write_config`` it; the snippet must not echo anything."""
-    result = h.php_eval(vm, _PRELUDE + php + f"\nwrite_config({h._php_str(message)});\necho 'OK';", timeout=timeout)
+    """Run ``php`` after the package prelude, then ``write_config`` it; the snippet must not echo anything.
+
+    Core's ``write_config()`` raises a "filter sync" event, and ``rc.filter_synchronize`` then runs on its own seconds
+    later on a node with HA sync set: a stale request landing on B at a moment the test does not control. A harness
+    write therefore saves the file only (``$write_config_only``) unless ``sync`` asks for the event.
+    """
+    save = f"write_config({h._php_str(message)}, TRUE, {'FALSE' if sync else 'TRUE'});"
+    result = h.php_eval(vm, _PRELUDE + php + f"\n{save}\necho 'OK';", timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         text = _redact(
             f"rc={result.returncode} stdout={result.stdout[-800:]!r} stderr={result.stderr[-300:]!r}", secret_values
@@ -346,11 +358,14 @@ def apply_banners(vm: SmokeVM) -> int:
 
 
 def in_flight(vm: SmokeVM) -> list[str]:
-    """The apply's signals still set: ``pending`` (``pfb_pending_changes()``) and ``tick`` (a tick process alive)."""
+    """The signals still set: ``pending`` (``pfb_pending_changes()``), ``tick`` (a tick process alive), ``sync`` (core's HA sync run)."""
     # The marker persists after an apply (#3481), so only the package's own check says whether it is pending.
     signals = ["pending"] if php_json(vm, emit("pfb_pending_changes()")) else []
     # Bracketed `[.]` keeps pgrep -f from matching this probe's own shell command line.
-    result = vm.ssh("if /bin/pgrep -f 'pfblockerng[.]php tick' >/dev/null 2>&1; then echo tick; fi")
+    result = vm.ssh(
+        "if /bin/pgrep -f 'pfblockerng[.]php tick' >/dev/null 2>&1; then echo tick; fi; "
+        "if /bin/pgrep -f 'rc[.]filter_synchronize' >/dev/null 2>&1; then echo sync; fi"
+    )
     assert result.returncode == 0, f"in-flight probe failed: rc={result.returncode} stderr={result.stderr!r}"
     return signals + result.stdout.split()
 
@@ -411,10 +426,31 @@ def wait_apply(vm: SmokeVM, *, since: int, timeout: float = SETTLE_TIMEOUT) -> d
 # --------------------------------------------------------------------------- #
 
 
-def configure_sender(pair: HaPair, transport: Transport, *, scope: str = "policy", timeout: int = 150) -> None:
-    """Store the sender's sync section on A as the Sync page does, in the automatic or the manual mode."""
+def hasync_section(password: str) -> dict[str, str]:
+    """Node A's core HA sync: target B, the HA user and the sections ticked, as ``ha_pair.configure_primary_hasync`` stores them."""
+    return {
+        "synchronizetoip": SECONDARY_SYNC_IP,
+        "username": HA_USER,
+        "password": password,
+        "synchronizerules": "on",
+        "synchronizenat": "on",
+        "synchronizealiases": "on",
+    }
+
+
+def configure_sender(
+    pair: HaPair, transport: Transport, *, scope: str = "policy", timeout: int = 150, core_sync: bool | None = None
+) -> None:
+    """Store the sender's sync section on A as the Sync page does, in the automatic or the manual mode.
+
+    ``core_sync`` says whether core's own HA sync (rules, NAT, aliases) stays set on A; the default is on for the
+    automatic transport, which rides it, and off for the manual one. With it on, core runs ``rc.filter_synchronize``
+    by itself after any apply pass on A, and that stale request lands on B at a moment no test controls.
+    """
     section = sender_section(transport, scope=scope, password=pair.sync_password, timeout=timeout)
-    set_leaves(pair.primary, {SYNC: section}, "pfBlockerNG smoke: HA sender", secret_values=[pair.sync_password])
+    core = transport == "automatic" if core_sync is None else core_sync
+    leaves = {SYNC: section, "hasync": hasync_section(pair.sync_password) if core else None}
+    set_leaves(pair.primary, leaves, "pfBlockerNG smoke: HA sender", secret_values=[pair.sync_password])
 
 
 def set_receiver_scope(vm: SmokeVM, scope: str) -> None:
@@ -652,9 +688,33 @@ def seed_node(vm: SmokeVM, tag: str, gateway: str) -> None:
     set_leaves(vm, leaves, "pfBlockerNG smoke: HA node local values", secret_values=list(CREDENTIAL_SCALARS.values()))
 
 
+def assert_dnsbl_vip(vm: SmokeVM, node: str, uniqid: str) -> None:
+    """The node owns its DNSBL VIP object, references it and has DNSBL on: a stale write must not have undone them."""
+    state = php_json(
+        vm,
+        emit(
+            "array('uniqids' => array_column(config_get_path('virtualip/vip', array()), 'uniqid'), "
+            f"'ref' => config_get_path('{DNSBL}/pfb_dnsvip4'), 'dnsbl' => config_get_path('{DNSBL}/pfb_dnsbl'))"
+        ),
+    )
+    assert uniqid in state["uniqids"], (
+        f"{node}: DNSBL VIP uniqid {uniqid!r} is not among its virtual IPs {state['uniqids']}"
+    )
+    assert state["ref"] == f"_vip{uniqid}", f"{node}: pfb_dnsvip4: expected {f'_vip{uniqid}'!r}, got {state['ref']!r}"
+    assert state["dnsbl"] == "on", f"{node}: pfb_dnsbl: expected 'on', got {state['dnsbl']!r}"
+
+
 def arrange_baseline(pair: HaPair) -> Baseline:
-    """Bring both nodes to one baseline: package on, DNSBL on, equal policy, different local values, one apply each."""
+    """Bring both nodes to one baseline: package on, DNSBL on, equal policy, different local values, one apply each.
+
+    Core's HA sync is taken off A for the whole arrangement and stays off in the snapshot: with it on, every apply pass
+    on A makes core run ``rc.filter_synchronize`` by itself, and its stale ``restore_config_section`` lands on B in the
+    middle of B's own reload (unbound left stopped, B's DNSBL VIP overwritten). ``configure_sender`` turns it on again
+    for the tests that ride it.
+    """
     a, b = pair.primary, pair.secondary
+    set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA sync off for the baseline")
+    settle(a)  # a run core already started with the old setting must end before B is touched
     gateway = gateway_name(a)
     for tag, vm in (("A", a), ("B", b)):
         h.inject_ip_lists(vm, [])
@@ -675,6 +735,8 @@ def arrange_baseline(pair: HaPair) -> Baseline:
         h.reload(vm, "update")
         settle(vm)
         wait_filter_idle(vm)
+    assert_dnsbl_vip(a, "primary", h.SMOKE_VIP_UNIQID)
+    assert_dnsbl_vip(b, "secondary", B_VIP_UNIQID)
     marker = str(php_json(b, emit("pfb_pending_changes_marker()")))
     digests: dict[str, str] = {}
     for name, vm in (("primary", a), ("secondary", b)):
@@ -686,9 +748,15 @@ def arrange_baseline(pair: HaPair) -> Baseline:
 
 def reset_pair(pair: HaPair, baseline: Baseline) -> None:
     """Put both nodes back at the module baseline and fail loudly when it does not take (B first, as ha_pair does)."""
-    for name, vm in (("secondary", pair.secondary), ("primary", pair.primary)):
+    for name, vm, uniqid in (
+        ("secondary", pair.secondary, B_VIP_UNIQID),
+        ("primary", pair.primary, h.SMOKE_VIP_UNIQID),
+    ):
+        # The mark first: a failed apply keeps it set, and settle() would wait for that for ever.
+        marked = vm.ssh(f"rm -f {baseline.marker}")
+        assert marked.returncode == 0, f"{name}: could not clear the pending mark: {marked.stderr!r}"
         settle(vm)
-        restored = vm.ssh(f"cp -p {BASELINE_COPY} {CONFIG} && rm -f /tmp/config.cache && rm -f {baseline.marker}")
+        restored = vm.ssh(f"cp -p {BASELINE_COPY} {CONFIG} && rm -f /tmp/config.cache")
         assert restored.returncode == 0, (
             f"{name}: baseline restore failed: rc={restored.returncode} {restored.stderr!r}"
         )
@@ -701,8 +769,109 @@ def reset_pair(pair: HaPair, baseline: Baseline) -> None:
             f"{name}: baseline restore did not take: config digest {digest} != baseline {expected}"
         )
         assert in_flight(vm) == [], f"{name}: an apply is still in flight after the baseline restore"
+        assert_dnsbl_vip(vm, name, uniqid)
 
 
 def token() -> str:
     """A short per-test token for unique alias names (aliasname is at most 24 word characters)."""
     return secrets.token_hex(3)
+
+
+# --------------------------------------------------------------------------- #
+# Rows by identity, payloads, enforcement
+# --------------------------------------------------------------------------- #
+
+FINDINGS_FILE = f"{h.PFB_DBDIR}/pfb_sync_findings.json"
+
+
+def _rows(section: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    """The group (``config``) or provider (``item``) rows of a stored section, in stored order; empty elements dropped."""
+    node = section or {}
+    rows = node.get("config") or node.get("item") or []
+    rows = list(rows.values()) if isinstance(rows, Mapping) else list(rows)
+    return [row for row in rows if isinstance(row, Mapping)]
+
+
+def identities(section: Mapping[str, Any] | None) -> list[str]:
+    """The ``aliasname`` of each group, or the ``xml`` of each Blacklist provider, in stored order."""
+    return [str(row.get("aliasname") or row.get("xml")) for row in _rows(section)]
+
+
+def local_by_identity(section: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each row's receiver-local leaves keyed by its identity: where a row sits in the list says nothing about them."""
+    keep = (*ROW_LOCAL_LEAVES, *BLACKLIST_CREDENTIAL_LEAVES)
+    return {
+        str(row.get("aliasname") or row.get("xml")): {k: row[k] for k in keep if k in row} for row in _rows(section)
+    }
+
+
+def findings(vm: SmokeVM) -> list[str]:
+    """The effective-policy findings the node's last completed apply recorded (``[]`` before one)."""
+    data = read_json_file(vm, FINDINGS_FILE) or {}
+    return [str(item) for item in data.get("findings", [])]
+
+
+def pf_table(vm: SmokeVM, alias: str, family: str = "v4") -> list[str]:
+    """The members of the group's pf table; ``[]`` while the table does not exist."""
+    table = f"pfB_{alias}_{family}"
+    result = vm.ssh(h.PFCTL, "-t", table, "-T", "show")
+    if result.returncode != 0 and "does not exist" in result.stderr:
+        return []
+    assert result.returncode == 0, f"pfctl -t {table} -T show: rc={result.returncode} stderr={result.stderr!r}"
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def policy_payload(vm: SmokeVM) -> dict[str, Any]:
+    """The ``restore_config_section`` payload ``vm``'s package builds in ``policy`` scope: the gate leaf plus the projection."""
+    php = (
+        "$stored = pfb_sync_stored_sections();\n"
+        "$gate = PFB_SECTIONS['sync'] . '/syncscope';\n"
+        "$payload = array();\n"
+        "array_set_path($payload, $gate, 'policy');\n"
+        "foreach (pfb_sync_policy_projection($stored) as $path => $leaf) {\n"
+        "    if ($leaf === FALSE) { continue; }\n"
+        "    array_set_path($payload, $path, is_array($leaf) ? $leaf : ($leaf === TRUE ? '' : (string) $leaf));\n"
+        "}\n" + emit("$payload")
+    )
+    payload: dict[str, Any] = php_json(vm, php)
+    return payload
+
+
+def send_payload(pair: HaPair, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """One real ``restore_config_section`` call from A to B with B's HA credentials: ``{"ok": True, "resp": ...}`` or a fault."""
+    return xmlrpc_call(
+        pair,
+        user=HA_USER,
+        password=pair.sync_password,
+        method="restore_config_section",
+        params_php=_json_php(dict(payload)),
+    )
+
+
+def inject_leaf(payload: dict[str, Any], path: str, value: str) -> None:
+    """Set ``value`` at ``path`` of a decoded payload, creating maps on the way.
+
+    A decoded PHP array is a list while its keys are 0..n-1 and a map otherwise, so an integer segment indexes a list
+    and any other segment (or a segment of a map) is a key.
+    """
+    node: Any = payload
+    *parents, leaf = path.split("/")
+    for segment in parents:
+        node = node[int(segment)] if isinstance(node, list) else node.setdefault(segment, {})
+    node[leaf] = value
+
+
+def row_key(rows: Any, field: str, identity: str) -> str:
+    """The key (a list position as text, or a map key) of the row of a decoded payload whose ``field`` is ``identity``."""
+    pairs = enumerate(rows) if isinstance(rows, list) else rows.items()
+    for key, row in pairs:
+        if isinstance(row, Mapping) and row.get(field) == identity:
+            return str(key)
+    raise AssertionError(f"no row with {field}={identity!r} in {rows!r}")
+
+
+def credential_values(tag: str) -> list[str]:
+    """Every credential value node ``tag`` was seeded with: the four scalars and each Blacklist item's username and password."""
+    return [sentinel(tag, name) for name in CREDENTIAL_SCALARS] + [
+        sentinel(tag, f"{xml}_{leaf}") for xml in BLACKLIST_XML for leaf in ("user", "pass")
+    ]
