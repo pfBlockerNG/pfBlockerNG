@@ -58,6 +58,7 @@ import pytest
 
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from . import stub_responses
+from ._matrix import own_variant
 
 if TYPE_CHECKING:
     from .ha_pair import HaPair  # type-only: ha_pair imports helpers, which imports this module
@@ -700,6 +701,18 @@ def _peer_vm_mac() -> str:
     return "\n".join(macs)
 
 
+def _peer_boot_env() -> dict[str, str]:
+    """Node B's boot env: its own host-forward/LAN ports, the mirror image of node A's sync link, its own MACs."""
+    return {
+        "SMOKE_SSH_HOSTPORT": str(DEFAULT_PEER_SSH_PORT),
+        "SMOKE_WEB_HOSTPORT": str(DEFAULT_PEER_WEB_PORT),
+        "SMOKE_LAN_SOCKET_PORT": str(DEFAULT_PEER_LAN_SOCKET_PORT),
+        "SMOKE_SYNC_PORT": str(DEFAULT_PEER_SYNC_PORT),
+        "SMOKE_SYNC_PEER_PORT": str(DEFAULT_SYNC_PORT),
+        "SMOKE_VM_MAC": _peer_vm_mac(),
+    }
+
+
 def _pfsense_image(work: Path) -> tuple[Path, str]:
     """Resolve ``(base qcow2, ssh key path)`` for a pfSense boot; skip cleanly when a prerequisite is absent.
 
@@ -810,9 +823,14 @@ def peer_vm(
 
     Depends on ``smoke_vm`` (node A, the HA primary) so A is up first and torn down last. Its own SSH/web/LAN
     host-forwards and sync-link UDP ports sit inside the lane's port block, and its net3 MAC differs from A's
-    (``_peer_vm_mac``). Refuses to boot when A came up without the sync link: that happens only when no
-    collected test requests ``ha_pair`` (``_ha_sync_env``).
+    (``_peer_vm_mac``). Skips before any boot when no .pkg was built or the leg is not CE (the pair is CE-only),
+    and refuses to boot when A came up without the sync link: that happens only when no collected test requests
+    ``ha_pair`` (``_ha_sync_env``).
     """
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    if own_variant().variant != "CE":
+        pytest.skip("HA pair is CE-only: Plus legs are out of scope (#3454)")
     if not _ha_sync_env(request.session.items):
         raise RuntimeError("peer_vm needs the HA sync link, but smoke_vm booted without it (no collected ha_pair test)")
     work = tmp_path_factory.mktemp("peer-vm")
@@ -825,14 +843,7 @@ def peer_vm(
         ssh_port=DEFAULT_PEER_SSH_PORT,
         web_port=DEFAULT_PEER_WEB_PORT,
         diag_name="pfsense-peer",
-        extra_env={
-            "SMOKE_SSH_HOSTPORT": str(DEFAULT_PEER_SSH_PORT),
-            "SMOKE_WEB_HOSTPORT": str(DEFAULT_PEER_WEB_PORT),
-            "SMOKE_LAN_SOCKET_PORT": str(DEFAULT_PEER_LAN_SOCKET_PORT),
-            "SMOKE_SYNC_PORT": str(DEFAULT_PEER_SYNC_PORT),
-            "SMOKE_SYNC_PEER_PORT": str(DEFAULT_SYNC_PORT),
-            "SMOKE_VM_MAC": _peer_vm_mac(),
-        },
+        extra_env=_peer_boot_env(),
     )
     try:
         yield handle.vm
@@ -850,13 +861,13 @@ def ha_pair(smoke_vm: SmokeVM, peer_vm: SmokeVM) -> Iterator[HaPair]:
     when the module ends, so later one-node modules see the image they always saw. Both nodes get the branch
     .pkg first, so the config snapshot the restore returns to already includes it.
     """
-    if not os.environ.get("SMOKE_PKG"):
-        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     from . import ha_pair as ha_pair_mod  # local import: ha_pair imports helpers, which imports this module
     from . import helpers
 
-    helpers.deploy(smoke_vm)
-    helpers.deploy(peer_vm)
+    with ha_pair_mod._stage("primary", "deploy"):
+        helpers.deploy(smoke_vm)
+    with ha_pair_mod._stage("secondary", "deploy"):
+        helpers.deploy(peer_vm)
     with ha_pair_mod.ha_pair_session(smoke_vm, peer_vm) as pair:
         yield pair
 
@@ -1845,19 +1856,16 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
     if isinstance(vm, tuple):
         vm = vm[0] if vm else None
     from . import helpers  # local import: helpers imports from conftest (avoid cycle)
-    from .ha_pair import HaPair  # same cycle: ha_pair imports helpers
 
-    # An ha_pair test requests only the pair, so its primary node is the VM to dump.
-    pair = request.node.funcargs.get("ha_pair")
-    if vm is None and isinstance(pair, HaPair):
-        vm = pair.primary
     if vm is None:
         return
 
     helpers.dump_diagnostics(vm)
-    if isinstance(pair, HaPair):
+    # funcargs holds the peer guest even when the ha_pair fixture itself failed to set up.
+    peer = request.node.funcargs.get("peer_vm")
+    if isinstance(peer, SmokeVM):
         print("========== HA NODE secondary diagnostics ==========")
-        helpers.dump_diagnostics(pair.secondary)
+        helpers.dump_diagnostics(peer)
 
 
 @pytest.fixture(autouse=True)

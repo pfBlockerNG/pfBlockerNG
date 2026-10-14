@@ -146,15 +146,16 @@ echo 'OK';"""
 
 
 def configure_node(vm: SmokeVM, node: str, *, sync_ip: str, advskew: str, carp_password: str) -> None:
-    """Snapshot config.xml, then give ``vm`` the SYNC interface, CARP VIP and HTTPS webgui."""
-    with _stage(node, "snapshot"):
-        if _baseline_exists(vm, node):
-            raise RuntimeError(f"{BASELINE} already exists: an earlier pair was never restored; not overwriting it")
-        _ssh_ok(vm, f"cp -p /conf/config.xml {BASELINE}")
+    """Refuse a node whose SYNC NIC is taken, snapshot config.xml, then give ``vm`` the SYNC interface, CARP VIP and HTTPS webgui."""
     with _stage(node, "sync-interface"):
         busy = _php_json(vm, "HABUSY", _BUSY_PHP)
         if busy:
             raise RuntimeError(f"{SYNC_IF}/{SYNC_NIC} already in use by {busy}; refusing to overlay the HA topology")
+    with _stage(node, "snapshot"):
+        if _baseline_exists(vm, node):
+            raise RuntimeError(f"{BASELINE} already exists: an earlier pair was never restored; not overwriting it")
+        _ssh_ok(vm, f"cp -p /conf/config.xml {BASELINE}.tmp && mv {BASELINE}.tmp {BASELINE}")
+    with _stage(node, "sync-interface"):
         _php_ok(vm, _sync_php(sync_ip, advskew, carp_password), [carp_password])
     with _stage(node, "filter"):
         helpers.apply_filter_sync(vm)
@@ -271,9 +272,9 @@ def ha_pair_session(primary: SmokeVM, secondary: SmokeVM) -> Iterator[HaPair]:
         )
         configure_secondary_users(secondary, pair.sync_password, pair.nopriv_password)
         configure_primary_hasync(primary, pair.sync_password)
-    except Exception as exc:
+    except BaseException as exc:
         failures = _restore_pair(primary, secondary)
-        if failures:
+        if failures and isinstance(exc, Exception):
             raise HaSetupError(f"{exc}; restore also failed: {'; '.join(failures)}") from exc
         raise
     try:
@@ -343,6 +344,3 @@ def wait_carp_state(vm: SmokeVM, expected: str, timeout: float = 60.0, *, node: 
         helpers.wait_until(reached, timeout=timeout)
     except RuntimeError as exc:  # wait_until's expiry is the only RuntimeError left: reached() swallows the rest
         raise RuntimeError(f"stuck/environment: expected CARP {expected} on {node}, last observed {last}") from exc
-
-
-config_digest = helpers.pfb_config_digest

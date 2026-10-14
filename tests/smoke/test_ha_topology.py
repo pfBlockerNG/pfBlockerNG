@@ -35,7 +35,6 @@ from .ha_pair import (
     HaPair,
     carp_state,
     clear_sshguard,
-    config_digest,
     set_carp_maintenance,
     wait_carp_state,
     xmlrpc_call,
@@ -102,6 +101,7 @@ def test_ha_privileged_user_authenticates_over_https_xmlrpc(ha_pair: HaPair) -> 
     )
 
 
+@pytest.mark.timeout(180)  # several pfSsh round-trips exceed the suite's 30 s function timeout on slower runners
 def test_wrong_password_and_unprivileged_user_are_rejected_without_mutation(ha_pair: HaPair) -> None:
     """Rejected callers must change nothing on B; the same payload with valid credentials DOES change it.
 
@@ -117,7 +117,7 @@ def test_wrong_password_and_unprivileged_user_are_rejected_without_mutation(ha_p
         return xmlrpc_call(ha_pair, user=user, password=password, method="restore_config_section", params_php=params)
 
     _snapshot_config(secondary, snapshot)
-    digest_before = config_digest(secondary)
+    digest_before = h.pfb_config_digest(secondary)
     assert not h.guest_file_contains(secondary, CONFIG, sentinel), f"sentinel {sentinel} already on the secondary"
     try:
         wrong = call(HA_USER, "not-" + ha_pair.sync_password)
@@ -127,7 +127,7 @@ def test_wrong_password_and_unprivileged_user_are_rejected_without_mutation(ha_p
 
         assert wrong.get("fault") == -1, f"wrong password: expected fault -1, got {wrong}"
         assert nopriv.get("fault") == -2, f"user without the HA privilege: expected fault -2, got {nopriv}"
-        assert config_digest(secondary) == digest_before, "a rejected call changed the secondary's config.xml"
+        assert h.pfb_config_digest(secondary) == digest_before, "a rejected call changed the secondary's config.xml"
         assert not h.guest_file_contains(secondary, CONFIG, sentinel), "a rejected call wrote the sentinel alias"
 
         accepted = call(HA_USER, ha_pair.sync_password)
@@ -136,9 +136,10 @@ def test_wrong_password_and_unprivileged_user_are_rejected_without_mutation(ha_p
         assert h.guest_file_contains(secondary, CONFIG, sentinel), "positive control: accepted call wrote nothing"
     finally:
         _restore_config(secondary, snapshot)
-    assert config_digest(secondary) == digest_before, "the secondary's config.xml was not restored"
+    assert h.pfb_config_digest(secondary) == digest_before, "the secondary's config.xml was not restored"
 
 
+@pytest.mark.timeout(180)  # bounded CARP waits plus pfSsh round-trips exceed the suite's 30 s function timeout
 def test_management_stays_reachable_while_carp_role_changes(ha_pair: HaPair) -> None:
     """Given A MASTER / B BACKUP, forcing A into CARP maintenance flips the roles and breaks no path."""
     primary, secondary = ha_pair.primary, ha_pair.secondary
@@ -160,6 +161,7 @@ def test_management_stays_reachable_while_carp_role_changes(ha_pair: HaPair) -> 
         wait_carp_state(secondary, "BACKUP", node="secondary")
 
 
+@pytest.mark.timeout(180)  # a blocking sync plus bounded CARP waits exceed the suite's 30 s function timeout
 def test_core_automatic_ha_sync_reaches_secondary(ha_pair: HaPair) -> None:
     """Core's ``rc.filter_synchronize`` on A (hasync -> B) carries a ticked section onto B."""
     primary, secondary = ha_pair.primary, ha_pair.secondary

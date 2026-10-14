@@ -218,6 +218,11 @@ lie**; image is Debian client, not pfSense.
 Each `SMOKE_*_IMAGE_DIR` must hold **exactly one** `*.qcow2` after its direct pull. The
 leg removes those directories when the workload exits.
 
+A session that collects `tests/smoke/test_ha_topology.py` (fixture `ha_pair`) also boots a SECOND
+pfSense guest (2 GiB) from the same image, joined to the first on net3 by a loopback UDP link. It uses
+lane ports +3..+5 (lane 0: peer SSH 2227, web 8085, LAN socket 12345, sync UDP 12343/12344) and runs
+CE legs only, e.g. `scripts/local-smoke.sh --no-two-vm --filter test_ha_topology`.
+
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
 Portable Linux builder reproduces `make package` for this `NO_BUILD` port. For CE 2.8

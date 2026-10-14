@@ -9,6 +9,7 @@ and the restore guarantees are pinned without a VM.
 from __future__ import annotations
 
 import importlib
+import io
 import json
 import os
 import re
@@ -17,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -161,6 +162,29 @@ def test_peer_mac_refuses_a_list_without_a_sync_nic(monkeypatch: pytest.MonkeyPa
         smoke_conftest._peer_vm_mac()
 
 
+def test_peer_boot_env_gives_node_b_its_own_ports_and_the_mirror_image_of_node_as_sync_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SMOKE_VM_MAC", raising=False)
+    expected = {
+        "SMOKE_SSH_HOSTPORT": str(smoke_conftest.DEFAULT_PEER_SSH_PORT),
+        "SMOKE_WEB_HOSTPORT": str(smoke_conftest.DEFAULT_PEER_WEB_PORT),
+        "SMOKE_LAN_SOCKET_PORT": str(smoke_conftest.DEFAULT_PEER_LAN_SOCKET_PORT),
+        "SMOKE_SYNC_PORT": str(smoke_conftest.DEFAULT_PEER_SYNC_PORT),
+        "SMOKE_SYNC_PEER_PORT": str(smoke_conftest.DEFAULT_SYNC_PORT),
+        "SMOKE_VM_MAC": smoke_conftest._peer_vm_mac(),
+    }
+
+    env = smoke_conftest._peer_boot_env()
+
+    assert env == expected
+    node_a = smoke_conftest._ha_sync_env([_item("ha_pair")])
+    assert (env["SMOKE_SYNC_PORT"], env["SMOKE_SYNC_PEER_PORT"]) == (
+        node_a["SMOKE_SYNC_PEER_PORT"],
+        node_a["SMOKE_SYNC_PORT"],
+    ), f"the two ends of the sync link must mirror each other: A={node_a} B={env}"
+
+
 # --------------------------------------------------------------------------- #
 # boot_and_probe: extra_env reaches the qemu wrapper, and only when asked
 # --------------------------------------------------------------------------- #
@@ -217,6 +241,16 @@ def test_boot_and_probe_passes_extra_env_through_to_the_boot_script(
     assert "QMP_SOCK" in env, f"boot env lost QMP_SOCK: {sorted(env)}"
 
 
+def test_boot_and_probe_extra_env_wins_over_the_inherited_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SMOKE_SSH_HOSTPORT", "2222")
+
+    env = _booted_env(monkeypatch, tmp_path, extra_env={"SMOKE_SSH_HOSTPORT": "9"})
+
+    assert env["SMOKE_SSH_HOSTPORT"] == "9", f"expected extra_env to override the inherited 2222, got {env!r}"
+
+
 # --------------------------------------------------------------------------- #
 # In-process guests for the ha_pair module
 # --------------------------------------------------------------------------- #
@@ -231,6 +265,10 @@ class FakeNode(smoke_conftest.SmokeVM):
         *,
         baseline: bool = False,
         fail_php: str | None = None,
+        fatal_php: str | None = None,
+        interrupt_php: str | None = None,
+        fail_ssh: str | None = None,
+        interrupt_snapshot: bool = False,
         busy: list[str] | None = None,
         verify: dict[str, Any] | None = None,
         ifconfig: str = "",
@@ -240,6 +278,10 @@ class FakeNode(smoke_conftest.SmokeVM):
         self.name = name
         self.baseline = baseline
         self.fail_php = fail_php
+        self.fatal_php = fatal_php
+        self.interrupt_php = interrupt_php
+        self.fail_ssh = fail_ssh
+        self.interrupt_snapshot = interrupt_snapshot
         self.busy = busy or []
         self.verify = verify or {"protocol": "http", "opt2": False}
         self.ifconfig = ifconfig
@@ -250,10 +292,16 @@ class FakeNode(smoke_conftest.SmokeVM):
     def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
         cmd = remote[0] if len(remote) == 1 else shlex.join(remote)
         self.ssh_calls.append(cmd)
+        if self.fail_ssh and self.fail_ssh in cmd:
+            return subprocess.CompletedProcess(remote, 1, "", f"{self.fail_ssh}: I/O error")
         out = ""
         if "echo present" in cmd:
             out = "present\n" if self.baseline else "absent\n"
         elif cmd.startswith("cp -p /conf/config.xml"):
+            if self.interrupt_snapshot:
+                # The link drops mid-copy: only a file under the baseline's FINAL name passes for a snapshot.
+                self.baseline = shlex.split(cmd)[3] == BASELINE
+                return subprocess.CompletedProcess(remote, 255, "", "connection lost")
             self.baseline = True
         elif cmd.startswith(f"cp -p {BASELINE} /conf/config.xml"):
             self.baseline = False
@@ -263,6 +311,12 @@ class FakeNode(smoke_conftest.SmokeVM):
 
     def php(self, snippet: str) -> subprocess.CompletedProcess[str]:
         self.snippets.append(snippet)
+        if self.interrupt_php and self.interrupt_php in snippet:
+            raise KeyboardInterrupt
+        if self.fatal_php and self.fatal_php in snippet:
+            return subprocess.CompletedProcess(
+                [], 0, "PHP Fatal error:  Uncaught Error: Call to undefined function", ""
+            )
         if self.fail_php and self.fail_php in snippet:
             # Worst case: the shell echoes the whole program (secrets included) into its error output.
             return subprocess.CompletedProcess([], 1, f"PHP Fatal error in:\n{snippet}", "boom")
@@ -501,3 +555,256 @@ def test_wait_carp_state_timeout_reports_expected_and_actual(ha: ModuleType) -> 
         RuntimeError, match=r"stuck/environment: expected CARP BACKUP on secondary, last observed MASTER"
     ):
         ha.wait_carp_state(FakeNode("secondary", ifconfig=_IFCONFIG), "BACKUP", timeout=0, node="secondary")
+
+
+# --------------------------------------------------------------------------- #
+# peer_vm: node B boots only on a CE leg that has a .pkg to deploy
+# --------------------------------------------------------------------------- #
+
+_MATRIX_ROWS = (
+    {"pfsense_version": "2.8", "variant": "CE", "freebsd_major": "15", "php_version": "8.3", "py_flavor": "py311"},
+    {"pfsense_version": "26.03", "variant": "Plus", "freebsd_major": "16", "php_version": "8.5", "py_flavor": "py311"},
+)
+
+
+def _leg(monkeypatch: pytest.MonkeyPatch, version: str, pkg: str | None) -> None:
+    """Make this process look like the smoke leg for matrix row ``version``, with or without a built .pkg."""
+    monkeypatch.setattr(importlib.import_module("tests.smoke._matrix"), "build_matrix", lambda: _MATRIX_ROWS)
+    monkeypatch.setenv("SMOKE_PFSENSE_VERSION", version)
+    monkeypatch.delenv("SMOKE_PHP_VERSION", raising=False)
+    if pkg is None:
+        monkeypatch.delenv("SMOKE_PKG", raising=False)
+    else:
+        monkeypatch.setenv("SMOKE_PKG", pkg)
+
+
+def _start_peer_vm(tmp_path_factory: pytest.TempPathFactory) -> Any:
+    """Node B's fixture generator for a session that collected an ha_pair test."""
+    request = SimpleNamespace(session=SimpleNamespace(items=[_item("smoke_vm", "peer_vm", "ha_pair")]))
+    return cast(Any, smoke_conftest.peer_vm).__wrapped__(object(), tmp_path_factory, request)
+
+
+@pytest.mark.parametrize(
+    ("version", "pkg", "reason"),
+    [("26.03", "pkg.pkg", "HA pair is CE-only"), ("2.8", None, "SMOKE_PKG not set")],
+    ids=["plus-leg", "no-pkg"],
+)
+def test_peer_vm_skips_before_booting_when_the_pair_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+    version: str,
+    pkg: str | None,
+    reason: str,
+) -> None:
+    _leg(monkeypatch, version, pkg)
+
+    def boot_is_unreachable(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("peer_vm reached a boot step on a leg that cannot run the HA pair")
+
+    monkeypatch.setattr(smoke_conftest, "_pfsense_image", boot_is_unreachable)
+    monkeypatch.setattr(smoke_conftest, "boot_and_probe", boot_is_unreachable)
+
+    with pytest.raises(pytest.skip.Exception, match=reason):
+        next(_start_peer_vm(tmp_path_factory))
+
+
+def test_peer_vm_on_a_ce_leg_boots_node_b_on_its_own_ports_and_the_mirrored_sync_link(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    _leg(monkeypatch, "2.8", "pkg.pkg")
+    booted: dict[str, Any] = {}
+    handle = SimpleNamespace(vm=object(), process="process", qmp_sock="qmp.sock", log_file=io.StringIO())
+
+    def fake_boot(*args: Any, **kwargs: Any) -> Any:
+        booted.update(kwargs)
+        return handle
+
+    killed: list[tuple[Any, Any]] = []
+    monkeypatch.setattr(smoke_conftest, "_pfsense_image", lambda work: (Path("base.qcow2"), "key"))
+    monkeypatch.setattr(smoke_conftest, "boot_and_probe", fake_boot)
+    monkeypatch.setattr(smoke_conftest, "_kill", lambda process, qmp_sock: killed.append((process, qmp_sock)))
+
+    fixture = _start_peer_vm(tmp_path_factory)
+    node_b = next(fixture)
+
+    assert node_b is handle.vm
+    assert booted["ssh_port"] == smoke_conftest.DEFAULT_PEER_SSH_PORT, f"node B booted with {booted}"
+    sync = {k: v for k, v in booted["extra_env"].items() if k.startswith("SMOKE_SYNC_")}
+    assert sync == {
+        "SMOKE_SYNC_PORT": str(smoke_conftest.DEFAULT_PEER_SYNC_PORT),
+        "SMOKE_SYNC_PEER_PORT": str(smoke_conftest.DEFAULT_SYNC_PORT),
+    }, f"node B's sync link is not the mirror of node A's: {booted['extra_env']}"
+    fixture.close()
+    assert killed == [("process", "qmp.sock")], "node B's qemu was not reaped at teardown"
+
+
+# --------------------------------------------------------------------------- #
+# ha_pair_session: every way out of setup or the body puts both nodes back
+# --------------------------------------------------------------------------- #
+
+
+def test_an_interrupt_during_setup_restores_both_nodes_secondary_first_and_propagates(
+    ha: ModuleType, seams: list[str]
+) -> None:
+    a, b = FakeNode("primary"), FakeNode("secondary", interrupt_php="bcrypt-hash")
+
+    with pytest.raises(KeyboardInterrupt):
+        with ha.ha_pair_session(a, b):
+            pytest.fail("the session must not yield after an interrupted setup")
+
+    assert not a.baseline and not b.baseline, f"baselines left behind: primary={a.baseline} secondary={b.baseline}"
+    assert seams == ["primary", "secondary", "secondary", "primary"], f"filter reload order was {seams}"
+
+
+@pytest.mark.parametrize("error", [RuntimeError("body failed"), KeyboardInterrupt()], ids=["error", "interrupt"])
+def test_an_error_in_the_session_body_restores_both_nodes_and_propagates_unchanged(
+    ha: ModuleType, seams: list[str], error: BaseException
+) -> None:
+    a, b = FakeNode("primary"), FakeNode("secondary")
+
+    with pytest.raises(type(error)) as caught:
+        with ha.ha_pair_session(a, b):
+            raise error
+
+    assert caught.value is error, f"expected the body's own exception, got {caught.value!r}"
+    assert not a.baseline and not b.baseline, f"baselines left behind: primary={a.baseline} secondary={b.baseline}"
+    assert seams[-2:] == ["secondary", "primary"], f"restore order was {seams[2:]}"
+
+
+# --------------------------------------------------------------------------- #
+# configure_node: refusal precedes the snapshot; the snapshot is all-or-nothing
+# --------------------------------------------------------------------------- #
+
+
+def test_a_pfssh_fatal_with_exit_zero_is_still_a_labelled_setup_failure(ha: ModuleType, seams: list[str]) -> None:
+    node = FakeNode("secondary", fatal_php="bcrypt-hash")
+
+    with pytest.raises(ha.HaSetupError, match=r"node=secondary stage=users.*PHP Fatal error"):
+        ha.configure_secondary_users(node, "sync-pw", "nopriv-pw")
+
+
+def test_a_failed_snapshot_is_labelled_and_nothing_is_applied(ha: ModuleType, seams: list[str]) -> None:
+    node = FakeNode("primary", fail_ssh="cp -p /conf/config.xml")
+
+    with pytest.raises(ha.HaSetupError, match=r"node=primary stage=snapshot"):
+        ha.configure_node(node, "primary", sync_ip=ha.PRIMARY_SYNC_IP, advskew="0", carp_password="carp")
+
+    assert not [s for s in node.snippets if "config_set_path('interfaces/opt2'" in s], "interfaces were mutated"
+    assert not node.baseline
+
+
+def test_an_interrupted_snapshot_never_leaves_a_file_that_passes_for_a_baseline(
+    ha: ModuleType, seams: list[str]
+) -> None:
+    node = FakeNode("secondary", interrupt_snapshot=True)
+
+    with pytest.raises(ha.HaSetupError, match=r"node=secondary stage=snapshot"):
+        ha.configure_node(node, "secondary", sync_ip=ha.SECONDARY_SYNC_IP, advskew="100", carp_password="carp")
+
+    assert not node.baseline, (
+        "a truncated snapshot under the baseline's own name would later be restored over the config"
+    )
+
+
+def test_a_node_refused_for_its_busy_sync_nic_is_never_snapshotted(ha: ModuleType, seams: list[str]) -> None:
+    node = FakeNode("secondary", busy=["opt2"])
+
+    with pytest.raises(ha.HaSetupError, match=r"node=secondary stage=sync-interface"):
+        ha.configure_node(node, "secondary", sync_ip=ha.SECONDARY_SYNC_IP, advskew="100", carp_password="carp")
+
+    snapshots = [c for c in node.ssh_calls if c.startswith("cp -p /conf/config.xml")]
+    assert not snapshots, f"a refused node must not be snapshotted, got {snapshots}"
+    assert not node.baseline
+
+
+def test_a_refused_secondary_is_left_untouched_by_the_failure_restore(ha: ModuleType, seams: list[str]) -> None:
+    a, b = FakeNode("primary"), FakeNode("secondary", busy=["opt2"])
+
+    with pytest.raises(ha.HaSetupError, match=r"node=secondary stage=sync-interface"):
+        with ha.ha_pair_session(a, b):
+            pytest.fail("the session must not yield after a refused node")
+
+    restores = [c for c in b.ssh_calls if c.startswith(f"cp -p {BASELINE} /conf/config.xml")]
+    assert not restores, f"the refused secondary's config.xml was overwritten from a baseline: {restores}"
+    assert not [s for s in b.snippets if "interface_bring_down" in s], (
+        "the refused secondary's interfaces were torn down"
+    )
+    assert not a.baseline, "the primary, which WAS configured, must be restored"
+
+
+# --------------------------------------------------------------------------- #
+# conftest.ha_pair: a deploy failure is labelled like every other setup failure
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(("failing", "deployed"), [("primary", []), ("secondary", ["primary"])])
+def test_a_deploy_failure_names_the_node_and_the_deploy_stage(
+    ha: ModuleType, monkeypatch: pytest.MonkeyPatch, failing: str, deployed: list[str]
+) -> None:
+    a, b = FakeNode("primary"), FakeNode("secondary")
+    deploys: list[str] = []
+
+    def deploy(vm: FakeNode, *args: Any, **kwargs: Any) -> None:
+        if vm.name == failing:
+            raise RuntimeError("pkg add failed")
+        deploys.append(vm.name)
+
+    monkeypatch.setenv("SMOKE_PKG", "pkg.pkg")
+    monkeypatch.setattr(importlib.import_module("tests.smoke.helpers"), "deploy", deploy)
+
+    with pytest.raises(ha.HaSetupError, match=rf"node={failing} stage=deploy.*pkg add failed"):
+        next(cast(Any, smoke_conftest.ha_pair).__wrapped__(a, b))
+
+    assert deploys == deployed, f"expected deploys {deployed} before the {failing} failure, got {deploys}"
+
+
+# --------------------------------------------------------------------------- #
+# _dump_vm_on_failure: the secondary is dumped whenever its guest exists
+# --------------------------------------------------------------------------- #
+
+
+def _dump_after_failure(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], node: Any) -> list[str]:
+    """Finish the autouse failure-dump fixture for ``node``; its dump seam prints ``dump <name>``."""
+    monkeypatch.setattr(
+        importlib.import_module("tests.smoke.helpers"), "dump_diagnostics", lambda vm: print(f"dump {vm.name}")
+    )
+    fixture = cast(Any, smoke_conftest._dump_vm_on_failure).__wrapped__(SimpleNamespace(node=node))
+    next(fixture)
+    with pytest.raises(StopIteration):
+        next(fixture)
+    return capsys.readouterr().out.splitlines()
+
+
+_SECONDARY_HEADER = "========== HA NODE secondary diagnostics =========="
+
+
+def test_a_failed_pair_setup_still_dumps_both_guests(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ha_pair never produced a value, so funcargs holds only the guests it depends on.
+    node = SimpleNamespace(
+        funcargs={"smoke_vm": FakeNode("primary"), "peer_vm": FakeNode("secondary")},
+        _rep_setup=SimpleNamespace(failed=True),
+    )
+
+    assert _dump_after_failure(monkeypatch, capsys, node) == ["dump primary", _SECONDARY_HEADER, "dump secondary"]
+
+
+def test_a_failed_pair_test_dumps_each_guest_once(
+    ha: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    a, b = FakeNode("primary"), FakeNode("secondary")
+    pair = ha.HaPair(a, b, sync_password="s", nopriv_password="n", carp_password="c")
+    node = SimpleNamespace(
+        funcargs={"smoke_vm": a, "peer_vm": b, "ha_pair": pair}, _rep_call=SimpleNamespace(failed=True)
+    )
+
+    assert _dump_after_failure(monkeypatch, capsys, node) == ["dump primary", _SECONDARY_HEADER, "dump secondary"]
+
+
+def test_a_failed_one_node_test_dumps_no_secondary(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    node = SimpleNamespace(funcargs={"smoke_vm": FakeNode("primary")}, _rep_call=SimpleNamespace(failed=True))
+
+    assert _dump_after_failure(monkeypatch, capsys, node) == ["dump primary"]
