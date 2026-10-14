@@ -94,6 +94,12 @@ smoke:tests.smoke.test_repo_install::test_install_from_live_pages_url  # SMOKE_R
 smoke:tests.smoke.test_repo_install::test_live_nightly_downgrade_requires_selected_semantic_repo  # needs both live URLs; the schedule passes neither (issue #2389)
 
 # smoke -- the HA pair fixture is CE-only: its peer_vm skips on a Plus leg (issue #3454).
+smoke:tests.smoke.test_ha_policy_versions::test_new_policy_sender_leaves_previous_receiver_untouched[automatic]  # HA pair is CE-only; Plus legs are out of scope (#3455)
+smoke:tests.smoke.test_ha_policy_versions::test_new_policy_sender_leaves_previous_receiver_untouched[manual]  # HA pair is CE-only; Plus legs are out of scope (#3455)
+smoke:tests.smoke.test_ha_policy_versions::test_previous_sender_keeps_legacy_semantics_on_new_receiver[automatic]  # HA pair is CE-only; Plus legs are out of scope (#3455)
+smoke:tests.smoke.test_ha_policy_versions::test_previous_sender_keeps_legacy_semantics_on_new_receiver[manual]  # HA pair is CE-only; Plus legs are out of scope (#3455)
+smoke:tests.smoke.test_ha_policy_versions::test_upgrade_from_previous_build_keeps_legacy_sync[checked]  # HA pair is CE-only; Plus legs are out of scope (#3455)
+smoke:tests.smoke.test_ha_policy_versions::test_upgrade_from_previous_build_keeps_legacy_sync[unchecked]  # HA pair is CE-only; Plus legs are out of scope (#3455)
 smoke:tests.smoke.test_ha_topology::test_core_automatic_ha_sync_reaches_secondary  # HA pair is CE-only; Plus legs are out of scope (#3454)
 smoke:tests.smoke.test_ha_topology::test_each_node_answers_on_its_own_management_path  # HA pair is CE-only; Plus legs are out of scope (#3454)
 smoke:tests.smoke.test_ha_topology::test_ha_privileged_user_authenticates_over_https_xmlrpc  # HA pair is CE-only; Plus legs are out of scope (#3454)

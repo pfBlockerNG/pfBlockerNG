@@ -235,6 +235,13 @@ only the source differs, and the log carries `build-prev-pkg: ref=<commit> pkg=<
 build stops the run before pytest. Fixture `prev_pkg` fails, never skips, when a leg has `SMOKE_PKG` but no
 `SMOKE_PREV_PKG`.
 
+Both builds are the same package name and version, so `pkg add` of the other one is a no-op ("the most
+recent version ... is already installed") and `helpers.deploy` never switches a node. `tests/smoke/test_ha_policy_versions.py`
+(`scripts/local-smoke.sh --no-two-vm --filter test_ha_policy_versions`) swaps a node with `pkg add -f`
+(`ha_versions.install_build`; the stored config survives, as in an upgrade) and proves the build from the
+installed code, printing `PFB_HA_BUILD node=<A|B> phase=... build=<previous|branch> pkg=... inc_sha256=...`
+for every node it touches; it restores the branch build on both nodes before and after every test.
+
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
 Portable Linux builder reproduces `make package` for this `NO_BUILD` port. For CE 2.8
