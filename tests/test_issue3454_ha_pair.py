@@ -700,6 +700,8 @@ def test_node_b_is_shut_down_when_the_ha_module_ends_not_at_session_end(
     monkeypatch: pytest.MonkeyPatch, pytester: pytest.Pytester, tmp_path: Path
 ) -> None:
     _leg(monkeypatch, "2.8", "pkg.pkg")
+    # Lane-reload tests can leave a fresh conftest in sys.modules; the inner run must import the one patched here.
+    monkeypatch.setitem(sys.modules, "tests.smoke.conftest", smoke_conftest)
     kill_log = tmp_path / "kills"
     kill_log.write_text("")
     monkeypatch.setenv("PFB_TEST_KILL_LOG", str(kill_log))
