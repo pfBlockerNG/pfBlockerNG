@@ -714,13 +714,12 @@ CHECK
     signal_ready="$stubdir/signal-ready"
     cat > "$graph_check" <<CHECK
 #!/bin/sh
-# issue #3432: the stall makes a runner that signals without waiting exit first.
-trap 'sleep 1; rm -f "$signal_lock" "$signal_scratch"' EXIT
-# timeout rebroadcasts TERM to the group; a second one must not abort the EXIT trap.
-trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM
-touch "$signal_lock" "$signal_scratch" "$signal_ready"
-# A foreground sleep would defer the trap until it exits.
+# issue #3432: ignore timeout's rebroadcast TERM so cleanup completes; the stall
+# makes a runner that signals without waiting exit before it.
+trap 'trap "" HUP INT TERM; sleep 1; rm -f "$signal_lock" "$signal_scratch"; exit 1' HUP INT TERM
+# Park in wait before signalling ready: a foreground sleep would defer the trap.
 sleep 300 &
+touch "$signal_lock" "$signal_scratch" "$signal_ready"
 wait
 CHECK
     sh "$script" --worktree "$repo" --diff "$base_sha" >/dev/null 2>&1 &
@@ -728,7 +727,7 @@ CHECK
     tries=0
     while [ ! -e "$signal_ready" ]; do
       tries=$((tries + 1))
-      [ "$tries" -lt 100 ] || { kill -KILL "$runner_pid"; wait "$runner_pid"; return 1; }
+      [ "$tries" -lt 100 ] || { kill -TERM "$runner_pid"; wait "$runner_pid"; echo 'STUCK/ENVIRONMENT: gate never signalled ready'; return 1; }
       sleep 0.01
     done
     kill -TERM "$runner_pid"
