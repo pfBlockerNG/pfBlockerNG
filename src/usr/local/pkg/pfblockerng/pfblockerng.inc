@@ -23000,7 +23000,7 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 
 	// The accepted digest suppresses the echo of this policy: a receive whose record cannot be published fails closed, applying nothing.
 	if (!pfb_sync_receive_record(
-		$changed === array() ? 'unchanged' : 'changed',
+		'changed',
 		$accepted,
 		'',
 		$pfb['dbdir'],
