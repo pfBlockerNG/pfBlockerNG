@@ -156,6 +156,21 @@ final class PfbPendingChangesTest extends TestCase
 		$this->assertFalse(pfb_pending_changes(), 'the version the pass saw is applied');
 	}
 
+	public function testSettlingAnAlreadyAppliedVersionDoesNotRewriteIt(): void
+	{
+		pfb_mark_pending_changes();
+		$seen = pfb_pending_changes_token();
+		pfb_settle_pending_changes($seen);
+		touch($this->marker . '.applied', 1000000000);
+		clearstatcache();
+
+		pfb_settle_pending_changes($seen);
+		clearstatcache();
+
+		$this->assertSame(1000000000, filemtime($this->marker . '.applied'), 'a routine pass with nothing new must not write persistent storage');
+		$this->assertFalse(pfb_pending_changes(), 'and nothing is pending');
+	}
+
 	public function testSettleKeepsAMarkTakenAfterTheToken(): void
 	{
 		pfb_mark_pending_changes();
@@ -319,10 +334,10 @@ final class PendingMarkerRaceStream
 		self::step();
 	}
 
+	// The step runs BEFORE the unlink: a save landing just before a delete is the interleaving that loses it.
 	public function unlink(string $path): bool
 	{
-		$ok = @unlink(self::real($path));
 		self::step();
-		return $ok;
+		return @unlink(self::real($path));
 	}
 }

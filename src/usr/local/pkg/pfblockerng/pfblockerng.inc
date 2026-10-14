@@ -6565,8 +6565,12 @@ function pfb_pending_changes_token(): ?string {
 	}
 	return $token === FALSE ? NULL : $token;
 }
+// Writes only a new version: a routine pass with nothing pending leaves persistent storage alone.
 function pfb_settle_pending_changes(?string $seen): void {
-	$seen === NULL || @file_put_contents(pfb_pending_changes_marker() . '.applied', $seen);
+	$applied = pfb_pending_changes_marker() . '.applied';
+	if ($seen !== NULL && @file_get_contents($applied) !== $seen) {
+		@file_put_contents($applied, $seen);
+	}
 }
 function pfb_clear_pending_changes(): void {
 	@unlink(pfb_pending_changes_marker());
