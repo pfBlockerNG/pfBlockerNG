@@ -121,7 +121,6 @@ class _Box:
     port: int
     user: str
     password: str = field(repr=False)
-    marker: str = ""
     feed: str = ""
 
 
@@ -309,7 +308,7 @@ def box(deployed_vm: helpers.SmokeVM, admin_credentials: tuple[str, str], webgui
         assert cleared.returncode == 0, f"could not clear the pending marker {marker}: {cleared.stderr!r}"
 
         user, password = admin_credentials
-        arranged = _Box(vm, webgui_protocol, port, user, password, marker, feed)
+        arranged = _Box(vm, webgui_protocol, port, user, password, feed)
         assert _in_flight(arranged) == [], "before-state: an apply is already pending or a tick is running"
         assert _table_members(vm) == [], f"before-state: table {TABLE} must not exist yet"
         yield arranged
