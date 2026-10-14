@@ -747,13 +747,19 @@ def test_copied_pfb_rules_report_only_real_differences(
     reported, the notice line is missing, or the detector's state changes what B generates.
     """
     a, b = ha_pair.primary, ha_pair.secondary
-    core_ha_on(ha_pair)  # core's HA sync is the copier under test
+    start = log_length(b)
     seed_node(b, "A", baseline.gateway)
     if inbound == "different":
         set_leaves(b, {f"{IP}/inbound_interface": "wan"}, "pfBlockerNG smoke: HA B inbound interface")
     h.reload(b, "update", wait_unbound=False)  # B records what it generates
     settle(b)
     wait_filter_idle(b)
+    wanted = {f"{IP}/inbound_interface": "wan" if inbound == "different" else "lan", f"{IP}/outbound_interface": "lan"}
+    stored = read_leaves(b, list(wanted))
+    assert stored == wanted, (
+        f"premise: B's rule-affecting local values are not what the test wrote: expected {wanted!r}, got {stored!r}; "
+        f"B's system log since the seed: {[x for x in log_since(b, start) if re.search(r'XMLRPC|Merged|Syncing|Reloading', x)]!r}"
+    )
     own = managed_objects(b)
     recorded = (read_json_file(b, COPIED_FILE) or {}).get("recorded") or {}
     show("B's own pfB rule interfaces", [(r["descr"], r.get("interface")) for r in own["owned"]])
@@ -762,6 +768,9 @@ def test_copied_pfb_rules_report_only_real_differences(
     mark = log_length(b)
 
     def copy_then_detect() -> dict[str, Any]:
+        core_ha_on(
+            ha_pair
+        )  # core's HA sync is the copier under test; on only for its own pass, never while B is seeded
         trigger_send(ha_pair, "automatic")  # core's HA sync: rules, NAT and aliases (A's pfB_* ones included)
         arrived = managed_objects(b)
         assert arrived["aliases"] == managed_objects(a)["aliases"], "B did not receive A's pfB aliases through HA sync"
@@ -1047,10 +1056,14 @@ def test_one_unreachable_target_does_not_block_the_other(ha_pair: HaPair, baseli
 def test_unreachable_peer_is_reported_truthfully(
     ha_pair: HaPair, baseline: Baseline, undo: ExitStack, transport: Transport
 ) -> None:
-    """B's sync NIC is down: the manual target records the client's transport error, the automatic path only "handed".
+    """B's sync NIC is down: the manual target records the client's transport error; the automatic path records nothing.
 
-    Red when: a manual attempt reads ``sent`` (or any non-transport class), an automatic run records anything but
-    ``handed`` with the digest, pfSense's own failure line is missing, or B's receive record moves.
+    Core's automatic sync checks B's config version before it calls the package's hook, so a peer that is dead from
+    the start leaves A's send record empty and pfSense's own failure line in A's system log. (A ``handed`` record
+    next to a failed transmit needs B to answer the version check and then refuse the data call.)
+
+    Red when: a manual attempt reads ``sent`` (or any class but a connection error or timeout), the automatic run
+    records any attempt, pfSense's own failure line is missing, or B's receive record moves.
     """
     a, b = ha_pair.primary, ha_pair.secondary
     configure_sender(ha_pair, transport, timeout=SYNC_TIMEOUT)
@@ -1074,25 +1087,25 @@ def test_unreachable_peer_is_reported_truthfully(
     show("A's send record", send)
     show("A's system log lines about the sync", lines)
 
-    attempts = send.get("attempts") or []
-    assert len(attempts) == 1, f"A's send record: expected one attempt, got {send!r}"
-    (attempt,) = attempts
-    if transport == "manual":
+    if transport == "automatic":
+        # Core's rc.filter_synchronize asks the peer for its config version first (carp_check_version, line 344) and
+        # returns when the peer does not answer, before it calls any package's plugin_xmlrpc_send (line 349): with B
+        # dead from the start the package's hook never runs, so A's record claims nothing (not even "handed").
+        assert send == {}, f"automatic transport against a dead peer: A's package must claim nothing, got {send!r}"
+        assert any("communications error" in line and SECONDARY_SYNC_IP in line for line in lines), (
+            f"pfSense's own failure report for the dead peer is missing from A's system log: {lines!r}"
+        )
+    else:
+        attempts = send.get("attempts") or []
+        assert len(attempts) == 1, f"A's send record: expected one attempt, got {send!r}"
+        (attempt,) = attempts
         assert (attempt.get("target"), attempt.get("outcome")) == (f"{SECONDARY_SYNC_IP}:443", "failed"), (
             f"A's attempt: {attempt!r}"
         )
         assert attempt.get("error") in TRANSPORT_ERRORS, (
             f"A's error class: expected one of {TRANSPORT_ERRORS}, got {attempt!r}"
         )
-    else:
-        assert (attempt.get("target"), attempt.get("outcome")) == ("pfSense HA sync", "handed"), (
-            f"automatic transport: A's package may only record handed, got {attempt!r}"
-        )
-        assert "error" not in attempt, f"a handed attempt carries an error: {attempt!r}"
-        assert any("XMLRPC" in line and SECONDARY_SYNC_IP in line for line in lines), (
-            f"pfSense's own failure report for the dead peer is missing from A's system log: {lines!r}"
-        )
-    assert attempt.get("digest") == digest, f"A's digest: expected {digest!r}, got {attempt.get('digest')!r}"
+        assert attempt.get("digest") == digest, f"A's digest: expected {digest!r}, got {attempt.get('digest')!r}"
     assert receive_state(b) == b_receive, "B's receive record moved while B was cut off"
 
 
@@ -1109,12 +1122,14 @@ def test_apply_window_defers_and_failure_keeps_pending(
     """B holds A's policy (digests equal) while its apply waits (``window``) or fails (``reload-failure``).
 
     ``window``: A's ``gen/pfb_quiet_hours`` (a policy leaf, so it travels) excludes the current time, B's tick
-    writes ``waiting: outside the apply window``. ``reload-failure``: B's firewall reload script is not executable
-    (restored by the test), so the apply fails with the pending mark kept. Either way one enforcement probe of the new
-    group finds nothing enforced; the control then lets the apply finish and the same probe sees it enforced.
+    writes ``waiting: outside the apply window``, one enforcement probe of the new group finds nothing enforced, and
+    the control (window opened, one tick) lets the apply finish and the same probe sees it enforced.
+    ``reload-failure``: B's package reload script is not executable (restored by the test), so the apply fails with
+    the pending mark kept. The runtime is not asserted there: core's own filter-reload event may enforce the group
+    anyway, so the failed record only says the package could not confirm its reload.
 
-    Red when: B does not store A's policy, the apply record is not the expected one, the pending mark is lost, or the
-    group is enforced before the apply could have run.
+    Red when: B does not store A's policy, the apply record is not the expected one, the pending mark is lost, or (window)
+    the group is enforced before the apply could have run.
     """
     a, b = ha_pair.primary, ha_pair.secondary
     alias, address = f"pfbha_x3{token()}", "198.51.100.41"
@@ -1180,24 +1195,22 @@ def test_apply_window_defers_and_failure_keeps_pending(
     assert in_flight(b) == ["pending"], f"the pending mark must be kept and the tick gone: {in_flight(b)!r}"
     probe = enforcement(b, alias, address)
     show("B's enforcement probe", probe)
-    assert probe == {"member": False, "rule": False}, (
-        f"B enforces A's group although its apply has not completed: {probe!r}"
-    )
-
     if mode == "window":
+        assert probe == {"member": False, "rule": False}, (
+            f"B enforces A's group although its apply has not completed: {probe!r}"
+        )
         set_leaves(b, {f"{GEN}/pfb_quiet_hours": ""}, "pfBlockerNG smoke: HA open the apply window")
         h.reload(b, "tick", wait_unbound=False)  # the first tick inside the window applies what was kept
-    else:
-        restore_script()
-        h.apply_filter_sync(b)  # the reload pfSense itself performs: the missing step the failed apply reported
-    if mode == "window":
         settle(b)
-    wait_filter_idle(b)
-    control = enforcement(b, alias, address)
-    show("B's enforcement probe after the control", control)
-    assert control == {"member": True, "rule": True}, (
-        f"non-vacuity: the probe does not see the group once it is applied: {control!r}"
-    )
+        wait_filter_idle(b)
+        control = enforcement(b, alias, address)
+        show("B's enforcement probe after the control", control)
+        assert control == {"member": True, "rule": True}, (
+            f"non-vacuity: the probe does not see the group once it is applied: {control!r}"
+        )
+    # reload-failure asserts nothing about the runtime: core queues its own filter reload for every config merge and
+    # write (check_reload_status "Reloading filter" in B's system log above), so the group may already be enforced
+    # while the package could not confirm its own reload. The failed record and the kept mark are what that row pins.
 
 
 # --------------------------------------------------------------------------- #
