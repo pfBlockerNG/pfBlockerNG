@@ -91,7 +91,8 @@ from .ha_policy import (
 pytestmark = pytest.mark.smoke
 
 V4, V6, BL = "pfblockernglistsv4", "pfblockernglistsv6", "pfblockerngblacklist"
-ROW_SECTIONS = (f"{LISTS_V4}/", f"{LISTS_V6}/", f"{BLACKLIST}/")
+ROW_ROOTS = (LISTS_V4, LISTS_V6, BLACKLIST)
+ROW_SECTIONS = tuple(f"{root}/" for root in ROW_ROOTS)
 SYSTEM_LOG = "/var/log/system.log"
 # The pfSense XMLRPC client logs this once per failed attempt before it retries (observed live in the exploration).
 CLIENT_RETRY_MARKER = "Retrying XMLRPC Request due to error"
@@ -205,7 +206,8 @@ def assert_local_kept(before: NodeState, after: NodeState, *, new_rows: Iterable
     """
 
     def kept(state: NodeState) -> dict[str, Any]:
-        return {p: v for p, v in state.local.items() if rows or not p.startswith(ROW_SECTIONS)}
+        # A section whose every group went is stored on B as an empty element: the section root is row territory too.
+        return {p: v for p, v in state.local.items() if rows or not (p in ROW_ROOTS or p.startswith(ROW_SECTIONS))}
 
     moved = diff_leaves(kept(before), kept(after))
     assert not moved["changed"], f"B's local leaves changed: expected none, got {moved['changed']!r}"
@@ -530,8 +532,11 @@ def test_injected_local_leaves_are_ignored_and_listed(ha_pair: HaPair, baseline:
         f"B's ignored paths: expected {sorted([iface_path, password_path])}, got {last!r}"
     )
     assert last.get("ignored_count") == 2, f"B's ignored_count: expected 2, got {last!r}"
-    assert last.get("incoming_digest") == last.get("accepted_digest") == digest, (
-        f"the ignored leaves must not count toward the digest: expected A's {digest}, got {last!r}"
+    assert last.get("accepted_digest") == digest, (
+        f"B accepted the injected request, so its accepted digest must be A's {digest}, got {last!r}"
+    )
+    assert last.get("incoming_digest") != last.get("accepted_digest"), (
+        f"the incoming digest covers the injected leaves, the accepted one must not: both are {last!r}"
     )
     receive = wait_apply(b, since=t0_b)
     settle(b)
