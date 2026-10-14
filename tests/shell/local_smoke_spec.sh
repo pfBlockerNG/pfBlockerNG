@@ -316,6 +316,18 @@ FAKEEOF
       The output should not include "ci-metadata:refs/remotes/origin/ci-metadata"
     End
 
+    It 'hands the on-box run the remote it fetched the ref from (issue #3455: P is fetched from it)'
+      When call run_and_diag --ref dummy --git-remote mirror-remote
+      The line 1 of output should equal 'exit=0'
+      The output should include "PFB_GIT_REMOTE='mirror-remote'"
+    End
+
+    It 'hands the on-box run origin when no remote is named'
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The output should include "PFB_GIT_REMOTE='origin'"
+    End
+
     It 'prints the WHOLE --git-remote help block (usage truncated twice with fixed ranges)'
       When call run_and_diag --help
       The line 1 of output should equal 'exit=0'

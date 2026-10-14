@@ -43,6 +43,9 @@
 #                     leading ghcr.io/ in PFSENSE_REF/CIVM_REF to
 #                     "${PFB_LAN_REGISTRY}/", add --plain-http to every oras call,
 #                     and skip the token-based ghcr.io login (anonymous LAN cache).
+#   PFB_GIT_REMOTE    the remote local-smoke.sh fetched the ref from; build-prev-pkg.sh
+#                     fetches the previous-devel commit from it when the clone lacks it
+#                     (default origin).
 #
 # Test-only (env):
 #   PFB_ONBOX_REPO_ROOT  override the repo path (default /root/pfBlockerNG). Points the
@@ -58,6 +61,8 @@
 #   3. Pull /root/images/{pfsense,civm} directly via oras into this workload's filesystem.
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
 #   5. Build .pkg via build-leg.sh → SMOKE_PKG.
+#   5a. Build the previous-devel .pkg via build-prev-pkg.sh → SMOKE_PREV_PKG (issue
+#      #3455); a failed build stops the run here.
 #   6. Sync the locked smoke + dependency-builder environment.
 #   7. Build this leg's extra_pkgs (per the CURRENT ref's version matrix) via
 #      build-dep-pkg-portable.py → SMOKE_DEP_PKGS (issue #1806 D2; empty when
@@ -349,6 +354,24 @@ fi
 SMOKE_PKG="$(sh scripts/build-leg.sh "$@")"
 export SMOKE_PKG
 printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2
+
+# ── Step 5a: the previous-devel .pkg (issue #3455) ─────────────────────────── #
+# The HA mixed-version rows install it on node B (SMOKE_PREV_PKG). It is built for every
+# leg: a native build ignores the variant, and peer_vm skips the Plus legs that cannot use
+# it, so there is no CE test here to get wrong. It follows the branch package's channel,
+# this leg's runtime tuple and the ports tree just prepared; only the source commit
+# differs. A failed build stops the run before pytest starts, so a package the rows need
+# never surfaces as a fixture failure an hour in.
+printf 'smoke-on-box: building the previous-devel .pkg...\n' >&2
+SMOKE_PREV_PKG="$(sh scripts/build-prev-pkg.sh \
+    --like       "$SMOKE_PKG" \
+    --ports-dir  "$PORTS_DIR" \
+    --abi        "$_ABI" \
+    --php        "$_php_ver" \
+    --py-flavor  "$_py_flavor")" \
+    || { printf 'smoke-on-box: build-prev-pkg failed\n' >&2; exit 1; }
+export SMOKE_PREV_PKG
+printf 'smoke-on-box: previous pkg built: %s\n' "$SMOKE_PREV_PKG" >&2
 
 # ── Step 5b: provision the locked smoke + dep-builder venv ─────────────────── #
 # Both the extra_pkgs builder below and run-smoke.sh use this exact repo-root
