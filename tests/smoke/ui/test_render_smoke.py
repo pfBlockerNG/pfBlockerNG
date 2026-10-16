@@ -1755,6 +1755,26 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
     )
 
 
+def test_dnsbl_group_policy_help_states_cidr_support_and_bypass_caveat(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The Group Policy section says CIDR subnets are accepted and warns the bypass can be hit or miss.
+
+    Issue #3508: the bypass list takes IPv4/IPv6 CIDR entries (the old "No Subnets allowed"
+    note is gone), and the help states that Unbound can hand one client's answer (bypassed or
+    blocked) to another when clients ask for the same name together or the answer is cached.
+    The section is server-rendered, so the page body is the oracle.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    assert "No Subnets allowed" not in body, "the Group Policy help still says subnets are not allowed"
+    missing = [text for text in ("CIDR subnets", "already cached", "hit or miss") if text not in body]
+    assert not missing, f"Group Policy help is missing {missing}"
+
+
 # The four TLD Allow picker selects (issue #876) -- built from the IANA-sourced gTLD/ccTLD/
 # iTLD arrays + the hand-curated bgTLD array in pfblockerng_dnsbl.php's $tld_list. Each is
 # checked for a STABLE, durable TLD rather than a newly-added one -- IANA's TLD set churns

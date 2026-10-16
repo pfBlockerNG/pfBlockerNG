@@ -181,6 +181,27 @@ def test_editor_mounts_on_every_wired_field(
         _shot(page, screenshot_dir, f"list_editor_mount_{page_label.split('(')[0]}_{field_id}")
 
 
+def test_group_policy_panel_shows_cidr_help_and_bypass_caveat(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Once the Group Policy gate is on and its panel expanded, the help the admin SEES says
+    CIDR subnets are accepted and warns the bypass can be hit or miss (issue #3508). The panel
+    is hidden until the ``pfb_gp`` checkbox is ticked, so only a real browser proves the text
+    is visible where the admin reads it.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+    _prep_gp(page)
+
+    panel = page.locator("#Python_Group_Policy_panel-body")
+    for text in ("CIDR subnets", "already cached", "hit or miss"):
+        expect(panel).to_contain_text(text, timeout=JS_TIMEOUT_MS)
+    expect(panel).not_to_contain_text("No Subnets allowed", timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "group_policy_cidr_help_and_caveat")
+
+
 def test_whitelist_editor_types_and_syncs_hidden_textarea(
     browser_page: Page,
     webui: WebUI,

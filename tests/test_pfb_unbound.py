@@ -1,13 +1,15 @@
 import builtins
+import contextlib
 import dataclasses
 import json
 import queue
 import random
 import re
+import sys
 import threading
 import types
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from configparser import ConfigParser
 from typing import Any
 
@@ -2448,6 +2450,201 @@ class TestOperateDnsbl:
         assert pfb_unbound.decisionDB.get("unknown") is None, (
             f"expected None, got {pfb_unbound.decisionDB.get('unknown')!r}"
         )
+
+
+class TestGroupPolicyBypassCidr:
+    """issue #3508: the Group Policy bypass list accepts IPv4/IPv6 CIDR entries as well as
+    bare IPs. Every verdict is observed through operate() on a name that IS on the
+    blocklist: a bypassed client resolves (MODULE_WAIT_MODULE), any other client is
+    blocked (MODULE_FINISHED). Row-level cases drive the ini loader with a parsed
+    ConfigParser; the file boundary (CRLF, reload, zone ids) drives init_standard()."""
+
+    @staticmethod
+    def _config(*rows: str) -> ConfigParser:
+        # Same parser as _load_ini_config(), default interpolation included.
+        config = ConfigParser()
+        config.read_string("[GP_Bypass_List]\n" + "".join(f"{i} = {row}\n" for i, row in enumerate(rows)))
+        return config
+
+    def _load(self, *rows: str) -> None:
+        pfb_unbound._load_gp_bypass_list(self._config(*rows))
+
+    @staticmethod
+    def _verdict(monkeypatch: Any, q_ip: str | None) -> str:
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
+        add_data("evil.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("evil.com.", qtype=RR_A, q_ip=q_ip)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        state = qstate.ext_state[0]
+        assert state in (MODULE_FINISHED, MODULE_WAIT_MODULE), (
+            f"client {q_ip!r}: expected {MODULE_FINISHED!r} or {MODULE_WAIT_MODULE!r}, got {state!r}"
+        )
+        return "blocked" if state == MODULE_FINISHED else "bypassed"
+
+    def _assert_verdict(self, monkeypatch: Any, q_ip: str | None, expected: str) -> None:
+        got = self._verdict(monkeypatch, q_ip)
+        assert got == expected, f"client {q_ip!r}: expected {expected!r}, got {got!r}"
+
+    @contextlib.contextmanager
+    def _booted_from_ini(self, tmp_path: Any, monkeypatch: Any, rows: list[str], newline: str = "\n") -> Iterator[None]:
+        lines = ["[MAIN]", "python_enable = true", "", "[GP_Bypass_List]"]
+        lines += [f"{i} = {row}" for i, row in enumerate(rows)]
+        (tmp_path / "pfb_unbound.ini").write_bytes((newline.join(lines) + newline).encode("utf-8"))
+        (tmp_path / "pfb_py_sources.json").write_text(json.dumps({"version": 1, "config": {}, "feeds": []}))
+        monkeypatch.chdir(tmp_path)
+        # init_standard() replaces sys.stderr; register monkeypatch's auto-restore.
+        monkeypatch.setattr(sys, "stderr", sys.stderr)
+        for key in ("mod_maxminddb_e", "mod_threading_e", "mod_sqlite3_e"):
+            pfb_unbound.pfb[key] = "stub"
+        pfb_unbound.pfb["mod_sqlite3"] = False
+        pfb_unbound.pfb["mod_threading"] = False
+        try:
+            assert pfb_unbound.init_standard(0, unboundmodule.module_env()) is True
+            yield
+        finally:
+            pfb_unbound.deinit(0)
+
+    def test_group_policy_ipv4_cidr_bypasses_members_and_blocks_others(self, monkeypatch: Any) -> None:
+        self._load("10.0.0.0/24")
+        for outsider in ("9.255.255.255", "10.0.1.0", "10.0.255.1"):
+            self._assert_verdict(monkeypatch, outsider, "blocked")
+        for member in ("10.0.0.0", "10.0.0.77", "10.0.0.255"):
+            self._assert_verdict(monkeypatch, member, "bypassed")
+
+    def test_group_policy_ipv6_cidr_bypasses_members_and_blocks_others(self, monkeypatch: Any) -> None:
+        self._load("2001:db8:1::/64")
+        for outsider in ("2001:db8:2::1", "2001:db8:1:1::1", "2001:db9:1::1"):
+            self._assert_verdict(monkeypatch, outsider, "blocked")
+        for member in ("2001:db8:1::", "2001:db8:1::abcd", "2001:db8:1:0:ffff:ffff:ffff:ffff"):
+            self._assert_verdict(monkeypatch, member, "bypassed")
+
+    @pytest.mark.parametrize(
+        ("row", "client"),
+        [
+            ("1.2.3.4", "1.2.3.4"),
+            ("1.2.3.4/32", "1.2.3.4"),
+            ("2001:db8::1/128", "2001:db8::1"),
+            ("2001:0db8:0:0:0:0:0:1", "2001:db8::1"),
+        ],
+    )
+    def test_group_policy_single_host_entry_matches_that_ip_only_and_stays_removable(
+        self, monkeypatch: Any, row: str, client: str
+    ) -> None:
+        self._load(row)
+        self._assert_verdict(monkeypatch, "192.0.2.200", "blocked")
+        self._assert_verdict(monkeypatch, client, "bypassed")
+
+        applied, _ = pfb_unbound.pfb_apply_control_command(["python_control", "removebypass", client.replace(".", "-")])
+
+        assert applied is True, f"expected True, got {applied!r}"
+        self._assert_verdict(monkeypatch, client, "blocked")
+
+    def test_group_policy_ipv4_mapped_client_matches_ipv4_cidr(self, monkeypatch: Any) -> None:
+        self._load("10.0.0.0/24")
+        self._assert_verdict(monkeypatch, "::ffff:10.0.1.1", "blocked")
+        self._assert_verdict(monkeypatch, "::ffff:10.0.0.77", "bypassed")
+
+    @pytest.mark.parametrize("q_ip", [None, "not-an-address"])
+    def test_group_policy_client_without_a_usable_address_is_never_bypassed(
+        self, monkeypatch: Any, q_ip: str | None
+    ) -> None:
+        # The widest possible networks: only the address guard keeps the verdict "blocked".
+        self._load("0.0.0.0/0", "::/0")
+        self._assert_verdict(monkeypatch, q_ip, "blocked")
+
+    @pytest.mark.parametrize(
+        ("row", "member", "other_family"),
+        [("0.0.0.0/0", "203.0.113.9", "2001:db8::1"), ("::/0", "2001:db8::1", "203.0.113.9")],
+    )
+    def test_group_policy_catch_all_prefix_bypasses_its_own_family_only(
+        self, monkeypatch: Any, row: str, member: str, other_family: str
+    ) -> None:
+        self._load(row)
+        self._assert_verdict(monkeypatch, other_family, "blocked")
+        self._assert_verdict(monkeypatch, member, "bypassed")
+
+    def test_group_policy_cidr_with_host_bits_set_is_accepted_as_its_network(self, monkeypatch: Any) -> None:
+        self._load("10.0.0.1/24")
+        self._assert_verdict(monkeypatch, "10.0.1.1", "blocked")
+        self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
+
+    def test_group_policy_row_with_trailing_space_is_accepted(self, monkeypatch: Any) -> None:
+        # The ini writer emits '10.0.0.0/24 ' for a row carrying an inline '# comment'.
+        self._load("10.0.0.0/24 ")
+        self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
+
+    def test_group_policy_runtime_removebypass_does_not_carve_a_hole_in_a_configured_cidr(
+        self, monkeypatch: Any
+    ) -> None:
+        # removebypass edits exact-IP entries only; the configured CIDR keeps covering the IP.
+        self._load("10.0.0.0/24")
+        self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
+
+        applied, msg = pfb_unbound.pfb_apply_control_command(["python_control", "removebypass", "10-0-0-77"])
+
+        assert applied is True, f"expected True, got {applied!r}"
+        assert "not in Group Policy" in msg, f"expected 'not in Group Policy' in {msg!r}"
+        self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
+
+    @pytest.mark.parametrize(
+        ("row", "probe"),
+        [
+            ("", "203.0.113.50"),
+            ("   ", "203.0.113.50"),
+            ("# comment", "203.0.113.50"),
+            ("10.0.0.0/33", "10.0.0.5"),
+            ("2001:db8:9::/129", "2001:db8:9::1"),
+            ("xn--abc", "203.0.113.50"),
+            ("example.com", "203.0.113.50"),
+            ("10.0.0.0/", "10.0.0.5"),
+            ("/24", "203.0.113.50"),
+            ("10.0.0.0/-1", "10.0.0.5"),
+            ("10.0.0.0/24 extra", "10.0.0.5"),
+        ],
+    )
+    def test_group_policy_unparseable_row_is_skipped_reported_and_never_widens(
+        self, monkeypatch: Any, capsys: Any, row: str, probe: str
+    ) -> None:
+        self._load("192.0.2.0/24", row, "2001:db8:5::/48")
+
+        err = capsys.readouterr().err
+        assert "Failed to parse: GP_Bypass_List: row:1" in err, f"expected the row-1 parse failure in {err!r}"
+        self._assert_verdict(monkeypatch, probe, "blocked")
+        # The rows around the bad one still loaded: one bad row never aborts the load.
+        self._assert_verdict(monkeypatch, "192.0.2.9", "bypassed")
+        self._assert_verdict(monkeypatch, "2001:db8:5::1", "bypassed")
+
+    def test_group_policy_gate_stays_off_when_no_row_parses(self) -> None:
+        self._load("example.com")
+        assert pfb_unbound.pfb["gpListDB"] is False, f"expected False, got {pfb_unbound.pfb['gpListDB']!r}"
+
+    def test_group_policy_cidr_survives_the_real_ini_boot_with_crlf_line_endings(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        with self._booted_from_ini(tmp_path, monkeypatch, ["10.0.0.0/24", "2001:db8:1::/64", "192.0.2.7"], "\r\n"):
+            self._assert_verdict(monkeypatch, "10.0.1.1", "blocked")
+            for member in ("10.0.0.77", "2001:db8:1::abcd", "192.0.2.7"):
+                self._assert_verdict(monkeypatch, member, "bypassed")
+
+    def test_group_policy_zone_id_row_does_not_abort_the_boot(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # '%em0' read as a '%' interpolation raised out of init_standard() on the PHP-accepted
+        # link-local form. The entry is bound to its zone, which a client address never carries.
+        with self._booted_from_ini(tmp_path, monkeypatch, ["fe80::1%em0", "10.0.0.0/24"]):
+            self._assert_verdict(monkeypatch, "fe80::1", "blocked")
+            self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
+
+    def test_group_policy_reload_drops_cidr_entries_removed_from_the_ini(self, tmp_path: Any, monkeypatch: Any) -> None:
+        with self._booted_from_ini(tmp_path, monkeypatch, ["10.0.0.0/24"]):
+            self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
+
+        # A reload whose list no longer covers 10.0.0.0/24 must not inherit the old network.
+        with self._booted_from_ini(tmp_path, monkeypatch, ["192.0.2.0/24"]):
+            self._assert_verdict(monkeypatch, "10.0.0.77", "blocked")
+            self._assert_verdict(monkeypatch, "192.0.2.9", "bypassed")
 
 
 class TestAttributionSurvivesRace:

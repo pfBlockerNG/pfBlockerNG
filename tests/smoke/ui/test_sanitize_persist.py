@@ -678,6 +678,60 @@ def test_dnsbl_tld_exclusion_accepts_idn_row(
     assert _decoded(after) == idn_row, f"the IDN row must persist verbatim, got {_decoded(after)!r}"
 
 
+def test_dnsbl_group_policy_bypass_accepts_cidr_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,  # noqa: ARG001
+) -> None:
+    """The Group Policy bypass list saves an IPv4 CIDR row verbatim (issue #3508).
+
+    The list used to take single IPs only. The row is unique per run so the POST must
+    CAUSE the change; the persisted blob is what the ini writer later emits.
+    """
+    vm = smoke_vm
+    octets = uuid.uuid4().bytes
+    row = f"10.{octets[0]}.{octets[1]}.0/24"
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp_bypass_list"
+
+    before = helpers.config_get(vm, cfg)
+    resp = webui.post(DNSBL_PAGE, {"pfb_gp_bypass_list": row}, timeout=SETTINGS_SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
+    assert "Invalid IP or CIDR entry" not in resp.text, f"the CIDR row was rejected: {row!r}"
+
+    after = helpers.config_get(vm, cfg)
+    assert after != before, "pfb_gp_bypass_list did not change -- the save did not take (POST must CAUSE the change)"
+    assert _decoded(after) == row, f"the CIDR row must persist verbatim, got {_decoded(after)!r}"
+
+
+def test_dnsbl_group_policy_bypass_rejects_out_of_range_prefix_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,  # noqa: ARG001
+) -> None:
+    """The Group Policy bypass list refuses a CIDR whose prefix is out of range (issue #3508).
+
+    Live counterpart of ``tests/php/DnsblCustomListWildcardValidationTest.php``: the save
+    aborts with this row's own message and the persisted field stays untouched.
+    """
+    vm = smoke_vm
+    row = "10.0.0.0/33"
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp_bypass_list"
+
+    before = helpers.config_get(vm, cfg)
+    resp = webui.post(DNSBL_PAGE, {"pfb_gp_bypass_list": row}, timeout=SETTINGS_SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
+
+    expected_error = f"Customlist pfb_gp_bypass_list: Invalid IP or CIDR entry: [ {row} ]"
+    assert expected_error in resp.text, (
+        f"the page did not report the row as invalid (expected {expected_error!r}) -- "
+        "an unrelated validation failure would abort the save too"
+    )
+    after = helpers.config_get(vm, cfg)
+    assert after == before, (
+        f"the out-of-range row was saved -- changed from {_decoded(before)!r} to {_decoded(after)!r}"
+    )
+
+
 def test_edit_hooks_save_sanitizes_the_written_script(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,

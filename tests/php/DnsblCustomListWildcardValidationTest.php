@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,6 +15,9 @@ use PHPUnit\Framework\TestCase;
  * and was saved — the row the build path then had to defend against. Exactly
  * one leading dot may come off, which is what pfb_filter() already tolerates
  * itself; the trailing-dot tolerance stays.
+ *
+ * Issue #3508: the Group Policy bypass list ('ip' arm) takes a bare IP or an IPv4/IPv6
+ * CIDR, and rejects anything else with the same per-row message shape.
  *
  * The page carries top-level execution and cannot be require()d off-appliance,
  * so the validation block is eval-extracted from the REAL source using its
@@ -103,5 +107,59 @@ final class DnsblCustomListWildcardValidationTest extends TestCase
 	public function testNoAaaaWildcardRowAccepted(): void
 	{
 		$this->assertSame([], $this->validateRow('pfb_noaaaa_list', '.example.com'));
+	}
+
+	/** @return array<string, array{string}> */
+	public static function groupPolicyAcceptedRows(): array
+	{
+		return [
+			'bare IPv4' => ['192.168.1.5'],
+			'bare IPv6' => ['2001:db8::1'],
+			'IPv4 CIDR' => ['10.0.0.0/24'],
+			'IPv6 CIDR' => ['2001:db8::/64'],
+			'IPv4 CIDR with host bits set' => ['10.0.0.1/24'],
+			'IPv4 host prefix' => ['10.0.0.5/32'],
+			'IPv6 host prefix' => ['2001:db8::1/128'],
+			'IPv4 catch-all' => ['0.0.0.0/0'],
+			'IPv6 catch-all' => ['::/0'],
+			'CIDR followed by an inline comment' => ['10.0.0.0/24 # office'],
+		];
+	}
+
+	#[DataProvider('groupPolicyAcceptedRows')]
+	public function testGroupPolicyBypassAcceptsIpAndCidrRows(string $row): void
+	{
+		$this->assertSame([], $this->validateRow('pfb_gp_bypass_list', $row));
+	}
+
+	/** @return array<string, array{string}> */
+	public static function groupPolicyRejectedRows(): array
+	{
+		return [
+			'IPv4 prefix above 32' => ['10.0.0.0/33'],
+			'IPv6 prefix above 128' => ['2001:db8::/129'],
+			'missing prefix length' => ['10.0.0.0/'],
+			'missing network' => ['/24'],
+			'hostname' => ['example.com'],
+			'trailing text after the CIDR' => ['10.0.0.0/24 extra'],
+			'negative prefix length' => ['10.0.0.0/-1'],
+		];
+	}
+
+	#[DataProvider('groupPolicyRejectedRows')]
+	public function testGroupPolicyBypassRejectsMalformedRows(string $row): void
+	{
+		$this->assertSame(
+			["Customlist pfb_gp_bypass_list: Invalid IP or CIDR entry: [ {$row} ]"],
+			$this->validateRow('pfb_gp_bypass_list', $row)
+		);
+	}
+
+	public function testCidrAcceptanceStaysScopedToTheGroupPolicyList(): void
+	{
+		$this->assertSame(
+			['Customlist pfb_noaaaa_list: Invalid Domain name entry: [ 10.0.0.0/24 ]'],
+			$this->validateRow('pfb_noaaaa_list', '10.0.0.0/24')
+		);
 	}
 }

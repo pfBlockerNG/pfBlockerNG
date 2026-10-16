@@ -391,6 +391,7 @@ allowRegexDB: defaultdict[str, Any]
 hstsDB: defaultdict[str, Any]
 whiteDB: defaultdict[str, Any]
 gpListDB: defaultdict[str, Any]
+gpNetDB: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
 noAAAADB: defaultdict[str, Any]
 decisionDB: _LruCache
 _dnsbl_last_event: Any = None
@@ -1442,6 +1443,45 @@ def _load_ini_config() -> ConfigParser | None:
     return config
 
 
+def _load_gp_bypass_list(config: ConfigParser) -> None:
+    """Load ``[GP_Bypass_List]``. A full-length entry (bare IP, /32, /128) is an exact
+    ``gpListDB`` key -- the one structure runtime add/removebypass edits -- and a shorter
+    prefix is a ``gpNetDB`` network. An unparseable row is reported and skipped, never
+    aborting the rest of the load."""
+    if not config.has_section("GP_Bypass_List"):
+        return
+    try:
+        # raw: a link-local zone id ('fe80::1%em0') is not a '%' interpolation.
+        for key, line in config.items("GP_Bypass_List", raw=True):
+            try:
+                net = ipaddress.ip_network(line.strip(), strict=False)
+            except ValueError:
+                sys.stderr.write("[pfBlockerNG]: Failed to parse: GP_Bypass_List: row:{} line:{}".format(key, line))
+                continue
+            if net.prefixlen == net.max_prefixlen:
+                gpListDB[str(net.network_address)] = 0
+            else:
+                gpNetDB.append(net)
+
+        if gpListDB or gpNetDB:
+            pfb["gpListDB"] = True
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to load GP Bypass List: {}".format(e))
+
+
+def _gp_net_match(q_ip: str) -> bool:
+    """True when client address ``q_ip`` lies inside a configured ``gpNetDB`` network."""
+    try:
+        addr = ipaddress.ip_address(q_ip)
+    except ValueError:
+        return False
+    # Unbound can report a v4 client as ::ffff:a.b.c.d; it belongs to the v4 networks.
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    # shortcut: linear scan; fine for an admin-sized list, use a prefix trie if it reaches thousands.
+    return any(addr in net for net in gpNetDB)
+
+
 def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
     """Load normalized user regex rows from MAIN.regex_list."""
     if config.has_option("MAIN", "regex_list"):
@@ -1493,6 +1533,7 @@ def init_standard(id: int, env: module_env) -> bool:
         _dnsbl_last_event, \
         noAAAADB, \
         gpListDB, \
+        gpNetDB, \
         safeSearchDB, \
         feedGroupIndexDB, \
         maxmindReader, \
@@ -1815,6 +1856,7 @@ def init_standard(id: int, env: module_env) -> bool:
     whiteDB = defaultdict(str)
     hstsDB = defaultdict(str)
     gpListDB = defaultdict(str)
+    gpNetDB = []
     noAAAADB = defaultdict(str)
     feedGroupDB: defaultdict[str, Any] = defaultdict(str)
 
@@ -2030,17 +2072,7 @@ def init_standard(id: int, env: module_env) -> bool:
                         pass
 
             # Collect user-defined Group Policy Global Bypass List
-            if config.has_section("GP_Bypass_List"):
-                gp_bypass_list = config.items("GP_Bypass_List")
-                if gp_bypass_list:
-                    try:
-                        for key, line in gp_bypass_list:
-                            gpListDB[line.rstrip("\r\n")] = 0
-
-                        pfb["gpListDB"] = True
-                    except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to load GP Bypass List: {}".format(e))
-                        pass
+            _load_gp_bypass_list(config)
 
             # Collect SafeSearch Redirection list
             _load_safesearch_db()
@@ -4192,7 +4224,7 @@ class Snapshot:
     Scope (deliberate): exactly the strata the per-query ``containers`` assembly feeds
     ``evaluate_domain`` (``operate()``), plus the ``important_rules`` fast-path gate and
     the build counts. The ``operate()``-level axes ``noAAAADB``/``safeSearchDB``/
-    ``gpListDB`` are NOT here -- they are not read by ``evaluate_domain``/``containers``,
+    ``gpListDB``/``gpNetDB`` are NOT here -- they are not read by ``evaluate_domain``/``containers``,
     are not produced by ``build()``/``dnsbl_build_from_manifest`` (loaded from static
     files), and ``gpListDB`` is MUTATED in place per query (a group-policy bypass cache),
     so it is not an immutable swap target. ``rcodeDB``/``maxmindReader`` shape the reply,
@@ -7481,6 +7513,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
 
                 if isgpBypass is not None:
                     bypass_dnsbl = True
+                elif gpNetDB:
+                    bypass_dnsbl = _gp_net_match(q_ip)
 
         # ADR-10: capture the ONE live matcher snapshot ref for this query. Every
         # name in this query (the original + any CNAME-chain targets) is evaluated

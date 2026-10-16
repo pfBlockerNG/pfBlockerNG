@@ -734,8 +734,9 @@ if ($_POST) {
 									}
 									break;
 								case 'ip':
-									if (empty(pfb_filter($value[0], PFB_FILTER_IP, 'dnsbl'))) {
-										$input_errors[] = "Customlist {$custom_type}: Invalid IP entry: [ " . htmlspecialchars($line) . " ]";
+									// issue #3508: a bare IP or an IPv4/IPv6 CIDR; is_subnet() first so a valid CIDR never logs a pfb_filter() rejection.
+									if (!is_subnet($value[0]) && empty(pfb_filter($value[0], PFB_FILTER_IP, 'dnsbl'))) {
+										$input_errors[] = "Customlist {$custom_type}: Invalid IP or CIDR entry: [ " . htmlspecialchars($line) . " ]";
 									}
 									break;
 								case 'tld':
@@ -3199,7 +3200,7 @@ $form->add($section);
 $section = new Form_Section('DNSBL Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
-	'This is a preliminary DNSBL Group Policy configuration that will bypass DNSBL for the defined LAN IPs. (No Subnets allowed)'));
+	'This is a preliminary DNSBL Group Policy configuration that will bypass DNSBL for the defined LAN IPs or CIDR subnets.'));
 
 $section->addInput(new Form_Textarea(
 	'pfb_gp_bypass_list',
@@ -3211,8 +3212,10 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'width: 100%')
-  ->setHelp('Enter the Local LAN IPs (one per line) that will bypass DNSBL Blocking.<br />'
-		. 'Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.');
+  ->setHelp('Enter the Local LAN IPs or CIDR subnets (IPv4 or IPv6, one per line) that will bypass DNSBL Blocking.<br />'
+		. 'Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.<br />'
+		. '<strong>Note:</strong> This bypass is not reliable for every client. When clients ask for the same name at the same moment, or the answer is already cached, '
+		. 'Unbound can give one client\'s result (bypassed or blocked) to another client, so the bypass can be hit or miss.');
 
 $form->add($section);
 

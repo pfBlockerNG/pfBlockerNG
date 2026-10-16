@@ -144,6 +144,7 @@ def reset_pfb_globals() -> None:
     pfb_unbound.whiteDB = defaultdict(str)
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)
+    pfb_unbound.gpNetDB = []
     pfb_unbound.noAAAADB = defaultdict(str)
 
     # ADR-10 P2: init_standard bundles the matcher strata into ONE immutable Snapshot
