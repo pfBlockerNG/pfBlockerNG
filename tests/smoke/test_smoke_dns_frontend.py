@@ -77,7 +77,7 @@ SNAPSHOT_PATHS = (
     "cert",
 )
 
-LAN_ALLOW = ("pfb3512 LAN", "allow", "192.168.1.0", "24")
+PFSENSE_LAN_NET = "192.168.1.0/24"  # pfSense allows it in access_lists.conf even with the Resolver on Localhost only
 
 Acl = tuple[str, str, str, str]  # (name, action, network, mask)
 
@@ -204,10 +204,10 @@ def _set_acls(vm: SmokeVM, acls: list[Acl]) -> None:
         f" 'description' => {h._php_str(name)})))"
         for name, action, net, mask in acls
     )
+    snippet = f"config_set_path('unbound/acls', array({lists}));\n" if acls else "config_del_path('unbound/acls');\n"
     _php_ok(
         vm,
-        f"config_set_path('unbound/acls', array({lists}));\n"
-        "write_config('pfBlockerNG smoke: Resolver access lists for the #3512 front end');",
+        snippet + "write_config('pfBlockerNG smoke: Resolver access lists for the #3512 front end');",
         "Resolver access lists",
     )
 
@@ -315,7 +315,8 @@ def _start_frontend(vm: SmokeVM) -> None:
         f"PY=$({PY_LAUNCHER} --print-interpreter) || exit 1\n"
         f"rm -f {PID_FILE}\n"
         f": > {LOG_FILE}\n"
-        f"/usr/sbin/daemon -p {PID_FILE} -o {LOG_FILE} {command}\n",
+        # daemon(8) holds the session's stdio open otherwise, and ssh then waits for it forever.
+        f"/usr/sbin/daemon -p {PID_FILE} -o {LOG_FILE} {command} </dev/null >/dev/null 2>&1\n",
         "start the front end",
     )
 
@@ -461,24 +462,16 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         )
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _set_resolver(vm, refid)
-        _apply_resolver(current, "Resolver on 5353, no LAN ACL")
-        _say(
-            "access_lists.conf without an explicit LAN ACL:\n"
-            + vm.ssh("cat /var/unbound/access_lists.conf 2>&1").stdout
-        )
+        _apply_resolver(current, "Resolver on 5353")
+        acl = vm.ssh("cat /var/unbound/access_lists.conf 2>&1").stdout
+        current.findings["access_lists.conf"] = acl.strip()
+        _say(f"access_lists.conf with active_interface=lo0 and no explicit ACL:\n{acl}")
+        assert f"access-control: {PFSENSE_LAN_NET} allow" in acl, f"pfSense did not allow the LAN network:\n{acl}"
         _say("unbound listeners: " + " ".join(f"{cmd}@{addr}" for cmd, addr in _listeners(vm) if cmd == "unbound"))
         _install_frontend(vm)
         _start_frontend(vm)
         _wait_frontend_answers(vm, blocked)
         _say("front end listeners: " + " ".join(f"{cmd}@{addr}" for cmd, addr in _listeners(vm) if "python" in cmd))
-        # What pfSense gives a LAN client when Unbound listens on Localhost only (no automatic LAN ACL?).
-        default, raw = _query(client_vm, h.unique_domain("defaultacl"))
-        current.findings["LAN client, no explicit ACL"] = default.rcode
-        _say(f"LAN client against Localhost-only Resolver, no explicit LAN ACL: {default}\n{raw}")
-        _set_acls(vm, [LAN_ALLOW])
-        _apply_resolver(current, "Resolver on 5353, LAN allowed")
-        acl = vm.ssh("grep -h access-control /var/unbound/access_lists.conf").stdout
-        assert f"{LAN_ALLOW[2]}/{LAN_ALLOW[3]} {LAN_ALLOW[1]}" in acl, f"the LAN ACL did not reach Unbound:\n{acl}"
         proxy = vm.ssh(f"/usr/local/sbin/unbound-control -c {h.UNBOUND_CONF} get_option proxy-protocol-port 2>&1")
         _say(f"unbound-control get_option proxy-protocol-port: {proxy.stdout.strip()}")
         yield current
@@ -573,15 +566,15 @@ def test_unbound_acl_refusal_reaches_the_client_through_the_front_end(rig: Rig) 
     """An Unbound ACL that refuses the client's address makes the front end relay REFUSED.
 
     Given the LAN client resolving an allowed name through the front end (before-state),
-    When the Resolver's access lists refuse 192.168.1.10/32 (more specific than the allowed LAN /24),
+    When the Resolver's access lists refuse 192.168.1.10/32 (more specific than the LAN /24 pfSense allows),
     Then the same kind of query comes back REFUSED with no records,
       And a listed name still gets the VIP, because the front end decides DNSBL itself (recorded as a finding),
-    Finally the LAN is allowed again.
+    Finally the access lists are empty again and the client resolves.
     """
     name = h.unique_domain("beforeacl")
     _assert_allowed_through_unbound(rig, name, *_query(rig.client, name), how="before the ACL")
     try:
-        _set_acls(rig.vm, [LAN_ALLOW, ("pfb3512 refuse client", "refuse", CLIENT_LAN_IP, "32")])
+        _set_acls(rig.vm, [("pfb3512 refuse client", "refuse", CLIENT_LAN_IP, "32")])
         _apply_resolver(rig, "Resolver refusing the client")
         refused, raw = _query(rig.client, h.unique_domain("refused"))
         assert refused.rcode == "REFUSED" and not refused.records, (
@@ -591,7 +584,7 @@ def test_unbound_acl_refusal_reaches_the_client_through_the_front_end(rig: Rig) 
         rig.findings["listed name, client refused by Unbound ACL"] = f"{listed.rcode} {listed.records}"
         assert h.is_vip(listed), f"the front end answers listed names itself, expected the VIP, got {listed}\n{raw}"
     finally:
-        _set_acls(rig.vm, [LAN_ALLOW])
-        _apply_resolver(rig, "Resolver, LAN allowed again")
+        _set_acls(rig.vm, [])
+        _apply_resolver(rig, "Resolver, access lists empty again")
     again = h.unique_domain("afteracl")
     _assert_allowed_through_unbound(rig, again, *_query(rig.client, again), how="after the ACL is removed")
