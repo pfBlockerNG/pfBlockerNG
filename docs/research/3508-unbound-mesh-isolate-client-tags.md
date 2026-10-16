@@ -145,8 +145,9 @@ would be blocked, and isolation removes that case the same way.
 4. **Nested ACLs.** Any pfSense ACL element more specific than a bypass
    netblock must carry the same tag, or its clients fall back to the
    untagged class.
-5. **Cache.** `pfb_unbound.py` sets `qstate.no_cache_store = 1` at
-   `MODULE_EVENT_NEW` for every bypassed query. The iterator skips all
+5. **Cache (shipped with #3508).** `pfb_unbound.py` sets
+   `qstate.no_cache_store = 1` at `MODULE_EVENT_NEW` for every bypassed
+   query. The iterator skips all
    message and RRset stores for that state (`iterator.c`, every
    `iter_dns_store()` call is guarded), so a bypassed answer, including
    its CNAME chain, never reaches a blocked client through the cache.

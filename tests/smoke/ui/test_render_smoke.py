@@ -1758,11 +1758,11 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
 def test_dnsbl_group_policy_help_states_cidr_support_and_bypass_caveat(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """The Group Policy section says CIDR subnets are accepted and warns about shared and cached answers.
+    """The Group Policy section says CIDR subnets are accepted and warns about shared answers.
 
     Issue #3508: the bypass list takes IPv4/IPv6 CIDR entries (the old "No Subnets allowed"
-    note is gone), and the help states that Unbound can hand one client's answer (bypassed or
-    blocked) to another when clients ask for the same name together or the answer is cached.
+    note is gone), and the help states that, rarely, two clients asking for the same name at
+    the same moment both receive the result decided for one of them.
     The section is server-rendered, so the page body is the oracle.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
@@ -1771,9 +1771,7 @@ def test_dnsbl_group_policy_help_states_cidr_support_and_bypass_caveat(
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     assert "No Subnets allowed" not in body, "the Group Policy help still says subnets are not allowed"
-    missing = [
-        text for text in ("CIDR subnets", "at the same moment", "until the cached entry expires") if text not in body
-    ]
+    missing = [text for text in ("CIDR subnets", "In rare cases", "at the same moment") if text not in body]
     assert not missing, f"Group Policy help is missing {missing}"
 
 

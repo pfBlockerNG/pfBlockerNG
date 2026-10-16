@@ -2567,6 +2567,28 @@ class TestGroupPolicyBypassCidr:
         self._assert_verdict(monkeypatch, "10.0.1.1", "blocked")
         self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
 
+    @pytest.mark.parametrize(("qname", "row"), [("evil.com.", "10.0.0.0/24"), ("good.com.", "10.0.0.77")])
+    def test_group_policy_bypassed_answer_is_never_stored_in_the_shared_cache(
+        self, monkeypatch: Any, qname: str, row: str
+    ) -> None:
+        # Unbound serves cache hits before operate() runs, so a bypassed answer stored in
+        # the shared cache reaches every other client. A name that is not listed is kept
+        # out too: a block found later on its CNAME chain comes after the iterator stored it.
+        self._load(row)
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        add_data("evil.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate(qname, qtype=RR_A, q_ip="10.0.0.77")
+        assert qstate.no_cache_store == 0, f"expected 0, got {qstate.no_cache_store!r}"
+
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert qstate.no_cache_store == 1, f"expected 1, got {qstate.no_cache_store!r}"
+
     def test_group_policy_runtime_removebypass_does_not_carve_a_hole_in_a_configured_cidr(
         self, monkeypatch: Any
     ) -> None:

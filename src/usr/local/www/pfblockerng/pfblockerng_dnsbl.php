@@ -3215,8 +3215,7 @@ $section->addInput(new Form_Textarea(
   ->setHelp('Enter the Local LAN IPs or CIDR subnets (IPv4 or IPv6, one per line) that will bypass DNSBL Blocking.<br />'
 		. 'Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.<br />'
 		. '<strong>Note:</strong> In rare cases, when a bypassed client and another client ask for the same name at the same moment, '
-		. 'the DNS Resolver sends both of them the result decided for one of them (bypassed or blocked). '
-		. 'Also, a blocked name that a bypassed client resolved can be answered from the DNS Resolver cache to other clients until the cached entry expires.');
+		. 'the DNS Resolver sends both of them the result decided for one of them (bypassed or blocked).');
 
 $form->add($section);
 

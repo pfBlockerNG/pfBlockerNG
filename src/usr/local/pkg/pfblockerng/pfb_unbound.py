@@ -7510,6 +7510,11 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 elif gpNetDB:
                     bypass_dnsbl = _gp_net_match(q_ip)
 
+        # Cache hits are served before operate() runs: a bypassed answer must never reach
+        # other clients through the shared cache (issue #3508).
+        if bypass_dnsbl:
+            qstate.no_cache_store = 1
+
         # ADR-10: capture the ONE live matcher snapshot ref for this query. Every
         # name in this query (the original + any CNAME-chain targets) is evaluated
         # against this single immutable snapshot, so a swap that rebinds ``_snapshot``
