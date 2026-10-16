@@ -45,6 +45,10 @@ ZONE = {
     ("trap.example.", dnswire.TYPE_A): ["trap.example. 300 IN A 192.0.2.56"],
     ("blocked.example.", dnswire.TYPE_A): ["blocked.example. 300 IN A 192.0.2.99"],
     (DUCK, dnswire.TYPE_TXT): [],
+    ("chain.example.", dnswire.TYPE_A): [
+        "chain.example. 300 IN CNAME other.example.",
+        "other.example. 300 IN A 192.0.2.60",
+    ],
 }
 
 
@@ -165,8 +169,13 @@ def test_aaaa_without_an_address_gets_the_baked_v6(ss_booted: Booted) -> None:
     assert _answers(reply) == [("nodata.example.", dnswire.TYPE_AAAA, ipaddress.IPv6Address("2001:db8::8").packed)]
 
 
-def test_no_chased_address_and_no_baked_address_is_servfail(ss_booted: Booted) -> None:
-    assert _resolve(ss_booted, build_query("nobaked.example."), FakeUnbound(ZONE)).rcode == 2
+def test_no_chased_address_and_no_baked_address_leaves_the_client_the_lone_cname(ss_booted: Booted) -> None:
+    """The module declines (no baked address for the type) and finishes with what the chase gave it: the CNAME."""
+    reply = _resolve(ss_booted, build_query("nobaked.example."), FakeUnbound(ZONE))
+    assert (reply.rcode, _answers(reply)) == (
+        0,
+        [("nobaked.example.", dnswire.TYPE_CNAME, dnswire.encode_name("nodata-target.example."))],
+    )
 
 
 # --- guards --------------------------------------------------------------------------------------
@@ -191,8 +200,9 @@ def test_a_module_that_keeps_asking_for_restarts_gets_one_chase_then_servfail(
     assert _asked(unbound) == [(DUCK, dnswire.TYPE_A), (TARGET, dnswire.TYPE_A)]
 
 
+@pytest.mark.parametrize("name", [DUCK, "chain.example."], ids=["address-answer", "unrelated-cname-chain"])
 def test_a_restart_with_nothing_planted_is_servfail_without_a_chase(
-    ss_booted: Booted, monkeypatch: pytest.MonkeyPatch
+    ss_booted: Booted, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     def restart(id: int, event: int, qstate: Any, qdata: Any) -> bool:
         qstate.ext_state[id] = shim.MODULE_WAIT_MODULE if event == shim.MODULE_EVENT_NEW else shim.MODULE_RESTART_NEXT
@@ -200,8 +210,8 @@ def test_a_restart_with_nothing_planted_is_servfail_without_a_chase(
 
     monkeypatch.setattr(ss_booted.module, "operate", restart)
     unbound = FakeUnbound(ZONE)
-    assert _resolve(ss_booted, build_query(DUCK), unbound).rcode == 2
-    assert _asked(unbound) == [(DUCK, dnswire.TYPE_A)]
+    assert _resolve(ss_booted, build_query(name), unbound).rcode == 2
+    assert _asked(unbound) == [(name, dnswire.TYPE_A)]
 
 
 # --- real sockets: the chase is made as the client -----------------------------------------------

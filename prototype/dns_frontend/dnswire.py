@@ -189,6 +189,11 @@ def encode_name(name: str) -> bytes:
     return b"".join(bytes([len(label)]) + label for label in name_to_labels(name)) + b"\x00"
 
 
+def name_from_rdata(rdata: bytes) -> str:
+    """The name an uncompressed domain-name rdata (CNAME, NS, PTR) holds, in presentation form."""
+    return labels_to_text(_read_labels(rdata, 0)[0])
+
+
 def _read_labels(data: bytes, pos: int) -> tuple[list[bytes], int]:
     """Labels of the name at `pos` (following compression pointers) and the offset just past it in the stream.
 

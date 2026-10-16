@@ -11,6 +11,13 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --module-dir DIR   dir holding pfb_unbound.py, pfb_dnsbl_regex_rules.py, pfb_unbound.ini and the manifest
                      (default /var/unbound); the process works in that directory, as Unbound's chroot does
   --timeout SECONDS  wait for Unbound before answering SERVFAIL (default 5)
+  --dot              also serve DNS over TLS, as the pfSense DNS Resolver is set up for (see below)
+  --pfsense-config P pfSense config.xml to read the DNS Resolver's DoT settings from (/cf/conf/config.xml)
+
+--dot reads unbound/enablessl, unbound/sslcertref and unbound/tlsport (853 if unset) from config.xml, serves the
+referenced certificate on every --listen address at that port (TLS 1.2+), and forwards a DoT query to Unbound like a
+TCP one, with the TLS peer's address in the PROXYv2 header. If the Resolver does not have DoT enabled or the
+certificate is missing or unusable, it exits 1 with the reason: there is no self-signed fallback.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -22,7 +29,9 @@ import asyncio
 import ipaddress
 import logging
 import os
+import secrets
 import signal
+import ssl
 import struct
 import sys
 import traceback
@@ -32,6 +41,7 @@ from types import ModuleType
 from typing import Any
 
 import dnswire
+import pfsense_dot
 import proxyv2
 import unbound_shim as shim
 
@@ -187,13 +197,35 @@ class Frontend:
                     if qstate.return_msg is unchanged and qstate.return_rcode == base_rcode:
                         relay = upstream_reply  # the module left Unbound's answer alone: pass its bytes through
             if state == shim.MODULE_RESTART_NEXT:
-                shim.log_err("MODULE_RESTART_NEXT (the SafeSearch CNAME redirect) is not emulated yet")
+                state = await self._chase_cname(query, qstate, forward)
         except Exception:
             shim.log_err(traceback.format_exc())
             state = shim.MODULE_ERROR
         if state != shim.MODULE_FINISHED:
             qstate.return_msg, qstate.return_rcode, relay = None, RCODE_SERVFAIL, None
         return self._send(query, qstate, relay)
+
+    async def _chase_cname(self, query: dnswire.Message, qstate: shim.module_qstate, forward: Forward) -> int:
+        """Emulate MODULE_RESTART_NEXT as the SafeSearch CNAME redirect uses it (safesearch_cname_redirect).
+
+        The module planted `orig -> CNAME -> target` and expects Unbound's iterator to chase the target, then runs
+        its post-resolution pass on the combined answer. Unbound will not chase a CNAME a module hands it, so this
+        plays the iterator: ask Unbound for the target as the same client, give the module the planted CNAME plus the
+        target's answer records, and run that pass once. A chase that finds nothing leaves the CNAME alone in the
+        message, which is what makes the module answer with its baked address. Returns the module's state.
+        """
+        planted = qstate.return_msg
+        if planted is None or len(planted.answer) != 1 or planted.answer[0].rtype != dnswire.TYPE_CNAME:
+            shim.log_err("MODULE_RESTART_NEXT without a planted CNAME referral")
+            return shim.MODULE_ERROR
+        cname = planted.answer[0]
+        target = dnswire.Question(dnswire.name_from_rdata(cname.rdata), planted.qinfo.qtype, planted.qinfo.qclass)
+        chase = dnswire.Message(secrets.randbits(16), dnswire.RD, [target], additional=_edns_for(query))
+        wire = await forward(dnswire.encode(chase))
+        answers = [] if wire is None else dnswire.parse(wire).answers  # an unparseable reply is a SERVFAIL, as above
+        qstate.return_msg = shim.DnsMsg(planted.qinfo, planted.rep.flags, [cname, *answers], [], [])
+        # A module that asks for yet another restart is not obeyed: the chased answer is final, so that is a SERVFAIL.
+        return self._operate(qstate, shim.MODULE_EVENT_MODDONE)
 
     def _send(self, query: dnswire.Message, qstate: shim.module_qstate, relay: bytes | None) -> bytes:
         """Reply to the client the way mesh_send_reply does: rcode != 0 is a bare error, no message is SERVFAIL."""
@@ -220,6 +252,15 @@ class Frontend:
         self._tasks.discard(task)
         if not task.cancelled() and task.exception() is not None:
             shim.log_err(f"query task failed: {task.exception()!r}")
+
+    async def start_dot(self, listen: Sequence[str], port: int, context: ssl.SSLContext) -> list[tuple[str, int]]:
+        """Serve DNS over TLS (the same framing as TCP) on each address; returns the bound (host, port)s."""
+        bound = []
+        for host in listen:
+            server = await asyncio.start_server(self._tcp_client, host, port, ssl=context)
+            self._servers.append(server)
+            bound.append((host, server.sockets[0].getsockname()[1]))
+        return bound
 
     async def start(self, listen: Sequence[str], port: int) -> list[tuple[str, int]]:
         """Serve UDP and TCP on each address (port 0 picks one port per address); returns the bound (host, port)s."""
@@ -369,6 +410,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--module-dir", default="/var/unbound", help="dir with pfb_unbound.py and its ini (/var/unbound)"
     )
     parser.add_argument("--timeout", type=float, default=5.0, help="seconds to wait for Unbound (5)")
+    parser.add_argument("--dot", action="store_true", help="also serve DNS over TLS as the DNS Resolver is set up for")
+    parser.add_argument(
+        "--pfsense-config",
+        default="/cf/conf/config.xml",
+        metavar="PATH",
+        help="pfSense config.xml (/cf/conf/config.xml)",
+    )
     args = parser.parse_args(argv)
     try:
         parse_hostport(args.upstream)
@@ -383,14 +431,23 @@ async def serve(
     stop: asyncio.Event | None = None,
     on_ready: Callable[[list[tuple[str, int]]], object] | None = None,
 ) -> None:
-    """Boot the module, serve until `stop` is set (SIGINT/SIGTERM when not given), then shut everything down."""
+    """Boot the module, serve until `stop` is set (SIGINT/SIGTERM when not given), then shut everything down.
+
+    `on_ready` gets the bound (host, port)s: the UDP+TCP listeners first, then the DoT ones. A DoT configuration that
+    cannot be served raises DotConfigError before the module boots.
+    """
+    dot = pfsense_dot.read_settings(args.pfsense_config) if args.dot else None
+    dot_context = pfsense_dot.server_context(dot) if dot is not None else None
     module = boot(args.module_dir)
     frontend = Frontend(module, parse_hostport(args.upstream), args.timeout)
     try:
-        bound = await frontend.start(args.listen or ["127.0.0.1"], args.port)
-        shim.log_info(f"listening on {', '.join(f'{host}:{port}' for host, port in bound)}; upstream {args.upstream}")
+        listen = args.listen or ["127.0.0.1"]
+        bound = await frontend.start(listen, args.port)
+        dot_bound = await frontend.start_dot(listen, dot.port, dot_context) if dot is not None else []
+        listening = [f"{host}:{port}" for host, port in bound] + [f"{host}:{port} (DoT)" for host, port in dot_bound]
+        shim.log_info(f"listening on {', '.join(listening)}; upstream {args.upstream}")
         if on_ready is not None:
-            on_ready(bound)
+            on_ready(bound + dot_bound)
         if stop is None:
             stop = asyncio.Event()
             for sig in (signal.SIGINT, signal.SIGTERM):
@@ -402,7 +459,11 @@ async def serve(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    asyncio.run(serve(parse_args(argv)))
+    try:
+        asyncio.run(serve(parse_args(argv)))
+    except pfsense_dot.DotConfigError as exc:
+        print(f"pfb_frontend: DNS over TLS: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
