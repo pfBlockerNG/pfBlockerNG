@@ -30,6 +30,19 @@ dnsbl_ipv6 = {DNSBL_IPV6}
 row1 = noaaaa.example,0
 """
 
+# pfb_py_ss.txt as pfb_ss_csv_rows() writes a CNAME redirect: domain,cname,target,baked_v4,baked_v6. The baked
+# addresses differ from every address the fake authoritative serves, so an answer shows whether the CNAME target
+# was chased or the module's baked fallback ran.
+SAFESEARCH_CSV = """duck.example,cname,safe.duck.example,198.51.100.7,2001:db8::7
+www.duck.example,cname,safe.duck.example,198.51.100.7,2001:db8::7
+nodata.example,cname,nodata-target.example,198.51.100.8,2001:db8::8
+nx.example,cname,nx-target.example,198.51.100.10,2001:db8::10
+servfail.example,cname,servfail-target.example,198.51.100.11,2001:db8::11
+silent.example,cname,silent-target.example,198.51.100.12,2001:db8::12
+nobaked.example,cname,nodata-target.example,,
+trap.example,cname,blocked.example,198.51.100.9,2001:db8::9
+"""
+
 
 @dataclass
 class Booted:

@@ -18,7 +18,9 @@ from typing import TypeVar
 
 import dnswire
 import pfb_frontend
+import pfsense_dot
 import pytest
+from dot_helpers import b64, cert_element, config_xml, dot_exchange, make_certificate
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, Booted
 from frontend_helpers import WATCHDOG, FakeAuthoritative, FakeUnbound, build_query, tcp_exchange, udp_exchange
 
@@ -40,6 +42,12 @@ AUTHORITATIVE = {
     (ALLOWED, 1): [f"{ALLOWED} 300 IN A 192.0.2.77"],
     ("alias.example.", 1): ["alias.example. 300 IN CNAME blocked.example.", "blocked.example. 300 IN A 192.0.2.99"],
     (BLOCKED, 1): ["blocked.example. 300 IN A 192.0.2.99"],
+    # SafeSearch (SAFESEARCH_CSV): the redirected names, their CNAME targets, and targets with no address.
+    ("duck.example.", 1): ["duck.example. 300 IN A 192.0.2.50"],
+    ("safe.duck.example.", 1): ["safe.duck.example. 300 IN A 192.0.2.88"],
+    ("nodata.example.", 1): ["nodata.example. 300 IN A 192.0.2.51"],
+    ("nodata-target.example.", 1): [],
+    ("nx.example.", 1): ["nx.example. 300 IN A 192.0.2.52"],  # nx-target.example. is absent: NXDOMAIN
 }
 
 
@@ -240,3 +248,71 @@ def test_cname_chain_reaching_a_blocked_name_gets_the_block_answer(booted: Boote
     unbound.tail.wait_for(f"{ALLOWED_CLIENT} alias.example. A IN", since=mark)  # Unbound resolved the chain
     [row] = _dnsbl_rows(booted)
     assert (row[0], row[2], row[3]) == ("DNSBL-python", "alias.example", ALLOWED_CLIENT)
+
+
+def test_safesearch_cname_redirect_gives_the_client_the_cname_and_the_chased_address(
+    ss_booted: Booted, unbound: RunningUnbound
+) -> None:
+    mark = unbound.tail.mark()
+
+    async def scenario(server: tuple[str, int]) -> bytes:
+        return (await udp_exchange(server, build_query("duck.example."), source=ALLOWED_CLIENT))[0]
+
+    reply = _through_frontend(ss_booted, unbound, scenario)
+    assert _answers(reply) == [
+        ("duck.example.", dnswire.TYPE_CNAME, dnswire.encode_name("safe.duck.example.")),
+        ("safe.duck.example.", dnswire.TYPE_A, bytes([192, 0, 2, 88])),  # Unbound's answer, not the baked 198.51.100.7
+    ]
+    logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT} safe.duck.example. A IN", since=mark)  # the chase, as the client
+    assert any(f"{ALLOWED_CLIENT} duck.example. A IN" in line for line in logged)
+
+
+@pytest.mark.parametrize(
+    ("name", "target", "baked"),
+    [
+        ("nodata.example.", "nodata-target.example.", "198.51.100.8"),
+        ("nx.example.", "nx-target.example.", "198.51.100.10"),
+    ],
+    ids=["target-has-no-data", "target-does-not-exist"],
+)
+def test_safesearch_target_without_an_address_gets_the_modules_baked_address(
+    ss_booted: Booted, unbound: RunningUnbound, name: str, target: str, baked: str
+) -> None:
+    mark = unbound.tail.mark()
+
+    async def scenario(server: tuple[str, int]) -> bytes:
+        return (await tcp_exchange(server, build_query(name), source=ALLOWED_CLIENT_TCP))[0]
+
+    reply = _through_frontend(ss_booted, unbound, scenario)
+    assert _answers(reply) == [(name, dnswire.TYPE_A, bytes(int(octet) for octet in baked.split(".")))]
+    unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {target} A IN", since=mark)  # the chase happened and found nothing
+
+
+def test_dot_client_gets_dnsbl_and_unbound_answers_and_unbounds_log_shows_the_tls_client(
+    booted: Booted, unbound: RunningUnbound, tmp_path: Path
+) -> None:
+    crt, key = make_certificate(tmp_path)
+    trust = tmp_path / "trust.pem"
+    trust.write_bytes(crt)
+    config = tmp_path / "config.xml"
+    config.write_text(config_xml(tlsport=_free_port(), entries=cert_element("5f0a1b2c3d4e5", b64(crt), b64(key))))
+    settings = pfsense_dot.read_settings(config)
+    mark = unbound.tail.mark()
+
+    async def main() -> tuple[bytes, bytes]:
+        frontend = pfb_frontend.Frontend(booted.module, ("127.0.0.1", unbound.port), timeout=WATCHDOG)
+        [server] = await frontend.start_dot(["127.0.0.1"], settings.port, pfsense_dot.server_context(settings))
+        try:
+            blocked, _, _ = await dot_exchange(server, build_query(BLOCKED), trust, source=ALLOWED_CLIENT)
+            allowed, _, _ = await dot_exchange(server, build_query(ALLOWED), trust, source=ALLOWED_CLIENT_TCP)
+            return blocked, allowed
+        finally:
+            await frontend.stop()
+
+    blocked, allowed = asyncio.run(main())
+    assert _answers(blocked) == [(BLOCKED, dnswire.TYPE_A, VIP4)]
+    assert _answers(allowed) == [(ALLOWED, dnswire.TYPE_A, bytes([192, 0, 2, 77]))]
+    logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {ALLOWED} A IN", since=mark)
+    assert [line for line in logged if "blocked.example" in line] == []
+    assert not any(f"127.0.0.1 {ALLOWED}" in line for line in logged)  # the TLS client, not the front end
+    assert [row[2] for row in _dnsbl_rows(booted)] == ["blocked.example"]

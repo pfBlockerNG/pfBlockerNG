@@ -270,7 +270,7 @@ def test_module_error_state_gives_servfail(booted: Booted, monkeypatch: pytest.M
     assert dnswire.parse(_resolve(booted, build_query(ALLOWED), FakeUnbound(ZONE)) or b"").rcode == 2
 
 
-def test_restart_next_gives_servfail_until_safesearch_is_emulated(
+def test_restart_next_without_a_planted_cname_referral_gives_servfail(
     booted: Booted, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def restart(id: int, event: int, qstate: Any, qdata: Any) -> bool:

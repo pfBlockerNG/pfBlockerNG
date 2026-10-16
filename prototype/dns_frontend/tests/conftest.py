@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from frontend_constants import INI, PROTO_DIR, SHIPPED_DIR, Booted
+from frontend_constants import INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted
 
 sys.path.insert(0, str(PROTO_DIR))
 
@@ -47,3 +47,15 @@ def booted(module_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Booted
         yield Booted(module, log)
     finally:
         pfb_frontend.shutdown(module)
+
+
+@pytest.fixture
+def safesearch_csv(module_dir: Path) -> None:
+    """Drops pfb_py_ss.txt into the module dir; init_standard() reads it, so it must exist before `booted`."""
+    (module_dir / "pfb_py_ss.txt").write_text(SAFESEARCH_CSV, encoding="utf-8")
+
+
+@pytest.fixture
+def ss_booted(safesearch_csv: None, booted: Booted) -> Booted:
+    """`booted` with the SafeSearch CNAME redirects of SAFESEARCH_CSV loaded."""
+    return booted
