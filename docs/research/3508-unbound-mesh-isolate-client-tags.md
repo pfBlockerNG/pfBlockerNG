@@ -147,12 +147,15 @@ would be blocked, and isolation removes that case the same way.
    untagged class.
 5. **Cache (shipped with #3508).** `pfb_unbound.py` sets
    `qstate.no_cache_store = 1` at `MODULE_EVENT_NEW` for every bypassed
-   query. The iterator skips all
-   message and RRset stores for that state (`iterator.c`, every
-   `iter_dns_store()` call is guarded), so a bypassed answer, including
-   its CNAME chain, never reaches a blocked client through the cache.
-   Bypassed clients still read answers cached by blocked clients, which are
-   always safe for them because synthetic blocks are never cached.
+   query. The iterator and the validator skip their message, RRset and
+   negative-cache stores for that state (every `iter_dns_store()` call in
+   `iterator.c`; `dns_cache_store()` and `val_neg_addreply()` in
+   `validator.c`), so a bypassed answer, including its CNAME chain, never
+   reaches a blocked client through the cache. The SafeSearch CNAME
+   redirect, which stores its chased answer itself, skips that store for a
+   bypassed client. Bypassed clients still read answers cached by blocked
+   clients, which are always safe for them because synthetic blocks are
+   never cached.
 6. **Decision.** Python cannot read the tags (`client_info` is not exposed
    in `interface.i`), but it does not need to: with isolation every client
    on a state is in the same class, so the existing client-IP match on the

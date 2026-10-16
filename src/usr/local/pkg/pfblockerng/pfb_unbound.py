@@ -1476,6 +1476,16 @@ def _gp_net_match(q_ip: str) -> bool:
     return any(addr in net for net in gpNetDB)
 
 
+def _gp_bypassed(qstate: module_qstate) -> bool:
+    """True when the query's client is on the Group Policy bypass list (exact IP or CIDR)."""
+    if not pfb["gpListDB"]:
+        return False
+    q_ip = get_q_ip(qstate)
+    if q_ip == "Unknown":
+        return False
+    return gpListDB.get(q_ip) is not None or (bool(gpNetDB) and _gp_net_match(q_ip))
+
+
 def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
     """Load normalized user regex rows from MAIN.regex_list."""
     if config.has_option("MAIN", "regex_list"):
@@ -7336,6 +7346,10 @@ def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSaf
             # validator marks a signed original zone bogus -> SERVFAIL (issue #149).
             qstate.return_msg.rep.security = sec_status_insecure
             invalidateQueryInCache(qstate, qstate.qinfo)
+            # A bypassed client's answer stays out of the shared cache (issue #3508).
+            if _gp_bypassed(qstate):
+                qstate.ext_state[id] = MODULE_FINISHED
+                return True
             qstate.no_cache_store = 0
             if not storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0):
                 # A cache-store failure must not SERVFAIL an already-built, already-
@@ -7498,17 +7512,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
     # DNSBL Validation for specific RR_TYPES only
     if qstate_valid and pfb["python_blacklist"] and q_type in pfb["rr_types"]:
         # Group Policy - Bypass DNSBL Validation
-        bypass_dnsbl = False
-        if pfb["gpListDB"]:
-            q_ip = get_q_ip(qstate)
-
-            if q_ip != "Unknown":
-                isgpBypass = gpListDB.get(q_ip)
-
-                if isgpBypass is not None:
-                    bypass_dnsbl = True
-                elif gpNetDB:
-                    bypass_dnsbl = _gp_net_match(q_ip)
+        bypass_dnsbl = _gp_bypassed(qstate)
 
         # Cache hits are served before operate() runs: a bypassed answer must never reach
         # other clients through the shared cache (issue #3508).

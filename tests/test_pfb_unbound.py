@@ -2589,6 +2589,23 @@ class TestGroupPolicyBypassCidr:
         )
         assert qstate.no_cache_store == 1, f"expected 1, got {qstate.no_cache_store!r}"
 
+    def test_group_policy_client_outside_the_bypass_list_stays_cacheable(self) -> None:
+        # Only bypassed answers are kept out of the cache: a configured list must not turn
+        # caching off for every other client.
+        self._load("10.0.0.0/24")
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        add_data("evil.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("good.com.", qtype=RR_A, q_ip="10.0.1.1")
+
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert qstate.no_cache_store == 0, f"expected 0, got {qstate.no_cache_store!r}"
+
     def test_group_policy_runtime_removebypass_does_not_carve_a_hole_in_a_configured_cidr(
         self, monkeypatch: Any
     ) -> None:
@@ -3236,6 +3253,30 @@ class TestSafeSearchCnameRedirect:
         )
         assert calls["store"] == [0], f"expected [0], got {calls['store']!r}"  # is_referral=0 (final answer)
         assert calls["invalidate"] == 1, f"expected 1, got {calls['invalidate']!r}"
+
+    def test_phase2_bypassed_client_finishes_without_storing_the_chased_answer(self, monkeypatch: Any) -> None:
+        # issue #3508: the redirected answer a Group Policy bypassed client receives must not
+        # enter the shared cache -- a blocked client would get it as a cache hit, ahead of
+        # operate(), instead of its block.
+        self._enable()
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: self.TARGET)
+        calls = self._spy_cache(monkeypatch)
+        pfb_unbound._load_gp_bypass_list(TestGroupPolicyBypassCidr._config("10.0.0.0/24"))
+        qstate = make_qstate(
+            "duckduckgo.com.",
+            qtype=RR_A,
+            q_ip="10.0.0.77",
+            return_msg=self._reply("duckduckgo.com.", cname=True, has_a=True),
+        )
+        qstate.no_cache_store = 1  # as phase 1 (the plant + restart) leaves it
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_msg.rep.security == sec_status_insecure, (
+            f"expected {sec_status_insecure!r}, got {qstate.return_msg.rep.security!r}"
+        )
+        assert calls["store"] == [], f"expected [], got {calls['store']!r}"
+        assert qstate.no_cache_store == 1, f"expected 1, got {qstate.no_cache_store!r}"
 
     def test_phase2_recache_failure_still_finishes(self, monkeypatch: Any) -> None:
         # issue #749: When the post-restart final-answer re-cache store fails, Then the
