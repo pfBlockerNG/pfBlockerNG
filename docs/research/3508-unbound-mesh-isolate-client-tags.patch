@@ -1,0 +1,178 @@
+diff --git a/daemon/remote.c b/daemon/remote.c
+index dcea730..d4d7d19 100644
+--- a/daemon/remote.c
++++ b/daemon/remote.c
+@@ -6439,6 +6439,7 @@ fr_atomic_copy_cfg(struct config_file* oldcfg, struct config_file* cfg,
+ 	COPY_VAR_int(serve_expired_reply_ttl);
+ 	COPY_VAR_int(serve_expired_client_timeout);
+ 	COPY_VAR_int(ede_serve_expired);
++	COPY_VAR_int(mesh_isolate_client_tags);
+ 	COPY_VAR_int(dns_error_reporting);
+ 	COPY_VAR_int(serve_original_ttl);
+ 	COPY_VAR_ptr(val_nsec3_key_iterations);
+diff --git a/daemon/worker.c b/daemon/worker.c
+index ac0748c..3ecd005 100644
+--- a/daemon/worker.c
++++ b/daemon/worker.c
+@@ -1955,11 +1955,16 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
+ 
+ 	/* If we may apply IP-based actions to the answer, build the client
+ 	 * information.  As this can be expensive, skip it if there is
+-	 * absolutely no possibility of it. */
+-	if((worker->daemon->use_response_ip || worker->daemon->use_rpz) &&
++	 * absolutely no possibility of it.  With mesh-isolate-client-tags,
++	 * also build it for every query type from a tagged or viewed ACL
++	 * element, so clients with different tags or views never share a
++	 * mesh state (a module deciding per client sees only one class). */
++	if(((worker->daemon->use_response_ip || worker->daemon->use_rpz) &&
+ 		(qinfo.qtype == LDNS_RR_TYPE_A ||
+ 		qinfo.qtype == LDNS_RR_TYPE_AAAA ||
+-		qinfo.qtype == LDNS_RR_TYPE_ANY)) {
++		qinfo.qtype == LDNS_RR_TYPE_ANY)) ||
++		(worker->env.cfg->mesh_isolate_client_tags && acladdr &&
++		(acladdr->taglist || acladdr->view))) {
+ 		cinfo_tmp.taglist = acladdr->taglist;
+ 		cinfo_tmp.taglen = acladdr->taglen;
+ 		cinfo_tmp.tag_actions = acladdr->tag_actions;
+diff --git a/doc/example.conf.in b/doc/example.conf.in
+index 18de92d..21a3e90 100644
+--- a/doc/example.conf.in
++++ b/doc/example.conf.in
+@@ -376,6 +376,10 @@ server:
+ 	# Set view for access control element
+ 	# access-control-view: 192.0.2.0/24 viewname
+ 
++	# Never share an in-flight query state between clients with different
++	# access-control tags or views, for every query type.
++	# mesh-isolate-client-tags: no
++
+ 	# Similar to 'access-control:' but for interfaces.
+ 	# Control which listening interfaces are allowed to accept (recursive)
+ 	# queries for this server.
+diff --git a/doc/unbound.conf.rst b/doc/unbound.conf.rst
+index 74f242a..f656a8b 100644
+--- a/doc/unbound.conf.rst
++++ b/doc/unbound.conf.rst
+@@ -1489,6 +1489,32 @@ These options are part of the ``server:`` section.
+     Set view for given access control element.
+ 
+ 
++@@UAHL@unbound.conf@mesh-isolate-client-tags@@: *<yes or no>*
++    If enabled, clients whose
++    :ref:`access-control<unbound.conf.access-control>` elements carry
++    different tags
++    (:ref:`access-control-tag<unbound.conf.access-control-tag>`) or views
++    (:ref:`access-control-view<unbound.conf.access-control-view>`) never
++    share an in-flight query state, for any query type.
++    Identical queries from clients with the same tags and view still share
++    one state.
++
++    By default, tags and views separate in-flight query states only for A,
++    AAAA and ANY queries, and only when response-ip or RPZ is configured.
++    Otherwise every client that asks the same question while it is being
++    resolved receives the answer computed for the first client.
++    That is wrong for modules that answer per client, such as a Python
++    module that applies client-specific policy in its operate function.
++    Tag such clients by policy and enable this option.
++
++    This option does not separate the message and RRset caches; a module
++    that produces client-specific answers must also avoid storing them.
++    It costs one copy of the tag list per query state and removes
++    coalescing between clients of different tags or views.
++
++    Default: no
++
++
+ @@UAHL@unbound.conf@interface-action@@: *<ip address or interface name [@port]> <action>*
+     Similar to :ref:`access-control<unbound.conf.access-control>` but for
+     interfaces.
+diff --git a/util/config_file.c b/util/config_file.c
+index 8b57a9b..8bf02c1 100644
+--- a/util/config_file.c
++++ b/util/config_file.c
+@@ -424,6 +424,7 @@ config_create(void)
+ #endif
+ 	cfg->ede = 0;
+ 	cfg->ede_serve_expired = 0;
++	cfg->mesh_isolate_client_tags = 0;
+ 	cfg->dns_error_reporting = 0;
+ 	cfg->iter_scrub_ns = 20;
+ 	cfg->iter_scrub_cname = 11;
+@@ -783,6 +784,7 @@ int config_set_option(struct config_file* cfg, const char* opt,
+ 	else S_NUMBER_OR_ZERO("serve-expired-client-timeout:", serve_expired_client_timeout)
+ 	else S_YNO("ede:", ede)
+ 	else S_YNO("ede-serve-expired:", ede_serve_expired)
++	else S_YNO("mesh-isolate-client-tags:", mesh_isolate_client_tags)
+ 	else S_YNO("dns-error-reporting:", dns_error_reporting)
+ 	else S_NUMBER_NONZERO("iter-scrub-ns:", iter_scrub_ns)
+ 	else S_NUMBER_OR_ZERO("iter-scrub-cname:", iter_scrub_cname)
+@@ -1266,6 +1268,7 @@ config_get_option(struct config_file* cfg, const char* opt,
+ 	else O_DEC(opt, "serve-expired-client-timeout", serve_expired_client_timeout)
+ 	else O_YNO(opt, "ede", ede)
+ 	else O_YNO(opt, "ede-serve-expired", ede_serve_expired)
++	else O_YNO(opt, "mesh-isolate-client-tags", mesh_isolate_client_tags)
+ 	else O_YNO(opt, "dns-error-reporting", dns_error_reporting)
+ 	else O_DEC(opt, "iter-scrub-ns", iter_scrub_ns)
+ 	else O_DEC(opt, "iter-scrub-cname", iter_scrub_cname)
+diff --git a/util/config_file.h b/util/config_file.h
+index 9fcdf17..ad62533 100644
+--- a/util/config_file.h
++++ b/util/config_file.h
+@@ -790,6 +790,9 @@ struct config_file {
+ 	int ede;
+ 	/** serve EDE code 3 - Stale Answer (RFC8914) for expired entries */
+ 	int ede_serve_expired;
++	/** never share a mesh state between clients whose access-control
++	 * elements carry different tags or views, for every query type */
++	int mesh_isolate_client_tags;
+ 	/** send DNS Error Reports to upstream reporting agent (RFC9567) */
+ 	int dns_error_reporting;
+ 	/** limit on NS RRs in RRset for the iterator scrubber. */
+diff --git a/util/configlexer.lex b/util/configlexer.lex
+index 821653a..da79fa2 100644
+--- a/util/configlexer.lex
++++ b/util/configlexer.lex
+@@ -415,6 +415,7 @@ serve-expired-ttl-reset{COLON}	{ YDVAR(1, VAR_SERVE_EXPIRED_TTL_RESET) }
+ serve-expired-reply-ttl{COLON}	{ YDVAR(1, VAR_SERVE_EXPIRED_REPLY_TTL) }
+ serve-expired-client-timeout{COLON}	{ YDVAR(1, VAR_SERVE_EXPIRED_CLIENT_TIMEOUT) }
+ ede-serve-expired{COLON}	{ YDVAR(1, VAR_EDE_SERVE_EXPIRED) }
++mesh-isolate-client-tags{COLON}	{ YDVAR(1, VAR_MESH_ISOLATE_CLIENT_TAGS) }
+ serve-original-ttl{COLON}	{ YDVAR(1, VAR_SERVE_ORIGINAL_TTL) }
+ fake-dsa{COLON}			{ YDVAR(1, VAR_FAKE_DSA) }
+ fake-sha1{COLON}		{ YDVAR(1, VAR_FAKE_SHA1) }
+diff --git a/util/configparser.y b/util/configparser.y
+index 3329419..099da6d 100644
+--- a/util/configparser.y
++++ b/util/configparser.y
+@@ -162,6 +162,7 @@ extern struct config_parser_state* cfg_parser;
+ %token VAR_VIEW_FIRST VAR_SERVE_EXPIRED VAR_SERVE_EXPIRED_TTL
+ %token VAR_SERVE_EXPIRED_TTL_RESET VAR_SERVE_EXPIRED_REPLY_TTL
+ %token VAR_SERVE_EXPIRED_CLIENT_TIMEOUT VAR_EDE_SERVE_EXPIRED
++%token VAR_MESH_ISOLATE_CLIENT_TAGS
+ %token VAR_SERVE_ORIGINAL_TTL VAR_FAKE_DSA
+ %token VAR_FAKE_SHA1 VAR_LOG_IDENTITY VAR_HIDE_TRUSTANCHOR
+ %token VAR_HIDE_HTTP_USER_AGENT VAR_HTTP_USER_AGENT
+@@ -333,6 +334,7 @@ content_server: server_num_threads | server_verbosity | server_port |
+ 	server_serve_expired_ttl | server_serve_expired_ttl_reset |
+ 	server_serve_expired_reply_ttl | server_serve_expired_client_timeout |
+ 	server_ede_serve_expired | server_serve_original_ttl | server_fake_dsa |
++	server_mesh_isolate_client_tags |
+ 	server_log_identity | server_use_systemd |
+ 	server_response_ip_tag | server_response_ip | server_response_ip_data |
+ 	server_shm_enable | server_shm_key | server_fake_sha1 |
+@@ -2265,6 +2267,15 @@ server_serve_expired_client_timeout: VAR_SERVE_EXPIRED_CLIENT_TIMEOUT STRING_ARG
+ 		free($2);
+ 	}
+ 	;
++server_mesh_isolate_client_tags: VAR_MESH_ISOLATE_CLIENT_TAGS STRING_ARG
++	{
++		OUTYY(("P(server_mesh_isolate_client_tags:%s)\n", $2));
++		if(strcmp($2, "yes") != 0 && strcmp($2, "no") != 0)
++			yyerror("expected yes or no.");
++		else cfg_parser->cfg->mesh_isolate_client_tags = (strcmp($2, "yes")==0);
++		free($2);
++	}
++	;
+ server_ede_serve_expired: VAR_EDE_SERVE_EXPIRED STRING_ARG
+ 	{
+ 		OUTYY(("P(server_ede_serve_expired:%s)\n", $2));
