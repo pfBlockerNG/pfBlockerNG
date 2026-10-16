@@ -122,7 +122,7 @@ def test_opt_record_marks_edns_and_carries_the_do_bit() -> None:
         ("x.example. 3600 IN A 10.10.10.1", dnswire.TYPE_A, bytes([10, 10, 10, 1])),
         ("x.example. 3600 IN AAAA ::1", dnswire.TYPE_AAAA, bytes(15) + b"\x01"),
         ("x.example. 3600 IN CNAME y.example.", dnswire.TYPE_CNAME, b"\x01y\x07example\x00"),
-        ('python_control. 0 IN TXT "Not authorized! [ a b ]"', dnswire.TYPE_TXT, b"\x16Not authorized! [ a b ]"),
+        ('python_control. 0 IN TXT "Not authorized! [ a b ]"', dnswire.TYPE_TXT, b"\x17Not authorized! [ a b ]"),
         (
             "blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600",
             dnswire.TYPE_SOA,

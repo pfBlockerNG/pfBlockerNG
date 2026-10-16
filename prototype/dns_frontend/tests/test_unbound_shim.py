@@ -241,6 +241,12 @@ def test_upstream_reply_becomes_return_msg_with_uncompressed_cname_rdata() -> No
     assert msg.qinfo.qname_str == "alias.example."
 
 
+def test_upstream_edns_is_removed_from_the_message_like_createresponse_does() -> None:
+    upstream = dnswire.Message(7, dnswire.QR, [dnswire.Question("a.example.", 1)], additional=[dnswire.make_opt(4096)])
+    msg = shim.DnsMsg.from_message(upstream)
+    assert (msg.additional, msg.rep.ar_numrrsets) == ([], 0)
+
+
 def test_rrsig_is_attached_to_the_rrset_it_covers() -> None:
     rrsig = dnswire.RR("a.example.", 46, 1, 60, struct.pack("!H", dnswire.TYPE_A) + bytes(18))
     a_rr = dnswire.rr_from_text("a.example. 60 IN A 192.0.2.1")

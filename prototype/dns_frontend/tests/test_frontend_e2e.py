@@ -145,6 +145,26 @@ def test_allowed_name_is_forwarded_and_the_reply_relayed_byte_for_byte(booted: B
     assert _log_rows(booted, "dnsbl.log") == []
 
 
+def test_unbound_reply_is_relayed_byte_for_byte_even_where_our_encoder_would_differ(booted: Booted) -> None:
+    qname = b"\x07allowed\x07example\x00"
+    upstream_reply = (
+        struct.pack("!HHHHHH", 0x0C0C, dnswire.QR | dnswire.RD | dnswire.RA, 1, 1, 0, 1)
+        + qname
+        + b"\x00\x01\x00\x01"
+        + qname  # owner written out in full: dnswire.encode would compress it
+        + struct.pack("!HHIH", dnswire.TYPE_A, 1, 300, 4)
+        + bytes([192, 0, 2, 77])
+        + b"\x00"
+        + struct.pack("!HHIH", dnswire.TYPE_OPT, 4096, 0, 4)  # an OPT with an EDE option code, which we never echo
+        + b"\x00\x0f\x00\x00"
+    )
+
+    async def forward(_wire: bytes) -> bytes:
+        return upstream_reply
+
+    assert _resolve(booted, build_query(ALLOWED, qid=0x0C0C, edns=True), forward) == upstream_reply
+
+
 def test_forwarded_reply_is_logged_against_the_client_not_the_front_end(booted: Booted) -> None:
     _resolve(booted, build_query(ALLOWED), FakeUnbound(ZONE))
     [row] = _log_rows(booted, "dns_reply.log")
@@ -210,6 +230,18 @@ def test_unbound_not_answering_gives_servfail(booted: Booted) -> None:
     query = build_query(ALLOWED, qid=0x0B0B)
     reply = dnswire.parse(_resolve(booted, query, silent) or b"")
     assert (reply.id, reply.rcode, reply.questions) == (0x0B0B, 2, dnswire.parse(query).questions)
+
+
+def test_refused_reply_without_a_question_section_is_relayed_and_logged_as_refused(booted: Booted) -> None:
+    # Unbound's access-control REFUSED carries no question section at all
+    refused = struct.pack("!HHHHHH", 0x1234, dnswire.QR | dnswire.RD | dnswire.RA | 5, 0, 0, 0, 0)
+
+    async def forward(_wire: bytes) -> bytes:
+        return refused
+
+    assert _resolve(booted, build_query(ALLOWED), forward) == refused
+    [row] = _log_rows(booted, "dns_reply.log")
+    assert "Refused" in row and CLIENT in row
 
 
 def test_unparseable_unbound_reply_gives_servfail(booted: Booted) -> None:
@@ -306,6 +338,21 @@ def test_proxy_endpoints_share_one_family_and_drop_scope_ids(
     client: tuple[str, int], local: tuple[str, int], expected: tuple[tuple[str, int], tuple[str, int]]
 ) -> None:
     assert pfb_frontend.proxy_endpoints(client, local) == expected
+
+
+def test_shutdown_gives_back_the_stderr_init_standard_replaced(
+    module_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the module's logger-backed stderr has no flush(), so interpreter exit would complain through it
+    monkeypatch.chdir(module_dir)
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
+    before = sys.stderr
+    module = pfb_frontend.boot(str(module_dir))
+    try:
+        assert sys.stderr is not before
+    finally:
+        pfb_frontend.shutdown(module)
+    assert sys.stderr is before
 
 
 def test_module_without_a_log_dir_gets_a_stderr_sink_instead_of_recursing(
@@ -416,6 +463,14 @@ def test_serve_boots_the_module_from_the_module_dir_and_shuts_it_down(
 ) -> None:
     monkeypatch.chdir(module_dir)
     monkeypatch.setattr(sys, "stderr", sys.stderr)
+    real_boot = pfb_frontend.boot
+
+    def boot_without_log_files(directory: str) -> Any:
+        module = real_boot(directory)
+        monkeypatch.setattr(module, "pfb_log", lambda name, line: None)  # the module logs to /var/log/pfblockerng
+        return module
+
+    monkeypatch.setattr(pfb_frontend, "boot", boot_without_log_files)
     args = pfb_frontend.parse_args(
         ["--listen", "127.0.0.1", "--port", "0", "--upstream", "127.0.0.1:9", "--module-dir", str(module_dir)]
     )
