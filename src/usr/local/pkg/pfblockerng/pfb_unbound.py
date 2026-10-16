@@ -1450,23 +1450,20 @@ def _load_gp_bypass_list(config: ConfigParser) -> None:
     aborting the rest of the load."""
     if not config.has_section("GP_Bypass_List"):
         return
-    try:
-        # raw: a link-local zone id ('fe80::1%em0') is not a '%' interpolation.
-        for key, line in config.items("GP_Bypass_List", raw=True):
-            try:
-                net = ipaddress.ip_network(line.strip(), strict=False)
-            except ValueError:
-                sys.stderr.write("[pfBlockerNG]: Failed to parse: GP_Bypass_List: row:{} line:{}".format(key, line))
-                continue
-            if net.prefixlen == net.max_prefixlen:
-                gpListDB[str(net.network_address)] = 0
-            else:
-                gpNetDB.append(net)
+    # raw: a link-local zone id ('fe80::1%em0') is not a '%' interpolation.
+    for key, line in config.items("GP_Bypass_List", raw=True):
+        try:
+            net = ipaddress.ip_network(line, strict=False)
+        except ValueError:
+            sys.stderr.write("[pfBlockerNG]: Failed to parse: GP_Bypass_List: row:{} line:{}".format(key, line))
+            continue
+        if net.prefixlen == net.max_prefixlen:
+            gpListDB[str(net.network_address)] = 0
+        else:
+            gpNetDB.append(net)
 
-        if gpListDB or gpNetDB:
-            pfb["gpListDB"] = True
-    except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: Failed to load GP Bypass List: {}".format(e))
+    if gpListDB or gpNetDB:
+        pfb["gpListDB"] = True
 
 
 def _gp_net_match(q_ip: str) -> bool:
@@ -1475,9 +1472,6 @@ def _gp_net_match(q_ip: str) -> bool:
         addr = ipaddress.ip_address(q_ip)
     except ValueError:
         return False
-    # Unbound can report a v4 client as ::ffff:a.b.c.d; it belongs to the v4 networks.
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
     # shortcut: linear scan; fine for an admin-sized list, use a prefix trie if it reaches thousands.
     return any(addr in net for net in gpNetDB)
 

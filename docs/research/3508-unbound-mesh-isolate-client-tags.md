@@ -97,7 +97,8 @@ with one condition and no new comparison code.
 The harness is
 [`3508-mesh-harness.py`](3508-mesh-harness.py).
 It builds a throwaway configuration with a Python module that bypasses
-`127.0.0.2` (tagged `bypass`) and answers NXDOMAIN to every other client.
+`127.0.0.2` and `127.0.0.5` (both tagged `bypass`) and answers NXDOMAIN to
+every other client.
 A forwarder stub answers after one second, so the queries overlap in flight.
 Each upstream answer carries a sequence number. Clients send A, TXT and HTTPS
 queries for the same name 50 ms apart.
@@ -109,20 +110,25 @@ Build: Unbound `master` `d648eac` plus the patch, with `--with-pythonmodule
 
 `BYPASS_NO_CACHE=1` makes the module set `qstate.no_cache_store = 1` for
 bypassed queries. A cell lists the result for the blocked client `127.0.0.3`;
-the bypassed client `127.0.0.2` received the real answer in every run.
+the bypassed clients received the real answer in every run.
 
 | Case | isolate=no | isolate=yes | isolate=no + no-cache | isolate=yes + no-cache |
 |---|---|---|---|---|
 | Bypass first, blocked attaches | **leak** (real answer) | NXDOMAIN | **leak** | NXDOMAIN |
 | Blocked first, bypass attaches | NXDOMAIN | NXDOMAIN | NXDOMAIN | NXDOMAIN |
-| Two blocked clients | one state, NXDOMAIN | one state, NXDOMAIN | one state, NXDOMAIN | one state, NXDOMAIN |
 | Bypass resolves, blocked asks later | **leak** (cache) | **leak** (cache) | NXDOMAIN | NXDOMAIN |
 
-Each row held for A, TXT and HTTPS. Only the last column is leak-free. The
-blocked-first row cannot show the opposite failure here because the module
-finishes immediately; `pfb_unbound.py` also blocks at `MODULE_EVENT_MODDONE`
-on a CNAME target, where an attached bypassed client would be blocked, and
-isolation removes that case the same way.
+Each row held for A, TXT and HTTPS. Only the last column is leak-free. Mesh
+states counted from `operate()` `MODULE_EVENT_NEW` calls: with the option, the
+bypass-first case runs 6 states for 6 queries (none shared across tags), and
+two same-tag bypass clients (`127.0.0.2`, `127.0.0.5`) still share 3 states
+for 6 queries. Isolated states also share the one upstream query
+(`upstream=1` in every case).
+
+The blocked-first row cannot show the opposite failure here because the
+module finishes immediately; `pfb_unbound.py` also blocks at
+`MODULE_EVENT_MODDONE` on a CNAME target, where an attached bypassed client
+would be blocked, and isolation removes that case the same way.
 
 ## pfBlockerNG integration (after Unbound ships the option)
 

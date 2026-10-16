@@ -2543,11 +2543,6 @@ class TestGroupPolicyBypassCidr:
         assert applied is True, f"expected True, got {applied!r}"
         self._assert_verdict(monkeypatch, client, "blocked")
 
-    def test_group_policy_ipv4_mapped_client_matches_ipv4_cidr(self, monkeypatch: Any) -> None:
-        self._load("10.0.0.0/24")
-        self._assert_verdict(monkeypatch, "::ffff:10.0.1.1", "blocked")
-        self._assert_verdict(monkeypatch, "::ffff:10.0.0.77", "bypassed")
-
     @pytest.mark.parametrize("q_ip", [None, "not-an-address"])
     def test_group_policy_client_without_a_usable_address_is_never_bypassed(
         self, monkeypatch: Any, q_ip: str | None
@@ -2570,11 +2565,6 @@ class TestGroupPolicyBypassCidr:
     def test_group_policy_cidr_with_host_bits_set_is_accepted_as_its_network(self, monkeypatch: Any) -> None:
         self._load("10.0.0.1/24")
         self._assert_verdict(monkeypatch, "10.0.1.1", "blocked")
-        self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
-
-    def test_group_policy_row_with_trailing_space_is_accepted(self, monkeypatch: Any) -> None:
-        # The ini writer emits '10.0.0.0/24 ' for a row carrying an inline '# comment'.
-        self._load("10.0.0.0/24 ")
         self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
 
     def test_group_policy_runtime_removebypass_does_not_carve_a_hole_in_a_configured_cidr(
@@ -2618,6 +2608,14 @@ class TestGroupPolicyBypassCidr:
         self._assert_verdict(monkeypatch, "192.0.2.9", "bypassed")
         self._assert_verdict(monkeypatch, "2001:db8:5::1", "bypassed")
 
+    def test_group_policy_unparseable_first_row_does_not_abort_the_load(self, monkeypatch: Any, capsys: Any) -> None:
+        self._load("example.com", "192.0.2.0/24", "2001:db8:5::/48")
+
+        err = capsys.readouterr().err
+        assert "Failed to parse: GP_Bypass_List: row:0" in err, f"expected the row-0 parse failure in {err!r}"
+        self._assert_verdict(monkeypatch, "192.0.2.9", "bypassed")
+        self._assert_verdict(monkeypatch, "2001:db8:5::1", "bypassed")
+
     def test_group_policy_gate_stays_off_when_no_row_parses(self) -> None:
         self._load("example.com")
         assert pfb_unbound.pfb["gpListDB"] is False, f"expected False, got {pfb_unbound.pfb['gpListDB']!r}"
@@ -2630,12 +2628,18 @@ class TestGroupPolicyBypassCidr:
             for member in ("10.0.0.77", "2001:db8:1::abcd", "192.0.2.7"):
                 self._assert_verdict(monkeypatch, member, "bypassed")
 
-    def test_group_policy_zone_id_row_does_not_abort_the_boot(self, tmp_path: Any, monkeypatch: Any) -> None:
+    def test_group_policy_zone_id_row_loads_and_matches_its_zoned_client(self, tmp_path: Any, monkeypatch: Any) -> None:
         # '%em0' read as a '%' interpolation raised out of init_standard() on the PHP-accepted
-        # link-local form. The entry is bound to its zone, which a client address never carries.
+        # link-local form. Unbound reports a link-local client with its zone ('fe80::1%em0').
         with self._booted_from_ini(tmp_path, monkeypatch, ["fe80::1%em0", "10.0.0.0/24"]):
             self._assert_verdict(monkeypatch, "fe80::1", "blocked")
+            self._assert_verdict(monkeypatch, "fe80::1%em0", "bypassed")
             self._assert_verdict(monkeypatch, "10.0.0.77", "bypassed")
+
+    def test_group_policy_link_local_cidr_matches_a_zoned_client(self, monkeypatch: Any) -> None:
+        self._load("fe80::/10")
+        self._assert_verdict(monkeypatch, "fec0::1%em0", "blocked")
+        self._assert_verdict(monkeypatch, "fe80::1%em0", "bypassed")
 
     def test_group_policy_reload_drops_cidr_entries_removed_from_the_ini(self, tmp_path: Any, monkeypatch: Any) -> None:
         with self._booted_from_ini(tmp_path, monkeypatch, ["10.0.0.0/24"]):

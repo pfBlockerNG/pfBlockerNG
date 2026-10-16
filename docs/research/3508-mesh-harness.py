@@ -1,5 +1,6 @@
 """Research harness for #3508: do clients with different access-control tags
 share an in-flight Unbound mesh state? A Python module bypasses 127.0.0.2 and
+127.0.0.5 (both tagged "bypass") and
 answers NXDOMAIN to every other client; overlapping and sequential queries
 show which client's answer each recipient receives.
 
@@ -82,8 +83,8 @@ def operate(id, event, qstate, qdata):
             r = r.next
         with open("%s/operate.log", "a") as f:
             f.write("%%s %%d %%s\\n" %% (qstate.qinfo.qname_str, qstate.qinfo.qtype, ",".join(ips)))
-        # policy: 127.0.0.2 bypasses, every other client is blocked (NXDOMAIN)
-        if ips and ips[0] != "127.0.0.2" and not qstate.qinfo.qname_str.startswith("ready."):
+        # policy: tagged 127.0.0.2 and 127.0.0.5 bypass, every other client is blocked (NXDOMAIN)
+        if ips and ips[0] not in ("127.0.0.2", "127.0.0.5") and not qstate.qinfo.qname_str.startswith("ready."):
             qstate.return_rcode = RCODE_NXDOMAIN
             qstate.no_cache_store = 1
             qstate.ext_state[id] = MODULE_FINISHED
@@ -121,6 +122,7 @@ open(f"{D}/unbound.conf", "w").write(f"""server:
     access-control: 127.0.0.0/8 allow
     define-tag: "bypass"
     access-control-tag: 127.0.0.2/32 "bypass"
+    access-control-tag: 127.0.0.5/32 "bypass"
 {opt}python:
     python-script: "{D}/mod.py"
 forward-zone:
@@ -169,7 +171,7 @@ def ask(src: str, name: str, qtype: int) -> None:
 CASES = [
     ("mixed", ["127.0.0.2", "127.0.0.3"]),  # bypass first, then blocked client
     ("rev", ["127.0.0.3", "127.0.0.2"]),  # blocked client first, then bypass
-    ("same", ["127.0.0.3", "127.0.0.4"]),  # both untagged
+    ("sametag", ["127.0.0.2", "127.0.0.5"]),  # two bypass clients, same tag
     ("later", ["127.0.0.2", "127.0.0.3"]),  # sequential: bypass resolves, blocked client asks after
 ]
 try:

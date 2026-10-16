@@ -1771,7 +1771,7 @@ def test_dnsbl_group_policy_help_states_cidr_support_and_bypass_caveat(
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     assert "No Subnets allowed" not in body, "the Group Policy help still says subnets are not allowed"
-    missing = [text for text in ("CIDR subnets", "already cached", "hit or miss") if text not in body]
+    missing = [text for text in ("CIDR subnets", "at the same moment", "hit or miss") if text not in body]
     assert not missing, f"Group Policy help is missing {missing}"
 
 
