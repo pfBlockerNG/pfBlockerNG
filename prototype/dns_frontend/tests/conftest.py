@@ -1,0 +1,49 @@
+"""Fixtures: put the prototype on sys.path and boot the REAL shipped pfb_unbound.py through the shim.
+
+Run: python3 -m pytest prototype/dns_frontend/tests -p no:cacheprovider -o addopts=
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from frontend_constants import INI, PROTO_DIR, SHIPPED_DIR, Booted
+
+sys.path.insert(0, str(PROTO_DIR))
+
+
+@pytest.fixture
+def module_dir(tmp_path: Path) -> Path:
+    """A module dir shaped like /var/unbound: shipped code (symlinked, byte-identical), ini, manifest, raw feed."""
+    for name in ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py"):
+        (tmp_path / name).symlink_to(SHIPPED_DIR / name)
+    (tmp_path / "pfb_py_raw").mkdir()
+    (tmp_path / "pfb_py_raw" / "feed.txt").write_text("blocked.example\n", encoding="utf-8")
+    manifest = {
+        "version": 1,
+        "config": {},
+        "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "TestFeed", "group": "TestGroup", "log_flag": "1"}],
+    }
+    (tmp_path / "pfb_py_sources.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / "pfb_unbound.ini").write_text(INI, encoding="utf-8")
+    return tmp_path
+
+
+@pytest.fixture
+def booted(module_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Booted]:
+    import pfb_frontend
+
+    monkeypatch.chdir(module_dir)
+    # init_standard() replaces sys.stderr with a file logger; register monkeypatch's auto-restore.
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
+    module = pfb_frontend.boot(str(module_dir))
+    log: list[tuple[str, str]] = []
+    monkeypatch.setattr(module, "pfb_log", lambda name, line: log.append((name, line)))
+    try:
+        yield Booted(module, log)
+    finally:
+        pfb_frontend.shutdown(module)
