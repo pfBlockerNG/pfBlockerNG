@@ -88,7 +88,7 @@ with one condition and no new comparison code.
   regional copy of the tag list, tag actions and view name per mesh state
   (`mesh_copy_client_info()`), and no coalescing across different tag sets.
   Same-class coalescing, cache lookups, and outbound query deduplication are
-  unchanged; the proof below shows one upstream query for two isolated states.
+  unchanged.
 - **Caches.** Not partitioned. A module that produces client-specific answers
   must still keep them out of the shared message and RRset caches.
 
@@ -122,8 +122,8 @@ Each row held for A, TXT and HTTPS. Only the last column is leak-free. Mesh
 states counted from `operate()` `MODULE_EVENT_NEW` calls: with the option, the
 bypass-first case runs 6 states for 6 queries (none shared across tags), and
 two same-tag bypass clients (`127.0.0.2`, `127.0.0.5`) still share 3 states
-for 6 queries. Isolated states also share the one upstream query
-(`upstream=1` in every case).
+for 6 queries. Every case sent one upstream query (`upstream=1`); the blocked
+state is answered at `MODULE_EVENT_NEW` and never goes upstream.
 
 The blocked-first row cannot show the opposite failure here because the
 module finishes immediately; `pfb_unbound.py` also blocks at
