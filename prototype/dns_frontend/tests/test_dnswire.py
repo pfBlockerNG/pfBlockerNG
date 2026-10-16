@@ -188,8 +188,9 @@ def test_truncated_pointer_is_rejected() -> None:
 
 @pytest.mark.parametrize("length_octet", [0x40, 0x41, 0x80, 0xBF])
 def test_label_longer_than_63_or_reserved_type_is_rejected(length_octet: int) -> None:
-    packet = _hdr(1) + bytes([length_octet]) + b"a" * 200 + b"\x00\x00\x01\x00\x01"
-    with pytest.raises(WireError, match="label"):
+    # The label fits the packet, so only the reserved-type rule can reject it (not "truncated label").
+    packet = _hdr(1) + bytes([length_octet]) + b"a" * length_octet + b"\x00\x00\x01\x00\x01"
+    with pytest.raises(WireError, match="reserved"):
         dnswire.parse(packet)
 
 
