@@ -74,6 +74,7 @@ _NAME_LAYOUTS: dict[int, tuple[int | None, ...]] = {
 
 _MAX_NAME = 255
 _MAX_LABEL = 63
+_MAX_HOPS = 127  # a name has at most 127 labels, so a longer pointer chain is not a compressed name
 _HEADER = struct.Struct("!HHHHHH")
 
 
@@ -197,12 +198,13 @@ def name_from_rdata(rdata: bytes) -> str:
 def _read_labels(data: bytes, pos: int) -> tuple[list[bytes], int]:
     """Labels of the name at `pos` (following compression pointers) and the offset just past it in the stream.
 
-    A pointer must point strictly backwards, so every hop moves toward the start of the packet and a loop is
-    impossible by construction.
+    A pointer must point strictly backwards, so a loop is impossible by construction; at most _MAX_HOPS pointers are
+    followed, because a chain of pointers aimed at the previous pointer costs a hop per link on every read.
     """
     labels: list[bytes] = []
     wire_len = 1  # root octet
     end: int | None = None
+    hops = 0
     cur = pos
     while True:
         if cur >= len(data):
@@ -218,6 +220,9 @@ def _read_labels(data: bytes, pos: int) -> tuple[list[bytes], int]:
                 end = cur + 2
             if target >= cur:
                 raise WireError("compression pointer does not point backwards")
+            hops += 1
+            if hops > _MAX_HOPS:
+                raise WireError(f"more than {_MAX_HOPS} compression pointers in one name")
             cur = target
             continue
         if octet & 0xC0:

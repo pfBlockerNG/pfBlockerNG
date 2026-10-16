@@ -49,6 +49,8 @@ LOG_DIR = "/var/log/pfblockerng"
 TCP_IDLE_TIMEOUT = 30.0  # Unbound's tcp-idle-timeout default
 RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
+MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real query carries an OPT, maybe a TSIG
+MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; more are dropped
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 
 
@@ -140,10 +142,19 @@ def _answer(query: dnswire.Message, msg: shim.DnsMsg) -> bytes:
 
 
 class Frontend:
-    def __init__(self, module: ModuleType, upstream: tuple[str, int], timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        module: ModuleType,
+        upstream: tuple[str, int],
+        timeout: float = 5.0,
+        max_udp_inflight: int = MAX_UDP_INFLIGHT,
+    ) -> None:
         self.module = module
         self.upstream = upstream
         self.timeout = timeout
+        self.max_udp_inflight = max_udp_inflight
+        self.udp_inflight = 0
+        self.udp_overloaded = False
         self._servers: list[asyncio.Server] = []
         self._udp: list[asyncio.DatagramTransport] = []
         self._clients: set[asyncio.StreamWriter] = set()
@@ -157,21 +168,20 @@ class Frontend:
         """Answer one client query: parse it, let the module decide, forward to Unbound when it defers.
 
         None means the packet is dropped. `forward` sends the client's own bytes to Unbound (with its PROXYv2
-        header) and returns Unbound's reply bytes, or None if there is none.
+        header) and returns Unbound's reply bytes, or None if there is none. The header is checked before anything
+        is parsed, so a hostile packet costs a constant, and every FORMERR is header-only.
         """
+        if len(wire) < 12 or wire[2] & 0x80:  # no header, or a response: never answered (no reflection loops)
+            return None
+        msg_id, flags, qdcount, ancount, nscount, arcount = struct.unpack("!HHHHHH", wire[:12])
+        if (flags >> 11) & 0xF:
+            return await forward(wire)
+        if qdcount != 1 or ancount + nscount + arcount > MAX_QUERY_RRS:
+            return _error(dnswire.Message(msg_id, flags), RCODE_FORMERR)
         try:
             query = dnswire.parse(wire)
         except dnswire.WireError:
-            if len(wire) < 12 or wire[2] & 0x80:
-                return None
-            msg_id, flags = struct.unpack("!HH", wire[:4])
             return _error(dnswire.Message(msg_id, flags), RCODE_FORMERR)
-        if query.flags & dnswire.QR:
-            return None
-        if query.opcode != 0:
-            return await forward(wire)
-        if len(query.questions) != 1:
-            return _error(query, RCODE_FORMERR)
 
         question = query.questions[0]
         qstate = shim.module_qstate(
@@ -302,7 +312,7 @@ class Frontend:
                 reply = await self.resolve(wire, src[0], upstream)
                 if reply is not None:
                     writer.write(struct.pack("!H", len(reply)) + reply)
-                    await writer.drain()
+                    await asyncio.wait_for(writer.drain(), TCP_IDLE_TIMEOUT)  # a client that never reads is dropped
         except OSError:
             pass
         finally:
@@ -320,17 +330,29 @@ class _UdpServer(asyncio.DatagramProtocol):
         self.transport = transport  # type: ignore[assignment]
 
     def datagram_received(self, data: bytes, addr: Any) -> None:
-        self.frontend.spawn(self._handle(data, addr))
+        frontend = self.frontend
+        if frontend.udp_inflight >= frontend.max_udp_inflight:
+            if not frontend.udp_overloaded:  # one line per flood, not per packet
+                frontend.udp_overloaded = True
+                shim.log_warn(f"{frontend.udp_inflight} UDP queries in flight: dropping new ones until they drain")
+            return
+        frontend.udp_inflight += 1
+        frontend.spawn(self._handle(data, addr))
 
     async def _handle(self, data: bytes, addr: Any) -> None:
         assert self.transport is not None
-        src, dst = proxy_endpoints(addr[:2], self.transport.get_extra_info("sockname")[:2])
-        forward = partial(
-            _forward_udp, self.frontend.upstream, proxyv2.header(src, dst, tcp=False), self.frontend.timeout
-        )
-        reply = await self.frontend.resolve(data, src[0], forward)
-        if reply is not None:
-            self.transport.sendto(reply, addr)
+        try:
+            src, dst = proxy_endpoints(addr[:2], self.transport.get_extra_info("sockname")[:2])
+            forward = partial(
+                _forward_udp, self.frontend.upstream, proxyv2.header(src, dst, tcp=False), self.frontend.timeout
+            )
+            reply = await self.frontend.resolve(data, src[0], forward)
+            if reply is not None:
+                self.transport.sendto(reply, addr)
+        finally:
+            self.frontend.udp_inflight -= 1
+            if self.frontend.udp_inflight == 0:
+                self.frontend.udp_overloaded = False
 
 
 class _ReplyCatcher(asyncio.DatagramProtocol):
@@ -351,7 +373,12 @@ async def _forward_udp(upstream: tuple[str, int], header: bytes, timeout: float,
     """One query to Unbound over its own connected UDP socket, PROXYv2 header in front; None on silence or error."""
     loop = asyncio.get_running_loop()
     result: asyncio.Future[bytes] = loop.create_future()
-    transport, _ = await loop.create_datagram_endpoint(lambda: _ReplyCatcher(wire[:2], result), remote_addr=upstream)
+    try:
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _ReplyCatcher(wire[:2], result), remote_addr=upstream
+        )
+    except OSError:  # out of descriptors: the caller says so once, as for any silence from Unbound
+        return None
     try:
         transport.sendto(header + wire)
         return await asyncio.wait_for(result, timeout)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from frontend_constants import INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted
+from hang_guard import hang_guard  # noqa: F401  (autouse: every test here gets the alarm)
 
 sys.path.insert(0, str(PROTO_DIR))
 
