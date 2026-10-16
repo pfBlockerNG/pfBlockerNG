@@ -187,7 +187,7 @@ def test_group_policy_panel_shows_cidr_help_and_bypass_caveat(
     screenshot_dir: Path,
 ) -> None:
     """Once the Group Policy gate is on and its panel expanded, the help the admin SEES says
-    CIDR subnets are accepted and warns the bypass can be hit or miss (issue #3508). The panel
+    CIDR subnets are accepted and warns about the rare shared-answer and cache cases (issue #3508). The panel
     is hidden until the ``pfb_gp`` checkbox is ticked, so only a real browser proves the text
     is visible where the admin reads it.
     """
@@ -196,7 +196,7 @@ def test_group_policy_panel_shows_cidr_help_and_bypass_caveat(
     _prep_gp(page)
 
     panel = page.locator("#Python_Group_Policy_panel-body")
-    for text in ("CIDR subnets", "at the same moment", "hit or miss"):
+    for text in ("CIDR subnets", "at the same moment", "until the cached entry expires"):
         expect(panel).to_contain_text(text, timeout=JS_TIMEOUT_MS)
     expect(panel).not_to_contain_text("No Subnets allowed", timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "group_policy_cidr_help_and_caveat")
