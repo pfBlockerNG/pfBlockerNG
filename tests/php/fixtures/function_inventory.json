@@ -1755,12 +1755,33 @@
     "pfb_dns_proxy_ensure_running": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "gateway",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway'"
+            }
+        ]
     },
     "pfb_dns_proxy_hosts_module": {
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_dns_proxy_interface_addresses": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "interfaces",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
     },
     "pfb_dns_proxy_listen": {
         "returnsRef": false,
@@ -1784,6 +1805,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_listeners_stored": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
                 "default": null
             }
         ]
@@ -1873,7 +1907,54 @@
     "pfb_dns_proxy_service": {
         "returnsRef": false,
         "returnType": "void",
-        "params": []
+        "params": [
+            {
+                "name": "gateway",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway'"
+            }
+        ]
+    },
+    "pfb_dns_proxy_tls_flags": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "plain",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_tokens": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "list",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_trusted_entry": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_dns_proxy_unmoved_effect": {
         "returnsRef": false,
@@ -15598,6 +15679,33 @@
                 "variadic": false,
                 "type": "?callable",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_validate_dns_proxy_listeners_post": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "valid_iface_list",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "certref",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },
