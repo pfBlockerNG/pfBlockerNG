@@ -171,8 +171,7 @@ func TestACLHostBitsAreMasked(t *testing.T) {
 	checkLookup(t, a, "2001:db8:2:1::1", ACLForward)
 }
 
-// P5: the oracle grid showed Unbound 1.26 lets the LAST of identical prefixes win (its config list is
-// built by prepending, and the first inserted node sticks); the brief says to follow Unbound.
+// Unbound lets the LAST of identical prefixes win: the config list is built by prepending and the first tree insert sticks.
 func TestACLDuplicatePrefixLastLineWins(t *testing.T) {
 	checkLookup(t, newACL(t, aclText("192.0.2.0/24 deny", "192.0.2.0/24 allow")), "192.0.2.1", ACLForward)
 	checkLookup(t, newACL(t, aclText("192.0.2.0/24 allow", "192.0.2.0/24 deny")), "192.0.2.1", ACLDrop)
