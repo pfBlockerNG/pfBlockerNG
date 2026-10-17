@@ -654,6 +654,21 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame($good, $this->rcText());
 	}
 
+	public function testAnEditedStopBlockOnDiskIsRestoredEvenWhenTheStartBlockIsCurrent(): void
+	{
+		// Given a script whose rc_start body is exactly what would be generated and whose rc_stop body differs
+		$this->moveResolver();
+		$this->assertTrue($this->generate());
+		$good = $this->rcText();
+		$edited = str_replace('/bin/kill -TERM', '/bin/kill -HUP', $good);
+		$this->assertNotSame($good, $edited, 'the fixture edits the stop block');
+		$this->assertSame(strstr($good, 'rc_stop() {', TRUE), strstr($edited, 'rc_stop() {', TRUE), 'and only the stop block');
+		file_put_contents("{$this->dir}/rc/" . self::RC, $edited);
+
+		$this->assertTrue($this->generate(), 'a stale stop block alone is enough to rewrite the script');
+		$this->assertSame($good, $this->rcText());
+	}
+
 	public function testWithNoMovedResolverTheScriptStillExistsAndNeverLaunchesAnything(): void
 	{
 		// Given no snapshot (not in proxy mode): stop_service() can only reach a script that exists

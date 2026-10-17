@@ -3954,7 +3954,9 @@ EOF;
  * @return list<string>
  */
 function pfb_dns_proxy_listen(array $saved): array {
-	// shortcut: addresses are read at apply time; an interface address change needs an apply to reach the proxy.
+	// shortcut: addresses are read at apply time and baked into the rc script. The proxy skips one that has gone away
+	// since (logged, the others are served) but does not listen on one added since until the next reload; derive them
+	// in rc start if that matters.
 	$interfaces = array_filter(explode(',', (string) $saved['active_interface']['value']));
 
 	$found = [];
@@ -4099,6 +4101,15 @@ EOF;
 function pfb_dns_proxy_restart(): void {
 	pfb_dns_proxy_service();
 	restart_service('pfb_dns_proxy');
+}
+
+/** The apply's branch with nothing to reload restarts nothing: bring up a proxy that died since the last reload. */
+function pfb_dns_proxy_ensure_running(): void {
+	if (pfb_dns_proxy_saved() !== NULL && !pfb_dns_proxy_running()) {
+		pfb_logger("\nStarting the DNS proxy", 1);
+		pfb_dns_proxy_service();
+		start_service('pfb_dns_proxy');
+	}
 }
 
 /** Installer: restart the proxy while the Resolver is moved aside for it, stop it (keeping its script) otherwise. */
@@ -12192,18 +12203,21 @@ function pfb_dns_proxy_running(): bool {
  * syntax error, and a server clause opened last is valid wherever the user's own text ends. Values that
  * already look moved are never snapshotted as the "previous" ones. OFF stops the DNS proxy service first (so
  * Unbound's regeneration finds port 53 free), then restores each key exactly and clears the snapshot; no
- * snapshot = nothing to do, except that a Resolver still on lo0:5353 without one is reported to the operator
- * (file_notice): it cannot be put back automatically. Idempotent.
+ * snapshot = nothing to do, except that a Resolver on lo0:5353 that carries the PFB_DNS_PROXY_LINE the move adds
+ * (a user's own lo0:5353 Resolver has none) is reported to the operator (file_notice): it cannot be put back
+ * automatically. Idempotent.
  *
  * @return bool TRUE iff config.xml changed (write_config was called once).
  */
 function pfb_dns_proxy_resolver(bool $on): bool {
 	$saved = pfb_dns_proxy_saved();
+	$custom = (string) base64_decode((string) config_get_path('unbound/custom_options', ''));
+	$has_line = in_array(PFB_DNS_PROXY_LINE, array_map('trim', explode("\n", $custom)), TRUE);
 
 	if (!$on) {
 		if ($saved === NULL) {
 			if ((string) config_get_path('unbound/port', '') === PFB_DNS_PROXY_UNBOUND_PORT &&
-			    config_get_path('unbound/active_interface', NULL) === 'lo0') {
+			    config_get_path('unbound/active_interface', NULL) === 'lo0' && $has_line) {
 				$text = 'DNS proxy: the DNS Resolver is still on loopback port ' . PFB_DNS_PROXY_UNBOUND_PORT .
 				    ', but pfBlockerNG has no valid saved copy of its previous settings to restore. In Services > DNS Resolver ' .
 				    'check and correct Network Interfaces, Listen Port, Enable SSL/TLS Service and Custom Options ' .
@@ -12265,8 +12279,7 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 		$changed = TRUE;
 	}
 
-	$custom = (string) base64_decode((string) config_get_path('unbound/custom_options', ''));
-	if (!in_array(PFB_DNS_PROXY_LINE, array_map('trim', explode("\n", $custom)), TRUE)) {
+	if (!$has_line) {
 		$custom = ($custom === '' || str_ends_with($custom, "\n")) ? $custom . PFB_DNS_PROXY_CLAUSE : "{$custom}\n" . PFB_DNS_PROXY_CLAUSE;
 		config_set_path('unbound/custom_options', pfb_text_area_encode($custom));
 		$changed = TRUE;
