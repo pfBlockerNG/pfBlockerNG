@@ -4050,10 +4050,15 @@ function pfb_dns_proxy_tokens(string $list): array {
 	return array_values(array_unique(preg_split('/[\s,]+/', $list, -1, PREG_SPLIT_NO_EMPTY) ?: []));
 }
 
-/** TRUE iff $entry is an IP address or an address/prefix a DoH front end may be trusted as: no zone id, no shell text. */
+/** The port as the gateway parses it (a whole number 1-65535, no leading zeros, no sign or padding), else NULL. */
+function pfb_dns_proxy_listener_port(mixed $port): ?string {
+	return (is_string($port) && ctype_digit($port) && strlen($port) <= 5 && (int) $port >= 1 && (int) $port <= 65535) ? (string) (int) $port : NULL;
+}
+
+/** TRUE iff $entry is an IP address or an address/prefix a DoH front end may be trusted as: no zone id, no zero-padded prefix, no shell text. */
 function pfb_dns_proxy_trusted_entry(string $entry): bool {
-	// is_subnet() reads "a/b/c" as "a/b" and a prefix of "8.0" as 8; the gateway rejects both, so only digits pass.
-	if (strpos($entry, '%') !== FALSE || preg_match('~^[^/]+(?:/[0-9]{1,3})?$~', $entry) !== 1) {
+	// is_subnet() accepts a zero-padded prefix ("/08"); the gateway's netip.ParsePrefix rejects it, so only plain numbers pass.
+	if (strpos($entry, '%') !== FALSE || preg_match('~^[^/]+(?:/(?:0|[1-9][0-9]{0,2}))?$~', $entry) !== 1) {
 		return FALSE;
 	}
 	return is_ipaddr($entry) || is_subnet($entry);
@@ -4071,8 +4076,7 @@ function pfb_dns_proxy_trusted_entry(string $entry): bool {
 function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_list, string $certref): array {
 	$errors = [];
 	foreach (['doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
-		$port = $post["pfb_dns_proxy_{$kind}_port"] ?? '';
-		if (!is_string($port) || !ctype_digit($port) || strlen($port) > 5 || (int) $port < 1 || (int) $port > 65535) {
+		if (pfb_dns_proxy_listener_port($post["pfb_dns_proxy_{$kind}_port"] ?? '') === NULL) {
 			$errors[] = "{$label} Port must be a whole number from 1 to 65535.";
 		}
 		foreach ((array) ($post["pfb_dns_proxy_{$kind}_interface"] ?? []) as $interface) {
@@ -4104,10 +4108,9 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 function pfb_dns_proxy_listeners_stored(array $post): array {
 	$stored = [];
 	foreach (['doh', 'doq'] as $kind) {
-		$port = $post["pfb_dns_proxy_{$kind}_port"] ?? '';
 		$interfaces = array_unique(array_filter((array) ($post["pfb_dns_proxy_{$kind}_interface"] ?? []), 'is_string'));
 		$stored["pfb_dns_proxy_{$kind}"] = pfb_filter($post["pfb_dns_proxy_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
-		$stored["pfb_dns_proxy_{$kind}_port"] = (is_string($port) && ctype_digit($port)) ? (string) (int) $port : PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port");
+		$stored["pfb_dns_proxy_{$kind}_port"] = pfb_dns_proxy_listener_port($post["pfb_dns_proxy_{$kind}_port"] ?? '') ?? PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port");
 		$stored["pfb_dns_proxy_{$kind}_interface"] = implode(',', $interfaces);
 		if ($kind === 'doh') {
 			$stored['pfb_dns_proxy_doh_trusted'] = implode(' ', pfb_dns_proxy_tokens((string) ($post['pfb_dns_proxy_doh_trusted'] ?? '')));
@@ -4117,17 +4120,21 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 }
 
 /**
- * The gateway's --doh-* / --doq-* arguments: each group only while its toggle is on and at least one address remains.
- * A listener's interface setting goes through the same derivation as the plain listeners; empty = $plain, the proxy's
- * own addresses. Trusted entries: valid IPs/CIDRs only (a hand-edited config.xml cannot reach the shell), a bare
- * address as a host prefix, every value shell-quoted.
+ * The gateway's --doh-* / --doq-* arguments for each group that is on, has a parsable port and an address. Stored
+ * values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a host prefix.
  *
- * @param list<string> $plain the plain DNS listen addresses
+ * @param list<string> $plain the plain DNS listen addresses, used when a group names no interface
+ * @param list<string> $warnings gets one line per group left out for its port
  */
-function pfb_dns_proxy_tls_flags(array $plain): string {
+function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
 	$flags = '';
-	foreach (['doh', 'doq'] as $kind) {
+	foreach (['doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
 		if (PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}") !== PfbToggle::On) {
+			continue;
+		}
+		$port = pfb_dns_proxy_listener_port(PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port"));
+		if ($port === NULL) {
+			$warnings[] = "DNS proxy: the stored {$label} port is not a whole number from 1 to 65535; {$label} is not served";
 			continue;
 		}
 		$interfaces = pfb_dns_proxy_tokens((string) PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_interface"));
@@ -4138,7 +4145,7 @@ function pfb_dns_proxy_tls_flags(array $plain): string {
 		foreach ($addresses as $address) {
 			$flags .= " --{$kind}-listen " . escapeshellarg($address);
 		}
-		$flags .= " --{$kind}-port " . escapeshellarg((string) PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port"));
+		$flags .= " --{$kind}-port " . escapeshellarg($port);
 		if ($kind === 'doh') {
 			foreach (pfb_dns_proxy_tokens((string) PfbConfig::read('dnsbl/pfb_dns_proxy_doh_trusted')) as $entry) {
 				if (pfb_dns_proxy_trusted_entry($entry)) {
@@ -4154,7 +4161,7 @@ function pfb_dns_proxy_tls_flags(array $plain): string {
  * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from the SAVED Resolver
  * (listen addresses, DoT), the DoH/DoQ settings and its Listen Port (unbound/port, which stays on loopback for Unbound;
  * 53 when absent or not a port) and DNSBL's runtime state ($pfb as pfb_global() left it, so callers hold a fresh one).
- * Written on every call, like the other pfBlockerNG rc services.
+ * Written on every call, like the other pfBlockerNG rc services; its warnings are logged only when the content changed.
  *
  * DNSBL on: the proxy boots pfb_unbound.py, and while the Resolver forwards it also listens for the upstream observer
  * Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query, and with the DNS Reply
@@ -4190,6 +4197,7 @@ function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 
 	$saved = pfb_dns_proxy_saved();
 	$listen = ($saved === NULL) ? [] : pfb_dns_proxy_listen($saved);
+	$warnings = [];
 	$addresses = '';
 	foreach (array_merge($listen, PFB_DNS_PROXY_LOOPBACK) as $address) {
 		$addresses .= ' --listen ' . escapeshellarg($address);
@@ -4203,13 +4211,13 @@ function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
 	if (is_file($gateway) && is_executable($gateway)) {
 		$command = escapeshellarg($gateway) . "{$addresses} --port 53 --upstream {$upstream}" . ($dot ? ' --dot' : '') .
-		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen) .
+		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) .
 		    " --acl-file /var/unbound/access_lists.conf --user unbound -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	} else {
 		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound --ready-file {$ready}" .
 		    ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '') . $module;
 		if ($saved !== NULL && (PfbConfig::read('dnsbl/pfb_dns_proxy_doh') === PfbToggle::On || PfbConfig::read('dnsbl/pfb_dns_proxy_doq') === PfbToggle::On)) {
-			pfb_logger("\nDNS proxy: DoH/DoQ are enabled but the pfb_dns_gateway binary is not installed; they are not served", 2);
+			$warnings[] = 'DNS proxy: DoH/DoQ are enabled but the pfb_dns_gateway binary is not installed; they are not served';
 		}
 	}
 
@@ -4345,6 +4353,14 @@ EOF;
 	// A survivor must fail the restart: the start's healthy check would otherwise report success over it
 	$rc['restart'] = "\trc_stop || return 1\n\trc_start\n";
 
+	// write_rcfile() wraps start/stop as rc_start() { ... } / rc_stop() { ... }: a warning is logged only for a changed script.
+	$disk = @file_get_contents(PFB_DNS_PROXY_RCFILE);
+	if (!is_string($disk) || strpos($disk, "rc_start() {\n\t{$rc['start']}\n}\n") === FALSE ||
+	    strpos($disk, "rc_stop() {\n\t{$rc['stop']}\n}\n") === FALSE) {
+		foreach ($warnings as $warning) {
+			pfb_logger("\n{$warning}", 2);
+		}
+	}
 	write_rcfile($rc);
 }
 
