@@ -658,9 +658,11 @@ def test_listed_name_gets_the_vip_and_a_feed_attributed_log_row(rig: Rig, proxy_
     Given a feed listing `blocked` and no dnsbl.log row for it yet,
     When the LAN client asks the proxy over UDP,
     Then it gets the DNSBL VIP and dnsbl.log gains a row naming the feed and the client,
-      And Unbound's query log, which has an allowed query asked after it, never saw the listed name.
+      And Unbound's query log, which has an allowed query asked after it, gains no line for the listed name
+      (the baseline queries asked before the toggle are in that log already: only new lines count).
     """
     rows_before = len(_dnsbl_rows(rig.vm, rig.names.blocked))
+    unbound_lines_before = _unbound_clients(rig.vm, rig.names.blocked)
     answer, raw = _query(rig.client, rig.names.blocked)
     assert h.is_vip(answer), f"{rig.names.blocked}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
     try:
@@ -673,7 +675,10 @@ def test_listed_name_gets_the_vip_and_a_feed_attributed_log_row(rig: Rig, proxy_
     # Barrier: Unbound logs the allowed query after any earlier arrival of the listed one would have been logged.
     after = h.unique_domain("after")
     _assert_answered_by_upstream(rig, after, *_query(rig.client, after), how="UDP barrier")
-    assert _unbound_clients(rig.vm, rig.names.blocked) == [], f"Unbound saw the listed name {rig.names.blocked}"
+    unbound_lines_after = _unbound_clients(rig.vm, rig.names.blocked)
+    assert unbound_lines_after == unbound_lines_before, (
+        f"Unbound logged {rig.names.blocked} for this query: {unbound_lines_before} -> {unbound_lines_after}"
+    )
 
 
 def test_allowed_name_is_answered_by_the_upstream_and_unbound_logs_the_client(rig: Rig, proxy_on: State) -> None:
