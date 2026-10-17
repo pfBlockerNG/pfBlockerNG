@@ -14,6 +14,11 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --timeout SECONDS  wait for Unbound before answering SERVFAIL (default 5)
   --dot              also serve DNS over TLS, as the pfSense DNS Resolver is set up for (see below)
   --pfsense-config P pfSense config.xml to read the DNS Resolver's DoT settings from (/cf/conf/config.xml)
+  --user NAME        give up root for NAME after binding the sockets and before the module boots (default: keep it)
+
+--user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then supplementary groups, group
+and user are set to NAME's, then the module boots, so every file it creates belongs to NAME. An unknown NAME (or '') or
+a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
 
 --dot reads unbound/sslcertref and unbound/tlsport (853 if unset) from config.xml, serves the referenced certificate
 on every --listen address at that port (TLS 1.2+), and forwards a DoT query to Unbound like a TCP one, with the TLS
@@ -34,8 +39,10 @@ import asyncio
 import ipaddress
 import logging
 import os
+import pwd
 import secrets
 import signal
+import socket
 import ssl
 import struct
 import sys
@@ -43,7 +50,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from functools import partial
 from types import ModuleType
-from typing import Any
+from typing import Any, NamedTuple
 
 import dnswire
 import pfsense_dot
@@ -98,6 +105,28 @@ def shutdown(module: ModuleType) -> None:
         sys.stderr = _stderr_before_boot
 
 
+class DropError(Exception):
+    """The user to run as does not exist, or the OS refused to become it; the message is what the operator sees."""
+
+
+def lookup_user(name: str) -> pwd.struct_passwd:
+    try:
+        return pwd.getpwnam(name)
+    except KeyError:
+        raise DropError(f"unknown user {name!r}") from None
+
+
+def drop_privileges(account: pwd.struct_passwd) -> None:
+    """Become `account`: supplementary groups first, then the group, then the user, which takes away the right to
+    do the other two. Becoming the user the process already is (root to root) works and changes nothing."""
+    try:
+        os.setgroups([])
+        os.setgid(account.pw_gid)
+        os.setuid(account.pw_uid)
+    except OSError as exc:
+        raise DropError(f"cannot switch to user {account.pw_name!r}: {exc}") from None
+
+
 # --- addressing ----------------------------------------------------------------------------------
 
 
@@ -122,6 +151,40 @@ def parse_hostport(value: str) -> tuple[str, int]:
     if not sep or not host or not port.isdigit() or not 0 < int(port) < 65536:
         raise ValueError(f"expected HOST:PORT, got {value!r}")
     return host.removeprefix("[").removesuffix("]"), int(port)
+
+
+# --- listening sockets ---------------------------------------------------------------------------
+
+
+class Listener(NamedTuple):
+    host: str
+    tcp: socket.socket
+    udp: socket.socket | None
+
+    def close(self) -> None:
+        for sock in (self.tcp, self.udp):
+            if sock is not None:
+                sock.close()
+
+
+def bind(host: str, port: int, *, udp: bool) -> Listener:
+    """Bound sockets for the address `host`, not yet served: TCP listening, and UDP on the same port when `udp`.
+
+    Binding is its own step so it happens as the starting user (port 53 needs root) and before the privilege drop;
+    UDP datagrams wait in the socket until serve_listeners() reads them, so none is lost while the module boots.
+    """
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    tcp = socket.create_server((host, port), family=family, backlog=100)
+    if not udp:
+        return Listener(host, tcp, None)
+    datagrams = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        datagrams.bind((host, tcp.getsockname()[1]))
+    except BaseException:
+        tcp.close()
+        datagrams.close()
+        raise
+    return Listener(host, tcp, datagrams)
 
 
 # --- replies the proxy builds itself -------------------------------------------------------------
@@ -273,29 +336,29 @@ class Frontend:
         if not task.cancelled() and task.exception() is not None:
             shim.log_err(f"query task failed: {task.exception()!r}")
 
-    async def start_dot(self, listen: Sequence[str], port: int, context: ssl.SSLContext) -> list[tuple[str, int]]:
-        """Serve DNS over TLS (the same framing as TCP) on each address; returns the bound (host, port)s."""
+    async def serve_listeners(
+        self, listeners: Sequence[Listener], context: ssl.SSLContext | None = None
+    ) -> list[tuple[str, int]]:
+        """Start serving sockets from bind(): TCP, and UDP where the listener has one, over TLS when `context` is
+        given (DoT is the same framing as TCP). Returns the bound (host, port)s."""
+        loop = asyncio.get_running_loop()
+        tls = {} if context is None else {"ssl": context, "ssl_handshake_timeout": TLS_HANDSHAKE_TIMEOUT}
         bound = []
-        for host in listen:
-            server = await asyncio.start_server(
-                self._tcp_client, host, port, ssl=context, ssl_handshake_timeout=TLS_HANDSHAKE_TIMEOUT
-            )
-            self._servers.append(server)
-            bound.append((host, server.sockets[0].getsockname()[1]))
+        for listener in listeners:
+            self._servers.append(await asyncio.start_server(self._tcp_client, sock=listener.tcp, **tls))
+            if listener.udp is not None:
+                transport, _ = await loop.create_datagram_endpoint(lambda: _UdpServer(self), sock=listener.udp)
+                self._udp.append(transport)  # type: ignore[arg-type]
+            bound.append((listener.host, listener.tcp.getsockname()[1]))
         return bound
+
+    async def start_dot(self, listen: Sequence[str], port: int, context: ssl.SSLContext) -> list[tuple[str, int]]:
+        """Serve DNS over TLS on each address; returns the bound (host, port)s."""
+        return await self.serve_listeners([bind(host, port, udp=False) for host in listen], context)
 
     async def start(self, listen: Sequence[str], port: int) -> list[tuple[str, int]]:
         """Serve UDP and TCP on each address (port 0 picks one port per address); returns the bound (host, port)s."""
-        loop = asyncio.get_running_loop()
-        bound = []
-        for host in listen:
-            server = await asyncio.start_server(self._tcp_client, host, port)
-            self._servers.append(server)
-            bound_port = server.sockets[0].getsockname()[1]
-            transport, _ = await loop.create_datagram_endpoint(lambda: _UdpServer(self), local_addr=(host, bound_port))
-            self._udp.append(transport)  # type: ignore[arg-type]
-            bound.append((host, bound_port))
-        return bound
+        return await self.serve_listeners([bind(host, port, udp=True) for host in listen])
 
     async def stop(self) -> None:
         for server in self._servers:
@@ -472,6 +535,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         metavar="PATH",
         help="pfSense config.xml (/cf/conf/config.xml)",
     )
+    parser.add_argument("--user", metavar="NAME", help="give up root for this user once the sockets are bound")
     args = parser.parse_args(argv)
     try:
         parse_hostport(args.upstream)
@@ -486,19 +550,32 @@ async def serve(
     stop: asyncio.Event | None = None,
     on_ready: Callable[[list[tuple[str, int]]], object] | None = None,
 ) -> None:
-    """Boot the module, serve until `stop` is set (SIGINT/SIGTERM when not given), then shut everything down.
+    """Bind, drop root for `args.user`, boot the module, serve until `stop` is set (SIGINT/SIGTERM when not given),
+    then shut everything down.
 
-    `on_ready` gets the bound (host, port)s: the UDP+TCP listeners first, then the DoT ones. A DoT configuration that
-    cannot be served raises DotConfigError before the module boots.
+    The sockets and the TLS context are made as the user the process started as; the drop comes after them and
+    before the boot, so what init_standard() and the watchers create belongs to `args.user`. `on_ready` gets the
+    bound (host, port)s: the UDP+TCP listeners first, then the DoT ones. A user that does not exist, a drop the OS
+    refuses (DropError) or a DoT configuration that cannot be served (DotConfigError) raises before the module boots.
     """
+    account = lookup_user(args.user) if args.user is not None else None
     dot = pfsense_dot.read_settings(args.pfsense_config) if args.dot else None
     dot_context = pfsense_dot.server_context(dot) if dot is not None else None
-    module = boot(args.module_dir)
+    listen = args.listen or ["127.0.0.1"]
+    listeners = [bind(host, args.port, udp=True) for host in listen]
+    dot_listeners = [bind(host, dot.port, udp=False) for host in listen] if dot is not None else []
+    try:
+        if account is not None:
+            drop_privileges(account)
+        module = boot(args.module_dir)
+    except BaseException:
+        for listener in (*listeners, *dot_listeners):
+            listener.close()
+        raise
     frontend = Frontend(module, parse_hostport(args.upstream), args.timeout)
     try:
-        listen = args.listen or ["127.0.0.1"]
-        bound = await frontend.start(listen, args.port)
-        dot_bound = await frontend.start_dot(listen, dot.port, dot_context) if dot is not None else []
+        bound = await frontend.serve_listeners(listeners)
+        dot_bound = await frontend.serve_listeners(dot_listeners, dot_context)
         listening = [f"{host}:{port}" for host, port in bound] + [f"{host}:{port} (DoT)" for host, port in dot_bound]
         shim.log_info(f"listening on {', '.join(listening)}; upstream {args.upstream}")
         if on_ready is not None:
@@ -518,6 +595,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         asyncio.run(serve(parse_args(argv)))
     except pfsense_dot.DotConfigError as exc:
         print(f"pfb_dns_proxy: DNS over TLS: {exc}", file=sys.stderr)
+        return 1
+    except DropError as exc:
+        print(f"pfb_dns_proxy: {exc}", file=sys.stderr)
         return 1
     return 0
 
