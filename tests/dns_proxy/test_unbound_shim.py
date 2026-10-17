@@ -42,10 +42,8 @@ def _load_stub() -> Any:
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Iterator[None]:
     shim.callbacks.clear()
-    shim.cache_calls.clear()
     yield
     shim.callbacks.clear()
-    shim.cache_calls.clear()
 
 
 def _qstate(name: str = "blocked.example.", qtype: int = shim.RR_TYPE_A, ip: str = "192.0.2.10") -> Any:
@@ -105,11 +103,21 @@ def test_register_inplace_callbacks_store_the_callable_per_kind() -> None:
     }
 
 
-def test_cache_calls_are_recorded_and_do_nothing_else() -> None:
+def _retained() -> dict[str, int]:
+    """Sizes of every container the shim module holds, so growth shows whatever it was stored in."""
+    return {name: len(value) for name, value in vars(shim).items() if isinstance(value, list | dict | set)}
+
+
+def test_the_cache_calls_are_no_ops_that_remember_nothing() -> None:
+    """The proxy runs for weeks and the SafeSearch pass calls both for every query: neither may keep a record."""
     qstate = _qstate()
-    assert shim.storeQueryInCache(qstate, qstate.qinfo, None, 1) is True
-    assert shim.invalidateQueryInCache(qstate, qstate.qinfo) is None
-    assert shim.cache_calls == [("store", "blocked.example.", 1), ("invalidate", "blocked.example.")]
+    before = _retained()
+    results = {
+        (shim.storeQueryInCache(qstate, qstate.qinfo, None, 1), shim.invalidateQueryInCache(qstate, qstate.qinfo))
+        for _ in range(1000)
+    }
+    assert results == {(True, None)}
+    assert _retained() == before
 
 
 def test_reply_callback_gets_the_client_address_in_repinfo() -> None:
