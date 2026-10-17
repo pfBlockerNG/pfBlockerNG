@@ -17,9 +17,16 @@ PROXY_FIXED = 16  # 12-byte signature + ver/cmd + family + 2-byte length
 
 
 def build_query(
-    name: str, qtype: int = dnswire.TYPE_A, *, qid: int = 0x1234, rd: bool = True, edns: bool = False
+    name: str,
+    qtype: int = dnswire.TYPE_A,
+    *,
+    qid: int = 0x1234,
+    rd: bool = True,
+    edns: bool = False,
+    do: bool = False,
 ) -> bytes:
-    additional = [dnswire.make_opt()] if edns else []
+    """A one-question query; `edns` adds an OPT, and `do` adds one with the DNSSEC-OK bit set."""
+    additional = [dnswire.make_opt(do=do)] if edns or do else []
     message = dnswire.Message(qid, dnswire.RD if rd else 0, [dnswire.Question(name, qtype)], additional=additional)
     return dnswire.encode(message)
 

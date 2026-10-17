@@ -15,10 +15,14 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --dot              also serve DNS over TLS, as the pfSense DNS Resolver is set up for (see below)
   --pfsense-config P pfSense config.xml to read the DNS Resolver's DoT settings from (/cf/conf/config.xml)
 
---dot reads unbound/enablessl, unbound/sslcertref and unbound/tlsport (853 if unset) from config.xml, serves the
-referenced certificate on every --listen address at that port (TLS 1.2+), and forwards a DoT query to Unbound like a
-TCP one, with the TLS peer's address in the PROXYv2 header. If the Resolver does not have DoT enabled or the
-certificate is missing or unusable, it exits 1 with the reason: there is no self-signed fallback.
+--dot reads unbound/sslcertref and unbound/tlsport (853 if unset) from config.xml, serves the referenced certificate
+on every --listen address at that port (TLS 1.2+), and forwards a DoT query to Unbound like a TCP one, with the TLS
+peer's address in the PROXYv2 header. unbound/enablessl is not read: --dot decides, since the Resolver's own DoT is
+off while the proxy runs. If the certificate is missing, unusable or its key is passphrase-protected, it exits 1
+with the reason: there is no self-signed fallback and no passphrase prompt.
+
+Limits: at most 128 TCP and DoT connections at once (over that they are closed at accept, one log line per burst),
+512 UDP queries in flight, and a DoT handshake must finish within 10 s.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -52,6 +56,8 @@ RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real query carries an OPT, maybe a TSIG
 MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; more are dropped
+MAX_TCP_CLIENTS = 128  # concurrent TCP and DoT connections, each holding an upstream connection; more are closed
+TLS_HANDSHAKE_TIMEOUT = 10.0  # a DoT client that has not finished its handshake by then is dropped (asyncio: 60 s)
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 
 
@@ -149,13 +155,16 @@ class Frontend:
         upstream: tuple[str, int],
         timeout: float = 5.0,
         max_udp_inflight: int = MAX_UDP_INFLIGHT,
+        max_tcp_clients: int = MAX_TCP_CLIENTS,
     ) -> None:
         self.module = module
         self.upstream = upstream
         self.timeout = timeout
         self.max_udp_inflight = max_udp_inflight
+        self.max_tcp_clients = max_tcp_clients
         self.udp_inflight = 0
         self.udp_overloaded = False
+        self.tcp_overloaded = False
         self._servers: list[asyncio.Server] = []
         self._udp: list[asyncio.DatagramTransport] = []
         self._clients: set[asyncio.StreamWriter] = set()
@@ -268,7 +277,9 @@ class Frontend:
         """Serve DNS over TLS (the same framing as TCP) on each address; returns the bound (host, port)s."""
         bound = []
         for host in listen:
-            server = await asyncio.start_server(self._tcp_client, host, port, ssl=context)
+            server = await asyncio.start_server(
+                self._tcp_client, host, port, ssl=context, ssl_handshake_timeout=TLS_HANDSHAKE_TIMEOUT
+            )
             self._servers.append(server)
             bound.append((host, server.sockets[0].getsockname()[1]))
         return bound
@@ -298,11 +309,27 @@ class Frontend:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    def _turn_away(self, writer: asyncio.StreamWriter) -> None:
+        """Close a connection that arrived over the cap: nothing is read from it and no Unbound connection is opened."""
+        if not self.tcp_overloaded:  # one line per burst, not per connection
+            self.tcp_overloaded = True
+            shim.log_warn(
+                f"TCP client limit of {self.max_tcp_clients} reached: closing new connections until the clients drain"
+            )
+        writer.close()
+
     async def _tcp_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """One client connection: length-framed queries answered one at a time, one upstream connection reused."""
-        self._clients.add(writer)
-        src, dst = proxy_endpoints(writer.get_extra_info("peername")[:2], writer.get_extra_info("sockname")[:2])
+        if len(self._clients) >= self.max_tcp_clients:
+            self._turn_away(writer)
+            return
+        peer, local = writer.get_extra_info("peername"), writer.get_extra_info("sockname")
+        if peer is None or local is None:  # the peer reset the connection before this handler ran
+            writer.close()
+            return
+        src, dst = proxy_endpoints(peer[:2], local[:2])
         upstream = _TcpUpstream(self.upstream, proxyv2.header(src, dst, tcp=True), self.timeout)
+        self._clients.add(writer)
         try:
             while True:
                 try:
@@ -320,6 +347,8 @@ class Frontend:
             upstream.close()
             writer.close()
             self._clients.discard(writer)
+            if not self._clients:
+                self.tcp_overloaded = False
 
 
 class _UdpServer(asyncio.DatagramProtocol):

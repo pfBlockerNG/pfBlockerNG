@@ -73,3 +73,11 @@ def bypass_list(module_dir: Path) -> None:
 def gp_booted(bypass_list: None, booted: Booted) -> Booted:
     """`booted` with BYPASSED_CLIENT on the Group Policy bypass list."""
     return booted
+
+
+@pytest.fixture(scope="module")
+def certificate(tmp_path_factory: pytest.TempPathFactory) -> tuple[bytes, bytes]:
+    """A self-signed localhost certificate as (certificate PEM, private key PEM), made once per test module."""
+    from dot_helpers import make_certificate  # imported late: it needs the proxy dir that this module puts on sys.path
+
+    return make_certificate(tmp_path_factory.mktemp("dot-cert"))
