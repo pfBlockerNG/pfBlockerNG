@@ -26,6 +26,7 @@ from frontend_helpers import (
     FakeProxyUpstream,
     FakeUnbound,
     build_query,
+    serve_plain,
     tcp_exchange,
     udp_exchange,
 )
@@ -404,7 +405,7 @@ def test_udp_and_tcp_listeners_block_locally_and_forward_with_a_proxyv2_header(b
     async def scenario() -> SimpleNamespace:
         async with FakeProxyUpstream(unbound) as upstream:
             frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await frontend.start(["127.0.0.1"], 0)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             try:
                 out = SimpleNamespace(server=server)
                 out.udp_blocked, _ = await udp_exchange(server, build_query(BLOCKED))
@@ -433,7 +434,7 @@ def test_tcp_client_connection_reuses_one_upstream_connection_and_header(booted:
     async def scenario() -> tuple[list[bytes], list[bytes]]:
         async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
             frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await frontend.start(["127.0.0.1"], 0)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             try:
                 reader, writer = await asyncio.open_connection(*server)
                 replies = []
@@ -456,7 +457,7 @@ def test_udp_query_unanswered_by_unbound_gets_servfail(booted: Booted) -> None:
     async def scenario() -> bytes:
         async with FakeProxyUpstream(FakeUnbound(ZONE), silent=True) as upstream:
             frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=0.05)
-            [server] = await frontend.start(["127.0.0.1"], 0)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             try:
                 return (await udp_exchange(server, build_query(ALLOWED, qid=9)))[0]
             finally:

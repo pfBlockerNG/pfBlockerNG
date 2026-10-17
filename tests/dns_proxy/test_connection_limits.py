@@ -24,7 +24,7 @@ import pytest
 import unbound_shim as shim
 from dot_helpers import dot_exchange, open_dot
 from frontend_constants import ALLOWED, BLOCKED, Booted
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, udp_exchange
+from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, serve_dot, serve_plain, udp_exchange
 
 ZONE = {(ALLOWED, dnswire.TYPE_A): [f"{ALLOWED} 300 IN A 192.0.2.77"]}
 Connection = tuple[asyncio.StreamReader, asyncio.StreamWriter]
@@ -52,9 +52,9 @@ class Listener:
 
     async def start(self, frontend: pfb_dns_proxy.Frontend) -> tuple[str, int]:
         if self.tls:
-            [server] = await frontend.start_dot(["127.0.0.1"], 0, self.context)
+            [server] = await serve_dot(frontend, ["127.0.0.1"], 0, self.context)
         else:
-            [server] = await frontend.start(["127.0.0.1"], 0)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
         return server
 
     async def connect(self, server: tuple[str, int]) -> Connection:
@@ -242,6 +242,11 @@ def test_a_new_overload_after_the_clients_drained_is_logged_again(
     assert asyncio.run(scenario()) == [1, 2]
 
 
+def test_the_default_idle_timeout_is_30_seconds() -> None:
+    """Unbound's tcp-idle-timeout default. The tests around it shorten the timeout, so nothing else pins this value."""
+    assert pfb_dns_proxy.TCP_IDLE_TIMEOUT == 30.0
+
+
 def test_a_client_that_sends_nothing_holds_its_slot_only_until_the_idle_timeout(
     booted: Booted, listener: Listener, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -269,7 +274,7 @@ def test_a_client_that_sends_nothing_holds_its_slot_only_until_the_idle_timeout(
 def test_the_tcp_cap_does_not_limit_udp(booted: Booted) -> None:
     async def scenario() -> bytes:
         frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG, max_tcp_clients=0)
-        [server] = await frontend.start(["127.0.0.1"], 0)
+        [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
         try:
             return (await udp_exchange(server, build_query(BLOCKED, qid=6)))[0]
         finally:
@@ -387,7 +392,7 @@ def test_a_non_tls_client_is_dropped_without_a_traceback_and_the_next_client_is_
     async def scenario() -> tuple[bytes, bytes]:
         frontend = WatchedFrontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
         context = pfsense_dot.server_context(pfsense_dot.DotSettings(853, *certificate))
-        [server] = await frontend.start_dot(["127.0.0.1"], 0, context)
+        [server] = await serve_dot(frontend, ["127.0.0.1"], 0, context)
         reader, writer = await asyncio.wait_for(asyncio.open_connection(*server), WATCHDOG)
         try:
             writer.write(b"GET / HTTP/1.1\r\nHost: dns.example\r\n\r\n")

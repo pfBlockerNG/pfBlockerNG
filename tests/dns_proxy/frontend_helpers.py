@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import selectors
 import socket
+import ssl
 import struct
 import threading
+from collections.abc import Sequence
 from functools import partial
 from typing import Self
 
 import dnswire
+import pfb_dns_proxy
 
 WATCHDOG = 10.0  # stuck-run guard for socket waits; never asserted on
 PROXY_FIXED = 16  # 12-byte signature + ver/cmd + family + 2-byte length
@@ -29,6 +32,31 @@ def build_query(
     additional = [dnswire.make_opt(do=do)] if edns or do else []
     message = dnswire.Message(qid, dnswire.RD if rd else 0, [dnswire.Question(name, qtype)], additional=additional)
     return dnswire.encode(message)
+
+
+def _bind_strict(listen: Sequence[str], port: int, *, udp: bool) -> list[pfb_dns_proxy.Listener]:
+    """pfb_dns_proxy.bind() on each address; the first ListenError propagates once the ones already bound are closed."""
+    bound: list[pfb_dns_proxy.Listener] = []
+    try:
+        for host in listen:
+            bound.append(pfb_dns_proxy.bind(host, port, udp=udp))
+    except BaseException:
+        for listener in bound:
+            listener.close()
+        raise
+    return bound
+
+
+async def serve_plain(frontend: pfb_dns_proxy.Frontend, listen: Sequence[str], port: int) -> list[tuple[str, int]]:
+    """Serve UDP and TCP on each address (port 0 picks one port per address); returns the bound (host, port)s."""
+    return await frontend.serve_listeners(_bind_strict(listen, port, udp=True))
+
+
+async def serve_dot(
+    frontend: pfb_dns_proxy.Frontend, listen: Sequence[str], port: int, context: ssl.SSLContext
+) -> list[tuple[str, int]]:
+    """Serve DNS over TLS on each address; returns the bound (host, port)s."""
+    return await frontend.serve_listeners(_bind_strict(listen, port, udp=False), context)
 
 
 class FakeUnbound:
