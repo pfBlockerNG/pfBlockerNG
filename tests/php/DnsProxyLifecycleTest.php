@@ -228,6 +228,7 @@ final class DnsProxyLifecycleTest extends TestCase
 			'untouched Resolver'                    => [$orig],
 			'own port 5353 on the LAN'              => [['port' => '5353'] + $orig],
 			'own loopback listener on port 53'      => [['active_interface' => 'lo0'] + $orig],
+			'own lo0:5353 Resolver, no proxy line'  => [['port' => '5353', 'active_interface' => 'lo0'] + $orig],
 		];
 	}
 
