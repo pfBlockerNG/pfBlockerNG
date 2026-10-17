@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from frontend_constants import INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted
+from frontend_constants import GP_BYPASS_INI, INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted
 from hang_guard import hang_guard  # noqa: F401  (autouse: every test here gets the alarm)
 
 sys.path.insert(0, str(PROTO_DIR))
@@ -59,4 +59,17 @@ def safesearch_csv(module_dir: Path) -> None:
 @pytest.fixture
 def ss_booted(safesearch_csv: None, booted: Booted) -> Booted:
     """`booted` with the SafeSearch CNAME redirects of SAFESEARCH_CSV loaded."""
+    return booted
+
+
+@pytest.fixture
+def bypass_list(module_dir: Path) -> None:
+    """Adds [GP_Bypass_List] (BYPASSED_CLIENT) to pfb_unbound.ini; init_standard() reads it, so it precedes `booted`."""
+    ini = module_dir / "pfb_unbound.ini"
+    ini.write_text(ini.read_text(encoding="utf-8") + GP_BYPASS_INI, encoding="utf-8")
+
+
+@pytest.fixture
+def gp_booted(bypass_list: None, booted: Booted) -> Booted:
+    """`booted` with BYPASSED_CLIENT on the Group Policy bypass list."""
     return booted

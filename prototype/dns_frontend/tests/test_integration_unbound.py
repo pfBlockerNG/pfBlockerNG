@@ -21,8 +21,17 @@ import pfb_frontend
 import pfsense_dot
 import pytest
 from dot_helpers import b64, cert_element, config_xml, dot_exchange, make_certificate
-from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, Booted
-from frontend_helpers import WATCHDOG, FakeAuthoritative, FakeUnbound, build_query, tcp_exchange, udp_exchange
+from frontend_constants import ALLOWED, BLOCKED, BYPASSED_CLIENT, DNSBL_IPV4, FILTERED_CLIENT, Booted
+from frontend_helpers import (
+    WATCHDOG,
+    FakeAuthoritative,
+    FakeUnbound,
+    build_query,
+    tcp_concurrent,
+    tcp_exchange,
+    udp_concurrent,
+    udp_exchange,
+)
 
 IMAGE = "pfb-dns-frontend-unbound:trixie"
 DOCKERFILE = (
@@ -130,9 +139,11 @@ def _free_port() -> int:
 
 
 class RunningUnbound:
-    def __init__(self, port: int, tail: LogTail) -> None:
+    def __init__(self, port: int, tail: LogTail, authoritative: FakeAuthoritative) -> None:
         self.port = port
         self.tail = tail
+        self.authoritative = authoritative
+        self.zone = authoritative.unbound.zone  # what the fake authoritative answers; tests may add names
 
 
 @pytest.fixture(scope="module")
@@ -160,11 +171,23 @@ def unbound(tmp_path_factory: pytest.TempPathFactory) -> Iterator[RunningUnbound
     tail = LogTail(name)
     try:
         tail.wait_for("start of service")
-        yield RunningUnbound(port, tail)
+        yield RunningUnbound(port, tail, authoritative)
     finally:
         _docker("rm", "-f", name)
         tail.close()
         authoritative.close()
+
+
+AUTHORITATIVE_DELAY = 0.3  # long enough that two queries sent together are both in flight until it elapses
+
+
+@pytest.fixture
+def slow_authoritative(unbound: RunningUnbound) -> Iterator[None]:
+    unbound.authoritative.delay = AUTHORITATIVE_DELAY
+    try:
+        yield
+    finally:
+        unbound.authoritative.delay = 0.0
 
 
 def _through_frontend(
@@ -316,3 +339,39 @@ def test_dot_client_gets_dnsbl_and_unbound_answers_and_unbounds_log_shows_the_tl
     assert [line for line in logged if "blocked.example" in line] == []
     assert not any(f"127.0.0.1 {ALLOWED}" in line for line in logged)  # the TLS client, not the front end
     assert [row[2] for row in _dnsbl_rows(booted)] == ["blocked.example"]
+
+
+ROUNDS = {"udp": 20, "tcp": 1}
+
+
+@pytest.mark.parametrize("filtered_first", [False, True], ids=["bypassed-first", "filtered-first"])
+@pytest.mark.parametrize("transport", ["udp", "tcp"])
+def test_two_clients_asking_for_one_name_at_once_each_get_their_own_answer(
+    gp_booted: Booted, unbound: RunningUnbound, slow_authoritative: None, transport: str, filtered_first: bool
+) -> None:
+    """Issue #3508 through the front end: a Group Policy bypassed client and a filtered client query the same
+    CNAME-to-a-listed-name at the same moment, Unbound resolves it (once or twice: merging is not asserted), and each
+    client is answered from its own verdict: the filtered one the block, the bypassed one Unbound's real reply."""
+    exchange = udp_concurrent if transport == "udp" else tcp_concurrent
+    clients = [FILTERED_CLIENT, BYPASSED_CLIENT] if filtered_first else [BYPASSED_CLIENT, FILTERED_CLIENT]
+    names = [f"shared-{uuid.uuid4().hex[:12]}.example." for _ in range(ROUNDS[transport])]  # fresh: nothing cached
+    for name in names:
+        unbound.zone[(name, dnswire.TYPE_A)] = [f"{name} 300 IN CNAME {BLOCKED}", f"{BLOCKED} 300 IN A 192.0.2.99"]
+    mark = unbound.tail.mark()
+
+    async def scenario(server: tuple[str, int]) -> list[list[bytes]]:
+        return [await exchange(server, [(client, build_query(name)) for client in clients]) for name in names]
+
+    rounds = _through_frontend(gp_booted, unbound, scenario)
+
+    for name, replies in zip(names, rounds, strict=True):
+        by_client = dict(zip(clients, replies, strict=True))
+        assert _answers(by_client[FILTERED_CLIENT]) == [(name, dnswire.TYPE_A, VIP4)], name
+        assert _answers(by_client[BYPASSED_CLIENT]) == [
+            (name, dnswire.TYPE_CNAME, dnswire.encode_name(BLOCKED)),
+            (BLOCKED, dnswire.TYPE_A, bytes([192, 0, 2, 99])),
+        ], name
+        for client in clients:  # Unbound logs each client query on receipt, merged into one resolution or not
+            unbound.tail.wait_for(f"{client} {name} A IN", since=mark)
+    # the block was decided for the filtered client alone, once per name: the bypassed client was never blocked
+    assert [(row[2], row[3]) for row in _dnsbl_rows(gp_booted)] == [(n.rstrip("."), FILTERED_CLIENT) for n in names]

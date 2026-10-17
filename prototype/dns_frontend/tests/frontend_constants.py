@@ -43,6 +43,14 @@ nobaked.example,cname,nodata-target.example,,
 trap.example,cname,blocked.example,198.51.100.9,2001:db8::9
 """
 
+# Group Policy bypass: a client on [GP_Bypass_List] is never DNSBL-blocked (pfb_unbound.py _load_gp_bypass_list).
+BYPASSED_CLIENT = "127.0.0.5"
+FILTERED_CLIENT = "127.0.0.6"
+GP_BYPASS_INI = f"""
+[GP_Bypass_List]
+row1 = {BYPASSED_CLIENT}
+"""
+
 
 @dataclass
 class Booted:

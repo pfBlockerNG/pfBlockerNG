@@ -7,6 +7,7 @@ import selectors
 import socket
 import struct
 import threading
+from functools import partial
 from typing import Self
 
 import dnswire
@@ -44,13 +45,19 @@ class FakeUnbound:
 
 
 class FakeAuthoritative:
-    """UDP responder on a loopback port served from a thread (a real Unbound forwards a zone to it)."""
+    """UDP responder on a loopback port served from a thread (a real Unbound forwards a zone to it).
 
-    def __init__(self, unbound: FakeUnbound) -> None:
+    `delay` (seconds, settable between queries) holds each reply back on its own timer, so queries that arrive
+    together are all in flight together instead of being answered one after the other.
+    """
+
+    def __init__(self, unbound: FakeUnbound, *, delay: float = 0.0) -> None:
         self.unbound = unbound
+        self.delay = delay
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
         self.port: int = self.sock.getsockname()[1]
+        self._timers: list[threading.Timer] = []
         self._wake_read, self._wake_write = socket.socketpair()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -64,11 +71,20 @@ class FakeAuthoritative:
                     if key.fileobj is self._wake_read:
                         return
                     data, client = self.sock.recvfrom(4096)
-                    self.sock.sendto(self.unbound.answer(data), client)
+                    reply = self.unbound.answer(data)
+                    if self.delay:
+                        timer = threading.Timer(self.delay, self.sock.sendto, (reply, client))
+                        self._timers.append(timer)
+                        timer.start()
+                    else:
+                        self.sock.sendto(reply, client)
 
     def close(self) -> None:
         self._wake_write.send(b"x")
         self._thread.join()
+        for timer in self._timers:
+            timer.cancel()
+            timer.join()
         for resource in (self.sock, self._wake_read, self._wake_write):
             resource.close()
 
@@ -173,3 +189,48 @@ async def tcp_exchange(
         return reply, writer.get_extra_info("sockname")[:2]
     finally:
         writer.close()
+
+
+async def udp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes]]) -> list[bytes]:
+    """One datagram per (source, wire), sent back to back in list order once every socket exists; replies in list order.
+
+    Nothing awaits between the sends, so the first query is on the wire, in order, before the second one starts.
+    """
+    loop = asyncio.get_running_loop()
+    results: list[asyncio.Future[bytes]] = [loop.create_future() for _ in queries]
+    transports = [
+        (await loop.create_datagram_endpoint(partial(_OneReply, result), remote_addr=server, local_addr=(source, 0)))[0]
+        for (source, _), result in zip(queries, results, strict=True)
+    ]
+    try:
+        for transport, (_, wire) in zip(transports, queries, strict=True):
+            transport.sendto(wire)
+        return list(await asyncio.wait_for(asyncio.gather(*results), WATCHDOG))
+    finally:
+        for transport in transports:
+            transport.close()
+
+
+async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes]]) -> list[bytes]:
+    """One length-framed query per (source, wire) on its own connection; all written before any reply is read.
+
+    The queries are written in list order, but the front end may service the connections in either order.
+    """
+    connections = [
+        await asyncio.wait_for(asyncio.open_connection(*server, local_addr=(source, 0)), WATCHDOG)
+        for source, _ in queries
+    ]
+
+    async def read_reply(reader: asyncio.StreamReader) -> bytes:
+        size = struct.unpack("!H", await reader.readexactly(2))[0]
+        return await reader.readexactly(size)
+
+    try:
+        for (_, writer), (_, wire) in zip(connections, queries, strict=True):
+            writer.write(struct.pack("!H", len(wire)) + wire)
+        return list(
+            await asyncio.wait_for(asyncio.gather(*(read_reply(reader) for reader, _ in connections)), WATCHDOG)
+        )
+    finally:
+        for _, writer in connections:
+            writer.close()
