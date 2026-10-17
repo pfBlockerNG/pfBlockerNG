@@ -243,6 +243,11 @@ if (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl
 	update_status(" done.\n\n");
 }
 
+// Create DNS proxy service: restart it while the Resolver is moved aside for it, stop it otherwise
+update_status("Creating DNS proxy service...");
+pfb_dns_proxy_service_sync();
+update_status(" done.\n");
+
 // Replace 'default' DNSBL active blocked webpage
 if (!file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php') ||
     pfb_dnsbl_webpage() == 'dnsbl_default.php') {
