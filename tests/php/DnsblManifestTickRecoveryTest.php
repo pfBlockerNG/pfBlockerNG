@@ -337,4 +337,29 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		$this->assertSame(0, $this->feedRuns,
 			'without the Python integration live there is no manifest contract to repair');
 	}
+
+	/**
+	 * issue #3515: with the DNS proxy hosting the module the Resolver carries no python keys, yet the
+	 * manifest is still the module's only blocklist source -- its absence is the same outage.
+	 */
+	public function testMissingManifestDispatchesAnUpdatePassWhenTheProxyHostsThePythonModule(): void
+	{
+		$GLOBALS['config']['unbound'] = ['python' => '', 'python_script' => ''];
+		$keys = [];
+		foreach (['port' => '53', 'active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
+			$keys[$key] = ['present' => $value !== NULL, 'value' => $value];
+		}
+		config_set_path(
+			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved',
+			base64_encode((string) json_encode($keys))
+		);
+		$this->tick();
+		$this->assertSame(0, $this->feedRuns, 'before-state: a published manifest dispatches nothing');
+
+		$this->assertTrue(unlink($GLOBALS['pfb']['unbound_py_sources']));
+		$this->tick();
+
+		$this->assertSame(1, $this->feedRuns,
+			'a missing manifest must dispatch a pass in proxy mode too, not only when Unbound carries the python keys');
+	}
 }

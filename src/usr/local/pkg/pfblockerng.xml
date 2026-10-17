@@ -47,6 +47,12 @@
 		<description>pfBlockerNG DNSBL service</description>
 	</service>
 	<service>
+		<name>pfb_dns_proxy</name>
+		<rcfile>pfb_dns_proxy.sh</rcfile>
+		<custom_php_service_status_command>isvalidpid('/var/run/pfb_dns_proxy.pid')</custom_php_service_status_command>
+		<description>pfBlockerNG DNS proxy (experimental)</description>
+	</service>
+	<service>
 		<name>pfb_filter</name>
 		<rcfile>pfb_filter.sh</rcfile>
 		<executable>php_pfb</executable>

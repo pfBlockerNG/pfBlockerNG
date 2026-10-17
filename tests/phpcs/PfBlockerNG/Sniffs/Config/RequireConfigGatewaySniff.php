@@ -179,6 +179,10 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/top1m_token',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
+		// issue #3515: experimental DNS-proxy front end toggle
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy',
+		// issue #3515: the Resolver snapshot the DNS proxy keeps
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',
