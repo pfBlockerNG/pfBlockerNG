@@ -12,6 +12,10 @@ use PHPUnit\Framework\TestCase;
  * the zero-downtime swap, which the proxy applies in place, never restarts it; and outside proxy mode the
  * proxy service is never touched.
  *
+ * restart_service() returns before the new proxy has written its pidfile, so the apply ledger -- which reads
+ * that pidfile -- must wait (bounded) for the proxy to come up before it decides whether the apply converged;
+ * a proxy that never comes up opens the ledger entry, worded for the proxy, not for Unbound.
+ *
  * A proxy-mode row is a Resolver whose saved snapshot exists (pfb_dns_proxy_saved() !== NULL). The restart
  * is observed through the restart_service() double: each call snapshots, at call time, how many Unbound
  * start attempts had happened and whether the proxy's rc script had been (re)generated.
@@ -87,7 +91,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 	private function setProxyMode(): void
 	{
 		$keys = [];
-		foreach (['port' => '53', 'active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
+		foreach (['active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
 			$keys[$key] = ['present' => $value !== NULL, 'value' => $value];
 		}
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
@@ -99,15 +103,19 @@ final class DnsProxyReloadRestartTest extends TestCase
 		return file_exists($log) ? count(file($log, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 	}
 
-	/** Record, at each service call, the Unbound start attempts so far and the proxy rc script's write count. */
-	private function observeServiceCalls(array &$seen): void
+	/**
+	 * Record, at each service call, the Unbound start attempts so far and the proxy rc script's write count.
+	 * The restarted proxy is up as soon as it is asked to restart, unless $proxyComesUp is FALSE.
+	 */
+	private function observeServiceCalls(array &$seen, bool $proxyComesUp = TRUE): void
 	{
-		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen, $proxyComesUp): void {
 			$seen[] = [
 				'call'   => [$fn, $service],
 				'starts' => $this->startAttempts(),
 				'rcfile' => $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0,
 			];
+			$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = $proxyComesUp;
 		};
 	}
 
@@ -202,5 +210,55 @@ final class DnsProxyReloadRestartTest extends TestCase
 
 		$this->assertGreaterThan($before, $this->startAttempts(), 'before: the restart path ran');
 		$this->assertSame([], $seen, 'a Resolver being given back is not a reason to bring the proxy up');
+	}
+
+	public function testTheLedgerWaitsForTheProxyToWriteItsPidfileBeforeItDecides(): void
+	{
+		// Given a restart-path apply, and a proxy that writes its pidfile only a few probes after the
+		// restart_service() call returned (the real start is asynchronous)
+		$this->setProxyMode();
+		$state = ['restarted' => FALSE, 'probes' => 0];
+		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = static function () use (&$state): bool {
+			return $state['restarted'] && ++$state['probes'] >= 3;
+		};
+		$GLOBALS['pfb_test_service_hook'] = static function (string $fn) use (&$state): void {
+			$state['restarted'] = $state['restarted'] || $fn === 'restart_service';
+		};
+
+		// When the Resolver is reloaded
+		pfb_reload_unbound('enabled', FALSE, TRUE);
+
+		// Then the ledger saw the running proxy: no "not converged" entry is open
+		$this->assertGreaterThanOrEqual(3, $state['probes'], 'the pidfile was probed until it appeared');
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'), 'a proxy that came up converged');
+	}
+
+	public function testAProxyThatNeverComesUpOpensTheLedgerEntryWordedForTheProxy(): void
+	{
+		// Given a restart-path apply whose proxy never writes a pidfile
+		$this->setProxyMode();
+		$seen = [];
+		$this->observeServiceCalls($seen, FALSE);
+
+		// When the Resolver is reloaded
+		pfb_reload_unbound('enabled', FALSE, TRUE);
+
+		// Then the apply is reported as not converged, and the message names the DNS proxy, not Unbound
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open);
+		$this->assertStringContainsString('not converged', $open[0]['message']);
+		$this->assertStringContainsString('DNS proxy', $open[0]['message']);
+		$this->assertStringNotContainsString('Unbound not fully live', $open[0]['message']);
+	}
+
+	public function testOutsideProxyModeTheNotConvergedMessageStillNamesUnbound(): void
+	{
+		// Given no snapshot and no Unbound start (the test double fails it): not converged, as today
+		pfb_reload_unbound('enabled', FALSE, TRUE);
+
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open, 'before: the apply did not converge');
+		$this->assertStringContainsString('Unbound not fully live with pfb_unbound.py', $open[0]['message']);
+		$this->assertStringNotContainsString('DNS proxy', $open[0]['message']);
 	}
 }

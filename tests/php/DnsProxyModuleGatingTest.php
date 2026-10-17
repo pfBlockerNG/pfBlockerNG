@@ -17,7 +17,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class DnsProxyModuleGatingTest extends TestCase
 {
-	private const LINE = 'proxy-protocol-port: 5353';
+	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
+		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
 	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 
@@ -77,7 +78,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 		} else {
 			unset($GLOBALS['g']);
 		}
-		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_unbound_configure_calls'], $GLOBALS['pfb_test_unbound_configure_resolver']);
+		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_unbound_configure_calls'], $GLOBALS['pfb_test_unbound_configure_resolver'],
+			$GLOBALS['pfb_test_valid_pids'], $GLOBALS['pfb_test_file_notices']);
 		rmdir_recursive($this->tmp);
 	}
 
@@ -133,14 +135,13 @@ final class DnsProxyModuleGatingTest extends TestCase
 		];
 	}
 
-	/** The same Resolver as the proxy leaves it. */
+	/** The same Resolver as the proxy leaves it: still on port 53, on loopback, our block appended. */
 	private static function movedResolver(): array
 	{
 		$moved = self::originalResolver();
-		$moved['port'] = '5353';
 		$moved['active_interface'] = 'lo0';
 		unset($moved['enablessl']);
-		$moved['custom_options'] = base64_encode(self::LINE . "\ndo-ip6: no\nprefetch: yes");
+		$moved['custom_options'] = base64_encode("do-ip6: no\nprefetch: yes\n" . self::BLOCK);
 		return $moved;
 	}
 
@@ -148,7 +149,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 	{
 		$original = self::originalResolver();
 		$keys = [];
-		foreach (['port', 'active_interface', 'enablessl', 'custom_options'] as $key) {
+		foreach (['active_interface', 'enablessl', 'custom_options'] as $key) {
 			$keys[$key] = ['present' => TRUE, 'value' => $original[$key]];
 		}
 		return base64_encode((string) json_encode($keys));
@@ -239,7 +240,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 			'python' => '', 'python_order' => 'pre_validator', 'python_script' => 'pfb_unbound',
 		];
 		$this->assertTrue($this->pythonModuleKeysSet(), 'before: the module is in Unbound');
-		$this->assertSame('53', config_get_path('unbound/port'), 'before: the Resolver is not moved');
+		$this->assertNotSame('lo0', config_get_path('unbound/active_interface'), 'before: the Resolver is not moved');
 
 		// When DNSBL is applied.
 		$changed = pfb_unbound_python('enabled');
@@ -248,13 +249,13 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertTrue($changed);
 		$this->assertFalse(config_path_enabled('unbound', 'python'));
 		$this->assertSame('', config_get_path('unbound/python_script'));
-		$this->assertSame('5353', config_get_path('unbound/port'));
+		$this->assertSame('53', config_get_path('unbound/port'), 'the listen port stays: the firewall resolves through it');
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
 		$this->assertNotSame('', $this->savedRaw());
 
 		// ... unbound.conf is regenerated from config.xml exactly once, without restarting DHCP ...
 		$this->assertSame([FALSE], $this->configureCalls());
-		$this->assertSame('5353', $this->resolverWhenConfigured()['port'], 'unbound.conf is rendered from the moved Resolver');
+		$this->assertSame('lo0', $this->resolverWhenConfigured()['active_interface'], 'unbound.conf is rendered from the moved Resolver');
 		$this->assertArrayNotHasKey('python', $this->resolverWhenConfigured(), 'with the module keys already out');
 
 		// ... and the module's own inputs are still produced, because the proxy loads the module from them.
@@ -332,7 +333,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Given a moved Resolver (the toggle stays on; DNSBL is what gets disabled).
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
-		$this->assertSame('5353', config_get_path('unbound/port'), 'before: moved');
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'before: moved');
 
 		// When the disabled pass runs.
 		pfb_unbound_python('disabled');
@@ -341,7 +342,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertResolverRestored('disabled pass');
 		$this->assertFalse($this->pythonModuleKeysSet());
 		$this->assertSame([FALSE], $this->configureCalls());
-		$this->assertSame('53', $this->resolverWhenConfigured()['port'], 'unbound.conf is rendered from the restored Resolver');
+		$this->assertSame('lan,opt1', $this->resolverWhenConfigured()['active_interface'], 'unbound.conf is rendered from the restored Resolver');
 		$this->assertArrayNotHasKey('python', $this->resolverWhenConfigured(), 'with the module keys out');
 		$this->assertTrue($GLOBALS['pfb']['dnsbl_python_unmount'], 'the disabled pass still schedules the unmount');
 	}
@@ -388,8 +389,27 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertResolverRestored('toggle off', ['python' => '', 'python_order' => 'pre_validator', 'python_script' => 'pfb_unbound']);
 		$this->assertTrue($this->pythonModuleKeysSet());
 		$this->assertSame([FALSE], $this->configureCalls());
-		$this->assertSame('53', $this->resolverWhenConfigured()['port'], 'unbound.conf is rendered from the restored Resolver');
+		$this->assertSame('lan,opt1', $this->resolverWhenConfigured()['active_interface'], 'unbound.conf is rendered from the restored Resolver');
 		$this->assertSame('pfb_unbound', $this->resolverWhenConfigured()['python_script'], 'with the module keys back');
+	}
+
+	public function testAnAbandonedRestoreKeepsTheModuleOutOfUnboundWhileTheProxyStillHostsIt(): void
+	{
+		// Given the admin unticked the toggle, but the proxy outlived its stop so the restore is abandoned
+		$this->seedMovedResolver();
+		$this->setProxy(FALSE);
+		$GLOBALS['pfb_test_valid_pids'] = [PFB_DNS_PROXY_PIDFILE => TRUE];
+		$this->assertFalse($this->pythonModuleKeysSet(), 'before: the module is out of Unbound');
+
+		// When DNSBL is applied
+		pfb_unbound_python('enabled');
+
+		// Then the Resolver is still moved and Unbound is not given the module the proxy still hosts
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertNotSame('', $this->savedRaw(), 'the snapshot is kept for the retry');
+		$this->assertFalse($this->pythonModuleKeysSet(), 'no module keys in Unbound while the proxy hosts the module');
+		$this->assertSame([], $this->configureCalls());
+		$this->assertStringNotContainsString('Mounting:', $this->pfbLog());
 	}
 
 	// -----------------------------------------------------------------------
@@ -525,7 +545,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Given a moved Resolver whose snapshot lives in the package config the wizard is about to sweep.
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
-		$this->assertSame('5353', config_get_path('unbound/port'), 'before: moved');
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'before: moved');
 		$this->assertNotSame('', $this->savedRaw(), 'before: snapshot present');
 
 		// When the wizard runs its capture-and-sweep step (the region ends at the sweep itself).
@@ -571,7 +591,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
 		$this->assertSame('enabled', $this->applyModeFor(FALSE), 'before: a normal pass is enabled');
-		$this->assertSame('5353', config_get_path('unbound/port'), 'before: moved');
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'before: moved');
 
 		// When pfblockerng_php_pre_deinstall_command()'s flag turns the pass into a disable pass.
 		$mode = $this->applyModeFor(TRUE);
