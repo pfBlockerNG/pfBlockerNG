@@ -10,6 +10,7 @@ import ssl
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -47,11 +48,6 @@ def _write_config(tmp_path: Path, *, entries: str | None = None, **kwargs: Any) 
     path = tmp_path / "config.xml"
     path.write_text(config_xml(entries=entries, **kwargs), encoding="utf-8")
     return path
-
-
-@pytest.fixture(scope="module")
-def certificate(tmp_path_factory: pytest.TempPathFactory) -> tuple[bytes, bytes]:
-    return make_certificate(tmp_path_factory.mktemp("dot-cert"))
 
 
 # --- config.xml ----------------------------------------------------------------------------------
@@ -95,8 +91,7 @@ GOOD = cert_element(REFID, b64(CRT), b64(KEY))
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        pytest.param({"enablessl": False}, r"unbound/enablessl is not set", id="disabled"),
-        pytest.param({"unbound": False}, r"unbound/enablessl is not set", id="no-unbound-section"),
+        pytest.param({"unbound": False}, r"unbound/sslcertref is empty", id="no-unbound-section"),
         pytest.param({"certref": None}, r"unbound/sslcertref is empty", id="no-certref"),
         pytest.param({"certref": ""}, r"unbound/sslcertref is empty", id="empty-certref"),
         pytest.param({"certref": "nope"}, r"no <cert> with refid 'nope'", id="wrong-refid"),
@@ -123,6 +118,20 @@ def test_a_resolver_that_cannot_serve_dot_is_a_clear_error(
     with pytest.raises(pfsense_dot.DotConfigError, match=message) as error:
         pfsense_dot.read_settings(path)
     assert str(path) in str(error.value)
+
+
+def test_the_resolvers_own_dot_switch_does_not_decide_whether_dot_is_served(tmp_path: Path) -> None:
+    """The caller's --dot decides: the Resolver's own DoT is turned off while the proxy serves it."""
+    off, on = tmp_path / "off", tmp_path / "on"
+    off.mkdir()
+    on.mkdir()
+    without_switch = _write_config(off, enablessl=False, tlsport=8853)
+    with_switch = _write_config(on, enablessl=True, tlsport=8853)
+    assert "<enablessl" not in without_switch.read_text(encoding="utf-8")  # the configs differ in that switch only
+    assert "<enablessl" in with_switch.read_text(encoding="utf-8")
+    settings = pfsense_dot.read_settings(without_switch)
+    assert settings == pfsense_dot.read_settings(with_switch)
+    assert (settings.port, settings.chain_pem, settings.key_pem) == (8853, CRT, KEY)
 
 
 def test_a_missing_or_malformed_config_is_a_clear_error(tmp_path: Path) -> None:
@@ -167,6 +176,37 @@ def test_a_certificate_that_does_not_load_is_a_clear_error(certificate: tuple[by
         pfsense_dot.server_context(mismatched)
 
 
+@pytest.mark.parametrize("key_kind", ["garbage", "encrypted"])
+def test_the_temporary_key_files_are_gone_after_a_failed_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key_kind: str
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    if key_kind == "encrypted":
+        keys = tmp_path / "keys"
+        keys.mkdir()
+        settings = pfsense_dot.DotSettings(853, *make_certificate(keys, passphrase="correct horse"))
+        assert b"ENCRYPTED" in settings.key_pem
+    else:
+        settings = pfsense_dot.DotSettings(853, CRT, KEY)
+    during_load: list[list[str]] = []
+    real = ssl.SSLContext.load_cert_chain
+
+    def refuse() -> bytes:
+        raise OSError("passphrase required")  # keeps the encrypted key from prompting on the test's terminal
+
+    def spy(self: ssl.SSLContext, certfile: Any, keyfile: Any = None, password: Any = None) -> None:
+        during_load.append(sorted(path.name for path in scratch.iterdir()))
+        real(self, certfile, keyfile, password if password is not None else refuse)
+
+    monkeypatch.setattr(ssl.SSLContext, "load_cert_chain", spy)
+    with pytest.raises(pfsense_dot.DotConfigError):
+        pfsense_dot.server_context(settings)
+    assert [[name.startswith("pfb-dot-") for name in names] for names in during_load] == [[True]]  # it was there...
+    assert list(scratch.iterdir()) == []  # ...and is gone
+
+
 # --- real sockets --------------------------------------------------------------------------------
 
 
@@ -177,7 +217,9 @@ def test_serve_with_dot_answers_a_tls_client_and_forwards_with_the_tls_peers_add
     trust = tmp_path / "trust.pem"
     trust.write_bytes(crt)
     port = free_port()
-    config = _write_config(tmp_path, tlsport=port, entries=OTHER + cert_element(REFID, b64(crt), b64(key)))
+    config = _write_config(
+        tmp_path, enablessl=False, tlsport=port, entries=OTHER + cert_element(REFID, b64(crt), b64(key))
+    )
     monkeypatch.chdir(module_dir)
     monkeypatch.setattr(sys, "stderr", sys.stderr)
     real_boot = pfb_dns_proxy.boot
@@ -254,8 +296,8 @@ def test_cli_dot_options_default_to_off_and_pfsenses_config_path() -> None:
 
 @pytest.mark.parametrize(
     ("kwargs", "message"),
-    [({"enablessl": False}, "enablessl"), ({"certref": "nope"}, "refid 'nope'")],
-    ids=["disabled", "missing-cert"],
+    [({"certref": None}, "sslcertref is empty"), ({"certref": "nope"}, "refid 'nope'")],
+    ids=["no-certref", "missing-cert"],
 )
 def test_dot_misconfiguration_exits_1_with_a_message_before_the_module_boots(
     tmp_path: Path,
@@ -272,7 +314,7 @@ def test_dot_misconfiguration_exits_1_with_a_message_before_the_module_boots(
 
 
 def test_dot_misconfiguration_makes_the_real_process_exit_non_zero(tmp_path: Path) -> None:
-    config = _write_config(tmp_path, enablessl=False)
+    config = _write_config(tmp_path, certref="nope")
     run = subprocess.run(
         [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--dot", "--pfsense-config", str(config)]
         + ["--listen", "127.0.0.1", "--port", "0", "--module-dir", str(tmp_path)],
@@ -281,4 +323,32 @@ def test_dot_misconfiguration_makes_the_real_process_exit_non_zero(tmp_path: Pat
         timeout=60,
         check=False,
     )
-    assert run.returncode == 1 and "unbound/enablessl is not set" in run.stderr and "Traceback" not in run.stderr
+    assert run.returncode == 1 and "no <cert> with refid 'nope'" in run.stderr and "Traceback" not in run.stderr
+
+
+def test_an_encrypted_private_key_exits_1_with_a_message_instead_of_prompting(tmp_path: Path) -> None:
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    crt, key = make_certificate(keys, passphrase="correct horse")
+    assert b"ENCRYPTED" in key  # the key really is passphrase-protected
+    config = _write_config(tmp_path, entries=cert_element(REFID, b64(crt), b64(key)))
+    stderr = tmp_path / "stderr.txt"
+    with (
+        stderr.open("wb") as err,
+        subprocess.Popen(
+            [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--dot", "--pfsense-config", str(config)]
+            + ["--listen", "127.0.0.1", "--port", "0", "--module-dir", str(tmp_path)],
+            stdin=subprocess.PIPE,  # open and never written: a passphrase prompt would block reading it
+            stdout=subprocess.DEVNULL,
+            stderr=err,
+            start_new_session=True,  # no controlling terminal, so a prompt can only go to that pipe
+        ) as child,
+    ):
+        try:
+            status = child.wait(timeout=WATCHDOG)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            pytest.fail("STUCK: the proxy is waiting for input (a passphrase prompt?) instead of exiting")
+    text = stderr.read_text(encoding="utf-8")
+    assert status == 1 and "passphrase" in text
+    assert "Enter PEM pass phrase" not in text and "Traceback" not in text

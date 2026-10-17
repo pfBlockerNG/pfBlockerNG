@@ -133,6 +133,25 @@ def test_the_chase_has_no_edns_when_the_client_has_none(ss_booted: Booted) -> No
     assert dnswire.parse(unbound.queries[1]).additional == []
 
 
+def _dnssec_ok_bits(wire: bytes) -> list[bool]:
+    """The DNSSEC-OK bit of each OPT record in the wire message: [] without EDNS, one entry with it."""
+    return [bool(rr.ttl & 0x8000) for rr in dnswire.parse(wire).additional if rr.rtype == dnswire.TYPE_OPT]
+
+
+@pytest.mark.parametrize(
+    ("client_edns", "client_do", "chase"),
+    [(True, True, [True]), (True, False, [False]), (False, False, [])],
+    ids=["do-1", "do-0", "no-opt"],
+)
+def test_the_chase_carries_the_clients_dnssec_ok_bit_or_no_opt_at_all(
+    ss_booted: Booted, client_edns: bool, client_do: bool, chase: list[bool]
+) -> None:
+    unbound = FakeUnbound(ZONE)
+    _resolve(ss_booted, build_query(DUCK, edns=client_edns, do=client_do), unbound)
+    assert _dnssec_ok_bits(unbound.queries[0]) == ([client_do] if client_edns else [])  # what the client sent
+    assert _dnssec_ok_bits(unbound.queries[1]) == chase  # what the chase sends Unbound for the target
+
+
 def test_other_query_types_for_a_safesearch_name_are_relayed_untouched(ss_booted: Booted) -> None:
     unbound = FakeUnbound(ZONE)
     wire = build_query(DUCK, dnswire.TYPE_TXT)
