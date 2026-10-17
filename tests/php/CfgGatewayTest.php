@@ -450,6 +450,22 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
+	 * pfb_dns_proxy_saved (issue #3515): the plain-string marker holding the Resolver's pre-move
+	 * values. Absent reads as '' (= "nothing saved"); a system-context write round-trips verbatim.
+	 */
+	public function testDnsProxySavedMarkerDefaultsToEmptyAndRoundTripsVerbatim(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+		$this->assertNull(config_get_path($path));
+		$this->assertSame('', PfbConfig::read('dnsbl/pfb_dns_proxy_saved'), 'absent -> default ""');
+
+		$marker = base64_encode('{"port":{"present":true,"value":"53"}}');
+		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy_saved', $marker);
+		$this->assertSame($marker, config_get_path($path), 'stored verbatim');
+		$this->assertSame($marker, PfbConfig::read('dnsbl/pfb_dns_proxy_saved'));
+	}
+
+	/**
 	 * issue #1669 slice C: pfb_syntax_highlight absent key returns On — the
 	 * registry default is 'on' (NEW feature, no prior behaviour to preserve, so
 	 * both fresh installs and upgraders read the same default; no grandfather
@@ -1520,6 +1536,8 @@ final class CfgGatewayTest extends TestCase
 			'pfb_cache_flush',
 			// issue #3515: experimental DNS-proxy front end toggle
 			'pfb_dns_proxy',
+			// issue #3515: the Resolver snapshot the DNS proxy keeps
+			'pfb_dns_proxy_saved',
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',

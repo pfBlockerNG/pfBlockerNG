@@ -508,6 +508,16 @@ if (!function_exists('write_config')) {
 	}
 }
 
+if (!function_exists('services_unbound_configure')) {
+	// pfSense services.inc: stop, regenerate unbound.conf from config.xml, start. The real one needs a
+	// live Resolver; record each call's $restart_dhcp argument (so tests can assert whether, how often and
+	// with what argument a path regenerated it) and report success.
+	function services_unbound_configure($restart_dhcp = true, $interface = '') {
+		$GLOBALS['pfb_test_unbound_configure_calls'][] = $restart_dhcp;
+		return 0;
+	}
+}
+
 if (!function_exists('get_configured_vip_ipv4')) {
 	// pfSense util.inc (faithful-lite): resolve a '_vip<uniqid>' id against
 	// virtualip/vip and return the entry's v4 address, null when unresolved.

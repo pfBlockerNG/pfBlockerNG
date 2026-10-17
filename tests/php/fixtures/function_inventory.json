@@ -1706,6 +1706,24 @@
             }
         ]
     },
+    "pfb_dns_proxy_resolver": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_saved": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": []
+    },
     "pfb_dns_redirect_rule": {
         "returnsRef": false,
         "returnType": "array",
