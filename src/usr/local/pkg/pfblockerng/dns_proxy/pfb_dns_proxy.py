@@ -26,8 +26,9 @@ peer's address in the PROXYv2 header. unbound/enablessl is not read: --dot decid
 off while the proxy runs. If the certificate is missing, unusable or its key is passphrase-protected, it exits 1
 with the reason: there is no self-signed fallback and no passphrase prompt.
 
-Limits: at most 128 TCP and DoT connections at once (over that they are closed at accept, one log line per burst),
-512 UDP queries in flight, and a DoT handshake must finish within 10 s.
+Limits: at most 128 TCP and DoT connections at once (over that they are closed at accept, before any DoT handshake
+byte, one log line per burst; a handshake in progress holds its slot), 512 UDP queries in flight, and a DoT handshake
+must finish within 10 s.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -63,7 +64,7 @@ RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real query carries an OPT, maybe a TSIG
 MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; more are dropped
-MAX_TCP_CLIENTS = 128  # concurrent TCP and DoT connections, each holding an upstream connection; more are closed
+MAX_TCP_CLIENTS = 128  # TCP and DoT connections at once; each opens one Unbound connection lazily; more are closed
 TLS_HANDSHAKE_TIMEOUT = 10.0  # a DoT client that has not finished its handshake by then is dropped (asyncio: 60 s)
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 
@@ -167,6 +168,10 @@ class Listener(NamedTuple):
                 sock.close()
 
 
+class ListenError(Exception):
+    """A listening socket could not be made; the message names the address and says why."""
+
+
 def bind(host: str, port: int, *, udp: bool) -> Listener:
     """Bound sockets for the address `host`, not yet served: TCP listening, and UDP on the same port when `udp`.
 
@@ -174,17 +179,36 @@ def bind(host: str, port: int, *, udp: bool) -> Listener:
     UDP datagrams wait in the socket until serve_listeners() reads them, so none is lost while the module boots.
     """
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    tcp = socket.create_server((host, port), family=family, backlog=100)
-    if not udp:
-        return Listener(host, tcp, None)
-    datagrams = socket.socket(family, socket.SOCK_DGRAM)
+    opened: list[socket.socket] = []
     try:
-        datagrams.bind((host, tcp.getsockname()[1]))
-    except BaseException:
-        tcp.close()
-        datagrams.close()
+        tcp = socket.create_server((host, port), family=family, backlog=100)
+        opened.append(tcp)
+        datagrams = None
+        if udp:
+            datagrams = socket.socket(family, socket.SOCK_DGRAM)
+            opened.append(datagrams)
+            datagrams.bind((host, tcp.getsockname()[1]))
+    except BaseException as exc:
+        for sock in opened:
+            sock.close()
+        if isinstance(exc, OSError):
+            reason = os.strerror(exc.errno) if exc.errno else str(exc)  # create_server() decorates exc.strerror
+            raise ListenError(f"cannot listen on {host}:{port}: {reason}") from None
         raise
     return Listener(host, tcp, datagrams)
+
+
+def bind_all(listen: Sequence[str], port: int, *, udp: bool) -> list[Listener]:
+    """bind() on each address; if one fails, the ones already bound are closed before the error propagates."""
+    bound: list[Listener] = []
+    try:
+        for host in listen:
+            bound.append(bind(host, port, udp=udp))
+    except BaseException:
+        for listener in bound:
+            listener.close()
+        raise
+    return bound
 
 
 # --- replies the proxy builds itself -------------------------------------------------------------
@@ -339,13 +363,14 @@ class Frontend:
     async def serve_listeners(
         self, listeners: Sequence[Listener], context: ssl.SSLContext | None = None
     ) -> list[tuple[str, int]]:
-        """Start serving sockets from bind(): TCP, and UDP where the listener has one, over TLS when `context` is
-        given (DoT is the same framing as TCP). Returns the bound (host, port)s."""
+        """Start serving sockets from bind(): TCP, and UDP where the listener has one. With `context` the TCP side is
+        DoT (the same framing as TCP), each client's handshake running in its handler. Returns the bound (host, port)s.
+        """
         loop = asyncio.get_running_loop()
-        tls = {} if context is None else {"ssl": context, "ssl_handshake_timeout": TLS_HANDSHAKE_TIMEOUT}
+        handler = self._tcp_client if context is None else partial(self._tcp_client, context=context)
         bound = []
         for listener in listeners:
-            self._servers.append(await asyncio.start_server(self._tcp_client, sock=listener.tcp, **tls))
+            self._servers.append(await asyncio.start_server(handler, sock=listener.tcp))
             if listener.udp is not None:
                 transport, _ = await loop.create_datagram_endpoint(lambda: _UdpServer(self), sock=listener.udp)
                 self._udp.append(transport)  # type: ignore[arg-type]
@@ -354,11 +379,11 @@ class Frontend:
 
     async def start_dot(self, listen: Sequence[str], port: int, context: ssl.SSLContext) -> list[tuple[str, int]]:
         """Serve DNS over TLS on each address; returns the bound (host, port)s."""
-        return await self.serve_listeners([bind(host, port, udp=False) for host in listen], context)
+        return await self.serve_listeners(bind_all(listen, port, udp=False), context)
 
     async def start(self, listen: Sequence[str], port: int) -> list[tuple[str, int]]:
         """Serve UDP and TCP on each address (port 0 picks one port per address); returns the bound (host, port)s."""
-        return await self.serve_listeners([bind(host, port, udp=True) for host in listen])
+        return await self.serve_listeners(bind_all(listen, port, udp=True))
 
     async def stop(self) -> None:
         for server in self._servers:
@@ -373,7 +398,8 @@ class Frontend:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     def _turn_away(self, writer: asyncio.StreamWriter) -> None:
-        """Close a connection that arrived over the cap: nothing is read from it and no Unbound connection is opened."""
+        """Close a connection that arrived over the cap: nothing is read from it (a DoT client gets no TLS handshake
+        either) and no Unbound connection is opened."""
         if not self.tcp_overloaded:  # one line per burst, not per connection
             self.tcp_overloaded = True
             shim.log_warn(
@@ -381,8 +407,14 @@ class Frontend:
             )
         writer.close()
 
-    async def _tcp_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        """One client connection: length-framed queries answered one at a time, one upstream connection reused."""
+    async def _tcp_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, context: ssl.SSLContext | None = None
+    ) -> None:
+        """One client connection: length-framed queries answered one at a time, one upstream connection reused.
+
+        `context` makes it DoT: the TLS handshake runs here, after the cap check, and a handshake in progress holds
+        the slot; one that fails or times out just closes the connection.
+        """
         if len(self._clients) >= self.max_tcp_clients:
             self._turn_away(writer)
             return
@@ -394,6 +426,9 @@ class Frontend:
         upstream = _TcpUpstream(self.upstream, proxyv2.header(src, dst, tcp=True), self.timeout)
         self._clients.add(writer)
         try:
+            # Nothing may be awaited before this: the ClientHello must still be on the socket, not in `reader`.
+            if context is not None:
+                await writer.start_tls(context, ssl_handshake_timeout=TLS_HANDSHAKE_TIMEOUT)
             while True:
                 try:
                     size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), TCP_IDLE_TIMEOUT))[0]
@@ -556,15 +591,19 @@ async def serve(
     The sockets and the TLS context are made as the user the process started as; the drop comes after them and
     before the boot, so what init_standard() and the watchers create belongs to `args.user`. `on_ready` gets the
     bound (host, port)s: the UDP+TCP listeners first, then the DoT ones. A user that does not exist, a drop the OS
-    refuses (DropError) or a DoT configuration that cannot be served (DotConfigError) raises before the module boots.
+    refuses (DropError), an address that cannot be bound (ListenError) or a DoT configuration that cannot be served
+    (DotConfigError) raises before the module boots.
     """
     account = lookup_user(args.user) if args.user is not None else None
     dot = pfsense_dot.read_settings(args.pfsense_config) if args.dot else None
     dot_context = pfsense_dot.server_context(dot) if dot is not None else None
     listen = args.listen or ["127.0.0.1"]
-    listeners = [bind(host, args.port, udp=True) for host in listen]
-    dot_listeners = [bind(host, dot.port, udp=False) for host in listen] if dot is not None else []
+    listeners: list[Listener] = []
+    dot_listeners: list[Listener] = []
     try:
+        listeners.extend(bind_all(listen, args.port, udp=True))
+        if dot is not None:
+            dot_listeners.extend(bind_all(listen, dot.port, udp=False))
         if account is not None:
             drop_privileges(account)
         module = boot(args.module_dir)
@@ -596,7 +635,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except pfsense_dot.DotConfigError as exc:
         print(f"pfb_dns_proxy: DNS over TLS: {exc}", file=sys.stderr)
         return 1
-    except DropError as exc:
+    except (DropError, ListenError) as exc:
         print(f"pfb_dns_proxy: {exc}", file=sys.stderr)
         return 1
     return 0
