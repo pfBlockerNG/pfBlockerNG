@@ -376,7 +376,8 @@ regenerates `unbound.conf`. The presence and value of those four keys are saved 
 reboot and backup restore) and restored exactly, with the module back in Unbound, when the toggle is
 turned off, DNSBL is disabled, the setup wizard resets the package config, or the package is removed
 (its disable pass). A lost marker on an already-moved Resolver is refused with an error, never re-saved
-as the "previous" values.
+as the "previous" values. Edits to those four Resolver settings made while the Resolver is moved are
+overwritten on the next apply, and the restore returns the values saved at toggle-on, not the edited ones.
 
 While the Resolver is moved (`pfb_dns_proxy_saved() !== NULL`) the proxy, not Unbound, is the module host:
 `pfb_unbound_py_mode_active()` is TRUE, and every liveness decision (`pfb_unbound_py_host_running()`: the
