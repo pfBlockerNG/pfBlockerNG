@@ -923,6 +923,17 @@ if (!function_exists('restart_service')) {
 	}
 }
 
+if (!function_exists('start_service')) {
+	// pfSense services.inc: start a named rc.d service. Recorded like restart_service() above.
+	function start_service($name, $after_sync = false) {
+		$GLOBALS['pfb_test_service_calls'][] = ['start_service', $name];
+		if (is_callable($GLOBALS['pfb_test_service_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_service_hook']('start_service', $name);
+		}
+		return TRUE;
+	}
+}
+
 if (!function_exists('stop_service')) {
 	// pfSense services.inc: stop a named rc.d service. Recorded like restart_service() above.
 	function stop_service($service) {
