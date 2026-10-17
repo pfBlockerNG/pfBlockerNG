@@ -242,9 +242,9 @@ def _create_cert(vm: SmokeVM) -> str:
     return match.group(1)
 
 
-def _configure_resolver_and_policy(vm: SmokeVM, refid: str) -> None:
-    """The pre-toggle Resolver (DoT on, queries logged, Listen Port and Interfaces unset) and Group Policy."""
-    bypass = h._b64_textarea([BYPASSED_ALIAS_IP])
+def _configure_resolver(vm: SmokeVM, refid: str) -> None:
+    """Save the Resolver page the way an operator with DoT does: port and interfaces at their defaults, DoT on,
+    queries logged, Custom Options in the `server:` form pfSense documents; then let Unbound pick it up."""
     _php_ok(
         vm,
         "$u = config_get_path('unbound', array());\n"
@@ -253,12 +253,24 @@ def _configure_resolver_and_policy(vm: SmokeVM, refid: str) -> None:
         f"$u['sslcertref'] = {h._php_str(refid)};\n"
         f"$u['custom_options'] = {h._php_str(base64.b64encode(CUSTOM_OPTIONS.encode()).decode())};\n"
         "config_set_path('unbound', $u);\n"
+        "write_config('pfBlockerNG smoke: Resolver DoT and log-queries for the #3515 smoke');\n"
+        "services_unbound_configure();",
+        "Resolver settings",
+    )
+    h.wait_unbound_ready(vm)
+
+
+def _configure_group_policy(vm: SmokeVM) -> None:
+    """Group Policy on, with the client's alias address as the one bypassed address."""
+    bypass = h._b64_textarea([BYPASSED_ALIAS_IP])
+    _php_ok(
+        vm,
         f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
         "$d['pfb_gp'] = 'on';\n"
         f"$d['pfb_gp_bypass_list'] = {h._php_str(bypass)};\n"
         f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: Resolver DoT, log-queries and Group Policy for the #3515 smoke');",
-        "Resolver and Group Policy settings",
+        "write_config('pfBlockerNG smoke: Group Policy bypass list for the #3515 smoke');",
+        "Group Policy settings",
     )
 
 
@@ -435,6 +447,13 @@ def _apply(vm: SmokeVM) -> None:
     h.reload(vm, "updatednsbl")
 
 
+def _unbound_conf_report(vm: SmokeVM) -> str:
+    """Why Unbound would not start: its own config check, and the lines around the error."""
+    check = vm.ssh(f"/usr/local/sbin/unbound-checkconf {h.UNBOUND_CONF} 2>&1").stdout
+    numbered = vm.ssh(f"cat -n {h.UNBOUND_CONF} | sed -n '85,130p'").stdout
+    return f"unbound-checkconf:\n{check}\nunbound.conf lines 85-130:\n{numbered}"
+
+
 def _wait_proxy_serves(rig: Rig) -> None:
     """Poll until the LAN client gets the VIP for a listed name: the proxy booted its module and loaded the feed."""
 
@@ -450,7 +469,10 @@ def _wait_proxy_serves(rig: Rig) -> None:
 
 def _toggle_on(rig: Rig) -> None:
     _set_proxy_toggle(rig.vm, True)
-    _apply(rig.vm)
+    try:
+        _apply(rig.vm)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\n{_unbound_conf_report(rig.vm)}") from exc
     _wait_proxy_serves(rig)
 
 
@@ -480,7 +502,6 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
     )
     listed = (names.blocked, names.whitelisted, *names.group_policy)
     feed_url = h.write_local_feed(vm, "smoke_3515_dns_proxy.txt", "".join(f"{name}\n" for name in listed))
-    h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
     _snapshot_config(vm)
     try:
         refid = _create_cert(vm)
@@ -489,7 +510,9 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
             client_vm.ssh_argv("tee", CERT_CLIENT), input=pem, capture_output=True, text=True, timeout=30, check=False
         )
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
-        _configure_resolver_and_policy(vm, refid)
+        _configure_resolver(vm, refid)
+        h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
+        _configure_group_policy(vm)
         _apply(vm)  # toggle off: pfBlockerNG's own wiring, the module inside Unbound
         before = _capture(vm)
         baseline = {
@@ -559,8 +582,8 @@ def test_toggle_on_moves_the_resolver_in_config_xml_and_snapshots_what_it_moved(
 
     Given the Resolver with port and active_interface absent, DoT on, and Custom Options starting `server:`,
     When the toggle is on and applied,
-    Then config.xml has port 5353, active_interface lo0, no enablessl and `proxy-protocol-port: 5353` as the FIRST
-      Custom Options line with the user's own lines after it; DoT's certificate keys are unchanged;
+    Then config.xml has port 5353, active_interface lo0, no enablessl and Custom Options with the user's own lines
+      first and a `server:` clause holding `proxy-protocol-port: 5353` last; DoT's certificate keys are unchanged;
       And the marker holds the previous values: presence and value of each moved key, as they were.
     """
     state, before = proxy_on, rig.before
@@ -572,7 +595,7 @@ def test_toggle_on_moves_the_resolver_in_config_xml_and_snapshots_what_it_moved(
         before.resolver["tlsport"],
     ), state.resolver
     options = base64.b64decode(state.resolver["custom_options"] or "").decode().replace("\r\n", "\n")
-    assert options.splitlines() == [PROXY_LINE, *CUSTOM_OPTIONS.splitlines()], f"Custom Options: {options!r}"
+    assert options.splitlines() == [*CUSTOM_OPTIONS.splitlines(), "server:", PROXY_LINE], f"Custom Options: {options!r}"
     assert state.marker, "pfb_dns_proxy_saved is empty after the toggle moved the Resolver"
     saved = json.loads(base64.b64decode(state.marker))
     expected = {key: {"present": before.resolver[key] is not None, "value": before.resolver[key]} for key in MOVED_KEYS}
