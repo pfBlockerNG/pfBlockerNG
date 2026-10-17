@@ -20,6 +20,10 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
 and user are set to NAME's, then the module boots, so every file it creates belongs to NAME. An unknown NAME (or '') or
 a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
 
+Each --listen address is bound on its own: one that cannot be bound (no longer an address of this box, port in use)
+is logged as a warning and skipped, and DoT is bound per address the same way. It exits 1 only when no address binds
+UDP+TCP; DoT that binds nowhere leaves the plain listeners serving.
+
 --dot reads unbound/sslcertref and unbound/tlsport (853 if unset) from config.xml, serves the referenced certificate
 on every --listen address at that port (TLS 1.2+), and forwards a DoT query to Unbound like a TCP one, with the TLS
 peer's address in the PROXYv2 header. unbound/enablessl is not read: --dot decides, since the Resolver's own DoT is
@@ -198,12 +202,27 @@ def bind(host: str, port: int, *, udp: bool) -> Listener:
     return Listener(host, tcp, datagrams)
 
 
-def bind_all(listen: Sequence[str], port: int, *, udp: bool) -> list[Listener]:
-    """bind() on each address; if one fails, the ones already bound are closed before the error propagates."""
+def _skip(exc: ListenError) -> None:
+    shim.log_warn(exc)
+
+
+def _raise(exc: ListenError) -> None:
+    raise exc
+
+
+def bind_all(
+    listen: Sequence[str], port: int, *, udp: bool, skipped: Callable[[ListenError], object]
+) -> list[Listener]:
+    """bind() on each address on its own: one that cannot be bound goes to `skipped` and is left out, so the result may
+    be empty. If `skipped` raises, the ones already bound are closed before the error propagates.
+    """
     bound: list[Listener] = []
     try:
         for host in listen:
-            bound.append(bind(host, port, udp=udp))
+            try:
+                bound.append(bind(host, port, udp=udp))
+            except ListenError as exc:
+                skipped(exc)
     except BaseException:
         for listener in bound:
             listener.close()
@@ -379,11 +398,11 @@ class Frontend:
 
     async def start_dot(self, listen: Sequence[str], port: int, context: ssl.SSLContext) -> list[tuple[str, int]]:
         """Serve DNS over TLS on each address; returns the bound (host, port)s."""
-        return await self.serve_listeners(bind_all(listen, port, udp=False), context)
+        return await self.serve_listeners(bind_all(listen, port, udp=False, skipped=_raise), context)
 
     async def start(self, listen: Sequence[str], port: int) -> list[tuple[str, int]]:
         """Serve UDP and TCP on each address (port 0 picks one port per address); returns the bound (host, port)s."""
-        return await self.serve_listeners(bind_all(listen, port, udp=True))
+        return await self.serve_listeners(bind_all(listen, port, udp=True, skipped=_raise))
 
     async def stop(self) -> None:
         for server in self._servers:
@@ -591,8 +610,8 @@ async def serve(
     The sockets and the TLS context are made as the user the process started as; the drop comes after them and
     before the boot, so what init_standard() and the watchers create belongs to `args.user`. `on_ready` gets the
     bound (host, port)s: the UDP+TCP listeners first, then the DoT ones. A user that does not exist, a drop the OS
-    refuses (DropError), an address that cannot be bound (ListenError) or a DoT configuration that cannot be served
-    (DotConfigError) raises before the module boots.
+    refuses (DropError), no address that can be bound for UDP+TCP (ListenError) or a DoT configuration that cannot be
+    served (DotConfigError) raises before the module boots; an address that cannot be bound is logged and skipped.
     """
     account = lookup_user(args.user) if args.user is not None else None
     dot = pfsense_dot.read_settings(args.pfsense_config) if args.dot else None
@@ -601,9 +620,11 @@ async def serve(
     listeners: list[Listener] = []
     dot_listeners: list[Listener] = []
     try:
-        listeners.extend(bind_all(listen, args.port, udp=True))
+        listeners.extend(bind_all(listen, args.port, udp=True, skipped=_skip))
+        if not listeners:
+            raise ListenError("no address could be bound")
         if dot is not None:
-            dot_listeners.extend(bind_all(listen, dot.port, udp=False))
+            dot_listeners.extend(bind_all(listen, dot.port, udp=False, skipped=_skip))
         if account is not None:
             drop_privileges(account)
         module = boot(args.module_dir)
