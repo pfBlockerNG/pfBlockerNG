@@ -41,6 +41,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$GLOBALS['pfb_test_unbound_configure_calls'] = [];
+		$GLOBALS['pfb_test_unbound_configure_resolver'] = [];
 		$this->tmp = sys_get_temp_dir() . '/pfb_dns_proxy_gate_' . uniqid('', TRUE);
 		mkdir($this->tmp, 0777, TRUE);
 		$GLOBALS['pfb'] = array_merge($this->originalPfb, [
@@ -76,7 +77,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		} else {
 			unset($GLOBALS['g']);
 		}
-		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_unbound_configure_calls']);
+		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_unbound_configure_calls'], $GLOBALS['pfb_test_unbound_configure_resolver']);
 		rmdir_recursive($this->tmp);
 	}
 
@@ -191,6 +192,14 @@ final class DnsProxyModuleGatingTest extends TestCase
 		return $GLOBALS['pfb_test_unbound_configure_calls'] ?? [];
 	}
 
+	/** The `unbound` section as config.xml held it when services_unbound_configure() ran (exactly once). */
+	private function resolverWhenConfigured(): array
+	{
+		$seen = $GLOBALS['pfb_test_unbound_configure_resolver'] ?? [];
+		$this->assertCount(1, $seen, 'unbound.conf regenerated exactly once');
+		return $seen[0];
+	}
+
 	private function pfbLog(): string
 	{
 		return (string) @file_get_contents($GLOBALS['pfb']['log']);
@@ -245,6 +254,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 		// ... unbound.conf is regenerated from config.xml exactly once, without restarting DHCP ...
 		$this->assertSame([FALSE], $this->configureCalls());
+		$this->assertSame('5353', $this->resolverWhenConfigured()['port'], 'unbound.conf is rendered from the moved Resolver');
+		$this->assertArrayNotHasKey('python', $this->resolverWhenConfigured(), 'with the module keys already out');
 
 		// ... and the module's own inputs are still produced, because the proxy loads the module from them.
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_conf']);
@@ -330,6 +341,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertResolverRestored('disabled pass');
 		$this->assertFalse($this->pythonModuleKeysSet());
 		$this->assertSame([FALSE], $this->configureCalls());
+		$this->assertSame('53', $this->resolverWhenConfigured()['port'], 'unbound.conf is rendered from the restored Resolver');
+		$this->assertArrayNotHasKey('python', $this->resolverWhenConfigured(), 'with the module keys out');
 		$this->assertTrue($GLOBALS['pfb']['dnsbl_python_unmount'], 'the disabled pass still schedules the unmount');
 	}
 
@@ -375,6 +388,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertResolverRestored('toggle off', ['python' => '', 'python_order' => 'pre_validator', 'python_script' => 'pfb_unbound']);
 		$this->assertTrue($this->pythonModuleKeysSet());
 		$this->assertSame([FALSE], $this->configureCalls());
+		$this->assertSame('53', $this->resolverWhenConfigured()['port'], 'unbound.conf is rendered from the restored Resolver');
+		$this->assertSame('pfb_unbound', $this->resolverWhenConfigured()['python_script'], 'with the module keys back');
 	}
 
 	// -----------------------------------------------------------------------
@@ -427,6 +442,28 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$patched = $this->patchedConf();
 		$this->assertStringContainsString('module-config: "python validator iterator"', $patched);
 		$this->assertStringContainsString("python:\npython-script: pfb_unbound.py", $patched);
+	}
+
+	public function testToggleOnWithALostMarkerOnAMovedResolverKeepsTheModuleOutOfBothSeams(): void
+	{
+		// Given the toggle on, a Resolver that already looks moved, the marker lost, and a python key set the
+		// move cannot take over: pfb_dns_proxy_resolver() refuses, and the owner rule still holds.
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::movedResolver() + [
+			'python' => '', 'python_order' => 'pre_validator', 'python_script' => 'pfb_unbound',
+		];
+		$this->assertSame('', $this->savedRaw(), 'before: no snapshot');
+		$this->writeUnboundConf(self::CONF_WITH_MODULE);
+
+		// When both seams run.
+		pfb_unbound_python('enabled');
+		$changed = pfb_unbound_dnsbl('enabled');
+
+		// Then the move was refused (nothing snapshotted) yet neither seam hands Unbound the module.
+		$this->assertSame('', $this->savedRaw(), 'the refusal stored no snapshot');
+		$this->assertFalse($this->pythonModuleKeysSet(), 'config.xml python keys');
+		$this->assertTrue($changed, 'unbound.conf was rewritten');
+		$this->assertStringNotContainsString('python', $this->patchedConf(), 'unbound.conf module');
 	}
 
 	public function testDisabledPassStillRemovesTheModuleWithoutASnapshot(): void
