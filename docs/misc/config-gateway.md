@@ -213,11 +213,11 @@ Authorization = property of **write**, not call site (generalises
     sync `local`; opt-in, experimental pfBlockerNG DNS proxy in front of the DNS Resolver.
     New key, no grandfather: absent reads Off = pre-feature behaviour.
   - **`pfb_dns_proxy_saved`** (issue #3515, plain string — `NULL`/`NULL` adapters, not a GUI field):
-    base64 JSON snapshot of the Resolver's `port`/`active_interface`/`enablessl`/`custom_options`
+    base64 JSON snapshot of the Resolver's `active_interface`/`enablessl`/`custom_options`
     (presence and value) taken before the DNS proxy moves it; `''` = not moved. Default `''`, sync
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`; the DNSBL page's section save
-    carries it through untouched. New key, no grandfather.
+    re-reads it right before it replaces the section, so an apply that finished meanwhile is not erased. New key, no grandfather.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

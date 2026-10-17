@@ -381,7 +381,7 @@ final class PfbWidgetOracleTest extends TestCase
 	private function enterProxyMode(bool $proxyUp): void
 	{
 		$keys = [];
-		foreach (['port' => '53', 'active_interface' => 'lan', 'enablessl' => null, 'custom_options' => null] as $key => $value) {
+		foreach (['active_interface' => 'lan', 'enablessl' => null, 'custom_options' => null] as $key => $value) {
 			$keys[$key] = ['present' => $value !== null, 'value' => $value];
 		}
 		$GLOBALS['config'] = [];
