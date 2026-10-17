@@ -426,6 +426,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$with = static fn (string $key, mixed $entry): array => [$key => $entry] + $valid;
 		return [
 			'not base64'                         => ['!!!not base64!!!'],
+			'valid base64 with a stray character' => [substr(self::snapshotOf($valid), 0, 8) . '!' . substr(self::snapshotOf($valid), 8)],
 			'base64 of text that is not JSON'    => [base64_encode('not json')],
 			'a JSON string'                      => [base64_encode('"port"')],
 			'an empty JSON list'                 => [base64_encode('[]')],

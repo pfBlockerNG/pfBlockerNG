@@ -1413,7 +1413,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// issue #3515: the Resolver's pre-move port/active_interface/enablessl/custom_options
-		// (base64 JSON, written and read only by pfb_dns_proxy_resolver()); '' = not moved.
+		// (base64 JSON, written by pfb_dns_proxy_resolver(), read via pfb_dns_proxy_saved()); '' = not moved.
 		'dnsbl/pfb_dns_proxy_saved' => [
 			'default'       => '',
 			'read_adapter'  => NULL,

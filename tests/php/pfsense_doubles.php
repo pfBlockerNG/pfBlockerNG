@@ -511,9 +511,11 @@ if (!function_exists('write_config')) {
 if (!function_exists('services_unbound_configure')) {
 	// pfSense services.inc: stop, regenerate unbound.conf from config.xml, start. The real one needs a
 	// live Resolver; record each call's $restart_dhcp argument (so tests can assert whether, how often and
-	// with what argument a path regenerated it) and report success.
+	// with what argument a path regenerated it) and the `unbound` section as config.xml held it at call
+	// time (what the real function would render into unbound.conf), and report success.
 	function services_unbound_configure($restart_dhcp = true, $interface = '') {
 		$GLOBALS['pfb_test_unbound_configure_calls'][] = $restart_dhcp;
+		$GLOBALS['pfb_test_unbound_configure_resolver'][] = config_get_path('unbound');
 		return 0;
 	}
 }

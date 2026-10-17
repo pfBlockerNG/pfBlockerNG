@@ -9646,8 +9646,9 @@ function pfb_unbound_dnsbl($mode) {
 	$pfbupdate = FALSE;
 	$log = '';
 
-	// issue #3515: while the DNS proxy owns the python module (the Resolver is moved), Unbound must not load it.
-	$module = $mode == 'enabled' && pfb_dns_proxy_saved() === NULL;
+	// issue #3515: while the DNS proxy owns the python module (the Resolver is moved) or is on, Unbound must not
+	// load it; the toggle term keeps this seam in step with pfb_unbound_python() when the move is refused.
+	$module = $mode == 'enabled' && $pfb['dnsbl_proxy'] !== PfbToggle::On && pfb_dns_proxy_saved() === NULL;
 
 	// Collect Unbound custom option pfSense conf line
 	$pfb['unboundconfig']	= config_get_path('unbound/custom_options');
