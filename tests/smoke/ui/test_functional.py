@@ -256,6 +256,14 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
+    # issue #3515: experimental DNS-proxy front end (default '' = off).
+    ToggleFlow(
+        name="dnsbl_dns_proxy",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_dns_proxy",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy",
+        # Adapter-backed unchecked saves use the canonical empty Off token.
+    ),
     ToggleFlow(
         name="dnsbl_py_nolog",
         page="/pfblockerng/pfblockerng_dnsbl.php",

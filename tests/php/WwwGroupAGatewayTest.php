@@ -373,6 +373,7 @@ final class WwwGroupAGatewayTest extends TestCase
 			'pfb_dnsbl_lenient'          => 'off',
 			'pfb_noaaaa'                 => '',
 			'pfb_gp'                     => '',
+			'pfb_dns_proxy'              => 'on',
 			'tld_allow'                  => '',
 			'tld_allow_sort'             => '',
 			'pfb_py_nolog'               => '',
