@@ -10,22 +10,26 @@ use PHPUnit\Framework\TestCase;
  * issue #3515 -- when the proxy daemon is started and stopped, relative to the Resolver:
  *
  *   - the proxy is stopped BEFORE the Resolver is restored, so Unbound's regeneration finds port 53 free
- *     (pfb_dns_proxy_resolver(FALSE), the one place every "turn it off" path goes through);
- *   - package removal always hands the Resolver back and stops the proxy, whatever the disable pass
- *     returned (pfb_dns_proxy_deinstall(), called right after the pass);
+ *     (pfb_dns_proxy_resolver(FALSE), the one place every "turn it off" path goes through), and the restore is
+ *     abandoned, snapshot kept and the operator told, when the proxy outlived its stop (stop_service() reports
+ *     nothing, so the pidfiles are the only witness);
+ *   - package removal always hands the Resolver back, stops the proxy and removes its rc script, whatever the
+ *     disable pass returned (pfb_dns_proxy_deinstall(), called right after the pass);
  *   - a Resolver that is still moved while the saved copy is lost or malformed cannot be put back
- *     automatically: the operator is told through a notice naming the keys to check, not only a log line;
+ *     automatically: the operator is told through a notice naming the keys to check, not only a log line --
+ *     but only for a Resolver carrying OUR marked block, never for an admin's own PROXYv2 setup;
  *   - the installer regenerates the rc script and restarts the proxy while the Resolver is moved, stops it
- *     otherwise (pfb_dns_proxy_service_sync());
+ *     otherwise;
  *   - pfblockerng.xml registers the service with a pidfile-based status command.
  */
 #[CoversFunction('pfb_dns_proxy_resolver')]
 #[CoversFunction('pfb_dns_proxy_deinstall')]
-#[CoversFunction('pfb_dns_proxy_service_sync')]
 final class DnsProxyLifecycleTest extends TestCase
 {
 	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
-	private const LINE  = 'proxy-protocol-port: 5353';
+	private const MARKER = '# pfBlockerNG DNS proxy';
+	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
+		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_write_config_calls',
 		'pfb_test_unbound_configure_calls', 'pfb_test_file_notices', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes',
@@ -53,10 +57,13 @@ final class DnsProxyLifecycleTest extends TestCase
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$GLOBALS['pfb_test_unbound_configure_calls'] = [];
 		$GLOBALS['pfb_test_file_notices'] = [];
+		$GLOBALS['pfb_test_valid_pids'] = [];
+		@unlink(PFB_DNS_PROXY_RCFILE);
 	}
 
 	protected function tearDown(): void
 	{
+		@unlink(PFB_DNS_PROXY_RCFILE);
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
 				$GLOBALS[$name] = $value;
@@ -82,14 +89,13 @@ final class DnsProxyLifecycleTest extends TestCase
 		];
 	}
 
-	/** The same Resolver as the proxy leaves it. */
+	/** The same Resolver as the proxy leaves it: still on port 53, on loopback, our block appended. */
 	private static function movedResolver(): array
 	{
 		$moved = self::originalResolver();
-		$moved['port'] = '5353';
 		$moved['active_interface'] = 'lo0';
 		unset($moved['enablessl']);
-		$moved['custom_options'] = base64_encode(self::LINE . "\ndo-ip6: no\nprefetch: yes");
+		$moved['custom_options'] = base64_encode("do-ip6: no\nprefetch: yes\n" . self::BLOCK);
 		return $moved;
 	}
 
@@ -97,7 +103,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		$original = self::originalResolver();
 		$keys = [];
-		foreach (['port', 'active_interface', 'enablessl', 'custom_options'] as $key) {
+		foreach (['active_interface', 'enablessl', 'custom_options'] as $key) {
 			$keys[$key] = ['present' => TRUE, 'value' => $original[$key]];
 		}
 		return base64_encode((string) json_encode($keys));
@@ -180,7 +186,75 @@ final class DnsProxyLifecycleTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// F4 -- a Resolver stuck on loopback 5353 with no usable saved copy
+	// S5b -- a proxy that outlives its stop keeps the Resolver where it is
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{string}> the pidfile that still names a live process after the stop */
+	public static function survivors(): array
+	{
+		return [
+			'the proxy itself'  => [PFB_DNS_PROXY_PIDFILE],
+			'only its supervisor' => [PFB_DNS_PROXY_DAEMON_PIDFILE],
+		];
+	}
+
+	#[DataProvider('survivors')]
+	public function testARestoreIsAbandonedWhileTheProxyIsStillAliveAfterItsStop(string $pidfile): void
+	{
+		// Given a moved Resolver and a proxy process that survived stop_service() (the rc script gave up after KILL)
+		$this->seedMovedResolver();
+		$GLOBALS['pfb_test_valid_pids'] = [$pidfile => TRUE];
+		$moved = $GLOBALS['config'];
+
+		// When the Resolver is to be restored
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then nothing moved back: the Resolver stays on loopback, the snapshot is kept for the next attempt ...
+		$this->assertFalse($changed);
+		$this->assertSame($moved, $GLOBALS['config'], 'port 53 is not handed to Unbound while the proxy still holds it');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot survives, so the next apply can retry');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+
+		// ... and the operator is told what to do, in a notice, not only in the log.
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$notice = $GLOBALS['pfb_test_file_notices'][0];
+		$this->assertStringContainsString('still running', $notice['notice']);
+		$this->assertStringContainsString('Status > Services', $notice['notice']);
+		$this->assertSame(2, $notice['priority']);
+		$this->assertStringContainsString('DNS proxy', (string) @file_get_contents($GLOBALS['pfb']['errlog']));
+	}
+
+	public function testARestoreProceedsWhenNeitherPidfileNamesALiveProcessAfterTheStop(): void
+	{
+		// Given the same moved Resolver, with both pidfiles dead (the normal outcome of a stop)
+		$this->seedMovedResolver();
+		$GLOBALS['pfb_test_valid_pids'] = [PFB_DNS_PROXY_PIDFILE => FALSE, PFB_DNS_PROXY_DAEMON_PIDFILE => FALSE];
+
+		$this->assertTrue(pfb_dns_proxy_resolver(FALSE));
+
+		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	public function testTheRestoreRetriesOnTheNextApplyAndSucceedsOnceTheProxyIsGone(): void
+	{
+		// Given an abandoned restore ...
+		$this->seedMovedResolver();
+		$GLOBALS['pfb_test_valid_pids'] = [PFB_DNS_PROXY_PIDFILE => TRUE];
+		$this->assertFalse(pfb_dns_proxy_resolver(FALSE), 'before: the first attempt is abandoned');
+
+		// When the proxy has exited by the next apply
+		$GLOBALS['pfb_test_valid_pids'] = [];
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the retry restores the Resolver from the kept snapshot
+		$this->assertTrue($changed);
+		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
+		$this->assertNull(pfb_dns_proxy_saved());
+	}
+
+	// -----------------------------------------------------------------------
+	// F4 -- a Resolver stuck on loopback with OUR block and no usable saved copy
 	// -----------------------------------------------------------------------
 
 	/** @return array<string,array{?string}> the marker as stored; NULL = absent */
@@ -196,7 +270,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	#[DataProvider('unusableMarkers')]
 	public function testAMovedResolverWithoutAUsableSnapshotRaisesAnOperatorNoticeNamingTheKeysToCheck(?string $marker): void
 	{
-		// Given the toggle is off (or DNSBL disabled) while the Resolver still sits on loopback 5353
+		// Given the toggle is off (or DNSBL disabled) while the Resolver still carries our block
 		$GLOBALS['config']['unbound'] = self::movedResolver();
 		if ($marker !== NULL) {
 			config_set_path(self::SAVED, $marker);
@@ -211,16 +285,17 @@ final class DnsProxyLifecycleTest extends TestCase
 			'the Resolver is not guessed at');
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'exactly one operator-visible notice');
 		$notice = $GLOBALS['pfb_test_file_notices'][0];
-		foreach (['Network Interfaces', 'Listen Port', 'Enable SSL/TLS Service', 'Custom Options', self::LINE] as $needle) {
+		foreach (['Network Interfaces', 'Enable SSL/TLS Service', 'Custom Options', self::MARKER] as $needle) {
 			$this->assertStringContainsString($needle, $notice['notice'], "the notice names {$needle}");
 		}
+		$this->assertStringNotContainsString('Listen Port', $notice['notice'], 'the move never changes the port');
 		$this->assertSame('/services_unbound.php', $notice['url'], 'it points at the Resolver page');
 		$this->assertSame(2, $notice['priority'], 'it is a warning, like the other DNSBL notices');
 		$this->assertStringContainsString('DNS proxy', (string) @file_get_contents($GLOBALS['pfb']['errlog']),
 			'the error log says so too');
 	}
 
-	/** @return array<string,array{array<string,string>}> Resolver values that are NOT the moved state */
+	/** @return array<string,array{array<string,string>}> Resolver values that do NOT carry our block */
 	public static function notMovedResolvers(): array
 	{
 		$orig = self::originalResolver();
@@ -228,20 +303,25 @@ final class DnsProxyLifecycleTest extends TestCase
 			'untouched Resolver'                    => [$orig],
 			'own port 5353 on the LAN'              => [['port' => '5353'] + $orig],
 			'own loopback listener on port 53'      => [['active_interface' => 'lo0'] + $orig],
-			'own lo0:5353 Resolver, no proxy line'  => [['port' => '5353', 'active_interface' => 'lo0'] + $orig],
+			'own lo0 Resolver with its own PROXYv2 line' => [[
+				'port' => '5353', 'active_interface' => 'lo0',
+				'custom_options' => base64_encode("server:\nproxy-protocol-port: 5353"),
+			] + $orig],
+			'a commented-out copy of our marker'    => [['custom_options' => base64_encode("# # pfBlockerNG DNS proxy\ndo-ip6: no")] + $orig],
 		];
 	}
 
 	/** @param array<string,string> $resolver */
 	#[DataProvider('notMovedResolvers')]
-	public function testAResolverThatIsNotMovedWithNoSnapshotRaisesNoNotice(array $resolver): void
+	public function testAResolverWithoutOurBlockAndNoSnapshotRaisesNoNotice(array $resolver): void
 	{
 		$GLOBALS['config']['unbound'] = $resolver;
 
 		pfb_dns_proxy_resolver(FALSE);
 
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'],
-			'no snapshot is the normal state of a box that never turned the proxy on');
+			'no snapshot is the normal state of a box that never turned the proxy on, and an admin\'s own '
+			. 'PROXYv2 front end is none of our business');
 	}
 
 	public function testAMovedResolverWithAValidSnapshotIsRestoredWithoutANotice(): void
@@ -263,14 +343,14 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->seedMovedResolver();
 		$atStop = [];
 		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use (&$atStop): void {
-			$atStop[] = [$fn, $service, count($GLOBALS['pfb_test_unbound_configure_calls']), config_get_path('unbound/port')];
+			$atStop[] = [$fn, $service, count($GLOBALS['pfb_test_unbound_configure_calls']), config_get_path('unbound/active_interface')];
 		};
 
 		// When the package is removed
 		pfb_dns_proxy_deinstall();
 
 		// Then the proxy was stopped before anything was restored or regenerated ...
-		$this->assertSame([['stop_service', 'pfb_dns_proxy', 0, '5353']], array_slice($atStop, 0, 1));
+		$this->assertSame([['stop_service', 'pfb_dns_proxy', 0, 'lo0']], array_slice($atStop, 0, 1));
 		// ... and the Resolver is back as the user had it, with unbound.conf regenerated once
 		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
 		$this->assertSame('', (string) config_get_path(self::SAVED, ''));
@@ -300,6 +380,39 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
 	}
 
+	/** @return array<string,array{bool}> whether the Resolver was moved when the package is removed */
+	public static function removalStates(): array
+	{
+		return ['a moved Resolver' => [TRUE], 'a Resolver that was never moved' => [FALSE]];
+	}
+
+	#[DataProvider('removalStates')]
+	public function testRemovalDeletesTheProxyRcScriptAfterStoppingTheProxy(bool $moved): void
+	{
+		// Given the proxy's rc script on disk (the installer wrote it) and the Resolver in this state
+		if ($moved) {
+			$this->seedMovedResolver();
+		} else {
+			$GLOBALS['config']['unbound'] = self::originalResolver();
+		}
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+		$atStop = [];
+		$GLOBALS['pfb_test_service_hook'] = static function (string $fn) use (&$atStop): void {
+			$atStop[] = [$fn, file_exists(PFB_DNS_PROXY_RCFILE)];
+		};
+
+		// When the package is removed
+		pfb_dns_proxy_deinstall();
+
+		// Then every stop found the script still there (stop_service() can only run an existing script) ...
+		$this->assertNotSame([], $atStop, 'before: the proxy was stopped');
+		foreach ($atStop as [$fn, $existed]) {
+			$this->assertTrue($existed, "{$fn}: the script is deleted only after the proxy was stopped");
+		}
+		// ... and the script is gone afterwards, as pfb_filter.sh and pfb_dnsbl.sh are on removal
+		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE);
+	}
+
 	/** The removal hook runs the restore unconditionally after the disable pass, whatever the pass returned. */
 	public function testThePreDeinstallHookRunsTheRestoreAfterTheDisablePassWhateverItReturns(): void
 	{
@@ -322,38 +435,19 @@ final class DnsProxyLifecycleTest extends TestCase
 	// S7 -- the installer
 	// -----------------------------------------------------------------------
 
-	public function testWhileTheResolverIsMovedTheInstallerRegeneratesTheScriptAndRestartsTheProxy(): void
+	public function testTheInstallerSyncsTheProxyServiceRightAfterTheDnsblServiceBlock(): void
 	{
-		$this->seedMovedResolver();
-		$atRestart = [];
-		$GLOBALS['pfb_test_service_hook'] = static function () use (&$atRestart): void {
-			$atRestart[] = $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0;
-		};
-
-		pfb_dns_proxy_service_sync();
-
-		$this->assertSame([['restart_service', 'pfb_dns_proxy']], $this->serviceCalls());
-		$this->assertSame([1], $atRestart, 'the rc script was (re)generated before the restart');
-	}
-
-	public function testWithoutAMovedResolverTheInstallerStopsTheProxyAndStillWritesTheScript(): void
-	{
-		$GLOBALS['config']['unbound'] = self::originalResolver();
-
-		pfb_dns_proxy_service_sync();
-
-		$this->assertSame([['stop_service', 'pfb_dns_proxy']], $this->serviceCalls(), 'never restarted outside proxy mode');
-		$this->assertSame(1, $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0, 'the script exists for later starts and stops');
-	}
-
-	public function testTheInstallerCallsTheSyncAfterTheDnsblServiceBlock(): void
-	{
+		// The installer is a script that runs at include time, so its wiring is pinned in the source: while
+		// the Resolver is moved the proxy is restarted (which regenerates its script first); otherwise the
+		// script is still written, for later starts and stops, and the proxy is stopped.
 		$install = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
 		$dnsbl = strpos($install, 'pfb_dnsbl_service();');
-		$sync = strpos($install, 'pfb_dns_proxy_service_sync();');
 		$this->assertNotFalse($dnsbl, 'test bootstrap: the DNSBL service block is found');
-		$this->assertNotFalse($sync, 'the installer must sync the DNS proxy service');
+
+		$sync = strpos($install, "if (pfb_dns_proxy_saved() !== NULL) { pfb_dns_proxy_restart(); } else { pfb_dns_proxy_service(); stop_service('pfb_dns_proxy'); }");
+		$this->assertNotFalse($sync, 'the installer must restart the proxy while moved, else write its script and stop it');
 		$this->assertGreaterThan($dnsbl, $sync, 'after the DNSBL service block');
+		$this->assertStringNotContainsString('pfb_dns_proxy_service_sync', $install, 'the one-caller wrapper is gone');
 	}
 
 	// -----------------------------------------------------------------------

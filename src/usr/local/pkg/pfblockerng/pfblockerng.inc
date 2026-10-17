@@ -3545,19 +3545,27 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
 }
 
-// issue #3515: the experimental DNS proxy takes the Resolver's client-facing place, so the Resolver is moved
-// to loopback 5353 through config.xml and Unbound is told (PROXYv2) to trust the proxy's source address.
+// issue #3515: the experimental DNS proxy takes the Resolver's client-facing place, so the Resolver is moved onto
+// loopback through config.xml (its port stays: the firewall resolves through it) and Unbound is told (PROXYv2) to
+// trust the proxy's source address on loopback port 5353.
 const PFB_DNS_PROXY_UNBOUND_PORT = '5353';
-const PFB_DNS_PROXY_LINE = 'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT;
-// pfSense writes custom_options after its forward-zone block, so a bare option there is a syntax error: the line
-// goes into a server clause of its own, appended after whatever clause the user's text ends in.
-const PFB_DNS_PROXY_CLAUSE = "server:\n" . PFB_DNS_PROXY_LINE;
-const PFB_DNS_PROXY_RESOLVER_KEYS = ['port', 'active_interface', 'enablessl', 'custom_options'];
+// The first and last line of the block pfb_dns_proxy_resolver() appends to custom_options. Everything that finds,
+// replaces or reports the block keys on these lines, never on a user's own PROXYv2 setup.
+const PFB_DNS_PROXY_MARKER = '# pfBlockerNG DNS proxy';
+const PFB_DNS_PROXY_MARKER_END = '# end pfBlockerNG DNS proxy';
+const PFB_DNS_PROXY_RESOLVER_KEYS = ['active_interface', 'enablessl', 'custom_options'];
 // The proxy's own pid (daemon(8) -p); its supervisor (-P) writes the daemon pidfile.
 const PFB_DNS_PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
 const PFB_DNS_PROXY_DAEMON_PIDFILE = '/var/run/pfb_dns_proxy_daemon.pid';
 const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
-const PFB_DNS_PROXY_RCFILE = '/usr/local/etc/rc.d/pfb_dns_proxy.sh';
+// Overridable before load (a unit test must not touch the appliance's rc.d), like the Unbound start budgets above;
+// the wait is the seconds an apply gives the restarted proxy to write its pidfile.
+if (!defined('PFB_DNS_PROXY_RCFILE')) {
+	define('PFB_DNS_PROXY_RCFILE', '/usr/local/etc/rc.d/pfb_dns_proxy.sh');
+}
+if (!defined('PFB_DNS_PROXY_START_WAIT')) {
+	define('PFB_DNS_PROXY_START_WAIT', 5);
+}
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -3948,26 +3956,23 @@ EOF;
  * unbound.inc binds them. An explicit list: each interface that is up and enabled (an IP entry verbatim,
  * else its IPv4 and IPv6 address). Empty or 'all' makes Unbound bind a wildcard, which the proxy cannot
  * (one wildcard UDP socket cannot answer from the address a client queried), so it gets every address of
- * the box. Valid, unscoped, non-link-local addresses only, once each, in derivation order.
+ * the box as pfSense lists them, CARP and IP-alias VIPs included. Valid, unscoped, non-link-local,
+ * non-loopback addresses only, once each, in derivation order: loopback stays Unbound's, which is how the
+ * firewall itself resolves (its resolv.conf names 127.0.0.1).
  *
  * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
  * @return list<string>
  */
 function pfb_dns_proxy_listen(array $saved): array {
 	// shortcut: addresses are read at apply time and baked into the rc script. The proxy skips one that has gone away
-	// since (logged, the others are served) but does not listen on one added since until the next reload; derive them
-	// in rc start if that matters.
+	// since (logged, the others are served) but does not listen on one added since until the next apply, which restarts
+	// the proxy when they changed (pfb_dns_proxy_ensure_running()).
 	$interfaces = array_filter(explode(',', (string) $saved['active_interface']['value']));
 
 	$found = [];
 	if ($interfaces === [] || in_array('all', $interfaces, TRUE)) {
-		array_push($found, '127.0.0.1', '::1', ...array_values((array) get_configured_ip_addresses()),
+		array_push($found, ...array_values((array) get_configured_ip_addresses()),
 		    ...array_values((array) get_configured_ipv6_addresses()));
-		foreach (config_get_path('virtualip/vip', []) as $vip) {
-			if (in_array($vip['mode'] ?? '', ['ipalias', 'carp'], TRUE)) {
-				$found[] = $vip['subnet'] ?? '';
-			}
-		}
 	} else {
 		foreach ($interfaces as $interface) {
 			// Same skip as unbound.inc: an interface that is down or disabled is not bound.
@@ -3985,24 +3990,27 @@ function pfb_dns_proxy_listen(array $saved): array {
 
 	$listen = [];
 	foreach ($found as $address) {
-		if (is_string($address) && is_ipaddr($address) && strpos($address, '%') === FALSE && !is_linklocal($address)) {
-			$listen[$address] = $address;
+		if (!is_string($address) || !is_ipaddr($address) || strpos($address, '%') !== FALSE || is_linklocal($address)) {
+			continue;
 		}
+		$packed = (string) inet_pton($address);
+		if ($packed === inet_pton('::1') || (strlen($packed) === 4 && $packed[0] === "\x7f")) {
+			continue;
+		}
+		$listen[$address] = $address;
 	}
 	return array_values($listen);
 }
 
 /**
  * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from the SAVED Resolver
- * (listen addresses, DoT). The file is rewritten only when its content changes.
+ * (listen addresses, DoT). Written on every call, like the other pfBlockerNG rc services.
  *
  * Start: only while DNSBL, the proxy toggle and the moved-Resolver snapshot are all set; never over a survivor;
  * through pfb_python.sh only; every address shell-quoted; no address = error and a non-zero exit. Stop: TERM at
  * 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's.
- *
- * @return bool TRUE iff the script was (re)written.
  */
-function pfb_dns_proxy_service(string $rcfile = PFB_DNS_PROXY_RCFILE): bool {
+function pfb_dns_proxy_service(): void {
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
 	$daemonpid = PFB_DNS_PROXY_DAEMON_PIDFILE;
 	$childpid = PFB_DNS_PROXY_PIDFILE;
@@ -4088,13 +4096,7 @@ EOF;
 
 EOF;
 
-	// write_rcfile() wraps start/stop as rc_start() { ... } / rc_stop() { ... }: unchanged when both blocks are on disk.
-	$disk = @file_get_contents($rcfile);
-	if (is_string($disk) && strpos($disk, "rc_start() {\n\t{$rc['start']}\n}\n") !== FALSE &&
-	    strpos($disk, "rc_stop() {\n\t{$rc['stop']}\n}\n") !== FALSE) {
-		return FALSE;
-	}
-	return write_rcfile($rc) !== FALSE;
+	write_rcfile($rc);
 }
 
 /** Regenerate the proxy's rc script, then restart it: the module host re-reads lists and ini only at init. */
@@ -4103,31 +4105,45 @@ function pfb_dns_proxy_restart(): void {
 	restart_service('pfb_dns_proxy');
 }
 
-/** The apply's branch with nothing to reload restarts nothing: bring up a proxy that died since the last reload. */
-function pfb_dns_proxy_ensure_running(): void {
-	if (pfb_dns_proxy_saved() !== NULL && !pfb_dns_proxy_running()) {
-		pfb_logger("\nStarting the DNS proxy", 1);
-		pfb_dns_proxy_service();
-		start_service('pfb_dns_proxy');
+/** Wait (bounded) for the proxy's pidfile: start_service() and restart_service() return before the new proxy wrote it. */
+function pfb_dns_proxy_await_running(): bool {
+	$deadline = hrtime(TRUE) + PFB_DNS_PROXY_START_WAIT * 1000000000;
+	while (!pfb_dns_proxy_running()) {
+		if (hrtime(TRUE) >= $deadline) {
+			return FALSE;
+		}
+		usleep(100000);
 	}
+	return TRUE;
 }
 
-/** Installer: restart the proxy while the Resolver is moved aside for it, stop it (keeping its script) otherwise. */
-function pfb_dns_proxy_service_sync(): void {
-	if (pfb_dns_proxy_saved() !== NULL) {
-		pfb_dns_proxy_restart();
+/**
+ * The apply's branch with nothing to reload restarts nothing: bring up a proxy that died since the last reload, and
+ * restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on, so an
+ * interface that got a new address is not served until the proxy restarts.
+ */
+function pfb_dns_proxy_ensure_running(): void {
+	if (pfb_dns_proxy_saved() === NULL) {
 		return;
 	}
+	$before = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 	pfb_dns_proxy_service();
-	stop_service('pfb_dns_proxy');
+	if (!pfb_dns_proxy_running()) {
+		pfb_logger("\nStarting the DNS proxy", 1);
+		start_service('pfb_dns_proxy');
+	} elseif ($before !== @file_get_contents(PFB_DNS_PROXY_RCFILE)) {
+		pfb_logger("\nRestarting the DNS proxy: its listen addresses changed", 1);
+		restart_service('pfb_dns_proxy');
+	}
 }
 
-/** Package removal: stop the proxy and put the Resolver back, whatever the disable pass did before. */
+/** Package removal: stop the proxy, put the Resolver back whatever the disable pass did before, remove the rc script. */
 function pfb_dns_proxy_deinstall(): void {
 	stop_service('pfb_dns_proxy');
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
 	}
+	unlink_if_exists(PFB_DNS_PROXY_RCFILE);
 }
 
 
@@ -12195,39 +12211,109 @@ function pfb_dns_proxy_running(): bool {
 }
 
 /**
- * Move the DNS Resolver to loopback 5353 for the DNS proxy ($on), or put it back ($on = FALSE).
+ * The networks pfSense's unbound_acls_config() would grant through `access-control` from the Resolver's
+ * active_interface, derived from the SAVED active_interface: the non-link-local IPv6 subnet of each interface that
+ * has no gateway (a LAN-type one; an Internet-facing interface is never granted), plus the enabled static routes
+ * that leave through such an interface. pfSense derives these from active_interface, so with the Resolver on
+ * loopback they vanish from unbound.conf (the IPv4 grants come from the NAT networks and stay) and the proxy's
+ * IPv6 clients, whose address Unbound only learns from the PROXYv2 header, would be REFUSED.
  *
- * ON snapshots the four PFB_DNS_PROXY_RESOLVER_KEYS (presence and value) once, then sets port 5353 and
- * active_interface lo0, drops enablessl (the proxy terminates DoT) and appends PFB_DNS_PROXY_CLAUSE to
- * custom_options: pfSense writes that text after its forward-zone block, so a bare line (first or last) would be a
- * syntax error, and a server clause opened last is valid wherever the user's own text ends. Values that
- * already look moved are never snapshotted as the "previous" ones. OFF stops the DNS proxy service first (so
- * Unbound's regeneration finds port 53 free), then restores each key exactly and clears the snapshot; no
- * snapshot = nothing to do, except that a Resolver on lo0:5353 that carries the PFB_DNS_PROXY_LINE the move adds
- * (a user's own lo0:5353 Resolver has none) is reported to the operator (file_notice): it cannot be put back
- * automatically. Idempotent.
+ * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
+ * @return list<string> valid CIDR networks (they are written into custom_options), once each; none when the
+ *         admin turned the automatic access control off
+ */
+function pfb_dns_proxy_acl_networks(array $saved): array {
+	if (config_path_enabled('unbound', 'disable_auto_added_access_control')) {
+		return [];
+	}
+
+	$interfaces = array_filter(explode(',', (string) $saved['active_interface']['value']));
+	if ($interfaces === [] || in_array('all', $interfaces, TRUE)) {
+		$interfaces = array_keys(get_configured_interface_with_descr());
+	}
+
+	$routes = get_staticroutes(FALSE, FALSE, TRUE);
+	$networks = [];
+	foreach ($interfaces as $interface) {
+		$address = get_interface_ipv6($interface);
+		if (!is_ipaddrv6($address) || interface_has_gateway($interface)) {
+			continue;
+		}
+		if (!is_linklocal($address)) {
+			$bits = get_interface_subnetv6($interface);
+			$networks[] = gen_subnetv6($address, $bits) . "/{$bits}";
+		}
+		foreach ($routes as $route) {
+			if (lookup_gateway_interface_by_name($route['gateway'] ?? '') == $interface) {
+				$networks[] = $route['network'];
+			}
+		}
+	}
+	return array_values(array_filter(array_unique($networks), 'is_subnet'));
+}
+
+/**
+ * The toggle-on refusal. While the toggle is on and the Resolver is not moved, Unbound is told not to load the
+ * module and the proxy is not started, so DNSBL blocks nothing: the operator gets a notice, not only a log line.
+ */
+function pfb_dns_proxy_refuse(string $why): bool {
+	$text = "DNS proxy: {$why}. DNSBL blocks nothing while the DNS proxy option is on and the Resolver is not moved: " .
+	    'correct the Resolver in Services > DNS Resolver, or turn the DNS proxy option off.';
+	pfb_logger("\n{$text}", 2);
+	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+	return FALSE;
+}
+
+/**
+ * Move the DNS Resolver aside for the DNS proxy ($on), or put it back ($on = FALSE).
+ *
+ * The proxy takes the Resolver's client-facing addresses on port 53, so the Resolver keeps its port (the firewall's
+ * own resolv.conf entry, 127.0.0.1, stays valid: pfSense lists it only while the port is 53) and listens on
+ * loopback only. ON snapshots the PFB_DNS_PROXY_RESOLVER_KEYS (presence and value) once, then sets active_interface
+ * lo0, drops enablessl (the proxy terminates DoT) and appends our block to custom_options: pfSense writes that text
+ * after its forward-zone block, so a bare line (first or last) would be a syntax error, and a server clause opened
+ * last is valid wherever the user's own text ends. The block makes Unbound also listen on 127.0.0.1 and ::1 port
+ * 5353 for the proxy's PROXYv2 stream and grants the IPv6 networks pfSense would no longer (see
+ * pfb_dns_proxy_acl_networks()); it is rewritten in place when the networks changed and is found by its marker lines,
+ * never by a user's own PROXYv2 setup. A refused move (values that cannot be stored verbatim, or our block with no
+ * snapshot: never snapshot moved values as the "previous" ones) is announced with a notice.
+ *
+ * OFF stops the DNS proxy service first (so Unbound's regeneration finds port 53 free); a proxy that outlived its stop
+ * abandons the restore (snapshot kept, notice raised) for the next apply to retry. Otherwise it restores each key
+ * exactly and clears the snapshot. No snapshot = nothing to do, except that a Resolver carrying our block is
+ * reported to the operator (file_notice): it cannot be put back automatically. Idempotent.
  *
  * @return bool TRUE iff config.xml changed (write_config was called once).
  */
 function pfb_dns_proxy_resolver(bool $on): bool {
 	$saved = pfb_dns_proxy_saved();
-	$custom = (string) base64_decode((string) config_get_path('unbound/custom_options', ''));
-	$has_line = in_array(PFB_DNS_PROXY_LINE, array_map('trim', explode("\n", $custom)), TRUE);
+	$custom = str_replace("\r\n", "\n", (string) base64_decode((string) config_get_path('unbound/custom_options', '')));
+	$has_marker = in_array(PFB_DNS_PROXY_MARKER, array_map('trim', explode("\n", $custom)), TRUE);
 
 	if (!$on) {
 		if ($saved === NULL) {
-			if ((string) config_get_path('unbound/port', '') === PFB_DNS_PROXY_UNBOUND_PORT &&
-			    config_get_path('unbound/active_interface', NULL) === 'lo0' && $has_line) {
-				$text = 'DNS proxy: the DNS Resolver is still on loopback port ' . PFB_DNS_PROXY_UNBOUND_PORT .
-				    ', but pfBlockerNG has no valid saved copy of its previous settings to restore. In Services > DNS Resolver ' .
-				    'check and correct Network Interfaces, Listen Port, Enable SSL/TLS Service and Custom Options ' .
-				    '(remove the "server:" and "' . PFB_DNS_PROXY_LINE . '" lines at its end), then stop the pfBlockerNG DNS proxy service in Status > Services.';
+			if ($has_marker) {
+				$text = 'DNS proxy: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings, but pfBlockerNG has no valid ' .
+				    'saved copy of its previous settings to restore. In Services > DNS Resolver check and correct ' .
+				    'Network Interfaces and Enable SSL/TLS Service, and remove from Custom Options the "server:" clause that ' .
+				    'starts with the line "' . PFB_DNS_PROXY_MARKER . '" and ends with "' . PFB_DNS_PROXY_MARKER_END . '", ' .
+				    'then stop the pfBlockerNG DNS proxy service in Status > Services.';
 				pfb_logger("\n{$text}", 2);
 				file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
 			}
 			return FALSE;
 		}
 		stop_service('pfb_dns_proxy');
+		// stop_service() reports nothing and the rc script gives up after KILL: only the pidfiles say whether the
+		// proxy still holds port 53, which Unbound would then collide on.
+		if (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
+			$text = 'DNS proxy: the DNS proxy is still running after it was stopped, so the DNS Resolver was not restored ' .
+			    '(Unbound would collide with the proxy on port 53). Stop the pfBlockerNG DNS proxy service in ' .
+			    'Status > Services; the next apply restores the Resolver.';
+			pfb_logger("\n{$text}", 2);
+			file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+			return FALSE;
+		}
 		foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {
 			if ($saved[$key]['present']) {
 				config_set_path("unbound/{$key}", $saved[$key]['value']);
@@ -12254,39 +12340,54 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 			}
 			$current[$key] = ['present' => $value !== NULL, 'value' => ($value === NULL) ? NULL : (string) $value];
 		}
-		$marker = ($current === NULL) ? FALSE : json_encode($current);
-		if ($marker === FALSE) {
-			pfb_logger("\nDNS proxy: the Resolver settings cannot be stored verbatim in pfb_dns_proxy_saved; refusing to move the Resolver", 2);
-			return FALSE;
+		$json = ($current === NULL) ? FALSE : json_encode($current);
+		if ($json === FALSE) {
+			return pfb_dns_proxy_refuse('the Resolver settings cannot be stored verbatim in pfb_dns_proxy_saved; refusing to move the Resolver');
 		}
-		if ($current['port']['value'] === PFB_DNS_PROXY_UNBOUND_PORT && $current['active_interface']['value'] === 'lo0') {
-			pfb_logger("\nDNS proxy: the Resolver already listens on lo0:" . PFB_DNS_PROXY_UNBOUND_PORT .
-			    " and pfb_dns_proxy_saved holds no snapshot; refusing to snapshot the moved values as the previous ones", 2);
-			return FALSE;
+		if ($has_marker) {
+			return pfb_dns_proxy_refuse('the Resolver already carries the DNS proxy block in Custom Options and ' .
+			    'pfb_dns_proxy_saved holds no snapshot; refusing to snapshot the moved values as the previous ones');
 		}
-		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy_saved', base64_encode($marker));
+		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy_saved', base64_encode($json));
+		$saved = $current;
 		$changed = TRUE;
 	}
 
-	foreach (['port' => PFB_DNS_PROXY_UNBOUND_PORT, 'active_interface' => 'lo0'] as $key => $value) {
-		if (config_get_path("unbound/{$key}", NULL) !== $value) {
-			config_set_path("unbound/{$key}", $value);
-			$changed = TRUE;
-		}
+	if (config_get_path('unbound/active_interface', NULL) !== 'lo0') {
+		config_set_path('unbound/active_interface', 'lo0');
+		$changed = TRUE;
 	}
 	if (config_get_path('unbound/enablessl', NULL) !== NULL) {
 		config_del_path('unbound/enablessl');
 		$changed = TRUE;
 	}
 
-	if (!$has_line) {
-		$custom = ($custom === '' || str_ends_with($custom, "\n")) ? $custom . PFB_DNS_PROXY_CLAUSE : "{$custom}\n" . PFB_DNS_PROXY_CLAUSE;
+	$lines = ['server:', PFB_DNS_PROXY_MARKER, 'interface: 127.0.0.1@' . PFB_DNS_PROXY_UNBOUND_PORT,
+	    'interface: ::1@' . PFB_DNS_PROXY_UNBOUND_PORT, 'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT];
+	foreach (pfb_dns_proxy_acl_networks($saved) as $network) {
+		$lines[] = "access-control: {$network} allow";
+	}
+	$lines[] = PFB_DNS_PROXY_MARKER_END;
+	$block = implode("\n", $lines);
+
+	if (!str_contains($custom, $block)) {
+		// An older block (other networks, or cut short by an edit) is replaced where it stands, from its marker to its
+		// end marker or the end of the text; otherwise ours goes last.
+		$stale = '/(?:^server:\n)?^' . preg_quote(PFB_DNS_PROXY_MARKER, '/') . '$\n?.*?(?:^' .
+		    preg_quote(PFB_DNS_PROXY_MARKER_END, '/') . '$|\z)/ms';
+		$count = 0;
+		$replaced = preg_replace_callback($stale, static fn (): string => $block, $custom, 1, $count);
+		if ($replaced !== NULL && $count === 1) {
+			$custom = $replaced;
+		} else {
+			$custom = ($custom === '' || str_ends_with($custom, "\n")) ? $custom . $block : "{$custom}\n{$block}";
+		}
 		config_set_path('unbound/custom_options', pfb_text_area_encode($custom));
 		$changed = TRUE;
 	}
 
 	if ($changed) {
-		$log = 'Moved the DNS Resolver to loopback port ' . PFB_DNS_PROXY_UNBOUND_PORT . ' for the DNS proxy';
+		$log = 'Moved the DNS Resolver onto loopback for the DNS proxy';
 		pfb_logger("\n{$log}", 1);
 		write_config("pfBlockerNG: {$log}");
 	}
@@ -12304,10 +12405,11 @@ function pfb_unbound_python($mode) {
 
 	$pfbpython = FALSE;
 
-	// issue #3515: while the DNS proxy is on it hosts the python module; Unbound must not load it.
+	// issue #3515: while the DNS proxy is on it hosts the python module; Unbound must not load it. A restore the proxy
+	// outlived keeps the snapshot, and so the proxy as host (pfb_unbound_dnsbl() reads the snapshot the same way).
 	$proxy = $mode == 'enabled' && $pfb['dnsbl_proxy'] === PfbToggle::On;
 	$moved = pfb_dns_proxy_resolver($proxy);
-	$module = $mode == 'enabled' && !$proxy;
+	$module = $mode == 'enabled' && !$proxy && pfb_dns_proxy_saved() === NULL;
 
 	// Ensure log file permissions are set as 'unbound:unbound' (unified.log excluded:
 	// the host daemon is now its sole writer, as root — ADR-38 Amendment 1).
@@ -13054,8 +13156,10 @@ function pfb_dnsbl_apply_ledger_update(): bool {
 	if ($converged) {
 		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
 	} else {
+		// issue #3515: in proxy mode the module host is the DNS proxy, not Unbound
+		$host = (pfb_dns_proxy_saved() !== NULL) ? 'the DNS proxy is' : 'Unbound';
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply',
-			'DNSBL apply not converged -- Unbound not fully live with pfb_unbound.py; see error.log',
+			"DNSBL apply not converged -- {$host} not fully live with pfb_unbound.py; see error.log",
 			$pfb['dbdir']);
 	}
 	return $converged;
@@ -13309,6 +13413,8 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	if ($mode == 'enabled' && pfb_dns_proxy_saved() !== NULL) {
 		pfb_logger("\nRestarting the DNS proxy", 1);
 		pfb_dns_proxy_restart();
+		// restart_service() returns before the new proxy has written its pidfile, which the ledger below reads
+		pfb_logger(pfb_dns_proxy_await_running() ? ' completed' : ' Not completed: the DNS proxy is not running', 1);
 	}
 
 	// ADR-61: mode=='enabled' is the only state DNSBL's apply is meant to converge to --

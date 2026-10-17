@@ -1412,7 +1412,7 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no proxy, Resolver untouched)',
 		],
 
-		// issue #3515: the Resolver's pre-move port/active_interface/enablessl/custom_options
+		// issue #3515: the Resolver's pre-move active_interface/enablessl/custom_options
 		// (base64 JSON, written by pfb_dns_proxy_resolver(), read via pfb_dns_proxy_saved()); '' = not moved.
 		'dnsbl/pfb_dns_proxy_saved' => [
 			'default'       => '',

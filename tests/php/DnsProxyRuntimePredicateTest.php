@@ -104,7 +104,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 			return;
 		}
 		$keys = [];
-		foreach (['port' => '53', 'active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
+		foreach (['active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
 			$keys[$key] = ['present' => $value !== NULL, 'value' => $value];
 		}
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));

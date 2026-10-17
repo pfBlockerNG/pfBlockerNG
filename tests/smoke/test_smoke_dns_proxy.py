@@ -1,23 +1,33 @@
 """Issue #3515, step 6: the experimental DNS Proxy toggle, driven the way an operator drives it, proven live.
 
-The toggle (``dnsbl/pfb_dns_proxy``) moves the DNS Resolver to loopback 5353 and runs pfBlockerNG's DNS proxy on the
-Resolver's client-facing interfaces: the proxy answers DNSBL decisions itself (the SHIPPED ``pfb_unbound.py`` through
-its Unbound API shim) and forwards every other query to Unbound with a PROXYv2 header. This module sets the real
-config keys, runs the real apply (``pfb_trigger scope=dnsbl``) and watches the box and a LAN client VM, with no
-hand-made proxy process and no hand-edited ``unbound.conf``.
+The toggle (``dnsbl/pfb_dns_proxy``) moves the DNS Resolver onto loopback (its port stays 53, so the firewall keeps
+resolving through it) and runs pfBlockerNG's DNS proxy on the Resolver's client-facing addresses: the proxy answers
+DNSBL decisions itself (the SHIPPED ``pfb_unbound.py`` through its Unbound API shim) and forwards every other query
+to Unbound on loopback 5353 with a PROXYv2 header. This module sets the real config keys, runs the real apply
+(``pfb_trigger scope=dnsbl``) and watches the box and a LAN client VM, with no hand-made proxy process and no
+hand-edited ``unbound.conf``.
 
 Module setup, put back in ``finally``::
 
     Resolver: DoT on with a self-signed certificate, ``log-queries: yes`` in Custom Options (which starts with the
               ``server:`` clause pfSense documents), Listen Port and Network Interfaces absent (their defaults)
+    LAN:      a static IPv6 address (the IPv6 locality tests' 2001:db8:51:1::1/64), so pfSense grants the LAN's IPv6
+              subnet to Unbound clients
     DNSBL:    one feed listing five names, Group Policy on with 192.168.1.12 on the bypass list
 
 What it proves, in file order:
 
 * before the toggle: Unbound hosts the python module and listens on 53 and 853 (the baseline every "not any more"
   below is measured against);
-* toggle on + apply: config.xml shows the Resolver moved and the snapshot, ``unbound.conf`` has no python module,
-  Unbound is loopback-only on 5353, service ``pfb_dns_proxy`` runs under ``daemon -t``, the proxy owns 53/853;
+* toggle on + apply: config.xml shows the Resolver moved (interfaces, DoT, Custom Options; NOT the port) and the
+  snapshot, ``unbound.conf`` has no python module, Unbound listens on loopback 53 and 5353 only, service
+  ``pfb_dns_proxy`` runs under ``daemon -t``, the proxy owns 53/853 on the LAN address and NOT on loopback;
+* the firewall keeps resolving through Unbound: ``/etc/resolv.conf`` still names 127.0.0.1 after pfSense regenerates
+  it, and the firewall's own lookup of a listed name is answered by the upstream (not DNSBL-filtered: a known limit);
+* pfSense's IPv6 grant for the LAN subnet disappears from its generated ``access_lists.conf`` with the Resolver on
+  loopback, and the same ``access-control`` row is in our marked ``custom_options`` clause instead (so IPv6 clients
+  relayed by the proxy are not REFUSED); no IPv6 client query is sent: the client VM has no IPv6 address on the LAN,
+  and ``DnsProxyAclTest`` pins the derivation;
 * from the LAN client (192.168.1.10): a listed name gets the VIP and a feed-attributed ``dnsbl.log`` row, an allowed
   name gets the upstream's answer and ``resolver.log`` names the client, the same over TCP and over DoT with the
   Resolver's certificate; a Group Policy bypassed address (192.168.1.12, an alias on the client) and the filtered
@@ -78,12 +88,18 @@ CFG_GROUP_POLICY = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp"
 CFG_GROUP_POLICY_LIST = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp_bypass_list"
 CFG_WHITELIST = f"{h.CFG_DNSBL_SETTINGS}/whitelist"
 
-MOVED_PORT = "5353"
-PROXY_LINE = f"proxy-protocol-port: {MOVED_PORT}"
+UPSTREAM_PORT = "5353"  # Unbound's loopback port for the proxy's PROXYv2 stream
+PROXY_LINE = f"proxy-protocol-port: {UPSTREAM_PORT}"
+MARKER = "# pfBlockerNG DNS proxy"  # first line of the block the toggle appends to Custom Options
+MARKER_END = "# end pfBlockerNG DNS proxy"
 CUSTOM_OPTIONS = "server:\nlog-queries: yes\n"
-# The keys the toggle moves, in the order the marker lists them, and the DoT keys it leaves alone.
-MOVED_KEYS = ("port", "active_interface", "enablessl", "custom_options")
-RESOLVER_KEYS = (*MOVED_KEYS, "sslcertref", "tlsport")
+# The keys the toggle moves, in the order the marker lists them (the Listen Port is not among them), and the keys it
+# leaves alone.
+MOVED_KEYS = ("active_interface", "enablessl", "custom_options")
+RESOLVER_KEYS = (*MOVED_KEYS, "port", "sslcertref", "tlsport")
+ACCESS_LISTS = "/var/unbound/access_lists.conf"  # pfSense's generated auto-added `access-control` rows
+LAN_V6_ADDR = h.IPV6_LOCAL_ADDR  # the address the module gives the LAN, so pfSense grants its /64 to clients
+LAN_V6_ROW = f"access-control: {h.IPV6_LOCAL_SUBNET} allow"
 DNS_PORTS = (53, 853, 5353)
 CERT_NAME = "pfsense-3515.pfb.localdomain"
 FEED_HEADER = "smoke3515"
@@ -131,6 +147,7 @@ class State:
     """What the box shows at one moment; every field is read from the box, none from what the test did."""
 
     conf: str  # unbound.conf
+    access_lists: str  # the generated access_lists.conf
     resolver: dict[str, str | None]  # config.xml unbound/<key>: the element's text, None when the element is absent
     marker: str  # config.xml pfb_dns_proxy_saved ('' when empty or absent)
     listeners: list[Listener]
@@ -333,6 +350,7 @@ def _capture(vm: SmokeVM) -> State:
     ps = vm.ssh("ps -axww -o pid,user,args | grep -E 'pfb_dns_prox[y]'").stdout.splitlines()
     return State(
         conf=vm.ssh("cat", h.UNBOUND_CONF).stdout,
+        access_lists=vm.ssh("cat", ACCESS_LISTS).stdout,
         resolver={key: _xml_text(root, f"unbound/{key}") for key in RESOLVER_KEYS},
         marker=_xml_text(root, "installedpackages/pfblockerngdnsblsettings/config/pfb_dns_proxy_saved") or "",
         listeners=_listeners(vm),
@@ -477,7 +495,7 @@ def _toggle_on(rig: Rig) -> None:
 
 
 def _is_on(state: State) -> bool:
-    return state.service == "running" and state.resolver["port"] == MOVED_PORT
+    return state.service == "running" and state.resolver["active_interface"] == "lo0"
 
 
 # --------------------------------------------------------------------------- #
@@ -503,7 +521,9 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
     listed = (names.blocked, names.whitelisted, *names.group_policy)
     feed_url = h.write_local_feed(vm, "smoke_3515_dns_proxy.txt", "".join(f"{name}\n" for name in listed))
     _snapshot_config(vm)
+    lan_v6_prior: dict[str, str] | None = None
     try:
+        lan_v6_prior = h.set_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, LAN_V6_ADDR, h.IPV6_LOCAL_BITS)
         refid = _create_cert(vm)
         pem = _sh(vm, f"cat {CERT_GUEST}").stdout
         trusted = subprocess.run(
@@ -533,6 +553,8 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
                 on53 = {s.local for s in _listeners(vm) if s.command == "unbound" and s.port == 53}
                 assert on53, f"Unbound is not back on port 53 after the restore: {_listeners(vm)}"
             finally:
+                if lan_v6_prior is not None:
+                    h.restore_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, lan_v6_prior)
                 _sh(vm, f"rm -f {SNAPSHOT_FILE} {CERT_GUEST}")
                 client_vm.ssh(f"rm -f {CERT_CLIENT}")
                 h.collect_host_diagnostics(vm)
@@ -578,17 +600,23 @@ def test_before_the_toggle_unbound_hosts_the_module_and_serves_53_and_853(rig: R
 # --------------------------------------------------------------------------- #
 
 
+def _lines(text: str) -> list[str]:
+    """The stripped lines of a config text (pfSense writes its access-control rows with a trailing space)."""
+    return [line.strip() for line in text.splitlines()]
+
+
 def test_toggle_on_moves_the_resolver_in_config_xml_and_snapshots_what_it_moved(rig: Rig, proxy_on: State) -> None:
     """The apply writes the move into config.xml and keeps the previous values in the marker.
 
     Given the Resolver with port and active_interface absent, DoT on, and Custom Options starting `server:`,
     When the toggle is on and applied,
-    Then config.xml has port 5353, active_interface lo0, no enablessl and Custom Options with the user's own lines
-      first and a `server:` clause holding `proxy-protocol-port: 5353` last; DoT's certificate keys are unchanged;
+    Then config.xml has active_interface lo0, no enablessl, the Listen Port exactly as it was (absent) and
+      Custom Options with the user's own lines first and our marked `server:` clause last (loopback 5353
+      listeners, the PROXYv2 port and the LAN's IPv6 grant); DoT's certificate keys are unchanged;
       And the marker holds the previous values: presence and value of each moved key, as they were.
     """
     state, before = proxy_on, rig.before
-    assert state.resolver["port"] == MOVED_PORT, state.resolver
+    assert state.resolver["port"] == before.resolver["port"] is None, state.resolver
     assert state.resolver["active_interface"] == "lo0", state.resolver
     assert state.resolver["enablessl"] is None, state.resolver
     assert (state.resolver["sslcertref"], state.resolver["tlsport"]) == (
@@ -596,29 +624,47 @@ def test_toggle_on_moves_the_resolver_in_config_xml_and_snapshots_what_it_moved(
         before.resolver["tlsport"],
     ), state.resolver
     options = base64.b64decode(state.resolver["custom_options"] or "").decode().replace("\r\n", "\n")
-    assert options.splitlines() == [*CUSTOM_OPTIONS.splitlines(), "server:", PROXY_LINE], f"Custom Options: {options!r}"
+    lines = options.splitlines()
+    assert MARKER in lines and MARKER_END in lines, f"Custom Options: {options!r}"
+    start, end = lines.index(MARKER), lines.index(MARKER_END)
+    assert lines[:start] == [*CUSTOM_OPTIONS.splitlines(), "server:"], f"Custom Options: {options!r}"
+    assert lines[start + 1 : start + 4] == [
+        f"interface: 127.0.0.1@{UPSTREAM_PORT}",
+        f"interface: ::1@{UPSTREAM_PORT}",
+        PROXY_LINE,
+    ]
+    grants = lines[start + 4 : end]
+    assert all(re.fullmatch(r"access-control: \S+ allow", row) for row in grants), f"Custom Options: {options!r}"
+    assert lines[end + 1 :] == [], f"nothing follows our block: {options!r}"
     assert state.marker, "pfb_dns_proxy_saved is empty after the toggle moved the Resolver"
     saved = json.loads(base64.b64decode(state.marker))
     expected = {key: {"present": before.resolver[key] is not None, "value": before.resolver[key]} for key in MOVED_KEYS}
     assert saved == expected, f"snapshot in the marker:\n{saved}\nResolver before the toggle:\n{expected}"
 
 
-def test_toggle_on_leaves_unbound_without_the_module_on_loopback_5353(rig: Rig, proxy_on: State) -> None:
-    """Unbound no longer runs the python module and listens on loopback 5353 only; it accepts the proxy's PROXYv2.
+def test_toggle_on_leaves_unbound_without_the_module_on_loopback_53_and_5353(rig: Rig, proxy_on: State) -> None:
+    """Unbound no longer runs the python module and listens on loopback only; it accepts the proxy's PROXYv2.
 
     Then unbound.conf has neither `module-config: "python` nor `python-script` (the baseline test pins both
-      present with the toggle off); every Unbound DNS socket is loopback on 5353, none on 53 or 853;
+      present with the toggle off); the Unbound DNS sockets are exactly loopback 53 (the firewall's own resolver)
+      and loopback 5353 (the proxy's upstream), IPv4 and IPv6, UDP and TCP, none on 853 or any LAN address;
       And the running Unbound reports proxy-protocol-port 5353.
     """
     assert not MODULE_LINE.search(proxy_on.conf), f"unbound.conf still loads the python module:\n{proxy_on.conf}"
     assert not SCRIPT_LINE.search(proxy_on.conf), f"unbound.conf still names a python-script:\n{proxy_on.conf}"
     sockets = proxy_on.unbound_dns()
     _say(f"Unbound DNS sockets, toggle on: {sorted(sockets)}")
-    assert ("udp4", "127.0.0.1:5353") in sockets, f"Unbound DNS sockets: {sorted(sockets)}"
-    stray = {(proto, local) for proto, local in sockets if not re.fullmatch(r"(127\.0\.0\.1|::1):5353", local)}
-    assert not stray, f"Unbound listens beyond loopback 5353: {sorted(stray)} (all: {sorted(sockets)})"
+    wanted = {
+        (f"{transport}{family}", f"{host}:{port}")
+        for transport in ("udp", "tcp")
+        for family, host in (("4", "127.0.0.1"), ("6", "::1"))
+        for port in (53, int(UPSTREAM_PORT))
+    }
+    assert wanted <= sockets, f"missing Unbound sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
+    stray = {(proto, local) for proto, local in sockets if not re.fullmatch(r"(127\.0\.0\.1|::1):(53|5353)", local)}
+    assert not stray, f"Unbound listens beyond loopback 53 and 5353: {sorted(stray)} (all: {sorted(sockets)})"
     option = rig.vm.ssh(f"/usr/local/sbin/unbound-control -c {h.UNBOUND_CONF} get_option proxy-protocol-port 2>&1")
-    assert option.stdout.strip() == MOVED_PORT, f"unbound-control get_option proxy-protocol-port: {option.stdout!r}"
+    assert option.stdout.strip() == UPSTREAM_PORT, f"unbound-control get_option proxy-protocol-port: {option.stdout!r}"
 
 
 def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig, proxy_on: State) -> None:
@@ -626,7 +672,8 @@ def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig
 
     Then Status > Services says `pfb_dns_proxy` runs; the supervisor's ps title is `daemon: pfb_dns_proxy[<pid>]`
       (daemon `-t`); the child is the proxy script, run as `unbound`, with `--dot` (the saved Resolver had DoT);
-      the proxy holds UDP and TCP 53 on the LAN address and loopback, and TCP 853 on the LAN address.
+      the proxy holds UDP and TCP 53 on the LAN's IPv4 and IPv6 addresses and TCP 853 on the LAN address,
+      and nothing on loopback (that is Unbound's).
     """
     state = proxy_on
     assert state.service == "running", f"service pfb_dns_proxy: {state.service}"
@@ -640,9 +687,56 @@ def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig
     assert child.split()[1] == "unbound", f"the proxy should have dropped root to unbound: {child!r}"
     sockets = state.proxy_sockets()
     _say(f"proxy sockets, toggle on: {sorted(sockets)}")
-    wanted = {(proto, f"{host}:53") for proto in ("udp4", "tcp4") for host in (PFSENSE_LAN_IP, "127.0.0.1")}
+    wanted = {(proto, f"{PFSENSE_LAN_IP}:53") for proto in ("udp4", "tcp4")}
+    wanted |= {(proto, f"{LAN_V6_ADDR}:53") for proto in ("udp6", "tcp6")}
     wanted.add(("tcp4", f"{PFSENSE_LAN_IP}:853"))
     assert wanted <= sockets, f"missing proxy sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
+    on_loopback = {(proto, local) for proto, local in sockets if re.match(r"(127\.0\.0\.1|::1):", local)}
+    assert not on_loopback, f"the proxy must leave loopback to Unbound: {sorted(on_loopback)}"
+
+
+def _firewall_lookup(vm: SmokeVM, name: str) -> str:
+    """What the firewall's OWN resolver (gethostbyname, i.e. /etc/resolv.conf) answers for `name`."""
+    out = _php_ok(vm, f"echo 'FW=' . gethostbyname({h._php_str(name + '.')}) . ';';", "firewall lookup")
+    match = re.search(r"FW=([^;]*);", out)
+    assert match, f"no answer line in the firewall lookup output: {out!r}"
+    return match.group(1)
+
+
+def test_the_firewall_keeps_resolving_through_unbound_and_is_not_dnsbl_filtered(rig: Rig, proxy_on: State) -> None:
+    """The firewall's own lookups keep going to Unbound on loopback 53, which no longer sits behind the proxy.
+
+    When pfSense regenerates /etc/resolv.conf (a reboot, a WAN event, a settings save do the same),
+    Then it still names 127.0.0.1 (pfSense lists it only while the Resolver's port is 53);
+      And the firewall's lookup of a listed name gets the upstream's answer, not the DNSBL VIP: the firewall's own
+      queries are not DNSBL-filtered (a known limit, see architecture-notes "Experimental DNS proxy mode").
+    """
+    _php_ok(rig.vm, "require_once('system.inc');\nsystem_resolvconf_generate();", "system_resolvconf_generate")
+    resolv = rig.vm.ssh("cat /etc/resolv.conf").stdout
+    assert re.search(r"^nameserver\s+127\.0\.0\.1\s*$", resolv, re.MULTILINE), f"/etc/resolv.conf:\n{resolv}"
+    answer = _firewall_lookup(rig.vm, rig.names.blocked)
+    assert answer == STUB_DNS_A, f"the firewall's own lookup of the listed {rig.names.blocked}: {answer!r}"
+
+
+def test_the_lans_ipv6_grant_moves_from_pfsenses_access_list_into_our_clause(rig: Rig, proxy_on: State) -> None:
+    """With the Resolver on loopback pfSense stops granting the LAN's IPv6 subnet; our clause grants it instead.
+
+    Given the LAN has a global IPv6 address (module setup), so pfSense grants its /64 with the Resolver on the LAN,
+    When the toggle is on and applied,
+    Then pfSense's generated access_lists.conf no longer has that row (the premise: without our clause IPv6 clients
+      relayed by the proxy would be REFUSED), the row is in unbound.conf inside our marked clause, and the running
+      Unbound was started from it.
+    """
+    assert LAN_V6_ROW in _lines(rig.before.access_lists), (
+        f"premise: access_lists.conf with the toggle off:\n{rig.before.access_lists}"
+    )
+    assert LAN_V6_ROW not in _lines(proxy_on.access_lists), (
+        f"access_lists.conf with the toggle on:\n{proxy_on.access_lists}"
+    )
+    conf = _lines(proxy_on.conf)
+    assert MARKER in conf and conf.index(MARKER) < conf.index(LAN_V6_ROW) < conf.index(MARKER_END), (
+        f"{LAN_V6_ROW} is not inside our clause of unbound.conf:\n{proxy_on.conf}"
+    )
 
 
 # --------------------------------------------------------------------------- #

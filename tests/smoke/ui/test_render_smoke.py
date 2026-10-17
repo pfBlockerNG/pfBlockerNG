@@ -1992,8 +1992,8 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
 
 
 def test_dnsbl_dns_proxy_option_renders_below_group_policy(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """issue #3515: the experimental DNS Proxy checkbox follows DNSBL Group Policy directly and
-    its help names the Resolver changes and that they are restored."""
+    """issue #3515: the experimental DNS Proxy checkbox follows DNSBL Group Policy directly and its help names the
+    Resolver changes, that they are restored, the firewall's own unfiltered lookups and the HA caveat."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
@@ -2014,11 +2014,15 @@ def test_dnsbl_dns_proxy_option_renders_below_group_policy(webui: WebUI, php_err
     for needle in (
         "Experimental",
         "text-warning",
-        "Listen Port becomes 5353",
         "Network Interfaces becomes Localhost",
+        "the Listen Port is not changed",
         "SSL/TLS Service is turned off",
-        "proxy-protocol-port: 5353",
+        "# pfBlockerNG DNS proxy",
+        "listens on 127.0.0.1 and ::1 port 5353",
         "saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed",
+        "are not filtered by DNSBL",
+        "High availability",
+        "turn the DNS Resolver sync off",
     ):
         assert needle in help_html, f"DNS Proxy help is missing {needle!r}"
 
