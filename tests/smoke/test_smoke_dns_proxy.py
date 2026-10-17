@@ -562,6 +562,7 @@ def test_before_the_toggle_unbound_hosts_the_module_and_serves_53_and_853(rig: R
     """
     before = rig.before
     assert MODULE_LINE.search(before.conf) and SCRIPT_LINE.search(before.conf), before.conf
+    _say(f"Unbound DNS sockets, toggle off: {sorted(before.unbound_dns())}")
     ports = {int(local.rsplit(":", 1)[1]) for _, local in before.unbound_dns()}
     assert {53, 853} <= ports and 5353 not in ports, f"Unbound DNS sockets: {sorted(before.unbound_dns())}"
     assert before.resolver["port"] is None and before.resolver["active_interface"] is None, before.resolver
@@ -612,6 +613,7 @@ def test_toggle_on_leaves_unbound_without_the_module_on_loopback_5353(rig: Rig, 
     assert not MODULE_LINE.search(proxy_on.conf), f"unbound.conf still loads the python module:\n{proxy_on.conf}"
     assert not SCRIPT_LINE.search(proxy_on.conf), f"unbound.conf still names a python-script:\n{proxy_on.conf}"
     sockets = proxy_on.unbound_dns()
+    _say(f"Unbound DNS sockets, toggle on: {sorted(sockets)}")
     assert ("udp4", "127.0.0.1:5353") in sockets, f"Unbound DNS sockets: {sorted(sockets)}"
     stray = {(proto, local) for proto, local in sockets if not re.fullmatch(r"(127\.0\.0\.1|::1):5353", local)}
     assert not stray, f"Unbound listens beyond loopback 5353: {sorted(stray)} (all: {sorted(sockets)})"
@@ -637,12 +639,8 @@ def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig
     assert "pfb_dns_proxy.py" in child and "--dot" in child and "--upstream 127.0.0.1:5353" in child, child
     assert child.split()[1] == "unbound", f"the proxy should have dropped root to unbound: {child!r}"
     sockets = state.proxy_sockets()
-    wanted = {
-        (proto, f"{host}:{port}")
-        for proto in ("udp4", "tcp4")
-        for host in (PFSENSE_LAN_IP, "127.0.0.1")
-        for port in (53,)
-    }
+    _say(f"proxy sockets, toggle on: {sorted(sockets)}")
+    wanted = {(proto, f"{host}:53") for proto in ("udp4", "tcp4") for host in (PFSENSE_LAN_IP, "127.0.0.1")}
     wanted.add(("tcp4", f"{PFSENSE_LAN_IP}:853"))
     assert wanted <= sockets, f"missing proxy sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
 
