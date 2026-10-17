@@ -384,6 +384,22 @@ Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher)
 decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. See
 `legacy/ADRs/ADR_10_Zero_Downtime_DNSBL/`.
 
+### Experimental DNS proxy mode (issue #3515)
+
+With the DNSBL **DNS Proxy** toggle on, pfBlockerNG's DNS proxy serves the Resolver's client-facing
+interfaces and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/python*` config.xml keys
+(`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it; the proxy imports
+the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
+moves the Resolver through config.xml (never `unbound.conf` directly): `unbound/port` 5353,
+`active_interface` `lo0`, `enablessl` removed, `proxy-protocol-port: 5353` prepended to `custom_options`
+(an appended line would land inside a later `forward-zone:`), then `services_unbound_configure(FALSE)`
+regenerates `unbound.conf`. The presence and value of those four keys are saved first in the per-node
+(`sync` local) registered marker `dnsbl/pfb_dns_proxy_saved` (base64 JSON in config.xml, so it survives
+reboot and backup restore) and restored exactly, with the module back in Unbound, when the toggle is
+turned off, DNSBL is disabled, the setup wizard resets the package config, or the package is removed
+(its disable pass). A lost marker on an already-moved Resolver is refused with an error, never re-saved
+as the "previous" values.
+
 ### ADR-08 — IDN homoglyph protection
 
 DNSBL settings carry an **IDN Blocking** mode — Off | All-IDN | Confusable (replaces the old
