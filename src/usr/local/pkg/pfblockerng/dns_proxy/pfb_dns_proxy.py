@@ -6,6 +6,9 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py
       --listen 192.0.2.1 --listen ::1 --port 53 --upstream 127.0.0.1:5353 --module-dir /var/unbound
 
+  /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py
+      --decision-fd 3 --module-dir /var/unbound --user unbound      (behind pfb_dns_gateway)
+
   --listen ADDR      address to serve on, repeatable (default 127.0.0.1)
   --port N           client-facing UDP and TCP port (default 53)
   --upstream H:P     Unbound with `proxy-protocol-port: P` (default 127.0.0.1:5353)
@@ -20,6 +23,9 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --reply-log        with --no-module: log each reply it relays to dns_reply.log, as the module does (see below)
   --user NAME        give up root for NAME after binding the sockets and before the module boots (default: keep it)
   --ready-file PATH  publish this process's PID to PATH once it serves; removed at shutdown (see below)
+  --decision-fd N    serve the decision protocol (docs/misc/dns-gateway-protocol.md) on the inherited AF_UNIX stream
+                     socket N instead of binding listeners: the Go gateway does the transport. Not with --listen,
+                     --port or --dot.
 
 --user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then the supplementary groups
 are cleared and group and user are set to NAME's, then the module boots, so every file it creates belongs to NAME.
@@ -78,6 +84,11 @@ its age, and is turned away when every client of the busier addresses has a quer
 burst. This is a fair share, not immunity: many addresses (spoofed ones, for UDP) that hold little each can still fill
 the global limits, and the busiest address pays for them. A DoT handshake must finish within 10 s.
 
+--decision-fd: nothing is bound. The user drop (--user) and the boot are as above; then READY goes to the gateway and
+each QUERY it sends is answered with an ANSWER or a DROP, a FORWARD/REPLY exchange standing in for the Unbound
+round trip where the module defers. EOF on the socket exits 0; malformed framing is logged and exits 1. A REPLY is
+waited for twice --timeout. --upstream and --pfsense-config are ignored.
+
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
 
@@ -109,6 +120,7 @@ from time import monotonic
 from types import ModuleType
 from typing import Any, NamedTuple
 
+import decision_service
 import dns_reply_log
 import dnswire
 import pfsense_dot
@@ -880,7 +892,7 @@ class _TcpUpstream:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="pfb_dns_proxy", description="pfBlockerNG DNS proxy (issue #3512)")
     parser.add_argument("--listen", action="append", metavar="ADDR", help="address to serve on, repeatable (127.0.0.1)")
-    parser.add_argument("--port", type=int, default=53, help="client-facing UDP and TCP port (53)")
+    parser.add_argument("--port", type=int, help="client-facing UDP and TCP port (53)")
     parser.add_argument("--upstream", default="127.0.0.1:5353", metavar="HOST:PORT", help="Unbound's PROXYv2 port")
     parser.add_argument(
         "--module-dir", default="/var/unbound", help="dir with pfb_unbound.py and its ini (/var/unbound)"
@@ -906,11 +918,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         metavar="PATH",
         help="publish this process's PID here once it serves; removed at shutdown (see the module docstring)",
     )
+    parser.add_argument(
+        "--decision-fd", type=int, metavar="N", help="serve the decision protocol on inherited socket N"
+    )
     args = parser.parse_args(argv)
     if args.observer and args.no_module:
         parser.error("--observer cannot be used with --no-module")
     if args.reply_log and not args.no_module:
         parser.error("--reply-log needs --no-module: the module logs its own replies")
+    if args.decision_fd is not None and (args.listen or args.port is not None or args.dot):
+        parser.error("--decision-fd cannot be combined with --listen, --port or --dot")
+    if args.port is None:  # None, not 53, as the default so that an explicit --port can be told from none
+        args.port = 53
     try:
         parse_hostport(args.upstream)
     except ValueError as exc:
@@ -1035,12 +1054,34 @@ async def serve(args: argparse.Namespace) -> None:
             reply_log.close()
 
 
+async def serve_decisions(args: argparse.Namespace) -> None:
+    """`--decision-fd` mode: nothing is bound; the user drop and the boot are serve()'s, in the same order. The module
+    then answers the gateway's queries on the inherited socket until the gateway closes it. A ProtocolError is logged
+    here and re-raised for exit 1; the module is shut down either way."""
+    account = lookup_user(args.user) if args.user is not None else None
+    sock = socket.socket(fileno=args.decision_fd)
+    if account is not None:
+        drop_privileges(account)
+    module = boot(args.module_dir)
+    frontend = Frontend(module, parse_hostport(args.upstream), args.timeout)
+    try:
+        await decision_service.serve(sock, frontend.resolve, args.timeout, shim.log_err)
+    except decision_service.ProtocolError as exc:
+        shim.log_err(f"decision protocol error: {exc}")
+        raise
+    finally:
+        shutdown(module)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
-        asyncio.run(serve(parse_args(argv)))
+        args = parse_args(argv)
+        asyncio.run(serve(args) if args.decision_fd is None else serve_decisions(args))
     except (DropError, ListenError, ReadyFileError) as exc:
         print(f"pfb_dns_proxy: {exc}", file=sys.stderr)
         return 1
+    except decision_service.ProtocolError:
+        return 1  # serve_decisions has logged it
     return 0
 
 
