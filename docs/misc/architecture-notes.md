@@ -400,6 +400,15 @@ turned off, DNSBL is disabled, the setup wizard resets the package config, or th
 (its disable pass). A lost marker on an already-moved Resolver is refused with an error, never re-saved
 as the "previous" values.
 
+While the Resolver is moved (`pfb_dns_proxy_saved() !== NULL`) the proxy, not Unbound, is the module host:
+`pfb_unbound_py_mode_active()` is TRUE, and every liveness decision (`pfb_unbound_py_host_running()`: the
+swap handshake default, ADR-61 convergence and retry, the zero-downtime fast path and its in-flight
+check) and the "module wired" check (`pfb_unbound_py_module_wired()`: `unbound.conf` references
+`pfb_unbound.py`; in proxy mode the proxy's liveness, also for the dashboard widget) follow the proxy's
+pid file `/var/run/pfb_dns_proxy.pid` instead of the Unbound process and `unbound.conf`. Checks about
+Unbound itself (stop/start, `is_service_running('unbound')`, `flush_stats`) are unchanged: it still runs
+on 5353.
+
 ### ADR-08 — IDN homoglyph protection
 
 DNSBL settings carry an **IDN Blocking** mode — Off | All-IDN | Confusable (replaces the old
