@@ -4,8 +4,8 @@ install() exposes them on `builtins` (the technique the repo's test suite uses w
 shipped pfb_unbound.py UNCHANGED from a module dir. Behaviour mirrors Unbound 1.2x: pythonmod/interface.i
 (DNSMessage, rrsets, rr_data), pythonmod_utils.c (createResponse) and services/mesh.c (how a finished query is sent).
 
-Not modelled: the message cache (storeQueryInCache/invalidateQueryInCache are recorded no-ops) and the cache,
-local and query_response callbacks, which fire only inside Unbound.
+Not modelled: the message cache (storeQueryInCache/invalidateQueryInCache are no-ops that keep nothing: the daemon
+runs for weeks) and the cache, local and query_response callbacks, which fire only inside Unbound.
 """
 
 from __future__ import annotations
@@ -71,8 +71,6 @@ _MODULE_COUNT = 16
 
 # Registered inplace callbacks by kind ("reply", "reply_cache", "reply_local", "reply_servfail", "query_response").
 callbacks: dict[str, Callable[..., Any]] = {}
-# storeQueryInCache / invalidateQueryInCache calls, in order: ("store", qname, is_referral) / ("invalidate", qname).
-cache_calls: list[tuple[Any, ...]] = []
 
 
 def _log(level: str, msg: object) -> None:
@@ -108,12 +106,11 @@ register_inplace_cb_query_response = _registrar("query_response")
 
 
 def storeQueryInCache(qstate: Any, qinfo: Any, msgrep: Any, is_referral: int) -> bool:
-    cache_calls.append(("store", qinfo.qname_str, is_referral))
     return True
 
 
 def invalidateQueryInCache(qstate: Any, qinfo: Any) -> None:
-    cache_calls.append(("invalidate", qinfo.qname_str))
+    pass
 
 
 # --- reply objects -------------------------------------------------------------------------------

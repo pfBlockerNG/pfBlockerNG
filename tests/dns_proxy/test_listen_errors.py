@@ -1,5 +1,6 @@
 """Startup when a socket cannot be bound: that address is skipped with one log line and the others are served; the
-proxy exits 1 (nothing booted) only when no UDP+TCP address binds at all. DoT is bound per address the same way.
+proxy exits 1 (nothing booted) only when no UDP+TCP address binds at all. DoT is bound per address the same way, and
+a DoT setup that cannot be served (no certificate, an unusable one) is one error line with the plain listeners serving.
 
 The rc script bakes the addresses of the last apply, so an address that has since gone away (a DHCP or PPPoE
 change, a VIP on a disabled interface) must not take DNS down on the addresses that are still there.
@@ -29,6 +30,7 @@ IN_USE = os.strerror(errno.EADDRINUSE)
 NOT_ON_THIS_BOX = os.strerror(errno.EADDRNOTAVAIL)
 SKIPPED = "pfb_dns_proxy warning: cannot listen on {host}:{port}: {reason}"
 NONE_BOUND = "pfb_dns_proxy: no address could be bound"
+DOT_OFF = "pfb_dns_proxy error: DNS over TLS is off, serving plain DNS only: "
 DNSBL_VIP4 = socket.inet_aton(DNSBL_IPV4)
 
 
@@ -69,7 +71,12 @@ def _serve(argv: list[str]) -> tuple[list[tuple[str, int]], list[bytes]]:
         ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
         task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
         try:
-            bound = await asyncio.wait_for(ready, WATCHDOG)
+            await asyncio.wait({ready, task}, timeout=WATCHDOG, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                task.result()  # serve() ended before it was ready: raise the reason it gave
+            if not ready.done():
+                pytest.fail("STUCK: serve() was not ready in time")
+            bound = ready.result()
             reply = (await udp_exchange(bound[0], build_query(BLOCKED)))[0]
             return bound, [rr.rdata for rr in dnswire.parse(reply).answers]
         finally:
@@ -163,6 +170,32 @@ def test_dot_that_binds_nowhere_does_not_stop_the_plain_listeners(
     assert [port for _, port in bound if port == tls_port] == []  # no DoT, ...
     assert len(bound) == 1 and answers == [DNSBL_VIP4]  # ... and the plain listener still answers
     assert _skip_lines(capfd.readouterr().err) == [SKIPPED.format(host="127.0.0.1", port=tls_port, reason=IN_USE)]
+
+
+@pytest.mark.parametrize(
+    ("config_kwargs", "reason"),
+    [({"certref": None}, "sslcertref is empty"), ({"certref": "nope"}, "refid 'nope'")],
+    ids=["no-certref", "missing-cert"],
+)
+def test_a_dot_setup_that_cannot_be_served_is_one_error_line_and_plain_dns_keeps_serving(
+    tmp_path: Path,
+    module_dir: Path,
+    quiet_boot: None,
+    capfd: pytest.CaptureFixture[str],
+    config_kwargs: dict[str, Any],
+    reason: str,
+) -> None:
+    config = tmp_path / "config.xml"
+    config.write_text(config_xml(**config_kwargs), encoding="utf-8")
+    argv = ["--listen", "127.0.0.1", "--port", "0", "--module-dir", str(module_dir)]
+
+    bound, answers = _serve([*argv, "--dot", "--pfsense-config", str(config)])
+
+    assert len(bound) == 1 and answers == [DNSBL_VIP4]  # the plain listener only, and its DNSBL decisions are made
+    err = capfd.readouterr().err
+    [line] = [line for line in err.splitlines() if "DNS over TLS" in line]  # once
+    assert line.startswith(DOT_OFF + str(config)) and reason in line
+    assert "Traceback" not in err
 
 
 def test_when_no_address_binds_each_is_logged_once_and_it_exits_1_without_booting(
