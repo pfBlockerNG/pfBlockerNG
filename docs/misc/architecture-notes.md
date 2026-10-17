@@ -369,8 +369,9 @@ interfaces and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/py
 (`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it; the proxy imports
 the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
 moves the Resolver through config.xml (never `unbound.conf` directly): `unbound/port` 5353,
-`active_interface` `lo0`, `enablessl` removed, `proxy-protocol-port: 5353` prepended to `custom_options`
-(an appended line would land inside a later `forward-zone:`), then `services_unbound_configure(FALSE)`
+`active_interface` `lo0`, `enablessl` removed, a `server:` clause with `proxy-protocol-port: 5353` appended to
+`custom_options` (pfSense writes custom options after its Forwarding `forward-zone:` block, so a bare line there
+is a syntax error), then `services_unbound_configure(FALSE)`
 regenerates `unbound.conf`. The presence and value of those four keys are saved first in the per-node
 (`sync` local) registered marker `dnsbl/pfb_dns_proxy_saved` (base64 JSON in config.xml, so it survives
 reboot and backup restore) and restored exactly, with the module back in Unbound, when the toggle is
