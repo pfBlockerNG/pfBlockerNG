@@ -144,8 +144,9 @@ gates_for() {
 	fi
 	# issue #3513: go/** holds the Go gateway module; gate_command() resolves the toolchain.
 	# shortcut: deleting the whole module fails the `cd`; upgrade when a diff may do that.
+	# gofmt's own status is tested (a missing gofmt prints nothing); -race needs cgo and a C compiler.
 	if printf '%s\n' "$suite_files" | LC_ALL=C grep -q '^go/'; then
-		out="${out}cd go/pfb_dns_gateway && test -z \"\$(gofmt -l .)\" && go vet ./... && go test -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .${nl}"
+		out="${out}cd go/pfb_dns_gateway && gofmt_out=\$(gofmt -l .) && test -z \"\$gofmt_out\" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .${nl}"
 	fi
 	# issue #3425: ShellSpec's repository-wide guards scan more than *.sh (truncate_survival:
 	# every file under src/ scripts/ tests/; parity_guard: workflow YAML; agent_config_parity:

@@ -1050,7 +1050,7 @@ CHECK
   shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
   reentry_gate='uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
   # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-  go_gate='cd go/pfb_dns_gateway && test -z "$(gofmt -l .)" && go vet ./... && go test -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
+  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
 
   It 'plans ShellSpec for a committed deletion of a config only ShellSpec reads'
     seed .agents/model-tiers.conf
@@ -1206,7 +1206,7 @@ Describe 'run-gates.sh Go gate selection'
   Include scripts/agent/run-gates.sh
 
   # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-  go_gate='cd go/pfb_dns_gateway && test -z "$(gofmt -l .)" && go vet ./... && go test -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
+  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
   # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
   shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
 
@@ -1278,8 +1278,7 @@ Describe 'run-gates.sh Go gate toolchain resolution'
   AGENT_SOURCE_ONLY=1
   Include scripts/agent/run-gates.sh
 
-  # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-  go_gate='cd go/pfb_dns_gateway && test -z "$(gofmt -l .)" && go vet ./... && go test -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
+  # The behaviour rows run the line gates_for() really emits; the selection rows above pin its bytes.
 
   setup() {
     workdir=$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gogate.XXXXXX")
@@ -1292,6 +1291,7 @@ Describe 'run-gates.sh Go gate toolchain resolution'
     for tool in sh timeout rm cat; do ln -s "$(command -v "$tool")" "$workdir/bare_bin/$tool"; done
     bare_path=$workdir/bare_bin
     go_fallback=$workdir/fallback_bin
+    go_gate=$(printf 'go/pfb_dns_gateway/acl.go\n' | gates_for | sed -n 1p)
   }
   cleanup() { rm -rf "$workdir"; }
   Before 'setup'
@@ -1339,7 +1339,7 @@ Describe 'run-gates.sh Go gate toolchain resolution'
     The output should include 'overall=0'
     The contents of file "$calls" should equal 'gofmt[fallback] -l .
 go[fallback] vet ./...|||
-go[fallback] test -count=1 ./...|||
+go[fallback] test -race -count=1 ./...|||
 go[fallback] build -o /dev/null .|0|freebsd|amd64
 go[fallback] build -o /dev/null .|0|freebsd|arm64'
   End
@@ -1363,6 +1363,19 @@ go[fallback] build -o /dev/null .|0|freebsd|arm64'
     The contents of file "$calls" should equal 'gofmt[fallback] -l .'
   End
 
+  # issue #3513: `test -z "$(gofmt -l .)"` passes on empty stdout, so a missing or failing gofmt
+  # would read as "formatted"; the gate has to test gofmt's own exit status.
+  It 'fails (never passes vacuously) when go resolves but gofmt is absent'
+    stub_toolchain "$go_fallback" fallback
+    rm "$go_fallback/gofmt"
+    When call run_go_gate "$bare_path"
+    The stderr should include 'GATE RUN:'
+    The output should include "GATE FAIL: $go_gate"
+    The output should not include 'GATE PASS'
+    The output should include 'overall=1'
+    Assert [ ! -e "$calls" ]
+  End
+
   It 'fails when go test fails, before the FreeBSD builds run'
     stub_toolchain "$go_fallback" fallback '' test
     When call run_go_gate "$bare_path"
@@ -1371,6 +1384,6 @@ go[fallback] build -o /dev/null .|0|freebsd|arm64'
     The output should include 'overall=1'
     The contents of file "$calls" should equal 'gofmt[fallback] -l .
 go[fallback] vet ./...|||
-go[fallback] test -count=1 ./...|||'
+go[fallback] test -race -count=1 ./...|||'
   End
 End
