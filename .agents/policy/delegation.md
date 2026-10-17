@@ -183,9 +183,9 @@ runner together.
 | PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `composer phpstan` · `composer phpcs -- --standard=phpcs.xml.dist src/` |
 | Shell (`*.sh`) | `sh -n` · `shellcheck` (only `src/`, `scripts/`, `.claude/hooks/` — the scope `.githooks/pre-commit` + CI use; `tests/` shellspec specs trip SC2034 false-positives) · ShellSpec |
 | Any path but Markdown and `docs/` (CI's shell-tests trigger), or Markdown a ShellSpec guard reads (set in `gates_for()`, #3425) | `shellspec --shell "$(command -v dash)"` (dash = strict-POSIX ash sibling of FreeBSD sh — bash-as-sh masks appliance divergences. Dash missing ⇒ the hand-run substitution goes empty and the runner falls back to `sh`: INSTALL dash (`brew`/`apt`), never drop the pin; plain `shellspec` is a last resort, named in the handoff) |
-| `go/**` | `gates_for()` Go line: gofmt, vet, test (Docker oracle), FreeBSD builds; no `go` ⇒ FAIL |
+| `go/**` | `gates_for()` Go line: gofmt, vet, `test -race` (Docker oracle), FreeBSD builds; no `go`/`gofmt` ⇒ FAIL |
 | Markdown (`*.md`) | `npx markdownlint-cli2` |
-| `tests/skip-allowlist.txt` / `tests/fixtures/skip-allowlist-canary.xml` | `python3 -m pytest` — the skip-set checker, its red canary and the tests parsing both files ride that gate (#3166, #3174) |
+| `tests/skip-allowlist.txt` / `tests/fixtures/skip-allowlist-canary.xml` | `python3 -m pytest` — the checker, red canary and tests parsing both files ride that gate (#3166, #3174) |
 | `www/` | Reachable UI coverage exists for the change per test mandate #4 |
 
 ## Validating workflow records
