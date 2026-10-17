@@ -59,7 +59,6 @@ from .ha_pair import (
     HaPair,
     carp_state,
     clear_sshguard,
-    configure_primary_hasync,
     configure_secondary_users,
     set_carp_maintenance,
     wait_carp_state,
@@ -83,6 +82,8 @@ from .ha_policy import (
     assert_receive,
     assert_sent,
     configure_sender,
+    core_ha_on,
+    core_sync_quiet,
     diff_leaves,
     emit,
     feed_path,
@@ -200,11 +201,6 @@ def assert_dnsbl_vips(pair: HaPair, when: str) -> None:
     for name, vm, expected in (("A", pair.primary, h.SMOKE_VIP_UNIQID), ("B", pair.secondary, B_VIP_UNIQID)):
         owned = php_json(vm, emit("array_column(config_get_path('virtualip/vip', array()), 'uniqid')"))
         assert expected in owned, f"{when}: node {name} lost its DNSBL VIP {expected!r}; its virtual IPs are {owned!r}"
-
-
-def core_ha_on(pair: HaPair) -> None:
-    """Point A's pfSense HA sync (rules, NAT, aliases) at B, as ``ha_pair`` arranged it; a config write, no event."""
-    configure_primary_hasync(pair.primary, pair.sync_password)
 
 
 @pytest.fixture(scope="module")
@@ -1261,11 +1257,13 @@ def test_feed_header_contract_and_effective_findings(
         )
         assert alias not in aliasnames(b), "B stored a group whose header A's apply had not normalised"
         # The producer's own apply persists the normalisation. Its filter reload would make core sync by itself (the
-        # "filter sync" event), so the pass runs with the HA sync target taken off and put back for the explicit send.
+        # "filter sync" event), so the pass runs with the HA sync target taken off, and the sync runs that pass queued
+        # must have started before the target goes back on for the explicit send.
         set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A without core HA sync")
         h.reload(a, "update", wait_unbound=False)
         settle(a)
         wait_filter_idle(a)
+        core_sync_quiet(a)
         core_ha_on(ha_pair)
 
     sync = sync_once(ha_pair, transport)

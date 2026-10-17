@@ -238,6 +238,7 @@ def test_new_policy_sender_leaves_previous_receiver_untouched(
             f"B must log one receive that merged no pfBlockerNG section, got {hv.package_writes(b_log.text)!r}"
         )
         assert (rows[0][0], rows[0][3]) == (TARGET, "sent, acceptance unconfirmed"), f"sender panel row: {rows[0]!r}"
+        hp.core_ha_on(ha_pair)  # the baseline keeps pfSense HA sync off A; this second send rides it
         hp.php_write(a, alias, "pfBlockerNG smoke: HA sentinel alias")
         hp.trigger_send(ha_pair, "automatic")
         hv.wait_sync_idle(a)
@@ -278,7 +279,7 @@ def test_previous_sender_keeps_legacy_semantics_on_new_receiver(
     # Given A runs the previous build with the unchecked legacy box, B the branch build.
     hv.install_build(a, prev_pkg, "previous", node="A", phase="sender on the previous build")
     hv.announce(b, "B", "receiver on the branch build")
-    b_start = hv.pfb_sections(b)  # before A enables a transport: in automatic mode every write on A syncs
+    b_start = hv.pfb_sections(b)  # B as it was before A sent anything
     hp.set_leaves(
         a,
         {hp.SYNC: hv.legacy_sync_section(transport, toggle="", password=password)},
@@ -291,6 +292,8 @@ def test_previous_sender_keeps_legacy_semantics_on_new_receiver(
     assert {"pfblockernglistsv4", "pfblockerngipsettings"} <= set(differing), (
         f"non-vacuity: A's sections must differ from B's before the sync: {differing}"
     )
+    if transport == "automatic":
+        hp.core_ha_on(ha_pair)  # the baseline keeps pfSense HA sync off A; the automatic transport rides it
     banners = hp.apply_banners(b)
 
     # When A syncs once.

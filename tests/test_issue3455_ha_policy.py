@@ -607,6 +607,59 @@ def test_core_sync_can_be_forced_either_way_whatever_the_transport(
     assert none["hasync"] is None
 
 
+def test_core_ha_on_stores_the_hasync_section_and_saves_the_file_only(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _recording_php_eval(hp, monkeypatch)
+
+    hp.core_ha_on(SimpleNamespace(primary=object(), sync_password="pw"))
+
+    (php,) = seen
+    assert '"hasync": {"synchronizetoip": "172.30.254.2"' in php and '"password": "pw"' in php, php
+    assert "TRUE, TRUE);" in php, (
+        f"a plain write_config() queues core's own rc.filter_synchronize, a second sender: {php!r}"
+    )
+
+
+def _aged(*ages: str) -> SimpleNamespace:
+    """A guest whose syslog's last "Syncing firewall" line is ``age`` seconds old at each successive probe."""
+    answers = iter(ages)
+    return SimpleNamespace(ssh=lambda *_a, **_k: _done(next(answers) + "\n"))
+
+
+def test_core_sync_quiet_polls_until_the_last_sync_line_is_as_old_as_the_run_horizon(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hp.h.time, "sleep", lambda _s: None)
+    horizon = hp.CORE_SYNC_QUIET
+
+    hp.core_sync_quiet(_aged("0", str(horizon - 1), str(horizon)))
+
+    with pytest.raises(StopIteration):  # one probe too few: the poll must not stop before the horizon
+        hp.core_sync_quiet(_aged("0", str(horizon - 1)))
+
+
+def test_core_sync_quiet_is_immediate_when_the_log_holds_no_sync_line(hp: ModuleType) -> None:
+    hp.core_sync_quiet(_aged("none"))
+
+
+def test_core_sync_quiet_reads_both_syslog_files_for_the_checkreloadstatus_line(hp: ModuleType) -> None:
+    commands: list[str] = []
+    vm = SimpleNamespace(ssh=lambda *command, **_k: commands.append(" ".join(command)) or _done("none\n"))
+
+    hp.core_sync_quiet(vm)
+
+    (command,) = commands
+    assert "check_reload_status.*Syncing firewall" in command and "system.log.0" in command, command
+
+
+def test_core_sync_quiet_fails_loudly_when_the_probe_fails(hp: ModuleType) -> None:
+    vm = SimpleNamespace(ssh=lambda *_a, **_k: _done("", returncode=1, stderr="date: bad"))
+
+    with pytest.raises(AssertionError, match="date: bad"):
+        hp.core_sync_quiet(vm)
+
+
 def test_in_flight_reports_core_sync_run_next_to_the_apply_signals(
     hp: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:

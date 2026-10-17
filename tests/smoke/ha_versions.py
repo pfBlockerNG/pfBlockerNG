@@ -240,8 +240,8 @@ def put_back(pair: HaPair, baseline: hp.Baseline) -> None:
 
     The baseline config goes back FIRST: an install runs the package's own hooks (the upgrade migration and a resync),
     and they must not act on the sync settings a test left behind, or A would send to B during the restore. A's
-    baseline still has pfSense HA sync on, so a config write during A's install starts a background core sync to B;
-    it is drained before B's baseline goes back, or it would land on B after the copy.
+    baseline keeps pfSense HA sync off (``arrange_baseline``), so the config writes of A's install queue core runs that
+    find no target; the drain and the evidence line prove none started before B's baseline goes back.
     """
     for node, vm in (("B", pair.secondary), ("A", pair.primary)):
         result = vm.ssh(f"cp -p {hp.BASELINE_COPY} {hp.CONFIG} && rm -f /tmp/config.cache")

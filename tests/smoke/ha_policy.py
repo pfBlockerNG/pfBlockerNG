@@ -453,6 +453,50 @@ def configure_sender(
     set_leaves(pair.primary, leaves, "pfBlockerNG smoke: HA sender", secret_values=[pair.sync_password])
 
 
+def core_ha_on(pair: HaPair) -> None:
+    """Point A's pfSense HA sync (rules, NAT, aliases) at B; a file-only save, so core queues no run of its own.
+
+    A plain ``write_config()`` makes core raise "filter sync", and ``rc.filter_synchronize`` then starts a second
+    sender one second later next to the test's explicit one: B's ``last`` record is whichever of the two arrives last.
+    """
+    set_leaves(
+        pair.primary,
+        {"hasync": hasync_section(pair.sync_password)},
+        "pfBlockerNG smoke: HA A core HA sync",
+        secret_values=[pair.sync_password],
+    )
+
+
+# check_reload_status logs "Syncing firewall" when it queues a run and starts it one second later; an event raised
+# within eight seconds of a run is logged again and starts five seconds after that. Two more seconds cover php's start.
+CORE_SYNC_QUIET = 7
+_SYNC_LINE_AGE = (
+    "last=$(grep -h 'check_reload_status.*Syncing firewall' /var/log/system.log.0 /var/log/system.log 2>/dev/null "
+    '| tail -n 1 | cut -c1-15); if [ -z "$last" ]; then echo none; '
+    'else echo $(( $(date +%s) - $(date -j -f "%b %e %T %Y" "$last $(date +%Y)" +%s) )); fi'
+)
+
+
+def core_sync_quiet(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Block until no ``rc.filter_synchronize`` run that core queued on ``vm`` can still start.
+
+    ``rc.filter_synchronize`` reads the HA sync target when it starts, so a run queued by a package write while the
+    target was off must have started before the target goes back on, or it sends next to the test's explicit send.
+    """
+    seen: list[str] = []
+
+    def quiet() -> bool:
+        result = vm.ssh(_SYNC_LINE_AGE)
+        assert result.returncode == 0, f"the sync-line age probe failed: rc={result.returncode} {result.stderr!r}"
+        seen[:] = [result.stdout.strip()]
+        return seen[0] == "none" or int(seen[0]) >= CORE_SYNC_QUIET
+
+    try:
+        h.wait_until(quiet, timeout=timeout, interval=1.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}; age of the last core sync line: {seen}") from exc
+
+
 def set_receiver_scope(vm: SmokeVM, scope: str) -> None:
     """Store ``scope`` as the node's own ``syncscope`` leaf with sending left off (what a receiver's Sync page holds)."""
     set_leaves(vm, {SYNC: {"syncscope": scope, "varsynconchanges": "disabled"}}, "pfBlockerNG smoke: HA receiver scope")
