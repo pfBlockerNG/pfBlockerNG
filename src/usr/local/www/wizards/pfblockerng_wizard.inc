@@ -175,6 +175,9 @@ function step4_submitphpaction() {
 
 	$pfb_general_schedule = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 
+	// issue #3515: the Resolver snapshot lives in the package config swept below; put the Resolver back first.
+	pfb_dns_proxy_resolver(FALSE);
+
 	// Remove any pfBlockerNG settings and file/folder contents
 	pfb_remove_config_settings();
 	pfb_clear_contents();
