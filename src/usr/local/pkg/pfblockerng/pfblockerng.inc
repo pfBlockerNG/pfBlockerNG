@@ -3578,6 +3578,9 @@ if (!defined('PFB_DNS_PROXY_RCFILE')) {
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', 5);
 }
+// issue #3513: when this Go gateway is installed and executable the rc script runs it, with the Python proxy as its
+// decision service; otherwise the Python listener runs alone, as before.
+const PFB_DNS_GATEWAY_BIN = '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway';
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -3964,23 +3967,20 @@ EOF;
 
 
 /**
- * Addresses the DNS proxy binds, derived from the Resolver's SAVED active_interface the way pfSense's
- * unbound.inc binds them. An explicit list: each interface that is up and enabled (an IP entry verbatim,
- * else its IPv4 and IPv6 address). Empty or 'all' makes Unbound bind a wildcard, which the proxy cannot
- * (one wildcard UDP socket cannot answer from the address a client queried), so it gets every address of
- * the box as pfSense lists them, CARP and IP-alias VIPs included. Valid, unscoped, non-link-local,
- * non-loopback addresses only, once each, in derivation order: loopback is not derived here, pfb_dns_proxy_service()
- * adds PFB_DNS_PROXY_LOOPBACK itself.
+ * Addresses a DNS proxy listener binds for an interface list, derived the way pfSense's unbound.inc binds them.
+ * An explicit list: each interface that is up and enabled (an IP entry verbatim, else its IPv4 and IPv6 address).
+ * Empty or 'all' makes Unbound bind a wildcard, which the proxy cannot (one wildcard UDP socket cannot answer from
+ * the address a client queried), so it gets every address of the box as pfSense lists them, CARP and IP-alias VIPs
+ * included. Valid, unscoped, non-link-local, non-loopback addresses only, once each, in derivation order: loopback
+ * is not derived here, pfb_dns_proxy_service() adds PFB_DNS_PROXY_LOOPBACK itself.
  *
- * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
+ * @param list<string> $interfaces
  * @return list<string>
  */
-function pfb_dns_proxy_listen(array $saved): array {
+function pfb_dns_proxy_interface_addresses(array $interfaces): array {
 	// shortcut: addresses are read at apply time and baked into the rc script. The proxy skips one that has gone away
 	// since (logged, the others are served) but does not listen on one added since until the next apply, which restarts
 	// the proxy when they changed (pfb_dns_proxy_ensure_running()).
-	$interfaces = array_filter(explode(',', (string) $saved['active_interface']['value']));
-
 	$found = [];
 	if ($interfaces === [] || in_array('all', $interfaces, TRUE)) {
 		array_push($found, ...array_values((array) get_configured_ip_addresses()),
@@ -4015,10 +4015,125 @@ function pfb_dns_proxy_listen(array $saved): array {
 }
 
 /**
+ * Addresses the DNS proxy binds, from the Resolver's SAVED active_interface.
+ *
+ * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
+ * @return list<string>
+ */
+function pfb_dns_proxy_listen(array $saved): array {
+	return pfb_dns_proxy_interface_addresses(array_filter(explode(',', (string) $saved['active_interface']['value'])));
+}
+
+/** The distinct, non-empty words of a space/comma separated settings list, in order. */
+function pfb_dns_proxy_tokens(string $list): array {
+	return array_values(array_unique(preg_split('/[\s,]+/', $list, -1, PREG_SPLIT_NO_EMPTY) ?: []));
+}
+
+/** TRUE iff $entry is an IP address or an address/prefix a DoH front end may be trusted as: no zone id, no shell text. */
+function pfb_dns_proxy_trusted_entry(string $entry): bool {
+	// is_subnet() reads "a/b/c" as "a/b" and a prefix of "8.0" as 8; the gateway rejects both, so only digits pass.
+	if (strpos($entry, '%') !== FALSE || preg_match('~^[^/]+(?:/[0-9]{1,3})?$~', $entry) !== 1) {
+		return FALSE;
+	}
+	return is_ipaddr($entry) || is_subnet($entry);
+}
+
+/**
+ * Save-time input errors of the DNS proxy's DoH/DoQ settings on the DNSBL page. Every posted value was already
+ * sanitized at ingestion. A port is a whole number 1-65535, an interface one of $valid_iface_list, a trusted entry
+ * an IP or CIDR prefix; DoH/DoQ need the DNS Resolver's certificate ($certref, its unbound/sslcertref).
+ *
+ * @param array<string,mixed> $post
+ * @param list<string> $valid_iface_list
+ * @return list<string>
+ */
+function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_list, string $certref): array {
+	$errors = [];
+	foreach (['doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
+		$port = $post["pfb_dns_proxy_{$kind}_port"] ?? '';
+		if (!is_string($port) || !ctype_digit($port) || strlen($port) > 5 || (int) $port < 1 || (int) $port > 65535) {
+			$errors[] = "{$label} Port must be a whole number from 1 to 65535.";
+		}
+		foreach ((array) ($post["pfb_dns_proxy_{$kind}_interface"] ?? []) as $interface) {
+			if (!is_string($interface) || !in_array($interface, $valid_iface_list, TRUE)) {
+				$errors[] = "{$label}: Invalid interface selection: " . htmlspecialchars(is_string($interface) ? $interface : '', ENT_QUOTES);
+			}
+		}
+		if (($post["pfb_dns_proxy_{$kind}"] ?? '') === 'on' && $certref === '') {
+			$errors[] = "{$label} is enabled, but DoH/DoQ use the DNS Resolver's SSL/TLS certificate; select one under Services > DNS Resolver.";
+		}
+	}
+
+	$trusted = $post['pfb_dns_proxy_doh_trusted'] ?? '';
+	$bad = is_string($trusted) ? array_filter(pfb_dns_proxy_tokens($trusted), static fn (string $entry): bool => !pfb_dns_proxy_trusted_entry($entry)) : ['(not text)'];
+	if ($bad !== []) {
+		$errors[] = 'DoH: Trusted front ends must be IP addresses or CIDR prefixes separated by spaces or commas: ' .
+		    htmlspecialchars(implode(' ', $bad), ENT_QUOTES);
+	}
+	return $errors;
+}
+
+/**
+ * The canonical stored value of each of the seven settings from a validated POST: a toggle is on only for 'on', a
+ * port loses its leading zeros, interface and trusted lists are deduplicated.
+ *
+ * @param array<string,mixed> $post
+ * @return array<string,string> config key => stored string
+ */
+function pfb_dns_proxy_listeners_stored(array $post): array {
+	$stored = [];
+	foreach (['doh', 'doq'] as $kind) {
+		$port = $post["pfb_dns_proxy_{$kind}_port"] ?? '';
+		$interfaces = array_unique(array_filter((array) ($post["pfb_dns_proxy_{$kind}_interface"] ?? []), 'is_string'));
+		$stored["pfb_dns_proxy_{$kind}"] = pfb_filter($post["pfb_dns_proxy_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+		$stored["pfb_dns_proxy_{$kind}_port"] = (is_string($port) && ctype_digit($port)) ? (string) (int) $port : PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port");
+		$stored["pfb_dns_proxy_{$kind}_interface"] = implode(',', $interfaces);
+		if ($kind === 'doh') {
+			$stored['pfb_dns_proxy_doh_trusted'] = implode(' ', pfb_dns_proxy_tokens((string) ($post['pfb_dns_proxy_doh_trusted'] ?? '')));
+		}
+	}
+	return $stored;
+}
+
+/**
+ * The gateway's --doh-* / --doq-* arguments: each group only while its toggle is on and at least one address remains.
+ * A listener's interface setting goes through the same derivation as the plain listeners; empty = $plain, the proxy's
+ * own addresses. Trusted entries: valid IPs/CIDRs only (a hand-edited config.xml cannot reach the shell), a bare
+ * address as a host prefix, every value shell-quoted.
+ *
+ * @param list<string> $plain the plain DNS listen addresses
+ */
+function pfb_dns_proxy_tls_flags(array $plain): string {
+	$flags = '';
+	foreach (['doh', 'doq'] as $kind) {
+		if (PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}") !== PfbToggle::On) {
+			continue;
+		}
+		$interfaces = pfb_dns_proxy_tokens((string) PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_interface"));
+		$addresses = ($interfaces === []) ? $plain : pfb_dns_proxy_interface_addresses($interfaces);
+		if ($addresses === []) {
+			continue;
+		}
+		foreach ($addresses as $address) {
+			$flags .= " --{$kind}-listen " . escapeshellarg($address);
+		}
+		$flags .= " --{$kind}-port " . escapeshellarg((string) PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port"));
+		if ($kind === 'doh') {
+			foreach (pfb_dns_proxy_tokens((string) PfbConfig::read('dnsbl/pfb_dns_proxy_doh_trusted')) as $entry) {
+				if (pfb_dns_proxy_trusted_entry($entry)) {
+					$flags .= ' --doh-trusted ' . escapeshellarg(strpos($entry, '/') !== FALSE ? $entry : $entry . (strpos($entry, ':') !== FALSE ? '/128' : '/32'));
+				}
+			}
+		}
+	}
+	return $flags;
+}
+
+/**
  * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from the SAVED Resolver
- * (listen addresses, DoT), its Listen Port (unbound/port, which stays on loopback for Unbound; 53 when absent or
- * not a port) and DNSBL's runtime state ($pfb as pfb_global() left it, so callers hold a fresh one). Written on every
- * call, like the other pfBlockerNG rc services.
+ * (listen addresses, DoT), the DoH/DoQ settings and its Listen Port (unbound/port, which stays on loopback for Unbound;
+ * 53 when absent or not a port) and DNSBL's runtime state ($pfb as pfb_global() left it, so callers hold a fresh one).
+ * Written on every call, like the other pfBlockerNG rc services.
  *
  * DNSBL on: the proxy boots pfb_unbound.py, and while the Resolver forwards it also listens for the upstream observer
  * Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query, and with the DNS Reply
@@ -4029,15 +4144,19 @@ function pfb_dns_proxy_listen(array $saved): array {
  * Start: only while the moved-Resolver snapshot is set and is still the one this script was written for (the stored
  * marker is baked in and compared; not the toggle or DNSBL: an abandoned restore leaves the Resolver moved with them
  * off, and the proxy keeps serving it); a stored marker that is no valid snapshot logs one error and exits 1 instead of
- * starting a proxy that could not bind; never over a survivor; through pfb_python.sh only; every address
- * shell-quoted. Loopback is always among the addresses, so a Resolver saved on Localhost only, or on an
- * interface with no address, still gets a proxy. Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled
- * only while its command line is the proxy's.
+ * starting a proxy that could not bind; never over a survivor; every address shell-quoted. Loopback is always among
+ * the addresses, so a Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. It
+ * runs $gateway, the Go gateway that serves DoH/DoQ and runs the Python proxy as its decision service, when that file
+ * is executable; else the Python proxy alone through pfb_python.sh, which serves no DoH/DoQ (a warning says so).
+ * Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's or the
+ * gateway's.
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
+ *
+ * @param string $gateway the gateway binary's path (a test points it at a temp file)
  */
-function pfb_dns_proxy_service(): void {
+function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 	global $pfb;
 
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
@@ -4052,11 +4171,24 @@ function pfb_dns_proxy_service(): void {
 	foreach (array_merge($listen, PFB_DNS_PROXY_LOOPBACK) as $address) {
 		$addresses .= ' --listen ' . escapeshellarg($address);
 	}
-	$dot = ($saved !== NULL && $saved['enablessl']['present']) ? ' --dot --pfsense-config /cf/conf/config.xml' : '';
+	$dot = ($saved !== NULL && $saved['enablessl']['present']);
 	$replylog = (($pfb['dnsbl_py_reply'] ?? NULL) === PfbToggle::On) ? ' --reply-log' : '';
 	$module = !pfb_dnsbl_active() ? " --no-module{$replylog}" : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
 
 	$port = pfb_dns_proxy_port();
+
+	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
+	if (is_file($gateway) && is_executable($gateway)) {
+		$command = escapeshellarg($gateway) . "{$addresses} --port 53 --upstream {$upstream}" . ($dot ? ' --dot' : '') .
+		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen) .
+		    " --acl-file /var/unbound/access_lists.conf --user unbound -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
+	} else {
+		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound" .
+		    ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '') . $module;
+		if ($saved !== NULL && (PfbConfig::read('dnsbl/pfb_dns_proxy_doh') === PfbToggle::On || PfbConfig::read('dnsbl/pfb_dns_proxy_doq') === PfbToggle::On)) {
+			pfb_logger("\nDNS proxy: DoH/DoQ are enabled but the pfb_dns_gateway binary is not installed; they are not served", 2);
+		}
+	}
 
 	$rc		= array();
 	$rc['file']	= 'pfb_dns_proxy.sh';
@@ -4105,7 +4237,7 @@ EOF;
 	rc_stop || return 1
 
 	# Detach std fds (#662): the supervisor must not hold the caller's pipe; the proxy's own output goes to its log
-	/usr/sbin/daemon -r -R 5 -t pfb_dns_proxy -P {$daemonpid} -p {$childpid} -o {$log} /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound{$dot}{$module} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_dns_proxy -P {$daemonpid} -p {$childpid} -o {$log} {$command} </dev/null >/dev/null 2>&1
 	/usr/bin/logger -p daemon.info -t pfb_dns_proxy "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy started"
 
 EOF;
@@ -4128,7 +4260,7 @@ EOF;
 			esac
 			args="\$(/bin/ps -ww -o args= -p "\${pid}" 2>/dev/null)"
 			case "\${args}" in
-				*pfb_dns_proxy*) alive="\${alive} \${pid}" ;;
+				*pfb_dns_proxy*|*pfb_dns_gateway*) alive="\${alive} \${pid}" ;;
 			esac
 		done
 		[ -n "\${alive}" ] || break
@@ -4175,21 +4307,23 @@ function pfb_dns_proxy_await_running(): bool {
 }
 
 /**
- * The apply's branch with nothing to reload restarts nothing: bring up a proxy that died since the last reload, and
- * restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on, so an
- * interface that got a new address is not served until the proxy restarts.
+ * Where the apply's reload decision ends, whichever branch ran: bring up a proxy that died since the last reload, and
+ * restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ
+ * settings, so a new address or a changed setting is not served until the proxy restarts.
+ *
+ * @param string $gateway the gateway binary's path, as for pfb_dns_proxy_service()
  */
-function pfb_dns_proxy_ensure_running(): void {
+function pfb_dns_proxy_ensure_running(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 	if (pfb_dns_proxy_saved() === NULL) {
 		return;
 	}
 	$before = @file_get_contents(PFB_DNS_PROXY_RCFILE);
-	pfb_dns_proxy_service();
+	pfb_dns_proxy_service($gateway);
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);
 		start_service('pfb_dns_proxy');
 	} elseif ($before !== @file_get_contents(PFB_DNS_PROXY_RCFILE)) {
-		pfb_logger("\nRestarting the DNS proxy: its listen addresses changed", 1);
+		pfb_logger("\nRestarting the DNS proxy: its listen addresses or DoH/DoQ settings changed", 1);
 		restart_service('pfb_dns_proxy');
 	}
 }

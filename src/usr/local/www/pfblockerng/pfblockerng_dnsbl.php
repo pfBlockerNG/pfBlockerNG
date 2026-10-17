@@ -73,6 +73,13 @@ $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default
 // when absent.
 $pconfig['pfb_cache']		= PfbConfig::read('dnsbl/pfb_cache');
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
+$pconfig['pfb_dns_proxy_doh']		= PfbConfig::read('dnsbl/pfb_dns_proxy_doh');
+$pconfig['pfb_dns_proxy_doh_port']	= PfbConfig::read('dnsbl/pfb_dns_proxy_doh_port');
+$pconfig['pfb_dns_proxy_doh_interface']	= pfb_csv_list(PfbConfig::read('dnsbl/pfb_dns_proxy_doh_interface'));
+$pconfig['pfb_dns_proxy_doh_trusted']	= PfbConfig::read('dnsbl/pfb_dns_proxy_doh_trusted');
+$pconfig['pfb_dns_proxy_doq']		= PfbConfig::read('dnsbl/pfb_dns_proxy_doq');
+$pconfig['pfb_dns_proxy_doq_port']	= PfbConfig::read('dnsbl/pfb_dns_proxy_doq_port');
+$pconfig['pfb_dns_proxy_doq_interface']	= pfb_csv_list(PfbConfig::read('dnsbl/pfb_dns_proxy_doq_interface'));
 
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
 $pconfig['pfb_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');
@@ -181,6 +188,9 @@ $options_dnsbl_redir_int	= $options_dnsbl_interface;
 
 // [ ADR-37 ] DoT/DoQ Block: WAN-excluded interface list (same filter as Permit Firewall Rules).
 $options_dnsbl_dot_block_int	= $options_dnsbl_interface;
+
+// issue #3513: DoH/DoQ listener interfaces: every configured interface (the WAN too, a front end may sit there).
+$options_dns_proxy_interface	= get_configured_interface_with_descr();
 
 // [ ADR-37 ] DoT/DoQ Block: rule action selector (mirrors the IP-settings Rule Action).
 $options_dnsbl_dot_block_action	= [ 'block' => 'Block', 'reject' => 'Reject' ];
@@ -577,7 +587,8 @@ if ($_POST) {
 
 		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
 		foreach (array('pfb_dnsvip4', 'pfb_dnsvip6', 'dnsbl_webpage', 'dnsbl_redir_exclude', 'dnsbl_dot_block_exclude',
-				'top1m_token', 'aliasaddr_in', 'aliasaddr_out', 'aliasports_in', 'aliasports_out') as $pfb_text_field) {
+				'top1m_token', 'aliasaddr_in', 'aliasaddr_out', 'aliasports_in', 'aliasports_out',
+				'pfb_dns_proxy_doh_port', 'pfb_dns_proxy_doq_port', 'pfb_dns_proxy_doh_trusted') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
 		}
 		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'whitelist', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist') as $pfb_text_area_field) {
@@ -846,6 +857,13 @@ if ($_POST) {
 		);
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
+		// issue #3513: the DNS proxy's DoH/DoQ listener settings. unbound/sslcertref is a foreign key (the Resolver's, not a pfblockerng* path).
+		$input_errors = array_merge($input_errors, pfb_validate_dns_proxy_listeners_post(
+			$_POST,
+			array_map('strval', array_keys($options_dns_proxy_interface)),
+			(string) config_get_path('unbound/sslcertref', '')
+		));
+
 		if (!$input_errors) {
 			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
 			// Refresh $pfb['dconfig'] if it changed -- the pre-facade snapshot would
@@ -895,6 +913,10 @@ if ($_POST) {
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			// issue #3513: the DNS proxy's DoH/DoQ settings, canonical once the validation above passed.
+			foreach (pfb_dns_proxy_listeners_stored($_POST) as $pfb_dns_proxy_key => $pfb_dns_proxy_value) {
+				$pfb['dconfig'][$pfb_dns_proxy_key] = $pfb_dns_proxy_value;
+			}
 
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
@@ -2848,6 +2870,74 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL. '
 		. pfb_list_section_help_note(['DNSBL Group Policy'], TRUE));
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dns_proxy_doh',
+	gettext('DNS Proxy DoH'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_proxy_doh'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from the DNS Proxy, which needs the pfBlockerNG DNS gateway. '
+		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
+		. '<div class="infoblock">Takes effect on the next DNSBL update. Default: <strong>Disabled</strong></div>');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_proxy_doh_port',
+	gettext('DNS Proxy DoH Port'),
+	'number',
+	$pconfig['pfb_dns_proxy_doh_port'],
+	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoH Listening Port' ]
+))->setHelp('Example ( 4443 ) &mdash; a single PORT in the range 1 - 65535 (TCP).');
+
+$section->addInput(new Form_Select(
+	'pfb_dns_proxy_doh_interface',
+	gettext('DNS Proxy DoH Interface(s)'),
+	$pconfig['pfb_dns_proxy_doh_interface'] ?? [],
+	$options_dns_proxy_interface,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', count($options_dns_proxy_interface) ?: '1')
+  ->setHelp('Interface(s) DoH listens on. None selected: the DNS Proxy\'s own addresses.');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_proxy_doh_trusted',
+	gettext('DNS Proxy DoH Trusted Front Ends'),
+	'text',
+	$pconfig['pfb_dns_proxy_doh_trusted'] ?? '',
+	['placeholder' => 'IP addresses or CIDR prefixes (optional)']
+))->setHelp('Optional. IP addresses or CIDR prefixes, separated by spaces or commas, of a front end trusted to send the client address: '
+		. 'the PROXY protocol v2 header (HAProxy <code>send-proxy-v2</code>) and X-Forwarded-For (HAProxy <code>option forwardfor</code>). '
+		. 'Empty: no front end is trusted, DoH sees each connection\'s own address.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dns_proxy_doq',
+	gettext('DNS Proxy DoQ'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_proxy_doq'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+		. 'Serves DNS over QUIC (RFC 9250) from the DNS Proxy, which needs the pfBlockerNG DNS gateway. DoQ is UDP. '
+		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
+		. '<div class="infoblock">Takes effect on the next DNSBL update. Default: <strong>Disabled</strong></div>');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_proxy_doq_port',
+	gettext('DNS Proxy DoQ Port'),
+	'number',
+	$pconfig['pfb_dns_proxy_doq_port'],
+	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoQ Listening Port' ]
+))->setHelp('Example ( 853 ) &mdash; a single PORT in the range 1 - 65535 (UDP).');
+
+$section->addInput(new Form_Select(
+	'pfb_dns_proxy_doq_interface',
+	gettext('DNS Proxy DoQ Interface(s)'),
+	$pconfig['pfb_dns_proxy_doq_interface'] ?? [],
+	$options_dns_proxy_interface,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', count($options_dns_proxy_interface) ?: '1')
+  ->setHelp('Interface(s) DoQ listens on. None selected: the DNS Proxy\'s own addresses.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_lenient',

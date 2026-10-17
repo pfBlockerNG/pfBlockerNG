@@ -263,7 +263,9 @@ final class DnsProxyServiceTest extends TestCase
 			'~(?<![\w$.\-/])/(?:[\w.\-]+/)*[\w.\-]+~',
 			function (array $m): string {
 				$path = $m[0];
-				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound'], TRUE) || preg_match('~^/(?:usr/local/pkg/pfblockerng|cf/conf)/~', $path) === 1) {
+				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/access_lists.conf'], TRUE) ||
+				    str_starts_with($path, "{$this->dir}/bin/pfb_dns_gateway") ||
+				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {
 					return $path;
 				}
 				if (preg_match('~^/(?:usr/local/sbin|usr/local/bin|usr/sbin|usr/bin|sbin|bin)/([\w.\-]+)$~', $path, $cmd) === 1) {
@@ -985,5 +987,429 @@ final class DnsProxyServiceTest extends TestCase
 
 		$this->assertSame(0, $status, "rc start failed: {$output}");
 		$this->assertSame([], $this->events(TRUE));
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #3513 -- the Go gateway replaces the Python listener while its binary is installed
+	// -----------------------------------------------------------------------
+
+	private const SETTINGS = 'installedpackages/pfblockerngdnsblsettings/config/0/';
+	private const DECIDER = [
+		'--', '/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py',
+		'--decision-fd', '3', '--module-dir', '/var/unbound', '--user', 'unbound',
+	];
+
+	/** An executable stand-in for the gateway binary; the script runs whatever path it is given. */
+	private function gateway(int $mode = 0755): string
+	{
+		$path = "{$this->dir}/bin/pfb_dns_gateway";
+		file_put_contents($path, "#!/bin/sh\n");
+		chmod($path, $mode);
+		return $path;
+	}
+
+	private function generateWith(string $gateway): void
+	{
+		pfb_dns_proxy_service($gateway);
+	}
+
+	private function setting(string $key, string $value): void
+	{
+		config_set_path(self::SETTINGS . $key, $value);
+	}
+
+	/** The Resolver of a box with two interfaces: lan (192.0.2.1, 2001:db8::1) and opt1 (198.51.100.1, 2001:db8:1::1). */
+	private function moveTwoInterfaceResolver(bool $dot = FALSE): void
+	{
+		$this->moveResolver(
+			$dot,
+			'lan,opt1',
+			['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'],
+			['lan' => '2001:db8::1', 'opt1' => '2001:db8:1::1']
+		);
+	}
+
+	/**
+	 * The daemon argv the gateway rc script must launch.
+	 *
+	 * @param list<string> $listen plain DNS addresses the Resolver's interfaces give; the loopback pair is appended
+	 * @param list<string> $tls the --doh-* / --doq-* arguments, in order
+	 * @return list<string>
+	 */
+	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = []): array
+	{
+		$addresses = [];
+		foreach ([...$listen, '127.0.0.1', '::1'] as $address) {
+			array_push($addresses, '--listen', $address);
+		}
+		return [
+			'-r', '-R', '5', '-t', 'pfb_dns_proxy',
+			'-P', $this->pidfile('pfb_dns_proxy_daemon.pid'), '-p', $this->pidfile('pfb_dns_proxy.pid'),
+			'-o', "{$this->dir}/log/dns_proxy.log",
+			$gateway, ...$addresses,
+			'--port', '53', '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
+			'--pfsense-config', '/cf/conf/config.xml', ...$tls,
+			'--acl-file', '/var/unbound/access_lists.conf', '--user', 'unbound', ...self::DECIDER,
+		];
+	}
+
+	/** @return list<string> the daemon argv after the rc script started under dash */
+	private function startAndReadArgv(string $gateway): array
+	{
+		$this->generateWith($gateway);
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		return $this->daemonArgv();
+	}
+
+	/** @return list<string> pfBlockerNG error-log lines that name the gateway binary */
+	private function gatewayWarnings(): array
+	{
+		$lines = explode("\n", (string) @file_get_contents("{$this->dir}/pfb.err"));
+		return array_values(array_filter($lines, static fn (string $line): bool => str_contains($line, 'pfb_dns_gateway')));
+	}
+
+	/** @return array<string,array{bool}> */
+	public static function gatewayDotRows(): array
+	{
+		return ['DoT off' => [FALSE], 'DoT on' => [TRUE]];
+	}
+
+	#[DataProvider('gatewayDotRows')]
+	public function testWithTheGatewayInstalledTheScriptRunsItWithTheDeciderAfterTheSeparatorAndDotOnlyWhenSaved(bool $dot): void
+	{
+		// Given the gateway binary and a saved Resolver that listened on lan (both families), DoH/DoQ off
+		$gateway = $this->gateway();
+		$this->moveResolver($dot, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
+
+		// When the rc service is generated and started under dash
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the daemon runs the gateway with the plain addresses, Unbound's PROXY port, the ACL file and the
+		// unprivileged user, and hands the Python decider's argv over after `--`
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1'], $dot), $argv);
+		$this->assertSame(['launch'], $this->events());
+	}
+
+	public function testTheGatewayScriptQuotesEveryValueAndStaysPosixShell(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
+		$this->generateWith($gateway);
+		$text = $this->rcText();
+
+		$this->assertStringContainsString("--listen '192.0.2.1' --listen '2001:db8::1'", $text);
+		$this->assertStringContainsString(escapeshellarg($gateway), $text, 'the binary path is quoted too');
+		$this->assertStringContainsString('</dev/null >/dev/null 2>&1', $text, 'stdio is detached (#662)');
+		$this->assertStringContainsString("rc_stop || return 1\n", $text, 'never launch over a survivor');
+		$proc = proc_open([$this->shell, '-n', "{$this->dir}/rc/" . self::RC], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes);
+		$this->assertIsResource($proc);
+		$output = (string) stream_get_contents($pipes[1]);
+		fclose($pipes[1]);
+		$this->assertSame(0, proc_close($proc), "sh -n rejected the generated script: {$output}");
+	}
+
+	/** @return array<string,array{string,string,list<string>}> DoH interface setting, trusted setting, the --doh-* arguments */
+	public static function dohRows(): array
+	{
+		return [
+			'no interface and no trusted entry: the plain addresses' => [
+				'', '',
+				['--doh-listen', '192.0.2.1', '--doh-listen', '2001:db8::1', '--doh-listen', '198.51.100.1',
+					'--doh-listen', '2001:db8:1::1', '--doh-port', '8443'],
+			],
+			'opt1 only, two trusted entries' => [
+				'opt1', '192.0.2.10 2001:db8::/32',
+				['--doh-listen', '198.51.100.1', '--doh-listen', '2001:db8:1::1', '--doh-port', '8443',
+					'--doh-trusted', '192.0.2.10/32', '--doh-trusted', '2001:db8::/32'],
+			],
+			'repeated interface, comma and space separators' => [
+				'opt1,opt1,', "10.0.0.0/8,\t 192.0.2.10",
+				['--doh-listen', '198.51.100.1', '--doh-listen', '2001:db8:1::1', '--doh-port', '8443',
+					'--doh-trusted', '10.0.0.0/8', '--doh-trusted', '192.0.2.10/32'],
+			],
+		];
+	}
+
+	/**
+	 * @param list<string> $expected
+	 */
+	#[DataProvider('dohRows')]
+	public function testDohOnAddsItsListenersPortAndTrustedFrontEndsToTheGatewayLine(string $interfaces, string $trusted, array $expected): void
+	{
+		// Given DoH on at port 8443 with this interface and trusted setting
+		$gateway = $this->gateway();
+		$this->moveTwoInterfaceResolver();
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_port', '8443');
+		$this->setting('pfb_dns_proxy_doh_interface', $interfaces);
+		$this->setting('pfb_dns_proxy_doh_trusted', $trusted);
+
+		// When the script starts
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the DoH group sits between --pfsense-config and --acl-file; the plain DNS addresses are untouched
+		$this->assertSame(
+			$this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1', '198.51.100.1', '2001:db8:1::1'], FALSE, $expected),
+			$argv
+		);
+	}
+
+	/** @return array<string,array{string,list<string>}> DoQ interface setting, the --doq-* arguments */
+	public static function doqRows(): array
+	{
+		return [
+			'no interface: the plain addresses' => [
+				'', ['--doq-listen', '192.0.2.1', '--doq-listen', '2001:db8::1', '--doq-listen', '198.51.100.1',
+					'--doq-listen', '2001:db8:1::1', '--doq-port', '8853'],
+			],
+			'lan only' => ['lan', ['--doq-listen', '192.0.2.1', '--doq-listen', '2001:db8::1', '--doq-port', '8853']],
+		];
+	}
+
+	/**
+	 * @param list<string> $expected
+	 */
+	#[DataProvider('doqRows')]
+	public function testDoqOnAddsItsListenersAndPortAndNoTrustedFrontEnds(string $interfaces, array $expected): void
+	{
+		$gateway = $this->gateway();
+		$this->moveTwoInterfaceResolver();
+		$this->setting('pfb_dns_proxy_doq', 'on');
+		$this->setting('pfb_dns_proxy_doq_port', '8853');
+		$this->setting('pfb_dns_proxy_doq_interface', $interfaces);
+		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+
+		$argv = $this->startAndReadArgv($gateway);
+
+		$this->assertSame(
+			$this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1', '198.51.100.1', '2001:db8:1::1'], FALSE, $expected),
+			$argv,
+			'DoQ has no trusted front ends, and DoH (off) leaves nothing behind'
+		);
+	}
+
+	public function testDohAndDoqTogetherListDohFirst(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doq', 'on');
+
+		$this->assertSame(
+			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
+				'--doh-listen', '192.0.2.1', '--doh-port', '4443', '--doq-listen', '192.0.2.1', '--doq-port', '853',
+			]),
+			$this->startAndReadArgv($gateway)
+		);
+	}
+
+	public function testTlsSettingsWhileTheirToggleIsOffAddNothing(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', '');
+		$this->setting('pfb_dns_proxy_doh_port', '8443');
+		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_proxy_doq_port', '8853');
+
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $this->startAndReadArgv($gateway));
+	}
+
+	public function testATlsListenerWhoseInterfacesHaveNoAddressIsLeftOutNotLaunchedOnNothing(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_interface', 'opt9');
+		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $this->startAndReadArgv($gateway),
+			'no --doh-* flag at all, not even the trusted ones');
+	}
+
+	public function testAHandEditedTrustedEntryThatIsNotAnAddressNeverReachesTheScript(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_trusted', "192.0.2.10 evil;touch {$this->dir}/pwned fe80::1%em0 \$(id) 10.0.0.0/33");
+
+		$this->generateWith($gateway);
+		$text = $this->rcText();
+
+		$this->assertSame(1, substr_count($text, '--doh-trusted'), 'only the real address survives');
+		$this->assertStringContainsString("--doh-trusted '192.0.2.10/32'", $text);
+		foreach (['evil', 'pwned', 'fe80', '$(id)', '/33'] as $junk) {
+			$this->assertStringNotContainsString($junk, $text, "{$junk} must not reach the script");
+		}
+	}
+
+	public function testThreeHundredTrustedEntriesAreEachQuotedAndLaunched(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$entries = [];
+		for ($i = 0; $i < 300; $i++) {
+			$entries[] = '10.' . intdiv($i, 250) . '.' . ($i % 250) . '.0/24';
+		}
+		$this->setting('pfb_dns_proxy_doh_trusted', implode(' ', $entries));
+
+		$argv = $this->startAndReadArgv($gateway);
+
+		$trusted = [];
+		foreach ($argv as $i => $arg) {
+			if ($arg === '--doh-trusted') {
+				$trusted[] = $argv[$i + 1];
+			}
+		}
+		$this->assertSame($entries, $trusted);
+		$this->assertSame(300, substr_count($this->rcText(), " --doh-trusted '"), 'each entry is its own quoted word');
+	}
+
+	public function testAGatewayThatIsNotExecutableIsNotUsed(): void
+	{
+		// Given the unchanged Python line a box without the binary gets
+		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->generateWith("{$this->dir}/bin/absent");
+		$python = $this->rcText();
+
+		// When the binary exists but lacks the execute bit
+		$this->generateWith($this->gateway(0644));
+
+		// Then the Python listener is still the one launched
+		$this->assertSame($python, $this->rcText());
+		$this->assertStringNotContainsString('--decision-fd', $python, 'the Python line carries no gateway arguments');
+	}
+
+	#[DataProvider('gatewayDotRows')]
+	public function testWithoutTheGatewayTheScriptIsTheUnchangedPythonLineWhateverTheDohAndDoqSettings(bool $dot): void
+	{
+		// Given a box in proxy mode and the script it gets with DoH and DoQ off
+		$this->moveResolver($dot, 'lan', ['lan' => '192.0.2.1']);
+		$this->generateWith("{$this->dir}/bin/absent");
+		$before = $this->rcText();
+		$this->assertStringContainsString(
+			"/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --listen '192.0.2.1' --listen '127.0.0.1' --listen '::1' --port 53 "
+			. "--upstream 127.0.0.1:5353 --module-dir /var/unbound --user unbound" . ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '') . ' --no-module </dev/null',
+			$before
+		);
+
+		// When DoH and DoQ are turned on and configured
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_port', '8443');
+		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_proxy_doq', 'on');
+
+		// Then the generated script does not change by a byte
+		$this->generateWith("{$this->dir}/bin/absent");
+		$this->assertSame($before, $this->rcText());
+	}
+
+	/** @return array<string,array{array<string,string>,int}> settings, expected number of warnings */
+	public static function warnRows(): array
+	{
+		return [
+			'DoH on'       => [['pfb_dns_proxy_doh' => 'on'], 1],
+			'DoQ on'       => [['pfb_dns_proxy_doq' => 'on'], 1],
+			'both on'      => [['pfb_dns_proxy_doh' => 'on', 'pfb_dns_proxy_doq' => 'on'], 1],
+			'both off'     => [[], 0],
+		];
+	}
+
+	/** @param array<string,string> $settings */
+	#[DataProvider('warnRows')]
+	public function testDohOrDoqOnWithoutTheGatewayLogsOneWarning(array $settings, int $warnings): void
+	{
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		foreach ($settings as $key => $value) {
+			$this->setting($key, $value);
+		}
+
+		$this->generateWith("{$this->dir}/bin/absent");
+
+		$this->assertCount($warnings, $this->gatewayWarnings(), 'warnings naming the gateway: ' . json_encode($this->gatewayWarnings()));
+	}
+
+	public function testWithTheGatewayInstalledDohAndDoqLogNoWarning(): void
+	{
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doq', 'on');
+
+		$this->generateWith($this->gateway());
+
+		$this->assertSame([], $this->gatewayWarnings());
+	}
+
+	public function testStopSignalsTheGatewayItStartedAndWaitsForItAndItsSupervisor(): void
+	{
+		// Given the gateway script was started: the supervisor and the gateway child are live in the sandbox
+		$gateway = $this->gateway();
+		$this->moveResolver();
+		$this->startAndReadArgv($gateway);
+		$this->assertStringContainsString($gateway, (string) file_get_contents("{$this->dir}/state/procs"), 'precondition: the child is the gateway');
+		$this->assertSame(['3001', '3002'], $this->livePids(), 'precondition: supervisor and gateway alive');
+
+		// When it is stopped
+		[$status, $output] = $this->rc('stop');
+
+		// Then both get TERM and are waited for, with no KILL
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertSame(['launch', 'term', 'sleep', 'sleep'], $this->events());
+		$this->assertSame([], $this->livePids());
+	}
+
+	/** @return array<string,array{string}> the gateway child's command line as ps shows it */
+	public static function gatewayChildLines(): array
+	{
+		return [
+			'with the decider argv after the separator' => [
+				'/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway --listen 192.0.2.1 --port 53 -- '
+				. '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --decision-fd 3',
+			],
+			'by its own name alone' => ['/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway --listen 192.0.2.1'],
+		];
+	}
+
+	#[DataProvider('gatewayChildLines')]
+	public function testStopRecognisesAGatewayChildByItsCommandLine(string $childArgs): void
+	{
+		// Given a live supervisor and a child whose command line is the gateway's
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', TRUE);
+		file_put_contents("{$this->dir}/state/procs",
+			"1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[1002] (daemon)\n"
+			. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||{$childArgs}\n");
+
+		[$status, $output] = $this->rc('stop');
+
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertSame([], $this->livePids(), 'the gateway child was signalled and exited with its supervisor');
+		$this->assertFileDoesNotExist($this->pidfile('pfb_dns_proxy.pid'));
+	}
+
+	public function testAGatewayThatIgnoresTermIsKilledAtFiveTicksAndGivenUpOnAtSeven(): void
+	{
+		// Given a gateway that survives both signals
+		$gateway = $this->gateway();
+		$this->moveResolver();
+		$this->generateWith($gateway);
+		$this->arrange([], 'never', 'never', TRUE);
+		file_put_contents("{$this->dir}/state/procs",
+			"1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[1002] (daemon)\n"
+			. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||{$gateway} --listen 192.0.2.1\n");
+
+		// When it is stopped
+		[$status, $output] = $this->rc('stop');
+
+		// Then the wait is still bounded exactly as for the Python proxy: TERM, KILL after 5 ticks, give up after 7
+		$this->assertNotContains($status, [0, 124, 137], "rc stop must fail on its own: {$output}");
+		$this->assertSame(['term', 'sleep', 'sleep', 'sleep', 'sleep', 'sleep', 'kill', 'sleep', 'sleep'], $this->events());
+		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
 }

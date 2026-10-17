@@ -123,7 +123,7 @@ final class PfbDnsPageWiringTest extends TestCase
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');
 
-		foreach (['pfb_dns_proxy', "'pfb_dns'", "dns/pfb_dns", 'DNS Proxy', 'pfBlockerNG DNS proxy'] as $needle) {
+		foreach (["'pfb_dns_proxy'", "'pfb_dns'", "dns/pfb_dns", "'DNS Proxy'", 'pfBlockerNG DNS proxy'] as $needle) {
 			$this->assertStringNotContainsString($needle, $page, "the DNSBL page has no trace of the toggle: {$needle}");
 		}
 		$this->assertStringNotContainsString('pfb_dns_config_lock', $page, 'nor of the lock that only the snapshot needed');

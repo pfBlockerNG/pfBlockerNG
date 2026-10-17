@@ -2041,9 +2041,70 @@ def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard:
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
-    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental", 'name="pfb_py_reply"'):
+    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', 'name="pfb_py_reply"'):
         assert gone not in resp.text, f"the DNSBL page still carries {gone!r}"
     assert "/pfblockerng/pfblockerng_dns.php" in resp.text, "the DNSBL page's tab bar links to pfB-DNS"
+
+
+_DNS_PROXY_LISTENER_FIELDS = (
+    "pfb_dns_proxy_doh",
+    "pfb_dns_proxy_doh_port",
+    "pfb_dns_proxy_doh_interface",
+    "pfb_dns_proxy_doh_trusted",
+    "pfb_dns_proxy_doq",
+    "pfb_dns_proxy_doq_port",
+    "pfb_dns_proxy_doq_interface",
+)
+
+
+def test_dnsbl_dns_proxy_doh_doq_fields_render_directly_after_the_proxy_option(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3513: the seven DoH/DoQ fields follow Group Policy, in order, before Download Schemes.
+
+    Given the DNSBL page renders, Then DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
+    interfaces) appear in that order before the Download Schemes input, as the right input kinds,
+    with help that says experimental, names the Resolver's certificate, that DoQ is UDP and the HAProxy options.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    assert result.ok, f"DNSBL DoH/DoQ render oracle failed: {result.detail}"
+    html = resp.text
+
+    start = html.index('name="pfb_dns_proxy_doh"')
+    end = html.index('name="pfb_dnsbl_lenient"')
+    positions = [html.find(f'name="{field}', start, end) for field in _DNS_PROXY_LISTENER_FIELDS]
+    assert -1 not in positions, f"a field is missing between DNS Proxy and Download Schemes: {positions}"
+    assert positions == sorted(positions), (
+        f"fields are out of order: {dict(zip(_DNS_PROXY_LISTENER_FIELDS, positions, strict=True))}"
+    )
+
+    def tag_at(position: int) -> str:
+        return html[html.rfind("<", 0, position + 1) : html.index(">", position) + 1]
+
+    for name, kind in (
+        ("pfb_dns_proxy_doh_port", "number"),
+        ("pfb_dns_proxy_doq_port", "number"),
+        ("pfb_dns_proxy_doh_trusted", "text"),
+    ):
+        tag = tag_at(html.index(f'name="{name}"', start, end))
+        assert re.search(rf"""\btype=["']?{kind}\b""", tag), f"{name} must be a {kind} input, got {tag}"
+    for name in ("pfb_dns_proxy_doh_interface", "pfb_dns_proxy_doq_interface"):
+        tag = tag_at(html.index(f'name="{name}', start, end))
+        assert tag.startswith("<select") and "multiple" in tag, f"{name} must be a multi-select, got {tag}"
+
+    block = html[start:end]
+    for needle in (
+        "Experimental",
+        "text-warning",
+        "DNS Resolver",
+        "SSL/TLS certificate",
+        "DoQ is UDP",
+        "send-proxy-v2",
+        "option forwardfor",
+    ):
+        assert needle in block, f"DoH/DoQ help is missing {needle!r}"
 
 
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
