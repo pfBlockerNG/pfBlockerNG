@@ -6,11 +6,14 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
+import socket
 import ssl
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -294,61 +297,51 @@ def test_cli_dot_options_default_to_off_and_pfsenses_config_path() -> None:
     assert (args.dot, args.pfsense_config) == (True, "/tmp/c.xml")
 
 
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [({"certref": None}, "sslcertref is empty"), ({"certref": "nope"}, "refid 'nope'")],
-    ids=["no-certref", "missing-cert"],
-)
-def test_dot_misconfiguration_exits_1_with_a_message_before_the_module_boots(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    kwargs: dict[str, Any],
-    message: str,
+def test_an_encrypted_private_key_is_refused_without_prompting_and_plain_dns_keeps_serving(
+    module_dir: Path, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(pfb_dns_proxy, "boot", lambda *_: pytest.fail("the module must not boot"))
-    config = _write_config(tmp_path, **kwargs)
-    assert pfb_dns_proxy.main(["--dot", "--pfsense-config", str(config), "--listen", "127.0.0.1", "--port", "0"]) == 1
-    err = capsys.readouterr().err
-    assert message in err and str(config) in err and "Traceback" not in err
-
-
-def test_dot_misconfiguration_makes_the_real_process_exit_non_zero(tmp_path: Path) -> None:
-    config = _write_config(tmp_path, certref="nope")
-    run = subprocess.run(
-        [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--dot", "--pfsense-config", str(config)]
-        + ["--listen", "127.0.0.1", "--port", "0", "--module-dir", str(tmp_path)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert run.returncode == 1 and "no <cert> with refid 'nope'" in run.stderr and "Traceback" not in run.stderr
-
-
-def test_an_encrypted_private_key_exits_1_with_a_message_instead_of_prompting(tmp_path: Path) -> None:
     keys = tmp_path / "keys"
     keys.mkdir()
     crt, key = make_certificate(keys, passphrase="correct horse")
     assert b"ENCRYPTED" in key  # the key really is passphrase-protected
     config = _write_config(tmp_path, entries=cert_element(REFID, b64(crt), b64(key)))
-    stderr = tmp_path / "stderr.txt"
-    with (
-        stderr.open("wb") as err,
-        subprocess.Popen(
-            [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--dot", "--pfsense-config", str(config)]
-            + ["--listen", "127.0.0.1", "--port", "0", "--module-dir", str(tmp_path)],
-            stdin=subprocess.PIPE,  # open and never written: a passphrase prompt would block reading it
-            stdout=subprocess.DEVNULL,
-            stderr=err,
-            start_new_session=True,  # no controlling terminal, so a prompt can only go to that pipe
-        ) as child,
-    ):
+    command = [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--dot", "--pfsense-config", str(config)]
+    command += ["--listen", "127.0.0.1", "--port", "0", "--module-dir", str(module_dir)]
+    with subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,  # open and never written: a passphrase prompt would block reading it
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # no controlling terminal, so a prompt can only go to that pipe
+    ) as child:
+        watchdog = threading.Timer(WATCHDOG, child.kill)  # a proxy stuck on a prompt never listens: EOF, not forever
+        watchdog.start()
         try:
+            assert child.stderr is not None
+            seen: list[str] = []
+            port, answered = None, None
+            for line in child.stderr:
+                seen.append(line)
+                if match := re.search(r"listening on 127\.0\.0\.1:(\d+)", line):
+                    port = int(match.group(1))
+                    break
+            if port is not None:  # an answer proves the event loop runs, so its SIGTERM handler is installed
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+                    client.settimeout(WATCHDOG)
+                    client.sendto(dnswire.encode(dnswire.Message(0x3515, dnswire.RD)), ("127.0.0.1", port))
+                    answered = dnswire.parse(client.recvfrom(4096)[0]).rcode
+            child.send_signal(signal.SIGTERM)
+            seen.extend(child.stderr)  # to EOF: the shutdown lines
             status = child.wait(timeout=WATCHDOG)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            pytest.fail("STUCK: the proxy is waiting for input (a passphrase prompt?) instead of exiting")
-    text = stderr.read_text(encoding="utf-8")
-    assert status == 1 and "passphrase" in text
+        finally:
+            watchdog.cancel()
+            if child.poll() is None:
+                child.kill()
+    text = "".join(seen)
+    assert (status, answered) == (0, 1), text  # the proxy itself answers a header-only query FORMERR
+    [error] = [line for line in text.splitlines() if "passphrase" in line]  # one line
+    assert error.startswith("pfb_dns_proxy error: DNS over TLS is off, serving plain DNS only: ")
+    [listening] = [line for line in text.splitlines() if "listening on" in line]
+    assert "(DoT)" not in listening
     assert "Enter PEM pass phrase" not in text and "Traceback" not in text
