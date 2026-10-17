@@ -27,6 +27,8 @@ from frontend_helpers import (
     FakeAuthoritative,
     FakeUnbound,
     build_query,
+    serve_dot,
+    serve_plain,
     tcp_concurrent,
     tcp_exchange,
     udp_concurrent,
@@ -195,7 +197,7 @@ def _through_frontend(
 ) -> T:
     async def main() -> T:
         frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", unbound.port), timeout=WATCHDOG)
-        [server] = await frontend.start(["127.0.0.1"], 0)
+        [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
         try:
             return await scenario(server)
         finally:
@@ -324,7 +326,7 @@ def test_dot_client_gets_dnsbl_and_unbound_answers_and_unbounds_log_shows_the_tl
 
     async def main() -> tuple[bytes, bytes]:
         frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", unbound.port), timeout=WATCHDOG)
-        [server] = await frontend.start_dot(["127.0.0.1"], settings.port, pfsense_dot.server_context(settings))
+        [server] = await serve_dot(frontend, ["127.0.0.1"], settings.port, pfsense_dot.server_context(settings))
         try:
             blocked, _, _ = await dot_exchange(server, build_query(BLOCKED), trust, source=ALLOWED_CLIENT)
             allowed, _, _ = await dot_exchange(server, build_query(ALLOWED), trust, source=ALLOWED_CLIENT_TCP)
