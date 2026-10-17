@@ -27,8 +27,9 @@ UDP+TCP; DoT that binds nowhere leaves the plain listeners serving.
 --dot reads unbound/sslcertref and unbound/tlsport (853 if unset) from config.xml, serves the referenced certificate
 on every --listen address at that port (TLS 1.2+), and forwards a DoT query to Unbound like a TCP one, with the TLS
 peer's address in the PROXYv2 header. unbound/enablessl is not read: --dot decides, since the Resolver's own DoT is
-off while the proxy runs. If the certificate is missing, unusable or its key is passphrase-protected, it exits 1
-with the reason: there is no self-signed fallback and no passphrase prompt.
+off while the proxy runs. If the certificate is missing, unusable or its key is passphrase-protected, DoT stays off:
+one error line with the reason, and the plain listeners serve (exiting would only make the supervisor relaunch every
+5 s with LAN DNS down). There is no self-signed fallback and no passphrase prompt.
 
 Limits: at most 128 TCP and DoT connections at once (over that they are closed at accept, before any DoT handshake
 byte, one log line per burst; a handshake in progress holds its slot), 512 UDP queries in flight, and a DoT handshake
@@ -598,6 +599,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _dot_setup(config_path: str) -> tuple[pfsense_dot.DotSettings | None, ssl.SSLContext | None]:
+    """The DoT settings and TLS context, or (None, None) after one error line when the Resolver's DoT setup cannot be
+    served: the plain listeners must not go down with it, and a supervisor restart would not fix it."""
+    try:
+        settings = pfsense_dot.read_settings(config_path)
+        return settings, pfsense_dot.server_context(settings)
+    except pfsense_dot.DotConfigError as exc:
+        shim.log_err(f"DNS over TLS is off, serving plain DNS only: {exc}")
+        return None, None
+
+
 async def serve(
     args: argparse.Namespace,
     *,
@@ -610,12 +622,12 @@ async def serve(
     The sockets and the TLS context are made as the user the process started as; the drop comes after them and
     before the boot, so what init_standard() and the watchers create belongs to `args.user`. `on_ready` gets the
     bound (host, port)s: the UDP+TCP listeners first, then the DoT ones. A user that does not exist, a drop the OS
-    refuses (DropError), no address that can be bound for UDP+TCP (ListenError) or a DoT configuration that cannot be
-    served (DotConfigError) raises before the module boots; an address that cannot be bound is logged and skipped.
+    refuses (DropError) or no address that can be bound for UDP+TCP (ListenError) raises before the module boots; an
+    address that cannot be bound is logged and skipped, and a DoT configuration that cannot be served (DotConfigError)
+    is logged as one error line and leaves DoT off.
     """
     account = lookup_user(args.user) if args.user is not None else None
-    dot = pfsense_dot.read_settings(args.pfsense_config) if args.dot else None
-    dot_context = pfsense_dot.server_context(dot) if dot is not None else None
+    dot, dot_context = _dot_setup(args.pfsense_config) if args.dot else (None, None)
     listen = args.listen or ["127.0.0.1"]
     listeners: list[Listener] = []
     dot_listeners: list[Listener] = []
@@ -653,9 +665,6 @@ async def serve(
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         asyncio.run(serve(parse_args(argv)))
-    except pfsense_dot.DotConfigError as exc:
-        print(f"pfb_dns_proxy: DNS over TLS: {exc}", file=sys.stderr)
-        return 1
     except (DropError, ListenError) as exc:
         print(f"pfb_dns_proxy: {exc}", file=sys.stderr)
         return 1
