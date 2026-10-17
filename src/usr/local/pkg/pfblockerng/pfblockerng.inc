@@ -22133,7 +22133,7 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 			preg_match('/authentication/i', $text) === 1                            => 'authentication failed',
 			preg_match('/^Exception calling XMLRPC method \S+ #-?\d+ : /', $text) === 1 => 'the peer returned an XMLRPC fault',
 			preg_match('/timed? ?out/i', $text) === 1                               => 'timeout',
-			preg_match('/\b(?:ssl|tls)\b|certificate/i', $text) === 1               => 'TLS error',
+			preg_match('/\b(?:ssl|tls)\b(?!:\/\/)|certificate/i', $text) === 1      => 'TLS error',
 			preg_match('/communications error|CurlException/i', $text) === 1        => 'connection error',
 			default                                                                 => 'transport error',
 		};

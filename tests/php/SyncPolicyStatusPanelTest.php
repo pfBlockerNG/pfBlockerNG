@@ -351,6 +351,9 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			'timeout'        => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Operation timed out after 5000 milliseconds', 'timeout'],
 			'tls'            => ['CurlException calling XMLRPC method restore_config_section #SSL certificate problem', 'TLS error'],
 			'connection'     => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Failed to connect', 'connection error'],
+			'unreachable https target'  => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: Host is down', 'connection error'],
+			'unanswered https target'   => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: Operation timed out', 'timeout'],
+			'tls failure at a tls:// target' => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: TLS handshake failed', 'TLS error'],
 			'unknown'        => ['Exception calling XMLRPC method x # boom', 'transport error'],
 			'empty'          => ['', 'no response from the XMLRPC client'],
 		];
