@@ -130,6 +130,25 @@ final class DnsProxyResolverMoveTest extends TestCase
 		return count(array_filter($this->customLines(), static fn (string $l): bool => trim($l) === self::LINE));
 	}
 
+	/**
+	 * The Unbound clause (`server`, `forward-zone`, ...) the proxy line sits in, NULL when absent. pfSense 2.8.1
+	 * writes custom_options after its Forwarding block, so the text starts inside that `forward-zone:` clause (live
+	 * run, unbound.conf:105: a bare proxy-protocol-port there is a syntax error). A bare `name:` line holds a value;
+	 * only a line that ends at its colon opens a clause.
+	 */
+	private function proxyLineClause(): ?string
+	{
+		$clause = 'forward-zone';
+		foreach ($this->customLines() as $line) {
+			if (preg_match('/^\s*([a-z][a-z-]*):\s*$/', $line, $m)) {
+				$clause = $m[1];
+			} elseif (trim($line) === self::LINE) {
+				return $clause;
+			}
+		}
+		return NULL;
+	}
+
 	/** @return array<string,array{0:string,1:?string}> key => [name, value]; NULL = absent */
 	public static function resolverShapes(): array
 	{
@@ -177,12 +196,12 @@ final class DnsProxyResolverMoveTest extends TestCase
 			$this->assertSame($expected, $saved[$k], "snapshot of {$k}");
 		}
 
-		// And the Resolver sits on loopback 5353, without DoT, with the PROXY line first.
+		// And the Resolver sits on loopback 5353, without DoT, with the PROXY line inside a server clause.
 		$after = config_get_path('unbound');
 		$this->assertSame('5353', $after['port']);
 		$this->assertSame('lo0', $after['active_interface']);
 		$this->assertArrayNotHasKey('enablessl', $after);
-		$this->assertSame(self::LINE, $this->customLines()[0]);
+		$this->assertSame('server', $this->proxyLineClause());
 		$this->assertSame(1, $this->proxyLineCount());
 		foreach (['enable', 'dnssec', 'sslcertref', 'tlsport'] as $untouched) {
 			$this->assertSame($before[$untouched], $after[$untouched], "{$untouched} is not the move's to change");
@@ -348,28 +367,29 @@ final class DnsProxyResolverMoveTest extends TestCase
 	// M7 -- the PROXY line in custom_options
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{0:?string,1:?string,2:bool}> original custom_options (NULL absent), expected decoded text after ON (NULL = unchanged), proxy line first? */
+	/** @return array<string,array{0:?string,1:?string}> original custom_options (NULL absent), expected decoded text after ON (NULL = unchanged) */
 	public static function customOptionShapes(): array
 	{
+		$added = "server:\n" . self::LINE;
 		$forward = "do-ip6: no\nforward-zone:\n  name: \".\"\n  forward-addr: 192.0.2.1";
 		return [
-			'absent'                            => [NULL, self::LINE, TRUE],
-			'present empty'                     => ['', self::LINE, TRUE],
-			'existing option lines'             => [base64_encode("do-ip6: no\nprefetch: yes"), self::LINE . "\ndo-ip6: no\nprefetch: yes", TRUE],
-			'ending in a forward-zone clause'   => [base64_encode($forward), self::LINE . "\n" . $forward, TRUE],
-			'already holding the proxy line'    => [base64_encode(self::LINE . "\ndo-ip6: no"), NULL, TRUE],
-			'proxy line with surrounding blanks' => [base64_encode("  " . self::LINE . "  \ndo-ip6: no"), NULL, TRUE],
-			'proxy line in the middle, padded'  => [base64_encode("do-ip6: no\n \t" . self::LINE . " \nprefetch: yes"), NULL, FALSE],
-			'a commented-out proxy line'        => [base64_encode("# " . self::LINE . "\ndo-ip6: no"), self::LINE . "\n# " . self::LINE . "\ndo-ip6: no", TRUE],
-			'CRLF line endings'                 => [base64_encode("do-ip6: no\r\nprefetch: yes\r\n"), self::LINE . "\ndo-ip6: no\nprefetch: yes\n", TRUE],
+			'absent'                            => [NULL, $added],
+			'present empty'                     => ['', $added],
+			'existing option lines'             => [base64_encode("do-ip6: no\nprefetch: yes"), "do-ip6: no\nprefetch: yes\n" . $added],
+			'starting with a server clause'     => [base64_encode("server:\nlog-queries: yes\n"), "server:\nlog-queries: yes\n" . $added],
+			'ending in a forward-zone clause'   => [base64_encode($forward), $forward . "\n" . $added],
+			'already holding the proxy line'    => [base64_encode(self::LINE . "\ndo-ip6: no"), NULL],
+			'proxy line with surrounding blanks' => [base64_encode("  " . self::LINE . "  \ndo-ip6: no"), NULL],
+			'proxy line in the middle, padded'  => [base64_encode("do-ip6: no\n \t" . self::LINE . " \nprefetch: yes"), NULL],
+			'a commented-out proxy line'        => [base64_encode("# " . self::LINE . "\ndo-ip6: no"), "# " . self::LINE . "\ndo-ip6: no\n" . $added],
+			'CRLF line endings'                 => [base64_encode("do-ip6: no\r\nprefetch: yes\r\n"), "do-ip6: no\nprefetch: yes\n" . $added],
 		];
 	}
 
 	#[DataProvider('customOptionShapes')]
-	public function testMoveOnPutsTheProxyLineFirstExactlyOnceAndMoveOffRestoresTheOriginalVerbatim(
+	public function testMoveOnAppendsAServerClauseWithTheProxyLineExactlyOnceAndMoveOffRestoresTheOriginalVerbatim(
 		?string $original,
-		?string $expectedText,
-		bool $first
+		?string $expectedText
 	): void {
 		// Given a Resolver with this custom_options.
 		$this->seedResolver(['custom_options' => $original]);
@@ -377,16 +397,14 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// When the proxy is turned on.
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
 
-		// Then the proxy line occurs exactly once (a line equal to it after trimming), and sits
-		// before any user clause when it was added.
+		// Then the proxy line occurs exactly once (a line equal to it after trimming), and when it was added it
+		// sits in a server clause opened after the user's own text, wherever that text ends.
 		$this->assertSame(1, $this->proxyLineCount());
 		if ($expectedText === NULL) {
 			$this->assertSame($original, config_get_path('unbound/custom_options'), 'an existing proxy line is left alone');
 		} else {
 			$this->assertSame($expectedText, implode("\n", $this->customLines()));
-		}
-		if ($first) {
-			$this->assertSame(self::LINE, trim($this->customLines()[0]));
+			$this->assertSame('server', $this->proxyLineClause());
 		}
 
 		// And turning it off puts the original value back verbatim (or removes the key again).
