@@ -1412,6 +1412,16 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no proxy, Resolver untouched)',
 		],
 
+		// issue #3515: the Resolver's pre-move port/active_interface/enablessl/custom_options
+		// (base64 JSON, written and read only by pfb_dns_proxy_resolver()); '' = not moved.
+		'dnsbl/pfb_dns_proxy_saved' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
+		],
+
 		// issue #3288: the selected CONCRETE mechanism -- one of the seven tokens;
 		// never '' or 'default' (that's dnsbl/global_log_mode below). Default
 		// 'disabled_log' fresh; existing installs grandfather to 'enabled'.

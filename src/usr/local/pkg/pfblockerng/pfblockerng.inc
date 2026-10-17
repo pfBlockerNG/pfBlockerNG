@@ -3545,6 +3545,12 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
 }
 
+// issue #3515: the experimental DNS proxy takes the Resolver's client-facing place, so the Resolver is moved
+// to loopback 5353 through config.xml and Unbound is told (PROXYv2) to trust the proxy's source address.
+const PFB_DNS_PROXY_UNBOUND_PORT = '5353';
+const PFB_DNS_PROXY_LINE = 'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT;
+const PFB_DNS_PROXY_RESOLVER_KEYS = ['port', 'active_interface', 'enablessl', 'custom_options'];
+
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
 	global $g, $pfb;
@@ -9638,6 +9644,9 @@ function pfb_unbound_dnsbl($mode) {
 	$pfbupdate = FALSE;
 	$log = '';
 
+	// issue #3515: while the DNS proxy owns the python module (the Resolver is moved), Unbound must not load it.
+	$module = $mode == 'enabled' && pfb_dns_proxy_saved() === NULL;
+
 	// Collect Unbound custom option pfSense conf line
 	$pfb['unboundconfig']	= config_get_path('unbound/custom_options');
 
@@ -9709,7 +9718,7 @@ function pfb_unbound_dnsbl($mode) {
 			}
 
 			elseif (strpos($line, 'module-config:') !== FALSE) {
-				if ($mode == 'enabled') {
+				if ($module) {
 					// Ensure the python module is loaded. The pfb_unbound.py script
 					// block is tracked separately ($unbound_py_script) and ensured
 					// after the loop, so do NOT infer its presence from this line.
@@ -9738,7 +9747,7 @@ function pfb_unbound_dnsbl($mode) {
 			}
 
 			elseif (strpos($line, 'python-script: pfb_unbound.py') !== FALSE) {
-				if ($mode == 'enabled') {
+				if ($module) {
 					$unbound_py_script = TRUE;
 				} else {
 					$u_update = TRUE;
@@ -9750,7 +9759,7 @@ function pfb_unbound_dnsbl($mode) {
 		}
 
 		// Add python script line
-		if (!$unbound_py_script && $mode == 'enabled') {
+		if (!$unbound_py_script && $module) {
 			$u_update = TRUE;
 			$u_msg .= "  Added DNSBL Unbound Python mode script\n";
 			$conf[] = "\npython:\npython-script: pfb_unbound.py\n";
@@ -11944,6 +11953,130 @@ function pfb_unbound_py_module_fingerprint(array $paths): string|false {
 }
 
 
+/**
+ * The Resolver snapshot pfb_dns_proxy_resolver() keeps in the registered marker dnsbl/pfb_dns_proxy_saved:
+ * base64 JSON with exactly the PFB_DNS_PROXY_RESOLVER_KEYS, each {"present": bool, "value": string|null}
+ * (value NULL iff not present).
+ *
+ * @return array<string,array{present:bool,value:?string}>|null NULL = no snapshot: the marker is empty (the
+ *         normal state) or not that shape (logged, never half-trusted).
+ */
+function pfb_dns_proxy_saved(): ?array {
+	$raw = PfbConfig::read('dnsbl/pfb_dns_proxy_saved');
+	if ($raw === '') {
+		return NULL;
+	}
+
+	// Strict base64 still skips whitespace, so a wrapped marker reads back intact.
+	$decoded = base64_decode($raw, TRUE);
+	$keys = ($decoded === FALSE) ? NULL : json_decode($decoded, TRUE);
+
+	$saved = (is_array($keys) && count($keys) === count(PFB_DNS_PROXY_RESOLVER_KEYS)) ? [] : NULL;
+	foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {
+		if ($saved === NULL) {
+			break;
+		}
+		$entry = $keys[$key] ?? NULL;
+		if (!is_array($entry) || count($entry) !== 2 || !is_bool($entry['present'] ?? NULL) ||
+		    !array_key_exists('value', $entry) ||
+		    ($entry['present'] ? !is_string($entry['value']) : $entry['value'] !== NULL)) {
+			$saved = NULL;
+			break;
+		}
+		$saved[$key] = ['present' => $entry['present'], 'value' => $entry['value']];
+	}
+
+	if ($saved === NULL) {
+		pfb_logger("\nDNS proxy: pfb_dns_proxy_saved is not a valid Resolver snapshot; ignoring it", 2);
+	}
+	return $saved;
+}
+
+/**
+ * Move the DNS Resolver to loopback 5353 for the DNS proxy ($on), or put it back ($on = FALSE).
+ *
+ * ON snapshots the four PFB_DNS_PROXY_RESOLVER_KEYS (presence and value) once, then sets port 5353 and
+ * active_interface lo0, drops enablessl (the proxy terminates DoT) and puts PFB_DNS_PROXY_LINE first in
+ * custom_options: an appended line would land inside a later user clause such as forward-zone:. Values that
+ * already look moved are never snapshotted as the "previous" ones. OFF restores each key exactly and clears
+ * the snapshot; no snapshot = nothing to do. Idempotent.
+ *
+ * @return bool TRUE iff config.xml changed (write_config was called once).
+ */
+function pfb_dns_proxy_resolver(bool $on): bool {
+	$saved = pfb_dns_proxy_saved();
+
+	if (!$on) {
+		if ($saved === NULL) {
+			return FALSE;
+		}
+		foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {
+			if ($saved[$key]['present']) {
+				config_set_path("unbound/{$key}", $saved[$key]['value']);
+			} else {
+				config_del_path("unbound/{$key}");
+			}
+		}
+		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy_saved', '');
+
+		$log = 'Restored the DNS Resolver settings the DNS proxy had moved';
+		pfb_logger("\n{$log}", 1);
+		write_config("pfBlockerNG: {$log}");
+		return TRUE;
+	}
+
+	$changed = FALSE;
+	if ($saved === NULL) {
+		$current = [];
+		foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {
+			$value = config_get_path("unbound/{$key}", NULL);
+			if ($value !== NULL && !is_scalar($value)) {
+				$current = NULL;
+				break;
+			}
+			$current[$key] = ['present' => $value !== NULL, 'value' => ($value === NULL) ? NULL : (string) $value];
+		}
+		$marker = ($current === NULL) ? FALSE : json_encode($current);
+		if ($marker === FALSE) {
+			pfb_logger("\nDNS proxy: the Resolver settings cannot be stored verbatim in pfb_dns_proxy_saved; refusing to move the Resolver", 2);
+			return FALSE;
+		}
+		if ($current['port']['value'] === PFB_DNS_PROXY_UNBOUND_PORT && $current['active_interface']['value'] === 'lo0') {
+			pfb_logger("\nDNS proxy: the Resolver already listens on lo0:" . PFB_DNS_PROXY_UNBOUND_PORT .
+			    " and pfb_dns_proxy_saved holds no snapshot; refusing to snapshot the moved values as the previous ones", 2);
+			return FALSE;
+		}
+		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy_saved', base64_encode($marker));
+		$changed = TRUE;
+	}
+
+	foreach (['port' => PFB_DNS_PROXY_UNBOUND_PORT, 'active_interface' => 'lo0'] as $key => $value) {
+		if (config_get_path("unbound/{$key}", NULL) !== $value) {
+			config_set_path("unbound/{$key}", $value);
+			$changed = TRUE;
+		}
+	}
+	if (config_get_path('unbound/enablessl', NULL) !== NULL) {
+		config_del_path('unbound/enablessl');
+		$changed = TRUE;
+	}
+
+	$custom = (string) base64_decode((string) config_get_path('unbound/custom_options', ''));
+	if (!in_array(PFB_DNS_PROXY_LINE, array_map('trim', explode("\n", $custom)), TRUE)) {
+		$custom = ($custom === '') ? PFB_DNS_PROXY_LINE : PFB_DNS_PROXY_LINE . "\n{$custom}";
+		config_set_path('unbound/custom_options', pfb_text_area_encode($custom));
+		$changed = TRUE;
+	}
+
+	if ($changed) {
+		$log = 'Moved the DNS Resolver to loopback port ' . PFB_DNS_PROXY_UNBOUND_PORT . ' for the DNS proxy';
+		pfb_logger("\n{$log}", 1);
+		write_config("pfBlockerNG: {$log}");
+	}
+	return $changed;
+}
+
+
 // Unbound python configuration file
 function pfb_unbound_python($mode) {
 	global $pfb;
@@ -11953,6 +12086,11 @@ function pfb_unbound_python($mode) {
 	config_read_file(FALSE, TRUE);
 
 	$pfbpython = FALSE;
+
+	// issue #3515: while the DNS proxy is on it hosts the python module; Unbound must not load it.
+	$proxy = $mode == 'enabled' && $pfb['dnsbl_proxy'] === PfbToggle::On;
+	$moved = pfb_dns_proxy_resolver($proxy);
+	$module = $mode == 'enabled' && !$proxy;
 
 	// Ensure log file permissions are set as 'unbound:unbound' (unified.log excluded:
 	// the host daemon is now its sole writer, as root — ADR-38 Amendment 1).
@@ -11967,7 +12105,7 @@ function pfb_unbound_python($mode) {
 	}
 
 	// Add python settings to DNS Resolver configuration
-	if ($mode == 'enabled') {
+	if ($module) {
 		if (!config_path_enabled('unbound', 'python') ||
 		    config_get_path('unbound/python_script') != 'pfb_unbound') {
 
@@ -11980,8 +12118,21 @@ function pfb_unbound_python($mode) {
 			pfb_logger("\n{$log}", 1);
 			write_config("pfBlockerNG: {$log}");
 		}
+	}
 
-		// If DNSBL python blocking mode enabled
+	// Remove python settings from DNS Resolver configuration
+	elseif (config_path_enabled('unbound', 'python') && config_get_path('unbound/python_script') == 'pfb_unbound') {
+		config_del_path('unbound/python');
+		config_set_path('unbound/python_order', '');
+		config_set_path('unbound/python_script', '');
+
+		$log = 'Removing DNSBL Unbound python integration settings';
+		pfb_logger("\n{$log}", 1);
+		write_config("pfBlockerNG: {$log}");
+	}
+
+	if ($mode == 'enabled') {
+		// If DNSBL python blocking mode enabled (the DNS proxy loads the module from these inputs too)
 
 		// Create DNSBL Whitelist
 		$dnsbl_whitelist = pfb_unbound_python_whitelist();
@@ -12023,17 +12174,6 @@ function pfb_unbound_python($mode) {
 
 	else {
 		$mode = 'disabled';
-
-		// Remove python settings from DNS Resolver configuration
-		if (config_path_enabled('unbound', 'python') && config_get_path('unbound/python_script') == 'pfb_unbound') {
-			config_del_path('unbound/python');
-			config_set_path('unbound/python_order', '');
-			config_set_path('unbound/python_script', '');
-
-			$log = 'Removing DNSBL Unbound python integration settings';
-			pfb_logger("\n{$log}", 1);
-			write_config("pfBlockerNG: {$log}");
-		}
 	}
 
 	// Mount lib and bin folders
@@ -12043,7 +12183,7 @@ function pfb_unbound_python($mode) {
 	foreach (array('/bin', '/lib') as $dir) {
 		$validate = exec("/sbin/mount | {$pfb['grep']} " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1");
 
-		if ($mode == 'enabled' && empty($validate)) {
+		if ($module && empty($validate)) {
 			if (!is_dir("{$pfb['dnsbldir']}{$base_py}{$dir}")) {
 				$log .= "\n  Creating: {$pfb['dnsbldir']}{$base_py}{$dir}";
 				safe_mkdir("{$pfb['dnsbldir']}{$base_py}{$dir}");
@@ -12060,6 +12200,13 @@ function pfb_unbound_python($mode) {
 
 	if (!empty($log)) {
 		pfb_logger("\nAdding DNSBL Unbound python mounts:{$log}\n", 1);
+	}
+
+	// The Resolver move/restore changed what unbound.conf is generated from: regenerate it now that the
+	// python keys are final and the module's mounts exist.
+	if ($moved) {
+		services_unbound_configure(FALSE);
+		$pfbpython = TRUE;
 	}
 
 	// Set flag to unmount python folders after the next reboot is completed to avoid crashing Unbound
