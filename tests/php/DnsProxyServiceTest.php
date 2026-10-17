@@ -1412,4 +1412,222 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(['term', 'sleep', 'sleep', 'sleep', 'sleep', 'sleep', 'kill', 'sleep', 'sleep'], $this->events());
 		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #3513 gate fixes -- what the gateway is handed must be what it can parse and nothing wider
+	// -----------------------------------------------------------------------
+
+	/** @return list<string> the values of every `$flag` argument the daemon double was launched with */
+	private function flagValues(array $argv, string $flag): array
+	{
+		$values = [];
+		foreach ($argv as $i => $arg) {
+			if ($arg === $flag) {
+				$values[] = $argv[$i + 1];
+			}
+		}
+		return $values;
+	}
+
+	/** @return list<string> error-log lines about a stored DoH/DoQ port the gateway could not parse */
+	private function portWarnings(): array
+	{
+		$lines = explode("\n", (string) @file_get_contents("{$this->dir}/pfb.err"));
+		return array_values(array_filter($lines, static fn (string $line): bool => str_contains($line, 'is not a whole number')));
+	}
+
+	/** @return array<string,array{string,list<string>}> trusted setting, the --doh-trusted values the gateway gets */
+	public static function trustedHostPrefixes(): array
+	{
+		return [
+			'bare v4 is a /32'            => ['192.0.2.10', ['192.0.2.10/32']],
+			'bare v6 is a /128'           => ['2001:db8::1', ['2001:db8::1/128']],
+			'bare v4-mapped v6 is a /128' => ['::ffff:192.0.2.10', ['::ffff:192.0.2.10/128']],
+			'prefixes pass through'       => ['10.0.0.0/8 2001:db8::/32', ['10.0.0.0/8', '2001:db8::/32']],
+			'mixed, in order'             => ['192.0.2.10, 2001:db8::1 10.0.0.0/8', ['192.0.2.10/32', '2001:db8::1/128', '10.0.0.0/8']],
+		];
+	}
+
+	/** @param list<string> $expected */
+	#[DataProvider('trustedHostPrefixes')]
+	public function testABareTrustedAddressBecomesAHostPrefixOfItsOwnFamilyNeverAWiderOne(string $trusted, array $expected): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_trusted', $trusted);
+
+		$argv = $this->startAndReadArgv($gateway);
+
+		$this->assertSame($expected, $this->flagValues($argv, '--doh-trusted'));
+		$this->assertStringContainsString(
+			implode(' ', array_map(static fn (string $c): string => '--doh-trusted ' . escapeshellarg($c), $expected)),
+			$this->rcText(),
+			'each prefix is its own quoted word, in order'
+		);
+	}
+
+	public function testEveryListenAddressPortAndTrustedValueOfTheTlsGroupsIsShellQuoted(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_port', '8443');
+		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_proxy_doq', 'on');
+		$this->setting('pfb_dns_proxy_doq_port', '8853');
+		$this->generateWith($gateway);
+		$text = $this->rcText();
+
+		foreach ([
+			"--doh-listen '192.0.2.1'", "--doh-listen '2001:db8::1'", "--doh-port '8443'", "--doh-trusted '192.0.2.10/32'",
+			"--doq-listen '192.0.2.1'", "--doq-listen '2001:db8::1'", "--doq-port '8853'",
+		] as $quoted) {
+			$this->assertStringContainsString($quoted, $text, "{$quoted} must be a quoted word of the daemon line");
+		}
+	}
+
+	/** @return array<string,array{string}> */
+	public static function unparsablePorts(): array
+	{
+		return [
+			'shell text'         => ["4443'; touch PWNED #"],
+			'command substitution' => ['$(touch PWNED)'],
+			'a word'             => ['abc'],
+			'zero'               => ['0'],
+			'one past the top'   => ['65536'],
+			'overflowing int'    => ['99999999999999999999'],
+			'negative'           => ['-1'],
+			'padded'             => [' 443'],
+		];
+	}
+
+	#[DataProvider('unparsablePorts')]
+	public function testAStoredPortTheGatewayCouldNotParseOmitsItsGroupAndWarnsOnce(string $port): void
+	{
+		// Given DoH and DoQ on, each with a hand-edited port, and a trusted front end
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		foreach (['doh', 'doq'] as $kind) {
+			$this->setting("pfb_dns_proxy_{$kind}", 'on');
+		}
+		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_proxy_doh_port', $port);
+		$this->setting('pfb_dns_proxy_doq_port', '8853');
+
+		// When the script is generated and started
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the DoH group is left out whole, the DoQ group is intact, the bad value is nowhere in the script,
+		// and one warning says so
+		$this->assertSame(
+			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--doq-listen', '192.0.2.1', '--doq-port', '8853']),
+			$argv
+		);
+		$this->assertStringNotContainsString('PWNED', $this->rcText());
+		$this->assertCount(1, $this->portWarnings(), 'one warning: ' . json_encode($this->portWarnings()));
+		$this->assertStringContainsString('DoH', $this->portWarnings()[0]);
+		$this->assertFileDoesNotExist("{$this->dir}/PWNED");
+	}
+
+	public function testABadDoqPortOmitsOnlyTheDoqGroup(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doq', 'on');
+		$this->setting('pfb_dns_proxy_doq_port', 'abc');
+
+		$this->assertSame(
+			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--doh-listen', '192.0.2.1', '--doh-port', '4443']),
+			$this->startAndReadArgv($gateway)
+		);
+		$this->assertCount(1, $this->portWarnings());
+		$this->assertStringContainsString('DoQ', $this->portWarnings()[0]);
+	}
+
+	/** @return array<string,array{string,string}> stored port, the one the gateway gets */
+	public static function paddedPorts(): array
+	{
+		return [
+			'one leading zero' => ['0443', '443'], 'octal-looking' => ['010', '10'], 'zero padded to five' => ['00080', '80'],
+			'plain' => ['8443', '8443'], 'cleared: the registered default' => ['', '4443'],
+		];
+	}
+
+	#[DataProvider('paddedPorts')]
+	public function testAStoredPortWithLeadingZerosIsHandedOverWithoutThemSoNoParserReadsItAsOctal(string $stored, string $expected): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_port', $stored);
+
+		$argv = $this->startAndReadArgv($gateway);
+
+		$this->assertSame([$expected], $this->flagValues($argv, '--doh-port'));
+		$this->assertSame([], $this->portWarnings(), 'a port that parses is not a warning');
+	}
+
+	/** @return array<string,array{string}> */
+	public static function untrustworthyPrefixes(): array
+	{
+		return [
+			'leading zero'        => ['10.0.0.0/08'],
+			'two leading zeros'   => ['10.0.0.0/008'],
+			'host prefix padded'  => ['192.0.2.10/032'],
+			'v6 leading zero'     => ['2001:db8::/064'],
+			'v4 with a v6 prefix' => ['192.0.2.1/64'],
+			'zone'                => ['fe80::1%em0'],
+		];
+	}
+
+	#[DataProvider('untrustworthyPrefixes')]
+	public function testAHandEditedTrustedPrefixTheGatewayWouldRejectNeverReachesTheScript(string $bad): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_trusted', "{$bad} 198.51.100.7");
+
+		$argv = $this->startAndReadArgv($gateway);
+
+		$this->assertSame(['198.51.100.7/32'], $this->flagValues($argv, '--doh-trusted'),
+			"{$bad} is dropped, the valid neighbour stays");
+	}
+
+	public function testTheMissingGatewayWarningIsLoggedWhenTheScriptChangesNotOnEveryApply(): void
+	{
+		// Given DoH on, no gateway binary installed, and a box whose script was just generated (one warning)
+		$absent = "{$this->dir}/bin/absent";
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->generateWith($absent);
+		$this->assertCount(1, $this->gatewayWarnings(), 'before: the generation that wrote the script warned once');
+
+		// When the next apply regenerates an identical script
+		$this->generateWith($absent);
+
+		// Then it does not warn again
+		$this->assertCount(1, $this->gatewayWarnings(), 'warnings: ' . json_encode($this->gatewayWarnings()));
+
+		// When an address change makes the script differ, it warns once more
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.77']);
+		$this->generateWith($absent);
+		$this->assertCount(2, $this->gatewayWarnings());
+	}
+
+	public function testTheBadPortWarningIsLoggedWhenTheScriptChangesNotOnEveryApply(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doh_port', 'abc');
+		$this->generateWith($gateway);
+		$this->assertCount(1, $this->portWarnings(), 'before: the generation that wrote the script warned once');
+
+		$this->generateWith($gateway);
+
+		$this->assertCount(1, $this->portWarnings(), 'warnings: ' . json_encode($this->portWarnings()));
+	}
 }
