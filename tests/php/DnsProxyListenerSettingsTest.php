@@ -150,6 +150,14 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'fullwidth digits'       => ['１０.0.0.1'],
 			'v6 prefix too long'     => ['2001:db8::/129'],
 			'host with a path'       => ['192.0.2.10/32/8'],
+			'v4 prefix with a leading zero'   => ['10.0.0.0/08'],
+			'v4 prefix with two leading zeros' => ['10.0.0.0/008'],
+			'v4 host prefix with a leading zero' => ['192.0.2.10/032'],
+			'v6 prefix with a leading zero'   => ['2001:db8::/064'],
+			'v4 host with a v6-sized prefix'  => ['192.0.2.1/64'],
+			'v4 octet with a leading zero'    => ['010.0.0.1'],
+			'empty prefix'                    => ['10.0.0.0/'],
+			'four-digit prefix'               => ['10.0.0.0/0008'],
 		];
 	}
 
@@ -196,6 +204,11 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'trailing comma and space'   => ['192.0.2.10, '],
 			'host bits set'              => ['10.1.2.3/8'],
 			'v4-mapped v6'               => ['::ffff:192.0.2.10'],
+			'prefix zero'                => ['0.0.0.0/0'],
+			'v6 prefix zero'             => ['::/0'],
+			'v4 host prefix at its limit' => ['10.0.0.1/32'],
+			'v6 host prefix at its limit' => ['2001:db8::1/128'],
+			'bare v6'                    => ['2001:db8::1'],
 		];
 	}
 
