@@ -8,6 +8,7 @@ test_integration_unbound.py runs the same flows against a real Unbound.
 from __future__ import annotations
 
 import asyncio
+import builtins
 import ipaddress
 import struct
 from typing import Any
@@ -69,6 +70,25 @@ class TargetTroubles(FakeUnbound):
         return self.answer(wire)
 
 
+@pytest.fixture
+def cache_calls(ss_booted: Booted) -> list[tuple[Any, ...]]:
+    """What the module asked Unbound's message cache to store or drop, in order. The shim's own calls are no-ops, so
+    the names the module looks up in builtins are swapped for recorders; uninstall() puts the originals back, and this
+    fixture depends on ss_booted so that runs after the test."""
+    calls: list[tuple[Any, ...]] = []
+
+    def store(qstate: Any, qinfo: Any, msgrep: Any, is_referral: int) -> bool:
+        calls.append(("store", qinfo.qname_str, is_referral))
+        return True
+
+    def invalidate(qstate: Any, qinfo: Any) -> None:
+        calls.append(("invalidate", qinfo.qname_str))
+
+    builtins.storeQueryInCache = store  # type: ignore[attr-defined]
+    builtins.invalidateQueryInCache = invalidate  # type: ignore[attr-defined]
+    return calls
+
+
 def _resolve(booted: Booted, wire: bytes, forward: Any, client: str = CLIENT) -> dnswire.Message:
     frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
     return dnswire.parse(asyncio.run(frontend.resolve(wire, client, forward)) or b"")
@@ -89,10 +109,9 @@ def _asked(unbound: FakeUnbound) -> list[tuple[str, int]]:
     ("qtype", "address"), [(dnswire.TYPE_A, TARGET_A), (dnswire.TYPE_AAAA, TARGET_AAAA)], ids=["A", "AAAA"]
 )
 def test_cname_is_chased_and_the_client_gets_the_cname_plus_the_targets_address(
-    ss_booted: Booted, qtype: int, address: bytes
+    ss_booted: Booted, cache_calls: list[tuple[Any, ...]], qtype: int, address: bytes
 ) -> None:
     unbound = FakeUnbound(ZONE)
-    shim.cache_calls.clear()
     reply = _resolve(ss_booted, build_query(DUCK, qtype, qid=0xBEEF), unbound)
     assert (reply.id, reply.rcode, reply.flags & (dnswire.QR | dnswire.RA | dnswire.RD)) == (
         0xBEEF,
@@ -103,7 +122,7 @@ def test_cname_is_chased_and_the_client_gets_the_cname_plus_the_targets_address(
     assert _answers(reply) == [CNAME_TO_TARGET, (TARGET, qtype, address)]
     assert _asked(unbound) == [(DUCK, qtype), (TARGET, qtype)]  # the original name first, then the chase
     # The module itself ran both passes: plant + restart, then the post-chase re-cache.
-    assert shim.cache_calls == [("invalidate", DUCK), ("store", DUCK, 1), ("invalidate", DUCK), ("store", DUCK, 0)]
+    assert cache_calls == [("invalidate", DUCK), ("store", DUCK, 1), ("invalidate", DUCK), ("store", DUCK, 0)]
 
 
 def test_the_www_variant_of_a_safesearch_name_is_redirected_too(ss_booted: Booted) -> None:
