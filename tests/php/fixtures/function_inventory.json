@@ -1794,6 +1794,19 @@
             }
         ]
     },
+    "pfb_dns_proxy_port": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "port",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_refuse": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1868,6 +1881,13 @@
             {
                 "name": "plain",
                 "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "warnings",
+                "byRef": true,
                 "variadic": false,
                 "type": "array",
                 "default": null
