@@ -7,12 +7,14 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- the DNS proxy takes over the addresses the DNS Resolver served before it was moved to
- * loopback 5353. pfb_dns_proxy_listen() derives them from the Resolver's SAVED active_interface the way
+ * issue #3515 -- the DNS proxy takes over the addresses the DNS Resolver served before it was moved onto
+ * loopback. pfb_dns_proxy_listen() derives them from the Resolver's SAVED active_interface the way
  * pfSense's unbound.inc binds them: an explicit list binds each interface that is up and enabled (an IP
  * entry verbatim, else its IPv4 and IPv6 address); empty or 'all' makes Unbound bind everything, which the
  * proxy (one wildcard UDP socket cannot answer from the address a client queried) turns into every address
- * of the box. Only valid, non-link-local, unscoped addresses survive, once each, in derivation order.
+ * of the box, as pfSense lists them (interfaces and CARP/IP-alias VIPs). Only valid, non-link-local,
+ * non-loopback, unscoped addresses survive, once each, in derivation order: loopback stays Unbound's, so the
+ * firewall resolves through it directly.
  *
  * Each row seeds the pfSense answers the derivation reads and asserts the exact address list.
  */
@@ -58,7 +60,6 @@ final class DnsProxyListenTest extends TestCase
 	private static function saved(?string $interfaces): array
 	{
 		return [
-			'port'             => ['present' => TRUE, 'value' => '53'],
 			'active_interface' => ['present' => $interfaces !== NULL, 'value' => $interfaces],
 			'enablessl'        => ['present' => FALSE, 'value' => NULL],
 			'custom_options'   => ['present' => FALSE, 'value' => NULL],
@@ -124,11 +125,21 @@ final class DnsProxyListenTest extends TestCase
 		$this->assertSame(['192.0.2.5', '2001:db8::5'], pfb_dns_proxy_listen(self::saved('192.0.2.5,2001:db8::5')));
 	}
 
-	public function testLoopbackEntryYieldsTheLoopbackAddresses(): void
+	public function testLoopbackEntryYieldsNoAddressBecauseUnboundKeepsLoopback(): void
 	{
 		$this->seedInterfaces(['lo0' => '127.0.0.1'], ['lo0' => '::1']);
 
-		$this->assertSame(['127.0.0.1', '::1'], pfb_dns_proxy_listen(self::saved('lo0')));
+		$this->assertSame([], pfb_dns_proxy_listen(self::saved('lo0')));
+	}
+
+	public function testLoopbackAddressesNamedAsIpEntriesAreDroppedInAnySpelling(): void
+	{
+		$this->seedInterfaces(['lan' => '192.0.2.1'], [], ['lan' => self::UP]);
+
+		$this->assertSame(
+			['192.0.2.1'],
+			pfb_dns_proxy_listen(self::saved('127.0.0.1,127.0.0.5,::1,0:0:0:0:0:0:0:1,lan'))
+		);
 	}
 
 	public function testDuplicateAddressesAreListedOnce(): void
@@ -164,17 +175,13 @@ final class DnsProxyListenTest extends TestCase
 
 	private function seedBox(): void
 	{
+		// As pfSense lists them: interface addresses keyed by name, CARP/IP-alias VIPs keyed '_vip<id>' (a
+		// proxy-ARP VIP is not in either list). get_configured_ipv6_addresses() leaves out a link-local address.
 		$GLOBALS['pfb_test_configured_ip_addresses'] = [
 			'wan' => '198.51.100.1', 'lan' => '192.0.2.1', 'opt1' => NULL,
+			'_vip1' => '203.0.113.7', '_vip2' => '192.0.2.254', '_vip3' => '192.0.2.1',
 		];
-		$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => '2001:db8::1', 'wan' => 'fe80::9'];
-		$GLOBALS['config']['virtualip']['vip'] = [
-			['mode' => 'ipalias', 'subnet' => '203.0.113.7', 'interface' => 'wan'],
-			['mode' => 'carp', 'subnet' => '192.0.2.254', 'interface' => 'lan'],
-			['mode' => 'proxyarp', 'subnet' => '203.0.113.99', 'interface' => 'wan'],
-			['mode' => 'ipalias', 'subnet' => '2001:db8::53', 'interface' => 'lan'],
-			['mode' => 'ipalias', 'subnet' => '192.0.2.1', 'interface' => 'lan'],
-		];
+		$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => '2001:db8::1', 'wan' => 'fe80::9', '_vip4' => '2001:db8::53'];
 	}
 
 	/** @return array<string,array{?string}> */
@@ -189,19 +196,26 @@ final class DnsProxyListenTest extends TestCase
 	}
 
 	#[DataProvider('wildcardRows')]
-	public function testAWildcardResolverGivesEveryAddressOfTheBoxIncludingAliasAndCarpVips(?string $interfaces): void
+	public function testAWildcardResolverGivesEveryNonLoopbackAddressOfTheBoxIncludingAliasAndCarpVips(?string $interfaces): void
 	{
 		$this->seedBox();
 
 		$this->assertSame(
-			[
-				'127.0.0.1', '::1', '198.51.100.1', '192.0.2.1', '2001:db8::1',
-				'203.0.113.7', '192.0.2.254', '2001:db8::53',
-			],
+			['198.51.100.1', '192.0.2.1', '203.0.113.7', '192.0.2.254', '2001:db8::1', '2001:db8::53'],
 			pfb_dns_proxy_listen(self::saved($interfaces)),
-			'loopbacks first, then interface addresses, then alias/carp VIPs; a proxyarp VIP, the duplicate '
-			. 'VIP address and the link-local fe80::9 are left out'
+			'IPv4 interfaces and VIPs, then IPv6 ones, as pfSense lists them; no loopback, no link-local fe80::9, '
+			. 'the duplicate VIP address once'
 		);
+	}
+
+	public function testTheListenDerivationReadsNoVipFromConfigXmlBecausePfsenseAlreadyListsThem(): void
+	{
+		// Given a VIP in config.xml that pfSense's own address lists do not carry
+		$this->seedBox();
+		$GLOBALS['config']['virtualip']['vip'] = [['mode' => 'ipalias', 'subnet' => '203.0.113.99', 'interface' => 'wan']];
+
+		// Then the proxy does not add it on its own
+		$this->assertNotContains('203.0.113.99', pfb_dns_proxy_listen(self::saved('all')));
 	}
 
 	// -----------------------------------------------------------------------
@@ -215,19 +229,16 @@ final class DnsProxyListenTest extends TestCase
 			'opt1' => '$(touch /tmp/pwned)',
 			'opt2' => '192.0.2.2 ',
 			'opt3' => '192.0.2.3',
+			'_vipa' => "192.0.2.9\n--listen 0.0.0.0",
+			'_vipb' => '192.0.2.8 && reboot',
 		];
 		$GLOBALS['pfb_test_configured_ipv6'] = [
 			'opt1' => '2001:db8::1%em1',
 			'opt2' => 'fe80::1%em0',
 			'opt3' => '`id`',
 		];
-		$GLOBALS['config']['virtualip']['vip'] = [
-			['mode' => 'ipalias', 'subnet' => "192.0.2.9\n--listen 0.0.0.0"],
-			['mode' => 'ipalias', 'subnet' => '192.0.2.8 && reboot'],
-			['mode' => 'carp'],
-		];
 
-		$this->assertSame(['127.0.0.1', '::1', '192.0.2.3'], pfb_dns_proxy_listen(self::saved('all')));
+		$this->assertSame(['192.0.2.3'], pfb_dns_proxy_listen(self::saved('all')));
 	}
 
 	public function testAnInterfaceNameWithShellMetacharactersYieldsNoAddress(): void

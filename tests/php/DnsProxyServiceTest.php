@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
  * issue #3515 -- the DNS proxy runs as the supervised rc service pfb_dns_proxy.
  *
  * Function under test: pfb_dns_proxy_service() -- writes /usr/local/etc/rc.d/pfb_dns_proxy.sh from the SAVED
- * Resolver (listen addresses, DoT) and reports whether it rewrote the file. Intent pinned here:
+ * Resolver (listen addresses, DoT). Intent pinned here:
  *   - the rc script launches the shipped proxy only through pfb_python.sh, on exactly the saved addresses,
  *     as the unprivileged `unbound` user, with every value shell-quoted and stdio detached;
  *   - it starts only while DNSBL, the proxy toggle and the moved-Resolver snapshot are all set, and never
@@ -18,7 +18,7 @@ use PHPUnit\Framework\TestCase;
  *   - it stops by TERM, KILL at 5 s, giving up (status 1) at 7 s, signalling only live processes that its
  *     own pidfiles name AND whose command line is the proxy's, so a stale pidfile whose pid was reused can
  *     never get an unrelated process killed;
- *   - it is rewritten only when its content changes.
+ *   - it is written on every call, like the other pfBlockerNG rc services.
  *
  * The real generator's output is written through the write_rcfile() double (wrapped as pfSense wraps it) and
  * executed under dash. Every absolute executable path is redirected to a sandbox command double (a path with
@@ -197,7 +197,6 @@ final class DnsProxyServiceTest extends TestCase
 	private function moveResolver(bool $dot = FALSE, string $interfaces = 'lan', array $v4 = ['lan' => '192.0.2.1'], array $v6 = []): void
 	{
 		$keys = [
-			'port'             => ['present' => TRUE, 'value' => '53'],
 			'active_interface' => ['present' => TRUE, 'value' => $interfaces],
 			'enablessl'        => ['present' => $dot, 'value' => $dot ? '' : NULL],
 			'custom_options'   => ['present' => FALSE, 'value' => NULL],
@@ -209,9 +208,9 @@ final class DnsProxyServiceTest extends TestCase
 		$GLOBALS['pfb_test_interface_info'] = array_fill_keys(array_keys($v4 + $v6), $up);
 	}
 
-	private function generate(): bool
+	private function generate(): void
 	{
-		return pfb_dns_proxy_service("{$this->dir}/rc/" . self::RC);
+		pfb_dns_proxy_service();
 	}
 
 	private function rcText(): string
@@ -340,7 +339,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
 
 		// When the rc service is generated and started under dash
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange();
 		[$status, $output] = $this->rc('start');
 
@@ -363,7 +362,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testScriptNamesNoInterpreterPathAndQuotesEveryListenValue(): void
 	{
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$text = $this->rcText();
 
 		$this->assertDoesNotMatchRegularExpression('~\bpython|/bin/php|\bphp\b~i', $text,
@@ -376,7 +375,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testGeneratedScriptIsValidPosixShell(): void
 	{
 		$this->moveResolver(TRUE);
-		$this->assertTrue($this->generate());
+		$this->generate();
 
 		$proc = proc_open([$this->shell, '-n', "{$this->dir}/rc/" . self::RC], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes);
 		$this->assertIsResource($proc);
@@ -395,7 +394,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testDotIsPassedExactlyWhenTheSavedResolverHadIt(bool $dot): void
 	{
 		$this->moveResolver($dot);
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange();
 		[$status, $output] = $this->rc('start');
 
@@ -413,7 +412,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$this->moveResolver(TRUE);
 		$GLOBALS['config']['unbound']['tlsport'] = '853; reboot';
-		$this->assertTrue($this->generate());
+		$this->generate();
 
 		$this->assertStringNotContainsString('tlsport', $this->rcText());
 		$this->assertStringNotContainsString('reboot', $this->rcText(),
@@ -440,7 +439,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		// Given a proxy that is running and a generated script whose gate has one condition closed
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange($gates, '2', '1', TRUE);
 
 		// When it is started (boot)
@@ -456,7 +455,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		// Given a saved Resolver whose only interface has no address at the last apply
 		$this->moveResolver(FALSE, 'opt9', [], []);
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange();
 
 		// When the service is started
@@ -472,7 +471,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testLauncherStdFdsAreDetachedToDevNull(): void
 	{
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange();
 
 		[$status, $output] = $this->rc('start');
@@ -490,7 +489,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		// Given a proxy that exits two ticks after TERM
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange([], '2', '1', TRUE);
 		$this->assertSame(['1001', '1002'], $this->livePids(), 'precondition: proxy alive');
 
@@ -509,7 +508,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		// Given a proxy that ignores TERM and dies one tick after KILL
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange([], 'never', '1', TRUE);
 
 		// When it is stopped
@@ -544,7 +543,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		// Given a proxy that survives both TERM and KILL
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange([], 'never', 'never', TRUE);
 
 		// When the service is stopped / started / restarted
@@ -561,7 +560,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testStartReplacesARunningProxyOnlyAfterItExited(): void
 	{
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange([], '2', '1', TRUE);
 
 		[$status, $output] = $this->rc('start');
@@ -588,7 +587,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		// Given a stale or hostile pidfile
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange();
 		if ($pidfile !== NULL) {
 			file_put_contents($this->pidfile('pfb_dns_proxy.pid'), str_replace('@DIR@', $this->dir, $pidfile));
@@ -609,7 +608,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testStartLaunchesEvenWhenAStalePidfileNamesAnUnrelatedLiveProcess(): void
 	{
 		$this->moveResolver();
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange();
 		file_put_contents($this->pidfile('pfb_dns_proxy.pid'), "1001\n");
 		file_put_contents("{$this->dir}/state/procs", "1001|X|||/usr/sbin/sshd -D\n");
@@ -621,58 +620,45 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// S3 -- rewrite only on change
+	// S3 -- written on every call, like the sibling services
 	// -----------------------------------------------------------------------
 
-	public function testTheScriptIsRewrittenOnlyWhenItsContentChanges(): void
+	public function testTheScriptIsWrittenOnEveryCallEvenWhenTheFileOnDiskIsAlreadyCurrent(): void
 	{
+		// Given the double writes where production looks (the appliance's rc.d), so a rewrite-only-on-change
+		// check would find an identical file there on the second call
+		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
+		@unlink(PFB_DNS_PROXY_RCFILE);
 		$this->moveResolver();
 
-		$this->assertTrue($this->generate(), 'first call: no file on disk, so it is written');
-		$this->assertSame(1, $GLOBALS['pfb_test_rcfile_writes'][self::RC]);
-		$first = $this->rcText();
+		// When the script is generated twice with the same inputs
+		pfb_dns_proxy_service();
+		$first = (string) file_get_contents(PFB_DNS_PROXY_RCFILE);
+		pfb_dns_proxy_service();
 
-		$this->assertFalse($this->generate(), 'second call, same inputs: nothing to write');
-		$this->assertSame(1, $GLOBALS['pfb_test_rcfile_writes'][self::RC], 'write_rcfile() was not called again');
-		$this->assertSame($first, $this->rcText());
+		// Then write_rcfile() ran both times, as for pfb_filter.sh and pfb_dnsbl.sh, with the same content
+		$this->assertSame(2, $GLOBALS['pfb_test_rcfile_writes'][self::RC]);
+		$this->assertSame($first, (string) file_get_contents(PFB_DNS_PROXY_RCFILE));
+		@unlink(PFB_DNS_PROXY_RCFILE);
+	}
+
+	public function testAnInterfaceAddressThatChangedIsInTheNextScript(): void
+	{
+		$this->moveResolver();
+		$this->generate();
+		$this->assertStringContainsString("'192.0.2.1'", $this->rcText());
 
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.77']);
-		$this->assertTrue($this->generate(), 'an interface address changed: the script is rewritten');
-		$this->assertSame(2, $GLOBALS['pfb_test_rcfile_writes'][self::RC]);
+		$this->generate();
+
 		$this->assertStringContainsString("'192.0.2.77'", $this->rcText());
 		$this->assertStringNotContainsString("'192.0.2.1'", $this->rcText());
-	}
-
-	public function testAnEditedScriptOnDiskIsRestored(): void
-	{
-		$this->moveResolver();
-		$this->assertTrue($this->generate());
-		$good = $this->rcText();
-		file_put_contents("{$this->dir}/rc/" . self::RC, str_replace("--port 53", "--port 5300", $good));
-
-		$this->assertTrue($this->generate(), 'the file on disk differs from the generated content');
-		$this->assertSame($good, $this->rcText());
-	}
-
-	public function testAnEditedStopBlockOnDiskIsRestoredEvenWhenTheStartBlockIsCurrent(): void
-	{
-		// Given a script whose rc_start body is exactly what would be generated and whose rc_stop body differs
-		$this->moveResolver();
-		$this->assertTrue($this->generate());
-		$good = $this->rcText();
-		$edited = str_replace('/bin/kill -TERM', '/bin/kill -HUP', $good);
-		$this->assertNotSame($good, $edited, 'the fixture edits the stop block');
-		$this->assertSame(strstr($good, 'rc_stop() {', TRUE), strstr($edited, 'rc_stop() {', TRUE), 'and only the stop block');
-		file_put_contents("{$this->dir}/rc/" . self::RC, $edited);
-
-		$this->assertTrue($this->generate(), 'a stale stop block alone is enough to rewrite the script');
-		$this->assertSame($good, $this->rcText());
 	}
 
 	public function testWithNoMovedResolverTheScriptStillExistsAndNeverLaunchesAnything(): void
 	{
 		// Given no snapshot (not in proxy mode): stop_service() can only reach a script that exists
-		$this->assertTrue($this->generate());
+		$this->generate();
 		$this->arrange(['GATE_SAVED' => '']);
 
 		[$status, $output] = $this->rc('start');
