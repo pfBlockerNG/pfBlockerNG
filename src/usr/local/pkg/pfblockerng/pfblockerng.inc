@@ -3550,6 +3550,8 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 const PFB_DNS_PROXY_UNBOUND_PORT = '5353';
 const PFB_DNS_PROXY_LINE = 'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT;
 const PFB_DNS_PROXY_RESOLVER_KEYS = ['port', 'active_interface', 'enablessl', 'custom_options'];
+// The proxy's own pid (daemon(8) -p); its supervisor writes pfb_dns_proxy_daemon.pid.
+const PFB_DNS_PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -11112,14 +11114,14 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive
 // marker (/var/unbound/pfb_py_reload.applied) — restoring the "lists live on return" invariant
 // the restart had. Queries NEVER stop during the wait (zero-downtime/zero-dropped). Returns
 // TRUE once applied; FALSE on timeout (in flight, not an error) or liveness loss. Default
-// liveness is the Unbound process: the reload-watcher thread lives inside it, so a dead
-// Unbound can never apply the generation (issue #3200).
+// liveness is the module host (Unbound, or the DNS proxy in proxy mode): the reload watcher
+// lives inside it, so a dead host can never apply the generation (issue #3200).
 // Poll cadence (~2s) + rebuild time bound the latency; the budget decides only how long
 // this caller waits before reporting the swap still in flight.
 function pfb_unbound_py_wait_applied($gen, $timeout_s = PFB_DNSBL_SWAP_WAIT, ?callable $alive = NULL) {
 	global $pfb;
 
-	$alive ??= static fn (): bool => is_process_running('unbound');
+	$alive ??= static fn (): bool => pfb_unbound_py_host_running();
 
 	return pfb_unbound_py_wait_marker("{$pfb['dnsbldir']}/pfb_py_reload.applied", $gen, $timeout_s, $alive);
 }
@@ -11992,6 +11994,11 @@ function pfb_dns_proxy_saved(): ?array {
 	return $saved;
 }
 
+/** TRUE iff the DNS proxy's pid file names a live process. */
+function pfb_dns_proxy_running(): bool {
+	return isvalidpid(PFB_DNS_PROXY_PIDFILE);
+}
+
 /**
  * Move the DNS Resolver to loopback 5353 for the DNS proxy ($on), or put it back ($on = FALSE).
  *
@@ -12621,13 +12628,37 @@ function pfb_stop_start_unbound($type) {
 }
 
 
-// ADR-10: is the DNSBL Unbound python integration the LIVE resolver mode? The
-// zero-downtime swap only applies when the in-memory matcher (pfb_unbound.py) is the
-// active blocklist source -- i.e. the resolver config has the python module wired in.
-// Read from config.xml (the source of truth), not a generated file.
+// ADR-10: is the Python DNSBL runtime the LIVE resolver mode? The zero-downtime swap only applies when the
+// in-memory matcher (pfb_unbound.py) is the active blocklist source: Unbound's python keys in config.xml
+// (the source of truth, not a generated file) or, issue #3515, the DNS proxy hosting it (Resolver snapshot).
 function pfb_unbound_py_mode_active() {
 	return (config_path_enabled('unbound', 'python') &&
-		config_get_path('unbound/python_script') == 'pfb_unbound');
+		config_get_path('unbound/python_script') == 'pfb_unbound') ||
+		pfb_dns_proxy_saved() !== NULL;
+}
+
+// issue #3515: liveness of the process hosting the DNSBL module -- the DNS proxy in proxy mode, else Unbound.
+function pfb_unbound_py_host_running(): bool {
+	return pfb_dns_proxy_saved() !== NULL ? pfb_dns_proxy_running() : is_process_running('unbound');
+}
+
+// Is the module wired into its host? Proxy mode: the proxy loads it itself, so wired == running.
+// Otherwise unbound.conf must reference pfb_unbound.py. Shared with the dashboard widget.
+function pfb_unbound_py_module_wired(): bool {
+	global $pfb;
+
+	if (pfb_dns_proxy_saved() !== NULL) {
+		return pfb_dns_proxy_running();
+	}
+
+	$unbound_conf = "{$pfb['dnsbldir']}/unbound.conf";
+	if (!file_exists($unbound_conf)) {
+		return FALSE;
+	}
+	// @-suppressed: a TOCTOU race (deleted/unreadable between the check above and here)
+	// returns FALSE, not a string -- strpos(FALSE, ...) is a PHP 8+ TypeError otherwise.
+	$conf_contents = @file_get_contents($unbound_conf);
+	return $conf_contents !== FALSE && strpos($conf_contents, 'pfb_unbound.py') !== FALSE;
 }
 
 /*
@@ -12786,7 +12817,8 @@ function pfb_dnsbl_manifest_missing(array $pfb): bool {
 
 // ADR-61: is DNSBL's live matcher state actually caught up with what it was told to
 // become? TRUE iff the sentinel/applied generations agree (or neither has ever been
-// written), Unbound is running, and unbound.conf still wires pfb_unbound.py. Pure
+// written), the module host is running, and the module is wired in
+// (pfb_unbound_py_host_running(), pfb_unbound_py_module_wired()). Pure
 // read -- no writes, no waiting/polling. Reused by pfb_reload_unbound()'s own
 // apply-stage writer/clearer and by the tick reconciliation step.
 function pfb_dnsbl_converged(): bool {
@@ -12798,19 +12830,7 @@ function pfb_dnsbl_converged(): bool {
 		return FALSE;
 	}
 
-	if (!is_process_running('unbound')) {
-		return FALSE;
-	}
-
-	// Mirrors the widget's $unbound_validate check (pfblockerng.widget.php) verbatim.
-	$unbound_conf = "{$pfb['dnsbldir']}/unbound.conf";
-	if (!file_exists($unbound_conf)) {
-		return FALSE;
-	}
-	// @-suppressed: a TOCTOU race (deleted/unreadable between the check above and here)
-	// returns FALSE, not a string -- strpos(FALSE, ...) is a PHP 8+ TypeError otherwise.
-	$conf_contents = @file_get_contents($unbound_conf);
-	return $conf_contents !== FALSE && strpos($conf_contents, 'pfb_unbound.py') !== FALSE;
+	return pfb_unbound_py_host_running() && pfb_unbound_py_module_wired();
 }
 
 // ADR-61: the DNSBL apply-stage writer/clearer decision, shared by every point in
@@ -12842,7 +12862,7 @@ function pfb_dnsbl_apply_retry(): void {
 
 	if (!pfb_dnsbl_converged()
 	    && pfb_unbound_py_mode_active()
-	    && is_process_running('unbound')
+	    && pfb_unbound_py_host_running()
 	    && empty($pfb['dnsbl_python_unmount'])
 	    && !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
 		pfb_unbound_py_flip_sentinel();
@@ -12872,9 +12892,9 @@ function pfb_dnsbl_manifest_failure_notice(): bool {
 }
 
 // Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
-// custom-list edit) already published atomically to the manifest. When python is live, unbound
-// is running, no config change is pending, and the RAM gate fits, this takes the ZERO-DOWNTIME
-// fast path (flip the reload sentinel, no restart). Any other case falls back to the restart
+// custom-list edit) already published atomically to the manifest. When python is live, its host
+// (Unbound, or the DNS proxy) is running, no config change is pending, and the RAM gate fits, this
+// takes the ZERO-DOWNTIME fast path (flip the reload sentinel, no restart). Any other case falls back to the restart
 // (fail-safe; PHP is the PRIMARY gate — never "flip and hope"). Returns TRUE only after the
 // applied-generation handshake; FALSE = restart fallback (resolver broken) OR unconfirmed-
 // in-flight (issue #3200): queries keep the previous snapshot and the ADR-61 tick retry
@@ -12892,14 +12912,14 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	}
 
 	// ZERO-DOWNTIME DATA FAST PATH (no restart). Eligible iff this is a data-only update
-	// in the live python mode, unbound is up, NO config change is staged (a pending
+	// in the live python mode, its host (Unbound or the DNS proxy) is up, NO config change is staged (a pending
 	// unbound.tmp or an unmount-in-progress means the resolver config changed -> restart),
 	// and the primary RAM gate says the ~2x transient build fits. Otherwise fall through
 	// to the restart path below (also the fallback when the swap is unavailable).
 	if ($datapath &&
 	    $mode == 'enabled' &&
 	    pfb_unbound_py_mode_active() &&
-	    is_process_running('unbound') &&
+	    pfb_unbound_py_host_running() &&
 	    empty($pfb['dnsbl_python_unmount']) &&
 	    !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
 
@@ -12939,8 +12959,8 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 				// issue #3200: expiry is NOT a failure -- a slow/declined rebuild stays
 				// in flight, the previous snapshot keeps serving, and ADR-61 tick
 				// reconciliation re-publishes. Liveness, not the clock, separates
-				// in-flight from broken: a dead Unbound can never apply the generation.
-				if (is_process_running('unbound')) {
+				// in-flight from broken: a dead module host can never apply the generation.
+				if (pfb_unbound_py_host_running()) {
 					pfb_logger(" swap not confirmed within {$swap_wait_s}s -- swap still in flight, previous lists serving", 1);
 					// Same leak rationale as the flip-failure branch below (#713 bug 3):
 					// the alert/#51 caller has no later clear_work_files.
@@ -12958,10 +12978,10 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					return FALSE;
 				}
 
-				// Unbound exited during the swap: nothing will ever apply the generation,
+				// The module host exited during the swap: nothing will ever apply the generation,
 				// so fall through to the restart tail -- restarting is what brings DNS
 				// back with the new manifest.
-				pfb_logger("\nADR-10: swap unconfirmed -- Unbound exited during the swap; recovering via restart", 2);
+				pfb_logger("\nADR-10: swap unconfirmed -- the module host exited during the swap; recovering via restart", 2);
 				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 			}
 			else {
