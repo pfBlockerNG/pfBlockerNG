@@ -75,8 +75,10 @@ pytest:tests.test_cross_agent_tooling::test_semgrep_scans_a_php_inc_file_only_wi
 pytest:tests.test_context_budget::test_ledger_unreadable_fires  # root bypasses file permissions — denial cannot be simulated
 pytest:tests.test_context_budget::test_indirect_unreadable_helper_fails_closed  # root bypasses file permissions — denial cannot be simulated
 pytest:tests.test_issue1542_top1m_fixed_file::test_enabled_missing_directory_or_unreadable_fixed_file_fails_closed[unreadable]  # root bypasses file permissions — denial cannot be simulated
-pytest:tests.dns_proxy.test_privilege_drop::test_the_real_process_serves_as_the_named_user_and_its_files_belong_to_that_user[nobody]  # dropping root needs root; the runner is not root
-pytest:tests.dns_proxy.test_privilege_drop::test_the_real_process_serves_as_the_named_user_and_its_files_belong_to_that_user[root]  # dropping root needs root; the runner is not root
+
+# pytest -- the reverse of the root-bypass entries above: these two skip only when the invoking uid is NOT 0.
+pytest:tests.dns_proxy.test_privilege_drop::test_the_real_process_serves_as_the_named_user_and_its_files_belong_to_that_user[nobody]  # skipped when os.geteuid() != 0: the test starts the proxy as root so that it can give root up; a root run executes it
+pytest:tests.dns_proxy.test_privilege_drop::test_the_real_process_serves_as_the_named_user_and_its_files_belong_to_that_user[root]  # skipped when os.geteuid() != 0: the test starts the proxy as root so that it can give root up; a root run executes it
 
 # ui -- the live-VM Tier-B browser legs. Whether any pre-defined feed exposes an
 # Alternate-URL radio is feed-data dependent, so the case has always skipped cleanly when

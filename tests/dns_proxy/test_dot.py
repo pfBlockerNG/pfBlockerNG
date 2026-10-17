@@ -33,7 +33,7 @@ from dot_helpers import (
     make_certificate,
 )
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, PROTO_DIR
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query
+from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, serve_dot
 
 CRT = b"-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n"
 KEY = b"-----BEGIN PRIVATE KEY-----\nREVG\n-----END PRIVATE KEY-----\n"
@@ -274,8 +274,8 @@ def test_tls_1_2_and_1_3_clients_are_both_served(
 
     async def scenario() -> tuple[bytes, str]:
         frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
-        [server] = await frontend.start_dot(
-            ["127.0.0.1"], 0, pfsense_dot.server_context(pfsense_dot.DotSettings(853, *certificate))
+        [server] = await serve_dot(
+            frontend, ["127.0.0.1"], 0, pfsense_dot.server_context(pfsense_dot.DotSettings(853, *certificate))
         )
         try:
             reply, _, version = await dot_exchange(server, build_query(BLOCKED), trust, max_version=max_version)

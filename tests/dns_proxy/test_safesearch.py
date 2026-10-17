@@ -19,7 +19,15 @@ import proxyv2
 import pytest
 import unbound_shim as shim
 from frontend_constants import DNSBL_IPV4, Booted
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, tcp_exchange, udp_exchange
+from frontend_helpers import (
+    WATCHDOG,
+    FakeProxyUpstream,
+    FakeUnbound,
+    build_query,
+    serve_plain,
+    tcp_exchange,
+    udp_exchange,
+)
 
 CLIENT = "192.0.2.10"
 DUCK = "duck.example."
@@ -260,7 +268,7 @@ def test_the_chase_reaches_unbound_behind_the_same_proxyv2_header_as_the_clients
         unbound = FakeUnbound(ZONE)
         async with FakeProxyUpstream(unbound) as upstream:
             frontend = pfb_dns_proxy.Frontend(ss_booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await frontend.start(["127.0.0.1"], 0)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             try:
                 udp, udp_client = await udp_exchange(server, build_query(DUCK), source="127.0.0.5")
                 udp_headers = list(upstream.headers)

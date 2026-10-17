@@ -203,31 +203,15 @@ def bind(host: str, port: int, *, udp: bool) -> Listener:
     return Listener(host, tcp, datagrams)
 
 
-def _skip(exc: ListenError) -> None:
-    shim.log_warn(exc)
-
-
-def _raise(exc: ListenError) -> None:
-    raise exc
-
-
-def bind_all(
-    listen: Sequence[str], port: int, *, udp: bool, skipped: Callable[[ListenError], object]
-) -> list[Listener]:
-    """bind() on each address on its own: one that cannot be bound goes to `skipped` and is left out, so the result may
-    be empty. If `skipped` raises, the ones already bound are closed before the error propagates.
-    """
+def bind_all(listen: Sequence[str], port: int, *, udp: bool) -> list[Listener]:
+    """bind() on each address on its own: one that cannot be bound is logged as a warning and left out, so the result
+    may be empty."""
     bound: list[Listener] = []
-    try:
-        for host in listen:
-            try:
-                bound.append(bind(host, port, udp=udp))
-            except ListenError as exc:
-                skipped(exc)
-    except BaseException:
-        for listener in bound:
-            listener.close()
-        raise
+    for host in listen:
+        try:
+            bound.append(bind(host, port, udp=udp))
+        except ListenError as exc:
+            shim.log_warn(exc)
     return bound
 
 
@@ -396,14 +380,6 @@ class Frontend:
                 self._udp.append(transport)  # type: ignore[arg-type]
             bound.append((listener.host, listener.tcp.getsockname()[1]))
         return bound
-
-    async def start_dot(self, listen: Sequence[str], port: int, context: ssl.SSLContext) -> list[tuple[str, int]]:
-        """Serve DNS over TLS on each address; returns the bound (host, port)s."""
-        return await self.serve_listeners(bind_all(listen, port, udp=False, skipped=_raise), context)
-
-    async def start(self, listen: Sequence[str], port: int) -> list[tuple[str, int]]:
-        """Serve UDP and TCP on each address (port 0 picks one port per address); returns the bound (host, port)s."""
-        return await self.serve_listeners(bind_all(listen, port, udp=True, skipped=_raise))
 
     async def stop(self) -> None:
         for server in self._servers:
@@ -632,11 +608,11 @@ async def serve(
     listeners: list[Listener] = []
     dot_listeners: list[Listener] = []
     try:
-        listeners.extend(bind_all(listen, args.port, udp=True, skipped=_skip))
+        listeners.extend(bind_all(listen, args.port, udp=True))
         if not listeners:
             raise ListenError("no address could be bound")
         if dot is not None:
-            dot_listeners.extend(bind_all(listen, dot.port, udp=False, skipped=_skip))
+            dot_listeners.extend(bind_all(listen, dot.port, udp=False))
         if account is not None:
             drop_privileges(account)
         module = boot(args.module_dir)

@@ -28,6 +28,7 @@ from frontend_helpers import (
     FakeProxyUpstream,
     FakeUnbound,
     build_query,
+    serve_plain,
     split_proxy_header,
     udp_exchange,
 )
@@ -153,7 +154,7 @@ def test_udp_queries_beyond_the_in_flight_limit_are_dropped_with_one_log_line(
             frontend = pfb_dns_proxy.Frontend(
                 booted.module, ("127.0.0.1", upstream.port), timeout=0.3, max_udp_inflight=4
             )
-            [server] = await frontend.start(["127.0.0.1"], 0)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             collector = _Collector()
             transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
                 lambda: collector, remote_addr=server
@@ -191,7 +192,7 @@ def test_no_descriptor_for_an_upstream_socket_is_one_log_line_and_a_servfail(
 
     async def scenario() -> bytes:
         frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
-        [server] = await frontend.start(["127.0.0.1"], 0)
+        [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
         monkeypatch.setattr(asyncio.BaseEventLoop, "create_datagram_endpoint", out_of_descriptors)
         try:
             return (await udp_exchange(server, build_query(ALLOWED)))[0]
@@ -219,7 +220,7 @@ def test_a_tcp_client_that_stops_reading_loses_its_connection(booted: Booted, mo
     async def scenario() -> bytes:
         nonlocal server_port
         frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
-        [server] = await frontend.start(["127.0.0.1"], 0)
+        [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
         server_port = server[1]
         monkeypatch.setattr(asyncio.StreamWriter, "drain", drain_that_never_finishes_on_the_server_side)
         try:
@@ -279,7 +280,7 @@ def test_an_upstream_tcp_connection_unbound_closed_while_idle_is_reopened_once(b
     async def scenario() -> tuple[list[bytes], int]:
         async with _AnswersOnceThenCloses(FakeUnbound(ZONE)) as upstream:
             frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await frontend.start(["127.0.0.1"], 0)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             try:
                 reader, writer = await asyncio.open_connection(*server)
                 replies = []
@@ -360,7 +361,7 @@ def _asked_over_udp(booted: Booted, script: Callable[[dnswire.Message], list[byt
             lambda: _ScriptedUnbound(script), local_addr=("127.0.0.1", 0)
         )
         frontend = pfb_dns_proxy.Frontend(booted.module, upstream.get_extra_info("sockname")[:2], timeout=0.3)
-        [server] = await frontend.start(["127.0.0.1"], 0)
+        [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
         try:
             return (await udp_exchange(server, build_query(ALLOWED, qid=0x1234)))[0]
         finally:
