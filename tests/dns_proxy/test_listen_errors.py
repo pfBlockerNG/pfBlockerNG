@@ -1,7 +1,14 @@
-"""Startup when a socket cannot be bound: exit 1 with one line on stderr, nothing left open, the module never boots."""
+"""Startup when a socket cannot be bound: that address is skipped with one log line and the others are served; the
+proxy exits 1 (nothing booted) only when no UDP+TCP address binds at all. DoT is bound per address the same way.
+
+The rc script bakes the addresses of the last apply, so an address that has since gone away (a DHCP or PPPoE
+change, a VIP on a disabled interface) must not take DNS down on the addresses that are still there.
+"""
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import errno
 import os
 import socket
@@ -9,13 +16,20 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+import dnswire
 import pfb_dns_proxy
 import pytest
 from dot_helpers import REFID, b64, cert_element, config_xml
-from frontend_constants import PROTO_DIR
+from frontend_constants import BLOCKED, DNSBL_IPV4, PROTO_DIR
+from frontend_helpers import WATCHDOG, build_query, udp_exchange
 
 IN_USE = os.strerror(errno.EADDRINUSE)
+NOT_ON_THIS_BOX = os.strerror(errno.EADDRNOTAVAIL)
+SKIPPED = "pfb_dns_proxy warning: cannot listen on {host}:{port}: {reason}"
+NONE_BOUND = "pfb_dns_proxy: no address could be bound"
+DNSBL_VIP4 = socket.inet_aton(DNSBL_IPV4)
 
 
 @pytest.fixture
@@ -26,61 +40,159 @@ def busy_port() -> Iterator[int]:
 
 
 @pytest.fixture
-def recorded_binds(monkeypatch: pytest.MonkeyPatch) -> list[pfb_dns_proxy.Listener]:
-    """Every Listener bind() hands out; and a boot() that fails the test: nothing boots after a failed bind."""
-    bound: list[pfb_dns_proxy.Listener] = []
-    real = pfb_dns_proxy.bind
-
-    def recording(host: str, port: int, *, udp: bool) -> pfb_dns_proxy.Listener:
-        listener = real(host, port, udp=udp)
-        bound.append(listener)
-        return listener
-
-    monkeypatch.setattr(pfb_dns_proxy, "bind", recording)
+def no_boot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A boot() that fails the test: nothing boots when no address could be bound."""
     monkeypatch.setattr(pfb_dns_proxy, "boot", lambda *_: pytest.fail("the module must not boot"))
-    return bound
 
 
-def _closed(listener: pfb_dns_proxy.Listener) -> bool:
-    return listener.tcp.fileno() == -1 and (listener.udp is None or listener.udp.fileno() == -1)
+@pytest.fixture
+def quiet_boot(module_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real module, booted from `module_dir` without its /var/log files."""
+    real_boot = pfb_dns_proxy.boot
+
+    def boot_without_log_files(directory: str) -> Any:
+        module = real_boot(directory)
+        monkeypatch.setattr(module, "pfb_log", lambda name, line: None)  # the module logs to /var/log/pfblockerng
+        return module
+
+    monkeypatch.chdir(module_dir)
+    monkeypatch.setattr(sys, "stderr", sys.stderr)  # init_standard() replaces it; register the auto-restore
+    monkeypatch.setattr(pfb_dns_proxy, "boot", boot_without_log_files)
 
 
-def test_a_port_in_use_on_the_second_address_exits_1_with_one_line_and_releases_the_first(
-    busy_port: int, recorded_binds: list[pfb_dns_proxy.Listener], capsys: pytest.CaptureFixture[str]
-) -> None:
-    argv = ["--listen", "127.0.0.1", "--listen", "127.0.0.2", "--port", str(busy_port)]
-    assert pfb_dns_proxy.main(argv) == 1
-    assert capsys.readouterr().err == f"pfb_dns_proxy: cannot listen on 127.0.0.2:{busy_port}: {IN_USE}\n"
-    assert len(recorded_binds) == 1  # 127.0.0.1 was bound before 127.0.0.2 failed ...
-    assert [_closed(listener) for listener in recorded_binds] == [True]  # ... and is given back
+def _serve(argv: list[str]) -> tuple[list[tuple[str, int]], list[bytes]]:
+    """Run serve() until it is ready, ask its first address for a blocked name, stop it: (listening on, answers)."""
+    args: argparse.Namespace = pfb_dns_proxy.parse_args(["--upstream", "127.0.0.1:9", *argv])
+
+    async def scenario() -> tuple[list[tuple[str, int]], list[bytes]]:
+        stop = asyncio.Event()
+        ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
+        try:
+            bound = await asyncio.wait_for(ready, WATCHDOG)
+            reply = (await udp_exchange(bound[0], build_query(BLOCKED)))[0]
+            return bound, [rr.rdata for rr in dnswire.parse(reply).answers]
+        finally:
+            stop.set()
+            await asyncio.wait_for(task, WATCHDOG)
+
+    return asyncio.run(scenario())
 
 
-def test_a_dot_port_in_use_exits_1_with_one_line_and_releases_the_plain_listeners(
-    tmp_path: Path,
-    certificate: tuple[bytes, bytes],
-    recorded_binds: list[pfb_dns_proxy.Listener],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def _skip_lines(stderr: str) -> list[str]:
+    return [line for line in stderr.splitlines() if "cannot listen" in line]
+
+
+def _dot_config(directory: Path, certificate: tuple[bytes, bytes], tls_port: int) -> Path:
     crt, key = certificate
+    config = directory / "config.xml"
+    config.write_text(config_xml(tlsport=tls_port, entries=cert_element(REFID, b64(crt), b64(key))), encoding="utf-8")
+    return config
+
+
+UNBINDABLE = [
+    pytest.param("127.0.0.2", IN_USE, id="port in use"),
+    pytest.param("203.0.113.9", NOT_ON_THIS_BOX, id="not an address of this box"),
+]
+
+
+@pytest.mark.parametrize(("host", "reason"), UNBINDABLE)
+def test_an_address_that_cannot_bind_is_skipped_with_one_line_and_the_others_are_served(
+    host: str,
+    reason: str,
+    busy_port: int,
+    module_dir: Path,
+    quiet_boot: None,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    argv = ["--listen", "127.0.0.1", "--listen", host, "--port", str(busy_port), "--module-dir", str(module_dir)]
+
+    bound, answers = _serve(argv)
+
+    assert bound == [("127.0.0.1", busy_port)]  # the address that exists is served, the one that does not is not ...
+    assert answers == [DNSBL_VIP4]  # ... and answers: the module booted and DNSBL decisions are made there
+    err = capfd.readouterr().err
+    assert _skip_lines(err) == [SKIPPED.format(host=host, port=busy_port, reason=reason)]  # once, one line
+    assert "Traceback" not in err
+
+
+def test_an_address_that_cannot_bind_is_skipped_wherever_it_is_in_the_list(
+    busy_port: int, module_dir: Path, quiet_boot: None, capfd: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["--listen", "127.0.0.2", "--listen", "127.0.0.1", "--port", str(busy_port), "--module-dir", str(module_dir)]
+
+    bound, _ = _serve(argv)
+
+    assert bound == [("127.0.0.1", busy_port)]
+    assert _skip_lines(capfd.readouterr().err) == [SKIPPED.format(host="127.0.0.2", port=busy_port, reason=IN_USE)]
+
+
+def test_a_dot_address_that_cannot_bind_is_skipped_and_the_other_dot_addresses_are_served(
+    tmp_path: Path,
+    module_dir: Path,
+    certificate: tuple[bytes, bytes],
+    quiet_boot: None,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    with socket.create_server(("127.0.0.2", 0)) as occupant:
+        tls_port = occupant.getsockname()[1]  # 127.0.0.2 has a DoT listener already; 127.0.0.1 has none
+        config = _dot_config(tmp_path, certificate, tls_port)
+        argv = ["--listen", "127.0.0.1", "--listen", "127.0.0.2", "--port", "0", "--module-dir", str(module_dir)]
+
+        bound, _ = _serve([*argv, "--dot", "--pfsense-config", str(config)])
+
+    assert [address for address in bound if address[1] == tls_port] == [("127.0.0.1", tls_port)]
+    assert len(bound) == 3  # the plain pair on both addresses, DoT on one
+    assert _skip_lines(capfd.readouterr().err) == [SKIPPED.format(host="127.0.0.2", port=tls_port, reason=IN_USE)]
+
+
+def test_dot_that_binds_nowhere_does_not_stop_the_plain_listeners(
+    tmp_path: Path,
+    module_dir: Path,
+    certificate: tuple[bytes, bytes],
+    quiet_boot: None,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
     with socket.create_server(("127.0.0.1", 0)) as occupant:
-        port = occupant.getsockname()[1]
-        config = tmp_path / "config.xml"
-        config.write_text(config_xml(tlsport=port, entries=cert_element(REFID, b64(crt), b64(key))), encoding="utf-8")
-        status = pfb_dns_proxy.main(["--listen", "127.0.0.1", "--port", "0", "--dot", "--pfsense-config", str(config)])
-    assert status == 1
-    assert capsys.readouterr().err == f"pfb_dns_proxy: cannot listen on 127.0.0.1:{port}: {IN_USE}\n"
-    assert len(recorded_binds) == 1  # the UDP+TCP listener of 127.0.0.1 was bound before the DoT one failed ...
-    assert [_closed(listener) for listener in recorded_binds] == [True]  # ... and is given back
+        tls_port = occupant.getsockname()[1]
+        config = _dot_config(tmp_path, certificate, tls_port)
+        argv = ["--listen", "127.0.0.1", "--port", "0", "--module-dir", str(module_dir)]
+
+        bound, answers = _serve([*argv, "--dot", "--pfsense-config", str(config)])
+
+    assert [port for _, port in bound if port == tls_port] == []  # no DoT, ...
+    assert len(bound) == 1 and answers == [DNSBL_VIP4]  # ... and the plain listener still answers
+    assert _skip_lines(capfd.readouterr().err) == [SKIPPED.format(host="127.0.0.1", port=tls_port, reason=IN_USE)]
 
 
-def test_the_real_process_exits_1_with_one_line_when_a_port_is_in_use(busy_port: int, tmp_path: Path) -> None:
+def test_when_no_address_binds_each_is_logged_once_and_it_exits_1_without_booting(
+    busy_port: int, no_boot: None, capfd: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["--listen", "127.0.0.2", "--listen", "203.0.113.9", "--port", str(busy_port)]
+
+    assert pfb_dns_proxy.main(argv) == 1
+
+    assert capfd.readouterr().err.splitlines() == [
+        SKIPPED.format(host="127.0.0.2", port=busy_port, reason=IN_USE),
+        SKIPPED.format(host="203.0.113.9", port=busy_port, reason=NOT_ON_THIS_BOX),
+        NONE_BOUND,
+    ]
+
+
+def test_the_real_process_exits_1_with_one_line_per_address_when_none_can_be_bound(
+    busy_port: int, tmp_path: Path
+) -> None:
     run = subprocess.run(
-        [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--listen", "127.0.0.1", "--listen", "127.0.0.2"]
+        [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--listen", "127.0.0.2", "--listen", "203.0.113.9"]
         + ["--port", str(busy_port), "--module-dir", str(tmp_path)],
         capture_output=True,
         text=True,
         timeout=60,
         check=False,
     )
-    expected = f"pfb_dns_proxy: cannot listen on 127.0.0.2:{busy_port}: {IN_USE}\n"
-    assert (run.returncode, run.stdout, run.stderr) == (1, "", expected)
+    expected = [
+        SKIPPED.format(host="127.0.0.2", port=busy_port, reason=IN_USE),
+        SKIPPED.format(host="203.0.113.9", port=busy_port, reason=NOT_ON_THIS_BOX),
+        NONE_BOUND,
+    ]
+    assert (run.returncode, run.stdout, run.stderr.splitlines()) == (1, "", expected)
