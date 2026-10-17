@@ -173,18 +173,19 @@ checks run.
 
 ### Canonical gates (single source of truth — briefs and gates reference THIS table)
 
-Mechanical runner: `scripts/agent/run-gates.sh [--diff <base>]` (`--plan` to preview) —
-change table and runner together.
+Runner: `scripts/agent/run-gates.sh [--diff <base>]` (`--plan` previews) — change table and
+runner together.
 
 | Touched | Gates (all must pass) |
 | ------- | --------------------- |
-| Any diff (always-on) | `sh scripts/agent/check-graph-fresh.sh` — rebuilds `graphify-out/graph.json` (`PYTHONHASHSEED=0`, resolved Graphify launcher) and FAILS when the committed file differs: the commit that moves code moves the graph. Missing Graphify ⇒ FAIL, never SKIP. Fix: `PYTHONHASHSEED=0 graphify update .` + commit |
+| Any diff (always-on) | `sh scripts/agent/check-graph-fresh.sh` — rebuilds `graphify-out/graph.json` and FAILS when the committed file differs: the commit that moves code moves the graph. Missing Graphify ⇒ FAIL, never SKIP. Fix: `PYTHONHASHSEED=0 graphify update .` + commit |
 | Python (`*.py`) | `python3 -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
 | PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `composer phpstan` · `composer phpcs -- --standard=phpcs.xml.dist src/` |
-| Shell (`*.sh`) | `sh -n` · `shellcheck` (only `src/`, `scripts/`, `.claude/hooks/` — the scope `.githooks/pre-commit` + CI use; `tests/` shellspec specs trip SC2034 false-positives) · ShellSpec (next row) |
-| Any path but Markdown and `docs/` (CI's shell-tests trigger), or Markdown a ShellSpec guard reads (set in `gates_for()`, #3425) | `shellspec --shell "$(command -v dash)"` (dash = strict-POSIX ash sibling of FreeBSD sh — bash-as-sh masks appliance divergences. Dash missing ⇒ the hand-run substitution goes empty and the runner falls back to `sh`: INSTALL dash (`brew`/`apt install dash`), never drop the pin; plain `shellspec` is a last resort, named in the handoff) |
+| Shell (`*.sh`) | `sh -n` · `shellcheck` (only `src/`, `scripts/`, `.claude/hooks/` — the scope `.githooks/pre-commit` + CI use; `tests/` shellspec specs trip SC2034 false-positives) · ShellSpec |
+| Any path but Markdown and `docs/` (CI's shell-tests trigger), or Markdown a ShellSpec guard reads (set in `gates_for()`, #3425) | `shellspec --shell "$(command -v dash)"` (dash = strict-POSIX ash sibling of FreeBSD sh — bash-as-sh masks appliance divergences. Dash missing ⇒ the hand-run substitution goes empty and the runner falls back to `sh`: INSTALL dash (`brew`/`apt`), never drop the pin; plain `shellspec` is a last resort, named in the handoff) |
+| `go/**` | `gates_for()` Go line: gofmt, vet, test (Docker oracle), FreeBSD builds; no `go` ⇒ FAIL |
 | Markdown (`*.md`) | `npx markdownlint-cli2` |
-| `tests/skip-allowlist.txt` / `tests/fixtures/skip-allowlist-canary.xml` | `python3 -m pytest` — the skip-set checker, its red canary, and the tests parsing both files ride the pytest gate (issues #3166, #3174) |
+| `tests/skip-allowlist.txt` / `tests/fixtures/skip-allowlist-canary.xml` | `python3 -m pytest` — the skip-set checker, its red canary and the tests parsing both files ride that gate (#3166, #3174) |
 | `www/` | Reachable UI coverage exists for the change per test mandate #4 |
 
 ## Validating workflow records
