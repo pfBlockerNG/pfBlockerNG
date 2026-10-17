@@ -13,6 +13,7 @@ import struct
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from frontend_helpers import (
     FakeProxyUpstream,
     FakeUnbound,
     build_query,
+    split_proxy_header,
     udp_exchange,
 )
 
@@ -320,3 +322,73 @@ def test_a_name_first_written_beyond_the_14_bit_pointer_range_is_never_a_pointer
     wire = dnswire.encode(dnswire.Message(1, dnswire.QR, [], [filler, *late]))
     assert len(wire) > 0x4000 + 40  # the late names really start beyond what a pointer can reach
     assert [rr.name for rr in dnswire.parse(wire).answers] == ["a.example.", "x.late.example.", "y.late.example."]
+
+
+# --- an upstream reply that is not for this query ------------------------------------------------
+
+GENUINE, FORGED = "192.0.2.77", "192.0.2.66"
+
+
+class _ScriptedUnbound(asyncio.DatagramProtocol):
+    """A UDP Unbound that answers each query (PROXYv2 header stripped) with the datagrams `script` returns for it."""
+
+    def __init__(self, script: Callable[[dnswire.Message], list[bytes]]) -> None:
+        self.script = script
+        self.transport: asyncio.DatagramTransport | None = None
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self.transport = transport  # type: ignore[assignment]
+
+    def datagram_received(self, data: bytes, addr: Any) -> None:
+        assert self.transport is not None
+        for reply in self.script(dnswire.parse(split_proxy_header(data)[1])):
+            self.transport.sendto(reply, addr)
+
+
+def _reply_for(query: dnswire.Message, qid: int, address: str) -> bytes:
+    flags = dnswire.QR | dnswire.RA | dnswire.RD
+    return dnswire.encode(
+        dnswire.Message(qid, flags, query.questions, [dnswire.rr_from_text(f"{ALLOWED} 300 IN A {address}")])
+    )
+
+
+def _asked_over_udp(booted: Booted, script: Callable[[dnswire.Message], list[bytes]]) -> dnswire.Message:
+    """What a client gets for ALLOWED (qid 0x1234) over UDP when Unbound's datagrams are whatever `script` says."""
+
+    async def scenario() -> bytes:
+        upstream, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+            lambda: _ScriptedUnbound(script), local_addr=("127.0.0.1", 0)
+        )
+        frontend = pfb_dns_proxy.Frontend(booted.module, upstream.get_extra_info("sockname")[:2], timeout=0.3)
+        [server] = await frontend.start(["127.0.0.1"], 0)
+        try:
+            return (await udp_exchange(server, build_query(ALLOWED, qid=0x1234)))[0]
+        finally:
+            await frontend.stop()
+            upstream.close()
+
+    return dnswire.parse(asyncio.run(scenario()))
+
+
+def test_upstream_replies_with_another_id_or_under_2_bytes_are_ignored_until_the_right_one_arrives(
+    booted: Booted,
+) -> None:
+    def script(query: dnswire.Message) -> list[bytes]:
+        forged = _reply_for(query, query.id ^ 0xFFFF, FORGED)
+        return [forged, b"", b"\x12", _reply_for(query, query.id, GENUINE)]
+
+    reply = _asked_over_udp(booted, script)
+    assert (reply.id, reply.rcode) == (0x1234, 0)
+    assert [rr.rdata for rr in reply.answers] == [bytes([192, 0, 2, 77])]  # the genuine address, not the forged one
+
+
+@pytest.mark.parametrize("kind", ["another-id", "empty", "one-byte"])
+def test_only_upstream_replies_that_are_not_for_this_query_give_servfail_after_the_timeout(
+    booted: Booted, kind: str
+) -> None:
+    def script(query: dnswire.Message) -> list[bytes]:
+        forged = {"another-id": _reply_for(query, query.id ^ 0xFFFF, FORGED), "empty": b"", "one-byte": b"\x12"}
+        return [forged[kind]]
+
+    reply = _asked_over_udp(booted, script)
+    assert (reply.id, reply.rcode, reply.answers) == (0x1234, 2, [])
