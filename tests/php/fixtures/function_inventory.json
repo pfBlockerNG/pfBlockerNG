@@ -1706,6 +1706,24 @@
             }
         ]
     },
+    "pfb_dns_proxy_deinstall": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
+    "pfb_dns_proxy_listen": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_resolver": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1719,6 +1737,11 @@
             }
         ]
     },
+    "pfb_dns_proxy_restart": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
     "pfb_dns_proxy_running": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1727,6 +1750,24 @@
     "pfb_dns_proxy_saved": {
         "returnsRef": false,
         "returnType": "?array",
+        "params": []
+    },
+    "pfb_dns_proxy_service": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "rcfile",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/etc/rc.d/pfb_dns_proxy.sh'"
+            }
+        ]
+    },
+    "pfb_dns_proxy_service_sync": {
+        "returnsRef": false,
+        "returnType": "void",
         "params": []
     },
     "pfb_dns_redirect_rule": {

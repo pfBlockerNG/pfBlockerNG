@@ -208,10 +208,23 @@ if (!function_exists('system_get_uniqueid')) {
 if (!function_exists('write_rcfile')) {
 	// pfb_filter_service()/pfb_dnsbl_service() call this at load time. Capture the rc
 	// array (keyed by its 'file') so a test can assert the generated start/stop bodies
-	// (e.g. the #662 daemon-fd-detach); behaviourally still a no-op on disk.
+	// (e.g. the #662 daemon-fd-detach), and count the writes per file. On disk it is a no-op unless a test
+	// sets $GLOBALS['pfb_test_rcfile_dir']: then the file is written there, wrapped as pfSense's
+	// service-utils.inc write_rcfile() wraps it (a test can then run it and a rewrite-on-change check can
+	// compare against it).
 	function write_rcfile($rc) {
 		if (isset($rc['file'])) {
 			$GLOBALS['pfb_test_rcfiles'][$rc['file']] = $rc;
+			$GLOBALS['pfb_test_rcfile_writes'][$rc['file']] = ($GLOBALS['pfb_test_rcfile_writes'][$rc['file']] ?? 0) + 1;
+			$dir = $GLOBALS['pfb_test_rcfile_dir'] ?? NULL;
+			if (is_string($dir) && !empty($rc['start'])) {
+				$restart = $rc['restart'] ?? "\trc_stop\n\trc_start\n";
+				file_put_contents("{$dir}/{$rc['file']}",
+					"#!/bin/sh\n# This file was automatically generated\n# by the pfSense service handler.\n\n"
+					. "rc_start() {\n\t{$rc['start']}\n}\n\nrc_stop() {\n\t{$rc['stop']}\n}\n\nrc_restart() {\n{$restart}\n}\n\n"
+					. "case \$1 in\n\tstart)\n\t\trc_start\n\t\t;;\n\tstop)\n\t\trc_stop\n\t\t;;\n\trestart)\n\t\trc_restart\n\t\t;;\nesac\n\n");
+				chmod("{$dir}/{$rc['file']}", 0755);
+			}
 		}
 		return true;
 	}
@@ -898,16 +911,43 @@ if (!function_exists('is_service_running')) {
 }
 
 if (!function_exists('restart_service')) {
-	// pfSense services.inc: restart a named rc.d service. No-op off-appliance.
+	// pfSense services.inc: restart a named rc.d service. Off-appliance nothing runs: the call is recorded
+	// in $GLOBALS['pfb_test_service_calls'] and handed to an optional $GLOBALS['pfb_test_service_hook'] callable
+	// ($fn, $service) so a test can snapshot state at call time (ordering assertions).
 	function restart_service($service) {
+		$GLOBALS['pfb_test_service_calls'][] = ['restart_service', $service];
+		if (is_callable($GLOBALS['pfb_test_service_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_service_hook']('restart_service', $service);
+		}
 		return TRUE;
 	}
 }
 
 if (!function_exists('stop_service')) {
-	// pfSense services.inc: stop a named rc.d service. No-op off-appliance.
+	// pfSense services.inc: stop a named rc.d service. Recorded like restart_service() above.
 	function stop_service($service) {
+		$GLOBALS['pfb_test_service_calls'][] = ['stop_service', $service];
+		if (is_callable($GLOBALS['pfb_test_service_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_service_hook']('stop_service', $service);
+		}
 		return TRUE;
+	}
+}
+
+if (!function_exists('get_interface_info')) {
+	// pfSense pfsense-utils.inc: per-interface status array, or NULL for a name that is not a configured
+	// interface (an IP entry, 'lo0'). Tests seed $GLOBALS['pfb_test_interface_info'] (name => ['status' =>
+	// 'up'|'down'|'no carrier', 'enable' => bool]); an absent key reads as NULL, as upstream.
+	function get_interface_info($ifdescr) {
+		return $GLOBALS['pfb_test_interface_info'][$ifdescr] ?? NULL;
+	}
+}
+
+if (!function_exists('get_configured_ip_addresses')) {
+	// pfSense util.inc: map of friendly interface / VIP id => runtime IPv4 address (NULL when unconfigured).
+	// Tests seed $GLOBALS['pfb_test_configured_ip_addresses']; default [].
+	function get_configured_ip_addresses() {
+		return $GLOBALS['pfb_test_configured_ip_addresses'] ?? [];
 	}
 }
 
