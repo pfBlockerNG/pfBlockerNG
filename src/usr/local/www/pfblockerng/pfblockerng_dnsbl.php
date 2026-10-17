@@ -2867,7 +2867,7 @@ $section->addInput(new Form_Checkbox(
 		. '<div class="infoblock">'
 		. 'Enabling it changes these DNS Resolver settings: Listen Port becomes 5353, Network Interfaces becomes Localhost, '
 		. 'SSL/TLS Service is turned off (the proxy serves DNS over TLS with the Resolver\'s certificate instead), '
-		. 'and <code>proxy-protocol-port: 5353</code> is added to Custom options.<br />'
+		. 'and a <code>server:</code> clause with <code>proxy-protocol-port: 5353</code> is added at the end of Custom options.<br />'
 		. 'The previous values are saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed.<br />'
 		. 'Default: <strong>Disabled</strong>'
 		. '</div>');
