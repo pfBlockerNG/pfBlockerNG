@@ -21,7 +21,7 @@ trait SyncPolicyFixtureTrait
 	private const EMBEDDED_KEY_PATH  = 'installedpackages/pfblockerngdnsbl/config/1/row/1/url';
 	private const EMBEDDED_KEY_VALUE = 'https://example.com/feed.txt?key=EMBEDDED-POLICY-KEY';
 
-	/** @return list<string> alias-qualified registry keys the spec classifies local (63) */
+	/** @return list<string> alias-qualified registry keys the spec classifies local (70) */
 	private static function localRegistryKeys(): array
 	{
 		$logs = [
@@ -66,6 +66,13 @@ trait SyncPolicyFixtureTrait
 			'dnsbl/pfb_cache_flush',
 			'dns/pfb_dns',
 			'dns/pfb_dns_saved',
+			'dnsbl/pfb_dns_proxy_doh',
+			'dnsbl/pfb_dns_proxy_doh_port',
+			'dnsbl/pfb_dns_proxy_doh_interface',
+			'dnsbl/pfb_dns_proxy_doh_trusted',
+			'dnsbl/pfb_dns_proxy_doq',
+			'dnsbl/pfb_dns_proxy_doq_port',
+			'dnsbl/pfb_dns_proxy_doq_interface',
 			'dnsbl/pfb_py_reply',
 			'dnsbl/pfb_py_nolog',
 			'dnsbl/pfb_control',
