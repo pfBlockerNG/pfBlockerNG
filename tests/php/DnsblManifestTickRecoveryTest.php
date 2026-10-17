@@ -346,7 +346,7 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 	{
 		$GLOBALS['config']['unbound'] = ['python' => '', 'python_script' => ''];
 		$keys = [];
-		foreach (['port' => '53', 'active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
+		foreach (['active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
 			$keys[$key] = ['present' => $value !== NULL, 'value' => $value];
 		}
 		config_set_path(

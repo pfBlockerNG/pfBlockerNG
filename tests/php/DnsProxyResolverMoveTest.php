@@ -7,10 +7,11 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #3515 -- the experimental DNS proxy takes the Resolver's client-facing place, so
- * pfb_dns_proxy_resolver() moves the Resolver to loopback 5353 through config.xml and
- * remembers every key it changed (presence AND value) in the registered marker
- * dnsbl/pfb_dns_proxy_saved; turning it off restores them exactly. pfb_dns_proxy_saved()
- * is the strict reader of that marker: anything but the documented shape is "no snapshot".
+ * pfb_dns_proxy_resolver() moves the Resolver onto loopback (its port stays 53: the firewall keeps resolving
+ * through it) and adds a marked server clause to custom_options that has Unbound also listen on 127.0.0.1 and
+ * ::1 port 5353 for the proxy's PROXYv2 stream. It remembers every key it changed (presence AND value) in the
+ * registered marker dnsbl/pfb_dns_proxy_saved; turning it off restores them exactly. pfb_dns_proxy_saved() is
+ * the strict reader of that marker: anything but the documented shape is "no snapshot".
  *
  * The moved Resolver is the persistent outcome (config.xml): these tests assert the config
  * after each call, never the mechanics of how it got there.
@@ -18,8 +19,11 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyResolverMoveTest extends TestCase
 {
 	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
-	private const KEYS  = ['port', 'active_interface', 'enablessl', 'custom_options'];
-	private const LINE  = 'proxy-protocol-port: 5353';
+	private const KEYS  = ['active_interface', 'enablessl', 'custom_options'];
+	private const MARKER = '# pfBlockerNG DNS proxy';
+	/** The clause the move appends when the Resolver has no IPv6 subnet to grant. */
+	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
+		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
 
 	private string $tmp;
 	private bool $hadPfb = FALSE;
@@ -42,6 +46,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$GLOBALS['pfb_test_file_notices'] = [];
 	}
 
 	protected function tearDown(): void
@@ -56,13 +61,13 @@ final class DnsProxyResolverMoveTest extends TestCase
 		} else {
 			unset($GLOBALS['config']);
 		}
-		unset($GLOBALS['pfb_test_write_config_calls']);
+		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_file_notices']);
 		rmdir_recursive($this->tmp);
 	}
 
 	/**
 	 * The Resolver as pfSense stores it: unrelated keys (they must never be touched) plus the
-	 * four keys the move owns. A NULL override deletes the key, so "absent" is a real state.
+	 * keys the move owns. A NULL override deletes the key, so "absent" is a real state.
 	 *
 	 * @param  array<string,?string> $override
 	 * @return array<string,string> the seeded `unbound` array
@@ -125,24 +130,24 @@ final class DnsProxyResolverMoveTest extends TestCase
 		return explode("\n", (string) base64_decode((string) config_get_path('unbound/custom_options'), TRUE));
 	}
 
-	private function proxyLineCount(): int
+	private function markerCount(): int
 	{
-		return count(array_filter($this->customLines(), static fn (string $l): bool => trim($l) === self::LINE));
+		return count(array_filter($this->customLines(), static fn (string $l): bool => trim($l) === self::MARKER));
 	}
 
 	/**
-	 * The Unbound clause (`server`, `forward-zone`, ...) the proxy line sits in, NULL when absent. pfSense 2.8.1
+	 * The Unbound clause (`server`, `forward-zone`, ...) our marker sits in, NULL when absent. pfSense 2.8.1
 	 * writes custom_options after its Forwarding block, so the text starts inside that `forward-zone:` clause (live
-	 * run, unbound.conf:105: a bare proxy-protocol-port there is a syntax error). A bare `name:` line holds a value;
+	 * run, unbound.conf:105: a bare option there is a syntax error). A bare `name:` line holds a value;
 	 * only a line that ends at its colon opens a clause.
 	 */
-	private function proxyLineClause(): ?string
+	private function markerClause(): ?string
 	{
 		$clause = 'forward-zone';
 		foreach ($this->customLines() as $line) {
 			if (preg_match('/^\s*([a-z][a-z-]*):\s*$/', $line, $m)) {
 				$clause = $m[1];
-			} elseif (trim($line) === self::LINE) {
+			} elseif (trim($line) === self::MARKER) {
 				return $clause;
 			}
 		}
@@ -154,7 +159,6 @@ final class DnsProxyResolverMoveTest extends TestCase
 	{
 		$cases = [];
 		$values = [
-			'port'             => ['53', '', 'abc'],
 			'active_interface' => ['lan,opt1', 'all', ''],
 			'enablessl'        => ['', 'yes'],
 			'custom_options'   => [base64_encode("do-ip6: no\nprefetch: yes"), ''],
@@ -173,17 +177,17 @@ final class DnsProxyResolverMoveTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	#[DataProvider('resolverShapes')]
-	public function testMoveOnRecordsEachKeyExactlyAsItWasPresentOrAbsentAndMovesTheResolver(string $key, ?string $value): void
+	public function testMoveOnRecordsEachKeyExactlyAsItWasPresentOrAbsentAndMovesTheResolverOntoLoopback(string $key, ?string $value): void
 	{
-		// Given a Resolver whose $key is in this shape, still on its own port.
+		// Given a Resolver whose $key is in this shape, still on its own interfaces.
 		$before = $this->seedResolver([$key => $value]);
-		$this->assertNotSame('5353', config_get_path('unbound/port'), 'before: the Resolver is not moved');
+		$this->assertNotSame('lo0', config_get_path('unbound/active_interface'), 'before: the Resolver is not moved');
 		$this->assertSame('', $this->savedRaw(), 'before: no snapshot');
 
 		// When the proxy is turned on.
 		$changed = pfb_dns_proxy_resolver(TRUE);
 
-		// Then it reports a config change, written once, with a snapshot of every key.
+		// Then it reports a config change, written once, with a snapshot of exactly the keys it changes.
 		$this->assertTrue($changed);
 		$this->assertSame(1, $this->writeCalls(), 'one write_config for the whole move');
 		$saved = pfb_dns_proxy_saved();
@@ -196,16 +200,37 @@ final class DnsProxyResolverMoveTest extends TestCase
 			$this->assertSame($expected, $saved[$k], "snapshot of {$k}");
 		}
 
-		// And the Resolver sits on loopback 5353, without DoT, with the PROXY line inside a server clause.
+		// And the Resolver sits on loopback, without DoT, with our marked block inside a server clause.
 		$after = config_get_path('unbound');
-		$this->assertSame('5353', $after['port']);
 		$this->assertSame('lo0', $after['active_interface']);
 		$this->assertArrayNotHasKey('enablessl', $after);
-		$this->assertSame('server', $this->proxyLineClause());
-		$this->assertSame(1, $this->proxyLineCount());
-		foreach (['enable', 'dnssec', 'sslcertref', 'tlsport'] as $untouched) {
+		$this->assertSame('server', $this->markerClause());
+		$this->assertSame(1, $this->markerCount());
+		foreach (['enable', 'dnssec', 'sslcertref', 'tlsport', 'port'] as $untouched) {
 			$this->assertSame($before[$untouched], $after[$untouched], "{$untouched} is not the move's to change");
 		}
+	}
+
+	/** @return array<string,array{0:?string}> the Resolver's listen port as the user left it */
+	public static function listenPorts(): array
+	{
+		return ['the default 53' => ['53'], 'an own port' => ['5300'], 'empty' => [''], 'absent' => [NULL]];
+	}
+
+	#[DataProvider('listenPorts')]
+	public function testTheListenPortIsNeverChangedByTheMoveOrTheRestore(?string $port): void
+	{
+		// Given a Resolver with this listen port: the firewall's own resolver entry (127.0.0.1) needs it to stay.
+		$this->seedResolver(['port' => $port]);
+		$had = config_get_path('unbound/port', 'ABSENT');
+
+		// When the proxy is turned on, then off again.
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$this->assertSame($had, config_get_path('unbound/port', 'ABSENT'), 'moved: the listen port is as it was');
+		$this->assertTrue(pfb_dns_proxy_resolver(FALSE));
+
+		// Then it is still as it was.
+		$this->assertSame($had, config_get_path('unbound/port', 'ABSENT'), 'restored: the listen port is as it was');
 	}
 
 	#[DataProvider('resolverShapes')]
@@ -255,10 +280,10 @@ final class DnsProxyResolverMoveTest extends TestCase
 	public static function drifts(): array
 	{
 		return [
-			'port back to 53'             => ['unbound/port', '53'],
 			'interfaces back to a LAN'    => ['unbound/active_interface', 'lan'],
 			'DoT switched back on'        => ['unbound/enablessl', ''],
-			'custom option line removed'  => ['unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes")],
+			'our block removed'           => ['unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes")],
+			'our block cut short'         => ['unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes\nserver:\n# pfBlockerNG DNS proxy\nproxy-protocol-port: 5353")],
 		];
 	}
 
@@ -278,57 +303,73 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 		// Then the moved values are back, and the snapshot is NOT replaced by the drifted values.
 		$this->assertTrue($changed);
-		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')));
+		$this->assertSame(1, $this->markerCount(), 'one block, never two');
 		$this->assertSame($snapshot, config_get_path(self::SAVED));
 		$this->assertSame(2, $this->writeCalls());
 	}
 
 	// -----------------------------------------------------------------------
-	// M4 -- never save moved values as the "previous" ones
+	// M4 -- never save moved values as the "previous" ones; a refused move is announced
 	// -----------------------------------------------------------------------
 
-	public function testMoveOnRefusesWhenTheResolverAlreadyLooksMovedAndNoSnapshotExists(): void
+	public function testMoveOnRefusesWhenTheResolverAlreadyCarriesOurBlockAndNoSnapshotExists(): void
 	{
-		// Given a Resolver already on 5353/lo0 with no snapshot (the snapshot was lost).
-		$this->seedResolver(['port' => '5353', 'active_interface' => 'lo0', 'enablessl' => NULL]);
+		// Given a Resolver carrying our block, on loopback, with no snapshot (the snapshot was lost).
+		$this->seedResolver([
+			'active_interface' => 'lo0',
+			'enablessl'        => NULL,
+			'custom_options'   => base64_encode("do-ip6: no\nprefetch: yes\n" . self::BLOCK),
+		]);
 		$config = $GLOBALS['config'];
 
 		// When the proxy is turned on.
 		$changed = pfb_dns_proxy_resolver(TRUE);
 
-		// Then it changes nothing and says why, instead of recording the moved values.
+		// Then it changes nothing and says why, instead of recording the moved values ...
 		$this->assertFalse($changed);
 		$this->assertSame(0, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
 		$this->assertStringContainsString('refusing to snapshot', $this->errorLog());
+
+		// ... and tells the operator, because DNSBL filters nothing while the toggle is on and the move is refused.
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$notice = $GLOBALS['pfb_test_file_notices'][0];
+		$this->assertStringContainsString('DNS proxy', $notice['notice']);
+		$this->assertStringContainsString('DNSBL', $notice['notice'], 'it says what the operator loses');
+		$this->assertSame('/services_unbound.php', $notice['url'], 'it points at the Resolver page');
+		$this->assertSame(2, $notice['priority']);
 	}
 
 	public function testMoveOnSnapshotsAResolverThatOnlyHalfLooksMoved(): void
 	{
-		// Given a Resolver on port 5353 but a LAN interface: not the moved shape.
-		$this->seedResolver(['port' => '5353']);
+		// Given the admin's own loopback Resolver, with their own PROXYv2 line but without our marked block.
+		$this->seedResolver([
+			'active_interface' => 'lo0',
+			'custom_options'   => base64_encode("server:\nproxy-protocol-port: 5353"),
+		]);
 
 		// When the proxy is turned on.
 		$changed = pfb_dns_proxy_resolver(TRUE);
 
-		// Then the user's values are recorded and the Resolver is moved.
+		// Then the user's values are recorded and our block is added after their text.
 		$this->assertTrue($changed);
-		$this->assertSame(['present' => TRUE, 'value' => 'lan,opt1'], pfb_dns_proxy_saved()['active_interface']);
-		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertSame(['present' => TRUE, 'value' => 'lo0'], pfb_dns_proxy_saved()['active_interface']);
+		$this->assertSame("server:\nproxy-protocol-port: 5353\n" . self::BLOCK, implode("\n", $this->customLines()));
 		$this->assertSame('', $this->errorLog());
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 
-	/** @return array<string,array{0:array<string,mixed>}> */
+	/** @return array<string,array{array<string,mixed>}> */
 	public static function unrepresentableResolvers(): array
 	{
 		return [
-			'a non-scalar port'                    => [['port' => ['53']]],
+			'a non-scalar DoT flag'                => [['enablessl' => ['x']]],
 			'a non-UTF-8 interface list'           => [['active_interface' => "lan\xff"]],
 		];
 	}
 
 	#[DataProvider('unrepresentableResolvers')]
-	public function testMoveOnRefusesAValueThatCannotBeStoredVerbatim(array $override): void
+	public function testMoveOnRefusesAValueThatCannotBeStoredVerbatimAndTellsTheOperator(array $override): void
 	{
 		// Given a Resolver key whose value a JSON snapshot could not restore as it was.
 		$this->seedResolver($override);
@@ -337,11 +378,22 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// When the proxy is turned on.
 		$changed = pfb_dns_proxy_resolver(TRUE);
 
-		// Then it refuses rather than moving a Resolver it could not restore.
+		// Then it refuses rather than moving a Resolver it could not restore, and says so in a notice.
 		$this->assertFalse($changed);
 		$this->assertSame(0, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
 		$this->assertStringContainsString('pfb_dns_proxy_saved', $this->errorLog());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$this->assertStringContainsString('DNSBL', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	public function testAMoveThatSucceedsRaisesNoNotice(): void
+	{
+		$this->seedResolver();
+
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -350,8 +402,8 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 	public function testMoveOffWithoutASnapshotChangesNothing(): void
 	{
-		// Given a Resolver that happens to sit on the moved values but has no snapshot.
-		$this->seedResolver(['port' => '5353', 'active_interface' => 'lo0']);
+		// Given a Resolver that happens to sit on loopback but has no snapshot and no block of ours.
+		$this->seedResolver(['active_interface' => 'lo0']);
 		$config = $GLOBALS['config'];
 
 		// When the proxy is turned off.
@@ -364,13 +416,13 @@ final class DnsProxyResolverMoveTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// M7 -- the PROXY line in custom_options
+	// M7 -- our block in custom_options
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{0:?string,1:?string}> original custom_options (NULL absent), expected decoded text after ON (NULL = unchanged) */
+	/** @return array<string,array{0:?string,1:string}> original custom_options (NULL absent), expected decoded text after ON */
 	public static function customOptionShapes(): array
 	{
-		$added = "server:\n" . self::LINE;
+		$added = self::BLOCK;
 		$forward = "do-ip6: no\nforward-zone:\n  name: \".\"\n  forward-addr: 192.0.2.1";
 		return [
 			'absent'                            => [NULL, $added],
@@ -378,18 +430,15 @@ final class DnsProxyResolverMoveTest extends TestCase
 			'existing option lines'             => [base64_encode("do-ip6: no\nprefetch: yes"), "do-ip6: no\nprefetch: yes\n" . $added],
 			'starting with a server clause'     => [base64_encode("server:\nlog-queries: yes\n"), "server:\nlog-queries: yes\n" . $added],
 			'ending in a forward-zone clause'   => [base64_encode($forward), $forward . "\n" . $added],
-			'already holding the proxy line'    => [base64_encode(self::LINE . "\ndo-ip6: no"), NULL],
-			'proxy line with surrounding blanks' => [base64_encode("  " . self::LINE . "  \ndo-ip6: no"), NULL],
-			'proxy line in the middle, padded'  => [base64_encode("do-ip6: no\n \t" . self::LINE . " \nprefetch: yes"), NULL],
-			'a commented-out proxy line'        => [base64_encode("# " . self::LINE . "\ndo-ip6: no"), "# " . self::LINE . "\ndo-ip6: no\n" . $added],
+			'a commented-out marker'            => [base64_encode("# # pfBlockerNG DNS proxy\ndo-ip6: no"), "# # pfBlockerNG DNS proxy\ndo-ip6: no\n" . $added],
 			'CRLF line endings'                 => [base64_encode("do-ip6: no\r\nprefetch: yes\r\n"), "do-ip6: no\nprefetch: yes\n" . $added],
 		];
 	}
 
 	#[DataProvider('customOptionShapes')]
-	public function testMoveOnAppendsAServerClauseWithTheProxyLineExactlyOnceAndMoveOffRestoresTheOriginalVerbatim(
+	public function testMoveOnAppendsOurServerClauseExactlyOnceAndMoveOffRestoresTheOriginalVerbatim(
 		?string $original,
-		?string $expectedText
+		string $expectedText
 	): void {
 		// Given a Resolver with this custom_options.
 		$this->seedResolver(['custom_options' => $original]);
@@ -397,20 +446,30 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// When the proxy is turned on.
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
 
-		// Then the proxy line occurs exactly once (a line equal to it after trimming), and when it was added it
-		// sits in a server clause opened after the user's own text, wherever that text ends.
-		$this->assertSame(1, $this->proxyLineCount());
-		if ($expectedText === NULL) {
-			$this->assertSame($original, config_get_path('unbound/custom_options'), 'an existing proxy line is left alone');
-		} else {
-			$this->assertSame($expectedText, implode("\n", $this->customLines()));
-			$this->assertSame('server', $this->proxyLineClause());
-		}
+		// Then our marker occurs exactly once, in a server clause opened after the user's own text, wherever
+		// that text ends.
+		$this->assertSame(1, $this->markerCount());
+		$this->assertSame($expectedText, implode("\n", $this->customLines()));
+		$this->assertSame('server', $this->markerClause());
 
 		// And turning it off puts the original value back verbatim (or removes the key again).
 		$this->assertTrue(pfb_dns_proxy_resolver(FALSE));
 		$this->assertSame($original, config_get_path('unbound/custom_options'));
 		$this->assertSame($original !== NULL, array_key_exists('custom_options', config_get_path('unbound')));
+	}
+
+	public function testAUsersOwnProxyProtocolLineIsNotOursSoOurBlockIsStillAdded(): void
+	{
+		// Given an admin who already runs their own PROXYv2 line (no marker of ours).
+		$own = "server:\nproxy-protocol-port: 5353";
+		$this->seedResolver(['custom_options' => base64_encode($own)]);
+
+		// When the proxy is turned on.
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+
+		// Then our block follows their text and the marker is ours alone.
+		$this->assertSame($own . "\n" . self::BLOCK, implode("\n", $this->customLines()));
+		$this->assertSame(1, $this->markerCount());
 	}
 
 	// -----------------------------------------------------------------------
@@ -422,11 +481,10 @@ final class DnsProxyResolverMoveTest extends TestCase
 		return ['present' => $present, 'value' => $value];
 	}
 
-	/** @return array<string,array<string,array{present:bool,value:?string}>> */
+	/** @return array<string,array{present:bool,value:?string}> */
 	private static function validSnapshot(): array
 	{
 		return [
-			'port'             => self::entry(TRUE, '53'),
 			'active_interface' => self::entry(TRUE, 'lan,opt1'),
 			'enablessl'        => self::entry(TRUE, ''),
 			'custom_options'   => self::entry(FALSE, NULL),
@@ -446,18 +504,19 @@ final class DnsProxyResolverMoveTest extends TestCase
 			'not base64'                         => ['!!!not base64!!!'],
 			'valid base64 with a stray character' => [substr(self::snapshotOf($valid), 0, 8) . '!' . substr(self::snapshotOf($valid), 8)],
 			'base64 of text that is not JSON'    => [base64_encode('not json')],
-			'a JSON string'                      => [base64_encode('"port"')],
+			'a JSON string'                      => [base64_encode('"active_interface"')],
 			'an empty JSON list'                 => [base64_encode('[]')],
 			'a key missing'                      => [self::snapshotOf($without('custom_options'))],
 			'an extra key'                       => [self::snapshotOf($valid + ['extra' => self::entry(FALSE, NULL)])],
-			'present as the string yes'          => [self::snapshotOf($with('port', self::entry('yes', '53')))],
-			'present as 1'                       => [self::snapshotOf($with('port', self::entry(1, '53')))],
-			'a value that is not a string'       => [self::snapshotOf($with('port', self::entry(TRUE, 53)))],
-			'present with a NULL value'          => [self::snapshotOf($with('port', self::entry(TRUE, NULL)))],
+			'a snapshot that still holds the port' => [self::snapshotOf($valid + ['port' => self::entry(TRUE, '53')])],
+			'present as the string yes'          => [self::snapshotOf($with('active_interface', self::entry('yes', 'lan')))],
+			'present as 1'                       => [self::snapshotOf($with('active_interface', self::entry(1, 'lan')))],
+			'a value that is not a string'       => [self::snapshotOf($with('active_interface', self::entry(TRUE, 53)))],
+			'present with a NULL value'          => [self::snapshotOf($with('active_interface', self::entry(TRUE, NULL)))],
 			'absent with a non-NULL value'       => [self::snapshotOf($with('custom_options', self::entry(FALSE, 'x')))],
-			'an entry that is not an object'     => [self::snapshotOf($with('port', '53'))],
-			'an entry without present'           => [self::snapshotOf($with('port', ['value' => '53']))],
-			'an entry with an extra key'         => [self::snapshotOf($with('port', self::entry(TRUE, '53') + ['junk' => 1]))],
+			'an entry that is not an object'     => [self::snapshotOf($with('active_interface', 'lan'))],
+			'an entry without present'           => [self::snapshotOf($with('active_interface', ['value' => 'lan']))],
+			'an entry with an extra key'         => [self::snapshotOf($with('active_interface', self::entry(TRUE, 'lan') + ['junk' => 1]))],
 		];
 	}
 

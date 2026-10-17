@@ -387,20 +387,32 @@ decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. Se
 ### Experimental DNS proxy mode (issue #3515)
 
 With the DNSBL **DNS Proxy** toggle on, pfBlockerNG's DNS proxy serves the Resolver's client-facing
-interfaces and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/python*` config.xml keys
+interfaces on port 53 and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/python*` config.xml keys
 (`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it; the proxy imports
 the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
-moves the Resolver through config.xml (never `unbound.conf` directly): `unbound/port` 5353,
-`active_interface` `lo0`, `enablessl` removed, a `server:` clause with `proxy-protocol-port: 5353` appended to
-`custom_options` (pfSense writes custom options after its Forwarding `forward-zone:` block, so a bare line there
-is a syntax error), then `services_unbound_configure(FALSE)`
-regenerates `unbound.conf`. The presence and value of those four keys are saved first in the per-node
-(`sync` local) registered marker `dnsbl/pfb_dns_proxy_saved` (base64 JSON in config.xml, so it survives
-reboot and backup restore) and restored exactly, with the module back in Unbound, when the toggle is
-turned off, DNSBL is disabled, the setup wizard resets the package config, or the package is removed
-(its disable pass). A lost marker on an already-moved Resolver is refused with an error, never re-saved
-as the "previous" values. Edits to those four Resolver settings made while the Resolver is moved are
-overwritten on the next apply, and the restore returns the values saved at toggle-on, not the edited ones.
+moves the Resolver through config.xml (never `unbound.conf` directly): `active_interface` `lo0`, `enablessl`
+removed, and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its
+Forwarding `forward-zone:` block, so a bare line there is a syntax error), then `services_unbound_configure(FALSE)`
+regenerates `unbound.conf`. `unbound/port` is **not** changed: Unbound keeps loopback port 53, so the firewall
+keeps resolving through it (pfSense puts `127.0.0.1` into `/etc/resolv.conf` only while the port is 53) and the
+proxy no longer binds loopback. The clause, between the marker lines `# pfBlockerNG DNS proxy` and
+`# end pfBlockerNG DNS proxy`, has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
+stream (`proxy-protocol-port: 5353`) and grants the IPv6 networks pfSense would no longer grant:
+`unbound_acls_config()` derives its IPv6 `access-control` rows from `active_interface` (the IPv4 rows come from
+the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for the SAVED interfaces
+(non-link-local subnet of each interface without a gateway, plus the enabled static routes through such an
+interface; nothing when "disable auto-added access control" is on). Every later apply recomputes the clause and
+replaces a stale one in place (a changed delegated prefix); lines the admin put around it are kept. Everything
+that finds, replaces or reports the clause keys on the marker lines, never on a user's own PROXYv2 setup.
+The presence and value of the three changed keys are saved first in the per-node (`sync` local) registered
+marker `dnsbl/pfb_dns_proxy_saved` (base64 JSON in config.xml, so it survives reboot and backup restore) and
+restored exactly, with the module back in Unbound, when the toggle is turned off, DNSBL is disabled, the setup
+wizard resets the package config, or the package is removed (its disable pass). A move that cannot be made safely
+(values that cannot be stored verbatim, or our block already in `custom_options` with no snapshot, which would
+save the moved values as the "previous" ones) is refused with a log line and a `file_notice`: while the toggle is on
+the module has no host, so DNSBL blocks nothing. The restore is abandoned (snapshot kept, `file_notice`, retried by
+the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
+`stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on port 53.
 
 While the Resolver is moved (`pfb_dns_proxy_saved() !== NULL`) the proxy, not Unbound, is the module host:
 `pfb_unbound_py_mode_active()` is TRUE, and every liveness decision (`pfb_unbound_py_host_running()`: the
@@ -408,42 +420,63 @@ swap handshake default, ADR-61 convergence and retry, the zero-downtime fast pat
 check) and the "module wired" check (`pfb_unbound_py_module_wired()`: `unbound.conf` references
 `pfb_unbound.py`; in proxy mode the proxy's liveness, also for the dashboard widget) follow the proxy's
 pid file `/var/run/pfb_dns_proxy.pid` instead of the Unbound process and `unbound.conf`. Checks about
-Unbound itself (stop/start, `is_service_running('unbound')`, `flush_stats`) are unchanged: it still runs
-on 5353.
+Unbound itself (stop/start, `is_service_running('unbound')`, `flush_stats`) are unchanged.
 
 **Service.** The proxy runs as the supervised rc service `pfb_dns_proxy` (`pfblockerng.xml` `<service>`, status =
 `isvalidpid('/var/run/pfb_dns_proxy.pid')`): `pfb_dns_proxy_service()` writes
-`/usr/local/etc/rc.d/pfb_dns_proxy.sh` (only when its content changes) from the SAVED Resolver, and the script runs
+`/usr/local/etc/rc.d/pfb_dns_proxy.sh` (on every call, like the other rc services) from the SAVED Resolver, and the
+script runs
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log` around `/usr/local/pkg/pfblockerng/pfb_python.sh -u
 .../dns_proxy/pfb_dns_proxy.py --listen A ... --port 53 --upstream 127.0.0.1:5353 --module-dir /var/unbound
 --user unbound [--dot --pfsense-config /cf/conf/config.xml]` (`--dot` iff the saved Resolver had `enablessl`).
 `pfb_dns_proxy_listen()` derives the addresses the way `unbound.inc` binds them (explicit interfaces that are up
 and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for an empty/`all` Resolver, every
-address of the box plus alias/carp VIPs, at apply time and bakes them into the script. The proxy binds each
+address pfSense lists for the box (`get_configured_ip_addresses()` / `get_configured_ipv6_addresses()`, which carry
+alias/carp VIPs), never loopback, at apply time, and bakes them into the script. The proxy binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
 disabled interface) is logged once as a warning and skipped, the others are served, and it exits non-zero only when
-no address binds UDP+TCP (DoT is bound per address the same way and never stops the plain listeners); an address
-added since the last reload gets a listener at the next reload. It starts only while DNSBL, the toggle and the
-moved-Resolver snapshot are all set (so a disabled package never starts a proxy against a restored Resolver), never
-over a survivor, and logs an error and exits non-zero with no address. Stop sends TERM to the supervisor and child
-named by the pidfiles (only while their command line is the proxy's) and KILL after 5 s; it removes the pidfiles once
-both are gone, and gives up after 7 s with status 1, keeping the pidfiles, because a process that survived KILL is
-still alive.
+no address binds UDP+TCP. A DoT setup that cannot be served (no or unusable certificate, a passphrase-protected
+key) no longer stops the proxy: one error line `pfb_dns_proxy error: DNS over TLS is off, serving plain DNS only: ...`
+and the plain listeners keep serving. An address added since the last reload gets a listener at the next apply:
+`pfb_dns_proxy_ensure_running()` regenerates the script and restarts a live proxy when the script changed. The
+script starts only while DNSBL, the toggle and the moved-Resolver snapshot are all set (so a disabled package never
+starts a proxy against a restored Resolver), never over a survivor, and logs an error and exits non-zero with no
+address. Stop sends TERM to the supervisor and child named by the pidfiles (only while their command line is the
+proxy's) and KILL after 5 s; it removes the pidfiles once both are gone, and gives up after 7 s with status 1,
+keeping the pidfiles, because a process that survived KILL is still alive.
 
 Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores the Resolver (toggle off, DNSBL
 disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds port 53 free;
 `pfb_dns_proxy_deinstall()` repeats that right after the uninstall disable pass whatever the pass returned, because the
-pass can return early (lock contention, failed recovery); `pfb_reload_unbound()`'s restart path restarts the proxy
-after Unbound (the module host re-reads lists and ini at init), the zero-downtime swap never does; an apply that finds
-nothing to reload (`pfb_dnsbl_reload_needed()` false) starts a proxy that is not running
-(`pfb_dns_proxy_ensure_running()`), since nothing else would; the installer
-(`pfb_dns_proxy_service_sync()`) regenerates the script and restarts the proxy while the Resolver is moved, stops it
-otherwise. A Resolver that is still on loopback 5353 with the proxy's `proxy-protocol-port: 5353` line while the saved
-copy is lost or malformed cannot be put back (a user's own lo0:5353 Resolver has no such line and is left alone): the
-apply raises a `file_notice` naming the Resolver settings to check and leaves the proxy running (stopping it
-would take LAN DNS down). Pinned by `DnsProxyListenTest`, `DnsProxyServiceTest`, `DnsProxyLifecycleTest`,
-`DnsProxyReloadRestartTest`, `DnsProxyApplyStartTest` and `tests/dns_proxy/test_listen_errors.py`.
+pass can return early (lock contention, failed recovery), and removes the rc script like the other services;
+`pfb_reload_unbound()`'s restart path restarts the proxy after Unbound (the module host re-reads lists and ini at
+init) and then waits up to `PFB_DNS_PROXY_START_WAIT` (5 s) for its pidfile, because `restart_service()` returns
+first and the apply ledger reads that pidfile (a proxy that is not up opens the ledger entry, worded for the proxy);
+the zero-downtime swap never restarts it; an apply that finds nothing to reload (`pfb_dnsbl_reload_needed()` false)
+calls `pfb_dns_proxy_ensure_running()`; the installer regenerates the script and restarts the proxy while the
+Resolver is moved, stops it otherwise. A Resolver that still carries our block while the saved
+copy is lost or malformed cannot be put back (a user's own lo0 Resolver or PROXYv2 line has no marker and is left
+alone): the apply raises a `file_notice` naming the Resolver settings to check and leaves the proxy running
+(stopping it would take LAN DNS down). Pinned by `DnsProxyResolverMoveTest`, `DnsProxyAclTest`, `DnsProxyListenTest`,
+`DnsProxyServiceTest`, `DnsProxyLifecycleTest`, `DnsProxyReloadRestartTest`, `DnsProxyApplyStartTest`,
+`DnsProxySettingsSaveTest` and `tests/dns_proxy/test_listen_errors.py`; the live sockets and resolv.conf are
+pinned by `tests/smoke/test_smoke_dns_proxy.py`.
+
+**Known limits.**
+
+- The firewall's own lookups go to Unbound directly (its resolv.conf names `127.0.0.1`), so they are **not**
+  DNSBL-filtered; only clients of the proxy are.
+- Edits made to the Resolver page's Custom options while the Resolver is moved survive until the proxy is turned
+  off: the restore returns the options saved at toggle-on, not the edited ones.
+- A stopped `pfb_dns_proxy` row shows in Status > Services for every user of the package, also with the toggle off.
+- When the Resolver listened on "All", tunnel addresses that are not assigned interfaces (OpenVPN, WireGuard) and
+  addresses that are only link-local IPv6 are not served by the proxy; pfSense lists neither.
+- DNS over TLS reads the Resolver's certificate when the proxy starts: a renewed certificate needs a proxy restart.
+- High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
+  toggle and the snapshot marker are per-node (`local`). A secondary that receives it ends up with Unbound on
+  loopback and no proxy in front of it, in either toggle state. Enable the DNS proxy on both nodes, or turn the
+  DNS Resolver sync off.
 
 ### ADR-08 — IDN homoglyph protection
 

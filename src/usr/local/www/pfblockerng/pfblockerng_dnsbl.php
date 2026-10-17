@@ -1019,6 +1019,9 @@ if ($_POST) {
 			// dnsbl_dot_block*). Those leaf writes MUST therefore follow the section write — done
 			// before it they are silently clobbered before write_config() flushes, so enabling DNS
 			// Redirect or DoT/DoQ Block never persists. (safesearch_doh* target a different section.)
+			// issue #3515: pfb_dns_proxy_resolver() writes the Resolver snapshot marker into this same section from
+			// the apply; one that finished since the page loaded must survive the replacement below.
+			$pfb['dconfig']['pfb_dns_proxy_saved'] = PfbConfig::read('dnsbl/pfb_dns_proxy_saved');
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			PfbConfig::write('dnsbl/pfb_psl_include_private', $psl_include_private);
 			PfbConfig::write('dnsbl/pfb_psl_allow_private', $psl_allow_private);
@@ -2869,10 +2872,15 @@ $section->addInput(new Form_Checkbox(
 		. 'Runs pfBlockerNG\'s DNS proxy on the DNS Resolver\'s network interfaces. '
 		. 'The proxy answers DNSBL blocks itself and forwards every other query to the DNS Resolver with the client\'s address (PROXY protocol v2).'
 		. '<div class="infoblock">'
-		. 'Enabling it changes these DNS Resolver settings: Listen Port becomes 5353, Network Interfaces becomes Localhost, '
+		. 'Enabling it changes these DNS Resolver settings: Network Interfaces becomes Localhost (the Listen Port is not changed), '
 		. 'SSL/TLS Service is turned off (the proxy serves DNS over TLS with the Resolver\'s certificate instead), '
-		. 'and a <code>server:</code> clause with <code>proxy-protocol-port: 5353</code> is added at the end of Custom options.<br />'
-		. 'The previous values are saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed.<br />'
+		. 'and a <code>server:</code> clause marked <code># pfBlockerNG DNS proxy</code> is added at the end of Custom options: '
+		. 'the Resolver also listens on 127.0.0.1 and ::1 port 5353 for the proxy, and the IPv6 networks of its interfaces stay allowed.<br />'
+		. 'The previous values are saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed; '
+		. 'edits made to Custom options in between are replaced by the saved ones then.<br />'
+		. 'The firewall\'s own DNS lookups go to the DNS Resolver directly and are not filtered by DNSBL.<br />'
+		. '<strong>High availability:</strong> the DNS Resolver sync copies these settings to the secondary node. '
+		. 'Enable this option on both nodes, or turn the DNS Resolver sync off.<br />'
 		. 'Default: <strong>Disabled</strong>'
 		. '</div>');
 

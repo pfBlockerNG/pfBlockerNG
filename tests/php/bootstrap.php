@@ -123,6 +123,21 @@ if (!defined('PFB_UNBOUND_CONTROL_BIN')) {
 $GLOBALS['pfb']['chroot_cmd'] = $pfb_test_chroot_cmd;
 unset($pfb_test_chroot_cmd);
 
+// 4f. Seams for the experimental DNS proxy (issue #3515): its rc script path, so a unit test never reads or
+//     unlinks the appliance's, and the bounded wait for its pidfile, so a proxy that never comes up costs a
+//     test one second, not five.
+$pfb_test_rc_dir = "{$pfb_test_tmp}/rc.d";
+if (!mkdir($pfb_test_rc_dir, 0777, TRUE)) {
+	throw new RuntimeException("PHPUnit sandbox directory creation failed: {$pfb_test_rc_dir}");
+}
+if (!defined('PFB_DNS_PROXY_RCFILE')) {
+	define('PFB_DNS_PROXY_RCFILE', "{$pfb_test_rc_dir}/pfb_dns_proxy.sh");
+}
+if (!defined('PFB_DNS_PROXY_START_WAIT')) {
+	define('PFB_DNS_PROXY_START_WAIT', 1);
+}
+unset($pfb_test_rc_dir);
+
 // 2 + load. Define the production functions by including the real source.
 // pfblockerng.inc is legacy code that emits some load-time E_DEPRECATED/E_WARNING
 // notices (e.g. an optional-before-required parameter, a switch `continue`) that

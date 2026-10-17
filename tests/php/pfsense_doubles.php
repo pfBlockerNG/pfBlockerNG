@@ -692,6 +692,38 @@ if (!function_exists('get_interfaces_with_gateway')) {
 	}
 }
 
+if (!function_exists('interface_has_gateway')) {
+	// pfSense interfaces.inc: TRUE for an interface that reaches the Internet through a gateway (a WAN-type
+	// one), FALSE for a LAN-type one. Reads the same $GLOBALS['pfb_test_interfaces_with_gateway'] list as
+	// get_interfaces_with_gateway() above.
+	function interface_has_gateway($friendly) {
+		return in_array($friendly, $GLOBALS['pfb_test_interfaces_with_gateway'] ?? [], TRUE);
+	}
+}
+
+if (!function_exists('get_staticroutes')) {
+	// pfSense util.inc: the static routes of config.xml (staticroutes/route) that are subnets, without the
+	// disabled ones when $returnenabledroutesonly (alias expansion is not modelled).
+	function get_staticroutes($returnsubnetsonly = false, $returnhostnames = false, $returnenabledroutesonly = false) {
+		$routes = [];
+		foreach (config_get_path('staticroutes/route', []) as $route) {
+			if (($returnenabledroutesonly && isset($route['disabled'])) || !is_subnet($route['network'] ?? '')) {
+				continue;
+			}
+			$routes[] = $route;
+		}
+		return $returnsubnetsonly ? array_column($routes, 'network') : $routes;
+	}
+}
+
+if (!function_exists('lookup_gateway_interface_by_name')) {
+	// pfSense gwlb.inc: the friendly interface a gateway name sits on, FALSE for an unknown gateway. Tests seed
+	// $GLOBALS['pfb_test_gateway_interfaces'] (map of gateway name => friendly interface name, default []).
+	function lookup_gateway_interface_by_name($name) {
+		return $GLOBALS['pfb_test_gateway_interfaces'][$name] ?? false;
+	}
+}
+
 if (!function_exists('get_interface_ip')) {
 	// pfSense interfaces.inc: returns the runtime IPv4 address for a friendly interface
 	// name, or null when unconfigured. Tests seed $GLOBALS['pfb_test_interface_ip']

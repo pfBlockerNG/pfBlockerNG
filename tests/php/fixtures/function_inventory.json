@@ -1706,6 +1706,24 @@
             }
         ]
     },
+    "pfb_dns_proxy_acl_networks": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_await_running": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_dns_proxy_deinstall": {
         "returnsRef": false,
         "returnType": "void",
@@ -1725,6 +1743,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_refuse": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "why",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]
@@ -1758,19 +1789,6 @@
         "params": []
     },
     "pfb_dns_proxy_service": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "rcfile",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/usr/local/etc/rc.d/pfb_dns_proxy.sh'"
-            }
-        ]
-    },
-    "pfb_dns_proxy_service_sync": {
         "returnsRef": false,
         "returnType": "void",
         "params": []
