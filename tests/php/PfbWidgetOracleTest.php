@@ -106,6 +106,9 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->savedPfb = $GLOBALS['pfb'] ?? null;
 		$this->hadConfig   = array_key_exists('config', $GLOBALS);
 		$this->savedConfig = $GLOBALS['config'] ?? null;
+		// The widget's wiring check (pfb_unbound_py_module_wired()) reads the GLOBAL $pfb, not the
+		// eval-extracted function's parameter, so point it at the same fixture directory.
+		$GLOBALS['pfb']['dnsbldir'] = $this->dir;
 	}
 
 	protected function tearDown(): void
@@ -125,6 +128,7 @@ final class PfbWidgetOracleTest extends TestCase
 		} else {
 			unset($GLOBALS['config']);
 		}
+		unset($GLOBALS['pfb_test_valid_pids']);
 	}
 
 	/** @return array<string,mixed> */
@@ -371,6 +375,58 @@ final class PfbWidgetOracleTest extends TestCase
 
 		$this->assertSame(self::ICON_YELLOW, $status);
 		$this->assertSame('DNSBL has 1 open issue(s). See the Failed Downloads list below.', $msg);
+	}
+
+	/** config.xml as a proxy-On apply leaves it (issue #3515): a Resolver snapshot, and the proxy's pid file state. */
+	private function enterProxyMode(bool $proxyUp): void
+	{
+		$keys = [];
+		foreach (['port' => '53', 'active_interface' => 'lan', 'enablessl' => null, 'custom_options' => null] as $key => $value) {
+			$keys[$key] = ['present' => $value !== null, 'value' => $value];
+		}
+		$GLOBALS['config'] = [];
+		config_set_path(
+			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved',
+			base64_encode((string) json_encode($keys))
+		);
+		$GLOBALS['pfb_test_valid_pids'] = ['/var/run/pfb_dns_proxy.pid' => $proxyUp];
+	}
+
+	public function testDnsblProxyModeIsGreenWhileTheProxyRunsEvenThoughUnboundConfNeverNamesThePythonModule(): void
+	{
+		$pfb = $this->liveDnsblPfb();
+		$this->writeUnboundConf(FALSE);	// the proxy hosts the module: Unbound's conf has no pfb_unbound.py
+		$this->enterProxyMode(false);
+		[, , $status] = pfb_widget_oracle_status($pfb);
+		$this->assertSame(self::ICON_RED, $status, 'before-state: the proxy is down');
+
+		$this->enterProxyMode(true);
+		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
+
+		$this->assertSame(self::ICON_GREEN, $status);
+		$this->assertSame('DNSBL is Active on vip: 198.51.100.1 ports: 8080 & 8443', $msg);
+	}
+
+	public function testDnsblProxyModeIsRedWhileTheProxyIsDownEvenIfUnboundConfNamesThePythonModule(): void
+	{
+		$pfb = $this->liveDnsblPfb();	// unbound.conf references pfb_unbound.py
+		$this->enterProxyMode(false);
+
+		[, , $status] = pfb_widget_oracle_status($pfb);
+
+		$this->assertSame(self::ICON_RED, $status);
+	}
+
+	public function testDnsblWithoutTheProxyStillReadsUnboundConfAndIgnoresALiveProxyPid(): void
+	{
+		$pfb = $this->liveDnsblPfb();
+		$this->writeUnboundConf(FALSE);
+		$GLOBALS['config'] = [];
+		$GLOBALS['pfb_test_valid_pids'] = ['/var/run/pfb_dns_proxy.pid' => true];
+
+		[, , $status] = pfb_widget_oracle_status($pfb);
+
+		$this->assertSame(self::ICON_RED, $status);
 	}
 
 	// -----------------------------------------------------------------------

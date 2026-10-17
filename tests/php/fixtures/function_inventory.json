@@ -1719,6 +1719,11 @@
             }
         ]
     },
+    "pfb_dns_proxy_running": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_dns_proxy_saved": {
         "returnsRef": false,
         "returnType": "?array",
@@ -14461,6 +14466,11 @@
             }
         ]
     },
+    "pfb_unbound_py_host_running": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_unbound_py_manifest_raw_paths": {
         "returnsRef": false,
         "returnType": "array",
@@ -14511,6 +14521,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_unbound_py_module_wired": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_unbound_py_normalize_absolute_path": {
         "returnsRef": false,
