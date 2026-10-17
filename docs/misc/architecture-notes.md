@@ -445,8 +445,9 @@ pass can return early (lock contention, failed recovery), and removes the rc scr
 `pfb_reload_unbound()`'s restart path restarts the proxy after Unbound (the module host re-reads lists and ini at
 init) and then waits up to `PFB_DNS_PROXY_START_WAIT` (5 s) for its pidfile, because `restart_service()` returns
 first and the apply ledger reads that pidfile (a proxy that is not up opens the ledger entry, worded for the proxy);
-the zero-downtime swap never restarts it; an apply that finds nothing to reload (`pfb_dnsbl_reload_needed()` false)
-calls `pfb_dns_proxy_ensure_running()`; the installer stages the module files into `/var/unbound` (`dnsbl_cache
+the zero-downtime swap never restarts it; `pfb_dns_proxy_ensure_running()` ends every enabled apply, whichever branch
+ran: it starts a proxy that is not running and, with it running, restarts it only when the regenerated script differs
+(issue #3513: a changed address or DoH/DoQ setting, which the swap would otherwise leave until a restart); the installer stages the module files into `/var/unbound` (`dnsbl_cache
 stage`) and only then regenerates the script and restarts the proxy while the Resolver is moved, stops it otherwise. A Resolver that still carries our block while the saved
 copy is lost or malformed cannot be put back (a user's own lo0 Resolver or PROXYv2 line has no marker and is left
 alone): the apply raises a `file_notice` naming the Resolver settings to check and leaves the proxy running
@@ -481,6 +482,24 @@ and `DnsProxyRuntimePredicateTest`.
   option is on has no snapshot and finds our block already there, so it refuses the move with a notice and DNSBL
   blocks nothing on it (with the option off it only raises the notice). Enable the DNS proxy on the secondary FIRST,
   before the primary syncs a moved Resolver, or turn the DNS Resolver sync off.
+
+**Gateway binary and DoH/DoQ (issue #3513).** When `PFB_DNS_GATEWAY_BIN`
+(`/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway`, the Go gateway) is an executable file,
+`pfb_dns_proxy_service()` makes the rc script run it instead of the Python listener:
+`pfb_dns_gateway --listen A ... --port 53 --upstream 127.0.0.1:5353 [--dot] --pfsense-config /cf/conf/config.xml
+[--doh-listen X ... --doh-port P [--doh-trusted C ...]] [--doq-listen Y ... --doq-port Q]
+--acl-file /var/unbound/access_lists.conf --user unbound -- <the Python proxy argv> --decision-fd 3 ...`. Without the
+binary (or without its execute bit) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
+turning either on then logs one warning per generation. The seven settings `dnsbl/pfb_dns_proxy_doh`, `_doh_port`
+(4443), `_doh_interface`, `_doh_trusted`, `dnsbl/pfb_dns_proxy_doq`, `_doq_port` (853) and `_doq_interface` (sync
+`local`, DoH/DoQ off) sit below the DNS Proxy checkbox; an interface list (empty = the proxy's own addresses) goes
+through the same `pfb_dns_proxy_interface_addresses()` derivation as `pfb_dns_proxy_listen()`, a `--doh-*`/`--doq-*`
+group appears only while its toggle is on and at least one address exists, and the trusted entries (IPs or CIDRs, a bare
+address passed as a host prefix) are validated again when the script is generated, so a hand-edited `config.xml` cannot
+reach the shell. Saving validates with `pfb_validate_dns_proxy_listeners_post()` (ports 1-65535, configured interfaces,
+IP/CIDR entries, and the DNS Resolver's `unbound/sslcertref` while DoH or DoQ is on). Stop recognises the gateway child
+by `pfb_dns_gateway` as well as `pfb_dns_proxy` in its command line, with the same 0/5/7 s bounds. Pinned by
+`DnsProxyServiceTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
 
 ### ADR-08 — IDN homoglyph protection
 

@@ -218,6 +218,18 @@ Authorization = property of **write**, not call site (generalises
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`; the DNSBL page's section save
     re-reads it right before it replaces the section, so an apply that finished meanwhile is not erased. New key, no grandfather.
+  - **`pfb_dns_proxy_doh` / `pfb_dns_proxy_doq` → `PfbToggle`** (issue #3513): default Off, sync `local`;
+    serve DoH / DoQ from the DNS proxy through the Go gateway. New keys, no grandfather: absent reads Off =
+    pre-feature behaviour.
+  - **`pfb_dns_proxy_doh_port` / `pfb_dns_proxy_doq_port`** (issue #3513, plain strings): defaults `'4443'` /
+    `'853'`, sync `local`; the page validates a whole number 1-65535 and stores it without leading zeros. New
+    keys, no grandfather.
+  - **`pfb_dns_proxy_doh_interface` / `pfb_dns_proxy_doq_interface`** (issue #3513, plain strings): comma-joined
+    configured interface names, default `''` = the proxy's own addresses, sync `local`. New keys, no grandfather.
+  - **`pfb_dns_proxy_doh_trusted`** (issue #3513, plain string): space-joined IPs/CIDRs of front ends trusted to
+    send PROXY protocol v2 / X-Forwarded-For, default `''`, sync `local`. New key, no grandfather. All seven are
+    written by the DNSBL page's section save (`pfb_dns_proxy_listeners_stored()`), read through
+    `PfbConfig::read()` by `pfb_dns_proxy_service()`.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

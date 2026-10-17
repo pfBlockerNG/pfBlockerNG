@@ -19,6 +19,7 @@ use PHPUnit\Framework\TestCase;
  * Each row seeds the pfSense answers the derivation reads and asserts the exact address list.
  */
 #[CoversFunction('pfb_dns_proxy_listen')]
+#[CoversFunction('pfb_dns_proxy_interface_addresses')]
 final class DnsProxyListenTest extends TestCase
 {
 	private const GLOBALS = [
@@ -247,5 +248,45 @@ final class DnsProxyListenTest extends TestCase
 
 		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_listen(self::saved('lan,wan;reboot,$(id), ,opt 1')),
 			'only the real interface contributes: the others are unknown names with no address');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #3513: the DoH/DoQ listeners pick their own interfaces through the same derivation
+	// -----------------------------------------------------------------------
+
+	public function testTheSameDerivationServesAnInterfaceListOfItsOwn(): void
+	{
+		$this->seedInterfaces(
+			['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'],
+			['opt1' => '2001:db8:1::1'],
+			['lan' => self::UP, 'opt1' => self::UP]
+		);
+
+		$this->assertSame(['198.51.100.1', '2001:db8:1::1'], pfb_dns_proxy_interface_addresses(['opt1']));
+		$this->assertSame(
+			pfb_dns_proxy_listen(self::saved('lan,opt1')),
+			pfb_dns_proxy_interface_addresses(['lan', 'opt1']),
+			'listen() is this derivation over the saved list: one rule set, not two'
+		);
+	}
+
+	public function testAnEmptyOrAllListMeansEveryAddressOfTheBox(): void
+	{
+		$this->seedInterfaces(['lan' => '192.0.2.1'], [], ['lan' => self::UP]);
+		$GLOBALS['pfb_test_configured_ip_addresses'] = ['lan' => '192.0.2.1'];
+
+		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_interface_addresses([]));
+		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_interface_addresses(['lan', 'all']));
+	}
+
+	public function testAnInterfaceListDeduplicatesItsAddressesAndSkipsADownInterface(): void
+	{
+		$this->seedInterfaces(
+			['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'],
+			[],
+			['lan' => self::UP, 'opt1' => ['status' => 'down', 'enable' => TRUE]]
+		);
+
+		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_interface_addresses(['lan', 'lan', 'opt1']));
 	}
 }

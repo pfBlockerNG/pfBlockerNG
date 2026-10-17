@@ -3476,7 +3476,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			pfb_dnsbl_cache('save');
 		}
 	}
-	elseif ($mode === 'enabled') {
+
+	if ($mode === 'enabled') {
 		pfb_dns_proxy_ensure_running();
 	}
 

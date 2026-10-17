@@ -159,6 +159,8 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dnsbl/pfb_dns_proxy'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy',
+			'dnsbl/pfb_dns_proxy_doh' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh',
+			'dnsbl/pfb_dns_proxy_doq' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
 			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
@@ -197,6 +199,8 @@ final class CfgGatewayTest extends TestCase
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dnsbl/pfb_dns_proxy'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy',
+			'dnsbl/pfb_dns_proxy_doh' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh',
+			'dnsbl/pfb_dns_proxy_doq' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -447,6 +451,45 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_dns_proxy'),
 			'pfb_dns_proxy absent -> Off (default)');
+	}
+
+	/** @return array<string,array{string}> */
+	public static function dnsProxyListenerToggleKeys(): array
+	{
+		return ['DoH' => ['dnsbl/pfb_dns_proxy_doh'], 'DoQ' => ['dnsbl/pfb_dns_proxy_doq']];
+	}
+
+	/** issue #3513: DoH/DoQ are opt-in; an absent key must leave them off. */
+	#[DataProvider('dnsProxyListenerToggleKeys')]
+	public function testDnsProxyListenerTogglesAreOffWhenAbsent(string $key): void
+	{
+		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/' . substr($key, 6)));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read($key), "{$key} absent -> Off (default)");
+	}
+
+	/** @return array<string,array{string,string,string}> key, registered default, a non-default stored value */
+	public static function dnsProxyListenerStringKeys(): array
+	{
+		return [
+			'DoH port'       => ['dnsbl/pfb_dns_proxy_doh_port', '4443', '8443'],
+			'DoH interfaces' => ['dnsbl/pfb_dns_proxy_doh_interface', '', 'lan,opt1'],
+			'DoH trusted'    => ['dnsbl/pfb_dns_proxy_doh_trusted', '', '192.0.2.10 2001:db8::/32'],
+			'DoQ port'       => ['dnsbl/pfb_dns_proxy_doq_port', '853', '8853'],
+			'DoQ interfaces' => ['dnsbl/pfb_dns_proxy_doq_interface', '', 'lan'],
+		];
+	}
+
+	/** issue #3513: the plain-string DoH/DoQ settings read their registered default when absent and store verbatim. */
+	#[DataProvider('dnsProxyListenerStringKeys')]
+	public function testDnsProxyListenerStringSettingsDefaultWhenAbsentAndRoundTripVerbatim(string $key, string $default, string $value): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/' . substr($key, 6);
+		$this->assertNull(config_get_path($path), 'precondition: absent');
+		$this->assertSame($default, PfbConfig::read($key), "{$key} absent -> registered default");
+
+		PfbConfig::write($key, $value);
+		$this->assertSame($value, config_get_path($path), "write stores {$key} verbatim");
+		$this->assertSame($value, PfbConfig::read($key), "write(read(v)) == v for {$key}");
 	}
 
 	/**
@@ -1536,6 +1579,14 @@ final class CfgGatewayTest extends TestCase
 			'pfb_cache_flush',
 			// issue #3515: experimental DNS-proxy front end toggle
 			'pfb_dns_proxy',
+			// issue #3513: DoH/DoQ listener settings of the DNS proxy
+			'pfb_dns_proxy_doh',
+			'pfb_dns_proxy_doh_port',
+			'pfb_dns_proxy_doh_interface',
+			'pfb_dns_proxy_doh_trusted',
+			'pfb_dns_proxy_doq',
+			'pfb_dns_proxy_doq_port',
+			'pfb_dns_proxy_doq_interface',
 			// issue #3515: the Resolver snapshot the DNS proxy keeps
 			'pfb_dns_proxy_saved',
 			'global_log',

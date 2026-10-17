@@ -374,6 +374,13 @@ final class WwwGroupAGatewayTest extends TestCase
 			'pfb_noaaaa'                 => '',
 			'pfb_gp'                     => '',
 			'pfb_dns_proxy'              => 'on',
+			'pfb_dns_proxy_doh'          => 'on',
+			'pfb_dns_proxy_doh_port'     => '4443',
+			'pfb_dns_proxy_doh_interface' => 'lan,opt1',
+			'pfb_dns_proxy_doh_trusted'  => '192.0.2.10/32 2001:db8::/32',
+			'pfb_dns_proxy_doq'          => '',
+			'pfb_dns_proxy_doq_port'     => '853',
+			'pfb_dns_proxy_doq_interface' => '',
 			'pfb_dns_proxy_saved'        => 'eyJwb3J0Ijp7InByZXNlbnQiOnRydWUsInZhbHVlIjoiNTMifX0=',	// not a page field: carried through the page's section save untouched
 			'tld_allow'                  => '',
 			'tld_allow_sort'             => '',

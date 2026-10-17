@@ -181,6 +181,14 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 		// issue #3515: experimental DNS-proxy front end toggle
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy',
+		// issue #3513: DoH/DoQ listener settings of the DNS proxy
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh_port',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh_interface',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh_trusted',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq_port',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq_interface',
 		// issue #3515: the Resolver snapshot the DNS proxy keeps
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log',
