@@ -644,12 +644,11 @@ def test_core_sync_quiet_is_immediate_when_the_log_holds_no_sync_line(hp: Module
 
 
 def test_core_sync_quiet_reads_both_syslog_files_for_the_checkreloadstatus_line(hp: ModuleType) -> None:
-    commands: list[str] = []
-    vm = SimpleNamespace(ssh=lambda *command, **_k: commands.append(" ".join(command)) or _done("none\n"))
+    vm = _vm({"Syncing firewall": _done("none\n")})
 
     hp.core_sync_quiet(vm)
 
-    (command,) = commands
+    (command,) = vm.calls
     assert "check_reload_status.*Syncing firewall" in command and "system.log.0" in command, command
 
 
