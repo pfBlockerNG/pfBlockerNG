@@ -1,8 +1,9 @@
 """The pfSense DNS Resolver's DNS over TLS settings, read from config.xml, as a TLS server context.
 
-The same three settings Unbound is configured from (pfSense src/etc/inc/unbound.inc): `unbound/enablessl` (an element
-that is present means on), `unbound/sslcertref` (the refid of a top-level <cert>) and `unbound/tlsport` (853 unless it
-is not a port). Unbound is given the certificate followed by its CA chain; so is this. Standard library only.
+Two of the settings Unbound is configured from (pfSense src/etc/inc/unbound.inc): `unbound/sslcertref` (the refid of a
+top-level <cert>) and `unbound/tlsport` (853 unless it is not a port). `unbound/enablessl` is not read: the caller's
+--dot decides, and the Resolver's own DoT is off while the proxy serves it. Unbound is given the certificate followed
+by its CA chain; so is this. Standard library only.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import tempfile
 import xml.etree.ElementTree as ET  # config.xml is the box's own trusted file
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
 
 DEFAULT_PORT = 853
 
@@ -68,10 +70,8 @@ def read_settings(path: str | os.PathLike[str]) -> DotSettings:
         raise DotConfigError(f"{where}: not well-formed XML: {exc}") from None
 
     unbound = root.find("unbound")
-    if unbound is None or unbound.find("enablessl") is None:
-        raise DotConfigError(
-            f"{where}: unbound/enablessl is not set; enable 'Enable SSL/TLS Service' in Services > DNS Resolver"
-        )
+    if unbound is None:
+        unbound = ET.Element("unbound")
     refid = _text(unbound, "sslcertref")
     if not refid:
         raise DotConfigError(f"{where}: unbound/sslcertref is empty; pick the SSL/TLS Certificate of the DNS Resolver")
@@ -87,9 +87,16 @@ def read_settings(path: str | os.PathLike[str]) -> DotSettings:
     )
 
 
+def _refuse_passphrase() -> NoReturn:
+    """Password callback: without one OpenSSL prompts on the terminal, which a daemon cannot answer."""
+    raise DotConfigError(
+        "the private key of the DNS Resolver's certificate is encrypted with a passphrase; use a key without one"
+    )
+
+
 def server_context(settings: DotSettings) -> ssl.SSLContext:
     """A TLS 1.2+ server context for the settings. load_cert_chain() wants files, so the PEMs go through a private
-    (0700) directory of 0600 files that is gone before this returns."""
+    (0700) directory of 0600 files that is gone before this returns, however the load ends."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     with tempfile.TemporaryDirectory(prefix="pfb-dot-") as directory:
@@ -101,7 +108,7 @@ def server_context(settings: DotSettings) -> ssl.SSLContext:
                 handle.write(pem)
             paths.append(path)
         try:
-            context.load_cert_chain(*paths)
+            context.load_cert_chain(*paths, password=_refuse_passphrase)
         except OSError as exc:  # ssl.SSLError is an OSError
             raise DotConfigError(f"cannot load the DNS Resolver's certificate and key: {exc}") from None
     return context

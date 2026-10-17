@@ -26,13 +26,17 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def make_certificate(directory: Path, name: str = "server") -> tuple[bytes, bytes]:
-    """A self-signed certificate valid for `localhost` and 127.0.0.1 as (certificate PEM, private key PEM)."""
+def make_certificate(directory: Path, name: str = "server", *, passphrase: str | None = None) -> tuple[bytes, bytes]:
+    """A self-signed certificate valid for `localhost` and 127.0.0.1 as (certificate PEM, private key PEM).
+
+    The key is plain unless `passphrase` is given: then it is the PKCS#8 encrypted form the openssl CLI writes.
+    """
     if shutil.which("openssl") is None:
         pytest.fail("the openssl CLI is required for the DoT tests (this must fail, not skip): `openssl` not found")
     cert, key = directory / f"{name}.crt", directory / f"{name}.key"
+    protection = ["-passout", f"pass:{passphrase}"] if passphrase else ["-nodes"]
     subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"]
+        ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", *protection]
         + ["-keyout", str(key), "-out", str(cert), "-days", "2", "-subj", "/CN=localhost"]
         + ["-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
         check=True,
@@ -106,3 +110,13 @@ async def dot_exchange(
         return reply, writer.get_extra_info("sockname")[:2], writer.get_extra_info("ssl_object").version()
     finally:
         writer.close()
+
+
+async def open_dot(
+    server: tuple[str, int], trust: Path, *, source: str = "127.0.0.1"
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """A TLS connection to `server` that stays open, trusting only the certificate PEM at `trust`."""
+    context = ssl.create_default_context(cafile=str(trust))
+    return await asyncio.wait_for(
+        asyncio.open_connection(*server, ssl=context, server_hostname="localhost", local_addr=(source, 0)), WATCHDOG
+    )
