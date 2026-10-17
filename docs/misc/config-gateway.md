@@ -209,6 +209,9 @@ Authorization = property of **write**, not call site (generalises
     before ADR-02 python force would otherwise activate it.
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables post-handshake full Unbound
     cache flush for bulk zero-downtime DNSBL data swaps.
+  - **`pfb_dns_proxy` → `PfbToggle`** (issue #3515, mirror `$pfb['dnsbl_proxy']`): default Off,
+    sync `local`; opt-in, experimental pfBlockerNG DNS proxy in front of the DNS Resolver.
+    New key, no grandfather: absent reads Off = pre-feature behaviour.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

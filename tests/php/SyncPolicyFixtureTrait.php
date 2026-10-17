@@ -63,6 +63,7 @@ trait SyncPolicyFixtureTrait
 			'dnsbl/pfb_dnsport_ssl',
 			'dnsbl/pfb_cache',
 			'dnsbl/pfb_cache_flush',
+			'dnsbl/pfb_dns_proxy',
 			'dnsbl/pfb_py_reply',
 			'dnsbl/pfb_py_nolog',
 			'dnsbl/pfb_control',
