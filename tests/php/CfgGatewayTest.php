@@ -158,6 +158,7 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_psl_include_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private',
 			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
+			'dnsbl/pfb_dns_proxy'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
 			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
@@ -195,6 +196,7 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
+			'dnsbl/pfb_dns_proxy'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -437,6 +439,14 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_cache_flush'),
 			'pfb_cache_flush absent -> Off (default)');
+	}
+
+	public function testReadReturnsOffDefaultForDnsblDnsProxyAbsentKey(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy';
+		$this->assertNull(config_get_path($path));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_dns_proxy'),
+			'pfb_dns_proxy absent -> Off (default)');
 	}
 
 	/**
@@ -1510,6 +1520,8 @@ final class CfgGatewayTest extends TestCase
 			'top1m_token', // ADR-59 P5
 			'pfb_cache',
 			'pfb_cache_flush',
+			// issue #3515: experimental DNS-proxy front end toggle
+			'pfb_dns_proxy',
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',

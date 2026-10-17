@@ -2124,6 +2124,38 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
     )
 
 
+def test_dnsbl_dns_proxy_option_renders_below_group_policy(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """issue #3515: the experimental DNS Proxy checkbox follows DNSBL Group Policy directly and
+    its help names the Resolver changes and that they are restored."""
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    assert result.ok, f"DNSBL DNS-proxy render oracle failed: {result.detail}"
+    html = resp.text
+    checkboxes = [
+        name.group(1)
+        for tag in re.findall(r"<input\b[^>]*>", html)
+        if re.search(r"""\btype=["']?checkbox\b""", tag) and (name := re.search(r'\bname="([^"]+)"', tag))
+    ]
+    assert "pfb_gp" in checkboxes and "pfb_dns_proxy" in checkboxes, f"missing checkbox in {checkboxes}"
+    after_gp = checkboxes.index("pfb_gp") + 1
+    assert checkboxes[after_gp : after_gp + 2] == ["pfb_dns_proxy", "pfb_dnsbl_lenient"], (
+        f"DNS Proxy must be the checkbox directly below Group Policy, got {checkboxes[after_gp : after_gp + 2]}"
+    )
+    # The help block sits between the proxy input and the next checkbox's input.
+    help_html = html[html.index('name="pfb_dns_proxy"') : html.index('name="pfb_dnsbl_lenient"')]
+    for needle in (
+        "Experimental",
+        "text-warning",
+        "Listen Port becomes 5353",
+        "Network Interfaces becomes Localhost",
+        "SSL/TLS Service is turned off",
+        "proxy-protocol-port: 5353",
+        "saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed",
+    ):
+        assert needle in help_html, f"DNS Proxy help is missing {needle!r}"
+
+
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts (DNSBL page) and
 # ip/suppression (IP page) flipped their registry default to 'on' -- the checkbox must
 # render CHECKED with no stored config, and still render UNCHECKED for a present Off token
