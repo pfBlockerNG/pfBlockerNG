@@ -637,6 +637,13 @@ never elapsed time.
     pfSense reports the failure.
 14. **Receiver scope.** B with its own scope set to `lists` still accepts A's `policy` payload.
 
+> **Amendment 2026-10-17 (#3455, owner decision).** Row 13's automatic half assumed that pfSense calls the
+> package's `plugin_xmlrpc_send()` before it contacts the peer. It does not: `rc.filter_synchronize` first
+> asks the peer for its configuration version (`carp_check_version()`) and returns when the peer does not
+> answer, before any package hook runs. With B unreachable from the start, A's package therefore records
+> no attempt at all, which claims even less than "handed", and pfSense's own communications-error line in
+> A's system log is the failure report. The row is met by an empty send record on A plus that log line.
+
 ## Out of scope
 
 - pfSense core changes, including what pfSense HA copies, how it authenticates, and any `nosync`
