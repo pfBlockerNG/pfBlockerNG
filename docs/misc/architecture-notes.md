@@ -615,13 +615,16 @@ separate times; a launch is not an answer.
 [--doh-listen X ... --doh-port P [--doh-trusted C ...]] [--doq-listen Y ... --doq-port Q]
 --acl-file /var/unbound/access_lists.conf --user unbound -- <the Python proxy argv> --decision-fd 3 ...`. Without the
 binary (or without its execute bit) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
-turning either on then logs one warning per generation. The seven settings `dnsbl/pfb_dns_proxy_doh`, `_doh_port`
-(4443), `_doh_interface`, `_doh_trusted`, `dnsbl/pfb_dns_proxy_doq`, `_doq_port` (853) and `_doq_interface` (sync
+turning either on then logs one warning each time the script is rewritten. The seven settings
+`dnsbl/pfb_dns_proxy_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dnsbl/pfb_dns_proxy_doq`, `_doq_port`
+(853) and `_doq_interface` (sync
 `local`, DoH/DoQ off) sit below the DNS Proxy checkbox; an interface list (empty = the proxy's own addresses) goes
 through the same `pfb_dns_proxy_interface_addresses()` derivation as `pfb_dns_proxy_listen()`, a `--doh-*`/`--doq-*`
-group appears only while its toggle is on and at least one address exists, and the trusted entries (IPs or CIDRs, a bare
+group appears only while its toggle is on, its stored port is a whole number 1-65535 (else the group is left out with
+one warning) and at least one address exists, and the trusted entries (IPs or CIDRs without zero-padded prefixes, a bare
 address passed as a host prefix) are validated again when the script is generated, so a hand-edited `config.xml` cannot
-reach the shell. Saving validates with `pfb_validate_dns_proxy_listeners_post()` (ports 1-65535, configured interfaces,
+reach the shell or hand the gateway a value it rejects. Saving validates with `pfb_validate_dns_proxy_listeners_post()`
+(ports 1-65535, configured interfaces,
 IP/CIDR entries, and the DNS Resolver's `unbound/sslcertref` while DoH or DoQ is on). Stop recognises the gateway child
 by `pfb_dns_gateway` as well as `pfb_dns_proxy` in its command line, with the same 0/5/7 s bounds. Pinned by
 `DnsProxyServiceTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
