@@ -3556,6 +3556,9 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 // to loopback 5353 through config.xml and Unbound is told (PROXYv2) to trust the proxy's source address.
 const PFB_DNS_PROXY_UNBOUND_PORT = '5353';
 const PFB_DNS_PROXY_LINE = 'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT;
+// pfSense writes custom_options after its forward-zone block, so a bare option there is a syntax error: the line
+// goes into a server clause of its own, appended after whatever clause the user's text ends in.
+const PFB_DNS_PROXY_CLAUSE = "server:\n" . PFB_DNS_PROXY_LINE;
 const PFB_DNS_PROXY_RESOLVER_KEYS = ['port', 'active_interface', 'enablessl', 'custom_options'];
 // The proxy's own pid (daemon(8) -p); its supervisor (-P) writes the daemon pidfile.
 const PFB_DNS_PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
@@ -12679,8 +12682,9 @@ function pfb_dns_proxy_running(): bool {
  * Move the DNS Resolver to loopback 5353 for the DNS proxy ($on), or put it back ($on = FALSE).
  *
  * ON snapshots the four PFB_DNS_PROXY_RESOLVER_KEYS (presence and value) once, then sets port 5353 and
- * active_interface lo0, drops enablessl (the proxy terminates DoT) and puts PFB_DNS_PROXY_LINE first in
- * custom_options: an appended line would land inside a later user clause such as forward-zone:. Values that
+ * active_interface lo0, drops enablessl (the proxy terminates DoT) and appends PFB_DNS_PROXY_CLAUSE to
+ * custom_options: pfSense writes that text after its forward-zone block, so a bare line (first or last) would be a
+ * syntax error, and a server clause opened last is valid wherever the user's own text ends. Values that
  * already look moved are never snapshotted as the "previous" ones. OFF stops the DNS proxy service first (so
  * Unbound's regeneration finds port 53 free), then restores each key exactly and clears the snapshot; no
  * snapshot = nothing to do, except that a Resolver still on lo0:5353 without one is reported to the operator
@@ -12698,7 +12702,7 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 				$text = 'DNS proxy: the DNS Resolver is still on loopback port ' . PFB_DNS_PROXY_UNBOUND_PORT .
 				    ', but pfBlockerNG has no valid saved copy of its previous settings to restore. In Services > DNS Resolver ' .
 				    'check and correct Network Interfaces, Listen Port, Enable SSL/TLS Service and Custom Options ' .
-				    '(remove "' . PFB_DNS_PROXY_LINE . '"), then stop the pfBlockerNG DNS proxy service in Status > Services.';
+				    '(remove the "server:" and "' . PFB_DNS_PROXY_LINE . '" lines at its end), then stop the pfBlockerNG DNS proxy service in Status > Services.';
 				pfb_logger("\n{$text}", 2);
 				file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
 			}
@@ -12758,7 +12762,7 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 
 	$custom = (string) base64_decode((string) config_get_path('unbound/custom_options', ''));
 	if (!in_array(PFB_DNS_PROXY_LINE, array_map('trim', explode("\n", $custom)), TRUE)) {
-		$custom = ($custom === '') ? PFB_DNS_PROXY_LINE : PFB_DNS_PROXY_LINE . "\n{$custom}";
+		$custom = ($custom === '' || str_ends_with($custom, "\n")) ? $custom . PFB_DNS_PROXY_CLAUSE : "{$custom}\n" . PFB_DNS_PROXY_CLAUSE;
 		config_set_path('unbound/custom_options', pfb_text_area_encode($custom));
 		$changed = TRUE;
 	}
