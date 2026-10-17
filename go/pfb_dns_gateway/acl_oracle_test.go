@@ -429,3 +429,12 @@ func TestACLOracleDefaultRoutes(t *testing.T) {
 	}
 	runOracleGrid(t, rows, []string{"8.8.8.8", "203.0.113.200", "2606:4700::1111", "fc00::1", "127.0.0.1", "127.9.9.9", "::1", "::2"})
 }
+
+// File rows on prefixes identical to Unbound's localhost defaults (127.0.0.0/8, ::1) must beat them.
+// 127.0.0.1/32 allow keeps the probe socket's own address and the sentinel answerable.
+func TestACLOracleLocalhostRowsOverrideDefaults(t *testing.T) {
+	rows := []aclRow{
+		{"127.0.0.1/32", "allow"}, {"127.0.0.0/8", "deny"}, {"::1", "refuse"}, {"10.0.0.0/8", "allow"},
+	}
+	runOracleGrid(t, rows, []string{"127.0.0.2", "127.9.9.9", "::1", "::2", "10.9.9.9", "8.8.8.8"})
+}
