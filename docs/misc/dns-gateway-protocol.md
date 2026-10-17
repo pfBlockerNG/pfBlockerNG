@@ -73,7 +73,8 @@ client, and answers with Unbound's reply bytes, or an empty REPLY when there is 
 Frames of different ids interleave freely and complete in any order; the decider never waits for one query before
 reading the next. An id is in flight from the gateway's QUERY until the gateway has read the decider's ANSWER or DROP
 for it. A gateway that stops waiting earlier (its own deadline, a client that went away) keeps the id reserved until
-then; the late ANSWER or DROP is read and discarded.
+then; the late ANSWER or DROP is read and discarded. A late FORWARD for such an id is answered at once with an
+empty REPLY and no exchange with Unbound takes place.
 
 An unknown or finished id is not an error: a REPLY the decider is not waiting for (finished query, never-seen id,
 or an id with no FORWARD outstanding) is ignored, and so is any frame the gateway receives for an id it no longer
@@ -95,13 +96,18 @@ These are fatal. The receiver logs the reason, closes the socket and stops; the 
 
 - `len` below 5 or above 65796 (detected on the 4 length bytes, before any payload is read);
 - an unknown type;
-- a type that is only valid in the other direction: FORWARD, ANSWER, DROP or READY from the gateway;
+- a type that is only valid in the other direction: FORWARD, ANSWER, DROP or READY from the gateway; QUERY or
+  REPLY from the decider;
 - a QUERY whose payload is empty, has `n = 0`, or has fewer than `n` bytes after the `n` byte;
-- a QUERY whose id is already in flight.
+- a QUERY whose id is already in flight;
+- READY more than once, or with an id other than 0 or a payload;
+- an ANSWER with an empty payload (a decider with nothing to send uses DROP);
+- a FORWARD or ANSWER whose DNS wire is longer than 65535 bytes.
 
 These are not, and the session goes on: a QUERY whose IP text is not a valid IP address (not ASCII, `999.1.1.1`,
 `192.0.2.10/24`) is answered with DROP for that id; a QUERY whose DNS wire is empty or shorter than a header gets
-DROP too, as the Python-only proxy never answers a packet that short.
+DROP too, as the Python-only proxy never answers a packet that short; a FORWARD that arrives while the previous
+FORWARD of its id is still unanswered is ignored.
 
 ## Client IP text
 
@@ -126,5 +132,6 @@ client address (Group Policy bypass and DNSBL logging key on it).
 - In flight: the protocol sets no cap. The gateway bounds it through its own client limits; the decider starts one
   task per QUERY and keeps no queue.
 
-Implementation: `dns_proxy/decision_service.py` (framing and loop) and `serve_decisions()` in
-`dns_proxy/pfb_dns_proxy.py`; tests: `tests/dns_proxy/test_decision_service.py`.
+Implementation: decider side `dns_proxy/decision_service.py` (framing and loop) and `serve_decisions()` in
+`dns_proxy/pfb_dns_proxy.py`, tests `tests/dns_proxy/test_decision_service.py`; gateway side
+`go/pfb_dns_gateway/decider.go`, tests `decider_test.go`, `gateway_test.go` and `process_test.go` in that directory.
