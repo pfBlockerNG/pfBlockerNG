@@ -3633,6 +3633,7 @@ function pfb_global() {
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= PfbConfig::read('dnsbl/pfb_cache');							// DNSBL Option to backup/restore Resolver cache (default on, issue #1907)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
+	$pfb['dnsbl_proxy']	= PfbConfig::read('dnsbl/pfb_dns_proxy');						// [ #3515 ] Experimental DNS proxy front end (default off)
 	// issue #3288: the DNSBL global policy read-only -- pfb_global() never
 	// writes, so an unmigrated/legacy box (config restore or HA sync bypassing
 	// pfb_run_migrations() entirely) stays correct via pfb_dnsbl_policy_config()'s

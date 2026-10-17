@@ -73,6 +73,7 @@ $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default
 // when absent.
 $pconfig['pfb_cache']		= PfbConfig::read('dnsbl/pfb_cache');
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
+$pconfig['pfb_dns_proxy']	= PfbConfig::read('dnsbl/pfb_dns_proxy');
 
 $pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
@@ -896,6 +897,7 @@ if ($_POST) {
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['pfb_dns_proxy']	= pfb_filter($_POST['pfb_dns_proxy'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
@@ -2852,6 +2854,23 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL. '
 		. pfb_list_section_help_note(['DNSBL Group Policy'], TRUE));
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dns_proxy',
+	gettext('DNS Proxy'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_proxy']) === PfbToggle::On,
+	'on'
+))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+		. 'Runs pfBlockerNG\'s DNS proxy on the DNS Resolver\'s network interfaces. '
+		. 'The proxy answers DNSBL blocks itself and forwards every other query to the DNS Resolver with the client\'s address (PROXY protocol v2).'
+		. '<div class="infoblock">'
+		. 'Enabling it changes these DNS Resolver settings: Listen Port becomes 5353, Network Interfaces becomes Localhost, '
+		. 'SSL/TLS Service is turned off (the proxy serves DNS over TLS with the Resolver\'s certificate instead), '
+		. 'and <code>proxy-protocol-port: 5353</code> is added to Custom options.<br />'
+		. 'The previous values are saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed.<br />'
+		. 'Default: <strong>Disabled</strong>'
+		. '</div>');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_lenient',

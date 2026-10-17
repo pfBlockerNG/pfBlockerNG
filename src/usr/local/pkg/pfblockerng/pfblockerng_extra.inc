@@ -1403,6 +1403,15 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'the post-swap flush exists only in the 4.0 no-reload pipeline; latency delta is the accepted zero-downtime redesign itself, not this default; default-off is a uniform decision at introduction',
 		],
 
+		// issue #3515: EXPERIMENTAL DNS proxy on the Resolver's client-facing interfaces. Default off.
+		'dnsbl/pfb_dns_proxy' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no proxy, Resolver untouched)',
+		],
+
 		// issue #3288: the selected CONCRETE mechanism -- one of the seven tokens;
 		// never '' or 'default' (that's dnsbl/global_log_mode below). Default
 		// 'disabled_log' fresh; existing installs grandfather to 'enabled'.
