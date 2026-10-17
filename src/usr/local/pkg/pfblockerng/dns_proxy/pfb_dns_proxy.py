@@ -52,7 +52,7 @@ must finish within 10 s.
 --decision-fd: nothing is bound. The user drop (--user) and the boot are as above; then READY goes to the gateway and
 each QUERY it sends is answered with an ANSWER or a DROP, a FORWARD/REPLY exchange standing in for the Unbound
 round trip where the module defers. EOF on the socket exits 0; malformed framing is logged and exits 1. A REPLY is
-waited for twice --timeout. --upstream and --pfsense-config are ignored.
+waited for twice --timeout. --upstream is only validated and --pfsense-config is not read.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
