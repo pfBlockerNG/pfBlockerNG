@@ -65,8 +65,12 @@ func runDocker(t *testing.T, stdin string, timeout time.Duration, args ...string
 type oracleTree struct {
 	before  []aclRow
 	access  []aclRow            // access_lists.conf
-	globbed map[string][]aclRow // acl.d/<name>, all read by one `include: acl.d/*.conf`; keep their prefixes disjoint
+	globbed map[string][]aclRow // acl.d/<name>, all read by one `include: acl.d/*.conf`
 	after   []aclRow
+
+	// implicit: access-control-view ("view") and access-control-tag ("tag") rows. Unbound allows each netblock that
+	// no access-control row names; the view and tag are the ones the template defines.
+	implicit []aclRow
 }
 
 // ordered is the rows in the order Unbound reads them; glob matches by name.
@@ -120,16 +124,19 @@ func startOracleUnbound(t *testing.T, tree oracleTree) *oracleUnbound {
     do-daemonize: no
     use-syslog: no
     logfile: ""
+    define-tag: "t1"
 %s    include: "%s/access_lists.conf"
     include: "%s/acl.d/*.conf"
 %s    local-zone: "oracle.test." static
     local-data: "%s 300 IN A 192.0.2.1"
+view:
+    name: "v1"
 `, port, port, renderRows(tree.before, "    "), dir, dir, renderRows(tree.after, "    "), oracleName)
 	// glibc's glob(3) fails Unbound's config when the glob's directory is missing, so the oracle always has one.
 	if err := os.MkdirAll(filepath.Join(dir, "acl.d"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	files := map[string]string{"unbound.conf": conf, "access_lists.conf": renderACL(tree.access)}
+	files := map[string]string{"unbound.conf": conf, "access_lists.conf": renderACL(tree.access) + renderImplicit(tree.implicit)}
 	for name, rows := range tree.globbed {
 		files["acl.d/"+name] = renderRows(rows, "")
 	}
@@ -225,14 +232,14 @@ func proxyV2UDP(src, dst netip.AddrPort) []byte {
 	return append(h, body...)
 }
 
-func (o *oracleUnbound) send(t *testing.T, id uint16, client netip.Addr) {
+func (o *oracleUnbound) send(t *testing.T, id uint16, client netip.Addr, name string) {
 	t.Helper()
 	dstIP := netip.MustParseAddr("127.0.0.1")
 	if client.Is6() {
 		dstIP = netip.MustParseAddr("::1")
 	}
 	datagram := append(proxyV2UDP(netip.AddrPortFrom(client, 40000), netip.AddrPortFrom(dstIP, uint16(o.port))),
-		dnsQuery(id, oracleName)...)
+		dnsQuery(id, name)...)
 	if _, err := o.conn.Write(datagram); err != nil {
 		t.Fatalf("send for %v: %v", client, err)
 	}
@@ -254,10 +261,16 @@ func classifyReply(b []byte) string {
 // answers in order, so no probe reply before the sentinel's means Unbound dropped it: no sleeps needed.
 func (o *oracleUnbound) probe(t *testing.T, client netip.Addr) string {
 	t.Helper()
+	return o.probeName(t, client, oracleName)
+}
+
+// probeName is probe for a query of name; the sentinel is always oracleName, which Unbound answers locally.
+func (o *oracleUnbound) probeName(t *testing.T, client netip.Addr, name string) string {
+	t.Helper()
 	o.nextID++
 	id := o.nextID
-	o.send(t, id, client)
-	o.send(t, oracleSentinelID, netip.MustParseAddr("127.0.0.1"))
+	o.send(t, id, client, name)
+	o.send(t, oracleSentinelID, netip.MustParseAddr("127.0.0.1"), oracleName)
 	outcome := "dropped"
 	buf := make([]byte, 4096)
 	for {
@@ -382,6 +395,38 @@ func renderACL(rows []aclRow) string {
 	return b.String()
 }
 
+// renderImplicit writes the implicit-allow rows; the view and tag names are the ones startOracleUnbound's template defines.
+func renderImplicit(rows []aclRow) string {
+	var b strings.Builder
+	for _, r := range rows {
+		switch r.action {
+		case "view":
+			b.WriteString("access-control-view: " + r.net + " v1\n")
+		case "tag":
+			b.WriteString("access-control-tag: " + r.net + " \"t1\"\n")
+		default:
+			panic("renderImplicit: unknown kind " + r.action)
+		}
+	}
+	return b.String()
+}
+
+// withImplicit adds the `allow` Unbound gives each implicit netblock that no identical access-control row names.
+func withImplicit(t *testing.T, rows, implicit []aclRow) []aclRow {
+	t.Helper()
+	listed := append([]aclRow(nil), rows...)
+	for _, r := range implicit {
+		present := false
+		for _, row := range rows {
+			present = present || referencePrefix(t, row.net) == referencePrefix(t, r.net)
+		}
+		if !present {
+			listed = append(listed, aclRow{r.net, "allow"})
+		}
+	}
+	return listed
+}
+
 // unboundWant is Unbound's outcome for the local-data name per action; "" leaves it to the printed grid.
 var unboundWant = map[string]string{
 	"deny": "dropped", "refuse": "refused",
@@ -398,8 +443,7 @@ func runOracleGrid(t *testing.T, tree oracleTree, extra []string, wantUnmatched 
 	t.Helper()
 	un := startOracleUnbound(t, tree)
 	a := NewACL(un.conf, t.Logf)
-	rows := tree.ordered()
-	listed := withUnboundDefaults(t, rows)
+	listed := withUnboundDefaults(t, withImplicit(t, tree.ordered(), tree.implicit))
 	clients := gridClients(t, listed, extra)
 	if len(clients) >= oracleSentinelID {
 		t.Fatalf("grid of %d clients exhausts the id space", len(clients))
@@ -410,8 +454,11 @@ func runOracleGrid(t *testing.T, tree oracleTree, extra []string, wantUnmatched 
 		got := a.Lookup(c)
 		out := un.probe(t, c)
 		t.Logf("client=%-24v reference=%-18q go=%-8v unbound=%s", c, ref, got, out)
-		// allow_cookie: Unbound refuses a query without a valid DNS cookie, which the gateway cannot judge; it forwards.
+		// allow_cookie: Unbound refuses a UDP query without a valid DNS cookie (this probe is UDP only); the gateway forwards it.
 		if ref == "allow_cookie" {
+			if got != ACLForward || out != "refused" {
+				t.Errorf("%v: allow_cookie over UDP: Go says %v, Unbound %s; want forward and refused", c, got, out)
+			}
 			continue
 		}
 		want, known := outcomeAction[out]
@@ -506,4 +553,45 @@ func TestACLOracleIncludeTreeMarkedClauseAndGlob(t *testing.T) {
 		after: []aclRow{{"198.51.100.0/24", "deny"}, {"192.168.1.0/24", "refuse"}, {"192.168.1.128/25", "allow"}},
 	}
 	runOracleGrid(t, tree, []string{"192.168.1.77", "192.168.1.200", "2001:db8:51:1::1234", "2001:db8:51:2::1", "10.7.0.5", "8.8.8.8", "2606:4700::1111"}, true)
+}
+
+// Unbound reads glob matches in name order (it sorts them), so of identical prefixes in two matched files the later
+// name's row wins. The grid compares that with a real Unbound.
+func TestACLOracleGlobOverlapReadInNameOrder(t *testing.T) {
+	tree := oracleTree{globbed: map[string][]aclRow{
+		"10-a.conf": {{"10.50.0.0/16", "deny"}, {"10.60.0.0/16", "allow"}},
+		"20-b.conf": {{"10.50.0.0/16", "allow"}, {"10.60.0.0/16", "refuse"}},
+	}}
+	runOracleGrid(t, tree, []string{"8.8.8.8", "10.70.0.1"}, true)
+}
+
+// access-control-view and access-control-tag netblocks with no identical access-control row: Unbound allows them, a
+// more specific one sits under a refuse row, and an identical one leaves the refuse row standing.
+func TestACLOracleViewAndTagNetblocksWithoutARow(t *testing.T) {
+	tree := oracleTree{
+		access: []aclRow{{"10.7.0.0/16", "refuse"}},
+		implicit: []aclRow{
+			{"10.7.1.0/24", "view"}, // view under the refuse row
+			{"10.7.0.0/16", "view"}, // identical to the refuse row
+			{"10.8.0.0/16", "view"}, // view only
+			{"10.9.0.0/16", "tag"},  // tag only
+		},
+	}
+	runOracleGrid(t, tree, []string{"8.8.8.8", "10.10.0.1"}, true)
+}
+
+// deny_non_local and refuse_non_local act on names Unbound holds no data for. The gateway forwards those clients, so
+// the decider can still answer a listed name; this pins what Unbound itself does with a non-local name.
+func TestACLOracleNonLocalNames(t *testing.T) {
+	un := startOracleUnbound(t, oracleTree{access: []aclRow{{"100.64.7.0/24", "deny_non_local"}, {"100.64.8.0/24", "refuse_non_local"}}})
+	a := NewACL(un.conf, t.Logf)
+	const elsewhere = "elsewhere.example." // outside the oracle's static local-zone oracle.test.
+	for _, c := range []struct{ client, unbound string }{{"100.64.7.1", "dropped"}, {"100.64.8.1", "refused"}} {
+		client := mustAddr(t, c.client)
+		got, out := a.Lookup(client), un.probeName(t, client, elsewhere)
+		t.Logf("client=%s name=%s go=%v unbound=%s", c.client, elsewhere, got, out)
+		if got != ACLForward || out != c.unbound {
+			t.Errorf("%s asking %s: Go says %v and Unbound %s; want forward and %s", c.client, elsewhere, got, out, c.unbound)
+		}
+	}
 }

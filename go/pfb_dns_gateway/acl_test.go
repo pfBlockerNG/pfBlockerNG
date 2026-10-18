@@ -414,10 +414,13 @@ func TestACLHostileInput(t *testing.T) {
 			[]lookupCheck{{"10.1.1.1", ACLDrop}}},
 		{"quoted netblock", "access-control: \"10.0.0.0/8\" deny\n",
 			[]lookupCheck{{"10.1.1.1", ACLDrop}}},
+		{"quoted action", "access-control: 10.0.0.0/8 \"deny\"\n", []lookupCheck{{"10.1.1.1", ACLDrop}}},
+		{"single-quoted netblock", "access-control: '10.0.0.0/8' deny\n", []lookupCheck{{"10.1.1.1", ACLDrop}}},
 		{"trailing comment", "access-control: 10.0.0.0/8 deny # x\n",
 			[]lookupCheck{{"10.1.1.1", ACLDrop}}},
 		{"commented-out rule", ignored("#access-control: 10.0.0.0/8 deny"), skipped},
-		{"access-control-view keyword", ignored("access-control-view: 10.0.0.0/8 deny"), skipped},
+		{"access-control-view names an implicit allow", ignored("access-control-view: 10.0.0.0/8 v1"),
+			[]lookupCheck{{"10.1.1.1", ACLForward}, {"12.1.1.1", ACLDrop}}},
 		{"keyword glued to netblock", ignored("access-control:10.0.0.0/8 deny"), skipped},
 		{"prefix /33", ignored("access-control: 10.0.0.0/33 deny"), skipped},
 		{"prefix /-1", ignored("access-control: 10.0.0.0/-1 deny"), skipped},
@@ -434,7 +437,7 @@ func TestACLHostileInput(t *testing.T) {
 		{"missing netblock", ignored("access-control: deny"), skipped},
 		{"missing action", ignored("access-control: 10.0.0.0/8"), skipped},
 		{"non-UTF-8 byte in the netblock", ignored("access-control: 10.0.0.0/8\xff deny"), skipped},
-		{"non-UTF-8 byte in a trailing comment", ignored("access-control: 10.0.0.0/8 deny # caf\xe9"), skipped},
+		{"non-UTF-8 byte in a trailing comment", "access-control: 10.0.0.0/8 deny # caf\xe9\n", []lookupCheck{{"10.1.1.1", ACLDrop}}},
 		// Unbound's lexer splits on space and tab only; a Unicode space must not make a rule stricter.
 		{"non-breaking space separator", ignored("access-control: 10.0.0.0/8\u00a0deny"), skipped},
 	}
@@ -525,4 +528,23 @@ func TestACLConcurrentLookupDuringRefresh(t *testing.T) {
 	// Iteration 199 wrote contents[1]: a lone 10/8 deny.
 	checkLookup(t, a, "10.1.2.3", ACLDrop)
 	checkLookup(t, a, "11.1.1.1", ACLRefuse)
+}
+
+// F1: access-control-view, -tag, -tag-action and -tag-data name a netblock Unbound allows when no access-control row
+// names the same netblock. An identical row keeps its action, and a more specific view sits under a refuse row.
+func TestACLViewAndTagNetblocksWithoutARowAreAllowed(t *testing.T) {
+	a := newACL(t, "access-control: 10.7.0.0/16 refuse\n"+
+		"access-control-view: 10.7.1.0/24 v1\n"+
+		"access-control-view: 10.7.0.0/16 v1\n"+
+		"access-control-tag: 10.8.0.0/16 \"t1\"\n"+
+		"access-control-tag-action: 10.9.0.0/16 t1 deny\n"+
+		"access-control-tag-data: 10.10.0.0/16 t1 \"x\"\n")
+	checkAll(t, a, map[string]ACLAction{
+		"10.7.1.5":  ACLForward, // view under the refuse row
+		"10.7.0.5":  ACLRefuse,  // identical netblock: the explicit row stands
+		"10.8.0.5":  ACLForward, // tag only
+		"10.9.0.5":  ACLForward, // tag action only
+		"10.10.0.5": ACLForward, // tag data only
+		"10.11.0.5": ACLRefuse,  // no row names it
+	})
 }

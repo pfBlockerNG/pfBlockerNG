@@ -73,7 +73,7 @@ func TestACLFollowsIncludesAndReadsTheMarkedClauseAndCustomRows(t *testing.T) {
 		"2001:db8:51:1::1234": ACLForward, // the marked clause's IPv6 grant: in no included file
 		"198.51.100.9":        ACLDrop,    // an admin's custom row in unbound.conf
 		"127.0.0.1":           ACLForward,
-		"10.1.1.1":            ACLRefuse, // no row names it; access-control-view is not a row
+		"10.1.1.1":            ACLForward, // access-control-view with no access-control row: Unbound allows it
 		"2001:db8:ffff::1":    ACLRefuse,
 	})
 	if !strings.Contains(log.joined(), "3 files") {
@@ -155,6 +155,7 @@ func TestACLConfigUnboundCannotLoadForwardsEverythingAndLogsOnce(t *testing.T) {
 		"unterminated quote":     {"unbound.conf": head + "include: \"{dir}/a.conf\n", "a.conf": ""},
 		"brace pattern":          {"unbound.conf": head + "include: {dir}/{a,b}.conf\n", "a.conf": "", "b.conf": ""},
 		"include without a path": {"unbound.conf": head + "include:\n"},
+		"malformed glob":         {"unbound.conf": head + "include: {dir}/[.conf\n"},
 	}
 	for name, files := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -263,4 +264,88 @@ func TestACLIncludeFanOutIsBounded(t *testing.T) {
 	if !strings.Contains(log.joined(), "forwarding every query") {
 		t.Errorf("a config that fans out without end must be reported; log:\n%s", log.joined())
 	}
+}
+
+// F3: Unbound reads `[!` as glob(3) negation; filepath.Match reads it as a set of '!' and 'a'.
+func TestACLGlobBracketNegationMatchesGlob3(t *testing.T) {
+	a, _, _ := newACLTree(t, map[string]string{
+		"unbound.conf":  "include: {dir}/acl.d/[!a]*.conf\n",
+		"acl.d/a1.conf": "access-control: 10.1.0.0/16 deny\n",
+		"acl.d/b1.conf": "access-control: 10.2.0.0/16 deny\n",
+	})
+	checkLookup(t, a, "10.1.0.1", ACLRefuse) // a1.conf is not matched, so no row names the client
+	checkLookup(t, a, "10.2.0.1", ACLDrop)
+}
+
+// F3: a wildcard does not match a leading dot (glob(3)); a dot the pattern spells out still matches.
+func TestACLGlobWildcardDoesNotMatchDotFiles(t *testing.T) {
+	a, _, _ := newACLTree(t, map[string]string{
+		"unbound.conf":       "include: {dir}/acl.d/*.conf\ninclude: {dir}/.hid/*.conf\n",
+		"acl.d/a.conf":       "access-control: 10.1.0.0/16 deny\n",
+		"acl.d/.hidden.conf": "access-control: 10.2.0.0/16 deny\n",
+		".hid/b.conf":        "access-control: 10.3.0.0/16 deny\n",
+	})
+	checkLookup(t, a, "10.1.0.1", ACLDrop)
+	checkLookup(t, a, "10.2.0.1", ACLRefuse) // .hidden.conf is not matched by *.conf
+	checkLookup(t, a, "10.3.0.1", ACLDrop)   // a literal dot in the pattern does match
+}
+
+// F3: Unbound's unquoted include path runs to a space, tab or CR, so a '#' is part of the name; a quoted one is too.
+func TestACLIncludePathWithHashIsOneName(t *testing.T) {
+	a, _, _ := newACLTree(t, map[string]string{
+		"unbound.conf": "include: {dir}/inc#1.conf\ninclude: \"{dir}/inc#2.conf\"\n",
+		"inc#1.conf":   "access-control: 10.1.0.0/16 deny\n",
+		"inc#2.conf":   "access-control: 10.2.0.0/16 deny\n",
+		"inc":          "access-control: 10.3.0.0/16 deny\n",
+	})
+	checkLookup(t, a, "10.1.0.1", ACLDrop)
+	checkLookup(t, a, "10.2.0.1", ACLDrop)
+	checkLookup(t, a, "10.3.0.1", ACLRefuse) // the file named inc is not included
+}
+
+// F4: an include on a CRLF line reads its path without the CR, quoted or not.
+func TestACLIncludeOnCRLFLine(t *testing.T) {
+	for name, line := range map[string]string{"unquoted": "include: {dir}/inc.conf\r\n", "quoted": "include: \"{dir}/inc.conf\"\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			a, _, _ := newACLTree(t, map[string]string{"unbound.conf": "server:\r\n" + line, "inc.conf": "access-control: 10.0.0.0/8 deny\r\n"})
+			checkLookup(t, a, "10.1.1.1", ACLDrop)
+		})
+	}
+}
+
+// F4: every file an include opens counts toward maxACLFiles, shared or not: 64 mids each including the same 64
+// leaves is 4161 opens, over the cap; 8 by 8 is well under it.
+func TestACLWideIncludeDAGHitsTheFileCap(t *testing.T) {
+	dag := func(width int) map[string]string {
+		files := map[string]string{}
+		var root strings.Builder
+		for m := range width {
+			fmt.Fprintf(&root, "include: {dir}/mid%d.conf\n", m)
+			var mid strings.Builder
+			for l := range width {
+				fmt.Fprintf(&mid, "include: {dir}/leaf%d.conf\n", l)
+			}
+			files[fmt.Sprintf("mid%d.conf", m)] = mid.String()
+		}
+		for l := range width {
+			files[fmt.Sprintf("leaf%d.conf", l)] = "access-control: 10.0.0.0/8 deny\n"
+		}
+		files["unbound.conf"] = root.String()
+		return files
+	}
+	t.Run("8 by 8 loads", func(t *testing.T) {
+		a, _, log := newACLTree(t, dag(8))
+		checkLookup(t, a, "10.1.1.1", ACLDrop)
+		if strings.Contains(log.joined(), "forwarding every query") {
+			t.Errorf("a shallow DAG under the cap must load; log:\n%s", log.joined())
+		}
+	})
+	t.Run("64 by 64 is over the cap", func(t *testing.T) {
+		a, _, log := newACLTree(t, dag(64))
+		checkLookup(t, a, "10.1.1.1", ACLForward)
+		want := fmt.Sprintf("more than %d files included", maxACLFiles)
+		if !strings.Contains(log.joined(), want) {
+			t.Errorf("want %q in the log; log:\n%s", want, log.joined())
+		}
+	})
 }
