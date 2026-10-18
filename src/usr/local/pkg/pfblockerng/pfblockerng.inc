@@ -4140,8 +4140,9 @@ EOF;
 	/bin/rm -f {$ready}
 
 	# Detach std fds (#662): the supervisor must not hold the caller's pipe; the proxy's own output goes to its log. The
-	# descriptors above stdio are closed too: lockf holds the start lock on a descriptor its command inherits, and a proxy
-	# that kept it would hold the lock for as long as it runs, so every later start would wait 10 s and fail
+	# descriptors above stdio are closed too, defensively: FreeBSD's lockf(1) closes its lock descriptor before it runs the
+	# command, so the proxy does not inherit the lock; a lockf that left it open would let a proxy hold the start lock for as
+	# long as it runs, and every later start would wait the 10 s and fail
 	/usr/sbin/daemon -r -R 5 -t pfb_dns_proxy -P {$daemonpid} -p {$childpid} -o {$log} /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound --ready-file {$ready}{$dot}{$module} </dev/null >/dev/null 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-
 	/usr/bin/logger -p daemon.info -t pfb_dns_proxy "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy started"
 
@@ -4231,9 +4232,10 @@ function pfb_dns_proxy_restart(): bool {
  * published one (a listener that cannot bind, which its supervisor restarts every few seconds), the marker an earlier
  * incarnation left, a live supervisor with no child and a marker with no live child are all NOT ready.
  *
- * pfb_dns_proxy_running() stays the pidfile-only LIVENESS predicate (is the module host up? what the zero-downtime swap, the
- * ledger and the status panel ask); this one answers whether an activation worked. It does not prove that recursion works:
- * the front end can handle queries while the Resolver behind it is still starting, which the boot query probe covers.
+ * pfb_dns_proxy_running() stays the pidfile-only LIVENESS predicate (is the module host up? what the zero-downtime swap and the
+ * ledger ask); this one answers whether an activation worked, and the status panel shows Running only while it holds (a live
+ * child that has not published its marker shows Starting). It does not prove that recursion works: the front end can handle
+ * queries while the Resolver behind it is still starting, which the boot query probe covers.
  */
 function pfb_dns_proxy_ready(): bool {
 	global $pfb;
@@ -13042,8 +13044,15 @@ function pfb_dns_status(): array {
 		$mode = 'On, without DNSBL: the proxy forwards every query';
 	}
 
+	// Running means ready (pfb_dns_proxy_ready()); a live child that has not published its marker is still starting
+	if (pfb_dns_proxy_ready()) {
+		$service = 'Running';
+	} else {
+		$service = pfb_dns_proxy_running() ? 'Starting' : 'Stopped';
+	}
+
 	return [
-		'service' => pfb_dns_proxy_running() ? 'Running' : 'Stopped',
+		'service' => $service,
 		'mode'    => $mode,
 		'listen'  => implode(', ', $listen),
 		'dot'     => $saved['enablessl']['present'] ? 'On, port ' . (config_get_path('unbound/tlsport', '') ?: '853') : 'Off',
