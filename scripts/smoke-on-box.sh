@@ -57,6 +57,9 @@
 #
 # RESPONSIBILITIES (in order):
 #   1. (the caller resolved the ref before invoking this script)
+#   1a. When the source carries go/pfb_dns_gateway, install the pinned Go (scripts/go_toolchain.py)
+#      into a private directory and put it on PATH for everything below; removed after the run
+#      (issue #3513). A legacy source gets no toolchain and no download.
 #   2. Ensure /root/FreeBSD-ports is current on pfblockerng/use-github.
 #   3. Pull /root/images/{pfsense,civm} directly via oras into this workload's filesystem.
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
@@ -220,6 +223,36 @@ fi
 _SELECTED_ROW="$_ROW_MATCHES"
 _php_ver="$(printf '%s' "$_SELECTED_ROW" | jq -r '.[0].php_version')"
 _py_flavor="$(printf '%s' "$_SELECTED_ROW" | jq -r '.[0].py_flavor')"
+
+# ── Step 1a: the Go compiler for the pfB-DNS payload (issue #3513) ─────────────── #
+# build-pfb-dns.py cross-compiles the gateway with Go, which a leased box does not have. The pinned
+# toolchain goes into a private directory BEFORE the first build, so an install that fails (a bad
+# download, a platform with no pinned archive) stops the run here. It is removed only after the whole
+# run, because the smoke module builds its DoQ client with the same compiler.
+_GO_PROVIDED=0
+_go_cleanup() {
+    _go_rc=$?
+    trap - EXIT
+    if [ "$_GO_PROVIDED" -eq 1 ]; then
+        python3 "${REPO_ROOT}/scripts/go_toolchain.py" remove "$PFB_GO_ROOT" >&2 || {
+            printf 'smoke-on-box: the Go toolchain in %s was not removed\n' "$PFB_GO_ROOT" >&2
+            [ "$_go_rc" -ne 0 ] || _go_rc=1
+        }
+    fi
+    exit "$_go_rc"
+}
+if [ -f "${REPO_ROOT}/go/pfb_dns_gateway/go.mod" ]; then
+    _go_env="$(python3 "${REPO_ROOT}/scripts/go_toolchain.py" install)" || {
+        printf 'smoke-on-box: cannot provide the Go toolchain the pfB-DNS payload is built with\n' >&2
+        exit 1
+    }
+    eval "$_go_env"
+    _GO_PROVIDED=1
+    trap _go_cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+fi
 
 # ── Step 2: ports tree — bring to pfblockerng/use-github ───────────────────── #
 printf 'smoke-on-box: updating FreeBSD-ports at %s (php=%s %s)\n' \
@@ -481,4 +514,8 @@ set -- --paths "$_PATHS" --marker "$_MARKER" --timeout "$_TIMEOUT"
 [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
 [ "$_SHARD" != "0" ] && set -- "$@" --shard "$_SHARD"
 [ "$_SHARD_TOTAL" != "1" ] && set -- "$@" --shard-total "$_SHARD_TOTAL"
-exec sh scripts/run-smoke.sh "$@"
+if [ "$_GO_PROVIDED" -eq 0 ]; then
+    exec sh scripts/run-smoke.sh "$@"
+fi
+# Not exec'd: the EXIT trap removes the Go toolchain once the run is over, whatever its status.
+sh scripts/run-smoke.sh "$@"
