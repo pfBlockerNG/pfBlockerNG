@@ -15,7 +15,7 @@ Describe 'pfb_dns.sh'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbdns.XXXXXX")"
     log="${work}/log"
-    : > "${log}"
+    true > "${log}"
     mkdir -p "${work}/dns_proxy" "${work}/fakebin"
     cp "${PFB_PKGDIR}/dns_proxy/pfb_dns.sh" "${work}/dns_proxy/pfb_dns.sh"
     cat > "${work}/fakebin/uname" <<EOF
