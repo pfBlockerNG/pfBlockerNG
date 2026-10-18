@@ -206,7 +206,7 @@ def test_a_go_env_file_in_the_users_config_cannot_change_the_build(
     # Given a user config file that sets a compile flag, which Go would apply if the builder read the file
     config = tmp_path / "config"
     (config / "go").mkdir(parents=True)
-    (config / "go" / "env").write_text("GOFLAGS=-gcflags=-N -l\n", encoding="utf-8")
+    (config / "go" / "env").write_text("GOFLAGS=-gcflags=-N\n", encoding="utf-8")
 
     # When the real gateway is cross-built with that config in place
     _out_dir, first = real_build
