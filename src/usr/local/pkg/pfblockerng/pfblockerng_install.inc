@@ -243,16 +243,6 @@ if (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl
 	update_status(" done.\n\n");
 }
 
-// Create DNS proxy service: restart it while the Resolver is moved aside for it, stop it otherwise
-update_status("Creating DNS proxy service...");
-if (pfb_dns_proxy_saved() !== NULL) {
-	pfb_dns_proxy_restart();
-} else {
-	pfb_dns_proxy_service();
-	stop_service('pfb_dns_proxy');
-}
-update_status(" done.\n");
-
 // Replace 'default' DNSBL active blocked webpage
 if (!file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php') ||
     pfb_dnsbl_webpage() == 'dnsbl_default.php') {
@@ -783,6 +773,17 @@ unlink_if_exists('/var/db/pfblockerng/dnsbl.sqlite');
  * chroot + nullfs mount-point dirs, so a fresh RAM-disk /var (e.g. after an upgrade
  * with RAM Disks enabled) can't make the copy fail. */
 exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
+
+// Create DNS proxy service once its runtime files are staged (it reads its module, lists and ini only at start):
+// restart it while the Resolver is moved aside for it, stop it otherwise
+update_status("Creating DNS proxy service...");
+if (pfb_dns_proxy_saved() !== NULL) {
+	pfb_dns_proxy_restart();
+} else {
+	pfb_dns_proxy_service();
+	stop_service('pfb_dns_proxy');
+}
+update_status(" done.\n");
 
 if ($ufound) {
 	$final = pfb_stop_start_unbound('');
