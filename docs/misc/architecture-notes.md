@@ -555,17 +555,23 @@ separate times; a launch is not an answer.
 `pfb_dns_gateway --listen A ... --listen 127.0.0.1 --listen ::1 --port P --upstream 127.0.0.1:5353 [--dot]
 --pfsense-config /cf/conf/config.xml
 [--doh-listen X ... --doh-port P [--doh-trusted C ...]] [--doq-listen Y ... --doq-port Q]
---acl-file /var/unbound/access_lists.conf --user unbound -- <the Python proxy argv> --decision-fd 3 ...`: the plain
+--unbound-conf /var/unbound/unbound.conf --user unbound -- <the Python proxy argv> --decision-fd 3 ...`: the plain
 `--listen` set and `--port` are the Python line's (the derived addresses, then loopback so the firewall's own lookups are
-filtered, at the Resolver's Listen Port). Without the
+filtered, at the Resolver's Listen Port). The gateway's ACL is Unbound's own: the `access-control` rows of
+`--unbound-conf` and of every file it includes (globs too: `access_lists.conf`, pfBlockerNG's marked clause, an admin's
+Custom Options), the last row of identical prefixes winning and the most specific prefix matching, as Unbound does; a
+client no row names is refused, as Unbound refuses it, and a config Unbound could not load (a missing include) is logged
+once and forwards everything. Without the
 binary (or without its execute bit) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
 turning either on then logs one warning each time the script's content changes. The seven settings
 `dnsbl/pfb_dns_proxy_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dnsbl/pfb_dns_proxy_doq`, `_doq_port`
 (853) and `_doq_interface` (sync
 `local`, DoH/DoQ off) sit below the DNS Proxy checkbox; an interface list (empty = the derived addresses, loopback not
-among them) goes through the same `pfb_dns_proxy_interface_addresses()` derivation as `pfb_dns_proxy_listen()`, a `--doh-*`/`--doq-*`
+among them) goes through the same `pfb_dns_proxy_interface_addresses()` derivation as `pfb_dns_proxy_listen()`, and every
+group also listens on `127.0.0.1` and `::1` (a stable backend for a local HAProxy; the ports are their own, so nothing
+collides), a `--doh-*`/`--doq-*`
 group appears only while its toggle is on, its stored port is a whole number 1-65535 (else the group is left out with
-one warning) and at least one address exists, and the trusted entries (IPs or CIDRs without zero-padded prefixes, a bare
+one warning), and the trusted entries (IPs or CIDRs without zero-padded prefixes, a bare
 address passed as a host prefix) are validated again when the script is generated, so a hand-edited `config.xml` cannot
 reach the shell or hand the gateway a value it rejects. Saving validates with `pfb_validate_dns_proxy_listeners_post()`
 (ports 1-65535, configured interfaces,
