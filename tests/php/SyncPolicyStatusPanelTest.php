@@ -354,6 +354,7 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			'unreachable https target'  => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: Host is down', 'connection error'],
 			'unanswered https target'   => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: Operation timed out', 'timeout'],
 			'tls failure at a tls:// target' => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: TLS handshake failed', 'TLS error'],
+			'handshake failure, warnings as the error' => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: stream_socket_client(): SSL operation failed with code 1. OpenSSL Error messages: error:0A00010B:SSL routines::wrong version number', 'TLS error'],
 			'unknown'        => ['Exception calling XMLRPC method x # boom', 'transport error'],
 			'empty'          => ['', 'no response from the XMLRPC client'],
 		];

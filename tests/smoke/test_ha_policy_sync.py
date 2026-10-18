@@ -94,7 +94,7 @@ V4, V6, BL = "pfblockernglistsv4", "pfblockernglistsv6", "pfblockerngblacklist"
 ROW_ROOTS = (LISTS_V4, LISTS_V6, BLACKLIST)
 ROW_SECTIONS = tuple(f"{root}/" for root in ROW_ROOTS)
 SYSTEM_LOG = "/var/log/system.log"
-# The pfSense XMLRPC client logs this once per failed attempt before it retries (observed live in the exploration).
+# The pfSense XMLRPC client logs this once per failed attempt before it retries.
 CLIENT_RETRY_MARKER = "Retrying XMLRPC Request due to error"
 
 
