@@ -88,6 +88,9 @@ smoke = [
     # ADR-14 Tier-B browser tier. The wheel is the bindings only -- the Chromium
     # BINARY is a separate `playwright install chromium` step.
     "playwright==1.61.0",
+    # Runner-side exposition parser for the metrics export smoke (#3522): the smoke VM
+    # installs packages offline, so node_exporter cannot parse the file in CI.
+    "prometheus-client==0.26.0",
 ]
 
 # The manual-only benchmarks job (ADR-01). Formerly legacy/benchmarks/requirements.txt.
