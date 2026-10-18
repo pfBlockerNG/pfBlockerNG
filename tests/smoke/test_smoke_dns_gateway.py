@@ -29,7 +29,10 @@ What it proves, in file order:
   row names still gets the VIP on every transport (DoQ from it through a host route that sets its source address);
 * a client no row names (the automatic LAN rows off, the only list naming 203.0.113.0/24) gets REFUSED on every
   transport for a listed and for an unlisted name, as Unbound refuses it, while an IPv6 LAN client that only
-  pfBlockerNG's marked clause in unbound.conf grants still gets the VIP on every transport;
+  pfBlockerNG's marked clause in unbound.conf grants still gets the VIP (the firewall asking its own LAN IPv6 address
+  over UDP and TCP; the client VM too, on every transport, where its IPv6 address reaches the firewall: the smoke
+  pfSense's pf carries `block drop in log inet6 all` and no LAN pass rule, so there it does not and the diagnostics
+  are logged);
 * ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
@@ -1042,8 +1045,9 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
     Then once the gateway has re-read the config the client gets REFUSED on every transport, for a listed name and for
       an unlisted one, and dnsbl.log has no row for them; an IPv6 client of the LAN, which only the clause grants, still
       gets the VIP, logged with its address: the firewall itself asking its own LAN IPv6 address over UDP and TCP, and
-      the client VM on every transport when its IPv6 address reaches the firewall (this smoke VM's LAN may not carry
-      it, and the diagnostics are logged then);
+      the client VM on every transport when its IPv6 address reaches the firewall (this smoke pfSense's pf blocks IPv6
+      from the LAN: `block drop in log inet6 all` and no LAN pass rule, neighbour discovery works; the diagnostics
+      are logged then);
     When the lists are put back,
     Then the IPv4 client gets the VIP on every transport again.
     """
