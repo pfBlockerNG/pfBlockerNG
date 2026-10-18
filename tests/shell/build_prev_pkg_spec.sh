@@ -267,6 +267,19 @@ side"
     The path "$BUILD_LEG_ARGV_LOG" should not be exist
   End
 
+  It 'reads a remote that looks like an option as a remote, never as a git option'
+    # An operator-supplied PFB_GIT_REMOTE of "--upload-pack=<cmd>" must not run <cmd>.
+    shallow_checkout
+    PFB_GIT_REMOTE="--upload-pack=touch ${WORK}/injected"
+    export PFB_GIT_REMOTE
+    When call run_prev
+    The status should be failure
+    The output should equal ''
+    The stderr should include 'build-prev-pkg: fetch failed'
+    The path "${WORK}/injected" should not be exist
+    The path "$BUILD_LEG_ARGV_LOG" should not be exist
+  End
+
   # ── failing loud ──────────────────────────────────────────────────────────── #
 
   It 'exits non-zero naming the build stage when build-leg fails'

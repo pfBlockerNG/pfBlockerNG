@@ -99,7 +99,7 @@ if ! git -C "$REPO_ROOT" cat-file -e "${_ref}^{commit}" 2>/dev/null; then
     _depth=''
     [ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository 2>/dev/null)" != true ] || _depth='--depth=1'
     printf 'build-prev-pkg: fetching %s from %s\n' "$_ref" "$_remote" >&2
-    git -C "$REPO_ROOT" fetch --quiet --no-tags ${_depth:+"$_depth"} "$_remote" "$_ref" >&2 \
+    git -C "$REPO_ROOT" fetch --quiet --no-tags ${_depth:+"$_depth"} -- "$_remote" "$_ref" >&2 \
         || die "fetch failed: ${_ref} from ${_remote}"
 fi
 
