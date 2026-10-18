@@ -25,7 +25,7 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	want := config{
 		listen: []string{"127.0.0.1"}, port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second,
-		aclFile: "/var/unbound/access_lists.conf", decider: []string{"/usr/local/pkg/pfblockerng/pfb_python.sh", "-u", "pfb_dns_proxy.py"},
+		unboundConf: "/var/unbound/unbound.conf", decider: []string{"/usr/local/pkg/pfblockerng/pfb_python.sh", "-u", "pfb_dns_proxy.py"},
 		pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
 	}
 	if !reflect.DeepEqual(cfg, want) {
@@ -36,14 +36,14 @@ func TestConfigDefaults(t *testing.T) {
 func TestConfigEveryFlag(t *testing.T) {
 	cfg, err := parse(t,
 		"--listen", "192.0.2.1", "--listen", "::1", "--port", "5300", "--upstream", "[::1]:5454",
-		"--timeout", "2500ms", "--acl-file", "/tmp/acl.conf", "--user", "unbound",
+		"--timeout", "2500ms", "--unbound-conf", "/tmp/unbound.conf", "--user", "unbound",
 		"--", "/usr/bin/python3", "-u", "decider.py", "--decision-fd", "3", "--module-dir", "/var/unbound")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := config{
 		listen: []string{"192.0.2.1", "::1"}, port: 5300, upstream: "[::1]:5454", timeout: 2500 * time.Millisecond,
-		aclFile: "/tmp/acl.conf", user: "unbound", pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
+		unboundConf: "/tmp/unbound.conf", user: "unbound", pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
 		// everything after `--` is the decider's, flags and all
 		decider: []string{"/usr/bin/python3", "-u", "decider.py", "--decision-fd", "3", "--module-dir", "/var/unbound"},
 	}
@@ -81,7 +81,7 @@ func TestConfigRejectsBadUsage(t *testing.T) {
 		"negative timeout":                {[]string{"--timeout", "-1s", "--", "decider"}, "timeout"},
 		"timeout not a duration":          {[]string{"--timeout", "five", "--", "decider"}, "timeout"},
 		"empty listen address":            {[]string{"--listen", "", "--", "decider"}, "listen"},
-		"empty acl file":                  {[]string{"--acl-file", "", "--", "decider"}, "acl-file"},
+		"empty unbound conf":              {[]string{"--unbound-conf", "", "--", "decider"}, "unbound-conf"},
 		"empty decider program":           {[]string{"--", ""}, "decider"},
 	}
 	for name, c := range cases {

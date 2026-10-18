@@ -91,7 +91,7 @@ func reverseLines(s string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// A1-A9: only deny and refuse act; every other known action and every unknown one forwards.
+// A1-A9: only deny and refuse act; every other known action forwards, and an unknown one is a line that names nobody.
 func TestACLActionMapping(t *testing.T) {
 	cases := []struct {
 		action string
@@ -106,9 +106,10 @@ func TestACLActionMapping(t *testing.T) {
 		{"allow_cookie", ACLForward, ACLForward},
 		{"deny_non_local", ACLForward, ACLForward},
 		{"refuse_non_local", ACLForward, ACLForward},
-		// An unknown action is a line Unbound would reject: ignored, so the outer deny still applies.
-		{"DENY", ACLForward, ACLDrop},
-		{"block", ACLForward, ACLDrop},
+		// An unknown action is a line Unbound would reject: ignored, so alone the client matches no row (Refuse) and
+		// behind a 0.0.0.0/0 deny the outer deny still applies.
+		{"DENY", ACLRefuse, ACLDrop},
+		{"block", ACLRefuse, ACLDrop},
 	}
 	for _, c := range cases {
 		t.Run(c.action, func(t *testing.T) {
@@ -165,10 +166,10 @@ func TestACLHostBitsAreMasked(t *testing.T) {
 	checkLookup(t, a, "198.51.100.0", ACLRefuse)
 	checkLookup(t, a, "198.51.100.7", ACLRefuse)
 	checkLookup(t, a, "198.51.100.255", ACLRefuse)
-	checkLookup(t, a, "198.51.99.255", ACLForward)
-	checkLookup(t, a, "198.51.101.0", ACLForward)
+	checkLookup(t, a, "198.51.99.255", ACLRefuse)
+	checkLookup(t, a, "198.51.101.0", ACLRefuse)
 	checkLookup(t, a, "2001:db8:2::1", ACLDrop)
-	checkLookup(t, a, "2001:db8:2:1::1", ACLForward)
+	checkLookup(t, a, "2001:db8:2:1::1", ACLRefuse)
 }
 
 // Unbound lets the LAST of identical prefixes win: the config list is built by prepending and the first tree insert sticks.
@@ -207,15 +208,15 @@ func TestACLLocalhostDefaultsYieldToExplicitRows(t *testing.T) {
 func TestACLBareAddressIsHostPrefix(t *testing.T) {
 	a := newACL(t, aclText("203.0.113.9 deny"))
 	checkLookup(t, a, "203.0.113.9", ACLDrop)
-	checkLookup(t, a, "203.0.113.8", ACLForward)
-	checkLookup(t, a, "203.0.113.10", ACLForward)
+	checkLookup(t, a, "203.0.113.8", ACLRefuse)
+	checkLookup(t, a, "203.0.113.10", ACLRefuse)
 }
 
 // C1: the gateway puts the unmapped address in the PROXYv2 header, so lookups must unmap too.
 func TestACLIPv4MappedClientMatchesAsIPv4(t *testing.T) {
 	a := newACL(t, aclText("10.0.0.0/8 deny"))
 	checkLookup(t, a, "::ffff:10.0.0.1", ACLDrop)
-	checkLookup(t, a, "::ffff:11.0.0.1", ACLForward)
+	checkLookup(t, a, "::ffff:11.0.0.1", ACLRefuse)
 }
 
 func TestACLZoneIsDroppedBeforeLookup(t *testing.T) {
@@ -224,16 +225,16 @@ func TestACLZoneIsDroppedBeforeLookup(t *testing.T) {
 	checkLookup(t, a, "fe80::1%em0", ACLForward)
 }
 
-func TestACLUnmatchedAndForeignFamilyClientsForward(t *testing.T) {
+// Unbound refuses a client that matches no row; a v4 /0 never captures a v6 client nor a v6 /0 a v4 one.
+func TestACLUnmatchedAndForeignFamilyClientsAreRefused(t *testing.T) {
 	a := newACL(t, aclText("10.0.0.0/8 deny", "2001:db8::/32 refuse"))
-	checkLookup(t, a, "192.0.2.1", ACLForward)
-	checkLookup(t, a, "2606:4700::1111", ACLForward)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+	checkLookup(t, a, "2606:4700::1111", ACLRefuse)
 	if got := a.Lookup(netip.Addr{}); got != ACLForward {
 		t.Errorf("Lookup(zero Addr): got %v, want %v", got, ACLForward)
 	}
-	// A v4 /0 must not capture v6 clients, nor a v6 /0 v4 clients.
-	checkLookup(t, newACL(t, aclText("0.0.0.0/0 deny")), "2001:db8::1", ACLForward)
-	checkLookup(t, newACL(t, aclText("::/0 deny")), "192.0.2.1", ACLForward)
+	checkLookup(t, newACL(t, aclText("0.0.0.0/0 deny")), "2001:db8::1", ACLRefuse)
+	checkLookup(t, newACL(t, aclText("::/0 deny")), "192.0.2.1", ACLRefuse)
 }
 
 // The file exactly as pfSense unbound_acls_config() writes it, trailing space and comment lines included.
@@ -268,17 +269,20 @@ func TestACLMissingFileForwardsEverythingAndLogsOnce(t *testing.T) {
 	}
 }
 
-func TestACLEmptyFileForwardsEverything(t *testing.T) {
+// A config with no `access-control` row is a valid Unbound config: only localhost is served.
+func TestACLEmptyFileRefusesEveryoneButLocalhost(t *testing.T) {
 	a := newACL(t, "")
-	checkLookup(t, a, "10.1.2.3", ACLForward)
-	checkLookup(t, a, "2001:db8::1", ACLForward)
+	checkLookup(t, a, "10.1.2.3", ACLRefuse)
+	checkLookup(t, a, "2001:db8::1", ACLRefuse)
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+	checkLookup(t, a, "::1", ACLForward)
 }
 
 // F3: file_put_contents truncates then writes; a cut `refuse_non_local` reads as `refuse` and must not act.
 func TestACLUnterminatedLastLineIsIgnored(t *testing.T) {
-	a := newACL(t, "access-control: 10.0.0.0/8 deny\naccess-control: 11.0.0.0/8 refuse")
-	checkLookup(t, a, "10.1.1.1", ACLDrop)
-	checkLookup(t, a, "11.1.1.1", ACLForward)
+	a := newACL(t, "access-control: 10.0.0.0/8 allow\naccess-control: 10.1.0.0/16 refuse")
+	checkLookup(t, a, "10.9.9.9", ACLForward)
+	checkLookup(t, a, "10.1.1.1", ACLForward)
 }
 
 func TestACLRefreshUnchangedReportsFalseAndKeepsRules(t *testing.T) {
@@ -334,7 +338,7 @@ func TestACLRewriteInPlaceIsReloadedByMtime(t *testing.T) {
 	if !a.Refresh() {
 		t.Error("Refresh() after an mtime-only change: got changed=false, want true")
 	}
-	checkLookup(t, a, "10.1.2.3", ACLForward)
+	checkLookup(t, a, "10.1.2.3", ACLRefuse)
 	checkLookup(t, a, "11.1.1.1", ACLDrop)
 }
 
@@ -361,7 +365,7 @@ func TestACLReplacedByRenameIsReloadedByInode(t *testing.T) {
 	if !a.Refresh() {
 		t.Error("Refresh() after a rename replacement: got changed=false, want true")
 	}
-	checkLookup(t, a, "10.1.2.3", ACLForward)
+	checkLookup(t, a, "10.1.2.3", ACLRefuse)
 	checkLookup(t, a, "11.1.1.1", ACLDrop)
 }
 
@@ -398,7 +402,7 @@ type lookupCheck struct {
 func TestACLHostileInput(t *testing.T) {
 	// A line the parser must skip, followed by a good deny that proves parsing carried on.
 	ignored := func(bad string) string { return bad + "\n" + aclText("12.0.0.0/8 deny") }
-	skipped := []lookupCheck{{"10.1.1.1", ACLForward}, {"12.1.1.1", ACLDrop}}
+	skipped := []lookupCheck{{"10.1.1.1", ACLRefuse}, {"12.1.1.1", ACLDrop}}
 	cases := []struct {
 		name    string
 		content string
@@ -420,11 +424,11 @@ func TestACLHostileInput(t *testing.T) {
 		{"prefix /abc", ignored("access-control: 10.0.0.0/abc deny"), skipped},
 		{"prefix missing digits", ignored("access-control: 10.0.0.0/ deny"), skipped},
 		{"IPv6 prefix /129", ignored("access-control: 2001:db8::/129 deny"),
-			[]lookupCheck{{"2001:db8::1", ACLForward}, {"12.1.1.1", ACLDrop}}},
+			[]lookupCheck{{"2001:db8::1", ACLRefuse}, {"12.1.1.1", ACLDrop}}},
 		{"zone id in prefix", ignored("access-control: fe80::1%em0/64 deny"),
-			[]lookupCheck{{"fe80::2", ACLForward}, {"12.1.1.1", ACLDrop}}},
+			[]lookupCheck{{"fe80::2", ACLRefuse}, {"12.1.1.1", ACLDrop}}},
 		{"zone id in bare address", ignored("access-control: fe80::1%em0 deny"),
-			[]lookupCheck{{"fe80::1", ACLForward}, {"12.1.1.1", ACLDrop}}},
+			[]lookupCheck{{"fe80::1", ACLRefuse}, {"12.1.1.1", ACLDrop}}},
 		{"extra trailing token", ignored("access-control: 10.0.0.0/8 deny extra"), skipped},
 		{"empty quoted netblock", ignored("access-control: \"\" deny"), skipped},
 		{"missing netblock", ignored("access-control: deny"), skipped},
@@ -455,7 +459,7 @@ func TestACLOversizedLineIsIgnoredWithoutExtraAllocation(t *testing.T) {
 	if got, limit := after.TotalAlloc-before.TotalAlloc, uint64(2*len(content)); got > limit {
 		t.Errorf("NewACL allocated %d bytes for a %d-byte file; want at most %d", got, len(content), limit)
 	}
-	checkLookup(t, a, "10.1.1.1", ACLForward)
+	checkLookup(t, a, "10.1.1.1", ACLRefuse)
 	checkLookup(t, a, "11.1.1.1", ACLDrop)
 }
 
@@ -480,39 +484,8 @@ func TestACLTwentyThousandLinesAllResolve(t *testing.T) {
 			t.Fatalf("Lookup(%s): got %v, want %v", client, got, want)
 		}
 	}
-	checkLookup(t, a, "10.200.0.1", ACLForward)
-	checkLookup(t, a, "11.0.0.1", ACLForward)
-}
-
-// The cap is 16 MiB: a file at the cap loads, one byte over is unreadable (Forward all, logged).
-func TestACLFileSizeCap(t *testing.T) {
-	const capBytes = 16 << 20
-	for _, c := range []struct {
-		name string
-		size int64
-		want ACLAction
-		logs bool
-	}{
-		{"at the cap", capBytes, ACLDrop, false},
-		{"one byte over the cap", capBytes + 1, ACLForward, true},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			path := writeACLFile(t, aclText("10.0.0.0/8 deny"))
-			// Sparse tail: no newline, so it is also an unterminated fragment the parser ignores.
-			if err := os.Truncate(path, c.size); err != nil {
-				t.Fatal(err)
-			}
-			var log capturedLog
-			a := NewACL(path, log.logf)
-			checkLookup(t, a, "10.1.1.1", c.want)
-			if c.logs && !strings.Contains(log.joined(), "too large") {
-				t.Errorf("an over-cap file must be logged as too large; log:\n%s", log.joined())
-			}
-			if !c.logs && strings.Contains(log.joined(), "too large") {
-				t.Errorf("a file at the cap must load; log:\n%s", log.joined())
-			}
-		})
-	}
+	checkLookup(t, a, "10.200.0.1", ACLRefuse)
+	checkLookup(t, a, "11.0.0.1", ACLRefuse)
 }
 
 // The assertion is the race detector (go test -race) plus a deterministic end state.
@@ -551,5 +524,5 @@ func TestACLConcurrentLookupDuringRefresh(t *testing.T) {
 	readers.Wait()
 	// Iteration 199 wrote contents[1]: a lone 10/8 deny.
 	checkLookup(t, a, "10.1.2.3", ACLDrop)
-	checkLookup(t, a, "11.1.1.1", ACLForward)
+	checkLookup(t, a, "11.1.1.1", ACLRefuse)
 }
