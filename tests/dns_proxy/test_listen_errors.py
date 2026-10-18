@@ -36,9 +36,19 @@ DNSBL_VIP4 = socket.inet_aton(DNSBL_IPV4)
 
 @pytest.fixture
 def busy_port() -> Iterator[int]:
-    """A port something is listening on at 127.0.0.2 (and nothing at 127.0.0.1)."""
-    with socket.create_server(("127.0.0.2", 0)) as occupant:
-        yield occupant.getsockname()[1]
+    """A port something is listening on at 127.0.0.2 and nothing is bound to at 127.0.0.1, tcp and udp: the ephemeral
+    port the kernel gave 127.0.0.2 can be in use at the other address, so that is checked, not assumed."""
+    for _ in range(100):
+        with socket.create_server(("127.0.0.2", 0)) as occupant:
+            port = occupant.getsockname()[1]
+            try:
+                with socket.create_server(("127.0.0.1", port)), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+                    udp.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            yield port
+            return
+    pytest.fail("no port is free at 127.0.0.1 and takeable at 127.0.0.2")
 
 
 @pytest.fixture

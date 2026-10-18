@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import csv
 import shutil
-import socket
 import struct
 import subprocess
 import threading
@@ -23,7 +22,7 @@ import dnswire
 import pfb_dns_proxy
 import pfsense_dot
 import pytest
-from dot_helpers import b64, cert_element, config_xml, dot_exchange, make_certificate
+from dot_helpers import b64, cert_element, config_xml, dot_exchange, free_port, make_certificate
 from frontend_constants import ALLOWED, BLOCKED, BYPASSED_CLIENT, DNSBL_IPV4, FILTERED_CLIENT, PROTO_DIR, Booted
 from frontend_helpers import (
     WATCHDOG,
@@ -152,12 +151,6 @@ def _docker(*args: str, stdin: str | None = None, timeout: float = 120) -> subpr
         pytest.fail("docker is required for the integration test (this must fail, not skip): `docker` not found")
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 class RunningUnbound:
     def __init__(
         self, port: int, tail: LogTail, authoritative: FakeAuthoritative, conf_dir: Path, observed: bool
@@ -186,7 +179,7 @@ def _run_unbound(tmp_path_factory: pytest.TempPathFactory, *, observer: bool) ->
             pytest.fail(f"cannot build the Unbound test image:\n{build.stdout}\n{build.stderr}")
 
     authoritative = FakeAuthoritative(FakeUnbound(AUTHORITATIVE))
-    port = _free_port()
+    port = free_port()
     conf_dir: Path = tmp_path_factory.mktemp("unbound-conf")
     (conf_dir / "unbound.conf").write_text(_conf(port, authoritative.port, observer=observer), encoding="utf-8")
     if observer:
@@ -221,16 +214,25 @@ def observed_unbound(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Runni
     yield from _run_unbound(tmp_path_factory, observer=True)
 
 
-AUTHORITATIVE_DELAY = 0.3  # long enough that two queries sent together are both in flight until it elapses
-
-
 @pytest.fixture
-def slow_authoritative(unbound: RunningUnbound) -> Iterator[None]:
-    unbound.authoritative.delay = AUTHORITATIVE_DELAY
+def gated_authoritative(unbound: RunningUnbound) -> Iterator[None]:
+    """The test sets `unbound.authoritative.gate` before each round; it is cleared again when the test is over."""
     try:
         yield
     finally:
-        unbound.authoritative.delay = 0.0
+        unbound.authoritative.gate = None
+
+
+def _open_gate_once_logged(
+    unbound: RunningUnbound, gate: threading.Event, clients: list[str], name: str, mark: int
+) -> None:
+    """Unbound logs each client query on receipt, so once every client's line is there all their queries are in flight
+    at Unbound, and the authoritative may answer. The gate opens on a stuck run too, which then fails at the wait."""
+    try:
+        for client in clients:
+            unbound.tail.wait_for(f"{client} {name} A IN", since=mark)
+    finally:
+        gate.set()
 
 
 def _through_frontend(
@@ -395,7 +397,7 @@ def test_dot_client_gets_dnsbl_and_unbound_answers_and_unbounds_log_shows_the_tl
     trust = tmp_path / "trust.pem"
     trust.write_bytes(crt)
     config = tmp_path / "config.xml"
-    config.write_text(config_xml(tlsport=_free_port(), entries=cert_element("5f0a1b2c3d4e5", b64(crt), b64(key))))
+    config.write_text(config_xml(tlsport=free_port(), entries=cert_element("5f0a1b2c3d4e5", b64(crt), b64(key))))
     settings = pfsense_dot.read_settings(config)
     mark = unbound.tail.mark()
 
@@ -454,7 +456,7 @@ def test_without_a_module_dot_forwards_a_listed_name_and_unbounds_log_shows_the_
     trust = tmp_path / "trust.pem"
     trust.write_bytes(crt)
     config = tmp_path / "config.xml"
-    config.write_text(config_xml(tlsport=_free_port(), entries=cert_element("5f0a1b2c3d4e5", b64(crt), b64(key))))
+    config.write_text(config_xml(tlsport=free_port(), entries=cert_element("5f0a1b2c3d4e5", b64(crt), b64(key))))
     settings = pfsense_dot.read_settings(config)
     mark = unbound.tail.mark()
 
@@ -489,7 +491,7 @@ ROUNDS = {"udp": 20, "tcp": 1}
 @pytest.mark.parametrize("filtered_first", [False, True], ids=["bypassed-first", "filtered-first"])
 @pytest.mark.parametrize("transport", ["udp", "tcp"])
 def test_two_clients_asking_for_one_name_at_once_each_get_their_own_answer(
-    gp_booted: Booted, unbound: RunningUnbound, slow_authoritative: None, transport: str, filtered_first: bool
+    gp_booted: Booted, unbound: RunningUnbound, gated_authoritative: None, transport: str, filtered_first: bool
 ) -> None:
     """Issue #3508 through the proxy: a Group Policy bypassed client and a filtered client query the same
     CNAME-to-a-listed-name at the same moment, Unbound resolves it (once or twice: merging is not asserted), and each
@@ -502,7 +504,15 @@ def test_two_clients_asking_for_one_name_at_once_each_get_their_own_answer(
     mark = unbound.tail.mark()
 
     async def scenario(server: tuple[str, int]) -> list[list[bytes]]:
-        return [await exchange(server, [(client, build_query(name)) for client in clients]) for name in names]
+        rounds = []
+        for name in names:
+            gate = unbound.authoritative.gate = threading.Event()
+            opened = asyncio.create_task(
+                asyncio.to_thread(_open_gate_once_logged, unbound, gate, clients, name, mark)
+            )  # the reply waits for it: both queries are in flight together, however fast Unbound is
+            rounds.append(await exchange(server, [(client, build_query(name)) for client in clients]))
+            await opened
+        return rounds
 
     rounds = _through_frontend(gp_booted, unbound, scenario)
 
