@@ -889,19 +889,19 @@ function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, strin
 	];
 }
 
-// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6'). $proxy is TRUE while the
-// DNS proxy hosts the DNSBL module (#3515): 127.0.0.1 is then Unbound, which has no module, so the IPv4 rule
-// targets the interface address the proxy listens on, as the IPv6 rule always did.
+// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6').
 // The key order is the stored order used by sync change detection.
-function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias, bool $proxy = FALSE): array {
+function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias): array {
 	$v4 = ($family === 'inet');
 
 	// #3400: FreeBSD drops ::1 redirected from a non-loopback interface. pfSense
 	// resolves <iface>ip to an assigned interface's current IPv6 on each filter reload.
-	if (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1 && (!$v4 || $proxy)) {
+	if ($v4) {
+		$target = '127.0.0.1';
+	} elseif (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1) {
 		$target = "{$iface}ip";
 	} else {
-		$target = $v4 ? '127.0.0.1' : '::1';
+		$target = '::1';
 	}
 
 	return [
