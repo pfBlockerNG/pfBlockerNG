@@ -387,15 +387,16 @@ decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. Se
 ### Experimental DNS proxy mode (issue #3515)
 
 With the DNSBL **DNS Proxy** toggle on, pfBlockerNG's DNS proxy serves the Resolver's client-facing
-interfaces on port 53 and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/python*` config.xml keys
+interfaces on the Resolver's Listen Port (`unbound/port`, 53 by default) and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/python*` config.xml keys
 (`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it; the proxy imports
 the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
 moves the Resolver through config.xml (never `unbound.conf` directly): `active_interface` `lo0`, `enablessl`
 removed, and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its
 Forwarding `forward-zone:` block, so a bare line there is a syntax error), then `services_unbound_configure(FALSE)`
-regenerates `unbound.conf`. `unbound/port` is **not** changed: Unbound keeps loopback port 53, so the firewall
-keeps resolving through it (pfSense puts `127.0.0.1` into `/etc/resolv.conf` only while the port is 53) and the
-proxy no longer binds loopback. The clause, between the marker lines `# pfBlockerNG DNS proxy` and
+regenerates `unbound.conf`. `unbound/port` is **not** changed: Unbound keeps its Listen Port on loopback and the proxy
+binds the same port on the Resolver's former addresses, so the firewall keeps resolving through Unbound (pfSense puts
+`127.0.0.1` into `/etc/resolv.conf` only while the port is 53) and the proxy never binds loopback. The clause,
+between the marker lines `# pfBlockerNG DNS proxy` and
 `# end pfBlockerNG DNS proxy`, has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
 stream (`proxy-protocol-port: 5353`) and grants the IPv6 networks pfSense would no longer grant:
 `unbound_acls_config()` derives its IPv6 `access-control` rows from `active_interface` (the IPv4 rows come from
@@ -414,7 +415,17 @@ values that cannot be stored verbatim; or our block already in `custom_options` 
 save the moved values as the "previous" ones) is refused with a log line and a `file_notice`: while the toggle is on
 the module has no host, so DNSBL blocks nothing. The restore is abandoned (snapshot kept, `file_notice`, retried by
 the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
-`stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on port 53.
+`stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on the Resolver's port.
+
+The DNSBL page's section save replaces the section that holds the snapshot marker, and the Resolver move rewrites
+that section and the unbound keys, each from the copy of config.xml its own process read at start (`write_config()`
+writes that whole copy back). Both therefore hold one named lock, `pfb_dnsbl_config_lock()` (pfSense `try_lock()`,
+bounded at 10 s), from a fresh `config_read_file()` under it through `write_config()`: `pfb_dns_proxy_resolver()` stops
+the proxy first (up to 7 s, never under the lock), then takes the lock for the move or restore; a call with no
+snapshot and no block of ours takes none. A lock that stays taken fails the save with an input error, and abandons the
+move or restore with a `file_notice` (snapshot kept, retried by the next apply). The wizard's reset stops, with an input
+error and the package config unswept, whenever a snapshot survived `pfb_dns_proxy_resolver(FALSE)` (its return value
+is FALSE for "nothing to restore" too). Pinned by `DnsProxyConfigLockTest`.
 
 While the Resolver is moved (`pfb_dns_proxy_saved() !== NULL`) the proxy, not Unbound, is the module host:
 `pfb_unbound_py_mode_active()` is TRUE, and every liveness decision (`pfb_unbound_py_host_running()`: the
@@ -430,8 +441,8 @@ Unbound itself (stop/start, `is_service_running('unbound')`, `flush_stats`) are 
 script runs
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log` around `/usr/local/pkg/pfblockerng/pfb_python.sh -u
-.../dns_proxy/pfb_dns_proxy.py --listen A ... --port 53 --upstream 127.0.0.1:5353 --module-dir /var/unbound
---user unbound [--dot --pfsense-config /cf/conf/config.xml]` (`--dot` iff the saved Resolver had `enablessl`).
+.../dns_proxy/pfb_dns_proxy.py --listen A ... --port P --upstream 127.0.0.1:5353 --module-dir /var/unbound
+--user unbound [--dot --pfsense-config /cf/conf/config.xml]` (`P` is `unbound/port` when it is a port, else 53; `--dot` iff the saved Resolver had `enablessl`).
 `pfb_dns_proxy_listen()` derives the addresses the way `unbound.inc` binds them (explicit interfaces that are up
 and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for an empty/`all` Resolver, every
 address pfSense lists for the box (`get_configured_ip_addresses()` / `get_configured_ipv6_addresses()`, which carry
@@ -449,15 +460,15 @@ proxy's) and KILL after 5 s; it removes the pidfiles once both are gone, and giv
 keeping the pidfiles, because a process that survived KILL is still alive.
 
 Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores the Resolver (toggle off, DNSBL
-disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds port 53 free;
+disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds the Resolver's port free;
 `pfb_dns_proxy_deinstall()` repeats that right after the uninstall disable pass whatever the pass returned, because the
 pass can return early (lock contention, failed recovery), and removes the rc script like the other services;
 `pfb_reload_unbound()`'s restart path restarts the proxy after Unbound (the module host re-reads lists and ini at
 init) and then waits up to `PFB_DNS_PROXY_START_WAIT` (5 s) for its pidfile, because `restart_service()` returns
 first and the apply ledger reads that pidfile (a proxy that is not up opens the ledger entry, worded for the proxy);
 the zero-downtime swap never restarts it; an apply that finds nothing to reload (`pfb_dnsbl_reload_needed()` false)
-calls `pfb_dns_proxy_ensure_running()`; the installer regenerates the script and restarts the proxy while the
-Resolver is moved, stops it otherwise. A Resolver that still carries our block while the saved
+calls `pfb_dns_proxy_ensure_running()`; the installer stages the module files into `/var/unbound` (`dnsbl_cache
+stage`) and only then regenerates the script and restarts the proxy while the Resolver is moved, stops it otherwise. A Resolver that still carries our block while the saved
 copy is lost or malformed cannot be put back (a user's own lo0 Resolver or PROXYv2 line has no marker and is left
 alone): the apply raises a `file_notice` naming the Resolver settings to check and leaves the proxy running
 (stopping it would take LAN DNS down). Pinned by `DnsProxyResolverMoveTest`, `DnsProxyAclTest`, `DnsProxyListenTest`,
