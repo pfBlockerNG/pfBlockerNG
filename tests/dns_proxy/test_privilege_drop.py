@@ -28,7 +28,7 @@ import pfsense_dot
 import pytest
 from dot_helpers import REFID, b64, cert_element, config_xml, free_port
 from frontend_constants import BLOCKED, INI, PROTO_DIR, SHIPPED_DIR
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, running_proxy, udp_exchange
+from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, running_proxy, serving, udp_exchange
 
 NO_SUCH_USER = "pfb-no-such-user-3515"
 NEEDS_ROOT = pytest.mark.skipif(
@@ -93,14 +93,8 @@ def test_sockets_and_tls_are_made_as_the_starting_user_then_root_is_dropped_then
                 + ["--module-dir", str(module_dir), "--dot", "--pfsense-config", str(config), "--user", "root"]
                 + (["--no-module"] if no_module else [])
             )
-            stop = asyncio.Event()
-            ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
-            task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
-            try:
-                await asyncio.wait_for(ready, WATCHDOG)
-            finally:
-                stop.set()
-                await asyncio.wait_for(task, WATCHDOG)
+            async with serving(args):
+                pass
 
     asyncio.run(scenario())
     assert events == [

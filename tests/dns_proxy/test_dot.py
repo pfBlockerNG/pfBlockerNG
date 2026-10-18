@@ -35,7 +35,7 @@ from dot_helpers import (
     make_certificate,
 )
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, PROTO_DIR
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, serve_dot
+from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, serve_dot, serving
 
 CRT = b"-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n"
 KEY = b"-----BEGIN PRIVATE KEY-----\nREVG\n-----END PRIVATE KEY-----\n"
@@ -282,18 +282,11 @@ def test_serve_with_dot_answers_a_tls_client_and_forwards_with_the_tls_peers_add
                 ["--listen", "127.0.0.1", "--port", "0", "--upstream", f"127.0.0.1:{upstream.port}"]
                 + ["--module-dir", str(module_dir), "--dot", "--pfsense-config", str(config)]
             )
-            stop = asyncio.Event()
-            ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
-            task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
-            try:
-                [plain, dot] = await asyncio.wait_for(ready, WATCHDOG)
+            async with serving(args) as [plain, dot]:
                 blocked, _, _ = await dot_exchange(dot, build_query(BLOCKED), trust, source="127.0.0.5")
                 headers_after_block = list(upstream.headers)
                 allowed, client, _ = await dot_exchange(dot, build_query(ALLOWED), trust, source="127.0.0.5")
                 return plain, dot, blocked, headers_after_block, allowed, client, list(upstream.headers)
-            finally:
-                stop.set()
-                await asyncio.wait_for(task, WATCHDOG)
 
     plain, dot, blocked, headers_after_block, allowed, client, headers = asyncio.run(scenario())
     assert dot == ("127.0.0.1", port) and plain[1] != port  # DoT is its own listener on the resolver's tlsport
