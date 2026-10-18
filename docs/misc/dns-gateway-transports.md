@@ -31,8 +31,17 @@ not crash-loop the only :53 listener.
 A listener that cannot be bound is logged and skipped. Readiness lines, before `ready upstream`, in the order udp+tcp,
 dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracketed (`[::1]:853`).
 
-Every transport goes through the same path as plain DNS: Resolver ACL (deny: nothing is answered; refuse: REFUSED built
-by the gateway), then the decider, then PROXYv2 to Unbound with the client in the header.
+pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
+`--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoH and
+DoQ ports are their own, so nothing collides with the plain DNS listeners there.
+
+Every transport goes through the same path as plain DNS: the Resolver ACL, then the decider, then PROXYv2 to Unbound
+with the client in the header. The ACL is Unbound's own, read from `--unbound-conf` (`/var/unbound/unbound.conf`) and
+every file it includes, globs too: the `access-control` rows of `access_lists.conf`, of pfBlockerNG's marked clause and
+of the admin's Custom Options. The most specific prefix matches and, of identical prefixes, the row read last wins; deny:
+nothing is answered; refuse, and a client no row names (Unbound's default): REFUSED built by the gateway. A config
+Unbound could not load (a missing include, an include cycle, a brace pattern) is logged once and the gateway forwards
+everything; any file or glob match that changes is picked up within a second.
 
 ## Who is the client
 
