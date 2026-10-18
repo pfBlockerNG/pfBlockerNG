@@ -17,6 +17,7 @@ STATIC_CHROOT_FILES = (
     "pfb_py_hsts.txt",
     "pfb_python.sh",
     "dnsbl_psl",
+    "pfb_upstream_observer.py",
 )
 
 
@@ -92,3 +93,10 @@ def test_shell_teardown_derives_shipped_files_including_psl_authority() -> None:
     assert "dnsbl_psl" in shipped
     assert 'rm -f "${pfbchroot}/pfb_py_tld.txt"' not in body
     assert all(file_name not in body for file_name in shipped)
+
+
+def test_shell_ships_the_proxy_mode_upstream_observer_with_the_other_chroot_files() -> None:
+    shipped = _shipped_files(SHELL.read_text())
+
+    assert "pfb_upstream_observer.py" in shipped
+    assert (PKG_DIR / "dns_proxy" / "pfb_upstream_observer.py").is_file(), "the observer is shipped from dns_proxy/"

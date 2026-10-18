@@ -1747,6 +1747,19 @@
             }
         ]
     },
+    "pfb_dns_proxy_observer_wanted": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "mode",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_refuse": {
         "returnsRef": false,
         "returnType": "bool",

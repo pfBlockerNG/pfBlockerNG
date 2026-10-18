@@ -333,7 +333,7 @@ final class DnsProxyServiceTest extends TestCase
 	// S2 -- what the generated script says
 	// -----------------------------------------------------------------------
 
-	public function testScriptLaunchesTheShippedProxyThroughPfbPythonOnTheSavedAddressesAsUnbound(): void
+	public function testScriptLaunchesTheShippedProxyThroughPfbPythonOnTheSavedAddressesAndLoopbackAsUnbound(): void
 	{
 		// Given a Resolver that was saved listening on lan (IPv4 and IPv6), without DoT
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
@@ -351,12 +351,38 @@ final class DnsProxyServiceTest extends TestCase
 				'-P', $this->pidfile('pfb_dns_proxy_daemon.pid'), '-p', $this->pidfile('pfb_dns_proxy.pid'),
 				'-o', "{$this->dir}/log/dns_proxy.log",
 				'/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py',
-				'--listen', '192.0.2.1', '--listen', '2001:db8::1',
+				'--listen', '192.0.2.1', '--listen', '2001:db8::1', '--listen', '127.0.0.1', '--listen', '::1',
 				'--port', '53', '--upstream', '127.0.0.1:5353', '--module-dir', '/var/unbound', '--user', 'unbound',
 			],
 			$this->daemonArgv()
 		);
 		$this->assertSame(['launch'], $this->events());
+	}
+
+	public function testTheProxyAlsoServesLoopbackSoTheFirewallsOwnLookupsAreFilteredWhateverTheSavedInterfaces(): void
+	{
+		// Given a Resolver saved on one IPv4-only interface: loopback is not among its addresses, and Unbound has
+		// moved to its own loopback ports, so loopback on the Listen Port is free for the proxy
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$GLOBALS['config']['unbound']['port'] = '5300';
+
+		// When the rc service is generated and started
+		$this->generate();
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then the proxy listens on the interface address first, then on both loopback addresses, all on that port:
+		// the firewall's resolv.conf (127.0.0.1, ::1) reaches the proxy, not Unbound
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$argv = $this->daemonArgv();
+		$listen = [];
+		foreach ($argv as $i => $arg) {
+			if ($arg === '--listen') {
+				$listen[] = $argv[$i + 1];
+			}
+		}
+		$this->assertSame(['192.0.2.1', '127.0.0.1', '::1'], $listen);
+		$this->assertSame('5300', $argv[(int) array_search('--port', $argv, TRUE) + 1]);
 	}
 
 	public function testScriptNamesNoInterpreterPathAndQuotesEveryListenValue(): void
@@ -367,7 +393,7 @@ final class DnsProxyServiceTest extends TestCase
 
 		$this->assertDoesNotMatchRegularExpression('~\bpython|/bin/php|\bphp\b~i', $text,
 			'the proxy is launched through pfb_python.sh only: no interpreter path may appear in the script');
-		$this->assertStringContainsString("--listen '192.0.2.1' --listen '2001:db8::1'", $text, 'every listen value is shell-quoted');
+		$this->assertStringContainsString("--listen '192.0.2.1' --listen '2001:db8::1' --listen '127.0.0.1' --listen '::1'", $text, 'every listen value is shell-quoted');
 		$this->assertStringContainsString('</dev/null >/dev/null 2>&1', $text, 'stdio is detached (#662)');
 		$this->assertStringContainsString("rc_stop || return 1\n", $text, 'never launch over a survivor');
 	}

@@ -115,7 +115,7 @@ final class DnsProxyAclTest extends TestCase
 
 		// Then the whole text is the user's lines plus one clause, the grant between the PROXYv2 line and the end marker
 		$this->assertSame(
-			"do-ip6: no\nprefetch: yes\nserver:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
+			"do-ip6: no\nprefetch: yes\nserver:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 			. "proxy-protocol-port: 5353\naccess-control: 2001:db8:1::/64 allow\n# end pfBlockerNG DNS proxy",
 			$this->customText()
 		);
@@ -300,7 +300,7 @@ final class DnsProxyAclTest extends TestCase
 		$this->assertTrue($changed);
 		$this->assertSame(['access-control: 2001:db8:9::/64 allow'], $this->grants());
 		$this->assertSame(
-			"# mine\ndo-ip6: no\nprefetch: yes\nserver:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
+			"# mine\ndo-ip6: no\nprefetch: yes\nserver:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 			. "proxy-protocol-port: 5353\naccess-control: 2001:db8:9::/64 allow\n# end pfBlockerNG DNS proxy\nprefetch-key: yes",
 			$this->customText()
 		);
