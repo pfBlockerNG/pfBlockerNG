@@ -145,3 +145,33 @@ def test_a_newcomer_as_heavy_as_the_busiest_never_takes_another_addresss_query_e
         return outcome
 
     assert asyncio.run(scenario()) == (["busiest", "other"], [])
+
+
+@pytest.mark.parametrize("newcomer", ["192.0.2.9", OTHER], ids=["new-address", "lighter-existing-address"])
+def test_a_newcomer_that_displaced_another_address_is_booked_to_its_own_address(
+    newcomer: str, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each query in flight is booked to the address that sent it, so the counts add up to what each address holds and
+    drain to nothing once every query has ended."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_INFLIGHT", 3)
+
+    async def scenario() -> tuple[dict[str, int], list[str], dict[str, int], dict[str, int]]:
+        queries = _Queries()
+        frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", 9), timeout=4.0)
+        _full_table(frontend, queries, clock)
+        await asyncio.sleep(0)
+        frontend.spawn_udp_query(queries.query("new"), newcomer)
+        await asyncio.sleep(0)
+        holders: dict[str, int] = {}
+        for src, _ in frontend._queries.values():
+            holders[src] = holders.get(src, 0) + 1
+        shares = dict(frontend._per_source)
+        queries.release.set()
+        await drained(frontend)
+        return holders, queries.cancelled, shares, dict(frontend._per_source)
+
+    holders, cancelled, shares, left = asyncio.run(scenario())
+    assert cancelled == ["busy1"]
+    assert holders == shares  # every query in flight is booked to the address that sent it
+    assert BUSIEST in shares
+    assert left == {}

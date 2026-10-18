@@ -20,6 +20,7 @@ import pytest
 import unbound_shim as shim
 from frontend_constants import DNSBL_IPV4, Booted
 from frontend_helpers import (
+    AD,
     WATCHDOG,
     FakeProxyUpstream,
     FakeUnbound,
@@ -139,6 +140,15 @@ def test_cname_is_chased_and_the_client_gets_the_cname_plus_the_targets_address(
     assert _asked(unbound) == [(DUCK, qtype), (TARGET, qtype)]  # the original name first, then the chase
     # The module itself ran both passes: plant + restart, then the post-chase re-cache.
     assert cache_calls == [("invalidate", DUCK), ("store", DUCK, 1), ("invalidate", DUCK), ("store", DUCK, 0)]
+
+
+@pytest.mark.parametrize(("do", "cd"), [(True, False), (False, True), (True, True)], ids=["do", "cd", "do-and-cd"])
+def test_a_safesearch_answer_never_claims_dnssec_authentication_whatever_the_client_asks(
+    ss_booted: Booted, do: bool, cd: bool
+) -> None:
+    reply = _resolve(ss_booted, build_query(DUCK, do=do, cd=cd, edns=True), FakeUnbound(ZONE))
+    assert _answers(reply) == [CNAME_TO_TARGET, (TARGET, dnswire.TYPE_A, TARGET_A)]
+    assert reply.flags & AD == 0  # the proxy synthesised this answer, so it cannot vouch for it
 
 
 def test_the_www_variant_of_a_safesearch_name_is_redirected_too(ss_booted: Booted) -> None:

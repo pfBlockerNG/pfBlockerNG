@@ -112,10 +112,10 @@ TCP_IDLE_TIMEOUT = 30.0  # Unbound's tcp-idle-timeout default
 RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real query carries an OPT, maybe a TSIG
-MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; over it a newcomer is dropped
+MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; over it see spawn_udp_query
 MAX_UDP_PER_SOURCE = 256  # ... of which one client address may hold this many (a NAT'd network at 400 qps holds ~120)
 MAX_TCP_CLIENTS = 128  # TCP and DoT connections at once; each opens one Unbound connection lazily
-MAX_TCP_PER_SOURCE = 64  # ... of which one client address may hold this many; over either a newcomer is refused
+MAX_TCP_PER_SOURCE = 64  # ... of which one client address may hold this many; over it see _make_room
 SILENCE_LOG_INTERVAL = 30.0  # seconds between two "no reply from Unbound" lines, whatever Unbound answers in between
 TLS_HANDSHAKE_TIMEOUT = 10.0  # a DoT client that has not finished its handshake by then is dropped (asyncio: 60 s)
 TLS_SHUTDOWN_TIMEOUT = 2.0  # a DoT client that does not answer our close by then is cut off (asyncio: 30 s)
@@ -714,7 +714,9 @@ class Frontend:
             if context is not None:
                 await writer.start_tls(context, ssl_handshake_timeout=TLS_HANDSHAKE_TIMEOUT)
             while True:
-                await asyncio.sleep(0)  # reading buffered bytes never yields: a pipelined burst would hold the loop
+                # Python 3.12+: a buffered read never yields, so a pipelined burst would hold the loop. 3.11's wait_for
+                # already yields once per read, so there this line is redundant.
+                await asyncio.sleep(0)
                 try:
                     size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), TCP_IDLE_TIMEOUT))[0]
                     wire = await asyncio.wait_for(reader.readexactly(size), TCP_IDLE_TIMEOUT)
@@ -845,7 +847,10 @@ class _TcpUpstream:
                 await self._writer.drain()
                 size = struct.unpack("!H", await asyncio.wait_for(self._reader.readexactly(2), self.timeout))[0]
                 return await asyncio.wait_for(self._reader.readexactly(size), self.timeout)
-            except (OSError, asyncio.IncompleteReadError, TimeoutError):
+            except TimeoutError:  # Unbound is slow, not gone: the query went out, so it is not sent again
+                self.close()
+                return None
+            except (OSError, asyncio.IncompleteReadError):
                 self.close()
                 if not reused:  # a connection Unbound closed while idle gets one fresh try, nothing else does
                     return None

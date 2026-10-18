@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import errno
+import os
 import re
 import selectors
 import signal
@@ -72,12 +74,27 @@ def build_query(
     return dnswire.encode(message)
 
 
+BIND_TRIES = 5  # port 0's UDP twin can be held by another process; see _bind_one
+
+
+def _bind_one(host: str, port: int, *, udp: bool) -> pfb_dns_proxy.Listener:
+    """pfb_dns_proxy.bind() on one address. With port 0 the TCP port picked may have its UDP twin held by another
+    process: that EADDRINUSE alone is tried again, BIND_TRIES times in all. An explicit port is never retried."""
+    for _ in range(BIND_TRIES - 1):
+        try:
+            return pfb_dns_proxy.bind(host, port, udp=udp)
+        except pfb_dns_proxy.ListenError as exc:
+            if port != 0 or not str(exc).endswith(os.strerror(errno.EADDRINUSE)):
+                raise
+    return pfb_dns_proxy.bind(host, port, udp=udp)  # the last try: its error is the caller's
+
+
 def _bind_strict(listen: Sequence[str], port: int, *, udp: bool) -> list[pfb_dns_proxy.Listener]:
     """pfb_dns_proxy.bind() on each address; the first ListenError propagates once the ones already bound are closed."""
     bound: list[pfb_dns_proxy.Listener] = []
     try:
         for host in listen:
-            bound.append(pfb_dns_proxy.bind(host, port, udp=udp))
+            bound.append(_bind_one(host, port, udp=udp))
     except BaseException:
         for listener in bound:
             listener.close()
@@ -98,6 +115,7 @@ async def serve_dot(
 
 
 EDNS_OPTION_EDE = 15  # RFC 8914 Extended DNS Error
+AD = 0x0020  # DNSSEC authenticated data: dnswire does not name it, and the proxy never sets it on its own answers
 UPSTREAM_SOA = "example. 60 IN SOA ns.example. hostmaster.example. 1 2 3 4 60"
 
 

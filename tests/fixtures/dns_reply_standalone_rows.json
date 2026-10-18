@@ -26,6 +26,9 @@
     "nxdomain-with-soa": [
       "DNS-reply,2026-10-18 12:00:00,reply,A,SOA,60,nxd.example,192.0.2.10,SOA,unk"
     ],
+    "nxdomain-with-cname": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,CNAME,300,nxcname.example,192.0.2.10,allowed.example,unk"
+    ],
     "no-answer": [
       "DNS-reply,2026-10-18 12:00:00,reply,AAAA,AAAA,0,nodata.example,192.0.2.10,NXDOMAIN,unk"
     ],
