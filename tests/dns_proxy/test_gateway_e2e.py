@@ -63,6 +63,7 @@ ACL_FILE = "\n".join([
     "#LAN",
     "access-control: 127.0.0.1/32 allow_snoop",
     "access-control: 127.0.0.0/8 allow_snoop ",
+    "access-control: 192.0.2.0/24 allow ",  # the rig Unbound's own grant: the clients behind a front end
     f"access-control: {REFUSED_CLIENT}/32 refuse",
     "",
 ])  # fmt: skip
@@ -347,20 +348,33 @@ def test_denied_client_gets_no_reply_over_udp_and_a_closed_connection_over_tcp(g
 
 @pytest.fixture(scope="module")
 def nomatch_client() -> str:
-    """An address of this host that no ACL row names and the rig's Unbound refuses: the Docker bridge's.
+    """A non-loopback address of this host that reaches the gateway as itself and that no ACL row names.
 
-    A loopback address will not do: Unbound's own defaults allow 127.0.0.0/8 and ::1.
+    A loopback address will not do: Unbound's own defaults allow 127.0.0.0/8 and ::1. An address of an interface that
+    is down (docker0 without containers) is sent as the host's primary address instead, so each candidate is tried:
+    the one a loopback receiver sees as the datagram's source is the one that works.
     """
     found = subprocess.run(
-        ["docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}"],
+        ["ip", "-4", "-o", "addr", "show", "up", "scope", "global"],
         capture_output=True, text=True, timeout=60, check=False,
     )  # fmt: skip
-    address = found.stdout.strip()
-    if found.returncode != 0 or not address or address.startswith("127."):
-        pytest.fail(
-            f"no non-loopback host address for the no-row client: docker said {found.stdout!r} {found.stderr!r}"
-        )
-    return address
+    candidates = [
+        fields[3].split("/")[0] for fields in (row.split() for row in found.stdout.splitlines()) if fields[3:]
+    ]
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+        receiver.bind(("127.0.0.1", 0))
+        receiver.settimeout(WATCHDOG)  # a datagram that never comes marks a candidate that cannot send
+        for address in candidates:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                try:
+                    sender.bind((address, 0))
+                    sender.sendto(b"probe", receiver.getsockname())
+                    seen = receiver.recvfrom(16)[1][0]
+                except OSError:
+                    continue
+            if seen == address:
+                return address
+    pytest.fail(f"no non-loopback IPv4 address of this host reaches a loopback listener as itself: {candidates}")
 
 
 def _is_refused(wire: bytes) -> bool:
