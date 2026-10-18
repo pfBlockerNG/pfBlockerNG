@@ -19,7 +19,6 @@ import pfb_dns_proxy
 import pfsense_dot
 import proxyv2
 import pytest
-import unbound_shim as shim
 from dot_helpers import dot_exchange, free_port
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, Booted
 from frontend_helpers import (
@@ -31,6 +30,7 @@ from frontend_helpers import (
     serve_dot,
     serve_plain,
     tcp_exchange,
+    udp_client,
     udp_exchange,
 )
 
@@ -57,14 +57,6 @@ def _resolve(module: Any, wire: bytes, forward: Any) -> bytes | None:
 
 def _framed(wire: bytes) -> bytes:
     return struct.pack("!H", len(wire)) + wire
-
-
-class _Collector(asyncio.DatagramProtocol):
-    def __init__(self) -> None:
-        self.replies: list[bytes] = []
-
-    def datagram_received(self, data: bytes, addr: Any) -> None:
-        self.replies.append(data)
 
 
 # --- the decision: there is none -------------------------------------------------------------------
@@ -172,52 +164,62 @@ def test_dot_forwards_a_listed_name_with_the_tls_client_in_the_proxyv2_header(
     assert client[0] == "127.0.0.7"
 
 
-def test_tcp_clients_over_the_cap_are_closed_unread_without_a_module() -> None:
-    async def scenario() -> tuple[bytes, int]:
+def test_a_tcp_client_over_the_cap_closes_the_longest_idle_one_without_a_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 1)
+
+    async def ask(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, qid: int) -> int:
+        writer.write(_framed(build_query(ALLOWED, qid=qid)))
+        size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), WATCHDOG))[0]
+        return dnswire.parse(await asyncio.wait_for(reader.readexactly(size), WATCHDOG)).id
+
+    async def scenario() -> tuple[int, int, bytes, int]:
         async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
-            frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", upstream.port), timeout=WATCHDOG, max_tcp_clients=1)
+            frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
             [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             reader, writer = await asyncio.open_connection(*server)
-            extra: asyncio.StreamWriter | None = None
+            extra_reader, extra = None, None
             try:
-                writer.write(_framed(build_query(ALLOWED)))
-                await asyncio.wait_for(reader.readexactly(2), WATCHDOG)  # served: its slot is taken
+                first = await ask(reader, writer, 1)  # served: its slot is taken
                 extra_reader, extra = await asyncio.open_connection(*server)
+                second = await ask(extra_reader, extra, 2)  # over the cap: served, the first one is closed for it
                 try:
-                    sent = await asyncio.wait_for(extra_reader.read(), WATCHDOG)  # EOF: closed at accept
+                    closed = await asyncio.wait_for(reader.read(), WATCHDOG)  # EOF
                 except ConnectionError:
-                    sent = b""
-                return sent, len(upstream.headers)
+                    closed = b""
+                return first, second, closed, len(upstream.headers)
             finally:
                 writer.close()
                 if extra is not None:
                     extra.close()
                 await frontend.stop()
 
-    assert asyncio.run(scenario()) == (b"", 1)  # nothing sent to the extra client, one upstream connection
+    assert asyncio.run(scenario()) == (1, 2, b"", 2)  # both were answered by Unbound, over a connection each
 
 
-def test_udp_queries_over_the_in_flight_cap_are_dropped_without_a_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def scenario() -> tuple[int, list[bytes]]:
-        dropped = asyncio.Event()  # the one log line a drop costs: the barrier that says the second datagram was seen
-        monkeypatch.setattr(shim, "log_warn", lambda _msg: dropped.set())
+def test_a_udp_query_over_the_in_flight_cap_drops_the_oldest_one_without_a_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_INFLIGHT", 1)
+
+    async def scenario() -> list[bytes]:
         async with FakeProxyUpstream(FakeUnbound(ZONE), silent=True) as upstream:
-            frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", upstream.port), timeout=WATCHDOG, max_udp_inflight=1)
+            frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", upstream.port), timeout=0.2)
             [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            collector = _Collector()
-            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
-                lambda: collector, remote_addr=server
-            )
+            transport, client = await udp_client(server)
             try:
                 transport.sendto(build_query(ALLOWED, qid=1))
                 transport.sendto(build_query(ALLOWED, qid=2))
-                await asyncio.wait_for(dropped.wait(), WATCHDOG)
-                return frontend.udp_inflight, collector.replies
+                await client.until(1)  # the newest times out: SERVFAIL
+                await frontend.stop()  # every query task has ended: the dropped one can never answer
+                await asyncio.sleep(0)
+                return client.replies
             finally:
                 transport.close()
-                await frontend.stop()
 
-    assert asyncio.run(scenario()) == (1, [])  # the first is in flight (the upstream is silent), the second dropped
+    [reply] = asyncio.run(scenario())  # exactly one: the first was dropped
+    assert (dnswire.parse(reply).id, dnswire.parse(reply).rcode) == (2, 2)
 
 
 # --- starting up -----------------------------------------------------------------------------------

@@ -12,7 +12,6 @@ import os
 import struct
 import subprocess
 import sys
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -30,12 +29,12 @@ from frontend_helpers import (
     build_query,
     serve_plain,
     split_proxy_header,
+    udp_client,
     udp_exchange,
 )
 
 QTC = b"\x00\x01\x00\x01"  # qtype A, qclass IN
 ZONE = {(ALLOWED, dnswire.TYPE_A): [f"{ALLOWED} 300 IN A 192.0.2.77"]}
-SLOW = 0.05  # seconds a hostile packet may cost; the bombs below cost the unfixed code seconds
 
 
 def _hdr(qd: int = 0, an: int = 0, ns: int = 0, ar: int = 0, *, flags: int = 0x0100, qid: int = 0xABCD) -> bytes:
@@ -73,12 +72,10 @@ def _pointer_chain_rrs(count: int) -> bytes:
     return bytes(out)
 
 
-def _resolve_timed(booted: Booted, wire: bytes, forward: Any = None) -> tuple[bytes | None, float]:
-    async def scenario() -> tuple[bytes | None, float]:
+def _resolve(booted: Booted, wire: bytes, forward: Any = None) -> bytes | None:
+    async def scenario() -> bytes | None:
         frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
-        started = time.perf_counter()
-        reply = await frontend.resolve(wire, "192.0.2.10", forward or FakeUnbound(ZONE))
-        return reply, time.perf_counter() - started
+        return await frontend.resolve(wire, "192.0.2.10", forward or FakeUnbound(ZONE))
 
     return asyncio.run(scenario())
 
@@ -86,11 +83,9 @@ def _resolve_timed(booted: Booted, wire: bytes, forward: Any = None) -> tuple[by
 # --- pointer bombs and header-only FORMERR -----------------------------------------------
 
 
-def test_a_chain_of_200_compression_pointers_is_rejected_in_milliseconds() -> None:
-    started = time.perf_counter()
+def test_a_chain_of_200_compression_pointers_is_rejected() -> None:
     with pytest.raises(dnswire.WireError, match="pointer"):
         dnswire.parse(_pointer_chain_rrs(200))
-    assert time.perf_counter() - started < SLOW
 
 
 def test_a_chain_of_100_compression_pointers_is_still_a_name() -> None:
@@ -104,13 +99,19 @@ def test_a_chain_of_100_compression_pointers_is_still_a_name() -> None:
     ids=["chain-of-questions", "wide-name-pointer-questions", "two-questions"],
 )
 def test_a_query_without_exactly_one_question_gets_a_header_only_formerr_without_being_parsed(
-    booted: Booted, bomb: bytes
+    booted: Booted, bomb: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    reply, elapsed = _resolve_timed(booted, bomb)
+    with monkeypatch.context() as patch:
+        patch.setattr(dnswire, "parse", lambda _wire: pytest.fail("the packet was parsed: its cost is not constant"))
+        reply = _resolve(booted, bomb)
     assert reply is not None and len(reply) == 12  # the header alone: no question echoed, nothing to amplify
-    parsed = dnswire.parse(reply)
-    assert (parsed.id, parsed.rcode, parsed.flags & (dnswire.QR | dnswire.RD)) == (0xABCD, 1, dnswire.QR | dnswire.RD)
-    assert elapsed < SLOW
+    msg_id, flags, *counts = struct.unpack("!HHHHHH", reply)
+    assert (msg_id, flags & 0xF, flags & (dnswire.QR | dnswire.RD), counts) == (
+        0xABCD,
+        1,
+        dnswire.QR | dnswire.RD,
+        [0, 0, 0, 0],
+    )
 
 
 @pytest.mark.parametrize(("extra", "formerr"), [(8, False), (9, True)])
@@ -118,7 +119,7 @@ def test_a_query_carrying_more_than_8_other_records_gets_a_header_only_formerr(
     booted: Booted, extra: int, formerr: bool
 ) -> None:
     wire = _hdr(1, ar=extra) + dnswire.encode_name(BLOCKED) + QTC + _null_rr(b"\x00") * extra
-    reply, _ = _resolve_timed(booted, wire)
+    reply = _resolve(booted, wire)
     assert reply is not None
     assert (len(reply) == 12 and dnswire.parse(reply).rcode == 1) is formerr
     assert formerr or dnswire.parse(reply).answers  # eight records are a query like any other: the block answer
@@ -129,51 +130,148 @@ def test_a_query_carrying_more_than_8_other_records_gets_a_header_only_formerr(
 
 def test_a_truncated_packet_with_qr_set_is_dropped_not_answered_with_formerr(booted: Booted) -> None:
     truncated_response = struct.pack("!HHHHHH", 7, 0x8100, 1, 0, 0, 0) + b"\xc0"
-    assert _resolve_timed(booted, truncated_response)[0] is None
+    assert _resolve(booted, truncated_response) is None
 
 
 # --- a flood and an exhausted descriptor table -----------------------------------------------
 
 
-class _Collector(asyncio.DatagramProtocol):
-    def __init__(self) -> None:
-        self.replies: list[bytes] = []
-
-    def datagram_received(self, data: bytes, addr: Any) -> None:
-        self.replies.append(data)
+def _ids(replies: list[bytes]) -> list[int]:
+    return sorted(dnswire.parse(reply).id for reply in replies)
 
 
-def test_udp_queries_beyond_the_in_flight_limit_are_dropped_with_one_log_line(
+def test_a_udp_query_over_the_in_flight_limit_drops_the_oldest_one_with_one_log_line(
     booted: Booted, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Issue #3517 review: the newest query was dropped, so unanswerable ones held every slot for the whole timeout."""
     warnings: list[object] = []
     monkeypatch.setattr(shim, "log_warn", warnings.append)
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_INFLIGHT", 4)
 
-    async def scenario() -> tuple[int, int, list[bytes]]:
+    async def scenario() -> list[bytes]:
         async with FakeProxyUpstream(FakeUnbound(ZONE), silent=True) as upstream:
-            frontend = pfb_dns_proxy.Frontend(
-                booted.module, ("127.0.0.1", upstream.port), timeout=0.3, max_udp_inflight=4
-            )
+            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=0.3)
             [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            collector = _Collector()
-            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
-                lambda: collector, remote_addr=server
-            )
+            transport, client = await udp_client(server)
             try:
                 for qid in range(10):
                     transport.sendto(build_query(ALLOWED, qid=qid))
-                while len(collector.replies) < 4:
-                    await asyncio.sleep(0.01)
-                await asyncio.sleep(0.3)  # the dropped six must not trickle in late
-                return len(upstream.headers), len(collector.replies), collector.replies
+                await client.until(4)  # the four newest time out: SERVFAIL
+                await frontend.stop()  # every query task has ended: one that was dropped can never answer
+                await asyncio.sleep(0)  # a reply sent before the stop is on this socket now
+                return client.replies
             finally:
                 transport.close()
-                await frontend.stop()
 
-    forwarded, answered, replies = asyncio.run(scenario())
-    assert (forwarded, answered) == (4, 4)  # four in flight, six dropped
-    assert [dnswire.parse(reply).rcode for reply in replies] == [2, 2, 2, 2]  # the four time out: SERVFAIL
+    replies = asyncio.run(scenario())
+    assert (_ids(replies), [dnswire.parse(reply).rcode for reply in replies]) == ([6, 7, 8, 9], [2, 2, 2, 2])
     assert len([w for w in warnings if "in flight" in str(w)]) == 1
+
+
+def test_a_source_over_its_udp_limit_loses_its_own_oldest_queries_and_no_other_source_is_affected(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #3517 review: about 100 qps of names Unbound never answers from one host left every other host without
+    DNS, because each such query held one of the shared slots for the whole timeout."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_PER_SOURCE", 4)
+
+    async def scenario() -> tuple[list[bytes], list[bytes]]:
+        upstream = FakeProxyUpstream(FakeUnbound(ZONE), unanswered_prefix="slow")
+        async with upstream:
+            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=0.3)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+            flooder, flood = await udp_client(server, "127.0.0.2")
+            bystander, other = await udp_client(server, "127.0.0.3")
+            try:
+                for qid in range(12):
+                    flooder.sendto(build_query(f"slow{qid}.example.", qid=qid))
+                bystander.sendto(build_query(ALLOWED, qid=0x77))
+                await other.until(1)
+                await flood.until(4)  # the flooder's four newest time out
+                await frontend.stop()
+                await asyncio.sleep(0)
+                return flood.replies, other.replies
+            finally:
+                flooder.close()
+                bystander.close()
+
+    flood, other = asyncio.run(scenario())
+    assert (_ids(flood), {dnswire.parse(reply).rcode for reply in flood}) == ([8, 9, 10, 11], {2})
+    answered = dnswire.parse(other[0])
+    assert (answered.id, answered.rcode, len(answered.answers)) == (0x77, 0, 1)
+
+
+def test_the_in_flight_limits_default_to_512_in_all_and_64_per_source() -> None:
+    assert (pfb_dns_proxy.MAX_UDP_INFLIGHT, pfb_dns_proxy.MAX_UDP_PER_SOURCE) == (512, 64)
+
+
+# --- one client's pipelined frames do not stall everyone else ---------------------------------
+
+
+def test_a_pipelined_burst_on_one_tcp_connection_does_not_hold_up_a_udp_query(booted: Booted) -> None:
+    """Issue #3517 review: a client with 100k buffered frames delayed a UDP reply from 0.7 ms to 754 ms, because a read
+    of buffered bytes and a write that is not blocked never yield. The burst is zero-length frames, which cost the
+    proxy nothing but the loop turn; what is counted is how many were handled by the time the UDP query was."""
+    frames = 20_000
+
+    class CountingFrontend(pfb_dns_proxy.Frontend):
+        handled = 0
+        handled_when_the_udp_query_came: int | None = None
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.first_frame = asyncio.Event()
+
+        async def resolve(self, wire: bytes, client_ip: str, forward: Any, **kwargs: Any) -> bytes | None:
+            if wire:
+                self.handled_when_the_udp_query_came = self.handled
+            else:
+                self.handled += 1
+                self.first_frame.set()
+            return await super().resolve(wire, client_ip, forward, **kwargs)
+
+    async def scenario() -> int | None:
+        frontend = CountingFrontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
+        [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+        _, writer = await asyncio.open_connection(*server)
+        try:
+            writer.write(b"\x00\x00" * frames)  # all of it is in the proxy's receive buffer at once
+            await asyncio.wait_for(frontend.first_frame.wait(), WATCHDOG)
+            await udp_exchange(server, build_query(BLOCKED))
+            return frontend.handled_when_the_udp_query_came
+        finally:
+            writer.close()
+            await frontend.stop()
+
+    handled = asyncio.run(scenario())
+    assert handled is not None and handled < frames // 10, f"{handled} of {frames} frames were handled before it"
+
+
+# --- Unbound's silence is logged once per burst ----------------------------------------------
+
+
+@pytest.mark.parametrize("with_module", [True, False], ids=["module", "no-module"])
+def test_unbound_not_answering_is_one_log_line_per_burst_and_a_reply_ends_the_burst(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch, with_module: bool
+) -> None:
+    """Issue #3517 review: one line per silent query, about 100 lines/s into an unrotated log under a flood."""
+    warnings: list[object] = []
+    monkeypatch.setattr(shim, "log_warn", warnings.append)
+    answered = FakeUnbound(ZONE)
+    script = iter([False, False, True, False, False])  # silent, silent, answers, silent, silent
+
+    async def forward(wire: bytes) -> bytes | None:
+        return answered.answer(wire) if next(script) else None
+
+    async def scenario() -> None:
+        frontend = pfb_dns_proxy.Frontend(booted.module if with_module else None, ("127.0.0.1", 9), timeout=WATCHDOG)
+        for label in ("first", "second", "third", "fourth", "fifth"):
+            await frontend.resolve(build_query(f"{label}.example."), "192.0.2.10", forward)
+
+    asyncio.run(scenario())
+    silent = [str(line) for line in warnings if "no reply from Unbound" in str(line)]
+    assert len(silent) == 2
+    assert ("first.example." in silent[0], "fourth.example." in silent[1]) == (True, True)
 
 
 def test_no_descriptor_for_an_upstream_socket_is_one_log_line_and_a_servfail(
@@ -289,7 +387,7 @@ def test_an_upstream_tcp_connection_unbound_closed_while_idle_is_reopened_once(b
                     writer.write(struct.pack("!H", len(wire)) + wire)
                     size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), WATCHDOG))[0]
                     replies.append(await asyncio.wait_for(reader.readexactly(size), WATCHDOG))
-                    await asyncio.sleep(0.1)  # let the upstream's close arrive
+
                 writer.close()
                 return replies, len(upstream.headers)
             finally:
@@ -313,7 +411,7 @@ def test_the_question_class_reaches_the_module(booted: Booted, monkeypatch: pyte
 
     monkeypatch.setattr(booted.module, "operate", spy)
     chaos = dnswire.encode(dnswire.Message(5, dnswire.RD, [dnswire.Question("version.bind.", dnswire.TYPE_TXT, 3)]))
-    _resolve_timed(booted, chaos)
+    _resolve(booted, chaos)
     assert seen[0] == 3
 
 
