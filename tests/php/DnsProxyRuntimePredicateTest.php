@@ -30,7 +30,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyRuntimePredicateTest extends TestCase
 {
 	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 
 	private string $dir;
 	private array $savedGlobals = [];

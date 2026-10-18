@@ -20,8 +20,9 @@ final class DnsProxyModuleGatingTest extends TestCase
 {
 	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
+	private const PFB_DNS = 'installedpackages/pfblockerngdns/config/0';
 
 	private string $tmp;
 	private bool $hadPfb = FALSE;
@@ -109,8 +110,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 			'pfb_cname' => '', 'tld_allow' => '', 'tld_wildcard' => '',
 			'pfb_gp' => '', 'pfb_gp_bypass_list' => '', 'whitelist' => '', 'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '',
 			'pfb_dnsbl' => '', 'pfb_dnsvip_auto' => '', 'dnsbl_interface' => 'lo0',
-			'pfb_dns_proxy' => $proxy ? 'on' : '',
 		]);
+		PfbConfig::writeSectionSystem(self::PFB_DNS, ['pfb_dns' => $proxy ? 'on' : '']);
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
 		$GLOBALS['pfb']['dnsbl_control'] = PfbToggle::Off;
 		$GLOBALS['pfb']['dnsbl_control_legacy'] = PfbToggle::Off;
@@ -118,7 +119,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 	private function setProxy(bool $on): void
 	{
-		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy', $on ? PfbToggle::On : PfbToggle::Off);
+		PfbConfig::writeSystem('dns/pfb_dns', $on ? PfbToggle::On : PfbToggle::Off);
 	}
 
 	/** The user's Resolver before the proxy touched it: DoT on, two LAN interfaces, own options. */

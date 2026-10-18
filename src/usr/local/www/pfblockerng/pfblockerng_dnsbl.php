@@ -73,7 +73,6 @@ $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default
 // when absent.
 $pconfig['pfb_cache']		= PfbConfig::read('dnsbl/pfb_cache');
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
-$pconfig['pfb_dns_proxy']	= PfbConfig::read('dnsbl/pfb_dns_proxy');
 
 $pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
@@ -848,16 +847,6 @@ if ($_POST) {
 		);
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
-		// issue #3515: hold the config lock pfb_dns_proxy_resolver() takes, from a fresh read of config.xml through
-		// write_config(): the Resolver move writes its snapshot marker into the section this save replaces.
-		$pfb_config_lock = NULL;
-		if (!$input_errors) {
-			$pfb_config_lock = pfb_dnsbl_config_lock();
-			if ($pfb_config_lock === NULL) {
-				$input_errors[] = 'DNSBL: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
-			}
-		}
-
 		if (!$input_errors) {
 			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
 			// Refresh $pfb['dconfig'] if it changed -- the pre-facade snapshot would
@@ -907,7 +896,6 @@ if ($_POST) {
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['pfb_dns_proxy']	= pfb_filter($_POST['pfb_dns_proxy'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
@@ -1029,9 +1017,6 @@ if ($_POST) {
 			// dnsbl_dot_block*). Those leaf writes MUST therefore follow the section write — done
 			// before it they are silently clobbered before write_config() flushes, so enabling DNS
 			// Redirect or DoT/DoQ Block never persists. (safesearch_doh* target a different section.)
-			// issue #3515: pfb_dns_proxy_resolver() writes the Resolver snapshot marker into this same section from the
-			// apply; take it from the config read afresh under the lock, or the replacement below erases it.
-			$pfb['dconfig']['pfb_dns_proxy_saved'] = PfbConfig::read('dnsbl/pfb_dns_proxy_saved');
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			PfbConfig::write('dnsbl/pfb_psl_include_private', $psl_include_private);
 			PfbConfig::write('dnsbl/pfb_psl_allow_private', $psl_allow_private);
@@ -1055,7 +1040,6 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
 			write_config('[pfBlockerNG] save DNSBL settings');
-			unlock($pfb_config_lock);
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header('Location: /pfblockerng/pfblockerng_dnsbl.php');
 			exit;
@@ -2637,6 +2621,7 @@ $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
 $tab_array[]	= array(gettext('DNSBL'),	TRUE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
@@ -2872,29 +2857,6 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL. '
 		. pfb_list_section_help_note(['DNSBL Group Policy'], TRUE));
-
-$section->addInput(new Form_Checkbox(
-	'pfb_dns_proxy',
-	gettext('DNS Proxy'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_dns_proxy']) === PfbToggle::On,
-	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
-		. 'Runs pfBlockerNG\'s DNS proxy on the DNS Resolver\'s network interfaces and Listen Port. '
-		. 'The proxy answers DNSBL blocks itself and forwards every other query to the DNS Resolver with the client\'s address (PROXY protocol v2).'
-		. '<div class="infoblock">'
-		. 'Enabling it changes these DNS Resolver settings: Network Interfaces becomes Localhost (the Listen Port is not changed, and must be neither 5353 nor 5354: the proxy and the Resolver use those loopback ports), '
-		. 'SSL/TLS Service is turned off (the proxy serves DNS over TLS with the Resolver\'s certificate instead), '
-		. 'and a <code>server:</code> clause marked <code># pfBlockerNG DNS proxy</code> is added at the end of Custom options: '
-		. 'the Resolver moves to 127.0.0.1 and ::1 port 5354 and also listens on port 5353 for the proxy, and the IPv6 networks of its interfaces stay allowed. '
-		. 'Do not set <code>port:</code> or listen on those two ports in Custom options.<br />'
-		. 'The previous values are saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed; '
-		. 'edits made to Custom options in between are replaced by the saved ones then.<br />'
-		. 'The firewall\'s own DNS lookups go through the proxy, so DNSBL filters them too.<br />'
-		. '<strong>High availability:</strong> the DNS Resolver sync copies these settings to the secondary node. '
-		. 'Enable this option on the secondary node first, before the primary syncs the changed DNS Resolver, or turn the DNS Resolver sync off.<br />'
-		. 'Default: <strong>Disabled</strong>'
-		. '</div>');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_lenient',

@@ -11,7 +11,7 @@ use PHPUnit\Framework\TestCase;
  * proxy, which takes that port on loopback too) and adds a marked server clause to custom_options that moves
  * Unbound's own listener to loopback port 5354 (plain, unused) and has it listen on 127.0.0.1 and ::1 port 5353 for
  * the proxy's PROXYv2 stream. It remembers every key it changed (presence AND value) in the
- * registered marker dnsbl/pfb_dns_proxy_saved; turning it off restores them exactly. pfb_dns_proxy_saved() is
+ * registered marker dns/pfb_dns_saved; turning it off restores them exactly. pfb_dns_proxy_saved() is
  * the strict reader of that marker: anything but the documented shape is "no snapshot".
  *
  * The moved Resolver is the persistent outcome (config.xml): these tests assert the config
@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class DnsProxyResolverMoveTest extends TestCase
 {
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const KEYS  = ['active_interface', 'enablessl', 'custom_options'];
 	private const MARKER = '# pfBlockerNG DNS proxy';
 	/** The clause the move appends when the Resolver has no IPv6 subnet to grant. */
@@ -398,7 +398,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertFalse($changed);
 		$this->assertSame(0, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
-		$this->assertStringContainsString('pfb_dns_proxy_saved', $this->errorLog());
+		$this->assertStringContainsString('pfb_dns_saved', $this->errorLog());
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
 		$this->assertStringContainsString('DNSBL', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
@@ -870,7 +870,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 		// Then it is "no snapshot", and the log names the field.
 		$this->assertNull($saved);
-		$this->assertStringContainsString('pfb_dns_proxy_saved', $this->errorLog());
+		$this->assertStringContainsString('pfb_dns_saved', $this->errorLog());
 	}
 
 	public function testSavedReadsAValidMarkerBackExactly(): void

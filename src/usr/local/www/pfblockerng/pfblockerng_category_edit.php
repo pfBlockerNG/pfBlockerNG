@@ -1070,6 +1070,7 @@ $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,			'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		$active['ip'],		'/pfblockerng/pfblockerng_ip.php');
 $tab_array[]	= array(gettext('DNSBL'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,			'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,			"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,			'/pfblockerng/pfblockerng_feeds.php');

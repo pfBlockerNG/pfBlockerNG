@@ -288,7 +288,7 @@ final class DnsProxyAclTest extends TestCase
 		$this->seedBox(['lan' => '2001:db8:1::1'], ['lan' => '64']);
 		$this->seedResolver('lan');
 		$this->moveOn();
-		$snapshot = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved');
+		$snapshot = config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved');
 		$edited = "# mine\n" . $this->customText() . "\nprefetch-key: yes";
 		config_set_path('unbound/custom_options', base64_encode($edited));
 
@@ -304,7 +304,7 @@ final class DnsProxyAclTest extends TestCase
 			. "proxy-protocol-port: 5353\naccess-control: 2001:db8:9::/64 allow\n# end pfBlockerNG DNS proxy\nprefetch-key: yes",
 			$this->customText()
 		);
-		$this->assertSame($snapshot, config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved'),
+		$this->assertSame($snapshot, config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved'),
 			'the snapshot still holds the original custom options');
 	}
 
