@@ -22,17 +22,16 @@ const (
 	doqInternalError    = 0x1
 	doqProtocolError    = 0x2
 	doqRequestCancelled = 0x3
-	doqExcessiveLoad    = 0x4
 
 	maxDoQStreams  = 100              // concurrent query streams per connection
 	doqIdleTimeout = 30 * time.Second // QUIC idle timeout; RFC 9250 4.4 asks for it to be negotiated
 )
 
 // serveDoQ serves QUIC on udp until stop(). No 0-RTT (a replayed query is not harmless here) and no unidirectional
-// streams (RFC 9250 4.3.3 makes opening one a protocol error). Connections over the cap are closed with
-// DOQ_EXCESSIVE_LOAD.
+// streams (RFC 9250 4.3.3 makes opening one a protocol error). Connections are admitted before their handshake.
 func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
-	tr := &quic.Transport{Conn: udp}
+	// A slot taken at the first Initial packet is only safe when its source is real: a Retry proves it first.
+	tr := &quic.Transport{Conn: udp, ConnContext: g.admitDoQ, VerifySourceAddress: func(net.Addr) bool { return true }}
 	ln, err := tr.Listen(conf, &quic.Config{MaxIncomingStreams: maxDoQStreams, MaxIncomingUniStreams: -1, MaxIdleTimeout: doqIdleTimeout})
 	if err != nil {
 		g.logf("DoQ on %s: %v", udp.LocalAddr(), err)
@@ -53,19 +52,28 @@ func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
 				g.pause()
 				continue
 			}
-			if !g.doqConns.take(g.logf) {
-				_ = conn.CloseWithError(doqExcessiveLoad, "")
-				continue
-			}
 			g.wg.Add(1)
 			go g.serveQUICConn(conn)
 		}
 	}()
 }
 
+// admitDoQ runs before the handshake (quic-go's ConnContext): an address the ACL denies never holds a slot, and a
+// connection over the cap is refused with CONNECTION_REFUSED. The slot is freed when the connection ends or its
+// handshake fails, which is when ctx ends.
+func (g *gateway) admitDoQ(ctx context.Context, info *quic.ClientInfo) (context.Context, error) {
+	if g.acl.Lookup(addrPortOf(info.RemoteAddr).Addr().Unmap().WithZone("")) == ACLDrop {
+		return nil, errors.New("client denied by the ACL")
+	}
+	if !g.doqConns.take(g.logf) {
+		return nil, errors.New("DoQ connection limit reached")
+	}
+	context.AfterFunc(ctx, g.doqConns.release)
+	return ctx, nil
+}
+
 func (g *gateway) serveQUICConn(conn *quic.Conn) {
 	defer g.wg.Done()
-	defer g.doqConns.release()
 	defer func() { _ = conn.CloseWithError(0, "") }()
 	peer, local := addrPortOf(conn.RemoteAddr()), addrPortOf(conn.LocalAddr())
 	for {
@@ -83,7 +91,7 @@ func (g *gateway) serveQUICConn(conn *quic.Conn) {
 // answered with CONNECTION_CLOSE and DOQ_PROTOCOL_ERROR).
 func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local netip.AddrPort) {
 	defer g.wg.Done()
-	_ = s.SetReadDeadline(time.Now().Add(g.tcpIdle))
+	_ = s.SetReadDeadline(time.Now().Add(g.timeout)) // a client sends the query and its FIN at once: no idle wait as on a TCP connection
 	wire, ok := readDoQQuery(s)
 	if !ok {
 		reset(s, doqProtocolError)
@@ -107,7 +115,10 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local ne
 		// generated according to the rules of the protocol that is in use."
 		binary.BigEndian.PutUint16(wire, uint16(1+rand.IntN(65535)))
 		fwd := func(ctx context.Context, q []byte) []byte { return g.up.exchangeUDPThenTCP(ctx, src, dst, q) }
-		if reply = g.resolve(g.ctx, src.Addr(), wire, fwd); reply == nil {
+		var admitted bool
+		if reply, admitted = g.resolveShared(g.ctx, src.Addr(), wire, fwd); !admitted {
+			reply = buildServfail(wire) // over the shared in-flight cap
+		} else if reply == nil {
 			reset(s, doqRequestCancelled) // the decider dropped the query
 			return
 		}
