@@ -30,7 +30,7 @@ final class DnsProxyConfigLockTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
 	private const LOCK = 'pfb_dnsbl_config';
 	private const DOUBLE_GLOBALS = ['pfb_test_lock_events', 'pfb_test_lock_held', 'pfb_test_try_lock_fail', 'pfb_test_config_read_hook',
-		'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_write_config_hook', 'pfb_test_write_config_calls',
+		'pfb_test_config_read_fails', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_write_config_hook', 'pfb_test_write_config_calls',
 		'pfb_test_file_notices', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_valid_pids'];
 
 	private string $tmp;
@@ -345,5 +345,48 @@ final class DnsProxyConfigLockTest extends TestCase
 		// Then it returns NULL and reloads nothing: this process's copy is not replaced by a read made without the lock
 		$this->assertNull($taken);
 		$this->assertSame([], $GLOBALS['pfb_test_config_read_calls'] ?? []);
+	}
+
+	public function testTheLockHelperLetsGoAndReturnsNullWhenTheFreshReadFails(): void
+	{
+		// Given config.xml cannot be parsed afresh: this process would be left holding its stale copy
+		$GLOBALS['pfb_test_config_read_fails'] = TRUE;
+
+		// When the lock is asked for while it is free
+		$key = pfb_dnsbl_config_lock();
+
+		// Then the caller gets NULL, as for a lock that stayed taken, and the lock it did take was released
+		$this->assertNull($key);
+		$this->assertSame(['try_lock', 'unlock'], array_column($this->lockEvents(), 0), 'one bounded attempt, then its release');
+		$this->assertFalse($this->lockHeld());
+	}
+
+	#[DataProvider('directions')]
+	public function testAFreshReadThatFailsAbandonsTheCallWithoutWritingAndTellsTheOperator(bool $on): void
+	{
+		// Given config.xml cannot be parsed afresh, over the Resolver in the state this direction starts from
+		if ($on) {
+			$this->seedResolver();
+		} else {
+			$this->moveThenResetDoubles();
+		}
+		$before = $GLOBALS['config'];
+		$GLOBALS['pfb_test_config_read_fails'] = TRUE;
+
+		// When the call is made
+		$changed = pfb_dns_proxy_resolver($on);
+
+		// Then the stale copy was not written back, the snapshot stays for the next apply, nothing is held ...
+		$this->assertFalse($changed);
+		$this->assertSame($before, $GLOBALS['config']);
+		$this->assertSame(0, $this->writes());
+		if (!$on) {
+			$this->assertNotNull(pfb_dns_proxy_saved(), 'the restore keeps the snapshot for the next apply');
+		}
+		$this->assertFalse($this->lockHeld());
+
+		// ... and the operator-visible notice says it will be retried
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('next apply', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 }

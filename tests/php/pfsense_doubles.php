@@ -502,17 +502,18 @@ if (!function_exists('config_read_file')) {
 	// this is a deliberate no-op: pfb_global() calls it to pick up any in-flight
 	// changes, but in tests the caller already seeded $GLOBALS['config'] before
 	// calling pfb_global(). Records each call's arguments (so tests can assert
-	// whether, and how, a path reloaded config); returns [] per the stub's type. Also records whether the
+	// whether, and how, a path reloaded config); returns TRUE like pfSense's bool, or FALSE (the parse failed) while
+	// $GLOBALS['pfb_test_config_read_fails'] is set. Also records whether the
 	// named config lock was held at that instant ($GLOBALS['pfb_test_config_read_lock_held']) and runs an optional
 	// $GLOBALS['pfb_test_config_read_hook'] callable, which stands in for the file on disk: a test uses it to
 	// replace the in-memory config with what another process wrote since this one read it.
-	function config_read_file(bool $use_backup = false, bool $use_cache = true): array {
+	function config_read_file(bool $use_backup = false, bool $use_cache = true): bool {
 		$GLOBALS['pfb_test_config_read_calls'][] = [$use_backup, $use_cache];
 		$GLOBALS['pfb_test_config_read_lock_held'][] = !empty($GLOBALS['pfb_test_lock_held']);
 		if (is_callable($GLOBALS['pfb_test_config_read_hook'] ?? NULL)) {
 			$GLOBALS['pfb_test_config_read_hook']();
 		}
-		return [];
+		return empty($GLOBALS['pfb_test_config_read_fails']);
 	}
 }
 
