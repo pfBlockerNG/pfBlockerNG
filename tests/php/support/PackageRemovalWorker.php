@@ -24,7 +24,10 @@ declare(strict_types=1);
  * Keep Settings), `stored` (full | dnsbl_off | disabled: what config.xml says is on), `permanent` (the lock or the read keeps
  * failing for good, not only through the removal's own attempt), `state` (the directory), `iniGone` (the module's ini is missing
  * when the hook starts), and two ways the proxy's start can go wrong: `startThrows` (the service handler throws) and
- * `proxyWontStart` (the rc script returns and nothing serves).
+ * `proxyWontStart` (the rc script returns and nothing serves). `unmigratedPolicy`: the DNSBL logging policy was never migrated
+ * (no apply has run since the key was introduced) and the Resolver is enabled, so the disable pass's policy upgrade turns the
+ * uninstall's disable back off and the pass moves the Resolver again. `lockAfterMove`: another save holds the config lock from
+ * the moment the Resolver was moved again until the recovery announces itself.
  */
 
 $workerArgv = $argv;
@@ -102,6 +105,14 @@ function worker_service_down(string $name): void
 	if ($name === 'pfb_dns_proxy') {
 		@unlink($GLOBALS['pfb']['dns_proxy_pidfile']);
 		@unlink($GLOBALS['pfb']['dns_proxy_ready']);
+	}
+}
+
+/** The hook's progress line. The recovery's announcement is when the save that held the config lock (lockAfterMove) finishes. */
+function update_status($status)
+{
+	if (!empty($GLOBALS['worker_scenario']['lockAfterMove']) && str_contains((string) $status, 'restoring the DNS proxy')) {
+		$GLOBALS['pfb_test_try_lock_fail'] = FALSE;
 	}
 }
 
@@ -273,6 +284,7 @@ register_shutdown_function(static function () use ($resultFile, &$paths, &$retur
 		'events'    => is_file("{$state}/events.log") ? array_values(array_filter(explode("\n", (string) file_get_contents("{$state}/events.log")))) : [],
 		'lockHeld'  => !empty($GLOBALS['pfb_test_lock_held']),
 		'notices'   => array_column($GLOBALS['pfb_test_file_notices'] ?? [], 'notice'),
+		'writes'    => $GLOBALS['pfb_test_write_config_calls'] ?? [],
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -298,6 +310,10 @@ $GLOBALS['worker_scenario'] = $scenario;
 $GLOBALS['pfb_test_rcfile_dir'] = rtrim(RCFILEPREFIX, '/');
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $desc): void {
 	worker_persist();
+	// lockAfterMove: another save takes the config lock just after the Resolver was moved again
+	if (!empty($GLOBALS['worker_scenario']['lockAfterMove']) && str_contains($desc, 'Moved the DNS Resolver')) {
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+	}
 };
 $GLOBALS['pfb_test_config_read_hook'] = static function (): void {
 	$last = end($GLOBALS['pfb_test_config_read_calls']);
@@ -335,8 +351,10 @@ if (is_file("{$state}/config.json")) {
 	config_set_path("{$dnsbl}/pfb_py_reply", 'on');
 	config_set_path("{$dnsbl}/pfb_control", 'on');
 	// The DNSBL logging policy an earlier apply already migrated (issue #3288): without the key the disable pass's policy
-	// upgrade calls pfb_global() again, which re-reads enable_cb and turns the uninstall's disable back on.
-	config_set_path("{$dnsbl}/global_log_mode", 'default');
+	// upgrade calls pfb_global() again, which re-reads enable_cb and turns the uninstall's disable back on (unmigratedPolicy).
+	if (empty($scenario['unmigratedPolicy'])) {
+		config_set_path("{$dnsbl}/global_log_mode", 'default');
+	}
 	config_set_path('virtualip/vip', [['uniqid' => '_test_a', 'subnet' => '10.10.10.1']]);
 	config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', 'on');
 	config_set_path('installedpackages/package', [['name' => 'pfBlockerNG-devel', 'internal_name' => 'pfblockerng', 'configurationfile' => 'pfblockerng.xml']]);
@@ -348,6 +366,10 @@ if (is_file("{$state}/config.json")) {
 		'custom_options'   => base64_encode("do-ip6: no\nserver:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\n"
 			. "interface: ::1@5353\nproxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy"),
 	];
+	if (!empty($scenario['unmigratedPolicy'])) {
+		// The re-enabled pass asks for pfB-DNS only while the Resolver is enabled (pfb_dns_wanted())
+		$GLOBALS['config']['unbound']['enable'] = '';
+	}
 	$saved = [];
 	foreach (['active_interface' => 'lan,opt1', 'enablessl' => '', 'custom_options' => base64_encode('do-ip6: no')] as $key => $value) {
 		$saved[$key] = ['present' => TRUE, 'value' => $value];
