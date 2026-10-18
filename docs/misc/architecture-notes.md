@@ -367,8 +367,8 @@ decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. Se
 pfB-DNS (the **pfB-DNS** tab; registered toggle `dns/pfb_dns`, runtime mirror `$pfb['pfb_dns']`, `sync` local) runs
 pfBlockerNG's DNS proxy on the Resolver's client-facing interfaces and on loopback (`127.0.0.1`, `::1`) at the
 Resolver's Listen Port (`unbound/port`, 53 by default). It is independent of DNSBL: `pfb_dns_wanted()` (pfBlockerNG
-enabled, the toggle on, the Resolver enabled) alone decides the Resolver move and restore, the service and the redirect
-retarget, and the apply reconciles it whatever the DNSBL `$mode` is.
+enabled, the toggle on, the Resolver enabled) alone decides the Resolver move, its restore and the service, and the apply
+reconciles it whatever the DNSBL `$mode` is.
 
 | pfB-DNS | DNSBL | `pfb_unbound.py` runs in | Unbound runs | The proxy |
 |---|---|---|---|---|
@@ -1604,7 +1604,7 @@ Live-VM smoke: `tests/smoke/test_smoke_managed_objects.py` (marker `smoke`).
 ## Optional NAT DNS-redirection (ADR-36)
 
 When enabled, pfBlockerNG creates and maintains a pair of NAT port-forward (rdr) rules per
-selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`, or `<iface>ip` while the DNS proxy is on, #3515) and one for IPv6 (`inet6`)
+selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`) and one for IPv6 (`inet6`)
 — that redirect all outbound port-53 DNS traffic to the firewall's own resolver. The IPv6 rule
 cannot target `::1`: FreeBSD drops a packet redirected to `::1` that arrived on a non-loopback
 interface (#3400). On an assigned interface (`wan`/`lan`/`optN`) it targets pfSense's
