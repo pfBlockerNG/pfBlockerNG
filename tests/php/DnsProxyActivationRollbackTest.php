@@ -266,6 +266,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Given a first activation with DNSBL on: the Resolver is moved, and the proxy lives but never publishes its marker
 		$this->activate(TRUE);
 		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
+		$before = $this->startAttempts();
 
 		// When the apply starts the proxy and waits for it
 		$ok = pfb_dns_proxy_ensure_running();
@@ -288,7 +289,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$last = end($seen);
 		$this->assertSame('lan,opt1', $last['active_interface'], 'rendered from the restored Resolver');
 		$this->assertSame('pfb_unbound', $last['python_script'], 'with the module loaded by Unbound again');
-		$this->assertSame(1, $this->startAttempts(), 'and Unbound was started once with it');
+		$this->assertSame($before + 1, $this->startAttempts(), 'and Unbound was started once with it');
 		$conf = (string) file_get_contents("{$this->tmp}/unbound.conf");
 		$this->assertStringContainsString('python-script: pfb_unbound.py', $conf, 'the file Unbound starts from names the DNSBL module again');
 		$this->assertStringNotContainsString('pfb_upstream_observer', $conf, 'and no longer the observer');
