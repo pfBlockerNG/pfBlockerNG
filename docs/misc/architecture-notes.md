@@ -416,14 +416,19 @@ values that cannot be stored verbatim; or our block already in `custom_options` 
 save the moved values as the "previous" ones) is refused with a log line and a `file_notice`: while the toggle is on
 the module has no host, so DNSBL blocks nothing. The restore is abandoned (snapshot kept, `file_notice`, retried by
 the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
-`stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on the Resolver's port.
+`stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on the Resolver's port;
+the proxy is then restarted (once the config lock below is released), so the moved Resolver stays served until the retry.
 
 The DNSBL page's section save replaces the section that holds the snapshot marker, and the Resolver move rewrites
 that section and the unbound keys, each from the copy of config.xml its own process read at start (`write_config()`
 writes that whole copy back). Both therefore hold one named lock, `pfb_dnsbl_config_lock()` (pfSense `try_lock()`,
-bounded at 10 s), from a fresh `config_read_file()` under it through `write_config()`: `pfb_dns_proxy_resolver()` stops
-the proxy first (up to 7 s, never under the lock), then takes the lock for the move or restore; a call with no
-snapshot and no block of ours takes none. A lock that stays taken fails the save with an input error, and abandons the
+bounded at 10 s), from a fresh `config_read_file()` under it through `write_config()`: `pfb_dns_proxy_resolver()` takes
+the lock for the move or restore and, for a restore, stops the proxy only once it holds the lock and has read config.xml
+afresh, so a lock that stays taken or a failed read leaves the proxy serving the Resolver that stayed moved. The stop
+runs under the lock and waits at most 7 s, so the hold is at most about 8 s (the stop plus the read and the write), inside
+the 10 s `try_lock()` of a settings save queued behind it; the restart after an abandoned restore (a second stop and a
+start, up to 14 s) runs after the lock is released. A call with no snapshot and no block of ours takes no lock and stops
+nothing. A lock that stays taken fails the save with an input error, and abandons the
 move or restore with a `file_notice` (snapshot kept, retried by the next apply). The wizard's reset stops, with an input
 error and the package config unswept, whenever a snapshot survived `pfb_dns_proxy_resolver(FALSE)` (its return value
 is FALSE for "nothing to restore" too). Pinned by `DnsProxyConfigLockTest`.
@@ -454,16 +459,19 @@ no address binds UDP+TCP. A DoT setup that cannot be served (no or unusable cert
 key) no longer stops the proxy: one error line `pfb_dns_proxy error: DNS over TLS is off, serving plain DNS only: ...`
 and the plain listeners keep serving. An address added since the last reload gets a listener at the next apply:
 `pfb_dns_proxy_ensure_running()` regenerates the script and restarts a live proxy when the script changed. The
-script starts only while DNSBL, the toggle and the moved-Resolver snapshot are all set (so a disabled package never
-starts a proxy against a restored Resolver), never over a survivor, and logs an error and exits non-zero with no
-address. Stop sends TERM to the supervisor and child named by the pidfiles (only while their command line is the
+script starts only while the moved-Resolver snapshot is set (so a disabled package never starts a proxy against a
+restored Resolver), never over a survivor; the toggle and DNSBL are not consulted, because an abandoned restore leaves
+the Resolver moved with them off and the proxy must keep serving it. It always listens on loopback as well, so a
+Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. Stop sends TERM to the supervisor and child named by the pidfiles (only while their command line is the
 proxy's) and KILL after 5 s; it removes the pidfiles once both are gone, and gives up after 7 s with status 1,
 keeping the pidfiles, because a process that survived KILL is still alive.
 
-Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores the Resolver (toggle off, DNSBL
-disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds the Resolver's port free;
+Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores the Resolver, under the config lock (toggle
+off, DNSBL disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds the Resolver's port free;
 `pfb_dns_proxy_deinstall()` repeats that right after the uninstall disable pass whatever the pass returned, because the
-pass can return early (lock contention, failed recovery), and removes the rc script like the other services;
+pass can return early (lock contention, failed recovery); it never stops the proxy before the restore (a restore that
+cannot take the lock would leave the moved Resolver with nothing serving it), stops it itself only when no snapshot is
+left, and removes the rc script like the other services;
 `pfb_reload_unbound()`'s restart path restarts the proxy after Unbound (the module host re-reads lists and ini at
 init) and then waits up to `PFB_DNS_PROXY_START_WAIT` (5 s) for its pidfile, because `restart_service()` returns
 first and the apply ledger reads that pidfile (a proxy that is not up opens the ledger entry, worded for the proxy);
