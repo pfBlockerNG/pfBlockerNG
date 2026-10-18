@@ -920,6 +920,32 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertFalse($apply(), 'an apply that changes nothing flags no reload');
 	}
 
+	/** With the DNS proxy on (its Resolver snapshot present) the redirect writer still targets IPv4 at loopback. */
+	public function testRedirectWriterKeepsIpv4LoopbackWhileTheProxyIsOn(): void
+	{
+		global $pfb;
+
+		$spec = self::writerSpec('redirect');
+		$GLOBALS['config'] = [];
+		$pfb['dbdir']      = $this->dir;
+		PfbConfig::write($spec['toggle'], 'on');
+		PfbConfig::write($spec['ifaces'], 'lan');
+		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl'        => ['present' => FALSE, 'value' => NULL],
+			'custom_options'   => ['present' => FALSE, 'value' => NULL],
+		])));
+
+		$apply = function () use ($spec): void {
+			global $pfb;
+			$pfb['filter_configure'] = FALSE;
+			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+		};
+		$apply();
+
+		$this->assertSame(['pfB_DNS_Redirect_lan_v4' => '127.0.0.1', 'pfB_DNS_Redirect_lan_v6' => 'lanip'], array_column(config_get_path('nat/rule'), 'target', 'descr'));
+	}
+
 	public function testFilterAutoruleWriteKeepsTheRawTrackerAndOnlyTheCheckedCopyIsCast(): void
 	{
 		global $pfb;
