@@ -640,7 +640,7 @@ separate times; a launch is not an answer.
 `--listen` set and `--port` are the Python line's (the derived addresses, then loopback so the firewall's own lookups are
 filtered, at the Resolver's Listen Port). Without the
 binary (or without its execute bit) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
-turning either on then logs one warning each time the script is rewritten. The seven settings
+turning either on then logs one warning each time the script's content changes. The seven settings
 `dnsbl/pfb_dns_proxy_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dnsbl/pfb_dns_proxy_doq`, `_doq_port`
 (853) and `_doq_interface` (sync
 `local`, DoH/DoQ off) sit below the DNS Proxy checkbox; an interface list (empty = the derived addresses, loopback not
