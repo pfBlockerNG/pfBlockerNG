@@ -422,15 +422,32 @@ marker `dns/pfb_dns_saved` (base64 JSON in config.xml, so it survives reboot and
 restored exactly, with the module back in Unbound (DNSBL on), when the toggle is turned off, pfBlockerNG or the Resolver
 is disabled, the setup wizard resets the package config, or the package is removed (its disable pass: the apply hands
 `pfb_unbound_python()` the `pfb_dns_wanted()` it took from the runtime that computed `$mode`, because a removal pass turns
-pfBlockerNG off only there and the function re-reads config.xml). A move that cannot be made safely
-(a Resolver Listen Port of 5353, or an `interface:` line of the admin's own in `custom_options` for `127.0.0.1` or
-`::1` port 5353, which Unbound would bind a second time and then not start although `unbound-checkconf` passes;
-values that cannot be stored verbatim; or our block already in `custom_options` with no snapshot, which would
-save the moved values as the "previous" ones) is refused with a log line and a `file_notice`: while the toggle is on
+pfBlockerNG off only there and the function re-reads config.xml). A move that cannot be made safely is refused, before any
+write, stop or snapshot, with a log line and a `file_notice`: a Resolver Listen Port of 5353 or 5354; a directive of the admin's
+own in `custom_options` that could take a listener, a second port or another file (an `interface`, `port` or `include` word,
+comments aside, see below); a quote or a backslash left open at a line's end; pfBlockerNG's marker lines unless they are
+exactly one complete start and end pair (a partial pair is never cut, so the admin's text survives byte for byte); values that
+cannot be stored verbatim; or our block already in `custom_options` with no snapshot, which would save the moved values as the
+"previous" ones. While the toggle is on
 the module has no host, so DNSBL blocks nothing. The restore is abandoned (snapshot kept, `file_notice`, retried by
 the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
 `stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on the Resolver's port;
 the proxy is then restarted (once the config lock below is released), so the moved Resolver stays served until the retry.
+
+The admin's Custom options are read the way Unbound 1.26.1 reads them, established with `unbound-checkconf -o` in the
+`pfb-dns-frontend-unbound:trixie` image rather than from the grammar: a `#` starts a comment only outside quotes and only after
+a space, a tab or the start of a line (`a#b port: 5300` and `a\ #x port: 5300` are not comments, and both move the port); `"`
+and `'` each open a string that the other quote does not end; a backslash escapes the next character, inside strings and out;
+a line ends a comment and a string. Unbound takes `port:` after another value on the same line (`prefetch: yes port: 5300`
+moves the port), so `port:` and `interface:` are refused wherever they stand. `include:` and `include-toplevel:` are refused
+outright: the file they name can hold any listener, and the proxy neither reads nor checks it. `outgoing-interface:` is refused
+too, although it binds nothing, so that one word rule covers every `interface` key. Legitimate includes keep working: the
+refusal applies only when the proxy is turned on, and turning it off or restoring the Resolver is never refused. This is a
+lexical refusal, not an isolation proof. Not covered: a line the admin saves on the Resolver page takes effect when pfSense
+regenerates Unbound, before any pfB-DNS apply runs this check (that pfSense regenerates on save is [INFERENCE], not run here);
+Unbound options that open a socket without an `interface`, `port` or `include` word (the image has no man page, so the list was
+not read from the binary); other Unbound syntax errors, which Unbound rejects at start (a failure that predates the proxy); and
+the Network Interfaces field, which pfSense writes outside the custom text (the Listen Port is refused separately).
 
 The pfB-DNS page's save writes the toggle leaf of the section that holds the snapshot marker, and the Resolver move
 rewrites that section and the unbound keys, each from the copy of config.xml its own process read at start (`write_config()`
