@@ -113,7 +113,7 @@ $section->addInput(new Form_Checkbox(
 		. 'A Custom options line with <code>interface:</code>, <code>port:</code> or <code>include:</code> (or a marker line without its partner) stops the move: nothing is changed and a notice names the line. '
 		. 'Includes are refused because the file they name cannot be checked; turning this option off is never refused.<br />'
 		. 'The previous values are saved and restored when this option is turned off, when pfBlockerNG is disabled, or when the package is removed; '
-		. 'edits made to Custom options in between are replaced by the saved ones then.<br />'
+		. 'edits made to Network Interfaces, SSL/TLS Service or Custom options in between are replaced by the saved ones then.<br />'
 		. 'The firewall\'s own DNS lookups go through the proxy. The proxy starts together with the DNS Resolver, also at boot, so they are served while the system starts.<br />'
 		. '<strong>High availability:</strong> the DNS Resolver sync copies these settings to the secondary node. '
 		. 'Enable this option on the secondary node first, before the primary syncs the changed DNS Resolver, or turn the DNS Resolver sync off.<br />'

@@ -2010,7 +2010,9 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         for tag in re.findall(r"<input\b[^>]*>", html)
         if re.search(r"""\btype=["']?checkbox\b""", tag) and (name := re.search(r'\bname="([^"]+)"', tag))
     ]
-    assert checkboxes == ["pfb_dns"], f"the page has the one enable checkbox, got {checkboxes}"
+    assert checkboxes == ["pfb_dns", "pfb_py_reply"], (
+        f"the page has the enable checkbox and the DNS Reply Logging checkbox, got {checkboxes}"
+    )
     help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
     for needle in (
         "Experimental",
@@ -2028,11 +2030,53 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         "High availability",
         "turn the DNS Resolver sync off",
         "next Update",
+        "Network Interfaces, SSL/TLS Service or Custom options in between are replaced",
+        "DNS Reply Logging",
+        "This one setting applies to both DNS modes",
+        "keep this disabled where that must not be recorded",
     ):
         assert needle in help_html, f"pfB-DNS help is missing {needle!r}"
     status_html = html[html.index("pfB-DNS Status") :]
     for label in ("Service", "Mode", "Listening on", "DNS over TLS"):
         assert label in status_html, f"pfB-DNS status is missing {label!r}"
+
+
+# Dual-marked ui_e2e (issue #810): this test MUTATES config.xml (DNSBL off, pfB-DNS and reply logging per row) as
+# setup, so it rides the per-test isolation probe; the module-level ui_render marker keeps it in the Tier-A gate.
+_PFB_DNS_TOGGLE = "installedpackages/pfblockerngdns/config/0/pfb_dns"
+_PFB_PY_REPLY = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
+
+
+@pytest.mark.ui_e2e
+@pytest.mark.parametrize(
+    ("pfb_dns", "reply", "shown"),
+    [("on", "on", True), ("", "on", False), ("on", "", False)],
+    ids=["pfb-dns-logging-replies", "no-pfb-dns-nothing-logs", "pfb-dns-logging-off"],
+)
+def test_reports_reply_controls_follow_pfb_dns_reply_logging_with_dnsbl_off(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard, pfb_dns: str, reply: str, shown: bool
+) -> None:
+    """issue #3515: with DNSBL off, Reports offers the DNS Reply suppress controls (types, records, stats) only while
+    pfB-DNS is on and DNS Reply Logging is on, i.e. while the proxy really fills the DNS Reply log; the DNSBL stat
+    selector stays hidden, since DNSBL itself is off."""
+    vm = smoke_vm
+    paths = (CFG_PFB_DNSBL, _PFB_DNS_TOGGLE, _PFB_PY_REPLY)
+    priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for path in paths}
+    try:
+        for path, value in zip(paths, ("", pfb_dns, reply), strict=True):
+            _set_scalar_or_absent(vm, path, value)
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        for field in ('name="pfbreplytypes', 'name="pfbreplyrec', 'name="pfbdnsblreplystat'):
+            assert (field in resp.text) is shown, (
+                f"{field} must {'render' if shown else 'be absent'} (pfB-DNS={pfb_dns!r}, reply={reply!r})"
+            )
+        assert 'name="pfbdnsblstat' not in resp.text, "the DNSBL stat selector stays DNSBL-only"
+    finally:
+        for path, prior in priors.items():
+            _set_scalar_or_absent(vm, path, prior)
 
 
 def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

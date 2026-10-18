@@ -4194,21 +4194,28 @@ function pfb_dns_proxy_ensure_running(): void {
 	}
 }
 
+// pkg(8) abandons a package removal only when its DEINSTALL script exits 3 (libpkg pkg_script_run_child()); any other failed status is
+// logged and the files are removed anyway, and pfSense's rc.packages discards the hook's return value: pfblockerng.xml exits with this.
+const PFB_PKG_REMOVAL_ABORT = 3;
+
 /**
  * Package removal: put the Resolver back whatever the disable pass did, stop the proxy, remove the rc script.
  * pfb_dns_proxy_resolver() stops the proxy itself, under its lock, when there is a Resolver to put back: stopping it first
  * would leave a Resolver that cannot be restored (lock taken, proxy survived) with nothing serving its port.
+ *
+ * @return bool FALSE iff the restore left the snapshot (config locked or unreadable, proxy outlived its stop): the
+ *         Resolver is still moved, so the proxy and its rc script are kept and the removal must not go on
  */
-function pfb_dns_proxy_deinstall(): void {
+function pfb_dns_proxy_deinstall(): bool {
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
 	}
-	// A snapshot that survived the restore (config locked, proxy outlived its stop) means the proxy still serves the moved
-	// Resolver: its script stays, so the operator's notice (stop it from Status > Services) can be followed.
-	if (pfb_dns_proxy_saved() === NULL) {
-		stop_service('pfb_dns_proxy');
-		unlink_if_exists(PFB_DNS_PROXY_RCFILE);
+	if (pfb_dns_proxy_saved() !== NULL) {
+		return FALSE;
 	}
+	stop_service('pfb_dns_proxy');
+	unlink_if_exists(PFB_DNS_PROXY_RCFILE);
+	return TRUE;
 }
 
 
@@ -12298,6 +12305,18 @@ function pfb_dns_wanted(): bool {
 
 	return ($pfb['enable'] ?? NULL) === PfbToggle::On && ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On &&
 	    ($pfb['unbound_state'] ?? NULL) === PfbToggle::On;
+}
+
+/**
+ * Does the DNS Reply log get filled, as far as Reports' reply controls are concerned: DNSBL on (its module logs, as before),
+ * or pfB-DNS on with the stored reply-logging preference on (the proxy's --reply-log). The preference alone is not enough:
+ * it defaults to on, and without pfB-DNS nothing logs.
+ */
+function pfb_dns_reply_log_active(): bool {
+	global $pfb;
+
+	return ($pfb['dnsbl'] ?? NULL) === PfbToggle::On
+	    || (($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['dnsbl_py_reply'] ?? NULL) === PfbToggle::On);
 }
 
 /**
@@ -22076,8 +22095,13 @@ function pfb_deinstall_sweep_managed_objects(): void {
 	unlink_if_exists("{$pfb['dbdir']}/pfb_sync_copied.json");
 }
 
-// Function to De-Install pfBlockerNG
-function pfblockerng_php_pre_deinstall_command() {
+/**
+ * Function to De-Install pfBlockerNG.
+ *
+ * @return bool FALSE iff the removal must stop because the DNS Resolver is still moved to the DNS proxy: nothing the Resolver
+ *         depends on was removed (pf rules and the disable pass are all that ran); TRUE otherwise
+ */
+function pfblockerng_php_pre_deinstall_command(): bool {
 	require_once('config.inc');
 	global $g, $pfb;
 
@@ -22096,7 +22120,7 @@ function pfblockerng_php_pre_deinstall_command() {
 	$pfb_pkg_op = pfb_pkg_operation();
 	if (!pfb_pkg_op_tears_down($pfb_pkg_op)) {
 		update_status("Keeping pfBlockerNG active across the package {$pfb_pkg_op} (not a removal).\n");
-		return;
+		return TRUE;
 	}
 
 	// Set these two variables to disable pfBlockerNG on de-install. pfb_global() turns the
@@ -22123,8 +22147,18 @@ function pfblockerng_php_pre_deinstall_command() {
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
 	pfb_top1m_teardown_call();
-	// issue #3515: the pass returns early on lock contention or a failed recovery; removal always gives the Resolver back.
-	pfb_dns_proxy_deinstall();
+	// issue #3515: the pass returns early on lock contention or a failed recovery; removal always gives the Resolver back,
+	// and stops here while it cannot: everything below destroys the recovery path (snapshot, runtime files, package settings).
+	if (!pfb_dns_proxy_deinstall()) {
+		pfb_stdout_close_line();
+		$text = 'pfBlockerNG removal was stopped: the DNS Resolver could not be put back (see the DNS proxy notice above), so it still ' .
+		    'depends on the DNS proxy. pfBlockerNG\'s files and settings were left in place. Once no other configuration save is in ' .
+		    'progress and no DNS proxy process is still running, remove the package again.';
+		pfb_logger("\n{$text}", 2);
+		file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+		update_status("{$text}\n");
+		return FALSE;
+	}
 
 	// issue #3216: the disable pass above mirrors its progress to the pkg output and can end
 	// mid-line -- close it so the teardown rows below start on their own line.
@@ -22270,6 +22304,7 @@ function pfblockerng_php_pre_deinstall_command() {
 	write_config('pfBlockerNG: remove package config sections on deinstall');
 
 	update_status(" done.\n");
+	return TRUE;
 }
 
 

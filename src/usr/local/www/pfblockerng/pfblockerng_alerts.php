@@ -3666,7 +3666,7 @@ foreach ($uni_defaults as $u_type => $u_cfg) {
 }
 $section->add($group);
 
-if ($pfb['dnsbl'] === PfbToggle::On) {
+if (pfb_dns_reply_log_active()) {
 	$group = new Form_Group('DNS Reply Log Options');
 	$group->add(new Form_Select(
 		'pfbreplytypes',
@@ -3776,7 +3776,9 @@ if ($pfb['dnsbl'] === PfbToggle::On) {
 	))->setHelp("Select the <strong>DNSBL Stat</strong> table(s) to hide")
 	  ->setAttribute('style', 'width: auto; overflow: hidden;')
 	  ->setAttribute('size', 14);
+}
 
+if (pfb_dns_reply_log_active()) {
 	$group->add(new Form_Select(
 		'pfbdnsblreplystat',
 		'Disabled DNS Reply Stats',
