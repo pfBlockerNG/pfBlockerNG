@@ -37,7 +37,7 @@ function oracle_load_config(): void
 	$GLOBALS['config'] = json_decode((string) file_get_contents($cfgfile), TRUE);
 	pfb_global();
 	$pfb['logdir'] = $GLOBALS['pfb_test_tmp'];
-	$pfb['schedule_state_dir'] = '/nonexistent';   // the disable pass returns at its dispatcher lock, as in the PHPUnit sandbox
+	$pfb['schedule_state_dir'] = $GLOBALS['pfb_test_tmp'];   // the dispatcher lock is a real file here, as on the appliance: the disable pass runs
 }
 
 /** install_package_xml()'s registration blocks (pkg-utils.inc "sidebar items", "services"): what the seed's install left registered. */
@@ -86,6 +86,9 @@ switch ($cmd) {
 		config_set_path("{$dnsbl}/dnsbl_interface", 'opt-double');
 		config_set_path("{$dnsbl}/pfb_dnsvip4", '_vip_test_a');
 		config_set_path("{$dnsbl}/pfb_py_reply", 'on');
+		// The DNSBL logging policy an earlier apply already migrated (issue #3288): without the key the disable pass's policy
+		// upgrade calls pfb_global() again, which re-reads enable_cb and turns the uninstall's disable back on.
+		config_set_path("{$dnsbl}/global_log_mode", 'default');
 		config_set_path('virtualip/vip', [['uniqid' => '_test_a', 'subnet' => '10.10.10.1']]);
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', 'on');
 		config_set_path('unbound/enable', '');
