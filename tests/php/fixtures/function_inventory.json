@@ -9574,6 +9574,31 @@
             }
         ]
     },
+    "pfb_metrics_collect": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_metrics_configure_cron": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/var/tmp/node_exporter'"
+            }
+        ]
+    },
     "pfb_metrics_export_allowed": {
         "returnsRef": false,
         "returnType": "?string",
@@ -9604,6 +9629,39 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            }
+        ]
+    },
+    "pfb_metrics_sqlite_rows": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "sql",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_metrics_write": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/var/tmp/node_exporter'"
             }
         ]
     },

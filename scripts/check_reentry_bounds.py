@@ -3,7 +3,7 @@
 
 A physical line is a composition when it names both a PHP interpreter and the
 re-entry target. Compositions are clean only when backgrounded or matched by one
-of seven repository-path-and-line exemptions for the bounded shell seam and
+of eight repository-path-and-line exemptions for the bounded shell seam and
 crontab command strings. Commented compositions still flag.
 
 With no paths, scan tracked `.php`, `.inc`, and `.sh` files under `src/`.
@@ -59,8 +59,8 @@ class _Exempt(NamedTuple):
     why: str
 
 
-# Exactly seven entries, every one load-bearing (each exempts a line that the token rule
-# alone would flag). Adding an eighth is a decision, never a convenience.
+# Exactly eight entries, every one load-bearing (each exempts a line that the token rule
+# alone would flag). Adding a ninth is a decision, never a convenience.
 _ALLOWLIST: tuple[_Exempt, ...] = (
     _Exempt(
         "src/usr/local/pkg/pfblockerng/pfblockerng.sh",
@@ -96,6 +96,11 @@ _ALLOWLIST: tuple[_Exempt, ...] = (
         "src/usr/local/www/widgets/widgets/pfblockerng.widget.php",
         "$pfb_cmd =",
         "crontab command string for the widget clear jobs; never executed here.",
+    ),
+    _Exempt(
+        "src/usr/local/pkg/pfblockerng/pfblockerng.inc",
+        "$pfb_metrics_cmd =",
+        "crontab command string for the metrics cron (timeout-bounded); never executed by this process.",
     ),
 )
 

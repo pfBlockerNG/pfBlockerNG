@@ -5234,6 +5234,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		FALSE
 	);
 
+	pfb_metrics_configure_cron(
+		$pfb['enable'] === PfbToggle::On && PfbConfig::read('gen/pfb_metrics_export') === PfbToggle::On
+	);
+
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
 	foreach (array( 'clearip', 'cleardnsbl') as $type) {
 		$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {$type} >/dev/null 2>&1";

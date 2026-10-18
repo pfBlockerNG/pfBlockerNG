@@ -233,7 +233,7 @@ def test_mwexec_bg_three_physical_lines_above_does_not_reach_the_composition() -
 
 
 # --------------------------------------------------------------------------- #
-# The allowlist: seven entries, each load-bearing. Every one gets three rows --
+# The allowlist: eight entries, each load-bearing. Every one gets three rows --
 # the real line is clean, a near-miss in the SAME file still flags (needle-
 # scoped, not file-scoped), and emptying `_ALLOWLIST` brings the real line back
 # (so a dead entry cannot rot unnoticed).
@@ -294,14 +294,20 @@ _ALLOWLIST_ROWS: tuple[_AllowRow, ...] = (
         '\t\t\t$pfb_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
         '\t\t\t$widget_clear_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
     ),
+    _AllowRow(
+        "pfblockerng.inc/$pfb_metrics_cmd",
+        _INC,
+        "\t$pfb_metrics_cmd = '/usr/bin/timeout 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
+        "\t$metrics_cmd = '/usr/bin/timeout 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
+    ),
 )
 
 _ALLOW_IDS = [row.entry for row in _ALLOWLIST_ROWS]
 
 
-def test_allowlist_holds_exactly_the_seven_recorded_entries() -> None:
-    """Seven entries, no more: a new one is a decision, never a convenience."""
-    assert len(crb._ALLOWLIST) == 7
+def test_allowlist_holds_exactly_the_eight_recorded_entries() -> None:
+    """Eight entries, no more: a new one is a decision, never a convenience."""
+    assert len(crb._ALLOWLIST) == 8
 
 
 @pytest.mark.parametrize("row", _ALLOWLIST_ROWS, ids=_ALLOW_IDS)

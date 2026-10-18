@@ -7827,6 +7827,167 @@ function pfb_metrics_render(array $s): string {
 	return $out;
 }
 
+// Read-only query for the metrics collector: pfb_open_sqlite() can create or repair tables, which a scrape must never do.
+// A missing file reads as no rows; an open or query failure reads as NULL.
+function pfb_metrics_sqlite_rows(string $path, string $sql): ?array {
+	if (!is_file($path)) {
+		return array();
+	}
+	try {
+		$db = new SQLite3($path, SQLITE3_OPEN_READONLY);
+		$db->enableExceptions(TRUE);
+		$rows = array();
+		$result = $db->query($sql);
+		while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+			$rows[] = $row;
+		}
+		$db->close();
+		return $rows;
+	} catch (Throwable) {
+		return NULL;
+	}
+}
+
+// Collects the renderer's input. Each source is independent: a failed one clears its source_up and drops only its own families.
+function pfb_metrics_collect(): array {
+	global $pfb;
+	$up = array();
+	$num = static fn ($v): int => is_numeric($v) ? (int) $v : 0;
+
+	$show_agg = (PfbConfig::readSection('installedpackages/pfblockerngglobal')['widget-show_agg'] ?? '') === 'on';
+
+	$pfctl = pfb_pfctl_tables_raw();
+	$up['pfctl'] = $pfctl !== array();
+	$ip_tables = NULL;
+	if ($up['pfctl']) {
+		$ip_ph = pfb_ip_placeholder();
+		$ip_tables = array();
+		foreach (pfb_pfctl_tables_parse($pfctl) as $alias => $info) {
+			if (!str_starts_with($alias, 'pfB_') || pfb_widget_alias_hidden($alias, $show_agg)) {
+				continue;
+			}
+			$placeholder = pfb_placeholder_for_family($ip_ph, str_ends_with($alias, '_v6') ? 'v6' : 'v4');
+			$ip_tables[$alias] = pfb_widget_alias_display_count($info['addresses'], "{$pfb['aliasdir']}/{$alias}.txt", $placeholder);
+		}
+	}
+
+	$pf_rules = pfSense_get_pf_rules();
+	$up['pf_rules'] = is_array($pf_rules);
+	$ip_rule_packets = NULL;
+	if ($up['pf_rules']) {
+		$ip_rule_packets = array();
+		foreach (pfb_rule_alias_packets(config_get_path('filter/rule', []), $pf_rules) as $alias => $agg) {
+			if (!pfb_widget_alias_hidden($alias, $show_agg)) {
+				$ip_rule_packets[$alias] = $agg['packets'];
+			}
+		}
+	}
+
+	$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl');
+	$up['dnsbl_db'] = $groups !== NULL;
+	$dnsbl_groups = NULL;
+	if ($groups !== NULL) {
+		$dnsbl_groups = array();
+		foreach ($groups as $row) {
+			$dnsbl_groups[] = array(
+				'group'   => (string) $row['groupname'],
+				'entries' => $row['entries'] === 'disabled' ? NULL : $num($row['entries']),
+				'counter' => $num($row['counter']),
+			);
+		}
+	}
+
+	$resolver = pfb_metrics_sqlite_rows($pfb['dnsbl_resolver'], 'SELECT totalqueries, queries FROM resolver WHERE row = 0');
+	$up['resolver_db'] = $resolver !== NULL;
+	$resolver_queries = NULL;
+	if (!empty($resolver)) {
+		$resolver_queries = $num($resolver[0]['totalqueries']) + $num($resolver[0]['queries']);
+	}
+
+	$state = pfb_schedule_state_read((string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc'));
+	$up['schedule_state'] = $state !== NULL;
+	$feed_success = NULL;
+	if ($state !== NULL) {
+		$feed_success = array();
+		foreach ($state['items'] as $id => $item) {
+			if (is_int($item['last_successful_check'] ?? NULL)) {
+				$feed_success[$id] = $item['last_successful_check'];
+			}
+		}
+	}
+
+	// A lock timeout is a failed read, not an empty ledger, so its rows are dropped with it.
+	$sync_unavailable = FALSE;
+	pfb_sync_status_read_all($pfb['dbdir'], 5.0, $sync_unavailable);
+	$up['sync_status'] = !$sync_unavailable;
+	$ledger = $sync_unavailable ? array() : pfb_sync_status_list_open($pfb['dbdir']);
+
+	// pfb_py_sync_status_list_open() reads a bad file as empty, so the file is checked here.
+	$py_path = "{$pfb['dnsbldir']}/pfb_py_status.json";
+	$py_data = is_file($py_path) ? json_decode((string) @file_get_contents($py_path), TRUE) : array();
+	$up['py_sync_status'] = is_array($py_data) && array_is_list($py_data);
+	if ($up['py_sync_status']) {
+		$ledger = array_merge($ledger, pfb_py_sync_status_list_open($pfb['dnsbldir']));
+	}
+	$feed_failing = array();
+	foreach ($ledger as $row) {
+		$feed_failing[] = array('facility' => $row['facility'], 'feed' => $row['item'], 'stage' => $row['stage']);
+	}
+
+	$pass = pfb_pass_status_read();
+	$up['pass_status'] = $pass !== NULL;
+
+	return array(
+		'version'          => pfb_pkg_ver(),
+		'ip_tables'        => $ip_tables,
+		'ip_rule_packets'  => $ip_rule_packets,
+		'dnsbl_groups'     => $dnsbl_groups,
+		'resolver_queries' => $resolver_queries,
+		'feed_success'     => $feed_success,
+		'feed_failing'     => $feed_failing,
+		'pass'             => $pass,
+		'source_up'        => $up,
+	);
+}
+
+// Publishes pfblockerng.prom atomically for node_exporter's textfile collector.
+function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
+	global $pfb;
+	$marker = "{$pfb['dbdir']}/.metrics_dir_missing";
+	if (!is_dir($dir)) {
+		// Logged once per outage: the marker stays until a write succeeds.
+		if (!file_exists($marker)) {
+			pfb_logger("Metrics export: {$dir} is missing; is the node_exporter service running?\n", 2);
+			@touch($marker);
+		}
+		return FALSE;
+	}
+	$tmp = @tempnam($dir, '.pfbmetrics_');
+	if ($tmp === FALSE) {
+		return FALSE;
+	}
+	if (@file_put_contents($tmp, pfb_metrics_render(pfb_metrics_collect())) === FALSE || !@chmod($tmp, 0644) || !@rename($tmp, "{$dir}/pfblockerng.prom")) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	@unlink($marker);
+	return TRUE;
+}
+
+// Runs the verb every minute while the option is on; turning it off removes the entry and the published file.
+function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter'): void {
+	// timeout(1) bounds a stuck run so one-minute invocations cannot pile up.
+	$pfb_metrics_cmd = '/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
+	if ($enabled) {
+		if (!pfblockerng_cron_exists($pfb_metrics_cmd, '*', '*', '*', '*')) {
+			install_cron_job($pfb_metrics_cmd, TRUE, '*', '*', '*', '*', '*', 'root');
+		}
+		return;
+	}
+	install_cron_job('pfblockerng.php metrics', FALSE);
+	unlink_if_exists("{$dir}/pfblockerng.prom");
+}
+
 /**
  * issue #1250: sweep matchgendir's machine-generated artifacts -- Reputation dMax's per-alias
  * 'pfB_Match_Rep_<header>_<fam>.txt', the ccwhite consolidated exempt file, and the ET/
@@ -21512,6 +21673,7 @@ function pfblockerng_php_pre_deinstall_command() {
 	// aliasarchive (zst + legacy bz2) already removed above (co-located with the aliastables boot-hook teardown).
 	unlink_if_exists("{$pfb['dnsbl_info']}");
 	unlink_if_exists("{$pfb['dnsbl_resolver']}");
+	pfb_metrics_configure_cron(FALSE);
 
 	// The chrooted Unbound python integration nullfs-mounts host dirs into the chroot
 	// (var/log/pfblockerng for the DNSBL logs, usr/local/share/GeoIP).  A disable goes

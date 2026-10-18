@@ -152,6 +152,11 @@ if (isset($argv[1])) {
 		echo "DNSBL control command [ {$cmd} ] queued (seq {$seq})\n";
 		exit;
 	}
+	// #3522: publishes pfblockerng.prom for node_exporter; the one-minute cron entry runs this verb.
+	elseif ($argv[1] == 'metrics') {
+		pfb_metrics_write();
+		exit;
+	}
 }
 
 // Extras - MaxMind/TOP1M Download URLs/filenames/settings
