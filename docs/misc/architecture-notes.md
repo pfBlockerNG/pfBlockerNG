@@ -385,7 +385,7 @@ interface; nothing when "disable auto-added access control" is on). Every later 
 replaces a stale one in place (a changed delegated prefix); lines the admin put around it are kept. Everything
 that finds, replaces or reports the clause keys on the marker lines, never on a user's own PROXYv2 setup.
 The presence and value of the three changed keys are saved first in the per-node (`sync` local) registered
-marker `dnsbl/pfb_dns_proxy_saved` (base64 JSON in config.xml, so it survives reboot and backup restore) and
+marker `dns/pfb_dns_saved` (base64 JSON in config.xml, so it survives reboot and backup restore) and
 restored exactly, with the module back in Unbound, when the toggle is turned off, DNSBL is disabled, the setup
 wizard resets the package config, or the package is removed (its disable pass). A move that cannot be made safely
 (a Resolver Listen Port of 5353, or an `interface:` line of the admin's own in `custom_options` for `127.0.0.1` or
@@ -399,7 +399,7 @@ the proxy is then restarted (once the config lock below is released), so the mov
 
 The DNSBL page's section save replaces the section that holds the snapshot marker, and the Resolver move rewrites
 that section and the unbound keys, each from the copy of config.xml its own process read at start (`write_config()`
-writes that whole copy back). Both therefore hold one named lock, `pfb_dnsbl_config_lock()` (pfSense `try_lock()`,
+writes that whole copy back). Both therefore hold one named lock, `pfb_dns_config_lock()` (pfSense `try_lock()`,
 bounded at 10 s), from a fresh `config_read_file()` under it through `write_config()`: `pfb_dns_proxy_resolver()` takes
 the lock for the move or restore and, for a restore, stops the proxy only once it holds the lock and has read config.xml
 afresh, so a lock that stays taken or a failed read leaves the proxy serving the Resolver that stayed moved. The stop

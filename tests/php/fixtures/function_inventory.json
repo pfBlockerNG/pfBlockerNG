@@ -1706,6 +1706,11 @@
             }
         ]
     },
+    "pfb_dns_config_lock": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": []
+    },
     "pfb_dns_proxy_acl_networks": {
         "returnsRef": false,
         "returnType": "array",
@@ -1759,6 +1764,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dns_proxy_port": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
     },
     "pfb_dns_proxy_refuse": {
         "returnsRef": false,
@@ -1853,6 +1863,11 @@
             }
         ]
     },
+    "pfb_dns_status": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dnsbl_abp_extract_ip": {
         "returnsRef": false,
         "returnType": null,
@@ -1885,6 +1900,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dnsbl_active": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_dnsbl_alias_count_norm_skip": {
         "returnsRef": false,
@@ -2100,11 +2120,6 @@
                 "default": null
             }
         ]
-    },
-    "pfb_dnsbl_config_lock": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": []
     },
     "pfb_dnsbl_converged": {
         "returnsRef": false,

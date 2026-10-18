@@ -179,10 +179,6 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/top1m_token',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
-		// issue #3515: experimental DNS-proxy front end toggle
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy',
-		// issue #3515: the Resolver snapshot the DNS proxy keeps
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',
@@ -277,6 +273,9 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngglobal/alertrefresh',
 		// issue #3452: installedpackages/pfblockerngsync/config/0 (replaces the issue #2123 syncinterfaces checkbox)
 		'installedpackages/pfblockerngsync/config/0/syncscope',
+		// issue #3515: installedpackages/pfblockerngdns/config/0 (pfB-DNS): the enable toggle and the Resolver snapshot it keeps
+		'installedpackages/pfblockerngdns/config/0/pfb_dns',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_saved',
 		// issue #3450: IP-page scalars registered as plain strings
 		'installedpackages/pfblockerngipsettings/config/0/ip_placeholder',
 		'installedpackages/pfblockerngipsettings/config/0/maxmind_locale',

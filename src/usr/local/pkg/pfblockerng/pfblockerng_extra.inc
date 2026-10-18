@@ -878,6 +878,9 @@ const PFB_SECTIONS = [
 	// sibling still passes a section write through byte-identical.
 	'global' => 'installedpackages/pfblockerngglobal',
 	'sync'   => 'installedpackages/pfblockerngsync/config/0',
+	// issue #3515: pfB-DNS, the experimental DNS proxy tab. Its own section, so the DNSBL page's section save cannot touch
+	// the Resolver snapshot kept beside the toggle; never synced (not one of pfblockerng_sync_sections()).
+	'dns'    => 'installedpackages/pfblockerngdns/config/0',
 ];
 
 // issue #1921: dedicated map key standing for "key genuinely absent" inside a
@@ -1401,25 +1404,6 @@ function pfb_cfg_registry(): array
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'local',
 			'no_grandfather' => 'the post-swap flush exists only in the 4.0 no-reload pipeline; latency delta is the accepted zero-downtime redesign itself, not this default; default-off is a uniform decision at introduction',
-		],
-
-		// issue #3515: EXPERIMENTAL DNS proxy on the Resolver's client-facing interfaces. Default off.
-		'dnsbl/pfb_dns_proxy' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no proxy, Resolver untouched)',
-		],
-
-		// issue #3515: the Resolver's pre-move active_interface/enablessl/custom_options
-		// (base64 JSON, written by pfb_dns_proxy_resolver(), read via pfb_dns_proxy_saved()); '' = not moved.
-		'dnsbl/pfb_dns_proxy_saved' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
 		],
 
 		// issue #3288: the selected CONCRETE mechanism -- one of the seven tokens;
@@ -2385,6 +2369,29 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'sync'          => 'local',
 			'no_grandfather' => 'migration issue3452 runs before the registry pass; absent with no sync section = fresh/never-saved = policy',
+		],
+
+		// -------------------------------------------------------------------
+		// pfB-DNS section (pfblockerngdns/config/0, issue #3515)
+		// -------------------------------------------------------------------
+
+		// EXPERIMENTAL DNS proxy on the Resolver's client-facing interfaces, with or without DNSBL. Default off.
+		'dns/pfb_dns' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads Off = pre-feature behaviour (no proxy, Resolver untouched)',
+		],
+
+		// The Resolver's pre-move active_interface/enablessl/custom_options (base64 JSON, written by
+		// pfb_dns_proxy_resolver(), read via pfb_dns_proxy_saved()); '' = not moved.
+		'dns/pfb_dns_saved' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
 		],
 	];
 

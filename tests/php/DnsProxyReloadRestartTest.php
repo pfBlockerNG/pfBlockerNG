@@ -24,7 +24,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyReloadRestartTest extends TestCase
 {
 	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const GLOBALS = [
 		'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls',
 		'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_swap_wait_s',
