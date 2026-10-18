@@ -11,6 +11,9 @@
 //	listening udp+tcp <host>:<port>     one per bound --listen address
 //	listening dot|doh|doq <host>:<port> one per bound TLS listener
 //	ready upstream <host>:<port>
+//
+// --ready-file PATH: the gateway writes its own pid there, mode 0600, once it serves, and removes the file at stop
+// while the file still names it.
 package main
 
 import (
@@ -24,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,6 +58,7 @@ type config struct {
 	noModule      bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
 	observer      bool
 	replyLog      bool
+	readyFile     string // --ready-file: the gateway's pid is published here once it serves; "" = none
 	decider       []string
 
 	// Test seams; the zero value is production.
@@ -103,6 +108,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.BoolVar(&cfg.noModule, "no-module", false, "pfB-DNS without DNSBL: the decider boots no module and forwards every query")
 	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: the decider listens for the upstream observer's reports")
 	fs.BoolVar(&cfg.replyLog, "reply-log", false, "the decider logs each relayed reply to dns_reply.log (needs --no-module)")
+	fs.StringVar(&cfg.readyFile, "ready-file", "", "write the gateway's pid here, mode 0600, once it serves; removed at stop while it still names the gateway")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -313,12 +319,6 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	trace("ready")
 
-	for _, l := range listeners {
-		logf("listening udp+tcp %s", l.addr())
-	}
-	secure.report(logf)
-	logf("ready upstream %s", cfg.upstream)
-
 	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
 	for _, l := range listeners {
 		g.serve(l)
@@ -339,6 +339,15 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		}
 	}()
 	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{})}
+	if err := publishReady(cfg.readyFile); err != nil {
+		s.shutdown()
+		return nil, err
+	}
+	for _, l := range listeners {
+		logf("listening udp+tcp %s", l.addr())
+	}
+	secure.report(logf)
+	logf("ready upstream %s", cfg.upstream)
 	go s.watch()
 	return s, nil
 }
@@ -369,6 +378,9 @@ func (s *server) fatal() <-chan error { return s.failed }
 func (s *server) shutdown() {
 	s.once.Do(func() {
 		close(s.stopped)
+		if err := removeReady(s.cfg.readyFile); err != nil {
+			s.logf("cannot remove the ready file: %v", err)
+		}
 		s.dec.Close() // first: queries blocked writing to a decider that reads nothing would hold g.stop() up to the write deadline
 		s.g.stop()
 		if !s.child.waitExit(s.cfg.killAfter) {
@@ -376,6 +388,62 @@ func (s *server) shutdown() {
 			s.child.kill(s.logf, s.cfg.killAfter)
 		}
 	})
+}
+
+// publishReady writes the gateway's pid to path, mode 0600: a temporary file in the same directory, renamed over
+// path, so a reader sees all of it or none, and a symlink planted at path is replaced rather than written through.
+// An empty path publishes nothing.
+func publishReady(path string) error {
+	if path == "" {
+		return nil
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return fmt.Errorf("cannot write the ready file: %w", err)
+	}
+	_, err = fmt.Fprintf(tmp, "%d\n", os.Getpid())
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("cannot write the ready file: %w", err)
+	}
+	return nil
+}
+
+// removeReady deletes the ready file only while it still holds this process's pid. Anything else (another pid, a
+// symlink, a FIFO) is left alone: the open never follows a symlink and never blocks on a FIFO.
+func removeReady(path string) error {
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 32))
+	if err != nil {
+		return err
+	}
+	if string(b) != strconv.Itoa(os.Getpid())+"\n" {
+		return nil
+	}
+	return os.Remove(path)
 }
 
 var errInterrupted = errors.New("interrupted while waiting for the decider")
