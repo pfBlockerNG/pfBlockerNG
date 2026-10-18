@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
@@ -23,12 +25,14 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_reload_unbound')]
 final class DnsProxyReloadRestartTest extends TestCase
 {
+	use DnsProxyReadySeedTrait;
+
 	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const GLOBALS = [
 		'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls',
 		'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_swap_wait_s',
-		'pfb_test_unbound_py_sentinel_published',
+		'pfb_test_unbound_py_sentinel_published', 'pfb_test_try_lock_fail', 'pfb_test_file_notices',
 	];
 
 	private string $dir;
@@ -71,7 +75,9 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$GLOBALS['pfb_test_process_running'] = ['unbound' => FALSE];
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		$GLOBALS['pfb_test_service_calls'] = [];
-		unset($GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles'], $GLOBALS['pfb_test_service_hook']);
+		unset($GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles'], $GLOBALS['pfb_test_service_hook'], $GLOBALS['pfb_test_try_lock_fail']);
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$this->clearProxyFiles();
 	}
 
 	protected function tearDown(): void
@@ -84,6 +90,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 			}
 		}
 		$this->savedGlobals = [];
+		$this->clearProxyFiles();
 		rmdir_recursive($this->dir);
 	}
 
@@ -115,7 +122,11 @@ final class DnsProxyReloadRestartTest extends TestCase
 				'starts' => $this->startAttempts(),
 				'rcfile' => $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0,
 			];
-			$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = $proxyComesUp;
+			if ($proxyComesUp) {
+				$this->proxyServes();
+			} else {
+				$this->clearProxyFiles();
+			}
 		};
 	}
 
@@ -150,6 +161,22 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertSame(['restart_service', 'pfb_dns_proxy'], $seen[0]['call']);
 		$this->assertGreaterThan($before, $seen[0]['starts'], 'the proxy is restarted after Unbound was started');
 		$this->assertSame(1, $seen[0]['rcfile'], 'the rc script was regenerated before the restart');
+	}
+
+	public function testARestartedProxyThatServesIsLoggedAsReadyAndNothingIsRolledBack(): void
+	{
+		// Given the restart path and a proxy that publishes its marker once restarted
+		$this->setProxyMode();
+		$seen = [];
+		$this->observeServiceCalls($seen);
+
+		// When the Resolver is reloaded
+		pfb_reload_unbound('enabled', FALSE, TRUE);
+
+		// Then the log says the proxy is ready, and no rollback ran (no notice, no second service call)
+		$this->assertStringContainsString('the DNS proxy is ready', (string) file_get_contents($GLOBALS['pfb']['log']));
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+		$this->assertCount(1, $seen);
 	}
 
 	public function testProxyModeDataUpdateTheSwapCannotTakeRestartsTheProxyToo(): void
@@ -212,14 +239,18 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertSame([], $seen, 'a Resolver being given back is not a reason to bring the proxy up');
 	}
 
-	public function testTheLedgerWaitsForTheProxyToWriteItsPidfileBeforeItDecides(): void
+	public function testTheLedgerWaitsForTheProxyToPublishItsReadyMarkerBeforeItDecides(): void
 	{
-		// Given a restart-path apply, and a proxy that writes its pidfile only a few probes after the
+		// Given a restart-path apply, and a proxy that publishes its marker only a few probes after the
 		// restart_service() call returned (the real start is asynchronous)
 		$this->setProxyMode();
 		$state = ['restarted' => FALSE, 'probes' => 0];
-		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = static function () use (&$state): bool {
-			return $state['restarted'] && ++$state['probes'] >= 3;
+		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function () use (&$state): bool {
+			if (!$state['restarted'] || ++$state['probes'] < 3) {
+				return FALSE;
+			}
+			$this->proxyServes();
+			return TRUE;
 		};
 		$GLOBALS['pfb_test_service_hook'] = static function (string $fn) use (&$state): void {
 			$state['restarted'] = $state['restarted'] || $fn === 'restart_service';
@@ -228,15 +259,18 @@ final class DnsProxyReloadRestartTest extends TestCase
 		// When the Resolver is reloaded
 		pfb_reload_unbound('enabled', FALSE, TRUE);
 
-		// Then the ledger saw the running proxy: no "not converged" entry is open
-		$this->assertGreaterThanOrEqual(3, $state['probes'], 'the pidfile was probed until it appeared');
+		// Then the ledger saw the serving proxy: no "not converged" entry is open
+		$this->assertGreaterThanOrEqual(3, $state['probes'], 'the marker was waited for until it appeared');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'), 'a proxy that came up converged');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'and nothing was rolled back');
 	}
 
-	public function testAProxyThatNeverComesUpOpensTheLedgerEntryWordedForTheProxy(): void
+	public function testAProxyThatNeverComesUpAndCannotBeRolledBackOpensTheLedgerEntryWordedForTheProxy(): void
 	{
-		// Given a restart-path apply whose proxy never writes a pidfile
+		// Given a restart-path apply whose proxy never becomes ready, and a rollback that cannot start: another process holds
+		// the config lock, so the Resolver stays moved and the proxy stays the host of the module
 		$this->setProxyMode();
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 		$seen = [];
 		$this->observeServiceCalls($seen, FALSE);
 

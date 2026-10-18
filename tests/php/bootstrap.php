@@ -147,6 +147,10 @@ $pfb_prev_er = error_reporting();
 error_reporting($pfb_prev_er & ~E_DEPRECATED & ~E_WARNING);
 require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 error_reporting($pfb_prev_er);
+// 4g. The DNS proxy's readiness is read from its child pidfile and its listener-ready marker (issue #3515). Both live in $pfb,
+//     like the other runtime paths, so a unit test reads its own files, never /var/run or /var/unbound.
+$GLOBALS['pfb']['dns_proxy_pidfile'] = "{$pfb_test_tmp}/pfb_dns_proxy.pid";
+$GLOBALS['pfb']['dns_proxy_ready'] = "{$pfb_test_tmp}/pfb_dns_ready";
 $pfb_test_timeout_out = [];
 $pfb_test_timeout_rc = 0;
 exec('command -v timeout 2>/dev/null', $pfb_test_timeout_out, $pfb_test_timeout_rc);

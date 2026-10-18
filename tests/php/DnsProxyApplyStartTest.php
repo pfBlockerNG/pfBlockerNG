@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
@@ -20,7 +22,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_ensure_running')]
 final class DnsProxyApplyStartTest extends TestCase
 {
-	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
+	use DnsProxyReadySeedTrait;
+
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const GLOBALS = [
@@ -49,6 +52,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
 		@unlink(PFB_DNS_PROXY_RCFILE);
+		$this->clearProxyFiles();
 	}
 
 	protected function tearDown(): void
@@ -60,6 +64,7 @@ final class DnsProxyApplyStartTest extends TestCase
 				unset($GLOBALS[$name]);
 			}
 		}
+		$this->clearProxyFiles();
 		$this->savedGlobals = [];
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		rmdir_recursive($this->dir);
@@ -82,15 +87,17 @@ final class DnsProxyApplyStartTest extends TestCase
 		// Given proxy mode and a proxy that is not running
 		$this->setProxyMode();
 		$seen = [];
-		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use (&$seen): void {
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = [[$fn, $service], $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0];
+			$this->proxyServes();
 		};
 
 		// When the apply finds nothing to reload
-		pfb_dns_proxy_ensure_running();
+		$ready = pfb_dns_proxy_ensure_running();
 
-		// Then the proxy is started exactly once, and not restarted, after its rc script was written
+		// Then the proxy is started exactly once, and not restarted, after its rc script was written, and it is ready
 		$this->assertSame([[['start_service', 'pfb_dns_proxy'], 1]], $seen);
+		$this->assertTrue($ready);
 	}
 
 	public function testProxyModeWithALiveProxyAndAnUnchangedScriptRestartsNothing(): void
@@ -98,13 +105,14 @@ final class DnsProxyApplyStartTest extends TestCase
 		// Given proxy mode, the script a start would run already on disk, and the proxy running
 		$this->setProxyMode();
 		pfb_dns_proxy_service();
-		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = TRUE;
+		$this->proxyServes();
 
 		// When the apply finds nothing to reload
-		pfb_dns_proxy_ensure_running();
+		$ready = pfb_dns_proxy_ensure_running();
 
 		// Then the proxy is neither started nor restarted
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls']);
+		$this->assertTrue($ready);
 	}
 
 	public function testProxyModeWithALiveProxyWhoseListenAddressesChangedRestartsItWithTheNewScript(): void
@@ -112,11 +120,12 @@ final class DnsProxyApplyStartTest extends TestCase
 		// Given a live proxy started from a script naming the LAN's old address ...
 		$this->setProxyMode('192.0.2.1');
 		pfb_dns_proxy_service();
-		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = TRUE;
+		$this->proxyServes();
 		$this->assertStringContainsString("'192.0.2.1'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the old address');
 		$seen = [];
-		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use (&$seen): void {
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = [[$fn, $service], (string) file_get_contents(PFB_DNS_PROXY_RCFILE)];
+			$this->proxyServes();
 		};
 
 		// When the LAN gets a new address and the apply finds nothing to reload
@@ -138,11 +147,12 @@ final class DnsProxyApplyStartTest extends TestCase
 		$GLOBALS['pfb']['dnsbl_py_reply'] = PfbToggle::Off;
 		$this->setProxyMode();
 		pfb_dns_proxy_service();
-		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = TRUE;
+		$this->proxyServes();
 		$this->assertStringNotContainsString('--reply-log', (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: not logging');
 		$seen = [];
-		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use (&$seen): void {
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = [[$fn, $service], (string) file_get_contents(PFB_DNS_PROXY_RCFILE)];
+			$this->proxyServes();
 		};
 
 		// When the preference is switched on and the apply finds nothing to reload
@@ -173,12 +183,12 @@ final class DnsProxyApplyStartTest extends TestCase
 
 		$this->assertSame(1, substr_count($source, 'pfb_dns_proxy_ensure_running('), 'one call site');
 		$this->assertMatchesRegularExpression(
-			"/\\n\\t\\t\\tpfb_dnsbl_cache\\('save'\\);\\n\\t\\t}\\n\\t}\\n(?:\\n?\\t\\/\\/[^\\n]*\\n)*\\tpfb_dns_proxy_ensure_running\\(\\);\\n/",
+			"/\\n\\t\\t\\tpfb_dnsbl_cache\\('save'\\);\\n\\t\\t}\\n\\t}\\n(?:\\n?\\t\\/\\/[^\\n]*\\n)*\\tif \\(!pfb_dns_proxy_ensure_running\\(\\)\\) \\{\\n/",
 			$source,
-			'a statement of its own after the reload branch has closed: pfB-DNS runs with DNSBL off, where the mode is not enabled'
+			'a statement of its own after the reload branch has closed, whose result is read: pfB-DNS runs with DNSBL off, where the mode is not enabled'
 		);
 		$this->assertDoesNotMatchRegularExpression(
-			"/\\{\\s*pfb_dns_proxy_ensure_running\\(\\);\\s*\\}/",
+			"/\\{\\s*if \\(!pfb_dns_proxy_ensure_running\\(\\)\\)/",
 			$source,
 			'not inside a branch of the DNSBL mode'
 		);

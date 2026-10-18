@@ -32,6 +32,11 @@
  * fail for the rest of boot. Start the proxy here, in the background, and only when it is not already serving
  * (a Resolver restart from the GUI must not bounce it). The rc script refuses to start without a moved-Resolver snapshot.
  *
+ * The rc script serializes its starts (lockf), so this background start and an apply's start_service() cannot both launch a
+ * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart): the package's own apply
+ * confirms the proxy with its listener-ready marker and rolls pfB-DNS back when it does not come up. That marker says the
+ * front end can answer queries; it is no proof that recursion works, which needs the Unbound this hook runs before.
+ *
  * Core functions only: on the non-verbose boot path none of pfBlockerNG's own includes are loaded. This file runs inside
  * pfSense's function, so it must leave no variable behind.
  */
