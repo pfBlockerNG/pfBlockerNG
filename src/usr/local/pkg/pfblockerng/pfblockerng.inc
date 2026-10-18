@@ -12601,9 +12601,10 @@ function pfb_dns_proxy_resolver_locked(bool $on): bool {
 	$saved = pfb_dns_proxy_saved();
 	$custom = str_replace("\r\n", "\n", (string) base64_decode((string) config_get_path('unbound/custom_options', '')));
 	$has_marker = in_array(PFB_DNS_PROXY_MARKER, array_map('trim', explode("\n", $custom)), TRUE);
-	// An older block of ours, from its marker to its end marker or the end of the text.
-	$stale = '/(?:^server:\n)?^' . preg_quote(PFB_DNS_PROXY_MARKER, '/') . '$\n?.*?(?:^' .
-	    preg_quote(PFB_DNS_PROXY_MARKER_END, '/') . '$|\z)/ms';
+	// Our block, from its marker to its end marker. Both uses run only after the structure check above has found exactly one
+	// such pair, so the cut never has to run to the end of the text.
+	$stale = '/(?:^server:\n)?^' . preg_quote(PFB_DNS_PROXY_MARKER, '/') . '$\n?.*?^' .
+	    preg_quote(PFB_DNS_PROXY_MARKER_END, '/') . '$/ms';
 
 	if (!$on) {
 		if ($saved === NULL) {
