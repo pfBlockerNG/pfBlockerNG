@@ -330,13 +330,12 @@ def _ask_doq(client: SmokeVM, name: str, ca: str | None = CERT_CLIENT) -> tuple[
     if ca:
         args += ["-ca", ca]
     result = client.ssh(shlex.join(args) + " 2>&1", timeout=40.0)
+    output = f"{result.stdout}\n[exit {result.returncode}]"
     lines = result.stdout.splitlines()
     if result.returncode != 0 or not lines or not lines[0].startswith("rcode "):
-        return h.DnsAnswer("UNKNOWN", []), result.stdout
+        return h.DnsAnswer("UNKNOWN", []), output
     fields = (line.split() for line in lines[1:])
-    return h.DnsAnswer(
-        lines[0].split()[1], [f[3] for f in fields if len(f) == 4 and f[:1] == ["answer"]]
-    ), result.stdout
+    return h.DnsAnswer(lines[0].split()[1], [f[3] for f in fields if len(f) == 4 and f[:1] == ["answer"]]), output
 
 
 def _ask(client: SmokeVM, transport: str, name: str, *, source: str | None = None) -> tuple[h.DnsAnswer, str]:
@@ -351,7 +350,7 @@ def _ask(client: SmokeVM, transport: str, name: str, *, source: str | None = Non
         args += ["-p", str(port)]
     args += ["A", name, f"@{PFSENSE_LAN_IP}"]
     result = client.ssh(shlex.join(args) + " 2>&1", timeout=40.0)
-    return h._parse_dig(result.stdout, "A"), result.stdout
+    return h._parse_dig(result.stdout, "A"), f"{result.stdout}\n[exit {result.returncode}]"
 
 
 def _ask_all(gw: Gateway, names: dict[str, str]) -> dict[str, tuple[h.DnsAnswer, str]]:
@@ -362,7 +361,8 @@ def _expect_everywhere(
     what: str, results: dict[str, tuple[h.DnsAnswer, str]], ok: Callable[[h.DnsAnswer], bool], expected: str
 ) -> None:
     for transport, (answer, raw) in results.items():
-        tail = f" ({raw.strip().splitlines()[-1]})" if answer.rcode == "UNKNOWN" and raw.strip() else ""
+        tail = " | ".join(raw.strip().splitlines()[-2:])
+        tail = f" ({tail})" if answer.rcode == "UNKNOWN" else ""
         _say(f"{what}, {transport}: {answer.rcode} {answer.records}{tail}")
     wrong = {transport: result for transport, result in results.items() if not ok(result[0])}
     assert not wrong, f"{what}: expected {expected} on every transport; differing:\n" + "\n".join(
@@ -662,6 +662,7 @@ def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw
     state = gateway_on
     sockets = state.proxy_sockets()
     _say(f"gateway sockets: {sorted(sockets)}")
+    _say(f"access_lists.conf with the gateway serving: {_lines(state.access_lists)}")
     wanted = {(proto, f"{PFSENSE_LAN_IP}:53") for proto in ("udp4", "tcp4")}
     wanted |= {(proto, "127.0.0.1:53") for proto in ("udp4", "tcp4")} | {
         (proto, "::1:53") for proto in ("udp6", "tcp6")
