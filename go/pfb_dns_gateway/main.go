@@ -42,7 +42,7 @@ type config struct {
 	port          int
 	upstream      string
 	timeout       time.Duration
-	aclFile       string
+	unboundConf   string
 	user          string
 	dot           bool
 	pfsenseConfig string
@@ -70,7 +70,7 @@ func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 // writes the flag defaults to usage and returns flag.ErrHelp.
 func parseConfig(args []string, usage io.Writer) (config, error) {
 	cfg := config{
-		port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second, aclFile: "/var/unbound/access_lists.conf",
+		port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second, unboundConf: "/var/unbound/unbound.conf",
 		pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
 	}
 	split := slices.Index(args, "--")
@@ -87,7 +87,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.IntVar(&cfg.port, "port", cfg.port, "plain DNS port; 0 picks one per address")
 	fs.StringVar(&cfg.upstream, "upstream", cfg.upstream, "Unbound's proxy-protocol HOST:PORT")
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "wait for Unbound per exchange")
-	fs.StringVar(&cfg.aclFile, "acl-file", cfg.aclFile, "Resolver ACL file")
+	fs.StringVar(&cfg.unboundConf, "unbound-conf", cfg.unboundConf, "Unbound's config: the access-control rows of it and of every file it includes are the ACL")
 	fs.StringVar(&cfg.user, "user", "", "give up root for this user once the sockets are bound and the decider runs")
 	fs.BoolVar(&cfg.dot, "dot", false, "serve DoT on every --listen address at unbound/tlsport (853 if unset) of --pfsense-config")
 	fs.StringVar(&cfg.pfsenseConfig, "pfsense-config", cfg.pfsenseConfig, "config.xml with unbound/sslcertref, tlsport and the <cert>/<ca>")
@@ -127,8 +127,8 @@ func (c config) validate() error {
 	if c.timeout <= 0 {
 		return fmt.Errorf("--timeout %s must be positive", c.timeout)
 	}
-	if c.aclFile == "" {
-		return errors.New("--acl-file must not be empty")
+	if c.unboundConf == "" {
+		return errors.New("--unbound-conf must not be empty")
 	}
 	if len(c.listen) == 0 {
 		return errors.New("--listen is required: the addresses to serve plain DNS on")
@@ -232,7 +232,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		cfg.killAfter = defaultKillAfter
 	}
 
-	acl := NewACL(cfg.aclFile, logf)
+	acl := NewACL(cfg.unboundConf, logf)
 	var listeners []*plainListener
 	for _, host := range cfg.listen {
 		l, err := bindPlain(host, cfg.port)
@@ -305,7 +305,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	secure.serve(g, cfg.dohTrusted)
 	g.wg.Add(1)
-	go func() { // the pfSense rewrite of the ACL file reaches the matcher within a second
+	go func() { // a rewrite of the config or any file it includes reaches the matcher within a second
 		defer g.wg.Done()
 		tick := time.NewTicker(time.Second)
 		defer tick.Stop()
