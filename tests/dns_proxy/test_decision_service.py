@@ -7,8 +7,11 @@ exit status is the point. Frame bytes are packed here with struct, not with the 
 from __future__ import annotations
 
 import asyncio
+import csv
+import json
 import select
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -20,7 +23,16 @@ import decision_service
 import dnswire
 import pfb_dns_proxy
 import pytest
-from frontend_constants import ALLOWED, BLOCKED, BYPASSED_CLIENT, DNSBL_IPV4, FILTERED_CLIENT, PROTO_DIR, Booted
+from frontend_constants import (
+    ALLOWED,
+    BLOCKED,
+    BYPASSED_CLIENT,
+    DNSBL_IPV4,
+    FILTERED_CLIENT,
+    PROTO_DIR,
+    Booted,
+    LogFeed,
+)
 from frontend_helpers import WATCHDOG, FakeUnbound, build_query
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
@@ -795,3 +807,92 @@ def test_an_unknown_user_exits_1_before_the_socket_or_the_module_is_touched(
     monkeypatch.setattr(pfb_dns_proxy, "boot", lambda *_a: pytest.fail("the module must not boot"))
     assert pfb_dns_proxy.main(["--decision-fd", "999", "--user", "pfb-no-such-user-3513"]) == 1
     assert capsys.readouterr().err == "pfb_dns_proxy: unknown user 'pfb-no-such-user-3513'\n"
+
+
+# --- the upstream observer: the decider is the module host while the gateway fronts DNS ---------------------------
+# Unbound's observer (pfb_upstream_observer.py) reports each raw upstream response to pfb_upstream.sock in the module
+# dir. With the Go gateway there is no listening proxy, so the decider must serve that socket itself, or upstream
+# blocks are no longer logged (issue #3513, owner decision 2026-10-18).
+
+NXDOMAIN_RECURSIVE = 0x8183  # QR RD RA, NXDOMAIN: how a forwarding upstream answers a name it blocks
+UPSTREAM_BLOCKED = "upstream-blocked.example"
+
+
+def _observer_report() -> bytes:
+    """The datagram the observer sends from inside Unbound for an upstream answer carrying EDE 15 (Blocked)."""
+    ede15 = b"\x00\x0fBlocked by Quad9"
+    return json.dumps(
+        {
+            "client": CLIENT,
+            "qname": f"{UPSTREAM_BLOCKED}.",
+            "qtype": dnswire.TYPE_A,
+            "flags": NXDOMAIN_RECURSIVE,
+            "opts": [[15, ede15.hex()]],
+        }
+    ).encode()
+
+
+def _module_logs(monkeypatch: pytest.MonkeyPatch) -> LogFeed:
+    """Send the log lines of whichever module boots next to a LogFeed instead of /var/log."""
+    log = LogFeed()
+    real_boot = pfb_dns_proxy.boot
+
+    def boot(directory: str) -> Any:
+        module = real_boot(directory)
+        monkeypatch.setattr(module, "pfb_log", lambda name, line: log.append((name, line)))
+        return module
+
+    monkeypatch.setattr(pfb_dns_proxy, "boot", boot)
+    return log
+
+
+def _upstream_blocked_names(log: list[tuple[str, str]]) -> list[str]:
+    rows = [next(csv.reader([line])) for name, line in log if name.endswith("dnsbl.log")]
+    return [row[2] for row in rows if row[5] == "Upstream_Block"]
+
+
+def test_an_upstream_report_sent_to_the_observer_socket_fires_the_modules_query_response(
+    module_dir: Path, forwarding_ini: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = _module_logs(monkeypatch)
+    socket_path = module_dir / pfb_dns_proxy.OBSERVER_SOCKET
+
+    async def scenario(_gateway: Gateway) -> None:
+        assert socket_path.exists(), f"the decider serves no observer socket at {socket_path}"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as observer:
+            observer.sendto(_observer_report(), str(socket_path))
+        await asyncio.to_thread(log.wait_for, lambda lines: _upstream_blocked_names(lines) == [UPSTREAM_BLOCKED])
+
+    _serve_decisions(module_dir, monkeypatch, scenario)
+    assert _upstream_blocked_names(log) == [UPSTREAM_BLOCKED]
+
+
+def test_the_observer_socket_is_private_while_the_decider_serves_and_gone_when_the_session_ends(
+    module_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    socket_path = module_dir / pfb_dns_proxy.OBSERVER_SOCKET
+    modes: list[int] = []
+
+    async def scenario(_gateway: Gateway) -> None:
+        assert socket_path.exists(), f"the decider serves no observer socket at {socket_path}"
+        modes.append(socket_path.stat().st_mode)
+
+    _serve_decisions(module_dir, monkeypatch, scenario)
+    assert [(stat.S_ISSOCK(mode), stat.S_IMODE(mode)) for mode in modes] == [(True, 0o600)]
+    assert not socket_path.exists()
+
+
+def test_decisions_are_still_served_when_the_observer_socket_cannot_be_made(
+    module_dir: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    socket_path = module_dir / pfb_dns_proxy.OBSERVER_SOCKET
+    socket_path.write_text("in the way", encoding="utf-8")
+    _module_logs(monkeypatch)
+
+    async def scenario(gateway: Gateway) -> None:
+        await gateway.send(query_frame(7, build_query(BLOCKED)))
+        assert (await gateway.recv())[:2] == (ANSWER, 7)
+
+    _serve_decisions(module_dir, monkeypatch, scenario)
+    assert "upstream-block detection is off" in capfd.readouterr().err
+    assert socket_path.read_text(encoding="utf-8") == "in the way"
