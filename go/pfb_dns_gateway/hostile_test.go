@@ -159,10 +159,15 @@ func TestTCPClientThatNeverReadsIsDroppedAfterTheIdleTimeout(t *testing.T) {
 			break
 		}
 	}
-	if got := r.roundTrip(transport{"tcp", true}, "", buildQuery(t, 2, "barrier.example.", true)); len(got) != 60000 {
+	barrier := r.tcpClient("") // accepted after the hostile connection, answered in full
+	tcpSend(t, barrier, buildQuery(t, 2, "barrier.example.", true))
+	if got := tcpReply(t, barrier); len(got) != 60000 {
 		t.Fatalf("the barrier connection, accepted after the hostile one: got %d bytes", len(got))
 	}
-	eventually(t, "the connection of a client that never reads to be dropped", func() bool { return r.g.tcpConns.Load() == 1 })
+	_ = barrier.Close()
+	// Only the hostile connection can still hold a slot, and it frees it only when the gateway gives up writing to
+	// a client that never reads: a gateway with no write deadline waits for it forever.
+	eventually(t, "the connection of a client that never reads to be dropped", func() bool { return r.g.tcpConns.Load() == 0 })
 }
 
 // A client that connects and never sends a byte holds a slot only for the idle timeout.
