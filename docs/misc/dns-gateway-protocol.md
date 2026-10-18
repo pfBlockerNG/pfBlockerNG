@@ -13,7 +13,9 @@ runs exactly as in the Python-only proxy.
 
 One `AF_UNIX`, `SOCK_STREAM` socketpair, created by the gateway. The gateway starts the decider as a child with the
 other end inherited as file descriptor N (the gateway uses 3) and passes `--decision-fd N`. In that mode the decider
-binds no DNS socket; `--listen`, `--port` and `--dot` are rejected (exit 2). It still hosts the module, so it makes the
+binds no DNS socket; `--listen`, `--port` and `--dot` are rejected (exit 2). It takes the Python proxy's mode flags: with
+`--no-module` (pfB-DNS with DNSBL off) it boots no module and forwards every query, with `--no-module --reply-log` it also
+writes the DNS Reply log row of each reply. Otherwise it hosts the module, and with `--observer` it makes the
 observer socket `pfb_upstream.sock` in `--module-dir` exactly as the Python-only proxy does: Unbound's upstream observer
 (`pfb_upstream_observer.py`) reports each raw upstream response there and the module logs an upstream block (mode 0600;
 a socket that cannot be made is one error line, and the decider serves without upstream-block detection).
@@ -85,7 +87,7 @@ tracks.
 
 ## READY and lifecycle
 
-READY is the first frame the decider sends, once the module has booted and the observer socket is made (and, with
+READY is the first frame the decider sends, once the module has booted (if there is one) and the observer socket is made (if asked for) (and, with
 `--user`, after the privilege drop). The gateway starts serving clients on READY and not before; a QUERY sent earlier is read after it.
 
 EOF from the gateway, including a frame cut half way through its header or payload, ends the session: the decider

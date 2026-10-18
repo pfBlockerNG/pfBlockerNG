@@ -92,3 +92,46 @@ func TestConfigRejectsBadUsage(t *testing.T) {
 		})
 	}
 }
+
+// pfB-DNS's modes (issue #3513): the gateway takes the flags of the Python proxy that decide what its decider does, and
+// hands them on, so the rc line has one set of mode flags whichever process serves.
+func TestConfigHandsTheModeFlagsToTheDecider(t *testing.T) {
+	base := []string{"/usr/bin/python3", "-u", "decider.py", "--decision-fd", "3", "--module-dir", "/var/unbound"}
+	cases := map[string]struct {
+		flags []string
+		want  []string
+	}{
+		"no flags leave the decider argv as it was": {nil, nil},
+		"DNSBL off":                          {[]string{"--no-module"}, []string{"--no-module"}},
+		"DNSBL off, replies logged":          {[]string{"--no-module", "--reply-log"}, []string{"--no-module", "--reply-log"}},
+		"DNSBL on, upstream blocks reported": {[]string{"--observer"}, []string{"--observer"}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := parse(t, append(append(slices.Clone(c.flags), "--"), base...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := append(slices.Clone(base), c.want...); !slices.Equal(cfg.decider, want) {
+				t.Fatalf("decider argv:\n got  %q\n want %q", cfg.decider, want)
+			}
+		})
+	}
+}
+
+func TestConfigRejectsModeFlagsThatContradictEachOther(t *testing.T) {
+	cases := map[string]struct {
+		flags []string
+		want  string
+	}{
+		"the observer needs the module":           {[]string{"--no-module", "--observer"}, "--observer"},
+		"the reply log is for the no-module mode": {[]string{"--reply-log"}, "--reply-log"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if cfg, err := parse(t, append(slices.Clone(c.flags), "--", "decider")...); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got cfg=%+v err=%v, want an error mentioning %q", cfg, err, c.want)
+			}
+		})
+	}
+}
