@@ -635,7 +635,7 @@ if (isset($_POST) && !empty($_POST)) {
 		$pfb['aglobal']['pfbdnsblreplystat']	= implode(',', (array)$_POST['pfbdnsblreplystat'])	?: '';
 
 		foreach ($aglobal_array as $type => $value) {
-			if (ctype_digit($_POST[$type]) && $_POST[$type] <= 5000) {
+			if (ctype_digit($_POST[$type] ?? '') && $_POST[$type] <= 5000) {
 				$pfb['aglobal'][$type] = $_POST[$type];
 			} else {
 				$pfb['aglobal'][$type] = $value;
