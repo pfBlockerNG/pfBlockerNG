@@ -31,6 +31,7 @@ from frontend_helpers import (
     FakeUnbound,
     UpstreamVerdict,
     build_query,
+    running_proxy,
     serve_dot,
     serve_plain,
     tcp_concurrent,
@@ -377,6 +378,71 @@ def test_dot_client_gets_dnsbl_and_unbound_answers_and_unbounds_log_shows_the_tl
     assert [line for line in logged if "blocked.example" in line] == []
     assert not any(f"127.0.0.1 {ALLOWED}" in line for line in logged)  # the TLS client, not the proxy
     assert [row[2] for row in _dnsbl_rows(booted)] == ["blocked.example"]
+
+
+# --- pfB-DNS with DNSBL off (--no-module): no module anywhere, every query forwarded to a real Unbound -------------
+#
+# BLOCKED is on the feed that the module blocks in the tests above; here no module exists, so Unbound's own answer
+# for it (the zone's 192.0.2.99, not the DNSBL VIP) is what the client must get.
+
+
+def test_without_a_module_a_listed_name_is_answered_by_unbound_and_its_log_shows_the_real_client(
+    unbound: RunningUnbound,
+) -> None:
+    mark = unbound.tail.mark()
+
+    async def main() -> tuple[bytes, bytes]:
+        frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", unbound.port), timeout=WATCHDOG)
+        [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+        try:
+            udp, _ = await udp_exchange(server, build_query(BLOCKED), source=ALLOWED_CLIENT)
+            tcp, _ = await tcp_exchange(server, build_query(BLOCKED), source=ALLOWED_CLIENT_TCP)
+            return udp, tcp
+        finally:
+            await frontend.stop()
+
+    udp, tcp = asyncio.run(main())
+    for reply in (udp, tcp):
+        assert _answers(reply) == [(BLOCKED, dnswire.TYPE_A, bytes([192, 0, 2, 99]))]  # Unbound's, not the VIP
+    logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {BLOCKED} A IN", since=mark)
+    assert any(f"{ALLOWED_CLIENT} {BLOCKED} A IN" in line for line in logged)  # not the proxy's 127.0.0.1
+    assert not any(f"127.0.0.1 {BLOCKED}" in line for line in logged)
+
+
+def test_without_a_module_dot_forwards_a_listed_name_and_unbounds_log_shows_the_tls_client(
+    unbound: RunningUnbound, tmp_path: Path
+) -> None:
+    crt, key = make_certificate(tmp_path)
+    trust = tmp_path / "trust.pem"
+    trust.write_bytes(crt)
+    config = tmp_path / "config.xml"
+    config.write_text(config_xml(tlsport=_free_port(), entries=cert_element("5f0a1b2c3d4e5", b64(crt), b64(key))))
+    settings = pfsense_dot.read_settings(config)
+    mark = unbound.tail.mark()
+
+    async def main() -> bytes:
+        frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", unbound.port), timeout=WATCHDOG)
+        [server] = await serve_dot(frontend, ["127.0.0.1"], settings.port, pfsense_dot.server_context(settings))
+        try:
+            return (await dot_exchange(server, build_query(BLOCKED), trust, source=ALLOWED_CLIENT_TCP))[0]
+        finally:
+            await frontend.stop()
+
+    assert _answers(asyncio.run(main())) == [(BLOCKED, dnswire.TYPE_A, bytes([192, 0, 2, 99]))]
+    logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {BLOCKED} A IN", since=mark)
+    assert not any(f"127.0.0.1 {BLOCKED}" in line for line in logged)  # the TLS client, not the proxy
+
+
+def test_the_real_process_starts_with_no_pfb_unbound_py_and_forwards_to_a_real_unbound(
+    unbound: RunningUnbound, tmp_path: Path
+) -> None:
+    mark = unbound.tail.mark()
+    argv = ["--no-module", "--listen", "127.0.0.1", "--port", "0", "--upstream", f"127.0.0.1:{unbound.port}"]
+    argv += ["--module-dir", str(tmp_path / "absent")]  # nothing there: no pfb_unbound.py, ini, manifest or feed
+    with running_proxy(argv, cwd=tmp_path) as (_, port):
+        reply = asyncio.run(udp_exchange(("127.0.0.1", port), build_query(BLOCKED), source=ALLOWED_CLIENT))[0]
+    assert _answers(reply) == [(BLOCKED, dnswire.TYPE_A, bytes([192, 0, 2, 99]))]
+    unbound.tail.wait_for(f"{ALLOWED_CLIENT} {BLOCKED} A IN", since=mark)
 
 
 ROUNDS = {"udp": 20, "tcp": 1}

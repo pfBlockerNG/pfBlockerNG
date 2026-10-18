@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import re
 import selectors
+import signal
 import socket
 import ssl
 import struct
+import subprocess
+import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Self
 
 import dnswire
 import pfb_dns_proxy
+from frontend_constants import PROTO_DIR
 
 WATCHDOG = 10.0  # stuck-run guard for socket waits; never asserted on
 PROXY_FIXED = 16  # 12-byte signature + ver/cmd + family + 2-byte length
@@ -308,3 +315,38 @@ async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
     finally:
         for _, writer in connections:
             writer.close()
+
+
+@contextlib.contextmanager
+def running_proxy(
+    argv: Sequence[str], *, interpreter: str = sys.executable, cwd: Path | None = None
+) -> Iterator[tuple[subprocess.Popen[str], int]]:
+    """The real pfb_dns_proxy.py as a child process, once it says it listens: (child, its first UDP+TCP port).
+
+    Leaving the block cleanly stops it with SIGTERM and requires exit status 0; leaving it by an exception just
+    reaps it. A proxy that never says it listens fails at EOF of its stderr (the watchdog kills it), with what it said.
+    """
+    command = [interpreter, str(PROTO_DIR / "pfb_dns_proxy.py"), *argv]
+    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, cwd=cwd)
+    watchdog = threading.Timer(WATCHDOG, child.kill)
+    watchdog.start()
+    try:
+        assert child.stderr is not None
+        seen: list[str] = []
+        port = None
+        for line in child.stderr:
+            seen.append(line)
+            if match := re.search(r"listening on 127\.0\.0\.1:(\d+)", line):
+                port = int(match.group(1))
+                break
+        assert port is not None, f"the proxy never listened; it printed:\n{''.join(seen)}"
+        yield child, port
+        child.send_signal(signal.SIGTERM)
+        assert child.wait(timeout=WATCHDOG) == 0
+    finally:
+        watchdog.cancel()
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+        if child.stderr is not None:
+            child.stderr.close()
