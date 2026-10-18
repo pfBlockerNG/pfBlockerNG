@@ -2,12 +2,14 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- the pfB-DNS tab's status panel: whether the proxy runs, which mode the box is in, where it
+ * issue #3515 -- the pfB-DNS tab's status panel: whether the proxy is running, starting or stopped, which mode the box is in, where it
  * listens and whether it serves DNS over TLS. Everything derives from the Resolver snapshot (the box is moved
  * or it is not), the toggle (what the admin asked for) and DNSBL (whether the proxy makes DNSBL decisions);
  * a toggle that is on while nothing is moved is said not to be active, with the reason (pfBlockerNG or the Resolver
@@ -16,8 +18,10 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_status')]
 final class PfbDnsStatusTest extends TestCase
 {
+	use DnsProxyReadySeedTrait;
+
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
-	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
+	private string $dir;
 
 	private array $savedGlobals = [];
 
@@ -27,7 +31,12 @@ final class PfbDnsStatusTest extends TestCase
 			$this->savedGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
 			unset($GLOBALS[$name]);
 		}
-		$GLOBALS['pfb'] = ['enable' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'pfb_dns' => PfbToggle::Off];
+		$this->dir = sys_get_temp_dir() . '/pfb_dns_status_' . getmypid() . '_' . uniqid();
+		mkdir($this->dir, 0777, TRUE);
+		$GLOBALS['pfb'] = [
+			'enable' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'pfb_dns' => PfbToggle::Off,
+			'dns_proxy_pidfile' => "{$this->dir}/pfb_dns_proxy.pid", 'dns_proxy_ready' => "{$this->dir}/pfb_dns_ready",
+		];
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_valid_pids'] = [];
 	}
@@ -41,6 +50,7 @@ final class PfbDnsStatusTest extends TestCase
 				unset($GLOBALS[$name]);
 			}
 		}
+		rmdir_recursive($this->dir);
 	}
 
 	/** The Resolver as pfB-DNS leaves it: the saved one listened on `lan` (192.0.2.1), with or without DoT. */
@@ -55,7 +65,7 @@ final class PfbDnsStatusTest extends TestCase
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
 		$GLOBALS['pfb_test_configured_ipv6'] = [];
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
-		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = $up;
+		$this->seedProxy('4242', "4242\n", $up);
 	}
 
 	public function testAnOffToggleWithNothingMovedIsNotInUse(): void
@@ -106,6 +116,25 @@ final class PfbDnsStatusTest extends TestCase
 			'listen'  => '192.0.2.1:53, 127.0.0.1:53, [::1]:53',
 			'dot'     => 'On, port 8853',
 		], pfb_dns_status());
+	}
+
+	/** @return array<string,array{?string}> the marker a live proxy child has not published: none yet, or one an earlier proxy left */
+	public static function unpublishedMarkers(): array
+	{
+		return [
+			'no marker yet' => [NULL],
+			'a marker naming another process' => ["4343\n"],
+		];
+	}
+
+	#[DataProvider('unpublishedMarkers')]
+	public function testALiveProxyThatIsNotReadyIsStartingNotRunning(?string $marker): void
+	{
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$this->moved(TRUE);
+		$this->seedProxy('4242', $marker);
+
+		$this->assertSame('Starting', pfb_dns_status()['service']);
 	}
 
 	public function testAMovedBoxWithDnsblOffAndAStoppedProxyOnAnotherPort(): void

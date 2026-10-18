@@ -528,7 +528,8 @@ at shutdown only while it still names itself. PHP calls the proxy ready iff the 
 (`$pfb['dns_proxy_pidfile']`) names a live process AND the marker holds that same decimal PID: a live process that never
 published one (a listener that cannot bind, which the supervisor restarts every 5 s), a marker an earlier incarnation left,
 a live supervisor alone and a marker with no live child are all NOT ready. `pfb_dns_proxy_running()` stays the pidfile-only
-LIVENESS predicate (is the module host up? the zero-downtime swap, the ledger and the status panel ask that); the two are
+LIVENESS predicate (is the module host up? the zero-downtime swap and the ledger ask that); the status panel shows Running only
+when ready and Starting while the child is alive but not ready; the two are
 different questions. Ready means the front end can answer, not that recursion works: the boot query probe in
 `tests/smoke/test_smoke_dns_proxy.py` (which runs after Unbound is up) remains the proof of an actual answer. The rc script
 removes a previous marker only before a fresh launch (a healthy repeated `start` keeps the serving proxy's), its stop removes

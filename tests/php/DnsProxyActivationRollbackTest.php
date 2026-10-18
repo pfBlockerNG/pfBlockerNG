@@ -43,7 +43,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls', 'pfb_test_service_hook',
 		'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_write_config_calls', 'pfb_test_unbound_configure_calls',
 		'pfb_test_unbound_configure_resolver', 'pfb_test_file_notices', 'pfb_test_try_lock_fail', 'pfb_test_lock_held',
-		'pfb_test_lock_events', 'pfb_test_interface_ip', 'pfb_test_interface_info',
+		'pfb_test_lock_events', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_write_config_hook',
 	];
 
 	private string $tmp;
@@ -288,7 +288,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$last = end($seen);
 		$this->assertSame('lan,opt1', $last['active_interface'], 'rendered from the restored Resolver');
 		$this->assertSame('pfb_unbound', $last['python_script'], 'with the module loaded by Unbound again');
-		$this->assertGreaterThanOrEqual(1, $this->startAttempts(), 'and Unbound was started with it');
+		$this->assertSame(1, $this->startAttempts(), 'and Unbound was started once with it');
 		$conf = (string) file_get_contents("{$this->tmp}/unbound.conf");
 		$this->assertStringContainsString('python-script: pfb_unbound.py', $conf, 'the file Unbound starts from names the DNSBL module again');
 		$this->assertStringNotContainsString('pfb_upstream_observer', $conf, 'and no longer the observer');
@@ -352,7 +352,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame(['restart_service', 'stop_service'], $this->proxyCalls);
 
 		// ... Unbound was started again after the restore (the reload's own start, then the rollback's) ...
-		$this->assertGreaterThanOrEqual($before + 2, $this->startAttempts());
+		$this->assertSame($before + 2, $this->startAttempts(), 'the reload and the rollback each started Unbound once');
 
 		// ... and the reload's log says the proxy did not complete, never that it did
 		$log = $this->pfbLog();
@@ -420,6 +420,12 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$moved = config_get_path('unbound');
 		$before = $this->startAttempts();
 
+		// The toggle as config.xml holds it at each write, not only the in-memory copy
+		$committed = [];
+		$GLOBALS['pfb_test_write_config_hook'] = function () use (&$committed): void {
+			$committed[] = $this->toggleStored();
+		};
+
 		// When the activation fails
 		$ok = pfb_dns_proxy_ensure_running();
 
@@ -432,6 +438,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		// ... the requested toggle is Off, so the next apply retries the restore instead of enabling it again ...
 		$this->assertSame('', $this->toggleStored());
+		$this->assertContains('', $committed, 'Off was written to config.xml, not only held in memory');
 
 		// ... and the operator is told that recovery is needed, not that the old integration is back
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
@@ -530,6 +537,17 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		$this->assertTrue(pfb_dns_proxy_roll_back(), 'restored: the old integration runs again');
 		$this->assertResolverIsTheOriginal('rolled back');
+	}
+
+	public function testTheRollbackCalledDirectlyReportsFailureWhileTheSnapshotIsKept(): void
+	{
+		// Given a moved Resolver and a proxy that is still alive after its stop, so the restore is abandoned
+		$this->activate(TRUE);
+		$this->survivesStop = TRUE;
+		$this->proxyLivesButNeverServes();
+
+		$this->assertFalse(pfb_dns_proxy_roll_back(), 'not restored: the caller is told the old integration is not back');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept for the next restore');
 	}
 
 	// -----------------------------------------------------------------------
