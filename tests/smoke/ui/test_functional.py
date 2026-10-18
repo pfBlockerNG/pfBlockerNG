@@ -264,6 +264,15 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdns/config/0/pfb_dns",
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
+    # issue #3515: DNS Reply Logging is edited on pfB-DNS but stored in the DNSBL section (default on).
+    ToggleFlow(
+        name="pfb_py_reply",
+        page="/pfblockerng/pfblockerng_dns.php",
+        field="pfb_py_reply",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply",
+        # Registry default 'on': an absent key means the feature is ON.
+        absent="on",
+    ),
     ToggleFlow(
         name="dnsbl_py_nolog",
         page="/pfblockerng/pfblockerng_dnsbl.php",
@@ -482,6 +491,46 @@ def test_software_page_toggle_post_roundtrip(
             absent="on",
         ),
     )
+
+
+def test_reply_logging_off_survives_unrelated_dnsbl_save(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """DNS Reply Logging stored Off on pfB-DNS survives an unrelated DNSBL save and a reload.
+
+    issue #3515: ``dnsbl/pfb_py_reply`` is stored in the DNSBL section but edited on the
+    pfB-DNS page, and the DNSBL form no longer posts it. An absent key reads as On (the
+    registry default), so a DNSBL save that rebuilt the section without the key would revive
+    logging. The oracle is the raw stored token (presence included) and the checkbox a fresh
+    GET of pfB-DNS renders; the original state is restored in ``finally``.
+    """
+    reply = next(flow for flow in FLOWS if flow.name == "pfb_py_reply")
+    unrelated = next(flow for flow in FLOWS if flow.name == "dnsbl_tld_wildcard")
+    reply_original = helpers.config_get_state(smoke_vm, reply.config_path)
+    unrelated_original = helpers.config_get_state(smoke_vm, unrelated.config_path)
+    try:
+        # UI save 1: Off on the pfB-DNS page (_set_and_confirm asserts the stored value).
+        _set_and_confirm(webui, smoke_vm, reply, reply.off)
+        # UI save 2: an unrelated DNSBL field, flipped away from its stored value.
+        unrelated_now = helpers.config_get(smoke_vm, unrelated.config_path)
+        unrelated_target = unrelated.off if unrelated_now == unrelated.on else unrelated.on
+        _set_and_confirm(webui, smoke_vm, unrelated, unrelated_target)
+        # Raw presence and token: a dropped key reads as On, so only (True, '') proves Off persisted.
+        assert helpers.config_get_state(smoke_vm, reply.config_path) == (True, reply.off), (
+            "the unrelated DNSBL save changed the stored DNS Reply Logging preference"
+        )
+        # Reload: the stored Off must render an unchecked box on a pfB-DNS page that really rendered.
+        page = webui.get(reply.page)
+        assert not looks_like_login_page(page.text), "pfB-DNS GET returned the login form (session lost)"
+        assert "pfB-DNS Settings" in page.text, "pfB-DNS page did not render its settings section"
+        assert reply.field not in scrape_form_fields(page.text), (
+            "pfB-DNS renders DNS Reply Logging checked after the stored Off"
+        )
+    finally:
+        helpers.config_restore_state(smoke_vm, reply.config_path, reply_original)
+        helpers.config_restore_state(smoke_vm, unrelated.config_path, unrelated_original)
 
 
 # --------------------------------------------------------------------------- #
