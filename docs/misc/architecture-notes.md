@@ -417,8 +417,8 @@ bounded at 10 s), from a fresh `config_read_file()` under it through `write_conf
 the lock for the move or restore and, for a restore, stops the proxy only once it holds the lock and has read config.xml
 afresh, so a lock that stays taken or a failed read leaves the proxy serving the Resolver that stayed moved. The stop
 runs under the lock and waits at most 7 s, so the hold is at most about 8 s (the stop plus the read and the write), inside
-the 10 s `try_lock()` of a settings save queued behind it; the restart after an abandoned restore (a second stop and a
-start, up to 14 s) runs after the lock is released. A call with no snapshot and no block of ours takes no lock and stops
+the 10 s `try_lock()` of a settings save queued behind it; the restart after an abandoned restore (a stop, up to 7 s,
+then the start) runs after the lock is released. A call with no snapshot and no block of ours takes no lock and stops
 nothing. A lock that stays taken fails the save with an input error, and abandons the
 move or restore with a `file_notice` (snapshot kept, retried by the next apply). The wizard's reset stops, with an input
 error and the package config unswept, whenever a snapshot survived `pfb_dns_proxy_resolver(FALSE)` (its return value
@@ -512,8 +512,6 @@ which prints the boot timeline.
 - A stopped `pfb_dns_proxy` row shows in Status > Services for every user of the package, also with pfB-DNS off.
 - Turning pfB-DNS on moves Unbound off the client port in the apply and starts the proxy right after: lookups fail for
   the seconds in between. In boot the hook starts the proxy before Unbound is up again, so queries wait on Unbound instead.
-- `rc.start_packages` starts every package rc script once more, and the proxy's `start` replaces a running proxy: after the
-  hook started it in `rc.bootup` it restarts once when the packages start (a module boot long with DNSBL on).
 - A listen address that does not exist yet at boot (DHCP, PPPoE) is skipped by the proxy, which logs it; the next apply
   regenerates the script with the addresses it finds.
 - When the Resolver listened on "All", tunnel addresses that are not assigned interfaces (OpenVPN, WireGuard) and

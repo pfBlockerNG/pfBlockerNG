@@ -17,6 +17,8 @@ use PHPUnit\Framework\TestCase;
  *     was abandoned leaves the Resolver moved, and the proxy must keep serving it until a retry succeeds), and never
  *     launches over a survivor; the proxy listens on the saved Resolver's non-loopback addresses plus loopback, so a
  *     Resolver saved on Localhost only, or on an interface with no address, still gets a proxy;
+ *   - a start over a proxy whose supervisor and child both serve keeps it: nothing is signalled or launched, so the
+ *     package start after the boot hook does not bounce it; a restart always stops first, and starts only when that stop succeeded;
  *   - it stops by TERM, KILL at 5 s, giving up (status 1) at 7 s, signalling only live processes that its
  *     own pidfiles name AND whose command line is the proxy's, so a stale pidfile whose pid was reused can
  *     never get an unrelated process killed;
@@ -708,9 +710,8 @@ final class DnsProxyServiceTest extends TestCase
 		$cycle = ['term', 'sleep', 'sleep', 'sleep', 'sleep', 'sleep', 'kill', 'sleep', 'sleep'];
 		return [
 			'stop'    => ['stop', $cycle],
-			'start'   => ['start', $cycle],
-			// pfSense's default rc_restart is rc_stop then rc_start, and rc_start stops again.
-			'restart' => ['restart', [...$cycle, ...$cycle]],
+			// rc_restart stops, then starts only when that stop succeeded: a survivor fails the restart after one stop
+			'restart' => ['restart', $cycle],
 		];
 	}
 
@@ -734,16 +735,37 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertFileExists($this->pidfile('pfb_dns_proxy.pid'));
 	}
 
-	public function testStartReplacesARunningProxyOnlyAfterItExited(): void
+	public function testAStartThatCannotStopASupervisorWhoseChildDiedFailsAndNeverLaunches(): void
 	{
+		// Given a supervisor that survives TERM and KILL, and a child that is already gone
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], 'never', 'never', TRUE);
+		file_put_contents($this->pidfile('pfb_dns_proxy.pid'), "4242\n");
+		file_put_contents("{$this->dir}/state/procs", "1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[4242] (daemon)\n");
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the pair is not healthy, so the stop runs to its bound (7 ticks) and the start fails on its own, with no launch
+		$this->assertNotContains($status, [0, 124, 137], "rc start must fail on its own: {$output}");
+		$this->assertSame(['term', 'sleep', 'sleep', 'sleep', 'sleep', 'sleep', 'kill', 'sleep', 'sleep'], $this->events());
+		$this->assertSame(['1001'], $this->livePids());
+	}
+
+	public function testRestartReplacesARunningProxyOnlyAfterItExited(): void
+	{
+		// Given a serving proxy
 		$this->moveResolver();
 		$this->generate();
 		$this->arrange([], '2', '1', TRUE);
 
-		[$status, $output] = $this->rc('start');
+		// When it is restarted explicitly: the proxy must take a new process
+		[$status, $output] = $this->rc('restart');
 
-		$this->assertSame(0, $status, "rc start failed: {$output}");
-		$this->assertSame(['term', 'sleep', 'sleep', 'launch'], $this->events(), 'launch only after the old pair exited');
+		// Then it is stopped once and launched once, and the launch comes only after the old pair exited
+		$this->assertSame(0, $status, "rc restart failed: {$output}");
+		$this->assertSame(['term', 'sleep', 'sleep', 'launch'], $this->events(), 'one stop, then one launch after the old pair exited');
 		$this->assertSame(['3001', '3002'], $this->livePids());
 	}
 
@@ -794,6 +816,93 @@ final class DnsProxyServiceTest extends TestCase
 
 		$this->assertSame(0, $status, "rc start failed: {$output}");
 		$this->assertSame(['launch'], $this->events(), 'the unrelated process is neither waited on nor signalled');
+	}
+
+	/** @return array<string,array{string,string,string,string}> supervisor pid, child pid, process table ('@DIR@' = the sandbox), the reused pid */
+	public static function reusedPidRows(): array
+	{
+		return [
+			'the supervisor pidfile names a pid reused by sshd' => ['1003', '1002',
+				"1003|@DIR@/run/pfb_dns_proxy_daemon.pid|||/usr/sbin/sshd -D\n"
+				. "1002|@DIR@/run/pfb_dns_proxy.pid|||python3.11 -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py\n", '1003'],
+			'the child pidfile names a pid reused by sshd' => ['1001', '1002',
+				"1001|@DIR@/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[1002] (daemon)\n"
+				. "1002|@DIR@/run/pfb_dns_proxy.pid|||/usr/sbin/sshd -D\n", '1002'],
+		];
+	}
+
+	public function testSecondStartWhileBothProcessesServeKeepsThemAndLaunchesNothing(): void
+	{
+		// Given a proxy the first start launched: its supervisor and child are both live and named by their pidfiles
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events(), 'precondition: the first start launched the proxy');
+
+		// When the package start runs again after the boot hook already started the proxy
+		[$status, $output] = $this->rc('start');
+
+		// Then the serving pair is kept: no stop, no signal, and no second daemon launch
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events(), 'a second start neither stops nor relaunches a serving proxy');
+		$this->assertSame(['3001', '3002'], $this->livePids());
+	}
+
+	public function testStartWithAChildThatDiedStopsTheSurvivingSupervisorAndLaunchesOnce(): void
+	{
+		// Given a supervisor still alive whose child is gone: the child pidfile names a pid that is no longer running
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', TRUE);
+		file_put_contents($this->pidfile('pfb_dns_proxy.pid'), "4242\n");
+		file_put_contents("{$this->dir}/state/procs", "1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[4242] (daemon)\n");
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the bounded recovery runs: the supervisor gets TERM, both pidfiles are cleared, and the proxy launches once
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['term', 'sleep', 'sleep', 'launch'], $this->events());
+		$this->assertSame(['3001', '3002'], $this->livePids());
+	}
+
+	public function testAStaleMarkerLeavesEvenAServingProxyAlone(): void
+	{
+		// Given a serving proxy, and a script written for a snapshot that has since changed
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange(['GATE_SAVED' => base64_encode('{"another":"snapshot"}')], '2', '1', TRUE);
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the stale script does nothing at all, the health check included: the next apply regenerates it
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame([], $this->events(TRUE));
+		$this->assertSame(['1001', '1002'], $this->livePids());
+	}
+
+	#[DataProvider('reusedPidRows')]
+	public function testAStartNeverCountsAReusedPidAsHealthyAndNeverSignalsIt(string $supervisor, string $child, string $procs, string $reused): void
+	{
+		// Given a pidfile that names a pid now reused by an unrelated process (sshd), beside a live proxy process
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '1', '1');
+		file_put_contents($this->pidfile('pfb_dns_proxy_daemon.pid'), "{$supervisor}\n");
+		file_put_contents($this->pidfile('pfb_dns_proxy.pid'), "{$child}\n");
+		file_put_contents("{$this->dir}/state/procs", str_replace('@DIR@', $this->dir, $procs));
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the pair is not taken for healthy: the proxy's own process is stopped and relaunched, and the unrelated
+		// process is neither signalled nor waited on
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['term', 'sleep', 'launch'], $this->events());
+		$this->assertContains($reused, $this->livePids(), 'the reused pid was never signalled');
 	}
 
 	// -----------------------------------------------------------------------

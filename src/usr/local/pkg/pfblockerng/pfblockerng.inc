@@ -4030,6 +4030,9 @@ function pfb_dns_proxy_listen(array $saved): array {
  * shell-quoted. Loopback is always among the addresses, so a Resolver saved on Localhost only, or on an
  * interface with no address, still gets a proxy. Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled
  * only while its command line is the proxy's.
+ *
+ * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
+ * bounce it. A restart stops first and starts only when that stop succeeded.
  */
 function pfb_dns_proxy_service(): void {
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
@@ -4074,6 +4077,23 @@ EOF;
 		$marker = escapeshellarg((string) PfbConfig::read('dns/pfb_dns_saved'));
 		$rc['start'] .= <<<EOF
 	[ "\${savedcheck}" = {$marker} ] || exit 0
+
+	# Already serving: both pidfiles name our live processes (the stop's own checks), so a second start keeps them
+	ours=0
+	for pidfile in {$daemonpid} {$childpid}; do
+		pid=''
+		if [ -r "\${pidfile}" ]; then
+			read -r pid < "\${pidfile}" || true
+		fi
+		case "\${pid}" in
+			''|*[!0-9]*) continue ;;
+		esac
+		args="\$(/bin/ps -ww -o args= -p "\${pid}" 2>/dev/null)"
+		case "\${args}" in
+			*pfb_dns_proxy*) ours="\$((ours + 1))" ;;
+		esac
+	done
+	[ "\${ours}" -eq 2 ] && exit 0
 
 	# Ensure all processes are stopped; never launch over a survivor
 	rc_stop || return 1
@@ -4123,6 +4143,9 @@ EOF;
 	/bin/rm -f {$daemonpid} {$childpid}
 
 EOF;
+
+	// A survivor must fail the restart: the start's healthy check would otherwise report success over it
+	$rc['restart'] = "\trc_stop || return 1\n\trc_start\n";
 
 	write_rcfile($rc);
 }
