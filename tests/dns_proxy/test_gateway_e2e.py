@@ -1,6 +1,6 @@
 """End-to-end (issue #3513): the Go gateway, built here with `go build`, in front of a REAL Unbound (Docker, host
-network, PROXYv2 port) with the REAL Python decider (`pfb_dns_proxy.py --decision-fd 3`) as its child, the ACL
-file written in pfSense's shape.
+network, PROXYv2 port) with the REAL Python decider (`pfb_dns_proxy.py --decision-fd 3`) as its child, Unbound's
+config laid out as pfSense lays it out (`unbound.conf` includes `access_lists.conf` and has rows of its own).
 
 No Go toolchain and no Docker are FAILURES, never skips: these tests are the evidence that the three pieces
 agree. The module writes its logs under /var/log/pfblockerng, which a developer machine does not have (and a test
@@ -57,16 +57,17 @@ BOOT_WATCHDOG = 45.0  # for the decider to boot the real module; under hang_guar
 DENIED_CLIENT = "127.0.0.10"
 ALLOWED_ANSWER = (ALLOWED, dnswire.TYPE_A, bytes([192, 0, 2, 77]))
 
-# What pfSense's unbound_acls_config() writes (note the trailing space after `allow_snoop`), plus two custom rows:
-# one client refused, one denied.
+# What pfSense's unbound_acls_config() writes into access_lists.conf (note the trailing space after `allow_snoop`),
+# plus one client refused.
 ACL_FILE = "\n".join([
     "#LAN",
     "access-control: 127.0.0.1/32 allow_snoop",
     "access-control: 127.0.0.0/8 allow_snoop ",
     f"access-control: {REFUSED_CLIENT}/32 refuse",
-    f"access-control: {DENIED_CLIENT}/32 deny",
     "",
 ])  # fmt: skip
+# Rows in unbound.conf itself, outside access_lists.conf: an admin's custom option, here one client denied.
+CLAUSE_ROWS = f"access-control: {DENIED_CLIENT}/32 deny\n"
 
 # Redirects what the module opens under /var/log/pfblockerng into PFB_TEST_LOG_DIR; imported first by every
 # interpreter that has this directory on PYTHONPATH.
@@ -210,11 +211,22 @@ class Running:
 
 @contextlib.contextmanager
 def _gateway_process(
-    gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path, acl_text: str, flags: list[str]
+    gateway_binary: Path,
+    module_dir: Path,
+    unbound: RunningUnbound,
+    tmp_path: Path,
+    acl_text: str,
+    flags: list[str],
+    clause_rows: str = CLAUSE_ROWS,
 ) -> Iterator[tuple[GatewayProcess, Path]]:
-    """The gateway with `flags` added: the REAL decider on the module dir, Unbound's PROXYv2 port upstream."""
+    """The gateway with `flags` added: the REAL decider on the module dir, Unbound's PROXYv2 port upstream.
+
+    The gateway is given an unbound.conf that includes access_lists.conf (`acl_text`) and carries `clause_rows`.
+    """
     acl = tmp_path / "access_lists.conf"
     acl.write_text(acl_text, encoding="utf-8")
+    conf = tmp_path / "unbound.conf"
+    conf.write_text(f'server:\n    include: "{acl}"\n{clause_rows}', encoding="utf-8")
     log_dir = tmp_path / "pfb-logs"
     log_dir.mkdir()
     site = tmp_path / "site"
@@ -223,7 +235,7 @@ def _gateway_process(
     env = {**os.environ, "PYTHONPATH": str(site), "PFB_TEST_LOG_DIR": str(log_dir)}
     argv = [
         str(gateway_binary), "--listen", "127.0.0.1", "--port", "0",
-        "--upstream", f"127.0.0.1:{unbound.port}", "--acl-file", str(acl), *flags,
+        "--upstream", f"127.0.0.1:{unbound.port}", "--unbound-conf", str(conf), *flags,
         "--",
         sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--decision-fd", "3", "--module-dir", str(module_dir),
     ]  # fmt: skip
@@ -236,13 +248,15 @@ def _gateway_process(
 
 
 @pytest.fixture
-def gateway(gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path) -> Iterator[Running]:
+def gateway(
+    gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path, acl_text: str
+) -> Iterator[Running]:
     """The gateway on a loopback port: the REAL decider on the module dir, Unbound's PROXYv2 port upstream.
 
     Fixtures that change what the module loads at boot (`safesearch_csv`, `bypass_list`) must come first in a test's
     parameters: pytest builds them in order and the module reads its files once.
     """
-    with _gateway_process(gateway_binary, module_dir, unbound, tmp_path, ACL_FILE, []) as (process, log_dir):
+    with _gateway_process(gateway_binary, module_dir, unbound, tmp_path, acl_text, []) as (process, log_dir):
         yield Running(process, process.server(), log_dir)
 
 
@@ -329,6 +343,78 @@ def test_denied_client_gets_no_reply_over_udp_and_a_closed_connection_over_tcp(g
             assert stream.recv(1) == b""
         except ConnectionResetError:
             pass  # the gateway shut the connection before reading anything
+
+
+@pytest.fixture(scope="module")
+def nomatch_client() -> str:
+    """An address of this host that no ACL row names and the rig's Unbound refuses: the Docker bridge's.
+
+    A loopback address will not do: Unbound's own defaults allow 127.0.0.0/8 and ::1.
+    """
+    found = subprocess.run(
+        ["docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    address = found.stdout.strip()
+    if found.returncode != 0 or not address or address.startswith("127."):
+        pytest.fail(
+            f"no non-loopback host address for the no-row client: docker said {found.stdout!r} {found.stderr!r}"
+        )
+    return address
+
+
+def _is_refused(wire: bytes) -> bool:
+    parsed = dnswire.parse(wire)
+    return (parsed.rcode, parsed.answers) == (5, [])
+
+
+# E9: Unbound refuses a client that matches no `access-control` row; so does the gateway, listed name or not
+@pytest.mark.parametrize("send", [_udp, _tcp], ids=["udp", "tcp"])
+def test_a_client_no_acl_row_names_is_refused_even_for_a_listed_name(
+    gateway: Running, nomatch_client: str, send: Callable[..., bytes]
+) -> None:
+    assert _answers(send(gateway.server, BLOCKED, ALLOWED_CLIENT)) == [(BLOCKED, dnswire.TYPE_A, VIP4)]  # before-state
+    for name in (BLOCKED, ALLOWED):
+        wire = send(gateway.server, name, nomatch_client)
+        assert _is_refused(wire), (
+            f"{nomatch_client} matches no row: want REFUSED with no answer for {name}, got rcode "
+            f"{dnswire.parse(wire).rcode} answers {_answers(wire)}"
+        )
+
+
+@pytest.mark.parametrize("transport", ["dot", "doh-get", "doh-post"])
+def test_a_client_no_acl_row_names_is_refused_over_dot_and_doh(
+    tls_gateway: TlsRunning, nomatch_client: str, transport: str
+) -> None:
+    assert tls_gateway.a_records(transport, BLOCKED) == [
+        f"{BLOCKED} A {DNSBL_IPV4}"
+    ]  # before-state: a client with a row
+    if transport == "dot":
+        wire = tls_gateway.dot_wire(BLOCKED, nomatch_client)
+    else:
+        wire = tls_gateway.doh_wire(BLOCKED, transport.removeprefix("doh-").upper(), source=nomatch_client)
+    assert _is_refused(wire), (
+        f"{nomatch_client} matches no row: want REFUSED with no answer over {transport}, got rcode "
+        f"{dnswire.parse(wire).rcode} answers {_answers(wire)}"
+    )
+
+
+@pytest.fixture
+def granted_gateway(
+    gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path, nomatch_client: str
+) -> Iterator[Running]:
+    """The gateway whose unbound.conf itself (no included file) grants `nomatch_client`, as pfBlockerNG's clause."""
+    clause = f"access-control: {nomatch_client}/32 allow\n" + CLAUSE_ROWS
+    with _gateway_process(gateway_binary, module_dir, unbound, tmp_path, ACL_FILE, [], clause) as (process, log_dir):
+        yield Running(process, process.server(), log_dir)
+
+
+def test_a_client_granted_only_by_a_row_of_unbound_conf_itself_gets_the_vip(
+    granted_gateway: Running, nomatch_client: str
+) -> None:
+    """The same client and name as E9, refused there: only this unbound.conf row (in no included file) differs."""
+    for send in (_udp, _tcp):
+        assert _answers(send(granted_gateway.server, BLOCKED, nomatch_client)) == [(BLOCKED, dnswire.TYPE_A, VIP4)]
 
 
 # E5
