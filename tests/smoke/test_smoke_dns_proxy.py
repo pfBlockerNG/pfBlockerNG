@@ -85,7 +85,7 @@ import re
 import shlex
 import subprocess
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -1932,6 +1932,7 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
 _ABORT_DIR = "/tmp/pfb3515_abort"
 _LOCK_HELD = f"{_ABORT_DIR}/lock_held"
 _LOCK_GO = f"{_ABORT_DIR}/lock_go"
+_LOCK_FAILED = f"{_ABORT_DIR}/lock_failed"
 _DELETE_OUT = f"{_ABORT_DIR}/delete.out"
 _RECOVERING = "restoring the DNS proxy, the package's service entries and its menu entry"
 # The lines of the shipped /etc/inc/pkg-utils.inc delete_package_xml() that run BEFORE the package's hook, and its call
@@ -1939,6 +1940,18 @@ _CORE_PRELUDE_LINES = (
     r"stop_service(\$service\['name'\])\|unlink_if_exists(\$prefix\|config_del_path(\"installedpackages/service"
     r"\|eval_once(\$pkg_config\['custom_php_pre_deinstall_command'\])"
 )
+
+
+def _await_delete(vm: SmokeVM, done: Callable[[str], bool], *, timeout: float) -> str:
+    """Poll pkg delete's output until ``done`` holds and return it; an expiry carries the output so far.
+
+    The diagnostics archive omits /tmp, so this error is the only record of what pkg printed.
+    """
+    try:
+        h.wait_until(lambda: done(h.read_log_file(vm, _DELETE_OUT)), timeout=timeout, interval=2.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\n{_DELETE_OUT} so far:\n{h.read_log_file(vm, _DELETE_OUT)}") from exc
+    return h.read_log_file(vm, _DELETE_OUT)
 
 
 def _delete_in_background(vm: SmokeVM) -> None:
@@ -1973,26 +1986,43 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
     _say(f"pkg: {vm.ssh('pkg --version').stdout.strip()}; pfSense: {vm.ssh('cat /etc/version').stdout.strip()}")
     _say(
         "shipped core, /etc/inc/pkg-utils.inc:\n"
-        + vm.ssh(f"grep -n '{_CORE_PRELUDE_LINES}' /etc/inc/pkg-utils.inc").stdout
+        + vm.ssh("grep", "-n", _CORE_PRELUDE_LINES, "/etc/inc/pkg-utils.inc").stdout
     )
     try:
         before, raw = _query(client, rig.names.blocked)
         assert h.is_vip(before), f"before: the listed name is not blocked with the VIP: {before}\n{raw}"
         assert pkg_installed_version(vm) is not None, "before: the package is not installed"
 
+        # lock() takes "{$g['tmp_path']}/pfb_dns_config.lock": $g needs globals.inc first, as pkg-utils.inc loads it.
         holder = (
-            f'require_once("util.inc"); $k = lock("pfb_dns_config", LOCK_EX); touch("{_LOCK_HELD}"); $i = 0; '
+            'require_once("globals.inc"); require_once("util.inc"); $k = lock("pfb_dns_config", LOCK_EX); '
+            f'if (!is_resource($k)) {{ touch("{_LOCK_FAILED}"); exit(1); }} touch("{_LOCK_HELD}"); $i = 0; '
             f'while (!file_exists("{_LOCK_GO}") && $i++ < 1800) {{ usleep(100000); }} unlock($k);'
         )
         vm.ssh(f"nohup {h.PHP_BIN} -r '{holder}' >/dev/null 2>&1 &")
-        h.wait_until(lambda: h.hook_marker_exists(vm, _LOCK_HELD), timeout=60.0, interval=1.0)
+        h.wait_until(
+            lambda: h.hook_marker_exists(vm, _LOCK_HELD) or h.hook_marker_exists(vm, _LOCK_FAILED),
+            timeout=60.0,
+            interval=1.0,
+        )
+        assert h.hook_marker_exists(vm, _LOCK_HELD), "the holder could not take pfb_dns_config: lock() gave no handle"
+        # Fail fast unless a fresh process, started as pkg's hook is, finds the lock taken.
+        probe_php = (
+            'require_once("globals.inc"); require_once("util.inc"); '
+            '$x = try_lock("pfb_dns_config", 1); echo is_resource($x) ? "ACQUIRED" : "NULL";'
+        )
+        probe = vm.ssh(f"{h.PHP_BIN} -r '{probe_php}'").stdout.strip()
+        assert probe == "NULL", (
+            f"a fresh process got pfb_dns_config while the holder has it ({probe}); lock files:\n"
+            + vm.ssh("ls -l /tmp/pfb_dns_config.lock /pfb_dns_config.lock 2>&1").stdout
+        )
 
         _delete_in_background(vm)
-        # The recovery announces itself before it waits for the lock: every restore attempt of the removal failed by now
-        h.wait_until(lambda: _RECOVERING in h.read_log_file(vm, _DELETE_OUT), timeout=300.0, interval=1.0)
+        # The recovery announces itself before it waits for the lock; an RC= first means it never waited.
+        out = _await_delete(vm, lambda text: _RECOVERING in text or "RC=" in text, timeout=300.0)
+        assert _RECOVERING in out, f"pkg delete finished without the recovery waiting for the config lock:\n{out}"
         vm.ssh(f"touch {_LOCK_GO}")
-        h.wait_until(lambda: "RC=" in h.read_log_file(vm, _DELETE_OUT), timeout=300.0, interval=2.0)
-        out = h.read_log_file(vm, _DELETE_OUT)
+        out = _await_delete(vm, lambda text: "RC=" in text, timeout=300.0)
 
         assert "removal was stopped" in out, f"pkg delete did not stop the removal:\n{out}"
         assert "service entries were registered again and the DNS proxy is running" in out, (
