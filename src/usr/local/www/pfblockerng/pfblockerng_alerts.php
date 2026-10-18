@@ -3616,7 +3616,9 @@ if ($pfb['dnsbl'] === PfbToggle::On) {
 		['min' => 0, 'max' => 2000]
 	))->setHelp('DNSBL Filter Limit Entries')
 	  ->setAttribute('title', 'Enter number of \'DNSBL Filter Limit Entries\' to view. Set to \'0\' to disable');
+}
 
+if (pfb_dns_reply_log_active()) {
 	$group->add(new Form_Input(
 		'dnsfilterlimitentries',
 		'DNS Reply Filter Limit',
