@@ -17,6 +17,7 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --pfsense-config P pfSense config.xml to read the DNS Resolver's DoT settings from (/cf/conf/config.xml)
   --no-module        pfB-DNS with DNSBL off: boot no pfb_unbound.py and forward every query to Unbound (see below)
   --observer         create the observer socket (see below); not with --no-module
+  --reply-log        with --no-module: log each reply it relays to dns_reply.log, as the module does (see below)
   --user NAME        give up root for NAME after binding the sockets and before the module boots (default: keep it)
 
 --user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then the supplementary groups
@@ -28,6 +29,14 @@ stays where it is and there is no observer socket (--observer is refused with it
 checks and parses is forwarded to Unbound as it is and Unbound's reply relayed as it is (silence is a SERVFAIL, as in
 the module mode); there are no decisions and no MODDONE pass. Listeners, DoT, the caps, the timeouts and --user are
 the same as without it.
+
+--reply-log (only with --no-module): the DNS Reply log of the module mode without the module (issue #3515). The proxy
+imports the shipped pfb_unbound.py from its own source directory (--module-dir stays unread), reads no feed and decides
+nothing, and logs each reply it relays with the module's own row writer into /var/log/pfblockerng/dns_reply.log, so
+Reports and Stats read the same rows (client, name, type, TTL, answer, GeoIP). It is for the pfSense DNS Reply Logging
+preference being on; without the flag nothing is imported, started or written. Logging cannot change an answer: a row
+that fails costs one error line and the rows after it still try. A reply log that cannot start (the shipped source
+missing, the log pipeline refusing) is one error line and the proxy forwards without it.
 
 Upstream blocks (issue #267): Unbound rewrites every reply it sends (RA set, AA clear, the upstream's EDNS options
 dropped), so the proxy cannot tell from a relayed reply that the upstream blocked it. While the Resolver forwards,
@@ -92,6 +101,7 @@ from time import monotonic
 from types import ModuleType
 from typing import Any, NamedTuple
 
+import dns_reply_log
 import dnswire
 import pfsense_dot
 import proxyv2
@@ -116,6 +126,7 @@ MAX_REPORT_OPTIONS = 8  # EDNS options in one observer report; an upstream reply
 MAX_REPORT_OPTION_HEX = 8192  # hex digits of one option's data (4 KiB: more than an upstream UDP reply holds)
 MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
 Forward = Callable[[bytes], Awaitable[bytes | None]]
+ReplyLogger = Callable[[dnswire.Message, str, bytes | None], None]  # query, client, Unbound's reply
 
 
 # --- module lifecycle ----------------------------------------------------------------------------
@@ -346,8 +357,15 @@ class _Client:
 
 
 class Frontend:
-    def __init__(self, module: ModuleType | None, upstream: tuple[str, int], timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        module: ModuleType | None,
+        upstream: tuple[str, int],
+        timeout: float = 5.0,
+        reply_log: ReplyLogger | None = None,
+    ) -> None:
         self.module = module
+        self.reply_log = reply_log  # the module logs its own replies; this is only for module is None
         self.upstream = upstream
         self.timeout = timeout
         self.udp_overloaded = False
@@ -409,6 +427,8 @@ class Frontend:
         question = query.questions[0]
         if self.module is None:
             reply = await self._ask(forward, wire, question)
+            if self.reply_log is not None:
+                self.reply_log(query, client_ip, reply)
             return _error(query, RCODE_SERVFAIL) if reply is None else reply
         qstate = shim.module_qstate(
             shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags
@@ -861,9 +881,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--observer", action="store_true", help="listen for the upstream observer's reports (needs the module)"
     )
+    parser.add_argument(
+        "--reply-log", action="store_true", help="log each relayed reply to dns_reply.log (needs --no-module)"
+    )
     args = parser.parse_args(argv)
     if args.observer and args.no_module:
         parser.error("--observer cannot be used with --no-module")
+    if args.reply_log and not args.no_module:
+        parser.error("--reply-log needs --no-module: the module logs its own replies")
     try:
         parse_hostport(args.upstream)
     except ValueError as exc:
@@ -882,6 +907,15 @@ def _dot_setup(config_path: str) -> tuple[pfsense_dot.DotSettings | None, ssl.SS
         return None, None
 
 
+def _open_reply_log() -> dns_reply_log.ReplyLog | None:
+    """The reply log, or None after one error line: DNS must not go down with its log; a restart would not fix it."""
+    try:
+        return dns_reply_log.ReplyLog()
+    except Exception as exc:
+        shim.log_err(f"DNS Reply logging is off, serving without it: {exc!r}")
+        return None
+
+
 async def serve(args: argparse.Namespace) -> None:
     """Bind, drop root for `args.user`, boot the module (not with `args.no_module`), serve until SIGINT or SIGTERM,
     then shut everything down.
@@ -891,7 +925,8 @@ async def serve(args: argparse.Namespace) -> None:
     are logged in the "listening on" line, UDP+TCP first, then DoT. A user that does not exist, a drop the OS refuses
     (DropError) or no address that can be bound for UDP+TCP (ListenError) raises before the module boots; an address
     that cannot be bound is logged and skipped, and a DoT configuration that cannot be served (DotConfigError) is
-    logged as one error line and leaves DoT off.
+    logged as one error line and leaves DoT off. With `args.reply_log` the reply log starts after the drop too, so the
+    log file it writes belongs to `args.user`; one that cannot start is logged as one error line and left off.
     """
     account = lookup_user(args.user) if args.user is not None else None
     dot, dot_context = _dot_setup(args.pfsense_config) if args.dot else (None, None)
@@ -907,11 +942,12 @@ async def serve(args: argparse.Namespace) -> None:
         if account is not None:
             drop_privileges(account)
         module = None if args.no_module else boot(args.module_dir)
+        reply_log = _open_reply_log() if args.reply_log else None
     except BaseException:
         for listener in (*listeners, *dot_listeners):
             listener.close()
         raise
-    frontend = Frontend(module, parse_hostport(args.upstream), args.timeout)
+    frontend = Frontend(module, parse_hostport(args.upstream), args.timeout, reply_log)
     try:
         bound = await frontend.serve_listeners(listeners)
         dot_bound = await frontend.serve_listeners(dot_listeners, dot_context)
@@ -930,6 +966,8 @@ async def serve(args: argparse.Namespace) -> None:
         await frontend.stop()
         if module is not None:
             shutdown(module)
+        if reply_log is not None:
+            reply_log.close()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
