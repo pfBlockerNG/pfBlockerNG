@@ -142,15 +142,20 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'nor its rc script');
 	}
 
-	public function testTheApplyCallsItOnlyFromTheBranchThatDoesNotReload(): void
+	public function testTheApplyCallsItAfterTheReloadBranchWhateverTheDnsblMode(): void
 	{
 		$source = (string) file_get_contents(self::APPLY);
 
 		$this->assertSame(1, substr_count($source, 'pfb_dns_proxy_ensure_running('), 'one call site');
-		$this->assertStringContainsString(
-			"\t\t\tpfb_dnsbl_cache('save');\n\t\t}\n\t}\n\telseif (\$mode === 'enabled') {\n\t\tpfb_dns_proxy_ensure_running();\n\t}\n",
+		$this->assertMatchesRegularExpression(
+			"/\\n\\t\\t\\tpfb_dnsbl_cache\\('save'\\);\\n\\t\\t}\\n\\t}\\n(?:\\n?\\t\\/\\/[^\\n]*\\n)*\\tpfb_dns_proxy_ensure_running\\(\\);\\n/",
 			$source,
-			'it is the else of the reload predicate, after the reload branch (which restarted the proxy) has closed'
+			'a statement of its own after the reload branch has closed: pfB-DNS runs with DNSBL off, where the mode is not enabled'
+		);
+		$this->assertDoesNotMatchRegularExpression(
+			"/\\{\\s*pfb_dns_proxy_ensure_running\\(\\);\\s*\\}/",
+			$source,
+			'not inside a branch of the DNSBL mode'
 		);
 	}
 }

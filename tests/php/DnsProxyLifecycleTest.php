@@ -377,6 +377,22 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], 'nothing was restored, so nothing to regenerate');
 	}
 
+	public function testRemovalKeepsTheProxyRcScriptWhileASnapshotSurvivesTheRestore(): void
+	{
+		// Given a moved Resolver that cannot be put back (another save holds the config lock) and the rc script on disk
+		$this->seedMovedResolver();
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+
+		// When the package is removed
+		pfb_dns_proxy_deinstall();
+
+		// Then the script stays: the proxy keeps serving the moved Resolver, and the operator's notice says to stop it
+		// from Status > Services, which can only run a script that exists
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is kept');
+		$this->assertFileExists(PFB_DNS_PROXY_RCFILE);
+	}
+
 	public function testRemovalOfABoxThatNeverMovedTheResolverStopsTheProxyAndChangesNothingElse(): void
 	{
 		$GLOBALS['config']['unbound'] = self::originalResolver();
