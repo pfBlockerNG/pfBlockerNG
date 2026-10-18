@@ -90,14 +90,22 @@ def _check_member(member: tarfile.TarInfo, root: Path) -> None:
 
 
 def _extract(archive: Path, root: Path) -> None:
-    with tarfile.open(archive) as tar:
-        members = tar.getmembers()
-        for member in members:
-            _check_member(member, root)
-        if hasattr(tarfile, "data_filter"):
+    # Only tarfile.data_filter follows links; _check_member cannot see a chain (a -> ., then a/b -> ..).
+    if not hasattr(tarfile, "data_filter"):
+        raise ToolchainError("this Python has no tarfile.data_filter, so no archive can be extracted safely")
+    try:
+        with tarfile.open(archive) as tar:
+            members = tar.getmembers()
+            names: set[str] = set()
+            for member in members:
+                _check_member(member, root)
+                name = os.path.normpath(member.name)
+                if name in names:
+                    raise ToolchainError(f"refusing archive member {member.name!r}: duplicate of an earlier member")
+                names.add(name)
             tar.extractall(root, members=members, filter="data")
-        else:
-            tar.extractall(root, members=members)  # every member was checked above
+    except tarfile.TarError as exc:
+        raise ToolchainError(f"refusing to extract {archive.name}: {exc}") from exc
 
 
 def _fetch_verified(fetch: Callable[[str], BinaryIO], url: str, sha256: str, dest: Path) -> None:
