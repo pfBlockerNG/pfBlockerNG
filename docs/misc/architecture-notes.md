@@ -502,8 +502,11 @@ Resolver restart. pfB-DNS therefore keeps the python keys naming the observer in
 functions only (the non-verbose boot path loads none of pfBlockerNG; the rc script itself refuses without a snapshot). The
 same hook keeps the proxy up after any Resolver restart from the GUI. On a RAM-disk `/var` the restore earlyshellcmd
 (`pfb_dnsbl_cache('conf')`) is registered while DNSBL or pfB-DNS is on, so the hook is staged before rc.bootup. Pinned by
-`DnsProxyBootTest`, `tests/test_dnsbl_chroot_teardown_contract.py` and the reboot test in `tests/smoke/test_smoke_dns_proxy.py`,
-which prints the boot timeline.
+`DnsProxyBootTest`, `tests/test_dnsbl_chroot_teardown_contract.py` and the reboot test in `tests/smoke/test_smoke_dns_proxy.py`:
+a probe it plants in `/etc/rc.custom_boot_early` queries 127.0.0.1:53 from early boot, the first correct answers must come
+before `rc.start_packages` begins, and the proxy must keep its pids and keep answering through the package stage. It
+prints the daemon launch, the listening socket, Unbound's process start, the first correct answers and Unbound's sync as
+separate times; a launch is not an answer.
 
 **Known limits.**
 
@@ -511,7 +514,9 @@ which prints the boot timeline.
   off: the restore returns the options saved at toggle-on, not the edited ones.
 - A stopped `pfb_dns_proxy` row shows in Status > Services for every user of the package, also with pfB-DNS off.
 - Turning pfB-DNS on moves Unbound off the client port in the apply and starts the proxy right after: lookups fail for
-  the seconds in between. In boot the hook starts the proxy before Unbound is up again, so queries wait on Unbound instead.
+  the seconds in between. In boot the hook starts the proxy before Unbound is up again: until Unbound's process is up
+  (the reboot smoke prints both times) a forwarded query gets SERVFAIL, while with DNSBL on a listed name is already
+  answered by the proxy.
 - A listen address that does not exist yet at boot (DHCP, PPPoE) is skipped by the proxy, which logs it; the next apply
   regenerates the script with the addresses it finds.
 - When the Resolver listened on "All", tunnel addresses that are not assigned interfaces (OpenVPN, WireGuard) and
