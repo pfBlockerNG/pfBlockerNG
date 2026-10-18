@@ -55,7 +55,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 
 	/**
 	 * @param array<string,mixed> $scenario extra worker scenario keys: stored, permanent, state (a directory a second run continues from)
-	 * @return array{returned:bool,snapshot:bool,interface:?string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,exit:int,state:string}
+	 * @return array{returned:bool,snapshot:bool,interface:?string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,rawFeed:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,exit:int,state:string}
 	 */
 	private function removal(string $failure, string $keep, array $scenario = []): array
 	{
@@ -107,6 +107,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertTrue($removal['dbCanary'], 'the package data directory is kept');
 		$this->assertTrue($removal['logCanary'], 'so is the log directory');
 		$this->assertTrue($removal['manifest'], 'so is the DNSBL manifest the proxy loads its blocklists from when it starts again');
+		$this->assertTrue($removal['rawFeed'], 'and the raw feed the proxy reads its blocklists from, which the disable pass would tear down');
 		$this->assertTrue($removal['rcScript'], 'the proxy\'s rc script is kept');
 		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
 		$this->assertNotSame([], array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped')
@@ -279,13 +280,15 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertFalse($removal['pending'], 'the teardown ran: the pending-changes marker is cleared');
 		$this->assertFalse($removal['rcScript'], 'the proxy\'s rc script is removed');
 		$this->assertFalse($removal['manifest'], 'and the DNSBL manifest, which nothing hosts any more');
+		$this->assertFalse($removal['rawFeed'], 'and the raw feed it was read from');
 		$this->assertSame($keep === 'on', $removal['dbCanary'], 'the data directory goes only with Keep Settings off');
 		$this->assertSame($keep === 'on', $removal['logCanary'], 'so does the log directory');
 		$this->assertSame($keep === 'on', in_array('pfblockerngipsettings', $removal['sections'], TRUE), 'and the package config sections');
 		$this->assertSame(self::THEIRS, $removal['services'], 'pfSense\'s deletion of the package\'s registrations stands: only other packages\' remain');
 		$this->assertSame([], array_filter($removal['menus'], static fn (string $menu): bool => str_contains($menu, 'pfBlockerNG')), 'and its menu entry');
 		$this->assertEqualsCanonicalizing(self::THEIRS, $removal['running'], 'nothing of the package runs');
-		$this->assertSame([], array_filter($removal['events'], static fn (string $event): bool => str_starts_with($event, 'start:')), 'and nothing was started');
+		$this->assertSame([], array_filter($removal['events'], static fn (string $event): bool => str_starts_with($event, 'start:') && !str_ends_with($event, ':ignored')),
+			'and nothing was started: a start aimed at an unregistered service is ignored by pfSense and is not one');
 		$this->assertSame([], $removal['notices'], 'no notice: nothing went wrong');
 	}
 
