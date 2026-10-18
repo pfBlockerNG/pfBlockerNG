@@ -11,10 +11,35 @@ from __future__ import annotations
 import importlib
 import json
 import subprocess
+from datetime import datetime, timedelta
+from functools import cache
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+
+BOOTSTRAP = Path(__file__).resolve().parent / "php" / "bootstrap.php"
+
+
+@cache
+def _registry_local_paths() -> frozenset[str]:
+    """Every ``sync: local`` key of the shipped registry, as the config path a seed would write (executed PHP)."""
+    script = (
+        "[, $boot] = $argv; require $boot;"
+        "$out = [];"
+        "foreach (pfb_cfg_registry() as $key => $entry) {"
+        "    if (($entry['sync'] ?? '') === 'local') {"
+        "        [$section, $leaf] = explode('/', $key, 2);"
+        "        $out[] = PFB_SECTIONS[$section] . '/' . $leaf;"
+        "    }"
+        "}"
+        "echo json_encode($out);"
+    )
+    result = subprocess.run(
+        ["php", "-r", script, "--", str(BOOTSTRAP)], capture_output=True, check=True, text=True, encoding="utf-8"
+    )
+    return frozenset(json.loads(result.stdout))
 
 
 @pytest.fixture
@@ -148,6 +173,44 @@ def test_every_seeded_leaf_both_nodes_hold_differs_between_them(hp: ModuleType) 
     assert same == [], f"seeded local leaves equal on both nodes (they would prove nothing): {same}"
 
 
+def test_every_sync_local_registry_key_is_seeded_on_a_node_or_excluded_with_its_reason(hp: ModuleType) -> None:
+    registry = _registry_local_paths()
+    seeded = (
+        set(hp.node_local_leaves("A", vip_uniqid="u"))
+        | set(hp.node_local_leaves("B", vip_uniqid="u"))
+        | set(hp.GATEWAY_LEAVES)
+    )
+    excluded = set(hp.UNSEEDED_LOCAL_KEYS)
+
+    missing = sorted(registry - seeded - excluded)
+    assert not missing, f"sync:local keys neither seeded nor excluded: {missing}"
+    assert not excluded & seeded, f"keys both seeded and excluded: {sorted(excluded & seeded)}"
+    assert excluded <= registry, f"exclusions that are not sync:local registry keys: {sorted(excluded - registry)}"
+    assert all(reason.strip() for reason in hp.UNSEEDED_LOCAL_KEYS.values()), "an excluded key has no reason"
+
+
+def test_every_seeded_registry_key_holds_a_value_on_both_nodes_except_the_dnsbl_vip_reference(hp: ModuleType) -> None:
+    registry = _registry_local_paths()
+    a = set(hp.node_local_leaves("A", vip_uniqid="u")) & registry
+    b = set(hp.node_local_leaves("B", vip_uniqid="u")) & registry
+
+    assert a ^ b == {f"{hp.DNSBL}/pfb_dnsvip4"}, f"seeded on one node only: {sorted(a ^ b)}"
+
+
+def test_the_seeded_numeric_leaves_are_values_the_package_reads_as_given(hp: ModuleType) -> None:
+    """A seed the package clamps or ignores proves nothing about "B kept its own": each must read back as seeded."""
+    numeric = ("log_max_", "pfb_log_trim_margin_pct", "pfb_alias_delta_batch", "pfb_dnsport", "pfb_py_cache_max")
+    for tag in ("A", "B"):
+        leaves = hp.node_local_leaves(tag, vip_uniqid="u")
+        for path, value in leaves.items():
+            if path.rsplit("/", 1)[1].startswith(numeric):
+                assert isinstance(value, str) and value.isdigit(), f"{tag} {path}: expected digits, got {value!r}"
+        timeout = leaves[f"{hp.GEN}/pfb_reentry_timeout"]
+        assert 60 <= int(timeout) <= 7200, (
+            f"{tag}'s re-entry timeout {timeout!r} is outside the range the package keeps"
+        )
+
+
 def test_only_node_b_carries_the_dnsbl_vip_reference_with_its_own_uniqid(hp: ModuleType) -> None:
     path = f"{hp.DNSBL}/pfb_dnsvip4"
 
@@ -172,6 +235,46 @@ def test_the_baseline_policy_leaves_are_not_local_seeds(hp: ModuleType) -> None:
     locals_ = set(hp.node_local_leaves("A", vip_uniqid="u")) | set(hp.node_local_leaves("B", vip_uniqid="u"))
 
     assert set(hp.BASELINE_POLICY_LEAVES).isdisjoint(locals_)
+
+
+def test_seed_node_redacts_the_sentinel_values_it_writes_and_not_their_config_paths(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(hp, "write_sections", lambda *_a, **_k: None)
+    monkeypatch.setattr(hp, "set_leaves", lambda _vm, _leaves, _message, **kw: calls.append(kw))
+
+    hp.seed_node(object(), "A", "gw")
+
+    (call,) = calls
+    redacted = set(call["secret_values"])
+    assert set(hp.credential_values("A")) <= redacted, f"a seeded credential would reach a failure text: {redacted}"
+    assert not redacted & set(hp.CREDENTIAL_SCALARS.values()), "config paths are not secrets: the values are"
+
+
+def test_the_baseline_names_every_sync_local_key_it_does_not_seed_and_why(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The reasons are printed in the run, so a reader of the log sees what the local-key seeding leaves out."""
+    monkeypatch.setattr(hp, "settle", lambda _vm: None)
+    monkeypatch.setattr(hp, "gateway_name", lambda _vm: "gw")
+    monkeypatch.setattr(hp, "write_feed", lambda *_a: "")
+    monkeypatch.setattr(hp, "seed_node", lambda *_a: None)
+    monkeypatch.setattr(hp, "php_write", lambda *_a, **_k: None)
+    monkeypatch.setattr(hp, "wait_filter_idle", lambda _vm: None)
+    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda *_a: None)
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "/mark")
+    monkeypatch.setattr(hp, "set_leaves", lambda *_a, **_k: None)
+    for fn in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled", "reload"):
+        monkeypatch.setattr(hp.h, fn, lambda *_a, **_k: None)
+    monkeypatch.setattr(hp.h, "pfb_config_digest", lambda _vm: "d")
+    vm = SimpleNamespace(ssh=lambda *_a, **_k: _done())
+
+    hp.arrange_baseline(SimpleNamespace(primary=vm, secondary=vm))
+
+    out = capsys.readouterr().out
+    for path, reason in hp.UNSEEDED_LOCAL_KEYS.items():
+        assert f"{path}: {reason}" in out, f"the run does not say why {path} is not seeded:\n{out}"
 
 
 # --------------------------------------------------------------------------- #
@@ -525,19 +628,45 @@ def test_sync_once_waits_for_the_apply_only_after_a_changed_receive(
     assert sync.passes == 1 and sync.receive == {"apply": {"outcome": "applied"}}
 
 
-def test_sync_once_does_not_wait_for_an_apply_after_an_unchanged_receive(
-    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    banners = iter([5, 5])
+def _sync_once_rig(hp: ModuleType, monkeypatch: pytest.MonkeyPatch, outcome: str) -> tuple[SimpleNamespace, list[str]]:
+    """``sync_once`` over fakes whose receive record says ``outcome``; ``events``: banner reads and settles in order."""
+    events: list[str] = []
+
+    def count(_vm: object) -> int:
+        events.append("count")
+        return 5
+
     monkeypatch.setattr(hp, "node_time", lambda _vm: 100)
-    monkeypatch.setattr(hp, "apply_banners", lambda _vm: next(banners))
+    monkeypatch.setattr(hp, "apply_banners", count)
     monkeypatch.setattr(hp, "trigger_send", lambda *_a, **_k: None)
     monkeypatch.setattr(hp, "send_state", lambda _vm: {})
-    monkeypatch.setattr(hp, "receive_state", lambda _vm: {"last": {"time": 101, "outcome": "unchanged"}})
-    monkeypatch.setattr(hp, "wait_apply", lambda *_a, **_k: pytest.fail("an unchanged receive opens no apply"))
-    pair = SimpleNamespace(primary=object(), secondary=object())
+    monkeypatch.setattr(hp, "receive_state", lambda _vm: {"last": {"time": 101, "outcome": outcome}})
+    monkeypatch.setattr(hp, "wait_apply", lambda *_a, **_k: pytest.fail(f"a {outcome} receive opens no apply"))
+    monkeypatch.setattr(hp, "settle", lambda vm: events.append(f"settle {vm.name}"))
+    return SimpleNamespace(primary=SimpleNamespace(name="A"), secondary=SimpleNamespace(name="B")), events
+
+
+@pytest.mark.parametrize("outcome", ["unchanged", "refused"])
+def test_sync_once_does_not_wait_for_an_apply_after_a_receive_that_opens_none_but_still_drains_b(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    """The tick spawn is delayed: a "no pass ran" claim read before B is idle could miss a pass that starts late."""
+    pair, events = _sync_once_rig(hp, monkeypatch, outcome)
 
     assert hp.sync_once(pair, "automatic").passes == 0
+
+    assert events == ["count", "settle B", "count"], f"B must be settled between the two banner reads: {events}"
+
+
+def test_sync_once_without_wait_reads_the_receive_and_settles_nothing(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deferred apply keeps its pending mark, so settling B would wait for it for ever."""
+    pair, events = _sync_once_rig(hp, monkeypatch, "changed")
+
+    hp.sync_once(pair, "manual", wait=False)
+
+    assert events == ["count", "count"], f"wait=False must not settle B: {events}"
 
 
 # --------------------------------------------------------------------------- #
@@ -623,8 +752,17 @@ def test_core_ha_on_stores_the_hasync_section_and_saves_the_file_only(
 
 def _aged(*ages: str) -> SimpleNamespace:
     """A guest whose syslog's last "Syncing firewall" line is ``age`` seconds old at each successive probe."""
+    clock = datetime(2026, 10, 18, 12, 0, 0)
     answers = iter(ages)
-    return SimpleNamespace(ssh=lambda *_a, **_k: _done(next(answers) + "\n"))
+
+    def probe(*_a: Any, **_k: Any) -> subprocess.CompletedProcess[str]:
+        age = next(answers)
+        if age == "none":
+            return _done("none\n")
+        stamp = clock - timedelta(seconds=int(age))
+        return _done(f"{stamp:%b} {stamp.day:>2} {stamp:%H:%M:%S}\n{clock:%Y %b} {clock.day:>2} {clock:%H:%M:%S}\n")
+
+    return SimpleNamespace(ssh=probe)
 
 
 def test_core_sync_quiet_polls_until_the_last_sync_line_is_as_old_as_the_run_horizon(
@@ -659,14 +797,76 @@ def test_core_sync_quiet_fails_loudly_when_the_probe_fails(hp: ModuleType) -> No
         hp.core_sync_quiet(vm)
 
 
-def test_in_flight_reports_core_sync_run_next_to_the_apply_signals(
-    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("probe", "age"),
+    [
+        ("Oct 18 02:41:40\n2026 Oct 18 02:41:47\n", 7),
+        ("Oct  8 09:00:00\n2026 Oct  8 09:00:09\n", 9),  # syslog and date(1) both pad a one-digit day with a space
+        ("Dec 31 23:59:58\n2027 Jan  1 00:00:05\n", 7),  # a December line read in January is last year's
+        ("Feb 29 10:00:00\n2025 Jan 15 10:00:00\n", 27734400),  # a leap day cannot be in a year that has none
+        ("none\n", None),
+    ],
+)
+def test_sync_line_age_is_the_distance_to_the_last_line_whatever_the_year_boundary(
+    hp: ModuleType, probe: str, age: int | None
+) -> None:
+    assert hp.sync_line_age(probe) == age
+
+
+def test_sync_line_age_refuses_a_stamp_that_is_no_date_in_this_year_or_the_one_before(hp: ModuleType) -> None:
+    """A leap day read in a year whose predecessor has none either: an error, never a guessed age."""
+    with pytest.raises(ValueError, match="Feb 29 10:00:00"):
+        hp.sync_line_age("Feb 29 10:00:00\n2026 Mar  5 10:00:00\n")
+
+
+def _guest_running(tmp_path: Path, *processes: str) -> SimpleNamespace:
+    """A guest that runs each command in a real ``/bin/sh``, where ``/bin/pgrep -f PATTERN`` greps ``processes``.
+
+    Like the real pgrep, it also sees the probe's own shell command line: the pattern must not match its own text.
+    """
+    table = tmp_path / "ps"
+    pgrep = tmp_path / "pgrep"
+    pgrep.write_text(f'#!/bin/sh\ngrep -Eq -e "$2" {table}\n')
+    pgrep.chmod(0o755)
+
+    def ssh(*command: str, **_k: Any) -> subprocess.CompletedProcess[str]:
+        line = " ".join(command)
+        table.write_text("\n".join([*processes, f"sh -c {line}"]) + "\n")
+        done = subprocess.run(
+            ["/bin/sh", "-c", line.replace("/bin/pgrep", str(pgrep))], capture_output=True, text=True, check=False
+        )
+        return _done(done.stdout, done.returncode, done.stderr)
+
+    return SimpleNamespace(ssh=ssh)
+
+
+TICK = "php /usr/local/www/pfblockerng/pfblockerng.php tick"
+SYNC = "/bin/sh /etc/rc.filter_synchronize"
+
+
+@pytest.mark.parametrize(
+    ("running", "signals"),
+    [
+        ((TICK, SYNC), ["pending", "tick", "sync"]),
+        ((TICK,), ["pending", "tick"]),
+        ((SYNC,), ["pending", "sync"]),
+        (("/usr/sbin/sshd",), ["pending"]),
+    ],
+)
+def test_in_flight_reports_each_signal_from_its_own_process_and_never_from_the_probe_itself(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, running: tuple[str, ...], signals: list[str]
 ) -> None:
     monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: True)
 
-    assert hp.in_flight(_vm({"pgrep": _done("tick\nsync\n")})) == ["pending", "tick", "sync"]
+    assert hp.in_flight(_guest_running(tmp_path, *running)) == signals
+
+
+def test_in_flight_is_empty_when_nothing_is_pending_and_no_process_runs(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: False)
-    assert hp.in_flight(_vm({"pgrep": _done("")})) == []
+
+    assert hp.in_flight(_guest_running(tmp_path, "/usr/sbin/sshd")) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -711,6 +911,10 @@ def test_pf_table_is_empty_while_the_table_does_not_exist_and_an_error_otherwise
         hp.pf_table(broken, "g")
 
 
+def _gated(scope: str) -> dict[str, Any]:
+    return {"installedpackages": {"pfblockerngsync": {"config": [{"syncscope": scope}]}}}
+
+
 def test_policy_payload_is_built_from_the_projection_with_the_gate_leaf(
     hp: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -718,13 +922,24 @@ def test_policy_payload_is_built_from_the_projection_with_the_gate_leaf(
 
     def php_json(_vm: object, php: str, **_k: Any) -> dict[str, Any]:
         seen.append(php)
-        return {"installedpackages": {}}
+        return _gated("policy")
 
     monkeypatch.setattr(hp, "php_json", php_json)
 
-    assert hp.policy_payload(object()) == {"installedpackages": {}}
+    assert hp.policy_payload(object()) == _gated("policy")
     (php,) = seen
     assert "pfb_sync_policy_projection($stored)" in php and "/syncscope'" in php and "'policy'" in php
+
+
+@pytest.mark.parametrize("payload", [_gated("all"), {"installedpackages": {}}])
+def test_policy_payload_refuses_a_payload_without_the_policy_gate_leaf(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+) -> None:
+    """A harness payload without the gate would be refused by B for the wrong reason: the builder must say so."""
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: payload)
+
+    with pytest.raises(AssertionError, match="payload gate leaf: expected 'policy'"):
+        hp.policy_payload(object())
 
 
 def test_send_payload_is_one_restore_config_section_call_with_the_ha_credentials(
@@ -744,6 +959,79 @@ def test_send_payload_is_one_restore_config_section_call_with_the_ha_credentials
     (call,) = calls
     assert (call["user"], call["password"], call["method"]) == ("pfbhasync", "pw", "restore_config_section")
     assert '{"installedpackages": {"x": ""}}' in call["params_php"]
+
+
+def test_send_payload_can_speak_as_another_user_and_send_a_payload_that_is_no_array(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R10 sends with a wrong password, an unprivileged user and a string where the payload array belongs."""
+    calls: list[dict[str, Any]] = []
+
+    def xmlrpc_call(_pair: object, **kw: Any) -> dict[str, Any]:
+        calls.append(kw)
+        return {"ok": True}
+
+    monkeypatch.setattr(hp, "xmlrpc_call", xmlrpc_call)
+    pair = SimpleNamespace(sync_password="pw")
+
+    hp.send_payload(pair, {"a": ""}, password="not-pw")
+    hp.send_payload(pair, {"a": ""}, user="noprivuser", password="np")
+    hp.send_payload(pair, "not-an-array")
+
+    assert [(c["user"], c["password"]) for c in calls] == [
+        ("pfbhasync", "not-pw"),
+        ("noprivuser", "np"),
+        ("pfbhasync", "pw"),
+    ]
+    assert calls[2]["params_php"] == "json_decode('\"not-an-array\"', TRUE)", calls[2]["params_php"]
+
+
+def _group_rig(hp: ModuleType, monkeypatch: pytest.MonkeyPatch) -> tuple[SimpleNamespace, Any, dict[str, Any]]:
+    """Two named nodes; ``rig`` records the feed files written and the section each node stored."""
+    rig: dict[str, Any] = {"feeds": [], "stored": {}}
+    a, b = SimpleNamespace(name="A"), SimpleNamespace(name="B")
+    tree = {"config": [{"aliasname": "old"}]}
+    monkeypatch.setattr(hp, "write_feed", lambda vm, alias, address: rig["feeds"].append((vm.name, alias, address)))
+    monkeypatch.setattr(hp, "read_sections", lambda _vm, _names: {"pfblockernglistsv4": json.loads(json.dumps(tree))})
+    monkeypatch.setattr(hp, "write_sections", lambda vm, sections, _message: rig["stored"].update({vm.name: sections}))
+    return SimpleNamespace(primary=a, secondary=b), hp.Baseline("gw", {}, "/mark"), rig
+
+
+def test_add_deny_group_adds_one_group_with_the_nodes_own_local_values_and_feeds_both_nodes(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pair, baseline, rig = _group_rig(hp, monkeypatch)
+
+    index = hp.add_deny_group(pair, baseline, "g1", "198.51.100.5", on=pair.secondary, tag="B")
+
+    assert index == 1 and sorted(rig["feeds"]) == [("A", "g1", "198.51.100.5"), ("B", "g1", "198.51.100.5")]
+    assert list(rig["stored"]) == ["B"], "the group must be stored on the node it is added to, and only there"
+    old, new = rig["stored"]["B"]["pfblockernglistsv4"]["config"]
+    assert old == {"aliasname": "old"}
+    assert new["aliasname"] == "g1" and new["srcint"] == "wan", f"B's group carries B's local values: {new!r}"
+    assert new["agateway_in"] == "gw"
+
+
+def test_add_deny_group_defaults_to_node_a_and_appends_extra_feed_rows_to_the_group(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pair, baseline, rig = _group_rig(hp, monkeypatch)
+    extra = {"header": "g2_key", "url": "https://feeds.invalid/g2.txt", "state": "Disabled", "format": "auto"}
+
+    hp.add_deny_group(pair, baseline, "g2", "198.51.100.6", rows=[extra])
+
+    _old, new = rig["stored"]["A"]["pfblockernglistsv4"]["config"]
+    assert new["srcint"] == "lan", f"A's group carries A's local values: {new!r}"
+    assert [row["header"] for row in new["row"]] == ["g2", "g2_key"]
+
+
+def test_add_deny_group_stores_a_ready_made_group_as_given(hp: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    pair, baseline, rig = _group_rig(hp, monkeypatch)
+    given = {"aliasname": "g3", "row": [{"header": "g3"}], "marker": "kept"}
+
+    hp.add_deny_group(pair, baseline, "g3", "198.51.100.7", on=pair.primary, group=given)
+
+    assert rig["stored"]["A"]["pfblockernglistsv4"]["config"][1] == given
 
 
 # --------------------------------------------------------------------------- #
@@ -814,6 +1102,55 @@ def test_reset_pair_fails_loudly_when_the_restore_does_not_take(
         hp.reset_pair(
             SimpleNamespace(primary=vm, secondary=vm), hp.Baseline("gw", {"primary": "d", "secondary": "d"}, "/mark")
         )
+
+
+def _reset_rig(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch, digests: dict[str, str]
+) -> tuple[SimpleNamespace, Any, list[str]]:
+    """Two fake nodes for ``reset_pair``; ``digests`` is the config digest each reads after its restore."""
+    log: list[str] = []
+
+    def node(name: str) -> SimpleNamespace:
+        def ssh(*command: str, **_k: Any) -> subprocess.CompletedProcess[str]:
+            log.append(f"{name}:{' '.join(command)}")
+            return _done()
+
+        return SimpleNamespace(ssh=ssh, name=name)
+
+    pair = SimpleNamespace(primary=node("A"), secondary=node("B"))
+    monkeypatch.setattr(hp, "settle", lambda vm: None)
+    monkeypatch.setattr(hp, "clear_sync_state", lambda vm: None)
+    monkeypatch.setattr(hp, "clear_sshguard", lambda vm: None)
+    monkeypatch.setattr(hp, "in_flight", lambda vm: [])
+    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda vm, name, uniqid: log.append(f"{vm.name}:vip={uniqid}"))
+    monkeypatch.setattr(hp.h, "apply_filter_sync", lambda vm: None)
+    monkeypatch.setattr(hp.h, "pfb_config_digest", lambda vm: digests[vm.name])
+    return pair, hp.Baseline("gw", {"primary": "dA", "secondary": "dB"}, "/mark"), log
+
+
+def test_reset_pair_still_restores_node_a_when_node_b_does_not_take(
+    hp: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pair, baseline, log = _reset_rig(hp, monkeypatch, {"A": "dA", "B": "moved"})
+
+    with pytest.raises(AssertionError) as err:
+        hp.reset_pair(pair, baseline)
+
+    assert any(line.startswith("A:cp -p") for line in log), f"A was never restored after B failed: {log}"
+    assert "A:vip=pfbsmokevip" in log, f"A's VIP was never checked after B failed: {log}"
+    assert "secondary: baseline restore did not take: config digest moved != baseline dB" in str(err.value)
+    assert "primary" not in str(err.value), f"A restored fine, yet the failure names it: {err.value}"
+
+
+def test_reset_pair_raises_every_failing_node_together(hp: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    pair, baseline, _log = _reset_rig(hp, monkeypatch, {"A": "movedA", "B": "movedB"})
+
+    with pytest.raises(AssertionError) as err:
+        hp.reset_pair(pair, baseline)
+
+    text = str(err.value)
+    assert "secondary: baseline restore did not take: config digest movedB" in text
+    assert "primary: baseline restore did not take: config digest movedA" in text
 
 
 def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_vips_before_it_snapshots(

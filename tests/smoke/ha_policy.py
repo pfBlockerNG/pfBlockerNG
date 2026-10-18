@@ -23,6 +23,7 @@ import secrets
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal
 
 from . import helpers as h
@@ -183,40 +184,85 @@ def group_local_values(tag: str, gateway: str) -> dict[str, str]:
     }
 
 
-def node_local_leaves(tag: str, *, vip_uniqid: str) -> dict[str, str]:
-    """Settings-section local leaves that differ between the nodes, ``tag`` = ``A`` or ``B``.
+# Every ``sync: local`` registry key (pfb_cfg_registry(): the 60 that never leave a node) the two guests keep apart, as
+# (A's value, B's value). Each is a value the package reads as given, and none breaks a node's apply pass or DNSBL.
+_LOG_SINKS = (
+    "log",
+    "errlog",
+    "extraslog",
+    "ip_blocklog",
+    "ip_permitlog",
+    "ip_matchlog",
+    "ip_parse_err",
+    "dnslog",
+    "dnsbl_parse_err",
+    "dnsreplylog",
+    "unilog",
+)
+LOCAL_SEEDS: dict[str, tuple[str, str]] = {
+    f"{IP}/maxmind_locale": ("de", "fr"),
+    f"{IP}/asn_reporting": ("on", ""),
+    f"{IP}/enable_rdns": ("on", ""),
+    f"{IP}/inbound_interface": ("lan", "wan"),
+    f"{IP}/outbound_interface": ("lan", "wan"),
+    f"{DNSBL}/pfb_cache": ("on", ""),
+    f"{DNSBL}/dnsbl_allow_int": ("lan", ""),
+    f"{DNSBL}/dnsbl_redir_int": ("lan", ""),
+    f"{DNSBL}/dnsbl_dot_block_int": ("lan", ""),
+    f"{DNSBL}/pfb_dnsport": ("8082", "8083"),
+    f"{DNSBL}/pfb_dnsport_ssl": ("8444", "8445"),
+    f"{DNSBL}/pfb_cache_flush": ("on", ""),
+    f"{DNSBL}/pfb_py_reply": ("on", ""),
+    f"{DNSBL}/pfb_py_nolog": ("on", ""),
+    f"{DNSBL}/pfb_py_cache_max": ("5000", "20000"),
+    f"{DNSBL}/pfb_control": ("on", ""),
+    f"{DNSBL}/pfb_control_legacy": ("on", ""),
+    f"{GLOBAL}/alertrefresh": ("on", ""),
+    f"{GEN}/pfb_syntax_highlight": ("on", ""),
+    f"{GEN}/pfb_log_trim_margin_pct": ("5", "10"),
+    f"{GEN}/pfb_reentry_timeout": ("1900", "2100"),
+    f"{GEN}/pfb_software_check": ("on", ""),
+    f"{GEN}/pfb_alias_delta_mode": ("replace", "auto"),
+    f"{GEN}/pfb_alias_delta_batch": ("256", "1024"),
+    f"{GEN}/log_syslog": ("on", ""),
+    # B's own scope is not the sender's: B stays a receiver whatever A sends (R14).
+    f"{SYNC}/syncscope": ("policy", "lists"),
+    **{f"{GEN}/log_max_{sink}": ("15000", "25000") for sink in _LOG_SINKS},
+    **{f"{GEN}/log_max_days_{sink}": ("7", "30") for sink in _LOG_SINKS},
+}
+# The two gateway leaves are seeded per node by ``seed_node``: a real gateway of the node, or ``default``.
+GATEWAY_LEAVES = (f"{DNSBL}/agateway_in", f"{DNSBL}/agateway_out")
+# The ``sync: local`` registry keys NOT seeded with distinct values, each with the reason a distinct value would break
+# the pair. The run prints this list (``arrange_baseline``).
+UNSEEDED_LOCAL_KEYS = {
+    f"{GEN}/settings_family": "the installer's own mode marker (pfb_settings_family_record() owns it), not a setting",
+    f"{GEN}/pfb_reuse": "a one-shot flag the update pass clears itself, so a seeded 'on' does not outlive the baseline pass",
+    f"{DNSBL}/pfb_dnsvip_auto": "turns VIP management on, which rewrites the DNSBL VIP object whose uniqid the tests pin",
+    f"{DNSBL}/dnsbl_interface": "must be the interface of the node's DNSBL VIP (lo0): pfb_validate_vips() disables DNSBL otherwise",
+    f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
+}
 
-    The four scalar credentials carry per-node sentinels; the rest are inert display/alert/interface/hook leaves the
-    apply pass either does not read or reads harmlessly. B's DNSBL VIP reference carries ITS OWN uniqid (#3441: the
-    same address, another uniqid, must survive a receive).
+
+def node_local_leaves(tag: str, *, vip_uniqid: str) -> dict[str, Any]:
+    """The local leaves the two nodes hold apart, ``tag`` = ``A`` or ``B``: every :data:`LOCAL_SEEDS` key but the gateways.
+
+    The four scalar credentials carry per-node sentinels, and so do the widget and hook leaves the registry does not
+    list. B's DNSBL VIP reference carries ITS OWN uniqid (#3441: the same address, another uniqid, must survive a
+    receive).
     """
     leaves: dict[str, Any] = {path: sentinel(tag, name) for name, path in CREDENTIAL_SCALARS.items()}
-    leaves.update(
+    leaves.update({path: values[int(tag == "B")] for path, values in LOCAL_SEEDS.items()})
+    leaves[f"{GLOBAL}/widget-pfblockerng"] = sentinel(tag, "widget-pfblockerng")
+    # A disabled hook never runs; only its stored row matters.
+    leaves[f"{GEN}/hooks/row"] = [
         {
-            f"{IP}/maxmind_locale": "de" if tag == "A" else "fr",
-            f"{IP}/asn_reporting": "on" if tag == "A" else "",
-            f"{IP}/enable_rdns": "on" if tag == "A" else "",
-            f"{IP}/inbound_interface": "lan" if tag == "A" else "wan",
-            f"{IP}/outbound_interface": "lan" if tag == "A" else "wan",
-            f"{DNSBL}/pfb_cache": "on" if tag == "A" else "",
-            f"{DNSBL}/dnsbl_allow_int": "lan" if tag == "A" else "",
-            f"{DNSBL}/dnsbl_redir_int": "lan" if tag == "A" else "",
-            f"{DNSBL}/dnsbl_dot_block_int": "lan" if tag == "A" else "",
-            f"{GLOBAL}/alertrefresh": "on" if tag == "A" else "",
-            f"{GLOBAL}/widget-pfblockerng": sentinel(tag, "widget-pfblockerng"),
-            f"{GEN}/pfb_syntax_highlight": "on" if tag == "A" else "",
-            # A disabled hook never runs; only its stored row matters.
-            f"{GEN}/hooks/row": [
-                {
-                    "script": f"hook_post_{sentinel(tag, 'hook')}.sh",
-                    "when": "post",
-                    "enabled": "",
-                    "description": sentinel(tag, "hook"),
-                    "timeout": "5",
-                }
-            ],
+            "script": f"hook_post_{sentinel(tag, 'hook')}.sh",
+            "when": "post",
+            "enabled": "",
+            "description": sentinel(tag, "hook"),
+            "timeout": "5",
         }
-    )
+    ]
     if tag == "B":
         leaves[f"{DNSBL}/pfb_dnsvip4"] = f"_vip{vip_uniqid}"
     return leaves
@@ -470,11 +516,35 @@ def core_ha_on(pair: HaPair) -> None:
 # check_reload_status logs "Syncing firewall" when it queues a run and starts it one second later; an event raised
 # within eight seconds of a run is logged again and starts five seconds after that. Two more seconds cover php's start.
 CORE_SYNC_QUIET = 7
-_SYNC_LINE_AGE = (
+# Prints ``none``, or the last "Syncing firewall" line's syslog stamp (no year) and then the guest's clock.
+_SYNC_LINE_PROBE = (
     "last=$(grep -h 'check_reload_status.*Syncing firewall' /var/log/system.log.0 /var/log/system.log 2>/dev/null "
-    '| tail -n 1 | cut -c1-15); if [ -z "$last" ]; then echo none; '
-    'else echo $(( $(date +%s) - $(date -j -f "%b %e %T %Y" "$last $(date +%Y)" +%s) )); fi'
+    '| tail -n 1 | cut -c1-15); if [ -z "$last" ]; then echo none; else echo "$last"; date "+%Y %b %e %T"; fi'
 )
+
+
+def sync_line_age(probe: str) -> int | None:
+    """Seconds since the last sync line, from :data:`_SYNC_LINE_PROBE`'s output (``None`` when the log has none).
+
+    A syslog stamp has no year: it belongs to the clock's year, or to the one before when that would put it in the
+    future (a December line read in January). Both stamps are the guest's local time, so their difference is exact
+    except across a DST change, which only makes a quiet wait one hour too short or too long.
+    """
+    lines = probe.strip().splitlines()
+    if lines == ["none"]:
+        return None
+    stamp, clock = lines
+    now = datetime.strptime(clock, "%Y %b %d %H:%M:%S")
+    for year in (now.year, now.year - 1):
+        try:
+            seen = datetime.strptime(f"{year} {stamp}", "%Y %b %d %H:%M:%S")
+        except ValueError:  # Feb 29 of a year that has none
+            continue
+        if seen <= now:
+            return int((now - seen).total_seconds())
+    raise ValueError(
+        f"the syslog stamp {stamp!r} is no past date in {now.year} or {now.year - 1} (guest clock {clock!r})"
+    )
 
 
 def core_sync_quiet(vm: SmokeVM, *, timeout: float = 60.0) -> None:
@@ -483,23 +553,18 @@ def core_sync_quiet(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     ``rc.filter_synchronize`` reads the HA sync target when it starts, so a run queued by a package write while the
     target was off must have started before the target goes back on, or it sends next to the test's explicit send.
     """
-    seen: list[str] = []
+    seen: list[int | None] = []
 
     def quiet() -> bool:
-        result = vm.ssh(_SYNC_LINE_AGE)
+        result = vm.ssh(_SYNC_LINE_PROBE)
         assert result.returncode == 0, f"the sync-line age probe failed: rc={result.returncode} {result.stderr!r}"
-        seen[:] = [result.stdout.strip()]
-        return seen[0] == "none" or int(seen[0]) >= CORE_SYNC_QUIET
+        seen[:] = [sync_line_age(result.stdout)]
+        return seen[0] is None or seen[0] >= CORE_SYNC_QUIET
 
     try:
         h.wait_until(quiet, timeout=timeout, interval=1.0)
     except RuntimeError as exc:
         raise RuntimeError(f"{exc}; age of the last core sync line: {seen}") from exc
-
-
-def set_receiver_scope(vm: SmokeVM, scope: str) -> None:
-    """Store ``scope`` as the node's own ``syncscope`` leaf with sending left off (what a receiver's Sync page holds)."""
-    set_leaves(vm, {SYNC: {"syncscope": scope, "varsynconchanges": "disabled"}}, "pfBlockerNG smoke: HA receiver scope")
 
 
 def trigger_send(pair: HaPair, transport: Transport, *, manual_pass: str = "update") -> None:
@@ -603,8 +668,11 @@ class Sync:
 def sync_once(pair: HaPair, transport: Transport, *, manual_pass: str = "update", wait: bool = True) -> Sync:
     """Trigger one send from A, then read B's receive record (written before the call returned).
 
-    With ``wait`` and a ``changed`` receive, block until the receive-triggered apply left ``waiting`` and B's tick is
-    gone, so the pass count is final. The receive is never polled for: both transports are synchronous.
+    With ``wait``, block until B is idle (no pending change, no tick, no core sync run) before the update passes are
+    counted, whatever the receive outcome: the tick spawn is delayed, so a pass opened by an unchanged or refused
+    receive could otherwise be missed. A ``changed`` receive first waits for the apply to leave ``waiting``. The
+    receive is never polled for: both transports are synchronous. Without ``wait`` B is not settled, because a
+    deferred apply keeps its pending mark.
     """
     a, b = pair.primary, pair.secondary
     t0_b = node_time(b)
@@ -616,8 +684,9 @@ def sync_once(pair: HaPair, transport: Transport, *, manual_pass: str = "update"
     assert last.get("time", 0) >= t0_b, (
         f"B's receive record is stale: {last!r} predates the send at B's {t0_b}; A sent {send!r}"
     )
-    if wait and last.get("outcome") == "changed":
-        receive = wait_apply(b, since=t0_b)
+    if wait:
+        if last.get("outcome") == "changed":
+            receive = wait_apply(b, since=t0_b)
         settle(b)
     return Sync(t0_b, send, receive, apply_banners(b) - banners)
 
@@ -704,6 +773,33 @@ def gateway_name(vm: SmokeVM) -> str:
     return str(names[0])
 
 
+def add_deny_group(
+    pair: HaPair,
+    baseline: Baseline,
+    alias: str,
+    address: str,
+    *,
+    on: SmokeVM | None = None,
+    tag: str = "A",
+    group: Mapping[str, Any] | None = None,
+    rows: Iterable[Mapping[str, str]] = (),
+) -> int:
+    """Append one IPv4 deny group to ``on``'s policy (node A by default), whose feed file exists on BOTH nodes.
+
+    Each node reads its own copy of the same feed path. The group carries node ``tag``'s row-local values unless a
+    ready-made ``group`` is given; ``rows`` are extra feed rows of it. Returns the new group's row index.
+    """
+    node = pair.primary if on is None else on
+    for vm in (pair.primary, pair.secondary):
+        write_feed(vm, alias, address)
+    tree = read_sections(node, ["pfblockernglistsv4"])["pfblockernglistsv4"]
+    assert isinstance(tree, dict) and tree.get("config"), f"the node has no IPv4 groups to add {alias} to: {tree!r}"
+    base = group or ip_group(alias, feed_path(alias), local=group_local_values(tag, baseline.gateway))
+    tree["config"] = [*tree["config"], {**base, "row": [*base["row"], *rows]}]
+    write_sections(node, {"pfblockernglistsv4": tree}, f"pfBlockerNG smoke: HA group {alias}")
+    return len(tree["config"]) - 1
+
+
 def seed_node(vm: SmokeVM, tag: str, gateway: str) -> None:
     """Write the common policy baseline and this node's own local values onto ``vm``."""
     local = group_local_values(tag, gateway)
@@ -727,9 +823,8 @@ def seed_node(vm: SmokeVM, tag: str, gateway: str) -> None:
     )
     leaves = node_local_leaves(tag, vip_uniqid=B_VIP_UNIQID)
     leaves.update(BASELINE_POLICY_LEAVES)
-    leaves[f"{DNSBL}/agateway_in"] = gateway if tag == "A" else "default"
-    leaves[f"{DNSBL}/agateway_out"] = gateway if tag == "A" else "default"
-    set_leaves(vm, leaves, "pfBlockerNG smoke: HA node local values", secret_values=list(CREDENTIAL_SCALARS.values()))
+    leaves.update(dict.fromkeys(GATEWAY_LEAVES, gateway if tag == "A" else "default"))
+    set_leaves(vm, leaves, "pfBlockerNG smoke: HA node local values", secret_values=credential_values(tag))
 
 
 def assert_dnsbl_vip(vm: SmokeVM, node: str, uniqid: str) -> None:
@@ -757,6 +852,8 @@ def arrange_baseline(pair: HaPair) -> Baseline:
     for the tests that ride it.
     """
     a, b = pair.primary, pair.secondary
+    for path, reason in UNSEEDED_LOCAL_KEYS.items():
+        print(f"HA sync:local key left unseeded: {path}: {reason}", flush=True)
     set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA sync off for the baseline")
     settle(a)  # a run core already started with the old setting must end before B is touched
     gateway = gateway_name(a)
@@ -790,30 +887,41 @@ def arrange_baseline(pair: HaPair) -> Baseline:
     return Baseline(gateway, digests, marker)
 
 
+def _reset_node(name: str, vm: SmokeVM, uniqid: str, baseline: Baseline) -> None:
+    # The mark first: a failed apply keeps it set, and settle() would wait for that for ever.
+    marked = vm.ssh(f"rm -f {baseline.marker}")
+    assert marked.returncode == 0, f"{name}: could not clear the pending mark: {marked.stderr!r}"
+    settle(vm)
+    restored = vm.ssh(f"cp -p {BASELINE_COPY} {CONFIG} && rm -f /tmp/config.cache")
+    assert restored.returncode == 0, f"{name}: baseline restore failed: rc={restored.returncode} {restored.stderr!r}"
+    clear_sync_state(vm)
+    h.apply_filter_sync(vm)
+    clear_sshguard(vm)
+    digest = h.pfb_config_digest(vm)
+    expected = baseline.digests[name]
+    assert digest == expected, f"{name}: baseline restore did not take: config digest {digest} != baseline {expected}"
+    assert in_flight(vm) == [], f"{name}: an apply is still in flight after the baseline restore"
+    assert_dnsbl_vip(vm, name, uniqid)
+
+
 def reset_pair(pair: HaPair, baseline: Baseline) -> None:
-    """Put both nodes back at the module baseline and fail loudly when it does not take (B first, as ha_pair does)."""
+    """Put both nodes back at the module baseline (B first, as ha_pair does) and fail loudly when it does not take.
+
+    Each node is tried even when the other fails, and the failures are raised together, as ``ha_pair.restore_node``
+    does: a node that did not come back must not leave the other one at its test state.
+    """
+    failures: list[str] = []
     for name, vm, uniqid in (
         ("secondary", pair.secondary, B_VIP_UNIQID),
         ("primary", pair.primary, h.SMOKE_VIP_UNIQID),
     ):
-        # The mark first: a failed apply keeps it set, and settle() would wait for that for ever.
-        marked = vm.ssh(f"rm -f {baseline.marker}")
-        assert marked.returncode == 0, f"{name}: could not clear the pending mark: {marked.stderr!r}"
-        settle(vm)
-        restored = vm.ssh(f"cp -p {BASELINE_COPY} {CONFIG} && rm -f /tmp/config.cache")
-        assert restored.returncode == 0, (
-            f"{name}: baseline restore failed: rc={restored.returncode} {restored.stderr!r}"
-        )
-        clear_sync_state(vm)
-        h.apply_filter_sync(vm)
-        clear_sshguard(vm)
-        digest = h.pfb_config_digest(vm)
-        expected = baseline.digests[name]
-        assert digest == expected, (
-            f"{name}: baseline restore did not take: config digest {digest} != baseline {expected}"
-        )
-        assert in_flight(vm) == [], f"{name}: an apply is still in flight after the baseline restore"
-        assert_dnsbl_vip(vm, name, uniqid)
+        try:
+            _reset_node(name, vm, uniqid, baseline)
+        except Exception as exc:
+            text = str(exc)
+            failures.append(text if text.startswith(f"{name}:") else f"{name}: {text}")
+    if failures:
+        raise AssertionError("baseline reset failed: " + "; ".join(failures))
 
 
 def token() -> str:
@@ -878,17 +986,27 @@ def policy_payload(vm: SmokeVM) -> dict[str, Any]:
         "}\n" + emit("$payload")
     )
     payload: dict[str, Any] = php_json(vm, php)
+    try:
+        gate = payload["installedpackages"]["pfblockerngsync"]["config"][0]["syncscope"]
+    except (KeyError, IndexError, TypeError):
+        gate = None
+    assert gate == "policy", (
+        f"payload gate leaf: expected 'policy', got {gate!r} in {payload.get('installedpackages')!r}"
+    )
     return payload
 
 
-def send_payload(pair: HaPair, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """One real ``restore_config_section`` call from A to B with B's HA credentials: ``{"ok": True, "resp": ...}`` or a fault."""
+def send_payload(pair: HaPair, payload: Any, *, user: str = HA_USER, password: str | None = None) -> dict[str, Any]:
+    """One real ``restore_config_section`` call from A to B (B's HA credentials unless overridden): ``{"ok": True, "resp": ...}`` or a fault.
+
+    ``payload`` is any JSON value: the harness also sends what a sender never would (a string where the array belongs).
+    """
     return xmlrpc_call(
         pair,
-        user=HA_USER,
-        password=pair.sync_password,
+        user=user,
+        password=pair.sync_password if password is None else password,
         method="restore_config_section",
-        params_php=_json_php(dict(payload)),
+        params_php=_json_php(payload),
     )
 
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import base64
 import json
 import threading
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -47,6 +47,7 @@ from .ha_policy import (
     NodeState,
     Sync,
     Transport,
+    add_deny_group,
     apply_banners,
     arrange_baseline,
     assert_applied_once,
@@ -57,12 +58,9 @@ from .ha_policy import (
     configure_sender,
     credential_values,
     diff_leaves,
-    feed_path,
     grep_leaks,
-    group_local_values,
     identities,
     inject_leaf,
-    ip_group,
     local_by_identity,
     node_local_leaves,
     node_state,
@@ -84,7 +82,6 @@ from .ha_policy import (
     unexpected_additions,
     wait_apply,
     wait_filter_idle,
-    write_feed,
     write_sections,
 )
 
@@ -131,20 +128,6 @@ def _reset(ha_pair: HaPair, baseline: Baseline) -> Iterator[None]:
 
 def b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
-
-
-def add_deny_group(
-    pair: HaPair, baseline: Baseline, alias: str, address: str, *, rows: Iterable[Mapping[str, str]] = ()
-) -> None:
-    """A new IPv4 deny group on A, whose feed file exists on BOTH nodes (each reads its own copy of the same path)."""
-    for vm in (pair.primary, pair.secondary):
-        write_feed(vm, alias, address)
-    tree = read_sections(pair.primary, [V4])[V4]
-    assert isinstance(tree, dict) and tree.get("config"), f"A has no IPv4 groups to add {alias} to: {tree!r}"
-    group = ip_group(alias, feed_path(alias), local=group_local_values("A", baseline.gateway))
-    group["row"] = [*group["row"], *rows]
-    tree["config"] = [*tree["config"], group]
-    write_sections(pair.primary, {V4: tree}, f"pfBlockerNG smoke: HA group {alias}")
 
 
 def row_prefix(vm: Any, section: str, identity: str) -> str:
@@ -465,7 +448,12 @@ def test_repeat_and_timed_out_retry_are_idempotent(ha_pair: HaPair, baseline: Ba
 @pytest.mark.parametrize("transport", TRANSPORTS)
 @pytest.mark.timeout(900)  # a send, B's apply pass, and recursive on-box greps of /conf and /var/log
 def test_credentials_and_local_keys_never_reach_b(ha_pair: HaPair, baseline: Baseline, transport: Transport) -> None:
-    """A's six credential kinds stay on A, B keeps its own; a feed URL with an embedded key is policy and arrives."""
+    """A's six credential kinds and every ``sync: local`` key the guests keep apart never reach B: B keeps its own.
+
+    The keys are :data:`ha_policy.LOCAL_SEEDS` (ports, interfaces, log limits, toggles, scope and so on, each with a
+    node-specific value); the few left out are :data:`ha_policy.UNSEEDED_LOCAL_KEYS`, printed in the run with their
+    reason. A feed URL with an embedded key is policy and arrives.
+    """
     a, b = ha_pair.primary, ha_pair.secondary
     alias = f"pfbha_r7{token()}"
     keyed = f"https://feeds.invalid/{alias}.txt?apikey={sentinel('KEY', alias)}"

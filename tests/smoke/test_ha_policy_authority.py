@@ -17,9 +17,10 @@ stays on both nodes, so the only update pass B ever runs is the receive-triggere
           match, and its generated pfB aliases, rules and NAT are byte-identical with or without that detector state
 
   Scenario: B lists A as a target, A is demoted, B's Sync page is saved (R12, R14, X2)
-    Then  a receive from A is never echoed (any of B's three scopes), a demoted A makes B originate nothing, saving
-          B's Sync page lets B's next send and a later local edit reach A, and an unreachable target of two does
-          not stop the other
+    Then  a receive from A is never echoed (any of B's three scopes), a demoted A makes B originate nothing, B's
+          send while A still syncs to B is dropped by core and leaves B's record at "sent" and A untouched, and once
+          A's HA sync target is cleared B's next send and a later local edit reach A; an unreachable target of two
+          does not stop the other
 
   Scenario: B is unreachable (R13, X6) / B defers or fails its apply (X3) / the feed header contract (X4)
     Then  A's record carries the client's transport error (manual) or only "handed" (automatic, with core's own
@@ -27,9 +28,11 @@ stays on both nodes, so the only update pass B ever runs is the receive-triggere
           reach B as the producer normalised them and B's findings list exactly what cannot take effect
 
 Deviations from a naive reading, each from source (see the tests' docstrings): core's XMLRPC server swallows a call
-from the host it syncs to (``xmlrpc.php`` ``loop_detected``), so the role flip first takes A off the HA primary role;
-the legacy ``all``/``lists`` scopes call ``merge_installedpackages_section``, which has no package hook, so A shows
-no receive record for them; ``gen/pfb_quiet_hours`` is a policy leaf, so the window travels from A.
+from the host it syncs to (``xmlrpc.php`` ``loop_detected``), so a deliberate role flip also clears A's HA sync
+target (spec amendment 2026-10-18): the tests assert what the package records and leaves untouched while core
+drops the call, never core's guard itself; the legacy ``all``/``lists`` scopes call
+``merge_installedpackages_section``, which has no package hook, so A shows no receive record for them;
+``gen/pfb_quiet_hours`` is a policy leaf, so the window travels from A.
 """
 
 # ruff: noqa: E501 -- embedded PHP is one statement per line (pfSsh buffers by line).
@@ -40,9 +43,7 @@ import contextlib
 import json
 import os
 import re
-import socket
-import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from typing import Any
 
@@ -57,6 +58,7 @@ from .ha_pair import (
     SECONDARY_SYNC_IP,
     SYNC_NIC,
     HaPair,
+    _redact,
     carp_state,
     clear_sshguard,
     configure_secondary_users,
@@ -67,6 +69,7 @@ from .ha_pair import (
 from .ha_policy import (
     B_VIP_UNIQID,
     DNSBL,
+    FINDINGS_FILE,
     GEN,
     IP,
     LISTS_V4,
@@ -76,6 +79,7 @@ from .ha_policy import (
     Baseline,
     Sync,
     Transport,
+    add_deny_group,
     apply_banners,
     arrange_baseline,
     assert_applied_once,
@@ -92,13 +96,16 @@ from .ha_policy import (
     ip_group,
     node_state,
     node_time,
+    pf_table,
     php_json,
+    policy_payload,
     read_json_file,
     read_leaves,
     read_sections,
     receive_state,
     reset_pair,
     seed_node,
+    send_payload,
     send_state,
     sender_section,
     set_leaves,
@@ -111,6 +118,7 @@ from .ha_policy import (
     write_feed,
     write_sections,
 )
+from .ha_versions import web_tunnel
 from .ui.credgate import admin_password_decision
 from .ui.test_sync_status_panels import (
     BANNED,
@@ -129,7 +137,6 @@ pytestmark = pytest.mark.smoke
 
 V4 = f"{LISTS_V4}/config"
 GATE = f"{SYNC}/syncscope"
-FINDINGS_FILE = f"{h.PFB_DBDIR}/pfb_sync_findings.json"
 COPIED_FILE = f"{h.PFB_DBDIR}/pfb_sync_copied.json"
 SYSTEM_LOG = "/var/log/system.log"
 RELOAD_SCRIPT = "/etc/rc.filter_configure_sync"
@@ -220,6 +227,20 @@ def baseline(ha_pair: HaPair) -> Baseline:
     return base
 
 
+def undo_per_test(pair: HaPair, baseline: Baseline, stack: ExitStack) -> None:
+    """Run the test's undo callbacks, reset both nodes to the baseline, then check the VIPs and the CARP roles.
+
+    Every step runs even when an earlier one fails (a reset that did not take must not hide which VIP is gone or that
+    the roles did not come back); the failures are raised together by the ExitStack, last one first.
+    """
+    with ExitStack() as steps:
+        steps.callback(wait_carp_state, pair.secondary, "BACKUP", node="secondary")
+        steps.callback(wait_carp_state, pair.primary, "MASTER", node="primary")
+        steps.callback(assert_dnsbl_vips, pair, "after the per-test reset")
+        steps.callback(reset_pair, pair, baseline)
+        steps.callback(stack.close)
+
+
 @pytest.fixture(autouse=True)
 def undo(ha_pair: HaPair, baseline: Baseline) -> Iterator[ExitStack]:
     """Per-test undo callbacks first (NIC, CARP, file modes), then both nodes back at the baseline, failing loudly."""
@@ -227,13 +248,7 @@ def undo(ha_pair: HaPair, baseline: Baseline) -> Iterator[ExitStack]:
     try:
         yield stack
     finally:
-        try:
-            stack.close()
-        finally:
-            reset_pair(ha_pair, baseline)
-            assert_dnsbl_vips(ha_pair, "after the per-test reset")
-            wait_carp_state(ha_pair.primary, "MASTER", node="primary")
-            wait_carp_state(ha_pair.secondary, "BACKUP", node="secondary")
+        undo_per_test(ha_pair, baseline, stack)
 
 
 # --------------------------------------------------------------------------- #
@@ -241,68 +256,23 @@ def undo(ha_pair: HaPair, baseline: Baseline) -> Iterator[ExitStack]:
 # --------------------------------------------------------------------------- #
 
 
-def show(label: str, value: Any) -> None:
-    """Print the record an assertion is about to read (records hold digests, outcomes and counts, never a secret)."""
-    print(f"[HA3455] {label}: {json.dumps(value, sort_keys=True, default=str)}", flush=True)
+def show(label: str, value: Any, *, secrets: Iterable[str] = ()) -> None:
+    """Print the record an assertion is about to read; ``secrets`` are redacted (raw log text may carry any value)."""
+    print(f"[HA3455] {label}: {_redact(json.dumps(value, sort_keys=True, default=str), secrets)}", flush=True)
 
 
-def json_php(value: Any) -> str:
-    """A PHP expression that decodes ``value`` (JSON) to an associative array: ``''`` stays ``''``, ``[]`` stays ``array()``."""
-    return f"json_decode({h._php_str(json.dumps(value))}, TRUE)"
+def pair_secrets(pair: HaPair) -> list[str]:
+    """Every password the pair was configured with: nothing printed from a guest's raw text may carry one."""
+    return [pair.sync_password, pair.nopriv_password, pair.carp_password]
 
 
 @contextlib.contextmanager
 def guest_webui(vm: SmokeVM) -> Iterator[WebUI]:
-    """A logged-in webConfigurator session on ``vm``'s HTTPS port, through an SSH tunnel to the guest's own 443.
-
-    The harness forwards only the guest's port 80, which redirects to HTTPS once the pair serves HTTPS, so a page
-    request reaches the real webConfigurator (self-signed certificate) over a tunnel the test closes itself.
-    """
+    """A logged-in webConfigurator session on ``vm``'s HTTPS port, through an SSH tunnel to the guest's own 443."""
     action, password = admin_password_decision(os.environ)
     if action == "fail":
         pytest.fail(password)
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    tunnel = subprocess.Popen(
-        [
-            "ssh",
-            "-i",
-            vm.ssh_key_path,
-            "-p",
-            str(vm.ssh_port),
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-o",
-            "LogLevel=ERROR",
-            "-N",
-            "-L",
-            f"127.0.0.1:{port}:127.0.0.1:443",
-            vm.ssh_target,
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-
-        def listening() -> bool:
-            if tunnel.poll() is not None:
-                raise RuntimeError(
-                    f"ssh tunnel to the guest's HTTPS port exited: rc={tunnel.returncode} {tunnel.stderr and tunnel.stderr.read()!r}"
-                )
-            with socket.socket() as sock:
-                sock.settimeout(2.0)
-                return sock.connect_ex(("127.0.0.1", port)) == 0
-
-        h.wait_until(listening, timeout=30.0, interval=0.5)
+    with web_tunnel(vm) as port:
         client = WebUI(
             host="127.0.0.1",
             port=port,
@@ -313,12 +283,6 @@ def guest_webui(vm: SmokeVM) -> Iterator[WebUI]:
         )
         client.login()
         yield client
-    finally:
-        tunnel.terminate()
-        try:
-            tunnel.wait(timeout=10.0)
-        except subprocess.TimeoutExpired:
-            tunnel.kill()
 
 
 def save_sync_page(client: WebUI, fields: dict[str, str]) -> None:
@@ -330,57 +294,6 @@ def save_sync_page(client: WebUI, fields: dict[str, str]) -> None:
     resp = client.session.post(client.url(page), data=data, verify=False, timeout=120.0, allow_redirects=True)
     assert not looks_like_login_page(resp.text), "the Sync page POST returned the login form (session lost)"
     assert resp.status_code == 200, f"Sync page save: expected HTTP 200, got {resp.status_code}"
-
-
-def policy_payload(vm: SmokeVM) -> dict[str, Any]:
-    """The payload ``vm``'s own policy would put on the wire (gate leaf plus projection paths), built the way core does."""
-    gate = h._php_str(GATE)
-    php = (
-        "$normalized = config_get_path('');\n"
-        f"array_set_path($normalized, {gate}, 'policy');\n"
-        "$sections = array();\n"
-        "foreach (pfblockerng_sync_sections(TRUE) as $s) { $sections[$s] = array_get_path($normalized, 'installedpackages/' . $s); }\n"
-        f"$paths = array_merge(array({gate}), array_keys(pfb_sync_policy_projection($sections)));\n"
-        "$payload = array();\n"
-        "foreach ($paths as $p) { array_set_path($payload, $p, array_get_path($normalized, $p, array())); }\n"
-        + emit("$payload")
-    )
-    payload: dict[str, Any] = php_json(vm, php)
-    assert payload["installedpackages"]["pfblockerngsync"]["config"][0]["syncscope"] == "policy", (
-        f"payload gate leaf: expected 'policy', got {payload['installedpackages']['pfblockerngsync']!r}"
-    )
-    return payload
-
-
-def restore_call(pair: HaPair, params: Any, *, user: str = HA_USER, password: str | None = None) -> dict[str, Any]:
-    """One single-shot ``restore_config_section`` from A to B; ``params`` is JSON-able or a ready PHP expression (str)."""
-    expression = params if isinstance(params, str) else json_php(params)
-    return xmlrpc_call(
-        pair,
-        user=user,
-        password=pair.sync_password if password is None else password,
-        method="restore_config_section",
-        params_php=expression,
-    )
-
-
-def add_group(
-    pair: HaPair,
-    base: Baseline,
-    alias: str,
-    address: str,
-    *,
-    on: SmokeVM,
-    tag: str,
-    group: dict[str, Any] | None = None,
-) -> int:
-    """Append one IPv4 deny group to ``on``'s policy (feed files on both nodes); returns its row index."""
-    for vm in (pair.primary, pair.secondary):
-        write_feed(vm, alias, address)
-    rows = list(read_sections(on, ["pfblockernglistsv4"])["pfblockernglistsv4"]["config"])
-    rows.append(group or ip_group(alias, feed_path(alias), local=group_local_values(tag, base.gateway)))
-    write_sections(on, {"pfblockernglistsv4": {"config": rows}}, f"pfBlockerNG smoke: HA {alias}")
-    return len(rows) - 1
 
 
 def aliasnames(vm: SmokeVM) -> list[str]:
@@ -400,7 +313,7 @@ def receive_from_a(pair: HaPair, base: Baseline, scope: str, alias: str, address
     """B (scope ``scope``, listing A as its manual target) receives a changed policy from A and applies it once."""
     configure_sender(pair, "manual", timeout=SYNC_TIMEOUT)
     list_a_as_target(pair, scope)
-    add_group(pair, base, alias, address, on=pair.primary, tag="A")
+    add_deny_group(pair, base, alias, address, on=pair.primary, tag="A")
     sync = sync_once(pair, "manual")
     wait_filter_idle(pair.secondary)
     show("A's send record", sync.send)
@@ -452,21 +365,12 @@ def wait_deferred(vm: SmokeVM, *, since: int) -> dict[str, Any]:
     return seen
 
 
-def table_members(vm: SmokeVM, table: str) -> list[str]:
-    """Members of a pf table; ``[]`` while the table does not exist."""
-    result = vm.ssh(h.PFCTL, "-t", table, "-T", "show")
-    if result.returncode != 0 and "does not exist" in result.stderr:
-        return []
-    assert result.returncode == 0, f"pfctl -t {table} -T show: rc={result.returncode} stderr={result.stderr!r}"
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
 def enforcement(vm: SmokeVM, alias: str, address: str) -> dict[str, bool]:
     """One probe of the running firewall: is the feed address in the group's table, is a loaded rule using the table."""
     table = f"pfB_{alias}_v4"
     rules = vm.ssh(h.PFCTL, "-sr")
     assert rules.returncode == 0, f"pfctl -sr: rc={rules.returncode} stderr={rules.stderr!r}"
-    return {"member": h.member_present(table_members(vm, table), address), "rule": table in rules.stdout}
+    return {"member": h.member_present(pf_table(vm, alias), address), "rule": table in rules.stdout}
 
 
 def log_length(vm: SmokeVM, path: str = SYSTEM_LOG) -> int:
@@ -668,7 +572,7 @@ def test_malformed_and_unauthenticated_requests_change_nothing(
         )
         assert apply_banners(b) == banners and in_flight(b) == [], f"{label}: B started an update pass or tick"
 
-    shape = restore_call(ha_pair, "'not-an-array'")
+    shape = send_payload(ha_pair, "not-an-array")
     show("non-array payload", shape)
     assert shape.get("ok") is not True, f"a payload that is not an array was answered as accepted: {shape}"
     assert_untouched("non-array payload")
@@ -676,7 +580,7 @@ def test_malformed_and_unauthenticated_requests_change_nothing(
 
     for label, payload, reason in refusals:
         t0 = node_time(b)
-        result = restore_call(ha_pair, payload)
+        result = send_payload(ha_pair, payload)
         last = receive_state(b).get("last") or {}
         show(f"{label}: reply {result}, B's last", last)
         assert result.get("ok") is True, f"{label}: core answers a refused policy with True, got {result}"
@@ -691,9 +595,9 @@ def test_malformed_and_unauthenticated_requests_change_nothing(
     changed[packages]["pfblockernglistsv4"]["config"].append(ip_group(alias, feed_path(alias)))
     write_feed(a, alias, "198.51.100.32")
     write_feed(b, alias, "198.51.100.32")
-    wrong = restore_call(ha_pair, changed, password="not-" + ha_pair.sync_password)
+    wrong = send_payload(ha_pair, changed, password="not-" + ha_pair.sync_password)
     clear_sshguard(b)
-    nopriv = restore_call(ha_pair, changed, user=NOPRIV_USER, password=ha_pair.nopriv_password)
+    nopriv = send_payload(ha_pair, changed, user=NOPRIV_USER, password=ha_pair.nopriv_password)
     clear_sshguard(b)
     show("wrong password", wrong)
     show("unprivileged user", nopriv)
@@ -706,7 +610,7 @@ def test_malformed_and_unauthenticated_requests_change_nothing(
 
     t0 = node_time(b)
     banners = apply_banners(b)
-    accepted = restore_call(ha_pair, changed)
+    accepted = send_payload(ha_pair, changed)
     show("control: valid credentials", accepted)
     assert accepted.get("ok") is True, f"control: the valid request was not answered: {accepted}"
     last = receive_state(b).get("last") or {}
@@ -860,20 +764,23 @@ def test_receiver_never_echoes(ha_pair: HaPair, baseline: Baseline, undo: ExitSt
 
 
 @pytest.mark.parametrize("scope", SCOPES)
-@pytest.mark.timeout(2400)  # a receive, three apply passes and a second receive on A
+@pytest.mark.timeout(2700)  # a receive, up to four apply passes on B, two receives on A and three rendered Sync pages
 def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo: ExitStack, scope: str) -> None:
     """Saving B's Sync page (a real page POST) lets B's next apply send to A, and so does a later local edit.
 
     Before the save B holds A's accepted policy and stays silent (it would send otherwise: same stored targets,
-    same scope). In ``policy`` scope the row first shows that, while A is still the HA primary (core syncs A to B),
-    B's send does not show on A: core's XMLRPC server discards a call from the host it syncs to (``xmlrpc.php``
-    loop guard). A then leaves the HA primary role (the deliberate flip) and A's receive record advances
-    (``unchanged``, then ``changed`` with B's new group, applied once). ``all``/``lists`` use core's
+    same scope). In ``policy`` scope core's XMLRPC server on A drops a call that comes from the host A itself syncs
+    to (``xmlrpc.php`` loop guard), so a deliberate role flip includes clearing A's System > HA sync target (spec
+    amendment 2026-10-18). What pfBlockerNG owes under that behaviour is asserted, not core's guard: while A still
+    syncs to B and B sends an edit, B's record claims at most "sent, acceptance unconfirmed" (record and rendered
+    panel), and A's receive record, policy digest and groups are exactly what they were; once A's HA sync target is
+    cleared, B's next send reaches A (``changed``, the digests B sent, applied). ``all``/``lists`` use core's
     ``merge_installedpackages_section``, which has no package hook: A shows no receive record, and the evidence is
     B's ``sent`` attempt and A's stored sections equal to B's.
 
-    Red when: the save does not clear B's suppression (B stays silent), B sends before the save, A does not hold
-    B's edit afterwards, or (policy) A's record does not carry the digests of what B sent.
+    Red when: the save does not clear B's suppression (B stays silent), B sends before the save, B's record or panel
+    claims acceptance, a send core dropped moves A's record, policy or groups, A does not hold B's edit after the
+    flip, or (policy) A's record does not carry the digests of what B sent.
     """
     a, b = ha_pair.primary, ha_pair.secondary
     receive_from_a(ha_pair, baseline, scope, f"pfbha_f{token()}", "198.51.100.61")
@@ -924,18 +831,41 @@ def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo
         wait_filter_idle(b)
         return t0_a, send_state(b)
 
-    t0_a, sent = b_sends()
-    show("B's send record after the save", sent)
-    (attempt,) = sent["attempts"]
-    assert (attempt["target"], attempt["outcome"]) == (f"{PRIMARY_SYNC_IP}:443", "sent"), f"B's attempt: {attempt!r}"
-    b_digest = node_state(b).digest
+    alias = f"pfbha_g{token()}"
     if scope == "policy":
-        assert attempt.get("digest") == b_digest, f"B's digest: expected {b_digest!r}, got {attempt.get('digest')!r}"
-        show("A's receive record while A is the HA primary", receive_state(a))
-        assert receive_state(a) == {}, (
-            f"core's loop guard should have dropped B's call while A syncs to B, yet A recorded {receive_state(a)!r}"
+        # B's edit is what the guard drops: a delivered call would visibly change A, so "A unchanged" is not vacuous.
+        dropped = f"pfbha_h{token()}"
+        add_deny_group(ha_pair, baseline, dropped, "198.51.100.63", on=b, tag="B")
+        a_receive, a_digest = receive_state(a), node_state(a).digest
+        t0_a, sent = b_sends()
+        show("B's send record while A still syncs to B", sent)
+        (attempt,) = sent["attempts"]
+        b_digest = node_state(b).digest
+        assert (attempt["target"], attempt["outcome"]) == (f"{PRIMARY_SYNC_IP}:443", "sent"), (
+            f"B's attempt: {attempt!r}"
         )
-        # The deliberate flip: A stops being the HA primary, so B's next send is an ordinary call to a receiver.
+        assert attempt.get("digest") == b_digest != a_digest, (
+            f"B's attempt must carry B's edited policy digest {b_digest!r} (A holds {a_digest!r}): {attempt!r}"
+        )
+        claims = [key for key in attempt if re.search(r"accept|appl", key)]
+        assert not claims, f"B's record claims more than 'sent' for a call it cannot see through: {attempt!r}"
+        with guest_webui(b) as ui_b:
+            panel_b = _sender(render_sync_page(b, ui_b))
+        rows_b = sender_rows(panel_b)
+        assert [(row[0], row[2], row[3]) for row in rows_b] == [
+            (f"{PRIMARY_SYNC_IP}:443", b_digest, "sent, acceptance unconfirmed")
+        ], f"B's sender panel: expected one sent attempt with B's digest, got {rows_b!r}"
+        banned = BANNED.search(panel_b)
+        assert banned is None, (
+            f"B's sender panel claims {banned and banned.group(0)!r} for a call it cannot see through"
+        )
+        show("A's receive record while A is the HA primary", receive_state(a))
+        assert receive_state(a) == a_receive, (
+            f"a call core dropped moved A's receive record: {a_receive!r} -> {receive_state(a)!r}"
+        )
+        assert node_state(a).digest == a_digest, "a call core dropped moved A's policy digest"
+        assert dropped not in aliasnames(a), f"a call core dropped still put {dropped} on A: {aliasnames(a)}"
+        # The deliberate flip: A's HA sync target goes, so B's next send is an ordinary call to a receiver.
         set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A leaves the primary role")
         t0_a, sent = b_sends()
         show("B's send record after A left the primary role", sent)
@@ -943,22 +873,31 @@ def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo
         assert (attempt["target"], attempt["outcome"]) == (f"{PRIMARY_SYNC_IP}:443", "sent"), (
             f"B's attempt: {attempt!r}"
         )
+        wait_apply(a, since=t0_a)
+        settle(a)
+        wait_filter_idle(a)
         last = receive_state(a).get("last") or {}
         show("A's receive record", receive_state(a))
-        assert last.get("outcome") == "unchanged" and last.get("time", 0) >= t0_a, (
-            f"A's receive record did not advance: {last!r}"
+        assert last.get("outcome") == "changed" and last.get("time", 0) >= t0_a, (
+            f"A's receive record did not advance to B's edit: {last!r}"
         )
-        assert last.get("incoming_digest") == last.get("accepted_digest") == b_digest, (
+        assert last.get("incoming_digest") == last.get("accepted_digest") == b_digest == node_state(a).digest, (
             f"A's digests: {last!r} vs B {b_digest!r}"
         )
+        assert dropped in aliasnames(a), f"after the flip B's edit {dropped} never reached A: A holds {aliasnames(a)}"
     else:
+        t0_a, sent = b_sends()
+        show("B's send record after the save", sent)
+        (attempt,) = sent["attempts"]
+        assert (attempt["target"], attempt["outcome"]) == (f"{PRIMARY_SYNC_IP}:443", "sent"), (
+            f"B's attempt: {attempt!r}"
+        )
         assert "digest" not in attempt, f"a legacy scope sends no digest: {attempt!r}"
         assert receive_state(a) == {}, (
             f"core's merge call has no package hook, yet A recorded a receive: {receive_state(a)!r}"
         )
 
-    alias = f"pfbha_g{token()}"
-    add_group(ha_pair, baseline, alias, "198.51.100.62", on=b, tag="B")
+    add_deny_group(ha_pair, baseline, alias, "198.51.100.62", on=b, tag="B")
     t0_a, sent = b_sends()
     show("B's send record after a local edit", sent)
     (attempt,) = sent["attempts"]
@@ -1020,7 +959,7 @@ def test_one_unreachable_target_does_not_block_the_other(ha_pair: HaPair, baseli
     live = section["row"][0]
     section["row"] = [{**live, "varsyncipaddress": DEAD_IP}, live]
     set_leaves(a, {SYNC: section}, "pfBlockerNG smoke: HA two targets", secret_values=[ha_pair.sync_password])
-    add_group(ha_pair, baseline, f"pfbha_d{token()}", "198.51.100.81", on=a, tag="A")
+    add_deny_group(ha_pair, baseline, f"pfbha_d{token()}", "198.51.100.81", on=a, tag="A")
 
     sync = sync_once(ha_pair, "manual")
     wait_filter_idle(b)
@@ -1076,12 +1015,13 @@ def test_unreachable_peer_is_reported_truthfully(
         show(
             "rc.filter_synchronize on A",
             {"rc": synced.returncode, "stdout": synced.stdout[-400:], "stderr": synced.stderr[-400:]},
+            secrets=pair_secrets(ha_pair),
         )
     send = send_state(a)
     digest = node_state(a).digest
     lines = [line for line in log_since(a, mark) if SECONDARY_SYNC_IP in line or "XMLRPC" in line]
     show("A's send record", send)
-    show("A's system log lines about the sync", lines)
+    show("A's system log lines about the sync", lines, secrets=pair_secrets(ha_pair))
 
     if transport == "automatic":
         # Core's rc.filter_synchronize asks the peer for its config version first (carp_check_version, line 344) and
@@ -1153,7 +1093,7 @@ def test_apply_window_defers_and_failure_keeps_pending(
         undo.callback(restore_script)
         locked = b.ssh("/bin/chmod", "a-x", RELOAD_SCRIPT)
         assert locked.returncode == 0, f"chmod of {RELOAD_SCRIPT} on B failed: {locked.stderr!r}"
-    add_group(ha_pair, baseline, alias, address, on=a, tag="A")
+    add_deny_group(ha_pair, baseline, alias, address, on=a, tag="A")
     banners = apply_banners(b)
     mark = log_length(b)
 
@@ -1174,6 +1114,7 @@ def test_apply_window_defers_and_failure_keeps_pending(
     show(
         "B's system log lines about the filter",
         [x for x in log_since(b, mark) if re.search(r"filter|reload|XMLRPC", x, re.I)],
+        secrets=pair_secrets(ha_pair),
     )
     assert (apply.get("outcome"), apply.get("reason")) == expected, (
         f"B's apply record: expected {expected!r}, got {apply!r}"
@@ -1240,7 +1181,7 @@ def test_feed_header_contract_and_effective_findings(
         {**group["row"][0], "header": raw},
         {"header": reserved, "url": feed_path(f"{alias}r"), "state": "Enabled", "format": "auto"},
     ]
-    index = add_group(ha_pair, baseline, alias, "198.51.100.91", on=a, tag="A", group=group)
+    index = add_deny_group(ha_pair, baseline, alias, "198.51.100.91", on=a, tag="A", group=group)
     headers = [f"{V4}/{index}/row/0/header", f"{V4}/{index}/row/1/header"]
     assert read_leaves(a, headers) == dict(zip(headers, [raw, reserved], strict=True)), (
         "premise: A stores the raw headers"
