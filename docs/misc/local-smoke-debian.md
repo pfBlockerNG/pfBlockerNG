@@ -38,9 +38,12 @@ Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by
   `smoke-on-box.sh`; an absent — or empty — directory self-bootstraps via
   `sparse-clone-ports.sh`, issue #2490).
-- Egress to `go.dev`, `dl.google.com`, `proxy.golang.org` and `sum.golang.org` for
-  `tests/smoke/test_smoke_dns_gateway.py`: it downloads a pinned, sha256-verified Go toolchain and the gateway's
-  modules into the run's own scratch directory and deletes them afterwards; nothing is installed on the box.
+- Egress to `go.dev`, `dl.google.com`, `proxy.golang.org` and `sum.golang.org` while the source under test carries
+  `go/pfb_dns_gateway`: `smoke-on-box.sh` runs `scripts/go_toolchain.py install` before the package build, which
+  downloads the pinned Go toolchain, checks its sha256 before extracting a byte and keeps it, with every Go cache,
+  in one private directory under the system temp directory. The directory is removed after the whole run (the smoke
+  module builds its DoQ client with the same compiler); nothing is installed on the box and the user's own Go
+  caches are never touched. A source without the module gets no toolchain and no download.
 
 Image storage is not a box prerequisite. Each workload clears and pulls its selected
 pfSense image (and civm image unless `--no-two-vm`) into
@@ -179,11 +182,12 @@ tests collected) would fail that shard spuriously. `N` should stay at or under f
 1. `local-smoke.sh` leases one box from `PFB_BOXES` via `select-box.sh -- <bootstrap>`.
 2. On box, `smoke-on-box.sh` (invoked by bootstrap) runs in order:
    - `git sparse-checkout` (only `src`, `scripts`, `stubs/python`, `tests/smoke` and `go` —
-     about 15 MB of a 74 MB tree by `git ls-tree -r -l`; `go` is the DNS gateway's source, which
-     `test_smoke_dns_gateway.py` builds),
+     about 15 MB of a 74 MB tree by `git ls-tree -r -l`; `go` is the pfB-DNS gateway's source, built into the
+     package),
      then `git fetch` + `git checkout FETCH_HEAD`. Ref resolved HERE; the leg
      runs the already-resolved tree and never fetches.
    - `sparse-clone-ports.sh` to bring `/root/FreeBSD-ports` to `pfblockerng/use-github`.
+   - when the source carries `go/pfb_dns_gateway`: `go_toolchain.py install` (above), so the build below has Go.
    - the leg on the box itself, after `sysctl -w net.ipv4.ip_unprivileged_port_start=53`.
      `oras` pulls pfSense and civm images into `/root/images/{pfsense,civm}`.
      The shared registry described above is the durable fleet cache when

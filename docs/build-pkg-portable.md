@@ -115,7 +115,9 @@ repository/workflow/catalogue jobs.
 - **Go** (only for a source that carries `go/pfb_dns_gateway`, see
   [pfB-DNS binaries](#pfb-dns-binaries-dual-architecture-payload)): a toolchain on
   `PATH` at least as new as the module's `go` directive. CI installs the pinned
-  `GO_VERSION` with `actions/setup-go`. A legacy source without the module needs no Go.
+  `GO_VERSION` with `actions/setup-go`; a leased smoke box gets it from
+  [`scripts/go_toolchain.py`](../scripts/go_toolchain.py) (the same pin, sha256-checked). A legacy source without the
+  module needs no Go.
 
 A clone of [`pfsense/FreeBSD-ports`](https://github.com/pfsense/FreeBSD-ports)
 (or the fork carrying the port under test) is required — passed via `--ports`.

@@ -669,6 +669,113 @@ STUBEOF
     The stderr should not include 'running smoke'
   End
 
+  # ── the Go toolchain for the pfB-DNS payload (issue #3513) ──────────────── #
+  # A source that carries go/pfb_dns_gateway needs Go to build its payload and a leased box has
+  # none: the leg gets the pinned toolchain BEFORE the build and removes it only AFTER the whole
+  # smoke run (the smoke module's DoQ client reuses it). A legacy source gets neither.
+
+  go_leg() {
+    prev_pkg_leg
+    GO_TC_LOG="${WORK}/go-log"
+    GO_TC_ROOT="${WORK}/toolchain"
+    true > "$GO_TC_LOG"
+    export GO_TC_LOG GO_TC_ROOT
+    cat > "${FAKE_ROOT}/scripts/go_toolchain.py" <<'STUBEOF'
+#!/usr/bin/env python3
+import os
+import shutil
+import sys
+
+root = os.environ["GO_TC_ROOT"]
+with open(os.environ["GO_TC_LOG"], "a") as log:
+    log.write("toolchain " + " ".join(sys.argv[1:]) + "\n")
+if sys.argv[1] == "install":
+    if os.environ.get("GO_TC_FAIL"):
+        sys.stderr.write("go_toolchain: no pinned archive for this machine\n")
+        sys.exit(1)
+    os.makedirs(root + "/go/bin")
+    with open(root + "/go/bin/go", "w") as go:
+        go.write("#!/bin/sh\necho go version go1.27.0\n")
+    os.chmod(root + "/go/bin/go", 0o755)
+    print("export PFB_GO_ROOT=" + root)
+    print("export PATH=" + root + "/go/bin:" + os.environ["PATH"])
+elif sys.argv[1] == "remove":
+    shutil.rmtree(sys.argv[2])
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'build-leg go=%s\n' "$(command -v go || echo none)" >> "$GO_TC_LOG"
+[ "${BUILD_LEG_EXIT:-0}" -eq 0 ] || exit "$BUILD_LEG_EXIT"
+printf '%s\n' /tmp/fake-branch.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'run-smoke go=%s root=%s\n' "$(command -v go || echo none)" "$([ -d "${PFB_GO_ROOT:-}" ] && echo present || echo gone)" >> "$GO_TC_LOG"
+exit "${RUN_SMOKE_EXIT:-0}"
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/go_toolchain.py" "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/run-smoke.sh"
+  }
+
+  with_go_module() {
+    mkdir -p "${FAKE_ROOT}/go/pfb_dns_gateway"
+    true > "${FAKE_ROOT}/go/pfb_dns_gateway/go.mod"
+  }
+
+  It 'provides the pinned Go before the build and removes it only after the whole smoke run'
+    go_leg
+    with_go_module
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The contents of file "$GO_TC_LOG" should equal "$(printf 'toolchain install\nbuild-leg go=%s/go/bin/go\nrun-smoke go=%s/go/bin/go root=present\ntoolchain remove %s\n' "$GO_TC_ROOT" "$GO_TC_ROOT" "$GO_TC_ROOT")"
+    The path "$GO_TC_ROOT" should not be exist
+  End
+
+  It 'removes the toolchain and keeps the smoke run exit status when the run fails'
+    go_leg
+    with_go_module
+    RUN_SMOKE_EXIT=7
+    export RUN_SMOKE_EXIT
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 7
+    The stderr should include 'running smoke'
+    The contents of file "$GO_TC_LOG" should include "toolchain remove ${GO_TC_ROOT}"
+    The path "$GO_TC_ROOT" should not be exist
+  End
+
+  It 'removes the toolchain when the package build fails, and never reaches the smoke run'
+    go_leg
+    with_go_module
+    BUILD_LEG_EXIT=1
+    export BUILD_LEG_EXIT
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should not equal 0
+    The stderr should not include 'running smoke'
+    The contents of file "$GO_TC_LOG" should equal "$(printf 'toolchain install\nbuild-leg go=%s/go/bin/go\ntoolchain remove %s\n' "$GO_TC_ROOT" "$GO_TC_ROOT")"
+    The path "$GO_TC_ROOT" should not be exist
+  End
+
+  It 'stops before any build, naming the toolchain, when it cannot be installed'
+    go_leg
+    with_go_module
+    GO_TC_FAIL=1
+    export GO_TC_FAIL
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should not equal 0
+    The stderr should include 'Go toolchain'
+    The stderr should include 'no pinned archive'
+    The contents of file "$GO_TC_LOG" should equal 'toolchain install'
+  End
+
+  It 'neither installs nor removes a toolchain for a source without the Go module'
+    go_leg
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The contents of file "$GO_TC_LOG" should not include 'toolchain'
+    The contents of file "$GO_TC_LOG" should include 'run-smoke'
+  End
+
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #
   #
   # The config echo (config abi=... pfsense_ref=... civm_ref=...) fires BEFORE the
