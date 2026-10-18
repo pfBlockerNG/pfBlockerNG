@@ -1836,8 +1836,10 @@ final class DnsProxyServiceTest extends TestCase
 		$text = $this->rcText();
 
 		foreach ([
-			"--doh-listen '192.0.2.1'", "--doh-listen '2001:db8::1'", "--doh-port '8443'", "--doh-trusted '192.0.2.10/32'",
-			"--doq-listen '192.0.2.1'", "--doq-listen '2001:db8::1'", "--doq-port '8853'",
+			"--doh-listen '192.0.2.1'", "--doh-listen '2001:db8::1'", "--doh-listen '127.0.0.1'", "--doh-listen '::1'",
+			"--doh-port '8443'", "--doh-trusted '192.0.2.10/32'",
+			"--doq-listen '192.0.2.1'", "--doq-listen '2001:db8::1'", "--doq-listen '127.0.0.1'", "--doq-listen '::1'",
+			"--doq-port '8853'",
 		] as $quoted) {
 			$this->assertStringContainsString($quoted, $text, "{$quoted} must be a quoted word of the daemon line");
 		}
@@ -1877,7 +1879,9 @@ final class DnsProxyServiceTest extends TestCase
 		// Then the DoH group is left out whole, the DoQ group is intact, the bad value is nowhere in the script,
 		// and one warning says so
 		$this->assertSame(
-			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--doq-listen', '192.0.2.1', '--doq-port', '8853']),
+			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
+				'--doq-listen', '192.0.2.1', ...self::loopbackListen('doq'), '--doq-port', '8853',
+			]),
 			$argv
 		);
 		$this->assertStringNotContainsString('PWNED', $this->rcText());
@@ -1895,7 +1899,9 @@ final class DnsProxyServiceTest extends TestCase
 		$this->setting('pfb_dns_proxy_doq_port', 'abc');
 
 		$this->assertSame(
-			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--doh-listen', '192.0.2.1', '--doh-port', '4443']),
+			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
+				'--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443',
+			]),
 			$this->startAndReadArgv($gateway)
 		);
 		$this->assertCount(1, $this->portWarnings());
