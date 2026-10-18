@@ -3162,6 +3162,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$mode = 'disabled';
 	}
 
+	// issue #3515: whether pfB-DNS is wanted is decided here, from the same runtime view as $mode (a removal pass has just
+	// turned pfBlockerNG off in it), and handed to pfb_unbound_python(), which re-reads config.xml and would see it back on.
+	$pfb_dns_wanted = pfb_dns_wanted();
+
 	// [ ADR-13 ] Provision (or remove) the auto-created DNSBL sinkhole VIP(s) BEFORE the
 	// DNSBL config consumers below. pfb_unbound_python() bakes the sinkhole IP
 	// ($pfb['dnsbl_vip4']/[vip6]) into the module ini, so the marked VIP must already exist
@@ -3172,7 +3176,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	pfb_manage_dnsbl_vip($mode);
 
 	// Modify Unbound python configuration and mount lib/bin folders, as required
-	$pfbpython = pfb_unbound_python($mode);
+	$pfbpython = pfb_unbound_python($mode, $pfb_dns_wanted);
 
 	// Modify Unbound.conf file, as required
 	$pfbupdate = pfb_unbound_dnsbl($mode);
@@ -3480,9 +3484,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			pfb_dnsbl_cache('save');
 		}
 	}
-	elseif ($mode === 'enabled') {
-		pfb_dns_proxy_ensure_running();
-	}
+
+	// issue #3515: pfB-DNS serves with DNSBL on or off ($mode only says whether DNSBL is): bring up a proxy that died since
+	// the last pass, and restart one whose rc script changed. A reload above has already restarted a proxy that hosts the module.
+	pfb_dns_proxy_ensure_running();
 
 
 	#################################

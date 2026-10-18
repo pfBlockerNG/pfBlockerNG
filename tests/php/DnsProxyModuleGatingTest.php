@@ -97,7 +97,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 	private function seedPackageConfig(bool $proxy): void
 	{
 		PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', [
-			'pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0',
+			'pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0', 'enable_cb' => 'on',
 		]);
 		PfbConfig::writeSectionSystem('installedpackages/pfblockerngipsettings/config/0', [
 			'suppression' => '', 'database_cc' => '', 'asn_token' => '', 'maxmind_account' => '',
@@ -249,8 +249,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 		// Then a restart is signalled, the module keys are gone and the Resolver is moved ...
 		$this->assertTrue($changed);
-		$this->assertFalse(config_path_enabled('unbound', 'python'));
-		$this->assertSame('', config_get_path('unbound/python_script'));
+		$this->assertFalse($this->pythonModuleKeysSet(), 'Unbound does not load the module the proxy hosts');
+		$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'), 'it runs the inert observer instead');
 		$this->assertSame('53', config_get_path('unbound/port'), 'the listen port stays: the firewall resolves through it');
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
 		$this->assertNotSame('', $this->savedRaw());
@@ -258,14 +258,14 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// ... unbound.conf is regenerated from config.xml exactly once, without restarting DHCP ...
 		$this->assertSame([FALSE], $this->configureCalls());
 		$this->assertSame('lo0', $this->resolverWhenConfigured()['active_interface'], 'unbound.conf is rendered from the moved Resolver');
-		$this->assertArrayNotHasKey('python', $this->resolverWhenConfigured(), 'with the module keys already out');
+		$this->assertSame('pfb_upstream_observer', $this->resolverWhenConfigured()['python_script'], 'with the module keys already out');
 
 		// ... and the module's own inputs are still produced, because the proxy loads the module from them.
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_conf']);
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_wh']);
 	}
 
-	public function testProxyOnLeavesAUsersOwnPythonModuleKeysAlone(): void
+	public function testProxyOnTakesUnboundsPythonSlotForTheObserverAsTheModuleDoes(): void
 	{
 		// Given the proxy on and a Resolver running the admin's own python module.
 		$this->setProxy(TRUE);
@@ -276,10 +276,9 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// When DNSBL is applied.
 		pfb_unbound_python('enabled');
 
-		// Then the module keys are not ours to remove.
-		$this->assertTrue(config_path_enabled('unbound', 'python'));
-		$this->assertSame('mymodule', config_get_path('unbound/python_script'));
-		$this->assertSame('pre_validator', config_get_path('unbound/python_order'));
+		// Then Unbound's one python slot goes to the observer, exactly as it goes to pfb_unbound.py with the toggle
+		// off: pfSense's Unbound start hook (the boot-time DNS) is looked up from that one script name.
+		$this->assertSame([TRUE, 'pre_validator', 'pfb_upstream_observer'], $this->pythonKeys());
 	}
 
 	public function testProxyOnAppliedAgainRegeneratesNothingAndSignalsNoRestart(): void
@@ -298,7 +297,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertCount(1, $this->configureCalls());
 	}
 
-	public function testMountsHappenOnlyWhenTheModuleGoesIntoUnbound(): void
+	public function testMountsHappenOnlyWhenAPythonScriptGoesIntoUnbound(): void
 	{
 		// Given nothing mounted; the proxy off first, to prove this harness reaches the mount code.
 		$this->useMountState(FALSE);
@@ -306,13 +305,13 @@ final class DnsProxyModuleGatingTest extends TestCase
 		pfb_unbound_python('enabled');
 		$this->assertStringContainsString('Mounting: /usr/local/bin', $this->pfbLog(), 'before: proxy off mounts');
 
-		// When the proxy is on.
+		// When the proxy is on but its move is refused (Listen Port 5353): no snapshot, so no python script at all.
 		@unlink($GLOBALS['pfb']['log']);
 		$this->setProxy(TRUE);
-		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$GLOBALS['config']['unbound'] = ['port' => '5353'] + self::originalResolver();
 		pfb_unbound_python('enabled');
 
-		// Then Unbound is not given the module's mounts.
+		// Then Unbound is not given python's mounts.
 		$this->assertStringNotContainsString('Mounting:', $this->pfbLog());
 	}
 
@@ -330,35 +329,120 @@ final class DnsProxyModuleGatingTest extends TestCase
 	// G3 -- every way out restores the Resolver and gives the module back
 	// -----------------------------------------------------------------------
 
-	public function testDnsblDisabledRestoresTheResolverAndKeepsTheModuleOut(): void
+	public function testDnsblDisabledWhilePfbDnsIsOnKeepsTheResolverMovedAndTheInertObserverInUnbound(): void
 	{
-		// Given a moved Resolver (the toggle stays on; DNSBL is what gets disabled).
+		// Given pfB-DNS on and a moved Resolver whose Unbound runs the observer, and DNSBL gets disabled.
 		$this->setProxy(TRUE);
+		$this->seedMovedResolver();
+		foreach (self::OBSERVER_KEYS as $key => $value) {
+			config_set_path("unbound/{$key}", $value);
+		}
+		$snapshot = $this->savedRaw();
+
+		// When the disabled pass runs.
+		$changed = pfb_unbound_python('disabled');
+
+		// Then pfB-DNS keeps serving: nothing is restored or regenerated, the observer stays in Unbound
+		// (it is what lets pfSense's Unbound start hook bring pfB-DNS up at boot) and its mounts are not unmounted.
+		$this->assertFalse($changed);
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertSame($snapshot, $this->savedRaw());
+		$this->assertSame([TRUE, 'pre_validator', 'pfb_upstream_observer'], $this->pythonKeys());
+		$this->assertSame([], $this->configureCalls());
+		$this->assertArrayNotHasKey('dnsbl_python_unmount', $GLOBALS['pfb'], 'the observer still needs the python mounts');
+	}
+
+	public function testPfbDnsOnWithDnsblOffMovesTheResolverAndGivesUnboundTheInertObserver(): void
+	{
+		// Given nothing mounted, pfB-DNS on and an untouched Resolver, and DNSBL off.
+		$this->useMountState(FALSE);
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+
+		// When the disabled pass runs (DNSBL is off: the pass that used to only tear DNSBL down).
+		$changed = pfb_unbound_python('disabled');
+
+		// Then the Resolver is moved, Unbound gets the observer and its mounts, and no DNSBL input is produced.
+		$this->assertTrue($changed);
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertNotSame('', $this->savedRaw());
+		$this->assertSame([TRUE, 'pre_validator', 'pfb_upstream_observer'], $this->pythonKeys());
+		$this->assertSame([FALSE], $this->configureCalls());
+		$this->assertSame('pfb_upstream_observer', $this->resolverWhenConfigured()['python_script']);
+		$this->assertStringContainsString('Mounting: /usr/local/bin', $this->pfbLog());
+		$this->assertStringContainsString('Mounting: /usr/local/lib', $this->pfbLog());
+		$this->assertArrayNotHasKey('dnsbl_python_unmount', $GLOBALS['pfb']);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['unbound_py_conf'], 'DNSBL off: the module ini is not produced');
+	}
+
+	public function testPfbDnsOnWithDnsblOffAppliedAgainSignalsNothing(): void
+	{
+		// Given pfB-DNS on, DNSBL off and one pass already applied.
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->assertTrue(pfb_unbound_python('disabled'));
+
+		// When the next pass finds everything in place.
+		$changed = pfb_unbound_python('disabled');
+
+		// Then it is a steady state.
+		$this->assertFalse($changed);
+		$this->assertCount(1, $this->configureCalls());
+	}
+
+	public function testPfbDnsOnWithTheResolverDisabledPutsItBack(): void
+	{
+		// Given pfB-DNS on and a moved Resolver, and the admin disables the Resolver itself (nothing left to front).
+		$this->setProxy(TRUE);
+		$this->seedMovedResolver();
+		config_del_path('unbound/enable');
+
+		// When the pass runs with no mode (DNSBL on, Resolver disabled).
+		$changed = pfb_unbound_python('');
+
+		// Then the Resolver is back as the user had it (its own enable flag stays absent) and the snapshot is cleared.
+		$expected = self::originalResolver();
+		unset($expected['enable']);
+		$this->assertTrue($changed);
+		$this->assertSame(self::sorted($expected), self::sorted(config_get_path('unbound')));
+		$this->assertSame('', $this->savedRaw());
+		$this->assertSame([FALSE], $this->configureCalls());
+	}
+
+	public function testPfBlockerNgDisabledPutsTheResolverBackWhateverPfbDnsSays(): void
+	{
+		// Given a moved Resolver, the toggle on, and pfBlockerNG itself disabled.
+		$this->setProxy(TRUE);
+		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::Off);
 		$this->seedMovedResolver();
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'before: moved');
 
 		// When the disabled pass runs.
 		pfb_unbound_python('disabled');
 
-		// Then the Resolver is back, the module keys are absent, unbound.conf was regenerated once.
-		$this->assertResolverRestored('disabled pass');
+		// Then the Resolver is back, the observer is not given to Unbound, unbound.conf was regenerated once.
+		$this->assertResolverRestored('pfBlockerNG disabled');
 		$this->assertFalse($this->pythonModuleKeysSet());
+		$this->assertFalse(config_path_enabled('unbound', 'python'));
 		$this->assertSame([FALSE], $this->configureCalls());
 		$this->assertSame('lan,opt1', $this->resolverWhenConfigured()['active_interface'], 'unbound.conf is rendered from the restored Resolver');
-		$this->assertArrayNotHasKey('python', $this->resolverWhenConfigured(), 'with the module keys out');
-		$this->assertTrue($GLOBALS['pfb']['dnsbl_python_unmount'], 'the disabled pass still schedules the unmount');
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_python_unmount'], 'the disabled pass schedules the unmount');
 	}
 
-	public function testAnUndefinedModeRestoresTheResolverToo(): void
+	public function testPfbDnsOffAndDnsblDisabledPutsTheResolverBackAndSchedulesTheUnmount(): void
 	{
-		// Given a moved Resolver and a pass whose mode is '' (DNSBL on, Resolver disabled).
-		$this->setProxy(TRUE);
+		// Given a moved Resolver and the admin turned pfB-DNS off while DNSBL is off.
 		$this->seedMovedResolver();
+		$this->setProxy(FALSE);
 
-		pfb_unbound_python('');
+		// When the disabled pass runs.
+		pfb_unbound_python('disabled');
 
-		$this->assertResolverRestored("mode ''");
+		// Then the Resolver is back, no python keys remain, and the python mounts are scheduled for unmounting.
+		$this->assertResolverRestored('toggle off, DNSBL off');
+		$this->assertFalse($this->pythonModuleKeysSet());
 		$this->assertSame([FALSE], $this->configureCalls());
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_python_unmount']);
 	}
 
 	public function testRestoringTheResolverAloneSignalsAnUnboundRestart(): void
@@ -432,7 +516,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 	private const CONF_WITH_MODULE = "server:\n\tinterface: 127.0.0.1\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_unbound.py\n";
 	private const CONF_WITHOUT_MODULE = "server:\n\tinterface: 127.0.0.1\n\tmodule-config: \"validator iterator\"\n";
 
-	public function testUnboundConfLosesTheModuleWhileASnapshotExists(): void
+	public function testUnboundConfSwapsTheModuleForTheObserverWhileASnapshotExists(): void
 	{
 		// Given a conf that loads the module and a snapshot (the proxy owns the module).
 		$this->seedMovedResolver();
@@ -442,11 +526,12 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// When the enabled pass patches it.
 		$changed = pfb_unbound_dnsbl('enabled');
 
-		// Then the module is removed from Unbound's module chain and its script block is gone.
+		// Then the module is out and the inert observer is the one python script, forwarding or not.
 		$this->assertTrue($changed);
 		$patched = $this->patchedConf();
-		$this->assertStringContainsString('module-config: "validator iterator"', $patched);
-		$this->assertStringNotContainsString('python', $patched);
+		$this->assertSame(1, substr_count($patched, 'python-script:'));
+		$this->assertStringContainsString('python-script: pfb_upstream_observer.py', $patched);
+		$this->assertStringNotContainsString('pfb_unbound.py', $patched);
 		$this->assertStringContainsString('interface: 127.0.0.1', $patched, 'unrelated lines survive');
 	}
 
@@ -520,10 +605,11 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringContainsString('interface: 10.10.10.1', $this->patchedConf());
 	}
 
-	public function testModuleFilesAreStagedByModeNotBySnapshot(): void
+	public function testModuleFilesAreStagedWhileTheModuleOrAnyPythonScriptIsInUnbound(): void
 	{
 		// The staging exec targets an absolute appliance path with no test seam, so the decision
-		// is pinned in the source: the proxy imports the staged module, so it must stay staged.
+		// is pinned in the source: the proxy imports the staged module, and Unbound's boot hook
+		// (pfb_upstream_observer_include.inc) must stay staged while the observer is in Unbound.
 		$ref = new ReflectionFunction('pfb_unbound_dnsbl');
 		$body = implode('', array_slice(
 			(array) file((string) $ref->getFileName()),
@@ -532,9 +618,9 @@ final class DnsProxyModuleGatingTest extends TestCase
 		));
 
 		$this->assertMatchesRegularExpression(
-			"/if \\(\\\$mode == 'enabled'\\) \\{\\s*(?:\\/\\/[^\\n]*\\n\\s*)*exec\\('[^']*dnsbl_cache stage/",
+			"/if \\(\\\$mode == 'enabled' \\|\\| \\\$script !== NULL\\) \\{\\s*(?:\\/\\/[^\\n]*\\n\\s*)*exec\\('[^']*dnsbl_cache stage/",
 			$body,
-			'staging must follow the mode, not whether a snapshot exists'
+			'staging must follow the mode or the script Unbound is given, never tear down under a snapshot'
 		);
 	}
 
@@ -580,25 +666,21 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertSame('pfb_upstream_observer', $this->resolverWhenConfigured()['python_script'], 'unbound.conf is rendered with the observer');
 	}
 
-	public function testProxyOnWithoutForwardingGivesUnboundNoPythonModuleAtAll(): void
+	public function testProxyOnWithoutForwardingStillGivesUnboundTheInertObserver(): void
 	{
-		// Given a moved Resolver that still carries the observer keys, then the admin switches forwarding off
-		// (recursion has no upstream answer to observe).
+		// Given pfB-DNS on, a moved Resolver that is recursing (not forwarding), and no python keys yet.
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
-		foreach (self::OBSERVER_KEYS as $key => $value) {
-			config_set_path("unbound/{$key}", $value);
-		}
 		$this->setForwarding(FALSE);
-		$this->assertSame([TRUE, 'pre_validator', 'pfb_upstream_observer'], $this->pythonKeys());
+		$this->assertFalse(config_path_enabled('unbound', 'python'));
 
 		// When DNSBL is applied.
 		$changed = pfb_unbound_python('enabled');
 
-		// Then the keys are removed and Unbound is signalled to restart without the module.
+		// Then Unbound is given the observer anyway: it stays inert without a report socket, and it is what
+		// lets pfSense's Unbound start hook bring pfB-DNS up at boot, forwarding or not.
 		$this->assertTrue($changed);
-		$this->assertFalse(config_path_enabled('unbound', 'python'));
-		$this->assertSame('', config_get_path('unbound/python_script'));
+		$this->assertSame([TRUE, 'pre_validator', 'pfb_upstream_observer'], $this->pythonKeys());
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'the Resolver stays moved');
 	}
 
@@ -620,10 +702,10 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertTrue($this->pythonModuleKeysSet());
 	}
 
-	public function testDnsblDisabledTakesTheObserverKeysOut(): void
+	public function testPfbDnsOffAndDnsblDisabledTakesTheObserverKeysOut(): void
 	{
-		// Given the observer keys and a moved Resolver, DNSBL disabled.
-		$this->setProxy(TRUE);
+		// Given the observer keys and a moved Resolver, the toggle off and DNSBL disabled.
+		$this->setProxy(FALSE);
 		$this->seedMovedResolver();
 		foreach (self::OBSERVER_KEYS as $key => $value) {
 			config_set_path("unbound/{$key}", $value);
@@ -633,9 +715,10 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// When the disabled pass runs.
 		pfb_unbound_python('disabled');
 
-		// Then neither the module nor the observer remains in Unbound.
+		// Then the Resolver is restored and neither the module nor the observer remains in Unbound.
 		$this->assertFalse(config_path_enabled('unbound', 'python'));
 		$this->assertSame('', config_get_path('unbound/python_script'));
+		$this->assertSame('', $this->savedRaw());
 	}
 
 	public function testAnAbandonedRestoreKeepsTheObserverWhileTheProxyStillHostsTheModule(): void
@@ -736,20 +819,19 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringNotContainsString('pfb_upstream_observer', $patched);
 	}
 
-	public function testUnboundConfLosesTheObserverWhenForwardingIsOff(): void
+	public function testUnboundConfKeepsTheObserverWhenForwardingIsOff(): void
 	{
-		// Given a conf that loads the observer, a snapshot, and a Resolver that no longer forwards.
+		// Given a conf that loads the observer, a snapshot, and a Resolver that does not forward.
 		$this->seedMovedResolver();
 		$this->setForwarding(FALSE);
 		$this->writeUnboundConf(self::CONF_WITH_OBSERVER);
 
-		// When the enabled pass patches it.
-		$this->assertTrue(pfb_unbound_dnsbl('enabled'));
+		// When the enabled pass looks at it.
+		$changed = pfb_unbound_dnsbl('enabled');
 
-		// Then no python module remains.
-		$patched = $this->patchedConf();
-		$this->assertStringContainsString('module-config: "validator iterator"', $patched);
-		$this->assertStringNotContainsString('python', $patched);
+		// Then the inert observer stays: nothing is rewritten.
+		$this->assertFalse($changed);
+		$this->assertSame('', $this->patchedConf());
 	}
 
 	public function testUnboundConfWithTheObserverAlreadyInPlaceIsLeftAlone(): void
@@ -767,11 +849,38 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertSame('', $this->patchedConf());
 	}
 
-	public function testDisabledPassStripsTheObserverFromUnboundConfToo(): void
+	public function testDisabledPassKeepsTheObserverInUnboundConfWhileASnapshotExists(): void
 	{
-		// Given a conf that loads the observer.
+		// Given a conf that loads the observer and a snapshot (pfB-DNS on, DNSBL off).
 		$this->seedMovedResolver();
-		$this->setForwarding(TRUE);
+		$this->writeUnboundConf(self::CONF_WITH_OBSERVER);
+
+		// When the disabled pass looks at it.
+		$changed = pfb_unbound_dnsbl('disabled');
+
+		// Then nothing is rewritten: pfB-DNS still needs the observer's boot hook.
+		$this->assertFalse($changed);
+		$this->assertSame('', $this->patchedConf());
+	}
+
+	public function testDisabledPassGivesUnboundTheObserverWhilePfbDnsIsOn(): void
+	{
+		// Given a snapshot and a conf with no python module at all (DNSBL was off when pfB-DNS moved the Resolver).
+		$this->seedMovedResolver();
+		$this->writeUnboundConf(self::CONF_WITHOUT_MODULE);
+
+		// When the disabled pass patches it.
+		$this->assertTrue(pfb_unbound_dnsbl('disabled'));
+
+		// Then the observer is added as the one python script.
+		$patched = $this->patchedConf();
+		$this->assertStringContainsString('module-config: "python validator iterator"', $patched);
+		$this->assertStringContainsString("python:\npython-script: pfb_upstream_observer.py", $patched);
+	}
+
+	public function testDisabledPassStripsTheObserverFromUnboundConfWithoutASnapshot(): void
+	{
+		// Given a conf that still loads the observer and no snapshot (pfB-DNS is gone).
 		$this->writeUnboundConf(self::CONF_WITH_OBSERVER);
 
 		// When the disabled pass patches it.
@@ -875,8 +984,12 @@ final class DnsProxyModuleGatingTest extends TestCase
 	// U1 -- the package's own uninstall pass
 	// -----------------------------------------------------------------------
 
-	/** The apply pass's own mode computation (pfblockerng_apply.inc), run against the real pfb_global(). */
-	private function applyModeFor(bool $install): string
+	/**
+	 * The apply pass's own mode and pfB-DNS decisions (pfblockerng_apply.inc), run against the real pfb_global().
+	 *
+	 * @return array{string,bool} $mode, and what the apply hands pfb_unbound_python() as $dns_wanted
+	 */
+	private function applyDecisionsFor(bool $install): array
 	{
 		$GLOBALS['pfb']['install'] = $install;
 		pfb_global();
@@ -887,28 +1000,31 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$end = $start === FALSE ? FALSE : strpos($source, $until, $start);
 		$this->assertTrue($start !== FALSE && $end !== FALSE, 'test bootstrap: apply mode region found');
 		$mode = NULL;
+		$pfb_dns_wanted = NULL;
 		$pfb = &$GLOBALS['pfb'];
 		eval(substr($source, (int) $start, (int) $end - (int) $start));
-		return (string) $mode;
+		return [(string) $mode, (bool) $pfb_dns_wanted];
 	}
 
 	public function testUninstallDisablePassRestoresTheResolver(): void
 	{
-		// Given pfBlockerNG fully on with a moved Resolver: on its own, the apply pass runs 'enabled'.
+		// Given pfBlockerNG fully on with a moved Resolver: on its own, the apply pass runs 'enabled' and wants pfB-DNS.
 		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
 		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
-		$this->assertSame('enabled', $this->applyModeFor(FALSE), 'before: a normal pass is enabled');
+		$this->assertSame(['enabled', TRUE], $this->applyDecisionsFor(FALSE), 'before: a normal pass is enabled');
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'before: moved');
 
 		// When pfblockerng_php_pre_deinstall_command()'s flag turns the pass into a disable pass.
-		$mode = $this->applyModeFor(TRUE);
+		[$mode, $wanted] = $this->applyDecisionsFor(TRUE);
 
-		// Then the pass is 'disabled', and its Unbound step hands the Resolver back.
-		$this->assertSame('disabled', $mode);
-		pfb_unbound_python($mode);
+		// Then the pass is 'disabled' and pfB-DNS is not wanted, although config.xml (which pfb_unbound_python() re-reads
+		// and which still has pfBlockerNG on) says otherwise: its Unbound step hands the Resolver back.
+		$this->assertSame(['disabled', FALSE], [$mode, $wanted]);
+		pfb_unbound_python($mode, $wanted);
 		$this->assertResolverRestored('uninstall disable pass');
+		$this->assertFalse(config_path_enabled('unbound', 'python'));
 	}
 }
