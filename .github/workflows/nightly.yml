@@ -206,6 +206,8 @@ jobs:
     name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }} php${{ matrix.php_version }} ${{ matrix.py_flavor }})
     needs: prepare
     runs-on: ubuntu-latest
+    env:
+      GO_VERSION: "1.27.0"
     strategy:
       fail-fast: false
       matrix:
@@ -234,6 +236,14 @@ jobs:
 
       - name: Sync the locked dependency-package toolchain
         run: uv sync --project trusted --locked --only-group dep-pkg-build
+
+      - name: Set up the pinned Go toolchain
+        # The pinned source's pfB-DNS gateway is cross-compiled by the trusted builder
+        # (scripts/build-pfb-dns.py, GOTOOLCHAIN=local): this is the compiler it runs.
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
 
       - name: Build and verify package
         env:
