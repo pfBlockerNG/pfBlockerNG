@@ -119,6 +119,14 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertMatchesRegularExpression('/<span class="text-warning"><strong>Experimental\./', $page, 'the help says so plainly, in the warning style');
 	}
 
+	public function testTheHelpNamesTheCustomOptionsLinesThatStopTheMove(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		$this->assertStringContainsString('<code>include:</code>', $page, 'an include is named: the move refuses it');
+		$this->assertStringContainsString('nothing is changed', $page, 'a refused move changes nothing, and the help says so');
+	}
+
 	public function testTheDnsblPageNoLongerCarriesTheToggleOrItsHelp(): void
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');

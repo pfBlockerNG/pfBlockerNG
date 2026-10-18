@@ -306,7 +306,6 @@ final class DnsProxyResolverMoveTest extends TestCase
 			'interfaces back to a LAN'    => ['unbound/active_interface', 'lan'],
 			'DoT switched back on'        => ['unbound/enablessl', ''],
 			'our block removed'           => ['unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes")],
-			'our block cut short'         => ['unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes\nserver:\n# pfBlockerNG DNS proxy\nproxy-protocol-port: 5353")],
 		];
 	}
 
@@ -542,7 +541,13 @@ final class DnsProxyResolverMoveTest extends TestCase
 			'interface-automatic-ports on the proxy port' => ["server:\ninterface-automatic-ports: 5353"],
 			'after another directive on the same line'    => ["prefetch: yes interface: 0.0.0.0@53"],
 			'after a lone CR'                             => ["server:\rinterface: 0.0.0.0@53"],
-			'commented out'                               => ["server:\n# interface: 127.0.0.1@5353"],
+			'an interface after a quoted hash'                  => ["server:\nlog-identity: \"#\" interface: 0.0.0.0@5300"],
+			'an interface after a hash inside a word'           => ["server:\nlog-identity: a#b interface: 0.0.0.0@5300"],
+			'an interface after a single-quoted hash'           => ["server:\nlog-identity: '#' interface: 0.0.0.0@5300"],
+			'an interface after an escaped quote inside quotes' => ["server:\nlog-identity: \"a\\\" # \" interface: 0.0.0.0@5300"],
+			'an interface after a directive on its line'        => ["server:\nprefetch: yes interface: 0.0.0.0@5300"],
+			'an outgoing-interface line (refused too: every interface key is)' => ["server:\noutgoing-interface: 192.0.2.1"],
+			'the admin\'s control-interface'                    => ["remote-control:\n    control-enable: no\n    control-interface: 127.0.0.1"],
 		];
 	}
 
@@ -579,6 +584,17 @@ final class DnsProxyResolverMoveTest extends TestCase
 			'no space after the colon' => ["server:\nport:5300\n"],
 			'CRLF line endings'        => ["server:\r\nport: 5300\r\n"],
 			'a tab after the colon'    => ["server:\nport:\t5300"],
+			'the admin\'s tls-port'    => ["server:\ntls-port: 8530"],
+			'the admin\'s https-port'  => ["server:\nhttps-port: 8443"],
+			'a port after a directive on its line'        => ["server:\nprefetch: yes port: 5300"],
+			'a port after the clause name'                => ["server: port: 5300"],
+			'a port after a quoted hash'                  => ["server:\nlog-identity: \"#\" port: 5300"],
+			'a port after a hash inside a word'           => ["server:\nlog-identity: a#b port: 5300"],
+			'a port after an escaped space and a hash'    => ["server:\nlog-identity: a\\ #x port: 5300"],
+			'a port after a single-quoted hash'           => ["server:\nlog-identity: '#' port: 5300"],
+			'a port after an escaped quote inside quotes' => ["server:\nlog-identity: \"a\\\" # \" port: 5300"],
+			'a port after an escaped single quote'        => ["server:\nlog-identity: 'a\\' # x' port: 5300"],
+			'a port key after another option (Unbound rejects the line)' => ["server:\nlog-identity: port: 53"],
 		];
 	}
 
@@ -622,15 +638,14 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('port:', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
-	/** @return array<string,array{0:string}> lines that are not the admin's own `port:` */
+	/** @return array<string,array{0:string}> lines that are not the admin's own `port:`: other option names, comments, and a quoted phrase with the word */
 	public static function otherPortLines(): array
 	{
 		return [
-			'tls-port'              => ["server:\ntls-port: 853"],
-			'proxy-protocol-port'   => ["server:\nproxy-protocol-port: 5300"],
-			'outgoing-port-avoid'   => ["server:\noutgoing-port-avoid: 5353"],
-			'commented out'         => ["server:\n# port: 5300"],
-			'a value that says port' => ["server:\nlog-identity: port: 53"],
+			'proxy-protocol-port'           => ["server:\nproxy-protocol-port: 5300"],
+			'outgoing-port-avoid'           => ["server:\noutgoing-port-avoid: 5353"],
+			'commented out'                 => ["server:\n# port: 5300"],
+			'a quoted phrase with the word' => ["server:\nlog-identity: \"my port 53\""],
 		];
 	}
 
@@ -687,14 +702,16 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('Custom Options', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
-	/** @return array<string,array{0:string}> lines that are not an interface directive: outgoing addresses, and words that only contain one */
+	/** @return array<string,array{0:string}> lines that name an interface, port or include but bind nothing: a comment, quoted text, or a word with no colon */
 	public static function nonInterfaceLines(): array
 	{
 		return [
-			'outgoing address on a reserved port' => ["server:\noutgoing-interface: 192.0.2.1@5353"],
-			'outgoing address on the plain port'  => ["server:\noutgoing-interface: 127.0.0.1@5354"],
-			'a value that has the word'           => ["server:\nlog-identity: my interface 0.0.0.0@5353"],
-			'a longer port starting with 5353'    => ["server:\noutgoing-interface: 192.0.2.1@53530"],
+			'a comment naming an interface'            => ["server:\n# interface: 0.0.0.0@53"],
+			'a comment after a quoted value'           => ["server:\nlog-identity: \"x\" # interface: 0.0.0.0@53"],
+			'a comment after a value on the same line' => ["server:\nprefetch: yes # interface: 0.0.0.0@5353"],
+			'a comment naming an include'              => ["server:\n# include: /tmp/extra.conf"],
+			'a quoted hash with no directive'          => ["server:\nlog-identity: \"# not a comment\""],
+			'a quoted phrase with the word interface'  => ["server:\nlog-identity: \"my interface 0.0.0.0@5353\""],
 		];
 	}
 
@@ -711,6 +728,167 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertTrue($changed);
 		$this->assertSame(1, $this->markerCount());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	/** @return array<string,array{0:string}> the admin's own `include:` lines, wherever they sit: the file they name can hold any listener, which the proxy cannot read */
+	public static function userIncludeLines(): array
+	{
+		return [
+			'include'                               => ["server:\ninclude: /tmp/extra.conf"],
+			'include-toplevel'                      => ["server:\ninclude-toplevel: /tmp/extra.conf"],
+			'include after a value on its line'     => ["server:\nlog-identity: \"x\" include: /tmp/extra.conf"],
+			'include after a quoted hash'           => ["server:\nlog-identity: \"#\" include: /tmp/extra.conf"],
+			'include with a space before its colon' => ["server:\ninclude : /tmp/extra.conf"],
+			'an include-like word in quotes'        => ["server:\nlog-identity: \"include: x\""],
+		];
+	}
+
+	#[DataProvider('userIncludeLines')]
+	public function testMoveOnRefusesAnIncludeOfTheAdminsOwnAndChangesNothing(string $custom): void
+	{
+		// Given Custom options of the admin's own with an include. The file it names can hold any listener and the
+		// proxy cannot read it, so the move is refused rather than guessed.
+		$this->seedResolver(['custom_options' => base64_encode($custom)]);
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then nothing moves (no snapshot, no write, the Resolver as it was) and the notice names the include.
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$notice = $GLOBALS['pfb_test_file_notices'][0];
+		$this->assertStringContainsString('Custom Options', $notice['notice']);
+		$this->assertStringContainsString('include:', $notice['notice']);
+		$this->assertSame('/services_unbound.php', $notice['url']);
+	}
+
+	public function testMoveOnRefusesAnIncludeAddedAfterOurBlockWasWrittenAndKeepsTheSnapshot(): void
+	{
+		// Given a moved Resolver, then an admin who appends an include to its Custom options.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$saved = pfb_dns_proxy_saved();
+		$edited = base64_encode(implode("\n", $this->customLines()) . "\ninclude: /tmp/extra.conf\n");
+		config_set_path('unbound/custom_options', $edited);
+		$writes = $this->writeCalls();
+
+		// When the proxy is applied again.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the admin's text is left as written and the snapshot is kept.
+		$this->assertFalse($changed);
+		$this->assertSame($writes, $this->writeCalls());
+		$this->assertSame($edited, config_get_path('unbound/custom_options'));
+		$this->assertSame($saved, pfb_dns_proxy_saved());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('include:', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	public function testMoveOffIsNeverRefusedForAnIncludeTheAdminKeeps(): void
+	{
+		// Given a moved Resolver, then an admin who appends an include to its Custom options.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		config_set_path('unbound/custom_options', base64_encode(implode("\n", $this->customLines()) . "\ninclude: /tmp/extra.conf\n"));
+
+		// When the proxy is turned off.
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the Resolver is restored with no notice: an include only blocks turning the proxy on.
+		$this->assertTrue($changed);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+		$this->assertNull(pfb_dns_proxy_saved());
+	}
+
+	/** @return array<string,array{0:string}> our marker lines in a shape that is not exactly one complete block, with the admin's own text after them */
+	public static function malformedBlocks(): array
+	{
+		$suffix = "\nforward-zone:\n  name: \".\"\n  forward-addr: 192.0.2.1";
+		return [
+			'a start line without its end line'  => ["do-ip6: no\nserver:\n# pfBlockerNG DNS proxy\nport: 5354\nprefetch: yes" . $suffix],
+			'an end line without its start line' => ["do-ip6: no\nprefetch: yes\n# end pfBlockerNG DNS proxy" . $suffix],
+			'the end line before the start line' => ["# end pfBlockerNG DNS proxy\n# pfBlockerNG DNS proxy\nprefetch: yes" . $suffix],
+			'two end lines'                      => ["server:\n# pfBlockerNG DNS proxy\nprefetch: yes\n# end pfBlockerNG DNS proxy\n# end pfBlockerNG DNS proxy" . $suffix],
+			'a start line with trailing spaces'  => ["server:\n# pfBlockerNG DNS proxy   \nprefetch: yes\n# end pfBlockerNG DNS proxy" . $suffix],
+		];
+	}
+
+	#[DataProvider('malformedBlocks')]
+	public function testMoveOnRefusesAMarkerBlockThatIsNotExactlyOneCompleteBlockAndKeepsEveryLine(string $custom): void
+	{
+		// Given Custom options whose pfBlockerNG marker lines are not exactly one start line and one end line, in order.
+		$this->seedResolver(['custom_options' => base64_encode($custom)]);
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then nothing is removed or moved: every line of the admin's text stays as it is, and the notice names both marker lines.
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$this->assertStringContainsString('# pfBlockerNG DNS proxy', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertStringContainsString('# end pfBlockerNG DNS proxy', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	public function testMoveOnRefusesAMovedBlockWhoseEndLineWasDeletedAndKeepsTheSuffixByteForByte(): void
+	{
+		// Given a moved Resolver, then an admin who deletes its end line and keeps writing Custom options below it.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$saved = pfb_dns_proxy_saved();
+		$lines = $this->customLines();
+		$this->assertSame('# end pfBlockerNG DNS proxy', end($lines), 'before the edit our block ends with its end line');
+		array_pop($lines);
+		$edited = base64_encode(implode("\n", $lines) . "\nforward-zone:\n  name: \"example.org\"\n  forward-addr: 192.0.2.53");
+		config_set_path('unbound/custom_options', $edited);
+		$writes = $this->writeCalls();
+
+		// When the proxy is applied again.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then nothing is removed: the admin's forward-zone is stored byte for byte, the snapshot is kept, and the notice names the end line.
+		$this->assertFalse($changed);
+		$this->assertSame($writes, $this->writeCalls());
+		$this->assertSame($edited, config_get_path('unbound/custom_options'));
+		$this->assertSame($saved, pfb_dns_proxy_saved());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('# end pfBlockerNG DNS proxy', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/** @return array<string,array{0:string}> lines Unbound rejects: a quote or a backslash that does not end on its line */
+	public static function unclosedLines(): array
+	{
+		return [
+			'a double quote not closed on its line' => ["server:\nlog-identity: \"abc\nprefetch: yes"],
+			'a single quote not closed on its line' => ["server:\nlog-identity: 'abc\nprefetch: yes"],
+			'a backslash ending a line'             => ["server:\nlog-identity: abc\\\nprefetch: yes"],
+		];
+	}
+
+	#[DataProvider('unclosedLines')]
+	public function testMoveOnRefusesALineUnboundRejectsAndChangesNothing(string $custom): void
+	{
+		// Given Custom options with a line Unbound would reject: an unclosed quote, or a backslash at the end of a line.
+		$this->seedResolver(['custom_options' => base64_encode($custom)]);
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then nothing moves and the notice says which line to fix.
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$this->assertStringContainsString('quote', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
 	public function testOurOwnLoopbackLinesAreNotTheAdminsSoReplacingAStaleBlockIsNotRefused(): void

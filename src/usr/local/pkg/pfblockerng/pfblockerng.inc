@@ -12943,11 +12943,11 @@ function pfb_dns_config_lock() {
  * proxy), has Unbound listen on 127.0.0.1 and ::1 port 5353 for the proxy's PROXYv2 stream and grants the IPv6 networks
  * pfSense would no longer (see pfb_dns_proxy_acl_networks()); it is rewritten in place when the networks changed or
  * it predates the port line, and is found by its marker lines, never by a user's own PROXYv2 setup. A refused move is
- * announced with a notice: a Listen Port of 5353 or 5354, any `interface:` line of the admin's own (Unbound's listen
- * addresses come from Network Interfaces; such a line could take a reserved or LAN address), a `port:` line of the admin's
- * own in Custom Options (Unbound could not bind our clause's sockets and would not start, or would listen elsewhere),
- * values that cannot be stored verbatim, our block with no snapshot (never snapshot moved values as the "previous" ones),
- * or a second copy of our marker line.
+ * announced with a notice, and nothing is changed: a Listen Port of 5353 or 5354; a directive of the admin's own in Custom
+ * Options that could take a listener, a second port or another file (any `interface`, `port` or `include` line, comments
+ * aside: see pfb_dns_proxy_directive_text()); a quote or backslash left open at a line's end; our marker lines that are not
+ * exactly one complete block (a partial or repeated pair is never cut); values that cannot be stored verbatim; or our
+ * block with no snapshot (never snapshot moved values as the "previous" ones).
  *
  * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, and only then stops the
  * DNS proxy service (so Unbound's regeneration finds the port free): a lock that stays taken, or a failed read, returns
@@ -12995,6 +12995,100 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 		pfb_dns_proxy_restart();
 	}
 	return $changed;
+}
+
+/**
+ * The admin's Custom Options text as Unbound's lexer reads it for directive names: every comment cut out, quoted words
+ * kept. Checked against unbound-checkconf 1.26.1 (`-o port`, `-o interface`, `-o include`): a `#` starts a comment only
+ * outside quotes and only after a space, a tab or the start of a line (`a#b` and `a\ #x` are not comments); a quote is
+ * `"` or `'`, and each is ignored inside the other; a backslash escapes the next character, inside quotes and out; a LF
+ * ends a comment and a quote (a quote cannot span lines). A `#` that is not a comment stays in the text, so the scan
+ * errs toward refusing.
+ *
+ * @return array{0:string,1:bool} the text without comments, and TRUE when a quote or a trailing backslash is left open
+ *                                 on its line, which Unbound rejects
+ */
+function pfb_dns_proxy_directive_text(string $text): array {
+	$code = '';
+	$quote = '';
+	$escaped = FALSE;
+	$comment = FALSE;
+	$token_start = TRUE;
+	$open = FALSE;
+	for ($i = 0, $n = strlen($text); $i < $n; $i++) {
+		$c = $text[$i];
+		if ($c === "\n") {
+			$open = $open || (!$comment && ($quote !== '' || $escaped));
+			$code .= $c;
+			$quote = '';
+			$escaped = FALSE;
+			$comment = FALSE;
+			$token_start = TRUE;
+			continue;
+		}
+		if ($comment) {
+			continue;
+		}
+		if ($escaped) {
+			$code .= $c;
+			$escaped = FALSE;
+			$token_start = FALSE;
+			continue;
+		}
+		if ($c === '\\') {
+			$code .= $c;
+			$escaped = TRUE;
+			$token_start = FALSE;
+			continue;
+		}
+		if ($quote !== '') {
+			$code .= $c;
+			if ($c === $quote) {
+				$quote = '';
+			}
+			$token_start = FALSE;
+			continue;
+		}
+		if ($c === '#' && $token_start) {
+			$comment = TRUE;
+			continue;
+		}
+		if ($c === '"' || $c === "'") {
+			$quote = $c;
+		}
+		$code .= $c;
+		$token_start = ($c === ' ' || $c === "\t");
+	}
+	return [$code, $open || (!$comment && ($quote !== '' || $escaped))];
+}
+
+/**
+ * The first directive in comment-free Custom Options text that could take a listener, a second port or another file, as
+ * [class, name]; NULL when there is none. A name counts when one of its hyphen-separated words is `include`, `interface`
+ * or `port`: that covers `include-toplevel`, `interface-automatic`, `control-interface`, `outgoing-interface` (refused
+ * too: a conservative choice, it binds nothing), `tls-port`, `https-port` and `control-port`. Only `proxy-protocol-port`
+ * is left alone. Quoted words count as well, so the scan errs toward refusing.
+ *
+ * @return array{0:string,1:string}|null
+ */
+function pfb_dns_proxy_listener_directive(string $code): ?array {
+	preg_match_all('/(?<![a-z0-9_-])([a-z0-9_-]+)[[:space:]]*:/i', $code, $names);
+	foreach ($names[1] as $name) {
+		$word = strtolower($name);
+		if (preg_match('/(^|-)include(-|$)/', $word) === 1) {
+			return ['include', $name];
+		}
+		if ($word === 'proxy-protocol-port') {
+			continue;
+		}
+		if (preg_match('/(^|-)interface(-|$)/', $word) === 1) {
+			return ['interface', $name];
+		}
+		if (preg_match('/(^|-)port$/', $word) === 1) {
+			return ['port', $name];
+		}
+	}
+	return NULL;
 }
 
 /** pfb_dns_proxy_resolver()'s move or restore, called with the config lock held and config.xml freshly read. */
@@ -13056,22 +13150,42 @@ function pfb_dns_proxy_resolver_locked(bool $on): bool {
 			    'set the Listen Port to another port (the default is 53)');
 		}
 	}
-	// Marker lines are counted first: a stray copy would make the cut below run on past it and hide the lines in between.
-	$markers = array_map('trim', explode("\n", $custom));
-	if (count(array_keys($markers, PFB_DNS_PROXY_MARKER, TRUE)) > 1) {
-		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain the line "' . PFB_DNS_PROXY_MARKER .
-		    '" more than once; remove the extra copy');
+	// pfBlockerNG's block is cut out only when the marker lines are exactly one complete block: a start line, then an end
+	// line, each found once and alone on its line (trimmed and exact alike), in that order. Anything else is refused whole,
+	// so none of the admin's text is cut to make room.
+	$trimmed = array_map('trim', explode("\n", $custom));
+	$starts = array_keys($trimmed, PFB_DNS_PROXY_MARKER, TRUE);
+	$ends = array_keys($trimmed, PFB_DNS_PROXY_MARKER_END, TRUE);
+	$exact_starts = preg_match_all('/^' . preg_quote(PFB_DNS_PROXY_MARKER, '/') . '$/m', $custom);
+	$exact_ends = preg_match_all('/^' . preg_quote(PFB_DNS_PROXY_MARKER_END, '/') . '$/m', $custom);
+	$whole = ($starts === [] && $ends === [])
+	    || (count($starts) === 1 && count($ends) === 1 && $starts[0] < $ends[0] && $exact_starts === 1 && $exact_ends === 1);
+	if (!$whole) {
+		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options must hold one complete pfBlockerNG DNS proxy block: the line "' .
+		    PFB_DNS_PROXY_MARKER . '", then the line "' . PFB_DNS_PROXY_MARKER_END . '", each once and alone on its line; ' .
+		    'a partial, repeated or reversed pair is refused and no line is removed: restore the missing line or remove the pair');
 	}
+	// The admin's own text is read as Unbound reads it: our block cut out, then comments and quoted words told apart.
 	$theirs = (string) preg_replace($stale, '', $custom);
-	// Unbound reads the text as one stream, so the key counts wherever it stands; a longer name such as
-	// outgoing-interface: is not that key (it names an outgoing source address, which binds nothing).
-	if (preg_match('/(?<![a-z0-9_-])interface(?:-[a-z-]+)?[[:space:]]*:/i', $theirs) === 1) {
-		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain an "interface:" line, which the DNS proxy does ' .
-		    'not allow: remove it and choose the Resolver\'s addresses in Network Interfaces');
+	[$code, $open] = pfb_dns_proxy_directive_text($theirs);
+	if ($open) {
+		return pfb_dns_proxy_refuse('a quote or a backslash in the DNS Resolver\'s Custom Options is not closed on its line, ' .
+		    'and Unbound rejects such a line: close the quote or remove the backslash');
 	}
-	if (preg_match('/^[ \t]*port:/m', $theirs) === 1) {
-		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options set "port:" themselves, which the DNS proxy overrides to ' .
-		    PFB_DNS_PROXY_UNBOUND_PLAIN_PORT . ' for Unbound; remove that line (the Listen Port field sets the port)');
+	$found = pfb_dns_proxy_listener_directive($code);
+	if ($found !== NULL) {
+		[$class, $name] = $found;
+		if ($class === 'include') {
+			return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain "' . $name . ':", and every include: and include-toplevel: ' .
+			    'line is refused: the DNS proxy cannot read the file an include names, which can hold a listener; remove the line');
+		}
+		if ($class === 'interface') {
+			return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain "' . $name . ':", and every interface: line is refused ' .
+			    '(its addresses come from Network Interfaces, and a line of the admin\'s can take a reserved or LAN address): ' .
+			    'remove the line and choose the addresses in Network Interfaces');
+		}
+		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain "' . $name . ':", and every port: line is refused: the DNS ' .
+		    'proxy sets port: to ' . PFB_DNS_PROXY_UNBOUND_PLAIN_PORT . ' for Unbound, and the Listen Port field sets the port: remove that line');
 	}
 
 	$changed = FALSE;
