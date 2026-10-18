@@ -355,6 +355,9 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			'unanswered https target'   => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: Operation timed out', 'timeout'],
 			'tls failure at a tls:// target' => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: TLS handshake failed', 'TLS error'],
 			'handshake failure, warnings as the error' => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: stream_socket_client(): SSL operation failed with code 1. OpenSSL Error messages: error:0A00010B:SSL routines::wrong version number', 'TLS error'],
+			'ssl-prefixed warning'       => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://172.30.254.2:443. Error: SSL: Connection reset by peer', 'TLS error'],
+			'bare certificate word'      => ['CurlException calling XMLRPC method restore_config_section #peer certificate cannot be authenticated', 'TLS error'],
+			'tls inside a word'          => ['A communications error occurred while attempting to call XMLRPC method restore_config_section: tlsx refused', 'connection error'],
 			'unknown'        => ['Exception calling XMLRPC method x # boom', 'transport error'],
 			'empty'          => ['', 'no response from the XMLRPC client'],
 		];
@@ -372,6 +375,32 @@ final class SyncPolicyStatusPanelTest extends TestCase
 
 		$this->assertFalse($ok);
 		$this->assertSame($class, $error);
+	}
+
+	/** @return array<string,array{string}> a target host name made of class words; the failure itself says the host is down */
+	public static function targetHostProvider(): array
+	{
+		return [
+			'ssl'            => ['ssl.lan'],
+			'tls label'      => ['fw-tls.example.com'],
+			'certificate'    => ['certificate.lan'],
+			'timeout'        => ['timeout.lan'],
+			'authentication' => ['authentication.lan'],
+		];
+	}
+
+	#[DataProvider('targetHostProvider')]
+	public function testTheTargetHostNameNeverDecidesTheClass(string $host): void
+	{
+		$this->seedNode('manual', 'all', []);
+		$GLOBALS['pfb_test_xmlrpc_fail'][$host] = "A communications error occurred while attempting to call XMLRPC method restore_config_section: Unable to connect to tls://{$host}:443. Error: Host is down";
+
+		$ok = $this->quiet(static function () use ($host, &$error): bool {
+			return pfblockerng_do_xmlrpc_sync($host, '443', 'https', 'admin', self::PASSWORD, 5, $error);
+		});
+
+		$this->assertFalse($ok);
+		$this->assertSame('connection error', $error);
 	}
 
 	public function testAHostileFaultEchoReachesNeitherTheStateNorThePanel(): void

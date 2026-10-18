@@ -22127,7 +22127,8 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 
 	if (!isset($resp)) {
 		// The client's own message (peer-controlled for a fault) stays in the system log where pfSense writes it; the state keeps only its class.
-		$text  = (string) $rpc_client->get_error();
+		// The target host is echoed in the text and may contain class words (ssl.lan, timeout.lan); never let it decide.
+		$text  = str_ireplace((string) $sync_to_ip, '', (string) $rpc_client->get_error());
 		$error = match (TRUE) {
 			$text === ''                                                            => 'no response from the XMLRPC client',
 			preg_match('/authentication/i', $text) === 1                            => 'authentication failed',
