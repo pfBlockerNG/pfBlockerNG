@@ -17,14 +17,19 @@ What it proves, in file order:
 
 * service: the daemon supervises ``pfb_dns_gateway``, whose child is ``pfb_dns_proxy.py --decision-fd 3``, both as
   ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and ``ready upstream 127.0.0.1:5353``; the gateway owns
-  every client-facing socket and Unbound listens on loopback 5353 and 5354 only;
+  every client-facing socket (DoH and DoQ on loopback too, for a local HAProxy) and Unbound listens on loopback 5353
+  and 5354 only;
 * Unbound runs the upstream observer, an upstream EDE block is logged with the real client, and the firewall's own
   lookup of a listed name gets the VIP, logged as 127.0.0.1;
 * from the LAN client (192.168.1.10), over UDP, TCP, DoT, DoH (POST and GET) and DoQ: a listed name gets the VIP and a
   ``dnsbl.log`` row naming the client; an allowed name gets the upstream's answer and ``resolver.log`` names the client;
 * hostile: DoQ from a client that does not trust the certificate, and DoH spoken as plain HTTP, get no answer;
 * a Resolver ACL row for the client: ``refuse`` gets REFUSED on every transport (never the VIP, no ``dnsbl.log`` row)
-  and removing it brings the VIP back; ``deny`` gets no answer on any transport;
+  and removing it brings the VIP back; ``deny`` gets no answer on any transport while a second LAN address that no
+  row names still gets the VIP on every transport (DoQ from it through a host route that sets its source address);
+* a client no row names (the automatic LAN rows off, the only list naming 203.0.113.0/24) gets REFUSED on every
+  transport for a listed and for an unlisted name, as Unbound refuses it, while an IPv6 LAN client that only
+  pfBlockerNG's marked clause in unbound.conf grants still gets the VIP on every transport;
 * ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
@@ -36,6 +41,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -59,6 +65,8 @@ from .test_smoke_dns_proxy import (
     CERT_GUEST,
     CERT_NAME,
     DAEMON_PID_FILE,
+    LAN_V6_ADDR,
+    LAN_V6_ROW,
     MODULE_LINE,
     OBSERVER_SCRIPT,
     PROXY_PID_FILE,
@@ -66,6 +74,7 @@ from .test_smoke_dns_proxy import (
     SCRIPT_LINE,
     SNAPSHOT_PATHS,
     UPSTREAM_PORT,
+    Listener,
     State,
     _apply,
     _capture,
@@ -105,6 +114,10 @@ DOT_PORT, DOH_PORT, DOQ_PORT = 853, 4443, 853
 FEED_HEADER = "smoke3513"
 BYPASSED_ALIAS_IP = "192.168.1.12"  # a second LAN address on the client: no ACL row names it
 ACL_NAME = "pfb3513 smoke"
+LAN_V6_CLIENT = h.IPV6_LOCAL_HOST  # taken by the client inside the LAN's IPv6 /64, which only the marked clause grants
+OTHER_ACL_NET = ("203.0.113.0", "24")  # TEST-NET-3: an access list that names nobody on the LAN
+AUTO_ROWS_OFF = "unbound/disable_auto_added_access_control"  # pfSense's switch for the LAN rows it adds by itself
+LOOPBACK = {"127.0.0.1", "::1"}  # DoH and DoQ always listen here too, whatever interfaces they are given
 SNAPSHOT_FILE = "/tmp/pfb3513_cfg_snapshot.json"  # on the guest: survives a dead test process
 
 CFG_DNSBL = h.CFG_DNSBL_SETTINGS
@@ -116,7 +129,7 @@ LISTENER_SETTINGS = {
     "pfb_dns_proxy_doq_port": str(DOQ_PORT),
     "pfb_dns_proxy_doq_interface": "lan",
 }
-CONFIG_PATHS = (*SNAPSHOT_PATHS, *(f"{CFG_DNSBL}/{key}" for key in LISTENER_SETTINGS), "unbound/acls")
+CONFIG_PATHS = (*SNAPSHOT_PATHS, *(f"{CFG_DNSBL}/{key}" for key in LISTENER_SETTINGS), "unbound/acls", AUTO_ROWS_OFF)
 
 TRANSPORTS = ("udp", "tcp", "dot", "doh-post", "doh-get", "doq")
 _TLS = (f"+tls-ca={CERT_CLIENT}", f"+tls-hostname={CERT_NAME}")
@@ -144,22 +157,39 @@ class Names:
     refused: dict[str, str]  # per transport, asked while the ACL refuses the client
     denied: dict[str, str]  # per transport, asked while the ACL denies the client
     restored: dict[str, str]  # per transport, asked after the refuse row is gone
+    alive: dict[str, str]  # per transport, asked from a second LAN address while the ACL denies the client
+    nomatch: dict[str, str]  # per transport, asked while no ACL row names the client
+    nomatch_restored: dict[str, str]  # per transport, asked after the lists are back
+    v6: dict[str, str]  # per transport, asked by the IPv6 LAN client while no ACL row names the IPv4 one
     refuse_poll: str  # asked until the refuse row shows
     deny_poll: str
+    nomatch_poll: str  # asked until no row names the client
     refuse_barrier: str  # asked by an address the ACL does not name, to drain dnsbl.log
     deny_barrier: str
+    v6_barrier: str  # asked last by the IPv6 client, to drain dnsbl.log
     firewall: str  # only the firewall's own lookups ask for it
     hostile: tuple[str, str]  # DoQ without trust; DoH over plain HTTP
 
     def listed(self) -> list[str]:
-        per_transport = (*self.blocked.values(), *self.refused.values(), *self.denied.values(), *self.restored.values())
+        per_transport = (
+            *self.blocked.values(),
+            *self.refused.values(),
+            *self.denied.values(),
+            *self.restored.values(),
+            *self.alive.values(),
+            *self.nomatch.values(),
+            *self.nomatch_restored.values(),
+            *self.v6.values(),
+        )
         return [
             self.ready,
             *per_transport,
             self.refuse_poll,
             self.deny_poll,
+            self.nomatch_poll,
             self.refuse_barrier,
             self.deny_barrier,
+            self.v6_barrier,
             self.firewall,
             *self.hostile,
         ]
@@ -175,10 +205,16 @@ def _make_names() -> Names:
         refused=per_transport("refused"),
         denied=per_transport("denied"),
         restored=per_transport("restored"),
+        alive=per_transport("alive"),
+        nomatch=per_transport("nomatch"),
+        nomatch_restored=per_transport("nmback"),
+        v6=per_transport("v6"),
         refuse_poll=h.unique_domain("refpoll"),
         deny_poll=h.unique_domain("denpoll"),
+        nomatch_poll=h.unique_domain("nmpoll"),
         refuse_barrier=h.unique_domain("refbar"),
         deny_barrier=h.unique_domain("denbar"),
+        v6_barrier=h.unique_domain("v6bar"),
         firewall=h.unique_domain("firewall"),
         hostile=(h.unique_domain("nocert"), h.unique_domain("plain")),
     )
@@ -259,6 +295,7 @@ def go_toolchain(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GoToolcha
         yield GoToolchain(go, env)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+    assert not root.exists(), f"the Go toolchain directory {root} is still there after the delete"
 
 
 def _go_build(toolchain: GoToolchain, package: str, goos: str, goarch: str, out: Path) -> None:
@@ -324,9 +361,15 @@ def _record_client_tools(client: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _ask_doq(client: SmokeVM, name: str, ca: str | None = CERT_CLIENT) -> tuple[h.DnsAnswer, str]:
+def _host_port(server: str, port: int) -> str:
+    return f"[{server}]:{port}" if ":" in server else f"{server}:{port}"
+
+
+def _ask_doq(
+    client: SmokeVM, name: str, ca: str | None = CERT_CLIENT, server: str = PFSENSE_LAN_IP
+) -> tuple[h.DnsAnswer, str]:
     """pfb_doq_probe from the client; its stdout is `rcode X` then `answer <name> <type> <rdata>` lines."""
-    args = [PROBE_BIN, "-server", f"{PFSENSE_LAN_IP}:{DOQ_PORT}", "-name", name, "-sni", CERT_NAME, "-timeout", "5s"]
+    args = [PROBE_BIN, "-server", _host_port(server, DOQ_PORT), "-name", name, "-sni", CERT_NAME, "-timeout", "5s"]
     if ca:
         args += ["-ca", ca]
     result = client.ssh(shlex.join(args) + " 2>&1", timeout=40.0)
@@ -338,17 +381,19 @@ def _ask_doq(client: SmokeVM, name: str, ca: str | None = CERT_CLIENT) -> tuple[
     return h.DnsAnswer(lines[0].split()[1], [f[3] for f in fields if len(f) == 4 and f[:1] == ["answer"]]), output
 
 
-def _ask(client: SmokeVM, transport: str, name: str, *, source: str | None = None) -> tuple[h.DnsAnswer, str]:
+def _ask(
+    client: SmokeVM, transport: str, name: str, *, source: str | None = None, server: str = PFSENSE_LAN_IP
+) -> tuple[h.DnsAnswer, str]:
     """The parsed answer and the tool's full output; no answer reads as rcode UNKNOWN with the tool's complaint."""
     if transport == "doq":
-        return _ask_doq(client, name)
+        return _ask_doq(client, name, server=server)
     options, port = DIG_TRANSPORTS[transport]
     args = ["dig", "+tries=1", "+time=5", *options]
     if source:
         args += ["-b", source]
     if port:
         args += ["-p", str(port)]
-    args += ["A", name, f"@{PFSENSE_LAN_IP}"]
+    args += ["A", name, f"@{server}"]
     result = client.ssh(shlex.join(args) + " 2>&1", timeout=40.0)
     return h._parse_dig(result.stdout, "A"), f"{result.stdout}\n[exit {result.returncode}]"
 
@@ -439,46 +484,100 @@ def _lan_addresses(vm: SmokeVM) -> set[str]:
     return {address for address in found if not address.startswith("fe80:")}
 
 
+def _lan_interface(client: SmokeVM) -> str:
+    rows = client.ssh("ip -o -4 addr show").stdout.splitlines()
+    interface = next((row.split()[1] for row in rows if f" {CLIENT_LAN_IP}/" in row), None)
+    assert interface, f"no client interface carries {CLIENT_LAN_IP}: {rows}"
+    return interface
+
+
 @contextlib.contextmanager
-def _resolver_acl(vm: SmokeVM, action: str) -> Iterator[None]:
-    """The Resolver's access list names the LAN client with `action`; Unbound rewrote access_lists.conf from it.
+def _client_v6(client: SmokeVM) -> Iterator[None]:
+    """`LAN_V6_CLIENT` as an IPv6 address of the client inside the LAN's /64 (no DAD wait), taken off on the way out."""
+    interface = _lan_interface(client)
+    address = f"{LAN_V6_CLIENT}/{h.IPV6_LOCAL_BITS}"
+    added = client.ssh(f"ip -6 addr add {address} dev {interface} nodad")
+    assert added.returncode == 0, f"cannot add {address} to {interface} on the client: {added.stderr!r}"
+    try:
+        _say(f"client IPv6: {client.ssh(f'ip -6 addr show dev {interface}').stdout.strip()}")
+        yield
+    finally:
+        client.ssh(f"ip -6 addr del {address} dev {interface}")
 
-    Whatever the list was is put back (and Unbound restarted on it) on the way out.
+
+def _naming(rows: list[str], address: str) -> list[str]:
+    """The `access-control` rows whose network holds `address`."""
+    ip, found = ipaddress.ip_address(address), []
+    for row in rows:
+        fields = row.split()
+        if len(fields) >= 2 and fields[0] == "access-control:":
+            try:
+                network = ipaddress.ip_network(fields[1], strict=False)
+            except ValueError:
+                continue
+            if ip in network:
+                found.append(row)
+    return found
+
+
+def _acl(name: str, action: str, network: str, mask: str) -> dict[str, object]:
+    """One Resolver access list as config.xml stores it."""
+    return {
+        "aclname": name,
+        "aclaction": action,
+        "description": "pfBlockerNG 3513 smoke",
+        "row": [{"acl_network": network, "mask": mask, "description": ""}],
+    }
+
+
+@contextlib.contextmanager
+def _resolver_acls(vm: SmokeVM, added: list[dict[str, object]], *, auto_rows: bool = True) -> Iterator[None]:
+    """`added` after the Resolver's access lists as they are; unless `auto_rows`, pfSense's own LAN rows are off too.
+
+    Unbound rewrote access_lists.conf from them. The lists as they were and the setting of the automatic rows are put
+    back (and Unbound restarted on them) on the way out.
     """
-    acl = [
-        {
-            "aclname": ACL_NAME,
-            "aclaction": action,
-            "description": "pfBlockerNG 3513 smoke",
-            "row": [{"acl_network": CLIENT_LAN_IP, "mask": "32", "description": ""}],
-        }
-    ]
-    prior = _php_ok(
-        vm, "echo '<<<ACLS>>>' . json_encode(config_get_path('unbound/acls', array())) . '<<<END>>>';", "read ACLs"
+    read = _php_ok(
+        vm,
+        "echo '<<<ACLS>>>' . json_encode(array('acls' => config_get_path('unbound/acls', array()), "
+        f"'auto' => config_get_path({h._php_str(AUTO_ROWS_OFF)}, NULL))) . '<<<END>>>';",
+        "read ACLs",
     )
-    prior_match = re.search(r"<<<ACLS>>>(.*?)<<<END>>>", prior, re.DOTALL)
-    assert prior_match, f"no ACL list in the output: {prior!r}"
+    match = re.search(r"<<<ACLS>>>(.*?)<<<END>>>", read, re.DOTALL)
+    assert match, f"no ACL list in the output: {read!r}"
+    prior = json.loads(match.group(1))
+    prior_acls = prior["acls"] if isinstance(prior["acls"], list) else [prior["acls"]]
 
-    def write(acls: str) -> None:
+    def write(acls: list[object], auto_off: str | None) -> None:
         _php_ok(
             vm,
-            f"$acls = json_decode({h._php_str(acls)}, true);\n"
+            f"$acls = json_decode({h._php_str(json.dumps(acls))}, true);\n"
             "if ($acls) { config_set_path('unbound/acls', $acls); } else { config_del_path('unbound/acls'); }\n"
-            "write_config('pfBlockerNG smoke: Resolver access list for the #3513 gateway smoke');\n"
+            f"$off = json_decode({h._php_str(json.dumps(auto_off))}, true);\n"
+            f"if ($off === NULL) {{ config_del_path({h._php_str(AUTO_ROWS_OFF)}); }} "
+            f"else {{ config_set_path({h._php_str(AUTO_ROWS_OFF)}, $off); }}\n"
+            "write_config('pfBlockerNG smoke: Resolver access lists for the #3513 gateway smoke');\n"
             "services_unbound_configure(FALSE);",
             "Resolver ACLs",
         )
         h.wait_unbound_ready(vm)
 
-    write(json.dumps(acl))
+    write([*prior_acls, *added], prior["auto"] if auto_rows else "yes")
     try:
+        yield
+    finally:
+        write(prior_acls, prior["auto"])
+
+
+@contextlib.contextmanager
+def _resolver_acl(vm: SmokeVM, action: str) -> Iterator[None]:
+    """The Resolver's access lists name the LAN client with `action` after whatever lists were there."""
+    with _resolver_acls(vm, [_acl(ACL_NAME, action, CLIENT_LAN_IP, "32")]):
         row = f"access-control: {CLIENT_LAN_IP}/32 {action}"
         written = _lines(vm.ssh("cat", ACCESS_LISTS).stdout)
         _say(f"{ACCESS_LISTS} with the {action} row: {written}")
         assert row in written, f"{ACCESS_LISTS} should have {row!r}; it has:\n{written}"
         yield
-    finally:
-        write(prior_match.group(1))
 
 
 def _wait_udp(gw: Gateway, name: str, ok: Callable[[h.DnsAnswer], bool], expected: str) -> tuple[h.DnsAnswer, str]:
@@ -496,9 +595,37 @@ def _wait_udp(gw: Gateway, name: str, ok: Callable[[h.DnsAnswer], bool], expecte
     return last[0]
 
 
-def _assert_no_rows_for(gw: Gateway, barrier: str, names: dict[str, str]) -> None:
-    """A client no ACL row names asks for a listed name, and its dnsbl.log row drains the log: no row for `names`."""
+def _ask_from_alias(gw: Gateway, transport: str, name: str) -> tuple[h.DnsAnswer, str]:
+    """`name` over `transport` from the second LAN address.
+
+    The DoQ probe has no source flag: a host route to the firewall carries the second address as its preferred source
+    for the one query instead, and the kernel's own route lookup is asserted to say so.
+    """
+    if transport != "doq":
+        return _ask(gw.client, transport, name, source=BYPASSED_ALIAS_IP)
+    route = f"{PFSENSE_LAN_IP}/32 dev {_lan_interface(gw.client)} src {BYPASSED_ALIAS_IP}"
+    added = gw.client.ssh(f"ip route add {route}")
+    assert added.returncode == 0, f"cannot add the route {route!r} on the client: {added.stderr!r}"
+    try:
+        chosen = gw.client.ssh(f"ip route get {PFSENSE_LAN_IP}").stdout
+        assert f"src {BYPASSED_ALIAS_IP}" in chosen, (
+            f"the client would not send DoQ from {BYPASSED_ALIAS_IP}: {chosen!r}"
+        )
+        return _ask(gw.client, "doq", name)
+    finally:
+        gw.client.ssh(f"ip route del {route}")
+
+
+def _assert_no_rows_for(gw: Gateway, barrier: str, names: dict[str, str], alive: dict[str, str] | None = None) -> None:
+    """A client no ACL row names asks for a listed name, and its dnsbl.log row drains the log: no row for `names`.
+
+    With `alive` (a listed name per transport) it asks on every transport first: a transport whose listener is dead
+    would otherwise look like one that refuses the row's client.
+    """
     with _client_alias(gw.client, BYPASSED_ALIAS_IP):
+        if alive:
+            results = {transport: _ask_from_alias(gw, transport, alive[transport]) for transport in TRANSPORTS}
+            _expect_everywhere(f"{BYPASSED_ALIAS_IP}, named by no row,", results, h.is_vip, "the VIP")
         answer, raw = _ask(gw.client, "udp", barrier, source=BYPASSED_ALIAS_IP)
     assert h.is_vip(answer), f"{BYPASSED_ALIAS_IP} is named by no ACL row and should get the VIP: {answer}\n{raw}"
     _wait_dnsbl_row(gw.vm, barrier)
@@ -542,7 +669,9 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, binaries
     names = _make_names()
     feed_url = h.write_local_feed(vm, "smoke_3513_dns_gateway.txt", "".join(f"{name}\n" for name in names.listed()))
     _snapshot(vm)
+    lan_v6_prior: dict[str, str] | None = None
     try:
+        lan_v6_prior = h.set_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, LAN_V6_ADDR, h.IPV6_LOCAL_BITS)
         refid = _create_cert(vm)
         pem = _sh(vm, f"cat {CERT_GUEST}").stdout
         trusted = subprocess.run(
@@ -569,6 +698,8 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, binaries
                 on53 = {s.local for s in _listeners(vm) if s.command == "unbound" and s.port == 53}
                 assert on53, f"Unbound is not back on port 53 after the restore: {_listeners(vm)}"
             finally:
+                if lan_v6_prior is not None:
+                    h.restore_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, lan_v6_prior)
                 _sh(vm, f"rm -f {SNAPSHOT_FILE} {CERT_GUEST}")
                 client_vm.ssh(f"rm -f {CERT_CLIENT} {PROBE_BIN}")
                 h.collect_host_diagnostics(vm)
@@ -645,7 +776,9 @@ def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decid
         ("udp+tcp", "127.0.0.1:53"),
         ("dot", f"{PFSENSE_LAN_IP}:{DOT_PORT}"),
         ("doh", f"{PFSENSE_LAN_IP}:{DOH_PORT}"),
+        ("doh", f"127.0.0.1:{DOH_PORT}"),
         ("doq", f"{PFSENSE_LAN_IP}:{DOQ_PORT}"),
+        ("doq", f"127.0.0.1:{DOQ_PORT}"),
     }
     assert wanted <= heard, f"missing readiness lines: {sorted(wanted - heard)}; the start's lines:\n" + "\n".join(
         log[start : ready + 1]
@@ -656,8 +789,9 @@ def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw
     """The gateway holds every client-facing port; Unbound hides on loopback 5353 (PROXYv2) and 5354.
 
     Then the gateway holds UDP and TCP 53 on the LAN address and on loopback and TCP 853 (DoT) on the LAN address, and
-      nothing else holds port 53; DoH (TCP 4443) and DoQ (UDP 853) are on exactly the LAN interface's addresses, not on
-      loopback; Unbound's DNS sockets are loopback 5353 and 5354 only.
+      nothing else holds port 53; DoH (TCP 4443) and DoQ (UDP 853) are on exactly the LAN interface's addresses and on
+      loopback (127.0.0.1 and ::1, a stable backend for a local HAProxy); Unbound's DNS sockets are loopback 5353 and
+      5354 only.
     """
     state = gateway_on
     sockets = state.proxy_sockets()
@@ -671,11 +805,13 @@ def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw
     assert wanted <= sockets, f"missing gateway sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
     on53 = {s.pid for s in state.listeners if s.local.endswith(":53")}
     assert on53 == {state.proxy_pid}, f"port 53 is held by pids {on53}, the gateway is {state.proxy_pid}"
-    lan = _lan_addresses(gw.vm)
+    lan = _lan_addresses(gw.vm) | LOOPBACK
     doh = {a.rsplit(":", 1)[0] for p, a in sockets if p.startswith("tcp") and a.endswith(f":{DOH_PORT}")}
     doq = {a.rsplit(":", 1)[0] for p, a in sockets if p.startswith("udp") and a.endswith(f":{DOQ_PORT}")}
-    _say(f"LAN interface addresses {sorted(lan)}; DoH on {sorted(doh)}; DoQ on {sorted(doq)}")
-    assert doh == lan and doq == lan, f"DoH on {sorted(doh)}, DoQ on {sorted(doq)}; the LAN interface has {sorted(lan)}"
+    _say(f"LAN interface addresses and loopback {sorted(lan)}; DoH on {sorted(doh)}; DoQ on {sorted(doq)}")
+    assert doh == lan and doq == lan, (
+        f"DoH on {sorted(doh)}, DoQ on {sorted(doq)}; the LAN interface and loopback have {sorted(lan)}"
+    )
     unbound = state.unbound_dns()
     _say(f"Unbound DNS sockets: {sorted(unbound)}")
     assert any(local == f"127.0.0.1:{UPSTREAM_PORT}" for _, local in unbound), f"Unbound sockets: {sorted(unbound)}"
@@ -864,15 +1000,63 @@ def test_a_resolver_deny_row_gets_no_answer_on_every_transport(gw: Gateway, gate
     Given the LAN client gets the VIP for a listed name on every transport,
     When the Resolver's access list denies 192.168.1.10/32,
     Then once the gateway has re-read it every transport yields no answer (UDP times out, TCP and DoT are closed, the
-      DoH request is aborted, the DoQ connection is refused), an address no row names still gets the VIP, and dnsbl.log
-      has no row for the denied names.
+      DoH request is aborted, the DoQ connection is refused), a second LAN address that no row names gets the VIP on
+      every transport (so no listener is dead), and dnsbl.log has no row for the denied names.
     """
     names = gw.names
     _expect_everywhere("before the deny row", _ask_all(gw, names.blocked), h.is_vip, "the VIP")
     with _resolver_acl(gw.vm, "deny"):
         _wait_udp(gw, names.deny_poll, _no_answer, "no answer")
         _expect_everywhere("deny row", _ask_all(gw, names.denied), _no_answer, "no answer")
-        _assert_no_rows_for(gw, names.deny_barrier, names.denied)
+        _assert_no_rows_for(gw, names.deny_barrier, names.denied, alive=names.alive)
+
+
+@pytest.mark.timeout(900)
+def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an_ipv6_lan_client_gets_the_vip(
+    gw: Gateway, gateway_on: State
+) -> None:
+    """A client that matches no `access-control` row is refused as Unbound refuses it, whatever it asks.
+
+    Given the LAN client gets the VIP for a listed name on every transport, and the marked clause in unbound.conf, not
+      access_lists.conf, grants the LAN's IPv6 /64,
+    When the automatic LAN rows are off and the Resolver's only access list names 203.0.113.0/24, so that
+      access_lists.conf has no row for 192.168.1.10,
+    Then once the gateway has re-read the config the client gets REFUSED on every transport, for a listed name and for
+      an unlisted one, and dnsbl.log has no row for them; an IPv6 client of the LAN, which only the clause grants, still
+      gets the VIP on every transport, logged with its address;
+    When the lists are put back,
+    Then the IPv4 client gets the VIP on every transport again.
+    """
+    names, vm = gw.names, gw.vm
+    assert LAN_V6_ROW in _lines(gateway_on.conf), f"premise: the marked clause grants the LAN's /64:\n{gateway_on.conf}"
+    assert LAN_V6_ROW not in _lines(gateway_on.access_lists), (
+        f"premise: so does access_lists.conf:\n{gateway_on.access_lists}"
+    )
+    _expect_everywhere("before the lists change", _ask_all(gw, names.blocked), h.is_vip, "the VIP")
+    unlisted = {transport: h.unique_domain(f"nomatch-allowed-{transport}") for transport in TRANSPORTS}
+    with _resolver_acls(vm, [_acl(f"{ACL_NAME} other", "allow", *OTHER_ACL_NET)], auto_rows=False):
+        written = _lines(vm.ssh("cat", ACCESS_LISTS).stdout)
+        _say(f"{ACCESS_LISTS} with no row for {CLIENT_LAN_IP}: {written}")
+        assert not _naming(written, CLIENT_LAN_IP), f"premise: a row names {CLIENT_LAN_IP}: {written}"
+        assert _naming(written, OTHER_ACL_NET[0]), f"premise: the other list is not in {ACCESS_LISTS}: {written}"
+        _wait_udp(gw, names.nomatch_poll, _refused, "REFUSED")
+        _expect_everywhere("no row, listed name", _ask_all(gw, names.nomatch), _refused, "REFUSED")
+        _expect_everywhere("no row, unlisted name", _ask_all(gw, unlisted), _refused, "REFUSED")
+        with _client_v6(gw.client):
+            v6 = {
+                transport: _ask(gw.client, transport, names.v6[transport], source=LAN_V6_CLIENT, server=LAN_V6_ADDR)
+                for transport in TRANSPORTS
+            }
+            _expect_everywhere("IPv6 LAN client", v6, h.is_vip, "the VIP")
+            barrier, raw = _ask(gw.client, "udp", names.v6_barrier, source=LAN_V6_CLIENT, server=LAN_V6_ADDR)
+        assert h.is_vip(barrier), f"the IPv6 client's last query should get the VIP: {barrier}\n{raw}"
+        _wait_dnsbl_row(vm, names.v6_barrier)
+        refused_rows = {name: _dnsbl_rows(vm, name) for name in (*names.nomatch.values(), *unlisted.values())}
+        assert not any(refused_rows.values()), f"dnsbl.log has rows for names the gateway refused: {refused_rows}"
+        v6_clients = {ipaddress.ip_address(row[3]) for name in names.v6.values() for row in _dnsbl_rows(vm, name)}
+        assert v6_clients == {ipaddress.ip_address(LAN_V6_CLIENT)}, f"dnsbl.log names {v6_clients} for the IPv6 client"
+    _wait_udp(gw, names.nomatch_poll, h.is_vip, "the VIP again")
+    _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_vip, "the VIP")
 
 
 # --------------------------------------------------------------------------- #
@@ -932,3 +1116,10 @@ def test_toggle_off_gives_the_resolver_back_and_leaves_no_gateway(gw: Gateway, g
     assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name through Unbound again: {allowed}\n{raw}"
     dot, raw = _ask(gw.client, "dot", gw.names.ready)
     assert h.is_vip(dot), f"blocked name over Unbound's own DoT again: {dot}\n{raw}"
+
+
+def test_a_listener_on_a_wildcard_socket_has_no_port() -> None:
+    """sockstat lists an unbound UDP socket as `*:*`; asking for its port used to raise `int('*')`."""
+    assert Listener("unbound", 1, "udp4", "*:*").port is None
+    assert Listener("unbound", 1, "tcp4", "127.0.0.1:53").port == 53
+    assert Listener("unbound", 1, "tcp6", "::1:5353").port == 5353
