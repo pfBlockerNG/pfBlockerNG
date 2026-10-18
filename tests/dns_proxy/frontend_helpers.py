@@ -135,17 +135,16 @@ class FakeUnbound:
 class FakeAuthoritative:
     """UDP responder on a loopback port served from a thread (a real Unbound forwards a zone to it).
 
-    `delay` (seconds, settable between queries) holds each reply back on its own timer, so queries that arrive
-    together are all in flight together instead of being answered one after the other.
+    `gate` (an Event, settable between queries) holds each reply back until it is set, so a test can release the
+    replies once it has seen the queries it wants in flight together; None answers at once.
     """
 
-    def __init__(self, unbound: FakeUnbound, *, delay: float = 0.0) -> None:
+    def __init__(self, unbound: FakeUnbound) -> None:
         self.unbound = unbound
-        self.delay = delay
+        self.gate: threading.Event | None = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
         self.port: int = self.sock.getsockname()[1]
-        self._timers: list[threading.Timer] = []
         self._wake_read, self._wake_write = socket.socketpair()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -160,19 +159,21 @@ class FakeAuthoritative:
                         return
                     data, client = self.sock.recvfrom(4096)
                     reply = self.unbound.answer(data)
-                    if self.delay:
-                        timer = threading.Timer(self.delay, self.sock.sendto, (reply, client))
-                        self._timers.append(timer)
-                        timer.start()
-                    else:
+                    if self.gate is None:
                         self.sock.sendto(reply, client)
+                    else:
+                        threading.Thread(
+                            target=self._send_when_open, args=(self.gate, reply, client), daemon=True
+                        ).start()
+
+    def _send_when_open(self, gate: threading.Event, reply: bytes, client: tuple[str, int]) -> None:
+        if gate.wait(WATCHDOG):  # a gate never opened is a stuck test: the reply is dropped and the test fails
+            with contextlib.suppress(OSError):  # the socket is closed when the test is over
+                self.sock.sendto(reply, client)
 
     def close(self) -> None:
         self._wake_write.send(b"x")
         self._thread.join()
-        for timer in self._timers:
-            timer.cancel()
-            timer.join()
         for resource in (self.sock, self._wake_read, self._wake_write):
             resource.close()
 

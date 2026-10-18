@@ -239,3 +239,11 @@ def test_name_inside_rdata_that_runs_past_rdlength_is_rejected() -> None:
     packet = _hdr(1, 1) + WWW + b"\x00\x05\x00\x01" + b"\xc0\x0c" + struct.pack("!HHIH", 5, IN, 60, 2) + b"\x01a\x00"
     with pytest.raises(WireError, match="rdata"):
         dnswire.parse(packet)
+
+
+@pytest.mark.parametrize("rtype", [dnswire.TYPE_CNAME, dnswire.TYPE_PTR])
+def test_name_in_rdata_followed_by_a_stray_octet_is_rejected(rtype: int) -> None:
+    """rdlength covers the name "a." and one octet more: the record says more than its type holds."""
+    packet = _hdr(1, 1) + WWW + b"\x00\x05\x00\x01" + _rr(b"\xc0\x0c", rtype, b"\x01a\x00\xff")
+    with pytest.raises(WireError, match="rdata length mismatch"):
+        dnswire.parse(packet)

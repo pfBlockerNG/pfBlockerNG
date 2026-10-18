@@ -29,6 +29,7 @@ from frontend_helpers import (
     build_query,
     serve_plain,
     split_proxy_header,
+    tcp_exchange,
     udp_client,
     udp_exchange,
 )
@@ -399,6 +400,68 @@ def test_an_upstream_tcp_connection_unbound_closed_while_idle_is_reopened_once(b
         (2, 0, 1),
     ]
     assert connections == 2
+
+
+class _ClosesWithoutAnswering(FakeProxyUpstream):
+    """An upstream that takes the query on each TCP connection and closes it without a word."""
+
+    async def _tcp_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            fixed = await reader.readexactly(PROXY_FIXED)
+            self.headers.append(fixed + await reader.readexactly(struct.unpack("!H", fixed[14:16])[0]))
+            await reader.readexactly(struct.unpack("!H", await reader.readexactly(2))[0])
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+
+
+def test_a_fresh_upstream_tcp_connection_that_fails_is_not_tried_again(booted: Booted) -> None:
+    """Only a connection Unbound may have closed while it idled gets a second try; a new one that fails is final."""
+
+    async def scenario() -> tuple[bytes, int]:
+        async with _ClosesWithoutAnswering(FakeUnbound(ZONE)) as upstream:
+            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+            try:
+                return (await tcp_exchange(server, build_query(ALLOWED, qid=3)))[0], len(upstream.headers)
+            finally:
+                await frontend.stop()
+
+    reply, connections = asyncio.run(scenario())
+    assert (dnswire.parse(reply).rcode, connections) == (2, 1)
+
+
+def test_the_upstream_socket_of_each_udp_query_is_closed_once_it_is_answered(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An open one per query would use up the descriptors: asyncio keeps a transport registered until it is closed."""
+    opened: list[asyncio.DatagramTransport] = []
+    upstream_port = 0
+    real = asyncio.BaseEventLoop.create_datagram_endpoint
+
+    async def keep_upstream_transports(self: Any, factory: Any, *args: Any, **kwargs: Any) -> Any:
+        transport, protocol = await real(self, factory, *args, **kwargs)
+        if kwargs.get("remote_addr") == ("127.0.0.1", upstream_port):
+            opened.append(transport)
+        return transport, protocol
+
+    monkeypatch.setattr(asyncio.BaseEventLoop, "create_datagram_endpoint", keep_upstream_transports)
+
+    async def scenario() -> None:
+        nonlocal upstream_port
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            upstream_port = upstream.port
+            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+            try:
+                for qid in (1, 2, 3):
+                    await udp_exchange(server, build_query(ALLOWED, qid=qid))
+            finally:
+                await frontend.stop()
+
+    asyncio.run(scenario())
+    assert [transport.is_closing() for transport in opened] == [True, True, True]
 
 
 def test_the_question_class_reaches_the_module(booted: Booted, monkeypatch: pytest.MonkeyPatch) -> None:
