@@ -120,9 +120,13 @@ class Message:
         return (self.flags >> 11) & 0xF
 
 
-def make_opt(udp_size: int = 1232, *, do: bool = False) -> RR:
-    """An empty EDNS OPT pseudo-RR: the class field carries the UDP size, the TTL field the DO bit."""
-    return RR(".", TYPE_OPT, udp_size, 0x8000 if do else 0, b"")
+EDNS_UDP_SIZE = 1232  # the UDP size the proxy advertises: Unbound's edns-buffer-size default
+
+
+def make_opt(udp_size: int = EDNS_UDP_SIZE, *, do: bool = False, options: bytes = b"") -> RR:
+    """An EDNS OPT pseudo-RR: the class field carries the UDP size, the TTL field the DO bit, the rdata `options`
+    (already encoded)."""
+    return RR(".", TYPE_OPT, udp_size, 0x8000 if do else 0, options)
 
 
 # --- names ---------------------------------------------------------------------------------------
