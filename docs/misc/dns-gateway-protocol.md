@@ -1,6 +1,6 @@
 # DNS gateway decision protocol
 
-Scope: the wire protocol between the Go connectivity layer (`pfb_dns_gateway`, the *gateway*) and the Python DNSBL
+Scope: the wire protocol between the Go connectivity layer (`pfb-dns`, the *gateway*) and the Python DNSBL
 decider (`dns_proxy/pfb_dns_proxy.py --decision-fd N`, the *decider*). Load when: changing either side or the frame
 format. Normative: where code and this page disagree, one of them is a bug. Issue #3513.
 

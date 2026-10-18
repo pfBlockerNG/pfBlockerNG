@@ -90,15 +90,16 @@ final class DnsProxyApplyStartTest extends TestCase
 	}
 
 	/**
-	 * A proxy-mode box with two addressed interfaces, an installed gateway binary and a running proxy.
+	 * A proxy-mode box with two addressed interfaces, a package that ships pfb-dns and a running proxy.
 	 *
-	 * @return string the gateway binary's path
+	 * @return string the package's dns_proxy directory
 	 */
 	private function runningGatewayBox(): string
 	{
-		$gateway = "{$this->dir}/pfb_dns_gateway";
-		file_put_contents($gateway, "#!/bin/sh\n");
-		chmod($gateway, 0755);
+		$gateway = "{$this->dir}/dns_proxy";
+		mkdir("{$gateway}/bin/freebsd-amd64", 0777, TRUE);
+		file_put_contents("{$gateway}/bin/freebsd-amd64/pfb-dns", "#!/bin/sh\n");
+		chmod("{$gateway}/bin/freebsd-amd64/pfb-dns", 0555);
 		$this->setProxyMode('192.0.2.1', 'lan,opt1');
 		$up = ['status' => 'up', 'enable' => TRUE];
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
