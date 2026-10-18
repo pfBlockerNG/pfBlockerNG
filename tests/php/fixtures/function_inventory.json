@@ -9840,6 +9840,36 @@
             }
         ]
     },
+    "pfb_pass_status_path": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_pass_status_read": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": []
+    },
+    "pfb_pass_status_record": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "field",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ts",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_pending_changes": {
         "returnsRef": false,
         "returnType": "bool",

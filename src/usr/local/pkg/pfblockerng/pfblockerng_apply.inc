@@ -1022,6 +1022,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		return TRUE;
 	}
 
+	// Advisory: a failed write never fails the pass; last_start without last_end reads as unfinished.
+	pfb_pass_status_record('last_start', $pfb_pass_started);
+
 	// ADR-43: normalize the trigger input.
 	// Array = new API (explicit request, no deprecation log).
 	// String = back-compat (routes through pfb_trigger_request(); deprecated verbs log once).
@@ -5378,6 +5381,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 
+	pfb_pass_status_record('last_end', time());
 	if ($pfb['enable'] === PfbToggle::On && !$pfb['save'] || $pfb['summary']) {
 		pfb_logger("\n UPDATE PROCESS ENDED\n", 1);
 	}

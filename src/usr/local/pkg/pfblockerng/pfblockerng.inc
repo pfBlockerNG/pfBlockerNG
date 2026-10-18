@@ -5457,6 +5457,47 @@ function pfb_metrics_export_allowed(?string $posted, bool $pkg_present): ?string
 	return NULL;
 }
 
+// Update-pass timing for the metrics exporter. A last_start without a later last_end reads as an unfinished pass.
+function pfb_pass_status_path(): string {
+	global $pfb;
+	return "{$pfb['dbdir']}/pfb_pass_status.json";
+}
+
+// [0, 0] when the file is absent, NULL when it is corrupt. A missing field reads as 0.
+function pfb_pass_status_read(): ?array {
+	if (!file_exists(pfb_pass_status_path())) {
+		return array('last_start' => 0, 'last_end' => 0);
+	}
+	$data = pfb_sync_json_read(pfb_pass_status_path());
+	if ($data === NULL) {
+		return NULL;
+	}
+	return array(
+		'last_start' => is_int($data['last_start'] ?? NULL) ? $data['last_start'] : 0,
+		'last_end'   => is_int($data['last_end'] ?? NULL) ? $data['last_end'] : 0,
+	);
+}
+
+// Staged in the same directory and renamed over the target. A corrupt file is replaced, not kept.
+function pfb_pass_status_record(string $field, int $ts): bool {
+	if (!in_array($field, array('last_start', 'last_end'), TRUE)) {
+		return FALSE;
+	}
+	$state = pfb_pass_status_read() ?? array('last_start' => 0, 'last_end' => 0);
+	$state[$field] = $ts;
+
+	$path = pfb_pass_status_path();
+	$tmp  = @tempnam(dirname($path), '.pfbpass_');
+	if ($tmp === FALSE) {
+		return FALSE;
+	}
+	if (@file_put_contents($tmp, json_encode($state)) === FALSE || !@chmod($tmp, 0644) || !@rename($tmp, $path)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 /*
  * issue #2016/#2488: resolve a nested re-entry budget FAIL-SAFE BY CONSTRUCTION --
  * start at the configured value and take the caller's only once it is proven positive-
