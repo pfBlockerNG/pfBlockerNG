@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -52,7 +54,27 @@ row1 = {BYPASSED_CLIENT}
 """
 
 
+class LogFeed(list[tuple[str, str]]):
+    """The (log file, line) pairs the module tried to write, in order; a test waits on them instead of sleeping."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cond = threading.Condition()
+
+    def append(self, item: tuple[str, str]) -> None:
+        with self._cond:
+            super().append(item)
+            self._cond.notify_all()
+
+    def wait_for(self, done: Callable[[list[tuple[str, str]]], bool], timeout: float = 10.0) -> list[tuple[str, str]]:
+        """The log once `done(log)` holds; raises with what was seen when it does not within `timeout` (a stuck run)."""
+        with self._cond:
+            if not self._cond.wait_for(lambda: done(self), timeout):
+                raise AssertionError(f"STUCK: the expected log line never came; saw {list(self)!r}")
+            return list(self)
+
+
 @dataclass
 class Booted:
     module: ModuleType
-    log: list[tuple[str, str]]  # (log file, line) the module tried to write
+    log: LogFeed

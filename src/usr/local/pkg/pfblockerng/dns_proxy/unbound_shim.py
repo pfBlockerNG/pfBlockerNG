@@ -5,7 +5,9 @@ shipped pfb_unbound.py UNCHANGED from a module dir. Behaviour mirrors Unbound 1.
 (DNSMessage, rrsets, rr_data), pythonmod_utils.c (createResponse) and services/mesh.c (how a finished query is sent).
 
 Not modelled: the message cache (storeQueryInCache/invalidateQueryInCache are no-ops that keep nothing: the daemon
-runs for weeks) and the cache, local and query_response callbacks, which fire only inside Unbound.
+runs for weeks) and the cache and local callbacks, which fire only inside Unbound. The query_response callback fires
+here too, but only on what pfb_upstream_observer.py reports from inside Unbound (fire_query_response): a reply the
+proxy relays is Unbound's rebuilt one, which no longer shows what the upstream said.
 """
 
 from __future__ import annotations
@@ -333,6 +335,14 @@ class module_qstate:
         self.mesh_info = MeshInfo(MeshReply(ReplyAddr(client_ip, client_port)))
 
 
+@dataclass
+class EdnsOpt:
+    """One entry of qstate.edns_opts_back_in_iter, the upstream's EDNS options: pythonmod shows `.code` and `.data`."""
+
+    code: int
+    data: bytes
+
+
 def fire_reply_callback(kind: str, qstate: module_qstate, rep: reply_info | None, rcode: int) -> None:
     """Invoke the registered inplace callback the way pythonmod does, with the client in `repinfo`."""
     callback = callbacks.get(kind)
@@ -343,6 +353,18 @@ def fire_reply_callback(kind: str, qstate: module_qstate, rep: reply_info | None
         callback(qstate.qinfo, qstate, rep, rcode, None, None, None, repinfo=qstate.mesh_info.reply_list.query_reply)
     except Exception as exc:  # pythonmod logs a failing callback and still sends the reply
         log_err(f"inplace callback {kind} failed: {exc!r}")
+
+
+def fire_query_response(qstate: module_qstate, response: Any) -> None:
+    """Invoke the registered query_response callback the way pythonmod does: the qstate (the upstream's EDNS options in
+    edns_opts_back_in_iter) and the RAW upstream response, which is what the module classifies an upstream block on."""
+    callback = callbacks.get("query_response")
+    if callback is None:
+        return
+    try:
+        callback(qstate, response)
+    except Exception as exc:  # pythonmod logs a failing callback and carries on
+        log_err(f"inplace callback query_response failed: {exc!r}")
 
 
 # --- install -------------------------------------------------------------------------------------
