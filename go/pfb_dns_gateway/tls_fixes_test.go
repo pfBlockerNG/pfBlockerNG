@@ -128,7 +128,7 @@ func TestDoQNewClientsProveTheirAddressWithARetryBeforeTheyHoldASlot(t *testing.
 // are not.
 func TestDoHTrustIsThePeerAddressNotTheListenerAddress(t *testing.T) {
 	const frontEnd, stranger = "127.0.0.9", "127.0.0.2"
-	r := newRig(t, rigConfig{acl: "access-control: 127.0.0.0/8 allow\n"}) // aclMixed would refuse 127.0.0.9 itself
+	r := newRig(t, rigConfig{acl: "access-control: 127.0.0.0/8 allow\n" + aclDocumentation}) // aclMixed would refuse 127.0.0.9 itself
 	m := newTLSMaterial(t)
 	addr := r.serveDoH(m, frontEnd+"/32")
 	r.autoAnswer(echoAnswer)
