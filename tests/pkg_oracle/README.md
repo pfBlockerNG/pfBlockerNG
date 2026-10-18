@@ -15,7 +15,7 @@ DEINSTALL step and the shipped hook is real:
 | locks / config | real `flock`-based `try_lock()`; a file-backed config.xml written whole by `write_config()` |
 
 Stand-ins (listed in `core.php`): `update_status`, `logger`, `gettext`, `init_config_arr` and `platform_booting` (RELENG_2_7_2
-only), `is_process_running`, `daemon(8)` and `read_xml_tag.sh` (`shims/`). The shared PHPUnit bootstrap loads `pfblockerng.inc`
+only), `is_process_running`, `daemon(8)`, `lockf(1)` (over `flock`) and `read_xml_tag.sh` (`shims/`). The shared PHPUnit bootstrap loads `pfblockerng.inc`
 before core does, so core's load-time rewrite of `pfb_filter.sh` / `pfb_dnsbl.sh` is not reproduced (the PHPUnit worker models it);
 the recovery writes all three rc scripts itself.
 
@@ -23,7 +23,7 @@ pfSense CE 2.8.x cannot be pinned (the public repo has no `RELENG_2_8_*` ref; Pl
 the logic that matters; the live 2.8.1 case is `test_an_aborted_removal_*` in `tests/smoke/test_smoke_dns_proxy.py`.
 
 ```sh
-sh tests/pkg_oracle/build.sh  OUT                    # fetch + sha256-verify core files, build pkg 2.1.0, build image pfb-pkg-oracle:1
+sh tests/pkg_oracle/build.sh  OUT                    # fetch + sha256-verify core files, build pkg 2.1.0, build image pfb-pkg-oracle:2
 sh tests/pkg_oracle/run.sh    OUT REPO recovered master   # the fixed code against core master (9363ac5b): exit 0 iff it held
 sh tests/pkg_oracle/run.sh    OUT REPO recovered r272     # ... against RELENG_2_7_2 (ec956d34)
 sh tests/pkg_oracle/run.sh    OUT BASE broken   master    # the base commit: exit 0 iff the defect reproduces
