@@ -77,10 +77,12 @@ its age, and is turned away when every client of the busier addresses has a quer
 burst. This is a fair share, not immunity: many addresses (spoofed ones, for UDP) that hold little each can still fill
 the global limits, and the busiest address pays for them. A DoT handshake must finish within 10 s.
 
---decision-fd: nothing is bound. The user drop (--user) and the boot are as above; then READY goes to the gateway and
-each QUERY it sends is answered with an ANSWER or a DROP, a FORWARD/REPLY exchange standing in for the Unbound
-round trip where the module defers. EOF on the socket exits 0; malformed framing is logged and exits 1. A REPLY is
-waited for twice --timeout. --upstream is only validated and --pfsense-config is not read.
+--decision-fd: no DNS socket is bound. The user drop (--user) and the boot are as above, and the observer socket
+pfb_upstream.sock is made as above (the gateway fronts DNS but this process hosts the module, so it hears Unbound's
+reports); then READY goes to the gateway and each QUERY it sends is answered with an ANSWER or a DROP, a FORWARD/REPLY
+exchange standing in for the Unbound round trip where the module defers. EOF on the socket exits 0; malformed framing
+is logged and exits 1. A REPLY is waited for twice --timeout. --upstream is only validated and --pfsense-config is not
+read.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -971,10 +973,7 @@ async def serve(args: argparse.Namespace) -> None:
         bound = await frontend.serve_listeners(listeners)
         dot_bound = await frontend.serve_listeners(dot_listeners, dot_context)
         if args.observer:
-            try:
-                await frontend.serve_observer(OBSERVER_SOCKET)  # relative: boot() made --module-dir the working dir
-            except OSError as exc:
-                shim.log_err(f"upstream-block detection is off: cannot listen on {OBSERVER_SOCKET}: {exc}")
+            await _serve_observer(frontend)
         stop = asyncio.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):  # before the line below: a supervisor signals on reading it
             asyncio.get_running_loop().add_signal_handler(sig, stop.set)
@@ -989,9 +988,19 @@ async def serve(args: argparse.Namespace) -> None:
             reply_log.close()
 
 
+async def _serve_observer(frontend: Frontend) -> None:
+    """Listen for Unbound's upstream-block reports at OBSERVER_SOCKET, relative: boot() made --module-dir the working
+    directory. Without the socket DNS is still served, only upstream blocks go unlogged."""
+    try:
+        await frontend.serve_observer(OBSERVER_SOCKET)
+    except OSError as exc:
+        shim.log_err(f"upstream-block detection is off: cannot listen on {OBSERVER_SOCKET}: {exc}")
+
+
 async def serve_decisions(args: argparse.Namespace) -> None:
-    """`--decision-fd` mode: nothing is bound; the user drop and the boot are serve()'s, in the same order. The module
-    then answers the gateway's queries on the inherited socket until the gateway closes it. A ProtocolError is logged
+    """`--decision-fd` mode: no DNS socket is bound (the gateway owns them) but the observer socket is, as in serve():
+    this process hosts the module. The user drop and the boot are serve()'s, in the same order. The module then
+    answers the gateway's queries on the inherited socket until the gateway closes it. A ProtocolError is logged
     here and re-raised for exit 1; the module is shut down either way."""
     account = lookup_user(args.user) if args.user is not None else None
     sock = socket.socket(fileno=args.decision_fd)
@@ -1000,11 +1009,13 @@ async def serve_decisions(args: argparse.Namespace) -> None:
     module = boot(args.module_dir)
     frontend = Frontend(module, parse_hostport(args.upstream), args.timeout)
     try:
+        await _serve_observer(frontend)  # before READY: the gateway serves only once the module can hear Unbound
         await decision_service.serve(sock, frontend.resolve, args.timeout, shim.log_err)
     except decision_service.ProtocolError as exc:
         shim.log_err(f"decision protocol error: {exc}")
         raise
     finally:
+        await frontend.stop()
         shutdown(module)
 
 
