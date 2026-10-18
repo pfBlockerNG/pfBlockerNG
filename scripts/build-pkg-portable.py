@@ -2,7 +2,7 @@
 # build-pkg-portable.py — build a pfSense-installable FreeBSD .pkg for the
 # pfBlockerNG port WITHOUT a FreeBSD host or the ports framework.
 #
-# pfBlockerNG is a NO_BUILD port: nothing is compiled. "Building" the package is
+# pfBlockerNG is a NO_BUILD port: nothing in the port is compiled. "Building" the package is
 # just (a) laying the production files out at their install paths, (b) doing the
 # port's textual substitutions, and (c) emitting a libpkg-format archive with the
 # right manifest. This tool replicates exactly that, portably (Linux + macOS),
@@ -10,6 +10,10 @@
 # consuming either its static pkg-plist or its staged dynamic plist — never a
 # hardcoded, pfBlockerNG-specific file list. So when the port gains files or
 # changes dependencies, this tool keeps up with the real `make package` inputs.
+#
+# One addition has no port recipe: a source carrying go/pfb_dns_gateway also ships the pfB-DNS
+# gateway, cross-compiled for FreeBSD amd64 and arm64 by build-pfb-dns.py and staged beside the
+# DNS proxy (stage_pfb_dns); the package stays NO_ARCH. See docs/build-pkg-portable.md.
 #
 # It supports both source layouts used by the four static native recipes:
 #   * USE_GITHUB: source fetched from GitHub into ${WRKSRC}
@@ -35,7 +39,8 @@
 # make package reads from the build host's installed packages.
 #
 # Requires: python3 (stdlib only) + a zstd encoder (the `zstd` binary, or the
-# python `zstandard` module). `--compression xz` needs neither (stdlib lzma).
+# python `zstandard` module). `--compression xz` needs neither (stdlib lzma). Go is
+# needed only for a source that carries go/pfb_dns_gateway.
 #
 # This is a developer tool (not shipped in release archives). See --help.
 
@@ -1011,6 +1016,7 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
             ignore=shutil.ignore_patterns(".DS_Store", "*.pyc", "__pycache__"),
         )
         sys.stderr.write(f"==> source: local working tree {src_root}\n")
+        args._source_tree = local
         return wrksrc
 
     account = mk.get("GH_ACCOUNT")
@@ -1031,7 +1037,37 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
     if not fetched_src.is_dir():
         raise BuildError(f"fetched tarball has no src/ dir under {tops[0].name}")
     shutil.copytree(fetched_src, wrksrc, dirs_exist_ok=True)
+    args._source_tree = tops[0]
     return wrksrc
+
+
+# The tracked top-level dir holding the Go modules build-pfb-dns.py builds from (go/pfb_dns_gateway).
+_GO_SOURCE_DIR = "go"
+_PFB_DNS_HELPER = Path(__file__).resolve().with_name("build-pfb-dns.py")
+_DNS_PROXY_DIR = "pkg/pfblockerng/dns_proxy"
+
+
+def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, workdir: Path) -> None:
+    """Cross-build pfB-DNS from the acquired source and stage both binaries under ``dns_proxy``/bin.
+
+    The package stays NO_ARCH: every architecture's binary ships and the runtime picks one. The
+    binaries are built here, never read from the source, so a tree that already carries a bin/ fails.
+    A port that installs no dns_proxy payload, or a legacy source without the Go module, gets none.
+    """
+    bin_dir = dns_proxy / "bin"
+    if bin_dir.exists():
+        raise BuildError(
+            f"the source ships {bin_dir.relative_to(recipe.stagedir)}: "
+            "pfB-DNS binaries are built by the package builder, never committed"
+        )
+    if source_tree is None or not dns_proxy.is_dir():
+        return
+    argv = [sys.executable, str(_PFB_DNS_HELPER), "--source-root", str(source_tree), "--out-dir", str(workdir)]
+    result = subprocess.run(argv, stdout=subprocess.PIPE, text=True, check=False)  # stderr streams through
+    if result.returncode != 0:
+        raise BuildError("pfB-DNS cross-build failed")
+    for target, built in json.loads(result.stdout)["targets"].items():
+        recipe._cmd_install_script([built["path"], f"{bin_dir / target}/"])
 
 
 def _download(url: str, dest: Path) -> None:
@@ -1510,17 +1546,21 @@ def _attest_checkout(
         _reject_payload_symlinks(payload_root, label)
 
 
-def _snapshot_checkout(path: Path, commit: str, dest: Path, payload_root: Path | None = None) -> Path:
+def _snapshot_checkout(
+    path: Path, commit: str, dest: Path, payload_root: Path | None = None, extra_roots: tuple[Path, ...] = ()
+) -> Path:
     """Materialize tracked source bytes from an attested Git object."""
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_CONFIG_SYSTEM"] = os.devnull
     command = ["git", "-C", str(path), "archive", "--format=tar", commit]
-    if payload_root is not None:
+    for root in (payload_root, *extra_roots):
+        if root is None:
+            continue
         try:
-            command.append(str(payload_root.relative_to(path)))
+            command.append(str(root.relative_to(path)))
         except ValueError:
-            raise BuildError(f"source snapshot payload root escapes checkout: {payload_root}") from None
+            raise BuildError(f"source snapshot payload root escapes checkout: {root}") from None
     try:
         result = subprocess.run(
             command,
@@ -1829,8 +1869,16 @@ def run_build(args: argparse.Namespace) -> Build:
                 source_tag=project_record["source_tag"],
                 payload_root=source_root,
             )
+            # Go modules sit beside src/ in the tree: snapshot them from the same attested commit.
+            go_tracked = _git_probe(
+                local_src, "ls-tree", "--name-only", project_record["source_sha"], "--", _GO_SOURCE_DIR
+            )
             args._source_snapshot = _snapshot_checkout(
-                local_src, project_record["source_sha"], workdir / "source-snapshot", source_root
+                local_src,
+                project_record["source_sha"],
+                workdir / "source-snapshot",
+                source_root,
+                (local_src / _GO_SOURCE_DIR,) if go_tracked else (),
             )
         elif args.gh_tagname:
             raise BuildError("project build requires --local-src for source tag attestation")
@@ -1849,6 +1897,12 @@ def run_build(args: argparse.Namespace) -> Build:
     recipe.run("do-install")
     if "post-install" in mk.recipes:
         recipe.run("post-install")
+    stage_pfb_dns(
+        recipe,
+        Path(seed["STAGEDIR"]) / prefix.lstrip("/") / _DNS_PROXY_DIR,
+        getattr(args, "_source_tree", None),
+        workdir / "pfb-dns",
+    )
 
     if project_record:
         epoch = _checked_mtime(project_record["source_date_epoch"], "build record source_date_epoch")

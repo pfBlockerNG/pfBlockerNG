@@ -1241,6 +1241,8 @@ jobs:
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
     timeout-minutes: 30
+    env:
+      GO_VERSION: "1.27.0"
     strategy:
       fail-fast: false
       matrix:
@@ -1282,6 +1284,15 @@ jobs:
       - name: Sync the locked dependency-package toolchain
         if: steps.extras.outputs.extra_pkgs != '[]'
         run: uv sync --locked --only-group dep-pkg-build
+
+      - name: Set up the pinned Go toolchain
+        # The release source's pfB-DNS gateway is cross-compiled by build-pkg-portable.py
+        # (scripts/build-pfb-dns.py, GOTOOLCHAIN=local): this is the compiler it runs. A
+        # release line without the Go module (release/3.3) builds nothing with it.
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
 
       - name: Compute this leg's LEG/ABI
         id: leg
