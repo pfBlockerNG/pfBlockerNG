@@ -233,6 +233,23 @@ def test_unbound_not_answering_gives_servfail(booted: Booted) -> None:
     assert (reply.id, reply.rcode, reply.questions) == (0x0B0B, 2, dnswire.parse(query).questions)
 
 
+@pytest.mark.parametrize("cd", [False, True], ids=["cd-clear", "cd-set"])
+@pytest.mark.parametrize("error", ["servfail", "formerr"])
+def test_an_error_reply_copies_the_clients_cd_bit_as_unbound_does(booted: Booted, error: str, cd: bool) -> None:
+    async def silent(_wire: bytes) -> None:
+        return None
+
+    query = build_query(ALLOWED, cd=cd)
+    if error == "formerr":
+        query = query[:4] + b"\x00\x02" + query[6:]  # two questions: refused before it is parsed
+    reply = dnswire.parse(_resolve(booted, query, silent) or b"")
+    assert (reply.rcode, bool(reply.flags & dnswire.CD), bool(reply.flags & dnswire.RD)) == (
+        2 if error == "servfail" else 1,
+        cd,
+        True,
+    )
+
+
 def test_refused_reply_without_a_question_section_is_relayed_and_logged_as_refused(booted: Booted) -> None:
     # Unbound's access-control REFUSED carries no question section at all
     refused = struct.pack("!HHHHHH", 0x1234, dnswire.QR | dnswire.RD | dnswire.RA | 5, 0, 0, 0, 0)
