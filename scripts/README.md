@@ -269,6 +269,7 @@ Produce the installable FreeBSD package:
 | --- | --- | --- |
 | [`build-pkg-portable.py`](build-pkg-portable.py) | **Linux or macOS** (no FreeBSD) | reads the port files and emits the libpkg archive directly. |
 | [`build-dep-pkg-portable.py`](build-dep-pkg-portable.py) | **Linux or macOS** (no FreeBSD) | builds a pure-wheel dependency from its Ports-pinned sdist with the locked Python toolchain. |
+| [`build-pfb-dns.py`](build-pfb-dns.py) | **Linux or macOS** (needs Go) | cross-compiles the pfB-DNS gateway for FreeBSD amd64 and arm64; `build-pkg-portable.py` runs it and stages both binaries (see [`../docs/build-pkg-portable.md`](../docs/build-pkg-portable.md#pfb-dns-binaries-dual-architecture-payload)). |
 
 `build-pkg-portable.py` exploits the fact that pfBlockerNG is a `NO_BUILD` port:
 it executes the port's own `do-extract`/`post-extract`/`do-install` recipe and
