@@ -1676,3 +1676,11 @@ if (!function_exists('pfSense_get_pf_rules')) {
 		return $GLOBALS['pfb_test_pf_rules'] ?? [];
 	}
 }
+
+// --- is_pkg_installed() double (metrics export gate) ---
+// Tests seed $GLOBALS['pfb_test_installed_pkgs'] with the package names that are "installed".
+if (!function_exists('is_pkg_installed')) {
+	function is_pkg_installed(string $n): bool {
+		return in_array($n, $GLOBALS['pfb_test_installed_pkgs'] ?? [], TRUE);
+	}
+}

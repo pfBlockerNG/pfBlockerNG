@@ -61,7 +61,7 @@ final class SyncPolicyOwnershipTest extends TestCase
 	public function testEveryRegistryEntryDeclaresPolicyOrLocal(): void
 	{
 		$registry = pfb_cfg_registry();
-		$this->assertCount(154, $registry, 'vacuity guard: 132 existing + 20 registered by #3450 + 2 by #3413');
+		$this->assertCount(155, $registry, 'vacuity guard: 132 existing + 20 registered by #3450 + 2 by #3413 + 1 by #3522');
 
 		$this->assertSame([], self::unclassifiedSyncEntries($registry),
 			"every pfb_cfg_registry() entry must declare 'sync' => 'policy'|'local'");
@@ -93,7 +93,7 @@ final class SyncPolicyOwnershipTest extends TestCase
 	public function testLocalKeySetIsExactlyTheSpecifiedSixty(): void
 	{
 		$expected = self::localRegistryKeys();
-		$this->assertCount(60, $expected, 'vacuity guard: the spec local set has 60 keys');
+		$this->assertCount(61, $expected, 'vacuity guard: the spec local set has 61 keys');
 		sort($expected, SORT_STRING);
 
 		$this->assertSame($expected, self::keysClassified('local'),

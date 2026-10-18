@@ -9574,6 +9574,26 @@
             }
         ]
     },
+    "pfb_metrics_export_allowed": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "posted",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "pkg_present",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_migration_registry": {
         "returnsRef": false,
         "returnType": "array",

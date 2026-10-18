@@ -1491,6 +1491,8 @@ final class CfgGatewayTest extends TestCase
 			'log_syslog',
 			// issue #1669 slice C: CodeMirror 6 live syntax-highlight toggle (default on)
 			'pfb_syntax_highlight',
+			// issue #3522: metrics export toggle (node_exporter textfile collector)
+			'pfb_metrics_export',
 
 			// pfblockerngdnsblsettings/config/0 scalars
 			'pfb_dnsbl',

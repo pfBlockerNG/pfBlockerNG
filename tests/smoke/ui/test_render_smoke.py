@@ -1910,6 +1910,37 @@ def test_general_private_address_label_renders(webui: WebUI, php_error_log_guard
     )
 
 
+def test_general_metrics_export_requires_node_exporter(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """#3522: with pfSense-pkg-node_exporter absent, the General tab's Metrics export checkbox
+    renders disabled, with the red notice and its installer link.
+
+    Absence is the smoke VM's default and is asserted, not assumed: a VM that has the package
+    fails the precondition instead of being checked against the wrong state.
+    """
+    absent = smoke_vm.ssh("/usr/local/sbin/pkg", "info", "-e", "pfSense-pkg-node_exporter")
+    assert absent.returncode != 0, (
+        f"precondition: pfSense-pkg-node_exporter must be absent on the smoke VM (pkg info -e rc={absent.returncode})"
+    )
+
+    path = "/pfblockerng/pfblockerng_general.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("General Settings",))
+    assert result.ok, f"General render oracle failed: {result.detail}"
+    body = resp.text
+
+    checkbox = re.search(r'<input\b[^>]*\bname="pfb_metrics_export"[^>]*>', body)
+    assert checkbox is not None, "General page is missing the Metrics export checkbox"
+    assert re.search(r"\bdisabled\b", checkbox.group(0)), (
+        "Metrics export checkbox must render disabled while node_exporter is absent"
+    )
+    assert (
+        '<span class="text-danger">Requires the <a href="/pkg_mgr_install.php?pkg=pfSense-pkg-node_exporter">'
+        "node_exporter package</a>.</span>"
+    ) in body, "General page is missing the red node_exporter notice with its installer link"
+
+
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The second Feeds panel — the one listing user-configured feeds that don't match the
     predefined catalog — is headed "Custom Feeds", not the former "Unknown user defined Feeds".

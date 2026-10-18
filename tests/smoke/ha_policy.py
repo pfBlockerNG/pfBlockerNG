@@ -240,6 +240,7 @@ UNSEEDED_LOCAL_KEYS = {
     f"{DNSBL}/pfb_dnsvip_auto": "turns VIP management on, which rewrites the DNSBL VIP object whose uniqid the tests pin",
     f"{DNSBL}/dnsbl_interface": "must be the interface of the node's DNSBL VIP (lo0): pfb_validate_vips() disables DNSBL otherwise",
     f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
+    f"{GEN}/pfb_metrics_export": "'on' needs pfSense-pkg-node_exporter on the node (the save gate refuses it without), and no HA guest installs that package",
 }
 
 

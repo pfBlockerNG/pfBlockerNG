@@ -1194,6 +1194,15 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
+		// Prometheus metrics via node_exporter's textfile collector: 'on' | '' (checkbox). Default ''.
+		'gen/pfb_metrics_export' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new #3522 field; \'\' = off = no exporter',
+		],
+
 		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. New-install default 'auto'.
 		// 'auto' = delta for small churn (< ~5%), full replace for initial load / large churn;
 		// 'delta' = ALWAYS forward delta, NO large-churn replace fallback (power-user override);

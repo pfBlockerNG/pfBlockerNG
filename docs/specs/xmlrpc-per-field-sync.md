@@ -160,7 +160,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 
 | Section | Shape | Written by | Mode |
 | --- | --- | --- | --- |
-| `pfblockerng` | `config/0` map; `hooks/row` list | General tab, Hooks tab | allowlist (43 registered) |
+| `pfblockerng` | `config/0` map; `hooks/row` list | General tab, Hooks tab | allowlist (44 registered) |
 | `pfblockerngipsettings` | `config/0` map | IP tab | allowlist (11 registered + 12 newly registered) |
 | `pfblockerngdnsblsettings` | `config/0` map | DNSBL tab | allowlist (69 registered + 8 newly registered) |
 | `pfblockernglistsv4`, `pfblockernglistsv6`, `pfblockerngdnsbl` | rows `config/N`, each with a `row/M` feed list | category editor | deny list |
@@ -174,7 +174,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 
 | Section | Local keys |
 | --- | --- |
-| `gen` | `settings_family`, every `log_max_*` and `log_max_days_*`, `pfb_log_trim_margin_pct`, `pfb_reentry_timeout`, `pfb_software_check`, `pfb_reuse`, `pfb_alias_delta_mode`, `pfb_alias_delta_batch`, `pfb_syntax_highlight`, `log_syslog` |
+| `gen` | `settings_family`, every `log_max_*` and `log_max_days_*`, `pfb_log_trim_margin_pct`, `pfb_reentry_timeout`, `pfb_software_check`, `pfb_reuse`, `pfb_alias_delta_mode`, `pfb_alias_delta_batch`, `pfb_syntax_highlight`, `log_syslog`, `pfb_metrics_export` |
 | `ip` | `enable_rdns`, `maxmind_locale`, `asn_reporting`, `inbound_interface`, `outbound_interface`, `maxmind_account`, `maxmind_key`, `asn_token` |
 | `dnsbl` | `pfb_dnsvip_auto`, `dnsbl_interface`, `pfb_dnsvip4`, `pfb_dnsvip6`, `pfb_dnsport`, `pfb_dnsport_ssl`, `pfb_cache`, `pfb_cache_flush`, `pfb_py_reply`, `pfb_py_nolog`, `pfb_control`, `pfb_control_legacy`, `pfb_py_cache_max`, `dnsbl_allow_int`, `dnsbl_redir_int`, `dnsbl_dot_block_int`, `agateway_in`, `agateway_out`, `top1m_token` |
 | `rep`, `ss` | none |

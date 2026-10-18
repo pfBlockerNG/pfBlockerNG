@@ -22,6 +22,7 @@
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
+require_once('pkg-utils.inc');
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 
 global $pfb;
@@ -109,6 +110,9 @@ $pconfig['pfb_reentry_timeout']		= PfbConfig::read('gen/pfb_reentry_timeout');
 // default-on toggle field (merged PfbToggle, issue #1887; mirrors pfb_keep) --
 // extract the scalar .value for pfb_cfg_toggle_read() at render.
 $pconfig['pfb_syntax_highlight']	= PfbConfig::read('gen/pfb_syntax_highlight')->value;
+
+// #3522: metrics export toggle (default off). Read here for the render; the save gate reads the POST.
+$pconfig['pfb_metrics_export']	= PfbConfig::read('gen/pfb_metrics_export')->value;
 
 // issue #1875 step 2b: gate the CM6 live-highlight overlay for pfb_feed_internal_allowlist,
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
@@ -201,6 +205,15 @@ if ($_POST) {
 		// array (crafted POST) reaches the untyped resolver and lands on the default.
 		$_POST['pfb_reentry_timeout'] = (string) pfb_reentry_timeout($_POST['pfb_reentry_timeout'] ?? NULL);
 
+		// Server-side gate: a crafted POST cannot enable the option without the package.
+		$metrics_export_error = pfb_metrics_export_allowed(
+			pfb_filter($_POST['pfb_metrics_export'] ?? '', PFB_FILTER_ON_OFF, 'general'),
+			is_pkg_installed('pfSense-pkg-node_exporter')
+		);
+		if ($metrics_export_error !== NULL) {
+			$input_errors[] = $metrics_export_error;
+		}
+
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
@@ -254,6 +267,9 @@ if ($_POST) {
 			$pfb['gconfig']['log_syslog']	= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
 
 			$pfb['gconfig']['pfb_syntax_highlight']	= pfb_filter($_POST['pfb_syntax_highlight'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
+
+			// Server-side gate above refuses 'on' without node_exporter, so only a valid value reaches here.
+			$pfb['gconfig']['pfb_metrics_export']	= pfb_filter($_POST['pfb_metrics_export'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
@@ -410,6 +426,23 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_syntax_highlight']) === PfbToggle::On,
 	'on'
 ))->setHelp(pfb_general_toggle_help());
+
+// Disabled without node_exporter: the save gate refuses 'on' there, so the box must not offer it.
+$metrics_export_pkg = is_pkg_installed('pfSense-pkg-node_exporter');
+$metrics_export_box = new Form_Checkbox(
+	'pfb_metrics_export',
+	'Metrics export',
+	gettext('Enable'),
+	pfb_cfg_toggle_read($pconfig['pfb_metrics_export']) === PfbToggle::On,
+	'on'
+);
+if (!$metrics_export_pkg) {
+	$metrics_export_box->setAttribute('disabled', 'disabled');
+}
+$section->addInput($metrics_export_box)->setHelp(
+	'Publish Prometheus metrics through the node_exporter package\'s textfile collector (/var/tmp/node_exporter/pfblockerng.prom).'
+	. ($metrics_export_pkg ? '' : '<br /><span class="text-danger">Requires the <a href="/pkg_mgr_install.php?pkg=pfSense-pkg-node_exporter">node_exporter package</a>.</span>')
+);
 
 $section->addInput(new Form_Select(
 	'skipfeed',

@@ -5449,6 +5449,14 @@ function pfb_reentry_timeout($raw): int {
 	return PFB_REENTRY_TIMEOUT;
 }
 
+// Save gate for the metrics export toggle: 'on' needs node_exporter's textfile collector.
+function pfb_metrics_export_allowed(?string $posted, bool $pkg_present): ?string {
+	if ($posted === 'on' && !$pkg_present) {
+		return 'Metrics export requires the node_exporter package.';
+	}
+	return NULL;
+}
+
 /*
  * issue #2016/#2488: resolve a nested re-entry budget FAIL-SAFE BY CONSTRUCTION --
  * start at the configured value and take the caller's only once it is proven positive-

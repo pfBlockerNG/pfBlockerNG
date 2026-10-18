@@ -233,6 +233,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerng/config/0/log_syslog',
 		// issue #1669 slice C: CodeMirror 6 live syntax-highlight toggle (default on)
 		'installedpackages/pfblockerng/config/0/pfb_syntax_highlight',
+		// issue #3522: metrics export toggle (node_exporter textfile collector)
+		'installedpackages/pfblockerng/config/0/pfb_metrics_export',
 		// installedpackages/pfblockerngsafesearch (flat section, no /config/0)
 		'installedpackages/pfblockerngsafesearch/safesearch_enable',
 		'installedpackages/pfblockerngsafesearch/safesearch_youtube',
