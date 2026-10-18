@@ -66,6 +66,7 @@ VERDICTS = {  # what the upstream says, whatever the table holds
     "refused.example.": UpstreamVerdict(rcode=5),
     "servfail.example.": UpstreamVerdict(rcode=2),
     "nxd.example.": UpstreamVerdict(rcode=3),
+    "nxcname.example.": UpstreamVerdict(rcode=3, answers=("{name} 300 IN CNAME allowed.example.",)),
 }
 
 
@@ -85,6 +86,7 @@ CASES = {
     "cname-chain": Case("alias.example."),
     "nxdomain": Case("nx.example."),
     "nxdomain-with-soa": Case("nxd.example."),
+    "nxdomain-with-cname": Case("nxcname.example."),
     "no-answer": Case("nodata.example.", dnswire.TYPE_AAAA),
     "refused": Case("refused.example."),
     "servfail-from-unbound": Case("servfail.example."),

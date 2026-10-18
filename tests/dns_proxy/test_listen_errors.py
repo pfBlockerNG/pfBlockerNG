@@ -24,7 +24,7 @@ import pfb_dns_proxy
 import pytest
 from dot_helpers import REFID, b64, cert_element, config_xml
 from frontend_constants import BLOCKED, DNSBL_IPV4, PROTO_DIR
-from frontend_helpers import build_query, serving, udp_exchange
+from frontend_helpers import _bind_strict, build_query, serving, udp_exchange
 
 IN_USE = os.strerror(errno.EADDRINUSE)
 NOT_ON_THIS_BOX = os.strerror(errno.EADDRNOTAVAIL)
@@ -227,3 +227,71 @@ def test_the_real_process_exits_1_with_one_line_per_address_when_none_can_be_bou
         NONE_BOUND,
     ]
     assert (run.returncode, run.stdout, run.stderr.splitlines()) == (1, "", expected)
+
+
+def _counting_binds(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:
+    """Every pfb_dns_proxy.bind() call as (host, port), each passed on to the real bind()."""
+    real, calls = pfb_dns_proxy.bind, []
+
+    def counted(host: str, port: int, *, udp: bool) -> pfb_dns_proxy.Listener:
+        calls.append((host, port))
+        return real(host, port, udp=udp)
+
+    monkeypatch.setattr(pfb_dns_proxy, "bind", counted)
+    return calls
+
+
+def test_a_port_zero_bind_whose_udp_twin_is_taken_is_tried_again_and_the_retry_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Port 0 hands TCP a port and UDP must take the same number. Another process holding that UDP port fails the first
+    attempt; the retry, on the port the kernel picks now, serves a real datagram."""
+    real, calls = pfb_dns_proxy.bind, []
+    holder: list[socket.socket] = []  # the other process: UDP on the port the first attempt's TCP socket got
+
+    def first_attempt_meets_the_taken_port(host: str, port: int, *, udp: bool) -> pfb_dns_proxy.Listener:
+        calls.append((host, port))
+        if holder:
+            return real(host, port, udp=udp)
+        probe = real(host, 0, udp=False)  # the port a port-0 TCP bind gets
+        number = probe.tcp.getsockname()[1]
+        probe.close()
+        holder.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        holder[0].bind((host, number))
+        return real(host, number, udp=True)  # its UDP twin is taken: EADDRINUSE
+
+    monkeypatch.setattr(pfb_dns_proxy, "bind", first_attempt_meets_the_taken_port)
+    bound: list[pfb_dns_proxy.Listener] = []
+    try:
+        bound = _bind_strict(["127.0.0.1"], 0, udp=True)
+        [listener] = bound
+        assert calls == [("127.0.0.1", 0), ("127.0.0.1", 0)]  # the first attempt, then the retry
+        assert listener.udp is not None
+        assert listener.udp.getsockname()[1] == listener.tcp.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(b"ping", listener.udp.getsockname())
+            listener.udp.settimeout(2.0)
+            assert listener.udp.recvfrom(64)[0] == b"ping"
+    finally:
+        for listener in bound:
+            listener.close()
+        for sock in holder:
+            sock.close()
+
+
+def test_an_explicit_port_in_use_is_raised_at_once_and_never_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _counting_binds(monkeypatch)
+    with socket.create_server(("127.0.0.1", 0)) as occupant:
+        port = occupant.getsockname()[1]
+        with pytest.raises(pfb_dns_proxy.ListenError, match=IN_USE):
+            _bind_strict(["127.0.0.1"], port, udp=True)
+    assert calls == [("127.0.0.1", port)]
+
+
+def test_a_port_zero_bind_refused_for_another_reason_is_raised_at_once_and_never_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _counting_binds(monkeypatch)
+    with pytest.raises(pfb_dns_proxy.ListenError, match=NOT_ON_THIS_BOX):
+        _bind_strict(["203.0.113.9"], 0, udp=True)
+    assert calls == [("203.0.113.9", 0)]
