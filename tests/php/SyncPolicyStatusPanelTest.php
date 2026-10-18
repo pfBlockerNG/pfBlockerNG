@@ -407,6 +407,32 @@ final class SyncPolicyStatusPanelTest extends TestCase
 		$this->assertSame('connection error', $error);
 	}
 
+	/** @return array<string,array{string,string,string}> target, the client's text, the class: the host is removed where it is echoed, never from the failure detail */
+	public static function keywordHostProvider(): array
+	{
+		$prefix = 'A communications error occurred while attempting to call XMLRPC method restore_config_section: ';
+		return [
+			'certificate host, certificate failure' => ['certificate', $prefix . 'Unable to connect to tls://certificate:443. Error: peer certificate expired', 'TLS error'],
+			'ssl host, ssl failure'                 => ['ssl', $prefix . 'Unable to connect to tls://ssl:443. Error: SSL operation failed', 'TLS error'],
+			'ssl host, host down'                   => ['ssl', $prefix . 'Unable to connect to tls://ssl:443. Error: Host is down', 'connection error'],
+			'unresolved keyword host'               => ['ssl.lan', $prefix . 'Unable to connect to tls://ssl.lan:443. Error: php_network_getaddresses: getaddrinfo for ssl.lan failed: Name does not resolve', 'connection error'],
+		];
+	}
+
+	#[DataProvider('keywordHostProvider')]
+	public function testOnlyTheEchoedEndpointLosesTheHostName(string $host, string $text, string $class): void
+	{
+		$this->seedNode('manual', 'all', []);
+		$GLOBALS['pfb_test_xmlrpc_fail'][$host] = $text;
+
+		$ok = $this->quiet(static function () use ($host, &$error): bool {
+			return pfblockerng_do_xmlrpc_sync($host, '443', 'https', 'admin', self::PASSWORD, 5, $error);
+		});
+
+		$this->assertFalse($ok);
+		$this->assertSame($class, $error);
+	}
+
 	public function testAHostileFaultEchoReachesNeitherTheStateNorThePanel(): void
 	{
 		$key = 'MMKEY-0123456789abcdef';

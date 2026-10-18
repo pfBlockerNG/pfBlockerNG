@@ -22127,10 +22127,10 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 
 	if (!isset($resp)) {
 		// The client's own message (peer-controlled for a fault) stays in the system log where pfSense writes it; the state keeps only its class.
-		// The target host is echoed in the text and may contain class words (ssl.lan, timeout.lan); never let it decide.
+		// The target host is echoed (tls://<host>, getaddrinfo for <host>) and may contain class words (ssl.lan, timeout.lan); remove it there only.
 		$text  = (string) $rpc_client->get_error();
 		if ((string) $sync_to_ip !== '') {
-			$text = preg_replace('/(?<![\w.\-])' . preg_quote((string) $sync_to_ip, '/') . '(?![\w.\-])/i', '', $text) ?? $text;
+			$text = preg_replace('/(?:(?<=:\/\/)|(?<=getaddrinfo for ))' . preg_quote((string) $sync_to_ip, '/') . '(?![\w.\-])/i', '', $text) ?? $text;
 		}
 		$error = match (TRUE) {
 			$text === ''                                                            => 'no response from the XMLRPC client',
