@@ -287,7 +287,7 @@ func udpQuery(t *testing.T, to netip.AddrPort, wire []byte) []byte {
 
 // G18: one unbindable --listen address is skipped and named; the good one serves.
 func TestGatewaySkipsAnUnbindableListenAddressAndServesTheOthers(t *testing.T) {
-	gw := startGatewayProcess(t, []string{"--listen", "192.0.2.1", "--listen", "127.0.0.1", "--port", "0", "--acl-file", "/nonexistent/acl"}, decider("serve"))
+	gw := startGatewayProcess(t, []string{"--listen", "192.0.2.1", "--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf"}, decider("serve"))
 	skipped := gw.waitLine("cannot listen on 192.0.2.1:0:")
 	serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("ready upstream 127.0.0.1:5353")
@@ -447,7 +447,7 @@ func lifecycleConfig(t *testing.T, mode string) (config, *capture) {
 	t.Helper()
 	return config{
 		listen: []string{"127.0.0.1"}, port: 0, upstream: "127.0.0.1:5353", timeout: watchdog,
-		aclFile: filepath.Join(t.TempDir(), "absent"), decider: decider(mode),
+		unboundConf: filepath.Join(t.TempDir(), "absent"), decider: decider(mode),
 	}, &capture{}
 }
 
