@@ -28,7 +28,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_deinstall')]
 final class DnsProxyLifecycleTest extends TestCase
 {
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const MARKER = '# pfBlockerNG DNS proxy';
 	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";

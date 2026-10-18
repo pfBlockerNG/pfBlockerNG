@@ -27,11 +27,11 @@ use PHPUnit\Framework\TestCase;
  * a lock that is not reentrant, config_read_file() runs a hook standing in for what another process wrote.
  */
 #[CoversFunction('pfb_dns_proxy_resolver')]
-#[CoversFunction('pfb_dnsbl_config_lock')]
+#[CoversFunction('pfb_dns_config_lock')]
 final class DnsProxyConfigLockTest extends TestCase
 {
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
-	private const LOCK = 'pfb_dnsbl_config';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
+	private const LOCK = 'pfb_dns_config';
 	private const DOUBLE_GLOBALS = ['pfb_test_lock_events', 'pfb_test_lock_held', 'pfb_test_try_lock_fail', 'pfb_test_config_read_hook',
 		'pfb_test_config_read_fails', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_write_config_hook', 'pfb_test_write_config_calls',
 		'pfb_test_file_notices', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_valid_pids', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes'];
@@ -244,7 +244,7 @@ final class DnsProxyConfigLockTest extends TestCase
 
 		// Then a settings save that arrives as the restore starts its stop still takes the lock inside its own bounded wait:
 		// the stop's give-up ticks, plus a second for the restore's own fresh read and write
-		$this->assertGreaterThan((int) $giveUp[1] + 1, PFB_DNSBL_CONFIG_LOCK_WAIT,
+		$this->assertGreaterThan((int) $giveUp[1] + 1, PFB_DNS_CONFIG_LOCK_WAIT,
 			'the lock wait must outlast the stop that now runs under the lock');
 	}
 
@@ -382,7 +382,7 @@ final class DnsProxyConfigLockTest extends TestCase
 	public function testTheLockHelperReturnsTheHandleAfterAFreshReadAndNullWithoutReadingWhenTheLockIsTaken(): void
 	{
 		// When the lock is free
-		$key = pfb_dnsbl_config_lock();
+		$key = pfb_dns_config_lock();
 
 		// Then it returns the handle with config.xml read afresh under it
 		$this->assertIsResource($key);
@@ -393,7 +393,7 @@ final class DnsProxyConfigLockTest extends TestCase
 		// When another process holds it
 		unset($GLOBALS['pfb_test_config_read_calls'], $GLOBALS['pfb_test_config_read_lock_held']);
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
-		$taken = pfb_dnsbl_config_lock();
+		$taken = pfb_dns_config_lock();
 
 		// Then it returns NULL and reloads nothing: this process's copy is not replaced by a read made without the lock
 		$this->assertNull($taken);
@@ -406,7 +406,7 @@ final class DnsProxyConfigLockTest extends TestCase
 		$GLOBALS['pfb_test_config_read_fails'] = TRUE;
 
 		// When the lock is asked for while it is free
-		$key = pfb_dnsbl_config_lock();
+		$key = pfb_dns_config_lock();
 
 		// Then the caller gets NULL, as for a lock that stayed taken, and the lock it did take was released
 		$this->assertNull($key);

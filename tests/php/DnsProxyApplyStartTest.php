@@ -21,7 +21,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyApplyStartTest extends TestCase
 {
 	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',

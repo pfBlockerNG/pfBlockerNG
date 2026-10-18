@@ -386,7 +386,7 @@ final class PfbWidgetOracleTest extends TestCase
 		}
 		$GLOBALS['config'] = [];
 		config_set_path(
-			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved',
+			'installedpackages/pfblockerngdns/config/0/pfb_dns_saved',
 			base64_encode((string) json_encode($keys))
 		);
 		$GLOBALS['pfb_test_valid_pids'] = ['/var/run/pfb_dns_proxy.pid' => $proxyUp];

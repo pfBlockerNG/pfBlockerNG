@@ -19,7 +19,7 @@ or checking foreign-key exclusions.
 - **Path addressing (issue #1931):** registry keys = `'<alias>/<config-key>'` path
   strings — `'gen/pfb_keep'`, `'ip/suppression'` — alias resolved through
   `PFB_SECTIONS` map (`gen`/`dnsbl`/`ss`/`ip`/`rep`, plus `global`/`sync` since
-  issue #2123), single home of seven real section paths. Same-named keys in different
+  issue #2123, and `dns` since issue #3515), single home of eight real section paths. Same-named keys in different
   sections cannot collide — which is what lets #2123 register the DNSBL page's
   `dnsbl/auto*` scalars while the identically named per-feed-row and per-continent keys
   stay foreign. Bare-name lookups throw (`InvalidArgumentException`) — no dual
@@ -209,15 +209,19 @@ Authorization = property of **write**, not call site (generalises
     before ADR-02 python force would otherwise activate it.
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables post-handshake full Unbound
     cache flush for bulk zero-downtime DNSBL data swaps.
-  - **`pfb_dns_proxy` → `PfbToggle`** (issue #3515, mirror `$pfb['dnsbl_proxy']`): default Off,
-    sync `local`; opt-in, experimental pfBlockerNG DNS proxy in front of the DNS Resolver.
-    New key, no grandfather: absent reads Off = pre-feature behaviour.
-  - **`pfb_dns_proxy_saved`** (issue #3515, plain string — `NULL`/`NULL` adapters, not a GUI field):
+  - **`dns/pfb_dns` → `PfbToggle`** (issue #3515, pfB-DNS, mirror `$pfb['pfb_dns']`; section `dns` =
+    `installedpackages/pfblockerngdns/config/0`, the pfB-DNS tab's own): default Off, sync `local`; opt-in,
+    experimental pfBlockerNG DNS proxy in front of the DNS Resolver, with or without DNSBL. The feature is
+    unreleased, so there is no grandfather and no migration from the DNSBL-section key it started as
+    (`dnsbl/pfb_dns_proxy`, retired without an alias): absent reads Off = pre-feature behaviour.
+  - **`dns/pfb_dns_saved`** (issue #3515, plain string — `NULL`/`NULL` adapters, not a GUI field):
     base64 JSON snapshot of the Resolver's `active_interface`/`enablessl`/`custom_options`
     (presence and value) taken before the DNS proxy moves it; `''` = not moved. Default `''`, sync
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
-    callers hold no web session), read only by `pfb_dns_proxy_saved()`; the DNSBL page's section save
-    re-reads it right before it replaces the section, so an apply that finished meanwhile is not erased. New key, no grandfather.
+    callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
+    not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only the toggle
+    leaf, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
+    (`pfblockerng_sync_sections()`), so neither key can leave the node. New key, no grandfather.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

@@ -30,7 +30,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_service')]
 final class DnsProxyServiceTest extends TestCase
 {
-	private const SAVED = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved';
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const RC = 'pfb_dns_proxy.sh';
 
 	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger'];
@@ -82,8 +82,8 @@ final class DnsProxyServiceTest extends TestCase
 		read_xml_tag.sh)
 			[ "$1" = string ] || { ev bad-xml; exit 2; }
 			case "$2" in
-			*/pfb_dns_proxy_saved) echo "$GATE_SAVED" ;;
-			*/pfb_dns_proxy) echo "$GATE_PROXY" ;;
+			*/pfb_dns_saved) echo "$GATE_SAVED" ;;
+			*/pfb_dns) echo "$GATE_PROXY" ;;
 			*/pfb_dnsbl) echo "$GATE_DNSBL" ;;
 			*) ev bad-xml; exit 2 ;;
 			esac

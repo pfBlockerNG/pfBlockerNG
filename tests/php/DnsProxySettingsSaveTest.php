@@ -5,59 +5,54 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- the DNSBL settings page replaces the whole pfblockerngdnsblsettings section from the snapshot
- * of it taken when the page loaded. pfb_dns_proxy_resolver() writes the Resolver snapshot marker
- * (pfb_dns_proxy_saved) into that same section from the apply, which can finish between the page's read and its
- * write; the write would then erase the marker while the Resolver is still moved, and the Resolver could never be
- * put back. The page therefore takes the named config lock pfb_dns_proxy_resolver() takes (pfb_dnsbl_config_lock():
- * bounded, and config.xml is read afresh under it), re-reads the marker into its snapshot as the last step before
- * the section write, and holds the lock through write_config(). A lock that stays taken is an input error: the
- * settings are not saved and the form comes back with the admin's input.
+ * issue #3515 -- the pfB-DNS page saves the enable toggle into the pfblockerngdns section, which also holds the
+ * Resolver snapshot marker (pfb_dns_saved) pfb_dns_proxy_resolver() writes from the apply. Both read-modify-write
+ * config.xml from the copy their own process read at start (write_config() writes that whole copy back), so the page
+ * takes the named config lock pfb_dns_proxy_resolver() takes (pfb_dns_config_lock(): bounded, config.xml read afresh
+ * under it) and holds it through write_config(). It writes the one leaf it owns, never the section, so the marker it
+ * does not render is carried through untouched. A lock that stays taken is an input error: nothing is saved and the
+ * form comes back.
  *
  * The page is a script that renders on include, so the ordering is pinned in its source; the lock itself and the
  * Resolver side are exercised by DnsProxyConfigLockTest.
  */
 final class DnsProxySettingsSaveTest extends TestCase
 {
-	private const SECTION_WRITE = "PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', \$pfb['dconfig']);";
-	private const MARKER_REREAD = "\$pfb['dconfig']['pfb_dns_proxy_saved'] = PfbConfig::read('dnsbl/pfb_dns_proxy_saved');";
-	private const LOCK_TAKEN = "\$pfb_config_lock = pfb_dnsbl_config_lock();";
-	private const SAVE = "write_config('[pfBlockerNG] save DNSBL settings');";
+	private const TOGGLE_WRITE = "PfbConfig::write('dns/pfb_dns', \$pfb_dns);";
+	private const LOCK_TAKEN = "\$pfb_config_lock = pfb_dns_config_lock();";
+	private const SAVE = "write_config('[pfBlockerNG] save pfB-DNS settings');";
 
 	private static function page(): string
 	{
-		return php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php');
+		return php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dns.php');
 	}
 
-	public function testThePageReReadsTheResolverSnapshotMarkerRightBeforeItWritesTheSection(): void
+	public function testThePageWritesOnlyItsOwnToggleLeafAndNeverTheSectionThatHoldsTheSnapshotMarker(): void
 	{
 		$page = self::page();
 
-		$this->assertSame(1, substr_count($page, self::SECTION_WRITE), 'test bootstrap: the page writes the section once');
-		$this->assertStringContainsString(
-			self::MARKER_REREAD . ' ' . self::SECTION_WRITE,
-			$page,
-			'the marker is refreshed in the same statement run as the section write, with nothing in between'
-		);
+		$this->assertSame(1, substr_count($page, self::TOGGLE_WRITE), 'the page writes the toggle once, through the gateway');
+		$this->assertStringNotContainsString('writeSection', $page, 'a section write would replace the marker the page does not carry');
+		$this->assertStringNotContainsString('pfb_dns_saved', $page, 'the marker is not the page\'s to touch');
 	}
 
-	public function testThePageHoldsTheConfigLockFromBeforeTheMarkerReReadThroughWriteConfig(): void
+	public function testThePageHoldsTheConfigLockFromBeforeTheToggleWriteThroughWriteConfig(): void
 	{
 		$page = self::page();
 
 		$this->assertSame(1, substr_count($page, self::LOCK_TAKEN), 'the page takes the config lock once');
 		$lock = (int) strpos($page, self::LOCK_TAKEN);
-		$reread = (int) strpos($page, self::MARKER_REREAD);
-		$this->assertLessThan($reread, $lock, 'the lock is taken (and config.xml read afresh) before the marker is read');
+		$write = (int) strpos($page, self::TOGGLE_WRITE);
+		$this->assertLessThan($write, $lock, 'the lock is taken (and config.xml read afresh) before the toggle is written');
 
 		$this->assertSame(1, substr_count($page, self::SAVE), 'test bootstrap: the page saves once');
 		$this->assertStringContainsString(
-			self::SAVE . ' unlock($pfb_config_lock);',
+			self::TOGGLE_WRITE . ' ' . self::SAVE . ' unlock($pfb_config_lock);',
 			$page,
-			'the lock is released right after write_config(), so it covers the section write and the registered-field writes'
+			'the lock is released right after write_config(), so it covers the toggle write and the save'
 		);
 		$this->assertSame(1, substr_count($page, 'unlock($pfb_config_lock);'), 'one release');
-		$this->assertLessThan((int) strpos($page, "header('Location: /pfblockerng/pfblockerng_dnsbl.php');"), (int) strpos($page, 'unlock($pfb_config_lock);'),
+		$this->assertLessThan((int) strpos($page, "header('Location: /pfblockerng/pfblockerng_dns.php');"), (int) strpos($page, 'unlock($pfb_config_lock);'),
 			'released before the redirect and exit');
 	}
 
@@ -65,15 +60,15 @@ final class DnsProxySettingsSaveTest extends TestCase
 	{
 		$page = self::page();
 
-		// The lock is taken only when validation passed, and a NULL (another save holds it) joins the input errors
-		// that make the page skip the save and render the form again.
+		// A NULL (another save holds it) joins the input errors that make the page skip the save and render the form
+		// again; the write sits behind the input-error gate.
 		$this->assertStringContainsString(
-			'if (!$input_errors) { $pfb_config_lock = pfb_dnsbl_config_lock(); if ($pfb_config_lock === NULL) { $input_errors[] =',
+			self::LOCK_TAKEN . ' if ($pfb_config_lock === NULL) { $input_errors[] =',
 			$page
 		);
 		$gate = strpos($page, 'if ($pfb_config_lock === NULL) { $input_errors[] =');
 		$save = strpos($page, 'if (!$input_errors) {', (int) $gate);
 		$this->assertNotFalse($save, 'the save block follows, gated on the input errors again');
-		$this->assertLessThan((int) strpos($page, self::SECTION_WRITE), (int) $save, 'and the section is written inside it');
+		$this->assertLessThan((int) strpos($page, self::TOGGLE_WRITE), (int) $save, 'and the toggle is written inside it');
 	}
 }
