@@ -10121,14 +10121,19 @@
                 "name": "xml_file",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
-                "default": "'/root/git/.pfBlockerNG_worktrees/issue-3515-core-abort-recovery/src/usr/local/pkg/pfblockerng.xml'"
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },
     "pfb_package_removal_recover": {
         "returnsRef": false,
         "returnType": "array",
+        "params": []
+    },
+    "pfb_package_removal_stopped": {
+        "returnsRef": false,
+        "returnType": "bool",
         "params": []
     },
     "pfb_page_anchor_layout": {
