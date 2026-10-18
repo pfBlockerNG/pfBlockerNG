@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -45,7 +44,7 @@ func (d aclDeps) changed() bool {
 		}
 	}
 	for _, g := range d.globs {
-		if matches, _ := filepath.Glob(g.pattern); !slices.Equal(matches, g.matches) {
+		if matches, _ := globFiles(g.pattern); !slices.Equal(matches, g.matches) {
 			return true
 		}
 	}
@@ -55,9 +54,10 @@ func (d aclDeps) changed() bool {
 // confWalker reads an Unbound config the way Unbound does: line by line, an `include:` read where it stands, so
 // that of identical prefixes the row read last wins whichever file it is in.
 type confWalker struct {
-	rows   map[netip.Prefix]ACLAction
-	deps   aclDeps
-	opened int
+	rows     map[netip.Prefix]ACLAction
+	deps     aclDeps
+	opened   int
+	implicit []netip.Prefix // netblocks named by an implicit-allow row; allowed after the walk
 }
 
 func newConfWalker() *confWalker { return &confWalker{rows: map[netip.Prefix]ACLAction{}} }
@@ -115,10 +115,12 @@ func (w *confWalker) line(from string, depth int, raw []byte) error {
 	line := bytes.TrimLeft(raw, " \t")
 	switch {
 	case bytes.HasPrefix(line, []byte("access-control:")):
-		if utf8.Valid(raw) {
-			if prefix, action, ok := parseACLLine(string(raw)); ok {
-				w.rows[prefix] = action
-			}
+		if prefix, action, ok := parseACLLine(string(raw)); ok {
+			w.rows[prefix] = action
+		}
+	case bytes.HasPrefix(line, []byte("access-control-")):
+		if prefix, ok := parseImplicitRow(string(line)); ok {
+			w.implicit = append(w.implicit, prefix)
 		}
 	case bytes.HasPrefix(line, []byte("include:")), bytes.HasPrefix(line, []byte("include-toplevel:")):
 		return w.include(from, depth, string(line))
@@ -126,10 +128,9 @@ func (w *confWalker) line(from string, depth int, raw []byte) error {
 	return nil
 }
 
-// include follows one directive: a quoted or unquoted path, or a glob (`*`, `?`, `[`). Matches are read in name
-// order; Unbound reads them in directory order, so identical prefixes in two matched files are not told apart.
-// shortcut: brace and tilde patterns are not expanded and fail the load (the gateway then forwards everything,
-// never stricter than Unbound), pfSense writes neither; a glob whose directory is missing matches nothing.
+// include follows one directive: a quoted or unquoted path (an unquoted one ends at a space, tab or CR, as in Unbound's
+// lexer), or a glob (`*`, `?`, `[`) whose matches Unbound reads in sorted order. shortcut: brace and tilde patterns
+// fail the load, so the gateway forwards everything; pfSense writes neither.
 func (w *confWalker) include(from string, depth int, directive string) error {
 	rest := strings.TrimLeft(directive[strings.IndexByte(directive, ':')+1:], " \t")
 	target := rest
@@ -139,7 +140,7 @@ func (w *confWalker) include(from string, depth int, directive string) error {
 			return fmt.Errorf("%s: include: unterminated quote in %q", from, directive)
 		}
 		target = rest[1 : 1+end]
-	} else if i := strings.IndexAny(rest, " \t#\r"); i >= 0 {
+	} else if i := strings.IndexAny(rest, " \t\r"); i >= 0 {
 		target = rest[:i]
 	}
 	switch {
@@ -150,15 +151,47 @@ func (w *confWalker) include(from string, depth int, directive string) error {
 	case !strings.ContainsAny(target, "*?["):
 		return w.file(target, depth+1)
 	}
-	matches, err := filepath.Glob(target)
+	pattern := strings.ReplaceAll(target, "[!", "[^") // glob(3) negates with '!'; filepath.Match negates with '^'
+	matches, err := globFiles(pattern)
 	if err != nil {
 		return fmt.Errorf("%s: include %q: %w", from, target, err)
 	}
-	w.deps.globs = append(w.deps.globs, aclGlob{pattern: target, matches: matches})
+	w.deps.globs = append(w.deps.globs, aclGlob{pattern: pattern, matches: matches})
 	for _, m := range matches {
 		if err := w.file(m, depth+1); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// allowImplicit gives each implicit-allow netblock that no access-control row names the `allow` Unbound gives it.
+func (w *confWalker) allowImplicit() {
+	for _, p := range w.implicit {
+		if _, listed := w.rows[p]; !listed {
+			w.rows[p] = ACLForward
+		}
+	}
+}
+
+// globFiles is filepath.Glob without its leading-dot rule: a wildcard never matches a dot-name the pattern does not
+// spell out, as glob(3) does.
+func globFiles(pattern string) ([]string, error) {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	pat := strings.Split(filepath.Clean(pattern), string(filepath.Separator))
+	return slices.DeleteFunc(matches, func(m string) bool {
+		parts := strings.Split(filepath.Clean(m), string(filepath.Separator))
+		if len(parts) != len(pat) {
+			return false
+		}
+		for i, part := range parts {
+			if strings.HasPrefix(part, ".") && !strings.HasPrefix(pat[i], ".") {
+				return true
+			}
+		}
+		return false
+	}), nil
 }
