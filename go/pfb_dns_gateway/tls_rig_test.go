@@ -22,7 +22,6 @@ import (
 const (
 	rfcDoQProtocolError     = 0x2
 	rfcDoQRequestCancelled  = 0x3
-	rfcDoQExcessiveLoad     = 0x4
 	rfcMaxIncomingDoQStream = 100
 )
 
