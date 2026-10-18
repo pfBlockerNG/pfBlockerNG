@@ -159,6 +159,9 @@ PAGE_TABLE: tuple[Page, ...] = (
             "first match wins",
         ),
     ),
+    # issue #3515: the pfB-DNS tab (experimental DNS proxy). The section titles are the page's own: the tab label alone
+    # is on every page's tab bar and proves nothing.
+    Page("dns", "/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings", "pfB-DNS Status")),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
     # StaticText label ("IPv4 Alias name(s):" etc.), which renders ONLY for the active
@@ -2124,41 +2127,56 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
     )
 
 
-def test_dnsbl_dns_proxy_option_renders_below_group_policy(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """issue #3515: the experimental DNS Proxy checkbox follows DNSBL Group Policy directly and its help names the
-    Resolver changes, that they are restored, the firewall's own lookups going through the proxy and the HA caveat."""
-    path = "/pfblockerng/pfblockerng_dnsbl.php"
+def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3515: the pfB-DNS tab carries the enable checkbox, whose help says plainly that it is experimental,
+    what it changes in the Resolver, that it is restored, that it runs with or without DNSBL and the HA caveat; a
+    status panel names the service, the mode, the listen addresses and DoT."""
+    path = "/pfblockerng/pfblockerng_dns.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-    assert result.ok, f"DNSBL DNS-proxy render oracle failed: {result.detail}"
+    result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
+    assert result.ok, f"pfB-DNS render oracle failed: {result.detail}"
     html = resp.text
     checkboxes = [
         name.group(1)
         for tag in re.findall(r"<input\b[^>]*>", html)
         if re.search(r"""\btype=["']?checkbox\b""", tag) and (name := re.search(r'\bname="([^"]+)"', tag))
     ]
-    assert "pfb_gp" in checkboxes and "pfb_dns_proxy" in checkboxes, f"missing checkbox in {checkboxes}"
-    after_gp = checkboxes.index("pfb_gp") + 1
-    assert checkboxes[after_gp : after_gp + 2] == ["pfb_dns_proxy", "pfb_dnsbl_lenient"], (
-        f"DNS Proxy must be the checkbox directly below Group Policy, got {checkboxes[after_gp : after_gp + 2]}"
-    )
-    # The help block sits between the proxy input and the next checkbox's input.
-    help_html = html[html.index('name="pfb_dns_proxy"') : html.index('name="pfb_dnsbl_lenient"')]
+    assert checkboxes == ["pfb_dns"], f"the page has the one enable checkbox, got {checkboxes}"
+    help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
     for needle in (
         "Experimental",
         "text-warning",
+        "with or without DNSBL",
         "Network Interfaces becomes Localhost",
         "the Listen Port is not changed",
         "neither 5353 nor 5354",
         "SSL/TLS Service is turned off",
         "# pfBlockerNG DNS proxy",
         "port 5354 and also listens on port 5353 for the proxy",
-        "saved and restored when this option is turned off, when DNSBL is disabled, or when the package is removed",
-        "go through the proxy, so DNSBL filters them too",
+        "saved and restored when this option is turned off, when pfBlockerNG is disabled, "
+        "or when the package is removed",
+        "go through the proxy",
         "High availability",
         "turn the DNS Resolver sync off",
+        "next Update",
     ):
-        assert needle in help_html, f"DNS Proxy help is missing {needle!r}"
+        assert needle in help_html, f"pfB-DNS help is missing {needle!r}"
+    status_html = html[html.index("pfB-DNS Status") :]
+    for label in ("Service", "Mode", "Listening on", "DNS over TLS"):
+        assert label in status_html, f"pfB-DNS status is missing {label!r}"
+
+
+def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """issue #3515: the toggle left the DNSBL page for the pfB-DNS tab, which the DNSBL page's own tab bar links to."""
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental"):
+        assert gone not in resp.text, f"the DNSBL page still carries {gone!r}"
+    assert "/pfblockerng/pfblockerng_dns.php" in resp.text, "the DNSBL page's tab bar links to pfB-DNS"
 
 
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts (DNSBL page) and
@@ -3730,14 +3748,15 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     sinkhole pages remain a recorded exclusion.
     """
     covered_paths = {p.path.split("?", 1)[0] for p in PAGE_TABLE}
-    # 14 distinct main .php files are render-smoked here (pfblockerng.php is never
+    # 15 distinct main .php files are render-smoked here (pfblockerng.php is never
     # served directly -- it is the CLI dispatcher; pfblockerng_geoip.inc is the template for
     # the GeoIP pages
-    # below), plus the widget = 15 distinct paths.
+    # below), plus the widget = 16 distinct paths.
     expected_main = {
         "/pfblockerng/pfblockerng_general.php",
         "/pfblockerng/pfblockerng_ip.php",
         "/pfblockerng/pfblockerng_dnsbl.php",
+        "/pfblockerng/pfblockerng_dns.php",
         "/pfblockerng/pfblockerng_feeds.php",
         "/pfblockerng/pfblockerng_alerts.php",
         "/pfblockerng/pfblockerng_log.php",

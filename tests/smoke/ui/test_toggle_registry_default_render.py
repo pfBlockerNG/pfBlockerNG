@@ -325,7 +325,6 @@ _SWEPT_DNSBL_TOGGLES = {
     "pfb_py_nolog": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_nolog",
     "pfb_noaaaa": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa",
     "pfb_gp": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp",
-    "pfb_dns_proxy": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy",
 }
 CFG_ENABLE_CB = "installedpackages/pfblockerng/config/0/enable_cb"
 
@@ -352,6 +351,21 @@ def test_swept_dnsbl_toggle_renders_on_when_stored_and_off_when_absent(
         f"an absent {name} must render UNCHECKED -- the registered default "
         "must reproduce the page default #2812 deleted"
     )
+
+
+@pytest.mark.ui_e2e
+def test_swept_pfb_dns_renders_on_when_stored_and_off_when_absent(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """issue #3515: the pfB-DNS enable checkbox (the pfblockerngdns section) renders checked only for stored ``on``."""
+    path = "installedpackages/pfblockerngdns/config/0/pfb_dns"
+    node_state(path, "on")
+    html = _render(smoke_vm, webui, "/pfblockerng/pfblockerng_dns.php", "pfB-DNS Settings")
+    assert _checkbox_is_checked(html, "pfb_dns"), "control: a stored 'on' pfb_dns must render checked"
+
+    node_state(path, None)
+    html = _render(smoke_vm, webui, "/pfblockerng/pfblockerng_dns.php", "pfB-DNS Settings")
+    assert not _checkbox_is_checked(html, "pfb_dns"), "an absent pfb_dns must render UNCHECKED (registry default Off)"
 
 
 @pytest.mark.ui_e2e

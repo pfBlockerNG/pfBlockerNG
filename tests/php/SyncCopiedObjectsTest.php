@@ -927,7 +927,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertFalse($apply(), 'before: an apply that changes nothing flags no reload');
 
 		// When the proxy is turned on (the Resolver snapshot exists) and the next apply runs.
-		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy_saved', $snapshot);
+		PfbConfig::writeSystem('dns/pfb_dns_saved', $snapshot);
 
 		// Then the IPv4 rule reaches the proxy and the pf reload is flagged, once.
 		$this->assertTrue($apply(), 'the toggling apply flags a reload');
@@ -935,7 +935,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertFalse($apply(), 'the next apply flags none');
 
 		// And turning it off puts the rows back byte for byte.
-		PfbConfig::writeSystem('dnsbl/pfb_dns_proxy_saved', '');
+		PfbConfig::writeSystem('dns/pfb_dns_saved', '');
 		$this->assertTrue($apply(), 'the apply that turns it off flags a reload');
 		$this->assertSame($off, config_get_path('nat/rule'));
 	}

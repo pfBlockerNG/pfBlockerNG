@@ -350,7 +350,7 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 			$keys[$key] = ['present' => $value !== NULL, 'value' => $value];
 		}
 		config_set_path(
-			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_saved',
+			'installedpackages/pfblockerngdns/config/0/pfb_dns_saved',
 			base64_encode((string) json_encode($keys))
 		);
 		$this->tick();
