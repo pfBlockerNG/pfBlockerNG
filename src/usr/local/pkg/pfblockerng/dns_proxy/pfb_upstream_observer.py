@@ -16,12 +16,15 @@ One JSON datagram per upstream response, sent to the Unix socket SOCKET:
      "opts": [[EDNS option code, data as hex], ...]}
 
 Installed as /var/unbound/pfb_upstream_observer.py and named by `python-script:`. SOCKET is relative to Unbound's
-working directory (its chroot, /var/unbound), where the proxy creates it (pfb_dns_proxy.py OBSERVER_SOCKET).
-An answer is never delayed or changed: the send does not block, and a proxy that is not listening just loses the report.
+working directory (its chroot, /var/unbound), where the proxy creates it (pfb_dns_proxy.py OBSERVER_SOCKET) when it is
+started with --observer. Without that file the script does nothing, so it may stay loaded whenever the proxy is not
+listening for reports. An answer is never delayed or changed: the send does not block, and a proxy that stops
+listening just loses the report.
 Standard library only.
 """
 
 import json
+import os
 import socket
 from typing import TYPE_CHECKING
 
@@ -79,6 +82,9 @@ def operate(id, event, qstate, qdata):
 
 def relay_upstream_response(qstate, response, **kwargs):
     global _warned
+    # No socket file: no proxy asked for reports, so build nothing (this runs for every upstream response).
+    if not os.path.exists(SOCKET):
+        return True
     try:
         reply_list = qstate.mesh_info.reply_list
         report = {
