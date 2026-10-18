@@ -1,10 +1,11 @@
 """Integration: which directives the real Unbound reads from the admin's Custom Options text (Docker).
 
-pfb_dns_proxy_directive_text() and pfb_dns_proxy_listener_directive() (src/usr/local/pkg/pfblockerng/pfblockerng.inc)
-decide, before the Resolver is moved, what Unbound would bind. That model was established with `unbound-checkconf -o`
-against the installed Unbound, not from its grammar; this test keeps it honest: each case asks Unbound which value it
-takes for one option, and whether a listed value is effective. A change in Unbound's lexer then fails here, not on a
-pfSense box. No Docker (or an image that cannot be built) is a FAILURE, never a skip, like the other integration tests.
+Each case asks the installed Unbound (unbound-checkconf -o) which value it takes for one option from a given
+Custom Options text, and whether a listed value is effective. That is the lexing the guard in pfblockerng.inc
+(pfb_dns_proxy_directive_text() and pfb_dns_proxy_listener_directive()) models before the Resolver is moved.
+This test never calls the guard; the PHP suite pins the guard with its own hand-copied case lists
+(DnsProxyResolverMoveTest), so the two can drift apart. No Docker (or an image that cannot be built) is a
+FAILURE, never a skip, like the other integration tests.
 """
 
 from __future__ import annotations
