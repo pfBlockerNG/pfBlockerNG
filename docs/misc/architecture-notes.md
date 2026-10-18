@@ -406,8 +406,10 @@ own in `custom_options` that could take a listener, a second port or another fil
 comments aside, see below); a quote or a backslash left open at a line's end; pfBlockerNG's marker lines unless they are
 exactly one complete start and end pair (a partial pair is never cut, so the admin's text survives byte for byte); values that
 cannot be stored verbatim; or our block already in `custom_options` with no snapshot, which would save the moved values as the
-"previous" ones. While the toggle is on
-the module has no host, so DNSBL blocks nothing. The restore is abandoned (snapshot kept, `file_notice`, retried by
+"previous" ones. Both module seams, `pfb_unbound_python()` and `pfb_unbound_dnsbl()`, follow the effective takeover (a valid
+snapshot), not the requested toggle. A refused move or failed config lock leaves DNSBL running in Unbound as before;
+with DNSBL off, Unbound gets no DNSBL module. A takeover already in place keeps only the observer in Unbound. The notice
+and pfB-DNS status panel explain when pfB-DNS is not active. The restore is abandoned (snapshot kept, `file_notice`, retried by
 the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
 `stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on the Resolver's port;
 the proxy is then restarted (once the config lock below is released), so the moved Resolver stays served until the retry.
@@ -528,7 +530,7 @@ has a python script), instead of `pfb_unbound.py`: `pfb_unbound_python()` sets `
 `/var/unbound/pfb_upstream.sock` only when the proxy was started with `--observer` (DNSBL on, the Resolver forwarding):
 the proxy creates that socket only then, and the script returns at once without it, so it is inert in every other mode.
 With `--observer` the proxy runs the module's own `inplace_cb_query_response` on each report, so `dnsbl.log` and the
-Upstream counter keep one writer. With the move refused Unbound runs no python script. `pfb_unbound_py_mode_active()` and
+Upstream counter keep one writer. With the move refused nothing fronts the Resolver, so Unbound keeps the DNSBL module (DNSBL on) or runs no python script (DNSBL off). `pfb_unbound_py_mode_active()` and
 `pfb_unbound_py_module_wired()` read only `pfb_unbound` / `pfb_unbound.py` (or the proxy, while it hosts the module), so
 the observer never reads as the module. Pinned by `DnsProxyModuleGatingTest` and `DnsProxyRuntimePredicateTest`.
 
@@ -566,8 +568,8 @@ separate times; a launch is not an answer.
 - DNS over TLS reads the Resolver's certificate when the proxy starts: a renewed certificate needs a proxy restart.
 - High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
   toggle and the snapshot marker are per-node (`local`). A secondary that receives the moved section before its own
-  option is on has no snapshot and finds our block already there, so it refuses the move with a notice and DNSBL
-  blocks nothing on it (with the option off it only raises the notice). Enable pfB-DNS on the secondary FIRST,
+  option is on has no snapshot and finds our block already there, so it refuses the move with a notice, pfB-DNS stays
+  inactive on it and DNSBL, if on, keeps its module in Unbound (with the option off it only raises the notice). Enable pfB-DNS on the secondary FIRST,
   before the primary syncs a moved Resolver, or turn the DNS Resolver sync off.
 
 ### ADR-08 — IDN homoglyph protection
