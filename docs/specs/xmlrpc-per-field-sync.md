@@ -643,6 +643,14 @@ never elapsed time.
 > answer, before any package hook runs. With B unreachable from the start, A's package therefore records
 > no attempt at all, which claims even less than "handed", and pfSense's own communications-error line in
 > A's system log is the failure report. The row is met by an empty send record on A plus that log line.
+>
+> **Amendment 2026-10-18 (#3455, owner decision).** Row 12's role flip assumed that once B lists A and B's Sync
+> page is saved, B's next send reaches A's package. It does not while A still syncs to B: pfSense's `xmlrpc.php`
+> drops a sync call that comes from the host the receiving node itself syncs to. A deliberate role flip
+> therefore also clears A's System > High Availability sync target. That guard is pfSense's, not pfBlockerNG's.
+> What the package owes under it: while A still syncs to B, B's send is dropped by core, and B's own record
+> claims at most "sent, acceptance unconfirmed"; A's pfBlockerNG receive record and policy stay unchanged; after
+> the flip, B's send reaches A.
 
 ## Out of scope
 
