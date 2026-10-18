@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -18,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  *   pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir,
  *                          float $timeout_s = 5.0): void
  *   pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
- *   pfb_sync_status_read_all(string $ledger_dir, float $timeout_s = 5.0, ?bool &$unavailable = NULL): array
+ *   pfb_sync_status_read_all(string $ledger_dir, float $timeout_s = 5.0, ?bool &$unavailable = NULL, ?bool &$corrupt = NULL): array
  *   pfb_sync_status_locked(string $ledger_dir, callable $fn, float $timeout_s = 5.0): void
  *
  * Coverage mandate (CLAUDE.md "Test coverage") — every branch:
@@ -1091,5 +1092,68 @@ PHP;
 			'close() must have aborted on the lock-acquire expiry -- the entry must still be OPEN, '
 			. 'got ' . var_export($open, TRUE));
 		$this->assertSame('pfB_StillOpen_v4', $open[0]['item']);
+	}
+
+	/** @return array<string,array{0:string,1:array<mixed>}> raw file bytes, then what read_all() returns for them */
+	public static function damagedLedgerProvider(): array
+	{
+		return [
+			'not JSON'        => ['not valid json {{{{', []],
+			'JSON scalar'     => ['5', []],
+			'JSON null'       => ['null', []],
+			'whitespace only' => ["\n", []],
+			'JSON list'       => ['[{"ip":{"Alias_v4":{"download":{"message":"m"}}}}]', [['ip' => ['Alias_v4' => ['download' => ['message' => 'm']]]]]],
+		];
+	}
+
+	/** @param array<mixed> $returned */
+	#[DataProvider('damagedLedgerProvider')]
+	public function testReadAllFlagsADamagedLedgerWithoutChangingWhatItReturns(string $raw, array $returned): void
+	{
+		file_put_contents($this->dir . '/pfb_sync_status.json', $raw);
+		$unavailable = TRUE;
+		$corrupt     = FALSE;
+
+		$data = pfb_sync_status_read_all($this->dir, 5.0, $unavailable, $corrupt);
+
+		$this->assertTrue($corrupt, 'a file that is not an object ledger must set $corrupt');
+		$this->assertFalse($unavailable, 'damage is not a lock timeout');
+		$this->assertSame($returned, $data, 'read_all() keeps its fail-open return value; writers depend on it');
+	}
+
+	/** @return array<string,array{0:?string}> raw file bytes; NULL leaves the file absent */
+	public static function intactLedgerProvider(): array
+	{
+		return [
+			'absent file'  => [NULL],
+			'empty file'   => [''],
+			'empty list'   => ['[]'],
+			'empty object' => ['{}'],
+			'object'       => ['{"ip":{"Alias_v4":{"download":{"message":"m"}}}}'],
+		];
+	}
+
+	#[DataProvider('intactLedgerProvider')]
+	public function testReadAllDoesNotFlagAnAbsentEmptyOrObjectLedger(?string $raw): void
+	{
+		if ($raw !== NULL) {
+			file_put_contents($this->dir . '/pfb_sync_status.json', $raw);
+		}
+		$corrupt = TRUE;	// deliberately wrong initial value
+
+		pfb_sync_status_read_all($this->dir, 5.0, $unavailable, $corrupt);
+
+		$this->assertFalse($corrupt);
+	}
+
+	public function testReadAllFlagsANonFileAtTheLedgerPath(): void
+	{
+		mkdir($this->dir . '/pfb_sync_status.json');
+		$corrupt = FALSE;
+
+		$data = pfb_sync_status_read_all($this->dir, 5.0, $unavailable, $corrupt);
+
+		$this->assertSame([], $data);
+		$this->assertTrue($corrupt, 'an unreadable ledger is damage, not an absent file');
 	}
 }

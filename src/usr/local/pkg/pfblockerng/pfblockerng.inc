@@ -7916,11 +7916,12 @@ function pfb_metrics_collect(): array {
 		}
 	}
 
-	// A lock timeout is a failed read, not an empty ledger, so its rows are dropped with it.
+	// One snapshot gives both health and rows. A lock timeout or a damaged file is a failed read, not an empty ledger.
 	$sync_unavailable = FALSE;
-	pfb_sync_status_read_all($pfb['dbdir'], 5.0, $sync_unavailable);
-	$up['sync_status'] = !$sync_unavailable;
-	$ledger = $sync_unavailable ? array() : pfb_sync_status_list_open($pfb['dbdir']);
+	$sync_corrupt = FALSE;
+	$sync_data = pfb_sync_status_read_all($pfb['dbdir'], 5.0, $sync_unavailable, $sync_corrupt);
+	$up['sync_status'] = !$sync_unavailable && !$sync_corrupt;
+	$ledger = $up['sync_status'] ? pfb_sync_status_flatten($sync_data) : array();
 
 	// pfb_py_sync_status_list_open() reads a bad file as empty, so the file is checked here.
 	// An empty file is a valid empty ledger there, so it is valid here too.

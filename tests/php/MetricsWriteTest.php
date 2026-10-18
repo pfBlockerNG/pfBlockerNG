@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -139,6 +140,74 @@ final class MetricsWriteTest extends TestCase
 		file_put_contents($py, '{"not": valid json');
 
 		$this->assertFalse(pfb_metrics_collect()['source_up']['py_sync_status']);
+	}
+
+	/** @return array<string,array{0:string}> */
+	public static function damagedSyncLedgerProvider(): array
+	{
+		return [
+			'not JSON'    => ['{"ip": '],
+			'JSON scalar' => ['5'],
+			// A list decodes to an array, and flattening it would invent a failing row.
+			'JSON list'   => ['[{"ip":{"Alias_v4":{"download":{"message":"x","first_seen":1,"last_seen":2}}}}]'],
+		];
+	}
+
+	#[DataProvider('damagedSyncLedgerProvider')]
+	public function testDamagedSyncLedgerClearsItsSourceAndEmitsNoFailingRows(string $raw): void
+	{
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_sync_status.json", $raw);
+		file_put_contents("{$GLOBALS['pfb']['dnsbldir']}/pfb_py_status.json", json_encode([
+			['facility' => 'dnsbl', 'item' => 'dnsbl:DNSBL_Ads', 'stage' => 'script', 'message' => 'm', 'first_seen' => 1, 'last_seen' => 2],
+		]));
+
+		$s = pfb_metrics_collect();
+
+		$this->assertFalse($s['source_up']['sync_status']);
+		$this->assertTrue($s['source_up']['py_sync_status'], 'the other ledger is independent');
+		$this->assertSame([['facility' => 'dnsbl', 'feed' => 'dnsbl:DNSBL_Ads', 'stage' => 'script']], $s['feed_failing']);
+	}
+
+	public function testNonFileAtTheSyncLedgerPathClearsItsSource(): void
+	{
+		mkdir("{$GLOBALS['pfb']['dbdir']}/pfb_sync_status.json");
+
+		$this->assertFalse(pfb_metrics_collect()['source_up']['sync_status']);
+	}
+
+	/** @return array<string,array{0:?string}> raw file bytes; NULL leaves the file absent */
+	public static function intactSyncLedgerProvider(): array
+	{
+		return [
+			'absent file'  => [NULL],
+			'empty file'   => [''],
+			'empty ledger' => ['[]'],
+		];
+	}
+
+	#[DataProvider('intactSyncLedgerProvider')]
+	public function testAbsentOrEmptySyncLedgerIsUpWithNoFailingRows(?string $raw): void
+	{
+		if ($raw !== NULL) {
+			file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_sync_status.json", $raw);
+		}
+
+		$s = pfb_metrics_collect();
+
+		$this->assertTrue($s['source_up']['sync_status']);
+		$this->assertSame([], $s['feed_failing']);
+	}
+
+	public function testSyncLedgerRowsAndHealthComeFromOneIntactFile(): void
+	{
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_sync_status.json", json_encode([
+			'ip' => ['ipv4:Alias_v4' => ['download' => ['message' => 'x', 'first_seen' => 1, 'last_seen' => 2]]],
+		]));
+
+		$s = pfb_metrics_collect();
+
+		$this->assertTrue($s['source_up']['sync_status']);
+		$this->assertSame([['facility' => 'ip', 'feed' => 'ipv4:Alias_v4', 'stage' => 'download']], $s['feed_failing']);
 	}
 
 	public function testFeedFailingListsOpenEntriesFromBothLedgers(): void

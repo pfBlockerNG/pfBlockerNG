@@ -13697,6 +13697,26 @@
             }
         ]
     },
+    "pfb_sync_status_flatten": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "data",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "facility",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_sync_status_list_open": {
         "returnsRef": false,
         "returnType": "array",
@@ -13819,6 +13839,13 @@
             },
             {
                 "name": "unavailable",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
+            },
+            {
+                "name": "corrupt",
                 "byRef": true,
                 "variadic": false,
                 "type": "?bool",

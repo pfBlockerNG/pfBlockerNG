@@ -7190,17 +7190,23 @@ function pfblockerng_tick(
  * @param string    $ledger_dir   Directory that contains pfb_sync_status.json.
  * @param float     $timeout_s    Bounded SH-acquire budget in seconds (issue #1780).
  * @param bool|null $unavailable  Out param: TRUE iff the lock acquire expired.
+ * @param bool|null $corrupt      Out param: TRUE iff the file exists but is unreadable, not JSON, or not an object.
+ *                                The return value is unchanged (fail-open); a caller that must tell damage from an
+ *                                empty ledger (the metrics export) reads this instead.
  * @return array<string,array<string,array<string,array{message:string,first_seen:int,last_seen:int}>>>
  */
-function pfb_sync_status_read_all(string $ledger_dir, float $timeout_s = 5.0, ?bool &$unavailable = NULL): array
+function pfb_sync_status_read_all(string $ledger_dir, float $timeout_s = 5.0, ?bool &$unavailable = NULL, ?bool &$corrupt = NULL): array
 {
 	$unavailable = FALSE;
+	$corrupt = FALSE;
 	$path = $ledger_dir . '/pfb_sync_status.json';
 	if (!is_file($path)) {
+		$corrupt = file_exists($path);	// a directory at the path is damage; a missing file is just an empty ledger
 		return [];
 	}
 	$fp = @fopen($path, 'r');
 	if ($fp === FALSE) {
+		$corrupt = TRUE;
 		return [];
 	}
 	if (!pfb_flock_bounded($fp, LOCK_SH, $timeout_s)) {
@@ -7217,10 +7223,15 @@ function pfb_sync_status_read_all(string $ledger_dir, float $timeout_s = 5.0, ?b
 	$raw = stream_get_contents($fp);
 	flock($fp, LOCK_UN);
 	fclose($fp);
-	if ($raw === FALSE || $raw === '') {
+	if ($raw === FALSE) {
+		$corrupt = TRUE;
+		return [];
+	}
+	if ($raw === '') {
 		return [];
 	}
 	$data = json_decode($raw, TRUE);
+	$corrupt = !is_array($data) || ($data !== [] && array_is_list($data));
 	return is_array($data) ? $data : [];	// corrupt/non-object -> empty, fail-open
 }
 
@@ -7391,7 +7402,18 @@ function pfb_sync_status_close(string $facility, string $item, string $stage, st
  */
 function pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
 {
-	$data = pfb_sync_status_read_all($ledger_dir);
+	return pfb_sync_status_flatten(pfb_sync_status_read_all($ledger_dir), $facility);
+}
+
+/**
+ * pfb_sync_status_flatten — the open entries of an already-read ledger snapshot.
+ *
+ * @param array<mixed> $data     A pfb_sync_status_read_all() result.
+ * @param string|null  $facility 'ip' | 'dnsbl' | NULL for every facility.
+ * @return list<array{facility:string,item:string,stage:string,message:string,first_seen:int,last_seen:int}>
+ */
+function pfb_sync_status_flatten(array $data, ?string $facility = null): array
+{
 	$out  = [];
 	foreach ($data as $fac => $items) {
 		if ($facility !== NULL && $fac !== $facility) {
