@@ -264,7 +264,7 @@ final class DnsProxyServiceTest extends TestCase
 			'~(?<![\w$.\-/*])/(?:[\w.\-]+/)*[\w.\-]+~',
 			function (array $m): string {
 				$path = $m[0];
-				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
+				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/unbound.conf', '/var/unbound/pfb_dns_ready'], TRUE) ||
 				    str_starts_with($path, "{$this->dir}/dns_proxy/") ||
 				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {
 					return $path;
@@ -1136,8 +1136,30 @@ final class DnsProxyServiceTest extends TestCase
 			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
 			'--pfsense-config', '/cf/conf/config.xml', ...$tls, ...$module,
-			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', ...self::DECIDER,
+			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', '/var/unbound/pfb_dns_ready', ...self::DECIDER,
 		];
+	}
+
+	public function testTheGatewayIsAskedToPublishItsPidBeforeTheDeciderSeparatorAndNothingElseIs(): void
+	{
+		// Given a package that ships pfb-dns, and the same box with no payload (a legacy package)
+		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1']);
+		$gateway = $this->gateway();
+
+		// When the rc service is generated and started
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the gateway gets exactly one --ready-file, ahead of `--`, and the decider is handed none
+		$separator = (int) array_search('--', $argv, TRUE);
+		$this->assertSame(1, count(array_keys($argv, '--ready-file', TRUE)), 'exactly one --ready-file');
+		$flag = (int) array_search('--ready-file', $argv, TRUE);
+		$this->assertLessThan($separator, $flag, '--ready-file belongs to the gateway, so it comes before the separator');
+		$this->assertSame('/var/unbound/pfb_dns_ready', $argv[$flag + 1]);
+		$this->assertNotContains('--ready-file', array_slice($argv, $separator), 'the decider never publishes the pid: it is not the gateway');
+
+		// And the Python listener, which has no such flag, is not given it
+		$this->generateWith("{$this->dir}/no_payload");
+		$this->assertStringNotContainsString('--ready-file', $this->rcText());
 	}
 
 	/** @return list<string> the daemon argv after the rc script started under dash */

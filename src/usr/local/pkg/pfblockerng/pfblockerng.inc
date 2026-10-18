@@ -3583,6 +3583,9 @@ if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 // daemon(8) child's pid is the gateway's own. Any such file makes the rc script run the wrapper; none (a legacy
 // package) leaves the Python listener alone, as before.
 const PFB_DNS_PROXY_DIR = '/usr/local/pkg/pfblockerng/dns_proxy';
+// Where pfb-dns publishes its own pid (--ready-file, ahead of the decider's `--`) once it serves. The gateway writes it,
+// never the decider, so the marker names the daemon(8) child.
+const PFB_DNS_PROXY_READY = '/var/unbound/pfb_dns_ready';
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -4155,9 +4158,10 @@ function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
  * starting a proxy that could not bind; never over a survivor; every address shell-quoted. Loopback is always among
  * the addresses, so a Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. It
  * runs pfb-dns, the Go gateway that serves DoH/DoQ and runs the Python proxy as its decision service, through pfb_dns.sh
- * (which execs this machine's binary) as soon as the package ships any bin/<target>/pfb-dns: a payload this machine
- * cannot run fails in the wrapper, it never starts the Python listener; with no payload (a legacy package) it runs the
- * Python proxy alone through pfb_python.sh, which serves no DoH/DoQ (a warning says so).
+ * (which execs this machine's binary) as soon as the package ships any bin/<target>/pfb-dns, with --ready-file
+ * PFB_DNS_PROXY_READY ahead of the decider's `--` (the gateway publishes its pid there once it serves): a payload this
+ * machine cannot run fails in the wrapper, it never starts the Python listener; with no payload (a legacy package) it
+ * runs the Python proxy alone through pfb_python.sh, which serves no DoH/DoQ (a warning says so).
  * Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's or the
  * installed pfb-dns's.
  *
@@ -4192,7 +4196,8 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	if ((glob("{$proxyDir}/bin/*/pfb-dns") ?: []) !== []) {
 		$command = '/bin/sh ' . escapeshellarg("{$proxyDir}/pfb_dns.sh") . "{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? ' --dot' : '') .
 		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
-		    " --unbound-conf /var/unbound/unbound.conf --user unbound -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
+		    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . PFB_DNS_PROXY_READY .
+		    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	} else {
 		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound" .
 		    ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '') . $module;

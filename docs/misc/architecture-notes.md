@@ -558,9 +558,12 @@ the rc script run `/bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh` inst
 `pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1 --port P --upstream 127.0.0.1:5353 [--dot]
 --pfsense-config /cf/conf/config.xml
 [--doh-listen X ... --doh-port P [--doh-trusted C ...]] [--doq-listen Y ... --doq-port Q]
---unbound-conf /var/unbound/unbound.conf --user unbound -- <the Python proxy argv> --decision-fd 3 ...`: the plain
+--unbound-conf /var/unbound/unbound.conf --user unbound --ready-file /var/unbound/pfb_dns_ready -- <the Python proxy argv> --decision-fd 3 ...`: the plain
 `--listen` set and `--port` are the Python line's (the derived addresses, then loopback so the firewall's own lookups are
-filtered, at the Resolver's Listen Port). The gateway's ACL is Unbound's own: the `access-control` rows of
+filtered, at the Resolver's Listen Port). `--ready-file` is optional for the binary and always passed here, ahead of the
+decider's `--` and never handed on: the gateway writes its own pid there (mode 0600) once its listeners serve and the
+decider has sent READY, and removes the file at stop while it still names it. Nothing on this branch reads that marker
+yet (the activation readiness wait is issue #3515's). The gateway's ACL is Unbound's own: the `access-control` rows of
 `--unbound-conf` and of every file it includes (globs too: `access_lists.conf`, pfBlockerNG's marked clause, an admin's
 Custom Options), the last row of identical prefixes winning and the most specific prefix matching, as Unbound does; a
 client no row names is refused, as Unbound refuses it, and a config Unbound could not load (a missing include) is logged
