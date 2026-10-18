@@ -893,10 +893,8 @@ def test_alerts_whitelist_reload_takes_the_zero_downtime_swap_without_restarting
         h.wait_zero_downtime_swap(vm, since=swaps)
         after = (_pid_file(vm, PROXY_PID_FILE), _pid_file(vm, DAEMON_PID_FILE), h.unbound_pid(vm))
         assert after == pids, f"pids (proxy, supervisor, unbound) changed across the swap: {pids} -> {after}"
-        allowed = h.dns_probe_client_until(
-            rig.client, name, lambda a: h.resolves_to(a, STUB_DNS_A), timeout=60.0, interval=3.0
-        )
-        assert h.resolves_to(allowed, STUB_DNS_A), f"{name} after the whitelist: {allowed}"
+        allowed, raw = _query(rig.client, name)
+        assert h.resolves_to(allowed, STUB_DNS_A), f"{name} after the whitelist: {allowed}\n{raw}"
     finally:
         h.config_restore_state(vm, CFG_WHITELIST, original)
 

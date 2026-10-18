@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -79,7 +80,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 			unset($GLOBALS['g']);
 		}
 		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_unbound_configure_calls'], $GLOBALS['pfb_test_unbound_configure_resolver'],
-			$GLOBALS['pfb_test_valid_pids'], $GLOBALS['pfb_test_file_notices']);
+			$GLOBALS['pfb_test_valid_pids'], $GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_lock_held']);
 		rmdir_recursive($this->tmp);
 	}
 
@@ -559,6 +560,71 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Then the Resolver is back as the user had it, and the package config really was swept.
 		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
 		$this->assertSame([], config_get_path('installedpackages', []));
+	}
+
+	/** Runs the wizard's capture-and-sweep step of step4_submitphpaction() (a `return` ends it early); returns its $input_errors. */
+	private function runWizardReset(): array
+	{
+		$input_errors = [];
+		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/wizards/pfblockerng_wizard.inc');
+		$start = strpos($source, "\t\$pfb_general_schedule = PfbConfig::readSection('installedpackages/pfblockerng/config/0');");
+		$sweep = "\n\tpfb_remove_config_settings();";
+		$end = $start === FALSE ? FALSE : strpos($source, $sweep, $start);
+		$this->assertTrue($start !== FALSE && $end !== FALSE, 'test bootstrap: wizard capture/sweep region found');
+		eval(substr($source, (int) $start, (int) $end + strlen($sweep) - (int) $start));
+		return $input_errors;
+	}
+
+	/** @return array<string,array{string}> why the Resolver could not be put back */
+	public static function failedRestores(): array
+	{
+		return [
+			'the proxy outlives its stop'       => ['proxy alive'],
+			'another save holds the config lock' => ['config locked'],
+		];
+	}
+
+	#[DataProvider('failedRestores')]
+	public function testWizardResetStopsBeforeTheSweepAndKeepsTheSnapshotWhenTheResolverCannotBePutBack(string $why): void
+	{
+		// Given a moved Resolver whose restore cannot complete
+		$this->setProxy(TRUE);
+		$this->seedMovedResolver();
+		if ($why === 'proxy alive') {
+			$GLOBALS['pfb_test_valid_pids'] = [PFB_DNS_PROXY_PIDFILE => TRUE];
+		} else {
+			$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		}
+		$moved = self::sorted(config_get_path('unbound'));
+		$snapshot = $this->savedRaw();
+		$this->assertNotSame('', $snapshot, 'before: snapshot present');
+
+		// When the wizard runs its reset
+		$errors = $this->runWizardReset();
+
+		// Then it reports the failure and stops: the Resolver, the snapshot and the package config are all untouched
+		$this->assertCount(1, $errors, 'one input error');
+		$this->assertStringContainsString('DNS proxy', $errors[0]);
+		$this->assertStringContainsString('Resolver', $errors[0]);
+		$this->assertSame($snapshot, $this->savedRaw(), 'the snapshot is kept for the next attempt');
+		$this->assertSame($moved, self::sorted(config_get_path('unbound')), 'the Resolver is left as it is');
+		$this->assertNotSame([], config_get_path('installedpackages', []), 'the package config was not swept');
+	}
+
+	public function testWizardResetSweepsWhenThereIsNoMovedResolverToPutBack(): void
+	{
+		// Given an untouched Resolver: pfb_dns_proxy_resolver(FALSE) returns FALSE because there is nothing to do
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->assertSame('', $this->savedRaw(), 'before: no snapshot');
+		$this->assertNotSame([], config_get_path('installedpackages', []), 'before: the package config exists');
+
+		// When the wizard runs its reset
+		$errors = $this->runWizardReset();
+
+		// Then a FALSE that means "nothing to restore" is not a failure: the sweep ran
+		$this->assertSame([], $errors);
+		$this->assertSame([], config_get_path('installedpackages', []));
+		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
 	}
 
 	// -----------------------------------------------------------------------
