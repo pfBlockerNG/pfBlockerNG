@@ -26,6 +26,7 @@ from frontend_helpers import (
     WATCHDOG,
     FakeProxyUpstream,
     FakeUnbound,
+    ManualClock,
     build_query,
     running_proxy,
     serve_dot,
@@ -216,8 +217,8 @@ def test_dot_forwards_a_listed_name_with_the_tls_client_in_the_proxyv2_header(
     assert client[0] == "127.0.0.7"
 
 
-def test_a_tcp_client_over_the_cap_closes_the_longest_idle_one_without_a_module(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_tcp_client_over_the_cap_is_refused_while_the_one_in_the_table_is_active_without_a_module(
+    clock: ManualClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 1)
 
@@ -226,7 +227,7 @@ def test_a_tcp_client_over_the_cap_closes_the_longest_idle_one_without_a_module(
         size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), WATCHDOG))[0]
         return dnswire.parse(await asyncio.wait_for(reader.readexactly(size), WATCHDOG)).id
 
-    async def scenario() -> tuple[int, int, bytes, int]:
+    async def scenario() -> tuple[int, bytes, int, int]:
         async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
             frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
             [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
@@ -235,23 +236,25 @@ def test_a_tcp_client_over_the_cap_closes_the_longest_idle_one_without_a_module(
             try:
                 first = await ask(reader, writer, 1)  # served: its slot is taken
                 extra_reader, extra = await asyncio.open_connection(*server)
-                second = await ask(extra_reader, extra, 2)  # over the cap: served, the first one is closed for it
+                extra.write(_framed(build_query(ALLOWED, qid=2)))
                 try:
-                    closed = await asyncio.wait_for(reader.read(), WATCHDOG)  # EOF
+                    refused = await asyncio.wait_for(extra_reader.read(65536), WATCHDOG)  # b"" at EOF: nothing answered
                 except ConnectionError:
-                    closed = b""
-                return first, second, closed, len(upstream.headers)
+                    refused = b""
+                again = await ask(reader, writer, 3)  # the first one was not closed for it
+                return first, refused, again, len(upstream.headers)
             finally:
                 writer.close()
                 if extra is not None:
                     extra.close()
                 await frontend.stop()
 
-    assert asyncio.run(scenario()) == (1, 2, b"", 2)  # both were answered by Unbound, over a connection each
+    # Unbound saw one connection, the first's: the refused one never opened an upstream connection.
+    assert asyncio.run(scenario()) == (1, b"", 3, 1)
 
 
-def test_a_udp_query_over_the_in_flight_cap_drops_the_oldest_one_without_a_module(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_udp_query_over_the_in_flight_cap_is_dropped_without_a_module(
+    clock: ManualClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_INFLIGHT", 1)
 
@@ -263,15 +266,15 @@ def test_a_udp_query_over_the_in_flight_cap_drops_the_oldest_one_without_a_modul
             try:
                 transport.sendto(build_query(ALLOWED, qid=1))
                 transport.sendto(build_query(ALLOWED, qid=2))
-                await client.until(1)  # the newest times out: SERVFAIL
+                await client.until(1)  # the first times out: SERVFAIL
                 await frontend.stop()  # every query task has ended: the dropped one can never answer
                 await asyncio.sleep(0)
                 return client.replies
             finally:
                 transport.close()
 
-    [reply] = asyncio.run(scenario())  # exactly one: the first was dropped
-    assert (dnswire.parse(reply).id, dnswire.parse(reply).rcode) == (2, 2)
+    [reply] = asyncio.run(scenario())  # exactly one: the second was dropped
+    assert (dnswire.parse(reply).id, dnswire.parse(reply).rcode) == (1, 2)
 
 
 # --- starting up -----------------------------------------------------------------------------------
@@ -358,3 +361,13 @@ def test_the_real_process_starts_with_no_module_dir_forwards_and_stops_cleanly_o
         reply = dnswire.parse(asyncio.run(udp_exchange(("127.0.0.1", port), build_query(BLOCKED, qid=0x3515)))[0])
         assert not (tmp_path / pfb_dns_proxy.OBSERVER_SOCKET).exists()  # while it runs: a started observer is here
     assert (reply.id, reply.rcode) == (0x3515, 2)
+
+
+def test_the_real_process_stops_cleanly_on_a_sigterm_sent_the_moment_it_says_it_is_listening() -> None:
+    """The 'listening on' line is what a supervisor waits for before it signals the proxy, so SIGTERM must be handled
+    from the moment that line is out: it killed the process (status -15) when it came within a millisecond of it. The
+    window is that narrow, hence ten starts."""
+    argv = ["--no-module", "--listen", "127.0.0.1", "--port", "0", "--upstream", f"127.0.0.1:{free_port()}"]
+    for _ in range(10):
+        with running_proxy(argv):
+            pass  # leaving the block sends SIGTERM at once and requires exit status 0

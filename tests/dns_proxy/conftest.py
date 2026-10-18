@@ -9,10 +9,14 @@ import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from frontend_constants import GP_BYPASS_INI, INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted, LogFeed
 from hang_guard import hang_guard  # noqa: F401  (autouse: every test here gets the alarm)
+
+if TYPE_CHECKING:
+    from frontend_helpers import ManualClock
 
 sys.path.insert(0, str(PROTO_DIR))
 
@@ -94,3 +98,14 @@ def certificate(tmp_path_factory: pytest.TempPathFactory) -> tuple[bytes, bytes]
     from dot_helpers import make_certificate  # imported late: it needs the proxy dir that this module puts on sys.path
 
     return make_certificate(tmp_path_factory.mktemp("dot-cert"))
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> ManualClock:
+    """The proxy's clock, frozen: a ManualClock that only moves when a test advances it."""
+    import frontend_helpers  # imported late: it needs the proxy dir that this module puts on sys.path
+    import pfb_dns_proxy
+
+    frozen = frontend_helpers.ManualClock()
+    monkeypatch.setattr(pfb_dns_proxy, "monotonic", frozen, raising=False)  # a proxy without a clock has none to set
+    return frozen
