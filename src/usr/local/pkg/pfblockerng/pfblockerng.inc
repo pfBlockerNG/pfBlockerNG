@@ -10423,12 +10423,14 @@ function pfb_unbound_dnsbl($mode) {
 	$pfbupdate = FALSE;
 	$log = '';
 
-	// issue #3515: while the DNS proxy fronts the Resolver (the snapshot), or pfB-DNS is on (the toggle term keeps this
-	// seam in step with pfb_unbound_python() when the move is refused), Unbound must not load the DNSBL module.
-	$module = $mode == 'enabled' && $pfb['pfb_dns'] !== PfbToggle::On && pfb_dns_proxy_saved() === NULL;
-	// The python script Unbound is given: pfb_unbound.py, or, while the proxy fronts the Resolver, its upstream observer
-	// in every mode (inert unless the proxy listens for it; it is what makes pfSense run the boot hook), or none.
-	$script = $module ? 'pfb_unbound.py' : (pfb_dns_proxy_saved() !== NULL ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL);
+	// issue #3515: Unbound loads the DNSBL module unless the DNS proxy fronts the Resolver, and that is the EFFECTIVE takeover
+	// (a valid moved-Resolver snapshot), never the requested toggle: a takeover that did not happen (move refused, config
+	// locked) leaves the module where it was. pfb_unbound_python() decides the same way. While the proxy fronts the Resolver,
+	// Unbound is given its upstream observer in every mode (inert unless the proxy listens for it; it is what makes
+	// pfSense run the boot hook), else nothing.
+	$fronted = pfb_dns_proxy_saved() !== NULL;
+	$module = $mode == 'enabled' && !$fronted;
+	$script = $module ? 'pfb_unbound.py' : ($fronted ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL);
 
 	// Collect Unbound custom option pfSense conf line
 	$pfb['unboundconfig']	= config_get_path('unbound/custom_options');
@@ -12830,7 +12832,8 @@ function pfb_dns_proxy_port(): string {
 
 /**
  * What the pfB-DNS tab's status panel shows, as text: the service, the mode, the listen addresses and DoT. The box is
- * moved or it is not (the Resolver snapshot); a toggle that is on while nothing is moved is unapplied, never running.
+ * moved or it is not (the Resolver snapshot); a toggle that is on while nothing is moved is never running: it is said
+ * not to be active, with the reason (pfBlockerNG or the Resolver disabled, or the Resolver not moved yet or refused).
  *
  * @return array{service:string,mode:string,listen:string,dot:string}
  */
@@ -12839,11 +12842,19 @@ function pfb_dns_status(): array {
 
 	$saved = pfb_dns_proxy_saved();
 	if ($saved === NULL) {
+		if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
+			$mode = 'Off: the DNS Resolver serves clients itself';
+		} elseif (($pfb['enable'] ?? NULL) !== PfbToggle::On) {
+			$mode = 'On, but not active: pfBlockerNG is disabled';
+		} elseif (($pfb['unbound_state'] ?? NULL) !== PfbToggle::On) {
+			$mode = 'On, but not active: the DNS Resolver is disabled';
+		} else {
+			$mode = 'On, not active: the DNS Resolver has not been moved to the proxy (run an Update; if this stays, see the notices). ' .
+			    'It serves clients itself, with DNSBL if that is on';
+		}
 		return [
 			'service' => 'Not in use',
-			'mode'    => (($pfb['pfb_dns'] ?? NULL) === PfbToggle::On)
-			    ? 'On, not applied yet: run an Update, and check the notices if this stays'
-			    : 'Off: the DNS Resolver serves clients itself',
+			'mode'    => $mode,
 			'listen'  => '-',
 			'dot'     => '-',
 		];
@@ -12914,12 +12925,22 @@ function pfb_dns_proxy_acl_networks(array $saved): array {
 }
 
 /**
- * The toggle-on refusal. While the toggle is on and the Resolver is not moved, Unbound is told not to load the
- * module and the proxy is not started, so DNSBL blocks nothing: the operator gets a notice, not only a log line.
+ * What a pfB-DNS takeover that did not happen means, for a notice. The proxy fronts the Resolver iff a moved-Resolver
+ * snapshot exists (pfb_unbound_python() and pfb_unbound_dnsbl() decide the module by it): with one the proxy keeps serving
+ * the Resolver it moved earlier; without one the Resolver is unchanged and, DNSBL being on, keeps the DNSBL module.
  */
+function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
+	if ($fronted) {
+		return 'The DNS proxy keeps serving the DNS Resolver as it was moved.';
+	}
+	return 'pfB-DNS is not active and the DNS Resolver is unchanged' .
+	    (pfb_dnsbl_active() ? ': DNSBL keeps running in the DNS Resolver as before.' : '.');
+}
+
+/** The toggle-on refusal: the operator gets a notice, not only a log line, saying what stays as it was and what to correct. */
 function pfb_dns_proxy_refuse(string $why): bool {
-	$text = "DNS proxy: {$why}. DNSBL blocks nothing while the DNS proxy option is on and the Resolver is not moved: " .
-	    'correct the Resolver in Services > DNS Resolver, or turn the DNS proxy option off.';
+	$text = "DNS proxy: {$why}. " . pfb_dns_proxy_unmoved_effect(pfb_dns_proxy_saved() !== NULL) .
+	    ' Correct the Resolver in Services > DNS Resolver, or turn the DNS proxy option off.';
 	pfb_logger("\n{$text}", 2);
 	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
 	return FALSE;
@@ -12966,7 +12987,8 @@ function pfb_dns_config_lock() {
  * Options that could take a listener, a second port or another file (any `interface`, `port` or `include` line, comments
  * aside: see pfb_dns_proxy_directive_text()); a quote or backslash left open at a line's end; our marker lines that are not
  * exactly one complete block (a partial or repeated pair is never cut); values that cannot be stored verbatim; or our
- * block with no snapshot (never snapshot moved values as the "previous" ones).
+ * block with no snapshot (never snapshot moved values as the "previous" ones). A refused move stores no snapshot, so
+ * DNSBL keeps its module in Unbound (pfb_unbound_python(), pfb_unbound_dnsbl()).
  *
  * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, and only then stops the
  * DNS proxy service (so Unbound's regeneration finds the port free): a lock that stays taken, or a failed read, returns
@@ -12996,8 +13018,9 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 
 	$lock = pfb_dns_config_lock();
 	if ($lock === NULL) {
-		$text = 'DNS proxy: the DNS Resolver was not ' . ($on ? 'moved' : 'put back') .
-		    ' because config.xml was locked by another save; the next apply retries.';
+		$fronted = pfb_dns_proxy_saved() !== NULL;
+		$text = 'DNS proxy: the DNS Resolver was not ' . ($on ? ($fronted ? 're-applied' : 'moved') : 'put back') .
+		    ' because config.xml was locked by another save; the next apply retries.' . ($on ? ' ' . pfb_dns_proxy_unmoved_effect($fronted) : '');
 		pfb_logger("\n{$text}", 2);
 		file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
 		return FALSE;
@@ -13283,15 +13306,15 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 	$pfbpython = FALSE;
 
-	// issue #3515: pfB-DNS fronts the Resolver whenever it is wanted, DNSBL on or off ($mode only says whether DNSBL
-	// is). A restore the proxy outlived keeps the snapshot, and so the proxy fronting it (pfb_unbound_dnsbl() reads the
-	// snapshot the same way). Unbound loads the DNSBL module only while nothing fronts it; while the proxy does it runs
-	// the observer in every mode: inert unless the proxy hosts the module and the Resolver forwards, and the one script
-	// that makes pfSense run the boot hook (pfb_upstream_observer_include.inc) which starts pfB-DNS before the packages.
-	$proxy = $dns_wanted ?? pfb_dns_wanted();
-	$moved = pfb_dns_proxy_resolver($proxy);
+	// issue #3515: pfB-DNS asks for the Resolver whenever it is wanted, DNSBL on or off ($mode only says whether DNSBL is),
+	// but only a move that happened counts: the proxy fronts the Resolver iff the snapshot is valid (a restore the proxy
+	// outlived keeps it, and a refused or locked move stores none; pfb_unbound_dnsbl() reads the snapshot the same way).
+	// Unbound loads the DNSBL module only while nothing fronts it; while the proxy does it runs the observer in every mode:
+	// inert unless the proxy hosts the module and the Resolver forwards, and the one script that makes pfSense run the boot
+	// hook (pfb_upstream_observer_include.inc) which starts pfB-DNS before the packages.
+	$moved = pfb_dns_proxy_resolver($dns_wanted ?? pfb_dns_wanted());
 	$fronted = pfb_dns_proxy_saved() !== NULL;
-	$module = $mode == 'enabled' && !$proxy && !$fronted;
+	$module = $mode == 'enabled' && !$fronted;
 	$observer = $fronted;
 
 	// Ensure log file permissions are set as 'unbound:unbound' (unified.log excluded:

@@ -353,11 +353,13 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertSame($config, $GLOBALS['config']);
 		$this->assertStringContainsString('refusing to snapshot', $this->errorLog());
 
-		// ... and tells the operator, because DNSBL filters nothing while the toggle is on and the move is refused.
+		// ... and tells the operator that pfB-DNS is not active and the Resolver unchanged (nothing is lost: DNSBL, when it is on,
+		// stays in the Resolver; this move runs with DNSBL off, so the notice claims none)
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
 		$notice = $GLOBALS['pfb_test_file_notices'][0];
 		$this->assertStringContainsString('DNS proxy', $notice['notice']);
-		$this->assertStringContainsString('DNSBL', $notice['notice'], 'it says what the operator loses');
+		$this->assertStringContainsString('pfB-DNS is not active', $notice['notice'], 'it says the takeover did not happen');
+		$this->assertStringNotContainsString('DNSBL', $notice['notice'], 'DNSBL is off here: no claim about it');
 		$this->assertSame('/services_unbound.php', $notice['url'], 'it points at the Resolver page');
 		$this->assertSame(2, $notice['priority']);
 	}
@@ -406,7 +408,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertSame($config, $GLOBALS['config']);
 		$this->assertStringContainsString('pfb_dns_saved', $this->errorLog());
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
-		$this->assertStringContainsString('DNSBL', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertStringContainsString('pfB-DNS is not active', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
 	public function testAMoveThatSucceedsRaisesNoNotice(): void
@@ -437,12 +439,12 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertSame(0, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
 
-		// ... and the operator is told which setting to change, and what DNSBL loses meanwhile.
+		// ... and the operator is told which setting to change, and that nothing was taken over.
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
 		$notice = $GLOBALS['pfb_test_file_notices'][0];
 		$this->assertStringContainsString('Listen Port', $notice['notice']);
 		$this->assertStringContainsString('5353', $notice['notice']);
-		$this->assertStringContainsString('DNSBL', $notice['notice']);
+		$this->assertStringContainsString('pfB-DNS is not active', $notice['notice']);
 		$this->assertSame('/services_unbound.php', $notice['url']);
 		$this->assertStringContainsString('Listen Port', $this->errorLog());
 	}
