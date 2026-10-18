@@ -26,7 +26,7 @@ def _php_function_body(source: str, name: str) -> str:
     """Extract one top-level function from the PHP source."""
     matches = list(
         re.finditer(
-            rf"^function {re.escape(name)}\([^\n]*\)\s*\{{",
+            rf"^function {re.escape(name)}\([^\n]*\)(?:\s*:\s*[^\n{{]+)?\s*\{{",
             source,
             re.MULTILINE,
         )

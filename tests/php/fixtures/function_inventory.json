@@ -1731,7 +1731,7 @@
     },
     "pfb_dns_proxy_deinstall": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": []
     },
     "pfb_dns_proxy_ensure_running": {
@@ -1854,6 +1854,11 @@
                 "default": "false"
             }
         ]
+    },
+    "pfb_dns_reply_log_active": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_dns_status": {
         "returnsRef": false,
@@ -16431,7 +16436,7 @@
     },
     "pfblockerng_php_pre_deinstall_command": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "bool",
         "params": []
     },
     "pfblockerng_plugin_xmlrpc_recv": {
