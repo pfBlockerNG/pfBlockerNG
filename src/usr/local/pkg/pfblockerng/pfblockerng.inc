@@ -4539,6 +4539,30 @@ function pfb_package_removal_recover(): array {
 	return $failed;
 }
 
+/**
+ * The removal stops with the Resolver still moved to the DNS proxy: put back what pfSense took, then say so. FALSE is the
+ * hook's answer, which keeps the package installed.
+ */
+function pfb_package_removal_stopped(): bool {
+	pfb_stdout_close_line();
+	// pfSense's own half of the removal has already stopped the proxy and deleted what registers it: put that back
+	$failed = pfb_package_removal_recover();
+	$text = 'pfBlockerNG removal was stopped: the DNS Resolver could not be put back (see the DNS proxy notice above), so it still ' .
+	    'depends on the DNS proxy. pfBlockerNG\'s files and settings were left in place';
+	if ($failed === []) {
+		$text .= ', its service entries were registered again and the DNS proxy is running. Once no other configuration save is in ' .
+		    'progress and the DNS proxy can be stopped, remove the package again.';
+	} else {
+		$text .= ', but the recovery did not complete: ' . implode('; ', $failed) . '. DNS clients may not be answered until the DNS ' .
+		    'proxy runs: start it with ' . PFB_DNS_PROXY_RCFILE . ' start. Then, once no other configuration save is in progress ' .
+		    'and the DNS proxy can be stopped, remove the package again.';
+	}
+	pfb_logger("\n{$text}", 2);
+	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+	update_status("{$text}\n");
+	return FALSE;
+}
+
 
 // Create Firewall filter service
 if (!file_exists('/usr/local/etc/rc.d/pfb_filter.sh')) {
@@ -22942,9 +22966,9 @@ function pfb_deinstall_sweep_managed_objects(): void {
 /**
  * Function to De-Install pfBlockerNG.
  *
- * @return bool FALSE iff the removal must stop because the DNS Resolver is still moved to the DNS proxy: nothing the Resolver
- *         depends on was removed by this function (pf rules and the disable pass are all that ran), and what pfSense removed
- *         before it ran is put back (pfb_package_removal_recover()); TRUE otherwise
+ * @return bool FALSE iff the removal must stop because the DNS Resolver is still moved to the DNS proxy: the Resolver check runs
+ *         before the disable pass, so nothing it tears down was removed; what pfSense removed before the hook ran is put back
+ *         (pfb_package_removal_recover()); TRUE otherwise
  */
 function pfblockerng_php_pre_deinstall_command(): bool {
 	require_once('config.inc');
@@ -22968,15 +22992,6 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 		return TRUE;
 	}
 
-	// Set these two variables to disable pfBlockerNG on de-install. pfb_global() turns the
-	// install/reinstall flag into enable/dnsbl='' (2129), so this runs a full DISABLE pass --
-	// uninstall == turning pfBlockerNG OFF (rules removed, DNSBL/Unbound disabled, its pre/post
-	// hooks fired so external consumers reconfigure to the off state), a no-op if already off.
-	$pfb['save'] = $pfb['install'] = TRUE;
-	// #684: publish the pkg transition to the hooks fired by the disable pass below (they get
-	// PFB_PRE_UNINSTALL=1). Context only -- pfBlockerNG does not branch on it.
-	$pfb['hook_lifecycle'] = 'uninstall';
-
 	// issue #3090: hold the feed-pass lock across the whole removal -- the disable pass below only
 	// DEFERS on contention (#3062 install shape; architecture-notes.md "The uninstall holds it too").
 	update_status("Serialising against any in-flight pfBlockerNG feed pass...");
@@ -22989,29 +23004,27 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	update_status(pfb_schedule_dispatch_begin(PFB_INSTALL_FEED_PASS_WAIT, $pfb_dispatch_contended)
 		? " done.\n" : " lock not taken; continuing anyway.\n");
 
+	// issue #3515: the Resolver goes back before the disable pass tears anything down. The pass removes the DNSBL manifest and the
+	// raw lists the proxy reads when it starts again, so a refused restore stops the removal here, before any of that.
+	if (!pfb_dns_proxy_deinstall()) {
+		return pfb_package_removal_stopped();
+	}
+
+	// Set these two variables to disable pfBlockerNG on de-install. pfb_global() turns the
+	// install/reinstall flag into enable/dnsbl='' (2129), so this runs a full DISABLE pass --
+	// uninstall == turning pfBlockerNG OFF (rules removed, DNSBL/Unbound disabled, its pre/post
+	// hooks fired so external consumers reconfigure to the off state), a no-op if already off.
+	$pfb['save'] = $pfb['install'] = TRUE;
+	// #684: publish the pkg transition to the hooks fired by the disable pass below (they get
+	// PFB_PRE_UNINSTALL=1). Context only -- pfBlockerNG does not branch on it.
+	$pfb['hook_lifecycle'] = 'uninstall';
+
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
-	// issue #3515: the pass returns early on lock contention or a failed recovery; removal always gives the Resolver back,
-	// and stops here while it cannot: everything below destroys the recovery path (snapshot, runtime files, package settings),
-	// the DNSBL manifest and raw lists the proxy reads when it starts again included (the TOP1M teardown below removes them).
+	// issue #3515: the disable pass can move the Resolver again (pfb_dns_wanted() reads enable_cb, which its policy upgrade may
+	// re-read), so it is put back once more; a refused restore stops the removal the same way as the check above.
 	if (!pfb_dns_proxy_deinstall()) {
-		pfb_stdout_close_line();
-		// pfSense's own half of the removal has already stopped the proxy and deleted what registers it: put that back
-		$failed = pfb_package_removal_recover();
-		$text = 'pfBlockerNG removal was stopped: the DNS Resolver could not be put back (see the DNS proxy notice above), so it still ' .
-		    'depends on the DNS proxy. pfBlockerNG\'s files and settings were left in place';
-		if ($failed === []) {
-			$text .= ', its service entries were registered again and the DNS proxy is running. Once no other configuration save is in ' .
-			    'progress and the DNS proxy can be stopped, remove the package again.';
-		} else {
-			$text .= ', but the recovery did not complete: ' . implode('; ', $failed) . '. DNS clients may not be answered until the DNS ' .
-			    'proxy runs: start it with ' . PFB_DNS_PROXY_RCFILE . ' start. Then, once no other configuration save is in progress ' .
-			    'and the DNS proxy can be stopped, remove the package again.';
-		}
-		pfb_logger("\n{$text}", 2);
-		file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
-		update_status("{$text}\n");
-		return FALSE;
+		return pfb_package_removal_stopped();
 	}
 	pfb_top1m_teardown_call();
 

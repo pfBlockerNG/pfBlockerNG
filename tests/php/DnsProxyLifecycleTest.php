@@ -451,7 +451,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE);
 	}
 
-	/** The removal hook runs the restore unconditionally after the disable pass, whatever the pass returned. */
+	/** The removal hook puts the Resolver back before the disable pass, and once more after it, whatever the pass returned. */
 	public function testThePreDeinstallHookRunsTheRestoreAfterTheDisablePassWhateverItReturns(): void
 	{
 		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
@@ -459,11 +459,14 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertNotFalse($start, 'pre-deinstall controller must remain defined');
 		$hook = substr($source, (int) $start);
 
+		$gate = strpos($hook, 'if (!pfb_dns_proxy_deinstall()) {');
 		$pass = strpos($hook, 'sync_package_pfblockerng();');
-		$restore = strpos($hook, 'if (!pfb_dns_proxy_deinstall()) {');
+		$restore = strpos($hook, 'if (!pfb_dns_proxy_deinstall()) {', (int) $pass);
 		$this->assertNotFalse($pass, 'the disable pass is a plain statement: its result is not consulted');
-		$this->assertNotFalse($restore, 'package removal must restore the Resolver');
-		$this->assertGreaterThan($pass, $restore, 'the restore follows the disable pass');
+		$this->assertNotFalse($gate, 'package removal must restore the Resolver before the disable pass tears anything down');
+		$this->assertLessThan($pass, $gate, 'the first restore precedes the disable pass');
+		$this->assertNotFalse($restore, 'and the removal restores the Resolver once more after the pass');
+		$this->assertGreaterThan($pass, $restore, 'the second restore follows the disable pass');
 		$between = substr($hook, (int) $pass, (int) $restore - (int) $pass);
 		$this->assertDoesNotMatchRegularExpression('~\bif\b|\{|\}|\breturn\b|\belse\b~', $between,
 			'nothing conditional or early between the pass and the restore: it runs whatever the pass returned');
