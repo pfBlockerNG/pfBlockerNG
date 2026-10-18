@@ -10,7 +10,8 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --port N           client-facing UDP and TCP port (default 53)
   --upstream H:P     Unbound with `proxy-protocol-port: P` (default 127.0.0.1:5353)
   --module-dir DIR   dir holding pfb_unbound.py, pfb_dnsbl_regex_rules.py, pfb_unbound.ini and the manifest
-                     (default /var/unbound); the process works in that directory, as Unbound's chroot does
+                     (default /var/unbound); the process works in that directory, as Unbound's chroot does, and
+                     creates the observer socket pfb_upstream.sock there (see below)
   --timeout SECONDS  wait for Unbound before answering SERVFAIL (default 5)
   --dot              also serve DNS over TLS, as the pfSense DNS Resolver is set up for (see below)
   --pfsense-config P pfSense config.xml to read the DNS Resolver's DoT settings from (/cf/conf/config.xml)
@@ -19,6 +20,13 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
 --user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then supplementary groups, group
 and user are set to NAME's, then the module boots, so every file it creates belongs to NAME. An unknown NAME (or '') or
 a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
+
+Upstream blocks (issue #267): Unbound rewrites every reply it sends (RA set, AA clear, the upstream's EDNS options
+dropped), so the proxy cannot tell from a relayed reply that the upstream blocked it. While the Resolver forwards,
+Unbound runs pfb_upstream_observer.py, which sends each RAW upstream response to the Unix socket pfb_upstream.sock
+that the proxy creates in --module-dir (mode 0600, replacing a stale one); the proxy fires the module's own
+inplace_cb_query_response on it, so the log line, the Upstream counter and the forwarding gate are the module's. A
+socket that cannot be made is one error line, and the proxy serves without upstream-block detection.
 
 Each --listen address is bound on its own: one that cannot be bound (no longer an address of this box, port in use)
 is logged as a warning and skipped, and DoT is bound per address the same way. It exits 1 only when no address binds
@@ -42,7 +50,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import errno
 import ipaddress
+import json
 import logging
 import os
 import pwd
@@ -50,6 +61,7 @@ import secrets
 import signal
 import socket
 import ssl
+import stat
 import struct
 import sys
 import traceback
@@ -71,6 +83,12 @@ MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real q
 MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; more are dropped
 MAX_TCP_CLIENTS = 128  # TCP and DoT connections at once; each opens one Unbound connection lazily; more are closed
 TLS_HANDSHAKE_TIMEOUT = 10.0  # a DoT client that has not finished its handshake by then is dropped (asyncio: 60 s)
+OBSERVER_SOCKET = (
+    "pfb_upstream.sock"  # in --module-dir, which is the working directory; pfb_upstream_observer.py SOCKET
+)
+MAX_REPORT_OPTIONS = 8  # EDNS options in one observer report; an upstream reply carries a handful
+MAX_REPORT_OPTION_HEX = 8192  # hex digits of one option's data (4 KiB: more than an upstream UDP reply holds)
+MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 
 
@@ -236,6 +254,37 @@ def _answer(query: dnswire.Message, msg: shim.DnsMsg) -> bytes:
     return dnswire.encode(dnswire.Message(query.id, flags, query.questions, msg.answer, msg.authority, additional))
 
 
+def _is_u16(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 0xFFFF
+
+
+def _upstream_report(data: bytes) -> tuple[shim.module_qstate, shim.DnsMsg]:
+    """What pythonmod would give inplace_cb_query_response for one observer report: the qstate carrying the upstream's
+    EDNS options and the raw response. ValueError if the datagram is not a well-formed report."""
+    try:
+        report = json.loads(data)
+        client, qname, qtype, flags, opts = (report[key] for key in ("client", "qname", "qtype", "flags", "opts"))
+    except (ValueError, TypeError, KeyError, RecursionError) as exc:
+        raise ValueError(f"not a report: {exc!r}") from exc
+    if not (isinstance(qname, str) and 0 < len(qname) <= MAX_REPORT_QNAME and _is_u16(qtype) and _is_u16(flags)):
+        raise ValueError("qname, qtype or flags is not valid")
+    if not (isinstance(client, str) and isinstance(opts, list) and len(opts) <= MAX_REPORT_OPTIONS):
+        raise ValueError("client or opts is not valid")
+    if client:
+        ipaddress.ip_address(client)  # ValueError
+    options = []
+    for opt in opts:
+        if not (isinstance(opt, list) and len(opt) == 2 and _is_u16(opt[0])):
+            raise ValueError("option is not [code, hex data]")
+        if not (isinstance(opt[1], str) and len(opt[1]) <= MAX_REPORT_OPTION_HEX):
+            raise ValueError("option data is not hex of a sane size")
+        options.append(shim.EdnsOpt(opt[0], bytes.fromhex(opt[1])))  # ValueError
+    qinfo = shim.query_info(qname, qtype)
+    qstate = shim.module_qstate(qinfo, client, 0, 0)
+    qstate.edns_opts_back_in_iter = options
+    return qstate, shim.DnsMsg(qinfo, flags, [], [], [])
+
+
 # --- the proxy -----------------------------------------------------------------------------------
 
 
@@ -260,6 +309,8 @@ class Frontend:
         self._udp: list[asyncio.DatagramTransport] = []
         self._clients: set[asyncio.StreamWriter] = set()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._observer: tuple[asyncio.DatagramTransport, str] | None = None
+        self._malformed_reported = False
 
     def _operate(self, qstate: shim.module_qstate, event: int) -> int:
         self.module.operate(shim.MODULE_ID, event, qstate, None)
@@ -352,6 +403,44 @@ class Frontend:
             return _error(query, rcode)
         return _answer(query, msg)
 
+    def relay_upstream_response(self, data: bytes) -> None:
+        """Handle one datagram from pfb_upstream_observer.py: fire the module's query_response callback on the raw
+        upstream response it reports, so the module logs an upstream block (and counts it) exactly as inside Unbound.
+        A malformed datagram is dropped; the first one is warned about, not every one."""
+        try:
+            report = _upstream_report(data)
+        except ValueError as exc:
+            if not self._malformed_reported:
+                self._malformed_reported = True
+                shim.log_warn(f"malformed upstream report from the observer, ignored (further ones silently): {exc}")
+            return
+        shim.fire_query_response(*report)
+
+    async def serve_observer(self, path: str) -> None:
+        """Receive the observer's reports on the Unix datagram socket `path`: mode 0600, so only its owner (the user
+        Unbound runs as) can report. A socket left by a previous proxy is replaced; anything else at `path` raises
+        OSError and is left alone."""
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISSOCK(mode):
+                raise OSError(errno.EEXIST, f"{path} exists and is not a socket")
+            os.unlink(path)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            sock.bind(path)
+            os.chmod(path, 0o600)
+            sock.setblocking(False)
+            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+                lambda: _ObserverServer(self), sock=sock
+            )
+        except BaseException:
+            sock.close()
+            raise
+        self._observer = (transport, path)  # type: ignore[assignment]
+
     # --- sockets ---
 
     def spawn(self, coro: Coroutine[Any, Any, None]) -> None:
@@ -388,6 +477,12 @@ class Frontend:
             writer.close()
         for transport in self._udp:
             transport.close()
+        if self._observer is not None:
+            transport, path = self._observer
+            self._observer = None
+            transport.close()
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(path)
         tasks = list(self._tasks)
         for task in tasks:
             task.cancel()
@@ -477,6 +572,14 @@ class _UdpServer(asyncio.DatagramProtocol):
             self.frontend.udp_inflight -= 1
             if self.frontend.udp_inflight == 0:
                 self.frontend.udp_overloaded = False
+
+
+class _ObserverServer(asyncio.DatagramProtocol):
+    def __init__(self, frontend: Frontend) -> None:
+        self.frontend = frontend
+
+    def datagram_received(self, data: bytes, addr: Any) -> None:
+        self.frontend.relay_upstream_response(data)
 
 
 class _ReplyCatcher(asyncio.DatagramProtocol):
@@ -624,6 +727,10 @@ async def serve(
     try:
         bound = await frontend.serve_listeners(listeners)
         dot_bound = await frontend.serve_listeners(dot_listeners, dot_context)
+        try:
+            await frontend.serve_observer(OBSERVER_SOCKET)  # relative: boot() made --module-dir the working directory
+        except OSError as exc:
+            shim.log_err(f"upstream-block detection is off: cannot listen on {OBSERVER_SOCKET}: {exc}")
         listening = [f"{host}:{port}" for host, port in bound] + [f"{host}:{port} (DoT)" for host, port in dot_bound]
         shim.log_info(f"listening on {', '.join(listening)}; upstream {args.upstream}")
         if on_ready is not None:
