@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/netip"
 	"time"
 
@@ -27,24 +28,18 @@ const (
 	doqIdleTimeout = 30 * time.Second // QUIC idle timeout; RFC 9250 4.4 asks for it to be negotiated
 )
 
-// listenDoQ binds host on the UDP port and serves QUIC on it. No 0-RTT (a replayed query is not harmless here) and
-// no unidirectional streams (RFC 9250 4.3.3 makes opening one a protocol error).
-func listenDoQ(host string, port int, conf *tls.Config) (*quic.Listener, error) {
-	udp, err := bindUDP(host, port)
+// serveDoQ serves QUIC on udp until stop(). No 0-RTT (a replayed query is not harmless here) and no unidirectional
+// streams (RFC 9250 4.3.3 makes opening one a protocol error). Connections over the cap are closed with
+// DOQ_EXCESSIVE_LOAD.
+func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
+	tr := &quic.Transport{Conn: udp}
+	ln, err := tr.Listen(conf, &quic.Config{MaxIncomingStreams: maxDoQStreams, MaxIncomingUniStreams: -1, MaxIdleTimeout: doqIdleTimeout})
 	if err != nil {
-		return nil, err
-	}
-	ln, err := quic.Listen(udp, conf, &quic.Config{MaxIncomingStreams: maxDoQStreams, MaxIncomingUniStreams: -1, MaxIdleTimeout: doqIdleTimeout})
-	if err != nil {
+		g.logf("DoQ on %s: %v", udp.LocalAddr(), err)
 		_ = udp.Close()
-		return nil, err
+		return
 	}
-	return ln, nil
-}
-
-// serveDoQ accepts DoQ connections on ln until stop(); connections over the cap are closed with DOQ_EXCESSIVE_LOAD.
-func (g *gateway) serveDoQ(ln *quic.Listener) {
-	g.closeOnStop(func() { _ = ln.Close() }) // also closes every connection of the listener
+	g.closeOnStop(func() { _ = ln.Close(); _ = tr.Close(); _ = udp.Close() }) // ln.Close also closes every connection of the listener
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
