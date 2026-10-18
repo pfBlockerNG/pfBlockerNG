@@ -279,7 +279,7 @@ TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.89'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.92'
     End
   End
 End
