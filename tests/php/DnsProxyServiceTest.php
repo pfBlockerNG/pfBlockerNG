@@ -299,7 +299,7 @@ final class DnsProxyServiceTest extends TestCase
 				if ($path === $GLOBALS['pfb']['dns_proxy_ready']) {
 					return $this->readyFile();
 				}
-				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/access_lists.conf'], TRUE) ||
+				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
 				    str_starts_with($path, "{$this->dir}/bin/pfb_dns_gateway") ||
 				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {
 					return $path;
@@ -1347,7 +1347,7 @@ final class DnsProxyServiceTest extends TestCase
 			$gateway, ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
 			'--pfsense-config', '/cf/conf/config.xml', ...$tls,
-			'--acl-file', '/var/unbound/access_lists.conf', '--user', 'unbound', ...self::DECIDER,
+			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', ...self::DECIDER,
 		];
 	}
 
@@ -1384,8 +1384,8 @@ final class DnsProxyServiceTest extends TestCase
 		// When the rc service is generated and started under dash
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then the daemon runs the gateway with the plain addresses, Unbound's PROXY port, the ACL file and the
-		// unprivileged user, and hands the Python decider's argv over after `--`
+		// Then the daemon runs the gateway with the plain addresses, Unbound's PROXY port, Unbound's config (where it
+		// reads the ACL) and the unprivileged user, and hands the Python decider's argv over after `--`
 		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1'], $dot), $argv);
 		$this->assertSame(['launch'], $this->events());
 	}
@@ -1408,23 +1408,30 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(0, proc_close($proc), "sh -n rejected the generated script: {$output}");
 	}
 
+	/** @return list<string> the loopback pair DoH and DoQ always listen on, next to the interfaces they are given */
+	private static function loopbackListen(string $kind): array
+	{
+		return ["--{$kind}-listen", '127.0.0.1', "--{$kind}-listen", '::1'];
+	}
+
 	/** @return array<string,array{string,string,list<string>}> DoH interface setting, trusted setting, the --doh-* arguments */
 	public static function dohRows(): array
 	{
+		$loopback = self::loopbackListen('doh');
 		return [
-			'no interface and no trusted entry: the plain addresses' => [
+			'no interface and no trusted entry: the plain addresses and loopback' => [
 				'', '',
 				['--doh-listen', '192.0.2.1', '--doh-listen', '2001:db8::1', '--doh-listen', '198.51.100.1',
-					'--doh-listen', '2001:db8:1::1', '--doh-port', '8443'],
+					'--doh-listen', '2001:db8:1::1', ...$loopback, '--doh-port', '8443'],
 			],
 			'opt1 only, two trusted entries' => [
 				'opt1', '192.0.2.10 2001:db8::/32',
-				['--doh-listen', '198.51.100.1', '--doh-listen', '2001:db8:1::1', '--doh-port', '8443',
+				['--doh-listen', '198.51.100.1', '--doh-listen', '2001:db8:1::1', ...$loopback, '--doh-port', '8443',
 					'--doh-trusted', '192.0.2.10/32', '--doh-trusted', '2001:db8::/32'],
 			],
 			'repeated interface, comma and space separators' => [
 				'opt1,opt1,', "10.0.0.0/8,\t 192.0.2.10",
-				['--doh-listen', '198.51.100.1', '--doh-listen', '2001:db8:1::1', '--doh-port', '8443',
+				['--doh-listen', '198.51.100.1', '--doh-listen', '2001:db8:1::1', ...$loopback, '--doh-port', '8443',
 					'--doh-trusted', '10.0.0.0/8', '--doh-trusted', '192.0.2.10/32'],
 			],
 		];
@@ -1447,7 +1454,8 @@ final class DnsProxyServiceTest extends TestCase
 		// When the script starts
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then the DoH group sits between --pfsense-config and --acl-file; the plain DNS addresses are untouched
+		// Then the DoH group sits between --pfsense-config and --unbound-conf, loopback after its interfaces' addresses;
+		// the plain DNS addresses are untouched
 		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1', '198.51.100.1', '2001:db8:1::1'], FALSE, $expected),
 			$argv
@@ -1457,12 +1465,13 @@ final class DnsProxyServiceTest extends TestCase
 	/** @return array<string,array{string,list<string>}> DoQ interface setting, the --doq-* arguments */
 	public static function doqRows(): array
 	{
+		$loopback = self::loopbackListen('doq');
 		return [
-			'no interface: the plain addresses' => [
+			'no interface: the plain addresses and loopback' => [
 				'', ['--doq-listen', '192.0.2.1', '--doq-listen', '2001:db8::1', '--doq-listen', '198.51.100.1',
-					'--doq-listen', '2001:db8:1::1', '--doq-port', '8853'],
+					'--doq-listen', '2001:db8:1::1', ...$loopback, '--doq-port', '8853'],
 			],
-			'lan only' => ['lan', ['--doq-listen', '192.0.2.1', '--doq-listen', '2001:db8::1', '--doq-port', '8853']],
+			'lan only' => ['lan', ['--doq-listen', '192.0.2.1', '--doq-listen', '2001:db8::1', ...$loopback, '--doq-port', '8853']],
 		];
 	}
 
@@ -1497,7 +1506,8 @@ final class DnsProxyServiceTest extends TestCase
 
 		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
-				'--doh-listen', '192.0.2.1', '--doh-port', '4443', '--doq-listen', '192.0.2.1', '--doq-port', '853',
+				'--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443',
+				'--doq-listen', '192.0.2.1', ...self::loopbackListen('doq'), '--doq-port', '853',
 			]),
 			$this->startAndReadArgv($gateway)
 		);
@@ -1535,10 +1545,11 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then plain DNS is served on the interface address and on both loopback addresses at 5300, so the firewall's
-		// resolv.conf (127.0.0.1, ::1) reaches the gateway; the DoH and DoQ groups are derived on their own, loopback-free
+		// resolv.conf (127.0.0.1, ::1) reaches the gateway; DoH and DoQ keep their own ports and also listen on loopback
 		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
-				'--doh-listen', '192.0.2.1', '--doh-port', '4443', '--doq-listen', '192.0.2.1', '--doq-port', '853',
+				'--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443',
+				'--doq-listen', '192.0.2.1', ...self::loopbackListen('doq'), '--doq-port', '853',
 			], '5300'),
 			$argv
 		);
@@ -1556,7 +1567,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $this->startAndReadArgv($gateway));
 	}
 
-	public function testATlsListenerWhoseInterfacesHaveNoAddressIsLeftOutNotLaunchedOnNothing(): void
+	public function testATlsListenerWhoseInterfacesHaveNoAddressStillListensOnLoopbackAlone(): void
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
@@ -1564,8 +1575,13 @@ final class DnsProxyServiceTest extends TestCase
 		$this->setting('pfb_dns_proxy_doh_interface', 'opt9');
 		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
 
-		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $this->startAndReadArgv($gateway),
-			'no --doh-* flag at all, not even the trusted ones');
+		$this->assertSame(
+			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
+				...self::loopbackListen('doh'), '--doh-port', '4443', '--doh-trusted', '192.0.2.10/32',
+			]),
+			$this->startAndReadArgv($gateway),
+			'the loopback backend for a local HAProxy is there whatever the interfaces came to'
+		);
 	}
 
 	public function testAHandEditedTrustedEntryThatIsNotAnAddressNeverReachesTheScript(): void
