@@ -175,8 +175,8 @@ tests collected) would fail that shard spuriously. `N` should stay at or under f
 
 1. `local-smoke.sh` leases one box from `PFB_BOXES` via `select-box.sh -- <bootstrap>`.
 2. On box, `smoke-on-box.sh` (invoked by bootstrap) runs in order:
-   - `git sparse-checkout` (only `src`, `scripts`, `stubs/python`, and `tests/smoke` —
-     13 MB of a 34 MB tree),
+   - `git sparse-checkout` (only `src`, `scripts`, `stubs/python`, `tests/smoke` and `go` —
+     13 MB of a 34 MB tree; `go` is the DNS gateway's source, which `test_smoke_dns_gateway.py` builds),
      then `git fetch` + `git checkout FETCH_HEAD`. Ref resolved HERE; the leg
      runs the already-resolved tree and never fetches.
    - `sparse-clone-ports.sh` to bring `/root/FreeBSD-ports` to `pfblockerng/use-github`.

@@ -360,7 +360,7 @@ _bootstrap="cd '$_ONBOX_REPO_ROOT_Q' \
           printf 'local-smoke: box hygiene: recovered proven-stale .git/HEAD.lock\n' >&2; \
       fi) \
  && git sparse-checkout init --cone \
- && git sparse-checkout set src scripts stubs/python tests/smoke \
+ && git sparse-checkout set src scripts stubs/python tests/smoke go \
  && git fetch --quiet '$_GIT_REMOTE_Q' '$_REF_Q' \
  && git checkout --quiet --force FETCH_HEAD \
  && git fetch --quiet --no-tags '$_GIT_REMOTE_Q' '$_CIMETA_REFSPEC_Q' \

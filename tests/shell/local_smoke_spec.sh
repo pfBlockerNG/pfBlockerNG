@@ -203,10 +203,11 @@ FAKEEOF
 
     It 'checks out only the paths a smoke leg reads'
       # src/ builds the .pkg; scripts/ holds the harness and installer client input;
-      # stubs/python supports root conftest; tests/smoke/ is the suite.
+      # stubs/python supports root conftest; tests/smoke/ is the suite; go/ is the DNS
+      # gateway's source, which test_smoke_dns_gateway.py builds on the box (issue #3513).
       When call run_and_diag --ref dummy
       The line 1 of output should equal 'exit=0'
-      The output should include 'git sparse-checkout set src scripts stubs/python tests/smoke'
+      The output should include 'git sparse-checkout set src scripts stubs/python tests/smoke go'
       The output should not include 'pkg-site'
     End
 
