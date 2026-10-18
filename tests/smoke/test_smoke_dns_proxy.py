@@ -103,7 +103,7 @@ RESOLVER_KEYS = (*MOVED_KEYS, "port", "sslcertref", "tlsport")
 ACCESS_LISTS = "/var/unbound/access_lists.conf"  # pfSense's generated auto-added `access-control` rows
 LAN_V6_ADDR = h.IPV6_LOCAL_ADDR  # the address the module gives the LAN, so pfSense grants its /64 to clients
 LAN_V6_ROW = f"access-control: {h.IPV6_LOCAL_SUBNET} allow"
-DNS_PORTS = (53, 853, 5353)
+DNS_PORTS = (53, 853, 5353, 5354)
 CERT_NAME = "pfsense-3515.pfb.localdomain"
 FEED_HEADER = "smoke3515"
 BYPASSED_ALIAS_IP = "192.168.1.12"  # a second LAN address on the client; on the Group Policy bypass list
@@ -633,12 +633,13 @@ def test_toggle_on_moves_the_resolver_in_config_xml_and_snapshots_what_it_moved(
     assert MARKER in lines and MARKER_END in lines, f"Custom Options: {options!r}"
     start, end = lines.index(MARKER), lines.index(MARKER_END)
     assert lines[:start] == [*CUSTOM_OPTIONS.splitlines(), "server:"], f"Custom Options: {options!r}"
-    assert lines[start + 1 : start + 4] == [
+    assert lines[start + 1 : start + 5] == [
+        "port: 5354",
         f"interface: 127.0.0.1@{UPSTREAM_PORT}",
         f"interface: ::1@{UPSTREAM_PORT}",
         PROXY_LINE,
     ]
-    grants = lines[start + 4 : end]
+    grants = lines[start + 5 : end]
     assert all(re.fullmatch(r"access-control: \S+ allow", row) for row in grants), f"Custom Options: {options!r}"
     assert lines[end + 1 :] == [], f"nothing follows our block: {options!r}"
     assert state.marker, "pfb_dns_proxy_saved is empty after the toggle moved the Resolver"
