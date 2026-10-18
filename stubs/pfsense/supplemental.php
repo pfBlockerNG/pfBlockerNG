@@ -19,8 +19,8 @@
 
 // @codingStandardsIgnoreFile
 
-/** Read and parse the pfSense configuration (config.lib.inc; pfSense CE 2.8+). */
-function config_read_file(bool $use_backup = false, bool $use_cache = true): array {}
+/** Read and parse the pfSense configuration (config.lib.inc; pfSense CE 2.8+): TRUE when it parsed. */
+function config_read_file(bool $use_backup = false, bool $use_cache = true): bool {}
 
 /** Return true if the current logged-in user may access $page, per their privilege match list (priv.inc). */
 function isAllowedPage($page) {}
