@@ -11,11 +11,12 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --upstream H:P     Unbound with `proxy-protocol-port: P` (default 127.0.0.1:5353)
   --module-dir DIR   dir holding pfb_unbound.py, pfb_dnsbl_regex_rules.py, pfb_unbound.ini and the manifest
                      (default /var/unbound); the process works in that directory, as Unbound's chroot does, and
-                     creates the observer socket pfb_upstream.sock there (see below)
+                     with --observer creates the observer socket pfb_upstream.sock there (see below)
   --timeout SECONDS  wait for Unbound before answering SERVFAIL (default 5)
   --dot              also serve DNS over TLS, as the pfSense DNS Resolver is set up for (see below)
   --pfsense-config P pfSense config.xml to read the DNS Resolver's DoT settings from (/cf/conf/config.xml)
   --no-module        pfB-DNS with DNSBL off: boot no pfb_unbound.py and forward every query to Unbound (see below)
+  --observer         create the observer socket (see below); not with --no-module
   --user NAME        give up root for NAME after binding the sockets and before the module boots (default: keep it)
 
 --user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then supplementary groups, group
@@ -23,16 +24,18 @@ and user are set to NAME's, then the module boots, so every file it creates belo
 a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
 
 --no-module: no module is imported or booted, so --module-dir is neither read nor needs to exist, the working directory
-stays where it is and no observer socket is made. A query that passes the header checks and parses is forwarded to
-Unbound as it is and Unbound's reply relayed as it is (silence is a SERVFAIL, as in the module mode); there are no
-decisions and no MODDONE pass. Listeners, DoT, the caps, the timeouts and --user are the same as without it.
+stays where it is and there is no observer socket (--observer is refused with it). A query that passes the header
+checks and parses is forwarded to Unbound as it is and Unbound's reply relayed as it is (silence is a SERVFAIL, as in
+the module mode); there are no decisions and no MODDONE pass. Listeners, DoT, the caps, the timeouts and --user are
+the same as without it.
 
 Upstream blocks (issue #267): Unbound rewrites every reply it sends (RA set, AA clear, the upstream's EDNS options
 dropped), so the proxy cannot tell from a relayed reply that the upstream blocked it. While the Resolver forwards,
 Unbound runs pfb_upstream_observer.py, which sends each RAW upstream response to the Unix socket pfb_upstream.sock
-that the proxy creates in --module-dir (mode 0600, replacing a stale one); the proxy fires the module's own
-inplace_cb_query_response on it, so the log line, the Upstream counter and the forwarding gate are the module's. A
-socket that cannot be made is one error line, and the proxy serves without upstream-block detection.
+that the proxy creates in --module-dir when it is started with --observer (mode 0600, replacing a stale one); the proxy
+fires the module's own inplace_cb_query_response on it, so the log line, the Upstream counter and the forwarding gate
+are the module's. Without --observer there is no socket, and the observer script, which may stay loaded in Unbound,
+does nothing. A socket that cannot be made is one error line, and the proxy serves without upstream-block detection.
 
 Each --listen address is bound on its own: one that cannot be bound (no longer an address of this box, port in use)
 is logged as a warning and skipped, and DoT is bound per address the same way. It exits 1 only when no address binds
@@ -685,7 +688,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--user", metavar="NAME", help="give up root for this user once the sockets are bound")
     parser.add_argument("--no-module", action="store_true", help="boot no pfb_unbound.py: forward every query")
+    parser.add_argument(
+        "--observer", action="store_true", help="listen for the upstream observer's reports (needs the module)"
+    )
     args = parser.parse_args(argv)
+    if args.observer and args.no_module:
+        parser.error("--observer cannot be used with --no-module")
     try:
         parse_hostport(args.upstream)
     except ValueError as exc:
@@ -742,7 +750,7 @@ async def serve(
     try:
         bound = await frontend.serve_listeners(listeners)
         dot_bound = await frontend.serve_listeners(dot_listeners, dot_context)
-        if module is not None:
+        if args.observer:
             try:
                 await frontend.serve_observer(OBSERVER_SOCKET)  # relative: boot() made --module-dir the working dir
             except OSError as exc:
