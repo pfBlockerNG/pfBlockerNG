@@ -3261,13 +3261,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				// exception source PER rule with a context label (interface + IP version), so when
 				// the exception alias is not usable the log names the specific rule that dropped it
 				// (#664) instead of an identical line per grid cell. The lookup itself is cheap.
-				// pfb_unbound_python() above has already moved (or restored) the Resolver, so the snapshot says
-				// which host answers 127.0.0.1 now: a toggling apply changes the IPv4 target and so the rows.
-				$redir_proxy = pfb_dns_proxy_saved() !== NULL;
 				$redir_new_owned = [];
 				foreach ($redir_ifaces as $redir_iface) {
 					foreach (['inet', 'inet6'] as $redir_family) {
-						$redir_new_owned[] = pfb_dns_redirect_rule($redir_iface, $redir_family, $redir_exception, $redir_proxy);
+						$redir_new_owned[] = pfb_dns_redirect_rule($redir_iface, $redir_family, $redir_exception);
 					}
 				}
 
