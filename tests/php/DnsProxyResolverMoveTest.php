@@ -22,15 +22,22 @@ final class DnsProxyResolverMoveTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const KEYS  = ['active_interface', 'enablessl', 'custom_options'];
 	private const MARKER = '# pfBlockerNG DNS proxy';
-	/** The clause the move appends when the Resolver has no IPv6 subnet to grant. */
-	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
-		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
+	/** The Python side's copy of the clause (tests/dns_proxy checks Unbound against the same file): one source of truth. */
+	private const BLOCK_FIXTURE = __DIR__ . '/../dns_proxy/fixtures/resolver_clause.conf';
 	/** The stored form of an older block of ours: the same lines with an IPv6 grant that is no longer current. */
 	private const STALE_BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 		. "proxy-protocol-port: 5353\naccess-control: 2001:db8::/64 allow\n# end pfBlockerNG DNS proxy";
 	/** The block as releases before the loopback front end wrote it: no `port:` line, so Unbound stayed on the Listen Port. */
 	private const LEGACY_BLOCK = "server:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
+
+	/** The clause the move appends when the Resolver has no IPv6 subnet to grant: the fixture's text without its final newline. */
+	private static function block(): string
+	{
+		$text = (string) file_get_contents(self::BLOCK_FIXTURE);
+		self::assertStringEndsWith("\n", $text, 'the fixture ends with one newline');
+		return substr($text, 0, -1);
+	}
 
 	private string $tmp;
 	private bool $hadPfb = FALSE;
@@ -334,7 +341,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->seedResolver([
 			'active_interface' => 'lo0',
 			'enablessl'        => NULL,
-			'custom_options'   => base64_encode("do-ip6: no\nprefetch: yes\n" . self::BLOCK),
+			'custom_options'   => base64_encode("do-ip6: no\nprefetch: yes\n" . self::block()),
 		]);
 		$config = $GLOBALS['config'];
 
@@ -370,7 +377,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// Then the user's values are recorded and our block is added after their text.
 		$this->assertTrue($changed);
 		$this->assertSame(['present' => TRUE, 'value' => 'lo0'], pfb_dns_proxy_saved()['active_interface']);
-		$this->assertSame("server:\nproxy-protocol-port: 5353\n" . self::BLOCK, implode("\n", $this->customLines()));
+		$this->assertSame("server:\nproxy-protocol-port: 5353\n" . self::block(), implode("\n", $this->customLines()));
 		$this->assertSame('', $this->errorLog());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
@@ -685,7 +692,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 		// Then the block is rewritten in place, without a notice.
 		$this->assertTrue($changed);
-		$this->assertSame("do-ip6: no\nprefetch: yes\n" . self::BLOCK, implode("\n", $this->customLines()));
+		$this->assertSame("do-ip6: no\nprefetch: yes\n" . self::block(), implode("\n", $this->customLines()));
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 
@@ -702,7 +709,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 		// Then the block is rewritten in place with the port line, once, without a notice, and the snapshot is untouched.
 		$this->assertTrue($changed);
-		$this->assertSame("do-ip6: no\nprefetch: yes\n" . self::BLOCK, implode("\n", $this->customLines()));
+		$this->assertSame("do-ip6: no\nprefetch: yes\n" . self::block(), implode("\n", $this->customLines()));
 		$this->assertSame(1, $this->markerCount());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 		$this->assertSame(base64_encode("do-ip6: no\nprefetch: yes"), pfb_dns_proxy_saved()['custom_options']['value']);
@@ -711,7 +718,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 	/** @return array<string,array{0:string}> our block as it is stored after the Resolver page re-saved the text */
 	public static function blocksOfOurs(): array
 	{
-		return ['the current block' => [self::BLOCK], 'a stale block' => [self::STALE_BLOCK]];
+		return ['the current block' => [self::block()], 'a stale block' => [self::STALE_BLOCK]];
 	}
 
 	#[DataProvider('blocksOfOurs')]
@@ -760,7 +767,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 	/** @return array<string,array{0:?string,1:string}> original custom_options (NULL absent), expected decoded text after ON */
 	public static function customOptionShapes(): array
 	{
-		$added = self::BLOCK;
+		$added = self::block();
 		$forward = "do-ip6: no\nforward-zone:\n  name: \".\"\n  forward-addr: 192.0.2.1";
 		return [
 			'absent'                            => [NULL, $added],
@@ -806,7 +813,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
 
 		// Then our block follows their text and the marker is ours alone.
-		$this->assertSame($own . "\n" . self::BLOCK, implode("\n", $this->customLines()));
+		$this->assertSame($own . "\n" . self::block(), implode("\n", $this->customLines()));
 		$this->assertSame(1, $this->markerCount());
 	}
 
