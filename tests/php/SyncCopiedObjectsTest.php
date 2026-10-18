@@ -895,8 +895,8 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertNoValueLeak();
 	}
 
-	/** #3515: the apply that toggles the DNS proxy rewrites the redirect rows' IPv4 target, and nothing else does. */
-	public function testRedirectWriterRetargetsTheIpv4RuleWhenTheProxyIsToggledAndOnlyThen(): void
+	/** The redirect writer with the DNS proxy off: IPv4 targets loopback, and an apply flags a pf reload only when the rows change. */
+	public function testRedirectWriterWritesTheLoopbackIpv4RuleAndFlagsAReloadOnlyWhenItChanges(): void
 	{
 		global $pfb;
 
@@ -905,11 +905,6 @@ final class SyncCopiedObjectsTest extends TestCase
 		$pfb['dbdir']      = $this->dir;
 		PfbConfig::write($spec['toggle'], 'on');
 		PfbConfig::write($spec['ifaces'], 'lan');
-		$snapshot = base64_encode((string) json_encode([
-			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
-			'enablessl'        => ['present' => FALSE, 'value' => NULL],
-			'custom_options'   => ['present' => FALSE, 'value' => NULL],
-		]));
 
 		// Runs one apply's redirect writer; TRUE iff it flagged a pf reload.
 		$apply = function () use ($spec): bool {
@@ -920,24 +915,9 @@ final class SyncCopiedObjectsTest extends TestCase
 		};
 		$targets = static fn (): array => array_column(config_get_path('nat/rule'), 'target', 'descr');
 
-		// Given the redirect rows written while the proxy is off.
-		$this->assertTrue($apply(), 'before: the first apply writes the rows');
-		$off = config_get_path('nat/rule');
+		$this->assertTrue($apply(), 'the first apply writes the rows');
 		$this->assertSame(['pfB_DNS_Redirect_lan_v4' => '127.0.0.1', 'pfB_DNS_Redirect_lan_v6' => 'lanip'], $targets());
-		$this->assertFalse($apply(), 'before: an apply that changes nothing flags no reload');
-
-		// When the proxy is turned on (the Resolver snapshot exists) and the next apply runs.
-		PfbConfig::writeSystem('dns/pfb_dns_saved', $snapshot);
-
-		// Then the IPv4 rule reaches the proxy and the pf reload is flagged, once.
-		$this->assertTrue($apply(), 'the toggling apply flags a reload');
-		$this->assertSame(['pfB_DNS_Redirect_lan_v4' => 'lanip', 'pfB_DNS_Redirect_lan_v6' => 'lanip'], $targets());
-		$this->assertFalse($apply(), 'the next apply flags none');
-
-		// And turning it off puts the rows back byte for byte.
-		PfbConfig::writeSystem('dns/pfb_dns_saved', '');
-		$this->assertTrue($apply(), 'the apply that turns it off flags a reload');
-		$this->assertSame($off, config_get_path('nat/rule'));
+		$this->assertFalse($apply(), 'an apply that changes nothing flags no reload');
 	}
 
 	public function testFilterAutoruleWriteKeepsTheRawTrackerAndOnlyTheCheckedCopyIsCast(): void

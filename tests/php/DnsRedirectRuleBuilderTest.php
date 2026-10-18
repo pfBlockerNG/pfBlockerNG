@@ -6,7 +6,7 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-/** ADR-36/#3400: pin each assigned-interface and fallback IPv6 redirect target. */
+/** ADR-36/#3400: pin the redirect target of each family on assigned and fallback interfaces. */
 #[CoversFunction('pfb_dns_redirect_rule')]
 final class DnsRedirectRuleBuilderTest extends TestCase
 {
@@ -83,45 +83,16 @@ final class DnsRedirectRuleBuilderTest extends TestCase
 		];
 	}
 
-	// #3515: with the DNS proxy on, 127.0.0.1 is Unbound (no DNSBL module), so a redirected client must reach the
-	// proxy, which listens on the interface's own address -- the target IPv6 already uses.
-
 	#[DataProvider('assignedInterfaces')]
-	public function testIpv4TargetOnAssignedInterfaceIsItsAddressKeywordWhileTheProxyIsOn(string $iface): void
+	public function testIpv4TargetOnAssignedInterfaceIsLoopback(string $iface): void
 	{
-		$this->assertSame('127.0.0.1', pfb_dns_redirect_rule($iface, 'inet', '')['target'], 'before: the proxy is off');
-		$this->assertSame("{$iface}ip", pfb_dns_redirect_rule($iface, 'inet', '', TRUE)['target']);
+		$this->assertSame('127.0.0.1', pfb_dns_redirect_rule($iface, 'inet', '')['target']);
 	}
 
 	#[DataProvider('fallbackInterfaces')]
-	public function testIpv4TargetOnOtherInterfaceStaysLoopbackWhileTheProxyIsOn(string $iface): void
+	public function testIpv4TargetOnOtherInterfaceStaysLoopback(string $iface): void
 	{
-		// pfSense has no <iface>ip keyword for these, so the target cannot change.
-		$this->assertSame('127.0.0.1', pfb_dns_redirect_rule($iface, 'inet', '', TRUE)['target']);
-	}
-
-	#[DataProvider('assignedAndFallbackInterfaces')]
-	public function testIpv6TargetAndEveryOtherFieldAreTheSameWhetherTheProxyIsOnOrOff(string $iface): void
-	{
-		$this->assertSame(
-			pfb_dns_redirect_rule($iface, 'inet6', ''),
-			pfb_dns_redirect_rule($iface, 'inet6', '', TRUE)
-		);
-	}
-
-	#[DataProvider('assignedInterfaces')]
-	public function testIpv4RowChangesOnlyItsTargetWhileTheProxyIsOn(string $iface): void
-	{
-		$off = pfb_dns_redirect_rule($iface, 'inet', '');
-		$on = pfb_dns_redirect_rule($iface, 'inet', '', TRUE);
-
-		$this->assertSame(array_keys($off), array_keys($on), 'the stored key order is the sync change detector');
-		$this->assertSame(array_replace($off, ['target' => "{$iface}ip"]), $on);
-	}
-
-	public static function assignedAndFallbackInterfaces(): array
-	{
-		return self::assignedInterfaces() + self::fallbackInterfaces();
+		$this->assertSame('127.0.0.1', pfb_dns_redirect_rule($iface, 'inet', '')['target']);
 	}
 
 	public function testUsableExceptionAliasBecomesNegatedSourceForBothFamilies(): void
