@@ -19,9 +19,9 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --observer         create the observer socket (see below); not with --no-module
   --user NAME        give up root for NAME after binding the sockets and before the module boots (default: keep it)
 
---user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then supplementary groups, group
-and user are set to NAME's, then the module boots, so every file it creates belongs to NAME. An unknown NAME (or '') or
-a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
+--user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then the supplementary groups
+are cleared and group and user are set to NAME's, then the module boots, so every file it creates belongs to NAME.
+An unknown NAME (or '') or a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
 
 --no-module: no module is imported or booted, so --module-dir is neither read nor needs to exist, the working directory
 stays where it is and there is no observer socket (--observer is refused with it). A query that passes the header
@@ -36,6 +36,9 @@ that the proxy creates in --module-dir when it is started with --observer (mode 
 fires the module's own inplace_cb_query_response on it, so the log line, the Upstream counter and the forwarding gate
 are the module's. Without --observer there is no socket, and the observer script, which may stay loaded in Unbound,
 does nothing. A socket that cannot be made is one error line, and the proxy serves without upstream-block detection.
+Trust boundary: the socket's owner (the user Unbound runs as) and root can write to it, so any process running as
+that user can forge a report. A forged report adds an Upstream_Block log row and moves the Upstream counter; it
+cannot change an answer, because the callback only observes and logs, and a malformed one is dropped.
 
 Each --listen address is bound on its own: one that cannot be bound (no longer an address of this box, port in use)
 is logged as a warning and skipped, and DoT is bound per address the same way. It exits 1 only when no address binds
@@ -359,9 +362,12 @@ class Frontend:
         return qstate.ext_state[shim.MODULE_ID]
 
     async def _ask(self, forward: Forward, wire: bytes, question: dnswire.Question) -> bytes | None:
-        """Unbound's reply to the client's query, or None. Silence is logged once, not per query: a flood of queries
-        Unbound never answers would otherwise fill the unrotated log, so the next line waits for an answer."""
+        """Unbound's reply to the client's query, or None. A reply too short to have a DNS header (a zero-length TCP
+        frame) is no reply. Silence is logged once, not per query: a flood of queries Unbound never answers would
+        otherwise fill the unrotated log, so the next line waits for an answer."""
         reply = await forward(wire)
+        if reply is not None and len(reply) < 12:
+            reply = None
         if reply is not None:
             self._silent = False
         elif not self._silent:
