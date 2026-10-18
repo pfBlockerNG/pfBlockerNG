@@ -27,12 +27,12 @@ final class Top1mTeardownWiringTest extends TestCase
 		$inc = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
 		$this->assertStringContainsString('pfb_top1m_teardown_call();', $apply,
 			'DNSBL disable must invoke the shared TOP1M teardown seam');
-		// After the disable pass and after the abort check: the teardown removes the manifest and raw lists a restarted DNS
-		// proxy loads its blocklists from, so a removal that stops (DnsProxyUninstallAbortTest) must not have run it.
+		// The teardown removes the manifest and raw lists a restarted DNS proxy loads its blocklists from: the removal reaches it
+		// only past the abort check ahead of the disable pass, so a removal that stops (DnsProxyUninstallAbortTest) never runs it.
 		$this->assertMatchesRegularExpression(
-			'/sync_package_pfblockerng\(\);\s*if \(!pfb_dns_proxy_deinstall\(\)\) \{.*?return FALSE;\s*\}\s*pfb_top1m_teardown_call\(\);/s',
+			'/if \(!pfb_dns_proxy_deinstall\(\)\) \{\s*return pfb_package_removal_stopped\(\);\s*\}.*?sync_package_pfblockerng\(\);\s*if \(!pfb_dns_proxy_deinstall\(\)\) \{\s*return pfb_package_removal_stopped\(\);\s*\}\s*pfb_top1m_teardown_call\(\);/s',
 			$inc,
-			'package removal must tear down retained TOP1M runtime state after the disable pass, once the removal is going ahead'
+			'package removal must put the Resolver back before the disable pass and tear down retained TOP1M runtime state after it, once the removal is going ahead'
 		);
 	}
 }
