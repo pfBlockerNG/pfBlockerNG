@@ -13,6 +13,7 @@ import logging
 import ssl
 import struct
 import traceback
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -41,19 +42,27 @@ Connection = tuple[asyncio.StreamReader, asyncio.StreamWriter]
 
 class WatchedFrontend(pfb_dns_proxy.Frontend):
     """A Frontend that reports each finished TCP/DoT client handler, so a test waits for a slot to free, not polls, and
-    keeps the server side of each client connection."""
+    keeps the server side of each client connection. `handled(n)` waits until n connections have reached the proxy and
+    been admitted or turned away."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.finished: asyncio.Queue[None] = asyncio.Queue()
         self.writers: list[asyncio.StreamWriter] = []
+        self._arrived = asyncio.Event()
 
     async def _tcp_client(self, *args: Any, **kwargs: Any) -> None:
         self.writers.append(args[1])
+        self._arrived.set()  # the admission below runs before this handler first yields, so before a waiter resumes
         try:
             await super()._tcp_client(*args, **kwargs)
         finally:
             self.finished.put_nowait(None)
+
+    async def handled(self, count: int) -> None:
+        while len(self.writers) < count:
+            self._arrived.clear()
+            await asyncio.wait_for(self._arrived.wait(), WATCHDOG)  # a stuck run fails here, not by sleeping
 
 
 @dataclass
@@ -182,15 +191,22 @@ HELD_ZONE = ZONE | {(HELD, dnswire.TYPE_A): [f"{HELD} 300 IN A 192.0.2.78"]}
 
 class HoldingFrontend(WatchedFrontend):
     """A WatchedFrontend that keeps the query for HELD inside resolve() until `release` is set: a client whose query is
-    with Unbound and has not been answered yet."""
+    with Unbound and has not been answered yet. `until_held(n)` waits until n such queries are."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self.held = 0
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
+    async def until_held(self, count: int) -> None:
+        while self.held < count:
+            self.entered.clear()
+            await asyncio.wait_for(self.entered.wait(), WATCHDOG)
+
     async def resolve(self, wire: bytes, client_ip: str, forward: Any, **kwargs: Any) -> bytes | None:
         if dnswire.parse(wire).questions[0].name == HELD:
+            self.held += 1
             self.entered.set()
             await self.release.wait()
         return await super().resolve(wire, client_ip, forward, **kwargs)
@@ -361,7 +377,7 @@ def test_a_client_that_has_a_query_at_unbound_or_was_just_answered_is_never_the_
                 waiting = await listener.connect(server)
                 held.append(waiting)
                 waiting[1].write(_framed(build_query(HELD, qid=1)))
-                await asyncio.wait_for(frontend.entered.wait(), WATCHDOG)
+                await frontend.until_held(1)
                 clock.advance(1.0)
                 idle = [await _served(listener, server, 10 + n) for n in range(neighbours)]
                 held += idle
@@ -383,6 +399,194 @@ def test_a_client_that_has_a_query_at_unbound_or_was_just_answered_is_never_the_
                 await frontend.stop()
 
     assert asyncio.run(scenario()) == (1, 0, [b""] * neighbours)
+
+
+async def _idle_connection(
+    listener: Listener, frontend: WatchedFrontend, server: tuple[str, int], source: str
+) -> Connection | None:
+    """A connection from `source` that says nothing, once the proxy has decided on it. None if the proxy turned it away
+    and the client could tell (a DoT handshake that fails; a plain TCP connection is closed after it is made)."""
+    attempted = len(frontend.writers) + 1
+    try:
+        connection = await listener.connect(server, source)
+    except (ConnectionError, ssl.SSLError, EOFError):
+        connection = None
+    await frontend.handled(attempted)
+    return connection
+
+
+def _held_by(frontend: pfb_dns_proxy.Frontend) -> Counter[str]:
+    return Counter(client.src for client in frontend._clients.values())
+
+
+BUSIEST, OTHER, THIRD = "127.0.0.2", "127.0.0.3", "127.0.0.4"
+
+
+@pytest.mark.parametrize(
+    ("newcomer", "closed"),
+    [
+        pytest.param(THIRD, "busiest-first", id="an-address-with-nothing-in-flight"),
+        pytest.param(OTHER, "busiest-first", id="an-address-with-fewer-than-the-busiest"),
+        pytest.param(BUSIEST, None, id="the-busiest-address-itself-is-not-lighter-so-it-is-refused"),
+    ],
+)
+def test_at_the_global_connection_limit_a_lighter_address_takes_the_place_of_the_busiest_addresss_longest_silent_client(
+    booted: Booted,
+    listener: Listener,
+    clock: ManualClock,
+    monkeypatch: pytest.MonkeyPatch,
+    newcomer: str,
+    closed: str | None,
+) -> None:
+    """The client silent longest overall belongs to a lighter address and stays: the one closed is the longest silent
+    of the address that holds most connections, however recently it was heard from."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 3)
+
+    async def scenario() -> tuple[list[bytes], list[int], Counter[str]]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                other = await _served(listener, server, 1, OTHER)  # silent the longest of the three
+                clock.advance(1.0)
+                busiest_first = await _served(listener, server, 2, BUSIEST)
+                clock.advance(1.0)
+                busiest_second = await _served(listener, server, 3, BUSIEST)
+                clock.advance(0.25)  # none has been silent for half the idle timeout
+                held += [other, busiest_first, busiest_second]
+                if closed is None:
+                    await _refused(listener, server, newcomer)
+                else:
+                    held.append(await _served(listener, server, 4, newcomer))
+                gone = [await _until_closed(busiest_first[0])] if closed else []
+                alive = [(await _ask(c, 10 + n)).rcode for n, c in enumerate([other, busiest_second])]
+                return gone, alive, _held_by(frontend)
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    gone, alive, shares = asyncio.run(scenario())
+    assert (gone, alive) == ([b""] if closed else [], [0, 0])
+    assert sum(shares.values()) == 3  # the table never holds more than its limit
+
+
+@pytest.mark.parametrize(
+    "neighbour_waiting", [False, True], ids=["an-idle-neighbour-goes", "nobody-idle-newcomer-refused"]
+)
+def test_a_lighter_address_never_takes_the_place_of_a_client_that_has_a_query_at_unbound(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch, neighbour_waiting: bool
+) -> None:
+    """Active work is not given up for fairness: of the busiest address's two clients the one with its query at Unbound
+    stays and is answered, and when both are waiting the newcomer is turned away."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 2)
+
+    async def scenario() -> tuple[list[int], list[bytes]]:
+        async with FakeProxyUpstream(FakeUnbound(HELD_ZONE)) as upstream:
+            frontend = HoldingFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                waiting = await listener.connect(server, BUSIEST)
+                held.append(waiting)
+                waiting[1].write(_framed(build_query(HELD, qid=1)))
+                await frontend.until_held(1)
+                clock.advance(1.0)
+                if neighbour_waiting:
+                    second = await listener.connect(server, BUSIEST)
+                    second[1].write(_framed(build_query(HELD, qid=2)))
+                    await frontend.until_held(2)
+                else:
+                    second = await _served(listener, server, 2, BUSIEST)
+                held.append(second)
+                clock.advance(0.25)
+                if neighbour_waiting:
+                    await _refused(listener, server, OTHER)
+                else:
+                    held.append(await _served(listener, server, 3, OTHER))  # the idle neighbour is the one that goes
+                frontend.release.set()
+                replies = [(await _read_reply(waiting)).id] + (
+                    [(await _read_reply(second)).id] if neighbour_waiting else []
+                )
+                return replies, [] if neighbour_waiting else [await _until_closed(second[0])]
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    replies, closed = asyncio.run(scenario())
+    assert (replies, closed) == ([1, 2] if neighbour_waiting else [1], [] if neighbour_waiting else [b""])
+
+
+def test_a_lighter_address_is_refused_rather_than_given_a_client_of_an_address_that_holds_no_more_than_it_does(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every client of the busier address has a query at Unbound, so there is none to close: the newcomer is turned
+    away. It does not close an idle client of its own address, nor of any address that holds as little as it does."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 3)
+
+    async def scenario() -> tuple[list[int], int]:
+        async with FakeProxyUpstream(FakeUnbound(HELD_ZONE)) as upstream:
+            frontend = HoldingFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                waiting = [await listener.connect(server, BUSIEST) for _ in range(2)]
+                held += waiting
+                for qid, connection in enumerate(waiting, start=1):
+                    connection[1].write(_framed(build_query(HELD, qid=qid)))
+                await frontend.until_held(2)
+                idle = await _served(listener, server, 3, OTHER)
+                held.append(idle)
+                clock.advance(0.25)
+                await _refused(listener, server, OTHER)
+                frontend.release.set()
+                answered = [(await _read_reply(connection)).id for connection in waiting]
+                return answered, (await _ask(idle, 4)).rcode
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    assert asyncio.run(scenario()) == ([1, 2], 0)
+
+
+def test_40_nat_connections_keep_working_while_two_addresses_fill_the_rest_of_the_table_with_idle_ones(
+    booted: Booted, listener: Listener, clock: ManualClock
+) -> None:
+    """Issue #3515 gate, both findings at the default limits: 40 persistent clients behind one address, and two
+    addresses that connect 64 clients each and send nothing: 168 connections for 128 places. The flooders give up places
+    to each other until they hold equal shares, a third address is served at once, and the 40 are never closed."""
+
+    async def scenario() -> tuple[Counter[str], Counter[str], list[int], int]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                nat = [await _served(listener, server, qid, "127.0.0.9") for qid in range(40)]
+                held += nat
+                for flooder in (BUSIEST, OTHER):
+                    for _ in range(64):
+                        if connection := await _idle_connection(listener, frontend, server, flooder):
+                            held.append(connection)
+                full = _held_by(frontend)
+                held.append(await _served(listener, server, 100, THIRD))  # not waiting for anyone to age
+                rcodes = []
+                for round_number in (1, 2, 3):
+                    clock.advance(0.5)
+                    rcodes += [(await _ask(c, 1000 * round_number + n)).rcode for n, c in enumerate(nat)]
+                return full, _held_by(frontend), rcodes, len(frontend._clients)
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    full, after, rcodes, clients = asyncio.run(scenario())
+    assert full == Counter({"127.0.0.9": 40, BUSIEST: 44, OTHER: 44})
+    assert after["127.0.0.9"] == 40 and after[THIRD] == 1 and clients == 128
+    assert rcodes == [0] * 120  # all 40 answered three times, on the connections they had
 
 
 def test_a_source_at_its_connection_limit_has_its_newcomers_refused_and_no_other_source_is_affected(
