@@ -502,14 +502,19 @@ if (!function_exists('config_read_file')) {
 	// this is a deliberate no-op: pfb_global() calls it to pick up any in-flight
 	// changes, but in tests the caller already seeded $GLOBALS['config'] before
 	// calling pfb_global(). Records each call's arguments (so tests can assert
-	// whether, and how, a path reloaded config); returns TRUE like pfSense's bool, or FALSE (the parse failed) while
-	// $GLOBALS['pfb_test_config_read_fails'] is set. Also records whether the
-	// named config lock was held at that instant ($GLOBALS['pfb_test_config_read_lock_held']) and runs an optional
+	// whether, and how, a path reloaded config; returns TRUE like pfSense's bool, or FALSE (the parse failed) while
+	// $GLOBALS['pfb_test_config_read_fails'] is set, or for the next $GLOBALS['pfb_test_config_read_fails_for'] FRESH reads
+	// (a file another process is mid-write on: it parses again after that, and a failed read runs no hook). Also records
+	// whether the named config lock was held at that instant ($GLOBALS['pfb_test_config_read_lock_held']) and runs an optional
 	// $GLOBALS['pfb_test_config_read_hook'] callable, which stands in for the file on disk: a test uses it to
 	// replace the in-memory config with what another process wrote since this one read it.
 	function config_read_file(bool $use_backup = false, bool $use_cache = true): bool {
 		$GLOBALS['pfb_test_config_read_calls'][] = [$use_backup, $use_cache];
 		$GLOBALS['pfb_test_config_read_lock_held'][] = !empty($GLOBALS['pfb_test_lock_held']);
+		if (!$use_cache && ($GLOBALS['pfb_test_config_read_fails_for'] ?? 0) > 0) {
+			$GLOBALS['pfb_test_config_read_fails_for']--;
+			return FALSE;
+		}
 		if (is_callable($GLOBALS['pfb_test_config_read_hook'] ?? NULL)) {
 			$GLOBALS['pfb_test_config_read_hook']();
 		}
@@ -522,9 +527,17 @@ if (!function_exists('try_lock')) {
 	// NULL when the lock stayed taken. Locks are per open handle, so a process that already holds the name waits
 	// on itself: a second acquire while $GLOBALS['pfb_test_lock_held'] is set fails like the timeout it would
 	// be. Every attempt is recorded in $GLOBALS['pfb_test_lock_events'] as ['try_lock', name, timeout];
-	// $GLOBALS['pfb_test_try_lock_fail'] makes another process hold the name.
+	// $GLOBALS['pfb_test_try_lock_fail'] makes another process hold the name for good, and
+	// $GLOBALS['pfb_test_try_lock_busy_for'] (seconds) makes it hold the name that much longer: an attempt waits its whole
+	// $timeout and gets NULL while the holder has longer to go, and otherwise waits the rest out and takes the lock.
 	function try_lock($lock, $timeout = 5) {
 		$GLOBALS['pfb_test_lock_events'][] = ['try_lock', $lock, $timeout];
+		$busy = (int) ($GLOBALS['pfb_test_try_lock_busy_for'] ?? 0);
+		if ($busy > $timeout) {
+			$GLOBALS['pfb_test_try_lock_busy_for'] = $busy - $timeout;
+			return NULL;
+		}
+		$GLOBALS['pfb_test_try_lock_busy_for'] = 0;
 		if (!empty($GLOBALS['pfb_test_try_lock_fail']) || !empty($GLOBALS['pfb_test_lock_held'])) {
 			return NULL;
 		}
@@ -554,6 +567,29 @@ if (!function_exists('write_config')) {
 		}
 		$GLOBALS['pfb_test_write_config_calls'][] = $desc;
 		return true;
+	}
+}
+
+if (!function_exists('parse_xml_config_pkg')) {
+	// pfSense xmlparse.inc: a package's XML as an array, [] when it cannot be read. Only what the package reads back is
+	// modelled: the repeated `menu` and `service` elements as lists of their children's text, as listtags_pkg() makes them
+	// (the pinned core parser is run against the shipped file by the real-pkg oracle, tests/pkg_oracle).
+	function parse_xml_config_pkg($cffile, $rootobj, $isstring = "false") {
+		$xml = @simplexml_load_file((string) $cffile);
+		if ($xml === FALSE || $xml->getName() !== $rootobj) {
+			return [];
+		}
+		$cfg = [];
+		foreach (['menu', 'service'] as $list) {
+			foreach ($xml->{$list} as $node) {
+				$entry = [];
+				foreach ($node->children() as $child) {
+					$entry[$child->getName()] = trim((string) $child, "\t\n\r");
+				}
+				$cfg[$list][] = $entry;
+			}
+		}
+		return $cfg;
 	}
 }
 

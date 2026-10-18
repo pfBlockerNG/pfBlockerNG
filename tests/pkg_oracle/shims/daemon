@@ -1,0 +1,23 @@
+#!/bin/sh
+# Linux stand-in for FreeBSD daemon(8): the flags pfb_dns_proxy.sh uses (-r -R N -t name -P supervisor-pidfile -p child-pidfile -o log).
+opt_P=; opt_p=; opt_o=; opt_t=
+while [ $# -gt 0 ]; do
+	case $1 in
+		-r) shift ;;
+		-R) shift 2 ;;
+		-t) opt_t=$2; shift 2 ;;
+		-P) opt_P=$2; shift 2 ;;
+		-p) opt_p=$2; shift 2 ;;
+		-o) opt_o=$2; shift 2 ;;
+		*) break ;;
+	esac
+done
+setsid sh -c '
+	echo $$ > "$1"; cpid=$2; log=$3; shift 3
+	trap "[ -n \"\$child\" ] && kill \"\$child\" 2>/dev/null; exit 0" TERM
+	"$@" >>"$log" 2>&1 &
+	child=$!
+	echo "$child" > "$cpid"
+	wait "$child"
+' "$opt_t" "$opt_P" "$opt_p" "$opt_o" "$@" </dev/null >/dev/null 2>&1 &
+exit 0
