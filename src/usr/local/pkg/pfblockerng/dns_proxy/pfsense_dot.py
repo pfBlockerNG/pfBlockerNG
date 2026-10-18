@@ -99,16 +99,16 @@ def server_context(settings: DotSettings) -> ssl.SSLContext:
     (0700) directory of 0600 files that is gone before this returns, however the load ends."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
-    with tempfile.TemporaryDirectory(prefix="pfb-dot-") as directory:
-        paths = []
-        for name, pem in (("chain.pem", settings.chain_pem), ("key.pem", settings.key_pem)):
-            path = Path(directory, name)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(pem)
-            paths.append(path)
-        try:
+    try:
+        with tempfile.TemporaryDirectory(prefix="pfb-dot-") as directory:
+            paths = []
+            for name, pem in (("chain.pem", settings.chain_pem), ("key.pem", settings.key_pem)):
+                path = Path(directory, name)
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(pem)
+                paths.append(path)
             context.load_cert_chain(*paths, password=_refuse_passphrase)
-        except OSError as exc:  # ssl.SSLError is an OSError
-            raise DotConfigError(f"cannot load the DNS Resolver's certificate and key: {exc}") from None
+    except OSError as exc:  # a full or read-only /tmp, or ssl.SSLError (an OSError): DoT is off, plain DNS is not
+        raise DotConfigError(f"cannot load the DNS Resolver's certificate and key: {exc}") from None
     return context

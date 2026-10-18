@@ -4,6 +4,7 @@ PROXYv2 hop to Unbound that carries the TLS client's address."""
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import re
 import signal
@@ -22,6 +23,7 @@ import pfb_dns_proxy
 import pfsense_dot
 import proxyv2
 import pytest
+import unbound_shim as shim
 from dot_helpers import (
     REFID,
     b64,
@@ -208,6 +210,46 @@ def test_the_temporary_key_files_are_gone_after_a_failed_load(
         pfsense_dot.server_context(settings)
     assert [[name.startswith("pfb-dot-") for name in names] for names in during_load] == [[True]]  # it was there...
     assert list(scratch.iterdir()) == []  # ...and is gone
+
+
+def _no_space(*_args: Any, **_kwargs: Any) -> Any:
+    raise OSError(errno.ENOSPC, "No space left on device")
+
+
+@pytest.fixture(params=["make-the-directory", "create-the-key-file"])
+def staging_fails(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The private staging of the PEMs fails (a full /tmp, a read-only one); returns the directory they would go to."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    if request.param == "make-the-directory":
+        monkeypatch.setattr(tempfile, "TemporaryDirectory", _no_space)
+    else:
+        real_open = os.open
+
+        def open_unless_the_key(path: Any, *args: Any, **kwargs: Any) -> int:
+            return _no_space() if str(path).endswith("key.pem") else real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", open_unless_the_key)
+    return scratch
+
+
+def test_a_filesystem_error_staging_the_key_files_is_a_clear_error_and_leaves_nothing_behind(
+    staging_fails: Path,
+) -> None:
+    """Issue #3517 review: it escaped as a bare OSError and took the plain listeners down with it."""
+    with pytest.raises(pfsense_dot.DotConfigError, match="No space left on device"):
+        pfsense_dot.server_context(pfsense_dot.DotSettings(853, CRT, KEY))
+    assert list(staging_fails.iterdir()) == []
+
+
+def test_dns_over_tls_stays_off_with_one_error_line_when_the_key_files_cannot_be_staged(
+    staging_fails: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    errors: list[object] = []
+    monkeypatch.setattr(shim, "log_err", errors.append)
+    assert pfb_dns_proxy._dot_setup(str(_write_config(tmp_path))) == (None, None)
+    assert [str(line) for line in errors if "DNS over TLS is off" in str(line) and "No space left" in str(line)] != []
 
 
 # --- real sockets --------------------------------------------------------------------------------
