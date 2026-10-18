@@ -882,19 +882,19 @@ function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, strin
 	];
 }
 
-// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6').
+// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6'). $proxy is TRUE while the
+// DNS proxy hosts the DNSBL module (#3515): 127.0.0.1 is then Unbound, which has no module, so the IPv4 rule
+// targets the interface address the proxy listens on, as the IPv6 rule always did.
 // The key order is the stored order used by sync change detection.
-function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias): array {
+function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias, bool $proxy = FALSE): array {
 	$v4 = ($family === 'inet');
 
 	// #3400: FreeBSD drops ::1 redirected from a non-loopback interface. pfSense
 	// resolves <iface>ip to an assigned interface's current IPv6 on each filter reload.
-	if ($v4) {
-		$target = '127.0.0.1';
-	} elseif (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1) {
+	if (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1 && (!$v4 || $proxy)) {
 		$target = "{$iface}ip";
 	} else {
-		$target = '::1';
+		$target = $v4 ? '127.0.0.1' : '::1';
 	}
 
 	return [
@@ -12275,8 +12275,10 @@ function pfb_dns_proxy_refuse(string $why): bool {
  * last is valid wherever the user's own text ends. The block makes Unbound also listen on 127.0.0.1 and ::1 port
  * 5353 for the proxy's PROXYv2 stream and grants the IPv6 networks pfSense would no longer (see
  * pfb_dns_proxy_acl_networks()); it is rewritten in place when the networks changed and is found by its marker lines,
- * never by a user's own PROXYv2 setup. A refused move (values that cannot be stored verbatim, or our block with no
- * snapshot: never snapshot moved values as the "previous" ones) is announced with a notice.
+ * never by a user's own PROXYv2 setup. A refused move is announced with a notice: a Listen Port of 5353 or an
+ * interface line of the admin's own for 127.0.0.1 or ::1 port 5353 (Unbound could not bind our clause's sockets
+ * and would not start), values that cannot be stored verbatim, or our block with no snapshot (never snapshot moved
+ * values as the "previous" ones).
  *
  * OFF stops the DNS proxy service first (so Unbound's regeneration finds port 53 free); a proxy that outlived its stop
  * abandons the restore (snapshot kept, notice raised) for the next apply to retry. Otherwise it restores each key
@@ -12289,6 +12291,9 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 	$saved = pfb_dns_proxy_saved();
 	$custom = str_replace("\r\n", "\n", (string) base64_decode((string) config_get_path('unbound/custom_options', '')));
 	$has_marker = in_array(PFB_DNS_PROXY_MARKER, array_map('trim', explode("\n", $custom)), TRUE);
+	// An older block of ours, from its marker to its end marker or the end of the text.
+	$stale = '/(?:^server:\n)?^' . preg_quote(PFB_DNS_PROXY_MARKER, '/') . '$\n?.*?(?:^' .
+	    preg_quote(PFB_DNS_PROXY_MARKER_END, '/') . '$|\z)/ms';
 
 	if (!$on) {
 		if ($saved === NULL) {
@@ -12327,6 +12332,19 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 		pfb_logger("\n{$log}", 1);
 		write_config("pfBlockerNG: {$log}");
 		return TRUE;
+	}
+
+	// Our clause listens on 127.0.0.1 and ::1 port 5353: when that is also the Resolver's Listen Port, or an interface
+	// line of the admin's own, Unbound exits at start ("address already in use") although unbound-checkconf passes.
+	if ((int) config_get_path('unbound/port', 0) === (int) PFB_DNS_PROXY_UNBOUND_PORT) {
+		return pfb_dns_proxy_refuse('the DNS Resolver\'s Listen Port is ' . PFB_DNS_PROXY_UNBOUND_PORT .
+		    ', the loopback port the DNS proxy uses to reach it; set the Listen Port to another port (the default is 53)');
+	}
+	$own_bind = '/^[ \t]*interface:[ \t]*["\']?(?:127\.0\.0\.1|::1)@' . PFB_DNS_PROXY_UNBOUND_PORT .
+	    '["\']?[ \t]*(?:#.*)?$/m';
+	if (preg_match($own_bind, (string) preg_replace($stale, '', $custom)) === 1) {
+		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options already have an "interface:" line for 127.0.0.1 or ::1 port ' .
+		    PFB_DNS_PROXY_UNBOUND_PORT . ', the loopback port the DNS proxy uses to reach it; remove or change that line');
 	}
 
 	$changed = FALSE;
@@ -12371,10 +12389,7 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 	$block = implode("\n", $lines);
 
 	if (!str_contains($custom, $block)) {
-		// An older block (other networks, or cut short by an edit) is replaced where it stands, from its marker to its
-		// end marker or the end of the text; otherwise ours goes last.
-		$stale = '/(?:^server:\n)?^' . preg_quote(PFB_DNS_PROXY_MARKER, '/') . '$\n?.*?(?:^' .
-		    preg_quote(PFB_DNS_PROXY_MARKER_END, '/') . '$|\z)/ms';
+		// An older block (other networks, or cut short by an edit) is replaced where it stands; otherwise ours goes last.
 		$count = 0;
 		$replaced = preg_replace_callback($stale, static fn (): string => $block, $custom, 1, $count);
 		if ($replaced !== NULL && $count === 1) {
