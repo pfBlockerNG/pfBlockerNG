@@ -241,6 +241,8 @@ UNSEEDED_LOCAL_KEYS = {
     f"{DNSBL}/dnsbl_interface": "must be the interface of the node's DNSBL VIP (lo0): pfb_validate_vips() disables DNSBL otherwise",
     f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
     f"{GEN}/pfb_metrics_export": "'on' needs pfSense-pkg-node_exporter on the node (the save gate refuses it without), and no HA guest installs that package",
+    f"{DNSBL}/pfb_dns_proxy": "turns the DNS proxy on, which moves the node's Resolver off its port and ends the DNSBL probes the harness runs",
+    f"{DNSBL}/pfb_dns_proxy_saved": "the Resolver snapshot the apply writes itself when it moves the Resolver; a seeded value reads as a moved one",
 }
 
 
