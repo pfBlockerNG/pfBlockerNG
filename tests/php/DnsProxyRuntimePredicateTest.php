@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -29,6 +31,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_update_unbound')]
 final class DnsProxyRuntimePredicateTest extends TestCase
 {
+	use DnsProxyReadySeedTrait;
+
 	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 
@@ -79,6 +83,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
 				$GLOBALS[$name] = $value;
@@ -92,7 +97,8 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 			$GLOBALS['pfb_test_valid_pids'],
 			$GLOBALS['pfb_test_file_notices'],
 			$GLOBALS['pfb_test_swap_wait_s'],
-			$GLOBALS['pfb_test_unbound_py_sentinel_published']
+			$GLOBALS['pfb_test_unbound_py_sentinel_published'],
+			$GLOBALS['pfb_test_service_hook']
 		);
 		rmdir_recursive($this->dir);
 	}
@@ -120,6 +126,16 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	private function setProxyUp(bool|callable $up): void
 	{
 		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = $up;
+	}
+
+	/** A proxy the reload or the rollback starts comes up ready, as the real one does: its child and its ready marker. */
+	private function proxyComesUpReadyWhenStarted(): void
+	{
+		$GLOBALS['pfb_test_service_hook'] = function (string $function, string $service): void {
+			if ($service === 'pfb_dns_proxy') {
+				$this->proxyServes();
+			}
+		};
 	}
 
 	private function setUnboundUp(bool|callable $up): void
@@ -494,6 +510,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->seedSwapFixture();
 		$this->setUnboundUpExceptDuringRestart();
 		$this->setProxyUp(FALSE);
+		$this->proxyComesUpReadyWhenStarted();
 		$this->applyEveryPublishedGeneration();
 		$starts = $this->startAttempts();
 
@@ -551,6 +568,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 			$calls++;
 			return $calls === 1;
 		});
+		$this->proxyComesUpReadyWhenStarted();
 		$starts = $this->startAttempts();
 
 		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
