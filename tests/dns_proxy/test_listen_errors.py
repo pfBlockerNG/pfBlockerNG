@@ -24,7 +24,7 @@ import pfb_dns_proxy
 import pytest
 from dot_helpers import REFID, b64, cert_element, config_xml
 from frontend_constants import BLOCKED, DNSBL_IPV4, PROTO_DIR
-from frontend_helpers import WATCHDOG, build_query, udp_exchange
+from frontend_helpers import build_query, serving, udp_exchange
 
 IN_USE = os.strerror(errno.EADDRINUSE)
 NOT_ON_THIS_BOX = os.strerror(errno.EADDRNOTAVAIL)
@@ -77,21 +77,9 @@ def _serve(argv: list[str]) -> tuple[list[tuple[str, int]], list[bytes]]:
     args: argparse.Namespace = pfb_dns_proxy.parse_args(["--upstream", "127.0.0.1:9", *argv])
 
     async def scenario() -> tuple[list[tuple[str, int]], list[bytes]]:
-        stop = asyncio.Event()
-        ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
-        task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
-        try:
-            await asyncio.wait({ready, task}, timeout=WATCHDOG, return_when=asyncio.FIRST_COMPLETED)
-            if task.done():
-                task.result()  # serve() ended before it was ready: raise the reason it gave
-            if not ready.done():
-                pytest.fail("STUCK: serve() was not ready in time")
-            bound = ready.result()
+        async with serving(args) as bound:
             reply = (await udp_exchange(bound[0], build_query(BLOCKED)))[0]
             return bound, [rr.rdata for rr in dnswire.parse(reply).answers]
-        finally:
-            stop.set()
-            await asyncio.wait_for(task, WATCHDOG)
 
     return asyncio.run(scenario())
 
