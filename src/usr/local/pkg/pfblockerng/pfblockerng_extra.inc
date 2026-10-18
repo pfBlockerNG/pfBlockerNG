@@ -2403,7 +2403,7 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
 		],
 
-		// issue #3513: DoH / DoQ served by pfB-DNS's Go binary (pfb_dns_gateway). Default off; the interface lists
+		// issue #3513: DoH / DoQ served by pfB-DNS's Go binary (pfb-dns). Default off; the interface lists
 		// (comma-joined names) and the trusted front ends (space-joined IPs/CIDRs) are per-node values.
 		'dns/pfb_dns_doh' => [
 			'default'       => '',
