@@ -22,6 +22,7 @@ import pytest
 from dot_helpers import dot_exchange, free_port
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, Booted
 from frontend_helpers import (
+    PROXY_FIXED,
     WATCHDOG,
     FakeProxyUpstream,
     FakeUnbound,
@@ -92,6 +93,56 @@ def test_unbound_not_answering_is_a_servfail_for_the_query_with_one_warning_nami
     reply = dnswire.parse(_resolve(None, query, silent) or b"")
     assert (reply.id, reply.rcode, reply.questions) == (0x0B0B, 2, dnswire.parse(query).questions)
     assert capfd.readouterr().err == "pfb_dns_proxy warning: no reply from Unbound for allowed.example. A\n"
+
+
+@pytest.mark.parametrize("short", [b"", b"\x0b\x0b", bytes(11)], ids=["zero-length", "id-only", "11-bytes"])
+def test_a_reply_from_unbound_too_short_to_have_a_header_is_a_servfail_not_relayed(short: bytes) -> None:
+    async def forward(_wire: bytes) -> bytes:
+        return short
+
+    reply = dnswire.parse(_resolve(None, build_query(ALLOWED, qid=0x0B0B), forward) or b"")
+    assert (reply.id, reply.rcode) == (0x0B0B, 2)
+
+
+def test_a_reply_from_unbound_of_a_header_alone_is_relayed_as_it_is() -> None:
+    refused = struct.pack("!HHHHHH", 0x0B0B, dnswire.QR | dnswire.RD | dnswire.RA | 5, 0, 0, 0, 0)  # 12 bytes: REFUSED
+
+    async def forward(_wire: bytes) -> bytes:
+        return refused
+
+    assert _resolve(None, build_query(ALLOWED, qid=0x0B0B), forward) == refused
+
+
+class _SendsAnEmptyFrame(FakeProxyUpstream):
+    """An upstream that answers the query with a TCP frame of length zero."""
+
+    async def _tcp_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            fixed = await reader.readexactly(PROXY_FIXED)
+            await reader.readexactly(struct.unpack("!H", fixed[14:16])[0])
+            await reader.readexactly(struct.unpack("!H", await reader.readexactly(2))[0])
+            writer.write(b"\x00\x00")
+            await writer.drain()
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+
+
+def test_an_empty_frame_from_unbound_over_tcp_reaches_the_client_as_a_servfail_without_a_module() -> None:
+    """Issue #3517 review: the client was sent `00 00`, a TCP message of length zero, instead of a SERVFAIL."""
+
+    async def scenario() -> bytes:
+        async with _SendsAnEmptyFrame(FakeUnbound(ZONE)) as upstream:
+            frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+            try:
+                return (await tcp_exchange(server, build_query(ALLOWED, qid=0x0B0B)))[0]
+            finally:
+                await frontend.stop()
+
+    reply = dnswire.parse(asyncio.run(scenario()))
+    assert (reply.id, reply.rcode) == (0x0B0B, 2)
 
 
 def test_a_query_without_a_question_gets_formerr_and_never_reaches_unbound() -> None:
