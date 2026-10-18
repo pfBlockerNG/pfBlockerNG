@@ -15,9 +15,12 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-// pfSense-shaped ACL used by the rigs: loopback aliases stand in for LAN clients.
+// pfSense-shaped ACL used by the rigs: loopback aliases stand in for LAN clients, and the documentation ranges are the
+// clients a trusted front end names (a client no row names is refused, as Unbound refuses it).
 const (
-	aclMixed = "#LAN\naccess-control: 127.0.0.0/8 allow_snoop \n" +
+	aclDocumentation = "access-control: 192.0.2.0/24 allow\naccess-control: 198.51.100.0/24 allow\n" +
+		"access-control: 203.0.113.0/24 allow\naccess-control: 2001:db8::/32 allow\n"
+	aclMixed = "#LAN\naccess-control: 127.0.0.0/8 allow_snoop \n" + aclDocumentation +
 		"access-control: 127.0.0.9/32 refuse\n" +
 		"access-control: 127.0.0.10/32 deny\n"
 	clientRefused, clientDenied, clientAllowed = "127.0.0.9", "127.0.0.10", "127.0.0.5"
