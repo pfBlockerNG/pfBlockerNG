@@ -12301,14 +12301,18 @@ function pfb_dns_proxy_observer_wanted(string $mode): bool {
  * so a holder must not take it again before unlock(). Release with unlock() after write_config().
  *
  * @return resource|null the handle for unlock(), with config.xml reloaded under it; NULL when the lock stayed taken
- *         (nothing was reloaded: this process's copy is not replaced by a read made without the lock)
+ *         (nothing was reloaded: this process's copy is not replaced by a read made without the lock) or the fresh
+ *         read failed (the lock is released: a stale copy must not be written back)
  */
 function pfb_dnsbl_config_lock() {
 	$lock = try_lock(PFB_DNSBL_CONFIG_LOCK, PFB_DNSBL_CONFIG_LOCK_WAIT);
 	if (!is_resource($lock)) {
 		return NULL;
 	}
-	config_read_file(FALSE, FALSE);
+	if (config_read_file(FALSE, FALSE) !== TRUE) {
+		unlock($lock);
+		return NULL;
+	}
 	return $lock;
 }
 
