@@ -1,11 +1,13 @@
-"""Issue #3515, step 6: the experimental DNS Proxy toggle, driven the way an operator drives it, proven live.
+"""Issue #3515: pfB-DNS, the experimental DNS proxy, driven the way an operator drives it, proven live.
 
-The toggle (``dnsbl/pfb_dns_proxy``) moves the DNS Resolver onto loopback (its port stays 53, so the firewall keeps
-resolving through it) and runs pfBlockerNG's DNS proxy on the Resolver's client-facing addresses: the proxy answers
-DNSBL decisions itself (the SHIPPED ``pfb_unbound.py`` through its Unbound API shim) and forwards every other query
-to Unbound on loopback 5353 with a PROXYv2 header. This module sets the real config keys, runs the real apply
-(``pfb_trigger scope=dnsbl``) and watches the box and a LAN client VM, with no hand-made proxy process and no
-hand-edited ``unbound.conf``.
+pfB-DNS (``dns/pfb_dns``, the pfB-DNS tab) moves the DNS Resolver onto loopback (its port stays 53, so the firewall
+keeps resolving through it) and runs pfBlockerNG's DNS proxy on the Resolver's client-facing addresses. It is
+independent of DNSBL: with DNSBL on the proxy answers DNSBL decisions itself (the SHIPPED ``pfb_unbound.py`` through
+its Unbound API shim) and forwards every other query to Unbound on loopback 5353 with a PROXYv2 header; with DNSBL off
+it boots no module and forwards every query. Unbound runs the inert ``pfb_upstream_observer.py`` in every pfB-DNS
+mode, because pfSense runs the start hook ``<python_script>_include.inc`` only for a python script, and that hook
+starts the proxy in boot. This module sets the real config keys, runs the real apply (``pfb_trigger scope=dnsbl``)
+and watches the box and a LAN client VM, with no hand-made proxy process and no hand-edited ``unbound.conf``.
 
 Module setup, put back in ``finally``::
 
@@ -13,16 +15,16 @@ Module setup, put back in ``finally``::
               ``server:`` clause pfSense documents), Listen Port and Network Interfaces absent (their defaults)
     LAN:      a static IPv6 address (the IPv6 locality tests' 2001:db8:51:1::1/64), so pfSense grants the LAN's IPv6
               subnet to Unbound clients
-    DNSBL:    one feed listing five names, Group Policy on with 192.168.1.12 on the bypass list
+    DNSBL:    one feed listing the test names, Group Policy on with 192.168.1.12 on the bypass list
 
 What it proves, in file order:
 
-* before the toggle: Unbound hosts the python module and listens on 53 and 853 (the baseline every "not any more"
-  below is measured against);
-* toggle on + apply: config.xml shows the Resolver moved (interfaces, DoT, Custom Options; NOT the port) and the
-  snapshot, ``unbound.conf`` never loads ``pfb_unbound.py``, Unbound listens on loopback 5353 and 5354 only
-  (our clause's ``port: 5354``), service ``pfb_dns_proxy`` runs under ``daemon -t``, the proxy owns 53/853 on the LAN
-  address and 53 on loopback;
+* pfB-DNS off, DNSBL on (devel's behaviour): Unbound hosts the python module and listens on 53 and 853 (the baseline
+  every "not any more" below is measured against);
+* pfB-DNS on, DNSBL on + apply: config.xml shows the Resolver moved (interfaces, DoT, Custom Options; NOT the port) and
+  the snapshot, ``unbound.conf`` never loads ``pfb_unbound.py``, Unbound listens on loopback 5353 and 5354 only (our
+  clause's ``port: 5354``), service ``pfb_dns_proxy`` runs under ``daemon -t``, the proxy owns 53/853 on the LAN address
+  and 53 on loopback;
 * the firewall resolves through the proxy: ``/etc/resolv.conf`` still names 127.0.0.1 after pfSense regenerates
   it, and the firewall's own lookup of a listed name is answered with the DNSBL VIP and logged;
 * pfSense's IPv6 grant for the LAN subnet disappears from its generated ``access_lists.conf`` with the Resolver on
@@ -34,14 +36,21 @@ What it proves, in file order:
   Resolver's certificate; a Group Policy bypassed address (192.168.1.12, an alias on the client) and the filtered
   client asking for the same names at the same moment each get their own answer (the #3508 shape);
 * the Alerts page's whitelist reload takes the zero-downtime swap: neither the proxy nor Unbound restarts;
-* toggle off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
+* pfB-DNS on, DNSBL off: the proxy runs with ``--no-module``, Unbound has no ``pfb_unbound.py`` (only the inert
+  observer), a listed name is NOT blocked (UDP, TCP, DoT), Unbound's log names the real client, the firewall's own
+  lookup goes through the proxy (Unbound has no socket on 53), and no DNSBL decision is logged;
+* a Resolver restart (the GUI's apply) brings a stopped proxy back through the observer's start hook;
+* a reboot, once with DNSBL off and once on: the proxy is serving before ``rc.start_packages`` begins (the gap between
+  Unbound's start and the proxy listening is printed), and a lookup from the box right after boot succeeds through it;
+* pfB-DNS off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
   stays absent), the marker is cleared, the module is back in ``unbound.conf``, Unbound is on 53 and 853 again.
 
-The Settings page checkbox (below DNSBL Group Policy, help says it is experimental) is covered by the Tier A render
-test ``test_dnsbl_dns_proxy_option_renders_below_group_policy`` (tests/smoke/ui/test_render_smoke.py) and the toggle
-flow ``dnsbl_dns_proxy`` (tests/smoke/ui/test_functional.py).
+The pfB-DNS tab (enable checkbox, help that says it is experimental, status panel) is covered by the Tier A render
+test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
+(tests/smoke/ui/test_render_smoke.py) and the toggle flow ``pfb_dns``
+(tests/smoke/ui/test_functional.py).
 
-Every test asks ``proxy_on`` for the toggle to be on and turns it on (one apply) if an earlier test left it off.
+Every test asks ``proxy_on`` for pfB-DNS to be on and turns it on (one apply) if an earlier test left it off.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
@@ -83,8 +92,10 @@ SNAPSHOT_FILE = "/tmp/pfb3515_cfg_snapshot.json"  # on the guest: survives a dea
 CERT_GUEST = "/tmp/pfb3515_cert.pem"
 CERT_CLIENT = "/tmp/pfb3515_ca.pem"
 
-CFG_PROXY = f"{h.CFG_DNSBL_SETTINGS}/pfb_dns_proxy"
-CFG_MARKER = f"{h.CFG_DNSBL_SETTINGS}/pfb_dns_proxy_saved"
+CFG_PFB_DNS = "installedpackages/pfblockerngdns/config/0"  # the pfB-DNS section: local, not synced
+CFG_PROXY = f"{CFG_PFB_DNS}/pfb_dns"
+CFG_MARKER = f"{CFG_PFB_DNS}/pfb_dns_saved"
+CFG_DNSBL = f"{h.CFG_DNSBL_SETTINGS}/pfb_dnsbl"
 CFG_GROUP_POLICY = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp"
 CFG_GROUP_POLICY_LIST = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp_bypass_list"
 CFG_WHITELIST = f"{h.CFG_DNSBL_SETTINGS}/whitelist"
@@ -119,6 +130,7 @@ SNAPSHOT_PATHS = (
     "cert",
     CFG_PROXY,
     CFG_MARKER,
+    CFG_DNSBL,
     CFG_GROUP_POLICY,
     CFG_GROUP_POLICY_LIST,
     CFG_WHITELIST,
@@ -177,6 +189,8 @@ class Names:
     whitelisted: str  # listed; the whitelist-reload test
     group_policy: tuple[str, ...]  # listed; one per Group Policy round
     firewall: str  # listed; only the firewall's own lookups ask for it
+    dnsbl_off_client: str  # listed; only the DNSBL-off test asks for it, from the client
+    dnsbl_off_firewall: str  # listed; only the DNSBL-off test asks for it, from the firewall
 
 
 @dataclass(frozen=True)
@@ -296,12 +310,22 @@ def _configure_group_policy(vm: SmokeVM) -> None:
 
 
 def _set_proxy_toggle(vm: SmokeVM, on: bool) -> None:
-    """The Settings page's save, minus the page: the registered toggle token, 'on' or the empty Off token."""
+    """The pfB-DNS tab's save, minus the page: the registered toggle token, 'on' or the empty Off token."""
     _php_ok(
         vm,
         f"config_set_path({h._php_str(CFG_PROXY)}, {h._php_str('on' if on else '')});\n"
-        f"write_config('pfBlockerNG smoke: DNS Proxy toggle {'on' if on else 'off'}');",
-        "DNS Proxy toggle",
+        f"write_config('pfBlockerNG smoke: pfB-DNS toggle {'on' if on else 'off'}');",
+        "pfB-DNS toggle",
+    )
+
+
+def _set_dnsbl(vm: SmokeVM, on: bool) -> None:
+    """The DNSBL tab's enable checkbox, minus the page: the registered toggle token, 'on' or the empty Off token."""
+    _php_ok(
+        vm,
+        f"config_set_path({h._php_str(CFG_DNSBL)}, {h._php_str('on' if on else '')});\n"
+        f"write_config('pfBlockerNG smoke: DNSBL {'on' if on else 'off'} for the #3515 smoke');",
+        "DNSBL toggle",
     )
 
 
@@ -356,7 +380,7 @@ def _capture(vm: SmokeVM) -> State:
         conf=vm.ssh("cat", h.UNBOUND_CONF).stdout,
         access_lists=vm.ssh("cat", ACCESS_LISTS).stdout,
         resolver={key: _xml_text(root, f"unbound/{key}") for key in RESOLVER_KEYS},
-        marker=_xml_text(root, "installedpackages/pfblockerngdnsblsettings/config/pfb_dns_proxy_saved") or "",
+        marker=_xml_text(root, "installedpackages/pfblockerngdns/config/pfb_dns_saved") or "",
         listeners=_listeners(vm),
         ps=[line.strip() for line in ps],
         proxy_pid=_pid_file(vm, PROXY_PID_FILE),
@@ -522,8 +546,17 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         whitelisted=h.unique_domain("whitelisted"),
         group_policy=tuple(h.unique_domain("gp") for _ in range(3)),
         firewall=h.unique_domain("firewall"),
+        dnsbl_off_client=h.unique_domain("dnsbloff"),
+        dnsbl_off_firewall=h.unique_domain("dnsbloff-fw"),
     )
-    listed = (names.blocked, names.whitelisted, names.firewall, *names.group_policy)
+    listed = (
+        names.blocked,
+        names.whitelisted,
+        names.firewall,
+        names.dnsbl_off_client,
+        names.dnsbl_off_firewall,
+        *names.group_policy,
+    )
     feed_url = h.write_local_feed(vm, "smoke_3515_dns_proxy.txt", "".join(f"{name}\n" for name in listed))
     _snapshot_config(vm)
     lan_v6_prior: dict[str, str] | None = None
@@ -718,13 +751,14 @@ def test_forwarding_on_gives_unbound_the_upstream_observer_never_the_module(rig:
     assert OBSERVER_SCRIPT in staged and "No such file" not in staged, f"staged files: {staged}"
 
 
-def test_forwarding_off_gives_unbound_no_python_script_at_all(rig: Rig, proxy_on: State) -> None:
-    """With the Resolver recursing there is no upstream block to observe, so Unbound loads no python module.
+def test_forwarding_off_still_gives_unbound_the_inert_observer(rig: Rig, proxy_on: State) -> None:
+    """With the Resolver recursing there is no upstream block to observe, yet Unbound keeps the observer script.
 
     Given the toggle applied and the Resolver switched from forwarding to recursion,
     When the DNSBL apply runs,
-    Then unbound.conf has no `python-script` and no python module (and never pfb_unbound.py); the forwarding setting
-      is put back afterwards and the next apply brings the observer back.
+    Then unbound.conf still names `pfb_upstream_observer.py` as its only python-script (it stays inert: the proxy
+      does not listen for reports) and never pfb_unbound.py: pfSense's start hook is looked up by that name, so
+      dropping it would drop pfB-DNS from the boot; the forwarding setting is put back afterwards.
     """
     vm = rig.vm
     original = h.config_get_state(vm, CFG_FORWARDING)
@@ -738,15 +772,18 @@ def test_forwarding_off_gives_unbound_no_python_script_at_all(rig: Rig, proxy_on
         )
         _apply(vm)
         state = _capture(vm)
-        assert not SCRIPT_LINE.search(state.conf), f"unbound.conf still names a python-script:\n{state.conf}"
-        assert not MODULE_LINE.search(state.conf), f"unbound.conf still loads a python module:\n{state.conf}"
+        scripts = re.findall(r"^\s*python-script\s*:\s*(\S+)", state.conf, re.MULTILINE)
+        assert scripts == [OBSERVER_SCRIPT], f"python-script lines: {scripts}\n{state.conf}"
         assert "pfb_unbound.py" not in state.conf, state.conf
+        child = state.ps_line(state.proxy_pid)
+        assert "--observer" not in child, f"the proxy listens for reports while the Resolver recurses: {child!r}"
     finally:
         h.config_restore_state(vm, CFG_FORWARDING, original)
         _php_ok(vm, "services_unbound_configure(FALSE);", "Resolver forwarding restored")
         _apply(vm)
     restored = _capture(vm)
     assert re.findall(r"^\s*python-script\s*:\s*(\S+)", restored.conf, re.MULTILINE) == [OBSERVER_SCRIPT], restored.conf
+    assert "--observer" in restored.ps_line(restored.proxy_pid), restored.ps
 
 
 def test_an_upstream_ede_block_is_logged_with_the_real_client(
@@ -985,6 +1022,193 @@ def test_alerts_whitelist_reload_takes_the_zero_downtime_swap_without_restarting
         assert h.resolves_to(allowed, STUB_DNS_A), f"{name} after the whitelist: {allowed}\n{raw}"
     finally:
         h.config_restore_state(vm, CFG_WHITELIST, original)
+
+
+# --------------------------------------------------------------------------- #
+# pfB-DNS on, DNSBL off: the proxy only forwards
+# --------------------------------------------------------------------------- #
+
+
+def _wait_forwards(rig: Rig, name: str) -> None:
+    """Poll until the LAN client gets the upstream's answer for a LISTED name: the proxy forwards and blocks nothing."""
+
+    def forwards() -> bool:
+        answer, _ = _query(rig.client, name)
+        return h.resolves_to(answer, STUB_DNS_A)
+
+    try:
+        h.wait_until(forwards, timeout=240.0, interval=3.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\n{_diagnostics(rig.vm)}") from exc
+
+
+@contextlib.contextmanager
+def _dnsbl_off(rig: Rig) -> Iterator[State]:
+    """pfB-DNS stays on and DNSBL goes off (applied); DNSBL is turned back on and applied afterwards."""
+    _set_dnsbl(rig.vm, False)
+    try:
+        _apply(rig.vm)
+        _wait_forwards(rig, rig.names.dnsbl_off_client)
+        yield _capture(rig.vm)
+    finally:
+        _set_dnsbl(rig.vm, True)
+        _apply(rig.vm)
+        _wait_proxy_serves(rig)
+
+
+def test_pfb_dns_without_dnsbl_forwards_everything_and_blocks_nothing(rig: Rig, proxy_on: State) -> None:
+    """pfB-DNS on + DNSBL off: the proxy takes the client port, boots no module and forwards every query.
+
+    Given pfB-DNS on and DNSBL turned off and applied (the Resolver stays moved: pfB-DNS does not follow DNSBL),
+    Then the proxy runs with `--no-module` (and no `--observer`); unbound.conf has no pfb_unbound.py and only the
+      inert observer as its python-script; Unbound has no socket on 53, so the firewall's resolv.conf entry 127.0.0.1
+      is answered by the proxy;
+      And a LISTED name is not blocked: the client gets the upstream's answer over UDP, TCP and DoT, Unbound's query
+      log names the real client, and no DNSBL decision reaches dnsbl.log;
+      And the firewall's own lookup of another listed name gets the upstream's answer, logged by Unbound as 127.0.0.1.
+    """
+    vm, client, names = rig.vm, rig.client, rig.names
+    with _dnsbl_off(rig) as state:
+        assert _is_on(state) and state.marker, f"pfB-DNS is not fronting the Resolver with DNSBL off: {state}"
+        child = state.ps_line(state.proxy_pid)
+        assert "--no-module" in child and "--observer" not in child, f"proxy command line: {child!r}"
+        assert "pfb_unbound.py" not in state.conf, f"unbound.conf names pfb_unbound.py:\n{state.conf}"
+        scripts = re.findall(r"^\s*python-script\s*:\s*(\S+)", state.conf, re.MULTILINE)
+        assert scripts == [OBSERVER_SCRIPT], f"python-script lines: {scripts}\n{state.conf}"
+        on53 = sorted(local for _, local in state.unbound_dns() if local.endswith(":53"))
+        assert not on53, f"Unbound still listens on 53: {on53}"
+
+        for how, tcp, dot in (("UDP", False, False), ("TCP", True, False), ("DoT", False, True)):
+            answer, raw = _query(client, names.dnsbl_off_client, tcp=tcp, dot=dot)
+            assert h.resolves_to(answer, STUB_DNS_A), (
+                f"{how}: listed {names.dnsbl_off_client} was blocked: {answer}\n{raw}"
+            )
+        clients = _wait_unbound_logged(vm, names.dnsbl_off_client)
+        assert set(clients) == {CLIENT_LAN_IP}, f"Unbound's query log names {clients}, not the client {CLIENT_LAN_IP}"
+        assert _dnsbl_rows(vm, names.dnsbl_off_client) == [], "DNSBL is off: dnsbl.log must gain no row"
+
+        _php_ok(vm, "require_once('system.inc');\nsystem_resolvconf_generate();", "system_resolvconf_generate")
+        resolv = vm.ssh("cat /etc/resolv.conf").stdout
+        assert re.search(r"^nameserver\s+127\.0\.0\.1\s*$", resolv, re.MULTILINE), f"/etc/resolv.conf:\n{resolv}"
+        firewall_answer = _firewall_lookup(vm, names.dnsbl_off_firewall)
+        assert firewall_answer == STUB_DNS_A, (
+            f"the firewall's lookup of the listed {names.dnsbl_off_firewall}: {firewall_answer!r}"
+        )
+        firewall_clients = _wait_unbound_logged(vm, names.dnsbl_off_firewall)
+        assert set(firewall_clients) == {"127.0.0.1"}, f"Unbound's query log names {firewall_clients}, not 127.0.0.1"
+        assert _dnsbl_rows(vm, names.dnsbl_off_firewall) == [], "DNSBL is off: dnsbl.log must gain no row"
+
+
+# --------------------------------------------------------------------------- #
+# The start hook: pfSense runs <python_script>_include.inc whenever it starts Unbound
+# --------------------------------------------------------------------------- #
+
+HOOK = "/var/unbound/pfb_upstream_observer_include.inc"
+
+
+def test_a_resolver_restart_brings_a_stopped_proxy_back_through_the_start_hook(rig: Rig, proxy_on: State) -> None:
+    """services_unbound_configure() (the GUI's apply, a boot) requires the observer's include, which starts the proxy.
+
+    Given pfB-DNS on with the hook staged in the chroot and the proxy stopped,
+    When the Resolver is restarted the way the Resolver page's Apply restarts it,
+    Then the proxy is running again without any pfBlockerNG apply, and serves.
+    """
+    vm = rig.vm
+    staged = vm.ssh(f"ls -l {HOOK} 2>&1").stdout
+    assert "No such file" not in staged, f"the hook is not staged: {staged}"
+    _force_stop_proxy(vm)
+    gone = _capture(vm)
+    assert gone.proxy_pid is None and gone.service == "stopped", f"the proxy is still up: {gone.ps}"
+    _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the Resolver's Apply)")
+    h.wait_unbound_ready(vm)
+    try:
+        h.wait_until(lambda: _pid_file(vm, PROXY_PID_FILE) is not None, timeout=60.0, interval=2.0)
+    except RuntimeError:
+        raise AssertionError(f"the Resolver restart did not start the proxy:\n{_diagnostics(vm)}") from None
+    _wait_proxy_serves(rig)
+
+
+BOOT_TIMELINE_PHP = r"""
+$boot = 0;
+if (preg_match('/sec = (\d+)/', (string) shell_exec('/sbin/sysctl -n kern.boottime'), $m)) { $boot = (int) $m[1]; }
+$epochs = function (string $re) use ($boot) {
+    $found = array();
+    foreach (@file('/var/log/system.log', FILE_IGNORE_NEW_LINES) ?: array() as $line) {
+        if (preg_match($re, $line, $m) && ($t = strtotime($m[1])) !== false && $t >= $boot) { $found[] = $t; }
+    }
+    return $found;
+};
+$when = '/^(\w{3}\s+\d+\s+[\d:]{8})\s';
+echo '<<<TL>>>' . json_encode(array(
+    'boot' => $boot,
+    'unbound_configured' => $epochs($when . '.*sync unbound done/'),
+    'proxy_started' => $epochs($when . '.*pfb_dns_proxy.*DNS proxy started/'),
+    'packages_started' => $epochs($when . '.*Restarting\/Starting all packages/'),
+)) . '<<<END>>>';
+"""
+
+
+def _boot_timeline(vm: SmokeVM) -> dict[str, list[int]]:
+    """Epoch seconds, from this boot's system log, of the events that bound the DNS gap in boot."""
+    out = h.php_eval(vm, BOOT_TIMELINE_PHP)
+    match = re.search(r"<<<TL>>>(.*?)<<<END>>>", out.stdout, re.DOTALL)
+    if out.returncode != 0 or match is None:
+        raise RuntimeError(f"boot timeline failed: rc={out.returncode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}")
+    return json.loads(match.group(1))
+
+
+@pytest.mark.timeout(1500)
+@pytest.mark.parametrize("dnsbl_on", [False, True], ids=["dnsbl-off", "dnsbl-on"])
+def test_after_a_reboot_the_proxy_is_serving_before_the_packages_start(
+    rig: Rig, proxy_on: State, dnsbl_on: bool
+) -> None:
+    """pfSense starts Unbound in rc.bootup and the packages only afterwards: pfB-DNS must not leave a DNS gap between.
+
+    Given pfB-DNS on, with DNSBL on or off, applied,
+    When the firewall reboots,
+    Then the first `DNS proxy started` of the boot (the observer's start hook, run by services_unbound_configure()
+      inside rc.bootup) is logged no later than `Restarting/Starting all packages` (rc.start_packages); the gap
+      between Unbound's start and the proxy's is printed; the Resolver is still moved and the proxy runs;
+      And a lookup from the firewall right after the boot succeeds through the proxy (the upstream's answer with
+      DNSBL off, the DNSBL VIP for a listed name with it on), and so does the client's.
+    """
+    vm = rig.vm
+    _set_dnsbl(vm, dnsbl_on)
+    try:
+        _apply(vm)
+        if dnsbl_on:
+            _wait_proxy_serves(rig)
+        else:
+            _wait_forwards(rig, rig.names.dnsbl_off_client)
+        h.reboot_vm(vm)
+        timeline = _boot_timeline(vm)
+        _say(f"boot timeline (epoch seconds, DNSBL {'on' if dnsbl_on else 'off'}): {timeline}")
+        assert timeline["packages_started"], f"no `Restarting/Starting all packages` line this boot: {timeline}"
+        assert timeline["proxy_started"], f"the proxy was not started this boot: {timeline}\n{_diagnostics(vm)}"
+        first_proxy, packages = timeline["proxy_started"][0], timeline["packages_started"][0]
+        assert first_proxy <= packages, (
+            f"the proxy was first started at {first_proxy}, after the packages began at {packages}: {timeline}"
+        )
+        if timeline["unbound_configured"]:
+            gap = first_proxy - timeline["unbound_configured"][0]
+            _say(
+                f"Unbound configured at {timeline['unbound_configured'][0]}, proxy started at {first_proxy}: {gap:+d} s"
+            )
+        state = _capture(vm)
+        assert _is_on(state) and state.marker, f"pfB-DNS is not in place after the reboot: {state}"
+        if dnsbl_on:
+            expected, name = h.DEFAULT_DNSBL_VIP4, rig.names.firewall
+            _wait_proxy_serves(rig)
+        else:
+            expected, name = STUB_DNS_A, rig.names.dnsbl_off_firewall
+            _wait_forwards(rig, rig.names.dnsbl_off_client)
+        answer = _firewall_lookup(vm, name)
+        assert answer == expected, f"the firewall's own lookup of {name} after the reboot: {answer!r}, not {expected}"
+    finally:
+        if not dnsbl_on:
+            _set_dnsbl(vm, True)
+            _apply(vm)
+            _wait_proxy_serves(rig)
 
 
 # --------------------------------------------------------------------------- #
