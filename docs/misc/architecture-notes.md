@@ -487,8 +487,8 @@ off, pfBlockerNG or the Resolver disabled, wizard, the uninstall disable pass), 
 pass can return early (lock contention, failed recovery); it never stops the proxy before the restore (a restore that
 cannot take the lock would leave the moved Resolver with nothing serving it), and stops it and removes the rc script like the other services only when no snapshot is left. It returns FALSE while a snapshot is left (config locked or unreadable, proxy outlived its stop), and `pfblockerng_php_pre_deinstall_command()` then stops the removal before its live-object teardown and the Keep Settings wipe, which would destroy the recovery path (snapshot, pending-changes marker, generated files, package settings). Only status 3 makes pkg(8) abandon a removal: `rc.packages` discards the hook's return value and exits 0, and pkg only logs a failed DEINSTALL script and removes the files anyway (libpkg `pkg_delete()` aborts on a failed pre-deinstall script in developer mode only), while `pkg_script_run_child()` ends the whole pkg process with exit 0 on a script status of 3 (same code in pkg 1.12 to 2.4; observed against a pkg 2.1.0 build). So `pfblockerng.xml` exits with `PFB_PKG_REMOVAL_ABORT` (3) when the hook returns FALSE, and the package stays installed, with its snapshot, runtime files and settings. pfSense's `delete_package_xml()` has already stopped and deregistered the package's services, and removed its menu items, before it evaluates the hook, so an aborted removal leaves those unregistered until a reinstall, and the operator removes the package again once the cause (a config save in progress, a surviving proxy process) is gone;
 `pfb_reload_unbound()`'s restart path restarts the proxy after Unbound (the module host re-reads lists and ini at
-init) and then waits up to `PFB_DNS_PROXY_START_WAIT` (5 s) for its pidfile, because `restart_service()` returns
-first and the apply ledger reads that pidfile (a proxy that is not up opens the ledger entry, worded for the proxy);
+init) and then waits for it to be READY (`pfb_dns_proxy_restart()`, see "Readiness and rollback" below), because
+`restart_service()` returns first and the apply ledger reads the proxy's state;
 the zero-downtime swap never restarts it; every apply calls `pfb_dns_proxy_ensure_running()` after its reload branch, DNSBL on or off (it starts a dead proxy and restarts a live one whose script changed); the installer stages the module files into `/var/unbound` (`dnsbl_cache
 stage`) and only then regenerates the script and restarts the proxy while the Resolver is moved, stops it otherwise. A Resolver that still carries our block while the saved
 copy is lost or malformed cannot be put back (a user's own lo0 Resolver or PROXYv2 line has no marker and is left
@@ -497,6 +497,40 @@ alone): the apply raises a `file_notice` naming the Resolver settings to check a
 `DnsProxyServiceTest`, `DnsProxyLifecycleTest`, `DnsProxyReloadRestartTest`, `DnsProxyApplyStartTest`,
 `DnsProxySettingsSaveTest` and `tests/dns_proxy/test_listen_errors.py`; the live sockets and resolv.conf are
 pinned by `tests/smoke/test_smoke_dns_proxy.py`.
+
+**Readiness and rollback.** A proxy is READY, not merely alive, when its listener can handle queries (`pfb_dns_proxy_ready()`).
+The rc script passes `--ready-file /var/unbound/pfb_dns_ready` (`$pfb['dns_proxy_ready']`); the proxy writes its own PID
+there (atomically, mode 0600, as `unbound`, in the chroot directory the module already writes to) only after its sockets
+are bound, its privileges dropped, its matcher or reply log initialised and its signal handlers installed, and removes it
+at shutdown only while it still names itself. PHP calls the proxy ready iff the child pidfile
+(`$pfb['dns_proxy_pidfile']`) names a live process AND the marker holds that same decimal PID: a live process that never
+published one (a listener that cannot bind, which the supervisor restarts every 5 s), a marker an earlier incarnation left,
+a live supervisor alone and a marker with no live child are all NOT ready. `pfb_dns_proxy_running()` stays the pidfile-only
+LIVENESS predicate (is the module host up? the zero-downtime swap, the ledger and the status panel ask that); the two are
+different questions. Ready means the front end can answer, not that recursion works: the boot query probe in
+`tests/smoke/test_smoke_dns_proxy.py` (which runs after Unbound is up) remains the proof of an actual answer. The rc script
+removes a previous marker only before a fresh launch (a healthy repeated `start` keeps the serving proxy's), its stop removes
+the marker only when it names a process that stop signalled, and `start` runs under
+`lockf -k -t 10 /var/run/pfb_dns_proxy.lock` (the script runs itself once more inside the lock, guarded by an environment
+variable): the boot hook's background start and an apply's `start_service()` otherwise both pass the "already serving?"
+check before `daemon(8)` has written a pidfile and both launch. A start that cannot take the lock logs an error and exits 75.
+
+Every caller that starts or restarts the proxy waits for readiness (`pfb_dns_proxy_await_ready()`: 30 s, the Unbound
+startup budget `PFB_UNBOUND_START_WAIT`, no setting of its own, never under a lock): `pfb_dns_proxy_restart()` (the reload's
+restart path and the installer) and `pfb_dns_proxy_ensure_running()` (the apply; it also checks a proxy that is alive with an
+unchanged script, so a crash-looping listener is noticed). A proxy that is not ready within the budget has FAILED its
+activation, and `pfb_dns_proxy_roll_back()` runs: under the config lock the requested toggle goes Off (so the next apply
+cannot enable it again, and there is no retry or suppression state of its own), then `pfb_unbound_python($mode, FALSE)` stops
+the proxy and gives the Resolver exactly its saved settings back and, iff DNSBL is on, puts the DNSBL module back into
+Unbound, and `pfb_unbound_dnsbl()` with `pfb_update_unbound()` regenerate `unbound.conf` and restart Unbound as an apply does.
+The restore consumes the snapshot, so that reload does not restart the proxy (no recursion), and the restore's own restart of a
+proxy that outlived its stop is deliberately not confirmed. The operator gets a notice: pfB-DNS was turned off, the Resolver
+was restored, DNSBL runs in Unbound again. A rollback that cannot finish (the config lock stays taken, the proxy outlives its
+stop) keeps the snapshot and the moved Resolver, runs nothing destructive after the failure, and says that recovery is needed:
+it never claims success. The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
+`DnsProxyActivationRollbackTest`, the marker and lock rows of `DnsProxyServiceTest` and `tests/dns_proxy/test_ready_file.py`
+(the marker itself); live by `tests/smoke/test_smoke_dns_proxy.py` (the marker, the lock, racing starts, and a rollback with
+every client port held).
 
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,
