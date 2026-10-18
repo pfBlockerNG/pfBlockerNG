@@ -9,8 +9,8 @@
 # this shell (exec), so its exit status and signals are the caller's.
 #
 # Exit status when no binary runs:
-#   3  no pfb-dns payload is installed at all (a legacy package); the caller may run the
-#      Python listener instead.
+#   3  no pfb-dns payload is installed at all (a legacy package). The generated rc script never starts
+#      the wrapper then, it runs the Python listener itself; a direct call gets this status.
 #   1  a payload is installed but unusable here (unknown machine, or this machine's binary is
 #      missing or not executable); the caller must NOT fall back to another binary or to Python.
 
