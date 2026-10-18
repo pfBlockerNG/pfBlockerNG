@@ -30,6 +30,26 @@ WATCHDOG = 10.0  # stuck-run guard for socket waits; never asserted on
 PROXY_FIXED = 16  # 12-byte signature + ver/cmd + family + 2-byte length
 
 
+class ManualClock:
+    """Stands in for pfb_dns_proxy.monotonic: it reads the same every time until a test moves it. The proxy's admission
+    and log windows run on that clock, so a test ages a query, a connection or a silence by `advance`, never by waiting.
+    The tests use steps that are exact in binary (0.5, 1, 2...), so a boundary is hit exactly."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+async def drained(frontend: pfb_dns_proxy.Frontend) -> None:
+    """Wait until every UDP query task of `frontend` has ended (answered, timed out or dropped for a newer one)."""
+    await asyncio.gather(*list(frontend._tasks), return_exceptions=True)
+
+
 def build_query(
     name: str,
     qtype: int = dnswire.TYPE_A,

@@ -51,11 +51,14 @@ off while the proxy runs. If the certificate is missing, unusable or its key is 
 one error line with the reason, and the plain listeners serve (exiting would only make the supervisor relaunch every
 5 s with LAN DNS down). There is no self-signed fallback and no passphrase prompt.
 
-Limits: at most 128 TCP and DoT connections at once and 16 per client address (over either, the connection idle
-longest of those is closed to make room for the new one, one log line per burst; a DoT handshake in progress counts),
-512 UDP queries in flight and 64 per client address (over either the oldest of those is dropped, one log line per
-burst), and a DoT handshake must finish within 10 s. Unbound answers a flood the same way, so one client cannot take
-DNS from the others.
+Limits: at most 128 TCP and DoT connections at once and 64 per client address, and 512 UDP queries in flight and 256
+per client address. Over a limit the newcomer is turned away (a UDP query is dropped, a connection is closed before
+its DoT handshake): work that may still finish is never cancelled for it. Only a stalled one makes room, and then the
+newcomer is served instead: a UDP query that has waited half --timeout for Unbound, or a TCP or DoT client (one in its
+handshake too) that has been silent for half the idle timeout and has no query at Unbound; the longest waiting or
+silent one, of the newcomer's own address when that is the limit it hit. One log line per burst. The limits bound one
+client address, not the table: enough addresses (spoofed ones, for UDP) can still fill the global limits, and while
+they hold them a newcomer waits for one of theirs to stall. A DoT handshake must finish within 10 s.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -67,7 +70,6 @@ import asyncio
 import contextlib
 import errno
 import ipaddress
-import itertools
 import json
 import logging
 import os
@@ -83,6 +85,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from functools import partial
+from time import monotonic
 from types import ModuleType
 from typing import Any, NamedTuple
 
@@ -96,10 +99,11 @@ TCP_IDLE_TIMEOUT = 30.0  # Unbound's tcp-idle-timeout default
 RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real query carries an OPT, maybe a TSIG
-MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; over it the oldest is dropped
-MAX_UDP_PER_SOURCE = 64  # ... of which one client address may hold this many: over it its own oldest is dropped
+MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; over it a newcomer is dropped
+MAX_UDP_PER_SOURCE = 256  # ... of which one client address may hold this many (a NAT'd network at 400 qps holds ~120)
 MAX_TCP_CLIENTS = 128  # TCP and DoT connections at once; each opens one Unbound connection lazily
-MAX_TCP_PER_SOURCE = 16  # ... of which one client address may hold this many; over either the longest idle is closed
+MAX_TCP_PER_SOURCE = 64  # ... of which one client address may hold this many; over either a newcomer is refused
+SILENCE_LOG_INTERVAL = 30.0  # seconds between two "no reply from Unbound" lines, whatever Unbound answers in between
 TLS_HANDSHAKE_TIMEOUT = 10.0  # a DoT client that has not finished its handshake by then is dropped (asyncio: 60 s)
 TLS_SHUTDOWN_TIMEOUT = 2.0  # a DoT client that does not answer our close by then is cut off (asyncio: 30 s)
 OBSERVER_SOCKET = (
@@ -334,7 +338,8 @@ def _upstream_report(data: bytes) -> tuple[shim.module_qstate, shim.DnsMsg]:
 @dataclass(slots=True)
 class _Client:
     src: str
-    active: int  # the tick of its last frame or reply: the lower, the longer it has been idle
+    active: float  # monotonic time of its connection or last reply: the smaller, the longer it has been silent
+    busy: bool = False  # a query of it is with Unbound: it is waiting, not silent
 
 
 class Frontend:
@@ -346,14 +351,15 @@ class Frontend:
         self.tcp_overloaded = False
         self._servers: list[asyncio.Server] = []
         self._udp: list[asyncio.DatagramTransport] = []
-        self._queries: dict[asyncio.Task[None], str] = {}  # UDP queries in flight, oldest first, by source
+        self._queries: dict[
+            asyncio.Task[None], tuple[str, float]
+        ] = {}  # UDP queries in flight, oldest first: source, start
         self._per_source: dict[str, int] = {}  # how many of them each source holds
         self._clients: dict[asyncio.StreamWriter, _Client] = {}
-        self._ticks = itertools.count()
         self._tasks: set[asyncio.Task[None]] = set()
         self._observer: tuple[asyncio.DatagramTransport, str] | None = None
         self._malformed_reported = False
-        self._silent = False  # Unbound has not answered since the last time this was logged
+        self._silence_logged = float("-inf")  # when "no reply from Unbound" was last logged
 
     def _operate(self, qstate: shim.module_qstate, event: int) -> int:
         module = self.module
@@ -363,15 +369,14 @@ class Frontend:
 
     async def _ask(self, forward: Forward, wire: bytes, question: dnswire.Question) -> bytes | None:
         """Unbound's reply to the client's query, or None. A reply too short to have a DNS header (a zero-length TCP
-        frame) is no reply. Silence is logged once, not per query: a flood of queries Unbound never answers would
-        otherwise fill the unrotated log, so the next line waits for an answer."""
+        frame) is no reply. Silence is logged at most once per SILENCE_LOG_INTERVAL, whatever Unbound answers in
+        between: a flood of queries it never answers would otherwise fill the unrotated log, and so would one that
+        it answers a few of."""
         reply = await forward(wire)
         if reply is not None and len(reply) < 12:
             reply = None
-        if reply is not None:
-            self._silent = False
-        elif not self._silent:
-            self._silent = True
+        if reply is None and (now := monotonic()) - self._silence_logged >= SILENCE_LOG_INTERVAL:
+            self._silence_logged = now
             shim.log_warn(f"no reply from Unbound for {question.name} {dnswire.type_str(question.qtype)}")
         return reply
 
@@ -530,31 +535,45 @@ class Frontend:
         return task
 
     def spawn_udp_query(self, coro: Coroutine[Any, Any, None], src: str) -> None:
-        """Run the query of one UDP datagram from `src`. Over the limit for `src`, or over the global one, the oldest
-        query of that source (or of all) is dropped for it, as Unbound jostles queries out: a flood of queries nobody
-        answers can then only push out its own source's. The scan for a source's oldest runs only when it is at its
-        limit, over at most MAX_UDP_PER_SOURCE of them."""
+        """Run the query of one UDP datagram from `src`, unless the table is full for it. Over the limit for `src`, or
+        over the global one, the newcomer is dropped without a reply, as a lost datagram is: the queries waiting may
+        still be answered. The exception is a query that has waited half the timeout for Unbound, as an unanswered
+        name does to the end: the oldest of `src`'s (or of all) goes for the newcomer if it is that old. The scan for a
+        source's oldest runs only when it is at its limit, over at most MAX_UDP_PER_SOURCE of them."""
+        now = monotonic()
         if self._per_source.get(src, 0) >= MAX_UDP_PER_SOURCE:
-            victim, why = next(task for task, owner in self._queries.items() if owner == src), f"{src} has"
+            oldest, why = (
+                next(t for t, (owner, _) in self._queries.items() if owner == src),
+                f"{src} has {MAX_UDP_PER_SOURCE}",
+            )
         elif len(self._queries) >= MAX_UDP_INFLIGHT:
-            victim, why = next(iter(self._queries)), f"{len(self._queries)}"
+            oldest, why = next(iter(self._queries)), f"{len(self._queries)}"
         else:
-            victim, why = None, ""
-        if victim is not None:
-            victim.cancel()
-            self._forget_udp_query(victim)
+            oldest, why = None, ""
+        if oldest is not None:
+            stalled = now - self._queries[oldest][1] >= self.timeout / 2
+            if stalled:
+                oldest.cancel()
+                self._forget_udp_query(oldest)
             if not self.udp_overloaded:  # one line per flood, not per packet
                 self.udp_overloaded = True
-                shim.log_warn(f"{why} UDP queries in flight: dropping the oldest for each new one until they drain")
+                shim.log_warn(
+                    f"{why} UDP queries in flight: dropping new ones, or the oldest once it has waited half the "
+                    "timeout, until they drain"
+                )
+            if not stalled:
+                coro.close()
+                return
         task = self.spawn(coro)
-        self._queries[task] = src
+        self._queries[task] = (src, now)
         self._per_source[src] = self._per_source.get(src, 0) + 1
         task.add_done_callback(self._forget_udp_query)
 
     def _forget_udp_query(self, task: asyncio.Task[None]) -> None:
-        src = self._queries.pop(task, None)
-        if src is None:  # dropped for a newer query: already forgotten
+        entry = self._queries.pop(task, None)
+        if entry is None:  # dropped for a newer query: already forgotten
             return
+        src = entry[0]
         if self._per_source[src] == 1:
             del self._per_source[src]
         else:
@@ -602,23 +621,34 @@ class Frontend:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _make_room(self, src: str) -> None:
-        """A TCP or DoT connection from `src` is about to be served. Over the limit for `src`, or over the global one,
-        the client idle longest of those (of `src`'s first) is closed for it: a peer that holds slots and sends
-        nothing cannot keep the others out. A pass over at most MAX_TCP_CLIENTS entries per connection."""
+    def _make_room(self, src: str) -> bool:
+        """A TCP or DoT connection from `src` is about to be served: False if it is to be turned away. Over the limit
+        for `src`, or over the global one, it is, so a client that is using its connection is never closed for it. Only
+        a client silent for half the idle timeout, and with no query at Unbound, is: the longest silent of `src`'s
+        when that is the limit, else of all. A pass over at most MAX_TCP_CLIENTS entries per connection."""
         crowd = [writer for writer, client in self._clients.items() if client.src == src]
         if len(crowd) >= MAX_TCP_PER_SOURCE:
             pool, why = crowd, f"{src} holds {len(crowd)} TCP connections"
         elif len(self._clients) >= MAX_TCP_CLIENTS:
             pool, why = list(self._clients), f"TCP client limit of {MAX_TCP_CLIENTS} reached"
         else:
-            return
-        victim = min(pool, key=lambda writer: self._clients[writer].active)
-        del self._clients[victim]
-        _hang_up(victim)
+            return True
+        now = monotonic()
+        stalled = [
+            w for w in pool if not self._clients[w].busy and now - self._clients[w].active >= TCP_IDLE_TIMEOUT / 2
+        ]
         if not self.tcp_overloaded:  # one line per burst, not per connection
             self.tcp_overloaded = True
-            shim.log_warn(f"{why}: closing the longest idle client for each new connection until the clients drain")
+            shim.log_warn(
+                f"{why}: turning new connections away, or closing a client silent for half the idle timeout, "
+                "until the clients drain"
+            )
+        if not stalled:
+            return False
+        victim = min(stalled, key=lambda writer: self._clients[writer].active)
+        del self._clients[victim]
+        _hang_up(victim)
+        return True
 
     async def _tcp_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, context: ssl.SSLContext | None = None
@@ -633,9 +663,11 @@ class Frontend:
             writer.close()
             return
         src, dst = proxy_endpoints(peer[:2], local[:2])
+        if not self._make_room(src[0]):
+            writer.close()
+            return
         upstream = _TcpUpstream(self.upstream, proxyv2.header(src, dst, tcp=True), self.timeout)
-        self._make_room(src[0])
-        client = self._clients[writer] = _Client(src[0], next(self._ticks))
+        client = self._clients[writer] = _Client(src[0], monotonic())
         try:
             # Nothing may be awaited before this: the ClientHello must still be on the socket, not in `reader`.
             if context is not None:
@@ -647,12 +679,12 @@ class Frontend:
                     wire = await asyncio.wait_for(reader.readexactly(size), TCP_IDLE_TIMEOUT)
                 except (asyncio.IncompleteReadError, TimeoutError, OSError):
                     return
-                client.active = next(self._ticks)
+                client.busy = True
                 reply = await self.resolve(wire, src[0], upstream)
+                client.active, client.busy = monotonic(), False
                 if reply is not None:
                     writer.write(struct.pack("!H", len(reply)) + reply)
                     await asyncio.wait_for(writer.drain(), TCP_IDLE_TIMEOUT)  # a client that never reads is dropped
-                client.active = next(self._ticks)
         except OSError:
             pass
         finally:
@@ -867,11 +899,11 @@ async def serve(args: argparse.Namespace) -> None:
                 await frontend.serve_observer(OBSERVER_SOCKET)  # relative: boot() made --module-dir the working dir
             except OSError as exc:
                 shim.log_err(f"upstream-block detection is off: cannot listen on {OBSERVER_SOCKET}: {exc}")
+        stop = asyncio.Event()
+        for sig in (signal.SIGINT, signal.SIGTERM):  # before the line below: a supervisor signals on reading it
+            asyncio.get_running_loop().add_signal_handler(sig, stop.set)
         listening = [f"{host}:{port}" for host, port in bound] + [f"{host}:{port} (DoT)" for host, port in dot_bound]
         shim.log_info(f"listening on {', '.join(listening)}; upstream {args.upstream}")
-        stop = asyncio.Event()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            asyncio.get_running_loop().add_signal_handler(sig, stop.set)
         await stop.wait()
     finally:
         await frontend.stop()

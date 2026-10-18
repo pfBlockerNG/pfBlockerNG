@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import inspect
 import os
 import struct
 import subprocess
@@ -26,7 +27,9 @@ from frontend_helpers import (
     WATCHDOG,
     FakeProxyUpstream,
     FakeUnbound,
+    ManualClock,
     build_query,
+    drained,
     serve_plain,
     split_proxy_header,
     tcp_exchange,
@@ -141,39 +144,84 @@ def _ids(replies: list[bytes]) -> list[int]:
     return sorted(dnswire.parse(reply).id for reply in replies)
 
 
-def test_a_udp_query_over_the_in_flight_limit_drops_the_oldest_one_with_one_log_line(
-    booted: Booted, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Issue #3517 review: the newest query was dropped, so unanswerable ones held every slot for the whole timeout."""
-    warnings: list[object] = []
-    monkeypatch.setattr(shim, "log_warn", warnings.append)
-    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_INFLIGHT", 4)
+class _Hold:
+    """Queries to hand Frontend.spawn_udp_query that wait on one event, and a record of who started and who was
+    cancelled: what a query that Unbound has not answered yet looks like, without a socket."""
 
-    async def scenario() -> list[bytes]:
-        async with FakeProxyUpstream(FakeUnbound(ZONE), silent=True) as upstream:
-            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=0.3)
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.started: list[str] = []
+        self.cancelled: list[str] = []
+
+    async def query(self, name: str) -> None:
+        self.started.append(name)
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.append(name)
+            raise
+
+
+def test_the_in_flight_limits_default_to_512_in_all_and_256_per_source() -> None:
+    assert (pfb_dns_proxy.MAX_UDP_INFLIGHT, pfb_dns_proxy.MAX_UDP_PER_SOURCE) == (512, 256)
+
+
+def test_a_busy_address_with_120_queries_in_flight_has_every_one_of_them_answered(booted: Booted) -> None:
+    """Issue #3515 gate: one address (a NAT'd network, a downstream forwarder, 127.0.0.1) at 400 qps against 0.3 s of
+    Unbound latency keeps about 120 queries in flight. The per-source limit of 64 dropped the oldest for every newcomer,
+    so each was cancelled just before its answer: 4% were answered."""
+    count = 120
+
+    class Holding(pfb_dns_proxy.Frontend):
+        """Keeps every query inside resolve() until all of them have been received, so all 120 are in flight at once."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.received = 0
+            self.all_received = asyncio.Event()
+            self.release = asyncio.Event()
+            self.answered: list[int] = []
+
+        def spawn_udp_query(self, coro: Any, src: str) -> None:
+            super().spawn_udp_query(coro, src)
+            self.received += 1
+            if self.received == count:
+                self.all_received.set()
+
+        async def resolve(self, wire: bytes, client_ip: str, forward: Any, **kwargs: Any) -> bytes | None:
+            await self.release.wait()
+            reply = await super().resolve(wire, client_ip, forward, **kwargs)
+            self.answered.append(dnswire.parse(wire).id)  # not reached by a query cancelled while it waited
+            return reply
+
+    async def scenario() -> tuple[list[int], list[tuple[int, int, int]]]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = Holding(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
             [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            transport, client = await udp_client(server)
+            transport, client = await udp_client(server, "127.0.0.2")
             try:
-                for qid in range(10):
+                for qid in range(count):
                     transport.sendto(build_query(ALLOWED, qid=qid))
-                await client.until(4)  # the four newest time out: SERVFAIL
-                await frontend.stop()  # every query task has ended: one that was dropped can never answer
-                await asyncio.sleep(0)  # a reply sent before the stop is on this socket now
-                return client.replies
+                await asyncio.wait_for(frontend.all_received.wait(), WATCHDOG)
+                frontend.release.set()
+                await drained(frontend)
+                replies = [dnswire.parse(wire) for wire in await client.until(len(frontend.answered))]
+                return sorted(frontend.answered), sorted((r.id, r.rcode, len(r.answers)) for r in replies)
             finally:
                 transport.close()
+                await frontend.stop()
 
-    replies = asyncio.run(scenario())
-    assert (_ids(replies), [dnswire.parse(reply).rcode for reply in replies]) == ([6, 7, 8, 9], [2, 2, 2, 2])
-    assert len([w for w in warnings if "in flight" in str(w)]) == 1
+    answered, replies = asyncio.run(scenario())
+    assert answered == list(range(count))
+    assert replies == [(qid, 0, 1) for qid in range(count)]
 
 
-def test_a_source_over_its_udp_limit_loses_its_own_oldest_queries_and_no_other_source_is_affected(
-    booted: Booted, monkeypatch: pytest.MonkeyPatch
+def test_a_source_at_its_udp_limit_has_its_newcomers_dropped_and_no_other_source_is_affected(
+    booted: Booted, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Issue #3517 review: about 100 qps of names Unbound never answers from one host left every other host without
-    DNS, because each such query held one of the shared slots for the whole timeout."""
+    DNS, because each held one of the shared slots for the whole timeout. What the limit protects is the queries
+    already waiting, which may still be answered: over it, the newcomer is the one that is dropped."""
     monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_PER_SOURCE", 4)
 
     async def scenario() -> tuple[list[bytes], list[bytes]]:
@@ -188,8 +236,8 @@ def test_a_source_over_its_udp_limit_loses_its_own_oldest_queries_and_no_other_s
                     flooder.sendto(build_query(f"slow{qid}.example.", qid=qid))
                 bystander.sendto(build_query(ALLOWED, qid=0x77))
                 await other.until(1)
-                await flood.until(4)  # the flooder's four newest time out
-                await frontend.stop()
+                await flood.until(4)  # the flooder's four admitted queries time out
+                await frontend.stop()  # every query task has ended: one that was dropped can never answer
                 await asyncio.sleep(0)
                 return flood.replies, other.replies
             finally:
@@ -197,13 +245,91 @@ def test_a_source_over_its_udp_limit_loses_its_own_oldest_queries_and_no_other_s
                 bystander.close()
 
     flood, other = asyncio.run(scenario())
-    assert (_ids(flood), {dnswire.parse(reply).rcode for reply in flood}) == ([8, 9, 10, 11], {2})
+    assert (_ids(flood), {dnswire.parse(reply).rcode for reply in flood}) == ([0, 1, 2, 3], {2})
     answered = dnswire.parse(other[0])
     assert (answered.id, answered.rcode, len(answered.answers)) == (0x77, 0, 1)
 
 
-def test_the_in_flight_limits_default_to_512_in_all_and_64_per_source() -> None:
-    assert (pfb_dns_proxy.MAX_UDP_INFLIGHT, pfb_dns_proxy.MAX_UDP_PER_SOURCE) == (512, 64)
+UDP_LIMITS = [
+    pytest.param("MAX_UDP_PER_SOURCE", ["192.0.2.1"] * 4, id="source-limit"),
+    pytest.param("MAX_UDP_INFLIGHT", ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"], id="global-limit"),
+]
+
+
+@pytest.mark.parametrize(("limit", "sources"), UDP_LIMITS)
+def test_a_udp_query_at_a_limit_is_dropped_for_a_newcomer_only_once_it_has_waited_half_the_timeout(
+    limit: str, sources: list[str], clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A query that is still young may be answered: the newcomer is dropped, not it. One that has waited half the
+    timeout for Unbound will not be (an unanswered name holds its slot to the end): it is dropped for the newcomer, and
+    at the global limit it may be another address's."""
+    monkeypatch.setattr(pfb_dns_proxy, limit, 2)
+
+    async def scenario() -> tuple[tuple[list[str], list[str], str], tuple[list[str], list[str]]]:
+        hold = _Hold()
+        frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", 9), timeout=4.0)
+        first_source, second_source, third_source, fourth_source = sources
+        frontend.spawn_udp_query(hold.query("first"), first_source)
+        clock.advance(1.0)
+        frontend.spawn_udp_query(hold.query("second"), second_source)
+        clock.advance(0.5)
+        young = hold.query("third")
+        frontend.spawn_udp_query(young, third_source)  # `first` has waited 1.5 s of the 2 s: the newcomer is dropped
+        await asyncio.sleep(0)
+        before = (list(hold.started), list(hold.cancelled), inspect.getcoroutinestate(young))
+        clock.advance(0.5)
+        frontend.spawn_udp_query(hold.query("fourth"), fourth_source)  # `first` has now waited exactly 2 s: it goes
+        await asyncio.sleep(0)
+        after = (list(hold.started), list(hold.cancelled))
+        hold.release.set()
+        await drained(frontend)
+        return before, after
+
+    before, after = asyncio.run(scenario())
+    assert before == (["first", "second"], [], inspect.CORO_CLOSED)  # closed: dropped, and never awaited
+    assert after == (["first", "second", "fourth"], ["first"])
+
+
+def test_an_overloaded_udp_table_is_logged_once_per_flood_and_again_for_the_next_one(
+    clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings: list[object] = []
+    monkeypatch.setattr(shim, "log_warn", warnings.append)
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_PER_SOURCE", 2)
+
+    async def scenario() -> list[list[str]]:
+        frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", 9))
+        started = []
+        for _ in range(2):  # two floods, the queries of the first gone before the second starts
+            hold = _Hold()
+            for n in range(5):  # three of the five are over the limit: one line, not three
+                frontend.spawn_udp_query(hold.query(f"q{n}"), "192.0.2.1")
+            await asyncio.sleep(0)
+            started.append(hold.started)
+            hold.release.set()
+            await drained(frontend)
+        return started
+
+    assert asyncio.run(scenario()) == [["q0", "q1"], ["q0", "q1"]]
+    assert len([w for w in warnings if "in flight" in str(w)]) == 2
+
+
+def test_the_per_source_counts_keep_nothing_for_a_source_with_no_query_left() -> None:
+    """A flood from spoofed addresses would otherwise grow the table by one entry per address for the process's life."""
+
+    async def scenario() -> tuple[int, dict[str, int], dict[Any, Any]]:
+        frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", 9))
+
+        async def finished() -> None:
+            return None
+
+        for index in range(50):
+            frontend.spawn_udp_query(finished(), f"192.0.2.{index}")
+        counted = len(frontend._per_source)
+        await drained(frontend)
+        return counted, frontend._per_source, frontend._queries
+
+    assert asyncio.run(scenario()) == (50, {}, {})
 
 
 # --- one client's pipelined frames do not stall everyone else ---------------------------------
@@ -248,31 +374,63 @@ def test_a_pipelined_burst_on_one_tcp_connection_does_not_hold_up_a_udp_query(bo
     assert handled is not None and handled < frames // 10, f"{handled} of {frames} frames were handled before it"
 
 
-# --- Unbound's silence is logged once per burst ----------------------------------------------
+# --- Unbound's silence is logged once per window ---------------------------------------------
 
 
-@pytest.mark.parametrize("with_module", [True, False], ids=["module", "no-module"])
-def test_unbound_not_answering_is_one_log_line_per_burst_and_a_reply_ends_the_burst(
-    booted: Booted, monkeypatch: pytest.MonkeyPatch, with_module: bool
-) -> None:
-    """Issue #3517 review: one line per silent query, about 100 lines/s into an unrotated log under a flood."""
+def _silence_lines(
+    booted: Booted,
+    clock: ManualClock,
+    monkeypatch: pytest.MonkeyPatch,
+    with_module: bool,
+    steps: list[tuple[float, str]],
+) -> list[str]:
+    """The 'no reply from Unbound' lines logged while `steps` are resolved in order: (seconds to pass first, name).
+    Unbound answers every name that does not start with 'silent'."""
     warnings: list[object] = []
     monkeypatch.setattr(shim, "log_warn", warnings.append)
     answered = FakeUnbound(ZONE)
-    script = iter([False, False, True, False, False])  # silent, silent, answers, silent, silent
 
     async def forward(wire: bytes) -> bytes | None:
-        return answered.answer(wire) if next(script) else None
+        return None if dnswire.parse(wire).questions[0].name.startswith("silent") else answered.answer(wire)
 
     async def scenario() -> None:
         frontend = pfb_dns_proxy.Frontend(booted.module if with_module else None, ("127.0.0.1", 9), timeout=WATCHDOG)
-        for label in ("first", "second", "third", "fourth", "fifth"):
-            await frontend.resolve(build_query(f"{label}.example."), "192.0.2.10", forward)
+        for pause, name in steps:
+            clock.advance(pause)
+            await frontend.resolve(build_query(name), "192.0.2.10", forward)
 
     asyncio.run(scenario())
-    silent = [str(line) for line in warnings if "no reply from Unbound" in str(line)]
-    assert len(silent) == 2
-    assert ("first.example." in silent[0], "fourth.example." in silent[1]) == (True, True)
+    return [str(line) for line in warnings if "no reply from Unbound" in str(line)]
+
+
+@pytest.mark.parametrize("with_module", [True, False], ids=["module", "no-module"])
+def test_unbound_not_answering_is_one_log_line_per_30_seconds_whatever_it_answers_in_between(
+    booted: Booted, clock: ManualClock, monkeypatch: pytest.MonkeyPatch, with_module: bool
+) -> None:
+    """Issue #3517 review: one line per silent query, about 100 lines/s into an unrotated log under a flood."""
+    steps = [
+        (0, "silent0.example."),
+        (0, ALLOWED),  # an answer in between does not re-arm the line
+        (0, "silent1.example."),
+        (29.5, "silent2.example."),  # 29.5 s into the window
+        (0.5, "silent3.example."),  # exactly 30 s: the next window
+    ]
+    lines = _silence_lines(booted, clock, monkeypatch, with_module, steps)
+    assert len(lines) == 2 and "silent0.example." in lines[0] and "silent3.example." in lines[1], lines
+
+
+@pytest.mark.parametrize("with_module", [True, False], ids=["module", "no-module"])
+def test_a_mixed_load_of_answered_and_unanswered_queries_logs_one_line_per_window(
+    booted: Booted, clock: ManualClock, monkeypatch: pytest.MonkeyPatch, with_module: bool
+) -> None:
+    """Issue #3515 gate: one answer used to re-arm the line, so two silent queries per answered one logged about one
+    line per second. Sixty seconds of that are two windows."""
+    steps: list[tuple[float, str]] = []
+    for second in range(60):
+        steps += [(1.0 if second else 0, f"silent{second}a.example."), (0, f"silent{second}b.example.")]
+        steps.append((0, ALLOWED))
+    lines = _silence_lines(booted, clock, monkeypatch, with_module, steps)
+    assert len(lines) == 2 and "silent0a.example." in lines[0] and "silent30a.example." in lines[1], lines
 
 
 def test_no_descriptor_for_an_upstream_socket_is_one_log_line_and_a_servfail(
