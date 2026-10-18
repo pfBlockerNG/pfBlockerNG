@@ -4,14 +4,14 @@ pfSense keeps `port: 53` and `interface: 127.0.0.1` / `::1` for a Resolver moved
 `port: 5354` and listens on loopback 5353 for the proxy's PROXYv2, so Unbound must hold exactly loopback 5353 and 5354
 and leave loopback 53 to the proxy. unbound-checkconf accepts both a clause that does that and one that does not, so
 the sockets are what is asserted, read from the container's own /proc/net (its own network namespace: no host port is
-touched). No Docker (or an image that cannot be built) is a FAILURE, never a skip, like the other integration tests.
+touched): every listening socket on any address, so that a wildcard listener is seen too. The clause is the shared
+fixture fixtures/resolver_clause.conf, which the PHP move test also pins what pfb_dns_proxy_resolver() writes against.
+No Docker (or an image that cannot be built) is a FAILURE, never a skip, like the other integration tests.
 """
 
 from __future__ import annotations
 
-import ast
 import contextlib
-import re
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,8 +19,7 @@ from pathlib import Path
 import pytest
 from test_integration_unbound import BUILD_TIMEOUT, DOCKERFILE, IMAGE, LogTail, _docker
 
-REPO = Path(__file__).resolve().parents[2]
-MOVE_TEST = REPO / "tests/php/DnsProxyResolverMoveTest.php"
+CLAUSE = Path(__file__).parent / "fixtures" / "resolver_clause.conf"
 
 # What pfSense (2.8) writes for a Resolver on lo0 that forwards, then the Custom Options text, which it writes last.
 PREAMBLE = """server:
@@ -49,31 +48,30 @@ LISTEN = "0A"  # tcp socket state; a udp socket is simply bound
 
 
 def _our_clause() -> str:
-    """The clause the move writes with no IPv6 grant, as pinned by DnsProxyResolverMoveTest::BLOCK (never a copy)."""
-    source = MOVE_TEST.read_text(encoding="utf-8")
-    declaration = re.search(r"private const BLOCK = (.*?);\n", source, re.DOTALL)
-    assert declaration, "DnsProxyResolverMoveTest::BLOCK not found"
-    literals = re.findall(r'"(?:[^"\\]|\\.)*"', declaration.group(1))
-    assert literals, declaration.group(1)
-    return "".join(ast.literal_eval(literal) for literal in literals)
+    """The clause the move writes with no IPv6 grant: the fixture's text without its final newline."""
+    return CLAUSE.read_text(encoding="utf-8").removesuffix("\n")
+
+
+def _shown(address: str) -> str:
+    return {LOOPBACK_V4: "127.0.0.1", LOOPBACK_V6: "::1", "0" * 8: "0.0.0.0", "0" * 32: "::"}.get(address, address)
 
 
 def _sockets(container: str) -> set[tuple[str, str, int]]:
-    """(tcp|udp, address, port) of every LISTENing tcp / bound udp socket on a loopback address, from /proc/net."""
-    found: set[tuple[str, str, int]] = set()
-    for table, proto, loopback, shown in (
-        ("tcp", "tcp", LOOPBACK_V4, "127.0.0.1"),
-        ("udp", "udp", LOOPBACK_V4, "127.0.0.1"),
-        ("tcp6", "tcp", LOOPBACK_V6, "::1"),
-        ("udp6", "udp", LOOPBACK_V6, "::1"),
-    ):
+    """(tcp|udp, address, port) of every LISTENing tcp socket on any address, and of every bound udp socket that shares
+    its address and port with one (Unbound's outgoing udp sockets are bound to the wildcard and listen for nothing)."""
+    listening: set[tuple[str, str, int]] = set()
+    datagram: set[tuple[str, str, int]] = set()
+    for table, proto in (("tcp", "tcp"), ("tcp6", "tcp"), ("udp", "udp"), ("udp6", "udp")):
         text = _docker("exec", container, "cat", f"/proc/net/{table}").stdout
         for line in text.splitlines()[1:]:
             fields = line.split()
             address, _, port = fields[1].partition(":")
-            if address == loopback and (proto == "udp" or fields[3] == LISTEN):
-                found.add((proto, shown, int(port, 16)))
-    return found
+            socket_ = (proto, _shown(address), int(port, 16))
+            if proto == "udp":
+                datagram.add(socket_)
+            elif fields[3] == LISTEN:
+                listening.add(socket_)
+    return listening | {socket_ for socket_ in datagram if ("tcp", *socket_[1:]) in listening}
 
 
 @contextlib.contextmanager
@@ -110,7 +108,7 @@ def _conf_dir(tmp_path: Path, text: str) -> Path:
     return tmp_path
 
 
-def test_clause_text_is_the_one_the_php_move_pins() -> None:
+def test_the_clause_is_marked_and_moves_unbound_to_5354() -> None:
     clause = _our_clause()
     assert clause.startswith("server:\n# pfBlockerNG DNS proxy\nport: 5354\n"), clause
     assert clause.endswith("# end pfBlockerNG DNS proxy"), clause
@@ -132,4 +130,12 @@ def test_with_our_clause_unbound_holds_only_loopback_5353_and_5354(tmp_path: Pat
     expected = {
         (proto, host, port) for proto in ("tcp", "udp") for host in ("127.0.0.1", "::1") for port in (5353, 5354)
     }
-    assert sockets == expected, f"loopback sockets: {sorted(sockets)}; expected {sorted(expected)}"
+    assert sockets == expected, f"listening sockets: {sorted(sockets)}; expected {sorted(expected)}"
+
+
+def test_a_wildcard_listener_is_seen_by_the_enumeration_that_pins_the_clause(tmp_path: Path) -> None:
+    """A check that looked at loopback only would accept a clause that also listened on every address."""
+    stray = "\nserver:\ninterface: 0.0.0.0@5399\n"
+    with _unbound(_conf_dir(tmp_path, PREAMBLE + "\n" + _our_clause() + "\n" + stray)) as name:
+        sockets = _sockets(name)
+    assert {("tcp", "0.0.0.0", 5399), ("udp", "0.0.0.0", 5399)} <= sockets, sorted(sockets)
