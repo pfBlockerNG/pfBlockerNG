@@ -6,12 +6,15 @@ with a fake download (a few bytes of tarball, a `go` that is a shell script), ne
 
 * the archive is hashed as it downloads and nothing is extracted unless the hash is the pinned one;
 * what is extracted cannot leave the root: `..`, absolute names, links and devices are refused;
+* a name that appears twice is refused, and nothing is extracted without `tarfile.data_filter`, the stdlib check
+  that follows links;
 * a platform with no pinned archive fails by name, without a download and without picking another archive;
 * a failed install leaves nothing behind, and `remove` deletes only a directory this helper made.
 """
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import os
@@ -171,6 +174,119 @@ def test_a_member_that_could_leave_the_root_is_refused_even_with_the_right_check
     assert not Path("/tmp/pfb-go-escape-absolute").exists()
     assert list(parent.iterdir()) == []
     assert sorted(p.name for p in tmp_path.iterdir()) == ["scratch"]
+
+
+def link_then_file(tar: tarfile.TarFile) -> None:
+    add_special(tar, "go/inner", tarfile.SYMTYPE, "../go/VERSION")
+    add_file(tar, "go/inner", b"overwrites VERSION through the earlier in-root link\n")
+
+
+def climbing_chain(tar: tarfile.TarFile) -> None:
+    # a -> . stays inside the root; a/b -> .. climbs out through a, so a/b/escape.txt lands beside the root
+    add_special(tar, "a", tarfile.SYMTYPE, ".")
+    add_special(tar, "a/b", tarfile.SYMTYPE, "..")
+    add_file(tar, "a/b/escape.txt", b"outside\n")
+
+
+def with_directory_entries(tar: tarfile.TarFile) -> None:
+    add_special(tar, "go/", tarfile.DIRTYPE)
+    add_special(tar, "go/pkg/", tarfile.DIRTYPE)
+
+
+@pytest.mark.parametrize(
+    "plant",
+    [
+        pytest.param(lambda tar: add_file(tar, "go/VERSION", b"second\n"), id="same name twice"),
+        pytest.param(lambda tar: add_file(tar, "go//VERSION", b"second\n"), id="same name once normalised"),
+        pytest.param(lambda tar: add_file(tar, "./go/VERSION", b"second\n"), id="same name with a leading ./"),
+        pytest.param(link_then_file, id="file over an earlier in-root symlink"),
+    ],
+)
+def test_a_name_that_appears_twice_is_refused_however_it_is_spelled(
+    tmp_path: Path, pin: Callable[[bytes], None], plant: Callable[[tarfile.TarFile], None]
+) -> None:
+    # Given an archive that passes its checksum and names one path twice
+    payload = archive_bytes(extra=plant)
+    pin(payload)
+    parent = tmp_path / "scratch"
+    parent.mkdir()
+
+    # When it is installed
+    with pytest.raises(go_toolchain.ToolchainError, match="duplicate"):
+        install(parent, Fetch(payload))
+
+    # Then nothing is left behind: a later entry cannot repoint an earlier one
+    assert list(parent.iterdir()) == []
+
+
+def test_a_symlink_chain_that_climbs_out_of_the_root_is_refused_and_the_victim_survives(
+    tmp_path: Path, pin: Callable[[bytes], None]
+) -> None:
+    # Given an archive that passes its checksum, and a file beside the root that its last member would overwrite
+    payload = archive_bytes(extra=climbing_chain)
+    pin(payload)
+    parent = tmp_path / "scratch"
+    parent.mkdir()
+    victim = parent / "escape.txt"
+    victim.write_text("precious\n")
+
+    # When it is installed
+    with pytest.raises(go_toolchain.ToolchainError, match="refus"):
+        install(parent, Fetch(payload))
+
+    # Then the victim is untouched and the half-made root is gone
+    assert victim.read_text() == "precious\n"
+    assert list(parent.iterdir()) == [victim]
+
+
+def test_without_tarfile_data_filter_nothing_is_extracted_and_the_archive_is_not_opened(
+    tmp_path: Path, pin: Callable[[bytes], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an interpreter without the stdlib filter, and the archive that escaped through the lexical fallback
+    payload = archive_bytes(extra=climbing_chain)
+    pin(payload)
+    monkeypatch.delattr(go_toolchain.tarfile, "data_filter")
+
+    def refuse_to_open(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("an archive was opened without tarfile.data_filter")
+
+    monkeypatch.setattr(go_toolchain.tarfile, "open", refuse_to_open)
+    parent = tmp_path / "scratch"
+    parent.mkdir()
+    victim = parent / "escape.txt"
+    victim.write_text("precious\n")
+
+    # When it is installed
+    with pytest.raises(go_toolchain.ToolchainError, match="data_filter"):
+        install(parent, Fetch(payload))
+
+    # Then it was refused before extraction, and the victim survives
+    assert victim.read_text() == "precious\n"
+    assert list(parent.iterdir()) == [victim]
+
+
+def test_bytes_that_are_not_a_tar_archive_are_refused_as_a_toolchain_error(
+    tmp_path: Path, pin: Callable[[bytes], None]
+) -> None:
+    payload = gzip.compress(b"this is not a tar archive\n" * 32)
+    pin(payload)
+
+    with pytest.raises(go_toolchain.ToolchainError, match="refus"):
+        install(tmp_path, Fetch(payload))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_directory_entries_are_an_ordinary_archive_and_not_duplicates(
+    tmp_path: Path, pin: Callable[[bytes], None]
+) -> None:
+    payload = archive_bytes(extra=with_directory_entries)
+    pin(payload)
+
+    root = install(tmp_path, Fetch(payload))
+
+    assert (root / "go" / "pkg").is_dir()
+    assert (root / "go" / "bin" / "go").is_file()
 
 
 @pytest.mark.parametrize(
