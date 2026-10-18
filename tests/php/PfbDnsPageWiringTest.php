@@ -206,4 +206,22 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 		$this->assertSame([], $found, 'files that still name pfb_dns_proxy_doh/doq');
 	}
+
+	public function testNoShippedSourceStillNamesTheRetiredGatewayBinary(): void
+	{
+		// The package ships pfb-dns (bin/<target>/pfb-dns, run through pfb_dns.sh); the single pfb_dns_gateway binary
+		// never shipped, so no page, include, script or doc string in the package may still send an operator to it
+		$root = dirname(__DIR__, 2) . '/src';
+		$found = [];
+		$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+		foreach ($files as $file) {
+			if (!$file->isFile() || !preg_match('/\.(php|inc|xml|sh|py)$/', $file->getFilename())) {
+				continue;
+			}
+			if (str_contains((string) file_get_contents($file->getPathname()), 'pfb_dns_gateway')) {
+				$found[] = substr($file->getPathname(), strlen($root) + 1);
+			}
+		}
+		$this->assertSame([], $found, 'files that still name pfb_dns_gateway');
+	}
 }
