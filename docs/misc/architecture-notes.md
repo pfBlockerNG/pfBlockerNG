@@ -549,10 +549,13 @@ separate times; a launch is not an answer.
   blocks nothing on it (with the option off it only raises the notice). Enable pfB-DNS on the secondary FIRST,
   before the primary syncs a moved Resolver, or turn the DNS Resolver sync off.
 
-**Gateway binary and DoH/DoQ (issue #3513).** When `PFB_DNS_GATEWAY_BIN`
-(`/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway`, the Go gateway) is an executable file,
-`pfb_dns_proxy_service()` makes the rc script run it instead of the Python listener:
-`pfb_dns_gateway --listen A ... --listen 127.0.0.1 --listen ::1 --port P --upstream 127.0.0.1:5353 [--dot]
+**Gateway binary and DoH/DoQ (issue #3513).** The package ships the Go gateway as `pfb-dns`, one raw binary per FreeBSD
+architecture (`dns_proxy/bin/freebsd-amd64/pfb-dns` and `dns_proxy/bin/freebsd-arm64/pfb-dns`, both mode 0555; the package
+stays `NO_ARCH`), next to `dns_proxy/pfb_dns.sh`. The wrapper (installed 0644, run as `/bin/sh`) picks the binary for
+`uname -p` and `exec`s it, so the `daemon -p` child's pid is the gateway's own; a machine it ships no binary for, or whose
+binary is missing or not executable, fails with status 1. When any `bin/*/pfb-dns` exists, `pfb_dns_proxy_service()` makes
+the rc script run `/bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh` instead of the Python listener:
+`pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1 --port P --upstream 127.0.0.1:5353 [--dot]
 --pfsense-config /cf/conf/config.xml
 [--doh-listen X ... --doh-port P [--doh-trusted C ...]] [--doq-listen Y ... --doq-port Q]
 --unbound-conf /var/unbound/unbound.conf --user unbound -- <the Python proxy argv> --decision-fd 3 ...`: the plain
@@ -561,9 +564,11 @@ filtered, at the Resolver's Listen Port). The gateway's ACL is Unbound's own: th
 `--unbound-conf` and of every file it includes (globs too: `access_lists.conf`, pfBlockerNG's marked clause, an admin's
 Custom Options), the last row of identical prefixes winning and the most specific prefix matching, as Unbound does; a
 client no row names is refused, as Unbound refuses it, and a config Unbound could not load (a missing include) is logged
-once and forwards everything. Forwarded, not mirrored: `deny_non_local`, `refuse_non_local` and `allow_cookie` clients, so the decider can still answer a listed name for them. Without the
-binary (or without its execute bit) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
-turning either on then logs one warning each time the script's content changes. The seven settings
+once and forwards everything. Forwarded, not mirrored: `deny_non_local`, `refuse_non_local` and `allow_cookie` clients, so the decider can still answer a listed name for them. With no
+`bin/*/pfb-dns` at all (a legacy package) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
+turning either on then logs one warning each time the script's content changes; a payload this machine cannot run
+(a partial package, an unknown architecture, a binary without its execute bit) is never answered with the Python listener, the
+wrapper fails instead. The seven settings
 `dns/pfb_dns_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dns/pfb_dns_doq`, `_doq_port`
 (853) and `_doq_interface` (sync
 `local`, DoH/DoQ off) are the pfB-DNS tab's, in the `dns` section beside the enable toggle (they started on the DNSBL
@@ -577,7 +582,9 @@ address passed as a host prefix) are validated again when the script is generate
 reach the shell or hand the gateway a value it rejects. The pfB-DNS page's save validates with `pfb_validate_dns_proxy_listeners_post()`
 (ports 1-65535, configured interfaces,
 IP/CIDR entries, and the DNS Resolver's `unbound/sslcertref` while DoH or DoQ is on). Stop recognises the gateway child
-by `pfb_dns_gateway` as well as `pfb_dns_proxy` in its command line, with the same 0/5/7 s bounds. Pinned by
+by `pfb_dns_proxy` in its command line, or by the installed path of the binary the wrapper exec'd
+(`/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-*/pfb-dns`), with the same 0/5/7 s bounds, and never signals a pid
+whose command line is neither. Pinned by
 `DnsProxyServiceTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
 
 The Resolver is moved exactly as for the Python listener, so in forwarding mode Unbound still runs

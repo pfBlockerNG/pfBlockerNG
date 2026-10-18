@@ -162,7 +162,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doh'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
-		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb_dns_gateway</code>). '
+		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb-dns</code>). '
 		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
 		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
 
@@ -203,7 +203,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doq'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
-		. 'Serves DNS over QUIC (RFC 9250) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb_dns_gateway</code>). DoQ is UDP. '
+		. 'Serves DNS over QUIC (RFC 9250) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb-dns</code>). DoQ is UDP. '
 		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
 		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
 
