@@ -615,6 +615,40 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame($flag === '--observer', in_array('--observer', $argv, TRUE), '--observer iff DNSBL is on and the Resolver forwards');
 	}
 
+	/** @return array<string,array{bool,?PfbToggle,list<string>}> DNSBL on, the DNS Reply Logging preference ($pfb['dnsbl_py_reply'], NULL = unread), the module flags expected in order */
+	public static function replyLogFlagRows(): array
+	{
+		return [
+			'DNSBL off, DNS Reply Logging on: the proxy logs the replies it forwards' => [FALSE, PfbToggle::On, ['--no-module', '--reply-log']],
+			'DNSBL off, DNS Reply Logging off: nothing is logged'                    => [FALSE, PfbToggle::Off, ['--no-module']],
+			'DNSBL off, preference never read: nothing is logged'                    => [FALSE, NULL, ['--no-module']],
+			'DNSBL on, DNS Reply Logging on: the module has its own log'             => [TRUE, PfbToggle::On, []],
+			'DNSBL on, DNS Reply Logging off'                                        => [TRUE, PfbToggle::Off, []],
+		];
+	}
+
+	/** @param list<string> $expected */
+	#[DataProvider('replyLogFlagRows')]
+	public function testTheProxyLogsRepliesOnlyWithoutTheModuleAndOnlyWhileTheSharedPreferenceIsOn(bool $dnsbl, ?PfbToggle $preference, array $expected): void
+	{
+		// Given pfBlockerNG enabled, DNSBL on or off, and the DNS Reply Logging preference (the DNSBL module's own switch) set or not
+		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		$GLOBALS['pfb']['dnsbl'] = $dnsbl ? PfbToggle::On : PfbToggle::Off;
+		if ($preference !== NULL) {
+			$GLOBALS['pfb']['dnsbl_py_reply'] = $preference;
+		}
+		$this->moveResolver();
+
+		// When the service is generated and started
+		$this->generate();
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then the daemon is launched with --reply-log iff it hosts no module and the preference is on
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame($expected, array_values(array_intersect($this->daemonArgv(), ['--no-module', '--reply-log', '--observer'])));
+	}
+
 	public function testAMarkerThatIsNotAValidSnapshotLaunchesNothingAndFailsLoudly(): void
 	{
 		// Given a stored marker that is non-empty but no valid Resolver snapshot (hand-edited, truncated): the PHP side
