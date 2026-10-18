@@ -224,11 +224,23 @@ def test_a_report_without_a_client_is_logged_against_the_resolver(fwd_booted: Bo
     assert [row[3] for row in _upstream_blocks(fwd_booted)] == ["127.0.0.1"]
 
 
+def _block_option_of_hex_size(digits: int) -> list[Any]:
+    """The EDE15 block option padded (extra text) to exactly `digits` hex digits, so an over-cap report is one the
+    proxy would log if it did not refuse it."""
+    return [15, (EDE15_BLOCKED[1] + b"a" * (digits // 2 - len(EDE15_BLOCKED[1]))).hex()]
+
+
+def _block_with_options(count: int) -> bytes:
+    """A report of an upstream block carrying `count` options in all: the block, then unrelated ones."""
+    return _report(opts=[[15, EDE15_BLOCKED[1].hex()], *[[10, "0102"]] * (count - 1)])
+
+
 MALFORMED = {
     "not json": b"not json",
     "empty": b"",
     "not utf-8": b"\xff\xfe\x00",
     "not an object": b"[1, 2]",
+    "nested deeper than the parser recurses": b"[" * 5000,
     "json null": b"null",
     "no fields": b"{}",
     "qname not a string": _report(qname=7),
@@ -248,8 +260,8 @@ MALFORMED = {
     "option code out of range": _report(opts=[[70000, "00"]]),
     "option data not hex": _report(opts=[[15, "zz"]]),
     "option data not a string": _report(opts=[[15, 5]]),
-    "option data too long": _report(opts=[[15, "00" * 5000]]),
-    "too many options": _report(opts=[[15, "00"]] * 9),
+    "option data over the cap": _report(opts=[_block_option_of_hex_size(pfb_dns_proxy.MAX_REPORT_OPTION_HEX + 2)]),
+    "too many options": _block_with_options(pfb_dns_proxy.MAX_REPORT_OPTIONS + 1),
 }
 
 
@@ -261,6 +273,20 @@ def test_a_malformed_report_is_dropped_and_the_next_good_one_is_still_logged(
     frontend.relay_upstream_response(datagram)
     assert _upstream_blocks(fwd_booted) == []
     frontend.relay_upstream_response(_report())
+    assert len(_upstream_blocks(fwd_booted)) == 1
+
+
+@pytest.mark.parametrize(
+    "datagram",
+    [
+        _block_with_options(pfb_dns_proxy.MAX_REPORT_OPTIONS),
+        _report(opts=[_block_option_of_hex_size(pfb_dns_proxy.MAX_REPORT_OPTION_HEX)]),
+    ],
+    ids=["options at the cap", "option data at the cap"],
+)
+def test_a_report_exactly_at_a_size_cap_is_still_logged(fwd_booted: Booted, datagram: bytes) -> None:
+    """The caps refuse only what is over them; a report at the limit is a genuine block."""
+    _frontend(fwd_booted).relay_upstream_response(datagram)
     assert len(_upstream_blocks(fwd_booted)) == 1
 
 
