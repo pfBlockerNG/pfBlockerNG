@@ -43,6 +43,14 @@ nothing is answered; refuse, and a client no row names (Unbound's default): REFU
 Unbound could not load (a missing include, an include cycle, a brace pattern) is logged once and the gateway forwards
 everything; any file or glob match that changes is picked up within a second.
 
+Two Unbound rules the gateway follows too. A netblock named only by `access-control-view`, `access-control-tag`,
+`access-control-tag-action` or `access-control-tag-data` is allowed, unless an identical `access-control` row names it.
+The gateway forwards `deny_non_local`, `refuse_non_local` and `allow_cookie` clients, so the decider can still answer a
+listed name for them; Unbound's own refusal or drop for a non-local name is not reproduced. Unbound refuses a UDP query
+without a valid DNS cookie, and the client retries over TCP. Known divergence: two statements on one line (`access-control:
+… allow access-control: …`) and a `server:` on a row's line are not split. The gateway ignores that row where Unbound
+applies it. Splitting them needs a tokenizer rewrite; pfSense and pfBlockerNG never write them.
+
 ## Who is the client
 
 | Transport | Client address |
