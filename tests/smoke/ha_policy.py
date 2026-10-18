@@ -243,6 +243,14 @@ UNSEEDED_LOCAL_KEYS = {
     f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
     f"{DNS}/pfb_dns": "turns pfB-DNS on, which moves the node's Resolver off its port and ends the DNSBL probes the harness runs",
     f"{DNS}/pfb_dns_saved": "the Resolver snapshot the apply writes itself when it moves the Resolver; a seeded value reads as a moved one",
+    **{
+        f"{DNS}/pfb_dns_{kind}": "turns the TLS listener on, which needs the Resolver's certificate the guests do not have"
+        for kind in ("doh", "doq")
+    },
+    **{
+        f"{DNS}/pfb_dns_{leaf}": "read only while its DoH/DoQ toggle is on, which this harness leaves off: a seeded value changes nothing"
+        for leaf in ("doh_port", "doh_interface", "doh_trusted", "doq_port", "doq_interface")
+    },
 }
 
 
