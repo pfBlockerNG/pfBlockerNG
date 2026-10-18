@@ -297,8 +297,8 @@ _ALLOWLIST_ROWS: tuple[_AllowRow, ...] = (
     _AllowRow(
         "pfblockerng.inc/$pfb_metrics_cmd",
         _INC,
-        "\t$pfb_metrics_cmd = '/usr/bin/timeout 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
-        "\t$metrics_cmd = '/usr/bin/timeout 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
+        "\t$pfb_metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
+        "\t$metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
     ),
 )
 

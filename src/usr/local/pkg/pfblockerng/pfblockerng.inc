@@ -8049,8 +8049,8 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 // Both directions hold the lock; one that stays held past $lock_wait_s is wedged, so the change goes ahead rather than block a save.
 function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter', float $lock_wait_s = 10.0): void {
 	global $pfb;
-	// timeout(1) bounds a stuck run so one-minute invocations cannot pile up.
-	$pfb_metrics_cmd = '/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
+	// TERM at 50 s, KILL 5 s later: a run that ignores TERM still dies before it can pile up behind the next minute's.
+	$pfb_metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
 	$sentinel = "{$pfb['dbdir']}/.metrics_enabled";
 	$lock = pfb_metrics_lock($lock_wait_s);
 	try {

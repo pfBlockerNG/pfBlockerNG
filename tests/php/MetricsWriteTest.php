@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_metrics_sqlite_rows')]
 final class MetricsWriteTest extends TestCase
 {
-	private const CRON_CMD    = '/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
+	private const CRON_CMD    = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
 	private const CRON_NEEDLE = 'pfblockerng.php metrics';
 	private const MISSING     = 'is missing; is the node_exporter service running?';
 
