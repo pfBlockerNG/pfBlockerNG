@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -177,6 +178,47 @@ def test_ambient_go_environment_cannot_steer_the_build(tmp_path: Path) -> None:
     result = run_helper(root, tmp_path / "out", env=hostile)
     assert result.returncode == 0, f"ambient Go environment leaked into the build:\n{result.stderr}"
     assert_freebsd_elf(tmp_path / "out")
+
+
+def test_a_go_sum_entry_missing_from_the_gateway_fails_the_build_and_is_not_repaired(tmp_path: Path) -> None:
+    # Given a copy of the real gateway whose go.sum has lost the hash of the quic-go module it compiles against
+    source = tmp_path / "src-tree"
+    shutil.copytree(ROOT / "go", source / "go")
+    go_sum = source / "go" / "pfb_dns_gateway" / "go.sum"
+    lines = go_sum.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = [line for line in lines if not line.startswith("github.com/quic-go/quic-go ") or "/go.mod " in line]
+    assert len(kept) == len(lines) - 1, "the gateway's go.sum has no quic-go module hash to remove"
+    go_sum.write_text("".join(kept), encoding="utf-8")
+    before = go_sum.read_bytes()
+
+    # When it is cross-built
+    result = run_helper(source, tmp_path / "out")
+
+    # Then the unverifiable module stops the build, and go.sum is not rewritten to let it through
+    assert result.returncode != 0, "a build with a go.sum entry missing succeeded"
+    assert "go.sum" in result.stderr, f"the error does not name go.sum:\n{result.stderr}"
+    assert go_sum.read_bytes() == before, "the build rewrote go.sum"
+
+
+def test_a_go_env_file_in_the_users_config_cannot_change_the_build(
+    real_build: tuple[Path, dict[str, Any]], tmp_path: Path
+) -> None:
+    # Given a user config file that sets a compile flag, which Go would apply if the builder read the file
+    config = tmp_path / "config"
+    (config / "go").mkdir(parents=True)
+    (config / "go" / "env").write_text("GOFLAGS=-gcflags=-N -l\n", encoding="utf-8")
+
+    # When the real gateway is cross-built with that config in place
+    _out_dir, first = real_build
+    result = run_helper(ROOT, tmp_path / "out", env=dict(os.environ, XDG_CONFIG_HOME=str(config)))
+
+    # Then the build succeeds with the same bytes as the build without it
+    assert result.returncode == 0, f"a user GOENV file broke the build:\n{result.stderr}"
+    second = json.loads(result.stdout)
+    for target in TARGETS:
+        assert second["targets"][target]["sha256"] == first["targets"][target]["sha256"], (
+            f"{target} was built differently under a user GOENV file"
+        )
 
 
 @pytest.mark.parametrize("wrong", ["linux-elf", "other-architecture"])
