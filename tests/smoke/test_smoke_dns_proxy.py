@@ -40,8 +40,11 @@ What it proves, in file order:
   observer), a listed name is NOT blocked (UDP, TCP, DoT), Unbound's log names the real client, the firewall's own
   lookup goes through the proxy (Unbound has no socket on 53), and no DNSBL decision is logged;
 * a Resolver restart (the GUI's apply) brings a stopped proxy back through the observer's start hook;
-* a reboot, once with DNSBL off and once on: the proxy is serving before ``rc.start_packages`` begins (the gap between
-  Unbound's start and the proxy listening is printed), and a lookup from the box right after boot succeeds through it;
+* a reboot, once with DNSBL off and once on: a bounded probe the test plants in /etc/rc.custom_boot_early asks the proxy
+  on 127.0.0.1:53 from early boot (a listed name and a name nobody asked before, the upstream a stub on the host). Its
+  first correct answers come before ``rc.start_packages`` begins (a "DNS proxy started" log line is a launch, not an
+  answer), the package stage neither restarts the proxy nor drops a query, the times of the launch, the listening
+  socket, the first answers and Unbound's sync are printed apart, and a lookup from the box right after boot succeeds;
 * pfB-DNS off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
   stays absent), the marker is cleared, the module is back in ``unbound.conf``, Unbound is on 53 and 853 again.
 
@@ -191,6 +194,7 @@ class Names:
     firewall: str  # listed; only the firewall's own lookups ask for it
     dnsbl_off_client: str  # listed; only the DNSBL-off test asks for it, from the client
     dnsbl_off_firewall: str  # listed; only the DNSBL-off test asks for it, from the firewall
+    boot_probe: str  # listed; only the early-boot probe asks for it
 
 
 @dataclass(frozen=True)
@@ -548,6 +552,7 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         firewall=h.unique_domain("firewall"),
         dnsbl_off_client=h.unique_domain("dnsbloff"),
         dnsbl_off_firewall=h.unique_domain("dnsbloff-fw"),
+        boot_probe=h.unique_domain("bootprobe-listed"),
     )
     listed = (
         names.blocked,
@@ -555,6 +560,7 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         names.firewall,
         names.dnsbl_off_client,
         names.dnsbl_off_firewall,
+        names.boot_probe,
         *names.group_policy,
     )
     feed_url = h.write_local_feed(vm, "smoke_3515_dns_proxy.txt", "".join(f"{name}\n" for name in listed))
@@ -1128,6 +1134,80 @@ def test_a_resolver_restart_brings_a_stopped_proxy_back_through_the_start_hook(r
     _wait_proxy_serves(rig)
 
 
+# The reboot. The test's own SSH session only exists once the boot is over, so the interval that matters (Unbound
+# started, packages not yet) is asked about by a probe planted in the one early hook pfSense offers.
+EARLY_HOOK = "/etc/rc.custom_boot_early"  # pfSense-rc runs it before rc.bootup: before Unbound and before the packages
+PROBE_DIR = "/conf/pfb3515_boot_probe.d"  # /conf is on disk: a RAM-backed /var does not survive the reboot
+PROBE_LOG = f"{PROBE_DIR}/log"
+PROBE_ORIG = f"{PROBE_DIR}/hook.orig"  # the hook as it was, bytes and mode (PROBE_NO_HOOK exists if it was absent)
+PROBE_NO_HOOK = f"{PROBE_DIR}/hook.absent"
+PROBE_PROCESS = "pfb3515_boot_probe[.]d/probe[.]sh"  # for pgrep/pkill -f; the brackets keep it off its own command
+PROBE_DEADLINE = 300  # s from the hook: the probe exits by then whatever happens
+PROBE_GRACE = (
+    45  # s the probe keeps asking after rc.start_packages begins: the package rc scripts start in the background
+)
+BOOT_ID_SLACK = 5  # s: the probe's kern.boottime may differ this much from the one read later
+_PROBE_TEMPLATE = r"""#!/bin/sh
+# Issue #3515 smoke probe, test-only: /etc/rc.custom_boot_early starts it detached. From early boot it asks the DNS
+# proxy on 127.0.0.1:53 for a LISTED name and a never-asked ALLOWED name twice a second and logs what answers, until
+# GRACE s after rc.start_packages began or DEADLINE s have passed: it always exits.
+DIR=/conf/pfb3515_boot_probe.d
+LOG=$DIR/log
+DEADLINE=@DEADLINE@
+GRACE=@GRACE@
+LISTED=${PROBE_LISTED:?}
+STEM=${PROBE_STEM:?}
+# kern.boottime is "{ sec = N, usec = M } <date>": the first number is N (a greedy "sec = " would catch usec)
+BOOT=$(/sbin/sysctl -n kern.boottime | /usr/bin/sed 's/^[^0-9]*\([0-9]*\).*/\1/')
+START=$(/bin/date +%s)
+n=0 seen_at='' last=''
+# rc.start_packages logs this when it begins; system.log outlives a reboot, so count against what it holds now
+MARK='Restarting/Starting all packages'
+packages() { c=$(/usr/bin/grep -c "$MARK" /var/log/system.log 2>/dev/null); echo "${c:-0}"; }
+base=$(packages)
+say() { printf '@@ %s boot=%s %s\n' "$(/bin/date +%s)" "$BOOT" "$*" >>"$LOG"; }
+# RCODE:addresses of the A answer, NONE:- when nothing answered in 3 s
+ask() {
+	/usr/bin/timeout 3 /usr/local/bin/drill "$1" A @127.0.0.1 2>/dev/null | /usr/bin/awk '
+		/rcode:/ { sub(/.*rcode: */, ""); sub(/,.*/, ""); rc = $0 }
+		/^;; ANSWER SECTION/ { ans = 1; next }
+		ans && (NF == 0 || /^;;/) { ans = 0 }
+		ans && $4 == "A" { a = a (a == "" ? "" : ",") $5 }
+		END { print (rc == "" ? "NONE" : rc) ":" (a == "" ? "-" : a) }'
+}
+# the proxy child ($p) holds 127.0.0.1:53: sockstat columns are USER COMMAND PID FD PROTO LOCAL FOREIGN
+held='$3 == p && $6 == "127.0.0.1:53" { f = 1 } END { exit !f }'
+say "start pid=$$ deadline=$DEADLINE"
+while :; do
+	now=$(/bin/date +%s)
+	if [ $((now - START)) -ge "$DEADLINE" ]; then say "end reason=deadline"; exit 0; fi
+	ub=$(/bin/pgrep -x unbound | /usr/bin/head -n 1)
+	px=$(/bin/cat /var/run/pfb_dns_proxy.pid 2>/dev/null)
+	dm=$(/bin/cat /var/run/pfb_dns_proxy_daemon.pid 2>/dev/null)
+	up=0
+	if [ -n "$px" ] && /usr/bin/sockstat -4l -p 53 | /usr/bin/awk -v p="$px" "$held"; then up=1; fi
+	pk=0
+	if [ -n "$seen_at" ]; then
+		pk=1
+	elif [ "$(packages)" -gt "$base" ]; then
+		pk=1 seen_at=$now
+	fi
+	cur="unbound=$ub proxy=$px daemon=$dm listening=$up pkg=$pk"
+	if [ "$cur" != "$last" ]; then
+		age=
+		[ -n "$ub" ] && age=$(/bin/ps -o etimes= -p "$ub" | /usr/bin/tr -d ' ')
+		say "state $cur unbound_age=$age"
+		last=$cur
+	fi
+	n=$((n + 1))
+	a=$STEM-$n.com
+	say "query n=$n allowed=$a listed=$(ask "$LISTED") answer=$(ask "$a")"
+	if [ -n "$seen_at" ] && [ $((now - seen_at)) -ge "$GRACE" ]; then say "end reason=packages"; exit 0; fi
+	/bin/sleep 0.5
+done
+"""
+PROBE_SCRIPT = _PROBE_TEMPLATE.replace("@DEADLINE@", str(PROBE_DEADLINE)).replace("@GRACE@", str(PROBE_GRACE))
+
 BOOT_TIMELINE_PHP = r"""
 $boot = 0;
 if (preg_match('/sec = (\d+)/', (string) shell_exec('/sbin/sysctl -n kern.boottime'), $m)) { $boot = (int) $m[1]; }
@@ -1141,38 +1221,251 @@ $epochs = function (string $re) use ($boot) {
 $when = '/^(\w{3}\s+\d+\s+[\d:]{8})\s';
 echo '<<<TL>>>' . json_encode(array(
     'boot' => $boot,
-    'unbound_configured' => $epochs($when . '.*sync unbound done/'),
-    'proxy_started' => $epochs($when . '.*pfb_dns_proxy.*DNS proxy started/'),
+    'sync_unbound_done' => $epochs($when . '.*sync unbound done/'),
+    'daemon_launches' => $epochs($when . '.*pfb_dns_proxy.*DNS proxy started/'),
     'packages_started' => $epochs($when . '.*Restarting\/Starting all packages/'),
 )) . '<<<END>>>';
 """
 
 
-def _boot_timeline(vm: SmokeVM) -> dict[str, list[int]]:
-    """Epoch seconds, from this boot's system log, of the events that bound the DNS gap in boot."""
+def _boot_timeline(vm: SmokeVM) -> tuple[int, dict[str, list[int]]]:
+    """This boot's kern.boottime second, and the epoch seconds of the events in its system log."""
     out = h.php_eval(vm, BOOT_TIMELINE_PHP)
     match = re.search(r"<<<TL>>>(.*?)<<<END>>>", out.stdout, re.DOTALL)
     if out.returncode != 0 or match is None:
         raise RuntimeError(f"boot timeline failed: rc={out.returncode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}")
-    return json.loads(match.group(1))
+    events = json.loads(match.group(1))
+    return events.pop("boot"), events
+
+
+def _plant_probe_script(listed: str, stem: str) -> str:
+    """POSIX sh for the guest: snapshot the hook (bytes and mode), put the probe in /conf, prepend its launcher."""
+    launcher = (
+        f"/usr/sbin/daemon -f /usr/bin/env PROBE_LISTED={shlex.quote(listed)} PROBE_STEM={shlex.quote(stem)} "
+        f"/bin/sh {PROBE_DIR}/probe.sh"
+    )
+    return (
+        "set -e\n"
+        "for tool in /usr/local/bin/drill /usr/bin/timeout /usr/bin/sockstat /bin/pgrep /usr/sbin/daemon; do\n"
+        '    [ -x "$tool" ] || { echo "missing $tool"; exit 1; }\n'
+        "done\n"
+        f"mkdir -p {PROBE_DIR}\n"
+        f"if [ -e {EARLY_HOOK} ]; then cp -p {EARLY_HOOK} {PROBE_ORIG}; else : > {PROBE_NO_HOOK}; fi\n"
+        f"cat > {PROBE_DIR}/probe.sh <<'PROBE_EOF'\n{PROBE_SCRIPT}PROBE_EOF\n"
+        f"chmod 755 {PROBE_DIR}/probe.sh\n"
+        f"{{ printf '%s\\n' '#!/bin/sh' {shlex.quote(launcher)}; [ ! -e {PROBE_ORIG} ] || cat {PROBE_ORIG}; }}"
+        f" > {EARLY_HOOK}\n"
+        f"chmod 755 {EARLY_HOOK}\n"
+    )
+
+
+def _unplant_probe_script() -> str:
+    """POSIX sh for the guest: kill the probe, put the hook back byte for byte, delete the probe's files."""
+    return (
+        "rc=0\n"
+        f"pkill -KILL -f '{PROBE_PROCESS}'\n"
+        f"for i in 1 2 3 4 5; do pgrep -f '{PROBE_PROCESS}' >/dev/null || break; sleep 0.2; done\n"
+        f"if pgrep -f '{PROBE_PROCESS}' >/dev/null; then echo 'probe still running'; rc=1; fi\n"
+        f"if [ -e {PROBE_NO_HOOK} ]; then\n"
+        f"    rm -f {EARLY_HOOK}\n"
+        f"    [ ! -e {EARLY_HOOK} ] || {{ echo 'hook not removed'; rc=1; }}\n"
+        f"elif [ -e {PROBE_ORIG} ]; then\n"
+        f"    cp -p {PROBE_ORIG} {EARLY_HOOK} && cmp -s {PROBE_ORIG} {EARLY_HOOK} \\\n"
+        f"        && [ \"$(stat -f '%p %u %g' {PROBE_ORIG})\" = \"$(stat -f '%p %u %g' {EARLY_HOOK})\" ] \\\n"
+        "        || { echo 'hook not restored'; rc=1; }\n"
+        "fi\n"
+        f"rm -rf {PROBE_DIR}\n"
+        "exit $rc\n"
+    )
+
+
+@contextlib.contextmanager
+def _early_boot_probe(vm: SmokeVM, *, listed: str, stem: str) -> Iterator[None]:
+    """Plant the probe in /etc/rc.custom_boot_early; `finally` kills it and puts the hook back as it was."""
+    try:
+        planted = _sh(vm, _plant_probe_script(listed, stem))
+        assert planted.returncode == 0, (
+            f"planting the early-boot probe: rc={planted.returncode} {planted.stdout}{planted.stderr}"
+        )
+        yield
+    finally:
+        removed = _sh(vm, _unplant_probe_script())
+        assert removed.returncode == 0, (
+            f"removing the early-boot probe: rc={removed.returncode} {removed.stdout}{removed.stderr}"
+        )
+
+
+def _probe_log(vm: SmokeVM) -> str:
+    return vm.ssh("cat", PROBE_LOG).stdout
+
+
+def _wait_probe_end(vm: SmokeVM) -> None:
+    """The probe logs `end` as its last act; it is bounded by PROBE_DEADLINE, so this wait is bounded too."""
+    try:
+        h.wait_until(
+            lambda: re.search(r"^@@ \d+ boot=\d+ end\b", _probe_log(vm), re.MULTILINE) is not None,
+            timeout=PROBE_DEADLINE + 60.0,
+            interval=3.0,
+        )
+    except RuntimeError:
+        raise AssertionError(f"the early-boot probe did not end:\n{_probe_log(vm)[-4000:]}") from None
+
+
+# One probe record: (epoch, the kern.boottime second the probe read, kind, key=value fields).
+#   start   pid, deadline
+#   state   unbound/proxy/daemon pids, listening (the proxy child holds 127.0.0.1:53), pkg (rc.start_packages began),
+#           unbound_age (ps etimes of Unbound); written on every change
+#   query   n, allowed (the fresh name), listed and answer (RCODE:addresses for the listed and the fresh name)
+#   end     reason
+ProbeRow = tuple[int, int, str, dict[str, str]]
+
+
+def _probe_rows(log: str) -> list[ProbeRow]:
+    rows: list[ProbeRow] = []
+    for line in log.splitlines():
+        match = re.fullmatch(r"@@ (\d+) boot=(\d+) (\w+)\s*(.*)", line)
+        if match:
+            fields = {k: v for k, _, v in (word.partition("=") for word in match[4].split())}
+            rows.append((int(match[1]), int(match[2]), match[3], fields))
+    return rows
+
+
+def _answered(answer: str, address: str) -> bool:
+    """`RCODE:addr,addr` is a NOERROR answer carrying `address`."""
+    rcode, _, addresses = answer.partition(":")
+    return rcode == "NOERROR" and address in addresses.split(",")
+
+
+def _digest(rows: list[ProbeRow]) -> str:
+    """The rows as logged, minus the query rows that repeat the answers of the query before them."""
+    kept: list[str] = []
+    previous: tuple[str | None, str | None] | None = None
+    for epoch, boot, kind, fields in rows:
+        shape = (fields.get("listed"), fields.get("answer"))
+        if kind == "query":
+            if shape == previous:
+                continue
+            previous = shape
+        kept.append(f"@@ {epoch} boot={boot} {kind} " + " ".join(f"{k}={v}" for k, v in fields.items()))
+    return "\n".join(kept)
+
+
+@dataclass(frozen=True)
+class BootProbe:
+    """What the early probe established about one boot (epoch seconds)."""
+
+    ready: int  # the first record whose answers were all correct
+    ready_name: str  # its fresh name
+    listening: int  # the first sample that found the proxy child on 127.0.0.1:53
+    unbound_start: int | None  # first sight of the Unbound serving at `ready`, minus its age; None when ps gave no age
+    pids: tuple[str, str]  # proxy child, supervisor: the same in every sample from `listening` to the end
+    packages_seen: int  # the first sample after rc.start_packages logged that it began
+
+
+def _judge_boot_probe(log: str, *, boot: int, packages: int, listed_address: str, upstream_address: str) -> BootProbe:
+    """Raise AssertionError unless the probe saw correct answers before `packages` and an undisturbed proxy after."""
+    rows = _probe_rows(log)
+    assert rows and rows[0][2] == "start", f"the early-boot probe never started; its log:\n{log}"
+    digest = _digest(rows)
+    assert all(abs(row[1] - boot) <= BOOT_ID_SLACK for row in rows), (
+        f"records of another boot (this one began at {boot}):\n{digest}"
+    )
+    assert rows[-1][2] == "end", f"the early-boot probe did not finish:\n{digest}"
+    queries = [row for row in rows if row[2] == "query"]
+    states = [row for row in rows if row[2] == "state"]
+
+    def served(row: ProbeRow) -> bool:
+        return _answered(row[3].get("listed", ""), listed_address) and _answered(
+            row[3].get("answer", ""), upstream_address
+        )
+
+    ready = next((row for row in queries if served(row)), None)
+    assert ready is not None, f"none of {len(queries)} probe queries was answered as expected:\n{digest}"
+    assert ready[0] < packages, (
+        f"the first correct answers came at boot+{ready[0] - boot} s, not before rc.start_packages began at "
+        f"boot+{packages - boot} s:\n{digest}"
+    )
+    heard = next((i for i, row in enumerate(states) if row[3].get("listening") == "1"), None)
+    assert heard is not None and states[heard][0] <= ready[0], (
+        f"the probe never saw the proxy listening by the first answers:\n{digest}"
+    )
+    pair = (states[heard][3].get("proxy", ""), states[heard][3].get("daemon", ""))
+    disturbed = [
+        row
+        for row in states[heard:]
+        if (row[3].get("proxy"), row[3].get("daemon"), row[3].get("listening")) != (*pair, "1")
+    ]
+    assert not disturbed, (
+        f"the proxy (child, supervisor) {pair} was listening, then the probe saw {len(disturbed)} other state(s) "
+        f"before it ended (query rows that repeat the answers before them are left out):\n{digest}"
+    )
+    began = next((row for row in states if row[3].get("pkg") == "1"), None)
+    assert began is not None, f"the probe never saw rc.start_packages begin:\n{digest}"
+    failed = [row for row in queries[queries.index(ready) :] if not served(row)]
+    assert not failed, f"{len(failed)} quer(ies) failed after the first correct answers, first {failed[0]}:\n{digest}"
+    assert rows[-1][3].get("reason") == "packages", (
+        f"the probe hit its deadline before it had watched the package stage for {PROBE_GRACE} s:\n{digest}"
+    )
+    unbound = [
+        row
+        for row in states
+        if row[0] <= ready[0] and row[3].get("unbound") and row[3].get("unbound_age", "").isdigit()
+    ]
+    return BootProbe(
+        ready=ready[0],
+        ready_name=ready[3]["allowed"],
+        listening=states[heard][0],
+        unbound_start=unbound[-1][0] - int(unbound[-1][3]["unbound_age"]) if unbound else None,
+        pids=pair,
+        packages_seen=began[0],
+    )
+
+
+def _boot_report(boot: int, probe: BootProbe, events: dict[str, list[int]]) -> str:
+    """Each event on its own line, as seconds since kern.boottime; an interval only where both ends were observed."""
+
+    def at(epoch: int | None) -> str:
+        return "unknown" if epoch is None else f"boot+{epoch - boot} s"
+
+    until = "unknown" if probe.unbound_start is None else f"{probe.ready - probe.unbound_start} s"
+    return (
+        f"daemon launch, system.log (not serving): {[at(e) for e in events['daemon_launches']]}\n"
+        f"Unbound process start (probe: first sight of its pid minus ps etimes): {at(probe.unbound_start)}\n"
+        f"proxy listening on 127.0.0.1:53 (probe: first sample that found it): {at(probe.listening)}\n"
+        f"first correct answers (probe asks twice a second): {at(probe.ready)}\n"
+        f"sync unbound done, system.log: {[at(e) for e in events['sync_unbound_done']]}\n"
+        f"rc.start_packages begins, system.log: {[at(e) for e in events['packages_started']]}\n"
+        f"rc.start_packages marker first seen by the probe: {at(probe.packages_seen)}\n"
+        f"Unbound process start to first correct answers: {until}\n"
+        f"proxy pids (child, supervisor) from listening to the end of the probe: {probe.pids}"
+    )
 
 
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize("dnsbl_on", [False, True], ids=["dnsbl-off", "dnsbl-on"])
-def test_after_a_reboot_the_proxy_is_serving_before_the_packages_start(
-    rig: Rig, proxy_on: State, dnsbl_on: bool
+def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_package_stage_leaves_it_be(
+    rig: Rig, proxy_on: State, stub_dns: _StubDnsServer, dnsbl_on: bool
 ) -> None:
-    """pfSense starts Unbound in rc.bootup and the packages only afterwards: pfB-DNS must not leave a DNS gap between.
+    """pfSense starts Unbound in rc.bootup, the packages later: pfB-DNS must answer in between, and keep answering.
 
-    Given pfB-DNS on, with DNSBL on or off, applied,
+    Given pfB-DNS on, with DNSBL on or off, applied, and a bounded probe in /etc/rc.custom_boot_early that asks
+      127.0.0.1:53 from early boot for a listed name and for a fresh allowed name (the upstream is a stub on the host),
     When the firewall reboots,
-    Then the first `DNS proxy started` of the boot (the observer's start hook, run by services_unbound_configure()
-      inside rc.bootup) is logged no later than `Restarting/Starting all packages` (rc.start_packages); the gap
-      between Unbound's start and the proxy's is printed; the Resolver is still moved and the proxy runs;
-      And a lookup from the firewall right after the boot succeeds through the proxy (the upstream's answer with
-      DNSBL off, the DNSBL VIP for a listed name with it on), and so does the client's.
+    Then the probe's first correct answers are logged before `Restarting/Starting all packages` (rc.start_packages):
+      the DNSBL VIP for the listed name with DNSBL on, the upstream's address for it with DNSBL off, and with both
+      the upstream's address for the fresh name, which the stub saw; a `DNS proxy started` line is a launch and does
+      not count;
+      And from the first answers to the end of the probe (45 s after rc.start_packages began, which covers the package
+      rc scripts it launches in the background) the proxy keeps its child and supervisor pids, stays on 127.0.0.1:53,
+      and no probe query fails;
+      And the launch, the listening socket, the first answers and Unbound's sync are reported as separate times;
+      And the Resolver is still moved and the proxy runs, and a lookup from the firewall after the boot succeeds
+      through the proxy (the upstream's answer with DNSBL off, the DNSBL VIP for a listed name with it on), and so
+      does the client's.
     """
     vm = rig.vm
+    expected = h.DEFAULT_DNSBL_VIP4 if dnsbl_on else STUB_DNS_A
+    stem = h.unique_domain("bootprobe").removesuffix(".com")  # the probe asks <stem>-<n>.com, a new name every time
     _set_dnsbl(vm, dnsbl_on)
     try:
         _apply(vm)
@@ -1180,27 +1473,39 @@ def test_after_a_reboot_the_proxy_is_serving_before_the_packages_start(
             _wait_proxy_serves(rig)
         else:
             _wait_forwards(rig, rig.names.dnsbl_off_client)
-        h.reboot_vm(vm)
-        timeline = _boot_timeline(vm)
-        _say(f"boot timeline (epoch seconds, DNSBL {'on' if dnsbl_on else 'off'}): {timeline}")
-        assert timeline["packages_started"], f"no `Restarting/Starting all packages` line this boot: {timeline}"
-        assert timeline["proxy_started"], f"the proxy was not started this boot: {timeline}\n{_diagnostics(vm)}"
-        first_proxy, packages = timeline["proxy_started"][0], timeline["packages_started"][0]
-        assert first_proxy <= packages, (
-            f"the proxy was first started at {first_proxy}, after the packages began at {packages}: {timeline}"
+        with _early_boot_probe(vm, listed=rig.names.boot_probe, stem=stem):
+            h.reboot_vm(vm)
+            _wait_probe_end(vm)
+            log = _probe_log(vm)
+        boot, events = _boot_timeline(vm)
+        assert events["packages_started"], f"no `Restarting/Starting all packages` line this boot: {events}"
+        probe = _judge_boot_probe(
+            log,
+            boot=boot,
+            packages=events["packages_started"][0],
+            listed_address=expected,
+            upstream_address=STUB_DNS_A,
         )
-        if timeline["unbound_configured"]:
-            gap = first_proxy - timeline["unbound_configured"][0]
-            _say(
-                f"Unbound configured at {timeline['unbound_configured'][0]}, proxy started at {first_proxy}: {gap:+d} s"
-            )
         state = _capture(vm)
+        upstream_saw = stub_dns.received(probe.ready_name)
+        _say(
+            f"boot timeline, DNSBL {'on' if dnsbl_on else 'off'} (kern.boottime {boot}):\n"
+            f"{_boot_report(boot, probe, events)}\n"
+            f"proxy pids after the package stage (pid files): {(state.proxy_pid, state.daemon_pid)}\n"
+            f"the upstream stub saw {probe.ready_name}: {upstream_saw}\n"
+            f"probe records (query rows that repeat the answers before them left out):\n{_digest(_probe_rows(log))}"
+        )
+        assert upstream_saw, f"the upstream never saw {probe.ready_name}, so the answer was not its own"
+        assert (str(state.proxy_pid), str(state.daemon_pid)) == probe.pids, (
+            f"proxy pids after the package stage (child, supervisor) {(state.proxy_pid, state.daemon_pid)}, "
+            f"while it was listening before it {probe.pids}"
+        )
         assert _is_on(state) and state.marker, f"pfB-DNS is not in place after the reboot: {state}"
         if dnsbl_on:
-            expected, name = h.DEFAULT_DNSBL_VIP4, rig.names.firewall
+            name = rig.names.firewall
             _wait_proxy_serves(rig)
         else:
-            expected, name = STUB_DNS_A, rig.names.dnsbl_off_firewall
+            name = rig.names.dnsbl_off_firewall
             _wait_forwards(rig, rig.names.dnsbl_off_client)
         answer = _firewall_lookup(vm, name)
         assert answer == expected, f"the firewall's own lookup of {name} after the reboot: {answer!r}, not {expected}"
