@@ -20,10 +20,11 @@ What it proves, in file order:
 * before the toggle: Unbound hosts the python module and listens on 53 and 853 (the baseline every "not any more"
   below is measured against);
 * toggle on + apply: config.xml shows the Resolver moved (interfaces, DoT, Custom Options; NOT the port) and the
-  snapshot, ``unbound.conf`` has no python module, Unbound listens on loopback 53 and 5353 only, service
-  ``pfb_dns_proxy`` runs under ``daemon -t``, the proxy owns 53/853 on the LAN address and NOT on loopback;
-* the firewall keeps resolving through Unbound: ``/etc/resolv.conf`` still names 127.0.0.1 after pfSense regenerates
-  it, and the firewall's own lookup of a listed name is answered by the upstream (not DNSBL-filtered: a known limit);
+  snapshot, ``unbound.conf`` never loads ``pfb_unbound.py``, Unbound listens on loopback 5353 and 5354 only
+  (our clause's ``port: 5354``), service ``pfb_dns_proxy`` runs under ``daemon -t``, the proxy owns 53/853 on the LAN
+  address and 53 on loopback;
+* the firewall resolves through the proxy: ``/etc/resolv.conf`` still names 127.0.0.1 after pfSense regenerates
+  it, and the firewall's own lookup of a listed name is answered with the DNSBL VIP and logged;
 * pfSense's IPv6 grant for the LAN subnet disappears from its generated ``access_lists.conf`` with the Resolver on
   loopback, and the same ``access-control`` row is in our marked ``custom_options`` clause instead (so IPv6 clients
   relayed by the proxy are not REFUSED); no IPv6 client query is sent: the client VM has no IPv6 address on the LAN,
@@ -642,27 +643,29 @@ def test_toggle_on_moves_the_resolver_in_config_xml_and_snapshots_what_it_moved(
     assert saved == expected, f"snapshot in the marker:\n{saved}\nResolver before the toggle:\n{expected}"
 
 
-def test_toggle_on_leaves_unbound_without_the_module_on_loopback_53_and_5353(rig: Rig, proxy_on: State) -> None:
-    """Unbound no longer runs the python module and listens on loopback only; it accepts the proxy's PROXYv2.
+def test_toggle_on_leaves_unbound_on_loopback_5353_and_5354_only(rig: Rig, proxy_on: State) -> None:
+    """Unbound moves off the Resolver's port onto loopback 5354 (plain) and 5353 (PROXYv2); the clause did it.
 
-    Then unbound.conf has neither `module-config: "python` nor `python-script` (the baseline test pins both
-      present with the toggle off); the Unbound DNS sockets are exactly loopback 53 (the firewall's own resolver)
-      and loopback 5353 (the proxy's upstream), IPv4 and IPv6, UDP and TCP, none on 853 or any LAN address;
-      And the running Unbound reports proxy-protocol-port 5353.
+    Then unbound.conf has `port: 5354` in our marked clause and never `python-script: pfb_unbound.py` (with
+      forwarding on it runs the upstream observer instead; the observer test pins that); the Unbound DNS sockets are
+      exactly loopback 5353 and 5354, IPv4 and IPv6, UDP and TCP, none on 53, 853 or any LAN address (loopback 53
+      is the proxy's); And the running Unbound reports proxy-protocol-port 5353.
     """
-    assert not MODULE_LINE.search(proxy_on.conf), f"unbound.conf still loads the python module:\n{proxy_on.conf}"
-    assert not SCRIPT_LINE.search(proxy_on.conf), f"unbound.conf still names a python-script:\n{proxy_on.conf}"
+    assert "pfb_unbound.py" not in proxy_on.conf, f"unbound.conf still loads pfb_unbound.py:\n{proxy_on.conf}"
+    assert re.search(r"^port:\s*5354\s*$", proxy_on.conf, re.MULTILINE), (
+        f"no `port: 5354` in unbound.conf:\n{proxy_on.conf}"
+    )
     sockets = proxy_on.unbound_dns()
     _say(f"Unbound DNS sockets, toggle on: {sorted(sockets)}")
     wanted = {
         (f"{transport}{family}", f"{host}:{port}")
         for transport in ("udp", "tcp")
         for family, host in (("4", "127.0.0.1"), ("6", "::1"))
-        for port in (53, int(UPSTREAM_PORT))
+        for port in (5354, int(UPSTREAM_PORT))
     }
     assert wanted <= sockets, f"missing Unbound sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
-    stray = {(proto, local) for proto, local in sockets if not re.fullmatch(r"(127\.0\.0\.1|::1):(53|5353)", local)}
-    assert not stray, f"Unbound listens beyond loopback 53 and 5353: {sorted(stray)} (all: {sorted(sockets)})"
+    stray = {(proto, local) for proto, local in sockets if not re.fullmatch(r"(127\.0\.0\.1|::1):(5353|5354)", local)}
+    assert not stray, f"Unbound listens beyond loopback 5353 and 5354: {sorted(stray)} (all: {sorted(sockets)})"
     option = rig.vm.ssh(f"/usr/local/sbin/unbound-control -c {h.UNBOUND_CONF} get_option proxy-protocol-port 2>&1")
     assert option.stdout.strip() == UPSTREAM_PORT, f"unbound-control get_option proxy-protocol-port: {option.stdout!r}"
 
@@ -672,8 +675,8 @@ def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig
 
     Then Status > Services says `pfb_dns_proxy` runs; the supervisor's ps title is `daemon: pfb_dns_proxy[<pid>]`
       (daemon `-t`); the child is the proxy script, run as `unbound`, with `--dot` (the saved Resolver had DoT);
-      the proxy holds UDP and TCP 53 on the LAN's IPv4 and IPv6 addresses and TCP 853 on the LAN address,
-      and nothing on loopback (that is Unbound's).
+      the proxy holds UDP and TCP 53 on the LAN's IPv4 and IPv6 addresses and on loopback (127.0.0.1 and ::1: the
+      firewall's own resolver entry), and TCP 853 on the LAN address.
     """
     state = proxy_on
     assert state.service == "running", f"service pfb_dns_proxy: {state.service}"
@@ -689,10 +692,10 @@ def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig
     _say(f"proxy sockets, toggle on: {sorted(sockets)}")
     wanted = {(proto, f"{PFSENSE_LAN_IP}:53") for proto in ("udp4", "tcp4")}
     wanted |= {(proto, f"{LAN_V6_ADDR}:53") for proto in ("udp6", "tcp6")}
+    wanted |= {(proto, "127.0.0.1:53") for proto in ("udp4", "tcp4")}
+    wanted |= {(proto, "::1:53") for proto in ("udp6", "tcp6")}
     wanted.add(("tcp4", f"{PFSENSE_LAN_IP}:853"))
     assert wanted <= sockets, f"missing proxy sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
-    on_loopback = {(proto, local) for proto, local in sockets if re.match(r"(127\.0\.0\.1|::1):", local)}
-    assert not on_loopback, f"the proxy must leave loopback to Unbound: {sorted(on_loopback)}"
 
 
 def _firewall_lookup(vm: SmokeVM, name: str) -> str:
@@ -703,19 +706,19 @@ def _firewall_lookup(vm: SmokeVM, name: str) -> str:
     return match.group(1)
 
 
-def test_the_firewall_keeps_resolving_through_unbound_and_is_not_dnsbl_filtered(rig: Rig, proxy_on: State) -> None:
-    """The firewall's own lookups keep going to Unbound on loopback 53, which no longer sits behind the proxy.
+def test_the_firewalls_own_lookups_go_through_the_proxy_and_are_dnsbl_filtered(rig: Rig, proxy_on: State) -> None:
+    """The firewall's own lookups reach the proxy on loopback 53, so DNSBL filters them.
 
     When pfSense regenerates /etc/resolv.conf (a reboot, a WAN event, a settings save do the same),
-    Then it still names 127.0.0.1 (pfSense lists it only while the Resolver's port is 53);
-      And the firewall's lookup of a listed name gets the upstream's answer, not the DNSBL VIP: the firewall's own
-      queries are not DNSBL-filtered (a known limit, see architecture-notes "Experimental DNS proxy mode").
+    Then it still names 127.0.0.1 (pfSense lists it while the Resolver's port is 53 and lo0 is bound: both stay);
+      And the firewall's lookup of a listed name gets the DNSBL VIP, and dnsbl.log gains a row for the listed name.
     """
     _php_ok(rig.vm, "require_once('system.inc');\nsystem_resolvconf_generate();", "system_resolvconf_generate")
     resolv = rig.vm.ssh("cat /etc/resolv.conf").stdout
     assert re.search(r"^nameserver\s+127\.0\.0\.1\s*$", resolv, re.MULTILINE), f"/etc/resolv.conf:\n{resolv}"
     answer = _firewall_lookup(rig.vm, rig.names.blocked)
-    assert answer == STUB_DNS_A, f"the firewall's own lookup of the listed {rig.names.blocked}: {answer!r}"
+    assert answer == h.DEFAULT_DNSBL_VIP4, f"the firewall's own lookup of the listed {rig.names.blocked}: {answer!r}"
+    _wait_dnsbl_row(rig.vm, rig.names.blocked)
 
 
 def test_the_lans_ipv6_grant_moves_from_pfsenses_access_list_into_our_clause(rig: Rig, proxy_on: State) -> None:
