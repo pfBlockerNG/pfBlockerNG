@@ -361,8 +361,9 @@ def _ask_all(gw: Gateway, names: dict[str, str]) -> dict[str, tuple[h.DnsAnswer,
 def _expect_everywhere(
     what: str, results: dict[str, tuple[h.DnsAnswer, str]], ok: Callable[[h.DnsAnswer], bool], expected: str
 ) -> None:
-    for transport, (answer, _) in results.items():
-        _say(f"{what}, {transport}: {answer.rcode} {answer.records}")
+    for transport, (answer, raw) in results.items():
+        tail = f" ({raw.strip().splitlines()[-1]})" if answer.rcode == "UNKNOWN" and raw.strip() else ""
+        _say(f"{what}, {transport}: {answer.rcode} {answer.records}{tail}")
     wrong = {transport: result for transport, result in results.items() if not ok(result[0])}
     assert not wrong, f"{what}: expected {expected} on every transport; differing:\n" + "\n".join(
         f"{transport}: got {answer}\n{raw}" for transport, (answer, raw) in wrong.items()
@@ -427,6 +428,17 @@ def _set_listeners(vm: SmokeVM) -> None:
     )
 
 
+def _lan_addresses(vm: SmokeVM) -> set[str]:
+    """The addresses of the LAN interface as ifconfig lists them, link-local ones left out: what `lan` comes to."""
+    out = _php_ok(vm, "echo 'IF=' . get_real_interface('lan') . ';';", "LAN interface")
+    match = re.search(r"IF=(\w+);", out)
+    assert match, f"no interface name in the output: {out!r}"
+    found = {
+        m.group(1).split("%")[0] for m in re.finditer(r"\binet6? (\S+)", vm.ssh("ifconfig", match.group(1)).stdout)
+    }
+    return {address for address in found if not address.startswith("fe80:")}
+
+
 @contextlib.contextmanager
 def _resolver_acl(vm: SmokeVM, action: str) -> Iterator[None]:
     """The Resolver's access list names the LAN client with `action`; Unbound rewrote access_lists.conf from it.
@@ -462,6 +474,7 @@ def _resolver_acl(vm: SmokeVM, action: str) -> Iterator[None]:
     try:
         row = f"access-control: {CLIENT_LAN_IP}/32 {action}"
         written = _lines(vm.ssh("cat", ACCESS_LISTS).stdout)
+        _say(f"{ACCESS_LISTS} with the {action} row: {written}")
         assert row in written, f"{ACCESS_LISTS} should have {row!r}; it has:\n{written}"
         yield
     finally:
@@ -642,9 +655,9 @@ def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decid
 def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw: Gateway, gateway_on: State) -> None:
     """The gateway holds every client-facing port; Unbound hides on loopback 5353 (PROXYv2) and 5354.
 
-    Then the gateway holds UDP and TCP 53 on the LAN address and on loopback, TCP 853 (DoT) and TCP 4443 (DoH) and UDP
-      853 (DoQ) on the LAN address, and nothing else holds port 53; DoH and DoQ are on no other address; Unbound's DNS
-      sockets are loopback 5353 and 5354 only.
+    Then the gateway holds UDP and TCP 53 on the LAN address and on loopback and TCP 853 (DoT) on the LAN address, and
+      nothing else holds port 53; DoH (TCP 4443) and DoQ (UDP 853) are on exactly the LAN interface's addresses, not on
+      loopback; Unbound's DNS sockets are loopback 5353 and 5354 only.
     """
     state = gateway_on
     sockets = state.proxy_sockets()
@@ -653,17 +666,15 @@ def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw
     wanted |= {(proto, "127.0.0.1:53") for proto in ("udp4", "tcp4")} | {
         (proto, "::1:53") for proto in ("udp6", "tcp6")
     }
-    wanted |= {("tcp4", f"{PFSENSE_LAN_IP}:{DOT_PORT}"), ("tcp4", f"{PFSENSE_LAN_IP}:{DOH_PORT}")}
-    wanted.add(("udp4", f"{PFSENSE_LAN_IP}:{DOQ_PORT}"))
+    wanted.add(("tcp4", f"{PFSENSE_LAN_IP}:{DOT_PORT}"))
     assert wanted <= sockets, f"missing gateway sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
-    on53 = {s.pid for s in state.listeners if s.port == 53}
+    on53 = {s.pid for s in state.listeners if s.local.endswith(":53")}
     assert on53 == {state.proxy_pid}, f"port 53 is held by pids {on53}, the gateway is {state.proxy_pid}"
-    doh_doq = {
-        s for s in sockets if s[1].endswith(f":{DOH_PORT}") or (s[0].startswith("udp") and s[1].endswith(":853"))
-    }
-    assert doh_doq == {("tcp4", f"{PFSENSE_LAN_IP}:{DOH_PORT}"), ("udp4", f"{PFSENSE_LAN_IP}:{DOQ_PORT}")}, (
-        f"DoH/DoQ sockets: {sorted(doh_doq)}"
-    )
+    lan = _lan_addresses(gw.vm)
+    doh = {a.rsplit(":", 1)[0] for p, a in sockets if p.startswith("tcp") and a.endswith(f":{DOH_PORT}")}
+    doq = {a.rsplit(":", 1)[0] for p, a in sockets if p.startswith("udp") and a.endswith(f":{DOQ_PORT}")}
+    _say(f"LAN interface addresses {sorted(lan)}; DoH on {sorted(doh)}; DoQ on {sorted(doq)}")
+    assert doh == lan and doq == lan, f"DoH on {sorted(doh)}, DoQ on {sorted(doq)}; the LAN interface has {sorted(lan)}"
     unbound = state.unbound_dns()
     _say(f"Unbound DNS sockets: {sorted(unbound)}")
     assert any(local == f"127.0.0.1:{UPSTREAM_PORT}" for _, local in unbound), f"Unbound sockets: {sorted(unbound)}"
@@ -790,6 +801,7 @@ def test_doq_from_a_client_that_does_not_trust_the_certificate_gets_no_answer(gw
     trusted, raw = _ask_doq(gw.client, name)
     assert h.is_vip(trusted), f"premise: DoQ with the Resolver's certificate trusted: {trusted}\n{raw}"
     answer, raw = _ask_doq(gw.client, name, ca=None)
+    _say(f"DoQ without trust in the certificate: {raw.strip()}")
     assert _no_answer(answer) and "x509" in raw, f"DoQ without trust in the certificate: {answer}\n{raw}"
 
 
@@ -804,7 +816,10 @@ def test_doh_spoken_as_plain_http_gets_no_answer(gw: Gateway, gateway_on: State)
     tls, raw = _ask(gw.client, "doh-post", name)
     assert h.is_vip(tls), f"premise: DoH with TLS: {tls}\n{raw}"
     answer, raw = _ask(gw.client, "doh-plain", name)
-    assert _no_answer(answer), f"DoH without TLS: expected no answer, got {answer}\n{raw}"
+    _say(f"DoH without TLS: {raw.strip()}")
+    assert _no_answer(answer) and "no servers could be reached" in raw, (
+        f"DoH without TLS: expected a failed connection and no answer, got {answer}\n{raw}"
+    )
 
 
 # --------------------------------------------------------------------------- #
