@@ -326,6 +326,8 @@ _SWEPT_DNSBL_TOGGLES = {
     "pfb_noaaaa": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa",
     "pfb_gp": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp",
     "pfb_dns_proxy": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy",
+    "pfb_dns_proxy_doh": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh",
+    "pfb_dns_proxy_doq": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq",
 }
 CFG_ENABLE_CB = "installedpackages/pfblockerng/config/0/enable_cb"
 
