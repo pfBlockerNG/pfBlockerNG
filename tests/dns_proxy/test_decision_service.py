@@ -811,8 +811,8 @@ def test_an_unknown_user_exits_1_before_the_socket_or_the_module_is_touched(
 
 # --- the upstream observer: the decider is the module host while the gateway fronts DNS ---------------------------
 # Unbound's observer (pfb_upstream_observer.py) reports each raw upstream response to pfb_upstream.sock in the module
-# dir. With the Go gateway there is no listening proxy, so the decider must serve that socket itself, or upstream
-# blocks are no longer logged (issue #3513, owner decision 2026-10-18).
+# dir. With the Go gateway there is no listening proxy, so the decider serves that socket itself when it is told to
+# with --observer (DNSBL on, Resolver forwarding), or upstream blocks are no longer logged (issue #3513).
 
 NXDOMAIN_RECURSIVE = 0x8183  # QR RD RA, NXDOMAIN: how a forwarding upstream answers a name it blocks
 UPSTREAM_BLOCKED = "upstream-blocked.example"
@@ -863,7 +863,7 @@ def test_an_upstream_report_sent_to_the_observer_socket_fires_the_modules_query_
             observer.sendto(_observer_report(), str(socket_path))
         await asyncio.to_thread(log.wait_for, lambda lines: _upstream_blocked_names(lines) == [UPSTREAM_BLOCKED])
 
-    _serve_decisions(module_dir, monkeypatch, scenario)
+    _serve_decisions(module_dir, monkeypatch, scenario, "--observer")
     assert _upstream_blocked_names(log) == [UPSTREAM_BLOCKED]
 
 
@@ -877,7 +877,7 @@ def test_the_observer_socket_is_private_while_the_decider_serves_and_gone_when_t
         assert socket_path.exists(), f"the decider serves no observer socket at {socket_path}"
         modes.append(socket_path.stat().st_mode)
 
-    _serve_decisions(module_dir, monkeypatch, scenario)
+    _serve_decisions(module_dir, monkeypatch, scenario, "--observer")
     assert [(stat.S_ISSOCK(mode), stat.S_IMODE(mode)) for mode in modes] == [(True, 0o600)]
     assert not socket_path.exists()
 
@@ -893,6 +893,6 @@ def test_decisions_are_still_served_when_the_observer_socket_cannot_be_made(
         await gateway.send(query_frame(7, build_query(BLOCKED)))
         assert (await gateway.recv())[:2] == (ANSWER, 7)
 
-    _serve_decisions(module_dir, monkeypatch, scenario)
+    _serve_decisions(module_dir, monkeypatch, scenario, "--observer")
     assert "upstream-block detection is off" in capfd.readouterr().err
     assert socket_path.read_text(encoding="utf-8") == "in the way"

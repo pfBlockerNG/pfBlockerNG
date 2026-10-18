@@ -4210,7 +4210,7 @@ function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
 	if (is_file($gateway) && is_executable($gateway)) {
 		$command = escapeshellarg($gateway) . "{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? ' --dot' : '') .
-		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) .
+		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
 		    " --unbound-conf /var/unbound/unbound.conf --user unbound -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	} else {
 		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound --ready-file {$ready}" .
