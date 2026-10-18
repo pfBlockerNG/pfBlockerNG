@@ -88,6 +88,8 @@ CFG_MARKER = f"{h.CFG_DNSBL_SETTINGS}/pfb_dns_proxy_saved"
 CFG_GROUP_POLICY = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp"
 CFG_GROUP_POLICY_LIST = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp_bypass_list"
 CFG_WHITELIST = f"{h.CFG_DNSBL_SETTINGS}/whitelist"
+CFG_FORWARDING = "unbound/forwarding"  # present (on) while the Resolver forwards to the System DNS server
+OBSERVER_SCRIPT = "pfb_upstream_observer.py"  # Unbound's python-script in proxy mode while it forwards
 
 UPSTREAM_PORT = "5353"  # Unbound's loopback port for the proxy's PROXYv2 stream
 PROXY_LINE = f"proxy-protocol-port: {UPSTREAM_PORT}"
@@ -174,6 +176,7 @@ class Names:
     blocked: str  # listed; the plain-query tests
     whitelisted: str  # listed; the whitelist-reload test
     group_policy: tuple[str, ...]  # listed; one per Group Policy round
+    firewall: str  # listed; only the firewall's own lookups ask for it
 
 
 @dataclass(frozen=True)
@@ -518,8 +521,9 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         blocked=h.unique_domain("blocked"),
         whitelisted=h.unique_domain("whitelisted"),
         group_policy=tuple(h.unique_domain("gp") for _ in range(3)),
+        firewall=h.unique_domain("firewall"),
     )
-    listed = (names.blocked, names.whitelisted, *names.group_policy)
+    listed = (names.blocked, names.whitelisted, names.firewall, *names.group_policy)
     feed_url = h.write_local_feed(vm, "smoke_3515_dns_proxy.txt", "".join(f"{name}\n" for name in listed))
     _snapshot_config(vm)
     lan_v6_prior: dict[str, str] | None = None
@@ -698,6 +702,80 @@ def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig
     assert wanted <= sockets, f"missing proxy sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
 
 
+def test_forwarding_on_gives_unbound_the_upstream_observer_never_the_module(rig: Rig, proxy_on: State) -> None:
+    """In proxy mode Unbound runs the upstream observer while the Resolver forwards; pfb_unbound.py stays out.
+
+    Given the Resolver forwards to the System DNS server (the rig's wiring) and the toggle is applied,
+    Then unbound.conf loads the python module with `python-script: pfb_upstream_observer.py` as its only script,
+      never `pfb_unbound.py`, and the observer is staged in the chroot beside the shipped module.
+    """
+    scripts = re.findall(r"^\s*python-script\s*:\s*(\S+)", proxy_on.conf, re.MULTILINE)
+    assert scripts == [OBSERVER_SCRIPT], f"python-script lines: {scripts}\n{proxy_on.conf}"
+    assert MODULE_LINE.search(proxy_on.conf), f"the python module is not in the module chain:\n{proxy_on.conf}"
+    assert "pfb_unbound.py" not in proxy_on.conf, f"unbound.conf names pfb_unbound.py:\n{proxy_on.conf}"
+    staged = rig.vm.ssh(f"ls -l /var/unbound/{OBSERVER_SCRIPT} /var/unbound/pfb_unbound.py 2>&1").stdout
+    assert OBSERVER_SCRIPT in staged and "No such file" not in staged, f"staged files: {staged}"
+
+
+def test_forwarding_off_gives_unbound_no_python_script_at_all(rig: Rig, proxy_on: State) -> None:
+    """With the Resolver recursing there is no upstream block to observe, so Unbound loads no python module.
+
+    Given the toggle applied and the Resolver switched from forwarding to recursion,
+    When the DNSBL apply runs,
+    Then unbound.conf has no `python-script` and no python module (and never pfb_unbound.py); the forwarding setting
+      is put back afterwards and the next apply brings the observer back.
+    """
+    vm = rig.vm
+    original = h.config_get_state(vm, CFG_FORWARDING)
+    try:
+        _php_ok(
+            vm,
+            "config_del_path('unbound/forwarding');\n"
+            "write_config('pfBlockerNG smoke: Resolver recursing for the #3515 observer gate');\n"
+            "services_unbound_configure(FALSE);",
+            "Resolver forwarding off",
+        )
+        _apply(vm)
+        state = _capture(vm)
+        assert not SCRIPT_LINE.search(state.conf), f"unbound.conf still names a python-script:\n{state.conf}"
+        assert not MODULE_LINE.search(state.conf), f"unbound.conf still loads a python module:\n{state.conf}"
+        assert "pfb_unbound.py" not in state.conf, state.conf
+    finally:
+        h.config_restore_state(vm, CFG_FORWARDING, original)
+        _php_ok(vm, "services_unbound_configure(FALSE);", "Resolver forwarding restored")
+        _apply(vm)
+    restored = _capture(vm)
+    assert re.findall(r"^\s*python-script\s*:\s*(\S+)", restored.conf, re.MULTILINE) == [OBSERVER_SCRIPT], restored.conf
+
+
+def test_an_upstream_ede_block_is_logged_with_the_real_client(
+    rig: Rig, proxy_on: State, stub_dns: _StubDnsServer
+) -> None:
+    """A block the upstream signals with EDE 15 is invisible in Unbound's reply; the observer makes it loggable.
+
+    Given the stub upstream answers a unique name with NXDOMAIN and an EDE option (info-code 15, text `Quad9`),
+    When the LAN client queries it through the proxy,
+    Then the client gets NXDOMAIN, and dnsbl.log gains the module's upstream-block row: source DNSBL-python, type
+      Upstream_Block, group Upstream, evaluation `EDE15 (Blocked)`, the extra text, and the client's own address.
+    """
+    name = h.unique_domain("pfbsmoke-3515-ede")
+    stub_dns.register_nxdomain(name, ede_info_code=15, ede_text="Quad9")
+    answer, raw = _query(rig.client, name)
+    assert answer.rcode == "NXDOMAIN", f"{name}: expected NXDOMAIN from the upstream, got {answer}\n{raw}"
+
+    def upstream_rows() -> list[list[str]]:
+        return [row for row in _dnsbl_rows(rig.vm, name) if row[5:6] == ["Upstream_Block"]]
+
+    try:
+        h.wait_until(lambda: bool(upstream_rows()), timeout=30.0)
+    except RuntimeError:
+        raise AssertionError(f"dnsbl.log gained no Upstream_Block row for {name}:\n{_proxy_log(rig.vm)}") from None
+    [row] = upstream_rows()
+    assert row[0] == "DNSBL-python" and row[6] == "Upstream", row
+    assert row[7] == "EDE15 (Blocked)" and row[8] == "Quad9", f"evaluation / extra text: {row}"
+    assert row[3] == CLIENT_LAN_IP, f"the row names {row[3]!r}, not the real client {CLIENT_LAN_IP}: {row}"
+
+
 def _firewall_lookup(vm: SmokeVM, name: str) -> str:
     """What the firewall's OWN resolver (gethostbyname, i.e. /etc/resolv.conf) answers for `name`."""
     out = _php_ok(vm, f"echo 'FW=' . gethostbyname({h._php_str(name + '.')}) . ';';", "firewall lookup")
@@ -711,14 +789,20 @@ def test_the_firewalls_own_lookups_go_through_the_proxy_and_are_dnsbl_filtered(r
 
     When pfSense regenerates /etc/resolv.conf (a reboot, a WAN event, a settings save do the same),
     Then it still names 127.0.0.1 (pfSense lists it while the Resolver's port is 53 and lo0 is bound: both stay);
-      And the firewall's lookup of a listed name gets the DNSBL VIP, and dnsbl.log gains a row for the listed name.
+      And the firewall's lookup of a listed name (resolv.conf, then drill @127.0.0.1) gets the DNSBL VIP, and
+      dnsbl.log gains a row for it that names 127.0.0.1 as the client.
     """
     _php_ok(rig.vm, "require_once('system.inc');\nsystem_resolvconf_generate();", "system_resolvconf_generate")
     resolv = rig.vm.ssh("cat /etc/resolv.conf").stdout
     assert re.search(r"^nameserver\s+127\.0\.0\.1\s*$", resolv, re.MULTILINE), f"/etc/resolv.conf:\n{resolv}"
-    answer = _firewall_lookup(rig.vm, rig.names.blocked)
-    assert answer == h.DEFAULT_DNSBL_VIP4, f"the firewall's own lookup of the listed {rig.names.blocked}: {answer!r}"
-    _wait_dnsbl_row(rig.vm, rig.names.blocked)
+    name = rig.names.firewall
+    answer = _firewall_lookup(rig.vm, name)
+    assert answer == h.DEFAULT_DNSBL_VIP4, f"the firewall's own lookup of the listed {name}: {answer!r}"
+    drilled = rig.vm.ssh(f"drill @127.0.0.1 {name} A 2>&1").stdout
+    assert h.DEFAULT_DNSBL_VIP4 in drilled, f"drill @127.0.0.1 {name}:\n{drilled}"
+    _wait_dnsbl_row(rig.vm, name)
+    clients = {row[3] for row in _dnsbl_rows(rig.vm, name)}
+    assert clients == {"127.0.0.1"}, f"dnsbl.log rows for {name} name {sorted(clients)}, not the firewall's 127.0.0.1"
 
 
 def test_the_lans_ipv6_grant_moves_from_pfsenses_access_list_into_our_clause(rig: Rig, proxy_on: State) -> None:
