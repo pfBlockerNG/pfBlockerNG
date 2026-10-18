@@ -135,3 +135,6 @@ client address (Group Policy bypass and DNSBL logging key on it).
 Implementation: decider side `dns_proxy/decision_service.py` (framing and loop) and `serve_decisions()` in
 `dns_proxy/pfb_dns_proxy.py`, tests `tests/dns_proxy/test_decision_service.py`; gateway side
 `go/pfb_dns_gateway/decider.go`, tests `decider_test.go`, `gateway_test.go` and `process_test.go` in that directory.
+
+The client-facing transports beyond plain UDP and TCP (DoT, DoH, DoQ), the certificate they serve and how a client
+address is decided on each are in [dns-gateway-transports.md](dns-gateway-transports.md).
