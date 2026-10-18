@@ -516,40 +516,57 @@ final class DnsProxyResolverMoveTest extends TestCase
 	}
 
 
-	/** @return array<string,array{0:string,1:string}> the admin's own Custom options, outside our block, that bind a loopback port of ours => that port */
-	public static function userLoopbackBinds(): array
+	/** @return array<string,array{0:string}> the admin's own `interface:` directives, wherever they sit and on whatever address or port: each is refused */
+	public static function userInterfaceLines(): array
 	{
 		return [
-			'IPv4 loopback'            => ["server:\ninterface: 127.0.0.1@5353", '5353'],
-			'IPv6 loopback'            => ["server:\ninterface: ::1@5353\n", '5353'],
-			'indented, with a comment' => ["server:\n  interface:   127.0.0.1@5353   # my own\nprefetch: yes", '5353'],
-			'quoted'                   => ["server:\ninterface: \"::1@5353\"", '5353'],
-			'CRLF line endings'        => ["server:\r\ninterface: 127.0.0.1@5353\r\n", '5353'],
-			'IPv4 loopback, plain port' => ["server:\ninterface: 127.0.0.1@5354", '5354'],
-			'IPv6 loopback, plain port' => ["server:\ninterface: ::1@5354\n", '5354'],
-			'quoted, plain port'        => ["server:\ninterface: \"127.0.0.1@5354\"   # mine", '5354'],
+			'IPv4 loopback on the proxy port'             => ["server:\ninterface: 127.0.0.1@5353"],
+			'IPv6 loopback on the proxy port'             => ["server:\ninterface: ::1@5353\n"],
+			'indented, with a comment'                    => ["server:\n  interface:   127.0.0.1@5353   # my own\nprefetch: yes"],
+			'quoted'                                      => ["server:\ninterface: \"::1@5353\""],
+			'CRLF line endings'                           => ["server:\r\ninterface: 127.0.0.1@5353\r\n"],
+			'IPv4 loopback on the plain port'             => ["server:\ninterface: 127.0.0.1@5354"],
+			'IPv6 loopback on the plain port'             => ["server:\ninterface: ::1@5354\n"],
+			'quoted, plain port, with a comment'          => ["server:\ninterface: \"127.0.0.1@5354\"   # mine"],
+			'expanded loopback on the proxy port'         => ["server:\ninterface: 127.0.0.2@5353"],
+			'IPv4 wildcard on the proxy port'             => ["server:\ninterface: 0.0.0.0@5353"],
+			'IPv6 wildcard on the proxy port'             => ["server:\ninterface: ::@5353"],
+			'LAN address on the proxy port'               => ["server:\ninterface: 192.0.2.1@5353"],
+			'scoped IPv6 address on the proxy port'       => ["server:\ninterface: fe80::1%em0@5353"],
+			'IPv4 wildcard on the Listen Port'            => ["server:\ninterface: 0.0.0.0@53"],
+			'LAN address on the Listen Port'              => ["server:\ninterface: 192.0.2.1@53"],
+			'LAN address on a non-reserved port'          => ["server:\ninterface: 192.0.2.1@8053"],
+			'loopback on a non-reserved port'             => ["server:\ninterface: 127.0.0.1@5300"],
+			'wildcard without a port'                     => ["server:\ninterface: 0.0.0.0"],
+			'interface-automatic'                         => ["server:\ninterface-automatic: yes"],
+			'interface-automatic-ports on the proxy port' => ["server:\ninterface-automatic-ports: 5353"],
+			'after another directive on the same line'    => ["prefetch: yes interface: 0.0.0.0@53"],
+			'after a lone CR'                             => ["server:\rinterface: 0.0.0.0@53"],
+			'commented out'                               => ["server:\n# interface: 127.0.0.1@5353"],
 		];
 	}
 
-	#[DataProvider('userLoopbackBinds')]
-	public function testMoveOnRefusesWhenTheAdminsOwnInterfaceLineBindsALoopbackPortOfOurs(string $custom, string $port): void
+	#[DataProvider('userInterfaceLines')]
+	public function testMoveOnRefusesEveryInterfaceDirectiveOfTheAdminsOwnAndChangesNothing(string $custom): void
 	{
-		// Given Custom options of the admin's own that already listen on 127.0.0.1 or ::1 port 5353 or 5354
-		// (unbound-checkconf rejects the same interface twice, and so would our clause).
+		// Given Custom options of the admin's own with an interface directive. Unbound's listen addresses come from
+		// Network Interfaces and ours from the proxy, so a line of the admin's can take a reserved port or a LAN address.
 		$this->seedResolver(['custom_options' => base64_encode($custom)]);
 		$config = $GLOBALS['config'];
 
 		// When the proxy is turned on.
 		$changed = pfb_dns_proxy_resolver(TRUE);
 
-		// Then nothing moves and the notice names the Custom options to correct.
+		// Then nothing moves (no snapshot, no write, the Resolver as it was) and the notice says where to fix it.
 		$this->assertFalse($changed);
 		$this->assertSame(0, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertNull(pfb_dns_proxy_saved());
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
 		$notice = $GLOBALS['pfb_test_file_notices'][0];
 		$this->assertStringContainsString('Custom Options', $notice['notice']);
-		$this->assertStringContainsString($port, $notice['notice']);
+		$this->assertStringContainsString('interface:', $notice['notice']);
+		$this->assertStringContainsString('Network Interfaces', $notice['notice']);
 		$this->assertSame('/services_unbound.php', $notice['url']);
 	}
 
@@ -651,24 +668,40 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('Custom Options', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
-	/** @return array<string,array{0:string}> interface lines that do not bind loopback port 5353 */
-	public static function otherInterfaceLines(): array
+	public function testMoveOnRefusesAStrayCopyOfOurMarkerThatWouldHideAnInterfaceLine(): void
+	{
+		// Given a moved Resolver, then an admin who puts a stray copy of our marker line in front of an interface line.
+		// Our block's text would then run from the stray line to our end line, and the interface line would look like ours.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$edited = base64_encode("# pfBlockerNG DNS proxy\ninterface: 0.0.0.0@53\n" . implode("\n", $this->customLines()));
+		config_set_path('unbound/custom_options', $edited);
+
+		// When the proxy is applied again.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the admin's text is left as written and the operator is told to remove the extra marker line.
+		$this->assertFalse($changed);
+		$this->assertSame($edited, config_get_path('unbound/custom_options'));
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('Custom Options', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/** @return array<string,array{0:string}> lines that are not an interface directive: outgoing addresses, and words that only contain one */
+	public static function nonInterfaceLines(): array
 	{
 		return [
-			'a LAN address on the proxy port' => ["server:\ninterface: 192.0.2.1@5353"],
-			'loopback on another port'        => ["server:\ninterface: 127.0.0.1@5300"],
-			'loopback on a longer port'       => ["server:\ninterface: 127.0.0.1@53530"],
-			'loopback on a longer plain port' => ["server:\ninterface: 127.0.0.1@53540"],
-			'loopback without a port'         => ["server:\ninterface: ::1"],
-			'commented out'                   => ["server:\n# interface: 127.0.0.1@5353"],
-			'commented out, plain port'       => ["server:\n# interface: 127.0.0.1@5354"],
+			'outgoing address on a reserved port' => ["server:\noutgoing-interface: 192.0.2.1@5353"],
+			'outgoing address on the plain port'  => ["server:\noutgoing-interface: 127.0.0.1@5354"],
+			'a value that has the word'           => ["server:\nlog-identity: my interface 0.0.0.0@5353"],
+			'a longer port starting with 5353'    => ["server:\noutgoing-interface: 192.0.2.1@53530"],
 		];
 	}
 
-	#[DataProvider('otherInterfaceLines')]
-	public function testMoveOnIgnoresInterfaceLinesThatDoNotBindTheProxysLoopbackPort(string $custom): void
+	#[DataProvider('nonInterfaceLines')]
+	public function testMoveOnIgnoresLinesThatAreNotAnInterfaceDirective(string $custom): void
 	{
-		// Given Custom options whose interface lines do not collide with our clause.
+		// Given Custom options with lines that only mention an interface: Unbound binds none of them.
 		$this->seedResolver(['custom_options' => base64_encode($custom)]);
 
 		// When the proxy is turned on.
