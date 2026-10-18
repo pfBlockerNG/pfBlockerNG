@@ -43,6 +43,7 @@ servfail.example,cname,servfail-target.example,198.51.100.11,2001:db8::11
 silent.example,cname,silent-target.example,198.51.100.12,2001:db8::12
 nobaked.example,cname,nodata-target.example,,
 trap.example,cname,blocked.example,198.51.100.9,2001:db8::9
+big.example,cname,big-target.example,198.51.100.13,2001:db8::13
 """
 
 # Group Policy bypass: a client on [GP_Bypass_List] is never DNSBL-blocked (pfb_unbound.py _load_gp_bypass_list).

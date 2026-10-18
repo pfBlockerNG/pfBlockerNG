@@ -33,12 +33,19 @@ def build_query(
     *,
     qid: int = 0x1234,
     rd: bool = True,
+    cd: bool = False,
     edns: bool = False,
     do: bool = False,
+    udp_size: int = 1232,
+    options: bytes = b"",
 ) -> bytes:
-    """A one-question query; `edns` adds an OPT, and `do` adds one with the DNSSEC-OK bit set."""
-    additional = [dnswire.make_opt(do=do)] if edns or do else []
-    message = dnswire.Message(qid, dnswire.RD if rd else 0, [dnswire.Question(name, qtype)], additional=additional)
+    """A one-question query; `edns` adds an OPT advertising `udp_size`, `do` one with the DNSSEC-OK bit set, `options`
+    (already encoded EDNS options) one that carries them."""
+    opt = dnswire.RR(".", dnswire.TYPE_OPT, udp_size, 0x8000 if do else 0, options)
+    flags = (dnswire.RD if rd else 0) | (dnswire.CD if cd else 0)
+    message = dnswire.Message(
+        qid, flags, [dnswire.Question(name, qtype)], additional=[opt] if edns or do or options else []
+    )
     return dnswire.encode(message)
 
 

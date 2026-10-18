@@ -245,9 +245,24 @@ def bind_all(listen: Sequence[str], port: int, *, udp: bool) -> list[Listener]:
 # --- replies the proxy builds itself -------------------------------------------------------------
 
 
-def _edns_for(query: dnswire.Message) -> list[dnswire.RR]:
-    opt = next((rr for rr in query.additional if rr.rtype == dnswire.TYPE_OPT), None)
-    return [] if opt is None else [dnswire.make_opt(do=bool(opt.ttl & 0x8000))]
+def _opt_of(query: dnswire.Message) -> dnswire.RR | None:
+    return next((rr for rr in query.additional if rr.rtype == dnswire.TYPE_OPT), None)
+
+
+def _edns_for(query: dnswire.Message, *, options: bool = False) -> list[dnswire.RR]:
+    """The OPT record for a message this proxy sends: none when the client sent none, else the proxy's UDP size, the
+    client's DO bit and, with `options` (the SafeSearch chase), the client's EDNS options such as ECS."""
+    opt = _opt_of(query)
+    if opt is None:
+        return []
+    return [dnswire.make_opt(do=bool(opt.ttl & 0x8000), options=opt.rdata if options else b"")]
+
+
+def _udp_limit(query: dnswire.Message) -> int:
+    """The bytes a UDP reply to `query` may have: 512 without EDNS, else the client's size, at least 512 and at most
+    the size this proxy advertises."""
+    opt = _opt_of(query)
+    return 512 if opt is None else min(max(opt.rclass, 512), dnswire.EDNS_UDP_SIZE)
 
 
 def _error(query: dnswire.Message, rcode: int) -> bytes:
@@ -256,11 +271,20 @@ def _error(query: dnswire.Message, rcode: int) -> bytes:
     return dnswire.encode(dnswire.Message(query.id, flags, query.questions, additional=_edns_for(query)))
 
 
-def _answer(query: dnswire.Message, msg: shim.DnsMsg) -> bytes:
-    """The module's replacement message, addressed to this client."""
-    flags = dnswire.QR | dnswire.RA | (msg.rep.flags & dnswire.AA) | (query.flags & (dnswire.RD | dnswire.CD))
+def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> bytes:
+    """The module's replacement message, addressed to this client. Over `limit` bytes (a UDP client's) it becomes the
+    question alone with TC set, which makes the client ask again over TCP."""
+    flags = (
+        dnswire.QR
+        | dnswire.RA
+        | (msg.rep.flags & (dnswire.AA | dnswire.TC))
+        | (query.flags & (dnswire.RD | dnswire.CD))
+    )
     additional = [*msg.additional, *_edns_for(query)]
-    return dnswire.encode(dnswire.Message(query.id, flags, query.questions, msg.answer, msg.authority, additional))
+    wire = dnswire.encode(dnswire.Message(query.id, flags, query.questions, msg.answer, msg.authority, additional))
+    if limit is None or len(wire) <= limit:
+        return wire
+    return dnswire.encode(dnswire.Message(query.id, flags | dnswire.TC, query.questions, additional=_edns_for(query)))
 
 
 def _is_u16(value: object) -> bool:
@@ -327,12 +351,16 @@ class Frontend:
         module.operate(shim.MODULE_ID, event, qstate, None)
         return qstate.ext_state[shim.MODULE_ID]
 
-    async def resolve(self, wire: bytes, client_ip: str, forward: Forward) -> bytes | None:
+    async def resolve(
+        self, wire: bytes, client_ip: str, forward: Forward, *, over_tcp: Forward | None = None
+    ) -> bytes | None:
         """Answer one client query: parse it, let the module decide, forward to Unbound when it defers.
 
         None means the packet is dropped. `forward` sends the client's own bytes to Unbound (with its PROXYv2
         header) and returns Unbound's reply bytes, or None if there is none. The header is checked before anything
-        is parsed, so a hostile packet costs a constant, and every FORMERR is header-only.
+        is parsed, so a hostile packet costs a constant, and every FORMERR is header-only. `over_tcp` is given for a
+        UDP client only: it asks Unbound over TCP, for a SafeSearch chase that came back truncated, and its presence
+        holds a reply built here to the client's UDP size (a relayed reply already is: Unbound saw the client's size).
         """
         if len(wire) < 12 or wire[2] & 0x80:  # no header, or a response: never answered (no reflection loops)
             return None
@@ -376,22 +404,25 @@ class Frontend:
                     if qstate.return_msg is unchanged and qstate.return_rcode == base_rcode:
                         relay = upstream_reply  # the module left Unbound's answer alone: pass its bytes through
             if state == shim.MODULE_RESTART_NEXT:
-                state = await self._chase_cname(query, qstate, forward)
+                state = await self._chase_cname(query, qstate, forward, over_tcp)
         except Exception:
             shim.log_err(traceback.format_exc())
             state = shim.MODULE_ERROR
         if state != shim.MODULE_FINISHED:
             qstate.return_msg, qstate.return_rcode, relay = None, RCODE_SERVFAIL, None
-        return self._send(query, qstate, relay)
+        return self._send(query, qstate, relay, None if over_tcp is None else _udp_limit(query))
 
-    async def _chase_cname(self, query: dnswire.Message, qstate: shim.module_qstate, forward: Forward) -> int:
+    async def _chase_cname(
+        self, query: dnswire.Message, qstate: shim.module_qstate, forward: Forward, over_tcp: Forward | None
+    ) -> int:
         """Emulate MODULE_RESTART_NEXT as the SafeSearch CNAME redirect uses it (safesearch_cname_redirect).
 
         The module planted `orig -> CNAME -> target` and expects Unbound's iterator to chase the target, then runs
         its post-resolution pass on the combined answer. Unbound will not chase a CNAME a module hands it, so this
         plays the iterator: ask Unbound for the target as the same client, give the module the planted CNAME plus the
         target's answer records, and run that pass once. A chase that finds nothing leaves the CNAME alone in the
-        message, which is what makes the module answer with its baked address. Returns the module's state.
+        message, which is what makes the module answer with its baked address. The chase carries the client's CD bit
+        and EDNS options; one that comes back truncated is asked again over `over_tcp`. Returns the module's state.
         """
         planted = qstate.return_msg
         if planted is None or len(planted.answer) != 1 or planted.answer[0].rtype != dnswire.TYPE_CNAME:
@@ -399,14 +430,26 @@ class Frontend:
             return shim.MODULE_ERROR
         cname = planted.answer[0]
         target = dnswire.Question(dnswire.name_from_rdata(cname.rdata), planted.qinfo.qtype, planted.qinfo.qclass)
-        chase = dnswire.Message(secrets.randbits(16), dnswire.RD, [target], additional=_edns_for(query))
-        wire = await forward(dnswire.encode(chase))
-        answers = [] if wire is None else dnswire.parse(wire).answers  # an unparseable reply is a SERVFAIL, as above
+        chase = dnswire.Message(
+            secrets.randbits(16),
+            dnswire.RD | (query.flags & dnswire.CD),
+            [target],
+            additional=_edns_for(query, options=True),
+        )
+        wire = dnswire.encode(chase)
+        reply = await forward(wire)
+        message = None if reply is None else dnswire.parse(reply)  # an unparseable reply is a SERVFAIL, as above
+        if message is not None and message.flags & dnswire.TC and over_tcp is not None:
+            reply = await over_tcp(wire)  # too big for a datagram: a truncated reply says nothing about the addresses
+            message = None if reply is None else dnswire.parse(reply)
+        answers = [] if message is None else message.answers
         qstate.return_msg = shim.DnsMsg(planted.qinfo, planted.rep.flags, [cname, *answers], [], [])
         # A module that asks for yet another restart is not obeyed: the chased answer is final, so that is a SERVFAIL.
         return self._operate(qstate, shim.MODULE_EVENT_MODDONE)
 
-    def _send(self, query: dnswire.Message, qstate: shim.module_qstate, relay: bytes | None) -> bytes:
+    def _send(
+        self, query: dnswire.Message, qstate: shim.module_qstate, relay: bytes | None, limit: int | None
+    ) -> bytes:
         """Reply to the client the way mesh_send_reply does: rcode != 0 is a bare error, no message is SERVFAIL."""
         msg, rcode = qstate.return_msg, qstate.return_rcode
         if msg is None and rcode == shim.RCODE_NOERROR:
@@ -418,7 +461,7 @@ class Frontend:
             return relay
         if rcode != shim.RCODE_NOERROR or msg is None:
             return _error(query, rcode)
-        return _answer(query, msg)
+        return _answer(query, msg, limit)
 
     def relay_upstream_response(self, data: bytes) -> None:
         """Handle one datagram from pfb_upstream_observer.py: fire the module's query_response callback on the raw
@@ -582,7 +625,8 @@ class _UdpServer(asyncio.DatagramProtocol):
             forward = partial(
                 _forward_udp, self.frontend.upstream, proxyv2.header(src, dst, tcp=False), self.frontend.timeout
             )
-            reply = await self.frontend.resolve(data, src[0], forward)
+            over_tcp = partial(_forward_tcp_once, self.frontend.upstream, src, dst, self.frontend.timeout)
+            reply = await self.frontend.resolve(data, src[0], forward, over_tcp=over_tcp)
             if reply is not None:
                 self.transport.sendto(reply, addr)
         finally:
@@ -630,6 +674,18 @@ async def _forward_udp(upstream: tuple[str, int], header: bytes, timeout: float,
         return None
     finally:
         transport.close()
+
+
+async def _forward_tcp_once(
+    upstream: tuple[str, int], src: tuple[str, int], dst: tuple[str, int], timeout: float, wire: bytes
+) -> bytes | None:
+    """One query to Unbound over a TCP connection of its own, PROXYv2 header first, for a UDP client's query whose
+    answer does not fit a datagram; None on silence or error."""
+    connection = _TcpUpstream(upstream, proxyv2.header(src, dst, tcp=True), timeout)
+    try:
+        return await connection(wire)
+    finally:
+        connection.close()
 
 
 class _TcpUpstream:

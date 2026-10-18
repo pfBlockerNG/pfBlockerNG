@@ -66,6 +66,12 @@ AUTHORITATIVE = {
     ("nodata-target.example.", 1): [],
     ("nx.example.", 1): ["nx.example. 300 IN A 192.0.2.52"],  # nx-target.example. is absent: NXDOMAIN
 }
+# SafeSearch target with 94 addresses: 1,569 bytes in the reply, more than any UDP size the proxy advertises (1232).
+BIG_ADDRESSES = [bytes([10, 1, 0, n]) for n in range(1, 95)]
+AUTHORITATIVE[("big.example.", 1)] = ["big.example. 300 IN A 192.0.2.60"]
+AUTHORITATIVE[("big-target.example.", 1)] = [
+    f"big-target.example. 300 IN A {'.'.join(map(str, a))}" for a in BIG_ADDRESSES
+]
 
 
 def _conf(port: int, authoritative_port: int, *, observer: bool = False) -> str:
@@ -348,6 +354,38 @@ def test_safesearch_target_without_an_address_gets_the_modules_baked_address(
     reply = _through_frontend(ss_booted, unbound, scenario)
     assert _answers(reply) == [(name, dnswire.TYPE_A, bytes(int(octet) for octet in baked.split(".")))]
     unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {target} A IN", since=mark)  # the chase happened and found nothing
+
+
+def test_safesearch_target_with_many_addresses_gives_a_tcp_client_every_real_address(
+    ss_booted: Booted, unbound: RunningUnbound
+) -> None:
+    async def scenario(server: tuple[str, int]) -> bytes:
+        return (await tcp_exchange(server, build_query("big.example."), source=ALLOWED_CLIENT_TCP))[0]
+
+    wire = _through_frontend(ss_booted, unbound, scenario)
+    assert dnswire.parse(wire).flags & dnswire.TC == 0
+    answers = _answers(wire)  # Unbound rotates the address set, so only the CNAME has a place
+    assert answers[0] == ("big.example.", dnswire.TYPE_CNAME, dnswire.encode_name("big-target.example."))
+    assert sorted(answers[1:]) == [("big-target.example.", dnswire.TYPE_A, address) for address in BIG_ADDRESSES]
+
+
+@pytest.mark.parametrize(("edns_size", "limit"), [(None, 512), (1232, 1232)], ids=["no-edns", "edns-1232"])
+def test_safesearch_target_too_big_for_a_datagram_is_truncated_for_a_udp_client_not_replaced_by_the_baked_address(
+    ss_booted: Booted, unbound: RunningUnbound, edns_size: int | None, limit: int
+) -> None:
+    """Issue #3517 review: Unbound truncated the chase over UDP (TC, no answers), the proxy read that as 'no address'
+    and answered with the baked 198.51.100.13, TC clear; a client without EDNS was also sent more than 512 bytes."""
+    query = (
+        build_query("big.example.") if edns_size is None else build_query("big.example.", edns=True, udp_size=edns_size)
+    )
+
+    async def scenario(server: tuple[str, int]) -> bytes:
+        return (await udp_exchange(server, query, source=ALLOWED_CLIENT))[0]
+
+    wire = _through_frontend(ss_booted, unbound, scenario)
+    reply = dnswire.parse(wire)
+    assert (reply.rcode, reply.flags & dnswire.TC, reply.answers) == (0, dnswire.TC, [])
+    assert len(wire) <= limit
 
 
 def test_dot_client_gets_dnsbl_and_unbound_answers_and_unbounds_log_shows_the_tls_client(
