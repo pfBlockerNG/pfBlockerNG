@@ -128,7 +128,8 @@ final class DnsProxyServiceTest extends TestCase
 			ev launch
 			# What the new proxy finds at its launch: the previous marker must be gone (rc removes it before a fresh start)
 			if [ -e "$READY_FILE" ]; then echo present >> "$S/launch.marker"; else echo absent >> "$S/launch.marker"; fi
-			# Descriptors above stdio that the new proxy inherited (the start lock's, when lockf leaks it)
+			# Descriptors above stdio that the new proxy inherited. FreeBSD lockf closes its lock descriptor before the command runs,
+			# so the native result is an empty list; this double's flock(1) keeps one, so an empty list here is the closes at work.
 			for fd in 3 4 5 6 7 8 9; do [ ! -e "/dev/fd/$fd" ] || echo "$fd" >> "$S/launch.fds"; done
 			# A test holds the launch open here to let a second start race it (the host's own sleep, not the tick double)
 			while [ -e "$S/barrier" ]; do /bin/sleep 0.05; done
@@ -150,7 +151,8 @@ final class DnsProxyServiceTest extends TestCase
 			;;
 		lockf)
 			# FreeBSD lockf(1): lockf [-k] [-t seconds] file command ... -- the lock is held until the command exits; -t gives up
-			# with status 75 (EX_TEMPFAIL). The rc script must keep the lock file (-k) and wait at most 10 s.
+			# with status 75 (EX_TEMPFAIL). The rc script must keep the lock file (-k) and wait at most 10 s. This double takes the
+			# lock with Linux flock(1), which hands its descriptor on to the command; the daemon double's probe covers the closes.
 			keep=; wait=
 			while [ "$#" -gt 0 ]; do
 				case "$1" in
@@ -1044,7 +1046,8 @@ final class DnsProxyServiceTest extends TestCase
 
 	public function testTheLaunchedProxyInheritsNoDescriptorFromTheStartLock(): void
 	{
-		// Given a start under lockf, which holds the lock on a descriptor its command (this script) inherits
+		// Given a start under lockf: FreeBSD's lockf closes its lock descriptor before the command runs, but this double's flock(1)
+		// passes it on, so the rc script's closes of descriptors 3-9 at launch are what keep the proxy from holding the lock
 		$this->moveResolver();
 		$this->generate();
 		$this->arrange();

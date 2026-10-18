@@ -1676,10 +1676,13 @@ def test_a_serving_proxy_has_published_its_ready_marker_and_a_repeated_start_kee
 
 
 def test_the_start_lock_is_free_while_the_proxy_runs(rig: Rig, proxy_on: State) -> None:
-    """lockf(1) hands its lock to the one run of the rc script, not to the daemon that script launches.
+    """lockf(1) holds the start lock for the one run of the rc script, not for the daemon that script launches.
 
-    The lock file descriptor is inherited by whatever the locked command starts. If the proxy kept it, every later
-    start would wait the whole 10 s and fail (lockf's status 75): the proxy has been running since before this test.
+    FreeBSD's lockf closes its lock descriptor before it runs the command, so the launched proxy does not
+    inherit the lock; the rc script also closes descriptors 3-9 at launch, defensively. Were a proxy to keep
+    the lock, every later start would wait the whole 10 s and fail (lockf's status 75). The proxy has been
+    running since before this test, so this probe checks that the lock is free; the race probe below proves
+    the lock itself.
 
     Given the proxy running,
     When the lock is taken for one second,
