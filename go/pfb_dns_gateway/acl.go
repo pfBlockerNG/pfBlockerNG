@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // ACLAction is what the gateway does with a client before asking the decider.
@@ -112,6 +113,7 @@ func (a *ACL) load() *aclSnapshot {
 		a.logf("acl: %v; forwarding every query", err)
 		return &aclSnapshot{deps: w.deps, broken: true}
 	}
+	w.allowImplicit()
 	rules := newACLRules(w.rows)
 	a.logf("acl: loaded %d entries from %d files starting at %s", rules.entries, w.opened, a.path)
 	return &aclSnapshot{deps: w.deps, rules: rules}
@@ -145,23 +147,51 @@ func newACLRules(rows map[netip.Prefix]ACLAction) aclRules {
 	return rules
 }
 
-// parseACLLine accepts `access-control: <netblock> <action>`; Unbound's lexer splits on space and tab only.
-func parseACLLine(line string) (netip.Prefix, ACLAction, bool) {
+// aclWords splits a row after its comment: Unbound's lexer splits on space and tab only. Only the part before the
+// comment must be UTF-8; the comment is Unbound's to skip.
+func aclWords(line string) ([]string, bool) {
 	line, _, _ = strings.Cut(line, "#")
-	f := strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' })
-	if len(f) != 3 || f[0] != "access-control:" {
+	if !utf8.ValidString(line) {
+		return nil, false
+	}
+	return strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' }), true
+}
+
+// unquote strips one pair of matching quotes: Unbound's lexer takes a double- or single-quoted word wherever a word goes.
+func unquote(s string) string {
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// parseACLLine accepts `access-control: <netblock> <action>`.
+func parseACLLine(line string) (netip.Prefix, ACLAction, bool) {
+	f, ok := aclWords(line)
+	if !ok || len(f) != 3 || f[0] != "access-control:" {
 		return netip.Prefix{}, 0, false
 	}
-	action, known := aclActions[f[2]]
+	action, known := aclActions[unquote(f[2])]
 	if !known {
 		return netip.Prefix{}, 0, false
 	}
-	block := f[1]
-	if len(block) >= 2 && block[0] == '"' && block[len(block)-1] == '"' {
-		block = block[1 : len(block)-1]
-	}
-	prefix, ok := parseNetblock(block)
+	prefix, ok := parseNetblock(unquote(f[1]))
 	return prefix, action, ok
+}
+
+// implicitAllowRows make Unbound allow their netblock when no access-control row names the same netblock.
+var implicitAllowRows = map[string]bool{
+	"access-control-view:": true, "access-control-tag:": true,
+	"access-control-tag-action:": true, "access-control-tag-data:": true,
+}
+
+// parseImplicitRow reads the netblock of an implicit-allow row.
+func parseImplicitRow(line string) (netip.Prefix, bool) {
+	f, ok := aclWords(line)
+	if !ok || len(f) < 2 || !implicitAllowRows[f[0]] {
+		return netip.Prefix{}, false
+	}
+	return parseNetblock(unquote(f[1]))
 }
 
 // parseNetblock masks host bits and turns a bare address into a host prefix; zones are rejected.
