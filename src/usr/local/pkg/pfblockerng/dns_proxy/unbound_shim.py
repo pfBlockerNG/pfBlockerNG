@@ -64,10 +64,8 @@ MODULE_ERROR = 5
 MODULE_FINISHED = 6
 
 sec_status_unchecked = 0
-sec_status_bogus = 1
 sec_status_indeterminate = 2
 sec_status_insecure = 3
-sec_status_secure = 4
 
 _MODULE_COUNT = 16
 
@@ -160,20 +158,12 @@ class reply_info:
         self.rrsets = rrsets
         self.authoritative = 0
 
-    @property
-    def rrset_count(self) -> int:
-        return len(self.rrsets)
-
 
 class query_info:
     def __init__(self, qname_str: str, qtype: int, qclass: int = RR_CLASS_IN) -> None:
         self.qname_str = qname_str
         self.qtype = qtype
         self.qclass = qclass
-
-    @property
-    def qname(self) -> bytes:
-        return dnswire.encode_name(self.qname_str)
 
     @property
     def qname_list(self) -> list[str]:
@@ -183,10 +173,6 @@ class query_info:
     @property
     def qtype_str(self) -> str:
         return dnswire.type_str(self.qtype)
-
-    @property
-    def qclass_str(self) -> str:
-        return "IN" if self.qclass == RR_CLASS_IN else f"CLASS{self.qclass}"
 
 
 def _rr_data(rdata: bytes) -> bytes:
@@ -257,15 +243,11 @@ class DnsMsg:
 
 
 class DNSMessage:
-    def __init__(
-        self, rr_name: str, rr_type: int, rr_class: int = RR_CLASS_IN, query_flags: int = 0, default_ttl: int = 0
-    ) -> None:
+    def __init__(self, rr_name: str, rr_type: int, rr_class: int = RR_CLASS_IN, query_flags: int = 0) -> None:
         self.rr_name = rr_name
         self.rr_type = rr_type
         self.rr_class = rr_class
         self.query_flags = query_flags
-        self.default_ttl = default_ttl
-        self.question: list[str] = []
         self.answer: list[str] = []
         self.authority: list[str] = []
         self.additional: list[str] = []
@@ -305,22 +287,8 @@ class MeshInfo:
     reply_list: MeshReply | None
 
 
-class ExtState:
-    def __init__(self) -> None:
-        self._states = [0] * _MODULE_COUNT
-
-    def __getitem__(self, module_id: int) -> int:
-        return self._states[module_id]
-
-    def __setitem__(self, module_id: int, state: int) -> None:
-        self._states[module_id] = state
-
-
 class module_env:
     """pythonmod hands init() the real struct; the module only forwards it to register_inplace_cb_*."""
-
-    cfg: Any = None
-    worker: Any = None
 
 
 class module_qstate:
@@ -329,7 +297,7 @@ class module_qstate:
         self.query_flags = query_flags
         self.return_msg: DnsMsg | None = None
         self.return_rcode = RCODE_NOERROR
-        self.ext_state = ExtState()
+        self.ext_state = [0] * _MODULE_COUNT
         self.no_cache_store = 0
         self.edns_opts_back_in_iter: list[Any] = []
         self.mesh_info = MeshInfo(MeshReply(ReplyAddr(client_ip, client_port)))
@@ -379,13 +347,9 @@ __all__ = [
     "MODULE_RESTART_NEXT",
     "MODULE_WAIT_MODULE",
     "MODULE_WAIT_SUBQUERY",
-    "PKT_AA",
-    "PKT_AD",
-    "PKT_CD",
     "PKT_QR",
     "PKT_RA",
     "PKT_RD",
-    "PKT_TC",
     "RCODE_NOERROR",
     "RCODE_NXDOMAIN",
     "RR_CLASS_IN",
@@ -413,11 +377,8 @@ __all__ = [
     "register_inplace_cb_reply_local",
     "register_inplace_cb_reply_servfail",
     "reply_info",
-    "sec_status_bogus",
     "sec_status_indeterminate",
     "sec_status_insecure",
-    "sec_status_secure",
-    "sec_status_unchecked",
     "storeQueryInCache",
 ]
 
