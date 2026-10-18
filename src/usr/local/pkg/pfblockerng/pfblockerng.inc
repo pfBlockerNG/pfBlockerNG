@@ -3565,7 +3565,8 @@ const PFB_DNS_PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
 const PFB_DNS_PROXY_DAEMON_PIDFILE = '/var/run/pfb_dns_proxy_daemon.pid';
 const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
 // issue #3515: the DNSBL page's section save and pfb_dns_proxy_resolver() both read-modify-write config.xml; the one
-// lock (pfSense try_lock(), seconds to give up after) they hold from a fresh read through write_config().
+// lock (pfSense try_lock(), seconds to give up after) they hold from a fresh read through write_config(). A restore
+// stops the proxy (up to 7 s) under it, so the wait must stay above that plus the restore's own read and write.
 const PFB_DNSBL_CONFIG_LOCK = 'pfb_dnsbl_config';
 const PFB_DNSBL_CONFIG_LOCK_WAIT = 10;
 // Overridable before load (a unit test must not touch the appliance's rc.d), like the Unbound start budgets above;
@@ -4017,9 +4018,11 @@ function pfb_dns_proxy_listen(array $saved): array {
  * (listen addresses, DoT) and its Listen Port (unbound/port, which stays on loopback for Unbound; 53 when absent or
  * not a port). Written on every call, like the other pfBlockerNG rc services.
  *
- * Start: only while DNSBL, the proxy toggle and the moved-Resolver snapshot are all set; never over a survivor;
- * through pfb_python.sh only; every address shell-quoted; no address = error and a non-zero exit. Stop: TERM at
- * 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's.
+ * Start: only while the moved-Resolver snapshot is set (not the toggle or DNSBL: an abandoned restore leaves the Resolver
+ * moved with them off, and the proxy keeps serving it); never over a survivor; through pfb_python.sh only; every
+ * address shell-quoted. Loopback is always among the addresses, so a Resolver saved on Localhost only, or on an
+ * interface with no address, still gets a proxy. Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled
+ * only while its command line is the proxy's.
  */
 function pfb_dns_proxy_service(): void {
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
@@ -4043,24 +4046,14 @@ function pfb_dns_proxy_service(): void {
 	$rc['file']	= 'pfb_dns_proxy.sh';
 	$rc['start']	= <<<EOF
 
-	# Run only while DNSBL, the DNS proxy and the moved-Resolver snapshot are all set: with the Resolver
-	# back on its own port the proxy would only collide with it
-	dnsblcheck="\$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngdnsblsettings/config/pfb_dnsbl)"
-	proxycheck="\$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngdnsblsettings/config/pfb_dns_proxy)"
+	# Run only while the moved-Resolver snapshot is set: with the Resolver back on its own port the proxy would only
+	# collide with it. The snapshot alone decides, not the toggle or DNSBL: a restore that was abandoned (config locked,
+	# proxy survived its stop) leaves the Resolver moved with those off, and the proxy must keep serving it
 	savedcheck="\$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngdnsblsettings/config/pfb_dns_proxy_saved)"
-	if [ "\${dnsblcheck}" != 'on' ] || [ "\${proxycheck}" != 'on' ] || [ -z "\${savedcheck}" ]; then
+	if [ -z "\${savedcheck}" ]; then
 		exit
 	fi
 
-EOF;
-	if ($listen === []) {
-		$rc['start'] .= <<<EOF
-	/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy has no address to listen on (no saved Resolver interface had one at the last apply) - not started"
-	exit 1
-
-EOF;
-	} else {
-		$rc['start'] .= <<<EOF
 	# Ensure all processes are stopped; never launch over a survivor
 	rc_stop || return 1
 
@@ -4069,7 +4062,6 @@ EOF;
 	/usr/bin/logger -p daemon.info -t pfb_dns_proxy "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy started"
 
 EOF;
-	}
 	$rc['stop']	= <<<EOF
 
 	# Terminate the DNS proxy and its supervisor and wait for both to exit: TERM at 0 s, KILL at 5 s, give up at 7 s.
@@ -4151,11 +4143,17 @@ function pfb_dns_proxy_ensure_running(): void {
 	}
 }
 
-/** Package removal: stop the proxy, put the Resolver back whatever the disable pass did before, remove the rc script. */
+/**
+ * Package removal: put the Resolver back whatever the disable pass did, stop the proxy, remove the rc script.
+ * pfb_dns_proxy_resolver() stops the proxy itself, under its lock, when there is a Resolver to put back: stopping it first
+ * would leave a Resolver that cannot be restored (lock taken, proxy survived) with nothing serving its port.
+ */
 function pfb_dns_proxy_deinstall(): void {
-	stop_service('pfb_dns_proxy');
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
+	}
+	if (pfb_dns_proxy_saved() === NULL) {
+		stop_service('pfb_dns_proxy');
 	}
 	unlink_if_exists(PFB_DNS_PROXY_RCFILE);
 }
@@ -12335,15 +12333,20 @@ function pfb_dnsbl_config_lock() {
  * sockets and would not start, or would listen elsewhere), values that cannot be stored verbatim, or our block with no
  * snapshot (never snapshot moved values as the "previous" ones).
  *
- * OFF stops the DNS proxy service first (so Unbound's regeneration finds the port free), outside the config lock: the
- * stop waits up to 7 s. A proxy that outlived its stop abandons the restore (snapshot kept, notice raised) for the next
- * apply to retry. Otherwise it restores each key exactly and clears the snapshot. No snapshot and no block of ours =
- * nothing to do (no lock, no reload); a Resolver carrying our block with no snapshot is reported to the operator
- * (file_notice): it cannot be put back automatically. Idempotent.
+ * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, and only then stops the
+ * DNS proxy service (so Unbound's regeneration finds the port free): a lock that stays taken, or a failed read, returns
+ * with the proxy still serving the Resolver that stayed moved. The stop waits up to 7 s with the lock held (the rc
+ * script's budget: TERM at 0 s, KILL at 5 s, give up at 7 s), so the hold is that plus the fresh read and the write, and
+ * a settings save queued behind it (PFB_DNSBL_CONFIG_LOCK_WAIT, 10 s) still gets the lock. A proxy that outlived its
+ * stop abandons the restore (snapshot kept, notice raised) for the next apply to retry, and is restarted once the lock
+ * is released (that restart, a second stop and a start, takes up to 14 s and stays outside the lock), so the moved
+ * Resolver keeps being served. Otherwise it restores each key exactly and clears the snapshot. No snapshot and no
+ * block of ours = nothing to do (no lock, no stop, no reload); a Resolver carrying our block with no snapshot is
+ * reported to the operator (file_notice): it cannot be put back automatically. Idempotent.
  *
  * Everything that reads or writes the Resolver keys and the snapshot runs under pfb_dnsbl_config_lock(), on a
  * config.xml read afresh under it, through write_config(). A lock that stays taken abandons the call: nothing is
- * written, the snapshot is kept, and a notice says the next apply retries.
+ * written or stopped, the snapshot is kept, and a notice says the next apply retries.
  *
  * @return bool TRUE iff config.xml changed (write_config was called once).
  */
@@ -12353,9 +12356,6 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 		$custom = (string) base64_decode((string) config_get_path('unbound/custom_options', ''));
 		if ($saved === NULL && !str_contains($custom, PFB_DNS_PROXY_MARKER)) {
 			return FALSE;
-		}
-		if ($saved !== NULL) {
-			stop_service('pfb_dns_proxy');
 		}
 	}
 
@@ -12368,10 +12368,17 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 		return FALSE;
 	}
 	try {
-		return pfb_dns_proxy_resolver_locked($on);
+		$changed = pfb_dns_proxy_resolver_locked($on);
 	} finally {
 		unlock($lock);
 	}
+
+	// A restore keeps the snapshot only when the proxy outlived its stop: the Resolver is still moved, so the proxy is
+	// restarted to serve it (the rc script starts on the snapshot alone). Not under the lock: a restart can take 14 s.
+	if (!$on && pfb_dns_proxy_saved() !== NULL) {
+		pfb_dns_proxy_restart();
+	}
+	return $changed;
 }
 
 /** pfb_dns_proxy_resolver()'s move or restore, called with the config lock held and config.xml freshly read. */
@@ -12396,8 +12403,10 @@ function pfb_dns_proxy_resolver_locked(bool $on): bool {
 			}
 			return FALSE;
 		}
+		// The stop runs here, under the lock: only a call that holds it and read config.xml afresh may stop the proxy.
 		// stop_service() reports nothing and the rc script gives up after KILL: only the pidfiles say whether the
 		// proxy still holds the Resolver's port, which Unbound would then collide on.
+		stop_service('pfb_dns_proxy');
 		if (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
 			$text = 'DNS proxy: the DNS proxy is still running after it was stopped, so the DNS Resolver was not restored ' .
 			    '(Unbound would collide with the proxy on the Resolver\'s port). Stop the pfBlockerNG DNS proxy service in ' .
