@@ -2180,7 +2180,8 @@ def test_pfb_dns_page_renders_the_doh_and_doq_settings_directly_after_the_enable
 
     Given the pfB-DNS page renders, Then DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
     interfaces) appear in that order between the enable checkbox and DNS Reply Logging, as the right input kinds,
-    with help that says experimental, names the Resolver's certificate, that DoQ is UDP and the HAProxy options.
+    with help that says experimental, names the Resolver's certificate, that DoQ is UDP and the HAProxy options, and
+    names the binary the package ships (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
     """
     path = "/pfblockerng/pfblockerng_dns.php"
     resp = webui.get(path)
@@ -2221,6 +2222,8 @@ def test_pfb_dns_page_renders_the_doh_and_doq_settings_directly_after_the_enable
         "option forwardfor",
     ):
         assert needle in block, f"DoH/DoQ help is missing {needle!r}"
+    assert block.count("<code>pfb-dns</code>") == 2, "DoH and DoQ help each name the shipped binary, pfb-dns"
+    assert "pfb_dns_gateway" not in html, "the page still names the retired binary pfb_dns_gateway"
 
 
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
