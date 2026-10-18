@@ -161,6 +161,7 @@ class Names:
     nomatch: dict[str, str]  # per transport, asked while no ACL row names the client
     nomatch_restored: dict[str, str]  # per transport, asked after the lists are back
     v6: dict[str, str]  # per transport, asked by the IPv6 LAN client while no ACL row names the IPv4 one
+    fw_v6: tuple[str, str]  # UDP and TCP, asked by the firewall itself of its own LAN IPv6 address
     refuse_poll: str  # asked until the refuse row shows
     deny_poll: str
     nomatch_poll: str  # asked until no row names the client
@@ -190,6 +191,7 @@ class Names:
             self.refuse_barrier,
             self.deny_barrier,
             self.v6_barrier,
+            *self.fw_v6,
             self.firewall,
             *self.hostile,
         ]
@@ -209,6 +211,7 @@ def _make_names() -> Names:
         nomatch=per_transport("nomatch"),
         nomatch_restored=per_transport("nmback"),
         v6=per_transport("v6"),
+        fw_v6=(h.unique_domain("fwv6-udp"), h.unique_domain("fwv6-tcp")),
         refuse_poll=h.unique_domain("refpoll"),
         deny_poll=h.unique_domain("denpoll"),
         nomatch_poll=h.unique_domain("nmpoll"),
@@ -503,6 +506,21 @@ def _client_v6(client: SmokeVM) -> Iterator[None]:
         yield
     finally:
         client.ssh(f"ip -6 addr del {address} dev {interface}")
+
+
+def _v6_diagnostics(gw: Gateway) -> str:
+    """Why the client VM may not reach the firewall's LAN IPv6 address: ping, neighbours and routes, the IPv6 rules."""
+    client = gw.client.ssh(
+        f"ping -6 -c 2 -W 3 -I {LAN_V6_CLIENT} {LAN_V6_ADDR} 2>&1; ip -6 neigh show; ip -6 route show"
+    ).stdout
+    firewall = gw.vm.ssh("ndp -an | grep 2001:db8; pfctl -sr 2>&1 | grep inet6 | head -20").stdout
+    return f"client VM:\n{client}\nfirewall:\n{firewall}"
+
+
+def _firewall_ask(vm: SmokeVM, name: str, *, tcp: bool) -> tuple[h.DnsAnswer, str]:
+    """`name` asked by the firewall itself of its own LAN IPv6 address, so the client is that address (drill)."""
+    out = vm.ssh(f"drill {'-t ' if tcp else ''}@{LAN_V6_ADDR} {name} A 2>&1").stdout
+    return h._parse_drill(out, "A"), out
 
 
 def _naming(rows: list[str], address: str) -> list[str]:
@@ -1023,7 +1041,9 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
       access_lists.conf has no row for 192.168.1.10,
     Then once the gateway has re-read the config the client gets REFUSED on every transport, for a listed name and for
       an unlisted one, and dnsbl.log has no row for them; an IPv6 client of the LAN, which only the clause grants, still
-      gets the VIP on every transport, logged with its address;
+      gets the VIP, logged with its address: the firewall itself asking its own LAN IPv6 address over UDP and TCP, and
+      the client VM on every transport when its IPv6 address reaches the firewall (this smoke VM's LAN may not carry
+      it, and the diagnostics are logged then);
     When the lists are put back,
     Then the IPv4 client gets the VIP on every transport again.
     """
@@ -1043,18 +1063,41 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
         _expect_everywhere("no row, listed name", _ask_all(gw, names.nomatch), _refused, "REFUSED")
         _expect_everywhere("no row, unlisted name", _ask_all(gw, unlisted), _refused, "REFUSED")
         with _client_v6(gw.client):
-            v6 = {
+            via_vm = {
                 transport: _ask(gw.client, transport, names.v6[transport], source=LAN_V6_CLIENT, server=LAN_V6_ADDR)
-                for transport in TRANSPORTS
+                for transport in ("udp", "tcp")
             }
-            _expect_everywhere("IPv6 LAN client", v6, h.is_vip, "the VIP")
-            barrier, raw = _ask(gw.client, "udp", names.v6_barrier, source=LAN_V6_CLIENT, server=LAN_V6_ADDR)
-        assert h.is_vip(barrier), f"the IPv6 client's last query should get the VIP: {barrier}\n{raw}"
+            vm_reaches = not all(_no_answer(answer) for answer, _ in via_vm.values())
+            if vm_reaches:
+                for transport in TRANSPORTS[2:]:
+                    via_vm[transport] = _ask(
+                        gw.client, transport, names.v6[transport], source=LAN_V6_CLIENT, server=LAN_V6_ADDR
+                    )
+                _expect_everywhere("IPv6 LAN client, the client VM", via_vm, h.is_vip, "the VIP")
+            else:
+                _say(
+                    f"the client VM reaches nothing on {LAN_V6_ADDR}; no IPv6 client is asked from it:\n"
+                    + _v6_diagnostics(gw)
+                )
+        via_firewall = {
+            transport: _firewall_ask(vm, name, tcp=transport == "tcp")
+            for transport, name in zip(("udp", "tcp"), names.fw_v6)
+        }
+        _expect_everywhere("IPv6 LAN client, the firewall itself", via_firewall, h.is_vip, "the VIP")
+        barrier, raw = _firewall_ask(vm, names.v6_barrier, tcp=False)
+        assert h.is_vip(barrier), f"the firewall's last IPv6 query should get the VIP: {barrier}\n{raw}"
         _wait_dnsbl_row(vm, names.v6_barrier)
         refused_rows = {name: _dnsbl_rows(vm, name) for name in (*names.nomatch.values(), *unlisted.values())}
         assert not any(refused_rows.values()), f"dnsbl.log has rows for names the gateway refused: {refused_rows}"
-        v6_clients = {ipaddress.ip_address(row[3]) for name in names.v6.values() for row in _dnsbl_rows(vm, name)}
-        assert v6_clients == {ipaddress.ip_address(LAN_V6_CLIENT)}, f"dnsbl.log names {v6_clients} for the IPv6 client"
+
+        def logged_clients(asked: list[str]) -> set[ipaddress.IPv6Address | ipaddress.IPv4Address]:
+            return {ipaddress.ip_address(row[3]) for name in asked for row in _dnsbl_rows(vm, name)}
+
+        assert logged_clients(list(names.fw_v6)) == {ipaddress.ip_address(LAN_V6_ADDR)}, (
+            "dnsbl.log: the firewall's rows"
+        )
+        if vm_reaches:
+            assert logged_clients(list(names.v6.values())) == {ipaddress.ip_address(LAN_V6_CLIENT)}, "dnsbl.log: the VM"
     _wait_udp(gw, names.nomatch_poll, h.is_vip, "the VIP again")
     _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_vip, "the VIP")
 
