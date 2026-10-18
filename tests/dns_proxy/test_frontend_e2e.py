@@ -27,6 +27,7 @@ from frontend_helpers import (
     FakeUnbound,
     build_query,
     serve_plain,
+    serving,
     tcp_exchange,
     udp_exchange,
 )
@@ -505,15 +506,8 @@ def test_serve_boots_the_module_from_the_module_dir_and_shuts_it_down(
     )
 
     async def scenario() -> bytes:
-        stop = asyncio.Event()
-        ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
-        task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
-        try:
-            [server] = await asyncio.wait_for(ready, WATCHDOG)
+        async with serving(args) as [server]:
             return (await udp_exchange(server, build_query(BLOCKED)))[0]
-        finally:
-            stop.set()
-            await asyncio.wait_for(task, WATCHDOG)
 
     reply = asyncio.run(scenario())
     assert _answers(dnswire.parse(reply)) == [(BLOCKED, dnswire.TYPE_A, VIP4)]

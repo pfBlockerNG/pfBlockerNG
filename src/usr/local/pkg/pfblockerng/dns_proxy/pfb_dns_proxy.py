@@ -829,21 +829,16 @@ def _dot_setup(config_path: str) -> tuple[pfsense_dot.DotSettings | None, ssl.SS
         return None, None
 
 
-async def serve(
-    args: argparse.Namespace,
-    *,
-    stop: asyncio.Event | None = None,
-    on_ready: Callable[[list[tuple[str, int]]], object] | None = None,
-) -> None:
-    """Bind, drop root for `args.user`, boot the module (not with `args.no_module`), serve until `stop` is set
-    (SIGINT/SIGTERM when not given), then shut everything down.
+async def serve(args: argparse.Namespace) -> None:
+    """Bind, drop root for `args.user`, boot the module (not with `args.no_module`), serve until SIGINT or SIGTERM,
+    then shut everything down.
 
     The sockets and the TLS context are made as the user the process started as; the drop comes after them and
-    before the boot, so what init_standard() and the watchers create belongs to `args.user`. `on_ready` gets the
-    bound (host, port)s: the UDP+TCP listeners first, then the DoT ones. A user that does not exist, a drop the OS
-    refuses (DropError) or no address that can be bound for UDP+TCP (ListenError) raises before the module boots; an
-    address that cannot be bound is logged and skipped, and a DoT configuration that cannot be served (DotConfigError)
-    is logged as one error line and leaves DoT off.
+    before the boot, so what init_standard() and the watchers create belongs to `args.user`. The bound (host, port)s
+    are logged in the "listening on" line, UDP+TCP first, then DoT. A user that does not exist, a drop the OS refuses
+    (DropError) or no address that can be bound for UDP+TCP (ListenError) raises before the module boots; an address
+    that cannot be bound is logged and skipped, and a DoT configuration that cannot be served (DotConfigError) is
+    logged as one error line and leaves DoT off.
     """
     account = lookup_user(args.user) if args.user is not None else None
     dot, dot_context = _dot_setup(args.pfsense_config) if args.dot else (None, None)
@@ -874,12 +869,9 @@ async def serve(
                 shim.log_err(f"upstream-block detection is off: cannot listen on {OBSERVER_SOCKET}: {exc}")
         listening = [f"{host}:{port}" for host, port in bound] + [f"{host}:{port} (DoT)" for host, port in dot_bound]
         shim.log_info(f"listening on {', '.join(listening)}; upstream {args.upstream}")
-        if on_ready is not None:
-            on_ready(bound + dot_bound)
-        if stop is None:
-            stop = asyncio.Event()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                asyncio.get_running_loop().add_signal_handler(sig, stop.set)
+        stop = asyncio.Event()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            asyncio.get_running_loop().add_signal_handler(sig, stop.set)
         await stop.wait()
     finally:
         await frontend.stop()
