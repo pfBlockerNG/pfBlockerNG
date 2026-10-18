@@ -48,9 +48,11 @@ off while the proxy runs. If the certificate is missing, unusable or its key is 
 one error line with the reason, and the plain listeners serve (exiting would only make the supervisor relaunch every
 5 s with LAN DNS down). There is no self-signed fallback and no passphrase prompt.
 
-Limits: at most 128 TCP and DoT connections at once (over that they are closed at accept, before any DoT handshake
-byte, one log line per burst; a handshake in progress holds its slot), 512 UDP queries in flight, and a DoT handshake
-must finish within 10 s.
+Limits: at most 128 TCP and DoT connections at once and 16 per client address (over either, the connection idle
+longest of those is closed to make room for the new one, one log line per burst; a DoT handshake in progress counts),
+512 UDP queries in flight and 64 per client address (over either the oldest of those is dropped, one log line per
+burst), and a DoT handshake must finish within 10 s. Unbound answers a flood the same way, so one client cannot take
+DNS from the others.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -62,6 +64,7 @@ import asyncio
 import contextlib
 import errno
 import ipaddress
+import itertools
 import json
 import logging
 import os
@@ -75,6 +78,7 @@ import struct
 import sys
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from dataclasses import dataclass
 from functools import partial
 from types import ModuleType
 from typing import Any, NamedTuple
@@ -89,9 +93,12 @@ TCP_IDLE_TIMEOUT = 30.0  # Unbound's tcp-idle-timeout default
 RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real query carries an OPT, maybe a TSIG
-MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; more are dropped
-MAX_TCP_CLIENTS = 128  # TCP and DoT connections at once; each opens one Unbound connection lazily; more are closed
+MAX_UDP_INFLIGHT = 512  # concurrent UDP queries, each holding an upstream socket; over it the oldest is dropped
+MAX_UDP_PER_SOURCE = 64  # ... of which one client address may hold this many: over it its own oldest is dropped
+MAX_TCP_CLIENTS = 128  # TCP and DoT connections at once; each opens one Unbound connection lazily
+MAX_TCP_PER_SOURCE = 16  # ... of which one client address may hold this many; over either the longest idle is closed
 TLS_HANDSHAKE_TIMEOUT = 10.0  # a DoT client that has not finished its handshake by then is dropped (asyncio: 60 s)
+TLS_SHUTDOWN_TIMEOUT = 2.0  # a DoT client that does not answer our close by then is cut off (asyncio: 30 s)
 OBSERVER_SOCKET = (
     "pfb_upstream.sock"  # in --module-dir, which is the working directory; pfb_upstream_observer.py SOCKET
 )
@@ -321,35 +328,46 @@ def _upstream_report(data: bytes) -> tuple[shim.module_qstate, shim.DnsMsg]:
 # --- the proxy -----------------------------------------------------------------------------------
 
 
+@dataclass(slots=True)
+class _Client:
+    src: str
+    active: int  # the tick of its last frame or reply: the lower, the longer it has been idle
+
+
 class Frontend:
-    def __init__(
-        self,
-        module: ModuleType | None,
-        upstream: tuple[str, int],
-        timeout: float = 5.0,
-        max_udp_inflight: int = MAX_UDP_INFLIGHT,
-        max_tcp_clients: int = MAX_TCP_CLIENTS,
-    ) -> None:
+    def __init__(self, module: ModuleType | None, upstream: tuple[str, int], timeout: float = 5.0) -> None:
         self.module = module
         self.upstream = upstream
         self.timeout = timeout
-        self.max_udp_inflight = max_udp_inflight
-        self.max_tcp_clients = max_tcp_clients
-        self.udp_inflight = 0
         self.udp_overloaded = False
         self.tcp_overloaded = False
         self._servers: list[asyncio.Server] = []
         self._udp: list[asyncio.DatagramTransport] = []
-        self._clients: set[asyncio.StreamWriter] = set()
+        self._queries: dict[asyncio.Task[None], str] = {}  # UDP queries in flight, oldest first, by source
+        self._per_source: dict[str, int] = {}  # how many of them each source holds
+        self._clients: dict[asyncio.StreamWriter, _Client] = {}
+        self._ticks = itertools.count()
         self._tasks: set[asyncio.Task[None]] = set()
         self._observer: tuple[asyncio.DatagramTransport, str] | None = None
         self._malformed_reported = False
+        self._silent = False  # Unbound has not answered since the last time this was logged
 
     def _operate(self, qstate: shim.module_qstate, event: int) -> int:
         module = self.module
         assert module is not None  # resolve() relays instead when there is no module
         module.operate(shim.MODULE_ID, event, qstate, None)
         return qstate.ext_state[shim.MODULE_ID]
+
+    async def _ask(self, forward: Forward, wire: bytes, question: dnswire.Question) -> bytes | None:
+        """Unbound's reply to the client's query, or None. Silence is logged once, not per query: a flood of queries
+        Unbound never answers would otherwise fill the unrotated log, so the next line waits for an answer."""
+        reply = await forward(wire)
+        if reply is not None:
+            self._silent = False
+        elif not self._silent:
+            self._silent = True
+            shim.log_warn(f"no reply from Unbound for {question.name} {dnswire.type_str(question.qtype)}")
+        return reply
 
     async def resolve(
         self, wire: bytes, client_ip: str, forward: Forward, *, over_tcp: Forward | None = None
@@ -376,11 +394,8 @@ class Frontend:
 
         question = query.questions[0]
         if self.module is None:
-            reply = await forward(wire)
-            if reply is None:
-                shim.log_warn(f"no reply from Unbound for {question.name} {dnswire.type_str(question.qtype)}")
-                return _error(query, RCODE_SERVFAIL)
-            return reply
+            reply = await self._ask(forward, wire, question)
+            return _error(query, RCODE_SERVFAIL) if reply is None else reply
         qstate = shim.module_qstate(
             shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags
         )
@@ -388,9 +403,8 @@ class Frontend:
         try:
             state = self._operate(qstate, shim.MODULE_EVENT_NEW)
             if state == shim.MODULE_WAIT_MODULE:
-                upstream_reply = await forward(wire)
+                upstream_reply = await self._ask(forward, wire, question)
                 if upstream_reply is None:
-                    shim.log_warn(f"no reply from Unbound for {question.name} {dnswire.type_str(question.qtype)}")
                     state = shim.MODULE_ERROR
                 else:
                     reply = dnswire.parse(upstream_reply)
@@ -503,10 +517,44 @@ class Frontend:
 
     # --- sockets ---
 
-    def spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+    def spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._task_done)
+        return task
+
+    def spawn_udp_query(self, coro: Coroutine[Any, Any, None], src: str) -> None:
+        """Run the query of one UDP datagram from `src`. Over the limit for `src`, or over the global one, the oldest
+        query of that source (or of all) is dropped for it, as Unbound jostles queries out: a flood of queries nobody
+        answers can then only push out its own source's. The scan for a source's oldest runs only when it is at its
+        limit, over at most MAX_UDP_PER_SOURCE of them."""
+        if self._per_source.get(src, 0) >= MAX_UDP_PER_SOURCE:
+            victim, why = next(task for task, owner in self._queries.items() if owner == src), f"{src} has"
+        elif len(self._queries) >= MAX_UDP_INFLIGHT:
+            victim, why = next(iter(self._queries)), f"{len(self._queries)}"
+        else:
+            victim, why = None, ""
+        if victim is not None:
+            victim.cancel()
+            self._forget_udp_query(victim)
+            if not self.udp_overloaded:  # one line per flood, not per packet
+                self.udp_overloaded = True
+                shim.log_warn(f"{why} UDP queries in flight: dropping the oldest for each new one until they drain")
+        task = self.spawn(coro)
+        self._queries[task] = src
+        self._per_source[src] = self._per_source.get(src, 0) + 1
+        task.add_done_callback(self._forget_udp_query)
+
+    def _forget_udp_query(self, task: asyncio.Task[None]) -> None:
+        src = self._queries.pop(task, None)
+        if src is None:  # dropped for a newer query: already forgotten
+            return
+        if self._per_source[src] == 1:
+            del self._per_source[src]
+        else:
+            self._per_source[src] -= 1
+        if not self._queries:
+            self.udp_overloaded = False
 
     def _task_done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
@@ -534,7 +582,7 @@ class Frontend:
         for server in self._servers:
             server.close()
         for writer in list(self._clients):
-            writer.close()
+            _hang_up(writer)
         for transport in self._udp:
             transport.close()
         if self._observer is not None:
@@ -548,56 +596,75 @@ class Frontend:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _turn_away(self, writer: asyncio.StreamWriter) -> None:
-        """Close a connection that arrived over the cap: nothing is read from it (a DoT client gets no TLS handshake
-        either) and no Unbound connection is opened."""
+    def _make_room(self, src: str) -> None:
+        """A TCP or DoT connection from `src` is about to be served. Over the limit for `src`, or over the global one,
+        the client idle longest of those (of `src`'s first) is closed for it: a peer that holds slots and sends
+        nothing cannot keep the others out. A pass over at most MAX_TCP_CLIENTS entries per connection."""
+        crowd = [writer for writer, client in self._clients.items() if client.src == src]
+        if len(crowd) >= MAX_TCP_PER_SOURCE:
+            pool, why = crowd, f"{src} holds {len(crowd)} TCP connections"
+        elif len(self._clients) >= MAX_TCP_CLIENTS:
+            pool, why = list(self._clients), f"TCP client limit of {MAX_TCP_CLIENTS} reached"
+        else:
+            return
+        victim = min(pool, key=lambda writer: self._clients[writer].active)
+        del self._clients[victim]
+        _hang_up(victim)
         if not self.tcp_overloaded:  # one line per burst, not per connection
             self.tcp_overloaded = True
-            shim.log_warn(
-                f"TCP client limit of {self.max_tcp_clients} reached: closing new connections until the clients drain"
-            )
-        writer.close()
+            shim.log_warn(f"{why}: closing the longest idle client for each new connection until the clients drain")
 
     async def _tcp_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, context: ssl.SSLContext | None = None
     ) -> None:
         """One client connection: length-framed queries answered one at a time, one upstream connection reused.
 
-        `context` makes it DoT: the TLS handshake runs here, after the cap check, and a handshake in progress holds
-        the slot; one that fails or times out just closes the connection.
+        `context` makes it DoT: the TLS handshake runs here, after the limits were applied, and a handshake in
+        progress counts as an idle client; one that fails or times out just closes the connection.
         """
-        if len(self._clients) >= self.max_tcp_clients:
-            self._turn_away(writer)
-            return
         peer, local = writer.get_extra_info("peername"), writer.get_extra_info("sockname")
         if peer is None or local is None:  # the peer reset the connection before this handler ran
             writer.close()
             return
         src, dst = proxy_endpoints(peer[:2], local[:2])
         upstream = _TcpUpstream(self.upstream, proxyv2.header(src, dst, tcp=True), self.timeout)
-        self._clients.add(writer)
+        self._make_room(src[0])
+        client = self._clients[writer] = _Client(src[0], next(self._ticks))
         try:
             # Nothing may be awaited before this: the ClientHello must still be on the socket, not in `reader`.
             if context is not None:
                 await writer.start_tls(context, ssl_handshake_timeout=TLS_HANDSHAKE_TIMEOUT)
             while True:
+                await asyncio.sleep(0)  # reading buffered bytes never yields: a pipelined burst would hold the loop
                 try:
                     size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), TCP_IDLE_TIMEOUT))[0]
                     wire = await asyncio.wait_for(reader.readexactly(size), TCP_IDLE_TIMEOUT)
                 except (asyncio.IncompleteReadError, TimeoutError, OSError):
                     return
+                client.active = next(self._ticks)
                 reply = await self.resolve(wire, src[0], upstream)
                 if reply is not None:
                     writer.write(struct.pack("!H", len(reply)) + reply)
                     await asyncio.wait_for(writer.drain(), TCP_IDLE_TIMEOUT)  # a client that never reads is dropped
+                client.active = next(self._ticks)
         except OSError:
             pass
         finally:
             upstream.close()
-            writer.close()
-            self._clients.discard(writer)
+            _hang_up(writer)
+            self._clients.pop(writer, None)
             if not self._clients:
                 self.tcp_overloaded = False
+
+
+def _hang_up(writer: asyncio.StreamWriter) -> None:
+    """Close a client connection. A TLS peer that does not answer our close_notify is cut off after
+    TLS_SHUTDOWN_TIMEOUT: StreamWriter.start_tls takes no ssl_shutdown_timeout before Python 3.12, and asyncio's own
+    wait is 30 s."""
+    tls = writer.get_extra_info("ssl_object") is not None  # gone once the transport is closed
+    writer.close()
+    if tls:
+        asyncio.get_running_loop().call_later(TLS_SHUTDOWN_TIMEOUT, writer.transport.abort)
 
 
 class _UdpServer(asyncio.DatagramProtocol):
@@ -609,30 +676,18 @@ class _UdpServer(asyncio.DatagramProtocol):
         self.transport = transport  # type: ignore[assignment]
 
     def datagram_received(self, data: bytes, addr: Any) -> None:
-        frontend = self.frontend
-        if frontend.udp_inflight >= frontend.max_udp_inflight:
-            if not frontend.udp_overloaded:  # one line per flood, not per packet
-                frontend.udp_overloaded = True
-                shim.log_warn(f"{frontend.udp_inflight} UDP queries in flight: dropping new ones until they drain")
-            return
-        frontend.udp_inflight += 1
-        frontend.spawn(self._handle(data, addr))
+        self.frontend.spawn_udp_query(self._handle(data, addr), addr[0])
 
     async def _handle(self, data: bytes, addr: Any) -> None:
         assert self.transport is not None
-        try:
-            src, dst = proxy_endpoints(addr[:2], self.transport.get_extra_info("sockname")[:2])
-            forward = partial(
-                _forward_udp, self.frontend.upstream, proxyv2.header(src, dst, tcp=False), self.frontend.timeout
-            )
-            over_tcp = partial(_forward_tcp_once, self.frontend.upstream, src, dst, self.frontend.timeout)
-            reply = await self.frontend.resolve(data, src[0], forward, over_tcp=over_tcp)
-            if reply is not None:
-                self.transport.sendto(reply, addr)
-        finally:
-            self.frontend.udp_inflight -= 1
-            if self.frontend.udp_inflight == 0:
-                self.frontend.udp_overloaded = False
+        src, dst = proxy_endpoints(addr[:2], self.transport.get_extra_info("sockname")[:2])
+        forward = partial(
+            _forward_udp, self.frontend.upstream, proxyv2.header(src, dst, tcp=False), self.frontend.timeout
+        )
+        over_tcp = partial(_forward_tcp_once, self.frontend.upstream, src, dst, self.frontend.timeout)
+        reply = await self.frontend.resolve(data, src[0], forward, over_tcp=over_tcp)
+        if reply is not None:
+            self.transport.sendto(reply, addr)
 
 
 class _ObserverServer(asyncio.DatagramProtocol):

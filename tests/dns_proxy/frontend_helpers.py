@@ -184,11 +184,14 @@ def split_proxy_header(data: bytes) -> tuple[bytes, bytes]:
 
 
 class FakeProxyUpstream:
-    """UDP+TCP listener on one loopback port that records each PROXYv2 header and answers via FakeUnbound."""
+    """UDP+TCP listener on one loopback port that records each PROXYv2 header and answers via FakeUnbound.
 
-    def __init__(self, unbound: FakeUnbound, *, silent: bool = False) -> None:
+    `silent` leaves every UDP query unanswered, `unanswered_prefix` only those whose lower-case name starts with it."""
+
+    def __init__(self, unbound: FakeUnbound, *, silent: bool = False, unanswered_prefix: str | None = None) -> None:
         self.unbound = unbound
         self.silent = silent
+        self.unanswered_prefix = unanswered_prefix
         self.headers: list[bytes] = []
         self.port = 0
         self._tcp: asyncio.Server | None = None
@@ -235,7 +238,10 @@ class _UdpUpstream(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         header, wire = split_proxy_header(data)
         self.owner.headers.append(header)
-        if not self.owner.silent and self.transport is not None:
+        if self.transport is None or self.owner.silent:
+            return
+        prefix = self.owner.unanswered_prefix
+        if prefix is None or not dnswire.parse(wire).questions[0].name.lower().startswith(prefix):
             self.transport.sendto(self.owner.unbound.answer(wire), addr)
 
 
@@ -262,6 +268,33 @@ async def udp_exchange(
         return await asyncio.wait_for(result, WATCHDOG), transport.get_extra_info("sockname")[:2]
     finally:
         transport.close()
+
+
+class UdpClient(asyncio.DatagramProtocol):
+    """A UDP client socket's replies, in arrival order, and a way to wait for the n-th one."""
+
+    def __init__(self) -> None:
+        self.replies: list[bytes] = []
+        self._arrived = asyncio.Event()
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        self.replies.append(data)
+        self._arrived.set()
+
+    async def until(self, count: int) -> list[bytes]:
+        while len(self.replies) < count:
+            self._arrived.clear()
+            await asyncio.wait_for(self._arrived.wait(), WATCHDOG)  # a stuck run fails here, not by sleeping
+        return self.replies
+
+
+async def udp_client(server: tuple[str, int], source: str = "127.0.0.1") -> tuple[asyncio.DatagramTransport, UdpClient]:
+    """A UDP socket bound to `source` and connected to `server`, for sending several queries and counting replies."""
+    client = UdpClient()
+    transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+        lambda: client, remote_addr=server, local_addr=(source, 0)
+    )
+    return transport, client
 
 
 async def tcp_exchange(
