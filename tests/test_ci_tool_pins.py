@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHELLCHECK_PIN = "v0.11.0"
 SHELLSPEC_PIN = "0.28.1"
 KCOV_PIN = "a39874f938ce13f7a65f253120d1ec946b349ffe"  # the commit tag v43 pointed at
+GO_PIN = "1.27.0"  # the compiler that cross-builds the pfB-DNS payload (issue #3513)
 
 
 _WORKFLOWS = ROOT / ".github/workflows"
@@ -61,12 +62,13 @@ def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
     against different binaries while both read as green (#2185)."""
     pins = _pins()
 
-    # Floor: the three pins whose drift changes a verdict must actually be found. A
+    # Floor: the pins whose drift changes a verdict or a shipped binary must actually be found. A
     # workflow that renames or restructures them would otherwise pass vacuously.
     for name, expected in (
         ("SHELLCHECK_VERSION", SHELLCHECK_PIN),
         ("SHELLSPEC_VERSION", SHELLSPEC_PIN),
         ("KCOV_COMMIT", KCOV_PIN),
+        ("GO_VERSION", GO_PIN),
     ):
         assert name in pins, f"no workflow pins {name} any more — the install moved; retarget this gate"
         assert set(pins[name]) == {expected}, (

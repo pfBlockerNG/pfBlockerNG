@@ -102,6 +102,8 @@ jobs:
     # own -- without this budget a stuck lock burns GitHub's 360-minute default rather
     # than failing here. Observed median 3.5 min, worst 3.9.
     timeout-minutes: 20
+    env:
+      GO_VERSION: "1.27.0"
 
     strategy:
       fail-fast: false
@@ -150,6 +152,14 @@ jobs:
         # leg runs whatever interpreter uv defaults to, so a second matrix entry would
         # silently test the same one twice and report two green legs for one version.
         run: uv sync --locked --group dev --python "${{ matrix.python-version }}"
+
+      - name: Set up the pinned Go toolchain
+        # tests/test_build_pfb_dns.py and tests/test_build_pkg_portable_pfb_dns.py run the real
+        # FreeBSD cross-build (GOTOOLCHAIN=local): this is the compiler they run.
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
 
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml. --junitxml feeds
