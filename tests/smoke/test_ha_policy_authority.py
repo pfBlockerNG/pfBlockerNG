@@ -43,7 +43,7 @@ import contextlib
 import json
 import os
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import ExitStack
 from typing import Any
 
@@ -58,7 +58,6 @@ from .ha_pair import (
     SECONDARY_SYNC_IP,
     SYNC_NIC,
     HaPair,
-    _redact,
     carp_state,
     clear_sshguard,
     configure_secondary_users,
@@ -110,6 +109,7 @@ from .ha_policy import (
     sender_section,
     set_leaves,
     settle,
+    show,
     sync_once,
     token,
     trigger_send,
@@ -254,11 +254,6 @@ def undo(ha_pair: HaPair, baseline: Baseline) -> Iterator[ExitStack]:
 # --------------------------------------------------------------------------- #
 # Plumbing
 # --------------------------------------------------------------------------- #
-
-
-def show(label: str, value: Any, *, secrets: Iterable[str] = ()) -> None:
-    """Print the record an assertion is about to read; ``secrets`` are redacted (raw log text may carry any value)."""
-    print(f"[HA3455] {label}: {_redact(json.dumps(value, sort_keys=True, default=str), secrets)}", flush=True)
 
 
 def pair_secrets(pair: HaPair) -> list[str]:
@@ -860,11 +855,15 @@ def test_sync_page_save_flips_the_role(ha_pair: HaPair, baseline: Baseline, undo
             f"B's sender panel claims {banned and banned.group(0)!r} for a call it cannot see through"
         )
         show("A's receive record while A is the HA primary", receive_state(a))
+        # Premise (core's loop guard drops this call): A's package state must not move, so nothing is half-applied.
         assert receive_state(a) == a_receive, (
-            f"a call core dropped moved A's receive record: {a_receive!r} -> {receive_state(a)!r}"
+            f"premise: core should have dropped B's call, yet A's package receive record moved: "
+            f"{a_receive!r} -> {receive_state(a)!r}"
         )
-        assert node_state(a).digest == a_digest, "a call core dropped moved A's policy digest"
-        assert dropped not in aliasnames(a), f"a call core dropped still put {dropped} on A: {aliasnames(a)}"
+        assert node_state(a).digest == a_digest, "premise: core should have dropped B's call, yet A's policy moved"
+        assert dropped not in aliasnames(a), (
+            f"premise: core should have dropped B's call, yet {dropped} is on A: {aliasnames(a)}"
+        )
         # The deliberate flip: A's HA sync target goes, so B's next send is an ordinary call to a receiver.
         set_leaves(a, {"hasync": None}, "pfBlockerNG smoke: HA A leaves the primary role")
         t0_a, sent = b_sends()

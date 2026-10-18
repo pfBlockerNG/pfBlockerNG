@@ -77,6 +77,7 @@ from .ha_policy import (
     sentinel,
     set_leaves,
     settle,
+    show,
     sync_once,
     token,
     unexpected_additions,
@@ -93,11 +94,6 @@ ROW_SECTIONS = tuple(f"{root}/" for root in ROW_ROOTS)
 SYSTEM_LOG = "/var/log/system.log"
 # The pfSense XMLRPC client logs this once per failed attempt before it retries.
 CLIENT_RETRY_MARKER = "Retrying XMLRPC Request due to error"
-
-
-def show(label: str, value: Any) -> None:
-    """Print a record the assertions rely on; the smoke log carries it next to the guest identity lines."""
-    print(f"HA {label}: {json.dumps(value, sort_keys=True, default=str)}")
 
 
 @pytest.fixture(scope="module")

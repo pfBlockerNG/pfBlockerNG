@@ -197,7 +197,7 @@ def test_every_seeded_registry_key_holds_a_value_on_both_nodes_except_the_dnsbl_
     assert a ^ b == {f"{hp.DNSBL}/pfb_dnsvip4"}, f"seeded on one node only: {sorted(a ^ b)}"
 
 
-def test_the_seeded_numeric_leaves_are_values_the_package_reads_as_given(hp: ModuleType) -> None:
+def test_the_seeded_numeric_leaves_are_digits_and_in_range(hp: ModuleType) -> None:
     """A seed the package clamps or ignores proves nothing about "B kept its own": each must read back as seeded."""
     numeric = ("log_max_", "pfb_log_trim_margin_pct", "pfb_alias_delta_batch", "pfb_dnsport", "pfb_py_cache_max")
     for tag in ("A", "B"):

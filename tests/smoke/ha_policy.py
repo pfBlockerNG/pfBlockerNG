@@ -403,6 +403,11 @@ def apply_banners(vm: SmokeVM) -> int:
     return h.count_log_marker(vm, h.PFB_LOG, APPLY_BANNER)
 
 
+def show(label: str, value: Any, *, secrets: Iterable[str] = ()) -> None:
+    """Print the record an assertion is about to read; ``secrets`` are redacted (raw log text may carry any value)."""
+    print(f"[HA3455] {label}: {_redact(json.dumps(value, sort_keys=True, default=str), secrets)}", flush=True)
+
+
 def in_flight(vm: SmokeVM) -> list[str]:
     """The signals still set: ``pending`` (``pfb_pending_changes()``), ``tick`` (a tick process alive), ``sync`` (core's HA sync run)."""
     # The marker persists after an apply (#3481), so only the package's own check says whether it is pending.
