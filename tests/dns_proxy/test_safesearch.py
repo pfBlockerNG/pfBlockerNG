@@ -458,3 +458,21 @@ def test_the_chase_reaches_unbound_behind_the_same_proxyv2_header_as_the_clients
     assert tcp_headers == [proxyv2.header(tcp_client, server, tcp=True)]  # both over the client's one connection
     assert asked == [(DUCK, 1), (TARGET, 1)] * 2
     assert struct.unpack("!H", udp[:2])[0] == 0x1234  # the client's id, not the chase's
+
+
+def test_a_chase_repeated_over_tcp_opens_the_connection_to_unbound_with_a_stream_header_for_the_same_client(
+    ss_booted: Booted,
+) -> None:
+    async def scenario() -> tuple[tuple[str, int], tuple[str, int], list[bytes]]:
+        async with FakeProxyUpstream(TruncatesTarget(_target_zone(3))) as upstream:
+            frontend = pfb_dns_proxy.Frontend(ss_booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+            try:
+                _, client = await udp_exchange(server, build_query(DUCK, edns=True), source="127.0.0.5")
+                return server, client, list(upstream.headers)
+            finally:
+                await frontend.stop()
+
+    server, client, headers = asyncio.run(scenario())
+    datagram = proxyv2.header(client, server, tcp=False)
+    assert headers == [datagram, datagram, proxyv2.header(client, server, tcp=True)]  # query, chase, chase over TCP
