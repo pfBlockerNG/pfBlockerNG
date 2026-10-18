@@ -1821,8 +1821,10 @@ def _occupy(vm: SmokeVM, addresses: list[str], port: str) -> None:
     for n, address in enumerate(addresses):
         family = "-6" if ":" in address else "-4"
         for proto, flag in (("tcp", ""), ("udp", "-u ")):
+            # daemon -f: without it nc keeps the ssh session's stdout open and the session never ends
             lines.append(
-                f"/usr/sbin/daemon -p {OCCUPANTS}/{proto}-{n}.pid /usr/bin/nc {family} {flag}-l {address} {port}"
+                f"/usr/sbin/daemon -f -p {OCCUPANTS}/{proto}-{n}.pid /usr/bin/nc {family} {flag}-l {address} {port}"
+                " </dev/null >/dev/null 2>&1"
             )
     started = _sh(vm, "\n".join(lines) + "\n")
     assert started.returncode == 0, f"starting the listeners failed: {started.stdout!r} {started.stderr!r}"
