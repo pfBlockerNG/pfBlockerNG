@@ -274,6 +274,9 @@ func TestDoHAndDoQQueriesOverTheSharedInflightCapAreAnsweredWithAnError(t *testi
 	for f := range failures {
 		t.Error(f)
 	}
+	if n := r.g.muxInflight.Load(); n != 0 { // each decrement runs before its reply is written, so this is exact
+		t.Fatalf("%d DoH and DoQ queries still counted in flight after every one was answered or refused, want 0: a slot leaked", n)
+	}
 	again := buildQuery(t, 0, "again.example.", true)
 	if resp, body := over.do(over.get(dnsParam(again))); resp.StatusCode != 200 || !bytes.Equal(body, echoWithQR(seenQuery{wire: again})[0]) {
 		t.Fatalf("DoH query after the held ones were answered: status %d, body %x, want 200 and the echo", resp.StatusCode, body)
@@ -281,4 +284,82 @@ func TestDoHAndDoQQueriesOverTheSharedInflightCapAreAnsweredWithAnError(t *testi
 	if got, want := doqClients[0].query(doqQuery(t, "again.example.")), withID0(echoWithQR(seenQuery{wire: again})[0]); !bytes.Equal(got[2:], want[2:]) {
 		t.Fatalf("DoQ query after the held ones were answered: %x, want the echo %x", got, want)
 	}
+}
+
+// F-5: a query the decider drops frees its shared slot too; if it did not, 512 drops would end DoH and DoQ until a
+// restart. The abort or reset the client sees comes after the slot is released, so the count is exact.
+func TestDoHAndDoQDroppedQueriesFreeTheirSharedSlot(t *testing.T) {
+	r := newRig(t, rigConfig{acl: aclMixed})
+	m := newTLSMaterial(t)
+	dohAddr, doqAddr := r.serveDoH(m), r.serveDoQ(m)
+	r.autoAnswer(func(decidedQuery) []byte { return nil }) // DROP
+	c := newDoHClient(t, dohAddr, m, dohOptions{h2: true})
+	if resp, err := c.http.Do(c.get(dnsParam(buildQuery(t, 0, "drop.example.", true)))); err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("a DoH query the decider dropped got status %d, want the request aborted", resp.StatusCode)
+	}
+	r.nextQuery() // the decider saw it: the abort was its DROP, not a refusal
+	if n := r.g.muxInflight.Load(); n != 0 {
+		t.Fatalf("%d queries counted in flight after a dropped DoH query, want 0", n)
+	}
+	s := dialDoQ(t, doqAddr, m, "").stream()
+	sendDoQ(t, s, doqQuery(t, "drop.example."))
+	requireStreamReset(t, s, rfcDoQRequestCancelled)
+	r.nextQuery()
+	if n := r.g.muxInflight.Load(); n != 0 {
+		t.Fatalf("%d queries counted in flight after a dropped DoQ query, want 0", n)
+	}
+}
+
+// F-5: the overload latch re-arms once the shared counter drains, so each flood is logged once and a later flood is
+// logged again. The queries go straight to resolveShared: no transport is needed to fill the cap.
+func TestSharedInflightCapLogsEachFloodOnce(t *testing.T) {
+	r := newRig(t, rigConfig{acl: aclMixed})
+	gates := map[byte]chan struct{}{'a': make(chan struct{}), 'b': make(chan struct{})} // first letter of a flood's names
+	r.autoAnswer(func(q decidedQuery) []byte {
+		if gate, ok := gates[q.wire[13]]; ok { // wire[12] is the first label's length
+			<-gate
+		}
+		return echoAnswer(q)
+	})
+	client := netip.MustParseAddr(clientAllowed)
+	noForward := func(context.Context, []byte) []byte {
+		t.Error("the decider answered without a FORWARD, so nothing may be forwarded")
+		return nil
+	}
+	logged := func() int { return strings.Count(r.logs.joined(), "DoH and DoQ queries in flight") }
+	flood := func(tag string, wantLogged int) {
+		t.Helper()
+		var wg sync.WaitGroup
+		for i := range maxMuxInflight {
+			wire := buildQuery(t, uint16(i+1), fmt.Sprintf("%s%d.example.", tag, i), true)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if reply, ok := r.g.resolveShared(r.g.ctx, client, wire, noForward); !ok || !bytes.Equal(reply, echoAnswer(decidedQuery{wire: wire})) {
+					t.Errorf("flood %s, query %d: ok=%v reply=%x, want it admitted and echoed", tag, i, ok, reply)
+				}
+			}()
+		}
+		for range maxMuxInflight {
+			r.nextQuery() // every query has reached the decider: the cap is full
+		}
+		for range 2 {
+			over := buildQuery(t, 1, "over.example.", true)
+			if reply, ok := r.g.resolveShared(r.g.ctx, client, over, noForward); ok || reply != nil {
+				t.Fatalf("flood %s: a query over the cap got ok=%v reply=%x, want it refused", tag, ok, reply)
+			}
+		}
+		if n := logged(); n != wantLogged {
+			t.Fatalf("flood %s: %d log lines in all, want %d (one per flood): %s", tag, n, wantLogged, r.logs.joined())
+		}
+		close(gates[tag[0]])
+		wg.Wait()
+		if n := r.g.muxInflight.Load(); n != 0 || r.g.muxOverload.Load() {
+			t.Fatalf("flood %s drained: inflight=%d overload latch=%v, want 0 and re-armed", tag, n, r.g.muxOverload.Load())
+		}
+	}
+	flood("a", 1)
+	flood("b", 2)
+	r.requireNoOtherQuery()
 }
