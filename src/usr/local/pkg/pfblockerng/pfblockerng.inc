@@ -3565,19 +3565,28 @@ const PFB_DNS_PROXY_RESOLVER_KEYS = ['active_interface', 'enablessl', 'custom_op
 const PFB_DNS_PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
 const PFB_DNS_PROXY_DAEMON_PIDFILE = '/var/run/pfb_dns_proxy_daemon.pid';
 const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
+// The lock file that serializes the rc script's starts (lockf(1), kept between starts): the boot hook's background start and an
+// apply's start_service() both run `rc start`, and both could pass its "already serving?" check before the first daemon wrote a pidfile.
+const PFB_DNS_PROXY_LOCKFILE = '/var/run/pfb_dns_proxy.lock';
 // issue #3515: the DNSBL page's section save and pfb_dns_proxy_resolver() both read-modify-write config.xml; the one
 // lock (pfSense try_lock(), seconds to give up after) they hold from a fresh read through write_config(). A restore
 // stops the proxy (up to 7 s) under it, so the wait must stay above that plus the restore's own read and write.
 const PFB_DNS_CONFIG_LOCK = 'pfb_dns_config';
 const PFB_DNS_CONFIG_LOCK_WAIT = 10;
 // Overridable before load (a unit test must not touch the appliance's rc.d), like the Unbound start budgets above;
-// the wait is the seconds an apply gives the restarted proxy to write its pidfile.
+// the wait is the seconds an activation gives the proxy to become READY, the Unbound startup budget (30 s) with no
+// setting of its own: pfb_dns_proxy_await_ready().
 if (!defined('PFB_DNS_PROXY_RCFILE')) {
 	define('PFB_DNS_PROXY_RCFILE', '/usr/local/etc/rc.d/pfb_dns_proxy.sh');
 }
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
-	define('PFB_DNS_PROXY_START_WAIT', 5);
+	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
+// Readiness is read from the daemon's child pidfile and from the marker the proxy publishes with --ready-file (its own PID,
+// written once it serves). Kept in $pfb like the other runtime paths, so a unit test reads its own files; the marker lives
+// in the Unbound chroot directory, where the proxy already writes as `unbound` (its module files).
+$pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
+$pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -4045,6 +4054,8 @@ function pfb_dns_proxy_service(): void {
 	$childpid = PFB_DNS_PROXY_PIDFILE;
 	$log = PFB_DNS_PROXY_LOG;
 	$upstream = '127.0.0.1:' . PFB_DNS_PROXY_UNBOUND_PORT;
+	$lockfile = PFB_DNS_PROXY_LOCKFILE;
+	$ready = escapeshellarg($pfb['dns_proxy_ready']);
 
 	$saved = pfb_dns_proxy_saved();
 	$listen = ($saved === NULL) ? [] : pfb_dns_proxy_listen($saved);
@@ -4061,6 +4072,19 @@ function pfb_dns_proxy_service(): void {
 	$rc		= array();
 	$rc['file']	= 'pfb_dns_proxy.sh';
 	$rc['start']	= <<<EOF
+
+	# Starts are serialized: the boot hook's background start and an apply's start_service() both run this, and without the
+	# lock both can pass the "already serving?" check below before the first daemon has written its pidfiles and launch twice.
+	# lockf holds the lock (file kept, at most 10 s) while this script runs itself once more; the variable stops that inner run
+	# from locking again. The stop takes no lock, so a start that waits can still be stopped.
+	if [ -z "\${PFB_DNS_PROXY_START_LOCKED:-}" ]; then
+		PFB_DNS_PROXY_START_LOCKED=1 /usr/bin/lockf -k -t 10 {$lockfile} /bin/sh "\$0" start
+		lockstatus="\$?"
+		if [ "\${lockstatus}" -eq 75 ]; then
+			/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: another start held the start lock for 10 s - not started"
+		fi
+		exit "\${lockstatus}"
+	fi
 
 	# Run only while the moved-Resolver snapshot is set: with the Resolver back on its own port the proxy would only
 	# collide with it. The snapshot alone decides, not the toggle or DNSBL: a restore that was abandoned (config locked,
@@ -4104,8 +4128,14 @@ EOF;
 	# Ensure all processes are stopped; never launch over a survivor
 	rc_stop || return 1
 
-	# Detach std fds (#662): the supervisor must not hold the caller's pipe; the proxy's own output goes to its log
-	/usr/sbin/daemon -r -R 5 -t pfb_dns_proxy -P {$daemonpid} -p {$childpid} -o {$log} /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound{$dot}{$module} </dev/null >/dev/null 2>&1
+	# The marker an earlier proxy left (a killed proxy cannot remove its own) must never pass for this one's: only a fresh
+	# start removes it, after the stop and before the launch; the proxy writes its own once it serves
+	/bin/rm -f {$ready}
+
+	# Detach std fds (#662): the supervisor must not hold the caller's pipe; the proxy's own output goes to its log. The
+	# descriptors above stdio are closed too: lockf holds the start lock on a descriptor its command inherits, and a proxy
+	# that kept it would hold the lock for as long as it runs, so every later start would wait 10 s and fail
+	/usr/sbin/daemon -r -R 5 -t pfb_dns_proxy -P {$daemonpid} -p {$childpid} -o {$log} /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound --ready-file {$ready}{$dot}{$module} </dev/null >/dev/null 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-
 	/usr/bin/logger -p daemon.info -t pfb_dns_proxy "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy started"
 
 EOF;
@@ -4116,6 +4146,7 @@ EOF;
 	# A pid is signalled only while its command line is the proxy's: a stale pidfile may name a reused pid.
 	# alive holds validated digits only, so kill gets it unquoted: one argument per pid.
 	tick=0
+	stopped=''
 	while true; do
 		alive=''
 		for pidfile in {$daemonpid} {$childpid}; do
@@ -4132,6 +4163,7 @@ EOF;
 			esac
 		done
 		[ -n "\${alive}" ] || break
+		stopped="\${stopped} \${alive}"
 		case "\${tick}" in
 			0) /bin/kill -TERM \${alive} 2>/dev/null ;;
 			5)
@@ -4148,6 +4180,21 @@ EOF;
 	done
 	/bin/rm -f {$daemonpid} {$childpid}
 
+	# The marker is removed only when it names a process stopped here (a KILLed proxy could not remove its own): another
+	# process's marker is never deleted
+	mark=''
+	if [ -r {$ready} ]; then
+		read -r mark < {$ready} || true
+	fi
+	case "\${mark}" in
+		''|*[!0-9]*) ;;
+		*)
+			case " \${stopped} " in
+				*" \${mark} "*) /bin/rm -f {$ready} ;;
+			esac
+			;;
+	esac
+
 EOF;
 
 	// A survivor must fail the restart: the start's healthy check would otherwise report success over it
@@ -4156,16 +4203,50 @@ EOF;
 	write_rcfile($rc);
 }
 
-/** Regenerate the proxy's rc script, then restart it: the module host re-reads lists and ini only at init. */
-function pfb_dns_proxy_restart(): void {
+/**
+ * Regenerate the proxy's rc script, restart it and wait for it to become READY: the module host re-reads lists and ini only
+ * at init. A proxy that is not ready within the startup budget fails the activation, which is rolled back
+ * (pfb_dns_proxy_confirm_ready()). The restore that was abandoned (pfb_dns_proxy_resolver()) restarts the proxy WITHOUT this: a
+ * rollback that waited for the proxy it restarts would roll back again.
+ *
+ * @return bool TRUE iff the proxy is ready
+ */
+function pfb_dns_proxy_restart(): bool {
 	pfb_dns_proxy_service();
 	restart_service('pfb_dns_proxy');
+	return pfb_dns_proxy_confirm_ready();
 }
 
-/** Wait (bounded) for the proxy's pidfile: start_service() and restart_service() return before the new proxy wrote it. */
-function pfb_dns_proxy_await_running(): bool {
+/**
+ * Is the DNS proxy READY: its listener serves queries. That is not the same as ALIVE. The proxy writes its own PID to the
+ * --ready-file marker only once its sockets are bound, its privileges dropped and its matcher initialised, so the child
+ * pidfile (daemon(8) -p) must name a live process AND the marker must hold that very decimal PID. A live process that never
+ * published one (a listener that cannot bind, which its supervisor restarts every few seconds), the marker an earlier
+ * incarnation left, a live supervisor with no child and a marker with no live child are all NOT ready.
+ *
+ * pfb_dns_proxy_running() stays the pidfile-only LIVENESS predicate (is the module host up? what the zero-downtime swap, the
+ * ledger and the status panel ask); this one answers whether an activation worked. It does not prove that recursion works:
+ * the front end can handle queries while the Resolver behind it is still starting, which the boot query probe covers.
+ */
+function pfb_dns_proxy_ready(): bool {
+	global $pfb;
+
+	if (!isvalidpid($pfb['dns_proxy_pidfile'])) {
+		return FALSE;
+	}
+	$child = (string) @file_get_contents($pfb['dns_proxy_pidfile']);
+	$marker = (string) @file_get_contents($pfb['dns_proxy_ready']);
+	$decimal = '/\A[1-9][0-9]*\n?\z/';
+	return preg_match($decimal, $child) === 1 && preg_match($decimal, $marker) === 1 && rtrim($child, "\n") === rtrim($marker, "\n");
+}
+
+/**
+ * Wait (bounded, PFB_DNS_PROXY_START_WAIT: the Unbound startup budget) for the proxy to become READY: start_service() and
+ * restart_service() return before the new proxy has bound anything. NEVER call it with the DNS config lock held.
+ */
+function pfb_dns_proxy_await_ready(): bool {
 	$deadline = hrtime(TRUE) + PFB_DNS_PROXY_START_WAIT * 1000000000;
-	while (!pfb_dns_proxy_running()) {
+	while (!pfb_dns_proxy_ready()) {
 		if (hrtime(TRUE) >= $deadline) {
 			return FALSE;
 		}
@@ -4175,23 +4256,110 @@ function pfb_dns_proxy_await_running(): bool {
 }
 
 /**
+ * After a start or restart the proxy was asked for: wait for it to become ready, outside any lock. One that does not within
+ * the budget has failed its activation, and the activation is rolled back (pfb_dns_proxy_roll_back()).
+ *
+ * @return bool TRUE iff the proxy is ready; FALSE after a failed activation, whatever the rollback achieved
+ */
+function pfb_dns_proxy_confirm_ready(): bool {
+	if (pfb_dns_proxy_await_ready()) {
+		return TRUE;
+	}
+	pfb_logger("\nNot completed: the DNS proxy did not become ready within " . PFB_DNS_PROXY_START_WAIT . ' s', 2);
+	pfb_dns_proxy_roll_back();
+	return FALSE;
+}
+
+/** A rollback outcome: in the log and as a notice, so the operator is told in the GUI. */
+function pfb_dns_proxy_rollback_notice(string $text): void {
+	pfb_logger("\n{$text}", 2);
+	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/pfblockerng/pfblockerng_dns.php', 2);
+}
+
+/**
+ * The proxy took the Resolver's place and did not become ready: give the Resolver, and with DNSBL on the DNSBL module, back to
+ * Unbound. Under the DNS config lock the requested pfB-DNS toggle goes Off first, so a rollback that fails half way is retried
+ * by the next apply's restore and that apply never enables pfB-DNS again; the lock is released before anything waits. Then
+ * the proxy is stopped and the Resolver gets exactly its saved settings back (pfb_unbound_python($mode, FALSE), which also puts
+ * the DNSBL module back into Unbound iff DNSBL is on), and unbound.conf is regenerated and Unbound restarted the way the apply
+ * would (pfb_unbound_dnsbl(), pfb_update_unbound()). The restore consumes the snapshot, so the Unbound reload that follows
+ * finds no proxy to restart: there is no loop.
+ *
+ * When the config lock stays taken, or the proxy outlives its stop, the snapshot, the moved Resolver and Unbound are left as
+ * they are (the restore keeps them, and nothing destructive runs after it), and the operator is told that recovery is
+ * needed: a rollback that did not finish never says it did. There is no retry state of its own: with the toggle Off the next
+ * apply's ordinary restore tries again.
+ *
+ * @return bool TRUE iff the DNS Resolver is restored and Unbound was restarted with its previous integration
+ */
+function pfb_dns_proxy_roll_back(): bool {
+	global $pfb;
+
+	$what = 'the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' seconds of its start';
+	$lock = pfb_dns_config_lock();
+	if ($lock === NULL) {
+		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and config.xml was locked by another save, so pfB-DNS could not be turned off and " .
+		    'the DNS Resolver could not be restored. Nothing was changed and its saved settings are kept; the next pfBlockerNG update retries. ' .
+		    'If DNS stays down, stop the pfBlockerNG DNS proxy service in Status > Services and turn pfB-DNS off.');
+		return FALSE;
+	}
+	try {
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		write_config("pfBlockerNG: pfB-DNS turned off: {$what}");
+	} finally {
+		unlock($lock);
+	}
+
+	pfb_global();
+	$mode = ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) ? 'enabled' : 'disabled';
+	// The Unbound reload below reads state only an apply pass sets; a rollback from the installer or a Reports page has none
+	$pfb += ['reuse_dnsbl' => '', 'save' => FALSE, 'install' => FALSE];
+	pfb_unbound_python($mode, FALSE);
+	if (pfb_dns_proxy_saved() !== NULL) {
+		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and pfB-DNS was turned off, but the DNS Resolver could not be restored (see the notice before this one). " .
+		    'The DNS Resolver is still moved aside for the DNS proxy and its saved settings are kept; the next pfBlockerNG update retries the restore. ' .
+		    'If that fails too, stop the pfBlockerNG DNS proxy service in Status > Services, then correct Network Interfaces, SSL/TLS Service and ' .
+		    'Custom Options in Services > DNS Resolver by hand.');
+		return FALSE;
+	}
+
+	pfb_update_unbound($mode, pfb_unbound_dnsbl($mode), TRUE);
+	pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, so pfB-DNS was turned off and the DNS Resolver was restored to its previous settings" .
+	    ($mode == 'enabled' ? '; DNSBL runs in the DNS Resolver again, as before' : '') . '. ' .
+	    'Read ' . PFB_DNS_PROXY_LOG . ' for the cause, correct it, then turn pfB-DNS on again.');
+	return TRUE;
+}
+
+/**
  * The apply's branch with nothing to reload restarts nothing: bring up a proxy that died since the last reload, and
  * restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on, so an
- * interface that got a new address is not served until the proxy restarts.
+ * interface that got a new address is not served until the proxy restarts. Whatever it did, the proxy must then be READY:
+ * one that is alive but never published its marker (restarted by its supervisor every few seconds) fails the activation
+ * and is rolled back, which a pidfile alone would never notice.
+ *
+ * @return bool TRUE iff nothing is moved or the proxy is ready; FALSE after a failed activation (rolled back or not)
  */
-function pfb_dns_proxy_ensure_running(): void {
+function pfb_dns_proxy_ensure_running(): bool {
 	if (pfb_dns_proxy_saved() === NULL) {
-		return;
+		return TRUE;
 	}
 	$before = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 	pfb_dns_proxy_service();
+	$acted = TRUE;
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);
 		start_service('pfb_dns_proxy');
 	} elseif ($before !== @file_get_contents(PFB_DNS_PROXY_RCFILE)) {
 		pfb_logger("\nRestarting the DNS proxy: its listen addresses changed", 1);
 		restart_service('pfb_dns_proxy');
+	} else {
+		$acted = FALSE;
 	}
+	$ready = pfb_dns_proxy_confirm_ready();
+	if ($acted && $ready) {
+		pfb_logger(' completed: the DNS proxy is ready', 1);
+	}
+	return $ready;
 }
 
 // pkg(8) abandons a package removal only when its DEINSTALL script exits 3 (libpkg pkg_script_run_child()); any other failed status is
@@ -12537,9 +12705,11 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 	}
 
 	// A restore keeps the snapshot only when the proxy outlived its stop: the Resolver is still moved, so the proxy is
-	// restarted to serve it (the rc script starts on the snapshot alone). Not under the lock: a restart can take 14 s.
+	// restarted to serve it (the rc script starts on the snapshot alone). Not under the lock: a restart can take 14 s. The
+	// restart waits for nothing and rolls nothing back: this restore may itself be a rollback.
 	if (!$on && pfb_dns_proxy_saved() !== NULL) {
-		pfb_dns_proxy_restart();
+		pfb_dns_proxy_service();
+		restart_service('pfb_dns_proxy');
 	}
 	return $changed;
 }
@@ -13824,11 +13994,14 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 
 	// issue #3515: the proxy hosts the module and re-reads lists and ini only when it boots, so it restarts with
 	// the Resolver (the zero-downtime swap returns above and never gets here). A disabled pass gives the Resolver back.
+	// restart_service() returns before the new proxy serves, which the ledger below depends on: wait for it to be READY,
+	// and a proxy that is not rolls the activation back (the Resolver, the module and Unbound as before), which the
+	// reload that rollback runs does not repeat: the restore consumed the snapshot this condition reads.
 	if ($mode == 'enabled' && pfb_dns_proxy_saved() !== NULL) {
 		pfb_logger("\nRestarting the DNS proxy", 1);
-		pfb_dns_proxy_restart();
-		// restart_service() returns before the new proxy has written its pidfile, which the ledger below reads
-		pfb_logger(pfb_dns_proxy_await_running() ? ' completed' : ' Not completed: the DNS proxy is not running', 1);
+		if (pfb_dns_proxy_restart()) {
+			pfb_logger(' completed: the DNS proxy is ready', 1);
+		}
 	}
 
 	// ADR-61: mode=='enabled' is the only state DNSBL's apply is meant to converge to --

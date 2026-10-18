@@ -35,7 +35,7 @@ final class DnsProxyServiceTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const RC = 'pfb_dns_proxy.sh';
 
-	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger'];
+	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger', 'lockf'];
 
 	/** One script installed under every command name the rc body uses; $0 picks the role. */
 	private const DOUBLE = <<<'SH'
@@ -126,6 +126,12 @@ final class DnsProxyServiceTest extends TestCase
 			done
 			echo "${attached:-none}" >> "$S/fds"
 			ev launch
+			# What the new proxy finds at its launch: the previous marker must be gone (rc removes it before a fresh start)
+			if [ -e "$READY_FILE" ]; then echo present >> "$S/launch.marker"; else echo absent >> "$S/launch.marker"; fi
+			# Descriptors above stdio that the new proxy inherited (the start lock's, when lockf leaks it)
+			for fd in 3 4 5 6 7 8 9; do [ ! -e "/dev/fd/$fd" ] || echo "$fd" >> "$S/launch.fds"; done
+			# A test holds the launch open here to let a second start race it (the host's own sleep, not the tick double)
+			while [ -e "$S/barrier" ]; do /bin/sleep 0.05; done
 			supervisor=; child=; title=
 			while [ "$#" -gt 0 ]; do
 				case "$1" in
@@ -141,6 +147,24 @@ final class DnsProxyServiceTest extends TestCase
 			echo 3002 > "$child"
 			printf '%s\n' "3001|$supervisor|||daemon: $title[3002] (daemon)" >> "$S/procs"
 			printf '%s\n' "3002|$child|||$*" >> "$S/procs"
+			;;
+		lockf)
+			# FreeBSD lockf(1): lockf [-k] [-t seconds] file command ... -- the lock is held until the command exits; -t gives up
+			# with status 75 (EX_TEMPFAIL). The rc script must keep the lock file (-k) and wait at most 10 s.
+			keep=; wait=
+			while [ "$#" -gt 0 ]; do
+				case "$1" in
+				-k) keep=1; shift ;;
+				-t) wait="$2"; shift 2 ;;
+				-*) ev bad-lockf; exit 2 ;;
+				*) break ;;
+				esac
+			done
+			{ [ -n "$keep" ] && [ "$wait" = 10 ] && [ "$#" -ge 2 ]; } || { ev bad-lockf; exit 2; }
+			printf '%s\n' "$1" >> "$S/lockf.calls"
+			[ -z "$LOCKF_BUSY" ] || exit 75
+			lockfile="$1"; shift
+			exec /usr/bin/flock -w "$wait" -E 75 "$lockfile" "$@"
 			;;
 		*)
 			exit 2
@@ -236,14 +260,14 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gates += ['GATE_DNSBL' => 'on', 'GATE_PROXY' => 'on', 'GATE_SAVED' => (string) config_get_path(self::SAVED, '')];
 		$state = "{$this->dir}/state";
-		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter];
+		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter, 'READY_FILE' => $this->readyFile(), 'LOCKF_BUSY' => ''];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv'] as $file) {
+		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		if ($running) {
@@ -256,6 +280,12 @@ final class DnsProxyServiceTest extends TestCase
 		file_put_contents("{$this->dir}/run.sh", $this->sandboxPaths($this->rcText()));
 	}
 
+	/** Where the sandboxed script keeps the proxy's ready marker (the production path is $pfb['dns_proxy_ready']). */
+	private function readyFile(): string
+	{
+		return "{$this->dir}/run/pfb_dns_ready";
+	}
+
 	/** Point every absolute path in the generated script at the sandbox; fail closed on any other. */
 	private function sandboxPaths(string $script): string
 	{
@@ -263,6 +293,9 @@ final class DnsProxyServiceTest extends TestCase
 			'~(?<![\w$.\-/])/(?:[\w.\-]+/)*[\w.\-]+~',
 			function (array $m): string {
 				$path = $m[0];
+				if ($path === $GLOBALS['pfb']['dns_proxy_ready']) {
+					return $this->readyFile();
+				}
 				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound'], TRUE) || preg_match('~^/(?:usr/local/pkg/pfblockerng|cf/conf)/~', $path) === 1) {
 					return $path;
 				}
@@ -369,7 +402,8 @@ final class DnsProxyServiceTest extends TestCase
 				'-o', "{$this->dir}/log/dns_proxy.log",
 				'/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py',
 				'--listen', '192.0.2.1', '--listen', '2001:db8::1', '--listen', '127.0.0.1', '--listen', '::1',
-				'--port', '53', '--upstream', '127.0.0.1:5353', '--module-dir', '/var/unbound', '--user', 'unbound', '--no-module',
+				'--port', '53', '--upstream', '127.0.0.1:5353', '--module-dir', '/var/unbound', '--user', 'unbound',
+				'--ready-file', "{$this->dir}/run/pfb_dns_ready", '--no-module',
 			],
 			$this->daemonArgv()
 		);
@@ -985,5 +1019,264 @@ final class DnsProxyServiceTest extends TestCase
 
 		$this->assertSame(0, $status, "rc start failed: {$output}");
 		$this->assertSame([], $this->events(TRUE));
+	}
+
+	// -----------------------------------------------------------------------
+	// S6 -- the listener-ready marker: written by the proxy itself, cleared by the rc script only around a fresh start
+	// -----------------------------------------------------------------------
+
+	private function seedMarker(string $pid): void
+	{
+		file_put_contents($this->readyFile(), "{$pid}\n");
+	}
+
+	/** @return list<string> what each launched proxy found at the marker's path when it started */
+	private function markerAtLaunch(): array
+	{
+		return file("{$this->dir}/state/launch.marker", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+	}
+
+	/** @return list<string> the descriptors above stdio each launched proxy inherited */
+	private function inheritedFds(): array
+	{
+		return file("{$this->dir}/state/launch.fds", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+	}
+
+	public function testTheLaunchedProxyInheritsNoDescriptorFromTheStartLock(): void
+	{
+		// Given a start under lockf, which holds the lock on a descriptor its command (this script) inherits
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange();
+
+		// When it launches the proxy
+		[$status, $output] = $this->rc('start');
+
+		// Then the proxy has no descriptor above stdio: one that held the lock would keep it for as long as the proxy runs,
+		// and every later start would wait its 10 s and fail
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events());
+		$this->assertSame([], $this->inheritedFds());
+	}
+
+	public function testAFreshStartRemovesThePreviousMarkerBeforeTheNewProxyIsLaunched(): void
+	{
+		// Given the marker an earlier proxy left behind (a killed proxy cannot remove its own)
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange();
+		$this->seedMarker('999');
+
+		// When a fresh start launches the proxy
+		[$status, $output] = $this->rc('start');
+
+		// Then the old marker was gone before the daemon was launched: nothing can mistake it for the new proxy's
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events());
+		$this->assertSame(['absent'], $this->markerAtLaunch());
+		$this->assertFileDoesNotExist($this->readyFile());
+	}
+
+	public function testAHealthyRepeatedStartKeepsTheMarkerOfTheServingProxy(): void
+	{
+		// Given a serving proxy (supervisor 1001, child 1002) whose marker names its child
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', TRUE);
+		$this->seedMarker('1002');
+
+		// When the package start runs again after the boot hook (or an earlier apply) started it
+		[$status, $output] = $this->rc('start');
+
+		// Then nothing is stopped, launched or removed: the marker still names the serving child
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame([], $this->events(TRUE));
+		$this->assertSame("1002\n", (string) file_get_contents($this->readyFile()));
+		$this->assertSame(['1001', '1002'], $this->livePids());
+		$this->assertSame([], $this->markerAtLaunch(), 'no new proxy was launched');
+	}
+
+	public function testAStopRemovesTheMarkerOfTheProxyItStopped(): void
+	{
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', TRUE);
+		$this->seedMarker('1002');
+
+		[$status, $output] = $this->rc('stop');
+
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertSame([], $this->livePids());
+		$this->assertFileDoesNotExist($this->readyFile(), 'the marker names a process that was stopped here');
+	}
+
+	public function testAStopLeavesAMarkerThatNamesAProcessItDidNotStop(): void
+	{
+		// Given a marker published by another proxy process (a start that finished while this stop ran), not the one stopped
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', TRUE);
+		$this->seedMarker('7777');
+
+		[$status, $output] = $this->rc('stop');
+
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertSame([], $this->livePids());
+		$this->assertSame("7777\n", (string) file_get_contents($this->readyFile()), 'another process\'s marker is never removed');
+	}
+
+	public function testAProxyKilledAfterIgnoringTermHasItsMarkerRemovedByTheStop(): void
+	{
+		// Given a proxy that ignores TERM and is KILLed: it could not remove its own marker
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], 'never', '1', TRUE);
+		$this->seedMarker('1002');
+
+		[$status, $output] = $this->rc('stop');
+
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertFileDoesNotExist($this->readyFile());
+	}
+
+	public function testAProxyThatSurvivesItsStopKeepsItsMarker(): void
+	{
+		// Given a proxy that survives TERM and KILL: it still serves, so its marker is still true
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], 'never', 'never', TRUE);
+		$this->seedMarker('1002');
+
+		[$status] = $this->rc('stop');
+
+		$this->assertNotSame(0, $status);
+		$this->assertSame("1002\n", (string) file_get_contents($this->readyFile()));
+	}
+
+	// -----------------------------------------------------------------------
+	// S7 -- starts are serialized: the boot hook's background start and an apply's start_service() must not both launch
+	// -----------------------------------------------------------------------
+
+	/** @return array{0: resource, 1: resource} the running verb and its output pipe */
+	private function startVerb(string $verb): array
+	{
+		$proc = proc_open(
+			[$GLOBALS['pfb']['timeout'], '-k', '2', '30', $this->shell, "{$this->dir}/run.sh", $verb],
+			[0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]],
+			$pipes
+		);
+		$this->assertIsResource($proc, 'proc_open failed');
+		fclose($pipes[0]);
+		return [$proc, $pipes[1]];
+	}
+
+	/** @param array{0: resource, 1: resource} $started @return array{0: int, 1: string} */
+	private function finishVerb(array $started): array
+	{
+		$output = (string) stream_get_contents($started[1]);
+		fclose($started[1]);
+		return [proc_close($started[0]), $output];
+	}
+
+	private function launchCount(): int
+	{
+		return count(array_keys($this->events(), 'launch', TRUE));
+	}
+
+	/** @return list<string> */
+	private function lockfCalls(): array
+	{
+		return file("{$this->dir}/state/lockf.calls", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+	}
+
+	/** The watchdog only salvages a stuck run: it fails the test, and the caller's finally block reaps what it started. */
+	private function waitUntil(callable $condition, string $what): void
+	{
+		$deadline = hrtime(TRUE) + 15 * 1000000000;
+		while (!$condition()) {
+			if (hrtime(TRUE) >= $deadline) {
+				$this->fail("STUCK/ENVIRONMENT: {$what}");
+			}
+			usleep(20000);
+		}
+	}
+
+	public function testEveryStartRunsUnderTheKeptLockWithATenSecondWaitAndTheStopDoesNot(): void
+	{
+		// Given a generated script
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange();
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the start ran under one lockf (kept lock file, 10 s wait: the double rejects any other form), however many
+		// times the script runs itself inside the lock
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(["{$this->dir}/run/pfb_dns_proxy.lock"], $this->lockfCalls());
+		$this->assertSame(['launch'], $this->events());
+
+		// And a stop takes no lock: it must be able to run while a start waits
+		[$status, $output] = $this->rc('stop');
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertCount(1, $this->lockfCalls(), 'stop is not serialized with start');
+	}
+
+	public function testTwoStartsRacingAtTheDaemonLaunchLaunchExactlyOneProxy(): void
+	{
+		// Given the daemon launch held open (the proxy's pidfiles are written when it returns), and a first start inside it
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange();
+		touch("{$this->dir}/state/barrier");
+		$first = $second = NULL;
+
+		try {
+			$first = $this->startVerb('start');
+			$this->waitUntil(fn (): bool => $this->launchCount() >= 1, 'the first start never reached the daemon launch');
+
+			// When a second start (the boot hook's background start, or an apply's start_service()) arrives while it is held:
+			// without a lock it passes the same "already serving?" check and launches too; with one it waits behind the first
+			$second = $this->startVerb('start');
+			$this->waitUntil(
+				fn (): bool => $this->launchCount() >= 2 || count($this->lockfCalls()) >= 2,
+				'the second start neither reached the daemon launch nor the lock'
+			);
+		} catch (Throwable $e) {
+			foreach ([$first, $second] as $started) {
+				if ($started !== NULL) {
+					proc_terminate($started[0]);
+				}
+			}
+			throw $e;
+		} finally {
+			@unlink("{$this->dir}/state/barrier");
+		}
+
+		[$firstStatus, $firstOutput] = $this->finishVerb($first);
+		[$secondStatus, $secondOutput] = $this->finishVerb($second);
+
+		// Then both succeed and exactly one proxy was launched: the second found the first's serving pair and kept it
+		$this->assertSame(0, $firstStatus, "first start failed: {$firstOutput}");
+		$this->assertSame(0, $secondStatus, "second start failed: {$secondOutput}");
+		$this->assertSame(['launch'], $this->events(), 'one daemon launch for two concurrent starts');
+		$this->assertSame(['3001', '3002'], $this->livePids(), 'one supervisor and one child');
+	}
+
+	public function testAStartThatCannotTakeTheLockWithinItsWaitFailsLoudlyAndLaunchesNothing(): void
+	{
+		// Given another start that holds the lock for longer than the wait
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange(['LOCKF_BUSY' => '1']);
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then it gives up with lockf's own "try again" status (75), one error line, and no launch or signal
+		$this->assertSame(75, $status, "rc start must fail with EX_TEMPFAIL: {$output}");
+		$this->assertSame(['log'], $this->events(TRUE), 'one error line, no daemon, no signal');
+		$this->assertStringContainsString('lock', (string) file_get_contents("{$this->dir}/state/logger"));
 	}
 }

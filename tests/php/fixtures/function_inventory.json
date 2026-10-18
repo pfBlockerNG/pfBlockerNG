@@ -1724,7 +1724,12 @@
             }
         ]
     },
-    "pfb_dns_proxy_await_running": {
+    "pfb_dns_proxy_await_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_confirm_ready": {
         "returnsRef": false,
         "returnType": "bool",
         "params": []
@@ -1734,9 +1739,22 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_proxy_directive_text": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_ensure_running": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": []
     },
     "pfb_dns_proxy_hosts_module": {
@@ -1757,9 +1775,27 @@
             }
         ]
     },
+    "pfb_dns_proxy_listener_directive": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "code",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_port": {
         "returnsRef": false,
         "returnType": "string",
+        "params": []
+    },
+    "pfb_dns_proxy_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
         "params": []
     },
     "pfb_dns_proxy_refuse": {
@@ -1803,8 +1839,26 @@
     },
     "pfb_dns_proxy_restart": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": []
+    },
+    "pfb_dns_proxy_roll_back": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_rollback_notice": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_dns_proxy_running": {
         "returnsRef": false,
