@@ -194,6 +194,10 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   `dnsbl_dot_block` sync, while their interface lists stay local. Their exception lists
   (`dnsbl_redir_exclude`, `dnsbl_dot_block_exclude`) and `killstates` are enforcement behaviour and
   therefore policy.
+- pfB-DNS is per node. `pfb_dns` (the toggle) and `pfb_dns_saved` (the Resolver snapshot) are local and live in their own
+  `dns` section, which is none of the synced sections and is never sent. pfSense's own DNS Resolver sync does copy the
+  moved `unbound` section to a secondary, so a secondary needs pfB-DNS on before the primary syncs a moved Resolver
+  (architecture-notes "pfB-DNS: the experimental DNS proxy", known limits).
 - Each node applies its own classification. The sender's classification never decides what the
   receiver keeps.
 
