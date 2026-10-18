@@ -24,18 +24,18 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_tokens')]
 final class DnsProxyListenerSettingsTest extends TestCase
 {
-	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php';
+	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dns.php';
 	private const IFACES = ['lan', 'opt1'];
-	private const PORT_FIELDS = ['DoH port' => ['pfb_dns_proxy_doh_port'], 'DoQ port' => ['pfb_dns_proxy_doq_port']];
-	private const INTERFACE_FIELDS = ['DoH' => ['pfb_dns_proxy_doh_interface'], 'DoQ' => ['pfb_dns_proxy_doq_interface']];
+	private const PORT_FIELDS = ['DoH port' => ['pfb_dns_doh_port'], 'DoQ port' => ['pfb_dns_doq_port']];
+	private const INTERFACE_FIELDS = ['DoH' => ['pfb_dns_doh_interface'], 'DoQ' => ['pfb_dns_doq_interface']];
 
 	/** @param array<string,mixed> $over fields replacing the defaults the page posts on a fresh install */
 	private function post(array $over = []): array
 	{
 		return $over + [
-			'pfb_dns_proxy_doh' => '', 'pfb_dns_proxy_doh_port' => '4443', 'pfb_dns_proxy_doh_interface' => [],
-			'pfb_dns_proxy_doh_trusted' => '',
-			'pfb_dns_proxy_doq' => '', 'pfb_dns_proxy_doq_port' => '853', 'pfb_dns_proxy_doq_interface' => [],
+			'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '4443', 'pfb_dns_doh_interface' => [],
+			'pfb_dns_doh_trusted' => '',
+			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_doq_interface' => [],
 		];
 	}
 
@@ -75,7 +75,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			$errors = $this->errors([$field => $port]);
 
 			$this->assertCount(1, $errors, "{$label} {$port}: " . json_encode($errors));
-			$this->assertStringContainsString(str_starts_with($field, 'pfb_dns_proxy_doh') ? 'DoH' : 'DoQ', $errors[0]);
+			$this->assertStringContainsString(str_starts_with($field, 'pfb_dns_doh') ? 'DoH' : 'DoQ', $errors[0]);
 			$this->assertStringContainsString('Port', $errors[0]);
 		}
 	}
@@ -89,7 +89,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	#[DataProvider('goodPorts')]
 	public function testAPortInRangeIsAccepted(string $port): void
 	{
-		$this->assertSame([], $this->errors(['pfb_dns_proxy_doh_port' => $port, 'pfb_dns_proxy_doq_port' => $port]));
+		$this->assertSame([], $this->errors(['pfb_dns_doh_port' => $port, 'pfb_dns_doq_port' => $port]));
 	}
 
 	// -----------------------------------------------------------------------
@@ -122,15 +122,15 @@ final class DnsProxyListenerSettingsTest extends TestCase
 
 	public function testANestedArrayPostedAsAnInterfaceIsAnInputErrorNotAFatal(): void
 	{
-		$errors = $this->errors(['pfb_dns_proxy_doh_interface' => [['lan']]]);
+		$errors = $this->errors(['pfb_dns_doh_interface' => [['lan']]]);
 
 		$this->assertCount(1, $errors, json_encode($errors));
 	}
 
 	public function testConfiguredInterfacesAndAnEmptySelectionAreAccepted(): void
 	{
-		$this->assertSame([], $this->errors(['pfb_dns_proxy_doh_interface' => ['lan', 'opt1', 'lan']]), 'duplicates are not an error');
-		$this->assertSame([], $this->errors(['pfb_dns_proxy_doh_interface' => []]), 'none = the proxy\'s own addresses');
+		$this->assertSame([], $this->errors(['pfb_dns_doh_interface' => ['lan', 'opt1', 'lan']]), 'duplicates are not an error');
+		$this->assertSame([], $this->errors(['pfb_dns_doh_interface' => []]), 'none = the proxy\'s own addresses');
 	}
 
 	// -----------------------------------------------------------------------
@@ -164,9 +164,9 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	#[DataProvider('badTrusted')]
 	public function testATrustedEntryThatIsNotAnIpOrCidrIsAnInputError(string $trusted): void
 	{
-		$this->assertSame([], $this->errors(['pfb_dns_proxy_doh_trusted' => '192.0.2.10']), 'before: an address is accepted');
+		$this->assertSame([], $this->errors(['pfb_dns_doh_trusted' => '192.0.2.10']), 'before: an address is accepted');
 
-		$errors = $this->errors(['pfb_dns_proxy_doh_trusted' => $trusted]);
+		$errors = $this->errors(['pfb_dns_doh_trusted' => $trusted]);
 
 		$this->assertNotSame([], $errors, "trusted {$trusted} must be rejected");
 		$this->assertStringContainsString('trusted', strtolower($errors[0]));
@@ -174,7 +174,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 
 	public function testTheOffendingTrustedEntryIsEscapedInTheError(): void
 	{
-		$errors = $this->errors(['pfb_dns_proxy_doh_trusted' => '<script>alert(1)</script>']);
+		$errors = $this->errors(['pfb_dns_doh_trusted' => '<script>alert(1)</script>']);
 
 		$this->assertCount(1, $errors);
 		$this->assertStringNotContainsString('<script>', $errors[0]);
@@ -186,12 +186,12 @@ final class DnsProxyListenerSettingsTest extends TestCase
 		// Given the page's ingestion step (pfb_sanitize_text) ran first on what the browser posted
 		$clean = pfb_sanitize_text("192.0.2.10\u{200B}\x07");
 		$this->assertSame('192.0.2.10', $clean, 'precondition: control and format characters are gone');
-		$this->assertSame([], $this->errors(['pfb_dns_proxy_doh_trusted' => $clean]));
+		$this->assertSame([], $this->errors(['pfb_dns_doh_trusted' => $clean]));
 
 		// When the rest is not an address, it is rejected
 		$junk = pfb_sanitize_text("192.0.2.10 ev\x00il\u{202E}");
 		$this->assertSame('192.0.2.10 evil', $junk);
-		$this->assertNotSame([], $this->errors(['pfb_dns_proxy_doh_trusted' => $junk]));
+		$this->assertNotSame([], $this->errors(['pfb_dns_doh_trusted' => $junk]));
 	}
 
 	/** @return array<string,array{string}> */
@@ -215,7 +215,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	#[DataProvider('goodTrusted')]
 	public function testTrustedAddressesAndPrefixesSeparatedBySpacesOrCommasAreAccepted(string $trusted): void
 	{
-		$this->assertSame([], $this->errors(['pfb_dns_proxy_doh_trusted' => $trusted]));
+		$this->assertSame([], $this->errors(['pfb_dns_doh_trusted' => $trusted]));
 	}
 
 	public function testThreeHundredTrustedEntriesAreAccepted(): void
@@ -225,7 +225,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			$entries[] = '10.' . intdiv($i, 250) . '.' . ($i % 250) . '.0/24';
 		}
 
-		$this->assertSame([], $this->errors(['pfb_dns_proxy_doh_trusted' => implode(' ', $entries)]));
+		$this->assertSame([], $this->errors(['pfb_dns_doh_trusted' => implode(' ', $entries)]));
 	}
 
 	// -----------------------------------------------------------------------
@@ -235,7 +235,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	/** @return array<string,array{string,string}> */
 	public static function tlsToggles(): array
 	{
-		return ['DoH' => ['pfb_dns_proxy_doh', 'DoH'], 'DoQ' => ['pfb_dns_proxy_doq', 'DoQ']];
+		return ['DoH' => ['pfb_dns_doh', 'DoH'], 'DoQ' => ['pfb_dns_doq', 'DoQ']];
 	}
 
 	#[DataProvider('tlsToggles')]
@@ -253,7 +253,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 
 	public function testBothOnWithoutACertificateReportsEach(): void
 	{
-		$this->assertCount(2, $this->errors(['pfb_dns_proxy_doh' => 'on', 'pfb_dns_proxy_doq' => 'on'], ''));
+		$this->assertCount(2, $this->errors(['pfb_dns_doh' => 'on', 'pfb_dns_doq' => 'on'], ''));
 	}
 
 	public function testBothOffNeedNoCertificate(): void
@@ -268,13 +268,13 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	public function testAFreshPostStoresTheRegisteredDefaults(): void
 	{
 		$this->assertSame([
-			'pfb_dns_proxy_doh'           => '',
-			'pfb_dns_proxy_doh_port'      => '4443',
-			'pfb_dns_proxy_doh_interface' => '',
-			'pfb_dns_proxy_doh_trusted'   => '',
-			'pfb_dns_proxy_doq'           => '',
-			'pfb_dns_proxy_doq_port'      => '853',
-			'pfb_dns_proxy_doq_interface' => '',
+			'pfb_dns_doh'           => '',
+			'pfb_dns_doh_port'      => '4443',
+			'pfb_dns_doh_interface' => '',
+			'pfb_dns_doh_trusted'   => '',
+			'pfb_dns_doq'           => '',
+			'pfb_dns_doq_port'      => '853',
+			'pfb_dns_doq_interface' => '',
 		], pfb_dns_proxy_listeners_stored($this->post()));
 	}
 
@@ -283,30 +283,30 @@ final class DnsProxyListenerSettingsTest extends TestCase
 		// An unchecked checkbox and an empty multi-select are simply absent from a browser POST.
 		$stored = pfb_dns_proxy_listeners_stored([]);
 
-		$this->assertSame('', $stored['pfb_dns_proxy_doh']);
-		$this->assertSame('', $stored['pfb_dns_proxy_doq']);
-		$this->assertSame('', $stored['pfb_dns_proxy_doh_interface']);
+		$this->assertSame('', $stored['pfb_dns_doh']);
+		$this->assertSame('', $stored['pfb_dns_doq']);
+		$this->assertSame('', $stored['pfb_dns_doh_interface']);
 	}
 
 	public function testStoredValuesAreCanonical(): void
 	{
 		$stored = pfb_dns_proxy_listeners_stored($this->post([
-			'pfb_dns_proxy_doh'           => 'on',
-			'pfb_dns_proxy_doh_port'      => '00443',
-			'pfb_dns_proxy_doh_interface' => ['lan', 'lan', 'opt1'],
-			'pfb_dns_proxy_doh_trusted'   => '192.0.2.10, 2001:db8::/32 ,,10.0.0.0/8 192.0.2.10',
-			'pfb_dns_proxy_doq'           => 'yes',
-			'pfb_dns_proxy_doq_interface' => 'lan',
+			'pfb_dns_doh'           => 'on',
+			'pfb_dns_doh_port'      => '00443',
+			'pfb_dns_doh_interface' => ['lan', 'lan', 'opt1'],
+			'pfb_dns_doh_trusted'   => '192.0.2.10, 2001:db8::/32 ,,10.0.0.0/8 192.0.2.10',
+			'pfb_dns_doq'           => 'yes',
+			'pfb_dns_doq_interface' => 'lan',
 		]));
 
 		$this->assertSame([
-			'pfb_dns_proxy_doh'           => 'on',
-			'pfb_dns_proxy_doh_port'      => '443',
-			'pfb_dns_proxy_doh_interface' => 'lan,opt1',
-			'pfb_dns_proxy_doh_trusted'   => '192.0.2.10 2001:db8::/32 10.0.0.0/8',
-			'pfb_dns_proxy_doq'           => '',
-			'pfb_dns_proxy_doq_port'      => '853',
-			'pfb_dns_proxy_doq_interface' => 'lan',
+			'pfb_dns_doh'           => 'on',
+			'pfb_dns_doh_port'      => '443',
+			'pfb_dns_doh_interface' => 'lan,opt1',
+			'pfb_dns_doh_trusted'   => '192.0.2.10 2001:db8::/32 10.0.0.0/8',
+			'pfb_dns_doq'           => '',
+			'pfb_dns_doq_port'      => '853',
+			'pfb_dns_doq_interface' => 'lan',
 		], $stored, 'port without leading zeros; interfaces and trusted deduplicated; a toggle is on only for "on"');
 	}
 
@@ -325,7 +325,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	{
 		$page = (string) file_get_contents(self::PAGE);
 
-		$sanitize = strpos($page, "'pfb_dns_proxy_doh_port', 'pfb_dns_proxy_doq_port', 'pfb_dns_proxy_doh_trusted'");
+		$sanitize = strpos($page, "'pfb_dns_doh_port', 'pfb_dns_doq_port', 'pfb_dns_doh_trusted'");
 		$validate = strpos($page, 'pfb_validate_dns_proxy_listeners_post(');
 		$gate     = strpos($page, 'if (!$input_errors) {');
 		$store    = strpos($page, 'pfb_dns_proxy_listeners_stored(');
