@@ -7635,6 +7635,77 @@ function pfb_widget_alias_display_count(int $addresses, string $alias_file, stri
 }
 
 
+// Decide whether a pfB alias must be hidden from the dashboard widget.
+//
+//   - pfB_DNSBL_VIPs       : the DNSBL sinkhole VIP table, not a feed list.
+//   - pfB_<Type>_Aggregated_v4/v6 : the ADR-11 aggregate ("Uber") aliases. They are
+//     internal Native reference IP-sets (deduped unions, no firewall rule of their own)
+//     consumed by the aggregate feature / HAProxy input, not user-facing block/permit
+//     lists -- listing them clutters the widget and double-counts entries already shown
+//     by their source lists. <Type> is exactly Deny|Permit|Match|Native; GeoIP folds into
+//     those action types, so there is no separate pfB_Geo_Aggregated alias to match.
+//
+// The aggregate aliases are revealed when $show_agg is TRUE (the widget's
+// "Show Aggregated Aliases" setting); pfB_DNSBL_VIPs and empty names stay hidden
+// regardless. Hides from display only -- the aliases / pf tables stay wired and
+// functional.
+function pfb_widget_alias_hidden($pfb_alias, $show_agg = FALSE) {
+	if (empty($pfb_alias) || $pfb_alias == 'pfB_DNSBL_VIPs') {
+		return TRUE;
+	}
+	if (preg_match('/^pfB_(Deny|Permit|Match|Native)_Aggregated_v[46]$/', $pfb_alias) === 1) {
+		return $show_agg !== TRUE;
+	}
+	return FALSE;
+}
+
+
+// Per-alias rule and packet totals for the widget. Entries are created in the order the
+// widget always used (enabled rule matches, then tracker packets), so row order is unchanged.
+function pfb_rule_alias_packets(array $filter_rules, array $pf_rules): array {
+	$agg = array();
+	$tracked_rules = array();
+
+	foreach ($filter_rules as $rule) {
+		if (strpos($rule['descr'], 'pfB_DNSBL_Ping') !== FALSE || strpos($rule['descr'], 'pfB_DNSBL_Permit') !== FALSE) {
+			continue;
+		}
+
+		$tracked_rules[$rule['tracker']] = array('packets' => 0);
+
+		foreach (array('source', 'destination') as $side) {
+			if (isset($rule[$side]['address']) && stripos($rule[$side]['address'], 'pfb_') !== FALSE) {
+				$alias = $rule[$side]['address'];
+				$tracked_rules[$rule['tracker']][$side] = $alias;
+				if (!isset($rule['disabled'])) {
+					$agg[$alias] ??= array('rule' => 0, 'packets' => 0, 'type' => '');
+					$agg[$alias]['rule'] += 1;
+					$agg[$alias]['type'] = ucfirst($rule['type']) ?: 'unknown';
+				}
+			}
+		}
+	}
+
+	foreach ($pf_rules as $prule) {
+		// prule may be an error string if pftcl_get_rule() returned an error
+		if (!is_array($prule) || !isset($prule['tracker'], $tracked_rules[$prule['tracker']])) {
+			continue;
+		}
+		if (isset($prule['packets']) && $prule['packets'] > 0) {
+			foreach (array('source', 'destination') as $side) {
+				if (isset($tracked_rules[$prule['tracker']][$side])) {
+					$alias = $tracked_rules[$prule['tracker']][$side];
+					$agg[$alias] ??= array('rule' => 0, 'packets' => 0, 'type' => '');
+					$agg[$alias]['packets'] += $prule['packets'];
+				}
+			}
+		}
+	}
+
+	return $agg;
+}
+
+
 /**
  * issue #1250: sweep matchgendir's machine-generated artifacts -- Reputation dMax's per-alias
  * 'pfB_Match_Rep_<header>_<fam>.txt', the ccwhite consolidated exempt file, and the ET/

@@ -18,38 +18,11 @@ use PHPUnit\Framework\TestCase;
  *     them clutters the widget and double-counts entries already shown by their
  *     source lists.
  *
- * The predicate lives inside pfblockerng.widget.php, which carries top-level
- * execution (it is a rendered web page, not a library) and therefore cannot be
- * require()d off-appliance. So — like the wizard-function extraction in
- * tests/php/bootstrap.php — this test reads the widget source and evals ONLY the
- * pfb_widget_alias_hidden() definition, pinning the predicate without pulling in
- * the page's runtime wiring.
+ * The predicate lives in pfblockerng.inc, which tests/php/bootstrap.php loads.
  */
 #[CoversFunction('pfb_widget_alias_hidden')]
 final class WidgetAliasHiddenTest extends TestCase
 {
-	public static function setUpBeforeClass(): void
-	{
-		if (function_exists('pfb_widget_alias_hidden')) {
-			return;
-		}
-
-		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/widgets/widgets/pfblockerng.widget.php'
-		);
-		if ($src === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.widget.php');
-		}
-
-		// Extract just the function definition (signature through its closing brace).
-		// The body's inner braces are tab-indented, so the function's own closing brace
-		// is the first '}' at the start of a line (\n followed by '}').
-		if (!preg_match('/function\s+pfb_widget_alias_hidden\s*\([^)]*\).*?\n\}/s', $src, $m)) {
-			throw new RuntimeException('test bootstrap: pfb_widget_alias_hidden() not found in widget source');
-		}
-		eval($m[0]);
-	}
-
 	/**
 	 * A normal, user-facing feed alias is SHOWN (the predicate returns false) — the
 	 * "before" half that proves hiding is a real branch, not an always-true path.

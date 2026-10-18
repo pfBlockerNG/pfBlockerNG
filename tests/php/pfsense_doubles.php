@@ -1668,3 +1668,11 @@ function listtags() {
 	return array_flip($ret);
 }
 }
+
+// --- pfSense_get_pf_rules() double (widget packet counts) ---
+// Widget packet counts read the live pf rule set; tests seed $GLOBALS['pfb_test_pf_rules'].
+if (!function_exists('pfSense_get_pf_rules')) {
+	function pfSense_get_pf_rules(): array {
+		return $GLOBALS['pfb_test_pf_rules'] ?? [];
+	}
+}

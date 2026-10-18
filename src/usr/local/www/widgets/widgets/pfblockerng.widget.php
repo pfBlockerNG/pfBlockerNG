@@ -222,30 +222,6 @@ if ($_POST) {
 }
 
 
-// Decide whether a pfB alias must be hidden from the dashboard widget.
-//
-//   - pfB_DNSBL_VIPs       : the DNSBL sinkhole VIP table, not a feed list.
-//   - pfB_<Type>_Aggregated_v4/v6 : the ADR-11 aggregate ("Uber") aliases. They are
-//     internal Native reference IP-sets (deduped unions, no firewall rule of their own)
-//     consumed by the aggregate feature / HAProxy input, not user-facing block/permit
-//     lists -- listing them clutters the widget and double-counts entries already shown
-//     by their source lists. <Type> is exactly Deny|Permit|Match|Native; GeoIP folds into
-//     those action types, so there is no separate pfB_Geo_Aggregated alias to match.
-//
-// The aggregate aliases are revealed when $show_agg is TRUE (the widget's
-// "Show Aggregated Aliases" setting); pfB_DNSBL_VIPs and empty names stay hidden
-// regardless. Hides from display only -- the aliases / pf tables stay wired and
-// functional.
-function pfb_widget_alias_hidden($pfb_alias, $show_agg = FALSE) {
-	if (empty($pfb_alias) || $pfb_alias == 'pfB_DNSBL_VIPs') {
-		return TRUE;
-	}
-	if (preg_match('/^pfB_(Deny|Permit|Match|Native)_Aggregated_v[46]$/', $pfb_alias) === 1) {
-		return $show_agg !== TRUE;
-	}
-	return FALSE;
-}
-
 // Collect all pfBlockerNG statistics
 function pfBlockerNG_update_table() {
 	global $pfb;
@@ -299,64 +275,13 @@ function pfBlockerNG_update_table() {
 	$pfb_filter_rules = config_get_path('filter/rule', []);
 
 	if (!empty($pfb_filter_rules)) {
-		$tracked_rules = array();
-
-		// Get the relevant pfB rules
-		foreach ($pfb_filter_rules as $rule) {
-			if (strpos($rule['descr'], 'pfB_DNSBL_Ping') !== FALSE || strpos($rule['descr'], 'pfB_DNSBL_Permit') !== FALSE) {
-				continue;
+		foreach (pfb_rule_alias_packets($pfb_filter_rules, pfSense_get_pf_rules()) as $pfb_alias => $pfb_agg) {
+			if ($pfb_agg['rule'] > 0) {
+				$pfb_table[$pfb_alias]['img'] = $pfb['up'];
+				$pfb_table[$pfb_alias]['rule'] = $pfb_agg['rule'];
+				$pfb_table[$pfb_alias]['type'] = $pfb_agg['type'];
 			}
-
-			$tracked_rules[$rule['tracker']] = array('packets' => 0);
-
-			if (isset($rule['source']['address']) && stripos($rule['source']['address'], 'pfb_') !== FALSE) {
-				$tracked_rules[$rule['tracker']]['source'] = $rule['source']['address'];
-				if (!isset($rule['disabled'])) {
-					$pfb_table[$rule['source']['address']]['img'] = $pfb['up'];
-					$pfb_table[$rule['source']['address']]['rule'] += 1;
-					if (!isset($pfb_table[$rule['source']['address']]['packets'])) {
-						$pfb_table[$rule['source']['address']]['packets'] = 0;
-					}
-					$pfb_table[$rule['source']['address']]['type'] = ucfirst($rule['type']) ?: 'unknown';
-				}
-			}
-			
-			if (isset($rule['destination']['address']) && stripos($rule['destination']['address'], 'pfb_') !== FALSE) {
-				$tracked_rules[$rule['tracker']]['destination'] = $rule['destination']['address'];
-				if (!isset($rule['disabled'])) {
-					$pfb_table[$rule['destination']['address']]['img'] = $pfb['up'];
-					$pfb_table[$rule['destination']['address']]['rule'] += 1;
-					if (!isset($pfb_table[$rule['destination']['address']]['packets'])) {
-						$pfb_table[$rule['destination']['address']]['packets'] = 0;
-					}
-					$pfb_table[$rule['destination']['address']]['type'] = ucfirst($rule['type']) ?: 'unknown';
-				}
-			}
-		}
-
-		// Get the packet count for each pfB rule
-		if (!empty($tracked_rules)) {
-			foreach (pfSense_get_pf_rules() as $prule) {
-
-				// prule may be an error string if pftcl_get_rule() returned an error
-				if (!is_array($prule)) {
-					continue;
-				}
-
-				if (isset($prule['tracker'])) {
-					$prule_id = $prule['tracker'];
-					if (isset($tracked_rules[$prule_id])) {
-						if (isset($prule['packets']) && $prule['packets'] > 0) {
-							if (isset($tracked_rules[$prule_id]['source'])) {
-								$pfb_table[$tracked_rules[$prule_id]['source']]['packets'] += $prule['packets'];
-							}
-							if (isset($tracked_rules[$prule_id]['destination'])) {
-								$pfb_table[$tracked_rules[$prule_id]['destination']]['packets'] += $prule['packets'];
-							}
-						}
-					}
-				}
-			}
+			$pfb_table[$pfb_alias]['packets'] = ($pfb_table[$pfb_alias]['packets'] ?? 0) + $pfb_agg['packets'];
 		}
 	}
 
