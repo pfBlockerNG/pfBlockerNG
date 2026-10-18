@@ -24,7 +24,16 @@ import pytest
 import unbound_shim as shim
 from dot_helpers import dot_exchange, open_dot
 from frontend_constants import ALLOWED, BLOCKED, Booted
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, serve_dot, serve_plain, udp_exchange
+from frontend_helpers import (
+    WATCHDOG,
+    FakeProxyUpstream,
+    FakeUnbound,
+    ManualClock,
+    build_query,
+    serve_dot,
+    serve_plain,
+    udp_exchange,
+)
 
 ZONE = {(ALLOWED, dnswire.TYPE_A): [f"{ALLOWED} 300 IN A 192.0.2.77"]}
 Connection = tuple[asyncio.StreamReader, asyncio.StreamWriter]
@@ -87,12 +96,17 @@ def _framed(wire: bytes) -> bytes:
     return struct.pack("!H", len(wire)) + wire
 
 
-async def _ask(connection: Connection, qid: int, name: str = ALLOWED) -> dnswire.Message:
-    reader, writer = connection
-    writer.write(_framed(build_query(name, qid=qid)))
-    await writer.drain()
+async def _read_reply(connection: Connection) -> dnswire.Message:
+    reader, _ = connection
     size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), WATCHDOG))[0]
     return dnswire.parse(await asyncio.wait_for(reader.readexactly(size), WATCHDOG))
+
+
+async def _ask(connection: Connection, qid: int, name: str = ALLOWED) -> dnswire.Message:
+    _, writer = connection
+    writer.write(_framed(build_query(name, qid=qid)))
+    await writer.drain()
+    return await _read_reply(connection)
 
 
 async def _until_closed(reader: asyncio.StreamReader) -> bytes:
@@ -140,48 +154,246 @@ def _overload_lines(warnings: list[object]) -> list[str]:
 # --- the cap -------------------------------------------------------------------------------------
 
 
-def test_the_connection_limits_default_to_128_in_all_and_16_per_source() -> None:
-    assert (pfb_dns_proxy.MAX_TCP_CLIENTS, pfb_dns_proxy.MAX_TCP_PER_SOURCE) == (128, 16)
+def test_the_connection_limits_default_to_128_in_all_and_64_per_source() -> None:
+    assert (pfb_dns_proxy.MAX_TCP_CLIENTS, pfb_dns_proxy.MAX_TCP_PER_SOURCE) == (128, 64)
 
 
-def test_a_connection_over_the_cap_closes_the_longest_idle_client_and_is_served(
-    booted: Booted, listener: Listener, monkeypatch: pytest.MonkeyPatch
+async def _refused(listener: Listener, server: tuple[str, int], source: str = "127.0.0.1") -> None:
+    """A connection the proxy turns away: it is closed without a reply, whatever the client asks (on DoT before the
+    handshake, so the client's own handshake fails)."""
+    try:
+        reader, writer = await listener.connect(server, source)
+    except (ConnectionError, ssl.SSLError, EOFError):
+        return
+    try:
+        writer.write(_framed(build_query(ALLOWED)))
+        try:
+            reply = await asyncio.wait_for(reader.read(65536), WATCHDOG)
+        except (ConnectionError, ssl.SSLError):
+            return
+        assert reply == b"", f"the connection was served: {reply[:32]!r}"
+    finally:
+        writer.close()
+
+
+HELD = "held.example."
+HELD_ZONE = ZONE | {(HELD, dnswire.TYPE_A): [f"{HELD} 300 IN A 192.0.2.78"]}
+
+
+class HoldingFrontend(WatchedFrontend):
+    """A WatchedFrontend that keeps the query for HELD inside resolve() until `release` is set: a client whose query is
+    with Unbound and has not been answered yet."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def resolve(self, wire: bytes, client_ip: str, forward: Any, **kwargs: Any) -> bytes | None:
+        if dnswire.parse(wire).questions[0].name == HELD:
+            self.entered.set()
+            await self.release.wait()
+        return await super().resolve(wire, client_ip, forward, **kwargs)
+
+
+def test_40_persistent_connections_behind_one_address_are_all_kept_and_all_answered(
+    booted: Booted, listener: Listener, clock: ManualClock
 ) -> None:
-    """Issue #3517 review: idle connections held every slot, so a new client was refused for as long as they stayed.
-    The client closed is the one idle longest, which is not the one that connected first."""
-    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 2)
+    """Issue #3515 gate: 40 clients behind one NAT address, each asking every half second, were closed and reconnected
+    331 times in 8 s, because one address could hold 16 connections and each newcomer closed the longest idle one."""
 
-    async def scenario() -> tuple[bytes, tuple[int, int]]:
+    async def scenario() -> tuple[list[int], int]:
         async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
             frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
             server = await listener.start(frontend)
             held: list[Connection] = []
             try:
-                first, second = await _served(listener, server, 1), await _served(listener, server, 2)
-                held += [first, second]
-                await _ask(first, 3)  # `first` is the older connection, but `second` has now been idle the longer
-                held.append(await _served(listener, server, 4))  # over the cap: it is answered, so a slot was made
-                closed = await _until_closed(second[0])
-                kept = await _ask(first, 5)
-                return closed, (kept.id, kept.rcode)
+                for qid in range(40):
+                    held.append(await _served(listener, server, qid, "127.0.0.2"))
+                rcodes = []
+                for round_number in (1, 2, 3):
+                    clock.advance(0.5)
+                    rcodes += [(await _ask(c, 100 * round_number + n)).rcode for n, c in enumerate(held)]
+                return rcodes, len(frontend.writers)
             finally:
                 for _, writer in held:
                     writer.close()
                 await frontend.stop()
 
-    closed, kept = asyncio.run(scenario())
-    assert (closed, kept) == (b"", (5, 0))
+    rcodes, connections = asyncio.run(scenario())
+    assert (rcodes, connections) == ([0] * 120, 40)  # every one of them answered three times on its first connection
 
 
-def test_a_source_over_its_connection_limit_loses_its_own_longest_idle_client_and_no_other_source_is_affected(
-    booted: Booted, listener: Listener, monkeypatch: pytest.MonkeyPatch
+def test_a_connection_over_the_cap_is_refused_while_every_client_is_active(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #3515 gate: each newcomer over the cap closed the client idle longest, so clients that were using their
+    connections were closed and had to reconnect, again and again. A client heard from within the last half of the idle
+    timeout keeps its slot; the newcomer is the one turned away."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 2)
+    warnings: list[object] = []
+    monkeypatch.setattr(shim, "log_warn", warnings.append)
+
+    async def scenario() -> list[int]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                held += [await _served(listener, server, 1), await _served(listener, server, 2)]
+                clock.advance(14.5)  # half of the 30 s idle timeout is 15 s
+                await _refused(listener, server)
+                return [(await _ask(connection, 3 + n)).rcode for n, connection in enumerate(held)]
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    assert asyncio.run(scenario()) == [0, 0]
+    assert len(_overload_lines(warnings)) == 1
+
+
+def test_a_client_idle_for_half_the_idle_timeout_is_closed_for_a_newcomer_and_only_that_one(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #3517 review: idle connections held every slot, so a new client was refused for as long as they stayed.
+    One that has said nothing for half the idle timeout is the one that goes, not the one that connected first."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 2)
+
+    async def scenario() -> tuple[int, bytes]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                first = await _served(listener, server, 1)
+                clock.advance(1.0)
+                second = await _served(listener, server, 2)
+                clock.advance(1.0)
+                await _ask(first, 3)  # `first` connected before `second`, but has been heard from since
+                held += [first, second]
+                clock.advance(13.5)  # `second` has been silent 14.5 s, `first` 13.5 s
+                await _refused(listener, server)
+                clock.advance(0.5)  # `second` has now been silent for exactly half the idle timeout
+                held.append(await _served(listener, server, 4))
+                closed = await _until_closed(second[0])
+                return (await _ask(first, 5)).rcode, closed
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    assert asyncio.run(scenario()) == (0, b"")
+
+
+def test_the_client_closed_for_a_newcomer_is_the_one_idle_longest_not_the_one_that_connected_first(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 2)
+
+    async def scenario() -> tuple[bytes, int]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                first = await _served(listener, server, 1)
+                clock.advance(1.0)
+                second = await _served(listener, server, 2)
+                clock.advance(1.0)
+                await _ask(first, 3)  # `first` is the older connection, but `second` has now been idle the longer
+                held += [first, second]
+                clock.advance(30.0)  # both are well past half the idle timeout
+                held.append(await _served(listener, server, 4))
+                return await _until_closed(second[0]), (await _ask(first, 5)).rcode
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    assert asyncio.run(scenario()) == (b"", 0)
+
+
+def test_a_connection_that_sent_nothing_is_idle_from_the_moment_it_connected(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 1)
+
+    async def scenario() -> tuple[bytes, int]:
+        frontend = WatchedFrontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
+        server = await listener.start(frontend)
+        # Accepted before the next client connects, so asyncio runs its handler (and takes the slot) first.
+        silent_reader, silent = await asyncio.wait_for(asyncio.open_connection(*server), WATCHDOG)
+        try:
+            clock.advance(14.5)
+            await _refused(listener, server)
+            clock.advance(0.5)
+            newcomer = await listener.connect(server)
+            reply = await _ask(newcomer, 5, BLOCKED)
+            newcomer[1].close()
+            return await _until_closed(silent_reader), reply.rcode
+        finally:
+            silent.close()
+            await frontend.stop()
+
+    assert asyncio.run(scenario()) == (b"", 0)
+
+
+@pytest.mark.parametrize(
+    ("phase", "neighbours"),
+    [("waiting", 1), ("waiting", 0), ("answered", 1)],
+    ids=["waiting-an-idle-neighbour-goes", "waiting-nobody-idle-newcomer-refused", "answered-an-idle-neighbour-goes"],
+)
+def test_a_client_that_has_a_query_at_unbound_or_was_just_answered_is_never_the_one_closed_as_idle(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch, phase: str, neighbours: int
+) -> None:
+    """Issue #3515 gate: a client whose query had been with Unbound for a second counted as idle since its frame came,
+    and was the one closed for 135 newcomers, just before its answer. Waiting is not idling, and the answer is activity
+    however long it took."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 1 + neighbours)
+
+    async def scenario() -> tuple[int, int, list[bytes]]:
+        async with FakeProxyUpstream(FakeUnbound(HELD_ZONE)) as upstream:
+            frontend = HoldingFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                waiting = await listener.connect(server)
+                held.append(waiting)
+                waiting[1].write(_framed(build_query(HELD, qid=1)))
+                await asyncio.wait_for(frontend.entered.wait(), WATCHDOG)
+                clock.advance(1.0)
+                idle = [await _served(listener, server, 10 + n) for n in range(neighbours)]
+                held += idle
+                clock.advance(100.0)  # everyone has been silent for far longer than half the idle timeout
+                if phase == "answered":
+                    frontend.release.set()
+                    reply = await _read_reply(waiting)
+                if neighbours:
+                    held.append(await _served(listener, server, 20))
+                else:
+                    await _refused(listener, server)
+                if phase == "waiting":
+                    frontend.release.set()
+                    reply = await _read_reply(waiting)
+                return reply.id, reply.rcode, [await _until_closed(connection[0]) for connection in idle]
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    assert asyncio.run(scenario()) == (1, 0, [b""] * neighbours)
+
+
+def test_a_source_at_its_connection_limit_has_its_newcomers_refused_and_no_other_source_is_affected(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Issue #3517 review: 128 idle connections from one host locked every other client out of TCP and DoT."""
     monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_PER_SOURCE", 2)
     warnings: list[object] = []
     monkeypatch.setattr(shim, "log_warn", warnings.append)
 
-    async def scenario() -> tuple[list[bytes], list[int]]:
+    async def scenario() -> list[int]:
         async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
             frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
             server = await listener.start(frontend)
@@ -190,23 +402,51 @@ def test_a_source_over_its_connection_limit_loses_its_own_longest_idle_client_an
                 a1 = await _served(listener, server, 1, "127.0.0.2")
                 a2 = await _served(listener, server, 2, "127.0.0.2")
                 bystander = await _served(listener, server, 3, "127.0.0.3")
-                a3 = await _served(listener, server, 4, "127.0.0.2")  # the third from one source: a1 goes
-                a4 = await _served(listener, server, 5, "127.0.0.2")  # and a2
-                held += [a1, a2, bystander, a3, a4]
-                closed = [await _until_closed(a1[0]), await _until_closed(a2[0])]
-                alive = [(await _ask(c, qid)).rcode for c, qid in ((bystander, 6), (a3, 7), (a4, 8))]
-                return closed, alive
+                await _refused(listener, server, "127.0.0.2")  # the third from one source
+                await _refused(listener, server, "127.0.0.2")
+                other = await _served(listener, server, 4, "127.0.0.3")  # another source is not affected
+                held += [a1, a2, bystander, other]
+                return [(await _ask(c, 10 + n)).rcode for n, c in enumerate(held)]
             finally:
                 for _, writer in held:
                     writer.close()
                 await frontend.stop()
 
-    assert asyncio.run(scenario()) == ([b"", b""], [0, 0, 0])
-    assert len([line for line in warnings if "127.0.0.2" in str(line)]) == 1  # two evictions, one burst, one line
+    assert asyncio.run(scenario()) == [0, 0, 0, 0]
+    assert len([line for line in warnings if "127.0.0.2" in str(line)]) == 1  # two refusals, one burst, one line
+
+
+def test_a_source_over_its_connection_limit_loses_its_own_longest_idle_client_not_another_sources(
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_PER_SOURCE", 2)
+
+    async def scenario() -> tuple[bytes, list[int]]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            server = await listener.start(frontend)
+            held: list[Connection] = []
+            try:
+                bystander = await _served(listener, server, 1, "127.0.0.3")  # idle the longest of all
+                clock.advance(1.0)
+                a1 = await _served(listener, server, 2, "127.0.0.2")
+                clock.advance(1.0)
+                a2 = await _served(listener, server, 3, "127.0.0.2")
+                clock.advance(30.0)  # all of them are well past half the idle timeout
+                a3 = await _served(listener, server, 4, "127.0.0.2")
+                held += [bystander, a1, a2, a3]
+                closed = await _until_closed(a1[0])
+                return closed, [(await _ask(c, 10 + n)).rcode for n, c in enumerate([bystander, a2, a3])]
+            finally:
+                for _, writer in held:
+                    writer.close()
+                await frontend.stop()
+
+    assert asyncio.run(scenario()) == (b"", [0, 0, 0])
 
 
 def test_a_cap_overload_is_logged_once_per_burst(
-    booted: Booted, listener: Listener, monkeypatch: pytest.MonkeyPatch
+    booted: Booted, listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 1)
     warnings: list[object] = []
@@ -217,15 +457,12 @@ def test_a_cap_overload_is_logged_once_per_burst(
             frontend = WatchedFrontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
             server = await listener.start(frontend)
             lines_after_burst = []
-            qid = 0
-            for _ in (1, 2):
-                held = []
-                for _ in range(3):  # each one past the first closes the one before it
-                    qid += 1
-                    held.append(await _served(listener, server, qid))
+            for qid in (1, 2):
+                served = await _served(listener, server, qid)  # takes the one slot
+                await _refused(listener, server)
+                await _refused(listener, server)  # two turned away: one line
                 lines_after_burst.append(len(_overload_lines(warnings)))
-                for _, writer in held:
-                    writer.close()
+                served[1].close()
                 for _ in range(3):
                     await frontend.finished.get()  # no client left: the burst is over
             await frontend.stop()
@@ -343,27 +580,27 @@ def test_a_connection_that_is_gone_before_its_handler_runs_does_not_keep_a_slot(
 # --- the cap comes before the DoT handshake ------------------------------------------------------
 
 
-def test_a_dot_client_that_never_finishes_its_handshake_is_closed_for_the_next_client_and_not_the_other_way_round(
-    booted: Booted, dot_listener: Listener, monkeypatch: pytest.MonkeyPatch
+def test_a_dot_client_still_in_its_handshake_holds_its_slot_and_the_newcomer_is_refused_before_its_own(
+    booted: Booted, dot_listener: Listener, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Issue #3517 review: a peer that opened connections and sent nothing held every slot for the handshake timeout."""
+    """Issue #3517 review: a peer that opened connections and sent nothing held every slot for the handshake timeout.
+    The cap is applied before the handshake, so a refused newcomer costs no TLS work; and a client is silent only from
+    its connection on, so the stalled one is not closed for it before it has been silent for half the idle timeout."""
     monkeypatch.setattr(pfb_dns_proxy, "MAX_TCP_CLIENTS", 1)
 
-    async def scenario() -> tuple[bytes, tuple[int, int]]:
+    async def scenario() -> int:
         frontend = WatchedFrontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
         server = await dot_listener.start(frontend)
         # Accepted before the next client connects, so asyncio runs its handler (and takes the slot) first.
-        stalled_reader, stalled = await asyncio.wait_for(asyncio.open_connection(*server), WATCHDOG)  # no ClientHello
+        _, stalled = await asyncio.wait_for(asyncio.open_connection(*server), WATCHDOG)  # no ClientHello
         try:
-            newcomer = await dot_listener.connect(server)  # its handshake runs: a slot was made
-            reply = await _ask(newcomer, 5, BLOCKED)
-            newcomer[1].close()
-            return await _until_closed(stalled_reader), (reply.id, reply.rcode)
+            await _refused(dot_listener, server)
+            return len(frontend._clients)
         finally:
             stalled.close()
             await frontend.stop()
 
-    assert asyncio.run(scenario()) == (b"", (5, 0))
+    assert asyncio.run(scenario()) == 1
 
 
 # --- the DoT handshake ---------------------------------------------------------------------------
