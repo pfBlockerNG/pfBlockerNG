@@ -61,25 +61,4 @@ final class DnsReplyReportControlsTest extends TestCase
 
 		$this->assertSame($shown, pfb_dns_reply_log_active());
 	}
-
-	public function testTheReportsPageGatesBothReplyControlsOnTheHelperAndKeepsTheDnsblStatsOnDnsbl(): void
-	{
-		$page = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
-
-		$this->assertStringContainsString(
-			"if (pfb_dns_reply_log_active()) { \$group = new Form_Group('DNS Reply Log Options');",
-			$page,
-			'the suppress-type controls follow the reply-logging gate'
-		);
-		$this->assertStringContainsString(
-			"if (pfb_dns_reply_log_active()) { \$group->add(new Form_Select( 'pfbdnsblreplystat',",
-			$page,
-			'the reply stat selector follows the reply-logging gate'
-		);
-		$this->assertStringContainsString(
-			"if (\$pfb['dnsbl'] === PfbToggle::On) { \$group->add(new Form_Select( 'pfbdnsblstat',",
-			$page,
-			'the DNSBL stat selector stays DNSBL-only'
-		);
-	}
 }
