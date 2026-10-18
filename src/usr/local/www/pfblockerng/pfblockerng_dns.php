@@ -32,23 +32,51 @@ $pconfig['pfb_dns'] = PfbConfig::read('dns/pfb_dns');
 // issue #3515: the one DNS Reply Logging preference (dnsbl/pfb_py_reply) both DNS modes read: the DNSBL module's own log, and
 // the proxy's --reply-log while DNSBL is off. Its control is here because this page is reachable in either mode.
 $pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
+// issue #3513: the DoH/DoQ listeners of the Go binary; interface lists are comma-joined in storage, a list in the form
+$pconfig['pfb_dns_doh']			= PfbConfig::read('dns/pfb_dns_doh');
+$pconfig['pfb_dns_doh_port']		= PfbConfig::read('dns/pfb_dns_doh_port');
+$pconfig['pfb_dns_doh_interface']	= pfb_csv_list(PfbConfig::read('dns/pfb_dns_doh_interface'));
+$pconfig['pfb_dns_doh_trusted']		= PfbConfig::read('dns/pfb_dns_doh_trusted');
+$pconfig['pfb_dns_doq']			= PfbConfig::read('dns/pfb_dns_doq');
+$pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns/pfb_dns_doq_port');
+$pconfig['pfb_dns_doq_interface']	= pfb_csv_list(PfbConfig::read('dns/pfb_dns_doq_interface'));
+// Every configured interface (the WAN too: a front end may sit there)
+$options_dns_interface = get_configured_interface_with_descr();
 
 $input_errors = array();
 
 if ($_POST) {
 	if (isset($_POST['save'])) {
+		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
+		foreach (array('pfb_dns_doh_port', 'pfb_dns_doq_port', 'pfb_dns_doh_trusted') as $pfb_text_field) {
+			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
+		}
+
 		$pfb_dns = pfb_filter($_POST['pfb_dns'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
 		$pfb_py_reply = pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';	// checkbox-absent is the owner-ruled empty Off token (issue #1907)
+
+		// issue #3513: unbound/sslcertref is a foreign key (the Resolver's, not a pfblockerng* path).
+		$input_errors = array_merge($input_errors, pfb_validate_dns_proxy_listeners_post(
+			$_POST,
+			array_map('strval', array_keys($options_dns_interface)),
+			(string) config_get_path('unbound/sslcertref', '')
+		));
 
 		// issue #3515: the apply moves and restores the Resolver (config.xml keys and the snapshot kept in this section)
 		// under this lock, from a fresh read. Hold it from a fresh read through write_config(), so this save cannot write
 		// back a copy that predates a move or a restore.
-		$pfb_config_lock = pfb_dns_config_lock();
-		if ($pfb_config_lock === NULL) {
-			$input_errors[] = 'pfB-DNS: another save of the pfSense configuration is in progress, so this setting was not saved. Save again in a moment.';
+		$pfb_config_lock = NULL;
+		if (!$input_errors) {
+			$pfb_config_lock = pfb_dns_config_lock();
+			if ($pfb_config_lock === NULL) {
+				$input_errors[] = 'pfB-DNS: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+			}
 		}
 
 		if (!$input_errors) {
+			foreach (pfb_dns_proxy_listeners_stored($_POST) as $pfb_dns_key => $pfb_dns_value) {
+				PfbConfig::write('dns/' . $pfb_dns_key, $pfb_dns_value);
+			}
 			PfbConfig::write('dnsbl/pfb_py_reply', $pfb_py_reply);
 			PfbConfig::write('dns/pfb_dns', $pfb_dns);
 			write_config('[pfBlockerNG] save pfB-DNS settings');
@@ -60,6 +88,12 @@ if ($_POST) {
 
 		$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
 		$pconfig['pfb_py_reply'] = $_POST['pfb_py_reply'] ?? '';
+		foreach (array('pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port') as $pfb_dns_field) {
+			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
+		}
+		foreach (array('pfb_dns_doh_interface', 'pfb_dns_doq_interface') as $pfb_dns_field) {
+			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
+		}
 	}
 }
 
@@ -118,6 +152,78 @@ $section->addInput(new Form_Checkbox(
 		. 'The change is applied on the next Update.<br />'
 		. 'Default: <strong>Disabled</strong>'
 		. '</div>');
+$form->add($section);
+
+$section = new Form_Section('DNS over HTTPS (DoH)');
+$section->addInput(new Form_Checkbox(
+	'pfb_dns_doh',
+	gettext('DoH'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_doh'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb_dns_gateway</code>). '
+		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
+		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_doh_port',
+	gettext('DoH Port'),
+	'number',
+	$pconfig['pfb_dns_doh_port'],
+	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoH Listening Port' ]
+))->setHelp('Example ( 4443 ) &mdash; a single PORT in the range 1 - 65535 (TCP).');
+
+$section->addInput(new Form_Select(
+	'pfb_dns_doh_interface',
+	gettext('DoH Interface(s)'),
+	$pconfig['pfb_dns_doh_interface'] ?? [],
+	$options_dns_interface,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', count($options_dns_interface) ?: '1')
+  ->setHelp('Interface(s) DoH listens on, besides loopback (127.0.0.1 and ::1), which is always served for a local front end. None selected: the Resolver\'s own interfaces.');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_doh_trusted',
+	gettext('DoH Trusted Front Ends'),
+	'text',
+	$pconfig['pfb_dns_doh_trusted'] ?? '',
+	['placeholder' => 'IP addresses or CIDR prefixes (optional)']
+))->setHelp('Optional. IP addresses or CIDR prefixes, separated by spaces or commas, of a front end trusted to send the client address: '
+		. 'the PROXY protocol v2 header (HAProxy <code>send-proxy-v2</code>) and X-Forwarded-For (HAProxy <code>option forwardfor</code>). '
+		. 'Empty: no front end is trusted, DoH sees each connection\'s own address.');
+$form->add($section);
+
+$section = new Form_Section('DNS over QUIC (DoQ)');
+$section->addInput(new Form_Checkbox(
+	'pfb_dns_doq',
+	gettext('DoQ'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_doq'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+		. 'Serves DNS over QUIC (RFC 9250) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb_dns_gateway</code>). DoQ is UDP. '
+		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
+		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_doq_port',
+	gettext('DoQ Port'),
+	'number',
+	$pconfig['pfb_dns_doq_port'],
+	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoQ Listening Port' ]
+))->setHelp('Example ( 853 ) &mdash; a single PORT in the range 1 - 65535 (UDP).');
+
+$section->addInput(new Form_Select(
+	'pfb_dns_doq_interface',
+	gettext('DoQ Interface(s)'),
+	$pconfig['pfb_dns_doq_interface'] ?? [],
+	$options_dns_interface,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', count($options_dns_interface) ?: '1')
+  ->setHelp('Interface(s) DoQ listens on, besides loopback (127.0.0.1 and ::1). None selected: the Resolver\'s own interfaces.');
 $form->add($section);
 
 $section = new Form_Section('DNS Reply Logging');

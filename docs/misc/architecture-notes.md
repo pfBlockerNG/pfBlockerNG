@@ -564,16 +564,17 @@ client no row names is refused, as Unbound refuses it, and a config Unbound coul
 once and forwards everything. Forwarded, not mirrored: `deny_non_local`, `refuse_non_local` and `allow_cookie` clients, so the decider can still answer a listed name for them. Without the
 binary (or without its execute bit) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
 turning either on then logs one warning each time the script's content changes. The seven settings
-`dnsbl/pfb_dns_proxy_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dnsbl/pfb_dns_proxy_doq`, `_doq_port`
+`dns/pfb_dns_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dns/pfb_dns_doq`, `_doq_port`
 (853) and `_doq_interface` (sync
-`local`, DoH/DoQ off) sit below the DNS Proxy checkbox; an interface list (empty = the derived addresses, loopback not
+`local`, DoH/DoQ off) are the pfB-DNS tab's, in the `dns` section beside the enable toggle (they started on the DNSBL
+page; the feature never shipped, so the old keys are gone with no alias or migration); an interface list (empty = the derived addresses, loopback not
 among them) goes through the same `pfb_dns_proxy_interface_addresses()` derivation as `pfb_dns_proxy_listen()`, and every
 group also listens on `127.0.0.1` and `::1` (a stable backend for a local HAProxy; the ports are their own, so nothing
 collides), a `--doh-*`/`--doq-*`
 group appears only while its toggle is on, its stored port is a whole number 1-65535 (else the group is left out with
 one warning), and the trusted entries (IPs or CIDRs without zero-padded prefixes, a bare
 address passed as a host prefix) are validated again when the script is generated, so a hand-edited `config.xml` cannot
-reach the shell or hand the gateway a value it rejects. Saving validates with `pfb_validate_dns_proxy_listeners_post()`
+reach the shell or hand the gateway a value it rejects. The pfB-DNS page's save validates with `pfb_validate_dns_proxy_listeners_post()`
 (ports 1-65535, configured interfaces,
 IP/CIDR entries, and the DNS Resolver's `unbound/sslcertref` while DoH or DoQ is on). Stop recognises the gateway child
 by `pfb_dns_gateway` as well as `pfb_dns_proxy` in its command line, with the same 0/5/7 s bounds. Pinned by

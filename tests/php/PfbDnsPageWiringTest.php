@@ -39,6 +39,12 @@ final class PfbDnsPageWiringTest extends TestCase
 		'www/pfblockerng/pfblockerng_update.php' => 1,
 	];
 
+	/** The DoH/DoQ settings in the order the page shows them (issue #3513). */
+	private const LISTENER_FIELDS = [
+		'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_interface', 'pfb_dns_doh_trusted',
+		'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_interface',
+	];
+
 	private static function src(string $relative): string
 	{
 		$text = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/' . $relative);
@@ -123,9 +129,66 @@ final class PfbDnsPageWiringTest extends TestCase
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');
 
-		foreach (["'pfb_dns_proxy'", "'pfb_dns'", "dns/pfb_dns", "'DNS Proxy'", 'pfBlockerNG DNS proxy'] as $needle) {
+		foreach (['pfb_dns_proxy', "'pfb_dns'", "dns/pfb_dns", 'DNS Proxy', 'pfBlockerNG DNS proxy'] as $needle) {
 			$this->assertStringNotContainsString($needle, $page, "the DNSBL page has no trace of the toggle: {$needle}");
 		}
 		$this->assertStringNotContainsString('pfb_dns_config_lock', $page, 'nor of the lock that only the snapshot needed');
+	}
+
+	public function testThePageCarriesTheSevenDohAndDoqSettingsBelowTheEnableToggleReadAndSavedThroughTheDnsSection(): void
+	{
+		// Given the pfB-DNS page
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		// Then its enable toggle comes first and the seven settings follow it in order, each read from the dns section
+		$after = (int) strpos($page, "'pfb_dns',");
+		$this->assertGreaterThan(0, $after, 'the enable checkbox');
+		foreach (self::LISTENER_FIELDS as $field) {
+			$at = strpos($page, "'{$field}',", $after);
+			$this->assertNotFalse($at, "the page has the {$field} control below the previous one");
+			$after = $at;
+			$this->assertStringContainsString("PfbConfig::read('dns/{$field}')", $page, "{$field} is read through the gateway from the dns section");
+		}
+
+		// And the save is validated, canonicalised and written to the same section, under the lock the snapshot needs
+		$this->assertStringContainsString('pfb_validate_dns_proxy_listeners_post(', $page, 'the seven fields are validated');
+		$this->assertStringContainsString('pfb_dns_proxy_listeners_stored(', $page, 'and stored canonically');
+		$this->assertStringContainsString("PfbConfig::write('dns/' . ", $page, 'into the dns section');
+		$this->assertLessThan(
+			(int) strpos($page, 'pfb_dns_proxy_listeners_stored('),
+			(int) strpos($page, 'pfb_dns_config_lock()'),
+			'the lock is held before anything is stored'
+		);
+	}
+
+	public function testTheDnsblPageCarriesNoneOfTheSevenSettingsAndNoCodeThatSavesThem(): void
+	{
+		// Given the DNSBL page, from which the settings moved
+		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');
+
+		// Then neither the fields nor their old names nor their save code are left there
+		foreach (self::LISTENER_FIELDS as $field) {
+			$this->assertStringNotContainsString($field, $page, "the DNSBL page has no trace of {$field}");
+		}
+		foreach (['pfb_dns_proxy_do', 'pfb_validate_dns_proxy_listeners_post', 'pfb_dns_proxy_listeners_stored', 'options_dns_proxy_interface'] as $needle) {
+			$this->assertStringNotContainsString($needle, $page, "the DNSBL page has no trace of {$needle}");
+		}
+	}
+
+	public function testNoSourceStillNamesAnOldDohOrDoqSettingKey(): void
+	{
+		// The feature never shipped: the old names are gone from every reader, with no alias and no migration
+		$root = dirname(__DIR__, 2) . '/src';
+		$found = [];
+		$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+		foreach ($files as $file) {
+			if (!$file->isFile() || !preg_match('/\.(php|inc|xml|sh)$/', $file->getFilename())) {
+				continue;
+			}
+			if (preg_match('/dnsbl\/pfb_dns_proxy_do[hq]|pfb_dns_proxy_do[hq]/', (string) file_get_contents($file->getPathname())) === 1) {
+				$found[] = substr($file->getPathname(), strlen($root) + 1);
+			}
+		}
+		$this->assertSame([], $found, 'files that still name pfb_dns_proxy_doh/doq');
 	}
 }

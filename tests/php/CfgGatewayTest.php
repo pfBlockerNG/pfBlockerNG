@@ -159,8 +159,8 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
-			'dnsbl/pfb_dns_proxy_doh' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh',
-			'dnsbl/pfb_dns_proxy_doq' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq',
+			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
+			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
 			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
@@ -199,8 +199,8 @@ final class CfgGatewayTest extends TestCase
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
-			'dnsbl/pfb_dns_proxy_doh' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh',
-			'dnsbl/pfb_dns_proxy_doq' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq',
+			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
+			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -458,14 +458,14 @@ final class CfgGatewayTest extends TestCase
 	/** @return array<string,array{string}> */
 	public static function dnsProxyListenerToggleKeys(): array
 	{
-		return ['DoH' => ['dnsbl/pfb_dns_proxy_doh'], 'DoQ' => ['dnsbl/pfb_dns_proxy_doq']];
+		return ['DoH' => ['dns/pfb_dns_doh'], 'DoQ' => ['dns/pfb_dns_doq']];
 	}
 
 	/** issue #3513: DoH/DoQ are opt-in; an absent key must leave them off. */
 	#[DataProvider('dnsProxyListenerToggleKeys')]
 	public function testDnsProxyListenerTogglesAreOffWhenAbsent(string $key): void
 	{
-		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/' . substr($key, 6)));
+		$this->assertNull(config_get_path('installedpackages/pfblockerngdns/config/0/' . substr($key, 4)));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read($key), "{$key} absent -> Off (default)");
 	}
 
@@ -473,11 +473,11 @@ final class CfgGatewayTest extends TestCase
 	public static function dnsProxyListenerStringKeys(): array
 	{
 		return [
-			'DoH port'       => ['dnsbl/pfb_dns_proxy_doh_port', '4443', '8443'],
-			'DoH interfaces' => ['dnsbl/pfb_dns_proxy_doh_interface', '', 'lan,opt1'],
-			'DoH trusted'    => ['dnsbl/pfb_dns_proxy_doh_trusted', '', '192.0.2.10 2001:db8::/32'],
-			'DoQ port'       => ['dnsbl/pfb_dns_proxy_doq_port', '853', '8853'],
-			'DoQ interfaces' => ['dnsbl/pfb_dns_proxy_doq_interface', '', 'lan'],
+			'DoH port'       => ['dns/pfb_dns_doh_port', '4443', '8443'],
+			'DoH interfaces' => ['dns/pfb_dns_doh_interface', '', 'lan,opt1'],
+			'DoH trusted'    => ['dns/pfb_dns_doh_trusted', '', '192.0.2.10 2001:db8::/32'],
+			'DoQ port'       => ['dns/pfb_dns_doq_port', '853', '8853'],
+			'DoQ interfaces' => ['dns/pfb_dns_doq_interface', '', 'lan'],
 		];
 	}
 
@@ -485,7 +485,7 @@ final class CfgGatewayTest extends TestCase
 	#[DataProvider('dnsProxyListenerStringKeys')]
 	public function testDnsProxyListenerStringSettingsDefaultWhenAbsentAndRoundTripVerbatim(string $key, string $default, string $value): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/' . substr($key, 6);
+		$path = 'installedpackages/pfblockerngdns/config/0/' . substr($key, 4);
 		$this->assertNull(config_get_path($path), 'precondition: absent');
 		$this->assertSame($default, PfbConfig::read($key), "{$key} absent -> registered default");
 
@@ -507,6 +507,17 @@ final class CfgGatewayTest extends TestCase
 		foreach (['dns/pfb_dns', 'dns/pfb_dns_saved'] as $key) {
 			$this->assertArrayHasKey($key, $registry, "{$key} is registered");
 			$this->assertSame('local', $registry[$key]['sync'], "{$key} never leaves the node");
+		}
+	}
+
+	/** issue #3513: the DoH/DoQ settings moved from the DNSBL section to the pfB-DNS one; the old keys are gone, not aliased. */
+	public function testTheDohAndDoqSettingsAreRegisteredInThePfbDnsSectionAndNotInTheDnsblOne(): void
+	{
+		$registry = pfb_cfg_registry();
+		foreach (['doh', 'doh_port', 'doh_interface', 'doh_trusted', 'doq', 'doq_port', 'doq_interface'] as $leaf) {
+			$this->assertArrayNotHasKey("dnsbl/pfb_dns_proxy_{$leaf}", $registry, "dnsbl/pfb_dns_proxy_{$leaf} left the registry");
+			$this->assertArrayHasKey("dns/pfb_dns_{$leaf}", $registry, "dns/pfb_dns_{$leaf} is registered");
+			$this->assertSame('local', $registry["dns/pfb_dns_{$leaf}"]['sync'], "dns/pfb_dns_{$leaf} never leaves the node");
 		}
 	}
 
@@ -1599,13 +1610,13 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dns',
 			'pfb_dns_saved',
 			// issue #3513: DoH/DoQ listener settings of the DNS proxy
-			'pfb_dns_proxy_doh',
-			'pfb_dns_proxy_doh_port',
-			'pfb_dns_proxy_doh_interface',
-			'pfb_dns_proxy_doh_trusted',
-			'pfb_dns_proxy_doq',
-			'pfb_dns_proxy_doq_port',
-			'pfb_dns_proxy_doq_interface',
+			'pfb_dns_doh',
+			'pfb_dns_doh_port',
+			'pfb_dns_doh_interface',
+			'pfb_dns_doh_trusted',
+			'pfb_dns_doq',
+			'pfb_dns_doq_port',
+			'pfb_dns_doq_interface',
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',

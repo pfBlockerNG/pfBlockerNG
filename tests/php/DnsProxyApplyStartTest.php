@@ -28,7 +28,7 @@ final class DnsProxyApplyStartTest extends TestCase
 	private const PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-	private const SETTINGS = 'installedpackages/pfblockerngdnsblsettings/config/0/';
+	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',
 		'pfb_test_valid_pids', 'pfb_test_rcfile_dir', 'pfb_test_interface_ip', 'pfb_test_interface_info',
@@ -192,16 +192,16 @@ final class DnsProxyApplyStartTest extends TestCase
 	/** @return array<string,array{array<string,string>,array<string,string>}> settings already saved, the setting that changes */
 	public static function listenerSettingChanges(): array
 	{
-		$doh = ['pfb_dns_proxy_doh' => 'on'];
-		$doq = ['pfb_dns_proxy_doq' => 'on'];
+		$doh = ['pfb_dns_doh' => 'on'];
+		$doq = ['pfb_dns_doq' => 'on'];
 		return [
 			'DoH turned on'  => [[], $doh],
-			'DoH port'       => [$doh, ['pfb_dns_proxy_doh_port' => '8443']],
-			'DoH interfaces' => [$doh, ['pfb_dns_proxy_doh_interface' => 'opt1']],
-			'DoH trusted'    => [$doh, ['pfb_dns_proxy_doh_trusted' => '192.0.2.10']],
+			'DoH port'       => [$doh, ['pfb_dns_doh_port' => '8443']],
+			'DoH interfaces' => [$doh, ['pfb_dns_doh_interface' => 'opt1']],
+			'DoH trusted'    => [$doh, ['pfb_dns_doh_trusted' => '192.0.2.10']],
 			'DoQ turned on'  => [[], $doq],
-			'DoQ port'       => [$doq, ['pfb_dns_proxy_doq_port' => '8853']],
-			'DoQ interfaces' => [$doq, ['pfb_dns_proxy_doq_interface' => 'opt1']],
+			'DoQ port'       => [$doq, ['pfb_dns_doq_port' => '8853']],
+			'DoQ interfaces' => [$doq, ['pfb_dns_doq_interface' => 'opt1']],
 		];
 	}
 
@@ -239,7 +239,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$gateway = $this->runningGatewayBox();
 		pfb_dns_proxy_service($gateway);
 		unset($GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE]);
-		$this->configure(['pfb_dns_proxy_doh' => 'on']);
+		$this->configure(['pfb_dns_doh' => 'on']);
 
 		pfb_dns_proxy_ensure_running($gateway);
 
@@ -253,7 +253,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->runningGatewayBox();
 		pfb_dns_proxy_service($absent);
 
-		$this->configure(['pfb_dns_proxy_doh' => 'on', 'pfb_dns_proxy_doq' => 'on']);
+		$this->configure(['pfb_dns_doh' => 'on', 'pfb_dns_doq' => 'on']);
 		pfb_dns_proxy_ensure_running($absent);
 
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls'], 'an unchanged script is no reason to restart');

@@ -179,14 +179,6 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/top1m_token',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
-		// issue #3513: DoH/DoQ listener settings of the DNS proxy
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh',
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh_port',
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh_interface',
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doh_trusted',
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq',
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq_port',
-		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dns_proxy_doq_interface',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',
@@ -284,6 +276,14 @@ class RequireConfigGatewaySniff implements Sniff
 		// issue #3515: installedpackages/pfblockerngdns/config/0 (pfB-DNS): the enable toggle and the Resolver snapshot it keeps
 		'installedpackages/pfblockerngdns/config/0/pfb_dns',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_saved',
+		// issue #3513: the DoH/DoQ listener settings of pfB-DNS
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_doh_port',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_doh_interface',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_doh_trusted',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_doq_port',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_doq_interface',
 		// issue #3450: IP-page scalars registered as plain strings
 		'installedpackages/pfblockerngipsettings/config/0/ip_placeholder',
 		'installedpackages/pfblockerngipsettings/config/0/maxmind_locale',
