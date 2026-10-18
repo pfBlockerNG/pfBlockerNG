@@ -1,16 +1,12 @@
 package main
 
-import (
-	"net"
-
-	"github.com/quic-go/quic-go"
-)
+import "net"
 
 // tlsListeners are the DoT, DoH and DoQ sockets, bound while the gateway is still root; serving starts later.
 type tlsListeners struct {
 	settings tlsSettings
 	dot, doh []*net.TCPListener
-	doq      []*quic.Listener
+	doq      []*net.UDPConn
 }
 
 // bindTLS binds every requested TLS transport. When one is requested but the certificate is unusable the reason is
@@ -43,7 +39,7 @@ func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
 		}
 	}
 	for _, host := range cfg.doqListen {
-		if ln, err := listenDoQ(host, cfg.doqPort, settings.doq()); err != nil {
+		if ln, err := bindUDP(host, cfg.doqPort); err != nil {
 			logf("%v", err)
 		} else {
 			t.doq = append(t.doq, ln)
@@ -79,7 +75,7 @@ func (t *tlsListeners) report(logf func(format string, args ...any)) {
 		logf("listening doh %s", ln.Addr())
 	}
 	for _, ln := range t.doq {
-		logf("listening doq %s", ln.Addr())
+		logf("listening doq %s", ln.LocalAddr())
 	}
 }
 
@@ -98,6 +94,6 @@ func (t *tlsListeners) serve(g *gateway, trusted []string) {
 		}
 	}
 	for _, ln := range t.doq {
-		g.serveDoQ(ln)
+		g.serveDoQ(ln, t.settings.doq())
 	}
 }

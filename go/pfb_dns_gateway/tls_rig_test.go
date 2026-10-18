@@ -74,12 +74,12 @@ func (r *rig) serveDoH(m tlsMaterial, trusted ...string) netip.AddrPort {
 
 func (r *rig) serveDoQ(m tlsMaterial) netip.AddrPort {
 	r.t.Helper()
-	ln, err := listenDoQ("127.0.0.1", 0, m.settings.doq())
+	udp, err := bindUDP("127.0.0.1", 0)
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.g.serveDoQ(ln)
-	return ln.Addr().(*net.UDPAddr).AddrPort()
+	r.g.serveDoQ(udp, m.settings.doq())
+	return udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
 // dialDoT connects as `source` (empty = the default) and completes the TLS handshake.
