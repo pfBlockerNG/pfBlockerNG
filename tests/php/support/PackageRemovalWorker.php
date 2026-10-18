@@ -262,6 +262,7 @@ register_shutdown_function(static function () use ($resultFile, &$paths, &$retur
 		'pending'   => $canary('pending'),
 		'dbCanary'  => $canary('db'),
 		'logCanary' => $canary('log'),
+		'rawFeed'   => $canary('raw'),
 		'manifest'  => file_exists("{$state}/pfb_py_sources.json"),
 		'rcScript'  => $rc !== '',
 		'rcSameAsBaseline' => $rc !== '' && $rc === ($baseline['rc'] ?? NULL),
@@ -333,6 +334,9 @@ if (is_file("{$state}/config.json")) {
 	config_set_path("{$dnsbl}/pfb_dnsvip4", '_vip_test_a');
 	config_set_path("{$dnsbl}/pfb_py_reply", 'on');
 	config_set_path("{$dnsbl}/pfb_control", 'on');
+	// The DNSBL logging policy an earlier apply already migrated (issue #3288): without the key the disable pass's policy
+	// upgrade calls pfb_global() again, which re-reads enable_cb and turns the uninstall's disable back on.
+	config_set_path("{$dnsbl}/global_log_mode", 'default');
 	config_set_path('virtualip/vip', [['uniqid' => '_test_a', 'subnet' => '10.10.10.1']]);
 	config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', 'on');
 	config_set_path('installedpackages/package', [['name' => 'pfBlockerNG-devel', 'internal_name' => 'pfblockerng', 'configurationfile' => 'pfblockerng.xml']]);
@@ -359,13 +363,17 @@ if (is_file("{$state}/config.json")) {
 }
 
 pfb_global();
+// The scheduler's dispatcher lock is a file in the state directory here, so the disable pass takes it as on the appliance
+// and runs its teardown; at its /usr/local/etc default the pass returns at the lock before touching anything.
+$pfb['schedule_state_dir'] = $state;
 $pfb['unbound_py_conf'] = "{$state}/pfb_unbound.ini";
 $pfb['unbound_py_sources'] = "{$state}/pfb_py_sources.json";
 $pfb['unbound_py_rawdir'] = "{$state}/pfb_py_raw";
-$paths = ['pending' => "{$tmp}/pending", 'db' => "{$pfb['dbdir']}/canary.txt", 'log' => "{$pfb['logdir']}/canary.txt"];
+$paths = ['pending' => "{$tmp}/pending", 'db' => "{$pfb['dbdir']}/canary.txt", 'log' => "{$pfb['logdir']}/canary.txt",
+	'raw' => "{$pfb['unbound_py_rawdir']}/canary.txt"];
 $pfb['pending_marker'] = $paths['pending'];
 pfb_mark_pending_changes();
-foreach (['db', 'log'] as $dir) {
+foreach (['db', 'log', 'raw'] as $dir) {
 	@mkdir(dirname($paths[$dir]), 0777, TRUE);
 	file_put_contents($paths[$dir], 'user data');
 }
@@ -404,8 +412,7 @@ switch ($scenario['failure']) {
 			$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 		} else {
 			// Another save holds the lock for 15 s: the removal's restore waits its 10 s and gives up, and the lock is free
-			// for the 5 s the recovery's own wait outlasts. (The disable pass returns before any restore in this sandbox:
-			// it cannot open its dispatcher lock file, /usr/local/etc/pfb_schedule_dispatch.lock.)
+			// for the 5 s the recovery's own wait outlasts.
 			$GLOBALS['pfb_test_try_lock_busy_for'] = 15;
 		}
 		break;
