@@ -67,6 +67,7 @@ from .test_smoke_dns_proxy import (
     CERT_CLIENT,
     CERT_GUEST,
     CERT_NAME,
+    CFG_PFB_DNS,
     DAEMON_PID_FILE,
     LAN_V6_ADDR,
     LAN_V6_ROW,
@@ -123,16 +124,15 @@ AUTO_ROWS_OFF = "unbound/disable_auto_added_access_control"  # pfSense's switch 
 LOOPBACK = {"127.0.0.1", "::1"}  # DoH and DoQ always listen here too, whatever interfaces they are given
 SNAPSHOT_FILE = "/tmp/pfb3513_cfg_snapshot.json"  # on the guest: survives a dead test process
 
-CFG_DNSBL = h.CFG_DNSBL_SETTINGS
 LISTENER_SETTINGS = {
-    "pfb_dns_proxy_doh": "on",
-    "pfb_dns_proxy_doh_port": str(DOH_PORT),
-    "pfb_dns_proxy_doh_interface": "lan",
-    "pfb_dns_proxy_doq": "on",
-    "pfb_dns_proxy_doq_port": str(DOQ_PORT),
-    "pfb_dns_proxy_doq_interface": "lan",
+    "pfb_dns_doh": "on",
+    "pfb_dns_doh_port": str(DOH_PORT),
+    "pfb_dns_doh_interface": "lan",
+    "pfb_dns_doq": "on",
+    "pfb_dns_doq_port": str(DOQ_PORT),
+    "pfb_dns_doq_interface": "lan",
 }
-CONFIG_PATHS = (*SNAPSHOT_PATHS, *(f"{CFG_DNSBL}/{key}" for key in LISTENER_SETTINGS), "unbound/acls", AUTO_ROWS_OFF)
+CONFIG_PATHS = (*SNAPSHOT_PATHS, *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_SETTINGS), "unbound/acls", AUTO_ROWS_OFF)
 
 TRANSPORTS = ("udp", "tcp", "dot", "doh-post", "doh-get", "doq")
 _TLS = (f"+tls-ca={CERT_CLIENT}", f"+tls-hostname={CERT_NAME}")
@@ -468,13 +468,13 @@ def _restore(vm: SmokeVM) -> None:
 
 
 def _set_listeners(vm: SmokeVM) -> None:
-    """DoH and DoQ on, on the LAN, as the DNSBL page's seven settings store them."""
+    """DoH and DoQ on, on the LAN, as the pfB-DNS tab's seven settings store them."""
     assignments = "".join(f"$d[{h._php_str(k)}] = {h._php_str(v)};\n" for k, v in LISTENER_SETTINGS.items())
     _php_ok(
         vm,
-        f"$d = config_get_path({h._php_str(CFG_DNSBL)}, array());\n{assignments}"
-        f"config_set_path({h._php_str(CFG_DNSBL)}, $d);\n"
-        "write_config('pfBlockerNG smoke: DNS proxy DoH and DoQ for the #3513 gateway smoke');",
+        f"$d = config_get_path({h._php_str(CFG_PFB_DNS)}, array());\n{assignments}"
+        f"config_set_path({h._php_str(CFG_PFB_DNS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: pfB-DNS DoH and DoQ for the #3513 gateway smoke');",
         "DoH/DoQ settings",
     )
 

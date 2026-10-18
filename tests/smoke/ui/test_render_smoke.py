@@ -2143,8 +2143,8 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         for tag in re.findall(r"<input\b[^>]*>", html)
         if re.search(r"""\btype=["']?checkbox\b""", tag) and (name := re.search(r'\bname="([^"]+)"', tag))
     ]
-    assert checkboxes == ["pfb_dns", "pfb_py_reply"], (
-        f"the page has the enable checkbox and the DNS Reply Logging checkbox, got {checkboxes}"
+    assert checkboxes == ["pfb_dns", "pfb_dns_doh", "pfb_dns_doq", "pfb_py_reply"], (
+        f"the page has the enable checkbox, the DoH and DoQ ones, then DNS Reply Logging; got {checkboxes}"
     )
     help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
     for needle in (
@@ -2283,62 +2283,63 @@ def test_reports_dns_reply_filter_limit_saves_from_the_rendered_form_with_dnsbl_
             helpers.config_restore_state(smoke_vm, path, prior)
 
 
+_DNS_LISTENER_FIELDS = (
+    "pfb_dns_doh",
+    "pfb_dns_doh_port",
+    "pfb_dns_doh_interface",
+    "pfb_dns_doh_trusted",
+    "pfb_dns_doq",
+    "pfb_dns_doq_port",
+    "pfb_dns_doq_interface",
+)
+_DNS_LISTENER_NAMES = tuple(f'name="{field}' for field in _DNS_LISTENER_FIELDS)
+
+
 def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """issue #3515: the toggle left the DNSBL page for the pfB-DNS tab, which the DNSBL page's own tab bar links to."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
-    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', 'name="pfb_py_reply"'):
+    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental", 'name="pfb_py_reply"', *_DNS_LISTENER_NAMES):
         assert gone not in resp.text, f"the DNSBL page still carries {gone!r}"
     assert "/pfblockerng/pfblockerng_dns.php" in resp.text, "the DNSBL page's tab bar links to pfB-DNS"
 
 
-_DNS_PROXY_LISTENER_FIELDS = (
-    "pfb_dns_proxy_doh",
-    "pfb_dns_proxy_doh_port",
-    "pfb_dns_proxy_doh_interface",
-    "pfb_dns_proxy_doh_trusted",
-    "pfb_dns_proxy_doq",
-    "pfb_dns_proxy_doq_port",
-    "pfb_dns_proxy_doq_interface",
-)
-
-
-def test_dnsbl_dns_proxy_doh_doq_fields_render_directly_after_the_proxy_option(
+def test_pfb_dns_page_renders_the_doh_and_doq_settings_directly_after_the_enable_toggle(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issue #3513: the seven DoH/DoQ fields follow Group Policy, in order, before Download Schemes.
+    """issue #3513: the seven DoH/DoQ fields follow the pfB-DNS enable checkbox, in order, before DNS Reply Logging.
 
-    Given the DNSBL page renders, Then DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
-    interfaces) appear in that order before the Download Schemes input, as the right input kinds,
+    Given the pfB-DNS page renders, Then DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
+    interfaces) appear in that order between the enable checkbox and DNS Reply Logging, as the right input kinds,
     with help that says experimental, names the Resolver's certificate, that DoQ is UDP and the HAProxy options.
     """
-    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    path = "/pfblockerng/pfblockerng_dns.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-    assert result.ok, f"DNSBL DoH/DoQ render oracle failed: {result.detail}"
+    result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
+    assert result.ok, f"pfB-DNS DoH/DoQ render oracle failed: {result.detail}"
     html = resp.text
 
-    start = html.index('name="pfb_dns_proxy_doh"')
-    end = html.index('name="pfb_dnsbl_lenient"')
-    positions = [html.find(f'name="{field}', start, end) for field in _DNS_PROXY_LISTENER_FIELDS]
-    assert -1 not in positions, f"a field is missing between DNS Proxy and Download Schemes: {positions}"
+    start = html.index('name="pfb_dns"')
+    end = html.index('name="pfb_py_reply"')
+    positions = [html.find(f'name="{field}', start, end) for field in _DNS_LISTENER_FIELDS]
+    assert -1 not in positions, f"a field is missing between the pfB-DNS toggle and DNS Reply Logging: {positions}"
     assert positions == sorted(positions), (
-        f"fields are out of order: {dict(zip(_DNS_PROXY_LISTENER_FIELDS, positions, strict=True))}"
+        f"fields are out of order: {dict(zip(_DNS_LISTENER_FIELDS, positions, strict=True))}"
     )
 
     def tag_at(position: int) -> str:
         return html[html.rfind("<", 0, position + 1) : html.index(">", position) + 1]
 
     for name, kind in (
-        ("pfb_dns_proxy_doh_port", "number"),
-        ("pfb_dns_proxy_doq_port", "number"),
-        ("pfb_dns_proxy_doh_trusted", "text"),
+        ("pfb_dns_doh_port", "number"),
+        ("pfb_dns_doq_port", "number"),
+        ("pfb_dns_doh_trusted", "text"),
     ):
         tag = tag_at(html.index(f'name="{name}"', start, end))
         assert re.search(rf"""\btype=["']?{kind}\b""", tag), f"{name} must be a {kind} input, got {tag}"
-    for name in ("pfb_dns_proxy_doh_interface", "pfb_dns_proxy_doq_interface"):
+    for name in ("pfb_dns_doh_interface", "pfb_dns_doq_interface"):
         tag = tag_at(html.index(f'name="{name}', start, end))
         assert tag.startswith("<select") and "multiple" in tag, f"{name} must be a multi-select, got {tag}"
 
