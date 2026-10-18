@@ -22,6 +22,7 @@ import pytest
 import unbound_shim as shim
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, DNSBL_IPV6, Booted
 from frontend_helpers import (
+    AD,
     WATCHDOG,
     FakeProxyUpstream,
     FakeUnbound,
@@ -102,6 +103,15 @@ def test_block_answer_keeps_the_client_case_clears_rd_and_echoes_edns(booted: Bo
     assert [rr.rtype for rr in reply.additional] == [dnswire.TYPE_OPT]
 
 
+@pytest.mark.parametrize(("do", "cd"), [(True, False), (False, True), (True, True)], ids=["do", "cd", "do-and-cd"])
+def test_a_block_answer_never_claims_dnssec_authentication_whatever_the_client_asks(
+    booted: Booted, do: bool, cd: bool
+) -> None:
+    reply = dnswire.parse(_resolve(booted, build_query(BLOCKED, do=do, cd=cd), FakeUnbound(ZONE)) or b"")
+    assert _answers(reply) == [(BLOCKED, dnswire.TYPE_A, VIP4)]
+    assert reply.flags & AD == 0  # the proxy synthesised this answer, so it cannot vouch for it
+
+
 def test_block_is_logged_with_the_feed_and_the_client_address(booted: Booted) -> None:
     _resolve(booted, build_query(BLOCKED), FakeUnbound(ZONE))
     [row] = _log_rows(booted, "dnsbl.log")
@@ -165,6 +175,19 @@ def test_unbound_reply_is_relayed_byte_for_byte_even_where_our_encoder_would_dif
         return upstream_reply
 
     assert _resolve(booted, build_query(ALLOWED, qid=0x0C0C, edns=True), forward) == upstream_reply
+
+
+def test_an_unbound_reply_with_the_authenticated_data_bit_is_relayed_with_that_bit_intact(booted: Booted) -> None:
+    query = build_query(ALLOWED, qid=0x0E0E, do=True, cd=True, edns=True)
+    upstream = bytearray(FakeUnbound(ZONE).answer(query))
+    upstream[3] |= AD  # the low byte of the flags word: AD is 0x0020
+
+    async def forward(_wire: bytes) -> bytes:
+        return bytes(upstream)
+
+    reply = _resolve(booted, query, forward)
+    assert reply == bytes(upstream)  # the module left Unbound's answer alone, so its bytes go out unchanged
+    assert dnswire.parse(reply or b"").flags & AD
 
 
 def test_forwarded_reply_is_logged_against_the_client_not_the_proxy(booted: Booted) -> None:

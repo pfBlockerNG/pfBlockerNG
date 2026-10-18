@@ -661,6 +661,105 @@ def test_an_upstream_tcp_connection_unbound_closed_while_idle_is_reopened_once(b
     assert connections == 2
 
 
+UPSTREAM_TIMEOUT = 1.0
+
+
+class _ScriptedTcpUpstream:
+    """A raw TCP stand-in for Unbound. `policy(connection, nth, wire)` says what it does with each frame, `nth` counting
+    from 1 on each connection: "answer", "answer_and_close", "silent" (the connection stays open, nothing is said) or
+    "close". Every frame it reads is kept in `frames`; `connections` counts the connections it accepted."""
+
+    def __init__(self, policy: Callable[[int, int, bytes], str]) -> None:
+        self.policy = policy
+        self.frames: list[bytes] = []
+        self.connections = 0
+
+    async def __aenter__(self) -> _ScriptedTcpUpstream:
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        self._server.close()
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.connections += 1
+        connection, nth = self.connections, 0
+        try:
+            while True:
+                size = struct.unpack("!H", await reader.readexactly(2))[0]
+                wire = await reader.readexactly(size)
+                nth += 1
+                self.frames.append(wire)
+                action = self.policy(connection, nth, wire)
+                if action == "close":
+                    return
+                if action.startswith("answer"):
+                    writer.write(struct.pack("!H", len(wire)) + wire)
+                    await writer.drain()
+                if action == "answer_and_close":
+                    return
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+
+
+def test_a_silent_reused_upstream_connection_is_not_resent_on_a_fresh_one_and_waits_one_timeout() -> None:
+    """Unbound keeps an idle connection open and stops answering on it: the query went out once, so it is not sent again
+    on a new connection, and the wait is one timeout, not two."""
+    q1, q2 = build_query(ALLOWED, qid=1), build_query(ALLOWED, qid=2)
+
+    async def scenario() -> tuple[bytes | None, float, int, int]:
+        async with _ScriptedTcpUpstream(lambda _c, _n, wire: "answer" if wire == q1 else "silent") as upstream:
+            connection = pfb_dns_proxy._TcpUpstream(("127.0.0.1", upstream.port), b"", UPSTREAM_TIMEOUT)
+            try:
+                assert await connection(q1) == q1
+                started = asyncio.get_running_loop().time()
+                reply = await connection(q2)
+                elapsed = asyncio.get_running_loop().time() - started
+                return reply, elapsed, upstream.connections, upstream.frames.count(q2)
+            finally:
+                connection.close()
+
+    reply, elapsed, connections, copies = asyncio.run(scenario())
+    assert (reply, connections, copies) == (None, 1, 1)
+    assert elapsed < 1.5 * UPSTREAM_TIMEOUT
+
+
+def test_a_reused_upstream_connection_unbound_closed_while_idle_gets_one_fresh_try() -> None:
+    q1, q2 = build_query(ALLOWED, qid=1), build_query(ALLOWED, qid=2)
+
+    async def scenario() -> tuple[bytes | None, bytes | None, int, int]:
+        async with _ScriptedTcpUpstream(lambda c, _n, _w: "answer_and_close" if c == 1 else "answer") as upstream:
+            connection = pfb_dns_proxy._TcpUpstream(("127.0.0.1", upstream.port), b"", UPSTREAM_TIMEOUT)
+            try:
+                first = await connection(q1)
+                second = await connection(q2)
+                return first, second, upstream.connections, upstream.frames.count(q2)
+            finally:
+                connection.close()
+
+    first, second, connections, copies = asyncio.run(scenario())
+    assert (first, second, connections, copies) == (q1, q2, 2, 1)
+
+
+@pytest.mark.parametrize("fresh", ["close", "silent"])
+def test_a_fresh_upstream_connection_that_fails_is_never_retried(fresh: str) -> None:
+    q1 = build_query(ALLOWED, qid=1)
+
+    async def scenario() -> tuple[bytes | None, int, int]:
+        async with _ScriptedTcpUpstream(lambda *_: fresh) as upstream:
+            connection = pfb_dns_proxy._TcpUpstream(("127.0.0.1", upstream.port), b"", UPSTREAM_TIMEOUT)
+            try:
+                reply = await connection(q1)
+                return reply, upstream.connections, upstream.frames.count(q1)
+            finally:
+                connection.close()
+
+    assert asyncio.run(scenario()) == (None, 1, 1)
+
+
 class _ClosesWithoutAnswering(FakeProxyUpstream):
     """An upstream that takes the query on each TCP connection and closes it without a word."""
 
