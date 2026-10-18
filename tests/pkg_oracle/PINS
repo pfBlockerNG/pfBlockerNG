@@ -1,0 +1,21 @@
+# What the oracle runs against, pinned. Sourced by build.sh and run.sh; nothing here is fetched unverified.
+
+# pfSense core (github.com/pfsense/pfsense, src/etc/inc/<file>): the functions pkg's DEINSTALL step runs before the package's
+# own hook. CE 2.8.x is NOT pinnable (the public repo has no RELENG_2_8_* ref and Plus is closed): master and RELENG_2_7_2 agree
+# on the logic that matters (see README.md).
+PFSENSE_MASTER=9363ac5b8651a1c7a333180425ce7719070f95f9
+PFSENSE_RELENG_2_7_2=ec956d343e6cd2db69caa23ba647a19d18fdbc3a
+CORE_FILES="pkg-utils.inc service-utils.inc util.inc xmlparse.inc"
+
+SHA256_master_pkg_utils_inc=bdf5e98086fde5b21f7f881c7b76b010dbe1204c9d9e791edefb63724ded9cef
+SHA256_master_service_utils_inc=c74996836b69482a451ea1383864aac4d19d86d743c55ca8963dcd555b42ed7e
+SHA256_master_xmlparse_inc=9f0a71e0419e0587af645e94e6c15eef851bdd7185b6df419a67b7acb5a06966
+SHA256_r272_pkg_utils_inc=f77123de6f53dd93d0f7cdaf5eb029664e8e7f1f83ec08a394994d5c860dffde
+SHA256_r272_service_utils_inc=c10292e3195ff6d002836ad176a2442c1b523f88f4519016cfbf198d7e975b2a
+SHA256_r272_xmlparse_inc=c8f994c2e9299b366d72da4817afe9e7c8a2f154d728cf93439c99c1e7c8320f
+SHA256_master_util_inc=9fee0c5a13f9bf9a8242c4277ad65911ad0a3676936a9aa6ebe4da5d49616ec6
+SHA256_r272_util_inc=9f451aac712d73ad72f65a2403ac53799faa1e0926cb08ba082dffcaf5488e3a
+
+# The real package manager: FreeBSD pkg, built from source on Linux (its DEINSTALL-script handling is libpkg's).
+PKG_VERSION=2.1.0
+PKG_SHA256=4c6bcf0dd3b52fbb00af7a1bbbbf938c0cdfc92854489df1682327fb667a0dad
