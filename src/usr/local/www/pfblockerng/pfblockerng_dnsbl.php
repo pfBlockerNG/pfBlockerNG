@@ -2868,7 +2868,7 @@ $section->addInput(new Form_Checkbox(
 		. 'Runs pfBlockerNG\'s DNS proxy on the DNS Resolver\'s network interfaces. '
 		. 'The proxy answers DNSBL blocks itself and forwards every other query to the DNS Resolver with the client\'s address (PROXY protocol v2).'
 		. '<div class="infoblock">'
-		. 'Enabling it changes these DNS Resolver settings: Network Interfaces becomes Localhost (the Listen Port is not changed), '
+		. 'Enabling it changes these DNS Resolver settings: Network Interfaces becomes Localhost (the Listen Port is not changed, and must not be 5353: the proxy reaches the Resolver there), '
 		. 'SSL/TLS Service is turned off (the proxy serves DNS over TLS with the Resolver\'s certificate instead), '
 		. 'and a <code>server:</code> clause marked <code># pfBlockerNG DNS proxy</code> is added at the end of Custom options: '
 		. 'the Resolver also listens on 127.0.0.1 and ::1 port 5353 for the proxy, and the IPv6 networks of its interfaces stay allowed.<br />'
@@ -2876,7 +2876,7 @@ $section->addInput(new Form_Checkbox(
 		. 'edits made to Custom options in between are replaced by the saved ones then.<br />'
 		. 'The firewall\'s own DNS lookups go to the DNS Resolver directly and are not filtered by DNSBL.<br />'
 		. '<strong>High availability:</strong> the DNS Resolver sync copies these settings to the secondary node. '
-		. 'Enable this option on both nodes, or turn the DNS Resolver sync off.<br />'
+		. 'Enable this option on the secondary node first, before the primary syncs the changed DNS Resolver, or turn the DNS Resolver sync off.<br />'
 		. 'Default: <strong>Disabled</strong>'
 		. '</div>');
 

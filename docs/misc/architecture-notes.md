@@ -386,7 +386,9 @@ The presence and value of the three changed keys are saved first in the per-node
 marker `dnsbl/pfb_dns_proxy_saved` (base64 JSON in config.xml, so it survives reboot and backup restore) and
 restored exactly, with the module back in Unbound, when the toggle is turned off, DNSBL is disabled, the setup
 wizard resets the package config, or the package is removed (its disable pass). A move that cannot be made safely
-(values that cannot be stored verbatim, or our block already in `custom_options` with no snapshot, which would
+(a Resolver Listen Port of 5353, or an `interface:` line of the admin's own in `custom_options` for `127.0.0.1` or
+`::1` port 5353, which Unbound would bind a second time and then not start although `unbound-checkconf` passes;
+values that cannot be stored verbatim; or our block already in `custom_options` with no snapshot, which would
 save the moved values as the "previous" ones) is refused with a log line and a `file_notice`: while the toggle is on
 the module has no host, so DNSBL blocks nothing. The restore is abandoned (snapshot kept, `file_notice`, retried by
 the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
@@ -452,9 +454,12 @@ pinned by `tests/smoke/test_smoke_dns_proxy.py`.
   addresses that are only link-local IPv6 are not served by the proxy; pfSense lists neither.
 - DNS over TLS reads the Resolver's certificate when the proxy starts: a renewed certificate needs a proxy restart.
 - High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
-  toggle and the snapshot marker are per-node (`local`). A secondary that receives it ends up with Unbound on
-  loopback and no proxy in front of it, in either toggle state. Enable the DNS proxy on both nodes, or turn the
-  DNS Resolver sync off.
+  toggle and the snapshot marker are per-node (`local`). A secondary that receives the moved section before its own
+  option is on has no snapshot and finds our block already there, so it refuses the move with a notice and DNSBL
+  blocks nothing on it (with the option off it only raises the notice). Enable the DNS proxy on the secondary FIRST,
+  before the primary syncs a moved Resolver, or turn the DNS Resolver sync off.
+- DNS Redirect on an interface without a pfSense `<iface>ip` keyword (OpenVPN, IPsec, L2TP, ...) still targets
+  `127.0.0.1`, which is Unbound and does not filter while the proxy is on.
 
 ### ADR-08 — IDN homoglyph protection
 
@@ -1454,7 +1459,7 @@ Live-VM smoke: `tests/smoke/test_smoke_managed_objects.py` (marker `smoke`).
 ## Optional NAT DNS-redirection (ADR-36)
 
 When enabled, pfBlockerNG creates and maintains a pair of NAT port-forward (rdr) rules per
-selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`) and one for IPv6 (`inet6`)
+selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`, or `<iface>ip` while the DNS proxy is on, #3515) and one for IPv6 (`inet6`)
 — that redirect all outbound port-53 DNS traffic to the firewall's own resolver. The IPv6 rule
 cannot target `::1`: FreeBSD drops a packet redirected to `::1` that arrived on a non-loopback
 interface (#3400). On an assigned interface (`wan`/`lan`/`optN`) it targets pfSense's

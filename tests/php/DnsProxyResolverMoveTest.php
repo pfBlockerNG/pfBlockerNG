@@ -24,6 +24,9 @@ final class DnsProxyResolverMoveTest extends TestCase
 	/** The clause the move appends when the Resolver has no IPv6 subnet to grant. */
 	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
+	/** The stored form of an older block of ours: the same lines with an IPv6 grant that is no longer current. */
+	private const STALE_BLOCK = "server:\n# pfBlockerNG DNS proxy\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
+		. "proxy-protocol-port: 5353\naccess-control: 2001:db8::/64 allow\n# end pfBlockerNG DNS proxy";
 
 	private string $tmp;
 	private bool $hadPfb = FALSE;
@@ -214,7 +217,15 @@ final class DnsProxyResolverMoveTest extends TestCase
 	/** @return array<string,array{0:?string}> the Resolver's listen port as the user left it */
 	public static function listenPorts(): array
 	{
-		return ['the default 53' => ['53'], 'an own port' => ['5300'], 'empty' => [''], 'absent' => [NULL]];
+		return [
+			'the default 53'                  => ['53'],
+			'an own port'                     => ['5300'],
+			'one below the proxy port'        => ['5352'],
+			'one above the proxy port'        => ['5354'],
+			'a longer port starting with it'  => ['53530'],
+			'empty'                           => [''],
+			'absent'                          => [NULL],
+		];
 	}
 
 	#[DataProvider('listenPorts')]
@@ -394,6 +405,177 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
 
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	// -----------------------------------------------------------------------
+	// Port 5353 -- our clause binds it on loopback, and Unbound cannot bind it twice
+	// -----------------------------------------------------------------------
+
+	public function testMoveOnRefusesWhenTheListenPortIsTheProxysLoopbackPortAndNamesTheListenPort(): void
+	{
+		// Given a Resolver whose Listen Port is 5353: our clause would bind 127.0.0.1 and ::1 on it a second time,
+		// which makes Unbound exit at start (live: "address already in use").
+		$this->seedResolver(['port' => '5353']);
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then nothing moves and no snapshot is kept ...
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+
+		// ... and the operator is told which setting to change, and what DNSBL loses meanwhile.
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$notice = $GLOBALS['pfb_test_file_notices'][0];
+		$this->assertStringContainsString('Listen Port', $notice['notice']);
+		$this->assertStringContainsString('5353', $notice['notice']);
+		$this->assertStringContainsString('DNSBL', $notice['notice']);
+		$this->assertSame('/services_unbound.php', $notice['url']);
+		$this->assertStringContainsString('Listen Port', $this->errorLog());
+	}
+
+	public function testMoveOnRefusesAMovedResolverWhoseListenPortWasLaterSetToTheProxysLoopbackPort(): void
+	{
+		// Given a moved Resolver, then an admin who sets its Listen Port to 5353 on the Resolver page.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		config_set_path('unbound/port', '5353');
+		$config = $GLOBALS['config'];
+		$writes = $this->writeCalls();
+
+		// When the proxy is applied again.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then it changes nothing and says which setting is the problem.
+		$this->assertFalse($changed);
+		$this->assertSame($writes, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('Listen Port', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/** @return array<string,array{0:string}> the admin's own Custom options, outside our block, that bind the proxy's loopback port */
+	public static function userLoopbackBinds(): array
+	{
+		return [
+			'IPv4 loopback'            => ["server:\ninterface: 127.0.0.1@5353"],
+			'IPv6 loopback'            => ["server:\ninterface: ::1@5353\n"],
+			'indented, with a comment' => ["server:\n  interface:   127.0.0.1@5353   # my own\nprefetch: yes"],
+			'quoted'                   => ["server:\ninterface: \"::1@5353\""],
+			'CRLF line endings'        => ["server:\r\ninterface: 127.0.0.1@5353\r\n"],
+		];
+	}
+
+	#[DataProvider('userLoopbackBinds')]
+	public function testMoveOnRefusesWhenTheAdminsOwnInterfaceLineBindsTheProxysLoopbackPort(string $custom): void
+	{
+		// Given Custom options of the admin's own that already listen on 127.0.0.1 or ::1 port 5353 (unbound-checkconf
+		// rejects the same interface twice, and so would our clause).
+		$this->seedResolver(['custom_options' => base64_encode($custom)]);
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then nothing moves and the notice names the Custom options to correct.
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$notice = $GLOBALS['pfb_test_file_notices'][0];
+		$this->assertStringContainsString('Custom Options', $notice['notice']);
+		$this->assertStringContainsString('5353', $notice['notice']);
+		$this->assertSame('/services_unbound.php', $notice['url']);
+	}
+
+	public function testMoveOnRefusesWhenTheAdminAddsThatInterfaceLineAfterOurBlockWasWritten(): void
+	{
+		// Given a moved Resolver, then an admin who appends their own loopback 5353 line to its Custom options.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$edited = base64_encode(implode("\n", $this->customLines()) . "\ninterface: ::1@5353\n");
+		config_set_path('unbound/custom_options', $edited);
+
+		// When the proxy is applied again.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the admin's text is left as written, with our one block, and the operator is told.
+		$this->assertFalse($changed);
+		$this->assertSame($edited, config_get_path('unbound/custom_options'));
+		$this->assertSame(1, $this->markerCount());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('Custom Options', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/** @return array<string,array{0:string}> interface lines that do not bind loopback port 5353 */
+	public static function otherInterfaceLines(): array
+	{
+		return [
+			'a LAN address on the proxy port' => ["server:\ninterface: 192.0.2.1@5353"],
+			'loopback on another port'        => ["server:\ninterface: 127.0.0.1@5300"],
+			'loopback on a longer port'       => ["server:\ninterface: 127.0.0.1@53530"],
+			'loopback without a port'         => ["server:\ninterface: ::1"],
+			'commented out'                   => ["server:\n# interface: 127.0.0.1@5353"],
+		];
+	}
+
+	#[DataProvider('otherInterfaceLines')]
+	public function testMoveOnIgnoresInterfaceLinesThatDoNotBindTheProxysLoopbackPort(string $custom): void
+	{
+		// Given Custom options whose interface lines do not collide with our clause.
+		$this->seedResolver(['custom_options' => base64_encode($custom)]);
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the Resolver is moved as usual, without a notice.
+		$this->assertTrue($changed);
+		$this->assertSame(1, $this->markerCount());
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	public function testOurOwnLoopbackLinesAreNotTheAdminsSoReplacingAStaleBlockIsNotRefused(): void
+	{
+		// Given a moved Resolver whose block of ours (with its own 5353 interface lines) holds a grant that is stale.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		config_set_path('unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes\n" . self::STALE_BLOCK));
+
+		// When the proxy is applied again.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the block is rewritten in place, without a notice.
+		$this->assertTrue($changed);
+		$this->assertSame("do-ip6: no\nprefetch: yes\n" . self::BLOCK, implode("\n", $this->customLines()));
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	/** @return array<string,array{0:string}> our block as it is stored after the Resolver page re-saved the text */
+	public static function blocksOfOurs(): array
+	{
+		return ['the current block' => [self::BLOCK], 'a stale block' => [self::STALE_BLOCK]];
+	}
+
+	#[DataProvider('blocksOfOurs')]
+	public function testABlockOfOursStoredWithCrlfEndingsIsKeptOrReplacedAsExactlyOneBlock(string $block): void
+	{
+		// Given a moved Resolver whose Custom options came back from the Resolver page with CRLF line endings
+		// (a browser text area submits them), our block among them.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$crlf = str_replace("\n", "\r\n", "do-ip6: no\nprefetch: yes\n" . $block);
+		config_set_path('unbound/custom_options', base64_encode($crlf));
+
+		// When the proxy is applied again.
+		pfb_dns_proxy_resolver(TRUE);
+
+		// Then there is exactly one block, never a second one appended beside the CRLF one.
+		$text = (string) base64_decode((string) config_get_path('unbound/custom_options'), TRUE);
+		$this->assertSame(1, $this->markerCount(), 'one block');
+		$this->assertSame(1, substr_count($text, 'proxy-protocol-port'), 'one PROXYv2 line');
+		$this->assertSame(1, substr_count($text, '# end pfBlockerNG DNS proxy'), 'one end marker');
 	}
 
 	// -----------------------------------------------------------------------
