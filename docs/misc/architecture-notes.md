@@ -621,8 +621,8 @@ the rc script run `/bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh` inst
 `--listen` set and `--port` are the Python line's (the derived addresses, then loopback so the firewall's own lookups are
 filtered, at the Resolver's Listen Port). `--ready-file` is optional for the binary and always passed here, ahead of the
 decider's `--` and never handed on: the gateway writes its own pid there (mode 0600) once its listeners serve and the
-decider has sent READY, and removes the file at stop while it still names it. Nothing on this branch reads that marker
-yet (the activation readiness wait is issue #3515's). The gateway's ACL is Unbound's own: the `access-control` rows of
+decider has sent READY, and removes the file at stop while it still names it. The activation wait (`pfb_dns_proxy_await_ready()`,
+see "Readiness and rollback" above) reads that marker, which names the `daemon -p` child because the wrapper `exec`s the binary. The gateway's ACL is Unbound's own: the `access-control` rows of
 `--unbound-conf` and of every file it includes (globs too: `access_lists.conf`, pfBlockerNG's marked clause, an admin's
 Custom Options), the last row of identical prefixes winning and the most specific prefix matching, as Unbound does; a
 client no row names is refused, as Unbound refuses it, and a config Unbound could not load (a missing include) is logged
