@@ -1,0 +1,46 @@
+{
+  "stamp": "2026-10-18 12:00:00",
+  "client": "192.0.2.10",
+  "rows": {
+    "a": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,A,300,allowed.example,192.0.2.10,192.0.2.77,unk"
+    ],
+    "aaaa": [
+      "DNS-reply,2026-10-18 12:00:00,reply,AAAA,AAAA,300,allowed.example,192.0.2.10,2001:db8::77,unk"
+    ],
+    "txt": [
+      "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,allowed.example,192.0.2.10,hello world,unk"
+    ],
+    "soa": [
+      "DNS-reply,2026-10-18 12:00:00,reply,SOA,SOA,300,allowed.example,192.0.2.10,ns.example,unk"
+    ],
+    "any": [
+      "DNS-reply,2026-10-18 12:00:00,reply,ANY,A,300,allowed.example,192.0.2.10,192.0.2.77,unk"
+    ],
+    "cname-chain": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,CNAME,300,alias.example,192.0.2.10,192.0.2.77,unk"
+    ],
+    "nxdomain": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,A,0,nx.example,192.0.2.10,NXDOMAIN,unk"
+    ],
+    "nxdomain-with-soa": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,SOA,60,nxd.example,192.0.2.10,SOA,unk"
+    ],
+    "no-answer": [
+      "DNS-reply,2026-10-18 12:00:00,reply,AAAA,AAAA,0,nodata.example,192.0.2.10,NXDOMAIN,unk"
+    ],
+    "refused": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,SOA,60,refused.example,192.0.2.10,Refused,unk"
+    ],
+    "servfail-from-unbound": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,SOA,60,servfail.example,192.0.2.10,ServFail,unk",
+      "DNS-reply,2026-10-18 12:00:00,servfail,A,SOA,60,servfail.example,192.0.2.10,ServFail,unk"
+    ],
+    "unbound-silent": [
+      "DNS-reply,2026-10-18 12:00:00,servfail,A,A,Unk,silent.example,192.0.2.10,ServFail,unk"
+    ],
+    "hostile-name": [
+      "DNS-reply,2026-10-18 12:00:00,reply,A,A,0,\"a,b\\034c\\060d\\062\\092010e\\038\\039.example\",192.0.2.10,NXDOMAIN,unk"
+    ]
+  }
+}
