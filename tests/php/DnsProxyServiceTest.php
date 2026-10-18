@@ -220,6 +220,7 @@ final class DnsProxyServiceTest extends TestCase
 			}
 		}
 		$this->savedGlobals = [];
+		@unlink(PFB_DNS_PROXY_RCFILE);
 		rmdir_recursive($this->dir);
 	}
 
@@ -1893,10 +1894,18 @@ final class DnsProxyServiceTest extends TestCase
 			"{$bad} is dropped, the valid neighbour stays");
 	}
 
+	/** The double writes where pfb_dns_proxy_service() reads the previous script from, so an unchanged one can be told. */
+	private function writeRcWhereProductionReadsIt(): void
+	{
+		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
+		@unlink(PFB_DNS_PROXY_RCFILE);
+	}
+
 	public function testTheMissingGatewayWarningIsLoggedWhenTheScriptChangesNotOnEveryApply(): void
 	{
 		// Given DoH on, no gateway binary installed, and a box whose script was just generated (one warning)
 		$absent = "{$this->dir}/bin/absent";
+		$this->writeRcWhereProductionReadsIt();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$this->setting('pfb_dns_proxy_doh', 'on');
 		$this->generateWith($absent);
@@ -1917,6 +1926,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testTheBadPortWarningIsLoggedWhenTheScriptChangesNotOnEveryApply(): void
 	{
 		$gateway = $this->gateway();
+		$this->writeRcWhereProductionReadsIt();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$this->setting('pfb_dns_proxy_doh', 'on');
 		$this->setting('pfb_dns_proxy_doh_port', 'abc');
