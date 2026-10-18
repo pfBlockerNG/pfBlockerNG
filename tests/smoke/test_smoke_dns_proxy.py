@@ -1906,6 +1906,8 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         assert "did not become ready" in logs and "was restored to its previous settings" in logs, (
             f"the package logs do not report the rollback:\n{diagnostics}"
         )
+        # The holders are this test's own LAN-address listeners: left up, they answer the client checks, not Unbound.
+        _release(vm)
 
         blocked, raw = _query(rig.client, rig.names.blocked)
         assert h.is_vip(blocked), f"blocked name through Unbound again: {blocked}\n{raw}"
