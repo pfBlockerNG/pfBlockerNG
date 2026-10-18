@@ -582,9 +582,16 @@ by `pfb_dns_gateway` as well as `pfb_dns_proxy` in its command line, with the sa
 
 The Resolver is moved exactly as for the Python listener, so in forwarding mode Unbound still runs
 `pfb_upstream_observer.py` (`pfb_unbound_python()` and `pfb_unbound_dnsbl()` key on the saved snapshot, never on the
-gateway binary). The decider is the module host: `pfb_dns_proxy.py --decision-fd` makes `/var/unbound/pfb_upstream.sock`
-before it sends READY and fires the module's `query_response` on each report, so an upstream block is logged under the
-gateway as under the Python listener. Pinned by `tests/dns_proxy/test_decision_service.py`.
+gateway binary). The decider is the module host only with DNSBL on: `pfb_dns_proxy.py --decision-fd` makes
+`/var/unbound/pfb_upstream.sock` before it sends READY, and only with `--observer` (DNSBL on, Resolver forwarding), and
+fires the module's `query_response` on each report, so an upstream block is logged under the gateway as under the Python
+listener. pfB-DNS's three modes are the gateway's own flags, the ones the Python listener has, handed on to the decider:
+`--no-module` (DNSBL off: the decider boots no module, reads no feed and forwards every query through FORWARD/REPLY, the
+early Resolver ACL, DoT, DoH and DoQ unchanged), `--no-module --reply-log` (the DNS Reply Logging preference is on: the
+decider writes the existing DNS Reply log row for each reply, through the same `dns_reply_log` helper, nothing otherwise)
+and `--observer`; `--observer` with `--no-module` and `--reply-log` without it are usage errors. Pinned by
+`tests/dns_proxy/test_decision_service.py`, `test_decision_modes.py` (decider) and `test_gateway_modes.py` (the real
+gateway, decider and Unbound), `go/pfb_dns_gateway/cli_test.go` and `DnsProxyServiceTest` (the rc line).
 
 ### ADR-08 — IDN homoglyph protection
 

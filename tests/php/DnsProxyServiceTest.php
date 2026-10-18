@@ -652,6 +652,62 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame($expected, array_values(array_intersect($this->daemonArgv(), ['--no-module', '--reply-log', '--observer'])));
 	}
 
+	/** @return array<string,array{bool,bool,?PfbToggle,list<string>}> DNSBL on, Resolver forwarding, the DNS Reply Logging preference, the gateway's mode flags */
+	public static function gatewayModeRows(): array
+	{
+		return [
+			'DNSBL off, preference on: no module, the replies are logged' => [FALSE, FALSE, PfbToggle::On, ['--no-module', '--reply-log']],
+			'DNSBL off, preference off: no module, nothing is logged'     => [FALSE, FALSE, PfbToggle::Off, ['--no-module']],
+			'DNSBL off, Resolver forwarding: still no observer'           => [FALSE, TRUE, PfbToggle::Off, ['--no-module']],
+			'DNSBL on, Resolver recursing: the decider hosts the module'  => [TRUE, FALSE, PfbToggle::On, []],
+			'DNSBL on, Resolver forwarding: upstream blocks are reported' => [TRUE, TRUE, PfbToggle::On, ['--observer']],
+		];
+	}
+
+	/** @param list<string> $flags */
+	#[DataProvider('gatewayModeRows')]
+	public function testTheGatewayLineCarriesThePfbDnsModeFlagsAsItsOwnAndTheDeciderIsLeftAlone(bool $dnsbl, bool $forwarding, ?PfbToggle $preference, array $flags): void
+	{
+		// Given the gateway binary, a saved Resolver, and pfB-DNS in the mode DNSBL, forwarding and the logging preference make
+		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		$GLOBALS['pfb']['dnsbl'] = $dnsbl ? PfbToggle::On : PfbToggle::Off;
+		$GLOBALS['pfb']['dnsbl_py_reply'] = $preference;
+		if ($forwarding) {
+			config_set_path('unbound/forwarding', '');
+		}
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+
+		// When the rc service is generated and started
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the gateway has exactly that mode's flags, before `--`, and the Python decider's own argv is the one it always had
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [], '53', $flags), $argv);
+		$decider = array_slice($argv, (int) array_search('--', $argv, TRUE));
+		$this->assertSame(self::DECIDER, $decider, 'the decider is told nothing the gateway does not pass on itself');
+	}
+
+	public function testDohAndDoqAreServedByTheGatewayWithDnsblOffToo(): void
+	{
+		// Given pfB-DNS alone (DNSBL off), DoH and DoQ on, and the gateway binary
+		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
+		$GLOBALS['pfb']['dnsbl_py_reply'] = PfbToggle::Off;
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doq', 'on');
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+
+		// When the rc service is generated and started
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the gateway serves both next to the plain listeners, and boots no DNSBL module for them
+		$this->assertContains('--no-module', $argv);
+		$this->assertContains('--doh-port', $argv, 'DoH is served with DNSBL off');
+		$this->assertContains('--doq-port', $argv, 'DoQ is served with DNSBL off');
+		$this->assertSame(['launch'], $this->events());
+	}
+
 	public function testAMarkerThatIsNotAValidSnapshotLaunchesNothingAndFailsLoudly(): void
 	{
 		// Given a stored marker that is non-empty but no valid Resolver snapshot (hand-edited, truncated): the PHP side
@@ -887,6 +943,26 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(['3001', '3002'], $this->livePids());
 	}
 
+	public function testSecondStartWhileTheGatewayAndItsSupervisorServeKeepsThemAndLaunchesNothing(): void
+	{
+		// Given the gateway the boot hook's start launched (DNSBL off, so nothing but the rc script and Unbound's config is needed)
+		$gateway = $this->gateway();
+		$this->moveResolver();
+		$this->generateWith($gateway);
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events(), 'precondition: the first start launched the gateway');
+
+		// When the package start runs the same script again
+		[$status, $output] = $this->rc('start');
+
+		// Then the serving pair is kept: no stop, no signal, and no second launch
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events(), 'a second start neither stops nor relaunches a serving gateway');
+		$this->assertSame(['3001', '3002'], $this->livePids());
+	}
+
 	public function testStartWithAChildThatDiedStopsTheSurvivingSupervisorAndLaunchesOnce(): void
 	{
 		// Given a supervisor still alive whose child is gone: the child pidfile names a pid that is no longer running
@@ -1036,9 +1112,10 @@ final class DnsProxyServiceTest extends TestCase
 	 * @param list<string> $listen plain DNS addresses the Resolver's interfaces give; the loopback pair is appended
 	 * @param list<string> $tls the --doh-* / --doq-* arguments, in order
 	 * @param string $port the Resolver's Listen Port the gateway binds for plain DNS
+	 * @param list<string> $module the pfB-DNS mode flags, which are the gateway's own: no DNSBL (the state of these tests) is --no-module
 	 * @return list<string>
 	 */
-	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = [], string $port = '53'): array
+	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = [], string $port = '53', array $module = ['--no-module']): array
 	{
 		$addresses = [];
 		foreach ([...$listen, '127.0.0.1', '::1'] as $address) {
@@ -1050,7 +1127,7 @@ final class DnsProxyServiceTest extends TestCase
 			'-o', "{$this->dir}/log/dns_proxy.log",
 			$gateway, ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
-			'--pfsense-config', '/cf/conf/config.xml', ...$tls,
+			'--pfsense-config', '/cf/conf/config.xml', ...$tls, ...$module,
 			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', ...self::DECIDER,
 		];
 	}

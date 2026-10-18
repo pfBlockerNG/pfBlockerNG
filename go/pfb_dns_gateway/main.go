@@ -1,4 +1,4 @@
-// pfb_dns_gateway (issue #3513): serves plain DNS over UDP and TCP, and DoT, DoH and DoQ with the DNS Resolver's
+// pfb_dns_gateway, the pfB-DNS network layer (issue #3513): serves plain DNS over UDP and TCP, and DoT, DoH and DoQ with the DNS Resolver's
 // certificate; applies the Resolver ACL before anyone is asked, lets the Python DNSBL decider (its child) decide
 // every other query, and forwards to Unbound with a PROXYv2 header naming the client.
 //
@@ -51,6 +51,9 @@ type config struct {
 	dohTrusted    []string
 	doqListen     []string
 	doqPort       int
+	noModule      bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
+	observer      bool
+	replyLog      bool
 	decider       []string
 
 	// Test seams; the zero value is production.
@@ -97,6 +100,9 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.Var(&dohTrusted, "doh-trusted", "front end trusted to send PROXYv2 and X-Forwarded-For to DoH (CIDR or address), repeatable")
 	fs.Var(&doqListen, "doq-listen", "DoQ (RFC 9250) address, repeatable; none = DoQ off")
 	fs.IntVar(&cfg.doqPort, "doq-port", cfg.doqPort, "DoQ UDP port; 0 picks one per address")
+	fs.BoolVar(&cfg.noModule, "no-module", false, "pfB-DNS without DNSBL: the decider boots no module and forwards every query")
+	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: the decider listens for the upstream observer's reports")
+	fs.BoolVar(&cfg.replyLog, "reply-log", false, "the decider logs each relayed reply to dns_reply.log (needs --no-module)")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -111,6 +117,14 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
+	for _, mode := range []struct {
+		on   bool
+		flag string
+	}{{cfg.noModule, "--no-module"}, {cfg.replyLog, "--reply-log"}, {cfg.observer, "--observer"}} {
+		if mode.on {
+			cfg.decider = append(cfg.decider, mode.flag)
+		}
+	}
 	return cfg, nil
 }
 
@@ -120,6 +134,12 @@ func (c config) validate() error {
 	}
 	if c.decider[0] == "" {
 		return errors.New("empty decider command after `--`")
+	}
+	if c.observer && c.noModule {
+		return errors.New("--observer cannot be used with --no-module")
+	}
+	if c.replyLog && !c.noModule {
+		return errors.New("--reply-log needs --no-module: the module logs its own replies")
 	}
 	if c.port < 0 || c.port > 65535 {
 		return fmt.Errorf("--port %d is outside 0..65535", c.port)

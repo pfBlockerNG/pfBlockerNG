@@ -46,7 +46,7 @@ func TestMain(m *testing.M) {
 //	bad-frame       READY, then a frame whose length is below the minimum
 //	ignore-eof      READY, then ignore everything, EOF included
 //
-// PFB_FAKE_PIDFILE gets its pid before anything else; PFB_FAKE_EXIT_DELAY (a duration) holds the exit after EOF,
+// PFB_FAKE_PIDFILE gets its pid and PFB_FAKE_ARGVFILE its arguments before anything else; PFB_FAKE_EXIT_DELAY (a duration) holds the exit after EOF,
 // which makes a gateway that exits before its child reaches the pid check with the child still alive.
 func fakeDecider(mode string) int {
 	conn, err := net.FileConn(os.NewFile(3, "decision"))
@@ -56,6 +56,9 @@ func fakeDecider(mode string) int {
 	}
 	if path := os.Getenv("PFB_FAKE_PIDFILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	}
+	if path := os.Getenv("PFB_FAKE_ARGVFILE"); path != "" { // what the gateway handed this process after its own role words
+		_ = os.WriteFile(path, []byte(strings.Join(os.Args[3:], " ")), 0o644)
 	}
 	switch mode {
 	case "no-ready-exit":
@@ -300,6 +303,21 @@ func TestGatewaySkipsAnUnbindableListenAddressAndServesTheOthers(t *testing.T) {
 	}
 	if strings.Contains(gw.logText(), "listening udp+tcp 192.0.2.1") {
 		t.Fatalf("the skipped address must not be reported as listening:\n%s", gw.logText())
+	}
+}
+
+// issue #3513: the process the gateway starts is handed the pfB-DNS mode flags it was given, once, after its own argv.
+func TestGatewayStartsTheDeciderWithTheModeFlagsItWasGiven(t *testing.T) {
+	argvFile := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("PFB_FAKE_ARGVFILE", argvFile)
+	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0", "--no-module", "--reply-log", "--unbound-conf", "/nonexistent/unbound.conf"}, decider("serve"))
+	gw.waitLine("ready upstream ")
+	got, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "--no-module --reply-log"; string(got) != want {
+		t.Fatalf("the decider's arguments: got %q, want %q", got, want)
 	}
 }
 
