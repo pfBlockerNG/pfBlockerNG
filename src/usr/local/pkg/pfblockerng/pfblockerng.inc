@@ -12943,10 +12943,11 @@ function pfb_dns_config_lock() {
  * proxy), has Unbound listen on 127.0.0.1 and ::1 port 5353 for the proxy's PROXYv2 stream and grants the IPv6 networks
  * pfSense would no longer (see pfb_dns_proxy_acl_networks()); it is rewritten in place when the networks changed or
  * it predates the port line, and is found by its marker lines, never by a user's own PROXYv2 setup. A refused move is
- * announced with a notice: a Listen Port of 5353 or 5354, an interface line of the admin's own for 127.0.0.1 or ::1
- * on either port, or a `port:` line of the admin's own in Custom Options (Unbound could not bind our clause's
- * sockets and would not start, or would listen elsewhere), values that cannot be stored verbatim, or our block with no
- * snapshot (never snapshot moved values as the "previous" ones).
+ * announced with a notice: a Listen Port of 5353 or 5354, any `interface:` line of the admin's own (Unbound's listen
+ * addresses come from Network Interfaces; such a line could take a reserved or LAN address), a `port:` line of the admin's
+ * own in Custom Options (Unbound could not bind our clause's sockets and would not start, or would listen elsewhere),
+ * values that cannot be stored verbatim, our block with no snapshot (never snapshot moved values as the "previous" ones),
+ * or a second copy of our marker line.
  *
  * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, and only then stops the
  * DNS proxy service (so Unbound's regeneration finds the port free): a lock that stays taken, or a failed read, returns
@@ -13055,12 +13056,18 @@ function pfb_dns_proxy_resolver_locked(bool $on): bool {
 			    'set the Listen Port to another port (the default is 53)');
 		}
 	}
+	// Marker lines are counted first: a stray copy would make the cut below run on past it and hide the lines in between.
+	$markers = array_map('trim', explode("\n", $custom));
+	if (count(array_keys($markers, PFB_DNS_PROXY_MARKER, TRUE)) > 1) {
+		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain the line "' . PFB_DNS_PROXY_MARKER .
+		    '" more than once; remove the extra copy');
+	}
 	$theirs = (string) preg_replace($stale, '', $custom);
-	$own_bind = '/^[ \t]*interface:[ \t]*["\']?(?:127\.0\.0\.1|::1)@(' . PFB_DNS_PROXY_UNBOUND_PORT . '|' .
-	    PFB_DNS_PROXY_UNBOUND_PLAIN_PORT . ')["\']?[ \t]*(?:#.*)?$/m';
-	if (preg_match($own_bind, $theirs, $bound) === 1) {
-		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options already have an "interface:" line for 127.0.0.1 or ::1 port ' .
-		    "{$bound[1]}, a loopback port the DNS proxy gives Unbound; remove or change that line");
+	// Unbound reads the text as one stream, so the key counts wherever it stands; a longer name such as
+	// outgoing-interface: is not that key (it names an outgoing source address, which binds nothing).
+	if (preg_match('/(?<![a-z0-9_-])interface(?:-[a-z-]+)?[[:space:]]*:/i', $theirs) === 1) {
+		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain an "interface:" line, which the DNS proxy does ' .
+		    'not allow: remove it and choose the Resolver\'s addresses in Network Interfaces');
 	}
 	if (preg_match('/^[ \t]*port:/m', $theirs) === 1) {
 		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options set "port:" themselves, which the DNS proxy overrides to ' .
