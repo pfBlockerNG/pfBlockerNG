@@ -96,6 +96,7 @@ def _conf(port: int, authoritative_port: int, *, observer: bool = False) -> str:
     log-queries: yes
     access-control: 0.0.0.0/0 refuse
     access-control: 127.0.0.0/8 allow
+    access-control: 192.0.2.0/24 allow
     access-control: {REFUSED_CLIENT}/32 refuse
 {server_extra}{python_clause}forward-zone:
     name: "example."
