@@ -7856,8 +7856,10 @@ function pfb_metrics_collect(): array {
 
 	$show_agg = (PfbConfig::readSection('installedpackages/pfblockerngglobal')['widget-show_agg'] ?? '') === 'on';
 
-	$pfctl = pfb_pfctl_tables_raw();
-	$up['pfctl'] = $pfctl !== array();
+	// A non-zero exit is a failed read even if pfctl printed some tables first; a zero exit with no output is an empty set.
+	$pfctl_rc = NULL;
+	$pfctl = pfb_pfctl_tables_raw('', $pfctl_rc);
+	$up['pfctl'] = $pfctl_rc === 0;
 	$ip_tables = NULL;
 	if ($up['pfctl']) {
 		$ip_ph = pfb_ip_placeholder();
@@ -8552,14 +8554,14 @@ function pfb_pfctl_killed_count(array $output): int {
 
 // ONE `pfctl -vvsTables` exec. Full dump — do not pipe through grep -A4 (that
 // truncation drops the In/Out packet lines the parser is meant to read).
-// Returns the line array exec() collected; never throws.
-function pfb_pfctl_tables_raw(string $pfctl_bin = ''): array {
+// Returns the line array exec() collected; never throws. $rc, when given, receives pfctl's exit status.
+function pfb_pfctl_tables_raw(string $pfctl_bin = '', ?int &$rc = NULL): array {
 	global $pfb;
 	if ($pfctl_bin === '') {
 		$pfctl_bin = $pfb['pfctl'] ?? '/sbin/pfctl';
 	}
 	$out = [];
-	exec(escapeshellarg($pfctl_bin) . ' -vvsTables 2>/dev/null', $out);
+	exec(escapeshellarg($pfctl_bin) . ' -vvsTables 2>/dev/null', $out, $rc);
 	return $out;
 }
 

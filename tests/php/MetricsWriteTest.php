@@ -13,6 +13,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_metrics_collect')]
 #[CoversFunction('pfb_metrics_write')]
 #[CoversFunction('pfb_metrics_configure_cron')]
+#[CoversFunction('pfb_pfctl_tables_raw')]
 final class MetricsWriteTest extends TestCase
 {
 	private const CRON_CMD    = '/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
@@ -42,9 +43,10 @@ final class MetricsWriteTest extends TestCase
 		$pfb['errlog']             = "{$this->root}/log/error.log";
 		$pfb['pfctl']              = "{$this->root}/pfctl";
 
-		// Fake pfctl: prints whatever the test wrote to pfctl.out, as `pfctl -vvsTables` would.
+		// Fake pfctl: prints whatever the test wrote to pfctl.out and exits with the status in pfctl.rc.
 		file_put_contents("{$this->root}/pfctl.out", '');
-		file_put_contents($pfb['pfctl'], "#!/bin/sh\ncat " . escapeshellarg("{$this->root}/pfctl.out") . "\n");
+		file_put_contents("{$this->root}/pfctl.rc", '0');
+		file_put_contents($pfb['pfctl'], "#!/bin/sh\ncat " . escapeshellarg("{$this->root}/pfctl.out") . "\nexit \$(cat " . escapeshellarg("{$this->root}/pfctl.rc") . ")\n");
 		chmod($pfb['pfctl'], 0755);
 
 		$GLOBALS['config'] = [];
@@ -398,5 +400,46 @@ final class MetricsWriteTest extends TestCase
 		file_put_contents("{$GLOBALS['pfb']['dnsbldir']}/pfb_py_status.json", '');
 
 		$this->assertTrue(pfb_metrics_collect()['source_up']['py_sync_status']);
+	}
+
+	public function testPfctlRawReportsTheExitStatusAndKeepsItsOutput(): void
+	{
+		file_put_contents("{$this->root}/pfctl.out", "-p-a---\tpfB_Deny_v4\n");
+		file_put_contents("{$this->root}/pfctl.rc", '3');
+
+		$rc = NULL;
+		$lines = pfb_pfctl_tables_raw('', $rc);
+
+		$this->assertSame(3, $rc);
+		$this->assertSame(["-p-a---\tpfB_Deny_v4"], $lines);
+	}
+
+	public function testPfctlNonZeroExitIsDownWithNoTablesEvenWhenItPrintedOutput(): void
+	{
+		file_put_contents("{$this->root}/pfctl.out", "-p-a---\tpfB_Deny_v4\n\tAddresses: 1200\n");
+		file_put_contents("{$this->root}/pfctl.rc", '1');
+
+		$s = pfb_metrics_collect();
+
+		$this->assertFalse($s['source_up']['pfctl']);
+		$this->assertNull($s['ip_tables']);
+	}
+
+	public function testPfctlZeroExitWithNoOutputIsUpWithNoTables(): void
+	{
+		$s = pfb_metrics_collect();
+
+		$this->assertTrue($s['source_up']['pfctl']);
+		$this->assertSame([], $s['ip_tables']);
+	}
+
+	public function testMissingPfctlBinaryIsDown(): void
+	{
+		$GLOBALS['pfb']['pfctl'] = "{$this->root}/no-such-pfctl";
+
+		$s = pfb_metrics_collect();
+
+		$this->assertFalse($s['source_up']['pfctl']);
+		$this->assertNull($s['ip_tables']);
 	}
 }
