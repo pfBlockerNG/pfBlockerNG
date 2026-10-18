@@ -15,11 +15,17 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --timeout SECONDS  wait for Unbound before answering SERVFAIL (default 5)
   --dot              also serve DNS over TLS, as the pfSense DNS Resolver is set up for (see below)
   --pfsense-config P pfSense config.xml to read the DNS Resolver's DoT settings from (/cf/conf/config.xml)
+  --no-module        pfB-DNS with DNSBL off: boot no pfb_unbound.py and forward every query to Unbound (see below)
   --user NAME        give up root for NAME after binding the sockets and before the module boots (default: keep it)
 
 --user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then supplementary groups, group
 and user are set to NAME's, then the module boots, so every file it creates belongs to NAME. An unknown NAME (or '') or
 a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
+
+--no-module: no module is imported or booted, so --module-dir is neither read nor needs to exist, the working directory
+stays where it is and no observer socket is made. A query that passes the header checks and parses is forwarded to
+Unbound as it is and Unbound's reply relayed as it is (silence is a SERVFAIL, as in the module mode); there are no
+decisions and no MODDONE pass. Listeners, DoT, the caps, the timeouts and --user are the same as without it.
 
 Upstream blocks (issue #267): Unbound rewrites every reply it sends (RA set, AA clear, the upstream's EDNS options
 dropped), so the proxy cannot tell from a relayed reply that the upstream blocked it. While the Resolver forwards,
@@ -291,7 +297,7 @@ def _upstream_report(data: bytes) -> tuple[shim.module_qstate, shim.DnsMsg]:
 class Frontend:
     def __init__(
         self,
-        module: ModuleType,
+        module: ModuleType | None,
         upstream: tuple[str, int],
         timeout: float = 5.0,
         max_udp_inflight: int = MAX_UDP_INFLIGHT,
@@ -313,7 +319,9 @@ class Frontend:
         self._malformed_reported = False
 
     def _operate(self, qstate: shim.module_qstate, event: int) -> int:
-        self.module.operate(shim.MODULE_ID, event, qstate, None)
+        module = self.module
+        assert module is not None  # resolve() relays instead when there is no module
+        module.operate(shim.MODULE_ID, event, qstate, None)
         return qstate.ext_state[shim.MODULE_ID]
 
     async def resolve(self, wire: bytes, client_ip: str, forward: Forward) -> bytes | None:
@@ -336,6 +344,12 @@ class Frontend:
             return _error(dnswire.Message(msg_id, flags), RCODE_FORMERR)
 
         question = query.questions[0]
+        if self.module is None:
+            reply = await forward(wire)
+            if reply is None:
+                shim.log_warn(f"no reply from Unbound for {question.name} {dnswire.type_str(question.qtype)}")
+                return _error(query, RCODE_SERVFAIL)
+            return reply
         qstate = shim.module_qstate(
             shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags
         )
@@ -670,6 +684,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="pfSense config.xml (/cf/conf/config.xml)",
     )
     parser.add_argument("--user", metavar="NAME", help="give up root for this user once the sockets are bound")
+    parser.add_argument("--no-module", action="store_true", help="boot no pfb_unbound.py: forward every query")
     args = parser.parse_args(argv)
     try:
         parse_hostport(args.upstream)
@@ -695,8 +710,8 @@ async def serve(
     stop: asyncio.Event | None = None,
     on_ready: Callable[[list[tuple[str, int]]], object] | None = None,
 ) -> None:
-    """Bind, drop root for `args.user`, boot the module, serve until `stop` is set (SIGINT/SIGTERM when not given),
-    then shut everything down.
+    """Bind, drop root for `args.user`, boot the module (not with `args.no_module`), serve until `stop` is set
+    (SIGINT/SIGTERM when not given), then shut everything down.
 
     The sockets and the TLS context are made as the user the process started as; the drop comes after them and
     before the boot, so what init_standard() and the watchers create belongs to `args.user`. `on_ready` gets the
@@ -718,7 +733,7 @@ async def serve(
             dot_listeners.extend(bind_all(listen, dot.port, udp=False))
         if account is not None:
             drop_privileges(account)
-        module = boot(args.module_dir)
+        module = None if args.no_module else boot(args.module_dir)
     except BaseException:
         for listener in (*listeners, *dot_listeners):
             listener.close()
@@ -727,10 +742,11 @@ async def serve(
     try:
         bound = await frontend.serve_listeners(listeners)
         dot_bound = await frontend.serve_listeners(dot_listeners, dot_context)
-        try:
-            await frontend.serve_observer(OBSERVER_SOCKET)  # relative: boot() made --module-dir the working directory
-        except OSError as exc:
-            shim.log_err(f"upstream-block detection is off: cannot listen on {OBSERVER_SOCKET}: {exc}")
+        if module is not None:
+            try:
+                await frontend.serve_observer(OBSERVER_SOCKET)  # relative: boot() made --module-dir the working dir
+            except OSError as exc:
+                shim.log_err(f"upstream-block detection is off: cannot listen on {OBSERVER_SOCKET}: {exc}")
         listening = [f"{host}:{port}" for host, port in bound] + [f"{host}:{port} (DoT)" for host, port in dot_bound]
         shim.log_info(f"listening on {', '.join(listening)}; upstream {args.upstream}")
         if on_ready is not None:
@@ -742,7 +758,8 @@ async def serve(
         await stop.wait()
     finally:
         await frontend.stop()
-        shutdown(module)
+        if module is not None:
+            shutdown(module)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
