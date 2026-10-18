@@ -276,11 +276,12 @@ def _serve_and_ask(argv: list[str], wire: bytes) -> tuple[bytes, bool, int]:
 @pytest.mark.parametrize(
     ("extra", "booted_from_module_dir", "observer", "forwarded", "answer"),
     [
-        pytest.param([], True, True, 0, VIP4, id="with-module"),  # the module blocks it, Unbound is never asked
+        pytest.param([], True, False, 0, VIP4, id="module"),  # the module blocks it, Unbound is never asked
+        pytest.param(["--observer"], True, True, 0, VIP4, id="module-and-observer"),
         pytest.param(["--no-module"], False, False, 1, BLOCKED_ADDRESS, id="no-module"),  # Unbound answers
     ],
 )
-def test_the_module_boots_and_the_observer_socket_exists_only_with_a_module(
+def test_the_module_boots_with_a_module_and_the_observer_socket_exists_only_when_asked_for(
     extra: list[str],
     booted_from_module_dir: bool,
     observer: bool,

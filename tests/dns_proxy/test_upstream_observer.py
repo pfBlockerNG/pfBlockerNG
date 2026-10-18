@@ -13,6 +13,7 @@ import asyncio
 import csv
 import importlib.util
 import json
+import os
 import socket
 import stat
 import sys
@@ -132,16 +133,51 @@ def test_resolution_goes_on_when_the_proxy_is_not_listening(
 
 
 def test_a_response_the_observer_cannot_describe_resolves_on_and_says_so(
-    observer: Observer, monkeypatch: pytest.MonkeyPatch
+    observer: Observer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     warned: list[str] = []
     monkeypatch.setattr(observer.module, "log_warn", warned.append)
     observer.module.init_standard(shim.MODULE_ID, shim.module_env())
     qstate, response = _upstream_response()
     qstate.qinfo = None  # type: ignore[assignment]
-    assert observer.registered["query_response"](qstate, response) is True
+    with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET):  # the proxy is listening, so a report is attempted
+        assert observer.registered["query_response"](qstate, response) is True
     assert len(warned) == 1
     assert "pfb_upstream_observer" in warned[0]
+
+
+class _Reads:
+    """A qstate stand-in that records the name of every attribute read from the real one."""
+
+    def __init__(self, qstate: shim.module_qstate) -> None:
+        self._qstate = qstate
+        self.reads: list[str] = []
+
+    def __getattr__(self, name: str) -> Any:
+        self.reads.append(name)
+        return getattr(self._qstate, name)
+
+
+def test_a_response_is_not_even_read_while_nobody_is_listening_for_the_report(
+    observer: Observer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The callback runs for every upstream response of every query, so with no socket file (no proxy asked for
+    reports) it must cost one existence check, not a report built from the response and thrown away."""
+    monkeypatch.chdir(tmp_path)
+    observer.module.init_standard(shim.MODULE_ID, shim.module_env())
+    relay = observer.registered["query_response"]
+    qstate, response = _upstream_response()
+    spy = _Reads(qstate)
+    path = tmp_path / pfb_dns_proxy.OBSERVER_SOCKET
+    with _listen(path) as receiver:
+        assert relay(spy, response) is True
+        assert json.loads(receiver.recv(65535))["qname"] == "blocked.example."
+    assert spy.reads != []  # before: with the proxy listening the response is read and reported
+    path.unlink()
+    spy.reads.clear()
+    assert relay(spy, response) is True
+    assert spy.reads == []
 
 
 @pytest.mark.parametrize(
@@ -388,10 +424,10 @@ def quiet_boot(module_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pfb_dns_proxy, "boot", boot_without_log_files)
 
 
-def _serving(module_dir: Path, during: Callable[[tuple[str, int]], Awaitable[T]]) -> T:
+def _serving(module_dir: Path, during: Callable[[tuple[str, int]], Awaitable[T]], *flags: str) -> T:
     """Run serve() on an ephemeral loopback port with `module_dir` as the module dir; `during` runs once it is ready."""
     args = pfb_dns_proxy.parse_args(
-        ["--upstream", "127.0.0.1:9", "--listen", "127.0.0.1", "--port", "0", "--module-dir", str(module_dir)]
+        ["--upstream", "127.0.0.1:9", "--listen", "127.0.0.1", "--port", "0", "--module-dir", str(module_dir), *flags]
     )
 
     async def scenario() -> T:
@@ -412,14 +448,36 @@ def _serving(module_dir: Path, during: Callable[[tuple[str, int]], Awaitable[T]]
     return asyncio.run(scenario())
 
 
-def test_the_proxy_listens_for_the_observer_in_the_module_dir_while_it_serves(
-    module_dir: Path, quiet_boot: None
+@pytest.mark.parametrize(
+    ("flags", "socket_exists"), [(["--observer"], True), ([], False)], ids=["with --observer", "by default"]
+)
+def test_the_proxy_listens_for_the_observer_in_the_module_dir_only_when_asked_to_and_removes_it_when_it_stops(
+    module_dir: Path, quiet_boot: None, flags: list[str], socket_exists: bool
 ) -> None:
+    async def during(_server: tuple[str, int]) -> bool:
+        return os.path.lexists(module_dir / pfb_dns_proxy.OBSERVER_SOCKET)
+
+    assert _serving(module_dir, during, *flags) is socket_exists
+    assert not (module_dir / pfb_dns_proxy.OBSERVER_SOCKET).exists()
+
+
+def test_the_observer_socket_is_a_socket_while_the_proxy_serves(module_dir: Path, quiet_boot: None) -> None:
     async def during(_server: tuple[str, int]) -> bool:
         return stat.S_ISSOCK((module_dir / pfb_dns_proxy.OBSERVER_SOCKET).stat().st_mode)
 
-    assert _serving(module_dir, during) is True
-    assert not (module_dir / pfb_dns_proxy.OBSERVER_SOCKET).exists()
+    assert _serving(module_dir, during, "--observer") is True
+
+
+def test_observer_is_off_unless_asked_for() -> None:
+    assert pfb_dns_proxy.parse_args([]).observer is False
+    assert pfb_dns_proxy.parse_args(["--observer"]).observer is True
+
+
+def test_observer_without_the_module_is_an_argument_error(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as refused:
+        pfb_dns_proxy.parse_args(["--observer", "--no-module"])
+    assert refused.value.code == 2
+    assert "--observer cannot be used with --no-module" in capsys.readouterr().err
 
 
 def test_dns_is_served_without_upstream_block_logging_when_the_socket_cannot_be_made(
@@ -431,6 +489,6 @@ def test_dns_is_served_without_upstream_block_logging_when_the_socket_cannot_be_
         reply = (await udp_exchange(server, build_query("blocked.example.")))[0]
         return [rr.rdata for rr in dnswire.parse(reply).answers]
 
-    assert len(_serving(module_dir, during)) == 1  # the module's DNSBL answer: the proxy still serves
+    assert len(_serving(module_dir, during, "--observer")) == 1  # the module's DNSBL answer: the proxy still serves
     assert "upstream-block detection is off" in capfd.readouterr().err
     assert (module_dir / pfb_dns_proxy.OBSERVER_SOCKET).read_text(encoding="utf-8") == "in the way"
