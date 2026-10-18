@@ -1331,9 +1331,10 @@ final class DnsProxyServiceTest extends TestCase
 	 *
 	 * @param list<string> $listen plain DNS addresses the Resolver's interfaces give; the loopback pair is appended
 	 * @param list<string> $tls the --doh-* / --doq-* arguments, in order
+	 * @param string $port the Resolver's Listen Port the gateway binds for plain DNS
 	 * @return list<string>
 	 */
-	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = []): array
+	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = [], string $port = '53'): array
 	{
 		$addresses = [];
 		foreach ([...$listen, '127.0.0.1', '::1'] as $address) {
@@ -1344,7 +1345,7 @@ final class DnsProxyServiceTest extends TestCase
 			'-P', $this->pidfile('pfb_dns_proxy_daemon.pid'), '-p', $this->pidfile('pfb_dns_proxy.pid'),
 			'-o', "{$this->dir}/log/dns_proxy.log",
 			$gateway, ...$addresses,
-			'--port', '53', '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
+			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
 			'--pfsense-config', '/cf/conf/config.xml', ...$tls,
 			'--acl-file', '/var/unbound/access_lists.conf', '--user', 'unbound', ...self::DECIDER,
 		];
@@ -1499,6 +1500,47 @@ final class DnsProxyServiceTest extends TestCase
 				'--doh-listen', '192.0.2.1', '--doh-port', '4443', '--doq-listen', '192.0.2.1', '--doq-port', '853',
 			]),
 			$this->startAndReadArgv($gateway)
+		);
+	}
+
+	#[DataProvider('listenPortRows')]
+	public function testTheGatewayBindsTheResolversListenPortAndFallsBackToTheDefaultWhenItIsNotAPort(?string $configured, string $expected): void
+	{
+		// Given the gateway binary and a moved Resolver whose Listen Port is $configured
+		$gateway = $this->gateway();
+		$this->moveResolver();
+		if ($configured !== NULL) {
+			$GLOBALS['config']['unbound']['port'] = $configured;
+		}
+
+		// When the rc service is generated and started under dash
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the gateway gets exactly one --port (--doh-port and --doq-port are other flags), the Resolver's or 53
+		$this->assertSame(1, count(array_keys($argv, '--port', TRUE)), 'exactly one --port');
+		$this->assertSame($expected, $argv[(int) array_search('--port', $argv, TRUE) + 1]);
+		$this->assertStringNotContainsString('reboot', $this->rcText());
+	}
+
+	public function testTheGatewayServesLoopbackOnTheListenPortWhileDohAndDoqKeepTheirOwnListeners(): void
+	{
+		// Given a Resolver saved on one IPv4-only interface, Listen Port 5300, DoH and DoQ on their own ports
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$GLOBALS['config']['unbound']['port'] = '5300';
+		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_proxy_doq', 'on');
+
+		// When the rc service is generated and started
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then plain DNS is served on the interface address and on both loopback addresses at 5300, so the firewall's
+		// resolv.conf (127.0.0.1, ::1) reaches the gateway; the DoH and DoQ groups are derived on their own, loopback-free
+		$this->assertSame(
+			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
+				'--doh-listen', '192.0.2.1', '--doh-port', '4443', '--doq-listen', '192.0.2.1', '--doq-port', '853',
+			], '5300'),
+			$argv
 		);
 	}
 
