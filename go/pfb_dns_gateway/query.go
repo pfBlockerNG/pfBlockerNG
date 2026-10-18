@@ -10,21 +10,53 @@ import (
 )
 
 const (
-	maxUDPInflight = 512              // concurrent UDP queries, each holding an upstream socket; more are dropped
-	maxTCPConns    = 128              // TCP connections at once; more are closed at accept
-	defaultTCPIdle = 30 * time.Second // Unbound's tcp-idle-timeout default
-	defaultGrace   = time.Second      // added to 2 x timeout for the whole query
+	maxUDPInflight   = 512              // concurrent UDP queries, each holding an upstream socket; more are dropped
+	maxTCPConns      = 128              // TCP and DoT connections at once; more are closed at accept
+	maxDoHConns      = 128              // DoH connections at once; more are closed at accept
+	maxDoQConns      = 128              // DoQ connections at once; more are closed with DOQ_EXCESSIVE_LOAD
+	defaultTCPIdle   = 30 * time.Second // Unbound's tcp-idle-timeout default
+	defaultGrace     = time.Second      // added to 2 x timeout for the whole query
+	defaultHandshake = 10 * time.Second // TLS handshake, PROXY header and HTTP request headers of a new connection
 )
+
+// connLimit caps the connections of one transport; the refusals of one burst are logged once.
+type connLimit struct {
+	what string
+	max  int64
+	n    atomic.Int64
+	over atomic.Bool // set when the burst is logged, cleared when the clients have drained
+}
+
+func newConnLimit(what string, max int64) *connLimit { return &connLimit{what: what, max: max} }
+
+// take reserves a slot; false means the limit is reached and the connection must be refused.
+func (c *connLimit) take(logf func(format string, args ...any)) bool {
+	if c.n.Add(1) <= c.max {
+		return true
+	}
+	c.n.Add(-1)
+	if c.over.CompareAndSwap(false, true) {
+		logf("%s client limit of %d reached: refusing new connections until the clients drain", c.what, c.max)
+	}
+	return false
+}
+
+func (c *connLimit) release() {
+	if c.n.Add(-1) == 0 {
+		c.over.Store(false)
+	}
+}
 
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
-	acl     *ACL
-	dec     *Decider
-	up      *upstream
-	timeout time.Duration // wait for Unbound per exchange
-	grace   time.Duration
-	tcpIdle time.Duration // idle limit for reading a query and for writing a reply
-	logf    func(format string, args ...any)
+	acl       *ACL
+	dec       *Decider
+	up        *upstream
+	timeout   time.Duration // wait for Unbound per exchange
+	grace     time.Duration
+	tcpIdle   time.Duration // idle limit for reading a query and for writing a reply
+	handshake time.Duration // limit for a TLS handshake, a PROXY header and request headers
+	logf      func(format string, args ...any)
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -33,10 +65,11 @@ type gateway struct {
 
 	udpInflight, tcpConns    atomic.Int64
 	udpOverload, tcpOverload atomic.Bool // one log line per burst: set when logged, cleared when drained
+	dohConns, doqConns       *connLimit
 
-	mu        sync.Mutex
-	listeners []*plainListener
-	clients   map[net.Conn]struct{}
+	mu      sync.Mutex
+	closers []func() // what stop() closes besides client connections: listeners, servers
+	clients map[net.Conn]struct{}
 }
 
 // idleGroup is a WaitGroup whose Add may race with Wait: a test waits for the queries sent so far, then sends
@@ -74,8 +107,9 @@ func (q *idleGroup) Wait() {
 
 func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, logf func(format string, args ...any)) *gateway {
 	g := &gateway{
-		acl: acl, dec: dec, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, logf: logf,
-		clients: map[net.Conn]struct{}{},
+		acl: acl, dec: dec, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, logf: logf,
+		clients:  map[net.Conn]struct{}{},
+		dohConns: newConnLimit("DoH", maxDoHConns), doqConns: newConnLimit("DoQ", maxDoQConns),
 	}
 	g.ctx, g.cancel = context.WithCancel(context.Background())
 	return g

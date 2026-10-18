@@ -10,11 +10,15 @@ must not create), so the decider runs with a sitecustomize.py that redirects tho
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
 import csv
+import http.client
 import os
 import shutil
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -27,7 +31,16 @@ from typing import Any
 
 import dnswire
 import pytest
-from frontend_constants import ALLOWED, BLOCKED, BYPASSED_CLIENT, FILTERED_CLIENT, PROTO_DIR, REPO_ROOT
+from dot_helpers import REFID, b64, cert_element, config_xml, dot_exchange, free_port, make_certificate
+from frontend_constants import (
+    ALLOWED,
+    BLOCKED,
+    BYPASSED_CLIENT,
+    DNSBL_IPV4,
+    FILTERED_CLIENT,
+    PROTO_DIR,
+    REPO_ROOT,
+)
 from frontend_helpers import WATCHDOG, build_query, tcp_concurrent, tcp_exchange, udp_concurrent, udp_exchange
 from test_integration_unbound import (  # noqa: F401  (fixtures: the Docker Unbound and its slow zone)
     ALLOWED_CLIENT,
@@ -77,14 +90,13 @@ builtins.open = _redirected
 MODULE_EXIT_LINE = "[pfBlockerNG]: pfb_unbound.py script exiting"
 
 
-@pytest.fixture(scope="module")
-def gateway_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def _go_build(tmp: Path, package: str, name: str) -> Path:
     go = shutil.which("go") or "/usr/local/go/bin/go"
     if not os.access(go, os.X_OK):
         pytest.fail("the Go toolchain is required (this must fail, not skip): `go` not on PATH or in /usr/local/go/bin")
-    binary = tmp_path_factory.mktemp("gateway-bin") / "pfb_dns_gateway"
+    binary = tmp / name
     build = subprocess.run(
-        [go, "build", "-o", str(binary), "."],
+        [go, "build", "-o", str(binary), package],
         cwd=GO_DIR,
         env={**os.environ, "CGO_ENABLED": "0"},
         capture_output=True,
@@ -93,8 +105,18 @@ def gateway_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
         check=False,
     )
     if build.returncode != 0:
-        pytest.fail(f"cannot build the gateway:\n{build.stdout}\n{build.stderr}")
+        pytest.fail(f"cannot build {name}:\n{build.stdout}\n{build.stderr}")
     return binary
+
+
+@pytest.fixture(scope="module")
+def gateway_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _go_build(tmp_path_factory.mktemp("gateway-bin"), ".", "pfb_dns_gateway")
+
+
+@pytest.fixture(scope="module")
+def doq_probe_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _go_build(tmp_path_factory.mktemp("doq-probe-bin"), "./cmd/pfb_doq_probe", "pfb_doq_probe")
 
 
 class GatewayProcess:
@@ -135,9 +157,14 @@ class GatewayProcess:
                 raise AssertionError(f"no line starting {prefix!r} ({state}); saw {self.lines!r}")
             return match
 
-    def server(self) -> tuple[str, int]:
-        host, _, port = self.wait_for("listening udp+tcp ").removeprefix("listening udp+tcp ").rpartition(":")
+    def listening(self, kind: str) -> tuple[str, int]:
+        """The address of the `listening <kind> host:port` line (udp+tcp, dot, doh or doq)."""
+        prefix = f"listening {kind} "
+        host, _, port = self.wait_for(prefix).removeprefix(prefix).rpartition(":")
         return host, int(port)
+
+    def server(self) -> tuple[str, int]:
+        return self.listening("udp+tcp")
 
     def finish(self) -> int:
         """Wait for the process to end (it must have been told to); returns its exit status, with stderr fully read."""
@@ -181,15 +208,13 @@ class Running:
             time.sleep(0.02)  # polling a file another process appends to; the watchdog bounds the loop
 
 
-@pytest.fixture
-def gateway(gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path) -> Iterator[Running]:
-    """The gateway on a loopback port: the REAL decider on the module dir, Unbound's PROXYv2 port upstream.
-
-    Fixtures that change what the module loads at boot (`safesearch_csv`, `bypass_list`) must come first in a test's
-    parameters: pytest builds them in order and the module reads its files once.
-    """
+@contextlib.contextmanager
+def _gateway_process(
+    gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path, acl_text: str, flags: list[str]
+) -> Iterator[tuple[GatewayProcess, Path]]:
+    """The gateway with `flags` added: the REAL decider on the module dir, Unbound's PROXYv2 port upstream."""
     acl = tmp_path / "access_lists.conf"
-    acl.write_text(ACL_FILE, encoding="utf-8")
+    acl.write_text(acl_text, encoding="utf-8")
     log_dir = tmp_path / "pfb-logs"
     log_dir.mkdir()
     site = tmp_path / "site"
@@ -198,16 +223,27 @@ def gateway(gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp
     env = {**os.environ, "PYTHONPATH": str(site), "PFB_TEST_LOG_DIR": str(log_dir)}
     argv = [
         str(gateway_binary), "--listen", "127.0.0.1", "--port", "0",
-        "--upstream", f"127.0.0.1:{unbound.port}", "--acl-file", str(acl),
+        "--upstream", f"127.0.0.1:{unbound.port}", "--acl-file", str(acl), *flags,
         "--",
         sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--decision-fd", "3", "--module-dir", str(module_dir),
     ]  # fmt: skip
     process = GatewayProcess(argv, env)
     try:
         process.wait_for("ready upstream ")
-        yield Running(process, process.server(), log_dir)
+        yield process, log_dir
     finally:
         process.stop()
+
+
+@pytest.fixture
+def gateway(gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path) -> Iterator[Running]:
+    """The gateway on a loopback port: the REAL decider on the module dir, Unbound's PROXYv2 port upstream.
+
+    Fixtures that change what the module loads at boot (`safesearch_csv`, `bypass_list`) must come first in a test's
+    parameters: pytest builds them in order and the module reads its files once.
+    """
+    with _gateway_process(gateway_binary, module_dir, unbound, tmp_path, ACL_FILE, []) as (process, log_dir):
+        yield Running(process, process.server(), log_dir)
 
 
 def _answers(wire: bytes) -> list[tuple[str, int, bytes]]:
@@ -358,3 +394,207 @@ def test_sigterm_ends_the_gateway_and_the_decider_and_the_module_shuts_down(gate
     with pytest.raises(ProcessLookupError):
         os.kill(decider_pid, 0)  # gone, and reaped by the gateway
     assert any(line.endswith(MODULE_EXIT_LINE) for line in gateway.process.lines), gateway.process.lines
+
+
+# --- DoT, DoH and DoQ with the Resolver's certificate (S4b) ------------------------------------------------------
+
+FRONT_END_CLIENT = "192.0.2.55"  # a client address behind a trusted front end (PROXYv2): not a loopback one
+FORWARDED_CLIENT = "192.0.2.56"  # the same through X-Forwarded-For
+LOOPBACK_REFUSED_ACL = "access-control: 127.0.0.0/8 allow_snoop\naccess-control: 127.0.0.1/32 refuse\n"
+PROXY_V2_SIGNATURE = b"\r\n\r\n\x00\r\nQUIT\n"
+
+
+def _proxy_v2(src: str, sport: int, dst: str, dport: int) -> bytes:
+    """The PROXYv2 header (spec section 2.2) a trusted front end puts in front of a TCP connection."""
+    addresses = socket.inet_aton(src) + socket.inet_aton(dst) + struct.pack("!HH", sport, dport)
+    return PROXY_V2_SIGNATURE + bytes([0x21, 0x11]) + struct.pack("!H", len(addresses)) + addresses
+
+
+class _FrontEndConnection(http.client.HTTPSConnection):
+    """HTTPS to the DoH listener over a socket that starts with `header` (empty = nothing), from `source`."""
+
+    def __init__(self, port: int, trust: Path, source: str, header: bytes) -> None:
+        super().__init__("localhost", port, timeout=WATCHDOG)
+        self._trust = ssl.create_default_context(cafile=str(trust))
+        self._source = source
+        self._header = header
+
+    def connect(self) -> None:
+        sock = socket.create_connection(("127.0.0.1", self.port), self.timeout, (self._source, 0))
+        if self._header:
+            sock.sendall(self._header)
+        self.sock = self._trust.wrap_socket(sock, server_hostname=self.host)
+
+
+class TlsRunning(Running):
+    """The gateway with DoT, DoH (127.0.0.1 trusted as a front end) and DoQ on loopback ports."""
+
+    def __init__(self, base: Running, ca: Path, probe: Path) -> None:
+        super().__init__(base.process, base.server, base.log_dir)
+        self.dot = base.process.listening("dot")
+        self.doh = base.process.listening("doh")
+        self.doq = base.process.listening("doq")
+        self.ca = ca
+        self.probe = probe
+
+    def dot_wire(self, name: str, source: str) -> bytes:
+        reply: bytes = asyncio.run(dot_exchange(self.dot, build_query(name), self.ca, source=source))[0]
+        return reply
+
+    def doh_wire(self, name: str, method: str, *, source: str = "127.0.0.1", front_end: str | None = None,
+                 forwarded_for: str | None = None) -> bytes:  # fmt: skip
+        wire = build_query(name)
+        header = _proxy_v2(front_end, 51000, "192.0.2.1", 443) if front_end else b""
+        headers = {"Accept": "application/dns-message"}
+        if forwarded_for:
+            headers["X-Forwarded-For"] = forwarded_for
+        conn = _FrontEndConnection(self.doh[1], self.ca, source, header)
+        try:
+            if method == "GET":
+                conn.request(
+                    "GET", "/dns-query?dns=" + base64.urlsafe_b64encode(wire).rstrip(b"=").decode(), headers=headers
+                )
+            else:
+                conn.request(
+                    "POST", "/dns-query", body=wire, headers={**headers, "Content-Type": "application/dns-message"}
+                )
+            response = conn.getresponse()
+            assert (response.status, response.getheader("Content-Type")) == (200, "application/dns-message")
+            body: bytes = response.read()
+            return body
+        finally:
+            conn.close()
+
+    def doq_lines(self, name: str) -> list[str]:
+        """pfb_doq_probe's output for `name`: `rcode X`, then one `answer ...` line per record."""
+        run = subprocess.run(
+            [str(self.probe), "-server", f"{self.doq[0]}:{self.doq[1]}", "-name", name, "-ca", str(self.ca)]
+            + ["-sni", "localhost", "-timeout", f"{WATCHDOG}s"],
+            capture_output=True, text=True, timeout=2 * WATCHDOG, check=False,
+        )  # fmt: skip
+        assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
+        return run.stdout.splitlines()
+
+    def a_records(self, transport: str, name: str, source: str = ALLOWED_CLIENT) -> list[str]:
+        """The A records answering `name` over `transport`, as `name A address` lines."""
+        if transport == "doq":
+            lines = self.doq_lines(name)
+            assert lines[0] == "rcode NOERROR", lines
+            return [line.removeprefix("answer ") for line in lines[1:]]
+        if transport == "dot":
+            wire = self.dot_wire(name, source)
+        elif transport == "doh-get":
+            wire = self.doh_wire(name, "GET", source=source)
+        elif transport == "doh-post":
+            wire = self.doh_wire(name, "POST", source=source)
+        elif transport == "doh-proxy":
+            wire = self.doh_wire(name, "GET", front_end=FRONT_END_CLIENT)
+        else:
+            wire = self.doh_wire(name, "GET", forwarded_for=FORWARDED_CLIENT)
+        assert dnswire.parse(wire).rcode == 0
+        return [f"{n} A {socket.inet_ntoa(rdata)}" for n, rtype, rdata in _answers(wire) if rtype == dnswire.TYPE_A]
+
+
+@pytest.fixture
+def acl_text() -> str:
+    return ACL_FILE
+
+
+@pytest.fixture
+def tls_gateway(
+    gateway_binary: Path,
+    doq_probe_binary: Path,
+    module_dir: Path,
+    unbound: RunningUnbound,
+    tmp_path: Path,
+    acl_text: str,
+) -> Iterator[TlsRunning]:
+    """The gateway with the certificate of a crafted config.xml serving DoT, DoH and DoQ."""
+    certificate, key = make_certificate(tmp_path)
+    config = tmp_path / "config.xml"
+    config.write_text(
+        config_xml(tlsport=free_port(), entries=cert_element(REFID, b64(certificate), b64(key))), encoding="utf-8"
+    )
+    flags = [
+        "--dot", "--pfsense-config", str(config),
+        "--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "127.0.0.1/32",
+        "--doq-listen", "127.0.0.1", "--doq-port", "0",
+    ]  # fmt: skip
+    with _gateway_process(gateway_binary, module_dir, unbound, tmp_path, acl_text, flags) as (process, log_dir):
+        yield TlsRunning(Running(process, process.server(), log_dir), tmp_path / "server.crt", doq_probe_binary)
+
+
+def test_readiness_lines_name_every_tls_listener_before_ready(tls_gateway: TlsRunning) -> None:
+    lines = tls_gateway.process.lines
+    kinds = [line.split()[1] for line in lines if line.startswith("listening ")]
+    assert kinds == ["udp+tcp", "dot", "doh", "doq"], lines
+    assert max(i for i, line in enumerate(lines) if line.startswith("listening ")) < next(
+        i for i, line in enumerate(lines) if line.startswith("ready upstream ")
+    )
+    assert all(port > 0 for _, port in (tls_gateway.dot, tls_gateway.doh, tls_gateway.doq))
+
+
+# X1
+@pytest.mark.parametrize("transport", ["dot", "doh-get", "doh-post", "doq"])
+def test_blocked_name_gets_the_block_answer_over_every_tls_transport(
+    tls_gateway: TlsRunning, unbound: RunningUnbound, transport: str
+) -> None:
+    mark = unbound.tail.mark()
+    assert tls_gateway.a_records(transport, BLOCKED) == [f"{BLOCKED} A {DNSBL_IPV4}"]
+    _tcp(tls_gateway.server, ALLOWED, ALLOWED_CLIENT_TCP)  # the barrier: Unbound is asked about the next name
+    logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {ALLOWED} A IN", since=mark)
+    assert [line for line in logged if "blocked.example" in line] == []
+
+
+# X2
+@pytest.mark.parametrize(
+    ("transport", "logged_client"),
+    [("dot", ALLOWED_CLIENT_TCP), ("doh-proxy", FRONT_END_CLIENT), ("doh-xff", FORWARDED_CLIENT), ("doq", "127.0.0.1")],
+)
+def test_allowed_name_over_every_tls_transport_carries_unbounds_answer_and_log_names_the_client(
+    tls_gateway: TlsRunning, unbound: RunningUnbound, transport: str, logged_client: str
+) -> None:
+    mark = unbound.tail.mark()
+    source = ALLOWED_CLIENT_TCP if transport == "dot" else "127.0.0.1"
+    assert tls_gateway.a_records(transport, ALLOWED, source) == [f"{ALLOWED} A 192.0.2.77"]
+    logged = unbound.tail.wait_for(f"{logged_client} {ALLOWED} A IN", since=mark)
+    if logged_client != "127.0.0.1":  # the client, never the gateway's own address
+        assert not any(f"127.0.0.1 {ALLOWED}" in line for line in logged)
+
+
+# X3
+@pytest.mark.parametrize("via", ["front_end", "forwarded_for"])
+def test_refused_client_over_doh_gets_refused_never_the_vip(tls_gateway: TlsRunning, via: str) -> None:
+    wire = tls_gateway.doh_wire(BLOCKED, "GET", **{via: REFUSED_CLIENT})
+    parsed = dnswire.parse(wire)
+    assert (parsed.rcode, parsed.answers) == (5, [])
+
+
+# X4
+def test_refused_client_over_dot_gets_refused_never_the_vip(tls_gateway: TlsRunning) -> None:
+    parsed = dnswire.parse(tls_gateway.dot_wire(BLOCKED, REFUSED_CLIENT))
+    assert (parsed.rcode, parsed.answers) == (5, [])
+
+
+@pytest.mark.parametrize("acl_text", [LOOPBACK_REFUSED_ACL])
+def test_refused_client_over_doq_gets_refused_never_the_vip(tls_gateway: TlsRunning, acl_text: str) -> None:
+    assert tls_gateway.doq_lines(BLOCKED) == ["rcode REFUSED"]
+
+
+def test_denied_client_gets_a_closed_connection_before_any_tls_handshake(tls_gateway: TlsRunning) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+        stream.settimeout(WATCHDOG)
+        stream.bind((DENIED_CLIENT, 0))
+        stream.connect(tls_gateway.dot)
+        try:
+            assert stream.recv(1) == b""
+        except ConnectionResetError:
+            pass  # the gateway shut the connection before reading anything
+
+
+def test_sigterm_with_tls_listeners_ends_the_gateway_and_the_decider(tls_gateway: TlsRunning) -> None:
+    [decider_pid] = tls_gateway.process.children()
+    tls_gateway.process.proc.send_signal(signal.SIGTERM)
+    assert tls_gateway.process.finish() == 0
+    with pytest.raises(ProcessLookupError):
+        os.kill(decider_pid, 0)
