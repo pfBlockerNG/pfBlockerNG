@@ -87,8 +87,8 @@ func TestDoQNonZeroMessageIDClosesTheConnectionWithProtocolError(t *testing.T) {
 	r.requireNoOtherQuery()
 }
 
-// T16: ACL refuse answers REFUSED; ACL deny cancels the stream with DOQ_REQUEST_CANCELLED; neither asks the decider.
-func TestDoQACLRefuseAnswersRefusedAndDenyCancelsTheStream(t *testing.T) {
+// T16: ACL refuse answers REFUSED; ACL deny refuses the connection before its handshake; neither asks the decider.
+func TestDoQACLRefuseAnswersRefusedAndDenyRefusesTheConnection(t *testing.T) {
 	r, m, addr := newDoQRig(t, rigConfig{})
 	r.autoAnswer(echoAnswer)
 	query := doqQuery(t, "blocked.example.")
@@ -96,10 +96,7 @@ func TestDoQACLRefuseAnswersRefusedAndDenyCancelsTheStream(t *testing.T) {
 	refused := dialDoQ(t, addr, m, clientRefused)
 	requireRefused(t, query, refused.query(query))
 
-	denied := dialDoQ(t, addr, m, clientDenied)
-	s := denied.stream()
-	sendDoQ(t, s, query)
-	requireStreamReset(t, s, rfcDoQRequestCancelled)
+	requireDoQRefusedBeforeTheHandshake(t, addr, m, clientDenied)
 
 	allowed := dialDoQ(t, addr, m, clientAllowed)
 	allowed.query(doqQuery(t, "allowed.example."))
@@ -149,6 +146,10 @@ func TestDoQMalformedStreamIsResetAndTheConnectionSurvives(t *testing.T) {
 			put(t, s, framed(response))
 			_ = s.Close()
 		}},
+		{"one byte more than the length says, then FIN", func(t *testing.T, s *quic.Stream) {
+			put(t, s, append(framed(good), 'x'))
+			_ = s.Close()
+		}},
 		{"an empty stream", func(t *testing.T, s *quic.Stream) { _ = s.Close() }},
 		{"a complete query that never gets its FIN", func(t *testing.T, s *quic.Stream) {
 			put(t, s, framed(good))
@@ -156,7 +157,7 @@ func TestDoQMalformedStreamIsResetAndTheConnectionSurvives(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, m, addr := newDoQRig(t, rigConfig{tcpIdle: 300 * time.Millisecond})
+			r, m, addr := newDoQRig(t, rigConfig{timeout: 300 * time.Millisecond}) // a stalled stream is cut at the query timeout
 			r.autoAnswer(echoAnswer)
 			c := dialDoQ(t, addr, m, clientAllowed)
 			bad := c.stream()
@@ -269,8 +270,8 @@ func TestDoQRefusesAnotherALPN(t *testing.T) {
 	r.requireNoOtherQuery()
 }
 
-// The 129th connection is closed with DOQ_EXCESSIVE_LOAD; the log says so once per burst; a slot freed is reusable.
-func TestDoQConnectionsOverTheCapAreClosedWithExcessiveLoad(t *testing.T) {
+// The 129th connection is refused before its handshake; the log says so once per burst; a slot freed is reusable.
+func TestDoQConnectionsOverTheCapAreRefusedBeforeTheHandshake(t *testing.T) {
 	r, m, addr := newDoQRig(t, rigConfig{})
 	r.autoAnswer(echoAnswer)
 	conns := make([]*doqClient, 0, maxDoQConns)
@@ -278,11 +279,7 @@ func TestDoQConnectionsOverTheCapAreClosedWithExcessiveLoad(t *testing.T) {
 		conns = append(conns, dialDoQ(t, addr, m, ""))
 	}
 	for range 2 {
-		over, err := tryDialDoQ(t, addr, doqConfig(m), "")
-		if err != nil {
-			t.Fatalf("the handshake of a connection over the cap completes before it can be refused: %v", err)
-		}
-		requireConnClosed(t, over, rfcDoQExcessiveLoad)
+		requireDoQRefusedBeforeTheHandshake(t, addr, m, "")
 	}
 	if n := strings.Count(r.logs.joined(), "DoQ client limit"); n != 1 {
 		t.Fatalf("two connections turned away in one burst must log once, got %d lines: %s", n, r.logs.joined())

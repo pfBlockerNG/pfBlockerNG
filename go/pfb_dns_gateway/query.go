@@ -11,9 +11,10 @@ import (
 
 const (
 	maxUDPInflight   = 512              // concurrent UDP queries, each holding an upstream socket; more are dropped
+	maxMuxInflight   = 512              // DoH and DoQ queries in flight together; more get 503 (DoH) or SERVFAIL (DoQ)
 	maxTCPConns      = 128              // TCP and DoT connections at once; more are closed at accept
 	maxDoHConns      = 128              // DoH connections at once; more are closed at accept
-	maxDoQConns      = 128              // DoQ connections at once; more are closed with DOQ_EXCESSIVE_LOAD
+	maxDoQConns      = 128              // DoQ connections at once; more are refused before their handshake
 	defaultTCPIdle   = 30 * time.Second // Unbound's tcp-idle-timeout default
 	defaultGrace     = time.Second      // added to 2 x timeout for the whole query
 	defaultHandshake = 10 * time.Second // TLS handshake, PROXY header and HTTP request headers of a new connection
@@ -65,6 +66,8 @@ type gateway struct {
 
 	udpInflight, tcpConns    atomic.Int64
 	udpOverload, tcpOverload atomic.Bool // one log line per burst: set when logged, cleared when drained
+	muxInflight              atomic.Int64
+	muxOverload              atomic.Bool
 	dohConns, doqConns       *connLimit
 
 	mu      sync.Mutex
@@ -150,4 +153,22 @@ func (g *gateway) resolve(ctx context.Context, client netip.Addr, wire []byte, f
 		return buildServfail(wire)
 	}
 	return answer
+}
+
+// resolveShared is resolve under the cap DoH and DoQ share: they carry many queries on one connection, so their
+// queries in flight (each holds an upstream socket) are counted apart from UDP's. ok is false over the cap.
+func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, wire []byte, fwd forwarder) (reply []byte, ok bool) {
+	if g.muxInflight.Add(1) > maxMuxInflight {
+		g.muxInflight.Add(-1)
+		if g.muxOverload.CompareAndSwap(false, true) {
+			g.logf("%d DoH and DoQ queries in flight: refusing new ones until they drain", maxMuxInflight)
+		}
+		return nil, false
+	}
+	defer func() {
+		if g.muxInflight.Add(-1) == 0 {
+			g.muxOverload.Store(false)
+		}
+	}()
+	return g.resolve(ctx, client, wire, fwd), true
 }

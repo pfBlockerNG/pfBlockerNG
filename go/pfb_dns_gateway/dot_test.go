@@ -216,9 +216,18 @@ func TestDoTDenyRuleArrivingOnAnOpenConnectionClosesIt(t *testing.T) {
 	requireTCPClosed(t, c)
 }
 
+// rewriteACL rewrites the ACL file in place and reloads it. Refresh keys on (inode, mtime, size) and an in-place
+// rewrite of the same size can land in the same clock tick, so the new mtime is the old one plus a second.
 func rewriteACL(t *testing.T, r *rig, content string) {
 	t.Helper()
+	fi, err := os.Stat(r.aclPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(r.aclPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(r.aclPath, time.Time{}, fi.ModTime().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	r.g.acl.Refresh()
