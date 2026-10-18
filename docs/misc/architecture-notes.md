@@ -642,7 +642,7 @@ filtered, at the Resolver's Listen Port). The gateway's ACL is Unbound's own: th
 `--unbound-conf` and of every file it includes (globs too: `access_lists.conf`, pfBlockerNG's marked clause, an admin's
 Custom Options), the last row of identical prefixes winning and the most specific prefix matching, as Unbound does; a
 client no row names is refused, as Unbound refuses it, and a config Unbound could not load (a missing include) is logged
-once and forwards everything. Without the
+once and forwards everything. Forwarded, not mirrored: `deny_non_local`, `refuse_non_local` and `allow_cookie` clients, so the decider can still answer a listed name for them. Without the
 binary (or without its execute bit) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
 turning either on then logs one warning each time the script's content changes. The seven settings
 `dnsbl/pfb_dns_proxy_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dnsbl/pfb_dns_proxy_doq`, `_doq_port`
