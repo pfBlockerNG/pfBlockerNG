@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -59,13 +60,37 @@ func runDocker(t *testing.T, stdin string, timeout time.Duration, args ...string
 	}
 }
 
+// oracleTree is an Unbound config laid out the way pfSense lays it out: rows of unbound.conf itself before and after
+// its includes (pfBlockerNG's marked clause, an admin's custom options), access_lists.conf, and one glob include.
+type oracleTree struct {
+	before  []aclRow
+	access  []aclRow            // access_lists.conf
+	globbed map[string][]aclRow // acl.d/<name>, all read by one `include: acl.d/*.conf`; keep their prefixes disjoint
+	after   []aclRow
+}
+
+// ordered is the rows in the order Unbound reads them; glob matches by name.
+func (o oracleTree) ordered() []aclRow {
+	rows := append(append([]aclRow(nil), o.before...), o.access...)
+	names := make([]string, 0, len(o.globbed))
+	for name := range o.globbed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		rows = append(rows, o.globbed[name]...)
+	}
+	return append(rows, o.after...)
+}
+
 type oracleUnbound struct {
 	conn   *net.UDPConn
 	port   int
 	nextID uint16
+	conf   string // the unbound.conf the daemon runs, at the same path on the host and in the container
 }
 
-func startOracleUnbound(t *testing.T, aclFileText string) *oracleUnbound {
+func startOracleUnbound(t *testing.T, tree oracleTree) *oracleUnbound {
 	t.Helper()
 	if out, err := runDocker(t, "", time.Minute, "version", "--format", "{{.Server.Version}}"); err != nil {
 		t.Fatalf("docker daemon unreachable (this must fail, not skip): %v\n%s", err, out)
@@ -95,19 +120,32 @@ func startOracleUnbound(t *testing.T, aclFileText string) *oracleUnbound {
     do-daemonize: no
     use-syslog: no
     logfile: ""
-    include: "/conf/access_lists.conf"
-    local-zone: "oracle.test." static
+%s    include: "%s/access_lists.conf"
+    include: "%s/acl.d/*.conf"
+%s    local-zone: "oracle.test." static
     local-data: "%s 300 IN A 192.0.2.1"
-`, port, port, oracleName)
-	for name, content := range map[string]string{"unbound.conf": conf, "access_lists.conf": aclFileText} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+`, port, port, renderRows(tree.before, "    "), dir, dir, renderRows(tree.after, "    "), oracleName)
+	// glibc's glob(3) fails Unbound's config when the glob's directory is missing, so the oracle always has one.
+	if err := os.MkdirAll(filepath.Join(dir, "acl.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"unbound.conf": conf, "access_lists.conf": renderACL(tree.access)}
+	for name, rows := range tree.globbed {
+		files["acl.d/"+name] = renderRows(rows, "")
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	name := fmt.Sprintf("pfb-acl-oracle-%d-%d", os.Getpid(), port)
 	cmd := exec.Command("docker", "run", "--rm", "--network", "host", "--name", name,
-		"-v", dir+":/conf:ro", oracleImage, "unbound", "-d", "-c", "/conf/unbound.conf")
+		"-v", dir+":"+dir+":ro", oracleImage, "unbound", "-d", "-c", dir+"/unbound.conf")
 	logR, logW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +199,7 @@ func startOracleUnbound(t *testing.T, aclFileText string) *oracleUnbound {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return &oracleUnbound{conn: conn, port: port}
+	return &oracleUnbound{conn: conn, port: port, conf: filepath.Join(dir, "unbound.conf")}
 }
 
 func dnsQuery(id uint16, name string) []byte {
@@ -325,6 +363,14 @@ func gridClients(t *testing.T, rows []aclRow, extra []string) []netip.Addr {
 	return clients
 }
 
+func renderRows(rows []aclRow, indent string) string {
+	var b strings.Builder
+	for _, r := range rows {
+		b.WriteString(indent + "access-control: " + r.net + " " + r.action + "\n")
+	}
+	return b.String()
+}
+
 func renderACL(rows []aclRow) string {
 	var b strings.Builder
 	for i, r := range rows {
@@ -343,42 +389,47 @@ var unboundWant = map[string]string{
 	"deny_non_local": "answered", "refuse_non_local": "answered",
 }
 
-func runOracleGrid(t *testing.T, rows []aclRow, extra []string) {
+// outcomeAction is what the gateway must do for each outcome Unbound gives a client.
+var outcomeAction = map[string]ACLAction{"dropped": ACLDrop, "refused": ACLRefuse, "answered": ACLForward}
+
+// runOracleGrid runs the gateway's ACL on the very unbound.conf a real Unbound runs and compares them for every
+// client of the grid: the gateway acts exactly as Unbound does, a client no row names included.
+func runOracleGrid(t *testing.T, tree oracleTree, extra []string, wantUnmatched bool) {
 	t.Helper()
-	text := renderACL(rows)
-	a := newACL(t, text)
-	un := startOracleUnbound(t, text)
+	un := startOracleUnbound(t, tree)
+	a := NewACL(un.conf, t.Logf)
+	rows := tree.ordered()
 	listed := withUnboundDefaults(t, rows)
 	clients := gridClients(t, listed, extra)
 	if len(clients) >= oracleSentinelID {
 		t.Fatalf("grid of %d clients exhausts the id space", len(clients))
 	}
-	acting, ordered := 0, 0
+	acting, ordered, unmatched := 0, 0, 0
 	for _, c := range clients {
 		ref, explicit := referenceAction(t, listed, c)
 		got := a.Lookup(c)
 		out := un.probe(t, c)
 		t.Logf("client=%-24v reference=%-18q go=%-8v unbound=%s", c, ref, got, out)
 
-		// Never stricter than Unbound.
-		if got == ACLDrop && out != "dropped" {
-			t.Errorf("%v: Go says Drop but Unbound %s", c, out)
-		}
-		if got == ACLRefuse && out != "refused" {
-			t.Errorf("%v: Go says Refuse but Unbound %s", c, out)
+		want, known := outcomeAction[out]
+		if !known {
+			t.Errorf("%v: Unbound's outcome %q is not dropped, refused or answered", c, out)
+		} else if got != want {
+			t.Errorf("%v: Go says %v but Unbound %s", c, got, out)
 		}
 		if !explicit {
-			if got != ACLForward {
-				t.Errorf("%v: unmatched client must Forward, got %v", c, got)
+			unmatched++
+			if out != "refused" {
+				t.Errorf("%v: matches no row, so Unbound should refuse it, got %s", c, out)
 			}
 			continue
 		}
 		// Non-vacuity: where the most specific explicit entry denies or refuses, Go must act.
-		want := map[string]ACLAction{"deny": ACLDrop, "refuse": ACLRefuse}[ref] // zero value is ACLForward
-		if got != want {
-			t.Errorf("%v: reference action %q, Go got %v, want %v", c, ref, got, want)
+		wantRef := map[string]ACLAction{"deny": ACLDrop, "refuse": ACLRefuse}[ref] // zero value is ACLForward
+		if got != wantRef {
+			t.Errorf("%v: reference action %q, Go got %v, want %v", c, ref, got, wantRef)
 		}
-		if want != ACLForward {
+		if wantRef != ACLForward {
 			acting++
 		}
 		// The reference table itself must agree with the real daemon, or the grid proves nothing.
@@ -389,10 +440,10 @@ func runOracleGrid(t *testing.T, rows []aclRow, extra []string) {
 			}
 		}
 	}
-	if acting == 0 || ordered == 0 {
-		t.Errorf("vacuous grid: %d acting and %d oracle-checked clients out of %d", acting, ordered, len(clients))
+	if acting == 0 || ordered == 0 || (wantUnmatched && unmatched == 0) {
+		t.Errorf("vacuous grid: %d acting, %d oracle-checked and %d unmatched clients out of %d", acting, ordered, unmatched, len(clients))
 	}
-	t.Logf("%d clients probed, %d where Go acts", len(clients), acting)
+	t.Logf("%d clients probed, %d where Go acts, %d matching no row", len(clients), acting, unmatched)
 }
 
 func TestACLOracleGrid(t *testing.T) {
@@ -417,7 +468,7 @@ func TestACLOracleGrid(t *testing.T) {
 		{"2001:db8:3::/48", "deny"}, {"2001:db8:3::/48", "allow"},
 		{"fd00:1::/32", "refuse"}, {"fd00:2::9", "deny"},
 	}
-	runOracleGrid(t, rows, []string{"8.8.8.8", "203.0.113.200", "2606:4700::1111", "fc00::1", "100.64.9.1"})
+	runOracleGrid(t, oracleTree{access: rows}, []string{"8.8.8.8", "203.0.113.200", "2606:4700::1111", "fc00::1", "100.64.9.1"}, true)
 }
 
 // P1/P2 /0 rows leave no unmatched client, so they get their own Unbound. Without pfSense's localhost rows,
@@ -427,7 +478,7 @@ func TestACLOracleDefaultRoutes(t *testing.T) {
 		{"192.168.1.0/24", "allow "}, {"0.0.0.0/0", "refuse"}, {"10.0.0.0/8", "deny"}, {"10.1.0.0/16", "allow"},
 		{"::/0", "deny"}, {"2001:db8::/32", "refuse"}, {"2001:db8:1::/48", "allow"},
 	}
-	runOracleGrid(t, rows, []string{"8.8.8.8", "203.0.113.200", "2606:4700::1111", "fc00::1", "127.0.0.1", "127.9.9.9", "::1", "::2"})
+	runOracleGrid(t, oracleTree{access: rows}, []string{"8.8.8.8", "203.0.113.200", "2606:4700::1111", "fc00::1", "127.0.0.1", "127.9.9.9", "::1", "::2"}, false)
 }
 
 // File rows on prefixes identical to Unbound's localhost defaults (127.0.0.0/8, ::1) must beat them.
@@ -436,5 +487,20 @@ func TestACLOracleLocalhostRowsOverrideDefaults(t *testing.T) {
 	rows := []aclRow{
 		{"127.0.0.1/32", "allow"}, {"127.0.0.0/8", "deny"}, {"::1", "refuse"}, {"10.0.0.0/8", "allow"},
 	}
-	runOracleGrid(t, rows, []string{"127.0.0.2", "127.9.9.9", "::1", "::2", "10.9.9.9", "8.8.8.8"})
+	runOracleGrid(t, oracleTree{access: rows}, []string{"127.0.0.2", "127.9.9.9", "::1", "::2", "10.9.9.9", "8.8.8.8"}, true)
+}
+
+// pfSense's layout on a box with IPv6: the LAN's IPv6 grant is pfBlockerNG's marked clause in unbound.conf, an admin's
+// custom rows come after the includes, a glob include adds more, and rows override each other across files.
+func TestACLOracleIncludeTreeMarkedClauseAndGlob(t *testing.T) {
+	tree := oracleTree{
+		before: []aclRow{{"2001:db8:51:1::/64", "allow"}, {"10.7.0.0/24", "deny"}},
+		access: []aclRow{{"127.0.0.1/32", "allow_snoop"}, {"192.168.1.0/24", "allow "}, {"10.7.0.0/24", "allow"}},
+		globbed: map[string][]aclRow{
+			"10-a.conf": {{"100.64.1.0/24", "refuse"}, {"2001:db8:52::/48", "allow"}},
+			"20-b.conf": {{"2001:db8:53::/48", "deny"}},
+		},
+		after: []aclRow{{"198.51.100.0/24", "deny"}, {"192.168.1.0/24", "refuse"}, {"192.168.1.128/25", "allow"}},
+	}
+	runOracleGrid(t, tree, []string{"192.168.1.77", "192.168.1.200", "2001:db8:51:1::1234", "2001:db8:51:2::1", "10.7.0.5", "8.8.8.8", "2606:4700::1111"}, true)
 }

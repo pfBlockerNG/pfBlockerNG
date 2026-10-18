@@ -28,7 +28,7 @@ func TestGatewayServesEveryTLSTransportAndReportsEachListener(t *testing.T) {
 	tlsport := ports[0]
 	path, m := goodConfig(t, strconv.Itoa(tlsport))
 	gw := startGatewayProcess(t, []string{
-		"--listen", "127.0.0.1", "--port", strconv.Itoa(ports[1]), "--acl-file", "/nonexistent/acl",
+		"--listen", "127.0.0.1", "--port", strconv.Itoa(ports[1]), "--unbound-conf", "/nonexistent/unbound.conf",
 		"--dot", "--pfsense-config", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 		"--doq-listen", "127.0.0.1", "--doq-port", "0",
@@ -95,7 +95,7 @@ func TestUnusableCertificateDisablesTheTLSTransportsButPlainDNSKeepsServing(t *t
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			gw := startGatewayProcess(t, []string{
-				"--listen", "127.0.0.1", "--port", "0", "--acl-file", "/nonexistent/acl",
+				"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 				"--dot", "--pfsense-config", c.path(t),
 				"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doq-listen", "127.0.0.1", "--doq-port", "0",
 			}, decider("serve"))
@@ -121,7 +121,7 @@ func TestUnusableCertificateDisablesTheTLSTransportsButPlainDNSKeepsServing(t *t
 // No TLS transport requested: config.xml is never looked at, so a missing one costs nothing and logs nothing.
 func TestConfigXMLIsNotReadWhenNoTLSTransportIsRequested(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
-		"--listen", "127.0.0.1", "--port", "0", "--acl-file", "/nonexistent/acl",
+		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 		"--pfsense-config", "/nonexistent/config.xml",
 	}, decider("serve"))
 	gw.waitLine("ready upstream ")
@@ -151,7 +151,7 @@ func TestCertificateIsReadBeforeThePrivilegeDrop(t *testing.T) {
 func TestUnparseableTrustedPrefixIsLoggedAndTheGatewayStillServesDoH(t *testing.T) {
 	path, m := goodConfig(t, strconv.Itoa(freePort(t)))
 	gw := startGatewayProcess(t, []string{
-		"--listen", "127.0.0.1", "--port", "0", "--acl-file", "/nonexistent/acl", "--pfsense-config", path,
+		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--pfsense-config", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "junk", "--doh-trusted", "192.0.2.0/24",
 	}, decider("serve"))
 	doh := listeningAddr(t, gw.waitLine("listening doh "), "doh")
@@ -175,7 +175,7 @@ func TestTLSAddressThatCannotBeBoundIsSkipped(t *testing.T) {
 	tlsport := held.Addr().(*net.TCPAddr).Port
 	path, m := goodConfig(t, strconv.Itoa(tlsport))
 	gw := startGatewayProcess(t, []string{
-		"--listen", "127.0.0.1", "--port", "0", "--acl-file", "/nonexistent/acl", "--dot", "--pfsense-config", path,
+		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--dot", "--pfsense-config", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 	}, decider("serve"))
 	skipped := gw.waitLine("cannot listen on 127.0.0.1:" + strconv.Itoa(tlsport))
