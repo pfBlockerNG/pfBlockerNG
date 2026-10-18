@@ -4097,8 +4097,10 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 }
 
 /**
- * The gateway's --doh-* / --doq-* arguments for each group that is on, has a parsable port and an address. Stored
- * values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a host prefix.
+ * The gateway's --doh-* / --doq-* arguments for each group that is on and has a parsable port. A group listens on its
+ * interfaces' addresses (the plain ones when it names none) and always on loopback too, a stable backend for a local
+ * HAProxy. Stored values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a
+ * host prefix.
  *
  * @param list<string> $plain the plain DNS listen addresses, used when a group names no interface
  * @param list<string> $warnings gets one line per group left out for its port
@@ -4115,10 +4117,7 @@ function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
 			continue;
 		}
 		$interfaces = pfb_dns_proxy_tokens((string) PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_interface"));
-		$addresses = ($interfaces === []) ? $plain : pfb_dns_proxy_interface_addresses($interfaces);
-		if ($addresses === []) {
-			continue;
-		}
+		$addresses = array_merge(($interfaces === []) ? $plain : pfb_dns_proxy_interface_addresses($interfaces), PFB_DNS_PROXY_LOOPBACK);
 		foreach ($addresses as $address) {
 			$flags .= " --{$kind}-listen " . escapeshellarg($address);
 		}
@@ -4166,7 +4165,7 @@ function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 	if (is_file($gateway) && is_executable($gateway)) {
 		$command = escapeshellarg($gateway) . "{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? ' --dot' : '') .
 		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) .
-		    " --acl-file /var/unbound/access_lists.conf --user unbound -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
+		    " --unbound-conf /var/unbound/unbound.conf --user unbound -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	} else {
 		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound" .
 		    ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '');
