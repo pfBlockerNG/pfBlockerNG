@@ -12,9 +12,11 @@ use PHPUnit\Framework\TestCase;
  *   - the proxy is stopped BEFORE the Resolver is restored, so Unbound's regeneration finds port 53 free
  *     (pfb_dns_proxy_resolver(FALSE), the one place every "turn it off" path goes through), and the restore is
  *     abandoned, snapshot kept and the operator told, when the proxy outlived its stop (stop_service() reports
- *     nothing, so the pidfiles are the only witness);
+ *     nothing, so the pidfiles are the only witness): the proxy is then restarted, so the moved Resolver stays
+ *     served until a later apply restores it;
  *   - package removal always hands the Resolver back, stops the proxy and removes its rc script, whatever the
- *     disable pass returned (pfb_dns_proxy_deinstall(), called right after the pass);
+ *     disable pass returned (pfb_dns_proxy_deinstall(), called right after the pass), but never stops the proxy
+ *     first: a restore that cannot take the config lock would leave the moved Resolver with nothing serving it;
  *   - a Resolver that is still moved while the saved copy is lost or malformed cannot be put back
  *     automatically: the operator is told through a notice naming the keys to check, not only a log line --
  *     but only for a Resolver carrying OUR marked block, never for an admin's own PROXYv2 setup;
@@ -33,7 +35,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_write_config_calls',
 		'pfb_test_unbound_configure_calls', 'pfb_test_file_notices', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes',
-		'pfb_test_valid_pids',
+		'pfb_test_valid_pids', 'pfb_test_try_lock_fail', 'pfb_test_lock_held', 'pfb_test_lock_events',
 	];
 
 	private string $tmp;
@@ -222,6 +224,9 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertStringContainsString('Status > Services', $notice['notice']);
 		$this->assertSame(2, $notice['priority']);
 		$this->assertStringContainsString('DNS proxy', (string) @file_get_contents($GLOBALS['pfb']['errlog']));
+
+		// ... and the proxy that serves the moved Resolver was stopped and then restarted, so DNS stays available
+		$this->assertSame([['stop_service', 'pfb_dns_proxy'], ['restart_service', 'pfb_dns_proxy']], $this->serviceCalls());
 	}
 
 	public function testARestoreProceedsWhenNeitherPidfileNamesALiveProcessAfterTheStop(): void
@@ -355,6 +360,21 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
 		$this->assertSame('', (string) config_get_path(self::SAVED, ''));
 		$this->assertCount(1, $GLOBALS['pfb_test_unbound_configure_calls']);
+	}
+
+	public function testRemovalWhileTheConfigIsLockedNeverStopsTheProxyThatServesTheMovedResolver(): void
+	{
+		// Given a moved Resolver, and another save holding the config lock for the whole bounded wait
+		$this->seedMovedResolver();
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+
+		// When the package is removed
+		pfb_dns_proxy_deinstall();
+
+		// Then the Resolver could not be put back, so the proxy that serves it was not stopped first
+		$this->assertSame([], $this->serviceCalls());
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], 'nothing was restored, so nothing to regenerate');
 	}
 
 	public function testRemovalOfABoxThatNeverMovedTheResolverStopsTheProxyAndChangesNothingElse(): void
