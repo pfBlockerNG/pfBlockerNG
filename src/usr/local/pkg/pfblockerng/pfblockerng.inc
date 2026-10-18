@@ -4407,9 +4407,12 @@ function pfb_dns_proxy_deinstall(): bool {
  * It works on config.xml read afresh under the config lock the DNSBL save and the Resolver restore hold (pfb_dns_config_lock()),
  * because write_config() writes whole the copy its process read: a stale copy written back would erase another save.
  *
+ * @param string|null $xml_file the package XML to register from; NULL = PFB_PACKAGE_XML (a default of the constant itself would put the
+ *        host's path into the function inventory golden: Reflection evaluates it)
  * @return string|null NULL once the registration is back and written; else why not (nothing was written)
  */
-function pfb_package_registration_restore(string $xml_file = PFB_PACKAGE_XML): ?string {
+function pfb_package_registration_restore(?string $xml_file = NULL): ?string {
+	$xml_file ??= PFB_PACKAGE_XML;
 	$pkg_config = parse_xml_config_pkg($xml_file, 'packagegui');
 	$listed_menus = is_array($pkg_config['menu'] ?? NULL) ? $pkg_config['menu'] : [];
 	$listed_services = is_array($pkg_config['service'] ?? NULL) ? $pkg_config['service'] : [];
