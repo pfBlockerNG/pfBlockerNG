@@ -102,3 +102,7 @@ smoke_key
 
 # -- Jetbrains -- #
 .idea/
+
+# ── pfB-DNS binaries (issue #3513) ────────────────────────────────────────────
+# build-pkg-portable.py cross-compiles them into the package; they are never committed.
+src/usr/local/pkg/pfblockerng/dns_proxy/bin/
