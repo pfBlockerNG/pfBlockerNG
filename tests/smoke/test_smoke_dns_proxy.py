@@ -50,8 +50,16 @@ What it proves, in file order:
   first correct answers come before ``rc.start_packages`` begins (a "DNS proxy started" log line is a launch, not an
   answer), the package stage neither restarts the proxy nor drops a query, the times of the launch, the listening
   socket, the first answers and Unbound's sync are printed apart, and a lookup from the box right after boot succeeds;
+* readiness: a serving proxy has published its ready marker (``/var/unbound/pfb_dns_ready``: its own child pid, mode
+  600, owned by unbound) and a healthy second ``start`` changes neither pids nor marker; ``lockf`` hands the start
+  lock to the one run of the rc script and not to the daemon it launches (the lock is free while the proxy runs); two
+  ``start`` verbs racing leave exactly one supervisor and one child, and the same race without the lock is printed as
+  evidence;
 * pfB-DNS off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
-  stays absent), the marker is cleared, the module is back in ``unbound.conf``, Unbound is on 53 and 853 again.
+  stays absent), the marker is cleared, the module is back in ``unbound.conf``, Unbound is on 53 and 853 again;
+* a failed activation: pfB-DNS requested, the Resolver already moved, every address the proxy would serve held by nc(1)
+  on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS is turned off, the Resolver
+  and Unbound are back exactly as before the toggle, and the client's listed name still gets the VIP from Unbound.
 
 The pfB-DNS tab (enable checkbox, help that says it is experimental, status panel) is covered by the Tier A render
 test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
@@ -409,6 +417,8 @@ def _force_stop_proxy(vm: SmokeVM) -> None:
         vm,
         f"[ -x {PROXY_RC} ] && {PROXY_RC} stop\n"
         f"for f in {DAEMON_PID_FILE} {PROXY_PID_FILE}; do [ -f $f ] && kill -KILL $(cat $f) 2>/dev/null; done\n"
+        # a supervisor no pidfile names (a lost start race) would respawn the child
+        "pkill -KILL -f 'daemon: pfb_dns_prox[y]'\n"
         "pkill -KILL -f 'pfb_dns_prox[y][.]py'\n"
         f"rm -f {DAEMON_PID_FILE} {PROXY_PID_FILE}\n",
     )
@@ -1618,6 +1628,126 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
 
 
 # --------------------------------------------------------------------------- #
+# Readiness: the listener-ready marker, and starts that do not race
+# --------------------------------------------------------------------------- #
+
+READY_FILE = "/var/unbound/pfb_dns_ready"  # the proxy's own pid, written by the proxy (--ready-file) once it serves
+START_LOCK = "/var/run/pfb_dns_proxy.lock"  # lockf(1): `rc start` runs under it, the file is kept between starts
+RACE_ROUNDS = 6
+
+
+def _marker(vm: SmokeVM) -> str | None:
+    result = vm.ssh("cat", READY_FILE)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _stat(vm: SmokeVM, path: str, fmt: str) -> str:
+    return vm.ssh(f"stat -f {shlex.quote(fmt)} {shlex.quote(path)} 2>&1").stdout.strip()
+
+
+def test_a_serving_proxy_has_published_its_ready_marker_and_a_repeated_start_keeps_everything(
+    rig: Rig, proxy_on: State
+) -> None:
+    """The proxy writes its own pid, mode 0600 as `unbound`, once it serves; a healthy second start changes nothing.
+
+    Given the toggle on and the proxy answering,
+    Then the ready marker holds exactly the child pid the supervisor's pidfile names, is mode 600 and owned by
+      unbound (the proxy wrote it after dropping root);
+    When the service is started again (the package start after the boot hook),
+    Then it exits 0 and the supervisor pid, the child pid, the marker's bytes and its mtime are all unchanged.
+    """
+    vm = rig.vm
+    child = proxy_on.proxy_pid
+    assert child is not None, f"no proxy child pid: {proxy_on}"
+    marker = _marker(vm)
+    assert marker == f"{child}\n", f"ready marker {marker!r}, expected the child pid {child}\n{_diagnostics(vm)}"
+    assert _stat(vm, READY_FILE, "%Lp %Su") == "600 unbound", _stat(vm, READY_FILE, "%Lp %Su %N")
+    mtime = _stat(vm, READY_FILE, "%m")
+
+    started = _sh(vm, f"{PROXY_RC} start; echo rc=$?")
+
+    assert "rc=0" in started.stdout, f"a repeated start failed: {started.stdout!r} {started.stderr!r}"
+    after = _capture(vm)
+    assert (after.proxy_pid, after.daemon_pid) == (proxy_on.proxy_pid, proxy_on.daemon_pid), (
+        f"a repeated start replaced the proxy: {proxy_on.proxy_pid}/{proxy_on.daemon_pid} -> "
+        f"{after.proxy_pid}/{after.daemon_pid}"
+    )
+    assert _marker(vm) == marker and _stat(vm, READY_FILE, "%m") == mtime, "a repeated start rewrote the marker"
+
+
+def test_the_start_lock_is_free_while_the_proxy_runs(rig: Rig, proxy_on: State) -> None:
+    """lockf(1) hands its lock to the one run of the rc script, not to the daemon that script launches.
+
+    The lock file descriptor is inherited by whatever the locked command starts. If the proxy kept it, every later
+    start would wait the whole 10 s and fail (lockf's status 75): the proxy has been running since before this test.
+
+    Given the proxy running,
+    When the lock is taken for one second,
+    Then lockf gets it at once (status 0).
+    """
+    probe = _sh(rig.vm, f"/usr/bin/lockf -k -t 1 {START_LOCK} /usr/bin/true; echo rc=$?")
+    assert "rc=0" in probe.stdout, (
+        f"the start lock is still held while the proxy runs (rc 75 = held): {probe.stdout!r} {probe.stderr!r}\n"
+        f"{_sh(rig.vm, f'ls -l {START_LOCK}; fstat {START_LOCK} 2>&1').stdout}"
+    )
+
+
+def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
+    """RACE_ROUNDS times: stop the proxy, run two `start`s at once, count what is left running.
+
+    Returns (supervisors, children, the two exit statuses) per round. The unlocked variant sets the rc script's own
+    inner-run variable, which makes it skip lockf: the same script, with only the serialization taken away.
+    """
+    env = "" if locked else "PFB_DNS_PROXY_START_LOCKED=1 "
+    script = (
+        f"i=0\nwhile [ $i -lt {RACE_ROUNDS} ]; do\n"
+        f"  {PROXY_RC} stop || {{ echo 'round='$i' stop-failed'; exit 1; }}\n"
+        f"  s1=$(mktemp /tmp/pfb3515_race.XXXXXX); s2=$(mktemp /tmp/pfb3515_race.XXXXXX)\n"
+        f"  ( {env}{PROXY_RC} start; echo $? > $s1 ) &\n"
+        f"  ( {env}{PROXY_RC} start; echo $? > $s2 ) &\n"
+        "  wait\n"
+        "  sleep 3\n"
+        "  sup=$(ps -axww -o args= | grep -c 'daemon: pfb_dns_prox[y]')\n"
+        "  kids=$(ps -axww -o args= | awk '$1 ~ /python/ && /pfb_dns_prox[y][.]py/' | wc -l | tr -d ' ')\n"
+        '  echo "round=$i supervisors=$sup children=$kids rc=$(cat $s1)/$(cat $s2)"\n'
+        "  rm -f $s1 $s2\n"
+        "  i=$((i + 1))\n"
+        "done\n"
+    )
+    out = _sh(vm, script, timeout=300.0).stdout
+    rounds = [re.fullmatch(r"round=\d+ supervisors=(\d+) children=(\d+) rc=(\S+)", line) for line in out.splitlines()]
+    parsed = [(int(m.group(1)), int(m.group(2)), m.group(3)) for m in rounds if m]
+    assert len(parsed) == RACE_ROUNDS, f"race probe output:\n{out}"
+    return parsed
+
+
+@pytest.mark.timeout(900)
+def test_starts_that_race_each_other_leave_exactly_one_proxy(rig: Rig, proxy_on: State) -> None:
+    """The boot hook's background start and an apply's start_service() both run `rc start`, at about the same moment.
+
+    Given the proxy stopped before each of RACE_ROUNDS rounds,
+    When two `start`s run at once,
+    Then both exit 0 and exactly one supervisor and one child are left, in every round;
+      the same race with the serialization taken away is printed too, as the evidence the lock answers a real race
+      (on this box's daemon(8) and sh; it is not asserted, a race may or may not fire in a given run).
+    """
+    vm = rig.vm
+    try:
+        unlocked = _race(vm, locked=False)
+        _say(f"unlocked start race (supervisors, children, exit statuses), per round: {unlocked}")
+        _force_stop_proxy(vm)
+        locked = _race(vm, locked=True)
+        _say(f"locked start race (supervisors, children, exit statuses), per round: {locked}")
+        assert all(round_ == (1, 1, "0/0") for round_ in locked), (
+            f"two racing starts did not leave exactly one proxy: {locked}\n{_diagnostics(vm)}"
+        )
+    finally:
+        _force_stop_proxy(vm)
+        _sh(vm, f"{PROXY_RC} start")
+    _wait_proxy_serves(rig)
+
+
+# --------------------------------------------------------------------------- #
 # Toggle off + apply: everything is back
 # --------------------------------------------------------------------------- #
 
@@ -1655,3 +1785,133 @@ def test_toggle_off_stops_the_proxy_and_puts_the_resolver_back_exactly(rig: Rig,
     assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name through Unbound again: {allowed}\n{raw}"
     dot, raw = _query(rig.client, rig.names.blocked, dot=True)
     assert h.is_vip(dot), f"blocked name over Unbound's own DoT again: {dot}\n{raw}"
+
+
+# --------------------------------------------------------------------------- #
+# A proxy that cannot serve: the activation is rolled back to the Unbound DNSBL that ran before
+# --------------------------------------------------------------------------- #
+
+OCCUPANTS = "/tmp/pfb3515_occupants"  # on the guest: pidfiles of the nc(1) listeners that hold the client-facing ports
+MOVE_PHP = "/tmp/pfb3515_move.php"
+# The Resolver step of the apply and nothing after it: pfb_unbound_python() moves the Resolver (and restarts Unbound on
+# loopback 5353/5354), and the proxy is NOT started. Prints the addresses the proxy would serve, and its port.
+MOVE_ONLY_PHP = r"""<?php
+require_once('util.inc');
+require_once('functions.inc');
+require_once('pkg-utils.inc');
+require_once('globals.inc');
+require_once('services.inc');
+require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
+global $g, $pfb;
+pfb_global();
+pfb_unbound_python('enabled', TRUE);
+$addresses = array_merge(pfb_dns_proxy_listen((array) pfb_dns_proxy_saved()), PFB_DNS_PROXY_LOOPBACK);
+echo '<<<ADDR>>>' . implode(',', $addresses) . '|' . pfb_dns_proxy_port() . '<<<END>>>';
+"""
+
+
+def _occupy(vm: SmokeVM, addresses: list[str], port: str) -> None:
+    """Hold <address>:<port> on tcp and udp for every address with nc(1) listeners, until each shows in sockstat.
+
+    A real process failure on the guest: the proxy skips an address it cannot bind and exits only when none binds,
+    so every address it would serve is taken.
+    """
+    lines = [f"rm -rf {OCCUPANTS}; mkdir -p {OCCUPANTS}"]
+    for n, address in enumerate(addresses):
+        family = "-6" if ":" in address else "-4"
+        for proto, flag in (("tcp", ""), ("udp", "-u ")):
+            lines.append(
+                f"/usr/sbin/daemon -p {OCCUPANTS}/{proto}-{n}.pid /usr/bin/nc {family} {flag}-l {address} {port}"
+            )
+    started = _sh(vm, "\n".join(lines) + "\n")
+    assert started.returncode == 0, f"starting the listeners failed: {started.stdout!r} {started.stderr!r}"
+    wanted = {(f"{proto}{'6' if ':' in a else '4'}", f"{a}:{port}") for a in addresses for proto in ("tcp", "udp")}
+
+    def held() -> bool:
+        return wanted <= {(s.proto, s.local) for s in _listeners(vm) if s.command == "nc"}
+
+    try:
+        h.wait_until(held, timeout=30.0, interval=1.0)
+    except RuntimeError:
+        have = sorted((s.command, s.proto, s.local) for s in _listeners(vm) if s.port == int(port))
+        raise AssertionError(f"the listeners do not hold {sorted(wanted)}; sockets on {port}: {have}") from None
+
+
+def _release(vm: SmokeVM) -> None:
+    _sh(
+        vm,
+        f"for f in {OCCUPANTS}/*.pid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; rm -rf {OCCUPANTS} {MOVE_PHP}",
+    )
+
+
+@pytest.mark.timeout(1500)
+def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_blocking_in_unbound(rig: Rig) -> None:
+    """A proxy that never serves leaves the Resolver, and the DNSBL in Unbound, exactly as they were.
+
+    Given pfB-DNS requested and the Resolver already moved (the first half of an activation), the proxy's rc script
+      not yet written, and every address the proxy would serve held by another process on port 53,
+    When the real apply runs (pfb_trigger scope=dnsbl) and the proxy, which cannot bind, never becomes ready,
+    Then pfB-DNS is turned off in config.xml, the proxy and its supervisor are gone with their pidfiles, every Resolver
+      key equals its pre-toggle value, the marker is cleared, unbound.conf loads the python module again and Unbound
+      listens on 53 and 853 as before; the proxy's own log says no address could be bound and the package log says it
+      did not become ready;
+      And the LAN client's listed name still gets the DNSBL VIP from that Unbound, an allowed name resolves, and DoT
+      works: the original mode answers, not merely a config file that says so.
+    """
+    vm, before = rig.vm, rig.before
+    if _is_on(_capture(vm)):  # an earlier test left pfB-DNS on: start from the baseline the rig recorded
+        _set_proxy_toggle(vm, False)
+        _apply(vm)
+    try:
+        # The boot hook starts the proxy from its rc script whenever Unbound restarts, which would win the ports first.
+        _sh(vm, f"rm -f {PROXY_RC}")
+        _set_proxy_toggle(vm, True)
+        written = _sh(vm, f"cat > {MOVE_PHP} <<'PHPEOF'\n{MOVE_ONLY_PHP}PHPEOF\n")
+        assert written.returncode == 0, f"writing {MOVE_PHP} failed: {written.stderr!r}"
+        moved = _sh(vm, f"/usr/local/bin/php {MOVE_PHP}", timeout=300.0)
+        found = re.search(r"<<<ADDR>>>(.*)\|(\d+)<<<END>>>", moved.stdout)
+        assert found, f"the move step printed no addresses: rc={moved.returncode}\n{moved.stdout}\n{moved.stderr}"
+        addresses, port = found.group(1).split(","), found.group(2)
+        _say(f"moved; the proxy would serve {addresses} on port {port}")
+        h.wait_unbound_ready(vm)
+        state = _capture(vm)
+        assert state.resolver["active_interface"] == "lo0" and state.marker, f"the Resolver was not moved: {state}"
+        assert state.ps == [], f"a proxy is already running: {state.ps}"
+        _occupy(vm, addresses, port)
+
+        _apply(vm)
+
+        after = _capture(vm)
+        diagnostics = _diagnostics(vm)
+        root = _config_xml(vm)
+        toggle = _xml_text(root, "installedpackages/pfblockerngdns/config/pfb_dns") or ""
+        assert toggle == "", f"pfB-DNS was not turned off: {toggle!r}\n{diagnostics}"
+        assert after.service == "stopped" and after.ps == [], f"proxy left running: {after.service} {after.ps}"
+        assert after.proxy_pid is None and after.daemon_pid is None, (after.proxy_pid, after.daemon_pid)
+        assert after.resolver == before.resolver, (
+            f"Resolver keys after the rollback:\n{after.resolver}\nbefore the toggle:\n{before.resolver}"
+        )
+        assert after.marker == "", f"pfb_dns_proxy_saved is not cleared: {after.marker!r}"
+        assert MODULE_LINE.search(after.conf) and SCRIPT_LINE.search(after.conf), f"module not back:\n{after.conf}"
+        assert after.unbound_dns() == before.unbound_dns(), (
+            f"Unbound sockets {sorted(after.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
+        )
+        assert "no address could be bound" in _proxy_log(vm, 200), (
+            f"the proxy did not fail on the held ports:\n{diagnostics}"
+        )
+        logs = vm.ssh(f"cat {h.PFB_LOG} {h.PFB_LOGDIR}/error.log 2>&1").stdout
+        assert "did not become ready" in logs and "was restored to its previous settings" in logs, (
+            f"the package logs do not report the rollback:\n{diagnostics}"
+        )
+
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"blocked name through Unbound again: {blocked}\n{raw}"
+        allowed, raw = _query(rig.client, h.unique_domain("rolledback"))
+        assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name through Unbound again: {allowed}\n{raw}"
+        dot, raw = _query(rig.client, rig.names.blocked, dot=True)
+        assert h.is_vip(dot), f"blocked name over Unbound's own DoT again: {dot}\n{raw}"
+    finally:
+        _release(vm)
+        _force_stop_proxy(vm)
+        _set_proxy_toggle(vm, False)

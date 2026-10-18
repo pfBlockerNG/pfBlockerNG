@@ -484,8 +484,8 @@ final class DnsProxyLifecycleTest extends TestCase
 		$stage = "exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');";
 		$this->assertSame(1, substr_count($install, $stage), 'test bootstrap: the installer stages the module files once');
 
-		$sync = "update_status(\"Creating DNS proxy service...\"); if (pfb_dns_proxy_saved() !== NULL) { pfb_dns_proxy_restart(); } else { pfb_dns_proxy_service(); stop_service('pfb_dns_proxy'); }";
-		$this->assertSame(1, substr_count($install, $sync), 'the installer must restart the proxy while moved, else write its script and stop it');
+		$sync = "update_status(\"Creating DNS proxy service...\"); if (pfb_dns_proxy_saved() !== NULL) { if (!pfb_dns_proxy_restart()) { update_status(\" the DNS proxy did not become ready (see the notices);\"); } } else { pfb_dns_proxy_service(); stop_service('pfb_dns_proxy'); }";
+		$this->assertSame(1, substr_count($install, $sync), 'the installer must restart the proxy while moved and say when it did not become ready, else write its script and stop it');
 		$this->assertStringContainsString($stage . ' ' . $sync, $install, 'the proxy block follows the staging command, with nothing in between');
 		$this->assertStringNotContainsString('pfb_dns_proxy_service_sync', $install, 'the one-caller wrapper is gone');
 	}
