@@ -207,6 +207,11 @@ Authorization = property of **write**, not call site (generalises
     migration: stored `'on'` beside pre-upgrade `dnsbl_mode` that is present and not
     `'dnsbl_python'` was inert (both consumers python-gated in 3.2) and is disabled
     before ADR-02 python force would otherwise activate it.
+  - **`dnsbl/pfb_py_reply` is read in both DNS modes** (issue #3515): it stays the DNSBL-section key,
+    with the same default, grandfathering and `local` sync, but it is edited on the pfB-DNS tab
+    (the pfB-DNS save writes it through the gateway under the same config lock as `dns/pfb_dns`;
+    the DNSBL save no longer assigns it). The DNSBL module's ini carries it as `python_reply`; with
+    DNSBL off, `pfb_dns_proxy_service()` turns it into the proxy's `--reply-log`.
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables post-handshake full Unbound
     cache flush for bulk zero-downtime DNSBL data swaps.
   - **`dns/pfb_dns` → `PfbToggle`** (issue #3515, pfB-DNS, mirror `$pfb['pfb_dns']`; section `dns` =

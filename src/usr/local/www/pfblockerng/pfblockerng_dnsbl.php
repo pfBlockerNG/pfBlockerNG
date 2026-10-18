@@ -74,7 +74,6 @@ $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default
 $pconfig['pfb_cache']		= PfbConfig::read('dnsbl/pfb_cache');
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
-$pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
 $pconfig['pfb_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');
 $pconfig['pfb_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');
@@ -898,7 +897,6 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
-			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			// ADR-08: IDN mode selector. Validate the raw word, then canonicalise via the
 			// PfbIdnMode adapter to ('on' = All | 'confusable' | '' = Off).
@@ -2744,13 +2742,10 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp($tld_wildcard_text);
 
-$section->addInput(new Form_Checkbox(
-	'pfb_py_reply',
+$section->addInput(new Form_StaticText(
 	gettext('DNS Reply Logging'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_py_reply'] ?? NULL),
-	'on'
-))->setHelp('Enable the logging of all DNS Replies that were not blocked via DNSBL.');
+	'Moved to the <a href="/pfblockerng/pfblockerng_dns.php">pfB-DNS</a> tab: one setting for the DNSBL module and for pfB-DNS without DNSBL.'
+));
 
 $section->addInput(new Form_Checkbox(
 	'pfb_hsts',
