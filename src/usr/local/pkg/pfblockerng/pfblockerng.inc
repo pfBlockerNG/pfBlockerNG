@@ -7848,99 +7848,124 @@ function pfb_metrics_sqlite_rows(string $path, string $sql): ?array {
 	}
 }
 
-// Collects the renderer's input. Each source is independent: a failed one clears its source_up and drops only its own families.
+// Collects the renderer's input. Each source is independent: a failed or throwing one clears its source_up and drops only its own families.
 function pfb_metrics_collect(): array {
 	global $pfb;
 	$up = array();
 	$num = static fn ($v): int => is_numeric($v) ? (int) $v : 0;
+	$guard = static function (string $source, callable $read) use (&$up): mixed {
+		try {
+			return $read();
+		} catch (Throwable) {
+			$up[$source] = FALSE;
+			return NULL;
+		}
+	};
 
 	$show_agg = (PfbConfig::readSection('installedpackages/pfblockerngglobal')['widget-show_agg'] ?? '') === 'on';
 
-	// A non-zero exit is a failed read even if pfctl printed some tables first; a zero exit with no output is an empty set.
-	$pfctl_rc = NULL;
-	$pfctl = pfb_pfctl_tables_raw('', $pfctl_rc);
-	$up['pfctl'] = $pfctl_rc === 0;
-	$ip_tables = NULL;
-	if ($up['pfctl']) {
+	$ip_tables = $guard('pfctl', function () use (&$up, $pfb, $show_agg): ?array {
+		// A non-zero exit is a failed read even if pfctl printed some tables first; a zero exit with no output is an empty set.
+		$rc = NULL;
+		$raw = pfb_pfctl_tables_raw('', $rc);
+		$up['pfctl'] = $rc === 0;
+		if (!$up['pfctl']) {
+			return NULL;
+		}
 		$ip_ph = pfb_ip_placeholder();
-		$ip_tables = array();
-		foreach (pfb_pfctl_tables_parse($pfctl) as $alias => $info) {
+		$tables = array();
+		foreach (pfb_pfctl_tables_parse($raw) as $alias => $info) {
 			if (!str_starts_with($alias, 'pfB_') || pfb_widget_alias_hidden($alias, $show_agg)) {
 				continue;
 			}
 			$placeholder = pfb_placeholder_for_family($ip_ph, str_ends_with($alias, '_v6') ? 'v6' : 'v4');
-			$ip_tables[$alias] = pfb_widget_alias_display_count($info['addresses'], "{$pfb['aliasdir']}/{$alias}.txt", $placeholder);
+			$tables[$alias] = pfb_widget_alias_display_count($info['addresses'], "{$pfb['aliasdir']}/{$alias}.txt", $placeholder);
 		}
-	}
+		return $tables;
+	});
 
-	$pf_rules = pfSense_get_pf_rules();
-	$up['pf_rules'] = is_array($pf_rules);
-	$ip_rule_packets = NULL;
-	if ($up['pf_rules']) {
-		$ip_rule_packets = array();
+	$ip_rule_packets = $guard('pf_rules', function () use (&$up, $show_agg): ?array {
+		$pf_rules = pfSense_get_pf_rules();
+		$up['pf_rules'] = is_array($pf_rules);
+		if (!$up['pf_rules']) {
+			return NULL;
+		}
+		$packets = array();
 		foreach (pfb_rule_alias_packets(config_get_path('filter/rule', []), $pf_rules) as $alias => $agg) {
 			if (!pfb_widget_alias_hidden($alias, $show_agg)) {
-				$ip_rule_packets[$alias] = $agg['packets'];
+				$packets[$alias] = $agg['packets'];
 			}
 		}
-	}
+		return $packets;
+	});
 
-	$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl');
-	$up['dnsbl_db'] = $groups !== NULL;
-	$dnsbl_groups = NULL;
-	if ($groups !== NULL) {
-		$dnsbl_groups = array();
+	$dnsbl_groups = $guard('dnsbl_db', function () use (&$up, $pfb, $num): ?array {
+		$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl');
+		$up['dnsbl_db'] = $groups !== NULL;
+		if ($groups === NULL) {
+			return NULL;
+		}
+		$out = array();
 		foreach ($groups as $row) {
-			$dnsbl_groups[] = array(
+			$out[] = array(
 				'group'   => (string) $row['groupname'],
 				'entries' => $row['entries'] === 'disabled' ? NULL : $num($row['entries']),
 				'counter' => $num($row['counter']),
 			);
 		}
-	}
+		return $out;
+	});
 
-	$resolver = pfb_metrics_sqlite_rows($pfb['dnsbl_resolver'], 'SELECT totalqueries, queries FROM resolver WHERE row = 0');
-	$up['resolver_db'] = $resolver !== NULL;
-	$resolver_queries = NULL;
-	if (!empty($resolver)) {
-		$resolver_queries = $num($resolver[0]['totalqueries']) + $num($resolver[0]['queries']);
-	}
+	$resolver_queries = $guard('resolver_db', function () use (&$up, $pfb, $num): ?int {
+		$resolver = pfb_metrics_sqlite_rows($pfb['dnsbl_resolver'], 'SELECT totalqueries, queries FROM resolver WHERE row = 0');
+		$up['resolver_db'] = $resolver !== NULL;
+		return empty($resolver) ? NULL : $num($resolver[0]['totalqueries']) + $num($resolver[0]['queries']);
+	});
 
-	$state = pfb_schedule_state_read((string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc'));
-	$up['schedule_state'] = $state !== NULL;
-	$feed_success = NULL;
-	if ($state !== NULL) {
-		$feed_success = array();
+	$feed_success = $guard('schedule_state', function () use (&$up, $pfb): ?array {
+		$state = pfb_schedule_state_read((string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc'));
+		$up['schedule_state'] = $state !== NULL;
+		if ($state === NULL) {
+			return NULL;
+		}
+		$success = array();
 		foreach ($state['items'] as $id => $item) {
 			if (is_int($item['last_successful_check'] ?? NULL)) {
-				$feed_success[$id] = $item['last_successful_check'];
+				$success[$id] = $item['last_successful_check'];
 			}
 		}
-	}
+		return $success;
+	});
 
 	// One snapshot gives both health and rows. A lock timeout or a damaged file is a failed read, not an empty ledger.
-	$sync_unavailable = FALSE;
-	$sync_corrupt = FALSE;
-	$sync_data = pfb_sync_status_read_all($pfb['dbdir'], 5.0, $sync_unavailable, $sync_corrupt);
-	$up['sync_status'] = !$sync_unavailable && !$sync_corrupt;
-	$ledger = $up['sync_status'] ? pfb_sync_status_flatten($sync_data) : array();
+	$sync_rows = $guard('sync_status', function () use (&$up, $pfb): array {
+		$unavailable = FALSE;
+		$corrupt = FALSE;
+		$data = pfb_sync_status_read_all($pfb['dbdir'], 5.0, $unavailable, $corrupt);
+		$up['sync_status'] = !$unavailable && !$corrupt;
+		return $up['sync_status'] ? pfb_sync_status_flatten($data) : array();
+	});
 
 	// pfb_py_sync_status_list_open() reads a bad file as empty, so the file is checked here.
 	// An empty file is a valid empty ledger there, so it is valid here too.
-	$py_path = "{$pfb['dnsbldir']}/pfb_py_status.json";
-	$py_raw = is_file($py_path) ? (string) @file_get_contents($py_path) : '';
-	$py_data = $py_raw === '' ? array() : json_decode($py_raw, TRUE);
-	$up['py_sync_status'] = is_array($py_data) && array_is_list($py_data);
-	if ($up['py_sync_status']) {
-		$ledger = array_merge($ledger, pfb_py_sync_status_list_open($pfb['dnsbldir']));
-	}
+	$py_rows = $guard('py_sync_status', function () use (&$up, $pfb): array {
+		$path = "{$pfb['dnsbldir']}/pfb_py_status.json";
+		$raw = is_file($path) ? (string) @file_get_contents($path) : '';
+		$data = $raw === '' ? array() : json_decode($raw, TRUE);
+		$up['py_sync_status'] = is_array($data) && array_is_list($data);
+		return $up['py_sync_status'] ? pfb_py_sync_status_list_open($pfb['dnsbldir']) : array();
+	});
+
 	$feed_failing = array();
-	foreach ($ledger as $row) {
+	foreach (array_merge($sync_rows ?? array(), $py_rows ?? array()) as $row) {
 		$feed_failing[] = array('facility' => $row['facility'], 'feed' => $row['item'], 'stage' => $row['stage']);
 	}
 
-	$pass = pfb_pass_status_read();
-	$up['pass_status'] = $pass !== NULL;
+	$pass = $guard('pass_status', function () use (&$up): ?array {
+		$pass = pfb_pass_status_read();
+		$up['pass_status'] = $pass !== NULL;
+		return $pass;
+	});
 
 	return array(
 		'version'          => pfb_pkg_ver(),

@@ -341,18 +341,21 @@ final class MetricsWriteTest extends TestCase
 		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
 	}
 
-	public function testThrowingCollectionLeavesNoTempFile(): void
+	public function testThrowingSourceIsDownWhileTheOtherSourcesStillPublish(): void
 	{
 		$dir = "{$this->root}/export";
 		mkdir($dir);
-		config_set_path('filter/rule', ['not-an-array']);
+		file_put_contents("{$this->root}/pfctl.out", "-p-a---\tpfB_Deny_v4\n\tAddresses: 1200\n");
+		config_set_path('filter/rule', ['not-an-array']);	// makes pfb_rule_alias_packets() throw a TypeError
 
-		try {
-			pfb_metrics_write($dir);
-			$this->fail('a collection error must propagate, not be swallowed');
-		} catch (TypeError) {
-		}
-		$this->assertSame([], glob("{$dir}/.pfbmetrics_*"), 'a throw after tempnam() leaves a temp file behind');
+		$this->assertTrue(pfb_metrics_write($dir));
+
+		$published = (string) file_get_contents("{$dir}/pfblockerng.prom");
+		$this->assertStringContainsString('pfblockerng_metrics_source_up{source="pf_rules"} 0', $published);
+		$this->assertStringContainsString('pfblockerng_metrics_source_up{source="pfctl"} 1', $published);
+		$this->assertStringContainsString('pfblockerng_ip_table_entries{table="pfB_Deny_v4"} 1200', $published);
+		$this->assertStringNotContainsString('pfblockerng_ip_rule_packets_total', $published);
+		$this->assertSame([], glob("{$dir}/.pfbmetrics_*"), 'no temp file may survive a publish');
 	}
 
 	public function testDirectoryAtTargetFailsPublishAndLeavesNoTempFile(): void
