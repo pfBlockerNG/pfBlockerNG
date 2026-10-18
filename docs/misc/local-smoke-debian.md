@@ -38,6 +38,9 @@ Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by
   `smoke-on-box.sh`; an absent — or empty — directory self-bootstraps via
   `sparse-clone-ports.sh`, issue #2490).
+- Egress to `go.dev`, `dl.google.com`, `proxy.golang.org` and `sum.golang.org` for
+  `tests/smoke/test_smoke_dns_gateway.py`: it downloads a pinned, sha256-verified Go toolchain and the gateway's
+  modules into the run's own scratch directory and deletes them afterwards; nothing is installed on the box.
 
 Image storage is not a box prerequisite. Each workload clears and pulls its selected
 pfSense image (and civm image unless `--no-two-vm`) into
