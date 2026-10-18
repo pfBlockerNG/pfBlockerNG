@@ -9,6 +9,7 @@ import ssl
 import struct
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import Self
 
@@ -59,17 +60,55 @@ async def serve_dot(
     return await frontend.serve_listeners(_bind_strict(listen, port, udp=False), context)
 
 
+EDNS_OPTION_EDE = 15  # RFC 8914 Extended DNS Error
+UPSTREAM_SOA = "example. 60 IN SOA ns.example. hostmaster.example. 1 2 3 4 60"
+
+
+@dataclass(frozen=True)
+class UpstreamVerdict:
+    """The raw reply an upstream resolver gives for one name, whatever Unbound makes of it on the way to its client:
+    RCODE, the RA and AA header bits, RFC 8914 (info code, extra text) pairs and answer records (`{name}` is the
+    queried name)."""
+
+    rcode: int
+    ra: bool = True
+    aa: bool = False
+    ede: tuple[tuple[int, str], ...] = ()
+    answers: tuple[str, ...] = ()
+
+
+def _upstream_reply(query: dnswire.Message, verdict: UpstreamVerdict) -> bytes:
+    flags = dnswire.QR | (query.flags & dnswire.RD) | verdict.rcode
+    flags |= (dnswire.RA if verdict.ra else 0) | (dnswire.AA if verdict.aa else 0)
+    options = b"".join(
+        struct.pack("!HHH", EDNS_OPTION_EDE, 2 + len(text.encode()), code) + text.encode() for code, text in verdict.ede
+    )
+    has_opt = any(rr.rtype == dnswire.TYPE_OPT for rr in query.additional)
+    additional = [dnswire.RR(".", dnswire.TYPE_OPT, 1232, 0, options)] if options or has_opt else []
+    authority = [] if verdict.answers else [dnswire.rr_from_text(UPSTREAM_SOA)]
+    answers = [dnswire.rr_from_text(text.replace("{name}", query.questions[0].name)) for text in verdict.answers]
+    return dnswire.encode(dnswire.Message(query.id, flags, query.questions, answers, authority, additional))
+
+
 class FakeUnbound:
-    """Stands in for Unbound behind the proxy: answers from a table, records every query it is sent."""
+    """Stands in for Unbound behind the proxy: answers from a table, records every query it is sent.
+
+    A name in `verdicts` (lower case, trailing dot) is answered with that raw reply instead of the table's, which is how
+    a test makes the upstream behind a REAL Unbound say NXRA, an Extended DNS Error, a null address and so on.
+    """
 
     def __init__(self, zone: dict[tuple[str, int], list[str]]) -> None:
         self.zone = zone
+        self.verdicts: dict[str, UpstreamVerdict] = {}
         self.queries: list[bytes] = []
 
     def answer(self, wire: bytes) -> bytes:
         self.queries.append(wire)
         query = dnswire.parse(wire)
         question = query.questions[0]
+        verdict = self.verdicts.get(question.name.lower())
+        if verdict is not None:
+            return _upstream_reply(query, verdict)
         rrs = self.zone.get((question.name.lower(), question.qtype))
         flags = dnswire.QR | dnswire.RA | (query.flags & dnswire.RD) | (0 if rrs is not None else 3)
         reply = dnswire.Message(query.id, flags, query.questions, [dnswire.rr_from_text(t) for t in rrs or []])

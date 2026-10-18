@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from frontend_constants import GP_BYPASS_INI, INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted
+from frontend_constants import GP_BYPASS_INI, INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted, LogFeed
 from hang_guard import hang_guard  # noqa: F401  (autouse: every test here gets the alarm)
 
 sys.path.insert(0, str(PROTO_DIR))
@@ -42,7 +42,7 @@ def booted(module_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Booted
     # init_standard() replaces sys.stderr with a file logger; register monkeypatch's auto-restore.
     monkeypatch.setattr(sys, "stderr", sys.stderr)
     module = pfb_dns_proxy.boot(str(module_dir))
-    log: list[tuple[str, str]] = []
+    log = LogFeed()
     monkeypatch.setattr(module, "pfb_log", lambda name, line: log.append((name, line)))
     try:
         yield Booted(module, log)
@@ -72,6 +72,19 @@ def bypass_list(module_dir: Path) -> None:
 @pytest.fixture
 def gp_booted(bypass_list: None, booted: Booted) -> Booted:
     """`booted` with BYPASSED_CLIENT on the Group Policy bypass list."""
+    return booted
+
+
+@pytest.fixture
+def forwarding_ini(module_dir: Path) -> None:
+    """Sets `forwarding = true` in [MAIN] (the Resolver forwards): init_standard() reads it, so it precedes `booted`."""
+    ini = module_dir / "pfb_unbound.ini"
+    ini.write_text(ini.read_text(encoding="utf-8").replace("[MAIN]\n", "[MAIN]\nforwarding = true\n", 1), "utf-8")
+
+
+@pytest.fixture
+def fwd_booted(forwarding_ini: None, booted: Booted) -> Booted:
+    """`booted` with the Resolver in forwarding mode, the only mode in which upstream blocks are detected."""
     return booted
 
 

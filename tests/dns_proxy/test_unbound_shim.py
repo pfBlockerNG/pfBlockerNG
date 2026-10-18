@@ -152,6 +152,42 @@ def test_firing_a_kind_nobody_registered_is_a_no_op() -> None:
     shim.fire_reply_callback("reply_cache", _qstate(), None, 0)
 
 
+def test_query_response_callback_gets_the_qstate_and_the_response_as_pythonmod_passes_them() -> None:
+    seen: dict[str, Any] = {}
+
+    def callback(qstate: Any, response: Any, **kwargs: Any) -> bool:
+        seen.update(qstate=qstate, response=response, kwargs=kwargs)
+        return True
+
+    shim.register_inplace_cb_query_response(callback, shim.module_env(), 0)
+    qstate = _qstate()
+    shim.fire_query_response(qstate, "RESPONSE")
+    assert (seen["qstate"], seen["response"], seen["kwargs"]) == (qstate, "RESPONSE", {})
+
+
+def test_a_raising_query_response_callback_is_logged_not_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = io.StringIO()
+    monkeypatch.setattr(sys, "__stderr__", captured)
+
+    def boom(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("callback exploded")
+
+    shim.register_inplace_cb_query_response(boom, shim.module_env(), 0)
+    shim.fire_query_response(_qstate(), None)
+    assert "callback exploded" in captured.getvalue()
+
+
+def test_firing_query_response_with_nobody_registered_is_a_no_op() -> None:
+    shim.fire_query_response(_qstate(), None)
+
+
+def test_an_edns_option_reads_as_pythonmod_shows_it_to_the_module() -> None:
+    """pfb_unbound._upstream_edns_opts() reads `.code` and `.data` from each of qstate.edns_opts_back_in_iter."""
+    qstate = _qstate()
+    qstate.edns_opts_back_in_iter = [shim.EdnsOpt(15, b"\x00\x0fBlocked")]
+    assert [(opt.code, bytes(opt.data)) for opt in qstate.edns_opts_back_in_iter] == [(15, b"\x00\x0fBlocked")]
+
+
 # --- qstate / query_info -------------------------------------------------------------------------
 
 
