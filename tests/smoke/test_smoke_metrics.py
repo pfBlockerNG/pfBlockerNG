@@ -152,8 +152,9 @@ def test_metrics_toggle_installs_cron_and_publishes(deployed_vm: SmokeVM) -> Non
         Then /etc/crontab carries exactly one metrics line: minute '*', run as root, wrapped in timeout 50;
         When the verb runs,
         Then pfblockerng.prom exists with mode 0644, parses cleanly, carries pfblockerng_info (non-empty
-            version), all eight pfblockerng_metrics_source_up sources, and pfblockerng_ip_table_entries
-            for the feed's pfB table with the count pfctl reports; and no temp file is left behind.
+            version), pfblockerng_metrics_source_up 1 for all eight sources (a source absent because its
+            feature is off is up), and pfblockerng_ip_table_entries for the feed's pfB table with the
+            count pfctl reports; and no temp file is left behind.
     """
     vm = deployed_vm
     _set_export(vm, True)
@@ -176,7 +177,7 @@ def test_metrics_toggle_installs_cron_and_publishes(deployed_vm: SmokeVM) -> Non
     assert len(info) == 1 and info[0].labels["version"], f"pfblockerng_info must carry a version: {info!r}"
 
     up = {s.labels["source"]: s.value for s in families["pfblockerng_metrics_source_up"].samples}
-    assert set(up) == _SOURCES, f"source_up must cover all eight sources: {up!r}"
+    assert up == dict.fromkeys(_SOURCES, 1.0), f"all eight sources must report up (an absent feature is up): {up!r}"
 
     # Expected tables come from pfctl itself, so the check does not skip when the VM has none.
     listed = vm.ssh(h.PFCTL, "-sT")
