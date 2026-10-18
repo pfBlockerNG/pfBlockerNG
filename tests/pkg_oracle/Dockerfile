@@ -7,8 +7,9 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
     && rm -rf /var/lib/apt/lists/*
 COPY prefix /work/prefix
 COPY shims/daemon /usr/sbin/daemon
+COPY shims/lockf /usr/bin/lockf
 COPY shims/read_xml_tag.sh /usr/local/sbin/read_xml_tag.sh
-RUN chmod +x /usr/sbin/daemon /usr/local/sbin/read_xml_tag.sh \
+RUN chmod +x /usr/sbin/daemon /usr/bin/lockf /usr/local/sbin/read_xml_tag.sh \
     && mkdir -p /opt/pybin /var/log/pfblockerng /var/unbound /usr/local/etc/rc.d \
     && ln -sf /usr/bin/python3 /opt/pybin/python3.13 \
     && (id unbound >/dev/null 2>&1 || useradd -r unbound)

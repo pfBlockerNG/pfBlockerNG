@@ -1,0 +1,8 @@
+#!/bin/sh
+# Linux stand-in for FreeBSD lockf(1) as pfb_dns_proxy.sh calls it: lockf -k -t SECONDS FILE COMMAND... (exit 75 when the lock is not taken in time).
+[ "$1" = "-k" ] && shift
+[ "$1" = "-t" ] || exit 64
+seconds=$2
+lockfile=$3
+shift 3
+exec flock -w "$seconds" -E 75 "$lockfile" "$@"
