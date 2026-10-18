@@ -1611,6 +1611,16 @@ job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
+**Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout 50
+/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while
+pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
+`pfb_metrics_configure_cron()` installs it idempotently from `sync_package_pfblockerng()`, and
+removes it together with `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package
+deinstall. The `metrics` verb is not gated by `.pfb_cron_disable`. It writes only that one file
+(temp file, `chmod 0644`, `rename()`) and logs once per outage when node_exporter's textfile
+directory is missing. `timeout 50` stops a hung run from piling up behind the next minute's.
+Spec: `docs/specs/metrics-export.md`.
+
 **Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process
 flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_feed_pass_*` in
 `pfblockerng.inc`). Both funnels — `sync_package_pfblockerng()` and `pfblockerng_sync_cron()` —

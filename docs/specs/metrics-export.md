@@ -46,11 +46,13 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
 
 - New CLI verb `php /usr/local/www/pfblockerng/pfblockerng.php metrics` runs
   `pfb_metrics_write()`.
-- While the option is on, a cron entry runs that verb every minute (`* * * * *`),
-  installed with `install_cron_job()`. The one-minute cadence matches node_exporter's
-  own `interface-collector.py`.
-- Turning the option off removes the cron entry and deletes `pfblockerng.prom`.
-  Package deinstall does the same.
+- While pfBlockerNG's master enable and the option are both on, a cron entry runs that
+  verb every minute (`* * * * *`), installed with `install_cron_job()`. The command is
+  `/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`,
+  bounded so a hung source cannot pile up runs. The one-minute cadence matches
+  node_exporter's own `interface-collector.py`.
+- Turning the option off, or turning pfBlockerNG's master enable off, removes the cron
+  entry and deletes `pfblockerng.prom`. Package deinstall does the same.
 - The cron state is reconciled wherever pfBlockerNG already reconciles its other cron
   entries on save and install. No separate daemon is added.
 - If `/var/tmp/node_exporter` does not exist (node_exporter disabled or never started),
@@ -76,8 +78,8 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
 ### Metrics
 
 All names carry the `pfblockerng_` prefix. `# HELP` and `# TYPE` lines are emitted for
-every family, and label values are escaped per the Prometheus text format (`\\`, `\"`,
-`\n`).
+every family that has at least one series, and label values are escaped per the
+Prometheus text format (`\\`, `\"`, `\n`).
 
 | Metric | Type | Labels | Source |
 | --- | --- | --- | --- |
@@ -111,16 +113,17 @@ Semantics operators rely on:
 ### Error handling
 
 Each source is collected independently. A failing source (pfctl exits non-zero, a
-SQLite file is missing, locked, or corrupt, or a JSON file fails to parse) drops only
-its own families and sets `pfblockerng_metrics_source_up{source="…"} 0`. The file is
-still published. A failed atomic publish leaves the previous file in place and removes
-the temp file.
+SQLite file cannot be opened or queried, or a JSON file fails to parse) drops only its
+own families and sets `pfblockerng_metrics_source_up{source="…"} 0`. A source that is
+absent because its feature is off (a missing SQLite or status file) reports
+`source_up 1` with no series; only an open, query, or parse failure reports 0. An empty
+Python status file counts as valid. The file is still published. A failed atomic publish
+leaves the previous file in place and removes the temp file.
 
 ## Acceptance criteria
 
-1. With node_exporter installed and **Metrics export** on, `pfblockerng.prom` appears
-   within one minute. node_exporter serves every family listed above, and
-   `promtool check metrics` accepts the file.
+1. With **Metrics export** on, `pfblockerng.prom` appears within one minute and the
+   Prometheus Python client's text parser accepts it (checked in the smoke suite).
 2. With the option off, the cron entry is absent and `pfblockerng.prom` does not exist.
    Toggling on and then off returns the box to that state.
 3. Without node_exporter installed, the General tab shows the checkbox disabled, the red
@@ -150,8 +153,10 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
   package, and cron install/removal on toggle.
 - UI tier (per architecture-notes "Web UI test tiers"): disabled checkbox, red notice,
   and link target when the package is absent; enabled checkbox when present.
-- Smoke (VM): run the `metrics` verb and assert the published file's families and
-  `promtool check metrics` validity. Install node_exporter on the VM for this suite.
+- Smoke (VM): run the `metrics` verb and assert the published file's families and that it
+  parses with the Prometheus Python client's text parser. The smoke image installs
+  packages offline and cannot install node_exporter, so the smoke creates the textfile
+  directory itself and enables the option through the config gateway.
 
 ## Out of scope
 
