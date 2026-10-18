@@ -1,24 +1,29 @@
 """Issue #3513, step 5: the Go DNS gateway in front of Unbound on a live pfSense, asked from a LAN client over every
 transport.
 
-With the DNS Proxy toggle on and ``pfb_dns_gateway`` installed, pfBlockerNG's rc script runs the gateway under
-daemon(8) with the Python decider as its child. This module builds the gateway from ``go/`` on the box (a pinned,
-sha256-verified Go toolchain in the run's own scratch directory, deleted afterwards), installs it where the rc script
-looks for it, turns DoH and DoQ on next to the toggle, and watches the box and the LAN client VM. The client reaches
-DoQ with ``pfb_doq_probe``, built from the same module.
+The package ships the gateway as ``pfb-dns``, one raw FreeBSD binary per architecture under ``dns_proxy/bin/``, and
+``pfb_dns.sh``, which runs the one for the machine; with the DNS Proxy toggle on, pfBlockerNG's rc script runs that
+wrapper under daemon(8) with the Python decider as the gateway's child. This module installs nothing of its own for the
+gateway, so a broken package cannot hide behind an uploaded binary: it asserts the INSTALLED package's payload, turns
+DoH and DoQ on next to the toggle, and watches the box and the LAN client VM. Only the client's DoQ probe,
+``pfb_doq_probe``, is built here, from ``go/``, with the Go that built the package (smoke-on-box.sh's, CI's, or, when
+there is none, the pinned one scripts/go_toolchain.py installs in this module's scratch directory and deletes).
 
-Module setup, put back in ``finally`` (the gateway binary is removed, so ``test_smoke_dns_proxy.py`` sees the Python
-fallback)::
+Module setup, put back in ``finally`` (``test_smoke_dns_proxy.py`` hides the payload itself, to see the Python
+listener of a legacy package)::
 
     Resolver: DoT on with a self-signed certificate, ``log-queries: yes`` in Custom Options
     DNSBL:    one feed listing every name the tests expect to be blocked; DoH on 4443 and DoQ on 853 on the LAN
 
 What it proves, in file order:
 
-* service: the daemon supervises ``pfb_dns_gateway``, whose child is ``pfb_dns_proxy.py --decision-fd 3``, both as
-  ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and ``ready upstream 127.0.0.1:5353``; the gateway owns
-  every client-facing socket (DoH and DoQ on loopback too, for a local HAProxy) and Unbound listens on loopback 5353
-  and 5354 only;
+* package: both ``pfb-dns`` binaries are 0555 and byte-equal to the built ``.pkg``'s members, ``pfb_dns.sh`` is 0644
+  (run as ``/bin/sh``), and the installed package's ABI is a wildcard (``NO_ARCH``);
+* service: the daemon supervises ``pfb-dns``, the binary ``pfb_dns.sh`` chose for ``uname -p`` (the wrapper exec'd, so
+  the pidfile's pid is the gateway's), which published that pid in ``/var/unbound/pfb_dns_ready``; its child is
+  ``pfb_dns_proxy.py --decision-fd 3``, both as ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and
+  ``ready upstream 127.0.0.1:5353``; the gateway owns every client-facing socket (DoH and DoQ on loopback too, for a
+  local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
 * Unbound runs the upstream observer, an upstream EDE block is logged with the real client, and the firewall's own
   lookup of a listed name gets the VIP, logged as 127.0.0.1;
 * from the LAN client (192.168.1.10), over UDP, TCP, DoT, DoH (POST and GET) and DoQ: a listed name gets the VIP and a
@@ -37,7 +42,7 @@ What it proves, in file order:
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
-    scripts/local-smoke.sh --ref issue/3513-go-connectivity-layer --filter test_smoke_dns_gateway
+    scripts/local-smoke.sh --ref <branch or sha> --filter test_smoke_dns_gateway
 """
 
 from __future__ import annotations
@@ -47,21 +52,21 @@ import hashlib
 import ipaddress
 import json
 import os
-import platform
 import re
 import shlex
 import shutil
 import subprocess
-import tarfile
-import urllib.request
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from scripts import go_toolchain as pinned_go
+
 from . import helpers as h
 from .conftest import CLIENT_LAN_IP, PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _StubDnsServer
+from .pkg_identity import branch_pkg_name
 from .test_smoke_dns_proxy import (
     ACCESS_LISTS,
     CERT_CLIENT,
@@ -104,15 +109,17 @@ from .test_smoke_dns_proxy import (
 
 pytestmark = [pytest.mark.smoke, pytest.mark.timeout(180)]
 
-# The pinned toolchain: https://go.dev/dl/?mode=json&include=all lists this archive with this digest.
-GO_VERSION = "go1.27.0"
-GO_ARCHIVE = f"{GO_VERSION}.linux-amd64.tar.gz"
-GO_URL = f"https://go.dev/dl/{GO_ARCHIVE}"
-GO_SHA256 = "675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685"
 GO_DIR = Path(__file__).resolve().parents[2] / "go" / "pfb_dns_gateway"
+# the client VM's `uname -m`
 GOARCH_OF_UNAME = {"amd64": "amd64", "x86_64": "amd64", "arm64": "arm64", "aarch64": "arm64"}
 
-GATEWAY_BIN = "/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway"  # where the rc script looks for it
+PACKAGE_DIR = "/usr/local/pkg/pfblockerng/dns_proxy"
+WRAPPER = f"{PACKAGE_DIR}/pfb_dns.sh"
+# `uname -p` on the guest -> the directory pfb_dns.sh must have chosen: the package's contract, restated here so a
+# wrapper that picked wrongly cannot agree with itself
+TARGET_OF_UNAME_P = {"amd64": "freebsd-amd64", "aarch64": "freebsd-arm64", "arm64": "freebsd-arm64"}
+PAYLOAD_TARGETS = ("freebsd-amd64", "freebsd-arm64")
+READY_FILE = "/var/unbound/pfb_dns_ready"  # pfb-dns writes its own pid here once it serves
 PROBE_BIN = "/tmp/pfb_doq_probe"  # on the client VM
 DOT_PORT, DOH_PORT, DOQ_PORT = 853, 4443, 853
 FEED_HEADER = "smoke3513"
@@ -234,14 +241,8 @@ class Gateway:
     before: State  # the Resolver as pfBlockerNG leaves it with DNSBL on and the toggle off
 
 
-@dataclass(frozen=True)
-class Binaries:
-    gateway: Path
-    probe: Path
-
-
 # --------------------------------------------------------------------------- #
-# The toolchain and the binaries, built on the box where pytest runs
+# The DoQ probe for the client VM, built on the box where pytest runs
 # --------------------------------------------------------------------------- #
 
 
@@ -251,56 +252,25 @@ class GoToolchain:
     env: dict[str, str]
 
 
-def _download_go(dest: Path) -> None:
-    """Fetch the pinned archive; nothing is extracted unless its sha256 is the pinned one."""
-    digest = hashlib.sha256()
-    with urllib.request.urlopen(GO_URL, timeout=120) as response, dest.open("wb") as out:
-        while chunk := response.read(1 << 20):
-            digest.update(chunk)
-            out.write(chunk)
-    if digest.hexdigest() != GO_SHA256:
-        raise RuntimeError(f"{GO_URL}: sha256 expected {GO_SHA256}, got {digest.hexdigest()}")
-
-
 @pytest.fixture(scope="module")
 def go_toolchain(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GoToolchain]:
-    """The pinned Go in this run's scratch directory; every cache lives beside it and all of it is deleted after."""
-    if platform.machine() not in ("x86_64", "AMD64"):
-        raise RuntimeError(f"the pinned toolchain is {GO_ARCHIVE}; this box is {platform.machine()}")
-    root = tmp_path_factory.mktemp("go-toolchain")
+    """The Go that built the package, reused: the `go` on PATH (smoke-on-box.sh's pinned one, or CI's setup-go).
+
+    A run with none installs the pinned toolchain (scripts/go_toolchain.py) in this module's scratch directory and
+    removes it after; a toolchain it did not install is never touched.
+    """
+    found = shutil.which("go")
+    if found:
+        version = subprocess.run([found, "version"], capture_output=True, text=True, timeout=60, check=False)
+        _say(f"toolchain: {version.stdout.strip()} ({found}, already installed)")
+        yield GoToolchain(Path(found), {**os.environ, "GOTOOLCHAIN": "local", "CGO_ENABLED": "0"})
+        return
+    root = pinned_go.install(tmp_path_factory.mktemp("go-toolchain"))
     try:
-        archive = root / GO_ARCHIVE
-        _download_go(archive)
-        with tarfile.open(archive) as tar:
-            tar.extractall(root, filter="data")
-        archive.unlink()
-        goroot = root / "go"
-        env = {
-            **os.environ,
-            "GOROOT": str(goroot),
-            "PATH": f"{goroot / 'bin'}{os.pathsep}{os.environ['PATH']}",
-            "GOPATH": str(root / "gopath"),
-            "GOCACHE": str(root / "gocache"),
-            "GOMODCACHE": str(root / "gomodcache"),
-            "GOTMPDIR": str(root / "gotmp"),
-            "GOTOOLCHAIN": "local",
-            "GOENV": "off",
-            "GOFLAGS": "-modcacherw",  # a read-only module cache would defeat the delete below
-            "HOME": str(root / "home"),  # keeps go's telemetry counters out of the real home
-            "XDG_CONFIG_HOME": str(root / "config"),
-            "XDG_CACHE_HOME": str(root / "cache"),
-            "CGO_ENABLED": "0",
-        }
-        for key in ("GOPATH", "GOCACHE", "GOMODCACHE", "GOTMPDIR", "HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
-            Path(env[key]).mkdir()
-        go = goroot / "bin" / "go"
-        version = subprocess.run([str(go), "version"], env=env, capture_output=True, text=True, timeout=60, check=False)
-        if GO_VERSION not in version.stdout:
-            raise RuntimeError(f"expected {GO_VERSION}, `go version` says {version.stdout!r} {version.stderr!r}")
-        _say(f"toolchain: {version.stdout.strip()}")
-        yield GoToolchain(go, env)
+        _say(f"toolchain: {pinned_go.GO_VERSION} installed in {root}")
+        yield GoToolchain(root / "go" / "bin" / "go", {**os.environ, **pinned_go.environment(root), "CGO_ENABLED": "0"})
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        pinned_go.remove(root)
     assert not root.exists(), f"the Go toolchain directory {root} is still there after the delete"
 
 
@@ -326,20 +296,13 @@ def _goarch(vm: SmokeVM, role: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def binaries(
-    go_toolchain: GoToolchain, smoke_vm: SmokeVM, client_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory
-) -> Binaries:
-    """The gateway for the pfSense VM's architecture (FreeBSD) and the DoQ probe for the client VM's (Linux)."""
-    out = tmp_path_factory.mktemp("go-binaries")
-    gateway_arch, probe_arch = _goarch(smoke_vm, "pfSense VM"), _goarch(client_vm, "client VM")
-    gateway, probe = out / "pfb_dns_gateway", out / "pfb_doq_probe"
-    _go_build(go_toolchain, ".", "freebsd", gateway_arch, gateway)
-    _go_build(go_toolchain, "./cmd/pfb_doq_probe", "linux", probe_arch, probe)
-    _say(
-        f"binary sizes: pfb_dns_gateway freebsd/{gateway_arch} {gateway.stat().st_size} bytes, "
-        f"pfb_doq_probe linux/{probe_arch} {probe.stat().st_size} bytes"
-    )
-    return Binaries(gateway, probe)
+def probe_binary(go_toolchain: GoToolchain, client_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """pfb_doq_probe for the client VM's architecture (Linux): the one binary this module builds."""
+    probe = tmp_path_factory.mktemp("go-binaries") / "pfb_doq_probe"
+    arch = _goarch(client_vm, "client VM")
+    _go_build(go_toolchain, "./cmd/pfb_doq_probe", "linux", arch, probe)
+    _say(f"pfb_doq_probe linux/{arch}: {probe.stat().st_size} bytes")
+    return probe
 
 
 def _upload(vm: SmokeVM, binary: Path, dest: str, owner: str) -> None:
@@ -352,6 +315,26 @@ def _upload(vm: SmokeVM, binary: Path, dest: str, owner: str) -> None:
     digest = vm.ssh(f"sha256 -q {dest} 2>/dev/null || sha256sum {dest}").stdout.split()
     expected = hashlib.sha256(payload).hexdigest()
     assert digest[:1] == [expected], f"{dest} on the guest: sha256 {digest}, built {expected}"
+
+
+def _guest_mode(vm: SmokeVM, path: str) -> str:
+    return vm.ssh(f"stat -f '%Lp' {path}").stdout.strip()
+
+
+def _package_member_sha256(pkg: str, suffix: str) -> str:
+    """sha256 of the one member of the built .pkg whose path ends in `/<suffix>`; tar finds its compression."""
+    listing = subprocess.run(["tar", "-tf", pkg], capture_output=True, text=True, timeout=180, check=True)
+    members = [name for name in listing.stdout.splitlines() if name.endswith(f"/{suffix}")]
+    assert len(members) == 1, f"{pkg} members ending in {suffix}: {members}"
+    data = subprocess.run(["tar", "-xOf", pkg, "--", members[0]], capture_output=True, timeout=180, check=True).stdout
+    return hashlib.sha256(data).hexdigest()
+
+
+def _selected_binary(vm: SmokeVM) -> str:
+    """The pfb-dns pfb_dns.sh must run on this machine: the table above, applied to the guest's own `uname -p`."""
+    machine = vm.ssh("uname -p").stdout.strip()
+    assert machine in TARGET_OF_UNAME_P, f"`uname -p` says {machine!r}; the package knows {sorted(TARGET_OF_UNAME_P)}"
+    return f"{PACKAGE_DIR}/bin/{TARGET_OF_UNAME_P[machine]}/pfb-dns"
 
 
 def _record_client_tools(client: SmokeVM) -> None:
@@ -676,7 +659,7 @@ def _toggle_on(gw: Gateway) -> None:
 
 
 @pytest.fixture(scope="module")
-def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, binaries: Binaries) -> Iterator[Gateway]:
+def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_binary: Path) -> Iterator[Gateway]:
     """Deploy the package, a feed, DoT, the gateway and the DoH/DoQ settings; apply once with the toggle off."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
@@ -702,14 +685,13 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, binaries
         _configure_resolver(vm, refid)
         h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
         _set_listeners(vm)
-        _upload(vm, binaries.gateway, GATEWAY_BIN, "root:wheel")  # before the first apply writes the rc script
-        _upload(client_vm, binaries.probe, PROBE_BIN, "root:root")
+        _upload(client_vm, probe_binary, PROBE_BIN, "root:root")  # the gateway itself is the package's, never uploaded
         _apply(vm)  # toggle off: pfBlockerNG's own wiring, the module inside Unbound
         yield Gateway(vm, client_vm, names, _capture(vm))
     finally:
         try:
             _force_stop_proxy(vm)
-            _sh(vm, f"pkill -KILL -f 'pfb_dns_gatewa[y]'\nrm -f {GATEWAY_BIN}\n")
+            _sh(vm, f"pkill -KILL -f '{PACKAGE_DIR}/bin/freebsd-[a-z0-9]*/pfb-dn[s]'\nrm -f {READY_FILE}\n")
         finally:
             _say("gateway log:\n" + _proxy_log(vm, 80))
             try:
@@ -754,13 +736,35 @@ def _processes(vm: SmokeVM) -> list[Process]:
     return [Process(int(r[0]), int(r[1]), r[2], r[3] if len(r) > 3 else "") for r in rows if len(r) >= 3]
 
 
+def test_the_installed_package_ships_both_pfb_dns_binaries_and_the_dispatcher(gw: Gateway) -> None:
+    """The payload is the package's own: both raw binaries 0555, the wrapper 0644, a wildcard ABI, the .pkg's bytes.
+
+    Then `pfb_dns.sh` is 0644 (it is run as `/bin/sh`, never executed); `bin/freebsd-amd64/pfb-dns` and
+      `bin/freebsd-arm64/pfb-dns` are 0555 and sha256-equal to the same members of the .pkg this run built; and the
+      installed package's ABI is `FreeBSD:<major>:*` (NO_ARCH), so one package serves both architectures.
+    """
+    vm, pkg = gw.vm, os.environ["SMOKE_PKG"]
+    assert _guest_mode(vm, WRAPPER) == "644", f"{WRAPPER}: mode {_guest_mode(vm, WRAPPER)!r}"
+    for target in PAYLOAD_TARGETS:
+        path = f"{PACKAGE_DIR}/bin/{target}/pfb-dns"
+        assert _guest_mode(vm, path) == "555", f"{path}: mode {_guest_mode(vm, path)!r}"
+        on_guest = vm.ssh(f"sha256 -q {path}").stdout.strip()
+        built = _package_member_sha256(pkg, f"dns_proxy/bin/{target}/pfb-dns")
+        _say(f"{target}/pfb-dns: sha256 {on_guest} (the .pkg's {built})")
+        assert on_guest == built, f"{path} on the guest is not the .pkg's member: {on_guest} vs {built}"
+    name = branch_pkg_name(pkg)
+    abi = vm.ssh(f"pkg query '%q' {name}").stdout.strip()
+    assert re.fullmatch(r"FreeBSD:\d+:\*", abi), f"the installed {name} has ABI {abi!r}, not a NO_ARCH wildcard"
+
+
 def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decider(
     gw: Gateway, gateway_on: State
 ) -> None:
     """The service is the Go gateway, not the Python listener: supervisor, gateway and decider, all as they should be.
 
     Then Status > Services says `pfb_dns_proxy` runs; the supervisor's ps title is `daemon: pfb_dns_proxy[<child pid>]`;
-      the child (the pidfile's pid) is `pfb_dns_gateway` as `unbound`; its only child is the decider
+      the child (the pidfile's pid) is the pfb-dns `pfb_dns.sh` chose for this machine, as `unbound`; its only child is
+      the decider
       `pfb_dns_proxy.py --decision-fd 3`, also `unbound`; no process runs the Python listener; dns_proxy.log has a
       `listening` line per transport and `ready upstream 127.0.0.1:5353` after them.
     """
@@ -773,7 +777,9 @@ def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decid
     assert supervisor and re.search(rf"\bdaemon: pfb_dns_proxy\[{state.proxy_pid}\]", supervisor.args), (
         f"supervisor {supervisor}; ps: {procs}"
     )
-    assert gateway and gateway.args.startswith(GATEWAY_BIN), f"the pidfile's process is not the gateway: {gateway}"
+    assert gateway and gateway.args.split()[0] == _selected_binary(gw.vm), (
+        f"the pidfile's process is not this machine's pfb-dns ({_selected_binary(gw.vm)}): {gateway}"
+    )
     assert gateway.user == "unbound", f"the gateway should have dropped root to unbound: {gateway}"
     deciders = [p for p in procs if p.ppid == state.proxy_pid]
     assert len(deciders) == 1, f"the gateway's children: {deciders}"
@@ -804,6 +810,27 @@ def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decid
     assert wanted <= heard, f"missing readiness lines: {sorted(wanted - heard)}; the start's lines:\n" + "\n".join(
         log[start : ready + 1]
     )
+
+
+def test_the_dispatcher_ran_this_machines_binary_and_the_gateway_published_its_pid(
+    gw: Gateway, gateway_on: State
+) -> None:
+    """`pfb_dns.sh` exec'd the package's binary for `uname -p`, and that process is the one the ready file names.
+
+    Then the executable of the pidfile's process (`procstat -b`, not its argv) is the package's
+      `bin/<target for uname -p>/pfb-dns`; `/var/unbound/pfb_dns_ready` holds exactly that pid, mode 0600, owned by
+      `unbound` (the gateway wrote it after dropping root), so the marker names the daemon(8) child itself.
+    """
+    vm, state = gw.vm, gateway_on
+    assert state.proxy_pid, f"no proxy pidfile: {state}"
+    expected = _selected_binary(vm)
+    executable = vm.ssh(f"procstat -b {state.proxy_pid}").stdout
+    _say(f"procstat -b {state.proxy_pid}: {executable.strip()}")
+    assert expected in executable.split(), f"pid {state.proxy_pid} does not run {expected}:\n{executable}"
+    marker = vm.ssh(f"cat {READY_FILE}").stdout.strip()
+    assert marker == str(state.proxy_pid), f"{READY_FILE} holds {marker!r}, the gateway is {state.proxy_pid}"
+    facts = vm.ssh(f"stat -f '%Lp %Su' {READY_FILE}").stdout.strip()
+    assert facts == "600 unbound", f"{READY_FILE}: mode and owner {facts!r}"
 
 
 def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw: Gateway, gateway_on: State) -> None:
@@ -1148,7 +1175,7 @@ def test_toggle_off_gives_the_resolver_back_and_leaves_no_gateway(gw: Gateway, g
     state = _capture(vm)
     assert state.service == "stopped" and state.ps == [], f"gateway left running: {state.service} {state.ps}"
     assert state.proxy_pid is None and state.daemon_pid is None, (state.proxy_pid, state.daemon_pid)
-    assert not [s for s in state.listeners if s.command == "pfb_dns_gateway"], "the gateway still holds a socket"
+    assert not [s for s in state.listeners if s.command == "pfb-dns"], "the gateway still holds a socket"
     assert state.resolver == before.resolver, (
         f"Resolver keys after the toggle off:\n{state.resolver}\nbefore:\n{before.resolver}"
     )
