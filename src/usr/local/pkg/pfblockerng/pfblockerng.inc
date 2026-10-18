@@ -7923,8 +7923,10 @@ function pfb_metrics_collect(): array {
 	$ledger = $sync_unavailable ? array() : pfb_sync_status_list_open($pfb['dbdir']);
 
 	// pfb_py_sync_status_list_open() reads a bad file as empty, so the file is checked here.
+	// An empty file is a valid empty ledger there, so it is valid here too.
 	$py_path = "{$pfb['dnsbldir']}/pfb_py_status.json";
-	$py_data = is_file($py_path) ? json_decode((string) @file_get_contents($py_path), TRUE) : array();
+	$py_raw = is_file($py_path) ? (string) @file_get_contents($py_path) : '';
+	$py_data = $py_raw === '' ? array() : json_decode($py_raw, TRUE);
 	$up['py_sync_status'] = is_array($py_data) && array_is_list($py_data);
 	if ($up['py_sync_status']) {
 		$ledger = array_merge($ledger, pfb_py_sync_status_list_open($pfb['dnsbldir']));
@@ -7962,11 +7964,13 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 		}
 		return FALSE;
 	}
+	// Rendered before tempnam(): a throw from collection must not leave a temp file behind.
+	$body = pfb_metrics_render(pfb_metrics_collect());
 	$tmp = @tempnam($dir, '.pfbmetrics_');
 	if ($tmp === FALSE) {
 		return FALSE;
 	}
-	if (@file_put_contents($tmp, pfb_metrics_render(pfb_metrics_collect())) === FALSE || !@chmod($tmp, 0644) || !@rename($tmp, "{$dir}/pfblockerng.prom")) {
+	if (@file_put_contents($tmp, $body) === FALSE || !@chmod($tmp, 0644) || !@rename($tmp, "{$dir}/pfblockerng.prom")) {
 		@unlink($tmp);
 		return FALSE;
 	}
@@ -7976,6 +7980,7 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 
 // Runs the verb every minute while the option is on; turning it off removes the entry and the published file.
 function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter'): void {
+	global $pfb;
 	// timeout(1) bounds a stuck run so one-minute invocations cannot pile up.
 	$pfb_metrics_cmd = '/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
 	if ($enabled) {
@@ -7986,6 +7991,8 @@ function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_
 	}
 	install_cron_job('pfblockerng.php metrics', FALSE);
 	unlink_if_exists("{$dir}/pfblockerng.prom");
+	// Re-enabling must log the next outage, not inherit this one's marker.
+	unlink_if_exists("{$pfb['dbdir']}/.metrics_dir_missing");
 }
 
 /**

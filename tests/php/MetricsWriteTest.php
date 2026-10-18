@@ -269,4 +269,65 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame([], $this->cronItems());
 		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
 	}
+
+	public function testThrowingCollectionLeavesNoTempFile(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		config_set_path('filter/rule', ['not-an-array']);
+
+		try {
+			pfb_metrics_write($dir);
+			$this->fail('a collection error must propagate, not be swallowed');
+		} catch (TypeError) {
+		}
+		$this->assertSame([], glob("{$dir}/.pfbmetrics_*"), 'a throw after tempnam() leaves a temp file behind');
+	}
+
+	public function testDirectoryAtTargetFailsPublishAndLeavesNoTempFile(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir("{$dir}/pfblockerng.prom", 0777, TRUE);
+
+		$this->assertFalse(pfb_metrics_write($dir));
+		$this->assertDirectoryExists("{$dir}/pfblockerng.prom");
+		$this->assertSame([], glob("{$dir}/.pfbmetrics_*"));
+	}
+
+	public function testDisableClearsTheDirMissingMarker(): void
+	{
+		$marker = "{$GLOBALS['pfb']['dbdir']}/.metrics_dir_missing";
+		file_put_contents($marker, '');
+
+		pfb_metrics_configure_cron(FALSE, "{$this->root}/export");
+
+		$this->assertFileDoesNotExist($marker);
+	}
+
+	public function testCorruptPassStatusReadsAsNullAndSourceDown(): void
+	{
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_pass_status.json", 'not json');
+
+		$s = pfb_metrics_collect();
+
+		$this->assertNull($s['pass']);
+		$this->assertFalse($s['source_up']['pass_status']);
+	}
+
+	public function testCorruptScheduleStateReadsAsNullAndSourceDown(): void
+	{
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_schedule_state.json", 'not json');
+
+		$s = pfb_metrics_collect();
+
+		$this->assertNull($s['feed_success']);
+		$this->assertFalse($s['source_up']['schedule_state']);
+	}
+
+	public function testEmptyPyStatusFileIsValidAndSourceUp(): void
+	{
+		file_put_contents("{$GLOBALS['pfb']['dnsbldir']}/pfb_py_status.json", '');
+
+		$this->assertTrue(pfb_metrics_collect()['source_up']['py_sync_status']);
+	}
 }
