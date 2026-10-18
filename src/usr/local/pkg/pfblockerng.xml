@@ -94,7 +94,9 @@
 	</custom_php_install_command>
 	<custom_php_pre_deinstall_command>
 		<![CDATA[
-		pfblockerng_php_pre_deinstall_command();
+		if (!pfblockerng_php_pre_deinstall_command()) {
+			exit(PFB_PKG_REMOVAL_ABORT);
+		}
 		]]>
 	</custom_php_pre_deinstall_command>
 	<custom_php_resync_config_command>

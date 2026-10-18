@@ -16,7 +16,9 @@ use PHPUnit\Framework\TestCase;
  *     served until a later apply restores it;
  *   - package removal always hands the Resolver back, stops the proxy and removes its rc script, whatever the
  *     disable pass returned (pfb_dns_proxy_deinstall(), called right after the pass), but never stops the proxy
- *     first: a restore that cannot take the config lock would leave the moved Resolver with nothing serving it;
+ *     first: a restore that cannot take the config lock would leave the moved Resolver with nothing serving it. It
+ *     reports FALSE while a snapshot survives (rc script kept), and the hook then stops the removal
+ *     (DnsProxyUninstallAbortTest);
  *   - a Resolver that is still moved while the saved copy is lost or malformed cannot be put back
  *     automatically: the operator is told through a notice naming the keys to check, not only a log line --
  *     but only for a Resolver carrying OUR marked block, never for an admin's own PROXYv2 setup;
@@ -352,7 +354,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		};
 
 		// When the package is removed
-		pfb_dns_proxy_deinstall();
+		$this->assertTrue(pfb_dns_proxy_deinstall(), 'the Resolver was put back: the removal goes on');
 
 		// Then the proxy was stopped before anything was restored or regenerated ...
 		$this->assertSame([['stop_service', 'pfb_dns_proxy', 0, 'lo0']], array_slice($atStop, 0, 1));
@@ -369,7 +371,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 
 		// When the package is removed
-		pfb_dns_proxy_deinstall();
+		$this->assertFalse(pfb_dns_proxy_deinstall(), 'the Resolver stayed moved: the removal must stop');
 
 		// Then the Resolver could not be put back, so the proxy that serves it was not stopped first
 		$this->assertSame([], $this->serviceCalls());
@@ -385,7 +387,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
 
 		// When the package is removed
-		pfb_dns_proxy_deinstall();
+		$this->assertFalse(pfb_dns_proxy_deinstall(), 'the snapshot survived: the removal must stop');
 
 		// Then the script stays: the proxy keeps serving the moved Resolver, and the operator's notice says to stop it
 		// from Status > Services, which can only run a script that exists
@@ -397,7 +399,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		$GLOBALS['config']['unbound'] = self::originalResolver();
 
-		pfb_dns_proxy_deinstall();
+		$this->assertTrue(pfb_dns_proxy_deinstall(), 'nothing was moved: the removal goes on');
 
 		$this->assertSame([['stop_service', 'pfb_dns_proxy']], $this->serviceCalls());
 		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], 'nothing to regenerate');
@@ -409,7 +411,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		$GLOBALS['config']['unbound'] = self::movedResolver();
 
-		pfb_dns_proxy_deinstall();
+		$this->assertTrue(pfb_dns_proxy_deinstall(), 'no snapshot to restore from: the removal goes on, with the operator told');
 
 		$this->assertSame([['stop_service', 'pfb_dns_proxy']], $this->serviceCalls());
 		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], 'nothing was restored, so nothing to regenerate');
@@ -438,7 +440,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		};
 
 		// When the package is removed
-		pfb_dns_proxy_deinstall();
+		$this->assertTrue(pfb_dns_proxy_deinstall(), 'the Resolver is back (or was never moved): the removal goes on');
 
 		// Then every stop found the script still there (stop_service() can only run an existing script) ...
 		$this->assertNotSame([], $atStop, 'before: the proxy was stopped');
@@ -458,7 +460,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		$hook = substr($source, (int) $start);
 
 		$pass = strpos($hook, 'sync_package_pfblockerng();');
-		$restore = strpos($hook, 'pfb_dns_proxy_deinstall();');
+		$restore = strpos($hook, 'if (!pfb_dns_proxy_deinstall()) {');
 		$this->assertNotFalse($pass, 'the disable pass is a plain statement: its result is not consulted');
 		$this->assertNotFalse($restore, 'package removal must restore the Resolver');
 		$this->assertGreaterThan($pass, $restore, 'the restore follows the disable pass');

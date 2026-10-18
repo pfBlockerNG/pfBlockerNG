@@ -847,6 +847,20 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
+			// issue #3515: the pfB-DNS page and the Resolver move write config.xml under this lock; this whole-section save, and
+			// write_config() with it (it writes the whole copy this request read), must not put back what they wrote since.
+			$pfb_config_lock = pfb_dns_config_lock();
+			if ($pfb_config_lock === NULL) {
+				$input_errors[] = 'DNSBL: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+			}
+		}
+
+		if (!$input_errors) {
+			// The fresh read replaced the config the validation above chose the block page in: take the section from it again.
+			// foreign key — out of ADR-29 gateway scope (dnsbl_webpage is out-of-scope; see CfgGatewayTest $out_of_scope)
+			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', $dnsbl_webpage_file);
+			$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
+
 			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
 			// Refresh $pfb['dconfig'] if it changed -- the pre-facade snapshot would
 			// otherwise clobber a NEWCFG-seeded bystander field at writeSection() below.
@@ -1038,6 +1052,7 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
 			write_config('[pfBlockerNG] save DNSBL settings');
+			unlock($pfb_config_lock);
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header('Location: /pfblockerng/pfblockerng_dnsbl.php');
 			exit;
