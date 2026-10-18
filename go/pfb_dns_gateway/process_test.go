@@ -41,6 +41,7 @@ func TestMain(m *testing.M) {
 //	serve           READY, then answer every QUERY with the query echoed and QR set; exit 0 at EOF
 //	no-ready-exit   exit 3 at once, never READY
 //	no-ready-hang   never READY; wait for EOF
+//	boot-ignores-eof never READY; ignore everything, EOF included
 //	ready-then-exit READY, then exit 0
 //	bad-frame       READY, then a frame whose length is below the minimum
 //	ignore-eof      READY, then ignore everything, EOF included
@@ -61,6 +62,9 @@ func fakeDecider(mode string) int {
 		return 3
 	case "no-ready-hang":
 		_, _ = io.Copy(io.Discard, conn)
+		return 0
+	case "boot-ignores-eof": // a module that is still booting reads no socket, so EOF goes unnoticed
+		time.Sleep(time.Hour)
 		return 0
 	}
 	_, _ = conn.Write(pack(tReady, 0, nil))
