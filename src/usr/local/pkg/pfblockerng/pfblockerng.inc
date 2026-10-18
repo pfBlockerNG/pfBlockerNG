@@ -7830,12 +7830,15 @@ function pfb_metrics_render(array $s): string {
 // Read-only query for the metrics collector: pfb_open_sqlite() can create or repair tables, which a scrape must never do.
 // A missing file reads as no rows; an open or query failure reads as NULL.
 function pfb_metrics_sqlite_rows(string $path, string $sql): ?array {
+	global $pfb;
 	if (!is_file($path)) {
 		return array();
 	}
 	try {
 		$db = new SQLite3($path, SQLITE3_OPEN_READONLY);
 		$db->enableExceptions(TRUE);
+		// Waits out the DNSBL writer's lock like pfb_open_sqlite(), but capped: its 100 s would outlast the cron's 50 s kill and lose every source, not just this one.
+		$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
 		$rows = array();
 		$result = $db->query($sql);
 		while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
@@ -7899,28 +7902,35 @@ function pfb_metrics_collect(): array {
 		return $packets;
 	});
 
-	$dnsbl_groups = $guard('dnsbl_db', function () use (&$up, $pfb, $num): ?array {
-		$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl');
-		$up['dnsbl_db'] = $groups !== NULL;
-		if ($groups === NULL) {
-			return NULL;
-		}
-		$out = array();
-		foreach ($groups as $row) {
-			$out[] = array(
-				'group'   => (string) $row['groupname'],
-				'entries' => $row['entries'] === 'disabled' ? NULL : $num($row['entries']),
-				'counter' => $num($row['counter']),
-			);
-		}
-		return $out;
-	});
+	// With DNSBL off the databases hold nothing to export (the widget shows none either): both sources are up with no series.
+	$dnsbl_groups = NULL;
+	$resolver_queries = NULL;
+	if ($pfb['dnsbl'] === PfbToggle::On) {
+		$dnsbl_groups = $guard('dnsbl_db', function () use (&$up, $pfb, $num): ?array {
+			$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl');
+			$up['dnsbl_db'] = $groups !== NULL;
+			if ($groups === NULL) {
+				return NULL;
+			}
+			$out = array();
+			foreach ($groups as $row) {
+				$out[] = array(
+					'group'   => (string) $row['groupname'],
+					'entries' => $row['entries'] === 'disabled' ? NULL : $num($row['entries']),
+					'counter' => $num($row['counter']),
+				);
+			}
+			return $out;
+		});
 
-	$resolver_queries = $guard('resolver_db', function () use (&$up, $pfb, $num): ?int {
-		$resolver = pfb_metrics_sqlite_rows($pfb['dnsbl_resolver'], 'SELECT totalqueries, queries FROM resolver WHERE row = 0');
-		$up['resolver_db'] = $resolver !== NULL;
-		return empty($resolver) ? NULL : $num($resolver[0]['totalqueries']) + $num($resolver[0]['queries']);
-	});
+		$resolver_queries = $guard('resolver_db', function () use (&$up, $pfb, $num): ?int {
+			$resolver = pfb_metrics_sqlite_rows($pfb['dnsbl_resolver'], 'SELECT totalqueries, queries FROM resolver WHERE row = 0');
+			$up['resolver_db'] = $resolver !== NULL;
+			return empty($resolver) ? NULL : $num($resolver[0]['totalqueries']) + $num($resolver[0]['queries']);
+		});
+	} else {
+		$up['dnsbl_db'] = $up['resolver_db'] = TRUE;
+	}
 
 	$feed_success = $guard('schedule_state', function () use (&$up, $pfb): ?array {
 		$state = pfb_schedule_state_read((string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc'));

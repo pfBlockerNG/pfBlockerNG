@@ -14,6 +14,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_metrics_write')]
 #[CoversFunction('pfb_metrics_configure_cron')]
 #[CoversFunction('pfb_pfctl_tables_raw')]
+#[CoversFunction('pfb_metrics_sqlite_rows')]
 final class MetricsWriteTest extends TestCase
 {
 	private const CRON_CMD    = '/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
@@ -42,6 +43,7 @@ final class MetricsWriteTest extends TestCase
 		$pfb['log']                = "{$this->root}/log/pfblockerng.log";
 		$pfb['errlog']             = "{$this->root}/log/error.log";
 		$pfb['pfctl']              = "{$this->root}/pfctl";
+		$pfb['dnsbl']              = PfbToggle::On;
 
 		// Fake pfctl: prints whatever the test wrote to pfctl.out and exits with the status in pfctl.rc.
 		file_put_contents("{$this->root}/pfctl.out", '');
@@ -444,5 +446,51 @@ final class MetricsWriteTest extends TestCase
 
 		$this->assertFalse($s['source_up']['pfctl']);
 		$this->assertNull($s['ip_tables']);
+	}
+
+	public function testDnsblOffSkipsBothDatabasesAndReportsThemUpWithNoSeries(): void
+	{
+		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER );',
+			"INSERT INTO dnsbl VALUES ('DNSBL_Ads', '2026-10-18 10:00:00', 5000, 17);",
+		]);
+		file_put_contents($GLOBALS['pfb']['dnsbl_resolver'], str_repeat('not a sqlite database ', 64));
+
+		$s = pfb_metrics_collect();
+
+		$this->assertNull($s['dnsbl_groups'], 'a readable database must not be read while DNSBL is off');
+		$this->assertNull($s['resolver_queries']);
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertTrue($s['source_up']['resolver_db'], 'a corrupt database must not be read while DNSBL is off');
+		$this->assertStringNotContainsString('pfblockerng_dnsbl_', pfb_metrics_render($s));
+	}
+
+	public function testALockedDatabaseIsWaitedForNotReportedDown(): void
+	{
+		$path = $GLOBALS['pfb']['dnsbl_info'];
+		$this->sqlite($path, [
+			'CREATE TABLE dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER );',
+			"INSERT INTO dnsbl VALUES ('DNSBL_Ads', '2026-10-18 10:00:00', 5000, 17);",
+		]);
+		$GLOBALS['pfb']['sqlite_timeout'] = 5000;
+		// A second process holds the write lock, as the DNSBL writer does, and releases it shortly after announcing it.
+		$holder = proc_open(
+			[PHP_BINARY, '-r', '$db = new SQLite3($argv[1]); $db->exec("BEGIN EXCLUSIVE"); echo "locked\n"; fflush(STDOUT); usleep(700000); $db->exec("COMMIT");', $path],
+			[1 => ['pipe', 'w']],
+			$pipes
+		);
+		$this->assertIsResource($holder);
+		try {
+			$this->assertSame("locked\n", fgets($pipes[1]), 'the holder must have the database locked before the read starts');
+
+			$s = pfb_metrics_collect();
+		} finally {
+			fclose($pipes[1]);
+			proc_close($holder);
+		}
+
+		$this->assertTrue($s['source_up']['dnsbl_db'], 'a busy database is waited for, not reported down');
+		$this->assertSame([['group' => 'DNSBL_Ads', 'entries' => 5000, 'counter' => 17]], $s['dnsbl_groups']);
 	}
 }
