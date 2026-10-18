@@ -275,7 +275,9 @@ function pfBlockerNG_update_table() {
 	$pfb_filter_rules = config_get_path('filter/rule', []);
 
 	if (!empty($pfb_filter_rules)) {
-		foreach (pfb_rule_alias_packets($pfb_filter_rules, pfSense_get_pf_rules()) as $pfb_alias => $pfb_agg) {
+		// A failed pf read can return a non-array; the helper's array type would TypeError.
+		$pfb_pf_rules = pfSense_get_pf_rules();
+		foreach (pfb_rule_alias_packets($pfb_filter_rules, is_array($pfb_pf_rules) ? $pfb_pf_rules : []) as $pfb_alias => $pfb_agg) {
 			if ($pfb_agg['rule'] > 0) {
 				$pfb_table[$pfb_alias]['img'] = $pfb['up'];
 				$pfb_table[$pfb_alias]['rule'] = $pfb_agg['rule'];

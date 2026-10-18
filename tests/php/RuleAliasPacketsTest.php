@@ -34,7 +34,7 @@ final class RuleAliasPacketsTest extends TestCase
 			['tracker' => 102, 'packets' => 15],
 			['tracker' => 103, 'packets' => 999], // Ping tracker: not tracked
 			['tracker' => 104, 'packets' => 7],
-			['tracker' => 101, 'packets' => 0],   // zero packets: no contribution
+			['tracker' => 101, 'packets' => -5], // negative packets: no contribution
 		];
 
 		$this->assertSame(
