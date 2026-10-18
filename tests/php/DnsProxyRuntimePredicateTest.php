@@ -349,6 +349,51 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->assertTrue(pfb_unbound_py_module_wired(), 'conf with pfb_unbound.py: wired');
 	}
 
+	// The observer (pfb_upstream_observer.py) is the python module Unbound runs in proxy mode while it forwards. It
+	// reports upstream answers to the proxy and never decides a block: its presence must not read as the DNSBL
+	// module being active or wired in Unbound.
+
+	private function writeUnboundConfWithObserver(): void
+	{
+		file_put_contents(
+			"{$this->dir}/unbound.conf",
+			"server:\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_upstream_observer.py\n"
+		);
+	}
+
+	public function testTheObserversPythonKeysAloneDoNotMakeThePythonRuntimeActive(): void
+	{
+		// Given Unbound's python keys naming the observer and no proxy snapshot (a stale state before the next apply)
+		$GLOBALS['config']['unbound'] = ['python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
+		$this->setProxyMode(FALSE);
+
+		// Then the DNSBL runtime is not active: the swap and the retries must not target a module nobody hosts
+		$this->assertFalse(pfb_unbound_py_mode_active());
+	}
+
+	public function testTheObserverInUnboundConfDoesNotMakeTheModuleWiredOutsideProxyMode(): void
+	{
+		$this->setProxyMode(FALSE);
+		$this->setProxyUp(TRUE);
+		$this->writeUnboundConfWithObserver();
+
+		$this->assertFalse(pfb_unbound_py_module_wired(), 'unbound.conf names the observer, not pfb_unbound.py');
+	}
+
+	public function testInProxyModeTheWiringFollowsTheProxyWhateverUnboundConfRunsAsItsPythonScript(): void
+	{
+		$this->setProxyMode(TRUE);
+		$this->writeUnboundConfWithObserver();
+		$GLOBALS['config']['unbound'] = ['python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
+
+		$this->setProxyUp(FALSE);
+		$this->assertFalse(pfb_unbound_py_module_wired(), 'proxy down: not wired, though Unbound loads the observer');
+		$this->assertTrue(pfb_unbound_py_mode_active(), 'the proxy still hosts the module');
+		$this->setProxyUp(TRUE);
+		$this->assertTrue(pfb_unbound_py_module_wired(), 'proxy up: wired, though the conf has no pfb_unbound.py');
+		$this->assertSame(TRUE, pfb_unbound_py_host_running());
+	}
+
 	// -----------------------------------------------------------------------
 	// P4 -- pfb_dnsbl_apply_retry(): re-publish the sentinel only if the host is alive
 	// -----------------------------------------------------------------------
