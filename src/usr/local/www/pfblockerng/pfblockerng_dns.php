@@ -97,7 +97,7 @@ $section->addInput(new Form_Checkbox(
 		. 'Runs pfBlockerNG\'s DNS proxy on the DNS Resolver\'s network interfaces and Listen Port, with or without DNSBL. '
 		. 'The proxy forwards every query to the DNS Resolver with the client\'s address (PROXY protocol v2), so the Resolver sees and logs the real client. '
 		. 'With DNSBL enabled the proxy also answers DNSBL blocks itself and the Resolver no longer loads the DNSBL Python module; '
-		. 'with DNSBL disabled the proxy makes no DNSBL decision and nothing is loaded.'
+		. 'with DNSBL disabled the proxy makes no DNSBL decision and loads no DNSBL module (the Resolver only runs a small inert script, which lets pfSense start the proxy during boot).'
 		. '<div class="infoblock">'
 		. 'Enabling it changes these DNS Resolver settings: Network Interfaces becomes Localhost (the Listen Port is not changed, and must be neither 5353 nor 5354: the proxy and the Resolver use those loopback ports), '
 		. 'SSL/TLS Service is turned off (the proxy serves DNS over TLS with the Resolver\'s certificate instead), '
