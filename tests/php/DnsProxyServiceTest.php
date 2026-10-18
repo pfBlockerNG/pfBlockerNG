@@ -13,8 +13,10 @@ use PHPUnit\Framework\TestCase;
  * Resolver (listen addresses, DoT). Intent pinned here:
  *   - the rc script launches the shipped proxy only through pfb_python.sh, on exactly the saved addresses,
  *     as the unprivileged `unbound` user, with every value shell-quoted and stdio detached;
- *   - it starts only while DNSBL, the proxy toggle and the moved-Resolver snapshot are all set, and never
- *     launches over a survivor;
+ *   - it starts while the moved-Resolver snapshot is set, whatever the proxy toggle and DNSBL say (a restore that
+ *     was abandoned leaves the Resolver moved, and the proxy must keep serving it until a retry succeeds), and never
+ *     launches over a survivor; the proxy listens on the saved Resolver's non-loopback addresses plus loopback, so a
+ *     Resolver saved on Localhost only, or on an interface with no address, still gets a proxy;
  *   - it stops by TERM, KILL at 5 s, giving up (status 1) at 7 s, signalling only live processes that its
  *     own pidfiles name AND whose command line is the proxy's, so a stale pidfile whose pid was reused can
  *     never get an unrelated process killed;
@@ -324,6 +326,19 @@ final class DnsProxyServiceTest extends TestCase
 		return file("{$this->dir}/state/daemon.argv", FILE_IGNORE_NEW_LINES) ?: [];
 	}
 
+	/** @return list<string> the addresses the daemon double was told to --listen on, in order */
+	private function daemonListen(): array
+	{
+		$argv = $this->daemonArgv();
+		$listen = [];
+		foreach ($argv as $i => $arg) {
+			if ($arg === '--listen') {
+				$listen[] = $argv[$i + 1];
+			}
+		}
+		return $listen;
+	}
+
 	private function pidfile(string $name): string
 	{
 		return "{$this->dir}/run/{$name}";
@@ -487,24 +502,12 @@ final class DnsProxyServiceTest extends TestCase
 	// S2/S4 -- the start gate
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{array<string,string>}> */
-	public static function closedGates(): array
+	public function testStartDoesNothingAndLeavesARunningProxyAloneWithoutAMovedResolver(): void
 	{
-		return [
-			'DNSBL off'                      => [['GATE_DNSBL' => '']],
-			'DNS proxy toggle off'           => [['GATE_PROXY' => '']],
-			'Resolver not moved (no snapshot)' => [['GATE_SAVED' => '']],
-		];
-	}
-
-	/** @param array<string,string> $gates */
-	#[DataProvider('closedGates')]
-	public function testStartDoesNothingUnlessDnsblProxyAndMovedResolverAreAllSet(array $gates): void
-	{
-		// Given a proxy that is running and a generated script whose gate has one condition closed
+		// Given a proxy that is running and a generated script whose gate finds no moved-Resolver snapshot
 		$this->moveResolver();
 		$this->generate();
-		$this->arrange($gates, '2', '1', TRUE);
+		$this->arrange(['GATE_SAVED' => ''], '2', '1', TRUE);
 
 		// When it is started (boot)
 		[$status, $output] = $this->rc('start');
@@ -515,21 +518,65 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
 
-	public function testStartWithNoListenAddressLogsAnErrorAndFailsWithoutLaunching(): void
+	/** @return array<string,array{array<string,string>}> */
+	public static function toggleAndDnsblRows(): array
 	{
-		// Given a saved Resolver whose only interface has no address at the last apply
-		$this->moveResolver(FALSE, 'opt9', [], []);
+		return [
+			'DNS proxy toggle off' => [['GATE_PROXY' => '']],
+			'DNSBL off'            => [['GATE_DNSBL' => '']],
+			'both off'             => [['GATE_PROXY' => '', 'GATE_DNSBL' => '']],
+		];
+	}
+
+	/** @param array<string,string> $gates */
+	#[DataProvider('toggleAndDnsblRows')]
+	public function testStartLaunchesWhileTheSnapshotRemainsWhateverTheToggleAndDnsblSay(array $gates): void
+	{
+		// Given a restore that was abandoned (config locked, or the proxy outlived its stop): the toggle or DNSBL is
+		// already off, but the Resolver is still moved and its snapshot kept
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange($gates);
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the proxy is launched: nothing else serves the moved Resolver's port until a retry restores it
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events());
+	}
+
+	/** @return array<string,array{string,array<string,string>,array<string,string>,list<string>}> */
+	public static function loopbackRows(): array
+	{
+		return [
+			'Resolver saved on Localhost only'   => ['lo0', ['lo0' => '127.0.0.1'], ['lo0' => '::1'], ['127.0.0.1', '::1']],
+			'Resolver saved on Localhost and LAN' => ['lo0,lan', ['lo0' => '127.0.0.1', 'lan' => '192.0.2.1'], ['lo0' => '::1'], ['192.0.2.1', '127.0.0.1', '::1']],
+			'Resolver saved on an interface with no address' => ['opt9', [], [], ['127.0.0.1', '::1']],
+		];
+	}
+
+	/**
+	 * @param array<string,string> $v4
+	 * @param array<string,string> $v6
+	 * @param list<string> $expected
+	 */
+	#[DataProvider('loopbackRows')]
+	public function testTheProxyStartsOnLoopbackPlusWhateverAddressesTheSavedInterfacesHave(string $interfaces, array $v4, array $v6, array $expected): void
+	{
+		// Given a Resolver saved on these interfaces: the firewall's own lookups reach the proxy on loopback however
+		// few client-facing addresses there are
+		$this->moveResolver(FALSE, $interfaces, $v4, $v6);
 		$this->generate();
 		$this->arrange();
 
 		// When the service is started
 		[$status, $output] = $this->rc('start');
 
-		// Then the failure is logged and the proxy is never launched listening nowhere
-		$this->assertNotSame(0, $status, "a proxy with no address must fail its start: {$output}");
-		$this->assertNotContains('launch', $this->events());
-		$this->assertContains('log', $this->events(TRUE));
-		$this->assertStringContainsString('listen', (string) file_get_contents("{$this->dir}/state/logger"));
+		// Then the proxy is launched on the saved interfaces' addresses and on loopback, each once
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events());
+		$this->assertSame($expected, $this->daemonListen());
 	}
 
 	public function testLauncherStdFdsAreDetachedToDevNull(): void
