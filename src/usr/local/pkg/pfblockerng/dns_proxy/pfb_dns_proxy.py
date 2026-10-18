@@ -52,13 +52,15 @@ one error line with the reason, and the plain listeners serve (exiting would onl
 5 s with LAN DNS down). There is no self-signed fallback and no passphrase prompt.
 
 Limits: at most 128 TCP and DoT connections at once and 64 per client address, and 512 UDP queries in flight and 256
-per client address. Over a limit the newcomer is turned away (a UDP query is dropped, a connection is closed before
-its DoT handshake): work that may still finish is never cancelled for it. Only a stalled one makes room, and then the
-newcomer is served instead: a UDP query that has waited half --timeout for Unbound, or a TCP or DoT client (one in its
-handshake too) that has been silent for half the idle timeout and has no query at Unbound; the longest waiting or
-silent one, of the newcomer's own address when that is the limit it hit. One log line per burst. The limits bound one
-client address, not the table: enough addresses (spoofed ones, for UDP) can still fill the global limits, and while
-they hold them a newcomer waits for one of theirs to stall. A DoT handshake must finish within 10 s.
+per client address. An address that is over its own limit is turned away (a UDP query is dropped, a connection is
+closed before its DoT handshake) and work that may still finish is never cancelled for it; only stalled work makes
+room, for the newcomer of its own address: a UDP query that has waited half --timeout for Unbound, a TCP or DoT client
+(one in its handshake too) that has been silent for half the idle timeout and has no query at Unbound. Over a global
+limit the same holds for an address that holds as much as the busiest one; an address that holds less takes the
+place of the busiest address's oldest UDP query, or of its longest silent client with no query at Unbound, whatever
+its age, and is turned away when every client of the busier addresses has a query at Unbound. One log line per
+burst. This is a fair share, not immunity: many addresses (spoofed ones, for UDP) that hold little each can still fill
+the global limits, and the busiest address pays for them. A DoT handshake must finish within 10 s.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -82,6 +84,7 @@ import stat
 import struct
 import sys
 import traceback
+from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -535,33 +538,39 @@ class Frontend:
         return task
 
     def spawn_udp_query(self, coro: Coroutine[Any, Any, None], src: str) -> None:
-        """Run the query of one UDP datagram from `src`, unless the table is full for it. Over the limit for `src`, or
-        over the global one, the newcomer is dropped without a reply, as a lost datagram is: the queries waiting may
-        still be answered. The exception is a query that has waited half the timeout for Unbound, as an unanswered
-        name does to the end: the oldest of `src`'s (or of all) goes for the newcomer if it is that old. The scan for a
-        source's oldest runs only when it is at its limit, over at most MAX_UDP_PER_SOURCE of them."""
+        """Run the query of one UDP datagram from `src`, unless the table is full for it.
+
+        Over the limit for `src` the newcomer is dropped without a reply, as a lost datagram is: the queries waiting
+        may still be answered. Over the global limit so is it, unless `src` holds fewer queries than the busiest
+        address, whose oldest query then goes for it whatever its age: a flood of queries nobody answers can only push
+        out its own. The one exception is a query that has waited half the timeout for Unbound, as an unanswered name
+        does to the end: the oldest of `src` goes for its newcomer if it is that old. The scan for an address's oldest
+        runs only when the table or the address is full, over at most MAX_UDP_INFLIGHT entries.
+        """
         now = monotonic()
-        if self._per_source.get(src, 0) >= MAX_UDP_PER_SOURCE:
-            oldest, why = (
-                next(t for t, (owner, _) in self._queries.items() if owner == src),
-                f"{src} has {MAX_UDP_PER_SOURCE}",
-            )
+        held = self._per_source.get(src, 0)
+        displaces = False  # the newcomer takes a query of a busier address, whatever its age
+        if held >= MAX_UDP_PER_SOURCE:
+            owner, why = src, f"{src} has {held}"
         elif len(self._queries) >= MAX_UDP_INFLIGHT:
-            oldest, why = next(iter(self._queries)), f"{len(self._queries)}"
+            busiest = max(self._per_source, key=self._per_source.__getitem__)
+            displaces = self._per_source[busiest] > held
+            owner, why = busiest if displaces else src, f"{len(self._queries)}"
         else:
-            oldest, why = None, ""
-        if oldest is not None:
-            stalled = now - self._queries[oldest][1] >= self.timeout / 2
-            if stalled:
+            owner, why = None, ""
+        if owner is not None:
+            oldest = next(task for task, (holder, _) in self._queries.items() if holder == owner)
+            reclaim = displaces or now - self._queries[oldest][1] >= self.timeout / 2
+            if reclaim:
                 oldest.cancel()
                 self._forget_udp_query(oldest)
             if not self.udp_overloaded:  # one line per flood, not per packet
                 self.udp_overloaded = True
                 shim.log_warn(
-                    f"{why} UDP queries in flight: dropping new ones, or the oldest once it has waited half the "
-                    "timeout, until they drain"
+                    f"{why} UDP queries in flight: a new one takes the place of the oldest of a busier address, or "
+                    "of its own once that has waited half the timeout, and is dropped otherwise, until they drain"
                 )
-            if not stalled:
+            if not reclaim:
                 coro.close()
                 return
         task = self.spawn(coro)
@@ -622,30 +631,42 @@ class Frontend:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     def _make_room(self, src: str) -> bool:
-        """A TCP or DoT connection from `src` is about to be served: False if it is to be turned away. Over the limit
-        for `src`, or over the global one, it is, so a client that is using its connection is never closed for it. Only
-        a client silent for half the idle timeout, and with no query at Unbound, is: the longest silent of `src`'s
-        when that is the limit, else of all. A pass over at most MAX_TCP_CLIENTS entries per connection."""
-        crowd = [writer for writer, client in self._clients.items() if client.src == src]
-        if len(crowd) >= MAX_TCP_PER_SOURCE:
-            pool, why = crowd, f"{src} holds {len(crowd)} TCP connections"
+        """A TCP or DoT connection from `src` is about to be served: False if it is to be turned away.
+
+        Over the limit for `src` it is, so a client that is using its connection is never closed for it; so it is over
+        the global one, unless `src` holds fewer connections than the busiest address. Only a client with no query at
+        Unbound can be closed for a newcomer: the longest silent of the busiest address, whatever its age, for a
+        lighter newcomer; for one that is over its own limit or as heavy as the busiest address, a client of its own
+        that has been silent for half the idle timeout. A pass over at most MAX_TCP_CLIENTS entries per connection.
+        """
+        held = Counter(client.src for client in self._clients.values())
+        own = held[src]
+        if own >= MAX_TCP_PER_SOURCE:
+            why, busier = f"{src} holds {own} TCP connections", False
         elif len(self._clients) >= MAX_TCP_CLIENTS:
-            pool, why = list(self._clients), f"TCP client limit of {MAX_TCP_CLIENTS} reached"
+            why, busier = f"TCP client limit of {MAX_TCP_CLIENTS} reached", max(held.values()) > own
         else:
             return True
-        now = monotonic()
-        stalled = [
-            w for w in pool if not self._clients[w].busy and now - self._clients[w].active >= TCP_IDLE_TIMEOUT / 2
-        ]
         if not self.tcp_overloaded:  # one line per burst, not per connection
             self.tcp_overloaded = True
             shim.log_warn(
-                f"{why}: turning new connections away, or closing a client silent for half the idle timeout, "
-                "until the clients drain"
+                f"{why}: a new connection takes the place of a silent client of a busier address, or of its own once "
+                "that has been silent for half the idle timeout, and is turned away otherwise, until the clients drain"
             )
-        if not stalled:
+        now = monotonic()
+        victim: asyncio.StreamWriter | None
+        if busier:
+            candidates = [w for w, client in self._clients.items() if not client.busy and held[client.src] > own]
+            victim = max(candidates, key=lambda w: (held[self._clients[w].src], -self._clients[w].active), default=None)
+        else:
+            candidates = [
+                w
+                for w, client in self._clients.items()
+                if client.src == src and not client.busy and now - client.active >= TCP_IDLE_TIMEOUT / 2
+            ]
+            victim = min(candidates, key=lambda w: self._clients[w].active, default=None)
+        if victim is None:
             return False
-        victim = min(stalled, key=lambda writer: self._clients[writer].active)
         del self._clients[victim]
         _hang_up(victim)
         return True

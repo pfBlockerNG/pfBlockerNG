@@ -166,43 +166,52 @@ def test_the_in_flight_limits_default_to_512_in_all_and_256_per_source() -> None
     assert (pfb_dns_proxy.MAX_UDP_INFLIGHT, pfb_dns_proxy.MAX_UDP_PER_SOURCE) == (512, 256)
 
 
+class _Watched(pfb_dns_proxy.Frontend):
+    """A Frontend that counts the UDP datagrams it has decided on (admitted or dropped), so a test acts once the table
+    is in the state it needs, and that keeps each query inside resolve() until `release` is set when `holding`: a query
+    Unbound has not answered yet. `answered` lists (client address, query id) of the queries that got their reply."""
+
+    def __init__(self, *args: Any, holding: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.holding = holding
+        self.release = asyncio.Event()
+        self.decided = 0
+        self.answered: list[tuple[str, int]] = []
+        self._decision = asyncio.Event()
+
+    def spawn_udp_query(self, coro: Any, src: str) -> None:
+        super().spawn_udp_query(coro, src)
+        self.decided += 1
+        self._decision.set()
+
+    async def until_decided(self, count: int) -> None:
+        while self.decided < count:
+            self._decision.clear()
+            await asyncio.wait_for(self._decision.wait(), WATCHDOG)  # a stuck run fails here, not by sleeping
+
+    async def resolve(self, wire: bytes, client_ip: str, forward: Any, **kwargs: Any) -> bytes | None:
+        if self.holding:
+            await self.release.wait()
+        reply = await super().resolve(wire, client_ip, forward, **kwargs)
+        self.answered.append((client_ip, dnswire.parse(wire).id))  # not reached by a query cancelled while it waited
+        return reply
+
+
 def test_a_busy_address_with_120_queries_in_flight_has_every_one_of_them_answered(booted: Booted) -> None:
     """Issue #3515 gate: one address (a NAT'd network, a downstream forwarder, 127.0.0.1) at 400 qps against 0.3 s of
     Unbound latency keeps about 120 queries in flight. The per-source limit of 64 dropped the oldest for every newcomer,
     so each was cancelled just before its answer: 4% were answered."""
     count = 120
 
-    class Holding(pfb_dns_proxy.Frontend):
-        """Keeps every query inside resolve() until all of them have been received, so all 120 are in flight at once."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            self.received = 0
-            self.all_received = asyncio.Event()
-            self.release = asyncio.Event()
-            self.answered: list[int] = []
-
-        def spawn_udp_query(self, coro: Any, src: str) -> None:
-            super().spawn_udp_query(coro, src)
-            self.received += 1
-            if self.received == count:
-                self.all_received.set()
-
-        async def resolve(self, wire: bytes, client_ip: str, forward: Any, **kwargs: Any) -> bytes | None:
-            await self.release.wait()
-            reply = await super().resolve(wire, client_ip, forward, **kwargs)
-            self.answered.append(dnswire.parse(wire).id)  # not reached by a query cancelled while it waited
-            return reply
-
-    async def scenario() -> tuple[list[int], list[tuple[int, int, int]]]:
+    async def scenario() -> tuple[list[tuple[str, int]], list[tuple[int, int, int]]]:
         async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
-            frontend = Holding(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
+            frontend = _Watched(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG, holding=True)
             [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
             transport, client = await udp_client(server, "127.0.0.2")
             try:
                 for qid in range(count):
                     transport.sendto(build_query(ALLOWED, qid=qid))
-                await asyncio.wait_for(frontend.all_received.wait(), WATCHDOG)
+                await frontend.until_decided(count)  # all 120 are in flight before the first is answered
                 frontend.release.set()
                 await drained(frontend)
                 replies = [dnswire.parse(wire) for wire in await client.until(len(frontend.answered))]
@@ -212,7 +221,7 @@ def test_a_busy_address_with_120_queries_in_flight_has_every_one_of_them_answere
                 await frontend.stop()
 
     answered, replies = asyncio.run(scenario())
-    assert answered == list(range(count))
+    assert answered == [("127.0.0.2", qid) for qid in range(count)]
     assert replies == [(qid, 0, 1) for qid in range(count)]
 
 
@@ -250,9 +259,102 @@ def test_a_source_at_its_udp_limit_has_its_newcomers_dropped_and_no_other_source
     assert (answered.id, answered.rcode, len(answered.answers)) == (0x77, 0, 1)
 
 
+SENTINEL = 0x5E5E
+
+
+async def _flushed(transport: asyncio.DatagramTransport, client: Any) -> list[bytes]:
+    """The replies `client` was sent before this call, once all of them have arrived: a datagram socket delivers in
+    order, so the answer to one more query (which the idle table admits) comes last."""
+    transport.sendto(build_query(ALLOWED, qid=SENTINEL))
+    while SENTINEL not in _ids(client.replies):
+        await client.until(len(client.replies) + 1)
+    return [reply for reply in client.replies if dnswire.parse(reply).id != SENTINEL]
+
+
+def test_two_addresses_holding_the_udp_table_with_unanswerable_names_do_not_keep_a_third_from_being_answered(
+    booted: Booted, clock: ManualClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #3515 gate: two addresses at the per-address limit hold the whole table (256 + 256), and with the newcomer
+    always the one dropped no other address got a query through. An address that holds less takes the place of the
+    oldest query of the one that holds most, so the flood costs only the flooders."""
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_PER_SOURCE", 4)
+    monkeypatch.setattr(pfb_dns_proxy, "MAX_UDP_INFLIGHT", 7)
+
+    async def scenario() -> tuple[int, list[bytes], list[bytes], list[bytes]]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE), unanswered_prefix="slow") as upstream:
+            frontend = _Watched(booted.module, ("127.0.0.1", upstream.port), timeout=0.3)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+            heavy, heavy_replies = await udp_client(server, "127.0.0.2")
+            light, light_replies = await udp_client(server, "127.0.0.3")
+            third, third_replies = await udp_client(server, "127.0.0.4")
+            try:
+                for qid in range(6):  # four are admitted, two are over the address's limit
+                    heavy.sendto(build_query(f"slow{qid}.example.", qid=qid))
+                for qid in range(3):
+                    light.sendto(build_query(f"slow{qid}.example.", qid=qid))
+                await frontend.until_decided(9)
+                held = len(frontend._queries)  # the table is full before the third address asks
+                third.sendto(build_query(ALLOWED, qid=0x77))
+                await frontend.until_decided(10)
+                await drained(frontend)  # every admitted query has ended: answered, or timed out as SERVFAIL
+                heavy_all = await _flushed(heavy, heavy_replies)
+                light_all = await _flushed(light, light_replies)
+                third_all = await _flushed(third, third_replies)
+                return held, heavy_all, light_all, third_all
+            finally:
+                for transport in (heavy, light, third):
+                    transport.close()
+                await frontend.stop()
+
+    held, heavy, light, third = asyncio.run(scenario())
+    assert held == 7
+    assert [dnswire.parse(reply).id for reply in third] == [0x77] and dnswire.parse(third[0]).rcode == 0
+    assert (_ids(heavy), _ids(light)) == ([1, 2, 3], [0, 1, 2])  # the heaviest address's oldest (id 0) was displaced
+
+
+def test_a_busy_address_with_120_queries_in_flight_keeps_every_answer_while_two_floods_hold_the_rest_of_the_table(
+    booted: Booted, clock: ManualClock
+) -> None:
+    """Issue #3515 gate, both findings at the default limits: a NAT'd network at 400 qps against 0.3 s of Unbound
+    latency has 120 queries in flight while two flooding addresses hold 256 unanswered ones each. Each of the 120 takes
+    the place of a flooder's oldest query: all are answered, none is dropped, the flooders end up with equal shares."""
+    flooders = ("192.0.2.1", "192.0.2.2")
+
+    async def scenario() -> tuple[int, dict[str, int], list[int], list[tuple[str, int]]]:
+        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
+            frontend = _Watched(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG, holding=True)
+            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
+            floods = _Hold()
+            for n in range(256):
+                for flooder in flooders:
+                    frontend.spawn_udp_query(floods.query(f"{flooder}/{n}"), flooder)
+            held = len(frontend._queries)
+            transport, client = await udp_client(server, "127.0.0.9")
+            try:
+                for qid in range(120):
+                    transport.sendto(build_query(ALLOWED, qid=qid))
+                await frontend.until_decided(512 + 120)
+                shares = dict(frontend._per_source)
+                frontend.release.set()
+                floods.release.set()
+                await drained(frontend)
+                replies = [dnswire.parse(wire) for wire in await client.until(len(frontend.answered))]
+                return held, shares, sorted(r.id for r in replies if r.rcode == 0 and r.answers), frontend.answered
+            finally:
+                transport.close()
+                await frontend.stop()
+
+    held, shares, answered_ids, answered = asyncio.run(scenario())
+    assert held == 512
+    assert shares == {"192.0.2.1": 196, "192.0.2.2": 196, "127.0.0.9": 120}
+    assert answered_ids == list(range(120))
+    assert sorted(answered) == [("127.0.0.9", qid) for qid in range(120)]
+
+
 UDP_LIMITS = [
     pytest.param("MAX_UDP_PER_SOURCE", ["192.0.2.1"] * 4, id="source-limit"),
-    pytest.param("MAX_UDP_INFLIGHT", ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"], id="global-limit"),
+    # the newcomer holds as many queries as the busiest address does, so no other address makes room for it
+    pytest.param("MAX_UDP_INFLIGHT", ["192.0.2.1", "192.0.2.2", "192.0.2.1", "192.0.2.1"], id="global-limit"),
 ]
 
 
@@ -261,8 +363,7 @@ def test_a_udp_query_at_a_limit_is_dropped_for_a_newcomer_only_once_it_has_waite
     limit: str, sources: list[str], clock: ManualClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A query that is still young may be answered: the newcomer is dropped, not it. One that has waited half the
-    timeout for Unbound will not be (an unanswered name holds its slot to the end): it is dropped for the newcomer, and
-    at the global limit it may be another address's."""
+    timeout for Unbound will not be (an unanswered name holds its slot to the end): it is dropped for the newcomer."""
     monkeypatch.setattr(pfb_dns_proxy, limit, 2)
 
     async def scenario() -> tuple[tuple[list[str], list[str], str], tuple[list[str], list[str]]]:
