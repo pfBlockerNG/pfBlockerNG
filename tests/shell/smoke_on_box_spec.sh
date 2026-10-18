@@ -776,6 +776,134 @@ STUBEOF
     The contents of file "$GO_TC_LOG" should include 'run-smoke'
   End
 
+  # The REAL go_toolchain.py behind the EXIT trap: the exit paths the stub above cannot reach (issue #3513).
+  real_go_leg() {
+    go_leg
+    GO_TC_PARENT="${WORK}/gotmp"
+    mkdir -p "$GO_TC_PARENT"
+    export GO_TC_PARENT REAL_SCRIPTS="${PFB_ROOT}/scripts"
+    cat > "${FAKE_ROOT}/scripts/go_toolchain.py" <<'STUBEOF'
+#!/usr/bin/env python3
+import os, shlex, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, os.environ["REAL_SCRIPTS"])
+import go_toolchain as g
+with open(os.environ["GO_TC_LOG"], "a") as log:
+    log.write("toolchain " + " ".join(sys.argv[1:]) + "\n")
+if sys.argv[1] == "install":
+    root = Path(tempfile.mkdtemp(prefix=g.PREFIX, dir=os.environ["GO_TC_PARENT"]))
+    (root / g.MARKER).write_text(g.MARKER_TEXT)
+    (root / "go" / "bin").mkdir(parents=True)
+    for key, value in g.environment(root).items():
+        print(f"export {key}={shlex.quote(value)}")
+else:
+    if os.environ.get("GO_TC_REMOVE_FAIL"):
+        sys.stderr.write("go_toolchain: simulated failure\n")
+        sys.exit(1)
+    try:
+        g.remove(Path(sys.argv[2]))
+    except g.ToolchainError as exc:
+        sys.stderr.write(f"go_toolchain: {exc}\n")
+        sys.exit(1)
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/go_toolchain.py"
+  }
+
+  ls_gotmp() { ls "$GO_TC_PARENT"; }
+
+  It 'removes the real toolchain directory after a clean run'
+    real_go_leg
+    with_go_module
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The result of function ls_gotmp should equal ''
+  End
+
+  It 'exits 1 and says so when the removal fails after a successful run'
+    real_go_leg
+    with_go_module
+    GO_TC_REMOVE_FAIL=1
+    export GO_TC_REMOVE_FAIL
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 1
+    The stderr should include 'was not removed'
+  End
+
+  It 'keeps a failing run status (7) when the removal also fails'
+    real_go_leg
+    with_go_module
+    GO_TC_REMOVE_FAIL=1
+    RUN_SMOKE_EXIT=7
+    export GO_TC_REMOVE_FAIL RUN_SMOKE_EXIT
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 7
+    The stderr should include 'was not removed'
+  End
+
+  It 'exits 143 on TERM during the run and still removes the real toolchain'
+    real_go_leg
+    with_go_module
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+kill -TERM "$PPID"
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/run-smoke.sh"
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 143
+    The result of function ls_gotmp should equal ''
+  End
+
+  It 'exits 130 on INT during the run and still removes the real toolchain'
+    real_go_leg
+    with_go_module
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+kill -INT "$PPID"
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/run-smoke.sh"
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 130
+    The result of function ls_gotmp should equal ''
+  End
+
+  It 'refuses a toolchain directory swapped for a symlink to a victim, and the victim survives'
+    real_go_leg
+    with_go_module
+    VICTIM="${WORK}/victim"
+    mkdir -p "$VICTIM"
+    printf 'precious\n' > "${VICTIM}/keep"
+    export VICTIM
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+rm -rf "$PFB_GO_ROOT"
+ln -s "$VICTIM" "$PFB_GO_ROOT"
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/run-smoke.sh"
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 1
+    The stderr should include 'refusing to delete'
+    The contents of file "${VICTIM}/keep" should equal 'precious'
+  End
+
+  It 'refuses a managed-name directory that lost its marker'
+    real_go_leg
+    with_go_module
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+rm -rf "$PFB_GO_ROOT"
+mkdir -p "$PFB_GO_ROOT/nested"
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/run-smoke.sh"
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 1
+    The stderr should include 'refusing to delete'
+  End
+
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #
   #
   # The config echo (config abi=... pfsense_ref=... civm_ref=...) fires BEFORE the
