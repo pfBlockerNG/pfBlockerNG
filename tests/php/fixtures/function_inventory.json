@@ -9596,6 +9596,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'/var/tmp/node_exporter'"
+            },
+            {
+                "name": "lock_wait_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "10.0"
             }
         ]
     },
@@ -9616,6 +9623,46 @@
                 "variadic": false,
                 "type": "bool",
                 "default": null
+            }
+        ]
+    },
+    "pfb_metrics_lock": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "wait_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": null
+            }
+        ]
+    },
+    "pfb_metrics_publish": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "body",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "lock_wait_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "10.0"
             }
         ]
     },

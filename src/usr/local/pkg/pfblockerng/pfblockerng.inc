@@ -7990,7 +7990,46 @@ function pfb_metrics_collect(): array {
 	);
 }
 
-// Publishes pfblockerng.prom atomically for node_exporter's textfile collector.
+// Exclusive lock that orders a publish against an enable or disable; the handle, or FALSE when it is not free within $wait_s.
+// Closing the handle releases it.
+function pfb_metrics_lock(float $wait_s) {
+	global $pfb;
+	$lock = @fopen("{$pfb['dbdir']}/.metrics.lock", 'c');
+	if ($lock !== FALSE && !pfb_flock_bounded($lock, LOCK_EX, $wait_s)) {
+		fclose($lock);
+		return FALSE;
+	}
+	return $lock;
+}
+
+// Publishes a rendered body atomically for node_exporter's textfile collector, unless the export was disabled since
+// it was rendered: a disable removes the sentinel under the same lock, so it cannot be undone by a run already underway.
+function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.0): bool {
+	global $pfb;
+	$lock = pfb_metrics_lock($lock_wait_s);
+	if ($lock === FALSE) {
+		return FALSE;
+	}
+	try {
+		if (!file_exists("{$pfb['dbdir']}/.metrics_enabled")) {
+			return FALSE;
+		}
+		$tmp = @tempnam($dir, '.pfbmetrics_');
+		if ($tmp === FALSE) {
+			return FALSE;
+		}
+		if (@file_put_contents($tmp, $body) === FALSE || !@chmod($tmp, 0644) || !@rename($tmp, "{$dir}/pfblockerng.prom")) {
+			@unlink($tmp);
+			return FALSE;
+		}
+		@unlink("{$pfb['dbdir']}/.metrics_dir_missing");
+		return TRUE;
+	} finally {
+		fclose($lock);
+	}
+}
+
+// Collects, renders and publishes pfblockerng.prom; the body of the `pfblockerng.php metrics` verb.
 function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 	global $pfb;
 	$marker = "{$pfb['dbdir']}/.metrics_dir_missing";
@@ -8002,35 +8041,36 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 		}
 		return FALSE;
 	}
-	// Rendered before tempnam(): a throw from collection must not leave a temp file behind.
-	$body = pfb_metrics_render(pfb_metrics_collect());
-	$tmp = @tempnam($dir, '.pfbmetrics_');
-	if ($tmp === FALSE) {
-		return FALSE;
-	}
-	if (@file_put_contents($tmp, $body) === FALSE || !@chmod($tmp, 0644) || !@rename($tmp, "{$dir}/pfblockerng.prom")) {
-		@unlink($tmp);
-		return FALSE;
-	}
-	@unlink($marker);
-	return TRUE;
+	// Collected and rendered before the lock: collection can take seconds and must not hold up an enable or disable.
+	return pfb_metrics_publish(pfb_metrics_render(pfb_metrics_collect()), $dir);
 }
 
 // Runs the verb every minute while the option is on; turning it off removes the entry and the published file.
-function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter'): void {
+// Both directions hold the lock; one that stays held past $lock_wait_s is wedged, so the change goes ahead rather than block a save.
+function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter', float $lock_wait_s = 10.0): void {
 	global $pfb;
 	// timeout(1) bounds a stuck run so one-minute invocations cannot pile up.
 	$pfb_metrics_cmd = '/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
-	if ($enabled) {
-		if (!pfblockerng_cron_exists($pfb_metrics_cmd, '*', '*', '*', '*')) {
-			install_cron_job($pfb_metrics_cmd, TRUE, '*', '*', '*', '*', '*', 'root');
+	$sentinel = "{$pfb['dbdir']}/.metrics_enabled";
+	$lock = pfb_metrics_lock($lock_wait_s);
+	try {
+		if ($enabled) {
+			@touch($sentinel);
+			if (!pfblockerng_cron_exists($pfb_metrics_cmd, '*', '*', '*', '*')) {
+				install_cron_job($pfb_metrics_cmd, TRUE, '*', '*', '*', '*', '*', 'root');
+			}
+			return;
 		}
-		return;
+		unlink_if_exists($sentinel);
+		install_cron_job('pfblockerng.php metrics', FALSE);
+		unlink_if_exists("{$dir}/pfblockerng.prom");
+		// Re-enabling must log the next outage, not inherit this one's marker.
+		unlink_if_exists("{$pfb['dbdir']}/.metrics_dir_missing");
+	} finally {
+		if ($lock !== FALSE) {
+			fclose($lock);
+		}
 	}
-	install_cron_job('pfblockerng.php metrics', FALSE);
-	unlink_if_exists("{$dir}/pfblockerng.prom");
-	// Re-enabling must log the next outage, not inherit this one's marker.
-	unlink_if_exists("{$pfb['dbdir']}/.metrics_dir_missing");
 }
 
 /**

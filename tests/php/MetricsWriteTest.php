@@ -90,6 +90,17 @@ final class MetricsWriteTest extends TestCase
 		));
 	}
 
+	private function sentinel(): string
+	{
+		return "{$GLOBALS['pfb']['dbdir']}/.metrics_enabled";
+	}
+
+	/** Turns the export on the way a sync pass does, which is what lets a write publish. */
+	private function enableExport(string $dir): void
+	{
+		pfb_metrics_configure_cron(TRUE, $dir);
+	}
+
 	public function testCollectReadsDnsblGroupsAndResolverTotals(): void
 	{
 		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
@@ -294,6 +305,7 @@ final class MetricsWriteTest extends TestCase
 	{
 		$dir = "{$this->root}/export";
 		mkdir($dir);
+		$this->enableExport($dir);
 
 		$this->assertTrue(pfb_metrics_write($dir));
 
@@ -307,6 +319,7 @@ final class MetricsWriteTest extends TestCase
 	public function testMissingDirReturnsFalseAndLogsOncePerOutage(): void
 	{
 		$dir = "{$this->root}/node_exporter";
+		$this->enableExport($dir);
 
 		$this->assertFalse(pfb_metrics_write($dir));
 		$this->assertFalse(pfb_metrics_write($dir));
@@ -347,6 +360,7 @@ final class MetricsWriteTest extends TestCase
 	{
 		$dir = "{$this->root}/export";
 		mkdir($dir);
+		$this->enableExport($dir);
 		file_put_contents("{$this->root}/pfctl.out", "-p-a---\tpfB_Deny_v4\n\tAddresses: 1200\n");
 		config_set_path('filter/rule', ['not-an-array']);	// makes pfb_rule_alias_packets() throw a TypeError
 
@@ -364,6 +378,7 @@ final class MetricsWriteTest extends TestCase
 	{
 		$dir = "{$this->root}/export";
 		mkdir("{$dir}/pfblockerng.prom", 0777, TRUE);
+		$this->enableExport($dir);
 
 		$this->assertFalse(pfb_metrics_write($dir));
 		$this->assertDirectoryExists("{$dir}/pfblockerng.prom");
@@ -492,5 +507,91 @@ final class MetricsWriteTest extends TestCase
 
 		$this->assertTrue($s['source_up']['dnsbl_db'], 'a busy database is waited for, not reported down');
 		$this->assertSame([['group' => 'DNSBL_Ads', 'entries' => 5000, 'counter' => 17]], $s['dnsbl_groups']);
+	}
+
+	public function testWriteWithoutTheEnabledSentinelPublishesNothing(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+
+		$this->assertFalse(pfb_metrics_write($dir));
+
+		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
+		$this->assertSame([], glob("{$dir}/.pfbmetrics_*"));
+	}
+
+	public function testEnableCreatesTheSentinelAndDisableRemovesItWithTheCronAndTheFile(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+
+		$this->assertFileDoesNotExist($this->sentinel(), 'before: the export starts disabled');
+		pfb_metrics_configure_cron(TRUE, $dir);
+		pfb_metrics_configure_cron(TRUE, $dir);
+		$this->assertFileExists($this->sentinel(), 'enabling must leave the sentinel, also when the cron entry already exists');
+		$this->assertTrue(pfb_metrics_write($dir));
+
+		pfb_metrics_configure_cron(FALSE, $dir);
+
+		$this->assertFileDoesNotExist($this->sentinel());
+		$this->assertSame([], $this->cronItems());
+		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
+	}
+
+	public function testARenderedBodyIsNotPublishedAfterTheExportIsDisabled(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		$body = pfb_metrics_render(pfb_metrics_collect());	// the run that began before the disable
+
+		pfb_metrics_configure_cron(FALSE, $dir);
+
+		$this->assertFalse(pfb_metrics_publish($body, $dir));
+		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom", 'a disable must not be undone by a run that started before it');
+		$this->assertSame([], glob("{$dir}/.pfbmetrics_*"));
+	}
+
+	public function testPublishWaitsForTheLockAndGivesUpWhileAnotherRunHoldsIt(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		$held = fopen("{$GLOBALS['pfb']['dbdir']}/.metrics.lock", 'c');
+		$this->assertNotFalse($held);
+		$this->assertTrue(flock($held, LOCK_EX));
+
+		try {
+			$this->assertFalse(pfb_metrics_publish('held', $dir, 0.05), 'a publish must not run while the lock is held elsewhere');
+			$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
+		} finally {
+			flock($held, LOCK_UN);
+			fclose($held);
+		}
+
+		$this->assertTrue(pfb_metrics_publish('released', $dir, 0.05));
+		$this->assertSame('released', file_get_contents("{$dir}/pfblockerng.prom"));
+	}
+
+	public function testDisableProceedsWithoutTheLockWhenItIsWedged(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		file_put_contents("{$dir}/pfblockerng.prom", 'stale');
+		$held = fopen("{$GLOBALS['pfb']['dbdir']}/.metrics.lock", 'c');
+		$this->assertNotFalse($held);
+		$this->assertTrue(flock($held, LOCK_EX));
+
+		try {
+			pfb_metrics_configure_cron(FALSE, $dir, 0.05);
+		} finally {
+			flock($held, LOCK_UN);
+			fclose($held);
+		}
+
+		$this->assertFileDoesNotExist($this->sentinel(), 'a wedged lock holder must not block a disable');
+		$this->assertSame([], $this->cronItems());
+		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
 	}
 }
