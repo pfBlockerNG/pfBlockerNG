@@ -419,6 +419,44 @@ final class DnsProxyServiceTest extends TestCase
 			'the proxy reads the DoT port from config.xml itself; the rc script passes no port');
 	}
 
+	/** @return array<string,array{?string,string}> the Resolver's `port` as config.xml holds it => the port the proxy is told to bind */
+	public static function listenPortRows(): array
+	{
+		return [
+			'Listen Port absent (the default)' => [NULL, '53'],
+			'Listen Port 53'                   => ['53', '53'],
+			'Listen Port 5300'                 => ['5300', '5300'],
+			'Listen Port 65535'                => ['65535', '65535'],
+			'Listen Port empty'                => ['', '53'],
+			'Listen Port a service name'       => ['domain', '53'],
+			'Listen Port 0'                    => ['0', '53'],
+			'Listen Port above 65535'          => ['65536', '53'],
+			'Listen Port with a shell payload' => ['5300; reboot', '53'],
+		];
+	}
+
+	#[DataProvider('listenPortRows')]
+	public function testTheProxyBindsTheResolversListenPortAndFallsBackToTheDefaultWhenItIsNotAPort(?string $configured, string $expected): void
+	{
+		// Given a moved Resolver whose Listen Port is $configured (Unbound keeps it on loopback; the proxy takes it on the LAN)
+		$this->moveResolver();
+		if ($configured !== NULL) {
+			$GLOBALS['config']['unbound']['port'] = $configured;
+		}
+
+		// When the rc service is generated and started under dash
+		$this->generate();
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then the proxy is launched with exactly one --port, the Resolver's port or 53, and nothing else of the value reaches the script
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$argv = $this->daemonArgv();
+		$this->assertSame(1, count(array_keys($argv, '--port', TRUE)), 'exactly one --port');
+		$this->assertSame($expected, $argv[(int) array_search('--port', $argv, TRUE) + 1]);
+		$this->assertStringNotContainsString('reboot', $this->rcText());
+	}
+
 	// -----------------------------------------------------------------------
 	// S2/S4 -- the start gate
 	// -----------------------------------------------------------------------

@@ -502,10 +502,45 @@ if (!function_exists('config_read_file')) {
 	// this is a deliberate no-op: pfb_global() calls it to pick up any in-flight
 	// changes, but in tests the caller already seeded $GLOBALS['config'] before
 	// calling pfb_global(). Records each call's arguments (so tests can assert
-	// whether, and how, a path reloaded config); returns [] per the stub's type.
+	// whether, and how, a path reloaded config); returns [] per the stub's type. Also records whether the
+	// named config lock was held at that instant ($GLOBALS['pfb_test_config_read_lock_held']) and runs an optional
+	// $GLOBALS['pfb_test_config_read_hook'] callable, which stands in for the file on disk: a test uses it to
+	// replace the in-memory config with what another process wrote since this one read it.
 	function config_read_file(bool $use_backup = false, bool $use_cache = true): array {
 		$GLOBALS['pfb_test_config_read_calls'][] = [$use_backup, $use_cache];
+		$GLOBALS['pfb_test_config_read_lock_held'][] = !empty($GLOBALS['pfb_test_lock_held']);
+		if (is_callable($GLOBALS['pfb_test_config_read_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_config_read_hook']();
+		}
 		return [];
+	}
+}
+
+if (!function_exists('try_lock')) {
+	// pfSense util.inc: a named flock() polled once a second for up to $timeout seconds; the handle on success,
+	// NULL when the lock stayed taken. Locks are per open handle, so a process that already holds the name waits
+	// on itself: a second acquire while $GLOBALS['pfb_test_lock_held'] is set fails like the timeout it would
+	// be. Every attempt is recorded in $GLOBALS['pfb_test_lock_events'] as ['try_lock', name, timeout];
+	// $GLOBALS['pfb_test_try_lock_fail'] makes another process hold the name.
+	function try_lock($lock, $timeout = 5) {
+		$GLOBALS['pfb_test_lock_events'][] = ['try_lock', $lock, $timeout];
+		if (!empty($GLOBALS['pfb_test_try_lock_fail']) || !empty($GLOBALS['pfb_test_lock_held'])) {
+			return NULL;
+		}
+		$GLOBALS['pfb_test_lock_held'] = TRUE;
+		return fopen('php://memory', 'r');
+	}
+}
+
+if (!function_exists('unlock')) {
+	// pfSense util.inc: release the handle try_lock() returned (anything else is ignored, as upstream).
+	function unlock($cfglckkey = 0) {
+		if (!is_resource($cfglckkey)) {
+			return;
+		}
+		$GLOBALS['pfb_test_lock_events'][] = ['unlock'];
+		$GLOBALS['pfb_test_lock_held'] = FALSE;
+		fclose($cfglckkey);
 	}
 }
 

@@ -848,6 +848,16 @@ if ($_POST) {
 		);
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
+		// issue #3515: hold the config lock pfb_dns_proxy_resolver() takes, from a fresh read of config.xml through
+		// write_config(): the Resolver move writes its snapshot marker into the section this save replaces.
+		$pfb_config_lock = NULL;
+		if (!$input_errors) {
+			$pfb_config_lock = pfb_dnsbl_config_lock();
+			if ($pfb_config_lock === NULL) {
+				$input_errors[] = 'DNSBL: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+			}
+		}
+
 		if (!$input_errors) {
 			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
 			// Refresh $pfb['dconfig'] if it changed -- the pre-facade snapshot would
@@ -1019,8 +1029,8 @@ if ($_POST) {
 			// dnsbl_dot_block*). Those leaf writes MUST therefore follow the section write — done
 			// before it they are silently clobbered before write_config() flushes, so enabling DNS
 			// Redirect or DoT/DoQ Block never persists. (safesearch_doh* target a different section.)
-			// issue #3515: pfb_dns_proxy_resolver() writes the Resolver snapshot marker into this same section from
-			// the apply; one that finished since the page loaded must survive the replacement below.
+			// issue #3515: pfb_dns_proxy_resolver() writes the Resolver snapshot marker into this same section from the
+			// apply; take it from the config read afresh under the lock, or the replacement below erases it.
 			$pfb['dconfig']['pfb_dns_proxy_saved'] = PfbConfig::read('dnsbl/pfb_dns_proxy_saved');
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			PfbConfig::write('dnsbl/pfb_psl_include_private', $psl_include_private);
@@ -1045,6 +1055,7 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
 			write_config('[pfBlockerNG] save DNSBL settings');
+			unlock($pfb_config_lock);
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header('Location: /pfblockerng/pfblockerng_dnsbl.php');
 			exit;
