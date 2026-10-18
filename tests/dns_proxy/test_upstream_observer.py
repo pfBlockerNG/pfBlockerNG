@@ -29,7 +29,7 @@ import pfb_dns_proxy
 import pytest
 import unbound_shim as shim
 from frontend_constants import PROTO_DIR, Booted
-from frontend_helpers import WATCHDOG, build_query, udp_exchange
+from frontend_helpers import WATCHDOG, build_query, serving, udp_exchange
 
 OBSERVER = PROTO_DIR / "pfb_upstream_observer.py"
 T = TypeVar("T")
@@ -457,19 +457,8 @@ def _serving(module_dir: Path, during: Callable[[tuple[str, int]], Awaitable[T]]
     )
 
     async def scenario() -> T:
-        stop = asyncio.Event()
-        ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
-        task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
-        try:
-            await asyncio.wait({ready, task}, timeout=WATCHDOG, return_when=asyncio.FIRST_COMPLETED)
-            if task.done():
-                task.result()
-            if not ready.done():
-                pytest.fail("STUCK: serve() was not ready in time")
-            return await during(ready.result()[0])
-        finally:
-            stop.set()
-            await asyncio.wait_for(task, WATCHDOG)
+        async with serving(args) as bound:
+            return await during(bound[0])
 
     return asyncio.run(scenario())
 

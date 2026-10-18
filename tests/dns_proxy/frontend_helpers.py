@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import re
@@ -13,14 +14,16 @@ import struct
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Self
+from typing import Self, TextIO
+from unittest import mock
 
 import dnswire
 import pfb_dns_proxy
+import pytest
 from frontend_constants import PROTO_DIR
 
 WATCHDOG = 10.0  # stuck-run guard for socket waits; never asserted on
@@ -391,3 +394,47 @@ def running_proxy(
         child.wait()
         if child.stderr is not None:
             child.stderr.close()
+
+
+class _LogTap:
+    """Stands in for sys.__stderr__ while serve() runs: passes every write on, and sets `ready` from the 'listening on'
+    log line the proxy prints."""
+
+    def __init__(self, real: TextIO, ready: asyncio.Future[list[tuple[str, int]]]) -> None:
+        self.real, self.ready, self.text = real, ready, ""
+
+    def write(self, text: str) -> int:
+        self.text += text
+        if not self.ready.done() and (match := re.search(r"listening on ([^\n]*); upstream ", self.text)):
+            self.ready.set_result([_bound(entry) for entry in match.group(1).split(", ")])
+        return self.real.write(text)
+
+    def flush(self) -> None:
+        self.real.flush()
+
+
+def _bound(entry: str) -> tuple[str, int]:
+    host, port = entry.removesuffix(" (DoT)").rsplit(":", 1)
+    return host, int(port)
+
+
+@contextlib.asynccontextmanager
+async def serving(args: argparse.Namespace) -> AsyncIterator[list[tuple[str, int]]]:
+    """pfb_dns_proxy.serve(args) as a task of this process, until it logs 'listening on': yields the bound
+    (host, port)s, UDP+TCP first, then DoT. Leaving the block cancels the task, which shuts the proxy down."""
+    assert sys.__stderr__ is not None
+    ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
+    tap = _LogTap(sys.__stderr__, ready)
+    with mock.patch.object(sys, "__stderr__", tap):
+        task = asyncio.create_task(pfb_dns_proxy.serve(args))
+        try:
+            await asyncio.wait({ready, task}, timeout=WATCHDOG, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                task.result()  # serve() ended before it listened: raise the reason it gave
+            if not ready.done():
+                pytest.fail(f"STUCK: serve() did not listen in time; it logged:\n{tap.text}")
+            yield ready.result()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait_for(task, WATCHDOG)

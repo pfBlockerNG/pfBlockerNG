@@ -30,6 +30,7 @@ from frontend_helpers import (
     running_proxy,
     serve_dot,
     serve_plain,
+    serving,
     tcp_exchange,
     udp_client,
     udp_exchange,
@@ -307,21 +308,9 @@ def _serve_and_ask(argv: list[str], wire: bytes) -> tuple[bytes, bool, int]:
         async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
             args = pfb_dns_proxy.parse_args(["--listen", "127.0.0.1", "--port", "0", *argv])
             args.upstream = f"127.0.0.1:{upstream.port}"
-            stop = asyncio.Event()
-            ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
-            task = asyncio.create_task(pfb_dns_proxy.serve(args, stop=stop, on_ready=ready.set_result))
-            try:
-                await asyncio.wait({ready, task}, timeout=WATCHDOG, return_when=asyncio.FIRST_COMPLETED)
-                if task.done():
-                    task.result()  # serve() ended before it was ready: raise the reason it gave
-                if not ready.done():
-                    pytest.fail("STUCK: serve() was not ready in time")
-                [server] = ready.result()
+            async with serving(args) as [server]:
                 reply = (await udp_exchange(server, wire))[0]
                 return reply, os.path.lexists(pfb_dns_proxy.OBSERVER_SOCKET), len(upstream.headers)
-            finally:
-                stop.set()
-                await asyncio.wait_for(task, WATCHDOG)
 
     return asyncio.run(scenario())
 
