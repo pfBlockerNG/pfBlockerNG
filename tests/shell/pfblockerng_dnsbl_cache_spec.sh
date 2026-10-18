@@ -53,6 +53,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # The DNS proxy's Unbound observer ships under dns_proxy/ and lands flat in the chroot (pfb_upstream_observer.py).
     mkdir -p "${pfbpkgdir}/dns_proxy"
     echo 'OBSERVER-v1' > "${pfbpkgdir}/dns_proxy/pfb_upstream_observer.py"
+    echo 'OBSERVER-INC-v1' > "${pfbpkgdir}/dns_proxy/pfb_upstream_observer_include.inc"
   }
 
   cleanup_sandbox() {
@@ -118,6 +119,28 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     echo 'OBSERVER-STALE' > "${pfbchroot}/pfb_upstream_observer.py"
     When call dc stage
     The contents of file "${pfbchroot}/pfb_upstream_observer.py" should equal 'OBSERVER-v1'
+    cleanup_sandbox
+  End
+
+  It 'stage copies the observer boot hook (pfSense requires <python_script>_include.inc) flat into the chroot'
+    setup_sandbox
+    When call dc stage
+    The contents of file "${pfbchroot}/pfb_upstream_observer_include.inc" should equal 'OBSERVER-INC-v1'
+    cleanup_sandbox
+  End
+
+  hook_teardown_before_after() {
+    if [ -f "${pfbchroot}/pfb_upstream_observer_include.inc" ]; then echo staged; else echo absent; fi
+    dnsbl_cache teardown 2>/dev/null
+    if [ -f "${pfbchroot}/pfb_upstream_observer_include.inc" ]; then echo staged; else echo absent; fi
+  }
+
+  It 'teardown removes the staged observer boot hook'
+    setup_sandbox
+    dc stage
+    When call hook_teardown_before_after
+    The line 1 of output should equal 'staged'
+    The line 2 of output should equal 'absent'
     cleanup_sandbox
   End
 

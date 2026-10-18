@@ -344,6 +344,11 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 	 */
 	public function testMissingManifestDispatchesAnUpdatePassWhenTheProxyHostsThePythonModule(): void
 	{
+		// The proxy hosts the module only while DNSBL is on, and the tick re-reads the toggles through pfb_global()
+		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
+		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
+		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
+		$GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 		$GLOBALS['config']['unbound'] = ['python' => '', 'python_script' => ''];
 		$keys = [];
 		foreach (['active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {

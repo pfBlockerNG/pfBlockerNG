@@ -385,6 +385,8 @@ final class PfbWidgetOracleTest extends TestCase
 			$keys[$key] = ['present' => $value !== null, 'value' => $value];
 		}
 		$GLOBALS['config'] = [];
+		// The proxy hosts the module only while DNSBL is on: the widget's own $pfb is the one the predicates read.
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 		config_set_path(
 			'installedpackages/pfblockerngdns/config/0/pfb_dns_saved',
 			base64_encode((string) json_encode($keys))

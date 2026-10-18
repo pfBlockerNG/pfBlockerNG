@@ -232,7 +232,7 @@ final class DnsProxyServiceTest extends TestCase
 	 */
 	private function arrange(array $gates = [], string $termAfter = '2', string $killAfter = '1', bool $running = FALSE): void
 	{
-		$gates += ['GATE_DNSBL' => 'on', 'GATE_PROXY' => 'on', 'GATE_SAVED' => 'eyJwb3J0IjoxfQ=='];
+		$gates += ['GATE_DNSBL' => 'on', 'GATE_PROXY' => 'on', 'GATE_SAVED' => (string) config_get_path(self::SAVED, '')];
 		$state = "{$this->dir}/state";
 		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter];
 		file_put_contents("{$state}/scenario", implode('', array_map(
@@ -367,7 +367,7 @@ final class DnsProxyServiceTest extends TestCase
 				'-o', "{$this->dir}/log/dns_proxy.log",
 				'/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py',
 				'--listen', '192.0.2.1', '--listen', '2001:db8::1', '--listen', '127.0.0.1', '--listen', '::1',
-				'--port', '53', '--upstream', '127.0.0.1:5353', '--module-dir', '/var/unbound', '--user', 'unbound',
+				'--port', '53', '--upstream', '127.0.0.1:5353', '--module-dir', '/var/unbound', '--user', 'unbound', '--no-module',
 			],
 			$this->daemonArgv()
 		);
@@ -577,6 +577,72 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(0, $status, "rc start failed: {$output}");
 		$this->assertSame(['launch'], $this->events());
 		$this->assertSame($expected, $this->daemonListen());
+	}
+
+	/** @return array<string,array{bool,bool,string}> DNSBL on, Resolver forwarding, the one module flag expected ('' = none) */
+	public static function moduleFlagRows(): array
+	{
+		return [
+			'DNSBL off: there is no module to host'          => [FALSE, FALSE, '--no-module'],
+			'DNSBL off, Resolver forwarding'                 => [FALSE, TRUE, '--no-module'],
+			'DNSBL on, Resolver recursing: no upstream to observe' => [TRUE, FALSE, ''],
+			'DNSBL on, Resolver forwarding: upstream blocks are reported' => [TRUE, TRUE, '--observer'],
+		];
+	}
+
+	#[DataProvider('moduleFlagRows')]
+	public function testTheProxyBootsTheModuleOnlyWithDnsblAndListensForTheObserverOnlyWhileForwarding(bool $dnsbl, bool $forwarding, string $flag): void
+	{
+		// Given pfBlockerNG enabled, DNSBL on or off, and the Resolver forwarding or not
+		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		$GLOBALS['pfb']['dnsbl'] = $dnsbl ? PfbToggle::On : PfbToggle::Off;
+		if ($forwarding) {
+			config_set_path('unbound/forwarding', '');
+		}
+		$this->moveResolver();
+
+		// When the service is generated and started
+		$this->generate();
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then the daemon is launched with exactly the module flag that mode needs
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$argv = $this->daemonArgv();
+		$this->assertSame($flag === '--no-module', in_array('--no-module', $argv, TRUE), '--no-module iff DNSBL is off');
+		$this->assertSame($flag === '--observer', in_array('--observer', $argv, TRUE), '--observer iff DNSBL is on and the Resolver forwards');
+	}
+
+	public function testAMarkerThatIsNotAValidSnapshotLaunchesNothingAndFailsLoudly(): void
+	{
+		// Given a stored marker that is non-empty but no valid Resolver snapshot (hand-edited, truncated): the PHP side
+		// sees no snapshot while a gate that only asks "non-empty?" would start a proxy on loopback alone
+		config_set_path(self::SAVED, 'not-a-snapshot');
+		$this->generate();
+		$this->arrange();
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then it logs one error and exits 1, without launching or stopping anything
+		$this->assertSame(1, $status, "rc start must fail: {$output}");
+		$this->assertSame(['log'], $this->events(TRUE), 'one error line, no daemon, no signal');
+		$this->assertStringContainsString('not a valid', (string) file_get_contents("{$this->dir}/state/logger"));
+	}
+
+	public function testAMarkerThatChangedSinceTheScriptWasWrittenLaunchesNothing(): void
+	{
+		// Given a script written for one snapshot, and a different one stored now (restored and moved again since)
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange(['GATE_SAVED' => base64_encode('{"another":"snapshot"}')]);
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the stale script does nothing: the next apply regenerates it for the stored snapshot
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame([], $this->events(TRUE));
 	}
 
 	public function testLauncherStdFdsAreDetachedToDevNull(): void

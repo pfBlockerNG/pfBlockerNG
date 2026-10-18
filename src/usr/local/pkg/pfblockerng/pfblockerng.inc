@@ -3552,8 +3552,9 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 const PFB_DNS_PROXY_UNBOUND_PORT = '5353';
 const PFB_DNS_PROXY_UNBOUND_PLAIN_PORT = '5354';
 const PFB_DNS_PROXY_LOOPBACK = ['127.0.0.1', '::1'];
-// Unbound's python_script value (and, with .py, its file in /var/unbound) while the DNS proxy hosts the module and the
-// Resolver forwards; see pfb_dns_proxy_observer_wanted().
+// Unbound's python_script value (and, with .py, its file in /var/unbound) whenever pfB-DNS fronts the Resolver: a script
+// that only reports what the upstream answered, inert unless the proxy was started with --observer. Unbound loads it in
+// every pfB-DNS mode because pfSense runs the start hook <python_script>_include.inc, which starts pfB-DNS during boot.
 const PFB_DNS_PROXY_OBSERVER = 'pfb_upstream_observer';
 // The first and last line of the block pfb_dns_proxy_resolver() appends to custom_options. Everything that finds,
 // replaces or reports the block keys on these lines, never on a user's own PROXYv2 setup.
@@ -4015,12 +4016,18 @@ function pfb_dns_proxy_listen(array $saved): array {
 
 /**
  * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from the SAVED Resolver
- * (listen addresses, DoT) and its Listen Port (unbound/port, which stays on loopback for Unbound; 53 when absent or
- * not a port). Written on every call, like the other pfBlockerNG rc services.
+ * (listen addresses, DoT), its Listen Port (unbound/port, which stays on loopback for Unbound; 53 when absent or
+ * not a port) and DNSBL's runtime state ($pfb as pfb_global() left it, so callers hold a fresh one). Written on every
+ * call, like the other pfBlockerNG rc services.
  *
- * Start: only while the moved-Resolver snapshot is set (not the toggle or DNSBL: an abandoned restore leaves the Resolver
- * moved with them off, and the proxy keeps serving it); never over a survivor; through pfb_python.sh only; every
- * address shell-quoted. Loopback is always among the addresses, so a Resolver saved on Localhost only, or on an
+ * DNSBL on: the proxy boots pfb_unbound.py, and while the Resolver forwards it also listens for the upstream observer
+ * Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query.
+ *
+ * Start: only while the moved-Resolver snapshot is set and is still the one this script was written for (the stored
+ * marker is baked in and compared; not the toggle or DNSBL: an abandoned restore leaves the Resolver moved with them
+ * off, and the proxy keeps serving it); a stored marker that is no valid snapshot logs one error and exits 1 instead of
+ * starting a proxy that could not bind; never over a survivor; through pfb_python.sh only; every address
+ * shell-quoted. Loopback is always among the addresses, so a Resolver saved on Localhost only, or on an
  * interface with no address, still gets a proxy. Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled
  * only while its command line is the proxy's.
  */
@@ -4038,6 +4045,7 @@ function pfb_dns_proxy_service(): void {
 		$addresses .= ' --listen ' . escapeshellarg($address);
 	}
 	$dot = ($saved !== NULL && $saved['enablessl']['present']) ? ' --dot --pfsense-config /cf/conf/config.xml' : '';
+	$module = !pfb_dnsbl_active() ? ' --no-module' : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
 
 	$port = pfb_dns_proxy_port();
 
@@ -4049,18 +4057,33 @@ function pfb_dns_proxy_service(): void {
 	# collide with it. The snapshot alone decides, not the toggle or DNSBL: a restore that was abandoned (config locked,
 	# proxy survived its stop) leaves the Resolver moved with those off, and the proxy must keep serving it
 	savedcheck="\$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngdns/config/pfb_dns_saved)"
-	if [ -z "\${savedcheck}" ]; then
-		exit
+
+EOF;
+	if ($saved === NULL) {
+		// Nothing valid to serve: quiet when the marker is empty (the normal off state), loud when one is stored that is no snapshot
+		$rc['start'] .= <<<EOF
+	if [ -n "\${savedcheck}" ]; then
+		/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: pfb_dns_saved is not a valid Resolver snapshot - not started"
+		exit 1
 	fi
+	exit 0
+
+EOF;
+	} else {
+		// The addresses below come from this snapshot: a marker that has changed since (restored, moved again) is for the next apply to regenerate
+		$marker = escapeshellarg((string) PfbConfig::read('dns/pfb_dns_saved'));
+		$rc['start'] .= <<<EOF
+	[ "\${savedcheck}" = {$marker} ] || exit 0
 
 	# Ensure all processes are stopped; never launch over a survivor
 	rc_stop || return 1
 
 	# Detach std fds (#662): the supervisor must not hold the caller's pipe; the proxy's own output goes to its log
-	/usr/sbin/daemon -r -R 5 -t pfb_dns_proxy -P {$daemonpid} -p {$childpid} -o {$log} /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound{$dot} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_dns_proxy -P {$daemonpid} -p {$childpid} -o {$log} /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound{$dot}{$module} </dev/null >/dev/null 2>&1
 	/usr/bin/logger -p daemon.info -t pfb_dns_proxy "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy started"
 
 EOF;
+	}
 	$rc['stop']	= <<<EOF
 
 	# Terminate the DNS proxy and its supervisor and wait for both to exit: TERM at 0 s, KILL at 5 s, give up at 7 s.
@@ -4151,10 +4174,12 @@ function pfb_dns_proxy_deinstall(): void {
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
 	}
+	// A snapshot that survived the restore (config locked, proxy outlived its stop) means the proxy still serves the moved
+	// Resolver: its script stays, so the operator's notice (stop it from Status > Services) can be followed.
 	if (pfb_dns_proxy_saved() === NULL) {
 		stop_service('pfb_dns_proxy');
+		unlink_if_exists(PFB_DNS_PROXY_RCFILE);
 	}
-	unlink_if_exists(PFB_DNS_PROXY_RCFILE);
 }
 
 
@@ -9867,11 +9892,12 @@ function pfb_unbound_dnsbl($mode) {
 	$pfbupdate = FALSE;
 	$log = '';
 
-	// issue #3515: while the DNS proxy owns the python module (the Resolver is moved) or is on, Unbound must not
-	// load it; the toggle term keeps this seam in step with pfb_unbound_python() when the move is refused.
+	// issue #3515: while the DNS proxy fronts the Resolver (the snapshot), or pfB-DNS is on (the toggle term keeps this
+	// seam in step with pfb_unbound_python() when the move is refused), Unbound must not load the DNSBL module.
 	$module = $mode == 'enabled' && $pfb['pfb_dns'] !== PfbToggle::On && pfb_dns_proxy_saved() === NULL;
-	// The python script Unbound is given: pfb_unbound.py, the proxy mode's upstream observer, or none.
-	$script = $module ? 'pfb_unbound.py' : (pfb_dns_proxy_observer_wanted($mode) ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL);
+	// The python script Unbound is given: pfb_unbound.py, or, while the proxy fronts the Resolver, its upstream observer
+	// in every mode (inert unless the proxy listens for it; it is what makes pfSense run the boot hook), or none.
+	$script = $module ? 'pfb_unbound.py' : (pfb_dns_proxy_saved() !== NULL ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL);
 
 	// Collect Unbound custom option pfSense conf line
 	$pfb['unboundconfig']	= config_get_path('unbound/custom_options');
@@ -9994,9 +10020,10 @@ function pfb_unbound_dnsbl($mode) {
 			$conf[] = "\npython:\npython-script: {$script}\n";
 		}
 
-		if ($mode == 'enabled') {
+		if ($mode == 'enabled' || $script !== NULL) {
 			// #468: the shipped-file list lives ONLY in 'dnsbl_cache stage' (single
-			// source of truth); it also mkdirs the chroot + nullfs mount-point dirs.
+			// source of truth); it also mkdirs the chroot + nullfs mount-point dirs. It stays staged while Unbound
+			// is given any python script: the observer's boot hook is a staged file too.
 			exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
 		} else {
 			exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache teardown >/dev/null 2>&1');
@@ -12236,6 +12263,22 @@ function pfb_dnsbl_active(): bool {
 	return ($pfb['enable'] ?? NULL) === PfbToggle::On && ($pfb['dnsbl'] ?? NULL) === PfbToggle::On;
 }
 
+/** pfB-DNS is wanted: pfBlockerNG enabled, the pfB-DNS toggle on and the Resolver enabled, with DNSBL on or off. */
+function pfb_dns_wanted(): bool {
+	global $pfb;
+
+	return ($pfb['enable'] ?? NULL) === PfbToggle::On && ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On &&
+	    ($pfb['unbound_state'] ?? NULL) === PfbToggle::On;
+}
+
+/**
+ * Does the DNS proxy host the DNSBL module: it fronts the Resolver (a snapshot, which an abandoned restore keeps) and
+ * DNSBL is on? With DNSBL off it hosts nothing and only forwards, so nothing about DNSBL's runtime applies to it.
+ */
+function pfb_dns_proxy_hosts_module(): bool {
+	return pfb_dns_proxy_saved() !== NULL && pfb_dnsbl_active();
+}
+
 /** The port the proxy serves clients on: the Resolver's Listen Port when it is a port, else 53. */
 function pfb_dns_proxy_port(): string {
 	$port = config_get_path('unbound/port', '');
@@ -12337,16 +12380,6 @@ function pfb_dns_proxy_refuse(string $why): bool {
 	pfb_logger("\n{$text}", 2);
 	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
 	return FALSE;
-}
-
-/**
- * Does Unbound run the upstream-block observer (PFB_DNS_PROXY_OBSERVER, a python script that only reports what the
- * upstream answered) instead of the DNSBL module? Only while the DNS proxy hosts the module (the Resolver is moved)
- * and the Resolver forwards: recursion has no upstream block to see. Unbound itself rewrites RA, AA and drops the EDE
- * of every reply, so only a callback inside it sees them.
- */
-function pfb_dns_proxy_observer_wanted(string $mode): bool {
-	return $mode == 'enabled' && config_path_enabled('unbound', 'forwarding') && pfb_dns_proxy_saved() !== NULL;
 }
 
 /**
@@ -12574,8 +12607,9 @@ function pfb_dns_proxy_resolver_locked(bool $on): bool {
 }
 
 
-// Unbound python configuration file
-function pfb_unbound_python($mode) {
+// Unbound python configuration file. $dns_wanted is the apply pass's own answer to pfb_dns_wanted(), taken from the same
+// runtime view as $mode: a removal pass turns pfBlockerNG off there, which the config re-read below would turn back on.
+function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	global $pfb;
 	pfb_global();
 
@@ -12584,13 +12618,16 @@ function pfb_unbound_python($mode) {
 
 	$pfbpython = FALSE;
 
-	// issue #3515: while the DNS proxy is on it hosts the python module; Unbound must not load it. A restore the proxy
-	// outlived keeps the snapshot, and so the proxy as host (pfb_unbound_dnsbl() reads the snapshot the same way).
-	// While the proxy hosts it and the Resolver forwards, Unbound runs the upstream observer instead.
-	$proxy = $mode == 'enabled' && $pfb['pfb_dns'] === PfbToggle::On;
+	// issue #3515: pfB-DNS fronts the Resolver whenever it is wanted, DNSBL on or off ($mode only says whether DNSBL
+	// is). A restore the proxy outlived keeps the snapshot, and so the proxy fronting it (pfb_unbound_dnsbl() reads the
+	// snapshot the same way). Unbound loads the DNSBL module only while nothing fronts it; while the proxy does it runs
+	// the observer in every mode: inert unless the proxy hosts the module and the Resolver forwards, and the one script
+	// that makes pfSense run the boot hook (pfb_upstream_observer_include.inc) which starts pfB-DNS before the packages.
+	$proxy = $dns_wanted ?? pfb_dns_wanted();
 	$moved = pfb_dns_proxy_resolver($proxy);
-	$module = $mode == 'enabled' && !$proxy && pfb_dns_proxy_saved() === NULL;
-	$observer = pfb_dns_proxy_observer_wanted($mode);
+	$fronted = pfb_dns_proxy_saved() !== NULL;
+	$module = $mode == 'enabled' && !$proxy && !$fronted;
+	$observer = $fronted;
 
 	// Ensure log file permissions are set as 'unbound:unbound' (unified.log excluded:
 	// the host daemon is now its sole writer, as root — ADR-38 Amendment 1).
@@ -12711,8 +12748,9 @@ function pfb_unbound_python($mode) {
 		$pfbpython = TRUE;
 	}
 
-	// Set flag to unmount python folders after the next reboot is completed to avoid crashing Unbound
-	if ($mode == 'disabled') {
+	// Set flag to unmount python folders after the next reboot is completed to avoid crashing Unbound (the observer,
+	// while pfB-DNS fronts the Resolver, still runs in it)
+	if ($mode == 'disabled' && !$observer) {
 		$pfb['dnsbl_python_unmount'] = TRUE;
 	}
 	return $pfbpython;
@@ -13125,16 +13163,16 @@ function pfb_stop_start_unbound($type) {
 
 // ADR-10: is the Python DNSBL runtime the LIVE resolver mode? The zero-downtime swap only applies when the
 // in-memory matcher (pfb_unbound.py) is the active blocklist source: Unbound's python keys in config.xml
-// (the source of truth, not a generated file) or, issue #3515, the DNS proxy hosting it (Resolver snapshot).
+// (the source of truth, not a generated file) or, issue #3515, the DNS proxy hosting it (Resolver snapshot, DNSBL on).
 function pfb_unbound_py_mode_active() {
 	return (config_path_enabled('unbound', 'python') &&
 		config_get_path('unbound/python_script') == 'pfb_unbound') ||
-		pfb_dns_proxy_saved() !== NULL;
+		pfb_dns_proxy_hosts_module();
 }
 
 // issue #3515: liveness of the process hosting the DNSBL module -- the DNS proxy in proxy mode, else Unbound.
 function pfb_unbound_py_host_running(): bool {
-	return pfb_dns_proxy_saved() !== NULL ? pfb_dns_proxy_running() : is_process_running('unbound');
+	return pfb_dns_proxy_hosts_module() ? pfb_dns_proxy_running() : is_process_running('unbound');
 }
 
 // Is the module wired into its host? Proxy mode: the proxy loads it itself, so wired == running.
@@ -13142,7 +13180,7 @@ function pfb_unbound_py_host_running(): bool {
 function pfb_unbound_py_module_wired(): bool {
 	global $pfb;
 
-	if (pfb_dns_proxy_saved() !== NULL) {
+	if (pfb_dns_proxy_hosts_module()) {
 		return pfb_dns_proxy_running();
 	}
 
@@ -13340,7 +13378,7 @@ function pfb_dnsbl_apply_ledger_update(): bool {
 		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
 	} else {
 		// issue #3515: in proxy mode the module host is the DNS proxy, not Unbound
-		$host = (pfb_dns_proxy_saved() !== NULL) ? 'the DNS proxy is' : 'Unbound';
+		$host = pfb_dns_proxy_hosts_module() ? 'the DNS proxy is' : 'Unbound';
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply',
 			"DNSBL apply not converged -- {$host} not fully live with pfb_unbound.py; see error.log",
 			$pfb['dbdir']);
@@ -18484,8 +18522,9 @@ function pfb_dnsbl_cache($mode) {
 	$a_earlyshellcmd = config_get_path('system/earlyshellcmd', []);
 	$a_shellcmdsettings = config_get_path('installedpackages/shellcmdsettings/config', []);
 
-	// Register only when DNSBL is enabled AND /var is a RAM disk; else deregister.
-	$want = ($pfb['dnsbl'] === PfbToggle::On && config_path_enabled('system', 'use_mfs_tmpvar'));
+	// Register only while DNSBL or pfB-DNS is on AND /var is a RAM disk; else deregister. pfB-DNS needs the restore too:
+	// it re-stages pfb_upstream_observer_include.inc, the boot hook that starts the proxy before the packages start.
+	$want = (($pfb['dnsbl'] === PfbToggle::On || pfb_dns_wanted()) && config_path_enabled('system', 'use_mfs_tmpvar'));
 
 	if ($want) {
 		// Add earlyshellcmd settings (distinct 'dnsbl_cache restore' string).
