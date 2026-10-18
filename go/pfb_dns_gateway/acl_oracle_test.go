@@ -410,7 +410,10 @@ func runOracleGrid(t *testing.T, tree oracleTree, extra []string, wantUnmatched 
 		got := a.Lookup(c)
 		out := un.probe(t, c)
 		t.Logf("client=%-24v reference=%-18q go=%-8v unbound=%s", c, ref, got, out)
-
+		// allow_cookie: Unbound refuses a query without a valid DNS cookie, which the gateway cannot judge; it forwards.
+		if ref == "allow_cookie" {
+			continue
+		}
 		want, known := outcomeAction[out]
 		if !known {
 			t.Errorf("%v: Unbound's outcome %q is not dropped, refused or answered", c, out)
