@@ -136,6 +136,17 @@ EOF
     cleanup
   End
 
+  It 'fails loudly, and does not run the other architecture, when an arm64 machine has only the amd64 binary'
+    setup
+    ship amd64
+    machine=arm64
+    When call run_wrapper
+    The status should equal 1
+    The stderr should include 'freebsd-arm64'
+    The contents of file "${log}" should equal "uname -p"
+    cleanup
+  End
+
   It 'fails loudly when its own binary is not executable'
     setup
     ship amd64 arm64
