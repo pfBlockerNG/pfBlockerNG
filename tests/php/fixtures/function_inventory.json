@@ -1773,6 +1773,19 @@
             }
         ]
     },
+    "pfb_dns_proxy_resolver_locked": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_restart": {
         "returnsRef": false,
         "returnType": "void",
@@ -2074,6 +2087,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dnsbl_config_lock": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": []
     },
     "pfb_dnsbl_converged": {
         "returnsRef": false,
