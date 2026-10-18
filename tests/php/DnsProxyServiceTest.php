@@ -1432,8 +1432,30 @@ final class DnsProxyServiceTest extends TestCase
 			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
 			'--pfsense-config', '/cf/conf/config.xml', ...$tls, ...$module,
-			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', ...self::DECIDER,
+			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', $this->readyFile(), ...self::DECIDER,
 		];
+	}
+
+	public function testTheGatewayIsAskedToPublishItsPidBeforeTheDeciderSeparatorAndNothingElseIs(): void
+	{
+		// Given a package that ships pfb-dns, and the same box with no payload (a legacy package)
+		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1']);
+		$gateway = $this->gateway();
+
+		// When the rc service is generated and started
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the gateway gets exactly one --ready-file, ahead of `--`, and the decider is handed none
+		$separator = (int) array_search('--', $argv, TRUE);
+		$this->assertSame(1, count(array_keys($argv, '--ready-file', TRUE)), 'exactly one --ready-file');
+		$flag = (int) array_search('--ready-file', $argv, TRUE);
+		$this->assertLessThan($separator, $flag, '--ready-file belongs to the gateway, so it comes before the separator');
+		$this->assertSame($this->readyFile(), $argv[$flag + 1]);
+		$this->assertNotContains('--ready-file', array_slice($argv, $separator), 'the decider never publishes the pid: it is not the gateway');
+
+		// And the Python listener of a legacy package publishes its own pid: it is its own front end, so it carries the flag
+		$this->generateWith("{$this->dir}/no_payload");
+		$this->assertStringContainsString(' --ready-file ' . escapeshellarg($GLOBALS['pfb']['dns_proxy_ready']), $this->rcText());
 	}
 
 	/** @return list<string> the daemon argv after the rc script started under dash */
