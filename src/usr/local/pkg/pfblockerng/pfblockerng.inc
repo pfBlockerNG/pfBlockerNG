@@ -4028,7 +4028,10 @@ function pfb_dns_proxy_listen(array $saved): array {
  * call, like the other pfBlockerNG rc services.
  *
  * DNSBL on: the proxy boots pfb_unbound.py, and while the Resolver forwards it also listens for the upstream observer
- * Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query.
+ * Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query, and with the DNS Reply
+ * Logging preference on (dnsbl/pfb_py_reply, the one the DNSBL module's own log reads) it also logs each reply it
+ * forwards to dns_reply.log (--reply-log); with it off nothing is logged. A running proxy reads its flags only at start,
+ * so a changed preference changes this script, which restarts the proxy (pfb_dns_proxy_ensure_running()).
  *
  * Start: only while the moved-Resolver snapshot is set and is still the one this script was written for (the stored
  * marker is baked in and compared; not the toggle or DNSBL: an abandoned restore leaves the Resolver moved with them
@@ -4042,6 +4045,8 @@ function pfb_dns_proxy_listen(array $saved): array {
  * bounce it. A restart stops first and starts only when that stop succeeded.
  */
 function pfb_dns_proxy_service(): void {
+	global $pfb;
+
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
 	$daemonpid = PFB_DNS_PROXY_DAEMON_PIDFILE;
 	$childpid = PFB_DNS_PROXY_PIDFILE;
@@ -4055,7 +4060,8 @@ function pfb_dns_proxy_service(): void {
 		$addresses .= ' --listen ' . escapeshellarg($address);
 	}
 	$dot = ($saved !== NULL && $saved['enablessl']['present']) ? ' --dot --pfsense-config /cf/conf/config.xml' : '';
-	$module = !pfb_dnsbl_active() ? ' --no-module' : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
+	$replylog = (($pfb['dnsbl_py_reply'] ?? NULL) === PfbToggle::On) ? ' --reply-log' : '';
+	$module = !pfb_dnsbl_active() ? " --no-module{$replylog}" : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
 
 	$port = pfb_dns_proxy_port();
 

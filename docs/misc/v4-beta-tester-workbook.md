@@ -431,8 +431,9 @@ instead of the VIP, which may avoid browser certificate errors.
 
 **CNAME Validation** also checks the names a domain points at.
 
-**DNS Reply Logging** (on the main DNSBL block) records replies that were
-*not* blocked. Useful to prove a name was allowed; it can fill the log.
+**DNS Reply Logging** (on the **pfB-DNS** tab, for DNSBL with or without
+pfB-DNS) records replies that were *not* blocked. Useful to prove a name was
+allowed; it can fill the log.
 
 - [ ] Note your current **Global Logging/Blocking Mechanism** and **Global
       Application Mode** after the upgrade

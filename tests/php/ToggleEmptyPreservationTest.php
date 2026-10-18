@@ -24,7 +24,6 @@ final class ToggleEmptyPreservationTest extends TestCase
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
 		$fields = [
 			'pfb_cache' => 'dnsbl/pfb_cache',
-			'pfb_py_reply' => 'dnsbl/pfb_py_reply',
 			'pfb_hsts' => 'dnsbl/pfb_hsts',
 			'pfb_idn_block_malicious' => 'dnsbl/pfb_idn_block_malicious',
 			'pfb_idn_escalate_suspicious' => 'dnsbl/pfb_idn_escalate_suspicious',
@@ -42,6 +41,26 @@ final class ToggleEmptyPreservationTest extends TestCase
 			$this->assertSame('on', config_get_path("{$section}/{$bare}"), "{$bare}: checked POST must persist On");
 			$this->assertTrue(pfb_dnsbl_toggle_enabled(PfbConfig::read($key)), "{$bare}: checked render must be enabled");
 		}
+	}
+
+	/**
+	 * issue #3515: DNS Reply Logging (dnsbl/pfb_py_reply, still the DNSBL-section key) is saved by the pfB-DNS page, as a
+	 * leaf through the gateway. Same polarity as the DNSBL page's toggles: an absent checkbox persists the empty Off token
+	 * even though the registry default is On, a checked one persists On, and the render reads them back.
+	 */
+	public function testPfbDnsPageSavesDnsReplyLoggingAsALeafWithTheSamePolarity(): void
+	{
+		$leaf = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply';
+		$GLOBALS['config'] = [];
+		$this->assertTrue(pfb_dnsbl_toggle_enabled(PfbConfig::read('dnsbl/pfb_py_reply')), 'nothing stored: the default is On');
+
+		PfbConfig::write('dnsbl/pfb_py_reply', pfb_filter(NULL, PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+		$this->assertSame('', config_get_path($leaf), 'absent POST must persist empty');
+		$this->assertFalse(pfb_dnsbl_toggle_enabled(PfbConfig::read('dnsbl/pfb_py_reply')), 'unchecked render must be disabled');
+
+		PfbConfig::write('dnsbl/pfb_py_reply', pfb_filter('on', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+		$this->assertSame('on', config_get_path($leaf), 'checked POST must persist On');
+		$this->assertTrue(pfb_dnsbl_toggle_enabled(PfbConfig::read('dnsbl/pfb_py_reply')), 'checked render must be enabled');
 	}
 
 	/** The IP page has its own suppression save/render decision and same polarity. */
@@ -70,7 +89,6 @@ final class ToggleEmptyPreservationTest extends TestCase
 	{
 		foreach ([
 			"\$pfb['dconfig']['pfb_cache'] = pfb_filter(\$_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_py_reply'] = pfb_filter(\$_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
 			"\$pfb['dconfig']['pfb_hsts'] = pfb_filter(\$_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
 			"\$pfb['dconfig']['pfb_idn_block_malicious'] = pfb_filter(\$_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
 			"\$pfb['dconfig']['pfb_idn_escalate_suspicious'] = pfb_filter(\$_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,

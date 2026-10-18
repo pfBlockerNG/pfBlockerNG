@@ -62,7 +62,6 @@ final class DnsblTabLayoutUiTest extends TestCase
 		$names = [
 			"new Form_Checkbox(\n\t'pfb_dnsbl'",
 			"new Form_Checkbox(\n\t'tld_wildcard'",
-			"new Form_Checkbox(\n\t'pfb_py_reply'",
 			"new Form_Checkbox(\n\t'pfb_hsts'",
 			"new Form_Select(\n\t'pfb_idn'",
 			"new Form_Checkbox(\n\t'pfb_idn_block_malicious'",
