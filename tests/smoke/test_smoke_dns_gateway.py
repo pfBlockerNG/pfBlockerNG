@@ -361,7 +361,7 @@ def _expect_everywhere(
     what: str, results: dict[str, tuple[h.DnsAnswer, str]], ok: Callable[[h.DnsAnswer], bool], expected: str
 ) -> None:
     for transport, (answer, raw) in results.items():
-        tail = " | ".join(raw.strip().splitlines()[-2:])
+        tail = " | ".join([line for line in raw.splitlines() if line.strip()][-2:])
         tail = f" ({tail})" if answer.rcode == "UNKNOWN" else ""
         _say(f"{what}, {transport}: {answer.rcode} {answer.records}{tail}")
     wrong = {transport: result for transport, result in results.items() if not ok(result[0])}
