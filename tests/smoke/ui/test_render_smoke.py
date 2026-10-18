@@ -2041,19 +2041,30 @@ def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard:
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
-    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental"):
+    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental", 'name="pfb_py_reply"'):
         assert gone not in resp.text, f"the DNSBL page still carries {gone!r}"
     assert "/pfblockerng/pfblockerng_dns.php" in resp.text, "the DNSBL page's tab bar links to pfB-DNS"
 
 
-# issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts (DNSBL page) and
+# issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
 # ip/suppression (IP page) flipped their registry default to 'on' -- the checkbox must
 # render CHECKED with no stored config, and still render UNCHECKED for a present Off token
-# for both canonical empty and legacy ``off`` storage.
-_ISSUE1907_DNSBL_TOGGLES = (
-    ("pfb_cache", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache"),
-    ("pfb_py_reply", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"),
-    ("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),
+# for both canonical empty and legacy ``off`` storage. issue #3515: pfb_py_reply (still the
+# DNSBL-section key, read by both DNS modes) is edited on the pfB-DNS page, not the DNSBL page.
+_ISSUE1907_TOGGLE_PAGES = (
+    (
+        "/pfblockerng/pfblockerng_dnsbl.php",
+        "DNSBL Webserver Configuration",
+        (
+            ("pfb_cache", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache"),
+            ("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),
+        ),
+    ),
+    (
+        "/pfblockerng/pfblockerng_dns.php",
+        "pfB-DNS Settings",
+        (("pfb_py_reply", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"),),
+    ),
 )
 _ISSUE1907_IP_SUPPRESSION_PATH = "installedpackages/pfblockerngipsettings/config/0/suppression"
 
@@ -2079,59 +2090,64 @@ def _set_scalar_or_absent(vm: SmokeVM, path: str, value: str | None) -> None:
     )
 
 
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "pfb-dns-page"])
 def test_dnsbl_python_gated_toggles_render_checked_when_absent(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,
+    page: str,
+    marker: str,
+    toggles: tuple[tuple[str, str], ...],
 ) -> None:
     """issue #1907: pfb_cache/pfb_py_reply/pfb_hsts render CHECKED with no stored config --
     the registry default flipped to 'on', matching the page's REMOVED
     ``isset(...) ? ... : 'on'`` fallback (PfbConfig::read() now owns the default).
+    issue #3515: pfb_py_reply is checked the same way on the pfB-DNS page, where it now lives.
     """
     vm = smoke_vm
-    priors = {
-        path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES
-    }
-    for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+    priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for _name, path in toggles}
+    for _name, path in toggles:
         _set_scalar_or_absent(vm, path, None)
     try:
-        page = "/pfblockerng/pfblockerng_dnsbl.php"
         resp = webui.get(page)
-        result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-        assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+        result = evaluate_render(page, resp.status_code, resp.text, (marker,))
+        assert result.ok, f"{page} render oracle failed: {result.detail}"
         fields = scrape_form_fields(resp.text)
-        for name, _path in _ISSUE1907_DNSBL_TOGGLES:
+        for name, _path in toggles:
             assert fields.get(name) == "on", (
                 f"{name} must render CHECKED with no stored config (issue #1907 default-on), got {fields.get(name)!r}"
             )
     finally:
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+        for _name, path in toggles:
             _set_scalar_or_absent(vm, path, priors[path])
 
 
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "pfb-dns-page"])
 def test_dnsbl_python_gated_toggles_render_unchecked_when_stored_off(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,
+    page: str,
+    marker: str,
+    toggles: tuple[tuple[str, str], ...],
 ) -> None:
     """Legacy ``off`` and canonical empty Off tokens both render unchecked."""
     vm = smoke_vm
-    priors = {
-        path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES
-    }
+    priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for _name, path in toggles}
     try:
         for stored in ("off", ""):
-            for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+            for _name, path in toggles:
                 _set_scalar_or_absent(vm, path, stored)
-            page = "/pfblockerng/pfblockerng_dnsbl.php"
             resp = webui.get(page)
-            result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-            assert result.ok, f"DNSBL render oracle failed for {stored!r}: {result.detail}"
+            result = evaluate_render(page, resp.status_code, resp.text, (marker,))
+            assert result.ok, f"{page} render oracle failed for {stored!r}: {result.detail}"
             fields = scrape_form_fields(resp.text)
-            for name, _path in _ISSUE1907_DNSBL_TOGGLES:
+            for name, _path in toggles:
                 assert name not in fields, (
                     f"{name} must render UNCHECKED when stored {stored!r}, got checked with value {fields.get(name)!r}"
                 )
     finally:
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+        for _name, path in toggles:
             _set_scalar_or_absent(vm, path, priors[path])
 
 

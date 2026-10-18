@@ -39,6 +39,11 @@ What it proves, in file order:
 * pfB-DNS on, DNSBL off: the proxy runs with ``--no-module``, Unbound has no ``pfb_unbound.py`` (only the inert
   observer), a listed name is NOT blocked (UDP, TCP, DoT), Unbound's log names the real client, the firewall's own
   lookup goes through the proxy (Unbound has no socket on 53), and no DNSBL decision is logged;
+* pfB-DNS on, DNSBL off, DNS Reply Logging on (the pfB-DNS tab's preference, ``dnsbl/pfb_py_reply``): the proxy
+  runs with ``--no-module --reply-log``, a LAN client's query is answered and dns_reply.log and unified.log (the
+  Reports and Stats pipeline) each gain one row naming the client, the name, the type and the upstream's answer, and
+  dnsbl.log none; with the preference off the proxy runs without ``--reply-log``, answers the same and no row is
+  written;
 * a Resolver restart (the GUI's apply) brings a stopped proxy back through the observer's start hook;
 * a reboot, once with DNSBL off and once on: a bounded probe the test plants in /etc/rc.custom_boot_early asks the proxy
   on 127.0.0.1:53 from early boot (a listed name and a name nobody asked before, the upstream a stub on the host). Its
@@ -1103,6 +1108,102 @@ def test_pfb_dns_without_dnsbl_forwards_everything_and_blocks_nothing(rig: Rig, 
         firewall_clients = _wait_unbound_logged(vm, names.dnsbl_off_firewall)
         assert set(firewall_clients) == {"127.0.0.1"}, f"Unbound's query log names {firewall_clients}, not 127.0.0.1"
         assert _dnsbl_rows(vm, names.dnsbl_off_firewall) == [], "DNSBL is off: dnsbl.log must gain no row"
+
+
+# --------------------------------------------------------------------------- #
+# DNS Reply Logging with DNSBL off: the one preference both DNS modes read, as the proxy's --reply-log
+# --------------------------------------------------------------------------- #
+
+CFG_REPLY_LOG = (
+    f"{h.CFG_DNSBL_SETTINGS}/pfb_py_reply"  # the pfB-DNS tab's DNS Reply Logging: 'on', or the empty Off token
+)
+REPLY_LOG = f"{h.PFB_LOGDIR}/dns_reply.log"
+UNIFIED_LOG = (
+    f"{h.PFB_LOGDIR}/unified.log"  # the filterlog daemon's copy of dns_reply.log rows: Reports and Stats read it
+)
+
+
+def _put_reply_logging(vm: SmokeVM, value: str | None) -> None:
+    """The pfB-DNS tab's save of DNS Reply Logging, minus the page: 'on' or the empty Off token; None puts back an
+    absent key."""
+    path = h._php_str(CFG_REPLY_LOG)
+    op = f"config_del_path({path});" if value is None else f"config_set_path({path}, {h._php_str(value)});"
+    _php_ok(vm, f"{op}\nwrite_config('pfBlockerNG smoke: DNS Reply Logging');", "DNS Reply Logging preference")
+
+
+def _proxy_args(vm: SmokeVM) -> str:
+    """The command line of the running proxy child, from its pidfile ('' when none runs)."""
+    pid = _pid_file(vm, PROXY_PID_FILE)
+    return vm.ssh(f"ps -ww -o args= -p {pid}").stdout.strip() if pid is not None else ""
+
+
+@contextlib.contextmanager
+def _reply_logging(rig: Rig, on: bool) -> Iterator[str]:
+    """DNS Reply Logging set and applied (the apply restarts a live proxy whose rc script changed), yielding the proxy's
+    command line; the preference as it was (absent stays absent) is put back and applied afterwards."""
+    present, prior = h.config_get_state(rig.vm, CFG_REPLY_LOG)
+    _put_reply_logging(rig.vm, "on" if on else "")
+    try:
+        _apply(rig.vm)
+        try:
+            h.wait_until(lambda: ("--reply-log" in _proxy_args(rig.vm)) == on, timeout=90.0, interval=3.0)
+        except RuntimeError as exc:
+            raise RuntimeError(f"{exc}\nproxy: {_proxy_args(rig.vm)!r}\n{_diagnostics(rig.vm)}") from exc
+        yield _proxy_args(rig.vm)
+    finally:
+        _put_reply_logging(rig.vm, prior if present else None)
+        _apply(rig.vm)
+
+
+def _reply_rows(vm: SmokeVM, name: str, path: str = REPLY_LOG) -> list[list[str]]:
+    """The DNS-reply rows of `name` in dns_reply.log (or unified.log, same ten columns):
+    DNS-reply,timestamp,type,orig_type,final_type,ttl,name,client,answer,geoip."""
+    rows = csv.reader(io.StringIO(h.read_log_file(vm, path)))
+    return [row for row in rows if row[:1] == ["DNS-reply"] and row[6:7] == [name]]
+
+
+def test_pfb_dns_without_dnsbl_logs_replies_for_the_client_only_while_dns_reply_logging_is_on(
+    rig: Rig, proxy_on: State
+) -> None:
+    """pfB-DNS on + DNSBL off: DNS Reply Logging on gives Reports and Stats the client's replies; off writes nothing.
+
+    Given pfB-DNS on and DNSBL off and applied, and DNS Reply Logging switched on and applied,
+    Then the proxy runs with `--no-module --reply-log`; a LAN client's query for a name nobody asked before is
+      answered by the upstream, and dns_reply.log gains one row (type reply, A, A, a TTL, the name, the CLIENT's
+      address, the upstream's answer) which the filterlog daemon copies into unified.log, the log Reports and Stats
+      read; dnsbl.log gains none;
+    When DNS Reply Logging is switched off and applied,
+    Then the proxy runs without `--reply-log`, a second new name is answered the same way, and neither log has a row
+      for it (checked after the answer and Unbound's own query log both name the query: the proxy had finished with it).
+    """
+    vm, client = rig.vm, rig.client
+    logged, silent = h.unique_domain("replylog-on"), h.unique_domain("replylog-off")
+    with _dnsbl_off(rig):
+        with _reply_logging(rig, True) as args:
+            assert "--no-module" in args and "--reply-log" in args and "--observer" not in args, f"proxy: {args!r}"
+            answer, raw = _query(client, logged)
+            assert h.resolves_to(answer, STUB_DNS_A), f"{logged} was not answered by the upstream: {answer}\n{raw}"
+            try:
+                h.wait_until(lambda: bool(_reply_rows(vm, logged)), timeout=30.0)
+            except RuntimeError:
+                raise AssertionError(f"dns_reply.log gained no row for {logged}:\n{_proxy_log(vm)}") from None
+            [row] = _reply_rows(vm, logged)
+            assert row[2:5] == ["reply", "A", "A"] and row[5].isdigit(), f"row: {row}"
+            assert row[6:9] == [logged, CLIENT_LAN_IP, STUB_DNS_A], f"row: {row}"
+            try:
+                h.wait_until(lambda: bool(_reply_rows(vm, logged, UNIFIED_LOG)), timeout=30.0)
+            except RuntimeError:
+                raise AssertionError(f"unified.log (Reports, Stats) gained no row for {logged}") from None
+            assert _reply_rows(vm, logged, UNIFIED_LOG) == [row], "unified.log keeps the row as it was written"
+            assert _dnsbl_rows(vm, logged) == [], "DNSBL is off: dnsbl.log must gain no row"
+        with _reply_logging(rig, False) as args:
+            assert "--no-module" in args and "--reply-log" not in args, f"proxy: {args!r}"
+            answer, raw = _query(client, silent)
+            assert h.resolves_to(answer, STUB_DNS_A), f"{silent} was not answered by the upstream: {answer}\n{raw}"
+            assert set(_wait_unbound_logged(vm, silent)) == {CLIENT_LAN_IP}
+            assert _reply_rows(vm, silent) == [], "DNS Reply Logging is off: dns_reply.log must gain no row"
+            assert _reply_rows(vm, silent, UNIFIED_LOG) == [], "and neither must unified.log"
+            assert _dnsbl_rows(vm, silent) == [], "DNSBL is off: dnsbl.log must gain no row"
 
 
 # --------------------------------------------------------------------------- #

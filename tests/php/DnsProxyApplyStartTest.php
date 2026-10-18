@@ -130,6 +130,31 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->assertStringNotContainsString("'192.0.2.1'", $seen[0][1]);
 	}
 
+	public function testProxyModeWithALiveProxyWhoseDnsReplyLoggingPreferenceChangedRestartsItWithTheNewScript(): void
+	{
+		// Given DNSBL off with DNS Reply Logging off, and a live proxy started from that script (no --reply-log)
+		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
+		$GLOBALS['pfb']['dnsbl_py_reply'] = PfbToggle::Off;
+		$this->setProxyMode();
+		pfb_dns_proxy_service();
+		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = TRUE;
+		$this->assertStringNotContainsString('--reply-log', (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: not logging');
+		$seen = [];
+		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use (&$seen): void {
+			$seen[] = [[$fn, $service], (string) file_get_contents(PFB_DNS_PROXY_RCFILE)];
+		};
+
+		// When the preference is switched on and the apply finds nothing to reload
+		$GLOBALS['pfb']['dnsbl_py_reply'] = PfbToggle::On;
+		pfb_dns_proxy_ensure_running();
+
+		// Then the proxy restarts once, from a script that launches it with --reply-log (a running proxy reads its flags only at start)
+		$this->assertCount(1, $seen, 'exactly one service call');
+		$this->assertSame(['restart_service', 'pfb_dns_proxy'], $seen[0][0]);
+		$this->assertStringContainsString(' --no-module --reply-log', $seen[0][1]);
+	}
+
 	public function testWithoutProxyModeTheProxyIsNeverStartedEvenThoughItIsNotRunning(): void
 	{
 		// Given the toggle is off: no snapshot, and the proxy is of course not running (same state as the first test)
