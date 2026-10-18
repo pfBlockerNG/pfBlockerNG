@@ -1821,6 +1821,19 @@
         "returnType": "void",
         "params": []
     },
+    "pfb_dns_proxy_unmoved_effect": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "fronted",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_redirect_rule": {
         "returnsRef": false,
         "returnType": "array",

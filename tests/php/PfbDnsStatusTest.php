@@ -3,13 +3,15 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
  * issue #3515 -- the pfB-DNS tab's status panel: whether the proxy runs, which mode the box is in, where it
  * listens and whether it serves DNS over TLS. Everything derives from the Resolver snapshot (the box is moved
  * or it is not), the toggle (what the admin asked for) and DNSBL (whether the proxy makes DNSBL decisions);
- * a toggle that is on while nothing is moved is said to be unapplied, never to run.
+ * a toggle that is on while nothing is moved is said not to be active, with the reason (pfBlockerNG or the Resolver
+ * disabled, or the Resolver not moved), never to run.
  */
 #[CoversFunction('pfb_dns_status')]
 final class PfbDnsStatusTest extends TestCase
@@ -66,14 +68,29 @@ final class PfbDnsStatusTest extends TestCase
 		], pfb_dns_status());
 	}
 
-	public function testAnOnToggleWithNothingMovedIsSaidToBeUnappliedNotRunning(): void
+	/** @return array<string,array{PfbToggle,PfbToggle,string}> pfBlockerNG, Resolver and the status the toggle-on-but-nothing-moved box shows */
+	public static function notActiveReasons(): array
+	{
+		return [
+			'pfBlockerNG disabled' => [PfbToggle::Off, PfbToggle::On, 'On, but not active: pfBlockerNG is disabled'],
+			'the Resolver disabled' => [PfbToggle::On, PfbToggle::Off, 'On, but not active: the DNS Resolver is disabled'],
+			'the Resolver not moved yet, or the move refused' => [PfbToggle::On, PfbToggle::On,
+				'On, not active: the DNS Resolver has not been moved to the proxy (run an Update; if this stays, see the notices). '
+				. 'It serves clients itself, with DNSBL if that is on'],
+		];
+	}
+
+	#[DataProvider('notActiveReasons')]
+	public function testAnOnToggleWithNothingMovedIsSaidNotToBeActiveAndWhy(PfbToggle $enable, PfbToggle $resolver, string $mode): void
 	{
 		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $enable;
+		$GLOBALS['pfb']['unbound_state'] = $resolver;
 
 		$status = pfb_dns_status();
 
 		$this->assertSame('Not in use', $status['service']);
-		$this->assertSame('On, not applied yet: run an Update, and check the notices if this stays', $status['mode']);
+		$this->assertSame($mode, $status['mode']);
 		$this->assertSame('-', $status['listen']);
 	}
 
