@@ -170,8 +170,10 @@ class Listener:
         return self.local.rsplit(":", 1)[0]
 
     @property
-    def port(self) -> int:
-        return int(self.local.rsplit(":", 1)[1])
+    def port(self) -> int | None:
+        """The port; None for a wildcard socket, which sockstat lists as `*:*`."""
+        port = self.local.rsplit(":", 1)[1]
+        return int(port) if port.isdigit() else None
 
 
 @dataclass(frozen=True)
