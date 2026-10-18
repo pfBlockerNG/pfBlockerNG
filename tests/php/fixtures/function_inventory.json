@@ -9594,6 +9594,19 @@
             }
         ]
     },
+    "pfb_metrics_render": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "s",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_migration_registry": {
         "returnsRef": false,
         "returnType": "array",

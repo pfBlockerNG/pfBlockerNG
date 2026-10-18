@@ -7755,6 +7755,78 @@ function pfb_rule_alias_packets(array $filter_rules, array $pf_rules): array {
 }
 
 
+// Prometheus text exposition 0.0.4 for pfblockerng.prom (node_exporter textfile collector).
+// Pure: renders already-collected source data; a NULL input family emits no series.
+function pfb_metrics_render(array $s): string {
+	$out = '';
+	$family = static function (string $name, string $help, array $rows) use (&$out): void {
+		if ($rows === array()) {
+			return;
+		}
+		$type = substr($name, -6) === '_total' ? 'counter' : 'gauge';
+		$out .= "# HELP {$name} {$help}\n# TYPE {$name} {$type}\n";
+		foreach ($rows as [$labels, $value]) {
+			$pairs = array();
+			foreach ($labels as $key => $val) {
+				$pairs[] = $key . '="' . str_replace(array('\\', '"', "\n"), array('\\\\', '\\"', '\\n'), (string) $val) . '"';
+			}
+			$out .= $name . ($pairs ? '{' . implode(',', $pairs) . '}' : '') . " {$value}\n";
+		}
+	};
+
+	$family('pfblockerng_info', 'pfBlockerNG package version.', array(array(array('version' => $s['version']), 1)));
+
+	$rows = array();
+	foreach ($s['ip_tables'] ?? array() as $table => $entries) {
+		$rows[] = array(array('table' => $table), $entries);
+	}
+	$family('pfblockerng_ip_table_entries', 'Addresses in each pfB alias table.', $rows);
+
+	$rows = array();
+	foreach ($s['ip_rule_packets'] ?? array() as $table => $packets) {
+		$rows[] = array(array('table' => $table), $packets);
+	}
+	$family('pfblockerng_ip_rule_packets_total', 'Packets matched by pfB firewall rules, per alias.', $rows);
+
+	$blocked = array();
+	$group_entries = array();
+	foreach ($s['dnsbl_groups'] ?? array() as $g) {
+		$blocked[] = array(array('group' => $g['group']), $g['counter']);
+		if ($g['entries'] !== NULL) {
+			$group_entries[] = array(array('group' => $g['group']), $g['entries']);
+		}
+	}
+	$family('pfblockerng_dnsbl_blocked_queries_total', 'DNS queries blocked, per DNSBL group.', $blocked);
+	$family('pfblockerng_dnsbl_group_entries', 'Entries in each enabled DNSBL group.', $group_entries);
+
+	$rq = $s['resolver_queries'] ?? NULL;
+	$family('pfblockerng_dnsbl_resolver_queries_total', 'DNS queries handled by the pfB resolver.', $rq === NULL ? array() : array(array(array(), $rq)));
+
+	$rows = array();
+	foreach ($s['feed_success'] ?? array() as $feed => $ts) {
+		$rows[] = array(array('feed' => $feed), $ts);
+	}
+	$family('pfblockerng_feed_last_success_timestamp_seconds', 'Unix time of the last successful check, per feed.', $rows);
+
+	$rows = array();
+	foreach ($s['feed_failing'] as $f) {
+		$rows[] = array(array('facility' => $f['facility'], 'feed' => $f['feed'], 'stage' => $f['stage']), 1);
+	}
+	$family('pfblockerng_feed_failing', '1 while a feed failure is open, by facility and stage.', $rows);
+
+	$pass = $s['pass'] ?? NULL;
+	$family('pfblockerng_update_last_start_timestamp_seconds', 'Unix time the latest update pass started.', $pass === NULL ? array() : array(array(array(), $pass['last_start'])));
+	$family('pfblockerng_update_last_end_timestamp_seconds', 'Unix time the latest update pass ended.', $pass === NULL ? array() : array(array(array(), $pass['last_end'])));
+
+	$rows = array();
+	foreach ($s['source_up'] as $source => $up) {
+		$rows[] = array(array('source' => $source), $up ? 1 : 0);
+	}
+	$family('pfblockerng_metrics_source_up', '1 when the metrics source was collected, 0 when it failed.', $rows);
+
+	return $out;
+}
+
 /**
  * issue #1250: sweep matchgendir's machine-generated artifacts -- Reputation dMax's per-alias
  * 'pfB_Match_Rep_<header>_<fam>.txt', the ccwhite consolidated exempt file, and the ET/
