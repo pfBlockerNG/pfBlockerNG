@@ -128,12 +128,20 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = $up;
 	}
 
-	/** A proxy the reload or the rollback starts comes up ready, as the real one does: its child and its ready marker. */
+	/**
+	 * A proxy the reload or the rollback starts comes up ready, as the real one does: its child and its ready marker. A stop
+	 * leaves it stopped, with neither.
+	 */
 	private function proxyComesUpReadyWhenStarted(): void
 	{
 		$GLOBALS['pfb_test_service_hook'] = function (string $function, string $service): void {
-			if ($service === 'pfb_dns_proxy') {
+			if ($service !== 'pfb_dns_proxy') {
+				return;
+			}
+			if (in_array($function, ['start_service', 'restart_service'], TRUE)) {
 				$this->proxyServes();
+			} elseif ($function === 'stop_service') {
+				$this->clearProxyFiles();
 			}
 		};
 	}
