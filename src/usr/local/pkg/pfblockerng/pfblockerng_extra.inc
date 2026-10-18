@@ -1415,58 +1415,6 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'the post-swap flush exists only in the 4.0 no-reload pipeline; latency delta is the accepted zero-downtime redesign itself, not this default; default-off is a uniform decision at introduction',
 		],
 
-		// issue #3513: DoH / DoQ served by the Go gateway (pfb_dns_gateway). Default off; the interface lists
-		// (comma-joined names) and the trusted front ends (space-joined IPs/CIDRs) are per-node values.
-		'dnsbl/pfb_dns_proxy_doh' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoH listener)',
-		],
-		'dnsbl/pfb_dns_proxy_doh_port' => [
-			'default'       => '4443',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads the 4443 default, which only matters once DoH is turned on',
-		],
-		'dnsbl/pfb_dns_proxy_doh_interface' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoH is turned on',
-		],
-		'dnsbl/pfb_dns_proxy_doh_trusted' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads \'\' = no trusted front end (PROXY protocol and X-Forwarded-For ignored)',
-		],
-		'dnsbl/pfb_dns_proxy_doq' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoQ listener)',
-		],
-		'dnsbl/pfb_dns_proxy_doq_port' => [
-			'default'       => '853',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads the 853 default, which only matters once DoQ is turned on',
-		],
-		'dnsbl/pfb_dns_proxy_doq_interface' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoQ is turned on',
-		],
-
 		// issue #3288: the selected CONCRETE mechanism -- one of the seven tokens;
 		// never '' or 'default' (that's dnsbl/global_log_mode below). Default
 		// 'disabled_log' fresh; existing installs grandfather to 'enabled'.
@@ -2453,6 +2401,58 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'sync'          => 'local',
 			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
+		],
+
+		// issue #3513: DoH / DoQ served by pfB-DNS's Go binary (pfb_dns_gateway). Default off; the interface lists
+		// (comma-joined names) and the trusted front ends (space-joined IPs/CIDRs) are per-node values.
+		'dns/pfb_dns_doh' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoH listener)',
+		],
+		'dns/pfb_dns_doh_port' => [
+			'default'       => '4443',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads the 4443 default, which only matters once DoH is turned on',
+		],
+		'dns/pfb_dns_doh_interface' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoH is turned on',
+		],
+		'dns/pfb_dns_doh_trusted' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = no trusted front end (PROXY protocol and X-Forwarded-For ignored)',
+		],
+		'dns/pfb_dns_doq' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoQ listener)',
+		],
+		'dns/pfb_dns_doq_port' => [
+			'default'       => '853',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads the 853 default, which only matters once DoQ is turned on',
+		],
+		'dns/pfb_dns_doq_interface' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoQ is turned on',
 		],
 	];
 

@@ -1290,7 +1290,7 @@ final class DnsProxyServiceTest extends TestCase
 	// issue #3513 -- the Go gateway replaces the Python listener while its binary is installed
 	// -----------------------------------------------------------------------
 
-	private const SETTINGS = 'installedpackages/pfblockerngdnsblsettings/config/0/';
+	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const DECIDER = [
 		'--', '/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py',
 		'--decision-fd', '3', '--module-dir', '/var/unbound', '--user', 'unbound',
@@ -1446,10 +1446,10 @@ final class DnsProxyServiceTest extends TestCase
 		// Given DoH on at port 8443 with this interface and trusted setting
 		$gateway = $this->gateway();
 		$this->moveTwoInterfaceResolver();
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_port', '8443');
-		$this->setting('pfb_dns_proxy_doh_interface', $interfaces);
-		$this->setting('pfb_dns_proxy_doh_trusted', $trusted);
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_port', '8443');
+		$this->setting('pfb_dns_doh_interface', $interfaces);
+		$this->setting('pfb_dns_doh_trusted', $trusted);
 
 		// When the script starts
 		$argv = $this->startAndReadArgv($gateway);
@@ -1483,10 +1483,10 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveTwoInterfaceResolver();
-		$this->setting('pfb_dns_proxy_doq', 'on');
-		$this->setting('pfb_dns_proxy_doq_port', '8853');
-		$this->setting('pfb_dns_proxy_doq_interface', $interfaces);
-		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_doq', 'on');
+		$this->setting('pfb_dns_doq_port', '8853');
+		$this->setting('pfb_dns_doq_interface', $interfaces);
+		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
 
 		$argv = $this->startAndReadArgv($gateway);
 
@@ -1501,8 +1501,8 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doq', 'on');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doq', 'on');
 
 		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
@@ -1538,8 +1538,8 @@ final class DnsProxyServiceTest extends TestCase
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$GLOBALS['config']['unbound']['port'] = '5300';
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doq', 'on');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doq', 'on');
 
 		// When the rc service is generated and started
 		$argv = $this->startAndReadArgv($gateway);
@@ -1559,10 +1559,10 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', '');
-		$this->setting('pfb_dns_proxy_doh_port', '8443');
-		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
-		$this->setting('pfb_dns_proxy_doq_port', '8853');
+		$this->setting('pfb_dns_doh', '');
+		$this->setting('pfb_dns_doh_port', '8443');
+		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_doq_port', '8853');
 
 		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $this->startAndReadArgv($gateway));
 	}
@@ -1571,9 +1571,9 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_interface', 'opt9');
-		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_interface', 'opt9');
+		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
 
 		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
@@ -1588,8 +1588,8 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_trusted', "192.0.2.10 evil;touch {$this->dir}/pwned fe80::1%em0 \$(id) 10.0.0.0/33");
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_trusted', "192.0.2.10 evil;touch {$this->dir}/pwned fe80::1%em0 \$(id) 10.0.0.0/33");
 
 		$this->generateWith($gateway);
 		$text = $this->rcText();
@@ -1605,12 +1605,12 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_doh', 'on');
 		$entries = [];
 		for ($i = 0; $i < 300; $i++) {
 			$entries[] = '10.' . intdiv($i, 250) . '.' . ($i % 250) . '.0/24';
 		}
-		$this->setting('pfb_dns_proxy_doh_trusted', implode(' ', $entries));
+		$this->setting('pfb_dns_doh_trusted', implode(' ', $entries));
 
 		$argv = $this->startAndReadArgv($gateway);
 
@@ -1628,7 +1628,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		// Given the unchanged Python line a box without the binary gets
 		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_doh', 'on');
 		$this->generateWith("{$this->dir}/bin/absent");
 		$python = $this->rcText();
 
@@ -1655,10 +1655,10 @@ final class DnsProxyServiceTest extends TestCase
 		);
 
 		// When DoH and DoQ are turned on and configured
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_port', '8443');
-		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
-		$this->setting('pfb_dns_proxy_doq', 'on');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_port', '8443');
+		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_doq', 'on');
 
 		// Then the generated script does not change by a byte
 		$this->generateWith("{$this->dir}/bin/absent");
@@ -1669,9 +1669,9 @@ final class DnsProxyServiceTest extends TestCase
 	public static function warnRows(): array
 	{
 		return [
-			'DoH on'       => [['pfb_dns_proxy_doh' => 'on'], 1],
-			'DoQ on'       => [['pfb_dns_proxy_doq' => 'on'], 1],
-			'both on'      => [['pfb_dns_proxy_doh' => 'on', 'pfb_dns_proxy_doq' => 'on'], 1],
+			'DoH on'       => [['pfb_dns_doh' => 'on'], 1],
+			'DoQ on'       => [['pfb_dns_doq' => 'on'], 1],
+			'both on'      => [['pfb_dns_doh' => 'on', 'pfb_dns_doq' => 'on'], 1],
 			'both off'     => [[], 0],
 		];
 	}
@@ -1693,8 +1693,8 @@ final class DnsProxyServiceTest extends TestCase
 	public function testWithTheGatewayInstalledDohAndDoqLogNoWarning(): void
 	{
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doq', 'on');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doq', 'on');
 
 		$this->generateWith($this->gateway());
 
@@ -1810,8 +1810,8 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_trusted', $trusted);
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_trusted', $trusted);
 
 		$argv = $this->startAndReadArgv($gateway);
 
@@ -1827,11 +1827,11 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_port', '8443');
-		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
-		$this->setting('pfb_dns_proxy_doq', 'on');
-		$this->setting('pfb_dns_proxy_doq_port', '8853');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_port', '8443');
+		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_doq', 'on');
+		$this->setting('pfb_dns_doq_port', '8853');
 		$this->generateWith($gateway);
 		$text = $this->rcText();
 
@@ -1867,11 +1867,11 @@ final class DnsProxyServiceTest extends TestCase
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		foreach (['doh', 'doq'] as $kind) {
-			$this->setting("pfb_dns_proxy_{$kind}", 'on');
+			$this->setting("pfb_dns_{$kind}", 'on');
 		}
-		$this->setting('pfb_dns_proxy_doh_trusted', '192.0.2.10');
-		$this->setting('pfb_dns_proxy_doh_port', $port);
-		$this->setting('pfb_dns_proxy_doq_port', '8853');
+		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
+		$this->setting('pfb_dns_doh_port', $port);
+		$this->setting('pfb_dns_doq_port', '8853');
 
 		// When the script is generated and started
 		$argv = $this->startAndReadArgv($gateway);
@@ -1894,9 +1894,9 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doq', 'on');
-		$this->setting('pfb_dns_proxy_doq_port', 'abc');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doq', 'on');
+		$this->setting('pfb_dns_doq_port', 'abc');
 
 		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
@@ -1922,8 +1922,8 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_port', $stored);
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_port', $stored);
 
 		$argv = $this->startAndReadArgv($gateway);
 
@@ -1949,8 +1949,8 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_trusted', "{$bad} 198.51.100.7");
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_trusted', "{$bad} 198.51.100.7");
 
 		$argv = $this->startAndReadArgv($gateway);
 
@@ -1971,7 +1971,7 @@ final class DnsProxyServiceTest extends TestCase
 		$absent = "{$this->dir}/bin/absent";
 		$this->writeRcWhereProductionReadsIt();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
+		$this->setting('pfb_dns_doh', 'on');
 		$this->generateWith($absent);
 		$this->assertCount(1, $this->gatewayWarnings(), 'before: the generation that wrote the script warned once');
 
@@ -1992,8 +1992,8 @@ final class DnsProxyServiceTest extends TestCase
 		$gateway = $this->gateway();
 		$this->writeRcWhereProductionReadsIt();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_proxy_doh', 'on');
-		$this->setting('pfb_dns_proxy_doh_port', 'abc');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_doh_port', 'abc');
 		$this->generateWith($gateway);
 		$this->assertCount(1, $this->portWarnings(), 'before: the generation that wrote the script warned once');
 

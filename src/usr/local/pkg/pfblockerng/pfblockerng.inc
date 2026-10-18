@@ -4065,7 +4065,7 @@ function pfb_dns_proxy_trusted_entry(string $entry): bool {
 }
 
 /**
- * Save-time input errors of the DNS proxy's DoH/DoQ settings on the DNSBL page. Every posted value was already
+ * Save-time input errors of the DNS proxy's DoH/DoQ settings on the pfB-DNS page. Every posted value was already
  * sanitized at ingestion. A port is a whole number 1-65535, an interface one of $valid_iface_list, a trusted entry
  * an IP or CIDR prefix; DoH/DoQ need the DNS Resolver's certificate ($certref, its unbound/sslcertref).
  *
@@ -4076,20 +4076,20 @@ function pfb_dns_proxy_trusted_entry(string $entry): bool {
 function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_list, string $certref): array {
 	$errors = [];
 	foreach (['doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
-		if (pfb_dns_proxy_listener_port($post["pfb_dns_proxy_{$kind}_port"] ?? '') === NULL) {
+		if (pfb_dns_proxy_listener_port($post["pfb_dns_{$kind}_port"] ?? '') === NULL) {
 			$errors[] = "{$label} Port must be a whole number from 1 to 65535.";
 		}
-		foreach ((array) ($post["pfb_dns_proxy_{$kind}_interface"] ?? []) as $interface) {
+		foreach ((array) ($post["pfb_dns_{$kind}_interface"] ?? []) as $interface) {
 			if (!is_string($interface) || !in_array($interface, $valid_iface_list, TRUE)) {
 				$errors[] = "{$label}: Invalid interface selection: " . htmlspecialchars(is_string($interface) ? $interface : '', ENT_QUOTES);
 			}
 		}
-		if (($post["pfb_dns_proxy_{$kind}"] ?? '') === 'on' && $certref === '') {
+		if (($post["pfb_dns_{$kind}"] ?? '') === 'on' && $certref === '') {
 			$errors[] = "{$label} is enabled, but DoH/DoQ use the DNS Resolver's SSL/TLS certificate; select one under Services > DNS Resolver.";
 		}
 	}
 
-	$trusted = $post['pfb_dns_proxy_doh_trusted'] ?? '';
+	$trusted = $post['pfb_dns_doh_trusted'] ?? '';
 	$bad = is_string($trusted) ? array_filter(pfb_dns_proxy_tokens($trusted), static fn (string $entry): bool => !pfb_dns_proxy_trusted_entry($entry)) : ['(not text)'];
 	if ($bad !== []) {
 		$errors[] = 'DoH: Trusted front ends must be IP addresses or CIDR prefixes separated by spaces or commas: ' .
@@ -4108,12 +4108,12 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 function pfb_dns_proxy_listeners_stored(array $post): array {
 	$stored = [];
 	foreach (['doh', 'doq'] as $kind) {
-		$interfaces = array_unique(array_filter((array) ($post["pfb_dns_proxy_{$kind}_interface"] ?? []), 'is_string'));
-		$stored["pfb_dns_proxy_{$kind}"] = pfb_filter($post["pfb_dns_proxy_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
-		$stored["pfb_dns_proxy_{$kind}_port"] = pfb_dns_proxy_listener_port($post["pfb_dns_proxy_{$kind}_port"] ?? '') ?? PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port");
-		$stored["pfb_dns_proxy_{$kind}_interface"] = implode(',', $interfaces);
+		$interfaces = array_unique(array_filter((array) ($post["pfb_dns_{$kind}_interface"] ?? []), 'is_string'));
+		$stored["pfb_dns_{$kind}"] = pfb_filter($post["pfb_dns_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
+		$stored["pfb_dns_{$kind}_port"] = pfb_dns_proxy_listener_port($post["pfb_dns_{$kind}_port"] ?? '') ?? PfbConfig::read("dns/pfb_dns_{$kind}_port");
+		$stored["pfb_dns_{$kind}_interface"] = implode(',', $interfaces);
 		if ($kind === 'doh') {
-			$stored['pfb_dns_proxy_doh_trusted'] = implode(' ', pfb_dns_proxy_tokens((string) ($post['pfb_dns_proxy_doh_trusted'] ?? '')));
+			$stored['pfb_dns_doh_trusted'] = implode(' ', pfb_dns_proxy_tokens((string) ($post['pfb_dns_doh_trusted'] ?? '')));
 		}
 	}
 	return $stored;
@@ -4131,22 +4131,22 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
 	$flags = '';
 	foreach (['doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
-		if (PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}") !== PfbToggle::On) {
+		if (PfbConfig::read("dns/pfb_dns_{$kind}") !== PfbToggle::On) {
 			continue;
 		}
-		$port = pfb_dns_proxy_listener_port(PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_port"));
+		$port = pfb_dns_proxy_listener_port(PfbConfig::read("dns/pfb_dns_{$kind}_port"));
 		if ($port === NULL) {
 			$warnings[] = "DNS proxy: the stored {$label} port is not a whole number from 1 to 65535; {$label} is not served";
 			continue;
 		}
-		$interfaces = pfb_dns_proxy_tokens((string) PfbConfig::read("dnsbl/pfb_dns_proxy_{$kind}_interface"));
+		$interfaces = pfb_dns_proxy_tokens((string) PfbConfig::read("dns/pfb_dns_{$kind}_interface"));
 		$addresses = array_merge(($interfaces === []) ? $plain : pfb_dns_proxy_interface_addresses($interfaces), PFB_DNS_PROXY_LOOPBACK);
 		foreach ($addresses as $address) {
 			$flags .= " --{$kind}-listen " . escapeshellarg($address);
 		}
 		$flags .= " --{$kind}-port " . escapeshellarg($port);
 		if ($kind === 'doh') {
-			foreach (pfb_dns_proxy_tokens((string) PfbConfig::read('dnsbl/pfb_dns_proxy_doh_trusted')) as $entry) {
+			foreach (pfb_dns_proxy_tokens((string) PfbConfig::read('dns/pfb_dns_doh_trusted')) as $entry) {
 				if (pfb_dns_proxy_trusted_entry($entry)) {
 					$flags .= ' --doh-trusted ' . escapeshellarg(strpos($entry, '/') !== FALSE ? $entry : $entry . (strpos($entry, ':') !== FALSE ? '/128' : '/32'));
 				}
@@ -4215,7 +4215,7 @@ function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 	} else {
 		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound --ready-file {$ready}" .
 		    ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '') . $module;
-		if ($saved !== NULL && (PfbConfig::read('dnsbl/pfb_dns_proxy_doh') === PfbToggle::On || PfbConfig::read('dnsbl/pfb_dns_proxy_doq') === PfbToggle::On)) {
+		if ($saved !== NULL && (PfbConfig::read('dns/pfb_dns_doh') === PfbToggle::On || PfbConfig::read('dns/pfb_dns_doq') === PfbToggle::On)) {
 			$warnings[] = 'DNS proxy: DoH/DoQ are enabled but the pfb_dns_gateway binary is not installed; they are not served';
 		}
 	}
