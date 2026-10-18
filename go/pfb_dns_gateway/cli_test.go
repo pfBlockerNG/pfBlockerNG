@@ -3,13 +3,18 @@ package main
 import (
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
+// parse runs parseConfig. --listen is required, so a test that does not care about it is given one.
 func parse(t *testing.T, args ...string) (config, error) {
 	t.Helper()
+	if !slices.ContainsFunc(args, func(a string) bool { return a == "--listen" || a == "-listen" }) {
+		args = append([]string{"--listen", "127.0.0.1"}, args...)
+	}
 	return parseConfig(args, io.Discard)
 }
 

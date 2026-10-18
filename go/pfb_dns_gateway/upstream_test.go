@@ -314,7 +314,7 @@ func TestUDPExchangeSendsTheHeaderThenTheQueryAndReturnsUnboundsReply(t *testing
 func TestUDPExchangeIgnoresRepliesThatDoNotCarryTheQueryID(t *testing.T) {
 	f := newFakeUpstream(t, answering(func(q seenQuery) [][]byte {
 		right := echoWithQR(q)[0]
-		return [][]byte{withID(right, 0x0001), {0x42}, right}
+		return [][]byte{withID(right, 0x4201), withID(right, 0x0042), {0x42}, right} // each id differs from 0x4242 in one byte
 	}))
 	u := newUpstream(f.addr, watchdog)
 	query := buildQuery(t, 0x4242, "example.", true)
@@ -326,7 +326,9 @@ func TestUDPExchangeIgnoresRepliesThatDoNotCarryTheQueryID(t *testing.T) {
 }
 
 func TestUDPExchangeWithOnlyWrongIDRepliesIsNoReply(t *testing.T) {
-	f := newFakeUpstream(t, answering(func(q seenQuery) [][]byte { return [][]byte{withID(echoWithQR(q)[0], 0x0001)} }))
+	f := newFakeUpstream(t, answering(func(q seenQuery) [][]byte {
+		return [][]byte{withID(echoWithQR(q)[0], 0x4201), withID(echoWithQR(q)[0], 0x0042)} // one byte off, either byte
+	}))
 	u := newUpstream(f.addr, 300*time.Millisecond)
 	if got := u.exchangeUDP(context.Background(), headerFor(t, "ipv4 udp"), buildQuery(t, 0x4242, "example.", true)); got != nil {
 		t.Fatalf("a reply with the wrong id was accepted: %x", got)

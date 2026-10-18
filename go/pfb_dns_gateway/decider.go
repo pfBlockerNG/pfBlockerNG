@@ -140,6 +140,14 @@ func (c *call) abandon() (unanswered bool) {
 	}
 }
 
+// abandon gives the query up: a FORWARD that reached it but was never picked up gets its empty REPLY at once, or
+// the decider would wait for it until its own timeout.
+func (d *Decider) abandon(id uint32, c *call) {
+	if c.abandon() {
+		_ = d.send(frameReply, id, nil)
+	}
+}
+
 // Decider is the gateway's end of the decision socket: one reader goroutine multiplexes the queries in flight.
 type Decider struct {
 	conn         net.Conn
@@ -328,9 +336,7 @@ func (d *Decider) Decide(ctx context.Context, client netip.Addr, wire []byte, fw
 		case answer := <-c.final:
 			return answer, nil
 		case <-ctx.Done():
-			if c.abandon() {
-				_ = d.send(frameReply, id, nil)
-			}
+			d.abandon(id, c)
 			return nil, ctx.Err()
 		case <-d.done:
 			return nil, d.Err()

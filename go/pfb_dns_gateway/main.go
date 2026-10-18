@@ -83,7 +83,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	var listen listFlag
-	fs.Var(&listen, "listen", "plain DNS address (UDP and TCP), repeatable (127.0.0.1)")
+	fs.Var(&listen, "listen", "plain DNS address (UDP and TCP), repeatable; required")
 	fs.IntVar(&cfg.port, "port", cfg.port, "plain DNS port; 0 picks one per address")
 	fs.StringVar(&cfg.upstream, "upstream", cfg.upstream, "Unbound's proxy-protocol HOST:PORT")
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "wait for Unbound per exchange")
@@ -108,9 +108,6 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q before `--`", fs.Arg(0))
 	}
 	cfg.listen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dohListen, dohTrusted, doqListen
-	if len(cfg.listen) == 0 {
-		cfg.listen = []string{"127.0.0.1"}
-	}
 	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
@@ -132,6 +129,9 @@ func (c config) validate() error {
 	}
 	if c.aclFile == "" {
 		return errors.New("--acl-file must not be empty")
+	}
+	if len(c.listen) == 0 {
+		return errors.New("--listen is required: the addresses to serve plain DNS on")
 	}
 	if slices.Contains(c.listen, "") {
 		return errors.New("--listen must not be empty")
@@ -180,9 +180,13 @@ func startDecider(argv []string, fd *os.File) (*child, error) {
 	return c, nil
 }
 
-func (c *child) kill() {
-	_ = c.cmd.Process.Kill()
-	<-c.exited
+// kill stops the decider and waits at most bound for it to be gone. After the privilege drop the gateway cannot
+// signal a decider that is still root (EPERM), and must not wait for that decider's boot to finish.
+func (c *child) kill(logf func(format string, args ...any), bound time.Duration) {
+	if err := c.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		logf("cannot kill the decider: %v", err)
+	}
+	c.waitExit(bound)
 }
 
 func (c *child) waitExit(d time.Duration) bool {
@@ -266,7 +270,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	dec := NewDecider(conn, logf)
 	abort := func(err error) (*server, error) {
 		dec.Close()
-		ch.kill()
+		ch.kill(logf, cfg.killAfter)
 		closeListeners()
 		return nil, err
 	}
@@ -345,11 +349,11 @@ func (s *server) fatal() <-chan error { return s.failed }
 func (s *server) shutdown() {
 	s.once.Do(func() {
 		close(s.stopped)
+		s.dec.Close() // first: queries blocked writing to a decider that reads nothing would hold g.stop() up to the write deadline
 		s.g.stop()
-		s.dec.Close()
 		if !s.child.waitExit(s.cfg.killAfter) {
 			s.logf("the decider did not exit within %s of EOF: killing it", s.cfg.killAfter)
-			s.child.kill()
+			s.child.kill(s.logf, s.cfg.killAfter)
 		}
 	})
 }
