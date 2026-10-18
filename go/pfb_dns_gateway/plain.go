@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -19,26 +20,58 @@ type plainListener struct {
 	tcp *net.TCPListener
 }
 
-// bindPlain binds host (an IP address) on port, TCP first and UDP on the port TCP got, so port 0 picks one for both.
-func bindPlain(host string, port int) (*plainListener, error) {
-	hostport := net.JoinHostPort(host, strconv.Itoa(port))
+// bindAddr checks host (an IP address) and port; an IPv4-mapped IPv6 host binds as IPv4.
+func bindAddr(host string, port int) (netip.AddrPort, error) {
 	addr, err := netip.ParseAddr(host)
 	if err != nil || port < 0 || port > 65535 {
-		return nil, fmt.Errorf("cannot listen on %s: not an IP address and port", hostport)
+		return netip.AddrPort{}, fmt.Errorf("cannot listen on %s: not an IP address and port", net.JoinHostPort(host, strconv.Itoa(port)))
 	}
-	addr = addr.Unmap()
-	family := "4"
-	if addr.Is6() {
-		family = "6"
+	return netip.AddrPortFrom(addr.Unmap(), uint16(port)), nil
+}
+
+func ipFamily(proto string, ap netip.AddrPort) string {
+	if ap.Addr().Is6() {
+		return proto + "6"
 	}
-	tcp, err := net.ListenTCP("tcp"+family, net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, uint16(port))))
+	return proto + "4"
+}
+
+// bindTCP binds host on port; port 0 picks one.
+func bindTCP(host string, port int) (*net.TCPListener, error) {
+	ap, err := bindAddr(host, port)
 	if err != nil {
-		return nil, listenError(hostport, err)
+		return nil, err
 	}
-	udp, err := net.ListenUDP("udp"+family, net.UDPAddrFromAddrPort(netip.AddrPortFrom(addr, tcp.Addr().(*net.TCPAddr).AddrPort().Port())))
+	tcp, err := net.ListenTCP(ipFamily("tcp", ap), net.TCPAddrFromAddrPort(ap))
+	if err != nil {
+		return nil, listenError(net.JoinHostPort(host, strconv.Itoa(port)), err)
+	}
+	return tcp, nil
+}
+
+// bindUDP binds host on port; port 0 picks one.
+func bindUDP(host string, port int) (*net.UDPConn, error) {
+	ap, err := bindAddr(host, port)
+	if err != nil {
+		return nil, err
+	}
+	udp, err := net.ListenUDP(ipFamily("udp", ap), net.UDPAddrFromAddrPort(ap))
+	if err != nil {
+		return nil, listenError(net.JoinHostPort(host, strconv.Itoa(port)), err)
+	}
+	return udp, nil
+}
+
+// bindPlain binds host on port, TCP first and UDP on the port TCP got, so port 0 picks one for both.
+func bindPlain(host string, port int) (*plainListener, error) {
+	tcp, err := bindTCP(host, port)
+	if err != nil {
+		return nil, err
+	}
+	udp, err := bindUDP(host, int(tcp.Addr().(*net.TCPAddr).AddrPort().Port()))
 	if err != nil {
 		_ = tcp.Close()
-		return nil, listenError(hostport, err)
+		return nil, err
 	}
 	return &plainListener{udp: udp, tcp: tcp}, nil
 }
@@ -60,20 +93,25 @@ func (l *plainListener) close() {
 
 // serve starts answering on l until stop().
 func (g *gateway) serve(l *plainListener) {
-	g.mu.Lock()
-	g.listeners = append(g.listeners, l)
-	g.mu.Unlock()
+	g.closeOnStop(l.close)
 	g.wg.Add(2)
 	go g.serveUDP(l.udp)
-	go g.serveTCP(l.tcp)
+	go g.serveTCP(l.tcp, nil)
+}
+
+// closeOnStop registers what stop() closes: a listener, or a server that owns its connections.
+func (g *gateway) closeOnStop(closeFn func()) {
+	g.mu.Lock()
+	g.closers = append(g.closers, closeFn)
+	g.mu.Unlock()
 }
 
 // stop ends serving: listeners and client connections are closed, queries in flight are cancelled.
 func (g *gateway) stop() {
 	g.cancel()
 	g.mu.Lock()
-	for _, l := range g.listeners {
-		l.close()
+	for _, closeFn := range g.closers {
+		closeFn()
 	}
 	for c := range g.clients {
 		_ = c.Close()
@@ -151,7 +189,8 @@ func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort
 
 // --- TCP ---
 
-func (g *gateway) serveTCP(ln *net.TCPListener) {
+// serveTCP accepts length-framed DNS connections; with tlsConf they speak TLS first (DoT), under the same cap.
+func (g *gateway) serveTCP(ln *net.TCPListener, tlsConf *tls.Config) {
 	defer g.wg.Done()
 	for {
 		conn, err := ln.AcceptTCP()
@@ -177,7 +216,7 @@ func (g *gateway) serveTCP(ln *net.TCPListener) {
 			continue
 		}
 		g.wg.Add(1)
-		go g.serveConn(conn, peer)
+		go g.serveConn(conn, peer, tlsConf)
 	}
 }
 
@@ -192,8 +231,9 @@ func (g *gateway) track(conn net.Conn) bool {
 	return true
 }
 
-// serveConn answers one client connection: length-framed queries one at a time over one upstream connection.
-func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort) {
+// serveConn answers one client connection: length-framed queries one at a time over one upstream connection. The
+// slot was taken at accept, so the TLS handshake (bounded by g.handshake) happens inside it.
+func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls.Config) {
 	defer g.wg.Done()
 	defer func() {
 		_ = conn.Close()
@@ -207,6 +247,15 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort) {
 	if !g.track(conn) {
 		return
 	}
+	var stream net.Conn = conn
+	if tlsConf != nil {
+		tc := tls.Server(conn, tlsConf)
+		_ = tc.SetDeadline(time.Now().Add(g.handshake))
+		if tc.HandshakeContext(g.ctx) != nil {
+			return
+		}
+		stream = tc
+	}
 	src, dst := proxyEndpoints(peer, conn.LocalAddr().(*net.TCPAddr).AddrPort())
 	header, err := proxyHeader(src, dst, true)
 	if err != nil {
@@ -215,7 +264,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort) {
 	up := g.up.newTCP(header)
 	defer up.close()
 	for {
-		wire, err := g.readQuery(conn)
+		wire, err := g.readQuery(stream)
 		if err != nil {
 			return
 		}
@@ -226,7 +275,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort) {
 		case toDecider:
 			reply = g.resolve(g.ctx, src.Addr(), wire, up.exchange)
 		}
-		if reply != nil && g.writeReply(conn, reply) != nil {
+		if reply != nil && g.writeReply(stream, reply) != nil {
 			return
 		}
 	}
