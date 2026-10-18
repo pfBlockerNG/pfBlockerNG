@@ -138,6 +138,12 @@ if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 }
 unset($pfb_test_rc_dir);
 
+// 4g. The installed package XML pfblockerng.inc re-registers the package's menu and services from after an aborted removal
+//     (issue #3515): the shipped file, so a unit test never reads the appliance's.
+if (!defined('PFB_PACKAGE_XML')) {
+	define('PFB_PACKAGE_XML', dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng.xml');
+}
+
 // 2 + load. Define the production functions by including the real source.
 // pfblockerng.inc is legacy code that emits some load-time E_DEPRECATED/E_WARNING
 // notices (e.g. an optional-before-required parameter, a switch `continue`) that
