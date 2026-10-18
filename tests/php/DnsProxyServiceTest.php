@@ -289,18 +289,18 @@ final class DnsProxyServiceTest extends TestCase
 		return "{$this->dir}/run/pfb_dns_ready";
 	}
 
-	/** Point every absolute path in the generated script at the sandbox; fail closed on any other. */
+	/** Point every absolute path in the generated script at the sandbox; fail closed on any other. A slash after a glob `*` is part of a case pattern, not a path. */
 	private function sandboxPaths(string $script): string
 	{
 		return (string) preg_replace_callback(
-			'~(?<![\w$.\-/])/(?:[\w.\-]+/)*[\w.\-]+~',
+			'~(?<![\w$.\-/*])/(?:[\w.\-]+/)*[\w.\-]+~',
 			function (array $m): string {
 				$path = $m[0];
 				if ($path === $GLOBALS['pfb']['dns_proxy_ready']) {
 					return $this->readyFile();
 				}
 				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
-				    str_starts_with($path, "{$this->dir}/bin/pfb_dns_gateway") ||
+				    str_starts_with($path, "{$this->dir}/dns_proxy/") ||
 				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {
 					return $path;
 				}
@@ -1363,7 +1363,7 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issue #3513 -- the Go gateway replaces the Python listener while its binary is installed
+	// issue #3513 -- pfb-dns, the Go gateway, replaces the Python listener while the package ships it
 	// -----------------------------------------------------------------------
 
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
@@ -1372,13 +1372,21 @@ final class DnsProxyServiceTest extends TestCase
 		'--decision-fd', '3', '--module-dir', '/var/unbound', '--user', 'unbound',
 	];
 
-	/** An executable stand-in for the gateway binary; the script runs whatever path it is given. */
-	private function gateway(int $mode = 0755): string
+	/**
+	 * The dns_proxy directory of a package that ships pfb-dns: one stand-in per target the generator only has to find,
+	 * never run (the wrapper beside them is the one thing the script launches).
+	 *
+	 * @param list<string> $targets the bin/<target>/ directories that get a pfb-dns
+	 */
+	private function gateway(int $mode = 0555, array $targets = ['freebsd-amd64', 'freebsd-arm64']): string
 	{
-		$path = "{$this->dir}/bin/pfb_dns_gateway";
-		file_put_contents($path, "#!/bin/sh\n");
-		chmod($path, $mode);
-		return $path;
+		$dir = "{$this->dir}/dns_proxy";
+		foreach ($targets as $target) {
+			$this->assertTrue(is_dir("{$dir}/bin/{$target}") || mkdir("{$dir}/bin/{$target}", 0777, TRUE), "payload mkdir failed: {$target}");
+			file_put_contents("{$dir}/bin/{$target}/pfb-dns", "#!/bin/sh\n");
+			chmod("{$dir}/bin/{$target}/pfb-dns", $mode);
+		}
+		return $dir;
 	}
 
 	private function generateWith(string $gateway): void
@@ -1421,7 +1429,7 @@ final class DnsProxyServiceTest extends TestCase
 			'-r', '-R', '5', '-t', 'pfb_dns_proxy',
 			'-P', $this->pidfile('pfb_dns_proxy_daemon.pid'), '-p', $this->pidfile('pfb_dns_proxy.pid'),
 			'-o', "{$this->dir}/log/dns_proxy.log",
-			$gateway, ...$addresses,
+			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
 			'--pfsense-config', '/cf/conf/config.xml', ...$tls, ...$module,
 			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', ...self::DECIDER,
@@ -1442,7 +1450,7 @@ final class DnsProxyServiceTest extends TestCase
 	private function gatewayWarnings(): array
 	{
 		$lines = explode("\n", (string) @file_get_contents("{$this->dir}/pfb.err"));
-		return array_values(array_filter($lines, static fn (string $line): bool => str_contains($line, 'pfb_dns_gateway')));
+		return array_values(array_filter($lines, static fn (string $line): bool => str_contains($line, 'pfb-dns binary')));
 	}
 
 	/** @return array<string,array{bool}> */
@@ -1475,7 +1483,7 @@ final class DnsProxyServiceTest extends TestCase
 		$text = $this->rcText();
 
 		$this->assertStringContainsString("--listen '192.0.2.1' --listen '2001:db8::1'", $text);
-		$this->assertStringContainsString(escapeshellarg($gateway), $text, 'the binary path is quoted too');
+		$this->assertStringContainsString(escapeshellarg("{$gateway}/pfb_dns.sh"), $text, 'the wrapper path is quoted too');
 		$this->assertStringContainsString('</dev/null >/dev/null 2>&1', $text, 'stdio is detached (#662)');
 		$this->assertStringContainsString("rc_stop || return 1\n", $text, 'never launch over a survivor');
 		$proc = proc_open([$this->shell, '-n', "{$this->dir}/rc/" . self::RC], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes);
@@ -1701,19 +1709,50 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(300, substr_count($this->rcText(), " --doh-trusted '"), 'each entry is its own quoted word');
 	}
 
-	public function testAGatewayThatIsNotExecutableIsNotUsed(): void
+	/** @return array<string,array{list<string>,int}> the bin/<target>/ directories that hold a pfb-dns, and its mode */
+	public static function payloads(): array
 	{
-		// Given the unchanged Python line a box without the binary gets
+		return [
+			'both architectures'                       => [['freebsd-amd64', 'freebsd-arm64'], 0555],
+			'amd64 alone: an arm64 box fails in the wrapper' => [['freebsd-amd64'], 0555],
+			'arm64 alone: an amd64 box fails in the wrapper' => [['freebsd-arm64'], 0555],
+			'a target no wrapper selects'              => [['freebsd-riscv64'], 0555],
+			'both, but not executable'                 => [['freebsd-amd64', 'freebsd-arm64'], 0644],
+		];
+	}
+
+	/** @param list<string> $targets */
+	#[DataProvider('payloads')]
+	public function testAnyPfbDnsFileMakesTheScriptRunTheWrapperAndNeverTheStandalonePythonListener(array $targets, int $mode): void
+	{
+		// Given a saved Resolver and a package that ships pfb-dns for $targets only
+		$gateway = $this->gateway($mode, $targets);
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+
+		// When the rc service is generated and started
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the daemon runs the wrapper under /bin/sh, which alone decides whether this machine has a usable binary
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
+		$this->assertStringNotContainsString('pfb_dns_proxy.py --listen', $this->rcText(), 'no standalone Python listener to fall back to when the wrapper refuses');
+	}
+
+	public function testABinTreeThatHoldsNoPfbDnsFileIsALegacyPackageAndKeepsThePythonListener(): void
+	{
+		// Given the script a box without the payload gets
 		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1']);
-		$this->setting('pfb_dns_doh', 'on');
-		$this->generateWith("{$this->dir}/bin/absent");
+		$this->generateWith("{$this->dir}/dns_proxy");
 		$python = $this->rcText();
 
-		// When the binary exists but lacks the execute bit
-		$this->generateWith($this->gateway(0644));
+		// When the package has bin/ directories but no pfb-dns in them
+		$gateway = $this->gateway(0555, []);
+		$this->assertTrue(mkdir("{$gateway}/bin/freebsd-amd64", 0777, TRUE));
+		file_put_contents("{$gateway}/bin/freebsd-amd64/README", 'not a binary');
+		$this->generateWith($gateway);
 
-		// Then the Python listener is still the one launched
+		// Then the Python listener is still the one launched, byte for byte
 		$this->assertSame($python, $this->rcText());
+		$this->assertStringContainsString('pfb_dns_proxy.py --listen', $python);
 		$this->assertStringNotContainsString('--decision-fd', $python, 'the Python line carries no gateway arguments');
 	}
 
@@ -1784,7 +1823,7 @@ final class DnsProxyServiceTest extends TestCase
 		$gateway = $this->gateway();
 		$this->moveResolver();
 		$this->startAndReadArgv($gateway);
-		$this->assertStringContainsString($gateway, (string) file_get_contents("{$this->dir}/state/procs"), 'precondition: the child is the gateway');
+		$this->assertStringContainsString("{$gateway}/pfb_dns.sh", (string) file_get_contents("{$this->dir}/state/procs"), 'precondition: the child is the wrapper');
 		$this->assertSame(['3001', '3002'], $this->livePids(), 'precondition: supervisor and gateway alive');
 
 		// When it is stopped
@@ -1796,15 +1835,21 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame([], $this->livePids());
 	}
 
-	/** @return array<string,array{string}> the gateway child's command line as ps shows it */
+	/** @return array<string,array{string}> the gateway child's command line as ps shows it, in each form it takes */
 	public static function gatewayChildLines(): array
 	{
+		$dir = '/usr/local/pkg/pfblockerng/dns_proxy';
 		return [
-			'with the decider argv after the separator' => [
-				'/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway --listen 192.0.2.1 --port 53 -- '
+			'the binary the wrapper exec`d, with the decider argv after the separator' => [
+				"{$dir}/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1 --port 53 -- "
 				. '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --decision-fd 3',
 			],
-			'by its own name alone' => ['/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway --listen 192.0.2.1'],
+			'the amd64 binary by its own name alone' => ["{$dir}/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1"],
+			'the arm64 binary by its own name alone' => ["{$dir}/bin/freebsd-arm64/pfb-dns --listen 192.0.2.1"],
+			'the wrapper before it execs' => [
+				"/bin/sh {$dir}/pfb_dns.sh --listen 192.0.2.1 --port 53 -- "
+				. '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --decision-fd 3',
+			],
 		];
 	}
 
@@ -1826,6 +1871,55 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertFileDoesNotExist($this->pidfile('pfb_dns_proxy.pid'));
 	}
 
+	/** @return array<string,array{string}> the command line a pid the gateway once had can come to carry, none of them ours */
+	public static function foreignChildLines(): array
+	{
+		return [
+			'the retired single-binary name' => ['/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway --listen 192.0.2.1'],
+			'another install of a pfb-dns' => ['/opt/pfb-dns/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1'],
+			'an editor on a file of that name' => ['vi /var/log/pfb-dns.log'],
+			'a pfb-dns outside the package directory' => ['/usr/local/pkg/pfblockerng/other/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1'],
+		];
+	}
+
+	#[DataProvider('foreignChildLines')]
+	public function testStopNeverSignalsAPidWhoseCommandLineIsNotTheProxys(string $childArgs): void
+	{
+		// Given a live supervisor and a pidfile child whose pid was reused by another command
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', TRUE);
+		file_put_contents("{$this->dir}/state/procs",
+			"1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[1002] (daemon)\n"
+			. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||{$childArgs}\n");
+
+		[$status, $output] = $this->rc('stop');
+
+		// Then only the supervisor is signalled and waited for: the stranger lives on and gets no KILL
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertSame(['1002'], $this->livePids(), 'the unrelated process was left alone');
+		$this->assertSame(['term', 'sleep', 'sleep'], $this->events());
+	}
+
+	public function testStartKeepsAServingGatewayWhosePidfileChildIsNamedByItsBinaryAlone(): void
+	{
+		// Given a supervisor and a child that pfb-dns replaced the wrapper in: its command line has no pfb_dns_proxy in it
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', TRUE);
+		file_put_contents("{$this->dir}/state/procs",
+			"1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[1002] (daemon)\n"
+			. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1\n");
+
+		// When the package start runs the script
+		[$status, $output] = $this->rc('start');
+
+		// Then both are recognised as serving: nothing is signalled and nothing is launched
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame([], $this->events());
+		$this->assertSame(['1001', '1002'], $this->livePids());
+	}
+
 	public function testAGatewayThatIgnoresTermIsKilledAtFiveTicksAndGivenUpOnAtSeven(): void
 	{
 		// Given a gateway that survives both signals
@@ -1835,7 +1929,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->arrange([], 'never', 'never', TRUE);
 		file_put_contents("{$this->dir}/state/procs",
 			"1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[1002] (daemon)\n"
-			. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||{$gateway} --listen 192.0.2.1\n");
+			. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||{$gateway}/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1\n");
 
 		// When it is stopped
 		[$status, $output] = $this->rc('stop');

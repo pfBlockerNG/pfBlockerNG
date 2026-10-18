@@ -7,7 +7,7 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
       --listen 192.0.2.1 --listen ::1 --port 53 --upstream 127.0.0.1:5353 --module-dir /var/unbound
 
   /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py
-      --decision-fd 3 --module-dir /var/unbound --user unbound      (behind pfb_dns_gateway)
+      --decision-fd 3 --module-dir /var/unbound --user unbound      (behind pfb-dns)
 
   --listen ADDR      address to serve on, repeatable (default 127.0.0.1)
   --port N           client-facing UDP and TCP port (default 53)

@@ -3592,9 +3592,11 @@ $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 if (!defined('PFB_PACKAGE_XML')) {
 	define('PFB_PACKAGE_XML', '/usr/local/pkg/pfblockerng.xml');
 }
-// issue #3513: when this Go gateway is installed and executable the rc script runs it, with the Python proxy as its
-// decision service; otherwise the Python listener runs alone, as before.
-const PFB_DNS_GATEWAY_BIN = '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway';
+// issue #3513: the package ships pfb-dns, the Go gateway that serves DoH/DoQ and runs the Python proxy as its decision
+// service, once per FreeBSD architecture (bin/<target>/pfb-dns). pfb_dns.sh picks this machine's and execs it, so the
+// daemon(8) child's pid is the gateway's own. Any such file makes the rc script run the wrapper; none (a legacy
+// package) leaves the Python listener alone, as before.
+const PFB_DNS_PROXY_DIR = '/usr/local/pkg/pfblockerng/dns_proxy';
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -4166,17 +4168,19 @@ function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
  * off, and the proxy keeps serving it); a stored marker that is no valid snapshot logs one error and exits 1 instead of
  * starting a proxy that could not bind; never over a survivor; every address shell-quoted. Loopback is always among
  * the addresses, so a Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. It
- * runs $gateway, the Go gateway that serves DoH/DoQ and runs the Python proxy as its decision service, when that file
- * is executable; else the Python proxy alone through pfb_python.sh, which serves no DoH/DoQ (a warning says so).
+ * runs pfb-dns, the Go gateway that serves DoH/DoQ and runs the Python proxy as its decision service, through pfb_dns.sh
+ * (which execs this machine's binary) as soon as the package ships any bin/<target>/pfb-dns: a payload this machine
+ * cannot run fails in the wrapper, it never starts the Python listener; with no payload (a legacy package) it runs the
+ * Python proxy alone through pfb_python.sh, which serves no DoH/DoQ (a warning says so).
  * Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's or the
- * gateway's.
+ * installed pfb-dns's.
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
  *
- * @param string $gateway the gateway binary's path (a test points it at a temp file)
+ * @param string $proxyDir the package's dns_proxy directory (a test points it at a temp directory)
  */
-function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
+function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	global $pfb;
 
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
@@ -4201,17 +4205,20 @@ function pfb_dns_proxy_service(string $gateway = PFB_DNS_GATEWAY_BIN): void {
 	$port = pfb_dns_proxy_port();
 
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
-	if (is_file($gateway) && is_executable($gateway)) {
-		$command = escapeshellarg($gateway) . "{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? ' --dot' : '') .
+	if ((glob("{$proxyDir}/bin/*/pfb-dns") ?: []) !== []) {
+		$command = '/bin/sh ' . escapeshellarg("{$proxyDir}/pfb_dns.sh") . "{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? ' --dot' : '') .
 		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
 		    " --unbound-conf /var/unbound/unbound.conf --user unbound -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	} else {
 		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound --ready-file {$ready}" .
 		    ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '') . $module;
 		if ($saved !== NULL && (PfbConfig::read('dns/pfb_dns_doh') === PfbToggle::On || PfbConfig::read('dns/pfb_dns_doq') === PfbToggle::On)) {
-			$warnings[] = 'DNS proxy: DoH/DoQ are enabled but the pfb_dns_gateway binary is not installed; they are not served';
+			$warnings[] = 'DNS proxy: DoH/DoQ are enabled but the pfb-dns binary is not installed; they are not served';
 		}
 	}
+	// The command lines of the processes this script keeps and signals: the supervisor, the Python proxy and the decider
+	// behind the gateway all name pfb_dns_proxy; pfb-dns itself, as the wrapper execs it, is known by its installed path.
+	$proxyArgs = '*pfb_dns_proxy*|' . PFB_DNS_PROXY_DIR . '/bin/freebsd-*/pfb-dns*';
 
 	$rc		= array();
 	$rc['file']	= 'pfb_dns_proxy.sh';
@@ -4264,7 +4271,7 @@ EOF;
 		esac
 		args="\$(/bin/ps -ww -o args= -p "\${pid}" 2>/dev/null)"
 		case "\${args}" in
-			*pfb_dns_proxy*) ours="\$((ours + 1))" ;;
+			{$proxyArgs}) ours="\$((ours + 1))" ;;
 		esac
 	done
 	[ "\${ours}" -eq 2 ] && exit 0
@@ -4304,7 +4311,7 @@ EOF;
 			esac
 			args="\$(/bin/ps -ww -o args= -p "\${pid}" 2>/dev/null)"
 			case "\${args}" in
-				*pfb_dns_proxy*|*pfb_dns_gateway*) alive="\${alive} \${pid}" ;;
+				{$proxyArgs}) alive="\${alive} \${pid}" ;;
 			esac
 		done
 		[ -n "\${alive}" ] || break
@@ -4491,15 +4498,15 @@ function pfb_dns_proxy_roll_back(): bool {
  * then be READY: one that is alive but never published its marker (restarted by its supervisor every few seconds) fails
  * the activation and is rolled back, which a pidfile alone would never notice.
  *
- * @param string $gateway the gateway binary's path, as for pfb_dns_proxy_service()
+ * @param string $proxyDir the package's dns_proxy directory, as for pfb_dns_proxy_service()
  * @return bool TRUE iff nothing is moved or the proxy is ready; FALSE after a failed activation (rolled back or not)
  */
-function pfb_dns_proxy_ensure_running(string $gateway = PFB_DNS_GATEWAY_BIN): bool {
+function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): bool {
 	if (pfb_dns_proxy_saved() === NULL) {
 		return TRUE;
 	}
 	$before = @file_get_contents(PFB_DNS_PROXY_RCFILE);
-	pfb_dns_proxy_service($gateway);
+	pfb_dns_proxy_service($proxyDir);
 	$acted = TRUE;
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);

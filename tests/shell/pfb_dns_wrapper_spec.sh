@@ -196,4 +196,28 @@ EOF
     The contents of file "${log}" should equal "$(printf 'uname -p\nran amd64\n')"
     cleanup
   End
+
+  # daemon(8) writes the pid of the process it starts to the child pidfile; the stop and the start's
+  # "already serving" check both read it. exec must leave pfb-dns as that very process.
+  It 'execs the binary, so the process the caller started is the one that runs pfb-dns'
+    setup
+    mkdir -p "${work}/dns_proxy/bin/freebsd-amd64"
+    cat > "${work}/dns_proxy/bin/freebsd-amd64/pfb-dns" <<EOF
+#!/bin/sh
+printf '%s\n' "\$\$" > "${work}/binary.pid"
+EOF
+    chmod +x "${work}/dns_proxy/bin/freebsd-amd64/pfb-dns"
+    run_as_daemon_child() {
+      PATH="${work}/fakebin:${PATH}" FAKE_MACHINE=amd64 \
+        sh -c 'printf "%s\n" "$$" > "$1/caller.pid"; exec /bin/sh "$1/dns_proxy/pfb_dns.sh"' sh "${work}" || return 1
+      if [ "$(cat "${work}/caller.pid")" = "$(cat "${work}/binary.pid")" ]; then
+        echo same
+      else
+        echo "caller $(cat "${work}/caller.pid") ran pfb-dns as $(cat "${work}/binary.pid")"
+      fi
+    }
+    When call run_as_daemon_child
+    The output should equal 'same'
+    cleanup
+  End
 End

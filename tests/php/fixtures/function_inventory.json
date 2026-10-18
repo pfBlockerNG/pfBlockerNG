@@ -1757,11 +1757,11 @@
         "returnType": "bool",
         "params": [
             {
-                "name": "gateway",
+                "name": "proxyDir",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
-                "default": "'/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway'"
+                "default": "'/usr/local/pkg/pfblockerng/dns_proxy'"
             }
         ]
     },
@@ -1922,11 +1922,11 @@
         "returnType": "void",
         "params": [
             {
-                "name": "gateway",
+                "name": "proxyDir",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
-                "default": "'/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_gateway'"
+                "default": "'/usr/local/pkg/pfblockerng/dns_proxy'"
             }
         ]
     },
