@@ -1,13 +1,15 @@
-// pfb_dns_gateway (issue #3513): serves plain DNS over UDP and TCP, applies the Resolver ACL before anyone is
-// asked, lets the Python DNSBL decider (its child) decide every other query, and forwards to Unbound with a
-// PROXYv2 header naming the client.
+// pfb_dns_gateway (issue #3513): serves plain DNS over UDP and TCP, and DoT, DoH and DoQ with the DNS Resolver's
+// certificate; applies the Resolver ACL before anyone is asked, lets the Python DNSBL decider (its child) decide
+// every other query, and forwards to Unbound with a PROXYv2 header naming the client.
 //
 //	pfb_dns_gateway [flags] -- <decider command...>
 //
 // The decider command is started with the decision socket as fd 3; docs/misc/dns-gateway-protocol.md is the
-// protocol. Readiness lines on stderr, once the decider has sent READY:
+// protocol, docs/misc/dns-gateway-transports.md the encrypted transports. Readiness lines on stderr, once the
+// decider has sent READY:
 //
 //	listening udp+tcp <host>:<port>     one per bound --listen address
+//	listening dot|doh|doq <host>:<port> one per bound TLS listener
 //	ready upstream <host>:<port>
 package main
 
@@ -36,13 +38,20 @@ const (
 )
 
 type config struct {
-	listen   []string
-	port     int
-	upstream string
-	timeout  time.Duration
-	aclFile  string
-	user     string
-	decider  []string
+	listen        []string
+	port          int
+	upstream      string
+	timeout       time.Duration
+	aclFile       string
+	user          string
+	dot           bool
+	pfsenseConfig string
+	dohListen     []string
+	dohPort       int
+	dohTrusted    []string
+	doqListen     []string
+	doqPort       int
+	decider       []string
 
 	// Test seams; the zero value is production.
 	drop         func() error      // replaces the privilege drop to --user
@@ -60,7 +69,10 @@ func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 // parseConfig reads the command line: flags, then `--`, then the decider command, which is never parsed. -h
 // writes the flag defaults to usage and returns flag.ErrHelp.
 func parseConfig(args []string, usage io.Writer) (config, error) {
-	cfg := config{port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second, aclFile: "/var/unbound/access_lists.conf"}
+	cfg := config{
+		port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second, aclFile: "/var/unbound/access_lists.conf",
+		pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
+	}
 	split := slices.Index(args, "--")
 	if split < 0 {
 		return config{}, errors.New("missing `--` and the decider command after it")
@@ -77,6 +89,14 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "wait for Unbound per exchange")
 	fs.StringVar(&cfg.aclFile, "acl-file", cfg.aclFile, "Resolver ACL file")
 	fs.StringVar(&cfg.user, "user", "", "give up root for this user once the sockets are bound and the decider runs")
+	fs.BoolVar(&cfg.dot, "dot", false, "serve DoT on every --listen address at unbound/tlsport (853 if unset) of --pfsense-config")
+	fs.StringVar(&cfg.pfsenseConfig, "pfsense-config", cfg.pfsenseConfig, "config.xml with unbound/sslcertref, tlsport and the <cert>/<ca>")
+	var dohListen, dohTrusted, doqListen listFlag
+	fs.Var(&dohListen, "doh-listen", "DoH address (HTTPS GET and POST on /dns-query), repeatable; none = DoH off")
+	fs.IntVar(&cfg.dohPort, "doh-port", cfg.dohPort, "DoH port; 0 picks one per address")
+	fs.Var(&dohTrusted, "doh-trusted", "front end trusted to send PROXYv2 and X-Forwarded-For to DoH (CIDR or address), repeatable")
+	fs.Var(&doqListen, "doq-listen", "DoQ (RFC 9250) address, repeatable; none = DoQ off")
+	fs.IntVar(&cfg.doqPort, "doq-port", cfg.doqPort, "DoQ UDP port; 0 picks one per address")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -87,7 +107,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	if fs.NArg() > 0 {
 		return config{}, fmt.Errorf("unexpected argument %q before `--`", fs.Arg(0))
 	}
-	cfg.listen = listen
+	cfg.listen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dohListen, dohTrusted, doqListen
 	if len(cfg.listen) == 0 {
 		cfg.listen = []string{"127.0.0.1"}
 	}
@@ -115,6 +135,21 @@ func (c config) validate() error {
 	}
 	if slices.Contains(c.listen, "") {
 		return errors.New("--listen must not be empty")
+	}
+	if slices.Contains(c.dohListen, "") {
+		return errors.New("--doh-listen must not be empty")
+	}
+	if slices.Contains(c.doqListen, "") {
+		return errors.New("--doq-listen must not be empty")
+	}
+	if c.pfsenseConfig == "" {
+		return errors.New("--pfsense-config must not be empty")
+	}
+	if c.dohPort < 0 || c.dohPort > 65535 {
+		return fmt.Errorf("--doh-port %d is outside 0..65535", c.dohPort)
+	}
+	if c.doqPort < 0 || c.doqPort > 65535 {
+		return fmt.Errorf("--doq-port %d is outside 0..65535", c.doqPort)
 	}
 	host, port, err := net.SplitHostPort(c.upstream)
 	if p, perr := strconv.Atoi(port); err != nil || host == "" || perr != nil || p < 1 || p > 65535 {
@@ -203,14 +238,17 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		}
 		listeners = append(listeners, l)
 	}
+	var secure *tlsListeners
 	closeListeners := func() {
 		for _, l := range listeners {
 			l.close()
 		}
+		secure.close()
 	}
 	if len(listeners) == 0 {
 		return nil, errors.New("no address could be bound")
 	}
+	secure = bindTLS(cfg, logf) // config.xml is root-only: read it, and bind, before the privilege drop
 	trace("bind")
 
 	conn, deciderEnd, err := newSocketpair()
@@ -254,12 +292,14 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	for _, l := range listeners {
 		logf("listening udp+tcp %s", l.addr())
 	}
+	secure.report(logf)
 	logf("ready upstream %s", cfg.upstream)
 
 	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
 	for _, l := range listeners {
 		g.serve(l)
 	}
+	secure.serve(g, cfg.dohTrusted)
 	g.wg.Add(1)
 	go func() { // the pfSense rewrite of the ACL file reaches the matcher within a second
 		defer g.wg.Done()
