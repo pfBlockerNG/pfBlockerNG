@@ -224,21 +224,22 @@ Authorization = property of **write**, not call site (generalises
     (presence and value) taken before the DNS proxy moves it; `''` = not moved. Default `''`, sync
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
-    not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only the toggle
-    leaf, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
+    not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only its own leaves
+    (the toggle and the seven DoH/DoQ settings), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
     (`pfblockerng_sync_sections()`), so neither key can leave the node. New key, no grandfather.
-  - **`pfb_dns_proxy_doh` / `pfb_dns_proxy_doq` → `PfbToggle`** (issue #3513): default Off, sync `local`;
-    serve DoH / DoQ from the DNS proxy through the Go gateway. New keys, no grandfather: absent reads Off =
-    pre-feature behaviour.
-  - **`pfb_dns_proxy_doh_port` / `pfb_dns_proxy_doq_port`** (issue #3513, plain strings): defaults `'4443'` /
-    `'853'`, sync `local`; the page validates a whole number 1-65535 and stores it without leading zeros. New
-    keys, no grandfather.
-  - **`pfb_dns_proxy_doh_interface` / `pfb_dns_proxy_doq_interface`** (issue #3513, plain strings): comma-joined
+  - **`dns/pfb_dns_doh` / `dns/pfb_dns_doq` → `PfbToggle`** (issue #3513, the pfB-DNS section): default Off, sync
+    `local`; serve DoH / DoQ from pfB-DNS through the Go binary, with or without DNSBL. New keys, no grandfather:
+    absent reads Off = pre-feature behaviour. They never lived anywhere else in a release: the first version kept them
+    on the DNSBL page as `dnsbl/pfb_dns_proxy_doh` and `_doq`, which are retired without an alias or a migration.
+  - **`dns/pfb_dns_doh_port` / `dns/pfb_dns_doq_port`** (issue #3513, plain strings): defaults `'4443'` / `'853'`,
+    sync `local`; the page validates a whole number 1-65535 and stores it without leading zeros. New keys, no
+    grandfather.
+  - **`dns/pfb_dns_doh_interface` / `dns/pfb_dns_doq_interface`** (issue #3513, plain strings): comma-joined
     configured interface names, default `''` = the proxy's own addresses, sync `local`. New keys, no grandfather.
-  - **`pfb_dns_proxy_doh_trusted`** (issue #3513, plain string): space-joined IPs/CIDRs of front ends trusted to
+  - **`dns/pfb_dns_doh_trusted`** (issue #3513, plain string): space-joined IPs/CIDRs of front ends trusted to
     send PROXY protocol v2 / X-Forwarded-For, default `''`, sync `local`. New key, no grandfather. All seven are
-    written by the DNSBL page's section save (`pfb_dns_proxy_listeners_stored()`), read through
-    `PfbConfig::read()` by `pfb_dns_proxy_service()`.
+    written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`, under `pfb_dns_config_lock()` beside the
+    toggle), read through `PfbConfig::read()` by `pfb_dns_proxy_service()`.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

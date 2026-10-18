@@ -176,12 +176,12 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 | --- | --- |
 | `gen` | `settings_family`, every `log_max_*` and `log_max_days_*`, `pfb_log_trim_margin_pct`, `pfb_reentry_timeout`, `pfb_software_check`, `pfb_reuse`, `pfb_alias_delta_mode`, `pfb_alias_delta_batch`, `pfb_syntax_highlight`, `log_syslog`, `pfb_metrics_export` |
 | `ip` | `enable_rdns`, `maxmind_locale`, `asn_reporting`, `inbound_interface`, `outbound_interface`, `maxmind_account`, `maxmind_key`, `asn_token` |
-| `dnsbl` | `pfb_dnsvip_auto`, `dnsbl_interface`, `pfb_dnsvip4`, `pfb_dnsvip6`, `pfb_dnsport`, `pfb_dnsport_ssl`, `pfb_cache`, `pfb_cache_flush`, `pfb_dns_proxy_doh`, `pfb_dns_proxy_doh_port`, `pfb_dns_proxy_doh_interface`, `pfb_dns_proxy_doh_trusted`, `pfb_dns_proxy_doq`, `pfb_dns_proxy_doq_port`, `pfb_dns_proxy_doq_interface`, `pfb_py_reply`, `pfb_py_nolog`, `pfb_control`, `pfb_control_legacy`, `pfb_py_cache_max`, `dnsbl_allow_int`, `dnsbl_redir_int`, `dnsbl_dot_block_int`, `agateway_in`, `agateway_out`, `top1m_token` |
+| `dnsbl` | `pfb_dnsvip_auto`, `dnsbl_interface`, `pfb_dnsvip4`, `pfb_dnsvip6`, `pfb_dnsport`, `pfb_dnsport_ssl`, `pfb_cache`, `pfb_cache_flush`, `pfb_py_reply`, `pfb_py_nolog`, `pfb_control`, `pfb_control_legacy`, `pfb_py_cache_max`, `dnsbl_allow_int`, `dnsbl_redir_int`, `dnsbl_dot_block_int`, `agateway_in`, `agateway_out`, `top1m_token` |
 | `rep`, `ss` | none |
 | `global` | every key except `feed_*`: `alertrefresh`, every `widget-*` |
 | `pfblockerngblacklist` | `item/*/username`, `item/*/password` (the `item` list is matched by its `xml` leaf) |
 | `sync` | `syncscope` (the section is never sent) |
-| `dns` | `pfb_dns`, `pfb_dns_saved` (issue #3515, pfB-DNS; the section is not one of the 19 and is never sent) |
+| `dns` | `pfb_dns`, `pfb_dns_saved`, `pfb_dns_doh`, `pfb_dns_doh_port`, `pfb_dns_doh_interface`, `pfb_dns_doh_trusted`, `pfb_dns_doq`, `pfb_dns_doq_port`, `pfb_dns_doq_interface` (issues #3515 and #3513, pfB-DNS; the section is not one of the 19 and is never sent) |
 
 - Credentials are local. The MaxMind account and key (`maxmind_account`, `maxmind_key`), the IPinfo
   ASN token (`asn_token`), the Cloudflare TOP1M token (`top1m_token`), and the Blacklist provider
@@ -194,7 +194,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   `dnsbl_dot_block` sync, while their interface lists stay local. Their exception lists
   (`dnsbl_redir_exclude`, `dnsbl_dot_block_exclude`) and `killstates` are enforcement behaviour and
   therefore policy.
-- pfB-DNS is per node. `pfb_dns` (the toggle) and `pfb_dns_saved` (the Resolver snapshot) are local and live in their own
+- pfB-DNS is per node. `pfb_dns` (the toggle), `pfb_dns_saved` (the Resolver snapshot) and the seven DoH/DoQ settings are local and live in their own
   `dns` section, which is none of the synced sections and is never sent. pfSense's own DNS Resolver sync does copy the
   moved `unbound` section to a secondary, so a secondary needs pfB-DNS on before the primary syncs a moved Resolver
   (architecture-notes "pfB-DNS: the experimental DNS proxy", known limits).
