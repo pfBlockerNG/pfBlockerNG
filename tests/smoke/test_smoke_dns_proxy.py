@@ -93,6 +93,7 @@ import pytest
 
 from . import helpers as h
 from .conftest import CLIENT_LAN_IP, PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _StubDnsServer
+from .test_repo_install import PKG_NAME, pkg_installed_version
 
 pytestmark = [pytest.mark.smoke, pytest.mark.timeout(180)]
 
@@ -1922,3 +1923,108 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         _release(vm)
         _force_stop_proxy(vm)
         _set_proxy_toggle(vm, False)
+
+
+# --------------------------------------------------------------------------- #
+# An aborted removal: pfSense's own half of `pkg delete` ran, the hook stopped the removal, pfB-DNS must still serve
+# --------------------------------------------------------------------------- #
+
+_ABORT_DIR = "/tmp/pfb3515_abort"
+_LOCK_HELD = f"{_ABORT_DIR}/lock_held"
+_LOCK_GO = f"{_ABORT_DIR}/lock_go"
+_DELETE_OUT = f"{_ABORT_DIR}/delete.out"
+_RECOVERING = "restoring the DNS proxy, the package's service entries and its menu entry"
+# The lines of the shipped /etc/inc/pkg-utils.inc delete_package_xml() that run BEFORE the package's hook, and its call
+_CORE_PRELUDE_LINES = (
+    r"stop_service(\$service\['name'\])\|unlink_if_exists(\$prefix\|config_del_path(\"installedpackages/service"
+    r"\|eval_once(\$pkg_config\['custom_php_pre_deinstall_command'\])"
+)
+
+
+def _delete_in_background(vm: SmokeVM) -> None:
+    command = f"env ASSUME_ALWAYS_YES=yes pkg delete -y {PKG_NAME} > {_DELETE_OUT} 2>&1; echo RC=$? >> {_DELETE_OUT}"
+    vm.ssh(f"nohup /bin/sh -c '{command}' >/dev/null 2>&1 &")
+
+
+def _registered_services(vm: SmokeVM) -> list[str]:
+    root = _config_xml(vm)
+    return [(s.findtext("name") or "") for s in root.findall("./installedpackages/service")]
+
+
+@pytest.mark.timeout(1500)
+def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_package(rig: Rig) -> None:
+    """`pkg delete` while another save holds the config lock: the removal stops, pfB-DNS keeps answering, a retry works.
+
+    Given pfB-DNS on with DNSBL on (the Resolver moved, the proxy answering a listed name with the VIP),
+      and another process holding pfSense's `pfb_dns_config` lock,
+    When `pkg delete` runs (pfSense stops and deregisters the services before the hook; the hook cannot restore the
+      Resolver),
+    Then pkg leaves the package installed, its output says the removal stopped and that the service entries and the
+      proxy are back, the three services are registered in config.xml, the proxy runs and answers the listed name with
+      the VIP and an allowed name with the upstream's answer, the Resolver is still moved and the snapshot kept;
+    When the lock is free and `pkg delete` runs again,
+    Then the package is removed, the proxy is stopped, the Resolver is back and Unbound answers the client.
+
+    Records the box's pkg version and the shipped core lines this depends on. Always releases the lock and redeploys.
+    """
+    vm, client = rig.vm, rig.client
+    _toggle_on(rig)
+    _sh(vm, f"rm -rf {_ABORT_DIR} && mkdir -p {_ABORT_DIR}")
+    _say(f"pkg: {vm.ssh('pkg --version').stdout.strip()}; pfSense: {vm.ssh('cat /etc/version').stdout.strip()}")
+    _say(
+        "shipped core, /etc/inc/pkg-utils.inc:\n"
+        + vm.ssh(f"grep -n '{_CORE_PRELUDE_LINES}' /etc/inc/pkg-utils.inc").stdout
+    )
+    try:
+        before, raw = _query(client, rig.names.blocked)
+        assert h.is_vip(before), f"before: the listed name is not blocked with the VIP: {before}\n{raw}"
+        assert pkg_installed_version(vm) is not None, "before: the package is not installed"
+
+        holder = (
+            f'require_once("util.inc"); $k = lock("pfb_dns_config", LOCK_EX); touch("{_LOCK_HELD}"); $i = 0; '
+            f'while (!file_exists("{_LOCK_GO}") && $i++ < 1800) {{ usleep(100000); }} unlock($k);'
+        )
+        vm.ssh(f"nohup {h.PHP_BIN} -r '{holder}' >/dev/null 2>&1 &")
+        h.wait_until(lambda: h.hook_marker_exists(vm, _LOCK_HELD), timeout=60.0, interval=1.0)
+
+        _delete_in_background(vm)
+        # The recovery announces itself before it waits for the lock: every restore attempt of the removal failed by now
+        h.wait_until(lambda: _RECOVERING in h.read_log_file(vm, _DELETE_OUT), timeout=300.0, interval=1.0)
+        vm.ssh(f"touch {_LOCK_GO}")
+        h.wait_until(lambda: "RC=" in h.read_log_file(vm, _DELETE_OUT), timeout=300.0, interval=2.0)
+        out = h.read_log_file(vm, _DELETE_OUT)
+
+        assert "removal was stopped" in out, f"pkg delete did not stop the removal:\n{out}"
+        assert "service entries were registered again and the DNS proxy is running" in out, (
+            f"recovery did not report success:\n{out}"
+        )
+        assert pkg_installed_version(vm) is not None, f"pkg removed the package although the hook aborted:\n{out}"
+        state = _capture(vm)
+        assert state.service == "running", f"the proxy is not running after the aborted removal:\n{_diagnostics(vm)}"
+        assert {"pfb_dnsbl", "pfb_dns_proxy", "pfb_filter"} <= set(_registered_services(vm)), _registered_services(vm)
+        assert state.resolver["active_interface"] == "lo0" and state.marker, (
+            f"the Resolver is not still moved: {state.resolver}"
+        )
+        blocked, raw = _query(client, rig.names.blocked)
+        assert h.is_vip(blocked), f"after the aborted removal the listed name is not blocked: {blocked}\n{raw}"
+        allowed, raw = _query(client, h.unique_domain("aborted"))
+        assert h.resolves_to(allowed, STUB_DNS_A), (
+            f"after the aborted removal an allowed name is not answered: {allowed}\n{raw}"
+        )
+
+        _delete_in_background(vm)
+        h.wait_until(lambda: "RC=" in h.read_log_file(vm, _DELETE_OUT), timeout=600.0, interval=2.0)
+        out = h.read_log_file(vm, _DELETE_OUT)
+        assert out.rstrip().endswith("RC=0"), f"the retry's pkg delete failed:\n{out}"
+        assert pkg_installed_version(vm) is None, f"the retry did not remove the package:\n{out}"
+        state = _capture(vm)
+        assert state.service != "running" and state.marker == "", f"the retry left the proxy or the snapshot: {state}"
+        allowed, raw = _query(client, h.unique_domain("retried"))
+        assert h.resolves_to(allowed, STUB_DNS_A), f"after the removal Unbound does not answer: {allowed}\n{raw}"
+    finally:
+        vm.ssh(f"mkdir -p {_ABORT_DIR}; touch {_LOCK_GO}")
+        with contextlib.suppress(RuntimeError):
+            h.wait_until(lambda: "RC=" in h.read_log_file(vm, _DELETE_OUT), timeout=300.0, interval=2.0)
+        vm.ssh(f"rm -rf {_ABORT_DIR}")
+        if pkg_installed_version(vm) is None:
+            h.deploy(vm)
