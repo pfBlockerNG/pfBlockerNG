@@ -116,9 +116,11 @@ Each source is collected independently. A failing source (pfctl exits non-zero, 
 SQLite file cannot be opened or queried, or a JSON file fails to parse) drops only its
 own families and sets `pfblockerng_metrics_source_up{source="…"} 0`. A source that is
 absent because its feature is off (a missing SQLite or status file) reports
-`source_up 1` with no series; only an open, query, or parse failure reports 0. An empty
-Python status file counts as valid. The file is still published. A failed atomic publish
-leaves the previous file in place and removes the temp file.
+`source_up 1` with no series; only an open, query, or parse failure reports 0. The one
+exception is an absent `pfb_pass_status.json` (no pass recorded yet): it reports
+`source_up 1` and both update timestamps as 0. An empty Python status file counts as
+valid. The file is still published. A failed atomic publish leaves the previous file in
+place and removes the temp file.
 
 ## Acceptance criteria
 

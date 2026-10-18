@@ -85,9 +85,11 @@ def _textfile_dir(deployed_vm: SmokeVM) -> Iterator[None]:
     try:
         yield
     finally:
-        _set_export(deployed_vm, False)
-        h.reload(deployed_vm, "update", wait_unbound=False)
-        deployed_vm.ssh("/bin/rm", "-rf", _TEXTFILE_DIR)
+        try:
+            _set_export(deployed_vm, False)
+            h.reload(deployed_vm, "update", wait_unbound=False)
+        finally:
+            deployed_vm.ssh("/bin/rm", "-rf", _TEXTFILE_DIR)
 
 
 def _set_export(vm: SmokeVM, on: bool) -> None:
@@ -187,9 +189,9 @@ def test_metrics_toggle_installs_cron_and_publishes(deployed_vm: SmokeVM) -> Non
     assert feed_table in pfb_tables, f"precondition: pfctl -sT must list {feed_table}: {sorted(pfb_tables)}"
     entries = {s.labels["table"]: s.value for s in families["pfblockerng_ip_table_entries"].samples}
     assert set(entries) <= pfb_tables, f"exported tables missing from pfctl -sT: {sorted(set(entries) - pfb_tables)}"
-    assert entries.get(feed_table) == len(h.pfctl_table_members(vm, feed_table)), (
-        f"{feed_table} entry count must equal pfctl's membership: {entries!r}"
-    )
+    members = len(h.pfctl_table_members(vm, feed_table))
+    assert members > 0, f"precondition: {feed_table} must hold the feed's addresses, or 0 == 0 proves nothing"
+    assert entries.get(feed_table) == members, f"{feed_table} entry count must equal pfctl's membership: {entries!r}"
 
     # The publisher's temp file lives only for the rename; the minute cron can overlap this read.
     def no_temp_file() -> bool:

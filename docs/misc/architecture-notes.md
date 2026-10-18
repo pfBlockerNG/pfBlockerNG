@@ -1616,9 +1616,11 @@ and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_
 pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
 `pfb_metrics_configure_cron()` installs it idempotently from `sync_package_pfblockerng()`, and
 removes it together with `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package
-deinstall. The `metrics` verb is not gated by `.pfb_cron_disable`. It writes only that one file
-(temp file, `chmod 0644`, `rename()`) and logs once per outage when node_exporter's textfile
-directory is missing. `timeout 50` stops a hung run from piling up behind the next minute's.
+deinstall. The `metrics` verb is not gated by `.pfb_cron_disable`. It publishes `pfblockerng.prom`
+(temp file, `chmod 0644`, `rename()`) and maintains a `.metrics_dir_missing` marker in
+`$pfb['dbdir']`: a missing node_exporter textfile directory logs once per outage, and the marker
+stays until a publish succeeds or the cron entry is removed. `timeout 50` stops a hung run from
+piling up behind the next minute's.
 Spec: `docs/specs/metrics-export.md`.
 
 **Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process
