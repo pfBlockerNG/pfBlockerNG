@@ -10,6 +10,7 @@ signatures against a real one are in test_integration_unbound.py.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import importlib.util
 import json
@@ -118,6 +119,31 @@ def test_the_observer_sends_the_raw_upstream_facts_in_one_datagram(
         "flags": NXDOMAIN_RECURSIVE,
         "opts": [[15, EDE15_BLOCKED[1].hex()], [10, "0102"]],
     }
+
+
+def test_a_full_proxy_socket_loses_the_report_and_never_holds_up_the_answer(
+    observer: Observer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The script runs on Unbound's worker threads: a send that waited for a proxy that stopped reading would stall
+    them all."""
+    monkeypatch.chdir(tmp_path)
+    warned: list[str] = []
+    monkeypatch.setattr(observer.module, "log_warn", warned.append)
+    observer.module.init_standard(shim.MODULE_ID, shim.module_env())
+    assert observer.module._sock.getblocking() is False
+    path = str(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET)
+    with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET), contextlib.ExitStack() as senders:
+        sent = 1
+        while sent:  # each sender is stopped by its own buffer; one refused at once finds the receiver's queue full
+            filler = senders.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM))
+            filler.setblocking(False)
+            sent = 0
+            with contextlib.suppress(BlockingIOError):
+                while True:
+                    filler.sendto(b"x", path)
+                    sent += 1
+        assert observer.registered["query_response"](*_upstream_response()) is True
+    assert warned == []  # a full socket is routine under load, not a fault to log for every response
 
 
 @pytest.mark.parametrize("listener", ["no socket file", "stale socket file nobody listens on"])
