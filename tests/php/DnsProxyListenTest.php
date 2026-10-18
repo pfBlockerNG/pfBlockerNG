@@ -13,8 +13,8 @@ use PHPUnit\Framework\TestCase;
  * entry verbatim, else its IPv4 and IPv6 address); empty or 'all' makes Unbound bind everything, which the
  * proxy (one wildcard UDP socket cannot answer from the address a client queried) turns into every address
  * of the box, as pfSense lists them (interfaces and CARP/IP-alias VIPs). Only valid, non-link-local,
- * non-loopback, unscoped addresses survive, once each, in derivation order: loopback stays Unbound's, so the
- * firewall resolves through it directly.
+ * non-loopback, unscoped addresses survive, once each, in derivation order. Loopback is never derived from the
+ * saved interfaces: pfb_dns_proxy_service() always adds 127.0.0.1 and ::1 itself (DnsProxyServiceTest).
  *
  * Each row seeds the pfSense answers the derivation reads and asserts the exact address list.
  */

@@ -387,17 +387,18 @@ decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. Se
 ### Experimental DNS proxy mode (issue #3515)
 
 With the DNSBL **DNS Proxy** toggle on, pfBlockerNG's DNS proxy serves the Resolver's client-facing
-interfaces on the Resolver's Listen Port (`unbound/port`, 53 by default) and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/python*` config.xml keys
+interfaces and loopback (`127.0.0.1`, `::1`) on the Resolver's Listen Port (`unbound/port`, 53 by default) and Unbound no longer loads `pfb_unbound.py`: neither the `unbound/python*` config.xml keys
 (`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it; the proxy imports
 the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
 moves the Resolver through config.xml (never `unbound.conf` directly): `active_interface` `lo0`, `enablessl`
 removed, and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its
 Forwarding `forward-zone:` block, so a bare line there is a syntax error), then `services_unbound_configure(FALSE)`
-regenerates `unbound.conf`. `unbound/port` is **not** changed: Unbound keeps its Listen Port on loopback and the proxy
-binds the same port on the Resolver's former addresses, so the firewall keeps resolving through Unbound (pfSense puts
-`127.0.0.1` into `/etc/resolv.conf` only while the port is 53) and the proxy never binds loopback. The clause,
-between the marker lines `# pfBlockerNG DNS proxy` and
-`# end pfBlockerNG DNS proxy`, has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
+regenerates `unbound.conf`. `unbound/port` and `lo0` are **not** changed, so pfSense keeps `127.0.0.1` and `::1` in the
+firewall's `/etc/resolv.conf` (it does only while the port is 53): the proxy serves that loopback port itself, so the
+firewall's own lookups are DNSBL-filtered, and Unbound's own sockets move off it. The clause, between the marker lines
+`# pfBlockerNG DNS proxy` and `# end pfBlockerNG DNS proxy`, sets `port: 5354` (a later `port:` overrides the earlier
+one for every `interface:` line without its own port, so Unbound's `127.0.0.1`/`::1` listeners land on loopback 5354,
+plain and unused), has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
 stream (`proxy-protocol-port: 5353`) and grants the IPv6 networks pfSense would no longer grant:
 `unbound_acls_config()` derives its IPv6 `access-control` rows from `active_interface` (the IPv4 rows come from
 the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for the SAVED interfaces
@@ -446,7 +447,7 @@ script runs
 `pfb_dns_proxy_listen()` derives the addresses the way `unbound.inc` binds them (explicit interfaces that are up
 and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for an empty/`all` Resolver, every
 address pfSense lists for the box (`get_configured_ip_addresses()` / `get_configured_ipv6_addresses()`, which carry
-alias/carp VIPs), never loopback, at apply time, and bakes them into the script. The proxy binds each
+alias/carp VIPs), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. The proxy binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
 disabled interface) is logged once as a warning and skipped, the others are served, and it exits non-zero only when
 no address binds UDP+TCP. A DoT setup that cannot be served (no or unusable certificate, a passphrase-protected
@@ -476,10 +477,21 @@ alone): the apply raises a `file_notice` naming the Resolver settings to check a
 `DnsProxySettingsSaveTest` and `tests/dns_proxy/test_listen_errors.py`; the live sockets and resolv.conf are
 pinned by `tests/smoke/test_smoke_dns_proxy.py`.
 
+**Upstream-block observer (forwarding mode).** Unbound rewrites RA/AA and drops the upstream's EDE on every client
+reply, so a block the upstream signals cannot be classified from what the proxy gets back. While the proxy hosts the
+module and the Resolver forwards (`unbound/forwarding`), Unbound therefore runs one tiny python module,
+`dns_proxy/pfb_upstream_observer.py`, staged flat into `/var/unbound` with the other shipped files (`dnsbl_cache
+stage`), instead of `pfb_unbound.py`: `pfb_unbound_python()` sets `python_script` `pfb_upstream_observer`,
+`pfb_unbound_dnsbl()` patches `module-config: "python ..."` and `python-script: pfb_upstream_observer.py`, and the
+python bin/lib chroot mounts are kept. It only relays each raw upstream response over the proxy's
+`/var/unbound/pfb_upstream.sock`; the proxy runs the module's own `inplace_cb_query_response` on it, so `dnsbl.log` and
+the Upstream counter keep one writer. With the Resolver recursing, or the move refused, Unbound runs no python module.
+`pfb_unbound_py_mode_active()` and `pfb_unbound_py_module_wired()` keep following the proxy (the snapshot), and read
+only `pfb_unbound` / `pfb_unbound.py`, so the observer never reads as the module. Pinned by `DnsProxyModuleGatingTest`
+and `DnsProxyRuntimePredicateTest`.
+
 **Known limits.**
 
-- The firewall's own lookups go to Unbound directly (its resolv.conf names `127.0.0.1`), so they are **not**
-  DNSBL-filtered; only clients of the proxy are.
 - Edits made to the Resolver page's Custom options while the Resolver is moved survive until the proxy is turned
   off: the restore returns the options saved at toggle-on, not the edited ones.
 - A stopped `pfb_dns_proxy` row shows in Status > Services for every user of the package, also with the toggle off.
@@ -491,8 +503,6 @@ pinned by `tests/smoke/test_smoke_dns_proxy.py`.
   option is on has no snapshot and finds our block already there, so it refuses the move with a notice and DNSBL
   blocks nothing on it (with the option off it only raises the notice). Enable the DNS proxy on the secondary FIRST,
   before the primary syncs a moved Resolver, or turn the DNS Resolver sync off.
-- DNS Redirect on an interface without a pfSense `<iface>ip` keyword (OpenVPN, IPsec, L2TP, ...) still targets
-  `127.0.0.1`, which is Unbound and does not filter while the proxy is on.
 
 ### ADR-08 — IDN homoglyph protection
 
