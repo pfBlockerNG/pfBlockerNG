@@ -28,7 +28,6 @@ TYPE_PTR = 12
 TYPE_MX = 15
 TYPE_TXT = 16
 TYPE_AAAA = 28
-TYPE_SRV = 33
 TYPE_OPT = 41
 TYPE_RRSIG = 46
 
@@ -114,10 +113,6 @@ class Message:
     @property
     def rcode(self) -> int:
         return self.flags & 0xF
-
-    @property
-    def opcode(self) -> int:
-        return (self.flags >> 11) & 0xF
 
 
 EDNS_UDP_SIZE = 1232  # the UDP size the proxy advertises: Unbound's edns-buffer-size default

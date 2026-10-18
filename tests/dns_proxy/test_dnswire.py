@@ -48,7 +48,7 @@ def test_encode_query_matches_hand_built_bytes() -> None:
 
 def test_parse_hand_built_query() -> None:
     message = dnswire.parse(_hdr(1, flags=0x0100) + WWW + b"\x00\x1c\x00\x01")
-    assert (message.id, message.flags, message.rcode, message.opcode) == (0xABCD, 0x0100, 0, 0)
+    assert (message.id, message.flags, message.rcode) == (0xABCD, 0x0100, 0)
     assert message.questions == [Question("www.example.com.", dnswire.TYPE_AAAA, IN)]
     assert message.answers == message.authority == message.additional == []
 
@@ -88,7 +88,7 @@ def test_parse_expands_compression_pointers_inside_rdata() -> None:
 
 def test_parse_keeps_rdata_of_types_that_may_not_be_compressed() -> None:
     srv = struct.pack("!HHH", 1, 2, 3) + b"\x03srv\x07example\x00"
-    message = dnswire.parse(_hdr(1, 1) + WWW + b"\x00\x01\x00\x01" + _rr(b"\xc0\x0c", dnswire.TYPE_SRV, srv))
+    message = dnswire.parse(_hdr(1, 1) + WWW + b"\x00\x01\x00\x01" + _rr(b"\xc0\x0c", 33, srv))  # 33: SRV
     assert message.answers[0].rdata == srv
 
 
