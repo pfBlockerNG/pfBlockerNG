@@ -12,9 +12,9 @@ use PHPUnit\Framework\TestCase;
  * The pages are scripts that render on include, so the contract is pinned in their source (like DnsProxySettingsSaveTest):
  *   - the pfB-DNS page renders the checkbox from the stored preference and saves it through the gateway, under the config
  *     lock and in the same write_config() as its own toggle, so the two cannot be saved apart;
- *   - the DNSBL page neither renders nor assigns it: its section save writes the section it read, so a key it never
- *     assigns keeps what the pfB-DNS page stored (assigning '' for the missing checkbox would turn logging off on every
- *     DNSBL save).
+ *   - the DNSBL page neither renders nor assigns it: its section save writes the section it read afresh under the config
+ *     lock (DnsblSettingsSaveRaceTest), so a key it never assigns keeps what the pfB-DNS page stored, even from a save
+ *     that overlapped (assigning '' for the missing checkbox would turn logging off on every DNSBL save).
  * The key, its default (on) and its local sync scope are the registry's; the rc flag is DnsProxyServiceTest's.
  */
 final class DnsReplyLoggingPreferencePageTest extends TestCase

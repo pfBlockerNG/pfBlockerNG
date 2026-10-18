@@ -134,6 +134,13 @@ final class PfbDnsPageWiringTest extends TestCase
 		foreach (['pfb_dns_proxy', "'pfb_dns'", "dns/pfb_dns", 'DNS Proxy', 'pfBlockerNG DNS proxy'] as $needle) {
 			$this->assertStringNotContainsString($needle, $page, "the DNSBL page has no trace of the toggle: {$needle}");
 		}
-		$this->assertStringNotContainsString('pfb_dns_config_lock', $page, 'nor of the lock that only the snapshot needed');
+	}
+
+	public function testTheDnsblPageSavesUnderTheSameConfigLockAsThePfbDnsPage(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');
+
+		$this->assertSame(1, substr_count($page, '$pfb_config_lock = pfb_dns_config_lock();'), 'its whole-section save runs under the lock the pfB-DNS page and the Resolver move take');
+		$this->assertSame(1, substr_count($page, 'unlock($pfb_config_lock);'), 'released after write_config()');
 	}
 }

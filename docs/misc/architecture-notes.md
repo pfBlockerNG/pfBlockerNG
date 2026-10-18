@@ -461,7 +461,11 @@ then the start) runs after the lock is released. A call with no snapshot and no 
 nothing. A lock that stays taken fails the save with an input error, and abandons the
 move or restore with a `file_notice` (snapshot kept, retried by the next apply). The wizard's reset stops, with an input
 error and the package config unswept, whenever a snapshot survived `pfb_dns_proxy_resolver(FALSE)` (its return value
-is FALSE for "nothing to restore" too). Pinned by `DnsProxyConfigLockTest`.
+is FALSE for "nothing to restore" too). The DNSBL page's save replaces its whole section and writes the whole config.xml copy
+its request read, so it takes the same lock before reading its section, applies the posted fields to the section read under
+it and holds the lock through `write_config()`: a DNS Reply Logging Off saved on the pfB-DNS page, or a Resolver move, that
+landed while the DNSBL form was open is kept, and a lock that stays taken or a failed read is an input error that saves
+nothing. Pinned by `DnsProxyConfigLockTest` and `DnsblSettingsSaveRaceTest`.
 
 While the Resolver is moved and DNSBL is on (`pfb_dns_proxy_hosts_module()`: a snapshot and `pfb_dnsbl_active()`) the proxy, not Unbound, is the module host:
 `pfb_unbound_py_mode_active()` is TRUE, and every liveness decision (`pfb_unbound_py_host_running()`: the
@@ -501,7 +505,7 @@ Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores th
 off, pfBlockerNG or the Resolver disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds the Resolver's port free;
 `pfb_dns_proxy_deinstall()` repeats that right after the uninstall disable pass whatever the pass returned, because the
 pass can return early (lock contention, failed recovery); it never stops the proxy before the restore (a restore that
-cannot take the lock would leave the moved Resolver with nothing serving it), and stops it and removes the rc script like the other services only when no snapshot is left (an abandoned restore keeps the script: the notice tells the operator to stop the proxy from Status > Services);
+cannot take the lock would leave the moved Resolver with nothing serving it), and stops it and removes the rc script like the other services only when no snapshot is left. It returns FALSE while a snapshot is left (config locked or unreadable, proxy outlived its stop), and `pfblockerng_php_pre_deinstall_command()` then stops the removal before its live-object teardown and the Keep Settings wipe, which would destroy the recovery path (snapshot, pending-changes marker, generated files, package settings). Only status 3 makes pkg(8) abandon a removal: `rc.packages` discards the hook's return value and exits 0, and pkg only logs a failed DEINSTALL script and removes the files anyway (libpkg `pkg_delete()` aborts on a failed pre-deinstall script in developer mode only), while `pkg_script_run_child()` ends the whole pkg process with exit 0 on a script status of 3 (same code in pkg 1.12 to 2.4; observed against a pkg 2.1.0 build). So `pfblockerng.xml` exits with `PFB_PKG_REMOVAL_ABORT` (3) when the hook returns FALSE, and the package stays installed, with its snapshot, runtime files and settings. pfSense's `delete_package_xml()` has already stopped and deregistered the package's services, and removed its menu items, before it evaluates the hook, so an aborted removal leaves those unregistered until a reinstall, and the operator removes the package again once the cause (a config save in progress, a surviving proxy process) is gone;
 `pfb_reload_unbound()`'s restart path restarts the proxy after Unbound (the module host re-reads lists and ini at
 init) and then waits up to `PFB_DNS_PROXY_START_WAIT` (5 s) for its pidfile, because `restart_service()` returns
 first and the apply ledger reads that pidfile (a proxy that is not up opens the ledger entry, worded for the proxy);
