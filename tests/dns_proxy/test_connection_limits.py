@@ -15,7 +15,7 @@ import struct
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import dnswire
 import pfb_dns_proxy
@@ -389,7 +389,7 @@ def test_a_dot_client_that_ignores_the_close_does_not_keep_its_connection_past_t
         frontend = WatchedFrontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
         server = await dot_listener.start(frontend)
         _, writer = await dot_listener.connect(server)
-        writer.transport.pause_reading()  # the server's close_notify is never read, so never answered
+        cast(asyncio.Transport, writer.transport).pause_reading()  # the server's close_notify is never answered
         try:
             await frontend.finished.get()  # the idle timeout ended the handler and freed its slot
             closed = asyncio.ensure_future(frontend.writers[0].wait_closed())

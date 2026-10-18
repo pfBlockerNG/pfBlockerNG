@@ -59,6 +59,11 @@ def test_every_name_pfb_unbound_expects_is_provided() -> None:
     assert [name for name in expected if name not in shim.__all__] == []
 
 
+def test_nothing_is_injected_that_pfb_unbound_does_not_declare() -> None:
+    """Every name in __all__ goes into builtins for the module's whole run: an extra one is clutter nobody reads."""
+    assert sorted(set(shim.__all__) - set(_names_pfb_unbound_expects_injected())) == []
+
+
 def test_constants_carry_the_values_of_the_repo_stub() -> None:
     stub = _load_stub()
     mismatched = {
@@ -195,8 +200,7 @@ def test_query_info_exposes_what_the_module_reads() -> None:
     qinfo = shim.query_info("Sub.Blocked.Example.", shim.RR_TYPE_AAAA)
     assert qinfo.qname_str == "Sub.Blocked.Example."  # client case preserved (dns0x20)
     assert qinfo.qname_list == ["Sub", "Blocked", "Example", ""]  # root label included: the TLD is [-2]
-    assert qinfo.qname == b"\x03Sub\x07Blocked\x07Example\x00"
-    assert (qinfo.qtype, qinfo.qclass, qinfo.qtype_str, qinfo.qclass_str) == (28, 1, "AAAA", "IN")
+    assert (qinfo.qtype, qinfo.qclass, qinfo.qtype_str) == (28, 1, "AAAA")
     assert shim.query_info("x.", 65280).qtype_str == "TYPE65280"
 
 
@@ -241,7 +245,7 @@ def test_rrsets_past_the_end_read_as_none_like_the_swig_wrapper() -> None:
     msg.authority.append("blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600")
     assert msg.set_return_msg(qstate) is True
     rep = qstate.return_msg.rep
-    assert (rep.an_numrrsets, rep.ns_numrrsets, rep.rrset_count) == (0, 1, 1)
+    assert (rep.an_numrrsets, rep.ns_numrrsets, len(rep.rrsets)) == (0, 1, 1)
     assert rep.rrsets[0].rk.type_str == "SOA"
     assert rep.rrsets[1] is None
 
@@ -325,7 +329,7 @@ def test_install_injects_names_before_import_and_uninstall_restores(
     monkeypatch.chdir(tmp_path)
     previous = object()
     monkeypatch.setattr(builtins, "log_info", previous, raising=False)  # e.g. the pytest stub's value
-    monkeypatch.delattr(builtins, "PKT_AD", raising=False)  # a name nobody had set
+    monkeypatch.delattr(builtins, "RR_TYPE_DNAME", raising=False)  # a name nobody had set
     monkeypatch.setattr(sys, "path", list(sys.path))
 
     module = shim.install(str(tmp_path))
@@ -334,13 +338,23 @@ def test_install_injects_names_before_import_and_uninstall_restores(
         assert module.CWD == str(tmp_path)
         assert sys.modules["pfb_unbound"] is module
         assert getattr(builtins, "log_info") is shim.log_info  # builtins' injected names are not in its typeshed stub
-        assert getattr(builtins, "PKT_AD") == 64
+        assert getattr(builtins, "RR_TYPE_DNAME") == 39
     finally:
         shim.uninstall()
 
     assert getattr(builtins, "log_info") is previous
-    assert not hasattr(builtins, "PKT_AD")
+    assert not hasattr(builtins, "RR_TYPE_DNAME")
     assert sys.modules.get("pfb_unbound") is not module
+
+
+def test_uninstall_forgets_the_callbacks_the_module_registered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "pfb_unbound.py").write_text("register_inplace_cb_reply(lambda *args, **kw: True, None, 0)\n", "utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    shim.install(str(tmp_path))
+    assert list(shim.callbacks) == ["reply"]
+    shim.uninstall()
+    assert shim.callbacks == {}
 
 
 def test_install_failure_leaves_nothing_behind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
