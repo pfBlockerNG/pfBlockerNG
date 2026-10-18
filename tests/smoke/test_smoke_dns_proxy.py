@@ -1178,7 +1178,7 @@ ask() {
 # the proxy child ($p) holds 127.0.0.1:53: sockstat columns are USER COMMAND PID FD PROTO LOCAL FOREIGN
 held='$3 == p && $6 == "127.0.0.1:53" { f = 1 } END { exit !f }'
 say "start pid=$$ deadline=$DEADLINE"
-while :; do
+while true; do
 	now=$(/bin/date +%s)
 	if [ $((now - START)) -ge "$DEADLINE" ]; then say "end reason=deadline"; exit 0; fi
 	ub=$(/bin/pgrep -x unbound | /usr/bin/head -n 1)
@@ -1250,7 +1250,7 @@ def _plant_probe_script(listed: str, stem: str) -> str:
         '    [ -x "$tool" ] || { echo "missing $tool"; exit 1; }\n'
         "done\n"
         f"mkdir -p {PROBE_DIR}\n"
-        f"if [ -e {EARLY_HOOK} ]; then cp -p {EARLY_HOOK} {PROBE_ORIG}; else : > {PROBE_NO_HOOK}; fi\n"
+        f"if [ -e {EARLY_HOOK} ]; then cp -p {EARLY_HOOK} {PROBE_ORIG}; else true > {PROBE_NO_HOOK}; fi\n"
         f"cat > {PROBE_DIR}/probe.sh <<'PROBE_EOF'\n{PROBE_SCRIPT}PROBE_EOF\n"
         f"chmod 755 {PROBE_DIR}/probe.sh\n"
         f"{{ printf '%s\\n' '#!/bin/sh' {shlex.quote(launcher)}; [ ! -e {PROBE_ORIG} ] || cat {PROBE_ORIG}; }}"
