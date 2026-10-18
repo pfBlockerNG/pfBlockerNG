@@ -28,7 +28,7 @@ import pfsense_dot
 import pytest
 from dot_helpers import REFID, b64, cert_element, config_xml, free_port
 from frontend_constants import BLOCKED, INI, PROTO_DIR, SHIPPED_DIR
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query
+from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, running_proxy, udp_exchange
 
 NO_SUCH_USER = "pfb-no-such-user-3515"
 NEEDS_ROOT = pytest.mark.skipif(
@@ -44,8 +44,13 @@ def test_user_defaults_to_no_drop() -> None:
 # --- the order -----------------------------------------------------------------------------------
 
 
-def test_sockets_and_tls_are_made_as_the_starting_user_then_root_is_dropped_then_the_module_boots(
-    module_dir: Path, tmp_path: Path, certificate: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("no_module", [False, True], ids=["with-module", "no-module"])
+def test_sockets_and_tls_are_made_as_the_starting_user_then_root_is_dropped_then_the_module_boots_if_there_is_one(
+    no_module: bool,
+    module_dir: Path,
+    tmp_path: Path,
+    certificate: tuple[bytes, bytes],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = pwd.getpwnam("root")
     crt, key = certificate
@@ -86,6 +91,7 @@ def test_sockets_and_tls_are_made_as_the_starting_user_then_root_is_dropped_then
             args = pfb_dns_proxy.parse_args(
                 ["--listen", "127.0.0.1", "--port", "0", "--upstream", f"127.0.0.1:{upstream.port}"]
                 + ["--module-dir", str(module_dir), "--dot", "--pfsense-config", str(config), "--user", "root"]
+                + (["--no-module"] if no_module else [])
             )
             stop = asyncio.Event()
             ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
@@ -104,7 +110,7 @@ def test_sockets_and_tls_are_made_as_the_starting_user_then_root_is_dropped_then
         ("setgroups", []),
         ("setgid", root.pw_gid),
         ("setuid", root.pw_uid),
-        ("boot",),
+        *([] if no_module else [("boot",)]),
     ]
 
 
@@ -243,3 +249,18 @@ def test_the_real_process_serves_as_the_named_user_and_its_files_belong_to_that_
     assert ids == {"Uid": [account.pw_uid] * 4, "Gid": [account.pw_gid] * 4, "Groups": []}
     assert (created, provided) == (account.pw_uid, 0)
     assert status == 0
+
+
+@NEEDS_ROOT
+@pytest.mark.parametrize("user", ["nobody", "root"])
+def test_the_real_process_without_a_module_serves_as_the_named_user_and_needs_no_module_dir(
+    user: str, tmp_path: Path
+) -> None:
+    account = pwd.getpwnam(user)
+    argv = ["--no-module", "--listen", "127.0.0.1", "--port", "0", "--upstream", f"127.0.0.1:{free_port()}"]
+    argv += ["--module-dir", str(tmp_path / "absent"), "--user", user]
+    with running_proxy(argv, interpreter=_interpreter_for(user)) as (child, port):
+        reply = dnswire.parse(asyncio.run(udp_exchange(("127.0.0.1", port), build_query(BLOCKED, qid=0x3515)))[0])
+        ids = _status_ids(child.pid)
+    assert ids == {"Uid": [account.pw_uid] * 4, "Gid": [account.pw_gid] * 4, "Groups": []}
+    assert reply.rcode == 2  # as that user: Unbound is down, and with no module nothing else answers
