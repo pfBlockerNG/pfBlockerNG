@@ -2189,9 +2189,9 @@ _PFB_PY_REPLY = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_repl
 def test_reports_reply_controls_follow_pfb_dns_reply_logging_with_dnsbl_off(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard, pfb_dns: str, reply: str, shown: bool
 ) -> None:
-    """issue #3515: with DNSBL off, Reports offers the DNS Reply suppress controls (types, records, stats) only while
-    pfB-DNS is on and DNS Reply Logging is on, i.e. while the proxy really fills the DNS Reply log; the DNSBL stat
-    selector stays hidden, since DNSBL itself is off."""
+    """issue #3515: with DNSBL off, Reports offers the DNS Reply suppress controls (types, records, stats) and the
+    DNS Reply Filter Limit only while pfB-DNS is on and DNS Reply Logging is on, i.e. while the proxy really fills
+    the DNS Reply log. The DNSBL stat selector and DNSBL Filter Limit stay hidden, since DNSBL itself is off."""
     vm = smoke_vm
     paths = (CFG_PFB_DNSBL, _PFB_DNS_TOGGLE, _PFB_PY_REPLY)
     priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for path in paths}
@@ -2202,14 +2202,85 @@ def test_reports_reply_controls_follow_pfb_dns_reply_logging_with_dnsbl_off(
         resp = webui.get(path)
         result = evaluate_render(path, resp.status_code, resp.text, ("Alert Settings",))
         assert result.ok, f"Alerts render oracle failed: {result.detail}"
-        for field in ('name="pfbreplytypes', 'name="pfbreplyrec', 'name="pfbdnsblreplystat'):
+        for field in (
+            'name="pfbreplytypes',
+            'name="pfbreplyrec',
+            'name="pfbdnsblreplystat',
+            'name="dnsfilterlimitentries',
+        ):
             assert (field in resp.text) is shown, (
                 f"{field} must {'render' if shown else 'be absent'} (pfB-DNS={pfb_dns!r}, reply={reply!r})"
             )
+        assert 'name="dnsblfilterlimitentries' not in resp.text, "the DNSBL Filter Limit stays DNSBL-only"
         assert 'name="pfbdnsblstat' not in resp.text, "the DNSBL stat selector stays DNSBL-only"
     finally:
         for path, prior in priors.items():
             _set_scalar_or_absent(vm, path, prior)
+
+
+_DNSBL_FILTER_LIMIT = "installedpackages/pfblockerngglobal/dnsblfilterlimitentries"
+_DNS_REPLY_FILTER_LIMIT = "installedpackages/pfblockerngglobal/dnsfilterlimitentries"
+_DNS_LOOKUP = "installedpackages/pfblockerngglobal/pfbextdns"
+
+
+@pytest.mark.ui_e2e
+def test_reports_dnsbl_on_keeps_both_filter_limits_and_the_reply_controls(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3515: with DNSBL on, Reports keeps every limit and reply control it showed before the reply gate:
+    the DNSBL Filter Limit and the DNS Reply Filter Limit render together with the reply-log controls."""
+    helpers.ensure_dnsbl_vip(smoke_vm)
+    original = helpers.config_get_state(smoke_vm, CFG_PFB_DNSBL)
+    _set_scalar_or_absent(smoke_vm, CFG_PFB_DNSBL, "on")
+    try:
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        for field in ('name="dnsblfilterlimitentries"', 'name="dnsfilterlimitentries"', 'name="pfbreplytypes'):
+            assert field in resp.text, f"with DNSBL on the Reports page is missing {field}"
+    finally:
+        helpers.config_restore_state(smoke_vm, CFG_PFB_DNSBL, original)
+
+
+@pytest.mark.ui_e2e
+def test_reports_dns_reply_filter_limit_saves_from_the_rendered_form_with_dnsbl_off(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3515: with DNSBL off and pfB-DNS logging replies, the DNS Reply Filter Limit is a field of the
+    Reports form, and Save stores the value that form posts. The field is looked up in the form the page
+    rendered; the stored config value is the oracle, with the seeded before-state asserted first."""
+    paths = (
+        CFG_PFB_DNSBL,
+        _PFB_DNS_TOGGLE,
+        _PFB_PY_REPLY,
+        _DNSBL_FILTER_LIMIT,
+        _DNS_REPLY_FILTER_LIMIT,
+        _DNS_LOOKUP,
+    )
+    priors = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    try:
+        _set_scalar_or_absent(smoke_vm, CFG_PFB_DNSBL, "")
+        _set_scalar_or_absent(smoke_vm, _PFB_DNS_TOGGLE, "on")
+        _set_scalar_or_absent(smoke_vm, _PFB_PY_REPLY, "on")
+        _set_scalar_or_absent(smoke_vm, _DNS_REPLY_FILTER_LIMIT, "40")
+        assert helpers.config_get_state(smoke_vm, _DNS_REPLY_FILTER_LIMIT) == (True, "40"), (
+            "before state: the seeded DNS Reply Filter Limit is not stored as 40"
+        )
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        page = webui.get(path)
+        result = evaluate_render(path, page.status_code, page.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        assert "dnsfilterlimitentries" in scrape_form_fields(page.text), (
+            "the Reports form has no DNS Reply Filter Limit field (DNSBL off, pfB-DNS on, reply logging on)"
+        )
+        webui.post(path, {"dnsfilterlimitentries": "55"})
+        assert helpers.config_get_state(smoke_vm, _DNS_REPLY_FILTER_LIMIT) == (True, "55"), (
+            "Save did not store the DNS Reply Filter Limit the form posted"
+        )
+    finally:
+        for path, prior in priors.items():
+            helpers.config_restore_state(smoke_vm, path, prior)
 
 
 def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
