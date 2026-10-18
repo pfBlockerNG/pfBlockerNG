@@ -16,6 +16,8 @@ Module setup, put back in ``finally``::
     LAN:      a static IPv6 address (the IPv6 locality tests' 2001:db8:51:1::1/64), so pfSense grants the LAN's IPv6
               subnet to Unbound clients
     DNSBL:    one feed listing the test names, Group Policy on with 192.168.1.12 on the bypass list
+    Package:  ``dns_proxy/bin`` (the pfb-dns payload) moved aside, so the rc script runs this Python listener, as it
+              does for a legacy package with no payload; put back at the end
 
 What it proves, in file order:
 
@@ -99,6 +101,9 @@ pytestmark = [pytest.mark.smoke, pytest.mark.timeout(180)]
 
 PROXY_PID_FILE = "/var/run/pfb_dns_proxy.pid"  # the python child (daemon -p)
 DAEMON_PID_FILE = "/var/run/pfb_dns_proxy_daemon.pid"  # its supervisor (daemon -P)
+# the package's pfb-dns binaries, one directory per architecture
+PAYLOAD_DIR = "/usr/local/pkg/pfblockerng/dns_proxy/bin"
+PAYLOAD_ASIDE = f"{PAYLOAD_DIR}.hidden"  # where this module keeps them: with none installed the rc script runs Python
 PROXY_LOG = f"{h.PFB_LOGDIR}/dns_proxy.log"
 PROXY_RC = "/usr/local/etc/rc.d/pfb_dns_proxy.sh"
 SERVICE = "pfb_dns_proxy"
@@ -427,6 +432,17 @@ def _force_stop_proxy(vm: SmokeVM) -> None:
     )
 
 
+def _hide_payload(vm: SmokeVM) -> None:
+    """Move the package's pfb-dns payload aside: with no `bin/*/pfb-dns` the rc script runs the Python listener."""
+    result = _sh(vm, f"rm -rf {PAYLOAD_ASIDE}\nif [ -d {PAYLOAD_DIR} ]; then mv {PAYLOAD_DIR} {PAYLOAD_ASIDE}; fi\n")
+    assert result.returncode == 0, f"hiding {PAYLOAD_DIR} failed: {result.stderr!r}"
+
+
+def _restore_payload(vm: SmokeVM) -> None:
+    """Put the payload back where the package installed it (a no-op when it was never moved)."""
+    _sh(vm, f"if [ -d {PAYLOAD_ASIDE} ]; then rm -rf {PAYLOAD_DIR}; mv {PAYLOAD_ASIDE} {PAYLOAD_DIR}; fi\n")
+
+
 # --------------------------------------------------------------------------- #
 # Queries and the logs that show who asked
 # --------------------------------------------------------------------------- #
@@ -585,6 +601,7 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
     _snapshot_config(vm)
     lan_v6_prior: dict[str, str] | None = None
     try:
+        _hide_payload(vm)
         lan_v6_prior = h.set_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, LAN_V6_ADDR, h.IPV6_LOCAL_BITS)
         refid = _create_cert(vm)
         pem = _sh(vm, f"cat {CERT_GUEST}").stdout
@@ -617,6 +634,7 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
             finally:
                 if lan_v6_prior is not None:
                     h.restore_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, lan_v6_prior)
+                _restore_payload(vm)
                 _sh(vm, f"rm -f {SNAPSHOT_FILE} {CERT_GUEST}")
                 client_vm.ssh(f"rm -f {CERT_CLIENT}")
                 h.collect_host_diagnostics(vm)
