@@ -19,10 +19,17 @@ a PROXYv2 header carrying the real client address, so Unbound's cache, access co
   --observer         create the observer socket (see below); not with --no-module
   --reply-log        with --no-module: log each reply it relays to dns_reply.log, as the module does (see below)
   --user NAME        give up root for NAME after binding the sockets and before the module boots (default: keep it)
+  --ready-file PATH  publish this process's PID to PATH once it serves; removed at shutdown (see below)
 
 --user: the sockets (port 53, DoT) and the TLS context are made as the starting user, then the supplementary groups
 are cleared and group and user are set to NAME's, then the module boots, so every file it creates belongs to NAME.
 An unknown NAME (or '') or a switch the OS refuses exits 1 with the reason; nothing is bound for an unknown NAME.
+
+--ready-file PATH: the PID of this process is written to PATH once it serves: after the sockets are bound, the drop
+to --user, the module (or the reply log) is started and the signal handlers are installed. The write is atomic and
+mode 0600: a temporary file beside PATH renamed over it, so a symlink at PATH is replaced, never followed. A start
+that fails leaves no marker; a PATH that cannot be written exits 1 with the reason. At shutdown PATH is removed only
+while it still holds this PID. The marker says the front end answers queries, not that Unbound resolves.
 
 --no-module: no module is imported or booted, so --module-dir is neither read nor needs to exist, the working directory
 stays where it is and there is no observer socket (--observer is refused with it). A query that passes the header
@@ -92,6 +99,7 @@ import ssl
 import stat
 import struct
 import sys
+import tempfile
 import traceback
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
@@ -230,6 +238,10 @@ class Listener(NamedTuple):
 
 class ListenError(Exception):
     """A listening socket could not be made; the message names the address and says why."""
+
+
+class ReadyFileError(Exception):
+    """--ready-file cannot be written; the message names the path and says why."""
 
 
 def bind(host: str, port: int, *, udp: bool) -> Listener:
@@ -889,6 +901,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--reply-log", action="store_true", help="log each relayed reply to dns_reply.log (needs --no-module)"
     )
+    parser.add_argument(
+        "--ready-file",
+        metavar="PATH",
+        help="publish this process's PID here once it serves; removed at shutdown (see the module docstring)",
+    )
     args = parser.parse_args(argv)
     if args.observer and args.no_module:
         parser.error("--observer cannot be used with --no-module")
@@ -921,6 +938,43 @@ def _open_reply_log() -> dns_reply_log.ReplyLog | None:
         return None
 
 
+def publish_ready_file(path: str) -> None:
+    """Write this process's PID to `path` atomically, mode 0600: a temporary file beside it, renamed over it. The rename
+    replaces whatever is at `path`, a symlink included, so nothing outside is written through one. A write that fails
+    removes its temporary file and raises ReadyFileError."""
+    temporary: str | None = None
+    try:
+        fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=f".{os.path.basename(path)}.")
+        with os.fdopen(fd, "w", encoding="ascii") as out:
+            out.write(f"{os.getpid()}\n")
+        os.replace(temporary, path)
+    except OSError as exc:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+        reason = os.strerror(exc.errno) if exc.errno else str(exc)
+        raise ReadyFileError(f"cannot write ready file {path}: {reason}") from None
+
+
+def remove_ready_file(path: str) -> None:
+    """Remove `path` only while it still holds this process's PID. Another proxy's marker, a symlink (never followed)
+    and a FIFO (never waited on) stay where they are; one that cannot be removed is one warning line."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return
+    try:
+        with os.fdopen(fd, "rb") as marker:
+            held = marker.read(32)
+        if held == f"{os.getpid()}\n".encode("ascii"):
+            os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        reason = os.strerror(exc.errno) if exc.errno else str(exc)
+        shim.log_warn(f"cannot remove ready file {path}: {reason}")
+
+
 async def serve(args: argparse.Namespace) -> None:
     """Bind, drop root for `args.user`, boot the module (not with `args.no_module`), serve until SIGINT or SIGTERM,
     then shut everything down.
@@ -932,6 +986,8 @@ async def serve(args: argparse.Namespace) -> None:
     that cannot be bound is logged and skipped, and a DoT configuration that cannot be served (DotConfigError) is
     logged as one error line and leaves DoT off. With `args.reply_log` the reply log starts after the drop too, so the
     log file it writes belongs to `args.user`; one that cannot start is logged as one error line and left off.
+
+    With `args.ready_file` the PID is published once the proxy serves and removed at shutdown (see --ready-file).
     """
     account = lookup_user(args.user) if args.user is not None else None
     dot, dot_context = _dot_setup(args.pfsense_config) if args.dot else (None, None)
@@ -964,10 +1020,14 @@ async def serve(args: argparse.Namespace) -> None:
         stop = asyncio.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):  # before the line below: a supervisor signals on reading it
             asyncio.get_running_loop().add_signal_handler(sig, stop.set)
+        if args.ready_file is not None:
+            publish_ready_file(args.ready_file)  # after the handlers: a SIGTERM sent on reading the marker is handled
         listening = [f"{host}:{port}" for host, port in bound] + [f"{host}:{port} (DoT)" for host, port in dot_bound]
         shim.log_info(f"listening on {', '.join(listening)}; upstream {args.upstream}")
         await stop.wait()
     finally:
+        if args.ready_file is not None:
+            remove_ready_file(args.ready_file)  # first: this proxy is no longer ready while it shuts down
         await frontend.stop()
         if module is not None:
             shutdown(module)
@@ -978,7 +1038,7 @@ async def serve(args: argparse.Namespace) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         asyncio.run(serve(parse_args(argv)))
-    except (DropError, ListenError) as exc:
+    except (DropError, ListenError, ReadyFileError) as exc:
         print(f"pfb_dns_proxy: {exc}", file=sys.stderr)
         return 1
     return 0
