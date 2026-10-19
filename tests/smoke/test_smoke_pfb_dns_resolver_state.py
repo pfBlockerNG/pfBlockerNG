@@ -292,6 +292,9 @@ def test_an_explicit_size_and_an_admin_directive_keep_winning_while_moved(rig: R
             "automatic size",
         )
         _put_custom_options(vm, f"server:\nedns-buffer-size: 4096\n{_custom_options(vm)}")
+        # the Resolver page's Apply regenerates unbound.conf; the pfB apply below only does when it rewrites the clause
+        _php_ok(vm, "services_unbound_configure();", "the Resolver page's Apply")
+        h.wait_unbound_ready(vm)
         _apply(vm)
         assert _clause_size(vm) is None, (
             f"an admin directive leaves the clause without a line: {_clause(_custom_options(vm))!r}"
