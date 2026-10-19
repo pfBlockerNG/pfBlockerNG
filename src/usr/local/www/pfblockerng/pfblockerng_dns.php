@@ -79,8 +79,11 @@ if ($_POST) {
 			}
 			PfbConfig::write('dnsbl/pfb_py_reply', $pfb_py_reply);
 			PfbConfig::write('dns/pfb_dns', $pfb_dns);
-			write_config('[pfBlockerNG] save pfB-DNS settings');
-			unlock($pfb_config_lock);
+			try {
+				write_config('[pfBlockerNG] save pfB-DNS settings');
+			} finally {
+				unlock($pfb_config_lock);
+			}
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header('Location: /pfblockerng/pfblockerng_dns.php');
 			exit;

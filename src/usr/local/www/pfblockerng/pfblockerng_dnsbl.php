@@ -1051,8 +1051,11 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
 			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
-			write_config('[pfBlockerNG] save DNSBL settings');
-			unlock($pfb_config_lock);
+			try {
+				write_config('[pfBlockerNG] save DNSBL settings');
+			} finally {
+				unlock($pfb_config_lock);
+			}
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header('Location: /pfblockerng/pfblockerng_dnsbl.php');
 			exit;

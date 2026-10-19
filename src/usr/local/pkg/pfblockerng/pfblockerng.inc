@@ -4445,10 +4445,23 @@ function pfb_dns_proxy_confirm_ready(): bool {
 	return FALSE;
 }
 
+/**
+ * A DNS proxy condition: logged, and raised as a notice unless that notice is already standing. pfSense's file_notice()
+ * files a new row on every call, so an apply or cron tick that meets a standing condition would add one each time.
+ */
+function pfb_dns_proxy_notify(string $text, string $url): void {
+	pfb_logger("\n{$text}", 2);
+	foreach (get_notices() ?: [] as $row) {
+		if (($row['id'] ?? '') === 'pfBlockerNG DNS Proxy' && ($row['notice'] ?? '') === htmlentities($text)) {
+			return;
+		}
+	}
+	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', $url, 2);
+}
+
 /** A rollback outcome: in the log and as a notice, so the operator is told in the GUI. */
 function pfb_dns_proxy_rollback_notice(string $text): void {
-	pfb_logger("\n{$text}", 2);
-	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/pfblockerng/pfblockerng_dns.php', 2);
+	pfb_dns_proxy_notify($text, '/pfblockerng/pfblockerng_dns.php');
 }
 
 /**
@@ -4458,7 +4471,8 @@ function pfb_dns_proxy_rollback_notice(string $text): void {
  * @return bool TRUE iff the toggle was written; FALSE when the lock stayed taken or the read failed (nothing was written)
  */
 function pfb_dns_proxy_turn_off(string $why): bool {
-	$lock = pfb_dns_config_lock();
+	// One retry: a save that held config.xml through a whole wait is usually done by the second
+	$lock = pfb_dns_config_lock() ?? pfb_dns_config_lock();
 	if ($lock === NULL) {
 		return FALSE;
 	}
@@ -4649,11 +4663,12 @@ function pfb_package_registration_restore(?string $xml_file = NULL): ?string {
 			config_set_path('installedpackages/service', $services);
 		}
 		// As delete_package_xml() persists its own half: config only, no package hooks or sync
-		write_config('pfBlockerNG: registered the package menu and services again after an aborted removal', FALSE, TRUE);
+		$written = write_config('pfBlockerNG: registered the package menu and services again after an aborted removal', FALSE, TRUE);
 	} finally {
 		unlock($lock);
 	}
-	return NULL;
+	// pfSense's write_config() answers -1 when config.xml could not be written, and FALSE when a rule forbids the write
+	return ($written === FALSE || $written === -1) ? 'config.xml could not be written' : NULL;
 }
 
 /**
@@ -4702,10 +4717,8 @@ function pfb_package_removal_recover(): array {
 		pfb_dnsbl_service();
 		pfb_dns_proxy_service();
 		if (pfb_dnsbl_active()) {
-			// Inputs of the ini the apply pass loads (sync_package_pfblockerng()) and pfb_global() does not
-			$pfb['dnsbl_tld_wildcard'] = PfbConfig::read('dnsbl/tld_wildcard');
-			$pfb['dnsbl_control'] = pfb_cfg_toggle_read(PfbConfig::read('dnsbl/pfb_control'));
-			$pfb['dnsbl_control_legacy'] = pfb_cfg_toggle_read(PfbConfig::read('dnsbl/pfb_control_legacy'));
+			// The apply pass's own ini inputs, from the settings config.xml stores
+			pfb_dnsbl_ini_inputs();
 			@file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'), LOCK_EX);
 		}
 
@@ -13117,6 +13130,23 @@ function pfb_unbound_python_sources_unlock() {
 }
 
 
+/**
+ * The DNSBL module's ini inputs that only the apply pass derives from config.xml (pfb_global() does not): every writer of the
+ * ini calls this first, so a recovery that rewrites the ini writes what the apply wrote (the decision cache cap included).
+ */
+function pfb_dnsbl_ini_inputs(): void {
+	global $pfb;
+
+	$dnsblconfig = $pfb['dnsblconfig'] ?? [];
+	// DNSBL Python decision-cache cap (LRU); 0 = unlimited. 0 is meaningful so avoid the ?: idiom (0 is falsy), and reject
+	// non-numeric input -- else the intval() at the ini emit would coerce a malformed value to 0 = silently unlimited.
+	$pfb_dcm_raw = (string) ($dnsblconfig['pfb_py_cache_max'] ?? '');
+	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
+	$pfb['dnsbl_tld_wildcard'] = $dnsblconfig['tld_wildcard'] ?? '';
+	$pfb['dnsbl_control'] = pfb_cfg_toggle_read($dnsblconfig['pfb_control'] ?: '');
+	$pfb['dnsbl_control_legacy'] = pfb_cfg_toggle_read($dnsblconfig['pfb_control_legacy'] ?? '');
+}
+
 // Build the Python INI from the current, gateway-loaded DNSBL settings.
 function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	global $pfb;
@@ -13288,8 +13318,11 @@ function pfb_unbound_py_module_fingerprint(array $paths): string|false {
  *         normal state) or not that shape (logged, never half-trusted).
  */
 function pfb_dns_proxy_saved(): ?array {
+	global $pfb;
+
 	$raw = PfbConfig::read('dns/pfb_dns_saved');
 	if ($raw === '') {
+		$pfb['dns_saved_logged'] = NULL;
 		return NULL;
 	}
 
@@ -13312,7 +13345,11 @@ function pfb_dns_proxy_saved(): ?array {
 		$saved[$key] = ['present' => $entry['present'], 'value' => $entry['value']];
 	}
 
-	if ($saved === NULL) {
+	// Logged once per stored value: every apply and page load reads the marker
+	if ($saved !== NULL) {
+		$pfb['dns_saved_logged'] = NULL;
+	} elseif (($pfb['dns_saved_logged'] ?? NULL) !== $raw) {
+		$pfb['dns_saved_logged'] = $raw;
 		pfb_logger("\nDNS proxy: pfb_dns_saved is not a valid Resolver snapshot; ignoring it", 2);
 	}
 	return $saved;
@@ -13435,7 +13472,9 @@ function pfb_dns_status(): array {
 		$listen[] = (strpos($address, ':') === FALSE ? $address : "[{$address}]") . ":{$port}";
 	}
 
-	if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
+	if (($pfb['enable'] ?? NULL) !== PfbToggle::On) {
+		$mode = 'Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices';
+	} elseif (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
 		$mode = 'Turning off: the Resolver restore is pending, see the notices';
 	} elseif (pfb_dnsbl_active()) {
 		$mode = 'On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else';
@@ -13513,8 +13552,7 @@ function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 function pfb_dns_proxy_refuse(string $why): bool {
 	$text = "DNS proxy: {$why}. " . pfb_dns_proxy_unmoved_effect(pfb_dns_proxy_saved() !== NULL) .
 	    ' Correct the Resolver in Services > DNS Resolver, or turn the DNS proxy option off.';
-	pfb_logger("\n{$text}", 2);
-	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+	pfb_dns_proxy_notify($text, '/services_unbound.php');
 	return FALSE;
 }
 
@@ -13629,8 +13667,7 @@ function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 		$fronted = pfb_dns_proxy_saved() !== NULL;
 		$text = 'DNS proxy: the DNS Resolver was not ' . ($on ? ($fronted ? 're-applied' : 'moved') : 'put back') .
 		    ' because config.xml was locked by another save; the next apply retries.' . ($on ? ' ' . pfb_dns_proxy_unmoved_effect($fronted) : '');
-		pfb_logger("\n{$text}", 2);
-		file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+		pfb_dns_proxy_notify($text, '/services_unbound.php');
 		return FALSE;
 	}
 	try {
@@ -13785,8 +13822,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 				    'Network Interfaces and Enable SSL/TLS Service, and remove from Custom Options the "server:" clause that ' .
 				    'starts with the line "' . PFB_DNS_PROXY_MARKER . '" and ends with "' . PFB_DNS_PROXY_MARKER_END . '", ' .
 				    'then stop the pfBlockerNG DNS proxy service in Status > Services.';
-				pfb_logger("\n{$text}", 2);
-				file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+				pfb_dns_proxy_notify($text, '/services_unbound.php');
 			}
 			return FALSE;
 		}
@@ -13798,8 +13834,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 			$text = 'DNS proxy: the DNS proxy is still running after it was stopped, so the DNS Resolver was not restored ' .
 			    '(Unbound would collide with the proxy on the Resolver\'s port). Stop the pfBlockerNG DNS proxy service in ' .
 			    'Status > Services; the next apply restores the Resolver.';
-			pfb_logger("\n{$text}", 2);
-			file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
+			pfb_dns_proxy_notify($text, '/services_unbound.php');
 			return FALSE;
 		}
 		foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {
@@ -14093,6 +14128,12 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	// The Resolver move/restore changed what unbound.conf is generated from: regenerate it now that the
 	// python keys are final and the module's mounts exist.
 	if ($moved) {
+		// A proxy that now owns the Resolver: its rc script names the snapshot before pfSense's boot hook runs it, and the
+		// observer the hook loads is staged before pfSense regenerates Unbound with it
+		if ($owned) {
+			exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
+			pfb_dns_proxy_service();
+		}
 		services_unbound_configure(FALSE);
 		$pfbpython = TRUE;
 	}

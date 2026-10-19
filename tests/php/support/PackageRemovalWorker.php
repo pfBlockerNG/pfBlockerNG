@@ -245,11 +245,7 @@ function worker_core_register(): void
 /** The DNSBL module's inputs the apply pass loads (pfblockerng_apply.inc), which the baseline apply would have left in $pfb. */
 function worker_dnsbl_inputs(): void
 {
-	global $pfb;
-
-	$pfb['dnsbl_tld_wildcard'] = $pfb['dnsblconfig']['tld_wildcard'] ?? '';
-	$pfb['dnsbl_control'] = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control'] ?? '');
-	$pfb['dnsbl_control_legacy'] = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control_legacy'] ?? '');
+	pfb_dnsbl_ini_inputs();
 }
 
 register_shutdown_function(static function () use ($resultFile, &$paths, &$returned, $state): void {
@@ -419,7 +415,7 @@ if (!is_file("{$state}/baseline.json")) {
 	foreach (['pfb_dns_proxy', 'pfb_filter', 'pfb_dnsbl', 'squid', 'zeek'] as $running) {
 		worker_service_up($running);
 	}
-	unset($pfb['dnsbl_tld_wildcard'], $pfb['dnsbl_control'], $pfb['dnsbl_control_legacy']);
+	unset($pfb['dnsbl_tld_wildcard'], $pfb['dnsbl_control'], $pfb['dnsbl_control_legacy'], $pfb['dnsbl_decisiondb_max']);
 }
 if (!empty($scenario['iniGone'])) {
 	// The module's ini is not there when the hook starts (a RAM-disk /var that was rebuilt, say)

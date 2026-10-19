@@ -1860,6 +1860,26 @@
             }
         ]
     },
+    "pfb_dns_proxy_notify": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "url",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_owns_resolver": {
         "returnsRef": false,
         "returnType": "bool",
@@ -2716,6 +2736,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dnsbl_ini_inputs": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
     },
     "pfb_dnsbl_ipv4_count_decision": {
         "returnsRef": false,
