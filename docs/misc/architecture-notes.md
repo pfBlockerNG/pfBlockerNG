@@ -717,8 +717,8 @@ separate times; a launch is not an answer.
 - When the Resolver listened on "All", tunnel addresses that are not assigned interfaces (OpenVPN, WireGuard) and
   addresses that are only link-local IPv6 are not served by the proxy; pfSense lists neither.
 - A renewed Resolver certificate reaches the gateway at the next apply or cron tick (at most 15 minutes), not the moment it is
-  saved; from then on new connections get it with no restart. A key the owner of `/var/unbound` can read is the price of a gateway
-  that is not root: the decider, which runs as the same user, could read it too.
+  saved; from then on new connections get it with no restart. Root pushes it over the control socket; the key file remains
+  root-only and cannot be read by Unbound or the Python decider.
 - High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
   toggle and the snapshot marker are per-node (`local`). With the sync on, two orders are unsafe:
   - Enabling pfB-DNS on the primary before the secondary: the secondary receives the moved section with no snapshot, so
