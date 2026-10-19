@@ -470,6 +470,89 @@ func TestACLGluedKeyRowsAreApplied(t *testing.T) {
 	}
 }
 
+// Unbound 1.26.1 allows a netblock named by an implicit-allow keyword whether the netblock is glued to the keyword or not,
+// quoted or not, IPv4 or IPv6; TestACLOracleGluedImplicitRows checks these spellings against a running Unbound.
+func TestACLGluedImplicitRowsAreAllowedLikeUnbound(t *testing.T) {
+	keywords := []struct{ name, args string }{
+		{"access-control-view", "v1"},
+		{"access-control-tag", `"t1"`},
+		{"access-control-tag-action", `"t1" deny`},
+		{"access-control-tag-data", `"t1" "A 192.0.2.1"`},
+	}
+	families := []struct{ name, netblock, in, out string }{
+		{"IPv4", "10.5.0.0/16", "10.5.1.1", "10.9.1.1"},
+		{"IPv6", "2001:db8:5::/48", "2001:db8:5::1", "2001:db8:9::1"},
+	}
+	quotes := []struct {
+		name string
+		wrap func(string) string
+	}{
+		{"unquoted", func(s string) string { return s }},
+		{"double-quoted", func(s string) string { return `"` + s + `"` }},
+		{"single-quoted", func(s string) string { return "'" + s + "'" }},
+	}
+	for _, k := range keywords {
+		for _, glued := range []bool{false, true} {
+			for _, f := range families {
+				for _, q := range quotes {
+					head, spelling := k.name+": ", "standard"
+					if glued {
+						head, spelling = k.name+":", "glued"
+					}
+					row := head + q.wrap(f.netblock) + " " + k.args + "\n"
+					t.Run(k.name+" "+spelling+" "+f.name+" "+q.name, func(t *testing.T) {
+						a := newACL(t, row)
+						checkLookup(t, a, f.in, ACLForward)
+						checkLookup(t, a, f.out, ACLRefuse)
+					})
+				}
+			}
+		}
+	}
+}
+
+// The implicit rows keep their meaning beyond the glued spelling: an identical explicit row still wins, a glued row allows
+// its own netblock only, unknown keywords and unparsable netblocks are skipped, and a keyword without its colon is not a row.
+func TestACLImplicitRowGuards(t *testing.T) {
+	t.Run("an identical explicit deny wins over an implicit allow in either order and spelling", func(t *testing.T) {
+		for _, content := range []string{
+			"access-control: 10.5.0.0/16 deny\naccess-control-view:10.5.0.0/16 v1\n",
+			"access-control-view:10.5.0.0/16 v1\naccess-control: 10.5.0.0/16 deny\n",
+			"access-control:10.5.0.0/16 deny\naccess-control-view: 10.5.0.0/16 v1\n",
+			"access-control-view: 10.5.0.0/16 v1\naccess-control:10.5.0.0/16 deny\n",
+		} {
+			a := newACL(t, content)
+			checkLookup(t, a, "10.5.1.1", ACLDrop)
+			checkLookup(t, a, "10.9.1.1", ACLRefuse)
+		}
+	})
+	t.Run("a standard implicit row allows its own netblock only", func(t *testing.T) {
+		a := newACL(t, "access-control-view: 10.5.0.0/16 v1\n")
+		checkLookup(t, a, "10.5.1.1", ACLForward)
+		checkLookup(t, a, "10.6.1.1", ACLRefuse)
+		checkLookup(t, a, "192.0.2.7", ACLRefuse)
+	})
+	for _, bad := range []string{
+		"access-control-viewer:10.1.0.0/16 v1",
+		"access-control-viewer: 10.1.0.0/16 v1",
+		"access-control-view:10.1.0.0/33 v1",
+		"access-control-view: 10.1.0.0/33 v1",
+		"access-control-view:10.1.0.0/abc v1",
+	} {
+		t.Run("skipped "+bad, func(t *testing.T) {
+			a := newACL(t, bad+"\naccess-control-view: 12.0.0.0/8 v1\n")
+			checkLookup(t, a, "10.1.1.1", ACLRefuse)
+			checkLookup(t, a, "12.1.1.1", ACLForward)
+			checkLookup(t, a, "192.0.2.7", ACLRefuse)
+		})
+	}
+	t.Run("a keyword without its colon is not a row", func(t *testing.T) {
+		a := newACL(t, "access-control-view 10.1.0.0/16 v1\naccess-control-view: 12.0.0.0/8 v1\n")
+		checkLookup(t, a, "10.1.1.1", ACLRefuse)
+		checkLookup(t, a, "12.1.1.1", ACLForward)
+	})
+}
+
 // The oversized line would parse as `10.0.0.0/8 deny` if the line cap were missing.
 func TestACLOversizedLineIsIgnoredWithoutExtraAllocation(t *testing.T) {
 	content := "access-control: 10.0.0.0/8 deny" + strings.Repeat(" ", 1<<20) + "# x\n" + aclText("11.0.0.0/8 deny")

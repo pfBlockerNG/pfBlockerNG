@@ -680,3 +680,56 @@ func TestACLOracleGluedKeyRows(t *testing.T) {
 		}
 	}
 }
+
+// Every implicit-allow keyword, glued or not, quoted or not, IPv4 or IPv6, against a running Unbound: the daemon answers
+// the inside client and refuses the outside one, and the gateway acts the same. The standard spellings are the controls.
+func TestACLOracleGluedImplicitRows(t *testing.T) {
+	keywords := []struct{ name, args string }{
+		{"access-control-view", "v1"},
+		{"access-control-tag", `"t1"`},
+		{"access-control-tag-action", `"t1" deny`},
+		{"access-control-tag-data", `"t1" "A 192.0.2.1"`},
+	}
+	quotes := []struct {
+		name string
+		wrap func(string) string
+	}{
+		{"unquoted", func(s string) string { return s }},
+		{"double-quoted", func(s string) string { return `"` + s + `"` }},
+		{"single-quoted", func(s string) string { return "'" + s + "'" }},
+	}
+	type expectation struct{ name, client, unbound string }
+	var raw strings.Builder
+	var wants []expectation
+	n := 0
+	for _, k := range keywords {
+		for _, glued := range []bool{false, true} {
+			for _, q := range quotes {
+				for _, v6 := range []bool{false, true} {
+					n++
+					netblock, in, out := fmt.Sprintf("10.%d.0.0/16", n), fmt.Sprintf("10.%d.1.1", n), fmt.Sprintf("172.16.%d.1", n)
+					if v6 {
+						netblock, in, out = fmt.Sprintf("2001:db8:%x::/48", n), fmt.Sprintf("2001:db8:%x::1", n), fmt.Sprintf("2001:db9:%x::1", n)
+					}
+					head := k.name + ": "
+					if glued {
+						head = k.name + ":"
+					}
+					raw.WriteString(head + q.wrap(netblock) + " " + k.args + "\n")
+					name := fmt.Sprintf("%s glued=%v %s v6=%v", k.name, glued, q.name, v6)
+					wants = append(wants, expectation{name, in, "answered"}, expectation{name, out, "refused"})
+				}
+			}
+		}
+	}
+	un := startOracleUnbound(t, oracleTree{raw: raw.String()})
+	a := NewACL(un.conf, t.Logf)
+	for _, w := range wants {
+		client := mustAddr(t, w.client)
+		got, out := a.Lookup(client), un.probe(t, client)
+		t.Logf("%s client=%s go=%v unbound=%s", w.name, w.client, got, out)
+		if out != w.unbound || got != outcomeAction[w.unbound] {
+			t.Errorf("%s client %s: Unbound says %s, Go says %v; want Unbound %s and Go %v", w.name, w.client, out, got, w.unbound, outcomeAction[w.unbound])
+		}
+	}
+}
