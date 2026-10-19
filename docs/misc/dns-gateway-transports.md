@@ -55,20 +55,22 @@ DoQ ports are their own, so nothing collides with the plain DNS listeners there.
 
 The caps in the table are global. On top of them one client address may hold at most half of each shared budget, so that
 one host cannot fill it: 256 of the 512 UDP queries in flight, 256 of the 512 DoH and DoQ queries in flight (one share for
-both transports together) and 64 of the 128 TCP and DoT connections (plain TCP and DoT count together). The share is
-counted per full address, never per prefix: a pfSense LAN is normally one /64, and prefix keying would make every IPv6
-host on it share one share. For DoH behind a trusted front end the address is the client the front end names, not the
-front end.
+both transports together), 64 of the 128 TCP and DoT connections (plain TCP and DoT count together), 64 of the 128 DoH
+connections and 64 of the 128 DoQ connections. The share is counted per full address, never per prefix: a pfSense LAN is
+normally one /64, and prefix keying would make every IPv6 host on it share one share. For DoH behind a trusted front end the
+address of a query is the client the front end names, not the front end; the front end's own connections, which carry many
+clients, hold no connection share (a peer in `--doh-trusted` is exempt, an address that is not in it is not, whatever
+header it sends). DoQ has no front end: its client is the QUIC peer, so it has no exemption.
 
 A query over its address's share is refused as one over the global cap is (UDP: dropped; DoH: 503 with `Retry-After: 1`;
-DoQ: SERVFAIL on the stream; TCP and DoT: the connection is closed at accept). Nothing already accepted is ever evicted to
+DoQ: SERVFAIL on the stream); a connection over it is refused as one over the global cap is (TCP, DoT and DoH: closed at
+accept; DoQ: `CONNECTION_REFUSED` before the handshake). Nothing already accepted is ever evicted to
 make room: a newcomer is refused, queries that were accepted are answered. The first refusal of a burst is logged
 (`client address limit of N <what> reached`, without the address) and the log re-arms once nothing is held.
 
 Known limit: a client that rotates its source address (many /128s of one /64, spoofed UDP sources) is held to the global
 cap only, because each address has a share of its own; the cap then bounds the gateway, and since nothing is evicted the
-others' accepted queries are not displaced, but new ones from everyone are refused until the flood drains. DoH and DoQ
-connection counts have the global cap only (128 each).
+others' accepted queries are not displaced, but new ones from everyone are refused until the flood drains.
 
 ## TCP and DoT connections
 

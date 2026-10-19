@@ -126,10 +126,18 @@ func (g *gateway) admitDoQ(ctx context.Context, info *quic.ClientInfo) (context.
 	if g.acl.Lookup(addrPortOf(info.RemoteAddr).Addr().Unmap().WithZone("")) == ACLDrop {
 		return nil, errors.New("client denied by the ACL")
 	}
+	peer := addrPortOf(info.RemoteAddr).Addr()
+	if !g.doqAddrs.take(peer, g.doqPerAddr, "DoQ connections", g.logf) {
+		return nil, errors.New("DoQ connection limit of the address reached")
+	}
 	if !g.doqConns.take(g.logf) {
+		g.doqAddrs.release(peer)
 		return nil, errors.New("DoQ connection limit reached")
 	}
-	context.AfterFunc(ctx, g.doqConns.release)
+	context.AfterFunc(ctx, func() {
+		g.doqConns.release()
+		g.doqAddrs.release(peer)
+	})
 	return ctx, nil
 }
 
