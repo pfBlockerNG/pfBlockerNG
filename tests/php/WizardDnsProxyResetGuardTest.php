@@ -20,7 +20,7 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		'asn_cache', 'dbdir', 'denydir', 'dnsbl_cache', 'dnsbl_info', 'dnsbl_resolver', 'dnsbl_supptxt', 'dnsdir',
 		'dnsorigdir', 'etdir', 'ip_cache', 'matchdir', 'nativedir', 'origdir', 'permitdir', 'snapdir', 'supptxt', 'supptxt_v6',
 	];
-	private const GLOBALS = ['pfb', 'config', 'input_errors', 'pfb_test_file_notices', 'pfb_test_write_config_hook'];
+	private const GLOBALS = ['pfb', 'config', 'input_errors', 'stepid', 'pfb_test_file_notices', 'pfb_test_write_config_hook'];
 	/** What the doubled write_config() throws: the reset that got past every guard and the sweep stops here, before it restarts services and exits the process. */
 	private const RESET_WRITE = 'pfBlockerNG: Default Wizard configuration saved';
 
