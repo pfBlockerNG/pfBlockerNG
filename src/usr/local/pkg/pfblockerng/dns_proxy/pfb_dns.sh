@@ -8,11 +8,11 @@
 # amd64 selects freebsd-amd64, aarch64 (or arm64) selects freebsd-arm64. The binary replaces
 # this shell (exec), so its exit status and signals are the caller's.
 #
-# Exit status when no binary runs:
-#   3  no pfb-dns payload is installed at all (a legacy package). The generated rc script never starts
-#      the wrapper then, it runs the Python listener itself; a direct call gets this status.
+# Exit status when no binary runs (there is nothing to fall back to: pfB-DNS has no other front end, and the
+# supervisor that starts this script starts it again every 5 s, so the caller never publishes its ready marker):
+#   3  no pfb-dns payload is installed at all.
 #   1  a payload is installed but unusable here (unknown machine, or this machine's binary is
-#      missing or not executable); the caller must NOT fall back to another binary or to Python.
+#      missing or not executable); the caller must NOT fall back to another binary or to anything else.
 
 diag() {
 	printf '%s\n' "pfb_dns.sh: $*" >&2
@@ -31,7 +31,7 @@ for candidate in "${here}"/bin/*/pfb-dns; do
 	fi
 done
 if [ "${payload}" -eq 0 ]; then
-	diag "no pfb-dns binary is installed under ${here}/bin (legacy package)"
+	diag "no pfb-dns binary is installed under ${here}/bin"
 	exit 3
 fi
 

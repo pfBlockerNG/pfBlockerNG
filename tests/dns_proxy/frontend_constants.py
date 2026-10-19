@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -79,3 +80,18 @@ class LogFeed(list[tuple[str, str]]):
 class Booted:
     module: ModuleType
     log: LogFeed
+
+
+def write_module_dir(root: Path, *, forwarding: bool = False) -> None:
+    """Shape `root` like /var/unbound: the shipped modules (symlinked, byte-identical), ini, manifest and raw feed. With
+    `forwarding` the ini says the Resolver forwards, the only mode in which upstream blocks are detected."""
+    for name in ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py"):
+        (root / name).symlink_to(SHIPPED_DIR / name)
+    (root / "pfb_py_raw").mkdir()
+    (root / "pfb_py_raw" / "feed.txt").write_text("blocked.example\n", encoding="utf-8")
+    feed = {"raw": "pfb_py_raw/feed.txt", "feed": "TestFeed", "group": "TestGroup", "log_flag": "1"}
+    (root / "pfb_py_sources.json").write_text(
+        json.dumps({"version": 1, "config": {}, "feeds": [feed]}), encoding="utf-8"
+    )
+    ini = INI.replace("[MAIN]\n", "[MAIN]\nforwarding = true\n", 1) if forwarding else INI
+    (root / "pfb_unbound.ini").write_text(ini, encoding="utf-8")

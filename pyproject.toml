@@ -179,10 +179,13 @@ ignore = [
 "tests/smoke/ui/test_widget_clear_failed.py"    = ["F811"]
 # issue #1014/#1019: imports the `clean_ledger` fixture from test_render_widget_ledger.py
 "tests/smoke/ui/test_category_ledger_close.py"  = ["F811"]
-# issue #3513: import the `unbound`, `observed_unbound` and `gateway_binary` fixtures from test_integration_unbound.py
-# and test_gateway_e2e.py
+# issue #3513, #3517: import the `unbound`, `observed_unbound`, `gateway` and `gateway_binary` fixtures from
+# test_integration_unbound.py and test_gateway_e2e.py
 "tests/dns_proxy/test_gateway_e2e.py"           = ["F811"]
 "tests/dns_proxy/test_gateway_modes.py"         = ["F811"]
+"tests/dns_proxy/test_gateway_chase.py"         = ["F811"]
+"tests/dns_proxy/test_gateway_safesearch.py"    = ["F811"]
+"tests/dns_proxy/test_gateway_upstream_blocks.py" = ["F811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfb_unbound", "pfb_dnsbl_regex_rules"]

@@ -1,137 +1,32 @@
-"""`--user NAME`: the proxy binds its sockets and builds its TLS context as the user it was started as (root on the
-appliance, for port 53), then gives up root for NAME, and only then boots pfb_unbound.py, so every file that
-init_standard() and the watchers create belongs to NAME.
+"""`--user NAME` (issue #3517): the decider, started as root by the gateway, gives up root for NAME after it has the
+gateway's decision socket and before it boots pfb_unbound.py, so every file that init_standard() and the watchers create
+belongs to NAME. The order, and an unknown user, are in test_decision_service.py.
 """
 
 from __future__ import annotations
 
-import asyncio
 import errno
 import json
 import os
 import pwd
-import re
 import shutil
-import signal
 import socket
 import subprocess
 import sys
 import tempfile
-import threading
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import dnswire
 import pfb_dns_proxy
-import pfsense_dot
 import pytest
-from dot_helpers import REFID, b64, cert_element, config_xml, free_port
 from frontend_constants import BLOCKED, INI, PROTO_DIR, SHIPPED_DIR
-from frontend_helpers import WATCHDOG, FakeProxyUpstream, FakeUnbound, build_query, running_proxy, serving, udp_exchange
+from frontend_helpers import WATCHDOG, build_query
+from test_decision_transport import ANSWER, DATAGRAM, FORWARD, READY, REPLY, Gateway, frame, query_frame
 
-NO_SUCH_USER = "pfb-no-such-user-3515"
 NEEDS_ROOT = pytest.mark.skipif(
-    os.geteuid() != 0, reason="giving up root needs root: the proxy is started as root on the appliance"
+    os.geteuid() != 0, reason="giving up root needs root: the decider is started as root on the appliance"
 )
-
-
-def test_user_defaults_to_no_drop() -> None:
-    assert pfb_dns_proxy.parse_args([]).user is None
-    assert pfb_dns_proxy.parse_args(["--user", "unbound"]).user == "unbound"
-
-
-# --- the order -----------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("no_module", [False, True], ids=["with-module", "no-module"])
-def test_sockets_and_tls_are_made_as_the_starting_user_then_root_is_dropped_then_the_module_boots_if_there_is_one(
-    no_module: bool,
-    module_dir: Path,
-    tmp_path: Path,
-    certificate: tuple[bytes, bytes],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = pwd.getpwnam("root")
-    crt, key = certificate
-    config = tmp_path / "config.xml"
-    entries = cert_element(REFID, b64(crt), b64(key))
-    config.write_text(config_xml(enablessl=False, tlsport=free_port(), entries=entries), encoding="utf-8")
-    events: list[tuple[Any, ...]] = []
-
-    def spy(name: str, real: Callable[..., Any]) -> Callable[..., Any]:
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            events.append((name, *args[:1]) if name == "bind" else (name,))
-            return real(*args, **kwargs)
-
-        return wrapper
-
-    def record(name: str) -> Callable[[Any], None]:
-        return lambda value: events.append((name, value))  # the real call needs root; the order is what is pinned
-
-    real_boot = pfb_dns_proxy.boot
-
-    def boot_without_log_files(directory: str) -> Any:
-        events.append(("boot",))
-        module = real_boot(directory)
-        monkeypatch.setattr(module, "pfb_log", lambda name, line: None)  # the module logs to /var/log/pfblockerng
-        return module
-
-    monkeypatch.chdir(module_dir)
-    monkeypatch.setattr(sys, "stderr", sys.stderr)
-    monkeypatch.setattr(pfsense_dot, "server_context", spy("tls-context", pfsense_dot.server_context))
-    monkeypatch.setattr(pfb_dns_proxy, "bind", spy("bind", pfb_dns_proxy.bind))
-    monkeypatch.setattr(pfb_dns_proxy, "boot", boot_without_log_files)
-    monkeypatch.setattr(os, "setgroups", record("setgroups"))
-    monkeypatch.setattr(os, "setgid", record("setgid"))
-    monkeypatch.setattr(os, "setuid", record("setuid"))
-
-    async def scenario() -> None:
-        async with FakeProxyUpstream(FakeUnbound({})) as upstream:
-            args = pfb_dns_proxy.parse_args(
-                ["--listen", "127.0.0.1", "--port", "0", "--upstream", f"127.0.0.1:{upstream.port}"]
-                + ["--module-dir", str(module_dir), "--dot", "--pfsense-config", str(config), "--user", "root"]
-                + (["--no-module"] if no_module else [])
-            )
-            async with serving(args):
-                pass
-
-    asyncio.run(scenario())
-    assert events == [
-        ("tls-context",),
-        ("bind", "127.0.0.1"),  # UDP+TCP
-        ("bind", "127.0.0.1"),  # DoT
-        ("setgroups", []),
-        ("setgid", root.pw_gid),
-        ("setuid", root.pw_uid),
-        *([] if no_module else [("boot",)]),
-    ]
-
-
-# --- the user ------------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("name", [NO_SUCH_USER, ""], ids=["unknown", "empty"])
-def test_an_unknown_or_empty_user_exits_1_before_anything_is_bound(
-    name: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(pfb_dns_proxy, "bind", lambda *_a, **_k: pytest.fail("nothing may be bound"))
-    monkeypatch.setattr(pfb_dns_proxy, "boot", lambda *_a: pytest.fail("the module must not boot"))
-    assert pfb_dns_proxy.main(["--user", name, "--listen", "127.0.0.1", "--port", "0"]) == 1
-    assert capsys.readouterr().err == f"pfb_dns_proxy: unknown user {name!r}\n"
-
-
-@pytest.mark.parametrize("name", [NO_SUCH_USER, ""], ids=["unknown", "empty"])
-def test_an_unknown_or_empty_user_makes_the_real_process_exit_1(tmp_path: Path, name: str) -> None:
-    run = subprocess.run(
-        [sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--user", name, "--listen", "127.0.0.1"]
-        + ["--port", "0", "--module-dir", str(tmp_path)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert (run.returncode, run.stdout, run.stderr) == (1, "", f"pfb_dns_proxy: unknown user {name!r}\n")
 
 
 @pytest.mark.parametrize("failing", ["setgroups", "setgid", "setuid"])
@@ -144,7 +39,9 @@ def test_a_drop_the_os_refuses_exits_1_with_a_message_before_the_module_boots(
     for name in ("setgroups", "setgid", "setuid"):
         monkeypatch.setattr(os, name, refuse if name == failing else lambda *_a: None)
     monkeypatch.setattr(pfb_dns_proxy, "boot", lambda *_a: pytest.fail("the module must not boot"))
-    assert pfb_dns_proxy.main(["--user", "root", "--listen", "127.0.0.1", "--port", "0"]) == 1
+    gateway_end, decider_end = socket.socketpair()
+    with gateway_end:
+        assert pfb_dns_proxy.main(["--decision-fd", str(decider_end.detach()), "--user", "root"]) == 1
     err = capsys.readouterr().err
     assert err == "pfb_dns_proxy: cannot switch to user 'root': [Errno 1] Operation not permitted\n"
 
@@ -197,64 +94,76 @@ def _status_ids(pid: int) -> dict[str, list[int]]:
     return fields
 
 
+def _decider_as(user: str, *flags: str) -> tuple[subprocess.Popen[str], Gateway]:
+    """The real decider on one end of a socketpair, started as the current user with `--user user`; READY is read."""
+    go, py = socket.socketpair()
+    go.settimeout(WATCHDOG)
+    child = subprocess.Popen(
+        [_interpreter_for(user), str(PROTO_DIR / "pfb_dns_proxy.py"), "--decision-fd", str(py.fileno())]
+        + ["--user", user, *flags],
+        pass_fds=[py.fileno()],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    py.close()
+    gateway = Gateway(go, child)
+    assert gateway.recv() == (READY, 0, b"")
+    return child, gateway
+
+
 @NEEDS_ROOT
 @pytest.mark.parametrize("user", ["nobody", "root"])
-def test_the_real_process_serves_as_the_named_user_and_its_files_belong_to_that_user(user: str) -> None:
+def test_the_real_decider_serves_as_the_named_user_and_its_files_belong_to_that_user(user: str) -> None:
     account = pwd.getpwnam(user)
-    interpreter = _interpreter_for(user)
     module_dir = _module_dir_for_any_user()
-    command = [interpreter, str(PROTO_DIR / "pfb_dns_proxy.py"), "--listen", "127.0.0.1", "--port", "0"]
-    command += ["--upstream", f"127.0.0.1:{free_port()}", "--module-dir", str(module_dir), "--user", user]
-    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    watchdog = threading.Timer(WATCHDOG, child.kill)  # a proxy that never says it listens fails at EOF, not forever
-    watchdog.start()
+    child, gateway = _decider_as(user, "--module-dir", str(module_dir))
     try:
-        assert child.stderr is not None
-        seen: list[str] = []
-        port = None
-        for line in child.stderr:
-            seen.append(line)
-            if match := re.search(r"listening on 127\.0\.0\.1:(\d+)", line):
-                port = int(match.group(1))
-                break
-        assert port is not None, f"the proxy never listened; it printed:\n{''.join(seen)}"
-
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:  # the sockets bound before the drop serve
-            client.settimeout(WATCHDOG)
-            client.sendto(build_query(BLOCKED, qid=0x3515), ("127.0.0.1", port))
-            reply = dnswire.parse(client.recvfrom(4096)[0])
+        gateway.send(query_frame(1, build_query(BLOCKED, qid=0x3515), DATAGRAM))
+        ftype, fid, wire = gateway.recv()
         ids = _status_ids(child.pid)
         created = os.stat(module_dir / "pfb_py_count").st_uid  # written by init_standard()
         provided = os.stat(module_dir / "pfb_unbound.ini").st_uid  # written by this test, as root
-        child.send_signal(signal.SIGTERM)
-        status = child.wait(timeout=WATCHDOG)
+        gateway.sock.close()  # EOF: the decider shuts the module down and exits 0
+        _, stderr = child.communicate(timeout=WATCHDOG)
     finally:
-        watchdog.cancel()
+        gateway.sock.close()
         if child.poll() is None:
             child.kill()
-        child.wait()
-        if child.stderr is not None:
-            child.stderr.close()
+            child.communicate()
         shutil.rmtree(module_dir, ignore_errors=True)
 
-    assert [rr.rdata for rr in reply.answers] == [
+    assert (ftype, fid) == (ANSWER, 1)
+    assert [rr.rdata for rr in dnswire.parse(wire).answers] == [
         bytes(4)
-    ]  # the module's null block (log_flag 0: no VIP); Unbound is down
+    ]  # the module's null block (log_flag 0: no VIP)
     assert ids == {"Uid": [account.pw_uid] * 4, "Gid": [account.pw_gid] * 4, "Groups": []}
     assert (created, provided) == (account.pw_uid, 0)
-    assert status == 0
+    assert child.returncode == 0, stderr
 
 
 @NEEDS_ROOT
 @pytest.mark.parametrize("user", ["nobody", "root"])
-def test_the_real_process_without_a_module_serves_as_the_named_user_and_needs_no_module_dir(
+def test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no_module_dir(
     user: str, tmp_path: Path
 ) -> None:
     account = pwd.getpwnam(user)
-    argv = ["--no-module", "--listen", "127.0.0.1", "--port", "0", "--upstream", f"127.0.0.1:{free_port()}"]
-    argv += ["--module-dir", str(tmp_path / "absent"), "--user", user]
-    with running_proxy(argv, interpreter=_interpreter_for(user)) as (child, port):
-        reply = dnswire.parse(asyncio.run(udp_exchange(("127.0.0.1", port), build_query(BLOCKED, qid=0x3515)))[0])
+    child, gateway = _decider_as(user, "--no-module", "--module-dir", str(tmp_path / "absent"))
+    try:
+        query = build_query(BLOCKED, qid=0x3515)
+        gateway.send(query_frame(1, query, DATAGRAM))
+        assert gateway.recv() == (FORWARD, 1, query)
         ids = _status_ids(child.pid)
+        gateway.send(frame(REPLY, 1))  # Unbound said nothing
+        ftype, fid, wire = gateway.recv()
+        gateway.sock.close()
+        _, stderr = child.communicate(timeout=WATCHDOG)
+    finally:
+        gateway.sock.close()
+        if child.poll() is None:
+            child.kill()
+            child.communicate()
     assert ids == {"Uid": [account.pw_uid] * 4, "Gid": [account.pw_gid] * 4, "Groups": []}
-    assert reply.rcode == 2  # as that user: Unbound is down, and with no module nothing else answers
+    assert (ftype, fid, dnswire.parse(wire).rcode) == (ANSWER, 1, 2)  # as that user: nothing answered, so SERVFAIL
+    assert child.returncode == 0, stderr

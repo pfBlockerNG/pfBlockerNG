@@ -7,8 +7,7 @@ The decision protocol with the Python decider is in [dns-gateway-protocol.md](dn
 
 ## Certificate
 
-DoT, DoH and DoQ serve the DNS Resolver's certificate, read from `config.xml` exactly as
-`dns_proxy/pfsense_dot.py` reads it: `unbound/sslcertref` names a top-level `<cert>`; its `crt` and `prv` are
+DoT, DoH and DoQ serve the DNS Resolver's certificate, read from `config.xml` by `tlsconfig.go`: `unbound/sslcertref` names a top-level `<cert>`; its `crt` and `prv` are
 base64 PEM; the CAs its `caref` leads to follow the certificate, nearest first, and a missing CA or a loop ends the
 chain. `unbound/tlsport` is the DoT port when it is a port (1 to 65535), else 853. `unbound/enablessl` is not read:
 the gateway flags decide. PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked
@@ -17,8 +16,7 @@ for a passphrase).
 `config.xml` is root-only, so it is read, and every TLS socket bound, before the privilege drop. It is not read at all
 unless `--dot`, `--doh-listen` or `--doq-listen` is given. When one is given and the certificate is unusable the reason
 is logged once (`TLS transports disabled: <file>: <reason>`), no TLS listener is bound and plain UDP and TCP keep
-serving. This differs on purpose from the Python `--dot`, which exits 1: under `daemon -r` a broken certificate must
-not crash-loop the only :53 listener.
+serving: under `daemon -r` a broken certificate must not crash-loop the only :53 listener.
 
 ## Listeners
 

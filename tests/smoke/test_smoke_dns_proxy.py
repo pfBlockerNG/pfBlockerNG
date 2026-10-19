@@ -1,13 +1,14 @@
 """Issue #3515: pfB-DNS, the experimental DNS proxy, driven the way an operator drives it, proven live.
 
 pfB-DNS (``dns/pfb_dns``, the pfB-DNS tab) moves the DNS Resolver onto loopback (its port stays 53, so the firewall
-keeps resolving through it) and runs pfBlockerNG's DNS proxy on the Resolver's client-facing addresses. It is
-independent of DNSBL: with DNSBL on the proxy answers DNSBL decisions itself (the SHIPPED ``pfb_unbound.py`` through
-its Unbound API shim) and forwards every other query to Unbound on loopback 5353 with a PROXYv2 header; with DNSBL off
-it boots no module and forwards every query. Unbound runs the inert ``pfb_upstream_observer.py`` in every pfB-DNS
-mode, because pfSense runs the start hook ``<python_script>_include.inc`` only for a python script, and that hook
-starts the proxy in boot. This module sets the real config keys, runs the real apply (``pfb_trigger scope=dnsbl``)
-and watches the box and a LAN client VM, with no hand-made proxy process and no hand-edited ``unbound.conf``.
+keeps resolving through it) and runs the Go gateway ``pfb-dns`` on the Resolver's client-facing addresses; its child,
+the Python decider, answers the DNSBL decisions. It is independent of DNSBL: with DNSBL on the decider answers DNSBL
+decisions itself (the SHIPPED ``pfb_unbound.py`` through its Unbound API shim) and the gateway forwards every other
+query to Unbound on loopback 5353 with a PROXYv2 header; with DNSBL off the decider boots no module and every query is
+forwarded. Unbound runs the inert ``pfb_upstream_observer.py`` in every pfB-DNS mode, because pfSense runs the start
+hook ``<python_script>_include.inc`` only for a python script, and that hook starts the gateway in boot. This module
+sets the real config keys, runs the real apply (``pfb_trigger scope=dnsbl``) and watches the box and a LAN client VM,
+with no hand-made process and no hand-edited ``unbound.conf``.
 
 Module setup, put back in ``finally``::
 
@@ -16,8 +17,8 @@ Module setup, put back in ``finally``::
     LAN:      a static IPv6 address (the IPv6 locality tests' 2001:db8:51:1::1/64), so pfSense grants the LAN's IPv6
               subnet to Unbound clients
     DNSBL:    one feed listing the test names, Group Policy on with 192.168.1.12 on the bypass list
-    Package:  ``dns_proxy/bin`` (the pfb-dns payload) moved aside, so the rc script runs this Python listener, as it
-              does for a legacy package with no payload; put back at the end
+    Package:  the installed ``dns_proxy/bin`` (the pfb-dns payload) is asserted present: pfB-DNS runs only through
+              the Go gateway, whose decider is the Python process, and a package without it cannot start it
 
 What it proves, in file order:
 
@@ -25,18 +26,15 @@ What it proves, in file order:
   every "not any more" below is measured against);
 * pfB-DNS on, DNSBL on + apply: config.xml shows the Resolver moved (interfaces, DoT, Custom Options; NOT the port) and
   the snapshot, ``unbound.conf`` never loads ``pfb_unbound.py``, Unbound listens on loopback 5353 and 5354 only (our
-  clause's ``port: 5354``), service ``pfb_dns_proxy`` runs under ``daemon -t``, the proxy owns 53/853 on the LAN address
-  and 53 on loopback;
-* the firewall resolves through the proxy: ``/etc/resolv.conf`` still names 127.0.0.1 after pfSense regenerates
-  it, and the firewall's own lookup of a listed name is answered with the DNSBL VIP and logged;
+  clause's ``port: 5354``); the service, its processes and sockets, the observer, the firewall's own lookups and the
+  client's queries over every transport are test_smoke_dns_gateway.py's;
 * pfSense's IPv6 grant for the LAN subnet disappears from its generated ``access_lists.conf`` with the Resolver on
   loopback, and the same ``access-control`` row is in our marked ``custom_options`` clause instead (so IPv6 clients
   relayed by the proxy are not REFUSED); no IPv6 client query is sent: the client VM has no IPv6 address on the LAN,
   and ``DnsProxyAclTest`` pins the derivation;
-* from the LAN client (192.168.1.10): a listed name gets the VIP and a feed-attributed ``dnsbl.log`` row, an allowed
-  name gets the upstream's answer and ``resolver.log`` names the client, the same over TCP and over DoT with the
-  Resolver's certificate; a Group Policy bypassed address (192.168.1.12, an alias on the client) and the filtered
-  client asking for the same names at the same moment each get their own answer (the #3508 shape);
+* from the LAN client (192.168.1.10): a listed name gets the VIP and a feed-attributed ``dnsbl.log`` row, and Unbound
+  never sees it; a Group Policy bypassed address (192.168.1.12, an alias on the client) and the filtered client asking
+  for the same names at the same moment each get their own answer (the #3508 shape);
 * the Alerts page's whitelist reload takes the zero-downtime swap: neither the proxy nor Unbound restarts;
 * pfB-DNS on, DNSBL off: the proxy runs with ``--no-module``, Unbound has no ``pfb_unbound.py`` (only the inert
   observer), a listed name is NOT blocked (UDP, TCP, DoT), Unbound's log names the real client, the firewall's own
@@ -99,11 +97,10 @@ from .test_repo_install import PKG_NAME, pkg_installed_version
 
 pytestmark = [pytest.mark.smoke, pytest.mark.timeout(180)]
 
-PROXY_PID_FILE = "/var/run/pfb_dns_proxy.pid"  # the python child (daemon -p)
+PROXY_PID_FILE = "/var/run/pfb_dns_proxy.pid"  # the gateway, pfb-dns exec'd by pfb_dns.sh (daemon -p)
 DAEMON_PID_FILE = "/var/run/pfb_dns_proxy_daemon.pid"  # its supervisor (daemon -P)
 # the package's pfb-dns binaries, one directory per architecture
 PAYLOAD_DIR = "/usr/local/pkg/pfblockerng/dns_proxy/bin"
-PAYLOAD_ASIDE = f"{PAYLOAD_DIR}.hidden"  # where this module keeps them: with none installed the rc script runs Python
 PROXY_LOG = f"{h.PFB_LOGDIR}/dns_proxy.log"
 PROXY_RC = "/usr/local/etc/rc.d/pfb_dns_proxy.sh"
 SERVICE = "pfb_dns_proxy"
@@ -428,19 +425,16 @@ def _force_stop_proxy(vm: SmokeVM) -> None:
         # a supervisor no pidfile names (a lost start race) would respawn the child
         "pkill -KILL -f 'daemon: pfb_dns_prox[y]'\n"
         "pkill -KILL -f 'pfb_dns_prox[y][.]py'\n"
+        "pkill -KILL -f 'dns_proxy/bin/freebsd-[a-z0-9]*/pfb-dn[s]'\n"
         f"rm -f {DAEMON_PID_FILE} {PROXY_PID_FILE}\n",
     )
 
 
-def _hide_payload(vm: SmokeVM) -> None:
-    """Move the package's pfb-dns payload aside: with no `bin/*/pfb-dns` the rc script runs the Python listener."""
-    result = _sh(vm, f"rm -rf {PAYLOAD_ASIDE}\nif [ -d {PAYLOAD_DIR} ]; then mv {PAYLOAD_DIR} {PAYLOAD_ASIDE}; fi\n")
-    assert result.returncode == 0, f"hiding {PAYLOAD_DIR} failed: {result.stderr!r}"
-
-
-def _restore_payload(vm: SmokeVM) -> None:
-    """Put the payload back where the package installed it (a no-op when it was never moved)."""
-    _sh(vm, f"if [ -d {PAYLOAD_ASIDE} ]; then rm -rf {PAYLOAD_DIR}; mv {PAYLOAD_ASIDE} {PAYLOAD_DIR}; fi\n")
+def _require_payload(vm: SmokeVM) -> None:
+    """The installed package ships a pfb-dns for this machine: pfB-DNS has no other front end, so nothing below can
+    run without it (a package without it fails here, not with a proxy that never becomes ready)."""
+    result = _sh(vm, f"ls {PAYLOAD_DIR}/*/pfb-dns")
+    assert result.returncode == 0 and result.stdout.strip(), f"the package installed no pfb-dns under {PAYLOAD_DIR}"
 
 
 # --------------------------------------------------------------------------- #
@@ -601,7 +595,7 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
     _snapshot_config(vm)
     lan_v6_prior: dict[str, str] | None = None
     try:
-        _hide_payload(vm)
+        _require_payload(vm)
         lan_v6_prior = h.set_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, LAN_V6_ADDR, h.IPV6_LOCAL_BITS)
         refid = _create_cert(vm)
         pem = _sh(vm, f"cat {CERT_GUEST}").stdout
@@ -634,7 +628,6 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
             finally:
                 if lan_v6_prior is not None:
                     h.restore_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, lan_v6_prior)
-                _restore_payload(vm)
                 _sh(vm, f"rm -f {SNAPSHOT_FILE} {CERT_GUEST}")
                 client_vm.ssh(f"rm -f {CERT_CLIENT}")
                 h.collect_host_diagnostics(vm)
@@ -750,49 +743,6 @@ def test_toggle_on_leaves_unbound_on_loopback_5353_and_5354_only(rig: Rig, proxy
     assert option.stdout.strip() == UPSTREAM_PORT, f"unbound-control get_option proxy-protocol-port: {option.stdout!r}"
 
 
-def test_toggle_on_runs_the_proxy_as_a_supervised_service_on_53_and_853(rig: Rig, proxy_on: State) -> None:
-    """Service pfb_dns_proxy runs under daemon(8) with its ps title, and owns the client-facing ports.
-
-    Then Status > Services says `pfb_dns_proxy` runs; the supervisor's ps title is `daemon: pfb_dns_proxy[<pid>]`
-      (daemon `-t`); the child is the proxy script, run as `unbound`, with `--dot` (the saved Resolver had DoT);
-      the proxy holds UDP and TCP 53 on the LAN's IPv4 and IPv6 addresses and on loopback (127.0.0.1 and ::1: the
-      firewall's own resolver entry), and TCP 853 on the LAN address.
-    """
-    state = proxy_on
-    assert state.service == "running", f"service pfb_dns_proxy: {state.service}"
-    assert state.proxy_pid and state.daemon_pid, f"pidfiles: proxy={state.proxy_pid} daemon={state.daemon_pid}"
-    supervisor = state.ps_line(state.daemon_pid)
-    assert re.search(rf"\bdaemon: pfb_dns_proxy\[{state.proxy_pid}\]", supervisor), (
-        f"supervisor ps line {supervisor!r}; ps: {state.ps}"
-    )
-    child = state.ps_line(state.proxy_pid)
-    assert "pfb_dns_proxy.py" in child and "--dot" in child and "--upstream 127.0.0.1:5353" in child, child
-    assert child.split()[1] == "unbound", f"the proxy should have dropped root to unbound: {child!r}"
-    sockets = state.proxy_sockets()
-    _say(f"proxy sockets, toggle on: {sorted(sockets)}")
-    wanted = {(proto, f"{PFSENSE_LAN_IP}:53") for proto in ("udp4", "tcp4")}
-    wanted |= {(proto, f"{LAN_V6_ADDR}:53") for proto in ("udp6", "tcp6")}
-    wanted |= {(proto, "127.0.0.1:53") for proto in ("udp4", "tcp4")}
-    wanted |= {(proto, "::1:53") for proto in ("udp6", "tcp6")}
-    wanted.add(("tcp4", f"{PFSENSE_LAN_IP}:853"))
-    assert wanted <= sockets, f"missing proxy sockets: {sorted(wanted - sockets)}; has {sorted(sockets)}"
-
-
-def test_forwarding_on_gives_unbound_the_upstream_observer_never_the_module(rig: Rig, proxy_on: State) -> None:
-    """In proxy mode Unbound runs the upstream observer while the Resolver forwards; pfb_unbound.py stays out.
-
-    Given the Resolver forwards to the System DNS server (the rig's wiring) and the toggle is applied,
-    Then unbound.conf loads the python module with `python-script: pfb_upstream_observer.py` as its only script,
-      never `pfb_unbound.py`, and the observer is staged in the chroot beside the shipped module.
-    """
-    scripts = re.findall(r"^\s*python-script\s*:\s*(\S+)", proxy_on.conf, re.MULTILINE)
-    assert scripts == [OBSERVER_SCRIPT], f"python-script lines: {scripts}\n{proxy_on.conf}"
-    assert MODULE_LINE.search(proxy_on.conf), f"the python module is not in the module chain:\n{proxy_on.conf}"
-    assert "pfb_unbound.py" not in proxy_on.conf, f"unbound.conf names pfb_unbound.py:\n{proxy_on.conf}"
-    staged = rig.vm.ssh(f"ls -l /var/unbound/{OBSERVER_SCRIPT} /var/unbound/pfb_unbound.py 2>&1").stdout
-    assert OBSERVER_SCRIPT in staged and "No such file" not in staged, f"staged files: {staged}"
-
-
 def test_forwarding_off_still_gives_unbound_the_inert_observer(rig: Rig, proxy_on: State) -> None:
     """With the Resolver recursing there is no upstream block to observe, yet Unbound keeps the observer script.
 
@@ -828,61 +778,12 @@ def test_forwarding_off_still_gives_unbound_the_inert_observer(rig: Rig, proxy_o
     assert "--observer" in restored.ps_line(restored.proxy_pid), restored.ps
 
 
-def test_an_upstream_ede_block_is_logged_with_the_real_client(
-    rig: Rig, proxy_on: State, stub_dns: _StubDnsServer
-) -> None:
-    """A block the upstream signals with EDE 15 is invisible in Unbound's reply; the observer makes it loggable.
-
-    Given the stub upstream answers a unique name with NXDOMAIN and an EDE option (info-code 15, text `Quad9`),
-    When the LAN client queries it through the proxy,
-    Then the client gets NXDOMAIN, and dnsbl.log gains the module's upstream-block row: source DNSBL-python, type
-      Upstream_Block, group Upstream, evaluation `EDE15 (Blocked)`, the extra text, and the client's own address.
-    """
-    name = h.unique_domain("pfbsmoke-3515-ede")
-    stub_dns.register_nxdomain(name, ede_info_code=15, ede_text="Quad9")
-    answer, raw = _query(rig.client, name)
-    assert answer.rcode == "NXDOMAIN", f"{name}: expected NXDOMAIN from the upstream, got {answer}\n{raw}"
-
-    def upstream_rows() -> list[list[str]]:
-        return [row for row in _dnsbl_rows(rig.vm, name) if row[5:6] == ["Upstream_Block"]]
-
-    try:
-        h.wait_until(lambda: bool(upstream_rows()), timeout=30.0)
-    except RuntimeError:
-        raise AssertionError(f"dnsbl.log gained no Upstream_Block row for {name}:\n{_proxy_log(rig.vm)}") from None
-    [row] = upstream_rows()
-    assert row[0] == "DNSBL-python" and row[6] == "Upstream", row
-    assert row[7] == "EDE15 (Blocked)" and row[8] == "Quad9", f"evaluation / extra text: {row}"
-    assert row[3] == CLIENT_LAN_IP, f"the row names {row[3]!r}, not the real client {CLIENT_LAN_IP}: {row}"
-
-
 def _firewall_lookup(vm: SmokeVM, name: str) -> str:
     """What the firewall's OWN resolver (gethostbyname, i.e. /etc/resolv.conf) answers for `name`."""
     out = _php_ok(vm, f"echo 'FW=' . gethostbyname({h._php_str(name + '.')}) . ';';", "firewall lookup")
     match = re.search(r"FW=([^;]*);", out)
     assert match, f"no answer line in the firewall lookup output: {out!r}"
     return match.group(1)
-
-
-def test_the_firewalls_own_lookups_go_through_the_proxy_and_are_dnsbl_filtered(rig: Rig, proxy_on: State) -> None:
-    """The firewall's own lookups reach the proxy on loopback 53, so DNSBL filters them.
-
-    When pfSense regenerates /etc/resolv.conf (a reboot, a WAN event, a settings save do the same),
-    Then it still names 127.0.0.1 (pfSense lists it while the Resolver's port is 53 and lo0 is bound: both stay);
-      And the firewall's lookup of a listed name (resolv.conf, then drill @127.0.0.1) gets the DNSBL VIP, and
-      dnsbl.log gains a row for it that names 127.0.0.1 as the client.
-    """
-    _php_ok(rig.vm, "require_once('system.inc');\nsystem_resolvconf_generate();", "system_resolvconf_generate")
-    resolv = rig.vm.ssh("cat /etc/resolv.conf").stdout
-    assert re.search(r"^nameserver\s+127\.0\.0\.1\s*$", resolv, re.MULTILINE), f"/etc/resolv.conf:\n{resolv}"
-    name = rig.names.firewall
-    answer = _firewall_lookup(rig.vm, name)
-    assert answer == h.DEFAULT_DNSBL_VIP4, f"the firewall's own lookup of the listed {name}: {answer!r}"
-    drilled = rig.vm.ssh(f"drill @127.0.0.1 {name} A 2>&1").stdout
-    assert h.DEFAULT_DNSBL_VIP4 in drilled, f"drill @127.0.0.1 {name}:\n{drilled}"
-    _wait_dnsbl_row(rig.vm, name)
-    clients = {row[3] for row in _dnsbl_rows(rig.vm, name)}
-    assert clients == {"127.0.0.1"}, f"dnsbl.log rows for {name} name {sorted(clients)}, not the firewall's 127.0.0.1"
 
 
 def test_the_lans_ipv6_grant_moves_from_pfsenses_access_list_into_our_clause(rig: Rig, proxy_on: State) -> None:
@@ -938,38 +839,6 @@ def test_listed_name_gets_the_vip_and_a_feed_attributed_log_row(rig: Rig, proxy_
     assert unbound_lines_after == unbound_lines_before, (
         f"Unbound logged {rig.names.blocked} for this query: {unbound_lines_before} -> {unbound_lines_after}"
     )
-
-
-def test_allowed_name_is_answered_by_the_upstream_and_unbound_logs_the_client(rig: Rig, proxy_on: State) -> None:
-    """An allowed name is forwarded to Unbound with PROXYv2: the upstream's answer comes back for the real client.
-
-    Given a name no feed lists,
-    When the LAN client asks the proxy over UDP,
-    Then the reply is the upstream stub's answer relayed from Unbound,
-      And `resolver.log` names 192.168.1.10, not the proxy's 127.0.0.1.
-    """
-    name = h.unique_domain("allowed")
-    _assert_answered_by_upstream(rig, name, *_query(rig.client, name), how="UDP")
-
-
-def test_tcp_queries_are_blocked_and_forwarded_like_udp(rig: Rig, proxy_on: State) -> None:
-    """Over TCP the listed name gets the VIP and an allowed name gets Unbound's answer for the real client."""
-    answer, raw = _query(rig.client, rig.names.blocked, tcp=True)
-    assert h.is_vip(answer), f"TCP {rig.names.blocked}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
-    name = h.unique_domain("tcp")
-    _assert_answered_by_upstream(rig, name, *_query(rig.client, name, tcp=True), how="TCP")
-
-
-def test_dot_queries_work_with_the_resolvers_certificate(rig: Rig, proxy_on: State) -> None:
-    """Over DoT, verified against the Resolver's own certificate, a listed name gets the VIP and an allowed one passes.
-
-    The saved Resolver had DoT on, so the proxy serves 853 with the certificate `unbound/sslcertref` names; the TLS
-    peer address becomes the PROXYv2 client, so Unbound's log names the LAN client for the DoT query too.
-    """
-    answer, raw = _query(rig.client, rig.names.blocked, dot=True)
-    assert h.is_vip(answer), f"DoT {rig.names.blocked}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
-    name = h.unique_domain("dot")
-    _assert_answered_by_upstream(rig, name, *_query(rig.client, name, dot=True), how="DoT")
 
 
 @contextlib.contextmanager
@@ -1652,7 +1521,7 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
 # Readiness: the listener-ready marker, and starts that do not race
 # --------------------------------------------------------------------------- #
 
-READY_FILE = "/var/unbound/pfb_dns_ready"  # the proxy's own pid, written by the proxy (--ready-file) once it serves
+READY_FILE = "/var/unbound/pfb_dns_ready"  # the gateway's own pid, written by it (--ready-file) once it serves
 START_LOCK = "/var/run/pfb_dns_proxy.lock"  # lockf(1): `rc start` runs under it, the file is kept between starts
 RACE_ROUNDS = 6
 

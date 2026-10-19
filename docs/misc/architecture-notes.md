@@ -362,22 +362,23 @@ Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher)
 decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. See
 `legacy/ADRs/ADR_10_Zero_Downtime_DNSBL/`.
 
-### pfB-DNS: the experimental DNS proxy (issue #3515)
+### pfB-DNS: the experimental DNS gateway (issues #3515, #3517)
 
 pfB-DNS (the **pfB-DNS** tab; registered toggle `dns/pfb_dns`, runtime mirror `$pfb['pfb_dns']`, `sync` local) runs
-pfBlockerNG's DNS proxy on the Resolver's client-facing interfaces and on loopback (`127.0.0.1`, `::1`) at the
-Resolver's Listen Port (`unbound/port`, 53 by default). It is independent of DNSBL: `pfb_dns_wanted()` (pfBlockerNG
+the Go gateway `pfb-dns` (UDP, TCP, DoT, DoH, DoQ), with pfBlockerNG's Python decider as its child, on the Resolver's
+client-facing interfaces and on loopback (`127.0.0.1`, `::1`) at the Resolver's Listen Port (`unbound/port`, 53 by
+default). It is the only DNS front end: there is no Python listener and no fallback to one. It is independent of DNSBL: `pfb_dns_wanted()` (pfBlockerNG
 enabled, the toggle on, the Resolver enabled) alone decides the Resolver move, its restore and the service, and the apply
 reconciles it whatever the DNSBL `$mode` is.
 
-| pfB-DNS | DNSBL | `pfb_unbound.py` runs in | Unbound runs | The proxy |
+| pfB-DNS | DNSBL | `pfb_unbound.py` runs in | Unbound runs | The gateway's mode flags |
 |---|---|---|---|---|
 | off | on | Unbound | the module: devel's behaviour, unchanged | not running |
-| on | on | the proxy, through the Unbound API shim | the inert observer (it reports upstream blocks while the Resolver forwards) | `--observer` iff the Resolver forwards |
-| on | off | nowhere (`--reply-log`: only its row writer, see below) | the inert observer | `--no-module`: forwards every query over PROXYv2; `--no-module --reply-log` also writes the DNS Reply log |
+| on | on | the decider, through the Unbound API shim | the inert observer (it reports upstream blocks while the Resolver forwards) | `--observer` iff the Resolver forwards |
+| on | off | nowhere (`--reply-log`: only its row writer, see below) | the inert observer | `--no-module`: every query is forwarded over PROXYv2; `--no-module --reply-log` also writes the DNS Reply log |
 
 Unbound loads `pfb_unbound.py` iff DNSBL is on and nothing fronts it: otherwise neither the `unbound/python*` config.xml keys
-(`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it. With DNSBL on the proxy imports
+(`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it. With DNSBL on the decider imports
 the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
 moves the Resolver through config.xml (never `unbound.conf` directly): `active_interface` `lo0`, `enablessl`
 removed, and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its
@@ -456,23 +457,28 @@ pid file `/var/run/pfb_dns_proxy.pid` instead of the Unbound process and `unboun
 Unbound itself (stop/start, `is_service_running('unbound')`, `flush_stats`) are unchanged. With DNSBL off the proxy hosts no module, so
 none of this applies and the predicates read Unbound as before.
 
-**Service.** The proxy runs as the supervised rc service `pfb_dns_proxy` (`pfblockerng.xml` `<service>`, status =
+**Service.** The gateway runs as the supervised rc service `pfb_dns_proxy` (`pfblockerng.xml` `<service>`, status =
 `isvalidpid('/var/run/pfb_dns_proxy.pid')`): `pfb_dns_proxy_service()` writes
 `/usr/local/etc/rc.d/pfb_dns_proxy.sh` (on every call, like the other rc services) from the SAVED Resolver, and the
-script runs
+script has one launch line:
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
--o /var/log/pfblockerng/dns_proxy.log` around `/usr/local/pkg/pfblockerng/pfb_python.sh -u
-.../dns_proxy/pfb_dns_proxy.py --listen A ... --port P --upstream 127.0.0.1:5353 --module-dir /var/unbound
---user unbound [--dot --pfsense-config /cf/conf/config.xml] [--no-module [--reply-log]|--observer]` (`P` is `unbound/port` when it is a port, else 53; `--dot` iff the saved Resolver had `enablessl`; `--no-module` iff DNSBL is off, so the proxy boots no `pfb_unbound.py` and forwards every query; `--observer` iff DNSBL is on and the Resolver forwards, so the proxy creates the observer's report socket).
+-o /var/log/pfblockerng/dns_proxy.log /bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1
+--port P --upstream 127.0.0.1:5353 [--dot] --pfsense-config /cf/conf/config.xml [the DoH/DoQ flags below]
+[--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
+/var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
+--module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53; `--dot` iff the saved Resolver had
+`enablessl`; `--no-module` iff DNSBL is off, so the decider boots no `pfb_unbound.py` and every query is forwarded;
+`--observer` iff DNSBL is on and the Resolver forwards, so the decider creates the observer's report socket). The gateway
+starts the decider as its child and hands the three mode flags on to it.
 `pfb_dns_proxy_listen()` derives the addresses the way `unbound.inc` binds them (explicit interfaces that are up
 and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for an empty/`all` Resolver, every
 address pfSense lists for the box (`get_configured_ip_addresses()` / `get_configured_ipv6_addresses()`, which carry
-alias/carp VIPs), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. The proxy binds each
+alias/carp VIPs), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. The gateway binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
-disabled interface) is logged once as a warning and skipped, the others are served, and it exits non-zero only when
-no address binds UDP+TCP. A DoT setup that cannot be served (no or unusable certificate, a passphrase-protected
-key) no longer stops the proxy: one error line `pfb_dns_proxy error: DNS over TLS is off, serving plain DNS only: ...`
-and the plain listeners keep serving. An address added since the last reload gets a listener at the next apply:
+disabled interface) is logged once and skipped, the others are served, and it exits non-zero only when
+no address binds. A DoT/DoH/DoQ setup that cannot be served (no or unusable certificate, a passphrase-protected
+key) no longer stops the gateway: one line `TLS transports disabled: <file>: <reason>` and the plain listeners keep serving.
+An address added since the last reload gets a listener at the next apply:
 `pfb_dns_proxy_ensure_running()` regenerates the script and restarts a live proxy when the script changed. The
 script starts only while the moved-Resolver snapshot is set (so a disabled package never starts a proxy against a
 restored Resolver), never over a survivor; the toggle and DNSBL are not consulted, because an abandoned restore leaves
@@ -480,6 +486,12 @@ the Resolver moved with them off and the proxy must keep serving it. The script 
 Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. Stop sends TERM to the supervisor and child named by the pidfiles (only while their command line is the
 proxy's) and KILL after 5 s; it removes the pidfiles once both are gone, and gives up after 7 s with status 1,
 keeping the pidfiles, because a process that survived KILL is still alive.
+
+The script never looks for the payload: `pfb_dns.sh` does, when the daemon starts it. A package with no `pfb-dns` this
+machine can run (no payload, another architecture's only, no execute bit) makes the wrapper exit with its reason on stderr,
+which `daemon -o` writes to `dns_proxy.log`, and the supervisor starts it again every 5 s; no ready marker is ever published,
+so the activation's readiness wait fails and rolls pfB-DNS back (see "Readiness and rollback" below). Nothing else
+starts a DNS front end instead.
 
 Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores the Resolver, under the config lock (toggle
 off, pfBlockerNG or the Resolver disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds the Resolver's port free;
@@ -496,13 +508,13 @@ alone): the apply raises a `file_notice` naming the Resolver settings to check a
 (stopping it would take LAN DNS down). Pinned by `DnsProxyResolverMoveTest`, `DnsProxyAclTest`, `DnsProxyListenTest`,
 `DnsProxyServiceTest`, `DnsProxyLifecycleTest`, `DnsProxyReloadRestartTest`, `DnsProxyApplyStartTest`,
 `DnsProxySettingsSaveTest`, `DnsProxyUninstallAbortTest` (the removal after pfSense's own half of it, the abort rows, the
-recovery and the retry round trip), `PackageRegistrationRestoreTest` and `tests/dns_proxy/test_listen_errors.py`; the live
-sockets and resolv.conf are pinned by `tests/smoke/test_smoke_dns_proxy.py`.
+recovery and the retry round trip), `DnsProxyGatewayOnlyTest` (the single launch line and the wrapper's failure for a package it cannot run), `PackageRegistrationRestoreTest` and the gateway's own tests under `go/pfb_dns_gateway` (`process_test.go`: an unbindable address is skipped, none binding exits 1); the live
+sockets and resolv.conf are pinned by `tests/smoke/test_smoke_dns_gateway.py` and `tests/smoke/test_smoke_dns_proxy.py`.
 
 **Readiness and rollback.** A proxy is READY, not merely alive, when its listener can handle queries (`pfb_dns_proxy_ready()`).
-The rc script passes `--ready-file /var/unbound/pfb_dns_ready` (`$pfb['dns_proxy_ready']`); the proxy writes its own PID
+The rc script passes `--ready-file /var/unbound/pfb_dns_ready` (`$pfb['dns_proxy_ready']`) to the gateway; the gateway writes its own PID
 there (atomically, mode 0600, as `unbound`, in the chroot directory the module already writes to) only after its sockets
-are bound, its privileges dropped, its matcher or reply log initialised and its signal handlers installed, and removes it
+are bound, its privileges dropped and its decider has sent READY (the module booted, the reply log or observer socket made), and removes it
 at shutdown only while it still names itself. PHP calls the proxy ready iff the child pidfile
 (`$pfb['dns_proxy_pidfile']`) names a live process AND the marker holds that same decimal PID: a live process that never
 published one (a listener that cannot bind, which the supervisor restarts every 5 s), a marker an earlier incarnation left,
@@ -530,7 +542,7 @@ proxy that outlived its stop is deliberately not confirmed. The operator gets a 
 was restored, DNSBL runs in Unbound again. A rollback that cannot finish (the config lock stays taken, the proxy outlives its
 stop) keeps the snapshot and the moved Resolver, runs nothing destructive after the failure, and says that recovery is needed:
 it never claims success. The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
-`DnsProxyActivationRollbackTest`, the marker and lock rows of `DnsProxyServiceTest` and `tests/dns_proxy/test_ready_file.py`
+`DnsProxyActivationRollbackTest`, the marker and lock rows of `DnsProxyServiceTest` and `go/pfb_dns_gateway/readyfile_test.go`
 (the marker itself); live by `tests/smoke/test_smoke_dns_proxy.py` (the marker, the lock, racing starts, and a rollback with
 every client port held).
 
@@ -608,29 +620,20 @@ separate times; a launch is not an answer.
   inactive on it and DNSBL, if on, keeps its module in Unbound (with the option off it only raises the notice). Enable pfB-DNS on the secondary FIRST,
   before the primary syncs a moved Resolver, or turn the DNS Resolver sync off.
 
-**Gateway binary and DoH/DoQ (issue #3513).** The package ships the Go gateway as `pfb-dns`, one raw binary per FreeBSD
+**Gateway binary and DoH/DoQ (issues #3513, #3517).** The package ships the Go gateway as `pfb-dns`, one raw binary per FreeBSD
 architecture (`dns_proxy/bin/freebsd-amd64/pfb-dns` and `dns_proxy/bin/freebsd-arm64/pfb-dns`, both mode 0555; the package
 stays `NO_ARCH`), next to `dns_proxy/pfb_dns.sh`. The wrapper (installed 0644, run as `/bin/sh`) picks the binary for
-`uname -p` and `exec`s it, so the `daemon -p` child's pid is the gateway's own; a machine it ships no binary for, or whose
-binary is missing or not executable, fails with status 1. When any `bin/*/pfb-dns` exists, `pfb_dns_proxy_service()` makes
-the rc script run `/bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh` instead of the Python listener:
-`pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1 --port P --upstream 127.0.0.1:5353 [--dot]
---pfsense-config /cf/conf/config.xml
-[--doh-listen X ... --doh-port P [--doh-trusted C ...]] [--doq-listen Y ... --doq-port Q]
---unbound-conf /var/unbound/unbound.conf --user unbound --ready-file /var/unbound/pfb_dns_ready -- <the Python proxy argv> --decision-fd 3 ...`: the plain
-`--listen` set and `--port` are the Python line's (the derived addresses, then loopback so the firewall's own lookups are
-filtered, at the Resolver's Listen Port). `--ready-file` is optional for the binary and always passed here, ahead of the
+`uname -p` and `exec`s it, so the `daemon -p` child's pid is the gateway's own; no payload at all fails with status 3, and a
+machine it ships no binary for, or whose binary is missing or not executable, with status 1, each with its reason on stderr. The
+launch line is the one "Service" above describes, whatever the package ships. The plain `--listen` set and `--port` are the derived addresses, then loopback so the
+firewall's own lookups are filtered, at the Resolver's Listen Port. `--ready-file` is optional for the binary and always passed here, ahead of the
 decider's `--` and never handed on: the gateway writes its own pid there (mode 0600) once its listeners serve and the
 decider has sent READY, and removes the file at stop while it still names it. The activation wait (`pfb_dns_proxy_await_ready()`,
 see "Readiness and rollback" above) reads that marker, which names the `daemon -p` child because the wrapper `exec`s the binary. The gateway's ACL is Unbound's own: the `access-control` rows of
 `--unbound-conf` and of every file it includes (globs too: `access_lists.conf`, pfBlockerNG's marked clause, an admin's
 Custom Options), the last row of identical prefixes winning and the most specific prefix matching, as Unbound does; a
 client no row names is refused, as Unbound refuses it, and a config Unbound could not load (a missing include) is logged
-once and forwards everything. Forwarded, not mirrored: `deny_non_local`, `refuse_non_local` and `allow_cookie` clients, so the decider can still answer a listed name for them. With no
-`bin/*/pfb-dns` at all (a legacy package) the script is the Python line above, byte for byte, and DoH/DoQ are not served:
-turning either on then logs one warning each time the script's content changes; a payload this machine cannot run
-(a partial package, an unknown architecture, a binary without its execute bit) is never answered with the Python listener, the
-wrapper fails instead. The seven settings
+once and forwards everything. Forwarded, not mirrored: `deny_non_local`, `refuse_non_local` and `allow_cookie` clients, so the decider can still answer a listed name for them. The seven settings
 `dns/pfb_dns_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dns/pfb_dns_doq`, `_doq_port`
 (853) and `_doq_interface` (sync
 `local`, DoH/DoQ off) are the pfB-DNS tab's, in the `dns` section beside the enable toggle (they started on the DNSBL
@@ -647,20 +650,28 @@ IP/CIDR entries, and the DNS Resolver's `unbound/sslcertref` while DoH or DoQ is
 by `pfb_dns_proxy` in its command line, or by the installed path of the binary the wrapper exec'd
 (`/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-*/pfb-dns`), with the same 0/5/7 s bounds, and never signals a pid
 whose command line is neither. Pinned by
-`DnsProxyServiceTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
+`DnsProxyServiceTest`, `DnsProxyGatewayOnlyTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
 
-The Resolver is moved exactly as for the Python listener, so in forwarding mode Unbound still runs
+In forwarding mode Unbound runs
 `pfb_upstream_observer.py` (`pfb_unbound_python()` and `pfb_unbound_dnsbl()` key on the saved snapshot, never on the
 gateway binary). The decider is the module host only with DNSBL on: `pfb_dns_proxy.py --decision-fd` makes
 `/var/unbound/pfb_upstream.sock` before it sends READY, and only with `--observer` (DNSBL on, Resolver forwarding), and
-fires the module's `query_response` on each report, so an upstream block is logged under the gateway as under the Python
-listener. pfB-DNS's three modes are the gateway's own flags, the ones the Python listener has, handed on to the decider:
+fires the module's `query_response` on each report, so an upstream block is logged for the client the gateway named. pfB-DNS's three modes are the gateway's own flags, handed on to the decider:
 `--no-module` (DNSBL off: the decider boots no module, reads no feed and forwards every query through FORWARD/REPLY, the
 early Resolver ACL, DoT, DoH and DoQ unchanged), `--no-module --reply-log` (the DNS Reply Logging preference is on: the
 decider writes the existing DNS Reply log row for each reply, through the same `dns_reply_log` helper, nothing otherwise)
 and `--observer`; `--observer` with `--no-module` and `--reply-log` without it are usage errors. Pinned by
-`tests/dns_proxy/test_decision_service.py`, `test_decision_modes.py` (decider) and `test_gateway_modes.py` (the real
+`tests/dns_proxy/test_decision_service.py`, `test_decision_modes.py` (decider), `test_decider_cli.py` (the decider's flags) and `test_gateway_modes.py` (the real
 gateway, decider and Unbound), `go/pfb_dns_gateway/cli_test.go` and `DnsProxyServiceTest` (the rc line).
+
+**Client UDP size and the SafeSearch chase.** The decision protocol's QUERY names the client's transport (a datagram client, plain UDP, or a stream one:
+TCP, DoT, DoH, DoQ). The decider holds an answer it builds itself to the UDP size a datagram client advertised (512 without EDNS,
+at most the 1232 it advertises itself; over it the answer is the question alone with TC set) and to nothing for a stream client; an answer
+it relays is Unbound's, which saw the client's size. The gateway never unpacks a DNS message: for a plain-UDP client it asks Unbound the
+decider's first FORWARD (the client's own bytes) over UDP only, and every later FORWARD of that QUERY (the SafeSearch chase, whose
+answers the decider must read whole) over UDP and, when Unbound truncated the reply, again over TCP behind a stream PROXYv2 header for the same client.
+Pinned by `tests/dns_proxy/test_decision_transport.py`, `test_safesearch.py` (decider) and `test_gateway_chase.py` (a real
+Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
 
 ### ADR-08 — IDN homoglyph protection
 

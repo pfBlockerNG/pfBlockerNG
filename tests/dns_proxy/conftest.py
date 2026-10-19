@@ -1,18 +1,17 @@
-"""Fixtures: put the shipped DNS proxy on sys.path and boot the REAL shipped pfb_unbound.py through the shim.
+"""Fixtures: put the shipped DNS decider on sys.path and boot the REAL shipped pfb_unbound.py through the shim.
 
 Run: python3 -m pytest tests/dns_proxy
 """
 
 from __future__ import annotations
 
-import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from frontend_constants import GP_BYPASS_INI, INI, PROTO_DIR, SAFESEARCH_CSV, SHIPPED_DIR, Booted, LogFeed
+from frontend_constants import GP_BYPASS_INI, PROTO_DIR, SAFESEARCH_CSV, Booted, LogFeed, write_module_dir
 from hang_guard import hang_guard  # noqa: F401  (autouse: every test here gets the alarm)
 
 if TYPE_CHECKING:
@@ -24,17 +23,7 @@ sys.path.insert(0, str(PROTO_DIR))
 @pytest.fixture
 def module_dir(tmp_path: Path) -> Path:
     """A module dir shaped like /var/unbound: shipped code (symlinked, byte-identical), ini, manifest, raw feed."""
-    for name in ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py"):
-        (tmp_path / name).symlink_to(SHIPPED_DIR / name)
-    (tmp_path / "pfb_py_raw").mkdir()
-    (tmp_path / "pfb_py_raw" / "feed.txt").write_text("blocked.example\n", encoding="utf-8")
-    manifest = {
-        "version": 1,
-        "config": {},
-        "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "TestFeed", "group": "TestGroup", "log_flag": "1"}],
-    }
-    (tmp_path / "pfb_py_sources.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (tmp_path / "pfb_unbound.ini").write_text(INI, encoding="utf-8")
+    write_module_dir(tmp_path)
     return tmp_path
 
 
