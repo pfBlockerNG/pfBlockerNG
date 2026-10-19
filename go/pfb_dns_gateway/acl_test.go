@@ -450,7 +450,7 @@ func TestACLHostileInput(t *testing.T) {
 	}
 }
 
-// Unbound 1.26.1 applies a netblock glued to `access-control:` (probed with unbound-checkconf and a running daemon).
+// Unbound's lexer ends the keyword at its colon, so a netblock glued to `access-control:` is a row Unbound applies.
 // TestACLOracleGluedKeyRows checks the same spellings against a running Unbound.
 func TestACLGluedKeyRowsAreApplied(t *testing.T) {
 	cases := []struct{ name, row, client string }{
