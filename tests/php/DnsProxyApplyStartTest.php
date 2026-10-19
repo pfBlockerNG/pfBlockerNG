@@ -302,4 +302,35 @@ final class DnsProxyApplyStartTest extends TestCase
 			'not inside a branch of the DNSBL mode'
 		);
 	}
+
+	/** @return array<string,array{?string}> the marker as stored: lost, or a value that is no snapshot */
+	public static function orphanedMarkers(): array
+	{
+		return ['marker lost' => [NULL], 'marker not a snapshot' => ['!!!not-a-snapshot!!!']];
+	}
+
+	/**
+	 * With our block and no snapshot the apply's check fails: nothing is started or restarted and no rc script is written with
+	 * listen addresses that cannot be known, so no TRUE is reported for an activation that did not happen.
+	 */
+	#[DataProvider('orphanedMarkers')]
+	public function testAnOrphanedResolverIsNeverStartedAndTheApplyCheckFails(?string $marker): void
+	{
+		// Given our block is in the Resolver and no snapshot says what it was moved from
+		$GLOBALS['config']['unbound'] = [
+			'active_interface' => 'lo0',
+			'custom_options'   => base64_encode("server:\n# pfBlockerNG DNS proxy\nport: 5354\n# end pfBlockerNG DNS proxy"),
+		];
+		if ($marker !== NULL) {
+			config_set_path(self::SAVED, $marker);
+		}
+
+		// When the apply checks the proxy
+		$ready = pfb_dns_proxy_ensure_running();
+
+		// Then the activation fails, and nothing is started, restarted or written
+		$this->assertFalse($ready, 'nothing serves the Resolver: the activation failed');
+		$this->assertSame([], $GLOBALS['pfb_test_service_calls'], 'no start, no restart');
+		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'no rc script with invented listen addresses');
+	}
 }
