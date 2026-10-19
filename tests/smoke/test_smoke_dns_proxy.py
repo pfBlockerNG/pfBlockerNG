@@ -126,6 +126,7 @@ PROXY_LINE = f"proxy-protocol-port: {UPSTREAM_PORT}"
 MARKER = "# pfBlockerNG DNS proxy"  # first line of the block the toggle appends to Custom Options
 MARKER_END = "# end pfBlockerNG DNS proxy"
 CUSTOM_OPTIONS = "server:\nlog-queries: yes\n"
+UNBOUND_EDNS_LINE = re.compile(r"^\s*edns-buffer-size:\s*(\d+)\s*$", re.MULTILINE)
 # The keys the toggle moves, in the order the marker lists them (the Listen Port is not among them), and the keys it
 # leaves alone.
 MOVED_KEYS = ("active_interface", "enablessl", "custom_options")
@@ -707,7 +708,13 @@ def test_toggle_on_moves_the_resolver_in_config_xml_and_snapshots_what_it_moved(
         f"interface: ::1@{UPSTREAM_PORT}",
         PROXY_LINE,
     ]
-    grants = lines[start + 5 : end]
+    # pfSense's automatic size for the saved interfaces: the size Unbound advertised natively before the move (its last
+    # edns-buffer-size line in unbound.conf). The clause's first row, then only access-control grants.
+    natives = UNBOUND_EDNS_LINE.findall(before.conf)
+    assert natives, f"before the move unbound.conf named no edns-buffer-size: {before.conf}"
+    rows = lines[start + 5 : end]
+    assert rows[:1] == [f"edns-buffer-size: {natives[-1]}"], f"Custom Options: {options!r}"
+    grants = rows[1:]
     assert all(re.fullmatch(r"access-control: \S+ allow", row) for row in grants), f"Custom Options: {options!r}"
     assert lines[end + 1 :] == [], f"nothing follows our block: {options!r}"
     assert state.marker, "pfb_dns_proxy_saved is empty after the toggle moved the Resolver"
@@ -1686,8 +1693,9 @@ def test_toggle_off_stops_the_proxy_and_puts_the_resolver_back_exactly(rig: Rig,
 
 OCCUPANTS = "/tmp/pfb3515_occupants"  # on the guest: pidfiles of the nc(1) listeners that hold the client-facing ports
 MOVE_PHP = "/tmp/pfb3515_move.php"
-# The Resolver step of the apply and nothing after it: pfb_unbound_python() moves the Resolver (and restarts Unbound on
-# loopback 5353/5354), and the proxy is NOT started. Prints the addresses the proxy would serve, and its port.
+# The Resolver step of the apply and nothing after it: pfb_unbound_python() moves the Resolver, stages the proxy's rc
+# script and restarts Unbound on loopback 5353/5354; the observer include that restart loads starts the proxy, which the
+# caller stops again. Prints the addresses the proxy would serve, and its port.
 MOVE_ONLY_PHP = r"""<?php
 require_once('util.inc');
 require_once('functions.inc');
@@ -1740,12 +1748,30 @@ def _release(vm: SmokeVM) -> None:
     )
 
 
+def _stop_the_proxy_the_move_started(vm: SmokeVM) -> None:
+    """Stop the proxy the move's Unbound restart started, bounded, so the test holds the ports before it occupies them.
+
+    pfb_unbound_python() stages the rc script before it restarts Unbound, and the observer include that restart loads
+    starts the script when it exists (issue #3515, P4b): an absent rc script no longer keeps the proxy down. Stops
+    repeat until nothing is left, so a start still in flight cannot survive the stop.
+    """
+    h.wait_until(lambda: bool(_capture(vm).ps), timeout=60.0, interval=1.0)
+    _say("the move's Unbound restart started the proxy; stopping it before the test takes the ports")
+
+    def stopped() -> bool:
+        _force_stop_proxy(vm)
+        return _capture(vm).ps == []
+
+    h.wait_until(stopped, timeout=60.0, interval=2.0)
+
+
 @pytest.mark.timeout(1500)
 def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_blocking_in_unbound(rig: Rig) -> None:
     """A proxy that never serves leaves the Resolver, and the DNSBL in Unbound, exactly as they were.
 
-    Given pfB-DNS requested and the Resolver already moved (the first half of an activation), the proxy's rc script
-      not yet written, and every address the proxy would serve held by another process on port 53,
+    Given pfB-DNS requested and the Resolver already moved (the first half of an activation), the proxy stopped again
+      (the move's Unbound restart had started it), and every address the proxy would serve held by another process on
+      port 53,
     When the real apply runs (pfb_trigger scope=dnsbl) and the proxy, which cannot bind, never becomes ready,
     Then pfB-DNS is turned off in config.xml, the proxy and its supervisor are gone with their pidfiles, every Resolver
       key equals its pre-toggle value, the marker is cleared, unbound.conf loads the python module again and Unbound
@@ -1759,8 +1785,6 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         _set_proxy_toggle(vm, False)
         _apply(vm)
     try:
-        # The boot hook starts the proxy from its rc script whenever Unbound restarts, which would win the ports first.
-        _sh(vm, f"rm -f {PROXY_RC}")
         _set_proxy_toggle(vm, True)
         written = _sh(vm, f"cat > {MOVE_PHP} <<'PHPEOF'\n{MOVE_ONLY_PHP}PHPEOF\n")
         assert written.returncode == 0, f"writing {MOVE_PHP} failed: {written.stderr!r}"
@@ -1770,6 +1794,7 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         addresses, port = found.group(1).split(","), found.group(2)
         _say(f"moved; the proxy would serve {addresses} on port {port}")
         h.wait_unbound_ready(vm)
+        _stop_the_proxy_the_move_started(vm)
         state = _capture(vm)
         assert state.resolver["active_interface"] == "lo0" and state.marker, f"the Resolver was not moved: {state}"
         assert state.ps == [], f"a proxy is already running: {state.ps}"
