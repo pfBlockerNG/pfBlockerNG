@@ -274,7 +274,7 @@ def test_the_observer_socket_asks_for_a_receive_buffer_that_holds_a_burst(fwd_bo
     assert asyncio.run(scenario()) >= pfb_dns_proxy.OBSERVER_RCVBUF
 
 
-DEFAULT_DATAGRAM = 2048  # net.local.dgram.maxdgram, FreeBSD's default: the largest AF_UNIX datagram the observer sends
+DEFAULT_DATAGRAM = 2048  # The observer's conservative report budget, not the platform-dependent kernel maximum.
 
 
 def test_one_option_at_the_cap_fits_a_default_datagram() -> None:
