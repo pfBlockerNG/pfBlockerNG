@@ -94,6 +94,10 @@ func (u *upstream) exchangeUDP(ctx context.Context, header, wire []byte) []byte 
 	}
 }
 
+// truncated reports whether reply is Unbound's answer with TC set, which a client of a size-limited UDP exchange
+// must ask for again over TCP.
+func truncated(reply []byte) bool { return len(reply) >= 3 && reply[2]&0x02 != 0 }
+
 // exchangeUDPThenTCP is for transports without a connection of their own: UDP first, and a reply with TC set is
 // asked for again over a new TCP connection behind a header of its own.
 func (u *upstream) exchangeUDPThenTCP(ctx context.Context, src, dst netip.AddrPort, wire []byte) []byte {
@@ -102,7 +106,7 @@ func (u *upstream) exchangeUDPThenTCP(ctx context.Context, src, dst netip.AddrPo
 		return nil
 	}
 	reply := u.exchangeUDP(ctx, header, wire)
-	if len(reply) < 3 || reply[2]&0x02 == 0 {
+	if !truncated(reply) {
 		return reply
 	}
 	if header, err = proxyHeader(src, dst, true); err != nil {
@@ -111,6 +115,16 @@ func (u *upstream) exchangeUDPThenTCP(ctx context.Context, src, dst netip.AddrPo
 	conn := u.newTCP(header)
 	defer conn.close()
 	return conn.exchange(ctx, wire)
+}
+
+// exchangeUDPThenPool is exchangeUDPThenTCP for a client that has a connection of its own: the reply with TC set is
+// asked for again on one of the client's pool connections, which stay open for the client's next truncated answer.
+func (u *upstream) exchangeUDPThenPool(ctx context.Context, udpHeader []byte, p *tcpPool, wire []byte) []byte {
+	reply := u.exchangeUDP(ctx, udpHeader, wire)
+	if !truncated(reply) {
+		return reply
+	}
+	return p.exchange(ctx, wire)
 }
 
 // tcpUpstream is one upstream connection: opened on first use, header first, reused. Exchanges must not overlap.
@@ -129,8 +143,9 @@ func (t *tcpUpstream) close() {
 	}
 }
 
-// tcpPool is the upstream connections of one client connection: single-flight tcpUpstreams, one taken per forward and
-// put back after it. At most connPipeline forwards are in flight, so the pool never holds more.
+// tcpPool is the upstream TCP connections of one client connection, for the answers Unbound truncates over UDP:
+// single-flight tcpUpstreams, one taken per retry and put back after it. At most connPipeline retries are in flight, so
+// the pool never holds more. It dials nothing until the first truncated answer.
 type tcpPool struct {
 	u      *upstream
 	header []byte

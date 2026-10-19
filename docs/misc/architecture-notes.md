@@ -717,7 +717,7 @@ TCP, DoT, DoH, DoQ). The decider holds an answer it builds itself to the UDP siz
 at most the 1232 it advertises itself; over it the answer is the question alone with TC set) and to nothing for a stream client; an answer
 it relays is Unbound's, which saw the client's size. The gateway never unpacks a DNS message: for a plain-UDP client it asks Unbound the
 decider's first FORWARD (the client's own bytes) over UDP only, and every later FORWARD of that QUERY (the SafeSearch chase, whose
-answers the decider must read whole) over UDP and, when Unbound truncated the reply, again over TCP behind a stream PROXYv2 header for the same client.
+answers the decider must read whole) over UDP and, when Unbound truncated the reply, again over TCP behind a stream PROXYv2 header for the same client. A stream client's every FORWARD is asked that way, so a TCP or DoT client opens an upstream TCP connection only for a truncated answer (Unbound's `incoming-num-tcp` is small).
 Pinned by `tests/dns_proxy/test_decision_transport.py`, `test_safesearch.py` (decider) and `test_gateway_chase.py` (a real
 Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
 
