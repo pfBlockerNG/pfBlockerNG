@@ -106,15 +106,100 @@ def test_a_query_without_exactly_one_question_gets_a_header_only_formerr_without
     )
 
 
-@pytest.mark.parametrize(("extra", "formerr"), [(8, False), (9, True)])
-def test_a_query_carrying_more_than_8_other_records_gets_a_header_only_formerr(
-    booted: Booted, extra: int, formerr: bool
+# --- what Unbound answers without resolving is Unbound's: forwarded unchanged, the module not asked ------
+
+UNBOUND_SAID = b"Unbound's reply, not a DNS message"  # comes back exactly as forwarded: the test sees who answered
+ANSWER = dnswire.RR(BLOCKED, dnswire.TYPE_A, dnswire.CLASS_IN, 60, bytes([192, 0, 2, 1]))
+NULL_RR = dnswire.RR(".", 10, dnswire.CLASS_IN, 0, b"")
+
+
+def _opt(version: int = 0, owner: str = ".") -> dnswire.RR:
+    return dnswire.RR(owner, dnswire.TYPE_OPT, 1232, version << 16, b"")
+
+
+def _query(
+    *,
+    flags: int = dnswire.RD,
+    qclass: int = dnswire.CLASS_IN,
+    answers: list[dnswire.RR] | None = None,
+    authority: list[dnswire.RR] | None = None,
+    additional: list[dnswire.RR] | None = None,
+) -> bytes:
+    question = dnswire.Question(BLOCKED, dnswire.TYPE_A, qclass)
+    return dnswire.encode(dnswire.Message(0x4242, flags, [question], answers or [], authority or [], additional or []))
+
+
+FORWARDED = {
+    "TC set": _query(flags=dnswire.RD | dnswire.TC),
+    "an answer record": _query(answers=[ANSWER]),
+    "an authority record": _query(authority=[ANSWER]),
+    "two additional records": _query(additional=[_opt(), NULL_RR]),
+    "nine additional records": _query(additional=[NULL_RR] * 9),
+    "one additional record that is not an OPT": _query(additional=[NULL_RR]),
+    "an OPT of EDNS version 1": _query(additional=[_opt(version=1)]),
+    "an OPT not owned by the root": _query(additional=[_opt(owner="example.")]),
+    "class CH": _query(qclass=3),
+    "class HS": _query(qclass=4),
+    "an answer section the parser cannot read": _hdr(1, an=1) + dnswire.encode_name(BLOCKED) + QTC + b"\xff",
+}
+DECIDED = {
+    "a plain query": _query(),
+    "an EDNS version 0 OPT of the root": _query(additional=[_opt()]),
+    "class ANY": _query(qclass=255),  # not a class Unbound answers without resolving: it stays with the module
+}
+
+
+def _decide(booted: Booted, monkeypatch: pytest.MonkeyPatch, wire: bytes) -> tuple[bytes | None, list[bytes], int]:
+    """(the reply, the wires forwarded to Unbound, how many times the module was asked) for one client query."""
+    forwarded: list[bytes] = []
+    asked: list[int] = []
+    real = booted.module.operate
+
+    def spy(id: int, event: int, qstate: Any, qdata: Any) -> bool:
+        asked.append(event)
+        return real(id, event, qstate, qdata)
+
+    async def forward(unbound_wire: bytes) -> bytes | None:
+        forwarded.append(unbound_wire)
+        return UNBOUND_SAID
+
+    monkeypatch.setattr(booted.module, "operate", spy)
+    return _resolve(booted, wire, forward), forwarded, len(asked)
+
+
+@pytest.mark.parametrize("wire", FORWARDED.values(), ids=FORWARDED.keys())
+def test_a_query_unbound_answers_without_resolving_goes_to_unbound_unchanged(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch, wire: bytes
 ) -> None:
-    wire = _hdr(1, ar=extra) + dnswire.encode_name(BLOCKED) + QTC + _null_rr(b"\x00") * extra
-    reply = _resolve(booted, wire)
+    """Unbound rejects or answers these before it resolves anything, so its reply is the exact answer and the module
+    never decides a name it would not have decided."""
+    assert _decide(booted, monkeypatch, wire) == (UNBOUND_SAID, [wire], 0)
+
+
+@pytest.mark.parametrize("wire", DECIDED.values(), ids=DECIDED.keys())
+def test_a_query_the_module_decides_is_not_forwarded(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch, wire: bytes
+) -> None:
+    reply, forwarded, asked = _decide(booted, monkeypatch, wire)
+    assert (reply != UNBOUND_SAID, forwarded, asked > 0) == (True, [], True)
+
+
+def test_a_packet_the_parser_cannot_read_gets_a_header_only_formerr_and_is_not_forwarded(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reply, forwarded, asked = _decide(booted, monkeypatch, _hdr(1) + b"\x05ab")  # a 5-octet label, 2 octets present
     assert reply is not None
-    assert (len(reply) == 12 and dnswire.parse(reply).rcode == 1) is formerr
-    assert formerr or dnswire.parse(reply).answers  # eight records are a query like any other: the block answer
+    assert (len(reply), dnswire.parse(reply).rcode, forwarded, asked) == (12, 1, [], 0)
+
+
+@pytest.mark.parametrize("wire", [FORWARDED["TC set"], FORWARDED["class CH"]], ids=["truncated", "class CH"])
+def test_a_query_unbound_answers_itself_that_gets_no_reply_is_a_servfail(booted: Booted, wire: bytes) -> None:
+    async def silent(_wire: bytes) -> bytes | None:
+        return None
+
+    reply = _resolve(booted, wire, silent)
+    assert reply is not None
+    assert dnswire.parse(reply).rcode == 2  # SERVFAIL, as a module-decided query gets when Unbound is silent
 
 
 # --- a response is never answered ------------------------------------------------------------
@@ -215,9 +300,11 @@ def test_the_question_class_reaches_the_module(booted: Booted, monkeypatch: pyte
         return real(id, event, qstate, qdata)
 
     monkeypatch.setattr(booted.module, "operate", spy)
-    chaos = dnswire.encode(dnswire.Message(5, dnswire.RD, [dnswire.Question("version.bind.", dnswire.TYPE_TXT, 3)]))
-    _resolve(booted, chaos)
-    assert seen[0] == 3
+    any_class = dnswire.encode(
+        dnswire.Message(5, dnswire.RD, [dnswire.Question("version.bind.", dnswire.TYPE_TXT, 255)])
+    )
+    _resolve(booted, any_class)
+    assert seen[0] == 255
 
 
 def test_a_name_first_written_beyond_the_14_bit_pointer_range_is_never_a_pointer_target() -> None:

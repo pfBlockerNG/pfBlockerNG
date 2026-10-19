@@ -516,6 +516,19 @@ def test_query_without_a_question_reaches_the_client_as_formerr_from_the_decider
     assert (msg_id, flags & 0x8000, flags & 0xF) == (0x0ABC, 0x8000, 1)  # id kept, QR set, FORMERR
 
 
+# Unbound refuses a truncated query before it reads the question: the blocked name gets its FORMERR, not the block.
+@pytest.mark.parametrize(
+    ("exchange", "source"), [(udp_exchange, ALLOWED_CLIENT), (tcp_exchange, ALLOWED_CLIENT_TCP)], ids=["udp", "tcp"]
+)
+def test_a_truncated_query_for_a_blocked_name_gets_unbounds_formerr_from_the_real_unbound(
+    gateway: Running, exchange: Callable[..., Coroutine[Any, Any, Any]], source: str
+) -> None:
+    query = bytearray(build_query(BLOCKED))
+    query[2] |= 0x02  # the TC bit
+    reply = dnswire.parse(_ask(exchange, gateway.server, bytes(query), source))
+    assert (reply.rcode, reply.answers) == (1, [])
+
+
 # E8
 def test_sigterm_ends_the_gateway_and_the_decider_and_the_module_shuts_down(gateway: Running) -> None:
     [decider_pid] = gateway.process.children()
