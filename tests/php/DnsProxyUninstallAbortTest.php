@@ -56,8 +56,8 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	}
 
 	/**
-	 * @param array<string,mixed> $scenario extra worker scenario keys: stored, permanent, unmigratedPolicy, lockAfterMove, state (a directory a second run continues from)
-	 * @return array{returned:bool,snapshot:bool,interface:?string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,rawFeed:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,writes:list<string>,exit:int,state:string}
+	 * @param array<string,mixed> $scenario extra worker scenario keys: stored, permanent, unmigratedPolicy, lockAfterMove, marker and interface (a Resolver pfB-DNS never moved beside that stored marker), state (a directory a second run continues from)
+	 * @return array{returned:bool,snapshot:bool,marker:string,interface:?string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,rawFeed:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,writes:list<string>,exit:int,state:string}
 	 */
 	private function removal(string $failure, string $keep, array $scenario = []): array
 	{
@@ -364,6 +364,58 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertSame([], array_filter($removal['events'], static fn (string $event): bool => str_starts_with($event, 'start:') && !str_ends_with($event, ':ignored')),
 			'and nothing was started: a start aimed at an unregistered service is ignored by pfSense and is not one');
 		$this->assertSame([], $removal['notices'], 'no notice: nothing went wrong');
+	}
+
+	/** @return array<string,array{string,string}> a stored marker that is no snapshot, and the Keep Settings choice */
+	public static function unconfirmedMarkers(): array
+	{
+		$cases = [];
+		foreach (['the single character 0' => '0', 'the text of an interrupted write' => '!!!truncated-snapshot!!!'] as $label => $marker) {
+			foreach (['on' => 'Keep Settings on', 'off' => 'Keep Settings off'] as $keep => $choice) {
+				$cases["{$label}, {$choice}"] = [$marker, $keep];
+			}
+		}
+		return $cases;
+	}
+
+	#[DataProvider('unconfirmedMarkers')]
+	public function testRemovalStopsWhenTheSavedStateCannotBeConfirmedAndErasesNeitherTheMarkerNorTheSettings(string $marker, string $keep): void
+	{
+		// Given a Resolver pfB-DNS was never shown to have moved (no block of ours) and a stored marker that is no snapshot
+		$removal = $this->removal('none', $keep, ['marker' => $marker]);
+
+		// Then the removal stops with pkg's abort status before anything is torn down, and the marker is exactly as stored
+		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'the package hook exits with the one status that makes pkg abandon the removal');
+		$this->assertFalse($removal['returned'], 'and never returns into the rest of the removal');
+		$this->assertSame($marker, $removal['marker'], 'the stored marker is kept verbatim, Keep Settings or not');
+		$this->assertSame('lo0', $removal['interface'], 'the Resolver is untouched');
+		$this->assertContains('pfblockerngdns', $removal['sections'], 'the section holding the marker is not wiped');
+		$this->assertContains('pfblockerngipsettings', $removal['sections'], 'nor any other package section');
+		$this->assertTrue($removal['pending'], 'the pending-changes marker, the first thing the teardown clears, is still there');
+		$this->assertTrue($removal['dbCanary'], 'the package data directory is kept');
+		$this->assertTrue($removal['rawFeed'], 'and the raw feed the disable pass would tear down');
+		$this->assertTrue($removal['rcScript'], 'the proxy\'s rc script is kept');
+		$texts = array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped'));
+		$this->assertNotSame([], $texts, 'the operator is told the removal stopped: ' . json_encode($removal['notices']));
+		foreach ($texts as $text) {
+			$this->assertStringContainsString('cannot be confirmed', $text);
+			$this->assertStringNotContainsString('the DNS proxy is running', $text);
+		}
+	}
+
+	#[DataProvider('keepSettings')]
+	public function testRemovalOfALoopbackOnlyResolverWithAnEmptyMarkerStillGoesThrough(string $keep): void
+	{
+		// Given a Resolver that has always sat on loopback: no block of ours and an empty marker
+		$removal = $this->removal('none', $keep, ['marker' => '']);
+
+		// Then nothing was moved, so the removal is not stopped and tears down as for any Resolver
+		$this->assertSame(0, $removal['exit'], 'a removal with nothing to restore is not aborted: ' . json_encode($removal['notices']));
+		$this->assertTrue($removal['returned']);
+		$this->assertSame('', $removal['marker']);
+		$this->assertFalse($removal['pending'], 'the teardown ran: the pending-changes marker is cleared');
+		$this->assertFalse($removal['rcScript'], 'the proxy\'s rc script is removed');
+		$this->assertSame($keep === 'on', in_array('pfblockerngipsettings', $removal['sections'], TRUE), 'the package config sections go only with Keep Settings off');
 	}
 
 	public function testRetryAfterTheLockIsReleasedRemovesThePackageForRealAndGivesTheResolverBack(): void

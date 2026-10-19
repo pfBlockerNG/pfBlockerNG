@@ -968,6 +968,45 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringContainsString('manual recovery required', end($texts));
 	}
 
+	/** @return array<string,array{string}> a stored marker that is no snapshot */
+	public static function unconfirmedMarkers(): array
+	{
+		return [
+			'the single character 0'           => ['0'],
+			'the text of an interrupted write' => ['!!!truncated-snapshot!!!'],
+			'base64 of text that is not JSON'  => [base64_encode('not json')],
+		];
+	}
+
+	/**
+	 * A saved state that cannot be confirmed (a marker that is no snapshot, none of our block in Custom Options) is never reported
+	 * as a restore: nothing can be put back from it, and nothing says what the Resolver was before.
+	 */
+	#[DataProvider('unconfirmedMarkers')]
+	public function testAMarkerThatIsNoSnapshotIsNeverReportedRestoredByTheRollback(string $marker): void
+	{
+		// Given the activation moved the Resolver, and the saved copy and our block are then both gone from config.xml
+		$this->activate(TRUE);
+		config_set_path(self::SAVED, $marker);
+		config_set_path('unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes"));
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: the marker is no snapshot');
+		$this->assertFalse(pfb_dns_proxy_block_present(), 'before: no block of ours');
+
+		// When the rollback runs
+		$restored = pfb_dns_proxy_roll_back();
+
+		// Then it fails, the marker is kept as stored, and the notice asks for a manual repair instead of claiming a restore
+		$this->assertFalse($restored, 'nothing can be put back from a marker that is no snapshot');
+		$this->assertSame($marker, (string) config_get_path(self::SAVED, ''), 'the marker is kept verbatim');
+		$texts = array_column($this->notices(), 'notice');
+		$this->assertNotEmpty($texts, 'the operator is told');
+		foreach ($texts as $text) {
+			$this->assertStringNotContainsString('to its previous settings', $text, 'no restore is claimed');
+		}
+		$this->assertStringContainsString('manual repair required', end($texts));
+		$this->assertStringNotContainsString('still carries', end($texts));
+	}
+
 	public function testAConfigLockHeldForOneWaitIsRetriedOnceAndTheRollbackStillRestoresTheResolver(): void
 	{
 		// Given a proxy that never serves, and a save that holds config.xml for longer than one lock wait but not two

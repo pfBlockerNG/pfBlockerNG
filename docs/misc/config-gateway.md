@@ -221,7 +221,8 @@ Authorization = property of **write**, not call site (generalises
     (`dnsbl/pfb_dns_proxy`, retired without an alias): absent reads Off = pre-feature behaviour.
   - **`dns/pfb_dns_saved`** (issue #3515, plain string — `NULL`/`NULL` adapters, not a GUI field):
     base64 JSON snapshot of the Resolver's `active_interface`/`enablessl`/`custom_options`
-    (presence and value) taken before the DNS proxy moves it; `''` = not moved. Default `''`, sync
+    (presence and value) taken before the DNS proxy moves it; `''` = not moved; any other value that is no snapshot is never
+    overwritten or cleared by the package (recovery required: the removal and the wizard's reset stop). Default `''`, sync
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
     not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only its own leaves

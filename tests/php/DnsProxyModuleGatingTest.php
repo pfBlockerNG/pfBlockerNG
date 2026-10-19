@@ -591,6 +591,41 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringNotContainsString('pfb_unbound.py', $this->patchedConf(), 'unbound.conf no matcher');
 	}
 
+	/** @return array<string,array{string}> a stored marker that is no snapshot */
+	public static function unconfirmedMarkers(): array
+	{
+		return [
+			'the single character 0'           => ['0'],
+			'the text of an interrupted write' => ['!!!truncated-snapshot!!!'],
+			'base64 of text that is not JSON'  => [base64_encode('not json')],
+		];
+	}
+
+	#[DataProvider('unconfirmedMarkers')]
+	public function testToggleOnWithAMarkerThatIsNoSnapshotAndNoBlockStillGivesUnboundTheDnsblModule(string $marker): void
+	{
+		// Given pfB-DNS on and DNSBL on, an ordinary Resolver (no block of ours) and a stored marker that is no snapshot: a
+		// corrupted value is no evidence that the proxy owns the Resolver, so the DNSBL that runs in Unbound must keep running
+		$this->setProxy(TRUE);
+		$this->enableDnsbl();
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		config_set_path(self::SAVED, $marker);
+		$this->writeUnboundConf(self::CONF_WITHOUT_MODULE);
+
+		// When both seams run
+		pfb_unbound_python('enabled');
+		$changed = pfb_unbound_dnsbl('enabled');
+
+		// Then the move was refused, the marker is kept, and Unbound is given the module, not the observer
+		$this->assertSame($marker, $this->savedRaw(), 'the marker is kept verbatim');
+		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'), 'the Resolver was not moved');
+		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'), 'config.xml runs the DNSBL module');
+		$this->assertTrue($changed, 'unbound.conf is patched to load the module');
+		$this->assertStringContainsString('pfb_unbound.py', $this->patchedConf());
+		$this->assertStringNotContainsString('pfb_upstream_observer', $this->patchedConf());
+		$this->assertFalse(pfb_dns_proxy_hosts_module(), 'the proxy hosts no module for a Resolver it was never shown to own');
+	}
+
 	public function testDisabledPassStillRemovesTheModuleWithoutASnapshot(): void
 	{
 		// Today's behaviour: mode 'disabled' strips the module whether or not a snapshot exists.
