@@ -511,7 +511,7 @@ then the start) runs after the lock is released. A call with no snapshot and no 
 nothing. A lock that stays taken fails the save with an input error, and abandons the
 move or restore with a `file_notice` (snapshot kept, retried by the next apply). The wizard's reset stops, with an input
 error and the package config unswept, whenever a snapshot survived `pfb_dns_proxy_resolver(FALSE)` (its return value
-is FALSE for "nothing to restore" too). The DNSBL page's save replaces its whole section and writes the whole config.xml copy
+is FALSE for "nothing to restore" too). A refused Finish stays on the Finalize step (Step 4 of 4), with its Finish and Skip buttons. The DNSBL page's save replaces its whole section and writes the whole config.xml copy
 its request read, so it takes the same lock before reading its section, applies the posted fields to the section read under
 it and holds the lock through `write_config()`: a DNS Reply Logging Off saved on the pfB-DNS page, or a Resolver move, that
 landed while the DNSBL form was open is kept, and a lock that stays taken or a failed read is an input error that saves

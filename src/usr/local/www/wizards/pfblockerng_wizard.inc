@@ -162,7 +162,8 @@ function step3_submitphpaction() {
 }
 
 function step4_submitphpaction() {
-	global $pfb, $input_errors;
+	global $pfb, $input_errors, $stepid;
+	// wizard.php increments $stepid after this action: a refusal sets 3, so the Finalize step (4) is re-rendered.
 
 	pfb_wizard_skip_check();
 
@@ -170,6 +171,7 @@ function step4_submitphpaction() {
 	$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
 	if (json_last_error() !== JSON_ERROR_NONE || !is_array($feed_info_raw)) {
 		$input_errors[] = 'pfBlockerNG: Feeds database missing. Cannot continue - Reinstall package.';
+		$stepid = 3;
 		return;
 	}
 
@@ -187,6 +189,7 @@ function step4_submitphpaction() {
 		    : 'DNS proxy: pfBlockerNG\'s saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so what the Resolver was before ' .
 		      'cannot be confirmed and pfBlockerNG was not reset. Check the Resolver in Services > DNS Resolver (restore a known-good configuration ' .
 		      'backup if needed), empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then run the wizard again.';
+		$stepid = 3;
 		return;
 	}
 
