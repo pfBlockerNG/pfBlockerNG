@@ -9,6 +9,7 @@ import subprocess
 
 import frontend_helpers
 import pytest
+from frontend_constants import LogFeed
 
 
 def test_an_async_wait_that_expires_is_stuck_and_chains_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,3 +39,9 @@ def test_a_wait_that_finishes_in_time_returns_its_value() -> None:
         return "answer"
 
     assert asyncio.run(frontend_helpers.watchdog(finished(), "the probe wait")) == "answer"
+
+
+def test_a_log_line_that_never_comes_is_stuck_not_a_verdict() -> None:
+    with pytest.raises(AssertionError, match=r"^STUCK/ENVIRONMENT: no expected log line within 0 s") as raised:
+        LogFeed().wait_for(lambda _log: False, timeout=0)
+    assert "saw []" in str(raised.value)

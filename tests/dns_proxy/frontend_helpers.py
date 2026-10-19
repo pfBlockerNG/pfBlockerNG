@@ -23,13 +23,14 @@ T = TypeVar("T")
 
 
 @contextlib.contextmanager
-def watched(what: str) -> Iterator[None]:
-    """Inside the block a WATCHDOG expiry means a stuck run: the environment's fault, never a product verdict. It is
-    raised as STUCK/ENVIRONMENT, chained to the timeout that caused it."""
+def watched(what: str, limit: float | None = None) -> Iterator[None]:
+    """Inside the block a timeout means a stuck run: the environment's fault, never a product verdict. It is raised as
+    STUCK/ENVIRONMENT, chained to the timeout that caused it. `limit` is the block's own limit (WATCHDOG by default)."""
     try:
         yield
     except (TimeoutError, subprocess.TimeoutExpired) as exc:
-        raise AssertionError(f"STUCK/ENVIRONMENT: {what} did not finish within {WATCHDOG:g} s") from exc
+        seconds = WATCHDOG if limit is None else limit
+        raise AssertionError(f"STUCK/ENVIRONMENT: {what} did not finish within {seconds:g} s") from exc
 
 
 async def watchdog(awaitable: Awaitable[T], what: str) -> T:

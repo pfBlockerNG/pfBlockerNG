@@ -13,11 +13,13 @@ from __future__ import annotations
 import asyncio
 import csv
 import struct
+import sys
 import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import dnswire
 import pytest
@@ -140,7 +142,9 @@ def _logged_through(running: Running, name: str) -> None:
     thread of its own into a file, so the wait polls it; the watchdog bounds the loop."""
     deadline = time.monotonic() + WATCHDOG
     while not _upstream_blocks(running, name):
-        assert time.monotonic() < deadline, f"STUCK: no upstream-block row for {name}; rows: {_rows(running)}"
+        assert time.monotonic() < deadline, (
+            f"STUCK/ENVIRONMENT: no upstream-block row for {name}; rows: {_rows(running)}"
+        )
         time.sleep(0.02)
 
 
@@ -251,3 +255,15 @@ def test_unbound_hides_the_upstream_signals_from_the_gateway_which_is_why_the_ob
         False,
         [],
     )
+
+
+def test_a_row_that_never_gets_logged_is_stuck_not_a_failed_row_assertion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "WATCHDOG", 0)
+    running = Running(cast(Any, None), ("127.0.0.1", 1), tmp_path)  # _logged_through reads only the log dir
+    with pytest.raises(
+        AssertionError, match=r"^STUCK/ENVIRONMENT: no upstream-block row for blocked\.example\."
+    ) as raised:
+        _logged_through(running, "blocked.example.")
+    assert "rows: []" in str(raised.value)

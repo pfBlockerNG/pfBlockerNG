@@ -28,6 +28,8 @@ NEEDS_ROOT = pytest.mark.skipif(
     os.geteuid() != 0, reason="giving up root needs root: the decider is started as root on the appliance"
 )
 
+INTERPRETER_PROBE_TIMEOUT = 60  # an interpreter importing the standard library as a user; past this it is stuck
+
 
 @pytest.mark.parametrize("failing", ["setgroups", "setgid", "setuid"])
 def test_a_drop_the_os_refuses_exits_1_with_a_message_before_the_module_boots(
@@ -54,13 +56,14 @@ def _interpreter_for(user: str) -> str:
     candidates = dict.fromkeys([sys.executable, shutil.which("python3") or "", "/usr/bin/python3"])
     for candidate in filter(None, candidates):
         try:
-            probe = subprocess.run(
-                [candidate, "-c", "import asyncio, ipaddress, json, sqlite3, ssl"],
-                user=user,
-                capture_output=True,
-                timeout=60,
-                check=False,
-            )
+            with watched(f"the interpreter probe as {user!r}", limit=INTERPRETER_PROBE_TIMEOUT):
+                probe = subprocess.run(
+                    [candidate, "-c", "import asyncio, ipaddress, json, sqlite3, ssl"],
+                    user=user,
+                    capture_output=True,
+                    timeout=INTERPRETER_PROBE_TIMEOUT,
+                    check=False,
+                )
         except OSError:  # PermissionError: the interpreter sits somewhere `user` cannot reach, such as /root
             continue
         if probe.returncode == 0:
@@ -169,3 +172,21 @@ def test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no
     assert ids == {"Uid": [account.pw_uid] * 4, "Gid": [account.pw_gid] * 4, "Groups": []}
     assert (ftype, fid, dnswire.parse(wire).rcode) == (ANSWER, 1, 2)  # as that user: nothing answered, so SERVFAIL
     assert child.returncode == 0, stderr
+
+
+def test_an_interpreter_probe_that_never_returns_is_stuck_and_its_child_is_reaped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """subprocess.run kills and reaps the probe's child on expiry: a stuck run, not a missing interpreter."""
+    real_run = subprocess.run
+
+    def sleeping_child(_args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        kwargs.pop("user", None)  # the child runs as this process: the test needs no root
+        return real_run([sys.executable, "-c", "import time; time.sleep(5)"], **kwargs)  # outlives a zero limit
+
+    monkeypatch.setattr(subprocess, "run", sleeping_child)
+    monkeypatch.setattr(sys.modules[__name__], "INTERPRETER_PROBE_TIMEOUT", 0)
+    message = r"^STUCK/ENVIRONMENT: the interpreter probe as 'nobody' did not finish within 0 s$"
+    with pytest.raises(AssertionError, match=message) as raised:
+        _interpreter_for("nobody")
+    assert isinstance(raised.value.__cause__, subprocess.TimeoutExpired)

@@ -72,7 +72,9 @@ class LogFeed(list[tuple[str, str]]):
         """The log once `done(log)` holds; raises with what was seen when it does not within `timeout` (a stuck run)."""
         with self._cond:
             if not self._cond.wait_for(lambda: done(self), timeout):
-                raise AssertionError(f"STUCK: the expected log line never came; saw {list(self)!r}")
+                raise AssertionError(
+                    f"STUCK/ENVIRONMENT: no expected log line within {timeout:g} s; saw {list(self)!r}"
+                )
             return list(self)
 
 
