@@ -1,47 +1,55 @@
-"""ADR-07 Phase 7 -- regex safety: always-on catastrophic-shape gate + opt-in length
-cap + always-on runtime warn/evict.
+"""ADR-07 Phase 7 -- regex safety: always-on admission gate + opt-in length
+cap + always-on runtime slow-match warning.
 
 `re` does not release the GIL during a match and a Python thread cannot be killed
-(ADR.md fact 2), so a query-time timeout CANNOT interrupt a catastrophic match. The
-accepted design is a bounded residual: a pathological pattern's FIRST match may block
-one query, but it is then EVICTED so it cannot hang again. The LOAD-time gate is split
-into two DECOUPLED concerns, both stdlib + in-process, applied to FEED *and* user regex:
+(ADR.md fact 2), so a query-time timeout CANNOT interrupt a runaway match. The
+design therefore bounds every admitted rule's work at load, and a rule that still
+measures slow at query time is WARNED about once and KEPT: removing it would only let
+one crafted query take a rule away for good. The LOAD-time gate is split into two
+DECOUPLED concerns, both stdlib + in-process, applied to FEED *and* user regex:
 
-  (1a) always-on catastrophic-SHAPE gate -- a structurally pathological pattern (nested /
-       adjacent / overlapping unbounded quantifier, stacked bounded repeat, or over the
-       complexity budget) is dropped at LOAD UNCONDITIONALLY -- independent of any
-       setting -- because such a shape drives catastrophic backtracking in `re`. Pure
-       static string analysis, NO execution of the candidate;
+  (1a) always-on ADMISSION gate -- a pattern outside the bounded grammar (printable
+       ASCII, an allowlist of constructs, bounded repeats and nesting) or over the
+       backtracking-cost bound is dropped at LOAD UNCONDITIONALLY -- independent of any
+       setting. Pure static string analysis, NO execution of the candidate;
   (1b) opt-in LENGTH ceiling -- a long-but-safe pattern is dropped at LOAD only when the
        "Limit long/complex regex" setting is enabled; length alone is a tunable
        convenience cap, NOT a safety gate, so it stays behind the flag;
-  (2) always-on RUNTIME timing -- over a warn ceiling log, over a higher evict ceiling
-      log + remove the pattern from the live regexDB/allowRegexDB (snapshot-iterate,
-      evict-after-loop -- never mutate mid-iteration; dict.pop is atomic under the GIL).
+  (2) always-on RUNTIME timing -- a match over the warn ceiling logs one line per rule, and a
+      list scan whose rules sum over the ceiling logs one line per list; every admitted rule
+      stays in the live regex containers, and there is no limit on how many rules a list holds.
 
 These tests are pure (no live Unbound). The runtime tests drive a deterministic clock
 by monkeypatching ``time.thread_time`` so a "slow" match is simulated without running a
-genuinely catastrophic pattern (which could hang the suite -- exactly the residual the
-design accepts but the tests must not pay).
+genuinely slow pattern.
 """
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+
+import pytest
+import unboundmodule
 
 import pfb_dnsbl_regex_rules
 import pfb_unbound
 from pfb_unbound import (
+    DNSBL_KIND_ALLOW,
     DNSBL_KIND_BLOCK,
     PRIO_FEED_ALLOW,
     PRIO_FEED_BLOCK,
+    PRIO_USER_ALLOW,
+    PRIO_USER_BLOCK,
     RegexRule,
     _dnsbl_compile_regex_rules,
-    _regex_is_catastrophic_shape,
+    _dnsbl_compile_user_regex,
     _scan_allow_regex_band,
+    _scan_block_band,
     evaluate_domain,
 )
 
@@ -62,9 +70,10 @@ def _cfg(**overrides: Any) -> dict[str, Any]:
         "regexDB": False,
         "whiteDB": False,
         "allowRegexDB": False,
+        "userRegexDB": False,
+        "userAllowRegexDB": False,
         "important_rules": False,
         "regex_warn_ms": pfb_unbound.REGEX_WARN_MS_DEFAULT,
-        "regex_evict_ms": pfb_unbound.REGEX_EVICT_MS_DEFAULT,
         "python_tld_seg": 2,
         "hstsDB": False,
         "hsts_tlds": ("app", "dev"),
@@ -81,6 +90,8 @@ def _containers(**overrides: Any) -> dict[str, Any]:
         "hstsDB": {},
         "regexDB": defaultdict(str),
         "allowRegexDB": defaultdict(str),
+        "userRegexDB": defaultdict(str),
+        "userAllowRegexDB": defaultdict(str),
         "feedGroupIndexDB": defaultdict(list),
     }
     base.update(overrides)
@@ -100,10 +111,10 @@ class _FakeClock:
 
 
 def _long_benign_pattern() -> str:
-    """A pattern over the length ceiling but STRUCTURALLY safe: a long concatenation of
-    literal labels with a single optional group -- no nested/overlapping quantifier, no
-    stacked repeat, and a complexity budget well under the threshold. Used to prove the
-    LENGTH ceiling is decoupled from (and gated independently of) the shape gate."""
+    """A pattern over the opt-in length ceiling but inside the admission grammar and cost
+    bound: a long concatenation of literal labels with a single optional group. Used to
+    prove the LENGTH ceiling is decoupled from (and gated independently of) the admission
+    gate."""
     pat = r"^(sub)?" + "verylongsubdomainlabel" * 10 + r"\.example\.com$"
     assert len(pat) > pfb_unbound.REGEX_STATIC_LEN_CAP
     return pat
@@ -111,7 +122,7 @@ def _long_benign_pattern() -> str:
 
 def _install_clock(monkeypatch: Any, elapsed_ms_per_match: list[float]) -> None:
     """Make every match report a fixed elapsed time (ms). Forces the thread_time path
-    so the warn/evict policy is deterministic (no perf-fallback 2-strike interplay)."""
+    so the warn policy is deterministic (no perf_counter interplay)."""
     ticks: list[float] = []
     for ms in elapsed_ms_per_match:
         ticks.extend([0.0, ms / 1000.0])
@@ -120,427 +131,35 @@ def _install_clock(monkeypatch: Any, elapsed_ms_per_match: list[float]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# (1a) CATASTROPHIC-SHAPE gate -- pure, ALWAYS-ON (length-independent)
+# (1a) ADMISSION gate at LOAD -- ALWAYS-ON (independent of the opt-in length cap).
+# The gate's own grammar and cost rows live in test_pfb_dnsbl_regex_rules.py.
 # --------------------------------------------------------------------------- #
-class TestCatastrophicShapeHeuristic:
-    """``_regex_is_catastrophic_shape`` is the always-on SAFETY half: it flags the
-    structurally dangerous shapes and is independent of pattern LENGTH."""
-
-    def test_single_group_nested_quantifier_flagged(self) -> None:
-        for pat in (r"(a+)+$", r"(a*)*", r"(\w+\.)+\w+$", r"([a-z]+)*\.example$", r"(.*a){20}$"):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_single_group_alternation_overlap_flagged(self) -> None:
-        # A quantified group whose body contains `|` backtracks catastrophically yet
-        # has no INNER quantifier, so the nested-quantifier heuristic alone misses it.
-        for pat in (r"^(a|a)+$", r"(a|ab)*", r"(foo|foobar)+", r"(x|y|x){10}"):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_multi_group_adjacent_quantifier_flagged(self) -> None:
-        # The dangerous shape the single-group heuristics MISS: two back-to-back groups
-        # where the second is quantified -- the first group's unbounded body and the
-        # quantified sibling share input, an exponential partition of the matched span.
-        for pat in (r"(a+)(a+)+", r"(a+)(b+)*", r"(\w+)(\d+)+$", r"^(x+)(y+)*\.example$"):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_ungrouped_adjacent_quantifier_run_flagged(self) -> None:
-        # issue #2035: a run of back-to-back atoms that each carry an unbounded quantifier
-        # and whose character sets OVERLAP partitions the matched span the same way the
-        # grouped shapes do -- every atom can cede characters to its neighbour. The four
-        # group-keyed shapes above all miss it (no parentheses anywhere) and four
-        # quantifiers sit well under the complexity budget. Measured at the maximum DNS
-        # name length (253 characters, the longest input the matcher can ever be handed):
-        # three adjacent `[a-z]+` cost 7 ms per query and four cost 462 ms.
+class TestAdmissionGateAtLoad:
+    def test_benign_feed_patterns_are_admitted(self) -> None:
         for pat in (
-            r"^[a-z]+[a-z]+[a-z]+[a-z]+@example\.com$",  # the issue's console reproduction
-            r"^[a-z]+[a-z]+[a-z]+\.example\.com$",
-            r"\w+\w+\w+",
-            r".*.*.*",
-            r"[a-z]+[a-z0-9]+[0-9a-z]+",  # overlap does not require identical atoms
-            r"^a{2,}a{2,}a{2,}$",  # `{m,}` is unbounded too
-            r"^[a-z]+?[a-z]+?[a-z]+?$",  # lazy quantifiers backtrack just as hard
+            r"ads\.",
+            r"ad[0-9]\.example\.com$",
+            r"^x[0-9]+\.example\.com$",
+            r"\.doubleclick\.net$",
+            r"^(.+\.)?doubleclick\.net$",
+            r"^(www\.)?ad-?serv(er|ice)\.example$",
+            r"^(foo|bar)\.example$",
+            r"^(.+\.)?ads?[0-9]*\.example\.(com|net|org)$",
+            r"^[a-z0-9-]+\.[a-z0-9-]+\.[a-z]{2,}$",
+            r"^[^.]+\.[^.]+\.[^.]+\.example$",
+            r"\d+\.\d+",
+            r"[a-z]+[0-9]+\.example\.com",
         ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
+            assert pfb_dnsbl_regex_rules.pfb_regex_admission(pat)[1] is None, pat
 
-    def test_adjacent_quantifier_run_overlap_is_case_insensitive(self) -> None:
-        # The DNSBL matcher compiles every admitted regex with re.IGNORECASE, so
-        # atom-overlap analysis must judge overlap under the same semantics: any
-        # letter matches BOTH [A-Z] and [a-z] once case-folded, so this run is
-        # exactly as catastrophic as the same-case run above.
-        for pat in (
-            r"^[A-Z]+[a-z]+[A-Z]+@example\.com$",
-            r"^[a-z]+[A-Z]+[a-z]+@example\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
+    def test_gate_is_independent_of_the_opt_in_length_cap(self) -> None:
+        # A long-but-safe pattern (inside the always-on admission length) is admitted:
+        # the length ceiling over REGEX_STATIC_LEN_CAP is the separate opt-in cap.
+        assert pfb_dnsbl_regex_rules.pfb_regex_admission(_long_benign_pattern())[1] is None
+        # And a SHORT unsafe shape is refused regardless of being well under that length.
+        assert pfb_dnsbl_regex_rules.pfb_regex_admission(r"(a+)+")[1] is not None
 
-    def test_grouped_adjacent_quantifier_run_flagged(self) -> None:
-        # The SAME shape wearing parentheses. Plain `(...)`/`(?:...)` groups do not change
-        # what the engine backtracks over, so `([a-z]+)([a-z]+)([a-z]+)` is the ungrouped
-        # run above -- and it is the more expensive form, measured at 1277 ms per query for
-        # four groups against a 253-character name (vs 462 ms ungrouped). No group-keyed
-        # shape above catches it: none of these carries a quantifier ON a group.
-        for pat in (
-            r"^([a-z]+)([a-z]+)([a-z]+)([a-z]+)@example\.com$",
-            r"^([a-z]+)([a-z]+)([a-z]+)\.example\.com$",
-            r"^(?:\w+)(?:\w+)(?:\w+)\.example$",
-            r"^[a-z]+(\w+)[a-z]+\.example$",  # grouped and ungrouped atoms in one run
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_zero_width_construct_does_not_split_a_run(self) -> None:
-        # A comment or a lookaround consumes NOTHING, so dropping one into the middle of a
-        # run leaves the engine backtracking over exactly the same span -- each row below
-        # is the issue's own reproduction plus one inert construct, and each still costs
-        # ~460 ms per query. Treating these as a run boundary would make the whole rule a
-        # one-token bypass.
-        for pat in (
-            r"^[a-z]+[a-z]+(?#c)[a-z]+[a-z]+@example\.com$",
-            r"^[a-z]+[a-z]+(?=a)[a-z]+[a-z]+@example\.com$",
-            r"^[a-z]+[a-z]+(?!b)[a-z]+[a-z]+@example\.com$",
-            r"^[a-z]+[a-z]+(?<=a)[a-z]+[a-z]+@example\.com$",
-            r"^[a-z]+[a-z]+(?<!b)[a-z]+[a-z]+@example\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_quantified_single_atom_group_counts_as_its_atom(self) -> None:
-        # `(?:[a-z])+` IS `[a-z]+` -- the group wraps one atom and the quantifier sits
-        # outside it. Measured at 475 ms per query for the four-group row, so a run spelled
-        # this way is the same defect, not a different one.
-        for pat in (
-            r"^(?:[a-z])+(?:[a-z])+(?:[a-z])+(?:[a-z])+@example\.com$",
-            r"^([a-z])+([a-z])+([a-z])+@example\.com$",
-            r"^(?P<a>\w)+(?P<b>\w)+(?P<c>\w)+@example\.com$",
-            # A group body wider than one atom repeats the same way: measured 238 ms per
-            # query for the four-group row against a matching 253-character name.
-            r"^(ab)+(ab)+(ab)+@example\.com$",
-            r"^(?:ab)+(?:ab)+(?:ab)+(?:ab)+@example\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_group_body_is_scanned_for_a_run_of_its_own(self) -> None:
-        # Wrapping a run in a group hides it from nothing: the engine still backtracks over
-        # the body (measured 24.8 ms at 81 characters for the first row, doubling every ten
-        # further characters). Whatever a group does to its NEIGHBOURS, its body is scanned.
-        for pat in (
-            r"^([a-z]+[a-z]+[a-z]+[a-z]+)?@example\.com$",
-            r"^([a-z]+(x)?[a-z]+[a-z]+[a-z]+)+@example\.com$",
-            r"^(?:[a-z]+[a-z]+[a-z]+){0,3}@example\.com$",
-            r"^[a-z]+([a-z]+)?[a-z]+[a-z]+@example\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # An optional group of literals is still just a literal prefix.
-        assert _regex_is_catastrophic_shape(r"^(www\.)?ads?\.example\.com$") is False
-
-    def test_lookaround_body_is_scanned_for_a_run_of_its_own(self) -> None:
-        # A lookaround consumes nothing, so it bridges the run around it -- but the engine
-        # still backtracks over what is INSIDE it (measured 18.5 ms at 110 characters), so
-        # its body is scanned on its own terms rather than skipped with the construct.
-        for pat in (
-            r"^(?=([a-z]+[a-z]+[a-z]+[a-z]+x))\@example\.com$",
-            r"^(?!(\w+\w+\w+y))[a-z]+\.example$",
-            r"^(?<=([a-z]+[a-z]+[a-z]+))x$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # A lookahead body is NOT adjacent to what follows it -- it matches no characters --
-        # so its atoms never join the outer run.
-        assert _regex_is_catastrophic_shape(r"^(?=.*ad)[a-z]+[a-z]+\.example$") is False
-        assert _regex_is_catastrophic_shape(r"^(?=[a-z]+)[a-z]+[a-z]+\.example$") is False
-        # A COMMENT is inert text rather than a pattern, so what looks like a run inside one
-        # is not a run at all and must not be read as one.
-        assert _regex_is_catastrophic_shape(r"^(?#[a-z]+[a-z]+[a-z]+)x$") is False
-
-    def test_nested_lookaround_scan_stops_at_its_depth_bound(self) -> None:
-        # The recursion into lookaround bodies is bounded so a hostile line cannot exhaust
-        # the stack. Pin the ceiling from BOTH sides: a run at the deepest scanned nesting is
-        # still found, and one nested a level deeper is deliberately not looked for -- which
-        # is the documented cost of the bound, not an accident.
-        run = "[a-z]+[a-z]+[a-z]+"
-        at_bound = "(?=" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + run
-        past_bound = "(?=" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1) + run
-        assert _regex_is_catastrophic_shape(at_bound + ")" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX) is True
-        assert (
-            _regex_is_catastrophic_shape(past_bound + ")" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1)) is False
-        )
-        # Nesting far past the bound is answered rather than crashing the load path.
-        assert _regex_is_catastrophic_shape("(?=" * 5000 + "a" + ")" * 5000) is False
-
-    def test_quantified_group_run_over_distinct_bodies_not_flagged(self) -> None:
-        # Two quantified groups only partition the span when they can consume the same
-        # input; `(ab)+(cd)+` has exactly one way to split, so it stays admitted.
-        assert _regex_is_catastrophic_shape(r"^(ab)+(cd)+(ef)+@example\.com$") is False
-
-    def test_optional_atom_does_not_split_a_run(self) -> None:
-        # An atom that may match nothing cannot separate its neighbours: when it matches
-        # empty the runs on either side are one run, and the engine explores that partition
-        # too (measured 7.8 ms per query, over the warn ceiling and under the evict one).
-        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+x?[a-z]+@example\.com$") is True
-        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(?P<g>x?)[a-z]+[a-z]+@example\.com$") is True
-        # …but an optional atom only BRIDGES a run, it never starts or extends one: the
-        # canonical `ads?` shape keeps its two quantifiers in runs of one.
-        assert _regex_is_catastrophic_shape(r"^ads?[0-9]*\.example\.(com|net)$") is False
-
-    def test_adjacent_quantifiers_over_disjoint_atoms_not_flagged(self) -> None:
-        # Adjacency alone is NOT the danger: when neighbouring atoms cannot match the same
-        # character there is exactly ONE way to split the input, so the engine never
-        # backtracks (measured 0.00 ms at 253 characters for the four-atom row below).
-        # Rejecting these would silently drop legitimate feed entries.
-        for pat in (
-            r"^cdn[a-z]+[0-9]*\.example\.com$",
-            r"^[a-z]+[0-9]+[a-z]+[0-9]+@example\.com$",
-            r"^\w+\.\w+$",
-            r"^.+@.+$",  # '@' floats through '.' spans but leaves no adjacent pair
-        ):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-
-    def test_two_adjacent_overlapping_quantifiers_not_flagged(self) -> None:
-        # The rule flags runs LONGER than _REGEX_ADJACENT_ATOM_MAX (2), because a pair
-        # splits the input linearly: measured 0.08 ms at the 253-character maximum, three
-        # orders of magnitude under the 100 ms eviction ceiling and under the 10 ms warn
-        # ceiling. A pair is the shape realistic host patterns actually use, so flagging it
-        # would cost false positives to buy no measurable safety.
-        for pat in (
-            r"^[a-z]+[a-z0-9-]*\.doubleclick\.net$",
-            r"^\w+\w+$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-
-    def test_non_backtracking_adjacent_quantifiers_not_flagged(self) -> None:
-        # A possessive quantifier (`a++`) never gives characters back, and a FIXED repeat
-        # (`a{3}`) has nothing to give -- neither can partition the span, so neither starts
-        # or continues a run.
-        # The middle row is the discriminating one: its first two atoms already form a run,
-        # so it stays admitted ONLY because the possessive third atom never joins it as a
-        # third quantifier (it bridges the chain like any mandatory overlapping atom).
-        for pat in (r"^[a-z]++[a-z]++[a-z]++$", r"^[a-z]+[a-z]+[a-z]++$", r"^[a-z]{3}[a-z]{3}[a-z]{3}$"):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-
-    def test_overlapping_mandatory_separator_does_not_split_a_run(self) -> None:
-        # issue #2082: a mandatory atom whose character set overlaps its neighbours is no
-        # boundary -- its position floats inside the span, so the quantifiers on both sides
-        # keep multiplying through it. Measured with the runtime's IGNORECASE compile against
-        # failing 253-character inputs (CI image; the rejected three-quantifier run costs
-        # 24.9 ms in the same environment): 1533 ms for the issue's reproduction (first row),
-        # 24 ms for the pair+separator+quantifier rows, 1465 ms for the fixed-repeat
-        # separator, 490 ms for the multi-character literal, 75 s for the double-separator row.
-        for pat in (
-            r"^[a-z]+[a-z]+a[a-z]+[a-z]+@x\.com$",  # the issue's console reproduction
-            r"^([a-z]+)([a-z]+)a([a-z]+)([a-z]+)@x\.com$",  # the same run wearing groups
-            r"^[a-z]+[a-z]+a[a-z]+@x\.com$",
-            r"^[a-z]+a[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+a{3}[a-z]+[a-z]+@x\.com$",  # a fixed repeat floats the same way
-            r"^[a-z]+[a-z]+abc[a-z]+[a-z]+@x\.com$",  # multi-character literal separator
-            r"^[a-z]+[a-z]+a[a-z]+a[a-z]+[a-z]+@x\.com$",
-            r"^\w+\w+x\w+\w+$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_separator_overlap_is_judged_case_insensitively(self) -> None:
-        # The matcher compiles admitted patterns with re.IGNORECASE, so 'A' floats through
-        # [a-z] spans exactly like 'a' does (measured 1520 ms per query at 253 characters).
-        assert _regex_is_catastrophic_shape(r"^[A-Z]+[a-z]+A[a-z]+[A-Z]+@x\.com$") is True
-
-    def test_single_quantifier_gaps_between_overlapping_separators_stay_admitted(self) -> None:
-        # The issue's design constraint: with ONE quantifier per gap the floating separator
-        # has no adjacent pair to multiply -- 5.8 ms worst case at 253 characters against an
-        # adversarial separator-rich input, under the 10 ms warn ceiling. Run length through
-        # bridged separators alone is NOT the discriminator; rejecting these would drop
-        # benign feed shapes.
-        for pat in (
-            r"^[a-z]+x[a-z]+y[a-z]+@x\.com$",  # the issue's measured benign row
-            r"^[a-z]+a[a-z]+$",
-            r"^[a-z]+[a-z]+a$",  # trailing separator: no quantifier after the float
-        ):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-
-    def test_conditional_group_separator_is_the_same_defect(self) -> None:
-        # issue #2082's second spelling: `(?(1)a|b)` between the pairs is the bare `a`
-        # separator wearing a conditional (measured 1492 ms per query at 253 characters,
-        # CI image; the QUANTIFIED spelling below costs 79 s).
-        for pat in (
-            r"^([a-z])[a-z]+[a-z]+(?(1)a|b)[a-z]+[a-z]+@x\.com$",
-            r"^([a-z])[a-z]+[a-z]+(?(1)a|b)+[a-z]+[a-z]+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # A conditional whose EVERY alternative is disjoint from the run really does pin
-        # the split, exactly like a bare disjoint literal.
-        assert _regex_is_catastrophic_shape(r"^([0-9])[a-z]+[a-z]+(?(1)\.|,)[a-z]+[a-z]+@x\.com$") is False
-
-    def test_scoped_flags_and_atomic_group_separator_spellings(self) -> None:
-        # `(?i:a)` and `(?>a)` between the pairs are still the floating `a` separator:
-        # scoped flags do not change what the engine backtracks over, and an atomic group's
-        # POSITION floats with the run even though its body never gives characters back
-        # (measured 1512 ms and 1558 ms per query at 253 characters, CI image).
-        for pat in (
-            r"^[a-z]+[a-z]+(?i:a)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?>a)[a-z]+[a-z]+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_grouped_mandatory_separator_spellings(self) -> None:
-        # The bare separator's grouped spellings float identically (issue #2082).
-        # Measured per query at 253 characters (CI image): 1529 / 1539 / 721 / 786 ms.
-        for pat in (
-            r"^[a-z]+[a-z]+(a){3}[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?:a){3}[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(ab){3}[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a)++[a-z]+[a-z]+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # A grouped DISJOINT separator still pins the split, exactly like the bare form.
-        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(\.){3}[a-z]+[a-z]+$") is False
-
-    def test_alternation_group_separator_is_the_same_defect(self) -> None:
-        # `(a|b)` between the pairs is the conditional separator without the condition --
-        # its body compiles standalone, so the overlap probe judges it directly. Measured
-        # 1719 / 1747 ms per query at 253 characters (CI image).
-        for pat in (
-            r"^[a-z]+[a-z]+(a|b)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?:a|b)[a-z]+[a-z]+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # Disjoint alternatives really pin the split.
-        assert _regex_is_catastrophic_shape(r"^([0-9])[a-z]+[a-z]+(\.|,)[a-z]+[a-z]+$") is False
-
-    def test_alternation_separator_with_a_parenthesised_branch(self) -> None:
-        # A parenthesised branch must stay on the alternation-separator path: entering the
-        # group would read its bare `|` as a boundary and reset the chain.
-        # Measured 1478 / 1463 / 1451 ms per query at 253 characters (CI image).
-        for pat in (
-            r"^[a-z]+[a-z]+(a|(b))[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?:a|(b))[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+((a)|b){3}[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|(b))+[a-z]+[a-z]+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # A quantifier-carrying body stays on the entered scan, so a run inside a branch
-        # is still found -- the overlap-probe shortcut must never hide it.
-        assert _regex_is_catastrophic_shape(r"^([a-z]+[a-z]+[a-z]+|x)@x\.com$") is True
-        # A `|` that only sits inside a NESTED group does not make the outer body an
-        # alternation: `(x(a|b)y)` must take the entered scan (where every atom bridges
-        # the chain), not the overlap probe (whose single-character match would read the
-        # multi-atom body as disjoint and reset the chain).
-        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(x(a|b)y)[a-z]+[a-z]+@x\.com$") is True
-        # Disjoint parenthesised alternatives still pin the split.
-        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(\.|(,))[a-z]+[a-z]+$") is False
-
-    def test_backreference_separator_bridges_the_chain(self) -> None:
-        # A backreference's character set is unknowable statically, so the gate must not
-        # read it as a boundary: measured 1564 ms (`\1`) and 2018 ms (`(?P=g)`) per query
-        # at 253 characters (CI image). Conservative bridge: the chain survives it.
-        for pat in (
-            r"^([a-z])[a-z]+[a-z]+\1[a-z]+[a-z]+@x\.com$",
-            r"^(?P<g>[a-z])[a-z]+[a-z]+(?P=g)[a-z]+[a-z]+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_long_chain_without_a_pair_is_rejected(self) -> None:
-        # Pair-adjacency alone under-covers. Four quantifiers connected
-        # only by floating separators cost 1753 ms per query at 253 characters (CI image);
-        # three cost 23 ms -- under the evict ceiling and the accepted warn-layer residual,
-        # and rejecting three would drop the issue's admitted single-gap shapes.
-        assert _regex_is_catastrophic_shape(r"^[a-z]+a[a-z]+a[a-z]+a[a-z]+@x\.com$") is True
-        assert _regex_is_catastrophic_shape(r"^[a-z]+a[a-z]+a[a-z]+@x\.com$") is False
-
-    def test_atomic_group_body_is_not_a_backtracking_run(self) -> None:
-        # Atomicity forbids backtracking INSIDE the body -- `^(?>[a-z]+[a-z]+[a-z]+)@...`
-        # costs 0.00 ms at 253 characters (CI image), so its body must never be read as a
-        # joinable run (the no-false-positive constraint) -- while the atomic group AS a
-        # floating separator stays the rejected 1558 ms shape.
-        assert _regex_is_catastrophic_shape(r"^(?>[a-z]+[a-z]+[a-z]+)@x\.com$") is False
-        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(?>a)[a-z]+[a-z]+@x\.com$") is True
-
-    def test_scoped_flags_group_body_is_scanned(self) -> None:
-        # A `(?i:...)` group is entered like `(?:...)`: skipping it wholesale would hide a
-        # run from the scan entirely (measured 1532 ms per query at 253 characters, CI
-        # image, for the first row), and a quantified single-atom spelling IS that atom's
-        # quantifier.
-        assert _regex_is_catastrophic_shape(r"^(?i:[a-z]+[a-z]+[a-z]+[a-z]+)@x\.com$") is True
-        assert _regex_is_catastrophic_shape(r"^(?i:[a-z])+(?i:[a-z])+(?i:[a-z])+@x\.com$") is True
-
-    def test_conditional_branches_are_scanned_as_independent_bodies(self) -> None:
-        for pat in (
-            r"^([a-z])(?(1)[a-z]+[a-z]+[a-z]+[a-z]+|b)@x\.com$",
-            r"^(a)?(?(1)b|[a-z]+[a-z]+[a-z]+[a-z]+)@x\.com$",
-            r"^(?P<flag>a)?(?(flag)(?i:[a-z]+[a-z]+[a-z]+)|b)$",
-            r"^(a)(?(1)(?P<body>[a-z]+[a-z]+[a-z]+)|b)$",
-            r"^(a)(?(1)(?=[a-z])[a-z]+[a-z]+[a-z]+|b)$",
-            r"^(a)(?(1)\([a-z]+[a-z]+[a-z]+\)|b)$",
-            r"^(a)(?(1)[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+|b)$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # Branches are separate patterns: two runs on each side of `|` never join.
-        for pat in (
-            r"^(?P<flag>a)?(?(flag)b|c)$",
-            r"^(a)?(?(1)[a-z]+[a-z]+|[a-z]+[a-z]+)$",
-            r"^(a)(?(1)(?>[a-z]+[a-z]+[a-z]+)|b)$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-
-    def test_multi_character_opaque_bodies_bridge_only_when_their_language_overlaps(self) -> None:
-        for pat in (
-            r"^[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?>ab)+[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(foo|foobar)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?:foo|foobar)+[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?i:foo|foobar)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(?i:(?>ab))[a-z]+[a-z]+@x\.com$",
-            r"^\w+\w+(?>éé)\w+\w+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        for pat in (
-            r"^[a-z]+[a-z]+(?>12)[a-z]+[a-z]+$",
-            r"^[a-z]+[a-z]+(?>a\.)[a-z]+[a-z]+$",
-            r"^[a-z]+[a-z]+(\.|,)[a-z]+[a-z]+$",
-            r"^[a-z]+[a-z]+(?i:12|34)[a-z]+[a-z]+$",
-            r"^[a-z]+[a-z]+(?>\(\[)[a-z]+[a-z]+$",
-            r"^[a-z]+[a-z]+(?>\N{BULLET})[a-z]+[a-z]+$",
-            r"^(?>ab)[a-z]+$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-
-    def test_alternation_shortcut_distinguishes_quantifiers_from_syntax_markers(self) -> None:
-        for pat in (
-            r"^[a-z]+[a-z]+(a|(?:b))[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|(?P<g1>b))[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|(?i:b))[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|(?>b))[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|(?=b)a)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|(?!x)b)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|\+)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|\*)[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|\N{BULLET})[a-z]+[a-z]+@x\.com$",
-            r"^[a-z]+[a-z]+(a|(?:b))+[a-z]+[a-z]+@x\.com$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-        # Marker characters that are literals do not manufacture an overlapping atom.
-        for pat in (
-            r"^[a-z]+[a-z]+(\+|\*)[a-z]+[a-z]+$",
-            r"^[a-z]+[a-z]+(?:\N{BULLET}|\*)[a-z]+[a-z]+$",
-            r"^(a+|b)$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-        # A genuine run in a branch is entered and scanned rather than hidden by the shortcut.
-        assert _regex_is_catastrophic_shape(r"^([a-z]+[a-z]+[a-z]+|x)@x\.com$") is True
-
-    def test_conditional_branch_scan_stops_at_the_shared_depth_bound(self) -> None:
-        run = "[a-z]+[a-z]+[a-z]+"
-        prefix = "(?P<flag>a)?"
-        at_bound = "(?(flag)" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + run
-        past_bound = "(?(flag)" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1) + run
-        assert (
-            _regex_is_catastrophic_shape(prefix + at_bound + "|b)" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX)
-            is True
-        )
-        assert (
-            _regex_is_catastrophic_shape(
-                prefix + past_bound + "|b)" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1)
-            )
-            is False
-        )
-        flood = prefix + "(?(flag)" * 2000 + "a" + "|b)" * 2000
-        assert isinstance(_regex_is_catastrophic_shape(flood), bool)
-
-    def test_issue2364_shapes_are_dropped_by_the_feed_loader_with_both_cap_modes(self) -> None:
+    def test_unsafe_separator_spellings_are_dropped_by_the_feed_loader_with_both_cap_modes(self) -> None:
         unsafe = (
             r"^([a-z])(?(1)[a-z]+[a-z]+[a-z]+[a-z]+|b)@x\.com$",
             r"^[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+@x\.com$",
@@ -555,66 +174,6 @@ class TestCatastrophicShapeHeuristic:
             assert admitted == 1, cap
             assert len(db) == 1, cap
             assert next(iter(db.values()))["re"].pattern == safe
-
-    def test_newline_repeat_is_not_read_as_a_named_unicode_escape(self) -> None:
-        # The two spellings are different regexes and each pins one half of the scanner.
-        # Lowercase `\n{2,}` is a newline carrying an open-ended REPEAT; reading it as the
-        # named-Unicode escape swallows the quantifier and blinds the gate to the run. This
-        # is the spelling the gate meets in production; admission preserves raw pattern
-        # syntax (issue #2079), while query normalization stays separate.
-        assert _regex_is_catastrophic_shape(r"\n{2,}\n{2,}\n{2,}") is True
-        # Capital-N `\N{BULLET}` IS the named escape and is ONE atom, so its quantified run
-        # is a run of three too -- green here only if the braces are consumed as part of the
-        # atom and `+` is read as its quantifier, the exact opposite parse from the row above.
-        assert _regex_is_catastrophic_shape("\\N{BULLET}+\\N{BULLET}+\\N{BULLET}+") is True
-
-    def test_stacked_bounded_repeat_flagged(self) -> None:
-        # Two consecutive {m}/{m,n} repeats multiply -> a tiny source string explodes.
-        for pat in (r"a{500}{500}", r"(x){500}{500}", r"[a-z]{50}{50}", r"\w{20}{20}$"):
-            assert _regex_is_catastrophic_shape(pat) is True, pat
-
-    def test_complexity_budget_backstop_flagged(self) -> None:
-        # A pattern with no single matching structural template but a large combined
-        # count of unbounded quantifiers + alternations is caught by the budget backstop.
-        over_budget = "".join(f"a{i}*|" for i in range(pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX + 2))
-        assert _regex_is_catastrophic_shape(over_budget) is True
-
-    def test_complexity_budget_at_threshold_not_flagged(self) -> None:
-        # The budget comparison is strictly `>` _REGEX_BUDGET_MAX, so a pattern whose budget
-        # equals MAX exactly is the last admissible value (off-by-one guard: a `>=` regression
-        # would flag this). Build a pattern whose budget is EXACTLY MAX -- `_REGEX_BUDGET_MAX`
-        # unbounded `*` quantifiers, zero alternations, and no other catastrophic shape (no
-        # nested/adjacent quantified group, no stacked bounded repeat, and -- issue #2035 --
-        # no run of adjacent quantified atoms either: the `b` separators are DISJOINT from
-        # `a`, so they split every quantifier into a chain of its own (issue #2082)).
-        at_budget = "a*b" * pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
-        # Compute the budget the SAME way the code does and pin it to MAX before asserting.
-        budget = len(pfb_dnsbl_regex_rules._REGEX_UNBOUNDED_QUANTIFIER.findall(at_budget)) + len(
-            pfb_dnsbl_regex_rules._REGEX_ALTERNATION.findall(at_budget)
-        )
-        assert budget == pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
-        assert _regex_is_catastrophic_shape(at_budget) is False
-
-    # --- false-positive guard: realistic benign feed regex must NOT be flagged ----- #
-    def test_benign_feed_patterns_not_flagged(self) -> None:
-        for pat in (
-            r"ads\.",
-            r"ad[0-9]\.example\.com$",
-            r"^x[0-9]+\.example\.com$",
-            r"\.doubleclick\.net$",
-            r"^(.+\.)?doubleclick\.net$",
-            r"^(www\.)?ad-?serv(er|ice)\.example$",
-            r"^(foo|bar)\.example$",
-            r"^(.+\.)?ads?[0-9]*\.example\.(com|net|org)$",
-        ):
-            assert _regex_is_catastrophic_shape(pat) is False, pat
-
-    def test_shape_gate_independent_of_length(self) -> None:
-        # A long-but-structurally-safe pattern is NOT a catastrophic shape: the shape
-        # gate must ignore length entirely (length is the separate opt-in ceiling).
-        assert _regex_is_catastrophic_shape(_long_benign_pattern()) is False
-        # And a SHORT catastrophic shape IS flagged regardless of being well under length.
-        assert _regex_is_catastrophic_shape(r"(a+)+") is True
 
 
 # --------------------------------------------------------------------------- #
@@ -634,10 +193,10 @@ def _block_rule(pattern: str, feed: str = "F") -> RegexRule:
 
 
 class TestStaticCapAtLoad:
-    def test_shape_gate_drops_catastrophic_even_with_cap_off(self) -> None:
-        # DECOUPLING (the key change): a catastrophic SHAPE is dropped at load even when
-        # the opt-in length cap is OFF -- the safety gate is unconditional. The benign
-        # sibling is admitted, proving it is the SHAPE, not a blanket drop.
+    def test_admission_gate_drops_a_quantified_group_even_with_cap_off(self) -> None:
+        # DECOUPLING (the key change): a quantified group is dropped at load even when
+        # the opt-in length cap is OFF -- the admission gate is unconditional. The benign
+        # sibling is admitted, proving it is the pattern, not a blanket drop.
         rules = [_block_rule(r"(a+)+$"), _block_rule(r"^safe\.example$")]
         db, admitted = _dnsbl_compile_regex_rules(rules, static_cap=False)
         assert admitted == 1
@@ -645,9 +204,9 @@ class TestStaticCapAtLoad:
         compiled = next(iter(db.values()))["re"]
         assert compiled.search("safe.example")
 
-    def test_shape_gate_drops_multi_group_and_stacked_repeat_cap_off(self) -> None:
-        # The newly-broadened shapes (missed by the old single-group heuristics) are also
-        # dropped with the cap OFF: multi-group adjacent quantifier + stacked repeat.
+    def test_admission_gate_drops_adjacent_quantified_groups_and_oversized_repeats_cap_off(self) -> None:
+        # Adjacent quantified groups and an oversized stacked repeat are also dropped
+        # with the cap OFF.
         rules = [
             _block_rule(r"(a+)(a+)+"),
             _block_rule(r"a{500}{500}"),
@@ -676,7 +235,7 @@ class TestStaticCapAtLoad:
 
     def test_build_threads_regex_cap_from_config(self) -> None:
         # build() reads config["regex_cap"] and forwards it to the compile helper. The
-        # length cap (not the shape gate) is what the flag toggles, so use a long-but-
+        # length cap (not the admission gate) is what the flag toggles, so use a long-but-
         # benign irreducible pattern to prove the flag is threaded.
         manifest = {
             "feeds": [{"feed": "F", "group": "G", "log_flag": "1", "raw": "F"}],
@@ -705,7 +264,7 @@ def test_pfb_unbound_reexports_are_the_same_objects_as_pfb_dnsbl_regex_rules() -
     # so a re-introduced duplicate literal of the SAME value would still pass here. That
     # case is behaviourally identical, and any DIFFERING value (the drift that matters)
     # fails, as does a re-defined function -- both mutation-checked.
-    for name in ("REGEX_STATIC_LEN_CAP", "_regex_is_catastrophic_shape", "pfb_split_regex_line"):
+    for name in ("REGEX_STATIC_LEN_CAP", "pfb_regex_admission", "pfb_regex_excerpt", "pfb_split_regex_line"):
         assert getattr(pfb_unbound, name) is getattr(pfb_dnsbl_regex_rules, name), (
             f"pfb_unbound.{name} is not the same object as pfb_dnsbl_regex_rules.{name} -- single-source broken"
         )
@@ -713,16 +272,16 @@ def test_pfb_unbound_reexports_are_the_same_objects_as_pfb_dnsbl_regex_rules() -
 
 def test_runtime_length_cap_comparator_is_strict_at_every_site() -> None:
     """Issue #1711/#1765: pin the runtime's exact-200-character admission boundary. All
-    FOUR REGEX_STATIC_LEN_CAP comparisons -- the three call sites left in pfb_unbound.py
-    (the build-time compile helper plus the two save-time-mirroring load paths) and the
-    one inside pfb_dnsbl_regex_rules.py's save-time probe ``main()`` -- use a STRICT '>':
+    THREE REGEX_STATIC_LEN_CAP comparisons -- the two left in pfb_unbound.py (the build-time
+    compile helper and the shared user-regex helper both load paths call) and the one inside
+    pfb_dnsbl_regex_rules.py's save-time probe ``main()`` -- use a STRICT '>':
     a '>=' regression at any site would silently drop a pattern exactly at the cap, which
     the resolver, the probe, and the PHP DnsblRegexEntryErrorTest suite all admit."""
     unbound_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfb_unbound.py"
     rules_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py"
     source = unbound_path.read_text() + "\n" + rules_path.read_text()
     strict = re.findall(r"len\([^)\n]*\)\s*>\s*REGEX_STATIC_LEN_CAP", source)
-    assert len(strict) == 4, f"expected exactly 4 strict '>' comparisons, found {len(strict)}: {strict}"
+    assert len(strict) == 3, f"expected exactly 3 strict '>' comparisons, found {len(strict)}: {strict}"
     non_strict = re.findall(r"len\([^)\n]*\)\s*>=\s*REGEX_STATIC_LEN_CAP", source)
     assert non_strict == [], f"found a non-strict '>=' REGEX_STATIC_LEN_CAP comparison: {non_strict}"
 
@@ -730,8 +289,8 @@ def test_runtime_length_cap_comparator_is_strict_at_every_site() -> None:
 def _anchored_pattern(length: int) -> str:
     """Mirror of DnsblRegexEntryErrorTest::anchoredPattern (tests/php/DnsblRegexEntryErrorTest.php):
     an anchored, structurally benign pattern (no quantifier, no alternation, no stacked
-    repeat) of EXACTLY the requested length, so only the length cap -- never the shape
-    gate or the complexity budget -- can be the reason it is admitted or dropped."""
+    repeat) of EXACTLY the requested length, so only the length cap -- never the admission
+    gate -- can be the reason it is admitted or dropped."""
     if length < 2:
         raise ValueError("length must be >= 2 to hold both anchors")
     return "^" + "a" * (length - 2) + "$"
@@ -760,115 +319,312 @@ class TestStaticCapExactBoundary:
 
 
 # --------------------------------------------------------------------------- #
-# (2) RUNTIME warn/evict -- block-regex discovery scan (feed AND user provenance)
+# (2) RUNTIME slow-match warning -- a slow rule is warned about ONCE and KEPT.
+# Every admitted rule has a static bound on its work, so a slow measurement (a slow
+# box, a busy core) is a reason to log, never to remove the rule.
 # --------------------------------------------------------------------------- #
+OLD_EVICT_CEILING_MS = 100.0  # the ceiling a rule used to be removed at
+SLOW_MS = 150.0  # measured over both the warn ceiling and the old evict ceiling
+
+
 def _slow_pattern() -> Any:
     # A trivially-matching compiled pattern; the SLOWNESS is faked via the clock so the
-    # test never actually pays catastrophic-backtracking cost.
+    # test never actually pays a slow match.
     return re.compile(r"slow\.example$")
 
 
-class TestRuntimeBlockRegexEviction:
-    def test_warn_then_evict_first_hit(self, monkeypatch: Any) -> None:
-        # Two queries: first reports a slow match (> evict ceiling) and is evicted;
-        # the pattern is gone before the second query (cannot hang twice).
-        regex_db: dict[str, Any] = {"F#0": {"re": _slow_pattern(), "important": False, "band": PRIO_FEED_BLOCK}}
+def _slow_rule_db() -> dict[str, Any]:
+    return {"F#0": {"re": _slow_pattern(), "important": False, "band": PRIO_FEED_BLOCK}}
+
+
+class TestSlowRegexIsWarnedAndKept:
+    def test_discovery_scan_keeps_a_rule_measured_over_the_old_evict_ceiling(
+        self, monkeypatch: Any, capsys: Any
+    ) -> None:
+        # Given a rule whose match is measured over the old evict ceiling, a query still
+        # blocks on it, the rule is still in the live dict, and the NEXT query blocks too.
+        assert SLOW_MS > OLD_EVICT_CEILING_MS
+        regex_db = _slow_rule_db()
         cfg = _cfg(regexDB=True)
         containers = _containers(regexDB=regex_db)
+        _install_clock(monkeypatch, [SLOW_MS, SLOW_MS])
+        first = evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
+        assert (first.is_found, first.group, first.feed) == (True, "DNSBL_Regex", "F#0")
+        assert "F#0" in regex_db
+        second = evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
+        assert (second.is_found, second.group, second.feed) == (True, "DNSBL_Regex", "F#0")
+        assert "F#0" in regex_db
+        # ... and exactly one warning line was written for the rule.
+        assert capsys.readouterr().err.count("slow DNSBL_Regex regex [ F#0 ]") == 1
 
-        # First query: a 150 ms match (> 100 ms evict) -> evicted, NOT counted as found.
-        _install_clock(monkeypatch, [150.0])
-        dec = evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
-        assert dec.is_found is False
-        assert "F#0" not in regex_db  # evicted from the LIVE dict
+    def test_block_band_scan_keeps_a_rule_measured_over_the_old_evict_ceiling(
+        self, monkeypatch: Any, capsys: Any
+    ) -> None:
+        regex_db = _slow_rule_db()
+        cfg = _cfg(regexDB=True)
+        _install_clock(monkeypatch, [SLOW_MS, SLOW_MS])
+        expected = (PRIO_FEED_BLOCK, {"kind": "regex", "key": "F#0"})
+        assert _scan_block_band("slow.example", cfg, {}, {}, regex_db, {}) == expected
+        assert _scan_block_band("slow.example", cfg, {}, {}, regex_db, {}) == expected
+        assert "F#0" in regex_db
+        assert capsys.readouterr().err.count("slow DNSBL_Regex regex [ F#0 ]") == 1
 
-        # Second query: the dict is empty, so no match and no hang.
-        assert len(regex_db) == 0
-        dec2 = evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
-        assert dec2.is_found is False
+    def test_allow_scan_keeps_a_rule_measured_over_the_old_evict_ceiling(self, monkeypatch: Any, capsys: Any) -> None:
+        allow_db: dict[str, Any] = {"A#0": {"re": _slow_pattern(), "important": False, "band": PRIO_FEED_ALLOW}}
+        _install_clock(monkeypatch, [SLOW_MS, SLOW_MS])
+        assert _scan_allow_regex_band("slow.example", allow_db, {}, 10.0) == PRIO_FEED_ALLOW
+        assert _scan_allow_regex_band("slow.example", allow_db, {}, 10.0) == PRIO_FEED_ALLOW
+        assert "A#0" in allow_db
+        assert capsys.readouterr().err.count("slow DNSBL_AllowRegex regex [ A#0 ]") == 1
 
-    def test_warn_only_keeps_pattern(self, monkeypatch: Any) -> None:
-        regex_db: dict[str, Any] = {"F#0": {"re": _slow_pattern(), "important": False, "band": PRIO_FEED_BLOCK}}
+    def test_a_rule_over_the_warn_ceiling_is_warned_once_and_still_blocks(self, monkeypatch: Any, capsys: Any) -> None:
+        regex_db = _slow_rule_db()
         cfg = _cfg(regexDB=True)
         containers = _containers(regexDB=regex_db)
-        # 20 ms: over warn (10) but under evict (100) -> warns, NOT evicted, still blocks.
+        # 20 ms: over warn (10) -> warns, still blocks, rule kept.
         _install_clock(monkeypatch, [20.0])
         dec = evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
         assert dec.is_found is True
         assert dec.group == "DNSBL_Regex"
         assert "F#0" in regex_db  # kept
-        assert "F#0" in pfb_unbound._regex_warned  # rate-limited warn recorded
+        assert capsys.readouterr().err.count("slow DNSBL_Regex regex [ F#0 ]") == 1  # warned
 
-    def test_user_provenance_bare_pattern_evicted(self, monkeypatch: Any) -> None:
-        # The un-vetted USER regex list loads as a BARE compiled pattern (not a dict).
-        # It must get the same eviction treatment.
-        regex_db: dict[str, Any] = {"MyUserRegex": _slow_pattern()}
-        cfg = _cfg(regexDB=True)
-        containers = _containers(regexDB=regex_db)
+    def test_a_slow_user_rule_is_kept_and_blocks_when_slow(self, monkeypatch: Any) -> None:
+        # A rule of the user list gets the same treatment as a feed rule: warned about, never removed.
+        user_db: dict[str, Any] = {"MyUserRegex": {"re": _slow_pattern(), "important": False, "band": PRIO_USER_BLOCK}}
+        cfg = _cfg(userRegexDB=True)
+        containers = _containers(userRegexDB=user_db)
         _install_clock(monkeypatch, [200.0])
         dec = evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
-        assert dec.is_found is False
-        assert "MyUserRegex" not in regex_db
+        assert dec.is_found is True
+        assert dec.feed == "MyUserRegex"
+        assert "MyUserRegex" in user_db
 
-    def test_eviction_does_not_corrupt_scan(self, monkeypatch: Any) -> None:
-        # Many patterns; the slow one in the middle is evicted while others remain. The
-        # scan iterates a SNAPSHOT, so no "dict changed size during iteration".
+    def test_a_slow_rule_among_many_does_not_disturb_the_scan(self, monkeypatch: Any) -> None:
         regex_db: dict[str, Any] = {}
         for i in range(5):
             regex_db["P#{}".format(i)] = {"re": re.compile(r"nomatch%d\.x$" % i), "important": False, "band": 1}
         regex_db["SLOW"] = {"re": _slow_pattern(), "important": False, "band": 1}
         cfg = _cfg(regexDB=True)
         containers = _containers(regexDB=regex_db)
-        # 6 entries scanned; only SLOW is slow. Order is dict-insertion; SLOW is last but
-        # we assert no exception is raised and only SLOW is evicted regardless of order.
+        # 6 entries scanned; only SLOW is slow (and the one that matches).
         _install_clock(monkeypatch, [1.0, 1.0, 1.0, 1.0, 1.0, 300.0])
         dec = evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
-        assert dec.is_found is False
-        assert "SLOW" not in regex_db
-        assert len(regex_db) == 5  # the five non-matching patterns survive
+        assert (dec.is_found, dec.feed) == (True, "SLOW")
+        assert len(regex_db) == 6  # every rule is still loaded
 
-
-# --------------------------------------------------------------------------- #
-# (2) RUNTIME warn/evict -- allow-regex scan
-# --------------------------------------------------------------------------- #
-class TestRuntimeAllowRegexEviction:
-    def test_allow_regex_evicted_over_ceiling(self, monkeypatch: Any) -> None:
-        allow_db: dict[str, Any] = {"A#0": {"re": _slow_pattern(), "important": False, "band": PRIO_FEED_ALLOW}}
-        _install_clock(monkeypatch, [250.0])
-        band = _scan_allow_regex_band("slow.example", allow_db, 10.0, 100.0)
-        assert band == 0  # evicted before it could contribute an allow band
-        assert "A#0" not in allow_db
-
-    def test_allow_regex_kept_under_ceiling(self, monkeypatch: Any) -> None:
+    def test_allow_regex_under_the_warn_ceiling_is_silent_and_kept(self, monkeypatch: Any, capsys: Any) -> None:
         allow_db: dict[str, Any] = {"A#0": {"re": _slow_pattern(), "important": False, "band": PRIO_FEED_ALLOW}}
         _install_clock(monkeypatch, [2.0])
-        band = _scan_allow_regex_band("slow.example", allow_db, 10.0, 100.0)
+        band = _scan_allow_regex_band("slow.example", allow_db, {}, 10.0)
         assert band == PRIO_FEED_ALLOW
         assert "A#0" in allow_db
+        assert capsys.readouterr().err == ""
 
 
-# --------------------------------------------------------------------------- #
-# perf_counter FALLBACK -- 2-strike guard (no false-evict on a lone spike)
-# --------------------------------------------------------------------------- #
-class TestPerfCounterFallback:
-    def test_single_spike_does_not_evict(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(pfb_unbound, "_REGEX_HAVE_THREAD_TIME", False)
-        # One over-evict crossing -> strike 1 of 2 -> NOT evicted yet.
-        evict = pfb_unbound._regex_should_evict("P", 500.0, 10.0, 100.0, "DNSBL_Regex", "P")
-        assert evict is False
-        assert pfb_unbound._regex_perf_strikes.get("P") == 1
+class _Measured:
+    """Replaces ``_regex_timed_search`` so each rule measures a fixed time (ms), keyed by its pattern
+    text. Unlike the thread-clock fake, the answer does not depend on the order a scan visits the
+    rules in."""
 
-    def test_two_consecutive_spikes_evict(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(pfb_unbound, "_REGEX_HAVE_THREAD_TIME", False)
-        assert pfb_unbound._regex_should_evict("P", 500.0, 10.0, 100.0, "DNSBL_Regex", "P") is False
-        assert pfb_unbound._regex_should_evict("P", 500.0, 10.0, 100.0, "DNSBL_Regex", "P") is True
+    def __init__(self, monkeypatch: Any) -> None:
+        self.ms: dict[str, float] = {}
+        monkeypatch.setattr(pfb_unbound, "_regex_timed_search", self)
 
-    def test_fast_match_clears_strike(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(pfb_unbound, "_REGEX_HAVE_THREAD_TIME", False)
-        assert pfb_unbound._regex_should_evict("P", 500.0, 10.0, 100.0, "DNSBL_Regex", "P") is False
-        # A subsequent fast match resets the streak so two spikes must be CONSECUTIVE.
-        assert pfb_unbound._regex_should_evict("P", 1.0, 10.0, 100.0, "DNSBL_Regex", "P") is False
-        assert "P" not in pfb_unbound._regex_perf_strikes
+    def __call__(self, pattern: Any, q_name: str) -> tuple[Any, float]:
+        return pattern.search(q_name), self.ms[pattern.pattern]
+
+    def db(self, prefix: str, band: int, ms_list: list[float], match_at: int | None = None) -> dict[str, Any]:
+        """A regex DB with one rule per entry of ``ms_list``, rule ``i`` measuring ``ms_list[i]``.
+        Every rule is an alternation (no required literal, so the prefilter always runs it); rule
+        ``match_at`` matches ``slow.example`` and the others never do."""
+        db: dict[str, Any] = {}
+        for index, ms in enumerate(ms_list):
+            text = rf"^(?:slow\.example|never{prefix}{index})$" if index == match_at else f"^(?:no{prefix}{index}|zz)$"
+            self.ms[text] = ms
+            db[f"{prefix}#{index}"] = {"re": re.compile(text), "important": False, "band": band}
+        return db
+
+
+SLOW_LIST_LINE = (
+    "[pfBlockerNG]: slow {label} regex list scan took {total} ms over {count} rules "
+    "(warn ceiling 10.0 ms); slowest [ {slowest} ] {top} ms\n"
+)
+
+
+class TestSlowListScanIsReported:
+    """Every rule can be under the warn ceiling and the whole list scan still slow: one line per
+    list per load reports the summed time, the number of rules timed and the slowest rule."""
+
+    @staticmethod
+    def _discover(cfg: dict[str, Any], containers: dict[str, Any]) -> Any:
+        return evaluate_domain("slow.example", "slow.example", "example", False, cfg, containers)
+
+    def test_a_discovery_scan_over_the_ceiling_in_total_logs_one_line_for_its_list(
+        self, monkeypatch: Any, capsys: Any
+    ) -> None:
+        measured = _Measured(monkeypatch)
+        containers = _containers(regexDB=measured.db("F", PRIO_FEED_BLOCK, [3.0, 4.0, 5.0]))
+        cfg = _cfg(regexDB=True)
+        assert self._discover(cfg, containers).is_found is False
+        assert capsys.readouterr().err == SLOW_LIST_LINE.format(
+            label="DNSBL_Regex", total="12.0", count=3, slowest="F#2", top="5.0"
+        )
+        # A second query over the same list adds nothing.
+        assert self._discover(cfg, containers).is_found is False
+        assert capsys.readouterr().err == ""
+
+    def test_a_list_scan_under_the_ceiling_in_total_is_silent(self, monkeypatch: Any, capsys: Any) -> None:
+        measured = _Measured(monkeypatch)
+        containers = _containers(regexDB=measured.db("F", PRIO_FEED_BLOCK, [3.0, 3.0, 3.0]))
+        assert self._discover(_cfg(regexDB=True), containers).is_found is False
+        assert capsys.readouterr().err == ""
+
+    def test_a_list_scan_summing_exactly_to_the_ceiling_is_silent(self, monkeypatch: Any, capsys: Any) -> None:
+        measured = _Measured(monkeypatch)
+        containers = _containers(regexDB=measured.db("F", PRIO_FEED_BLOCK, [5.0, 5.0]))
+        assert self._discover(_cfg(regexDB=True), containers).is_found is False
+        assert capsys.readouterr().err == ""
+
+    def test_a_scan_that_stops_on_its_first_match_still_counts_what_it_timed(
+        self, monkeypatch: Any, capsys: Any
+    ) -> None:
+        measured = _Measured(monkeypatch)
+        containers = _containers(regexDB=measured.db("F", PRIO_FEED_BLOCK, [6.0, 7.0, 9.0], match_at=1))
+        assert self._discover(_cfg(regexDB=True), containers).feed == "F#1"
+        assert capsys.readouterr().err == SLOW_LIST_LINE.format(
+            label="DNSBL_Regex", total="13.0", count=2, slowest="F#1", top="7.0"
+        )
+
+    def test_the_block_band_rescan_reports_the_same_list_once(self, monkeypatch: Any, capsys: Any) -> None:
+        measured = _Measured(monkeypatch)
+        regex_db = measured.db("F", PRIO_FEED_BLOCK, [3.0, 4.0, 5.0])
+        cfg = _cfg(regexDB=True)
+        assert _scan_block_band("slow.example", cfg, {}, {}, regex_db, {}) == (0, None)
+        assert capsys.readouterr().err == SLOW_LIST_LINE.format(
+            label="DNSBL_Regex", total="12.0", count=3, slowest="F#2", top="5.0"
+        )
+        assert _scan_block_band("slow.example", cfg, {}, {}, regex_db, {}) == (0, None)
+        assert capsys.readouterr().err == ""
+
+    def test_the_discovery_scan_and_the_band_rescan_share_one_line_per_list(
+        self, monkeypatch: Any, capsys: Any
+    ) -> None:
+        measured = _Measured(monkeypatch)
+        regex_db = measured.db("F", PRIO_FEED_BLOCK, [3.0, 4.0, 5.0])
+        cfg = _cfg(regexDB=True)
+        self._discover(cfg, _containers(regexDB=regex_db))
+        _scan_block_band("slow.example", cfg, {}, {}, regex_db, {})
+        assert capsys.readouterr().err.count("regex list scan took") == 1
+
+    def test_the_allow_scan_reports_its_own_list(self, monkeypatch: Any, capsys: Any) -> None:
+        measured = _Measured(monkeypatch)
+        allow_db = measured.db("A", PRIO_FEED_ALLOW, [3.0, 4.0, 5.0])
+        assert _scan_allow_regex_band("slow.example", allow_db, {}, 10.0) == 0
+        assert capsys.readouterr().err == SLOW_LIST_LINE.format(
+            label="DNSBL_AllowRegex", total="12.0", count=3, slowest="A#2", top="5.0"
+        )
+        assert _scan_allow_regex_band("slow.example", allow_db, {}, 10.0) == 0
+        assert capsys.readouterr().err == ""
+
+    def test_the_block_and_allow_lists_are_reported_separately(self, monkeypatch: Any, capsys: Any) -> None:
+        measured = _Measured(monkeypatch)
+        regex_db = measured.db("F", PRIO_FEED_BLOCK, [3.0, 4.0, 5.0])
+        allow_db = measured.db("A", PRIO_FEED_ALLOW, [3.0, 5.0, 4.0])
+        _scan_block_band("slow.example", _cfg(regexDB=True), {}, {}, regex_db, {})
+        _scan_allow_regex_band("slow.example", allow_db, {}, 10.0)
+        err = capsys.readouterr().err
+        assert err == SLOW_LIST_LINE.format(
+            label="DNSBL_Regex", total="12.0", count=3, slowest="F#2", top="5.0"
+        ) + SLOW_LIST_LINE.format(label="DNSBL_AllowRegex", total="12.0", count=3, slowest="A#1", top="5.0")
+
+    def test_a_swap_re_arms_the_list_report(self, monkeypatch: Any, capsys: Any) -> None:
+        measured = _Measured(monkeypatch)
+        containers = _containers(regexDB=measured.db("F", PRIO_FEED_BLOCK, [3.0, 4.0, 5.0]))
+        cfg = _cfg(regexDB=True)
+        self._discover(cfg, containers)
+        assert capsys.readouterr().err.count("regex list scan took") == 1
+        self._discover(cfg, containers)
+        assert capsys.readouterr().err == ""
+        empty = pfb_unbound.Snapshot(
+            data_db={},
+            zone_db={},
+            white_db={},
+            regex_db={},
+            allow_regex_db={},
+            user_regex_db={},
+            user_allow_regex_db={},
+            feed_group_index_db={},
+            hsts_db={},
+        )
+        assert pfb_unbound.rebuild_and_swap(lambda: empty, emit_counts=False) is True
+        self._discover(cfg, containers)
+        assert capsys.readouterr().err.count("regex list scan took") == 1
+
+    def test_a_rule_over_the_ceiling_still_gets_its_own_line_besides_the_list_line(
+        self, monkeypatch: Any, capsys: Any
+    ) -> None:
+        measured = _Measured(monkeypatch)
+        containers = _containers(regexDB=measured.db("F", PRIO_FEED_BLOCK, [20.0]))
+        self._discover(_cfg(regexDB=True), containers)
+        assert capsys.readouterr().err.splitlines(keepends=True) == [
+            "[pfBlockerNG]: slow DNSBL_Regex regex [ F#0 ] took 20.0 ms (warn ceiling 10.0 ms)\n",
+            SLOW_LIST_LINE.format(label="DNSBL_Regex", total="20.0", count=1, slowest="F#0", top="20.0"),
+        ]
+
+    def test_the_per_rule_warning_line_ends_with_a_newline(self, capsys: Any) -> None:
+        pfb_unbound._regex_warn_slow("RX", 50.0, 10.0, "DNSBL_Regex")
+        assert capsys.readouterr().err == (
+            "[pfBlockerNG]: slow DNSBL_Regex regex [ RX ] took 50.0 ms (warn ceiling 10.0 ms)\n"
+        )
+
+    def test_same_named_rules_of_different_lists_warn_independently(self, monkeypatch: Any, capsys: Any) -> None:
+        """Rule names repeat across lists (``F#0`` of a feed list and of a user list): each list warns for
+        its own rule, block and allow lists alike."""
+        measured = _Measured(monkeypatch)
+        containers = _containers(
+            regexDB=measured.db("X", PRIO_FEED_BLOCK, [20.0]),
+            userRegexDB=measured.db("X", PRIO_USER_BLOCK, [20.0]),
+        )
+        self._discover(_cfg(regexDB=True, userRegexDB=True), containers)
+        feed_allow = measured.db("X", PRIO_FEED_ALLOW, [20.0])
+        user_allow = measured.db("X", PRIO_USER_ALLOW, [20.0])
+        assert _scan_allow_regex_band("slow.example", feed_allow, user_allow, 10.0) == 0
+        rule_lines = [line for line in capsys.readouterr().err.splitlines() if "regex [ X#0 ]" in line]
+        assert rule_lines == [
+            "[pfBlockerNG]: slow user DNSBL_Regex regex [ X#0 ] took 20.0 ms (warn ceiling 10.0 ms)",
+            "[pfBlockerNG]: slow DNSBL_Regex regex [ X#0 ] took 20.0 ms (warn ceiling 10.0 ms)",
+            "[pfBlockerNG]: slow user DNSBL_AllowRegex regex [ X#0 ] took 20.0 ms (warn ceiling 10.0 ms)",
+            "[pfBlockerNG]: slow DNSBL_AllowRegex regex [ X#0 ] took 20.0 ms (warn ceiling 10.0 ms)",
+        ]
+
+    def test_every_slow_rule_of_one_list_warns_for_itself(self, monkeypatch: Any, capsys: Any) -> None:
+        measured = _Measured(monkeypatch)
+        containers = _containers(regexDB=measured.db("F", PRIO_FEED_BLOCK, [20.0, 30.0]))
+        self._discover(_cfg(regexDB=True), containers)
+        rule_lines = [line for line in capsys.readouterr().err.splitlines() if "regex [ F#" in line]
+        assert rule_lines == [
+            "[pfBlockerNG]: slow DNSBL_Regex regex [ F#0 ] took 20.0 ms (warn ceiling 10.0 ms)",
+            "[pfBlockerNG]: slow DNSBL_Regex regex [ F#1 ] took 30.0 ms (warn ceiling 10.0 ms)",
+        ]
+
+
+class TestNoRuntimeEviction:
+    def test_the_per_query_cfg_carries_the_warn_ceiling_and_no_evict_ceiling(self) -> None:
+        snapshot = pfb_unbound.Snapshot(
+            data_db={},
+            zone_db={},
+            white_db={},
+            regex_db={},
+            allow_regex_db={},
+            user_regex_db={},
+            user_allow_regex_db={},
+            feed_group_index_db={},
+            hsts_db={},
+        )
+        cfg = pfb_unbound._evaluate_cfg(snapshot)
+        assert cfg["regex_warn_ms"] == pfb_unbound.pfb["regex_warn_ms"]
+        assert "regex_evict_ms" not in cfg
 
 
 # --------------------------------------------------------------------------- #
@@ -883,9 +639,9 @@ class TestFastPathUnchanged:
         assert dec.is_found is True
         assert dec.b_type == "DNSBL"
 
-    def test_fast_regex_not_evicted(self, monkeypatch: Any) -> None:
-        # A normal (fast) regex match blocks and stays loaded; nothing warned/evicted.
-        regex_db: dict[str, Any] = {"F#0": {"re": _slow_pattern(), "important": False, "band": PRIO_FEED_BLOCK}}
+    def test_a_fast_regex_match_blocks_and_is_not_warned(self, monkeypatch: Any) -> None:
+        # A normal (fast) regex match blocks and stays loaded; nothing warned.
+        regex_db = _slow_rule_db()
         cfg = _cfg(regexDB=True)
         containers = _containers(regexDB=regex_db)
         _install_clock(monkeypatch, [0.5])
@@ -896,23 +652,702 @@ class TestFastPathUnchanged:
 
 
 # --------------------------------------------------------------------------- #
-# Real catastrophic pattern dropped UNCONDITIONALLY (end-to-end, BOUNDED so it
-# can't hang -- the pattern is never executed against any input)
+# A quantified group dropped UNCONDITIONALLY (end-to-end, BOUNDED so it can't
+# hang -- the pattern is never executed against any input)
 # --------------------------------------------------------------------------- #
-class TestRealCatastrophicCapped:
-    def test_shape_gate_drops_real_redos_pattern_cap_off(self) -> None:
-        # The shape gate catches the genuinely catastrophic shape WITHOUT executing it,
-        # and does so with the length cap OFF (the always-on safety gate).
+class TestQuantifiedGroupRefusedAtLoad:
+    def test_admission_gate_drops_a_starred_group_cap_off(self) -> None:
+        # The gate refuses a quantified group WITHOUT executing it, and does so with the
+        # length cap OFF (the always-on admission gate).
         rule = _block_rule(r"([a-z]+)*\.example$")
         db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=False)
         assert admitted == 0
         assert db == {}
 
-    def test_shape_gate_drops_alternation_overlap_cap_off(self) -> None:
-        # ^(a|a)+$ PASSES a naive length cap but backtracks catastrophically; the shape
+    def test_admission_gate_drops_a_repeated_alternation_cap_off(self) -> None:
+        # ^(a|a)+$ PASSES a naive length cap but backtracks exponentially; the admission
         # gate drops it at load WITHOUT executing it -- regardless of the length cap.
         rule = _block_rule(r"^(a|a)+$")
         for cap in (False, True):
             db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=cap)
             assert admitted == 0, cap
             assert db == {}, cap
+
+
+# --------------------------------------------------------------------------- #
+# Feed regex admission at load: compile isolation, no limit on the number of rules, short log excerpts
+# --------------------------------------------------------------------------- #
+
+
+def _allow_rule(pattern: str, feed: str = "F") -> RegexRule:
+    return RegexRule(
+        pattern=pattern,
+        kind=DNSBL_KIND_ALLOW,
+        band=PRIO_FEED_ALLOW,
+        important=False,
+        provenance="feed",
+        feed=feed,
+        group="DNSBL_Regex",
+        log="1",
+    )
+
+
+def _compiled_patterns(db: dict[str, dict[str, Any]]) -> list[str]:
+    return [entry["re"].pattern for entry in db.values()]
+
+
+def _excerpt_of(pattern: str) -> str:
+    """The log form of a long pattern: its first 32 characters, escaped, and its length."""
+    return ascii(pattern[:32]) + f" ... ({len(pattern)} chars)"
+
+
+@pytest.mark.parametrize("failure", [OverflowError, RecursionError, ValueError, MemoryError])
+def test_unexpected_compile_failure_drops_only_that_rule(monkeypatch: Any, failure: type[Exception]) -> None:
+    """Any exception out of ``re.compile`` costs the one rule that raised it; the lists
+    around it still load and the build is not aborted."""
+    first, middle, last = r"^first\.example$", r"^middle\.example$", r"^last\.example$"
+    real_compile = re.compile
+
+    def compile_or_fail(pattern: Any, flags: int = 0) -> Any:
+        if pattern == middle:
+            raise failure("simulated compile failure")
+        return real_compile(pattern, flags)
+
+    monkeypatch.setattr(pfb_unbound.re, "compile", compile_or_fail)
+    db, admitted = _dnsbl_compile_regex_rules([_block_rule(first), _block_rule(middle), _block_rule(last)])
+    assert admitted == 2
+    assert _compiled_patterns(db) == [first, last]
+
+
+@pytest.mark.parametrize("count", [1000, 1001, 1500])
+def test_every_admitted_rule_of_a_list_loads_however_many_there_are(capsys: Any, count: int) -> None:
+    rules = [_block_rule(rf"^r{i}\.example$") for i in range(count)]
+    db, admitted = _dnsbl_compile_regex_rules(rules)
+    assert admitted == count
+    assert _compiled_patterns(db) == [rule.pattern for rule in rules]
+    assert capsys.readouterr().err == ""
+
+
+def _costed_rule(index: int) -> RegexRule:
+    """A rule that costs exactly 65536: three digit atoms and ``x{252}`` (253 nodes), searched
+    from every position (x256). Distinct text per index, equal cost for all."""
+    rule = _block_rule(f"{index:03d}x{{252}}")
+    assert pfb_dnsbl_regex_rules.pfb_regex_admission(rule.pattern)[:2] == (65536, None)
+    return rule
+
+
+def test_a_list_far_over_the_old_summed_cost_budget_loads_in_full(capsys: Any) -> None:
+    """300 rules of cost 65536 sum to 19.6 million; only the per-rule bound applies to each."""
+    rules = [_costed_rule(i) for i in range(300)]
+    db, admitted = _dnsbl_compile_regex_rules(rules)
+    assert admitted == 300
+    assert _compiled_patterns(db) == [rule.pattern for rule in rules]
+    assert capsys.readouterr().err == ""
+
+
+def test_a_list_of_unanchored_literal_rules_loads_in_full(capsys: Any) -> None:
+    """An unanchored 9-character literal costs 2304 (``analytics`` is one): 1500 of them sum to 3.4 million."""
+    rules = [_block_rule(f"host{i:05d}") for i in range(1500)]
+    assert pfb_dnsbl_regex_rules.pfb_regex_admission(rules[0].pattern)[:2] == (2304, None)
+    db, admitted = _dnsbl_compile_regex_rules(rules)
+    assert admitted == 1500
+    assert capsys.readouterr().err == ""
+
+
+# Per call, at most REFUSAL_LOG_MAX per-rule refusal lines are written; the rest are counted
+# into one summary line.
+REFUSAL_LOG_MAX = 20
+
+
+def _per_rule_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if "dropping" in line or "compile error" in line]
+
+
+def test_refusal_log_lines_are_capped_per_list_and_the_rest_are_counted_once(capsys: Any) -> None:
+    rules = [_block_rule(f"(a+)+x{i}") for i in range(50)]
+    db, admitted = _dnsbl_compile_regex_rules(rules)
+    assert (db, admitted) == ({}, 0)
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+    assert all("dropping block regex feed" in line for line in lines[:REFUSAL_LOG_MAX]), lines
+    assert "30 more refused block regex rules not logged" in lines[REFUSAL_LOG_MAX], lines
+
+
+@pytest.mark.parametrize(("count", "suppressed"), [(REFUSAL_LOG_MAX, 0), (REFUSAL_LOG_MAX + 1, 1)])
+def test_the_refusal_log_cap_is_exact_at_its_boundary(capsys: Any, count: int, suppressed: int) -> None:
+    _dnsbl_compile_regex_rules([_allow_rule(f"(a+)+x{i}") for i in range(count)])
+    lines = capsys.readouterr().err.splitlines()
+    assert len(_per_rule_lines(lines)) == REFUSAL_LOG_MAX, lines
+    if suppressed:
+        assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+        assert f"{suppressed} more refused allow regex rules not logged" in lines[-1], lines
+    else:
+        assert len(lines) == REFUSAL_LOG_MAX, lines
+
+
+def test_gate_refusals_length_cap_drops_and_compile_errors_share_one_refusal_log_budget(
+    capsys: Any, monkeypatch: Any
+) -> None:
+    real_compile = re.compile
+
+    def compile_or_fail(candidate: Any, flags: int = 0) -> Any:
+        if candidate.startswith("^boom"):
+            raise ValueError("cannot compile")
+        return real_compile(candidate, flags)
+
+    monkeypatch.setattr(pfb_unbound.re, "compile", compile_or_fail)
+    rules = (
+        [_block_rule(f"(a+)+x{i}") for i in range(10)]  # refused by the gate
+        + [_block_rule("^" + "a" * 210 + f"{i:02d}$") for i in range(10)]  # over the opt-in length cap
+        + [_block_rule(f"^boom{i}$") for i in range(5)]  # admitted, then the compile raises
+    )
+    db, admitted = _dnsbl_compile_regex_rules(rules, static_cap=True)
+    assert (db, admitted) == ({}, 0)
+    lines = capsys.readouterr().err.splitlines()
+    assert len(_per_rule_lines(lines)) == REFUSAL_LOG_MAX, lines
+    assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+    assert "5 more refused block regex rules not logged" in lines[-1], lines
+
+
+def test_feed_rules_with_wide_classes_are_refused_without_a_compile_attempt(capsys: Any, monkeypatch: Any) -> None:
+    """Classes this wide cost milliseconds each to compile, so a full list of them is
+    refused rule by rule on the gate's verdict and no pattern reaches ``re.compile``."""
+    compiled: list[str] = []
+    real_compile = re.compile
+
+    def record_compile(candidate: Any, flags: int = 0) -> Any:
+        compiled.append(candidate)
+        return real_compile(candidate, flags)
+
+    monkeypatch.setattr(pfb_unbound.re, "compile", record_compile)
+    rules = [_block_rule("^" + "[!-~]" * 49 + f"x{i:04d}") for i in range(1000)]
+    db, admitted = _dnsbl_compile_regex_rules(rules)
+    assert (db, admitted) == ({}, 0)
+    assert compiled == []
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+    assert all("character classes too wide" in line for line in lines[:REFUSAL_LOG_MAX]), lines
+    assert f"{1000 - REFUSAL_LOG_MAX} more refused block regex rules not logged" in lines[-1], lines
+
+
+def test_refusals_do_not_stop_the_rest_of_the_list_loading_and_the_one_summary_line_counts_them(capsys: Any) -> None:
+    refused = [_block_rule(f"(a+)+x{i}") for i in range(REFUSAL_LOG_MAX + 30)]
+    fitting = [_block_rule(rf"^r{i}\.example$") for i in range(1100)]
+    db, admitted = _dnsbl_compile_regex_rules([*refused, *fitting])
+    assert admitted == 1100
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+    assert lines[-1].endswith("30 more refused block regex rules not logged"), lines
+
+
+def test_build_loads_every_admitted_feed_block_and_allow_regex_rule() -> None:
+    manifest = {
+        "feeds": [{"feed": "F", "group": "G", "log_flag": "1", "raw": "F"}],
+        "config": {},
+    }
+    lines = [f"/^b[0-9]+x{i}\\.example$/" for i in range(1500)] + [f"@@/^a[0-9]+x{i}\\.example$/" for i in range(1200)]
+    result = pfb_unbound.build(manifest, {"regex_cap": False}, line_reader=lambda _ref: lines)
+    assert len(result.regex_db) == 1500
+    assert len(result.allow_regex_db) == 1200
+    assert result.regex_count == 2700
+
+
+def test_refused_feed_pattern_is_logged_as_a_short_excerpt_with_its_reason(capsys: Any) -> None:
+    pattern = "(a+)+" + "a" * 285 + "TAILMARKER"  # refused by every gate generation: only its log form differs
+    db, admitted = _dnsbl_compile_regex_rules([_block_rule(pattern), _block_rule(r"^ok\.example$")])
+    assert admitted == 1
+    err = capsys.readouterr().err
+    assert _excerpt_of(pattern) in err
+    assert "over 256 characters" in err
+    assert "TAILMARKER" not in err
+
+
+def test_feed_pattern_dropped_by_the_length_cap_is_logged_as_a_short_excerpt(capsys: Any) -> None:
+    pattern = "^" + "a" * 228 + "TAILMARKER$"
+    assert pfb_unbound.REGEX_STATIC_LEN_CAP < len(pattern) <= 256
+    db, admitted = _dnsbl_compile_regex_rules([_block_rule(pattern)], static_cap=True)
+    assert admitted == 0
+    err = capsys.readouterr().err
+    assert _excerpt_of(pattern) in err
+    assert "TAILMARKER" not in err
+
+
+@pytest.mark.parametrize("failure", [re.error, ValueError])
+def test_feed_pattern_that_fails_to_compile_is_logged_as_a_short_excerpt(
+    capsys: Any, monkeypatch: Any, failure: type[Exception]
+) -> None:
+    pattern = "^" + "a" * 150 + "TAILMARKER$"
+    real_compile = re.compile
+
+    def compile_or_fail(candidate: Any, flags: int = 0) -> Any:
+        if candidate == pattern:
+            raise failure("cannot compile " + pattern)  # a message that quotes the whole pattern
+        return real_compile(candidate, flags)
+
+    monkeypatch.setattr(pfb_unbound.re, "compile", compile_or_fail)
+    db, admitted = _dnsbl_compile_regex_rules([_block_rule(pattern), _block_rule(r"^ok\.example$")])
+    assert admitted == 1
+    err = capsys.readouterr().err
+    assert _excerpt_of(pattern) in err
+    assert "TAILMARKER" not in err
+
+
+def test_control_characters_in_a_refused_feed_pattern_never_reach_the_log_raw(capsys: Any) -> None:
+    pattern = "(a+)+\x00b\x1bc\rd"
+    db, admitted = _dnsbl_compile_regex_rules([_block_rule(pattern)])
+    assert admitted == 0
+    err = capsys.readouterr().err
+    assert not any(character in err for character in ("\x00", "\x1b", "\r"))
+    assert ascii(pattern) in err
+    assert err.count("\n") == 1
+
+
+# User regex lists load at two sites (init and the zero-downtime swap) into the user container;
+# both take the per-pattern gate and the opt-in length cap, and no list has a rule limit.
+class _UserLoads(NamedTuple):
+    """What the two user-regex load sites produced for one ``MAIN.regex_list``."""
+
+    initial: dict[str, dict[str, Any]]  # userRegexDB after init_standard
+    swapped: dict[str, dict[str, Any]]  # user_regex_db of the swap snapshot ({} without a manifest)
+    blacklist_at_stats_gate: bool | None  # python_blacklist where init opens stats DBs (None: not watched)
+    feed_initial: dict[str, dict[str, Any]]  # regexDB after init_standard
+    feed_swapped: dict[str, dict[str, Any]]  # regex_db of the swap snapshot
+    user_allow_initial: dict[str, dict[str, Any]]  # userAllowRegexDB after init_standard
+    user_allow_swapped: dict[str, dict[str, Any]]  # user_allow_regex_db of the swap snapshot
+    count_initial: int | None  # what init emitted as pfb_py_regex_count
+    count_swapped: int  # regex_count of the swap snapshot
+    snapshot_count_initial: int  # regex_count of the snapshot init installed
+    warned_after_init: set[str]  # the slow-match warning bookkeeping once init has run
+    decision_initial: Any  # evaluate_domain over the snapshot init installed (None: no query given)
+    decision_swapped: Any  # the same query over the swap snapshot (None: no query, or no manifest)
+    important_initial: bool  # important_rules of the snapshot init installed
+    important_swapped: bool | None  # important_rules of the swap snapshot (None: no manifest)
+
+
+def _patterns(db: dict[str, dict[str, Any]]) -> dict[str, str]:
+    return {name: entry["re"].pattern for name, entry in db.items()}
+
+
+def _decide(snapshot: pfb_unbound.Snapshot, name: str) -> Any:
+    """``evaluate_domain`` for ``name`` over ``snapshot``, through the per-query cfg and containers the
+    resolver derives from it."""
+    cfg = pfb_unbound._evaluate_cfg(snapshot)
+    return evaluate_domain(name, name, name.rsplit(".", 1)[-1], False, cfg, snapshot.containers())
+
+
+def _user_regex_loads(
+    tmp_path: Path,
+    monkeypatch: Any,
+    rows: list[str],
+    *,
+    regex_cap: bool = False,
+    manifest: bool = True,
+    watch_stats_gate: bool = False,
+    feeds: dict[str, list[str]] | None = None,
+    user_feeds: tuple[str, ...] = (),
+    feed_log_flags: dict[str, str] | None = None,
+    query: str | None = None,
+    stale_warnings: tuple[str, ...] = (),
+) -> _UserLoads:
+    """Run both load sites over one ``MAIN.regex_list``. ``manifest=False`` leaves out the DNSBL
+    manifest: init then keeps what the user-regex load set (it would otherwise recompute the
+    flags from the merged databases) and the swap has nothing to build on.
+    ``watch_stats_gate`` records ``python_blacklist`` where init decides to open the DNSBL
+    stats database (the databases are never opened: the validator and the gate answer False).
+    ``query`` turns blocking on and decides that name over the snapshot of each load site.
+    ``stale_warnings`` seeds the slow-match warning bookkeeping before init runs."""
+    encoded = base64.b64encode("\n".join(rows).encode("utf-8")).decode("ascii")
+    ini = tmp_path / "pfb_unbound.ini"
+    manifest_path = tmp_path / "pfb_py_sources.json"
+    if manifest:
+        feed_rows = []
+        for name, lines in (feeds or {}).items():
+            (tmp_path / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+            provenance = "user" if name in user_feeds else "feed"
+            flag = (feed_log_flags or {}).get(name, "1")
+            feed_rows.append({"raw": name, "feed": name, "group": name, "log_flag": flag, "provenance": provenance})
+        manifest_path.write_text(json.dumps({"version": 1, "config": {}, "feeds": feed_rows}) + "\n", encoding="utf-8")
+    emitted: dict[str, int] = {}
+    monkeypatch.setattr(pfb_unbound, "dnsbl_emit_count", lambda path, count: emitted.update({path: count}) or True)
+    cap_line = "regex_cap = true\n" if regex_cap else ""
+    blocking_line = "python_blocking = true\n" if query is not None else ""
+    ini.write_text(f"[MAIN]\npython_enable = true\n{cap_line}{blocking_line}regex_list = {encoded}\n", encoding="utf-8")
+    monkeypatch.setitem(pfb_unbound.pfb, "pfb_unbound.ini", str(ini))
+    monkeypatch.setitem(pfb_unbound.pfb, "pfb_py_sources", str(manifest_path))
+    monkeypatch.setitem(pfb_unbound.pfb, "regex_cap", False)  # init sets it; the test restores it
+    monkeypatch.chdir(tmp_path)
+    seen_at_gate: list[bool] = []
+    if watch_stats_gate:
+
+        def stats_gate_spy() -> bool:
+            seen_at_gate.append(bool(pfb_unbound.pfb["python_blacklist"]))
+            return False
+
+        monkeypatch.setattr(pfb_unbound, "_validate_db_with_recovery", lambda _db: False)
+        monkeypatch.setattr(pfb_unbound, "_dnsbl_stats_wanted", stats_gate_spy)
+    pfb_unbound.pfb["mod_maxminddb_e"] = "stub"
+    pfb_unbound.pfb["mod_threading_e"] = "stub"
+    pfb_unbound.pfb["mod_sqlite3_e"] = "stub"
+    pfb_unbound.pfb["mod_sqlite3"] = watch_stats_gate
+    pfb_unbound.pfb["mod_threading"] = False
+    pfb_unbound._regex_warned.update(stale_warnings)
+    try:
+        assert pfb_unbound.init_standard(0, unboundmodule.module_env()) is True
+        initial = dict(pfb_unbound.userRegexDB)
+        feed_initial = dict(pfb_unbound.regexDB)
+        user_allow_initial = dict(pfb_unbound.userAllowRegexDB)
+        count_initial = emitted.get(pfb_unbound.pfb["pfb_py_regex_count"])
+        snapshot_count_initial = pfb_unbound._snapshot.regex_count
+        warned_after_init = set(pfb_unbound._regex_warned)
+        decision_initial = _decide(pfb_unbound._snapshot, query) if query is not None else None
+        important_initial = pfb_unbound._snapshot.important_rules
+        important_swapped: bool | None = None
+        decision_swapped = None
+        swapped: dict[str, dict[str, Any]] = {}
+        feed_swapped: dict[str, dict[str, Any]] = {}
+        user_allow_swapped: dict[str, dict[str, Any]] = {}
+        count_swapped = 0
+        if manifest:
+            # Init's stderr bridge drops a line identical to the previous one; the swap load
+            # must show its own log line, so clear that memory between the two loads.
+            pfb_unbound.pfb["p_err"] = ""
+            snapshot = pfb_unbound._build_swap_snapshot()
+            assert snapshot is not None
+            swapped = dict(snapshot.user_regex_db)
+            feed_swapped = dict(snapshot.regex_db)
+            user_allow_swapped = dict(snapshot.user_allow_regex_db)
+            count_swapped = snapshot.regex_count
+            important_swapped = snapshot.important_rules
+            if query is not None:
+                decision_swapped = _decide(snapshot, query)
+        return _UserLoads(
+            initial,
+            swapped,
+            seen_at_gate[0] if seen_at_gate else None,
+            feed_initial,
+            feed_swapped,
+            user_allow_initial,
+            user_allow_swapped,
+            count_initial,
+            count_swapped,
+            snapshot_count_initial,
+            warned_after_init,
+            decision_initial,
+            decision_swapped,
+            important_initial,
+            important_swapped,
+        )
+    finally:
+        pfb_unbound.deinit(0)
+        pfb_unbound._regex_warned.clear()
+
+
+HOSTILE_ROW = "^[a-z]{1,255}[a-z]{1,255}[a-z]{1,255}x"
+KEEP_ROW = r"^keep\.example$"
+
+
+def test_user_regex_refused_by_the_gate_is_dropped_and_the_next_row_still_loads(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{HOSTILE_ROW}#hostile", f"{KEEP_ROW}#keep"])
+    assert _patterns(loads.initial) == {"keep": KEEP_ROW}
+    assert _patterns(loads.swapped) == {"keep": KEEP_ROW}
+
+
+WIDE_ROW = "^" + "[!-~]" * 6 + "x"
+
+
+def test_user_regex_with_wide_classes_is_dropped_and_the_next_row_still_loads(tmp_path: Path, monkeypatch: Any) -> None:
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{WIDE_ROW}#wide", f"{KEEP_ROW}#keep"])
+    assert _patterns(loads.initial) == {"keep": KEEP_ROW}
+    assert _patterns(loads.swapped) == {"keep": KEEP_ROW}
+
+
+def test_user_regex_entries_are_non_important_band_five_blocks_at_both_load_sites(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{KEEP_ROW}#keep"])
+    for db in (loads.initial, loads.swapped):
+        assert set(db) == {"keep"}
+        assert db["keep"]["important"] is False
+        assert db["keep"]["band"] == PRIO_USER_BLOCK
+        assert db["keep"]["re"].flags & re.IGNORECASE
+
+
+@pytest.mark.parametrize(
+    ("rows", "loaded"),
+    [([f"{HOSTILE_ROW}#hostile"], False), ([f"{HOSTILE_ROW}#hostile", f"{KEEP_ROW}#keep"], True)],
+    ids=["nothing-compiled", "one-compiled"],
+)
+def test_init_raises_python_blacklist_only_when_a_user_pattern_compiled(
+    tmp_path: Path, monkeypatch: Any, rows: list[str], loaded: bool
+) -> None:
+    loads = _user_regex_loads(tmp_path, monkeypatch, rows, manifest=False, watch_stats_gate=True)
+    assert bool(loads.initial) is loaded
+    # The snapshot install at the end of init raises python_blacklist on its own, so the
+    # user-regex load's own raise is only visible where init opens the stats databases.
+    assert loads.blacklist_at_stats_gate is loaded
+
+
+@pytest.mark.parametrize(
+    ("rows", "loaded"),
+    [([f"{HOSTILE_ROW}#hostile"], False), ([f"{HOSTILE_ROW}#hostile", f"{KEEP_ROW}#keep"], True)],
+    ids=["nothing-compiled", "one-compiled"],
+)
+def test_the_swap_snapshot_carries_user_regex_only_when_one_compiled(
+    tmp_path: Path, monkeypatch: Any, rows: list[str], loaded: bool
+) -> None:
+    loads = _user_regex_loads(tmp_path, monkeypatch, rows)
+    assert bool(loads.swapped) is loaded
+
+
+@pytest.mark.parametrize("regex_cap", [False, True])
+def test_the_opt_in_length_cap_drops_an_over_length_user_pattern_at_both_load_sites(
+    tmp_path: Path, monkeypatch: Any, regex_cap: bool
+) -> None:
+    long_row = "^" + "a" * 210 + "$"
+    assert pfb_unbound.REGEX_STATIC_LEN_CAP < len(long_row) <= 256
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{long_row}#long", f"{KEEP_ROW}#keep"], regex_cap=regex_cap)
+    expected = {"keep": KEEP_ROW} if regex_cap else {"long": long_row, "keep": KEEP_ROW}
+    assert _patterns(loads.initial) == expected
+    assert _patterns(loads.swapped) == expected
+
+
+def test_user_regex_lists_have_no_rule_limit(
+    tmp_path: Path, monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    rows = [rf"^u{i}\.example$#u{i}" for i in range(1501)]
+    loads = _user_regex_loads(tmp_path, monkeypatch, rows)
+    assert len(loads.initial) == 1501
+    assert _patterns(loads.swapped) == _patterns(loads.initial)
+    assert "dropping" not in caplog.text
+
+
+def test_refused_user_regex_is_logged_as_a_short_excerpt_at_both_load_sites(
+    tmp_path: Path, monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    pattern = "(a+)+" + "b" * 285 + "TAILMARKER"  # refused by every gate generation: only its log form differs
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{pattern}#long", f"{KEEP_ROW}#keep"])
+    assert _patterns(loads.initial) == _patterns(loads.swapped) == {"keep": KEEP_ROW}
+    assert caplog.text.count(_excerpt_of(pattern)) == 2, caplog.text
+    assert "TAILMARKER" not in caplog.text
+
+
+# The shared helper both sites call, driven directly: one behaviour per test.
+def test_user_regex_log_lines_number_every_row_starting_at_one(capsys: Any) -> None:
+    entries = [("first", "(a+)+"), ("second", KEEP_ROW), ("third", "(b+)+")]
+    db = _dnsbl_compile_user_regex(entries, False)
+    assert list(db) == ["second"]
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 2, lines
+    assert "[ first ]" in lines[0] and "on line #1" in lines[0], lines
+    assert "[ third ]" in lines[1] and "on line #3" in lines[1], lines
+
+
+@pytest.mark.parametrize("failure", [OverflowError, RecursionError, ValueError])
+def test_a_user_pattern_whose_compile_raises_anything_is_dropped_alone(
+    monkeypatch: Any, failure: type[Exception]
+) -> None:
+    first, middle, last = r"^first\.example$", r"^middle\.example$", r"^last\.example$"
+    real_compile = re.compile
+
+    def compile_or_fail(pattern: Any, flags: int = 0) -> Any:
+        if pattern == middle:
+            raise failure("simulated compile failure")
+        return real_compile(pattern, flags)
+
+    monkeypatch.setattr(pfb_unbound.re, "compile", compile_or_fail)
+    db = _dnsbl_compile_user_regex([("first", first), ("middle", middle), ("last", last)], False)
+    assert _patterns(db) == {"first": first, "last": last}
+
+
+def test_user_pattern_dropped_by_the_length_cap_is_logged_as_a_short_excerpt(capsys: Any) -> None:
+    pattern = "^" + "a" * 228 + "TAILMARKER$"
+    assert pfb_unbound.REGEX_STATIC_LEN_CAP < len(pattern) <= 256
+    assert _dnsbl_compile_user_regex([("long", pattern)], True) == {}
+    err = capsys.readouterr().err
+    assert _excerpt_of(pattern) in err
+    assert "TAILMARKER" not in err
+
+
+def test_user_pattern_that_fails_to_compile_is_logged_as_a_short_excerpt(capsys: Any, monkeypatch: Any) -> None:
+    pattern = "^" + "a" * 150 + "TAILMARKER$"
+    real_compile = re.compile
+
+    def compile_or_fail(candidate: Any, flags: int = 0) -> Any:
+        if candidate == pattern:
+            raise ValueError("cannot compile " + pattern)  # a message that quotes the whole pattern
+        return real_compile(candidate, flags)
+
+    monkeypatch.setattr(pfb_unbound.re, "compile", compile_or_fail)
+    assert _dnsbl_compile_user_regex([("long", pattern)], False) == {}
+    err = capsys.readouterr().err
+    assert _excerpt_of(pattern) in err
+    assert "TAILMARKER" not in err
+
+
+# A pattern anchored only through a leading `.*` / `.+` is compiled behind a written `^`, so the engine
+# itself skips every other start position. Every load site compiles that text, not the pattern as fed.
+LEADING_DOT_ROW = r".*\.x\.com$"
+LEADING_DOT_COMPILED = r"^(?:(?s:.*)\.x\.com$)"
+
+
+def test_a_feed_block_rule_anchored_by_a_leading_dot_run_is_compiled_behind_a_caret() -> None:
+    db, admitted = _dnsbl_compile_regex_rules([_block_rule(LEADING_DOT_ROW), _block_rule(KEEP_ROW)])
+    assert admitted == 2
+    assert _compiled_patterns(db) == [LEADING_DOT_COMPILED, KEEP_ROW]
+    assert [entry["re"].search("www.x.com") is not None for entry in db.values()] == [True, False]
+
+
+def test_a_feed_allow_rule_anchored_by_a_leading_dot_run_is_compiled_behind_a_caret() -> None:
+    db, admitted = _dnsbl_compile_regex_rules([_allow_rule(LEADING_DOT_ROW)])
+    assert admitted == 1
+    assert _compiled_patterns(db) == [LEADING_DOT_COMPILED]
+
+
+def test_a_user_row_anchored_by_a_leading_dot_run_is_compiled_behind_a_caret() -> None:
+    db = _dnsbl_compile_user_regex([("lead", LEADING_DOT_ROW), ("keep", KEEP_ROW)], False)
+    assert _patterns(db) == {"lead": LEADING_DOT_COMPILED, "keep": KEEP_ROW}
+    assert db["lead"]["re"].search("www.x.com") is not None
+
+
+def test_both_user_regex_load_sites_compile_a_leading_dot_run_behind_a_caret(tmp_path: Path, monkeypatch: Any) -> None:
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{LEADING_DOT_ROW}#lead", f"{KEEP_ROW}#keep"])
+    expected = {"lead": LEADING_DOT_COMPILED, "keep": KEEP_ROW}
+    assert _patterns(loads.initial) == expected
+    assert _patterns(loads.swapped) == expected
+
+
+# A user regex that comes from the Custom_List of the manifest and not from the Regex List alone still
+# raises the master DNSBL gate at init, whichever list it is in.
+@pytest.mark.parametrize("row", [r"/^c[0-9]+\.example$/", r"@@/^ca[0-9]+\.example$/"], ids=["block", "allow"])
+def test_init_with_only_a_custom_list_user_regex_raises_python_blacklist(
+    tmp_path: Path, monkeypatch: Any, row: str
+) -> None:
+    loads = _user_regex_loads(
+        tmp_path, monkeypatch, [], feeds={"Custom": [row]}, user_feeds=("Custom",), watch_stats_gate=True
+    )
+    assert loads.blacklist_at_stats_gate is True
+    assert len(loads.user_allow_initial) + len(loads.initial) == 1
+
+
+class _ParseCounter:
+    """Counts the parses the admission gate makes of a pattern: the gate's one parse function is
+    replaced by a wrapper that records the text and calls it."""
+
+    def __init__(self, monkeypatch: Any) -> None:
+        self.texts: list[str] = []
+        self._real = pfb_dnsbl_regex_rules._admit
+        monkeypatch.setattr(pfb_dnsbl_regex_rules, "_admit", self)
+
+    def __call__(self, text: str) -> Any:
+        self.texts.append(text)
+        return self._real(text)
+
+
+def test_a_feed_rule_is_parsed_once_by_the_load(monkeypatch: Any) -> None:
+    parses = _ParseCounter(monkeypatch)
+    over_length = "^" + "a" * 210 + "$"
+    patterns = [LEADING_DOT_ROW, KEEP_ROW, "(a+)+", over_length]
+    db, admitted = _dnsbl_compile_regex_rules([_block_rule(pattern) for pattern in patterns], static_cap=True)
+    assert (admitted, _compiled_patterns(db)) == (2, [LEADING_DOT_COMPILED, KEEP_ROW])
+    assert parses.texts == patterns
+
+
+def test_a_user_row_is_parsed_once_by_the_load(monkeypatch: Any) -> None:
+    parses = _ParseCounter(monkeypatch)
+    patterns = [LEADING_DOT_ROW, KEEP_ROW, "(a+)+"]
+    db = _dnsbl_compile_user_regex([(f"row{index}", pattern) for index, pattern in enumerate(patterns)], False)
+    assert _patterns(db) == {"row0": LEADING_DOT_COMPILED, "row1": KEEP_ROW}
+    assert parses.texts == patterns
+
+
+# The Regex List rows share the refusal-log budget the feed lists have: the first REFUSAL_LOG_MAX lines of one
+# load are written and the rest are counted into one summary line.
+def test_user_regex_refusal_log_lines_are_capped_and_the_rest_are_counted_once(capsys: Any) -> None:
+    entries = [(f"row{i}", f"(a+)+x{i}") for i in range(REFUSAL_LOG_MAX + 5)]
+    assert _dnsbl_compile_user_regex(entries, False) == {}
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+    assert all("dropping user regex" in line for line in lines[:REFUSAL_LOG_MAX]), lines
+    assert lines[-1].endswith("5 more refused user regex rules not logged"), lines
+
+
+@pytest.mark.parametrize(("count", "suppressed"), [(REFUSAL_LOG_MAX, 0), (REFUSAL_LOG_MAX + 1, 1)])
+def test_the_user_regex_refusal_log_cap_is_exact_at_its_boundary(capsys: Any, count: int, suppressed: int) -> None:
+    _dnsbl_compile_user_regex([(f"row{i}", f"(a+)+x{i}") for i in range(count)], False)
+    lines = capsys.readouterr().err.splitlines()
+    assert len(_per_rule_lines(lines)) == REFUSAL_LOG_MAX, lines
+    if suppressed:
+        assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+        assert f"{suppressed} more refused user regex rules not logged" in lines[-1], lines
+    else:
+        assert len(lines) == REFUSAL_LOG_MAX, lines
+
+
+def test_user_gate_refusals_length_cap_drops_and_compile_errors_share_one_log_budget(
+    capsys: Any, monkeypatch: Any
+) -> None:
+    real_compile = re.compile
+
+    def compile_or_fail(candidate: Any, flags: int = 0) -> Any:
+        if candidate.startswith("^boom"):
+            raise ValueError("cannot compile")
+        return real_compile(candidate, flags)
+
+    monkeypatch.setattr(pfb_unbound.re, "compile", compile_or_fail)
+    entries = (
+        [(f"gate{i}", f"(a+)+x{i}") for i in range(10)]  # refused by the gate
+        + [(f"long{i}", "^" + "a" * 210 + f"{i:02d}$") for i in range(10)]  # over the opt-in length cap
+        + [(f"boom{i}", f"^boom{i}$") for i in range(5)]  # admitted, then the compile raises
+    )
+    assert _dnsbl_compile_user_regex(entries, True) == {}
+    lines = capsys.readouterr().err.splitlines()
+    assert len(_per_rule_lines(lines)) == REFUSAL_LOG_MAX, lines
+    assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+    assert lines[-1].endswith("5 more refused user regex rules not logged"), lines
+
+
+def test_user_refusals_past_the_log_budget_do_not_stop_the_rest_of_the_list_loading(capsys: Any) -> None:
+    refused = [(f"bad{i}", f"(a+)+x{i}") for i in range(REFUSAL_LOG_MAX + 30)]
+    fitting = [(f"ok{i}", rf"^r{i}\.example$") for i in range(100)]
+    db = _dnsbl_compile_user_regex([*refused, *fitting], False)
+    assert list(db) == [name for name, _pattern in fitting]
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == REFUSAL_LOG_MAX + 1, lines
+    assert lines[-1].endswith("30 more refused user regex rules not logged"), lines
+
+
+# `re.ASCII` is not used at any compile site: a `\w` must keep matching the Latin-1 letters that a CNAME
+# target decoded by ``convert_other()`` can carry.
+LATIN1_ROW = r"^ads\w*\.example$"
+LATIN1_NAME = "adsé.example"
+
+
+def test_a_word_class_matches_a_latin_1_letter_through_the_feed_and_user_load_paths() -> None:
+    feed_db, _admitted = _dnsbl_compile_regex_rules([_block_rule(LATIN1_ROW)])
+    user_db = _dnsbl_compile_user_regex([("latin", LATIN1_ROW)], False)
+    assert feed_db["F#0"]["re"].search(LATIN1_NAME)
+    assert user_db["latin"]["re"].search(LATIN1_NAME)
+    for db, cfg, containers in (
+        (feed_db, _cfg(regexDB=True), _containers(regexDB=feed_db)),
+        (user_db, _cfg(userRegexDB=True), _containers(userRegexDB=user_db)),
+    ):
+        decision = evaluate_domain(LATIN1_NAME, "alias.example", "example", True, cfg, containers)
+        assert decision.is_found and decision.feed in db, decision
+
+
+def test_init_starts_with_clean_slow_match_warning_bookkeeping(tmp_path: Path, monkeypatch: Any) -> None:
+    stale = ("stale-rule", "list:DNSBL_Regex")
+    seen: list[set[str]] = []
+    compile_user = pfb_unbound._dnsbl_compile_user_regex
+
+    def compile_after_reset(entries: Any, regex_cap: bool) -> Any:
+        # Capture before the final snapshot swap: that swap independently clears the same bookkeeping.
+        seen.append(set(pfb_unbound._regex_warned))
+        return compile_user(entries, regex_cap)
+
+    monkeypatch.setattr(pfb_unbound, "_dnsbl_compile_user_regex", compile_after_reset)
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{KEEP_ROW}#keep"], stale_warnings=stale)
+    assert seen == [set(), set()], seen
+    assert loads.warned_after_init == set()

@@ -125,7 +125,7 @@ final class DnsblRegexAdvisoryOnlyTest extends TestCase
 
 	// ---- Python remains the gate, both directions ------------------------------
 
-	public function testPythonStillBlocksAPatternItCannotCompile(): void
+	public function testTheProbeStillBlocksAPatternItCannotAdmit(): void
 	{
 		$errors = pfb_dnsbl_regex_validation_errors(
 			"(unclosed\n",
@@ -133,20 +133,20 @@ final class DnsblRegexAdvisoryOnlyTest extends TestCase
 			FALSE,
 			self::$timeout
 		);
-		$this->assertNotSame([], $errors, 'a pattern Python rejects must still block the save');
+		$this->assertNotSame([], $errors, 'a pattern the probe rejects must still block the save');
 		$this->assertMatchesRegularExpression('/^line 1: /', $errors[0]);
-		$this->assertStringContainsString('Python regex compile error', $errors[0]);
+		$this->assertStringContainsString('unbalanced (', $errors[0]);
 	}
 
-	public function testPythonAcceptsAValidPatternSoNothingBlocksTheSave(): void
+	public function testTheProbeAcceptsAnAdmittedPatternSoNothingBlocksTheSave(): void
 	{
-		// The named-group + inline-flag + escaped-'#' shapes together are the ones a
-		// hand-written outer grammar is most likely to mis-parse; Python compiles
+		// The optional capture group + escaped-'#' + description shapes together are the
+		// ones a hand-written outer grammar is most likely to mis-parse; the gate admits
 		// them, so the save must go through with no diagnostic of any kind.
 		$this->assertSame(
 			[],
 			pfb_dnsbl_regex_validation_errors(
-				"(?i)^(?P<sub>[a-z0-9-]+\\.)?ads\\#tag\\.example\\.com$ # ads\n",
+				"^(sub-[a-z0-9-]+\\.)?ads\\#tag\\.example\\.com$ # ads\n",
 				self::$python,
 				FALSE,
 				self::$timeout

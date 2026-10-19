@@ -48,7 +48,9 @@ def _load_hsts_site_b(hsts_path: Path) -> dict[str, Any]:
 
 
 def _load_hsts_site_a(hsts_path: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
-    stub_result = pfb_unbound.BuildResult(data_db={}, zone_db={}, feed_group_index_db={}, white_db={}, counts=0)
+    stub_result = pfb_unbound.BuildResult(
+        data_db={}, zone_db={}, feed_group_index_db={}, white_db={}, counts=0, user_regex_db={}, user_allow_regex_db={}
+    )
     monkeypatch.setattr(pfb_unbound, "dnsbl_build_from_manifest", lambda _path: stub_result)
     pfb_unbound.pfb["pfb_py_sources"] = str(tmp_path / "unused_manifest.json")
     pfb_unbound.pfb["pfb_unbound.ini"] = str(tmp_path / "no_such.ini")
@@ -188,7 +190,9 @@ def _drive_ini_site_load_ini_config(ini_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def _drive_ini_site_build_swap_snapshot(ini_path: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    stub_result = pfb_unbound.BuildResult(data_db={}, zone_db={}, feed_group_index_db={}, white_db={}, counts=0)
+    stub_result = pfb_unbound.BuildResult(
+        data_db={}, zone_db={}, feed_group_index_db={}, white_db={}, counts=0, user_regex_db={}, user_allow_regex_db={}
+    )
     monkeypatch.setattr(pfb_unbound, "dnsbl_build_from_manifest", lambda _path: stub_result)
     pfb_unbound.pfb["pfb_py_sources"] = str(tmp_path / "unused_manifest.json")
     pfb_unbound.pfb["pfb_unbound.ini"] = str(ini_path)

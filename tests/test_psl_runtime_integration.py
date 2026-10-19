@@ -148,7 +148,7 @@ def test_tld_allow_invalid_psl_fails_closed(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_reload_failure_retains_psl_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-    old = P.Snapshot({}, {}, {}, {}, {}, {}, {}, psl_rules=P.parse_psl_rules(PSL))
+    old = P.Snapshot({}, {}, {}, {}, {}, {}, {}, {}, {}, psl_rules=P.parse_psl_rules(PSL))
     monkeypatch.setattr(P, "_snapshot", old)
     assert P.rebuild_and_swap(lambda: None, emit_counts=False) is False
     assert P._snapshot is old
@@ -157,7 +157,7 @@ def test_reload_failure_retains_psl_snapshot(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_successful_reload_snapshot_carries_exact_psl_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rules = P.parse_psl_rules(PSL)
-    result = P.BuildResult({}, {}, {}, {}, 0, psl_rules=rules)
+    result = P.BuildResult({}, {}, {}, {}, 0, {}, {}, psl_rules=rules)
     monkeypatch.setattr(P, "dnsbl_build_from_manifest", lambda _path: result)
     monkeypatch.setitem(P.pfb, "pfb_py_sources", str(tmp_path / "pfb_py_sources.json"))
     monkeypatch.setitem(P.pfb, "pfb_unbound.ini", str(tmp_path / "missing.ini"))
@@ -177,6 +177,8 @@ def _allow_cfg(**overrides: Any) -> dict[str, Any]:
         "whiteDB": False,
         "regexDB": False,
         "allowRegexDB": False,
+        "userRegexDB": False,
+        "userAllowRegexDB": False,
         "hstsDB": False,
         "tld_allow": True,
         "tld_allow_list": ["com"],
@@ -199,6 +201,8 @@ def _allow_containers(rules: P.PslRules) -> dict[str, Any]:
         "whiteDB": {},
         "regexDB": {},
         "allowRegexDB": {},
+        "userRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": {},
         "hstsDB": {},
         "psl_rules": rules,
@@ -281,6 +285,8 @@ def test_snapshot_containers_capture_psl_policy_without_global_reads() -> None:
         {},
         {},
         {},
+        {},
+        {},
         psl_rules=rules,
         tld_allow_roots=("io",),
         psl_include_private=False,
@@ -302,7 +308,7 @@ def test_snapshot_feed_suffix_policy_defaults_honor_for_legacy_fixtures() -> Non
     """issue #2371: a Snapshot built the pre-#2371 way (no policy kwargs -- every legacy
     hand-built fixture in this suite) must default both new fields to "honor", never
     KeyError or silently pick a stricter state."""
-    snapshot = P.Snapshot({}, {}, {}, {}, {}, {}, {})
+    snapshot = P.Snapshot({}, {}, {}, {}, {}, {}, {}, {}, {})
     containers = snapshot.containers()
     assert containers["psl_feed_private_policy"] == "honor"
     assert containers["psl_feed_icann_policy"] == "honor"
@@ -312,6 +318,8 @@ def test_snapshot_empty_tld_allow_roots_ignore_later_global_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = P.Snapshot(
+        {},
+        {},
         {},
         {},
         {},
@@ -334,7 +342,7 @@ def test_snapshot_empty_tld_allow_roots_ignore_later_global_selection(
 
 
 def test_legacy_snapshot_default_roots_are_empty_for_allow_matcher() -> None:
-    snapshot = P.Snapshot({}, {}, {}, {}, {}, {}, {}, psl_rules=P.parse_psl_rules(PSL))
+    snapshot = P.Snapshot({}, {}, {}, {}, {}, {}, {}, {}, {}, psl_rules=P.parse_psl_rules(PSL))
     assert snapshot.tld_allow_roots is None
     containers = snapshot.containers()
 

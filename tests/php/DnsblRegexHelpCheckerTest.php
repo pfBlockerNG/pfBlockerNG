@@ -57,6 +57,27 @@ final class DnsblRegexHelpCheckerTest extends TestCase
 		);
 	}
 
+	public function testHelpSaysThePatternCharacterSetExcludesSpaces(): void
+	{
+		self::assertStringContainsString(
+			'printable ASCII without spaces',
+			self::helpText(),
+			'the help must say that a space is not a pattern character'
+		);
+	}
+
+	public function testHelpNamesTheAnchorThatAdmitsAnOpenRunBeforeALiteralTail(): void
+	{
+		$help = self::helpText();
+		self::assertStringContainsString('\S+\.example\.com', $help, 'the help must show an open run before a literal tail');
+		self::assertStringContainsString('ad.*\.example\.com', $help, 'the help must show a second open run before a literal tail');
+		self::assertStringContainsString(
+			'are refused unless anchored with <code>^</code>',
+			$help,
+			'the help must name the remedy the save-time error also gives'
+		);
+	}
+
 	/**
 	 * scripts/check_noopener.py scans `src/usr/local/www` only, and this help lives
 	 * under `src/usr/local/pkg`, so the repo-wide gate never sees these links. This

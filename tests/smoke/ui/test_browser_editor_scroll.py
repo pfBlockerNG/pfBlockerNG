@@ -146,8 +146,9 @@ def phone_page(browser_context: BrowserContext, webui: WebUI, smoke_vm: SmokeVM)
 # Long enough that the line cannot fit any plausible field width, so the editor is
 # genuinely scrolled right before the action under test. Regex-list syntax on one
 # side, shell on the other -- each editor gets a doc its own grammar accepts, so a
-# lint/parse error can never be what moves the view.
-LONG_REGEX_LINE = "^" + ("a" * 300) + "\\.example\\.com$"
+# lint/parse error can never be what moves the view. The regex line stays inside the
+# 256-character admission length so the save-time probe raises no diagnostic for it.
+LONG_REGEX_LINE = "^" + ("a" * 230) + "\\.example\\.com$"
 LONG_SHELL_LINE = "echo " + ("a" * 300)
 
 # The caret sits one character in from the left edge after a newline, so CM6 leaves a

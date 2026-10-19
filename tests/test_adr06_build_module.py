@@ -95,6 +95,9 @@ def _evaluate_build(result: pfb_unbound.BuildResult, config: dict[str, Any], q_n
         "zoneDB": result.zone_db,
         "whiteDB": result.white_db,
         "regexDB": {},
+        "userRegexDB": {},
+        "allowRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": {d: 0 for d in config.get("hsts_domains", [])},
     }
@@ -364,6 +367,9 @@ class TestWhitelistNormalisation:
             "whiteDB": result.white_db,
             "hstsDB": {},
             "regexDB": {},
+            "userRegexDB": {},
+            "allowRegexDB": {},
+            "userAllowRegexDB": {},
             "feedGroupIndexDB": {},
         }
         allowed = pfb_unbound.evaluate_domain("printer.lan", "printer.lan", "lan", False, cfg, containers)

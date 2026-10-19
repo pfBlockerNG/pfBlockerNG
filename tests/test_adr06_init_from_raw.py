@@ -152,6 +152,9 @@ def _evaluate_result(result: pfb_unbound.BuildResult, config: dict[str, Any], q_
         "zoneDB": result.zone_db,
         "whiteDB": result.white_db,
         "regexDB": {},
+        "userRegexDB": {},
+        "allowRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": {d: 0 for d in config.get("hsts_domains", [])},
     }
@@ -437,6 +440,9 @@ class TestInitGlobalAssignment:
             "zoneDB": pfb_unbound.zoneDB,
             "whiteDB": pfb_unbound.whiteDB,
             "regexDB": pfb_unbound.regexDB,
+            "userRegexDB": pfb_unbound.userRegexDB,
+            "allowRegexDB": pfb_unbound.allowRegexDB,
+            "userAllowRegexDB": pfb_unbound.userAllowRegexDB,
             "feedGroupIndexDB": pfb_unbound.feedGroupIndexDB,
             "hstsDB": pfb_unbound.hstsDB,
         }
@@ -465,6 +471,9 @@ class TestInitGlobalAssignment:
             "zoneDB": pfb_unbound.zoneDB,
             "whiteDB": pfb_unbound.whiteDB,
             "regexDB": {},
+            "userRegexDB": {},
+            "allowRegexDB": {},
+            "userAllowRegexDB": {},
             "feedGroupIndexDB": pfb_unbound.feedGroupIndexDB,
             "hstsDB": {},
         }

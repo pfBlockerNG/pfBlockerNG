@@ -56,7 +56,8 @@ except Exception:
 # save-time probe (pfb_dnsbl_regex_validation_errors() in pfblockerng_extra.inc).
 from pfb_dnsbl_regex_rules import (
     REGEX_STATIC_LEN_CAP,
-    _regex_is_catastrophic_shape,
+    pfb_regex_admission,
+    pfb_regex_excerpt,
     pfb_split_regex_line,
 )
 
@@ -388,6 +389,8 @@ dataDB: defaultdict[str, Any]
 zoneDB: defaultdict[str, Any]
 regexDB: defaultdict[str, Any]
 allowRegexDB: defaultdict[str, Any]
+userRegexDB: defaultdict[str, Any]
+userAllowRegexDB: defaultdict[str, Any]
 hstsDB: defaultdict[str, Any]
 whiteDB: defaultdict[str, Any]
 gpListDB: defaultdict[str, Any]
@@ -795,10 +798,12 @@ def _build_swap_snapshot() -> Snapshot | None:
     Reproduces init's DNSBL load off fresh local dicts so the swapped snapshot is
     decision-identical to a fresh init load:
       * dnsbl_build_from_manifest() -> data/zone/feedGroupIndex/white + FEED block-regex
-        + @@/re/ allow-regex + the important_rules fast-path flag + the loaded count.
-        ``None`` (absent/unparseable manifest, build error) -> the whole swap is a no-op.
-      * USER REGEX-ini patterns merged on top (band PRIO_USER_BLOCK, sovereign over feed
-        allows), after the shared catastrophic-shape gate and opt-in length cap.
+        + @@/re/ allow-regex + USER (Custom_List) block/allow regex + the important_rules
+        fast-path flag + the loaded count. ``None`` (absent/unparseable manifest, build
+        error) -> the whole swap is a no-op.
+      * USER REGEX-ini patterns loaded into the user block-regex container ahead of the
+        Custom_List ones (band PRIO_USER_BLOCK, sovereign over feed allows), after the
+        shared admission gate and opt-in length cap.
       * hstsDB reloaded from pfb_py_hsts.txt (watch-out (b): hstsDB is NOT in the
         manifest; omitting it would ship an empty hsts_db and silently flip HSTS NULL-vs-
         VIP behaviour)."""
@@ -810,46 +815,21 @@ def _build_swap_snapshot() -> Snapshot | None:
     zone_db = build_result.zone_db
     feed_group_index_db = build_result.feed_group_index_db
     white_db = build_result.white_db
-    regex_db: dict[str, Any] = dict(build_result.regex_db)
-    allow_regex_db: dict[str, Any] = dict(build_result.allow_regex_db)
+    regex_db = build_result.regex_db
+    allow_regex_db = build_result.allow_regex_db
+    user_allow_regex_db = build_result.user_allow_regex_db
+    user_regex_db: dict[str, Any] = {}
 
-    # USER regex patterns from MAIN.regex_list merged on top of the feed block-regex,
-    # mirroring init's shared catastrophic-shape gate and opt-in length cap.
+    # USER regex patterns from MAIN.regex_list, through the same admission gate and opt-in
+    # length cap as init's load; the Custom_List rows of the manifest follow them.
     if os.path.isfile(pfb["pfb_unbound.ini"]):
         config = ConfigParser()
         try:
             config.read(pfb["pfb_unbound.ini"], encoding="utf-8")
-            r_count = 1
-            for name, pattern in _load_user_regex_entries(config):
-                if _regex_is_catastrophic_shape(pattern):
-                    sys.stderr.write(
-                        "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
-                        "on line #{} (catastrophic shape)".format(name, pattern, r_count)
-                    )
-                    r_count += 1
-                    continue
-                if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
-                    sys.stderr.write(
-                        "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
-                        "on line #{} (static length cap)".format(name, pattern, r_count)
-                    )
-                    r_count += 1
-                    continue
-                try:
-                    regex_db[name] = {
-                        "re": re.compile(pattern, re.IGNORECASE),
-                        "important": False,
-                        "band": PRIO_USER_BLOCK,
-                    }
-                except Exception as e:
-                    sys.stderr.write(
-                        "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
-                            name, pattern, r_count, e
-                        )
-                    )
-                r_count += 1
+            user_regex_db.update(_dnsbl_compile_user_regex(_load_user_regex_entries(config), pfb["regex_cap"]))
         except Exception as e:
             sys.stderr.write("[pfBlockerNG]: reload: failed to load user REGEX ini: {}".format(e))
+    user_regex_db.update(build_result.user_regex_db)
 
     # HSTS reloaded from the static file (watch-out b -- not in the manifest).
     hsts_db: dict[str, Any] = {}
@@ -871,11 +851,13 @@ def _build_swap_snapshot() -> Snapshot | None:
         white_db=white_db,
         regex_db=regex_db,
         allow_regex_db=allow_regex_db,
+        user_regex_db=user_regex_db,
+        user_allow_regex_db=user_allow_regex_db,
         feed_group_index_db=feed_group_index_db,
         hsts_db=hsts_db,
-        important_rules=bool(build_result.important_rules),
+        important_rules=bool(build_result.important_rules or user_regex_db),
         counts=len(data_db) + len(zone_db),
-        regex_count=len(regex_db) + len(allow_regex_db),
+        regex_count=len(regex_db) + len(allow_regex_db) + len(user_regex_db) + len(user_allow_regex_db),
         rejects=build_result.rejects,
         psl_rules=build_result.psl_rules,
         tld_allow_roots=_selected_tld_roots(pfb.get("tld_allow_list", ())),
@@ -1345,7 +1327,7 @@ def _parse_ini_int(config: ConfigParser, section: str, option: str) -> int | Non
     """Parse an integer MAIN-ini option; ``None`` on a malformed (non-integer) value.
 
     issue #713: ``ConfigParser.getint()`` raises ``ValueError`` on a non-integer ini
-    value. Mirrors the existing ``regex_warn_ms``/``regex_evict_ms`` try/except-ValueError
+    value. Mirrors the existing ``regex_warn_ms`` try/except-ValueError
     guard (a few lines below the callers in ``init_standard``) so a malformed
     ``python_tld_seg``/``decisiondb_max`` value can no longer throw out of module init
     and take the whole Unbound Python module down. The caller keeps its own current
@@ -1531,6 +1513,8 @@ def init_standard(id: int, env: module_env) -> bool:
         zoneDB, \
         regexDB, \
         allowRegexDB, \
+        userRegexDB, \
+        userAllowRegexDB, \
         hstsDB, \
         whiteDB, \
         decisionDB, \
@@ -1648,12 +1632,11 @@ def init_standard(id: int, env: module_env) -> bool:
     # existing early-exit path while important_rules is False (behaviour-preserving).
     pfb["allowRegexDB"] = False
     pfb["important_rules"] = False
-    # ADR-07 regex-safety defaults: opt-in length cap OFF; shared catastrophic-shape
-    # gate and runtime warn/evict are always active. MAIN ini may override
-    # regex_cap, regex_warn_ms, and regex_evict_ms; it cannot disable the shape gate.
+    # ADR-07 regex-safety defaults: opt-in length cap OFF; shared admission gate
+    # and the runtime slow-match warning are always active. MAIN ini may override
+    # regex_cap and regex_warn_ms; it cannot disable the admission gate.
     pfb["regex_cap"] = False
     pfb["regex_warn_ms"] = REGEX_WARN_MS_DEFAULT
-    pfb["regex_evict_ms"] = REGEX_EVICT_MS_DEFAULT
     pfb["gpListDB"] = False
     pfb["noAAAADB"] = False
     pfb["python_idn"] = False
@@ -1846,17 +1829,20 @@ def init_standard(id: int, env: module_env) -> bool:
 
     regexDB = defaultdict(str)
     allowRegexDB = defaultdict(str)
+    userRegexDB = defaultdict(str)
+    userAllowRegexDB = defaultdict(str)
     psl_rules = PslRules()
-    # ADR-07: clear the runtime warn rate-limit + perf-fallback strike state on a
-    # (re)load so a fresh regex set starts with clean warn/evict bookkeeping.
+    # ADR-07: clear the runtime warn rate-limit on a (re)load so a fresh regex set
+    # starts with clean warn bookkeeping.
     _regex_warned.clear()
-    _regex_perf_strikes.clear()
     # Drop the literal-prefilter index caches so a fresh build occurs on the next
     # query (the new regex dicts are different objects; the identity check would
     # catch this anyway, but releasing the slot here avoids holding the old DB).
-    global _block_regex_index, _allow_regex_index
+    global _block_regex_index, _allow_regex_index, _user_block_regex_index, _user_allow_regex_index
     _block_regex_index = None
     _allow_regex_index = None
+    _user_block_regex_index = None
+    _user_allow_regex_index = None
     whiteDB = defaultdict(str)
     hstsDB = defaultdict(str)
     gpListDB = defaultdict(str)
@@ -1902,8 +1888,8 @@ def init_standard(id: int, env: module_env) -> bool:
             if config.has_option("MAIN", "python_idn_escalate_suspicious"):
                 pfb["python_idn_escalate_suspicious"] = config.getboolean("MAIN", "python_idn_escalate_suspicious")
             # issue #713: config.getint() raises ValueError on a non-integer ini value.
-            # Unlike the regex_warn_ms/regex_evict_ms getfloat reads above (already
-            # guarded), these two getint reads were UNGUARDED -- a malformed
+            # Unlike the regex_warn_ms getfloat read above (already guarded), these
+            # two getint reads were UNGUARDED -- a malformed
             # python_tld_seg/decisiondb_max value threw out of module init and took the
             # whole Unbound Python module down. _parse_ini_int() mirrors the regex_*
             # try/except-ValueError guard; keep the current default on a parse failure,
@@ -1958,18 +1944,13 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["forwarding"] = config.getboolean("MAIN", "forwarding")
 
             # ADR-07: ``regex_cap`` is the opt-in length cap for feed and user patterns;
-            # the shared catastrophic-shape gate and runtime warn/evict are always on.
+            # the shared admission gate and the runtime slow-match warning are always on.
             # Missing settings use cap OFF and the measured runtime defaults.
             if config.has_option("MAIN", "regex_cap"):
                 pfb["regex_cap"] = config.getboolean("MAIN", "regex_cap")
             if config.has_option("MAIN", "regex_warn_ms"):
                 try:
                     pfb["regex_warn_ms"] = config.getfloat("MAIN", "regex_warn_ms")
-                except ValueError:
-                    pass
-            if config.has_option("MAIN", "regex_evict_ms"):
-                try:
-                    pfb["regex_evict_ms"] = config.getfloat("MAIN", "regex_evict_ms")
                 except ValueError:
                     pass
 
@@ -2015,42 +1996,12 @@ def init_standard(id: int, env: module_env) -> bool:
             if pfb["tld_allow"] and pfb["tld_allow_list"]:
                 pfb["python_blacklist"] = True
 
-            # Collect user-defined Regex patterns
-            r_count = 1
-            for name, pattern in _load_user_regex_entries(config):
-                # ADR-07: a catastrophic SHAPE in the un-vetted USER regex
-                # list is dropped at load UNCONDITIONALLY (logged, not compiled).
-                if _regex_is_catastrophic_shape(pattern):
-                    sys.stderr.write(
-                        "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
-                        "on line #{} (catastrophic shape)".format(name, pattern, r_count)
-                    )
-                    r_count += 1
-                    continue
-                if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
-                    sys.stderr.write(
-                        "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
-                        "on line #{} (static length cap)".format(name, pattern, r_count)
-                    )
-                    r_count += 1
-                    continue
-                try:
-                    # ADR-07: a USER regex is SOVEREIGN -- band 5 (user block),
-                    # so it beats feed allows and remains user-owned.
-                    regexDB[name] = {
-                        "re": re.compile(pattern, re.IGNORECASE),
-                        "important": False,
-                        "band": PRIO_USER_BLOCK,
-                    }
-                    pfb["regexDB"] = True
-                    pfb["python_blacklist"] = True
-                except Exception as e:
-                    sys.stderr.write(
-                        "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
-                            name, pattern, r_count, e
-                        )
-                    )
-                r_count += 1
+            # Collect user-defined Regex patterns: the always-on admission gate and the
+            # opt-in length cap apply to this un-vetted list; the list has no rule limit.
+            user_regex = _dnsbl_compile_user_regex(_load_user_regex_entries(config), pfb["regex_cap"])
+            if user_regex:
+                userRegexDB.update(user_regex)
+                pfb["python_blacklist"] = True
 
             # Collect user-defined no AAAA domains
             if config.has_section("noAAAA"):
@@ -2098,13 +2049,15 @@ def init_standard(id: int, env: module_env) -> bool:
                 psl_rules = build_result.psl_rules
                 builtin_log_flag = build_result.builtin_log_flag
 
-                # ADR-07: MERGE the ABP feed block-regex into regexDB, preserving user-regex
-                # patterns compiled from MAIN.regex_list above, and load
-                # the @@/re/ allow-regex into allowRegexDB. Feed regex carry an explicit
-                # band + $important; user regex are the {re, band: PRIO_USER_BLOCK (5)}
-                # payload (sovereign over feed allows -- loaded above).
+                # ADR-07: load the feed block-regex into regexDB and the @@/re/ allow-regex
+                # into allowRegexDB (feed regex carry an explicit band + $important), and the
+                # Custom_List /re/ and @@/re/ rows into userRegexDB / userAllowRegexDB behind
+                # the MAIN.regex_list patterns compiled above (user regex are the {re, band}
+                # payloads PRIO_USER_BLOCK (5) / PRIO_USER_ALLOW (6), sovereign over feed allows).
                 regexDB.update(build_result.regex_db)
                 allowRegexDB.update(build_result.allow_regex_db)
+                userRegexDB.update(build_result.user_regex_db)
+                userAllowRegexDB.update(build_result.user_allow_regex_db)
 
                 pfb["zoneDB"] = bool(zoneDB)
                 pfb["dataDB"] = bool(dataDB)
@@ -2112,9 +2065,10 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["regexDB"] = bool(regexDB)
                 pfb["allowRegexDB"] = bool(allowRegexDB)
                 # The fast path stays byte-identical while important_rules is False; it
-                # flips True only when an ABP $important / feed @@ / feed regex loaded.
-                pfb["important_rules"] = bool(build_result.important_rules)
-                if dataDB or zoneDB or regexDB or allowRegexDB:
+                # flips True only when an ABP $important / feed @@ / feed regex / user regex (Regex List
+                # or Custom_List) loaded.
+                pfb["important_rules"] = bool(build_result.important_rules or userRegexDB)
+                if dataDB or zoneDB or regexDB or allowRegexDB or userRegexDB or userAllowRegexDB:
                     pfb["python_blacklist"] = True
 
                 # Emit pfb_py_count (the LOADED total) that pfb_update_unbound() reads for the UI.
@@ -2137,9 +2091,12 @@ def init_standard(id: int, env: module_env) -> bool:
             # Whitelist/HSTS dicts -- or close their entries when the blacklist gate is off.
             _load_whitelist_and_hsts_dbs(dnsbl_built)
 
-            # Emit the admitted feed + user regex total for PHP's DNSBL_Regex alias,
-            # even when only feed regex is enabled.
-            dnsbl_emit_count(pfb["pfb_py_regex_count"], len(regexDB) + len(allowRegexDB))
+            # Emit the admitted regex total (feed and user, block and allow) for PHP's
+            # DNSBL_Regex alias, even when only feed regex is enabled.
+            dnsbl_emit_count(
+                pfb["pfb_py_regex_count"],
+                len(regexDB) + len(allowRegexDB) + len(userRegexDB) + len(userAllowRegexDB),
+            )
 
             # Validate SQLite3 database connections. A False validate (issue #900)
             # is the corrupt/broken-DB case -- _validate_db_with_recovery deletes
@@ -2177,8 +2134,8 @@ def init_standard(id: int, env: module_env) -> bool:
 
     # ADR-10: BUNDLE the loaded matcher strata into ONE immutable Snapshot and
     # install it through the shared fail-closed rebuild_and_swap(). Up to here init
-    # populated the scratch globals (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/
-    # feedGroupIndexDB/hstsDB) exactly as before -- from the manifest build(), plus
+    # populated the scratch globals (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/userRegexDB/
+    # userAllowRegexDB/feedGroupIndexDB/hstsDB) exactly as before -- from the manifest build(), plus
     # the user REGEX ini and the HSTS file; the
     # ``important_rules`` fast-path gate sits in pfb["important_rules"]. The builder
     # closure wraps those SAME dict objects into a fresh Snapshot (no copy, no shape
@@ -2202,11 +2159,13 @@ def init_standard(id: int, env: module_env) -> bool:
             white_db=whiteDB,
             regex_db=regexDB,
             allow_regex_db=allowRegexDB,
+            user_regex_db=userRegexDB,
+            user_allow_regex_db=userAllowRegexDB,
             feed_group_index_db=feedGroupIndexDB,
             hsts_db=hstsDB,
             important_rules=bool(pfb["important_rules"]),
             counts=len(dataDB) + len(zoneDB),
-            regex_count=len(regexDB) + len(allowRegexDB),
+            regex_count=len(regexDB) + len(allowRegexDB) + len(userRegexDB) + len(userAllowRegexDB),
             psl_rules=psl_rules,
             tld_allow_roots=_selected_tld_roots(pfb.get("tld_allow_list", ())),
             psl_include_private=bool(pfb.get("psl_include_private", True)),
@@ -2295,7 +2254,7 @@ def init_standard(id: int, env: module_env) -> bool:
         "[pfBlockerNG]: init_standard script loaded in {:.1f}s (dnsbl {}, regex {}, whitelist {})".format(
             time.monotonic() - init_started,
             len(dataDB) + len(zoneDB),
-            len(regexDB) + len(allowRegexDB),
+            len(regexDB) + len(allowRegexDB) + len(userRegexDB) + len(userAllowRegexDB),
             len(whiteDB),
         )
     )
@@ -4176,11 +4135,14 @@ class BuildResult:
         white_db[domain]         = {"wildcard": bool, "important": bool, "band": int}
         regex_db[name]           = {"re": <compiled>, "important": bool, "band": int}   (ABP block-regex)
         allow_regex_db[name]     = {"re": <compiled>, "important": bool, "band": int}   (ABP @@/re/ allow-regex)
+        user_regex_db[name]      = {"re": <compiled>, "important": bool, "band": int}   (Custom_List /re/)
+        user_allow_regex_db[name] = {"re": <compiled>, "important": bool, "band": int}  (Custom_List @@/re/)
     ``important_rules`` is the build-emitted fast-path gate (ADR.md SS2): True iff any
     surviving rule needs the numeric 6-band branch (any $important / feed @@ / feed
-    regex). ``counts`` is the LOADED total (len(data_db) + len(zone_db)); init emits
+    regex / loaded user regex). ``counts`` is the LOADED total (len(data_db) + len(zone_db)); init emits
     it as pfb_py_count (its value legitimately rises -- lists are un-pruned).
-    ``regex_count`` is the ADMITTED feed-regex total for the DNSBL_Regex alias (UI).
+    ``regex_count`` is the ADMITTED regex total -- feed and user, block and allow -- for the
+    DNSBL_Regex alias (UI).
     ``rejects`` is the ADR-48 (issue #789) per-entry reject tally -- (feed, group)
     -> {'shape': n, 'wire_cap': m} -- for every domain target a normalise-fail (or
     the reconcile() wire-cap fold-drop) rejected; a diagnostic count, not consumed
@@ -4193,6 +4155,8 @@ class BuildResult:
     feed_group_index_db: dict[int, dict[str, str]]
     white_db: dict[str, dict[str, Any]]
     counts: int
+    user_regex_db: dict[str, dict[str, Any]]
+    user_allow_regex_db: dict[str, dict[str, Any]]
     regex_db: dict[str, dict[str, Any]] = field(default_factory=dict)
     allow_regex_db: dict[str, dict[str, Any]] = field(default_factory=dict)
     important_rules: bool = False
@@ -4234,16 +4198,16 @@ class Snapshot:
     so it is not an immutable swap target. ``rcodeDB``/``maxmindReader`` shape the reply,
     not the block decision, and are likewise out.
 
-    Immutability note (watch-out): the tuple of fields is frozen, but the
-    contained dicts are ordinary dicts. ADR-07's runtime regex eviction still mutates
-    ``regex_db`` in place (``_regex_evict_names`` in ``evaluate_domain``); a swap replaces
-    the whole snapshot with a freshly-compiled set, rebuilding evicted-pattern state from
-    the manifest through the shared admission gates.
+    Immutability note: the tuple of fields is frozen and the contained regex dicts are
+    never mutated at query time (a slow rule is warned about, never removed), so a cached
+    prefilter index over them cannot go stale; a swap replaces the whole snapshot with a
+    freshly-compiled set built through the shared admission gates.
 
     The fields mirror the legacy ``containers`` keys + the ``cfg`` fast-path flag so the
     refactor is byte-for-byte decision-identical (pinned by the retained ADR-06/07
     oracles): ``data_db``->dataDB, ``zone_db``->zoneDB, ``white_db``->whiteDB,
-    ``regex_db``->regexDB, ``allow_regex_db``->allowRegexDB,
+    ``regex_db``->regexDB, ``allow_regex_db``->allowRegexDB, ``user_regex_db``->userRegexDB,
+    ``user_allow_regex_db``->userAllowRegexDB,
     ``feed_group_index_db``->feedGroupIndexDB, ``hsts_db``->hstsDB.
 
     ``rejects`` (ADR-48, issue #789) rides alongside ``counts``/``regex_count`` as
@@ -4257,6 +4221,9 @@ class Snapshot:
     white_db: dict[str, Any]
     regex_db: dict[str, Any]
     allow_regex_db: dict[str, Any]
+    # User regex (MAIN regex_list + Custom_List /re/ and @@/re/), apart from the feed lists above.
+    user_regex_db: dict[str, Any]
+    user_allow_regex_db: dict[str, Any]
     feed_group_index_db: dict[int, Any]
     hsts_db: dict[str, Any]
     important_rules: bool = False
@@ -4293,6 +4260,8 @@ class Snapshot:
             "whiteDB": self.white_db,
             "regexDB": self.regex_db,
             "allowRegexDB": self.allow_regex_db,
+            "userRegexDB": self.user_regex_db,
+            "userAllowRegexDB": self.user_allow_regex_db,
             "feedGroupIndexDB": self.feed_group_index_db,
             "hstsDB": self.hsts_db,
             "psl_rules": self.psl_rules,
@@ -4982,8 +4951,9 @@ class ReconcileResult:
     build() folds these into the matcher dicts + compiles the irreducible regex:
         block_domains            -> dataDB/zoneDB (+band/important/feed/group/log)
         allow_domains            -> whiteDB ({wildcard, important} + band)
-        block_regex_irreducible  -> regexDB     (compiled by _dnsbl_compile_regex_rules())
-        allow_regex_irreducible  -> allowRegexDB (compiled by _dnsbl_compile_regex_rules())
+        block_regex_irreducible  -> regexDB / userRegexDB          (compiled by _dnsbl_compile_regex_rules())
+        allow_regex_irreducible  -> allowRegexDB / userAllowRegexDB (compiled by _dnsbl_compile_regex_rules())
+    (a feed rule goes to the feed container, a ``provenance="user"`` Custom_List rule to the user one)
     ``important_rules`` is the build-emitted fast-path flag (ADR.md SS2 "Query-time
     matcher"): True iff ANY surviving rule would engage the numeric 6-band branch
     (any $important, any feed allow/@@ or feed regex). False keeps today's matcher.
@@ -5131,11 +5101,11 @@ def reconcile(
                     log=r.log,
                 )
             )
-        # NOTE: a user rule alone does NOT force ``important_rules`` -- today's fast
+        # NOTE: a plain user rule alone does NOT force ``important_rules`` -- the fast
         # path already handles a pure user whitelist (important whiteDB) + user
-        # blocks. The flag is about the feed $important/@@/regex the fast
-        # path cannot resolve; once that is set, the numeric branch sees the user
-        # bands (5/6) too.
+        # blocks. The flag is about the feed $important/@@/regex the fast path cannot
+        # resolve; build() also raises it for a loaded user regex, so a user `@@/re/`
+        # beats a plain feed block. Once set, the numeric branch sees bands 5/6 too.
 
     return result
 
@@ -5205,49 +5175,61 @@ def _dnsbl_normalise_whitelist(
 
 
 # ============================================================================ #
-# ADR-07: regex safety (always-on shape gate and runtime guard + opt-in length cap) #
+# ADR-07: regex safety (always-on admission gate, slow-match warnings, opt-in length cap) #
 # ============================================================================ #
 # `re` does not release the GIL during a match and a Python thread cannot be
-# killed, so a query-time timeout CANNOT interrupt a catastrophic match. Bounded
-# residual instead: a pathological pattern's FIRST match may block one query,
-# then it is EVICTED so it cannot hang again. The shared catastrophic-shape gate
-# always rejects unsafe structures at LOAD; the opt-in length cap separately drops
-# over-length patterns. Always-on runtime timing evicts an admitted pattern from
-# the live regexDB/allowRegexDB over an EVICT ceiling (snapshot-iterate,
-# evict-after-loop; dict.pop is atomic under the GIL).
+# killed, so a query-time timeout CANNOT interrupt a runaway match. The defence is
+# therefore static: the shared admission gate refuses at LOAD every pattern outside
+# its bounded grammar, whose bound on backtracking steps (search-tree nodes of one
+# match on a name of at most 253 characters) is over REGEX_COST_MAX, or whose bracket
+# classes list more than REGEX_CLASS_WIDTH_MAX characters (compile time). A pattern the
+# bound counts as anchored only through a leading `.*` / `.+` is compiled behind a written `^`, each
+# such run spelled `(?s:.*)` / `(?s:.*)[^\n]` so that it crosses a newline as an unanchored search does
+# (the compile text of pfb_regex_admission), so the engine itself skips every later start position.
+# There is NO limit on the number of rules: every rule the gate admits loads, in feed lists
+# and in user lists alike, and user regex (MAIN regex_list, Custom_List) live in their own
+# containers (userRegexDB / userAllowRegexDB), scanned before the feed ones. The bound counts
+# steps, not time: measured at about 11-24 ns per step on a desktop CPU, so one admitted rule
+# costs at most ~6 ms there (a slower appliance scales proportionally), and a whole list scan
+# costs the sum of its rules: it grows with the rule count and nothing caps it. An uncached
+# query on the numeric-precedence path scans the block lists twice (discovery, band re-scan)
+# and the allow lists once. At query time each match is timed: a rule over the warn ceiling
+# logs ONE line, and a list scan whose rules sum over the ceiling logs ONE line per list, so a
+# slow whole-list scan is reported in the resolver log. A rule is never removed from the live
+# containers, so a crafted query cannot take one away. The opt-in length cap separately drops
+# over-length patterns.
 #
 # The shared gate and REGEX_STATIC_LEN_CAP live in pfb_dnsbl_regex_rules.py.
 
-# Runtime warn/evict ceilings (milliseconds of per-match thread CPU; measured
-# defaults, ADR.md SS2). Overridable via the pfb_unbound.ini MAIN section
-# (regex_warn_ms / regex_evict_ms) -> cfg, so they are not hardcoded magic.
+# Runtime warn ceiling (milliseconds of per-match thread CPU, and of one list scan in total;
+# measured default, ADR.md SS2). Overridable via the pfb_unbound.ini MAIN section
+# (regex_warn_ms) -> cfg, so it is not hardcoded magic.
 REGEX_WARN_MS_DEFAULT = 10.0
-REGEX_EVICT_MS_DEFAULT = 100.0
 
-# perf_counter fallback needs TWO consecutive over-evict strikes before evicting,
-# so a single wall-clock spike (a descheduled thread) cannot false-evict a good
-# pattern. thread_time is jitter-robust and evicts on the first crossing.
-REGEX_PERF_STRIKES = 2
+# Per-rule refusal lines are limited: the first REGEX_REFUSAL_LOG_MAX of a list are written,
+# the rest are counted into one summary line.
+REGEX_REFUSAL_LOG_MAX = 20
 
 # `time.thread_time` is present on CPython/FreeBSD (CLOCK_THREAD_CPUTIME_ID); fall
-# back to `time.perf_counter` (+ the 2-strike guard) only where it is absent.
+# back to `time.perf_counter` only where it is absent.
 _REGEX_HAVE_THREAD_TIME = hasattr(time, "thread_time")
 
-# Rate-limit the WARN log to one line per pattern name (a slow pattern warns once,
-# not on every query) and track perf_counter strikes per name. Module-level dicts
-# mutated under the GIL; small + bounded by the loaded regex count.
+# Rate-limit the WARN log to one line per rule name and one line per regex list (key
+# "list:<label>"; a rule name is "<feed>#<n>" or a user row name). Module-level set mutated
+# under the GIL; bounded by the loaded regex count. Cleared on every (re)load.
 _regex_warned: set[str] = set()
-_regex_perf_strikes: dict[str, int] = {}
 
 # Single-slot identity cache for the literal-prefilter index (one per scan
 # function).  Each slot is None or (db_ref, buckets, always) where db_ref is the
 # exact dict object of the regex DB, buckets maps first-char -> [(name, literal)],
 # and always is the list of names whose pattern yielded no required literal.  A
-# wholesale snapshot swap changes the dict's identity and triggers a rebuild; an
-# in-place eviction (pop) on the SAME dict does not -- a stale bucket entry for an
-# evicted name is a safe over-inclusion (the regex_db.get(_k) guard skips it).
-_block_regex_index: tuple[dict[str, Any], dict[str, list[tuple[str, str]]], list[str]] | None = None
-_allow_regex_index: tuple[dict[str, Any], dict[str, list[tuple[str, str]]], list[str]] | None = None
+# wholesale snapshot swap changes the dict's identity and triggers a rebuild; the dicts
+# are never mutated at query time, so a cached index cannot go stale.
+_RegexIndex = tuple[dict[str, Any], dict[str, list[tuple[str, str]]], list[str]]
+_block_regex_index: _RegexIndex | None = None
+_allow_regex_index: _RegexIndex | None = None
+_user_block_regex_index: _RegexIndex | None = None
+_user_allow_regex_index: _RegexIndex | None = None
 
 
 def _required_literal(pattern: str) -> str | None:
@@ -5313,8 +5295,7 @@ def _build_regex_index(
     buckets: dict[str, list[tuple[str, str]]] = {}
     always: list[str] = []
     for name, r in regex_db.items():
-        pattern_obj = r.get("re") if isinstance(r, dict) else r
-        raw_pattern: str = pattern_obj.pattern if hasattr(pattern_obj, "pattern") else ""
+        raw_pattern: str = r["re"].pattern
         lit = _required_literal(raw_pattern) if raw_pattern else None
         if lit is None:
             always.append(name)
@@ -5326,13 +5307,28 @@ def _build_regex_index(
     return buckets, always
 
 
+def _regex_candidates(index: _RegexIndex | None, regex_db: dict[str, Any], q_name: str) -> tuple[_RegexIndex, set[str]]:
+    """The literal-prefilter slot ``index`` refreshed for ``regex_db`` (rebuilt when it is a
+    different dict object) and the names of the rules that can match ``q_name``."""
+    if index is None or index[0] is not regex_db:
+        buckets, always = _build_regex_index(regex_db)
+        index = (regex_db, buckets, always)
+    q_lower = q_name.lower()
+    candidates: set[str] = set(index[2])
+    for char in set(q_lower):
+        bucket = index[1].get(char)
+        if bucket:
+            candidates.update(name for name, literal in bucket if literal in q_lower)
+    return index, candidates
+
+
 def _regex_timed_search(pattern: Any, q_name: str) -> tuple[Any, float]:
     """Run ``pattern.search(q_name)`` and return ``(match, elapsed_ms)`` where
     ``elapsed_ms`` is per-thread CPU time (``time.thread_time``) when available, else
     wall clock (``time.perf_counter``). Thread CPU is jitter-robust: a thread merely
     descheduled under load does not inflate the measurement, so a good pattern is not
-    false-evicted. NO timeout is attempted -- a match cannot be interrupted (fact 2);
-    this only MEASURES so the caller can warn/evict AFTER the (first) match returns."""
+    reported as slow. NO timeout is attempted -- a match cannot be interrupted (fact 2);
+    this only MEASURES so the caller can warn AFTER the match returns."""
     if _REGEX_HAVE_THREAD_TIME:
         start = time.thread_time()
         match = pattern.search(q_name)
@@ -5344,55 +5340,84 @@ def _regex_timed_search(pattern: Any, q_name: str) -> tuple[Any, float]:
     return match, elapsed_ms
 
 
-def _regex_should_evict(name: str, elapsed_ms: float, warn_ms: float, evict_ms: float, group: str, feed: Any) -> bool:
-    """Apply the runtime warn/evict policy for ONE match of pattern ``name`` that took
-    ``elapsed_ms``. Logs a rate-limited warning over ``warn_ms`` (once per name) and
-    returns True when the pattern should be EVICTED (over ``evict_ms``). With
-    ``time.thread_time`` an over-evict crossing evicts on the FIRST hit; on the
-    perf_counter fallback it requires ``REGEX_PERF_STRIKES`` consecutive crossings so
-    a lone wall-clock spike cannot false-evict. The caller collects names to evict and
-    pops them AFTER the scan loop (snapshot-iterate; never mutate mid-iteration)."""
-    if elapsed_ms <= warn_ms:
-        # A fast match clears any accumulated perf-fallback strike streak.
-        if not _REGEX_HAVE_THREAD_TIME:
-            _regex_perf_strikes.pop(name, None)
-        return False
-
-    if elapsed_ms <= evict_ms:
-        if name not in _regex_warned:
-            _regex_warned.add(name)
-            sys.stderr.write(
-                "[pfBlockerNG]: slow {} regex [ {} ] feed [ {} ] took {:.1f} ms (warn ceiling {:.1f} ms)".format(
-                    group, name, feed, elapsed_ms, warn_ms
-                )
-            )
-        if not _REGEX_HAVE_THREAD_TIME:
-            _regex_perf_strikes.pop(name, None)
-        return False
-
-    # Over the EVICT ceiling.
-    if not _REGEX_HAVE_THREAD_TIME:
-        strikes = _regex_perf_strikes.get(name, 0) + 1
-        _regex_perf_strikes[name] = strikes
-        if strikes < REGEX_PERF_STRIKES:
-            return False
-        _regex_perf_strikes.pop(name, None)
-
+def _regex_warn_slow(name: str, elapsed_ms: float, warn_ms: float, label: str) -> None:
+    """Log ONE warning per rule when a match of rule ``name`` of the list ``label`` took
+    ``elapsed_ms``, over ``warn_ms``. Rule names repeat across lists, so a rule is known by its
+    list and its name. Warn only: the rule stays loaded, because every admitted rule has a
+    static bound on its work and removing one at query time would only let a crafted
+    query take that rule away."""
+    key = f"{label}:{name}"
+    if elapsed_ms <= warn_ms or key in _regex_warned:
+        return
+    _regex_warned.add(key)
     sys.stderr.write(
-        "[pfBlockerNG]: EVICTING {} regex [ {} ] feed [ {} ] -- match took {:.1f} ms (evict ceiling {:.1f} ms); "
-        "it will no longer be evaluated".format(group, name, feed, elapsed_ms, evict_ms)
+        "[pfBlockerNG]: slow {} regex [ {} ] took {:.1f} ms (warn ceiling {:.1f} ms)\n".format(
+            label, name, elapsed_ms, warn_ms
+        )
     )
-    _regex_warned.discard(name)
-    return True
 
 
-def _regex_evict_names(db: dict[str, Any], names: Iterable[str]) -> None:
-    """Pop evicted pattern keys from a live regex DB AFTER the scan loop. ``dict.pop``
-    is atomic under the GIL, so this is safe even though the matcher runs across many
-    Unbound query threads; the scan iterates a SNAPSHOT (list(...)) so this never
-    mutates a dict mid-iteration (ADR.md fact 3)."""
-    for name in names:
-        db.pop(name, None)
+class _RegexScan:
+    """One pass over one regex list: times every match, warns per slow rule, and ``report``
+    writes the ONE per-list line (per load) when the rules of the pass summed over the warn
+    ceiling, naming the number of rules timed and the slowest. A pass that stops on its first
+    match reports what it timed. ``group`` is the DNSBL group of the list; a user list is
+    labelled apart from the feed list of the same group, and warns for its rules apart too."""
+
+    __slots__ = ("label", "rules", "slowest", "slowest_ms", "total_ms", "warn_ms")
+
+    def __init__(self, group: str, warn_ms: float, *, user: bool = False) -> None:
+        # The label names the list: it keys the per-rule and the per-list warnings.
+        self.label = "user " + group if user else group
+        self.warn_ms = warn_ms
+        self.rules = 0
+        self.total_ms = 0.0
+        self.slowest = ""
+        self.slowest_ms = 0.0
+
+    def search(self, name: str, rule: Any, q_name: str) -> Any:
+        """Time the ``{"re", ...}`` payload ``rule`` on ``q_name``."""
+        match, elapsed_ms = _regex_timed_search(rule["re"], q_name)
+        _regex_warn_slow(name, elapsed_ms, self.warn_ms, self.label)
+        self.rules += 1
+        self.total_ms += elapsed_ms
+        if elapsed_ms > self.slowest_ms:
+            self.slowest, self.slowest_ms = name, elapsed_ms
+        return match
+
+    def report(self) -> None:
+        key = "list:" + self.label
+        if self.total_ms <= self.warn_ms or key in _regex_warned:
+            return
+        _regex_warned.add(key)
+        sys.stderr.write(
+            "[pfBlockerNG]: slow {} regex list scan took {:.1f} ms over {} rules (warn ceiling {:.1f} ms); "
+            "slowest [ {} ] {:.1f} ms\n".format(
+                self.label, self.total_ms, self.rules, self.warn_ms, self.slowest, self.slowest_ms
+            )
+        )
+
+
+class _RefusalLog:
+    """The refusal lines of one regex list: the first REGEX_REFUSAL_LOG_MAX are written, the rest are
+    counted into the one summary line ``summarize`` writes."""
+
+    __slots__ = ("logged", "suppressed")
+
+    def __init__(self) -> None:
+        self.logged = 0
+        self.suppressed = 0
+
+    def write(self, line: str) -> None:
+        if self.logged < REGEX_REFUSAL_LOG_MAX:
+            self.logged += 1
+            sys.stderr.write(line + "\n")
+        else:
+            self.suppressed += 1
+
+    def summarize(self, kind: str) -> None:
+        if self.suppressed:
+            sys.stderr.write("[pfBlockerNG]: {} more refused {} regex rules not logged\n".format(self.suppressed, kind))
 
 
 def _dnsbl_compile_regex_rules(
@@ -5404,47 +5429,97 @@ def _dnsbl_compile_regex_rules(
 
     Returns ``(db, admitted)`` where ``db[name] = {"re": <compiled>, "important":
     bool, "band": int}`` and ``admitted`` is the count of patterns that compiled.
-    A pattern that fails ``re.compile`` is logged and skipped (mirrors the init REGEX
-    load) -- it never aborts the build. Names are unique per pattern occurrence so two
-    feeds carrying the same pattern both load.
+    A pattern that fails ``re.compile`` for any reason is logged and skipped (mirrors
+    the init REGEX load) -- it never aborts the build. Names are unique per pattern
+    occurrence so two feeds carrying the same pattern both load.
 
-    ADR-07: the always-on shared catastrophic-shape gate rejects unsafe patterns;
-    ``static_cap`` separately enables the opt-in length cap.
+    ADR-07: the always-on shared admission gate refuses patterns outside its bounded
+    grammar; ``static_cap`` separately enables the opt-in length cap. One call is one
+    list, and every rule that passes loads: there is no limit on the number of rules or
+    on their summed cost. At most REGEX_REFUSAL_LOG_MAX per-rule refusal lines (gate, length
+    cap, compile error) are written per call; the rest are counted into one summary line.
     """
     db: dict[str, dict[str, Any]] = {}
     admitted = 0
     seq = 0
+    log = _RefusalLog()
+    kind = ""
     for rule in regex_rules:
-        if _regex_is_catastrophic_shape(rule.pattern):
-            sys.stderr.write(
-                "[pfBlockerNG]: dropping pathological {} regex feed [ {} ] pattern [ {} ] (catastrophic shape)".format(
-                    rule.kind, rule.feed, rule.pattern
+        kind = rule.kind
+        _cost, refusal, compile_text = pfb_regex_admission(rule.pattern)
+        failure: str | None = None
+        if refusal is not None:
+            failure = "[pfBlockerNG]: dropping {} regex feed [ {} ] pattern [ {} ] ({})".format(
+                rule.kind, rule.feed, pfb_regex_excerpt(rule.pattern), refusal
+            )
+        elif static_cap and len(rule.pattern) > REGEX_STATIC_LEN_CAP:
+            failure = (
+                "[pfBlockerNG]: dropping over-length {} regex feed [ {} ] pattern [ {} ] (static length cap)".format(
+                    rule.kind, rule.feed, pfb_regex_excerpt(rule.pattern)
+                )
+            )
+        else:
+            try:
+                compiled = re.compile(compile_text, re.IGNORECASE)
+            except Exception as e:
+                failure = "[pfBlockerNG]: ABP regex compile error feed [ {} ] pattern [ {} ]: {} {}".format(
+                    rule.feed, pfb_regex_excerpt(rule.pattern), type(e).__name__, pfb_regex_excerpt(str(e))
+                )
+            else:
+                # Key by feed + a per-build sequence so identical patterns from different
+                # feeds (or the same feed) do not collide and each keeps its own warn
+                # rate-limit (P7).
+                name = "{}#{}".format(rule.feed or "DNSBL", seq)
+                seq += 1
+                db[name] = {"re": compiled, "important": rule.important, "band": rule.band}
+                admitted += 1
+        if failure is not None:
+            log.write(failure)
+    log.summarize(kind)
+    return db, admitted
+
+
+def _dnsbl_compile_user_regex(entries: Iterable[tuple[str, str]], regex_cap: bool) -> dict[str, dict[str, Any]]:
+    """Compile admin-owned ``MAIN.regex_list`` rows into band-5 (user block) regex-DB entries.
+
+    Both user-regex load sites (init and the zero-downtime swap) share this: the always-on
+    admission gate, then the opt-in length cap (``regex_cap``), then ``re.compile``. A row
+    that fails any step is skipped and logged by excerpt with its 1-based row number; like a
+    feed list, at most REGEX_REFUSAL_LOG_MAX such lines are written per call and the rest are
+    counted into one summary line. There is no limit on the number of rows."""
+    db: dict[str, dict[str, Any]] = {}
+    log = _RefusalLog()
+    for r_count, (name, pattern) in enumerate(entries, start=1):
+        _cost, refusal, compile_text = pfb_regex_admission(pattern)
+        if refusal is not None:
+            log.write(
+                "[pfBlockerNG]: dropping user regex [ {} ] pattern [ {} ] on line #{} ({})".format(
+                    name, pfb_regex_excerpt(pattern), r_count, refusal
                 )
             )
             continue
-        if static_cap and len(rule.pattern) > REGEX_STATIC_LEN_CAP:
-            sys.stderr.write(
-                "[pfBlockerNG]: dropping over-length {} regex feed [ {} ] pattern [ {} ] (static length cap)".format(
-                    rule.kind, rule.feed, rule.pattern
-                )
+        if regex_cap and len(pattern) > REGEX_STATIC_LEN_CAP:
+            log.write(
+                "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
+                "on line #{} (static length cap)".format(name, pfb_regex_excerpt(pattern), r_count)
             )
             continue
         try:
-            compiled = re.compile(rule.pattern, re.IGNORECASE)
-        except re.error as e:
-            sys.stderr.write(
-                "[pfBlockerNG]: ABP regex compile error feed [ {} ] pattern [ {} ]: {}".format(
-                    rule.feed, rule.pattern, e
+            # ADR-07: a USER regex is SOVEREIGN -- band 5 (user block), so it beats feed
+            # allows and remains user-owned.
+            db[name] = {
+                "re": re.compile(compile_text, re.IGNORECASE),
+                "important": False,
+                "band": PRIO_USER_BLOCK,
+            }
+        except Exception as e:
+            log.write(
+                "[pfBlockerNG]: Regex [ {} ] compile error pattern [ {} ] on line #{}: {} {}".format(
+                    name, pfb_regex_excerpt(pattern), r_count, type(e).__name__, pfb_regex_excerpt(str(e))
                 )
             )
-            continue
-        # Key by feed + a per-build sequence so identical patterns from different feeds
-        # (or the same feed) do not collide and each is independently evictable (P7).
-        name = "{}#{}".format(rule.feed or "DNSBL", seq)
-        seq += 1
-        db[name] = {"re": compiled, "important": rule.important, "band": rule.band}
-        admitted += 1
-    return db, admitted
+    log.summarize("user")
+    return db
 
 
 def build(
@@ -5695,6 +5770,8 @@ def build(
     # ---- Stage-B reconcile + Stage-C emit for the ABP rule stream -------------- #
     regex_db: dict[str, dict[str, Any]] = {}
     allow_regex_db: dict[str, dict[str, Any]] = {}
+    user_regex_db: dict[str, dict[str, Any]] = {}
+    user_allow_regex_db: dict[str, dict[str, Any]] = {}
     important_rules = permit_allow_inserted
     regex_count = 0
     if abp_rules:
@@ -5745,16 +5822,24 @@ def build(
                     "band": a.band,
                 }
 
-        # Irreducible regex -> regexDB (block) / allowRegexDB (allow). Compile here;
+        # Irreducible regex -> regexDB (feed block) / allowRegexDB (feed allow) and, for a
+        # user Custom_List row, userRegexDB / userAllowRegexDB. Compile here;
         # a broken pattern is logged + skipped, mirroring the MAIN.regex_list init load.
-        # The runtime warn/evict guard (ADR-07)
-        # applies later, at query time in evaluate_domain, not during this compile.
+        # The runtime slow-match warning (ADR-07) applies later, at query time in
+        # evaluate_domain, not during this compile.
         # Iterate over a stable list so the emit order is deterministic.
-        regex_db, block_admitted = _dnsbl_compile_regex_rules(result.block_regex_irreducible, static_cap=static_cap)
-        allow_regex_db, allow_admitted = _dnsbl_compile_regex_rules(
-            result.allow_regex_irreducible, static_cap=static_cap
-        )
-        regex_count = block_admitted + allow_admitted
+        feed_block = [rule for rule in result.block_regex_irreducible if rule.provenance != RULE_PROV_USER]
+        user_block = [rule for rule in result.block_regex_irreducible if rule.provenance == RULE_PROV_USER]
+        feed_allow = [rule for rule in result.allow_regex_irreducible if rule.provenance != RULE_PROV_USER]
+        user_allow = [rule for rule in result.allow_regex_irreducible if rule.provenance == RULE_PROV_USER]
+        regex_db, feed_block_admitted = _dnsbl_compile_regex_rules(feed_block, static_cap=static_cap)
+        allow_regex_db, feed_allow_admitted = _dnsbl_compile_regex_rules(feed_allow, static_cap=static_cap)
+        user_regex_db, user_block_admitted = _dnsbl_compile_regex_rules(user_block, static_cap=static_cap)
+        user_allow_regex_db, user_allow_admitted = _dnsbl_compile_regex_rules(user_allow, static_cap=static_cap)
+        regex_count = feed_block_admitted + feed_allow_admitted + user_block_admitted + user_allow_admitted
+        # A loaded user regex needs the numeric precedence path: the fast path never reads the
+        # allow-regex lists, so a user `@@/re/` could not override a plain feed block there.
+        important_rules = important_rules or bool(user_regex_db) or bool(user_allow_regex_db)
 
     return BuildResult(
         data_db=data_db,
@@ -5764,6 +5849,8 @@ def build(
         counts=len(data_db) + len(zone_db),
         regex_db=regex_db,
         allow_regex_db=allow_regex_db,
+        user_regex_db=user_regex_db,
+        user_allow_regex_db=user_allow_regex_db,
         important_rules=important_rules,
         regex_count=regex_count,
         rejects=rejects,
@@ -6247,13 +6334,11 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     _snapshot = new_snapshot
     decisionDB.clear()
     # #714 FIX #2: a swap installs a brand-new regex_db/allow_regex_db, so the runtime
-    # warn-suppression + perf-fallback strike bookkeeping keyed on pattern NAME must not
-    # survive it -- a name reused across reloads (a re-added or edited rule) would
-    # otherwise inherit stale strikes/suppression from the OLD pattern object. Mirrors
-    # the init_standard clear (ADR-07) so a no-restart swap resets the same state a
-    # restart would.
+    # warn-suppression bookkeeping keyed on pattern NAME must not survive it -- a name
+    # reused across reloads (a re-added or edited rule) would otherwise inherit stale
+    # suppression from the OLD pattern object. Mirrors the init_standard clear (ADR-07)
+    # so a no-restart swap resets the same state a restart would.
     _regex_warned.clear()
-    _regex_perf_strikes.clear()
     # ADR-10: refresh the MASTER DNSBL gate from the new snapshot, parity with init
     # (init sets pfb["python_blacklist"] True when any blocking stratum loaded -- line
     # ~1061). operate() gates ALL DNSBL evaluation on this flag; it is otherwise written
@@ -6262,7 +6347,14 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     # newly-swapped lists would never block. Mirror init: enable when the new snapshot has
     # any block/allow stratum. (A python_control runtime disable re-clears it afterwards;
     # a reload that brings lists legitimately re-enables blocking, exactly as init does.)
-    if new_snapshot.data_db or new_snapshot.zone_db or new_snapshot.regex_db or new_snapshot.allow_regex_db:
+    if (
+        new_snapshot.data_db
+        or new_snapshot.zone_db
+        or new_snapshot.regex_db
+        or new_snapshot.allow_regex_db
+        or new_snapshot.user_regex_db
+        or new_snapshot.user_allow_regex_db
+    ):
         pfb["python_blacklist"] = True
     # Issue #862 (sibling of #860): a swap that NEWLY satisfies _dnsbl_stats_wanted()
     # -- python_blacklist just flipped True above (feeds added post-boot, no Unbound
@@ -6533,7 +6625,7 @@ class _LruCache:
 #   6 user allow   5 user block   4 feed allow+important
 #   3 feed block+important   2 feed allow (@@)   1 feed block (||)
 # The numeric resolution engages whenever important_rules is True: a feed @@ allow
-# (reconcile, ~line 4095), a feed regex, or a permit-feed allow insertion (ADR-31 §2.2.3,
+# (reconcile, ~line 4095), a feed regex, a loaded user regex, or a permit-feed allow insertion (ADR-31 §2.2.3,
 # permit_allow_inserted in build()). Otherwise the fast path runs (any whiteDB hit
 # overrides any block). USER blocks (Custom_List, provenance='user') emit at band 5 in
 # build(); feed blocks at band 1 (3 with $important).
@@ -6562,20 +6654,44 @@ def _allow_priority(important: bool, *, user: bool = False) -> int:
     return PRIO_FEED_ALLOW_IMPORTANT if important else PRIO_FEED_ALLOW
 
 
-def _block_entry_band(entry: Any) -> int:
-    """Numeric band of a block payload (dataDB / zoneDB / regexDB value).
+def _block_entry_band(entry: dict[str, Any]) -> int:
+    """Numeric band of a block payload (dataDB / zoneDB / regexDB value): its ``band``
+    (ABP feed/user block, 1/3/5)."""
+    band: int = entry["band"]
+    return band
 
-    A payload carries an explicit ``band`` (ABP feed/user block, 1/3/5); a payload
-    without one is the historical feed block and is derived from its ``important``
-    flag (band 3 if $important, else feed block band 1) -- so a synthetic strata-test
-    payload (no ``band`` key) still resolves to the right band. A bare compiled
-    pattern (legacy/user regex) is a non-important feed block (band 1)."""
-    if isinstance(entry, dict):
-        band = entry.get("band")
-        if isinstance(band, int):
-            return band
-        return _block_priority(bool(entry.get("important", False)))
-    return PRIO_FEED_BLOCK
+
+def _best_block_regex(
+    regex_db: dict[str, Any],
+    candidates: Iterable[str],
+    q_name: str,
+    scan: _RegexScan,
+    best: int,
+    best_meta: dict[str, Any] | None,
+) -> tuple[int, dict[str, Any] | None]:
+    """Fold the matching rules among ``candidates`` of one block-regex list into
+    ``(best, best_meta)``: a rule replaces the holder only with a strictly higher band."""
+    for key in candidates:
+        rule = regex_db[key]
+        if scan.search(key, rule, q_name):
+            band = _block_entry_band(rule)
+            if band > best:
+                best, best_meta = band, {"kind": "regex", "key": key}
+    scan.report()
+    return best, best_meta
+
+
+def _best_allow_regex(
+    allow_regex_db: dict[str, Any], candidates: Iterable[str], q_name: str, scan: _RegexScan, best: int
+) -> int:
+    """The highest allow band among the matching rules of ``candidates`` of one allow-regex
+    list and ``best``."""
+    for key in candidates:
+        rule = allow_regex_db[key]
+        if scan.search(key, rule, q_name):
+            best = max(best, rule["band"])
+    scan.report()
+    return best
 
 
 def _scan_block_band(
@@ -6584,9 +6700,11 @@ def _scan_block_band(
     data_db: dict[str, Any],
     zone_db: dict[str, Any],
     regex_db: dict[str, Any],
+    user_regex_db: dict[str, Any],
 ) -> tuple[int, dict[str, Any] | None]:
     """Highest block band that matches ``q_name`` across dataDB (exact), zoneDB (the
-    suffix walk) and the block-regex DB, AND the winning entry that carries it.
+    suffix walk) and the block-regex DBs (the user list, then the feed list), AND the
+    winning entry that carries it.
 
     Returns ``(best_band, best_meta)``: ``best_band`` is the max matching band (0 if
     none match), and ``best_meta`` describes the entry whose band IS that max so the
@@ -6601,10 +6719,10 @@ def _scan_block_band(
 
     ``None`` when nothing matched. The numeric 6-band resolution takes the max block
     band (decide() semantics) -- the fast-path discovery short-circuits on the first
-    hit, which is wrong for the max. Snapshot-iterates the regex DB (eviction
-    safety). On a tie the first scanned kind (data -> zone -> regex) holds best_meta,
-    but the caller only re-attributes when this band strictly exceeds the discovered
-    one, so a tie never disturbs the discovered attribution."""
+    hit, which is wrong for the max. On a tie the first scanned kind (data -> zone ->
+    regex) holds best_meta -- the user regex list before the feed one -- but the caller only
+    re-attributes when this band strictly exceeds the discovered one, so a tie never disturbs
+    the discovered attribution."""
     best = 0
     best_meta: dict[str, Any] | None = None
     if cfg.get("dataDB"):
@@ -6620,100 +6738,58 @@ def _scan_block_band(
                 band = _block_entry_band(entry)
                 if band > best:
                     best, best_meta = band, {"kind": "zone", "entry": entry, "matched": q}
-    if cfg.get("regexDB") and q_name:
+    if q_name:
         # Literal-prefilter: build (or reuse) a first-char bucket index so only rules
         # whose required literal substring is present in the query reach re.search.
         # A necessary-condition guard -- a rule whose literal is absent cannot match,
         # so skipping its re.search changes no decision.  Rules with no extractable
         # literal (pure alternation, complex anchors) are always-run.  The full
         # re.search still runs on the ORIGINAL q_name (not the lowercased form used
-        # for the membership test), so case handling is unchanged.  The warn/evict
-        # ReDoS guard is unaffected: a slow rule is still timed and evicted on the
-        # queries where it actually runs.
-        global _block_regex_index
-        if _block_regex_index is None or _block_regex_index[0] is not regex_db:
-            _buckets, _always = _build_regex_index(regex_db)
-            _block_regex_index = (regex_db, _buckets, _always)
-        _bi_buckets, _bi_always = _block_regex_index[1], _block_regex_index[2]
-        q_lower = q_name.lower()
-        cand: set[str] = set(_bi_always)
-        for _ch in set(q_lower):
-            _b = _bi_buckets.get(_ch)
-            if _b:
-                for _name, _lit in _b:
-                    if _lit in q_lower:
-                        cand.add(_name)
-        # Snapshot-iterate + time each match (ADR-07), same warn/evict policy as the
-        # fast-path discovery scan; collect evicted names and pop AFTER the loop.
+        # for the membership test), so case handling is unchanged.  The slow-match
+        # warning is unaffected: a slow rule is still timed on the queries where it
+        # actually runs.
+        global _block_regex_index, _user_block_regex_index
+        # Time each match (ADR-07): a rule over the warn ceiling logs once, a list over it in
+        # total logs once, the same policy as the fast-path discovery scan; no rule is removed
+        # from the live DBs.
         warn_ms = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
-        evict_ms = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
-        to_evict: list[str] = []
-        for _k in cand:
-            r = regex_db.get(_k)
-            if r is None:  # evicted since the index was built -> skip (safe)
-                continue
-            pattern = r.get("re") if isinstance(r, dict) else r
-            match, elapsed_ms = _regex_timed_search(pattern, q_name)
-            if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_Regex", _k):
-                to_evict.append(_k)
-                continue
-            if match:
-                band = _block_entry_band(r)
-                if band > best:
-                    best, best_meta = band, {"kind": "regex", "key": _k}
-        if to_evict:
-            _regex_evict_names(regex_db, to_evict)
+        if cfg["userRegexDB"]:
+            _user_block_regex_index, candidates = _regex_candidates(_user_block_regex_index, user_regex_db, q_name)
+            best, best_meta = _best_block_regex(
+                user_regex_db, candidates, q_name, _RegexScan("DNSBL_Regex", warn_ms, user=True), best, best_meta
+            )
+        if cfg["regexDB"]:
+            _block_regex_index, candidates = _regex_candidates(_block_regex_index, regex_db, q_name)
+            best, best_meta = _best_block_regex(
+                regex_db, candidates, q_name, _RegexScan("DNSBL_Regex", warn_ms), best, best_meta
+            )
     return best, best_meta
 
 
 def _scan_allow_regex_band(
     q_name: str,
     allow_regex_db: dict[str, Any],
+    user_allow_regex_db: dict[str, Any],
     warn_ms: float = REGEX_WARN_MS_DEFAULT,
-    evict_ms: float = REGEX_EVICT_MS_DEFAULT,
 ) -> int:
-    """Highest allow band over the allow-regex (@@/re/) entries that match ``q_name``;
-    0 if none match. Values mirror regexDB's tolerant shape: a bare compiled pattern,
-    or a {"re", "important", "band"} payload. Iterates a SNAPSHOT (list(...)) and TIMES
-    each match (ADR-07): over the warn ceiling logs once, over the evict ceiling is
-    removed from the live allow-regex DB AFTER the loop (snapshot-iterate, evict-after-
-    loop -- the same warn/evict policy as the block-regex scans; fact 3)."""
+    """Highest allow band over the allow-regex (@@/re/) entries -- the user list, then the feed
+    list -- that match ``q_name``; 0 if none match. Every value is a {"re", "important",
+    "band"} payload. TIMES each match (ADR-07): over the warn ceiling logs once, and so does a
+    list over it in total; no rule is ever removed from the live allow-regex DBs."""
     if not q_name:
         return 0
     # Literal-prefilter: same necessary-condition guard as _scan_block_band (see
-    # that function's comment).  Separate cache slot keyed to allow_regex_db's identity.
-    global _allow_regex_index
-    if _allow_regex_index is None or _allow_regex_index[0] is not allow_regex_db:
-        _ai_buckets, _ai_always = _build_regex_index(allow_regex_db)
-        _allow_regex_index = (allow_regex_db, _ai_buckets, _ai_always)
-    _ai_buckets, _ai_always = _allow_regex_index[1], _allow_regex_index[2]
-    q_lower = q_name.lower()
-    cand: set[str] = set(_ai_always)
-    for _ch in set(q_lower):
-        _b = _ai_buckets.get(_ch)
-        if _b:
-            for _name, _lit in _b:
-                if _lit in q_lower:
-                    cand.add(_name)
+    # that function's comment).  Separate cache slots keyed to each list's dict identity.
+    global _allow_regex_index, _user_allow_regex_index
     best = 0
-    to_evict: list[str] = []
-    for _k in cand:
-        r = allow_regex_db.get(_k)
-        if r is None:  # evicted since the index was built -> skip (safe)
-            continue
-        pattern = r.get("re") if isinstance(r, dict) else r
-        match, elapsed_ms = _regex_timed_search(pattern, q_name)
-        if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_AllowRegex", _k):
-            to_evict.append(_k)
-            continue
-        if match:
-            important = bool(r.get("important", False)) if isinstance(r, dict) else False
-            band = r.get("band") if isinstance(r, dict) else None
-            if not isinstance(band, int):
-                band = _allow_priority(important)
-            best = max(best, band)
-    if to_evict:
-        _regex_evict_names(allow_regex_db, to_evict)
+    if user_allow_regex_db:
+        _user_allow_regex_index, candidates = _regex_candidates(_user_allow_regex_index, user_allow_regex_db, q_name)
+        best = _best_allow_regex(
+            user_allow_regex_db, candidates, q_name, _RegexScan("DNSBL_AllowRegex", warn_ms, user=True), best
+        )
+    if allow_regex_db:
+        _allow_regex_index, candidates = _regex_candidates(_allow_regex_index, allow_regex_db, q_name)
+        best = _best_allow_regex(allow_regex_db, candidates, q_name, _RegexScan("DNSBL_AllowRegex", warn_ms), best)
     return best
 
 
@@ -6742,6 +6818,19 @@ def whitelist_lookup_band(name: str, white_db: dict[str, Any], tld_seg: int) -> 
     return best
 
 
+def _first_regex_match(regex_db: dict[str, Any], q_name: str, scan: _RegexScan) -> tuple[str, Any] | None:
+    """The first rule of one block-regex list that matches ``q_name`` as ``(name, payload)``,
+    or ``None``. The pass is timed through ``scan`` and reports what it timed even when it
+    stops on the match."""
+    found = None
+    for key, rule in regex_db.items():
+        if scan.search(key, rule, q_name):
+            found = (key, rule)
+            break
+    scan.report()
+    return found
+
+
 def _resolve_numeric_allow(
     q_name: str,
     q_name_original: str,
@@ -6749,6 +6838,7 @@ def _resolve_numeric_allow(
     cfg: dict[str, Any],
     white_db: dict[str, Any],
     allow_regex_db: dict[str, Any],
+    user_allow_regex_db: dict[str, Any],
     block_band: int,
 ) -> bool:
     """Numeric 6-band resolution (ADR.md SS2): return True iff an ALLOW overrides the
@@ -6756,10 +6846,10 @@ def _resolve_numeric_allow(
     downstream hsts/null-blocking logic is shared with the fast path.
 
     A block always matched here (the caller gates on ``is_found``); ``block_band`` is
-    its highest matching band (computed by the caller over data/zone/block-regex).
+    its highest matching band (computed by the caller over data/zone/user + feed block-regex).
     Blocked iff ``block_band > allow_band``; with no allow match ``allow_band`` is 0
     so the block stands. Engaged only when ``important_rules`` is True (an ABP
-    $important / feed @@ / feed regex was loaded); proven against the 6-band precedence
+    $important / feed @@ / feed regex / user regex was loaded); proven against the 6-band precedence
     table by synthetic-payload unit tests and the production ABP equivalence tests.
     """
     allow_band = 0
@@ -6768,14 +6858,14 @@ def _resolve_numeric_allow(
         for n in names:
             allow_band = max(allow_band, whitelist_lookup_band(n, white_db, cfg["python_tld_seg"]))
 
-    if cfg.get("allowRegexDB", False):
+    if cfg["userAllowRegexDB"] or cfg["allowRegexDB"]:
         allow_band = max(
             allow_band,
             _scan_allow_regex_band(
                 q_name,
                 allow_regex_db,
+                user_allow_regex_db,
                 cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT),
-                cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT),
             ),
         )
 
@@ -6879,7 +6969,9 @@ def evaluate_domain(
     zone_db: dict[str, Any] = containers["zoneDB"]
     white_db: dict[str, Any] = containers["whiteDB"]
     regex_db: dict[str, Any] = containers["regexDB"]
-    allow_regex_db: dict[str, Any] = containers.get("allowRegexDB", {})
+    allow_regex_db: dict[str, Any] = containers["allowRegexDB"]
+    user_regex_db: dict[str, Any] = containers["userRegexDB"]
+    user_allow_regex_db: dict[str, Any] = containers["userAllowRegexDB"]
     feed_group_index_db: dict[int, Any] = containers["feedGroupIndexDB"]
     hsts_db: dict[str, Any] = containers["hstsDB"]
 
@@ -6979,32 +7071,27 @@ def evaluate_domain(
                     )
                 # IDN_ACT_NONE (legit, or a non-xn-- name) -> no IDN action, resolves.
 
-        if not is_found and cfg["regexDB"] and q_name:
-            # Snapshot-iterate (list(...)) so the runtime eviction can mutate the live
-            # regexDB without corrupting this scan (fact 3). Each match is TIMED (per-
-            # thread CPU); a pattern over the warn ceiling logs once, over the evict
-            # ceiling is removed from the live DB AFTER the loop -- so it cannot hang
-            # twice (the accepted residual is the single slow first-hit; fact 2).
+        if not is_found and q_name:
+            # User block-regex first, then the feed list. Each match is TIMED (per-thread CPU);
+            # a pattern over the warn ceiling logs once, and so does a list over it in total.
+            # Every admitted rule has a static bound on its work, so a slow measurement is
+            # reported and never acted on: no rule is removed from the live DB.
             warn_ms = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
-            evict_ms = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
-            to_evict: list[str] = []
-            for k, r in list(regex_db.items()):
-                # regexDB values may be a bare compiled pattern (today / user-regex) or
-                # a {"re", "important", "band"} payload (ABP feed block-regex). Read
-                # both shapes; the bare-pattern path is byte-identical to today.
-                pattern = r.get("re") if isinstance(r, dict) else r
-                match, elapsed_ms = _regex_timed_search(pattern, q_name)
-                if _regex_should_evict(k, elapsed_ms, warn_ms, evict_ms, "DNSBL_Regex", k):
-                    to_evict.append(k)
+            # Every list value is a {"re", "important", "band"} payload (feed or Custom_List
+            # block-regex, or a MAIN regex_list row).
+            for regex_list, loaded, is_user in (
+                (user_regex_db, cfg["userRegexDB"], True),
+                (regex_db, cfg["regexDB"], False),
+            ):
+                if not loaded:
                     continue
-                if match:
+                hit = _first_regex_match(regex_list, q_name, _RegexScan("DNSBL_Regex", warn_ms, user=is_user))
+                if hit is not None:
                     is_found = True
-                    feed = k
+                    feed = hit[0]
                     group = "DNSBL_Regex"
-                    block_band = _block_entry_band(r)
+                    block_band = _block_entry_band(hit[1])
                     break
-            if to_evict:
-                _regex_evict_names(regex_db, to_evict)
 
         if is_found:
             b_eval = q_name
@@ -7028,7 +7115,7 @@ def evaluate_domain(
                 names = [q_name] + ([q_name_original] if is_cname else [])
                 in_whitelist = any(whitelist_check_domain(n, white_db, cfg["python_tld_seg"]) for n in names)
         else:
-            # NUMERIC 6-band path (an ABP $important / feed @@ / feed regex is loaded).
+            # NUMERIC 6-band path (an ABP $important / feed @@ / feed regex / user regex is loaded).
             # decide() resolves by the HIGHEST matching block band vs the highest
             # matching allow band, so augment the first-discovered block's band with a
             # full scan over every matching block (data/zone-suffix/block-regex) -- the
@@ -7039,7 +7126,9 @@ def evaluate_domain(
             # -> null_blocking below) must follow the rule that actually won, not the
             # first discovered. A tie keeps the discovered attribution (block bands are
             # distinct odds, so a tie is the same entry / same priority).
-            scan_band, scan_meta = _scan_block_band(q_name, cfg, data_db, zone_db, regex_db)
+            scan_band, scan_meta = _scan_block_band(
+                q_name, cfg, data_db, zone_db, regex_db, user_regex_db=user_regex_db
+            )
             if scan_meta is not None and scan_band > block_band:
                 block_band = scan_band
                 if scan_meta["kind"] == "regex":
@@ -7065,6 +7154,7 @@ def evaluate_domain(
                 cfg,
                 white_db,
                 allow_regex_db,
+                user_allow_regex_db,
                 block_band,
             )
 
@@ -7143,9 +7233,10 @@ def _evaluate_cfg(snap: Snapshot) -> dict[str, Any]:
         "regexDB": bool(snap.regex_db),
         "whiteDB": bool(snap.white_db),
         "allowRegexDB": bool(snap.allow_regex_db),
+        "userRegexDB": bool(snap.user_regex_db),
+        "userAllowRegexDB": bool(snap.user_allow_regex_db),
         "important_rules": bool(snap.important_rules),
         "regex_warn_ms": pfb["regex_warn_ms"],
-        "regex_evict_ms": pfb["regex_evict_ms"],
         "python_tld_seg": pfb["python_tld_seg"],
         "hstsDB": bool(snap.hsts_db),
         "hsts_tlds": pfb["hsts_tlds"],

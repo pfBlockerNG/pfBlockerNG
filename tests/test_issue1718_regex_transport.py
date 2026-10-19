@@ -44,13 +44,13 @@ def test_initial_load_decodes_base64_rows_and_preserves_names(tmp_path: Path, mo
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
     try:
         _initial_load(tmp_path, monkeypatch, _ini(encoded))
-        assert set(P.regexDB) == {"foo_desc", "foo_desc_2", "inline_description", "regex_4"}
-        assert P.regexDB["foo_desc"]["re"].pattern == 'A%=:;"\\D'
-        assert P.regexDB["foo_desc"]["re"].flags & re.IGNORECASE
-        assert P.regexDB["foo_desc_2"]["re"].pattern == 'B%=:;"\\D'
-        assert P.regexDB["foo_desc_2"]["re"].flags & re.IGNORECASE
-        assert P.regexDB["inline_description"]["re"].pattern == "unnamed"
-        assert P.regexDB["regex_4"]["re"].pattern == "blank"
+        assert set(P.userRegexDB) == {"foo_desc", "foo_desc_2", "inline_description", "regex_4"}
+        assert P.userRegexDB["foo_desc"]["re"].pattern == 'A%=:;"\\D'
+        assert P.userRegexDB["foo_desc"]["re"].flags & re.IGNORECASE
+        assert P.userRegexDB["foo_desc_2"]["re"].pattern == 'B%=:;"\\D'
+        assert P.userRegexDB["foo_desc_2"]["re"].flags & re.IGNORECASE
+        assert P.userRegexDB["inline_description"]["re"].pattern == "unnamed"
+        assert P.userRegexDB["regex_4"]["re"].pattern == "blank"
     finally:
         P.deinit(0)
 
@@ -67,16 +67,16 @@ def test_swap_load_matches_initial(tmp_path: Path, monkeypatch: Any) -> None:
     initial = None
     try:
         _initial_load(tmp_path, monkeypatch, _ini(encoded))
-        initial = {name: entry["re"].pattern for name, entry in P.regexDB.items()}
+        initial = {name: entry["re"].pattern for name, entry in P.userRegexDB.items()}
         swapped = P._build_swap_snapshot()
         assert swapped is not None
-        assert {name: entry["re"].pattern for name, entry in swapped.regex_db.items()} == initial
-        assert all(entry["re"].flags & re.IGNORECASE for entry in swapped.regex_db.values())
+        assert {name: entry["re"].pattern for name, entry in swapped.user_regex_db.items()} == initial
+        assert all(entry["re"].flags & re.IGNORECASE for entry in swapped.user_regex_db.values())
     finally:
         P.deinit(0)
 
 
-def test_issue2364_shape_gate_matches_initial_and_swap_user_loads(tmp_path: Path, monkeypatch: Any) -> None:
+def test_issue2364_unsafe_row_is_dropped_by_the_initial_and_swap_user_loads(tmp_path: Path, monkeypatch: Any) -> None:
     unsafe = r"^[a-z]+[a-z]+(a|(?:b))+[a-z]+[a-z]+@x\.com$"
     safe = r"^[a-z]+\.[a-z]+\.[a-z]+$"
     text = f"{unsafe}#unsafe\n{safe}#safe\n"
@@ -89,13 +89,13 @@ def test_issue2364_shape_gate_matches_initial_and_swap_user_loads(tmp_path: Path
     monkeypatch.setitem(P.pfb, "pfb_py_sources", str(manifest))
     try:
         _initial_load(tmp_path, monkeypatch, _ini(encoded))
-        assert set(P.regexDB) == {"safe"}
-        assert P.regexDB["safe"]["re"].pattern == safe
+        assert set(P.userRegexDB) == {"safe"}
+        assert P.userRegexDB["safe"]["re"].pattern == safe
 
         swapped = P._build_swap_snapshot()
         assert swapped is not None
-        assert set(swapped.regex_db) == {"safe"}
-        assert swapped.regex_db["safe"]["re"].pattern == safe
+        assert set(swapped.user_regex_db) == {"safe"}
+        assert swapped.user_regex_db["safe"]["re"].pattern == safe
     finally:
         P.deinit(0)
 
@@ -107,7 +107,7 @@ def test_present_malformed_or_non_utf8_marker_fails_closed(
         caplog.clear()
         try:
             _initial_load(tmp_path, monkeypatch, _ini(payload))
-            assert P.regexDB == {}
+            assert P.userRegexDB == {}
             assert "Failed to decode MAIN.regex_list" in caplog.text
         finally:
             P.deinit(0)
@@ -117,10 +117,10 @@ def test_absent_marker_ignores_obsolete_regex_section(tmp_path: Path, monkeypatc
     ini_body = _ini("__ABSENT__") + "[REGEX]\nlegacy = old\n"
     try:
         _initial_load(tmp_path, monkeypatch, ini_body)
-        assert P.regexDB == {}
+        assert P.userRegexDB == {}
 
         swapped = P._build_swap_snapshot()
         assert swapped is not None
-        assert swapped.regex_db == {}
+        assert swapped.user_regex_db == {}
     finally:
         P.deinit(0)

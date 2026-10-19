@@ -77,6 +77,8 @@ def _containers(
         "whiteDB": white or {},
         "regexDB": regex or {},
         "allowRegexDB": allow_regex or {},
+        "userRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": feed_group_index or {},
         "hstsDB": hsts or {},
     }
@@ -89,6 +91,8 @@ def _containers_from_result(result: pfb_unbound.BuildResult) -> dict[str, Any]:
         "whiteDB": result.white_db,
         "regexDB": result.regex_db,
         "allowRegexDB": result.allow_regex_db,
+        "userRegexDB": result.user_regex_db,
+        "userAllowRegexDB": result.user_allow_regex_db,
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": {},
     }
@@ -103,6 +107,8 @@ def _cfg(**overrides: Any) -> dict[str, Any]:
         "whiteDB": True,
         "regexDB": True,
         "allowRegexDB": True,
+        "userRegexDB": True,
+        "userAllowRegexDB": True,
         "hstsDB": True,
         "tld_allow": False,
         "tld_allow_list": [],

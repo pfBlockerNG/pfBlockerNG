@@ -33,8 +33,8 @@ def test_escaped_hash_stays_in_the_pattern_and_the_description_follows_the_real_
     """``a\\#b#desc``: the escaped hash is pattern, the bare hash starts the description."""
     try:
         _load(tmp_path, monkeypatch, "^track\\.example\\.com/\\#/ads$#adshash\n")
-        assert set(P.regexDB) == {"adshash"}
-        assert P.regexDB["adshash"]["re"].pattern == "^track\\.example\\.com/\\#/ads$"
+        assert set(P.userRegexDB) == {"adshash"}
+        assert P.userRegexDB["adshash"]["re"].pattern == "^track\\.example\\.com/\\#/ads$"
     finally:
         P.deinit(0)
 
@@ -47,7 +47,7 @@ def test_escaped_hash_pattern_actually_matches_a_literal_hash(tmp_path: Path, mo
     """
     try:
         _load(tmp_path, monkeypatch, "^ads\\#tag\\.example\\.com$#hashtag\n")
-        compiled = P.regexDB["hashtag"]["re"]
+        compiled = P.userRegexDB["hashtag"]["re"]
         assert compiled.search("ads#tag.example.com") is not None
         assert compiled.search("adstag.example.com") is None
     finally:
@@ -58,8 +58,8 @@ def test_escaped_hash_with_no_description_keeps_the_whole_line_as_the_pattern(tm
     """No unescaped '#' anywhere means no description -- the row keeps its positional name."""
     try:
         _load(tmp_path, monkeypatch, "^ads\\#tag\\.example\\.com$\n")
-        assert set(P.regexDB) == {"regex_1"}
-        assert P.regexDB["regex_1"]["re"].pattern == "^ads\\#tag\\.example\\.com$"
+        assert set(P.userRegexDB) == {"regex_1"}
+        assert P.userRegexDB["regex_1"]["re"].pattern == "^ads\\#tag\\.example\\.com$"
     finally:
         P.deinit(0)
 
@@ -73,8 +73,8 @@ def test_an_escaped_backslash_does_not_escape_the_hash_after_it(tmp_path: Path, 
     """
     try:
         _load(tmp_path, monkeypatch, "^ads\\\\#evenrun\n")
-        assert set(P.regexDB) == {"evenrun"}
-        assert P.regexDB["evenrun"]["re"].pattern == "^ads\\\\"
+        assert set(P.userRegexDB) == {"evenrun"}
+        assert P.userRegexDB["evenrun"]["re"].pattern == "^ads\\\\"
     finally:
         P.deinit(0)
 
@@ -83,8 +83,8 @@ def test_an_unescaped_hash_still_starts_the_description(tmp_path: Path, monkeypa
     """The pre-existing split is untouched for every line with no escape in it."""
     try:
         _load(tmp_path, monkeypatch, "^ads\\.example\\.com$#plain\n")
-        assert set(P.regexDB) == {"plain"}
-        assert P.regexDB["plain"]["re"].pattern == "^ads\\.example\\.com$"
+        assert set(P.userRegexDB) == {"plain"}
+        assert P.userRegexDB["plain"]["re"].pattern == "^ads\\.example\\.com$"
     finally:
         P.deinit(0)
 
@@ -93,7 +93,7 @@ def test_a_whole_line_comment_is_still_dropped(tmp_path: Path, monkeypatch: Any)
     """A line whose first non-space character is '#' remains a comment, escape rule or not."""
     try:
         _load(tmp_path, monkeypatch, "  # just a comment\n^kept\\.example\\.com$#kept\n")
-        assert set(P.regexDB) == {"kept"}
+        assert set(P.userRegexDB) == {"kept"}
     finally:
         P.deinit(0)
 
@@ -102,7 +102,7 @@ def test_a_leading_escaped_hash_is_a_pattern_not_a_comment(tmp_path: Path, monke
     """``\\#foo`` starts with a backslash, so the whole-line-comment rule does not fire."""
     try:
         _load(tmp_path, monkeypatch, "\\#foo\n")
-        assert set(P.regexDB) == {"regex_1"}
-        assert P.regexDB["regex_1"]["re"].pattern == "\\#foo"
+        assert set(P.userRegexDB) == {"regex_1"}
+        assert P.userRegexDB["regex_1"]["re"].pattern == "\\#foo"
     finally:
         P.deinit(0)

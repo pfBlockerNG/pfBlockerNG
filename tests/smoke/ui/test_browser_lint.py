@@ -281,21 +281,19 @@ def test_regex_editor_server_lint_reports_python_only_error(
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """A pattern the tolerant Lezer grammar accepts but CPython's ``re`` rejects only
+    """A pattern the tolerant Lezer grammar accepts but the save-time probe refuses only
     gets a marker via the SERVER round-trip -- proving ``lang=regex`` actually reaches
     ``pfblockerng_lint.php``, not just the offline bracket lint.
 
     ``a{2,1}`` is syntactically well-formed to the Lezer regexp grammar (balanced
     braces, no offline error node -- confirmed above: a bracket problem is the only
-    thing ``lezerErrorLint()`` flags) but CPython's ``re.compile`` rejects it, so a
-    marker appearing here can ONLY be ``pfb_lint_parse_regex_errors()``'s diagnostic
-    (pfblockerng_extra.inc's regex probe reports
-    ``f"Python regex compile error: {error}"``). Hovering the marker opens
-    ``.cm-tooltip-lint``; assert the stable substring ``"repeat"`` rather than the exact
-    CPython wording (verified locally: CPython's ``re.compile('a{2,1}')`` raises
-    ``"min repeat greater than max repeat at position 2"`` -- the exact position may
-    shift across CPython versions, the "repeat" wording is the load-bearing, stable
-    part). Then a plain literal (``example``) is a valid pattern -- marker disappears.
+    thing ``lezerErrorLint()`` flags) but the bounded admission grammar refuses it
+    (``repeat out of bounds``; CPython's ``re.compile`` rejects it too), so a marker
+    appearing here can ONLY be ``pfb_lint_parse_regex_errors()``'s diagnostic
+    (pfblockerng_extra.inc's regex probe reports ``line N: <excerpt>: <reason>``).
+    Hovering the marker opens ``.cm-tooltip-lint``; assert the stable substring
+    ``"repeat"`` rather than the exact wording, which may be reworded. Then a plain
+    literal (``example``) is a valid pattern -- marker disappears.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)

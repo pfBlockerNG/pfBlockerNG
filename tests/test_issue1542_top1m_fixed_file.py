@@ -281,6 +281,9 @@ def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_
         "zoneDB": result.zone_db,
         "whiteDB": result.white_db,
         "regexDB": {},
+        "userRegexDB": {},
+        "allowRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": {},
     }

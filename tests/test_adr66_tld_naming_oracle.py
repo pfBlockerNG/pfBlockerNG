@@ -65,6 +65,9 @@ def _tld_allow_cfg(**overrides: Any) -> dict[str, Any]:
         "dataDB": False,
         "zoneDB": False,
         "regexDB": False,
+        "userRegexDB": False,
+        "allowRegexDB": False,
+        "userAllowRegexDB": False,
         "whiteDB": False,
         "hstsDB": False,
         "dnsbl_ipv4": "10.10.10.1",
@@ -83,6 +86,9 @@ def _containers() -> dict[str, Any]:
         "whiteDB": {},
         "hstsDB": {},
         "regexDB": {},
+        "userRegexDB": {},
+        "allowRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": {},
     }
 
@@ -163,7 +169,11 @@ class TestOracleATldAllowNumericBand:
                 "important_rules": True,
             }
         )
-        allow_regex_db = {"r": re.compile(allow_pattern)} if allow_pattern else {}
+        allow_regex_db = (
+            {"r": {"re": re.compile(allow_pattern), "important": False, "band": PRIO_FEED_ALLOW}}
+            if allow_pattern
+            else {}
+        )
         containers = _containers()
         containers["allowRegexDB"] = allow_regex_db
         return evaluate_domain(f"uuid-a5f0.{tld}", f"uuid-a5f0.{tld}", tld, False, cfg, containers)

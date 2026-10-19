@@ -44,6 +44,8 @@ def _snapshot(*, tag: str, counts: int = 0, regex_count: int = 0) -> P.Snapshot:
         white_db={},
         regex_db={},
         allow_regex_db={},
+        user_regex_db={},
+        user_allow_regex_db={},
         feed_group_index_db={},
         hsts_db={},
         important_rules=False,

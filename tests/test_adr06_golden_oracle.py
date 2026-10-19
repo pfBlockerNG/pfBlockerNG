@@ -342,7 +342,7 @@ class ReferencePipeline:
             if not tld:
                 continue
             idx = self._index_for("DNSBL_TLD", "DNSBL_TLD")
-            self.zone_db[tld] = {"log": "1", "index": idx}
+            self.zone_db[tld] = {"log": "1", "index": idx, "band": 1}
 
     def run(self) -> None:
         self._load_tld_master()
@@ -365,7 +365,7 @@ class ReferencePipeline:
                     continue
                 idx = self._index_for(feed, group)
                 ckind, key = self._classify(domain)
-                payload = {"log": log_flag, "index": idx}
+                payload = {"log": log_flag, "index": idx, "band": 1}
                 if ckind == "zone":
                     self.zone_db[key] = payload  # last-wins (dict; ADR-06 §2)
                 else:
@@ -387,6 +387,9 @@ def _build_cfg(config: dict[str, Any], *, has_white: bool) -> dict[str, Any]:
         "whiteDB": has_white,
         "hstsDB": True,
         "regexDB": False,
+        "userRegexDB": False,
+        "allowRegexDB": False,
+        "userAllowRegexDB": False,
         "tld_allow": False,
         "python_idn": False,
         "python_tld_seg": int(config.get("python_tld_seg", 1)),
@@ -431,6 +434,9 @@ def _evaluate(pipeline: ReferencePipeline, config: dict[str, Any], q_name: str) 
         "zoneDB": pipeline.zone_db,
         "whiteDB": pipeline.white_db,
         "regexDB": {},
+        "userRegexDB": {},
+        "allowRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": pipeline.feed_group_index_db,
         "hstsDB": {d: 0 for d in config.get("hsts_domains", [])},
     }

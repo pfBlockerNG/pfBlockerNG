@@ -11,8 +11,7 @@ Two test classes:
       the SAME (band, meta) / allow-band whether the prefilter is active or the
       original unguarded loop is used.  Covers: matching rules with strong literals,
       no-literal rules (pure alternation), a rule whose literal is embedded mid-name,
-      a rule that should be skipped by the prefilter (literal absent), and an evicted
-      name (popped from regex_db mid-test -- must not crash, must be skipped).
+      a rule that should be skipped by the prefilter (literal absent).
 """
 
 from __future__ import annotations
@@ -56,31 +55,22 @@ def _unguarded_block_scan(
 ) -> tuple[int, dict[str, Any] | None]:
     """Reference implementation: iterate ALL regex_db entries (no prefilter)."""
     from pfb_unbound import (
-        REGEX_EVICT_MS_DEFAULT,
         REGEX_WARN_MS_DEFAULT,
         _block_entry_band,
-        _regex_evict_names,
-        _regex_should_evict,
         _regex_timed_search,
+        _regex_warn_slow,
     )
 
     best = 0
     best_meta: dict[str, Any] | None = None
-    to_evict: list[str] = []
     warn_ms = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
-    evict_ms = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
-    for _k, r in list(regex_db.items()):
-        pattern = r.get("re") if isinstance(r, dict) else r
-        match, elapsed_ms = _regex_timed_search(pattern, q_name)
-        if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_Regex", _k):
-            to_evict.append(_k)
-            continue
+    for _k, r in regex_db.items():
+        match, elapsed_ms = _regex_timed_search(r["re"], q_name)
+        _regex_warn_slow(_k, elapsed_ms, warn_ms, "DNSBL_Regex")
         if match:
             band = _block_entry_band(r)
             if band > best:
                 best, best_meta = band, {"kind": "regex", "key": _k}
-    if to_evict:
-        _regex_evict_names(regex_db, to_evict)
     return best, best_meta
 
 
@@ -90,34 +80,19 @@ def _unguarded_allow_scan(
 ) -> int:
     """Reference implementation: iterate ALL allow_regex_db entries (no prefilter)."""
     from pfb_unbound import (
-        REGEX_EVICT_MS_DEFAULT,
         REGEX_WARN_MS_DEFAULT,
-        _allow_priority,
-        _regex_evict_names,
-        _regex_should_evict,
         _regex_timed_search,
+        _regex_warn_slow,
     )
 
     if not q_name:
         return 0
     best = 0
-    to_evict: list[str] = []
-    warn_ms = REGEX_WARN_MS_DEFAULT
-    evict_ms = REGEX_EVICT_MS_DEFAULT
-    for _k, r in list(allow_regex_db.items()):
-        pattern = r.get("re") if isinstance(r, dict) else r
-        match, elapsed_ms = _regex_timed_search(pattern, q_name)
-        if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_AllowRegex", _k):
-            to_evict.append(_k)
-            continue
+    for _k, r in allow_regex_db.items():
+        match, elapsed_ms = _regex_timed_search(r["re"], q_name)
+        _regex_warn_slow(_k, elapsed_ms, REGEX_WARN_MS_DEFAULT, "DNSBL_AllowRegex")
         if match:
-            important = bool(r.get("important", False)) if isinstance(r, dict) else False
-            band = r.get("band") if isinstance(r, dict) else None
-            if not isinstance(band, int):
-                band = _allow_priority(important)
-            best = max(best, band)
-    if to_evict:
-        _regex_evict_names(allow_regex_db, to_evict)
+            best = max(best, r["band"])
     return best
 
 
@@ -134,9 +109,10 @@ def _base_cfg(**overrides: Any) -> dict[str, Any]:
         "regexDB": True,
         "whiteDB": False,
         "allowRegexDB": False,
+        "userRegexDB": False,
+        "userAllowRegexDB": False,
         "important_rules": False,
         "regex_warn_ms": pfb_unbound.REGEX_WARN_MS_DEFAULT,
-        "regex_evict_ms": pfb_unbound.REGEX_EVICT_MS_DEFAULT,
         "python_tld_seg": 2,
         "hstsDB": False,
         "hsts_tlds": ("app", "dev"),
@@ -358,7 +334,7 @@ class TestScanOutputIdentity:
 
         # Given: prefiltered scan
         pfb_unbound._block_regex_index = None
-        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db)
+        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db, {})
 
         # Reference: unguarded scan on a separate copy (no state sharing)
         ref_band, ref_meta = _unguarded_block_scan(q, cfg, {}, {}, db_copy)
@@ -385,7 +361,7 @@ class TestScanOutputIdentity:
         q = "abc.net"
 
         pfb_unbound._block_regex_index = None
-        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db)
+        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db, {})
         ref_band, ref_meta = _unguarded_block_scan(q, cfg, {}, {}, db_copy)
 
         assert guarded_band == ref_band == PRIO_FEED_BLOCK
@@ -406,7 +382,7 @@ class TestScanOutputIdentity:
         q = "host.tracking.internal"
 
         pfb_unbound._block_regex_index = None
-        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db)
+        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db, {})
         ref_band, ref_meta = _unguarded_block_scan(q, cfg, {}, {}, db_copy)
 
         assert guarded_band == ref_band == PRIO_USER_BLOCK
@@ -434,7 +410,7 @@ class TestScanOutputIdentity:
         cfg = self._cfg()
 
         pfb_unbound._block_regex_index = None
-        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db)
+        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db, {})
         ref_band, ref_meta = _unguarded_block_scan(q, cfg, {}, {}, db_copy)
 
         # After: both return zero
@@ -477,42 +453,6 @@ class TestScanOutputIdentity:
         # 'embedded' has literal '.tracking.' which is not in 'abc.net'
         assert "embedded" not in cand
 
-    def test_block_scan_evicted_name_skipped_no_crash(self) -> None:
-        """
-        Scenario: a rule is evicted (popped from regex_db) after the index is built.
-
-        Given: regex_db with 'strong' and 'noliter'; prefilter index is built.
-        When: 'strong' is popped from regex_db (simulating eviction), then
-              _scan_block_band is called with a query that would have matched 'strong'.
-        Then: no crash; 'strong' is skipped; result = (0, None) since 'noliter'
-              also does not match.
-        """
-        db: dict[str, Any] = {
-            "strong": {
-                "re": re.compile(r"\.ads\.example\.com$"),
-                "important": True,
-                "band": PRIO_FEED_BLOCK_IMPORTANT,
-            },
-            "noliter": {"re": re.compile(r"(zzz|qqq)\.net$"), "important": False, "band": PRIO_FEED_BLOCK},
-        }
-        cfg = self._cfg()
-        q = "sub.ads.example.com"
-
-        # Build the index
-        pfb_unbound._block_regex_index = None
-        buckets, always = _build_regex_index(db)
-        pfb_unbound._block_regex_index = (db, buckets, always)
-
-        # Simulate eviction: pop 'strong' from the live db AFTER index build
-        db.pop("strong")
-
-        # When: scan runs with 'strong' already evicted
-        guarded_band, guarded_meta = _scan_block_band(q, cfg, {}, {}, db)
-
-        # Then: no crash; 'strong' is skipped (evicted); 'noliter' doesn't match -> 0
-        assert guarded_band == 0
-        assert guarded_meta is None
-
     def test_block_scan_index_rebuilds_on_new_db(self) -> None:
         """
         Scenario: a snapshot swap (new regex_db object) triggers an index rebuild.
@@ -534,13 +474,13 @@ class TestScanOutputIdentity:
 
         # Given: index is built for db_old
         pfb_unbound._block_regex_index = None
-        _ = _scan_block_band("old.com", cfg, {}, {}, db_old)
+        _ = _scan_block_band("old.com", cfg, {}, {}, db_old, {})
 
         assert pfb_unbound._block_regex_index is not None
         assert pfb_unbound._block_regex_index[0] is db_old  # Before: index is for db_old
 
         # When: called with db_new (different object)
-        band, meta = _scan_block_band("new.com", cfg, {}, {}, db_new)
+        band, meta = _scan_block_band("new.com", cfg, {}, {}, db_new, {})
 
         # After: index is rebuilt for db_new
         assert pfb_unbound._block_regex_index[0] is db_new
@@ -563,7 +503,7 @@ class TestScanOutputIdentity:
         q = "x.allow.example.com"
 
         pfb_unbound._allow_regex_index = None
-        guarded = _scan_allow_regex_band(q, db)
+        guarded = _scan_allow_regex_band(q, db, {})
         ref = _unguarded_allow_scan(q, db_copy)
 
         assert guarded == ref == PRIO_FEED_ALLOW
@@ -581,7 +521,7 @@ class TestScanOutputIdentity:
         q = "foo.org"
 
         pfb_unbound._allow_regex_index = None
-        guarded = _scan_allow_regex_band(q, db)
+        guarded = _scan_allow_regex_band(q, db, {})
         ref = _unguarded_allow_scan(q, db_copy)
 
         assert guarded == ref == PRIO_FEED_ALLOW
@@ -606,39 +546,15 @@ class TestScanOutputIdentity:
         db_copy = {k: dict(v) for k, v in db.items()}
 
         pfb_unbound._allow_regex_index = None
-        guarded = _scan_allow_regex_band(q, db)
+        guarded = _scan_allow_regex_band(q, db, {})
         ref = _unguarded_allow_scan(q, db_copy)
 
         # After: both zero
         assert guarded == 0
         assert ref == 0
 
-    def test_allow_scan_evicted_name_no_crash(self) -> None:
-        """
-        Scenario: allow rule evicted after index build -- must not crash.
-
-        Given: allow_regex_db with 'allow_strong'; index is built; 'allow_strong'
-               is then popped (simulating eviction).
-        When: scan runs on a matching query.
-        Then: no crash; result = 0 (evicted rule is skipped).
-        """
-        db: dict[str, Any] = {
-            "allow_strong": {"re": re.compile(r"\.allow\.example\.com$"), "important": False, "band": PRIO_FEED_ALLOW},
-        }
-        q = "x.allow.example.com"
-
-        pfb_unbound._allow_regex_index = None
-        buckets, always = _build_regex_index(db)
-        pfb_unbound._allow_regex_index = (db, buckets, always)
-
-        # Simulate eviction
-        db.pop("allow_strong")
-
-        result = _scan_allow_regex_band(q, db)
-        assert result == 0
-
     def test_allow_scan_empty_query_returns_zero(self) -> None:
         """Empty q_name must always return 0 (guard at function entry)."""
         db = self._allow_db()
         pfb_unbound._allow_regex_index = None
-        assert _scan_allow_regex_band("", db) == 0
+        assert _scan_allow_regex_band("", db, {}) == 0

@@ -80,66 +80,66 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertSame([], self::errors($pattern . "\n"), 'over-length alone is not a rejection reason yet');
 	}
 
-	/** @return array<string, array{string}> */
-	public static function catastrophicShapeProvider(): array
+	/** @return array<string, array{string, string}> */
+	public static function unsupportedShapeProvider(): array
 	{
 		return [
-			'nested quantifier (a+)+'           => ['(a+)+$'],
-			'nested quantifier (\\w+\\.)+'      => ['(\\w+\\.)+bad'],
-			'alternation overlap (a|ab)*'       => ['(a|ab)*'],
-			// The resolver's alternation guard is deliberately conservative:
-			// it drops ANY quantified single-group alternation, disjoint included.
-			'disjoint quantified alternation'   => ['(foo|bar)+'],
-			'disjoint bounded alternation'      => ['(a|b){3}'],
-			'adjacent quantified groups'        => ['(a+)(a+)+'],
-			'stacked bounded repeats'           => ['a{1000}{1000}'],
+			'nested quantifier (a+)+'           => ['(a+)+$', 'quantified group'],
+			'nested quantifier (\\w+\\.)+'      => ['(\\w+\\.)+bad', 'quantified group'],
+			'alternation overlap (a|ab)*'       => ['(a|ab)*', 'quantified group'],
+			// A group repeated more than optionally must be a plain run of atoms:
+			// disjoint alternation is refused too.
+			'disjoint quantified alternation'   => ['(foo|bar)+', 'quantified group'],
+			'disjoint bounded alternation'      => ['(a|b){3}', 'quantified group'],
+			'adjacent quantified groups'        => ['(a+)(a+)+', 'quantified group'],
+			'stacked bounded repeats'           => ['a{1000}{1000}', 'repeat out of bounds'],
+			// Bracket classes listing more than the width bound are refused though cheap to match.
+			'wide character classes'            => ['^[!-~][!-~][!-~]x', 'character classes too wide'],
 		];
 	}
 
-	#[DataProvider('catastrophicShapeProvider')]
-	public function testCatastrophicShapeIsRejected(string $pattern): void
+	#[DataProvider('unsupportedShapeProvider')]
+	public function testPatternOutsideTheBoundedGrammarIsRejected(string $pattern, string $reason): void
 	{
 		$error = self::oneError($pattern . "\n");
 		$this->assertStringContainsString('line 1:', $error);
-		$this->assertStringContainsString('catastrophic-backtracking shape', $error);
+		$this->assertStringContainsString($reason, $error);
 	}
 
-	public function testThirteenAlternationsExceedBudgetAndAreRejected(): void
+	public function testThirteenAlternationsAreAcceptedWhileTheirCostIsBounded(): void
 	{
 		$pattern = 'a|b|c|d|e|f|g|h|i|j|k|l|m|n';
-		$error = self::oneError($pattern . "\n");
-		$this->assertStringContainsString('line 1:', $error);
-		$this->assertStringContainsString('too many quantifiers/alternations', $error);
+		$this->assertSame([], self::errors($pattern . "\n"), 'alternation adds cost; 14 branches stay far under the bound');
 	}
 
-	public function testTwelveAlternationsAreWithinBudgetAndAccepted(): void
+	public function testTwelveAlternationsAreAccepted(): void
 	{
 		$pattern = 'a|b|c|d|e|f|g|h|i|j|k|l|m';
-		$this->assertSame([], self::errors($pattern . "\n"), '12 alternations are within the resolver budget');
+		$this->assertSame([], self::errors($pattern . "\n"));
 	}
 
-	public function testEscapedQuantifiersDoNotCountTowardTheBudget(): void
+	public function testEscapedQuantifiersAreLiterals(): void
 	{
 		$pattern = 'a\+b\*c\|d\+e\*f\|g\+h\*i\|j\+k\*l\|m\+n';
-		$this->assertSame([], self::errors($pattern . "\n"), 'escaped +, * and | are literals, not budget');
+		$this->assertSame([], self::errors($pattern . "\n"), 'escaped +, * and | are literals');
 	}
 
 	/** @return array<string, array{string, string}> */
 	public static function malformedProvider(): array
 	{
 		return [
-			'unterminated group' => ['(unclosed', 'unterminated subpattern'],
-			'unterminated class' => ['[a-', 'unterminated character set'],
+			'unterminated group' => ['(unclosed', 'unbalanced ('],
+			'unterminated class' => ['[a-', 'unclosed class'],
 		];
 	}
 
 	#[DataProvider('malformedProvider')]
-	public function testMalformedPatternIncludesPatternAndPythonDetail(string $pattern, string $detail): void
+	public function testMalformedPatternIncludesPatternAndReason(string $pattern, string $detail): void
 	{
 		$error = self::oneError($pattern . "\n");
 		$this->assertStringContainsString('line 1:', $error);
 		$this->assertStringContainsString("'{$pattern}'", $error);
-		$this->assertStringContainsString($detail, $error, "{$pattern} must include Python's compile detail");
+		$this->assertStringContainsString($detail, $error, "{$pattern} must include the gate's reason");
 	}
 
 	public function testOriginalLineNumbersAndFormCommentSemanticsArePreserved(): void
@@ -150,16 +150,18 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertCount(1, $errors);
 		$this->assertStringContainsString('line 5:', $errors[0]);
 		$this->assertStringContainsString("'(?R)'", $errors[0]);
-		$this->assertStringContainsString('Python', $errors[0]);
+		$this->assertStringContainsString('unsupported group', $errors[0]);
 	}
 
-	public function testUppercaseNamedGroupIsAcceptedWithoutResolverLowercasing(): void
+	public function testNamedGroupIsRefusedByTheBoundedGrammar(): void
 	{
-		$this->assertSame([], self::errors("(?P<X>A)\n"));
+		$errors = self::errors("(?P<X>A)\n");
+		$this->assertCount(1, $errors);
+		$this->assertStringContainsString('unsupported group', $errors[0]);
 	}
 
 	/** @return array<string, array{string}> */
-	public static function pythonOnlyProvider(): array
+	public static function inlineFlagProvider(): array
 	{
 		return [
 			'unicode flag' => ['(?u)\\w+'],
@@ -167,10 +169,12 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		];
 	}
 
-	#[DataProvider('pythonOnlyProvider')]
-	public function testPythonOnlySyntaxIsAccepted(string $pattern): void
+	#[DataProvider('inlineFlagProvider')]
+	public function testInlineFlagSyntaxIsRefusedByTheBoundedGrammar(string $pattern): void
 	{
-		$this->assertSame([], self::errors($pattern . "\n"), "{$pattern} is valid Python regex syntax");
+		$error = self::oneError($pattern . "\n");
+		$this->assertStringContainsString('line 1:', $error);
+		$this->assertStringContainsString('unsupported group', $error);
 	}
 
 	/** @return array<string, array{string}> */
@@ -184,23 +188,23 @@ final class DnsblRegexEntryErrorTest extends TestCase
 	}
 
 	#[DataProvider('pcreOnlyProvider')]
-	public function testPcreOnlySyntaxIsRejectedByPython(string $pattern): void
+	public function testPcreOnlySyntaxIsRejected(string $pattern): void
 	{
 		$error = self::oneError($pattern . "\n");
 		$this->assertStringContainsString('line 1:', $error);
 		$this->assertStringContainsString("'{$pattern}'", $error);
-		$this->assertStringContainsString('Python', $error);
+		$this->assertStringContainsString('unsupported group', $error);
 	}
 
-	public function testOverflowIsReportedForItsLineOnly(): void
+	public function testOutOfBoundsRepeatIsReportedForItsLineOnly(): void
 	{
 		$contents = "^before$\na{999999999999999999999999999999999999}\n^after$\n";
 		$errors = self::errors($contents);
 
 		$this->assertCount(1, $errors);
 		$this->assertStringContainsString('line 2:', $errors[0]);
-		$this->assertStringContainsString("'a{999999999999999999999999999999999999}'", $errors[0]);
-		$this->assertStringContainsString('repetition number is too large', $errors[0]);
+		$this->assertStringContainsString("'a{999999999999999999999999999999' ... (39 chars)", $errors[0]);
+		$this->assertStringContainsString('repeat out of bounds', $errors[0]);
 	}
 
 	/** @return array<string, array{string}> */
@@ -278,7 +282,7 @@ final class DnsblRegexEntryErrorTest extends TestCase
 			"\nexec " . escapeshellarg(self::$python) . ' "$@"' . "\n");
 		chmod($wrapper, 0700);
 		try {
-			$this->assertSame([], self::errors("^one$\n^two$\n(?u)\\w+\n", FALSE, $wrapper));
+			$this->assertSame([], self::errors("^one$\n^two$\n\\w+\n", FALSE, $wrapper));
 			$this->assertSame("launch\n", file_get_contents($marker));
 		} finally {
 			@unlink($wrapper);
@@ -347,32 +351,31 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		);
 	}
 
-	public function testOverLengthAndCatastrophicShapeReportsTheShapeFirst(): void
+	public function testOverLengthAndUnsupportedShapeReportsTheShapeFirst(): void
 	{
 		$pattern = '(' . str_repeat('a', 250) . '+)+';
 		$this->assertGreaterThan(200, strlen($pattern));
 		$error = self::oneError($pattern . "\n", TRUE);
-		$this->assertStringContainsString('catastrophic-backtracking shape', $error);
+		$this->assertStringContainsString('quantified group', $error);
 		$this->assertStringNotContainsString('length cap', $error);
 	}
 
-	public function testOverLengthAndOverBudgetReportsTheBudgetFirst(): void
+	public function testOverLengthAndOverCostReportsTheCostFirst(): void
 	{
-		$labels = array_map(static fn (int $i): string => str_repeat(chr(97 + $i), 15), range(0, 13));
-		$pattern = implode('|', $labels);
+		$pattern = str_repeat('[a-z]+', 40);
 		$this->assertGreaterThan(200, strlen($pattern));
 		$error = self::oneError($pattern . "\n", TRUE);
-		$this->assertStringContainsString('too many quantifiers/alternations', $error);
+		$this->assertStringContainsString('too costly to match', $error);
 		$this->assertStringNotContainsString('length cap', $error);
 	}
 
-	public function testOverLengthAndMalformedReportsTheLengthCapFirst(): void
+	public function testOverLengthAndMalformedReportsTheGrammarRefusalFirst(): void
 	{
 		$pattern = '(unclosed' . str_repeat('a', 200);
 		$this->assertGreaterThan(200, strlen($pattern));
 		$error = self::oneError($pattern . "\n", TRUE);
-		$this->assertStringContainsString('200-character length cap', $error);
-		$this->assertStringNotContainsString('compile error', $error);
+		$this->assertStringContainsString('unbalanced (', $error);
+		$this->assertStringNotContainsString('length cap', $error);
 	}
 
 	public function testOnlyTheOverLengthLineIsReportedAmongMultipleLines(): void
@@ -384,12 +387,12 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertStringContainsString('200-character length cap', $errors[0]);
 	}
 
-	#[DataProvider('catastrophicShapeProvider')]
-	public function testCatastrophicShapeIsRejectedRegardlessOfTheCapSetting(string $pattern): void
+	#[DataProvider('unsupportedShapeProvider')]
+	public function testPatternOutsideTheBoundedGrammarIsRejectedRegardlessOfTheCapSetting(string $pattern, string $reason): void
 	{
 		$error = self::oneError($pattern . "\n", TRUE);
 		$this->assertStringContainsString('line 1:', $error);
-		$this->assertStringContainsString('catastrophic-backtracking shape', $error);
+		$this->assertStringContainsString($reason, $error);
 	}
 
 	#[DataProvider('benignProvider')]
@@ -406,11 +409,18 @@ final class DnsblRegexEntryErrorTest extends TestCase
 
 	public function testOverLengthPatternWithShellMetacharactersIsRejectedSafely(): void
 	{
-		$hostile = 'ads$(rm -rf /)`id`\'"\\' . str_repeat('a', 200);
+		$hostile = 'ads$(rm-rf/)`id`\'"' . str_repeat('a', 200);
 		$this->assertGreaterThan(200, strlen($hostile));
 		$error = self::oneError($hostile . "\n", TRUE);
 		$this->assertStringContainsString('line 1:', $error);
 		$this->assertStringContainsString('200-character length cap', $error);
+	}
+
+	public function testPatternWithASpaceIsRefusedSafely(): void
+	{
+		$error = self::oneError('ads$(rm -rf /)`id`' . "\n", TRUE);
+		$this->assertStringContainsString('line 1:', $error);
+		$this->assertStringContainsString('non-ASCII, space or control character', $error);
 	}
 
 	public function testControlCharacterWinsOverLengthWhenBothPresent(): void
@@ -422,11 +432,13 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertStringNotContainsString('length cap', $error);
 	}
 
-	public function testHundredThousandCharacterLineIsRejectedByLengthCap(): void
+	public function testHundredThousandCharacterLineIsRefusedOnLengthWhateverTheCapSetting(): void
 	{
 		$pattern = self::anchoredPattern(100000);
 		$error = self::oneError($pattern . "\n", TRUE);
-		$this->assertStringContainsString('200-character length cap', $error);
+		$this->assertStringContainsString('over 256 characters', $error);
+		$this->assertStringContainsString('(100000 chars)', $error);
+		$this->assertLessThan(200, strlen($error), 'the diagnostic carries an excerpt, never the pattern');
 	}
 
 	public function testProbeDefaultsCapOffWhenTheArgvFlagIsAbsent(): void
@@ -439,7 +451,7 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 		$process = proc_open([self::$python, $script], $descriptors, $pipes);
 		$this->assertIsResource($process);
-		fwrite($pipes[0], self::anchoredPattern(300) . "\n");
+		fwrite($pipes[0], self::anchoredPattern(250) . "\n");
 		fclose($pipes[0]);
 		$stdout = stream_get_contents($pipes[1]);
 		$stderr = stream_get_contents($pipes[2]);

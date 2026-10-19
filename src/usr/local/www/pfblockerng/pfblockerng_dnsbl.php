@@ -2818,10 +2818,14 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_regex_cap']) === PfbToggle::On,
 	'on'
-))->setHelp('Best-effort ReDoS safeguard (opt-in): over-long or catastrophic-backtracking regex patterns are dropped at load, before they run. '
+))->setHelp('Length cap (opt-in): regex patterns over 200 characters are dropped at load, before they run. '
 		. 'Applies when Regex Blocking is enabled.'
-		. '<div class="infoblock">From both feeds (ABP) and the Regex List below (each drop is logged). '
-		. 'An always-on runtime guard additionally warns on, then evicts, any pattern whose match runs too slow.</div>');
+		. '<div class="infoblock">From both feeds (ABP) and the Regex List below (each list logs at most 20 drops, then one summary line). '
+		. 'This setting only adds the length cap. Independently of it, every pattern must fit a bounded grammar, a matching-cost limit and a character-class width limit '
+		. 'before it loads (printable ASCII without spaces, at most 256 characters, at most 256 characters listed across its [...] classes, no backreferences, lookarounds or flag groups). '
+		. 'Unanchored patterns with an open run before a literal tail, such as \S+\.example\.com or ad.*\.example\.com, are refused unless anchored with ^. '
+		. 'There is no limit on the number of rules. Regex List patterns and Custom_List regex rows are kept apart from the feed lists and checked first. '
+		. 'The resolver log reports a rule whose match runs slow and a whole list scan that runs slow; it never removes a rule.</div>');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_cname',

@@ -40,8 +40,9 @@ Every expected answer is pinned to the REAL semantics in
   ``log_type='1'`` → NOERROR + DNSBL VIP; a **regex** block forces ``log_type='1'``
   (VIP) at pfb_unbound.py:3545. NXDOMAIN is NEVER an ABP feed-match shape.
 * The DNSBL_Regex alias count (``/var/unbound/pfb_py_regex_count``) is
-  ``len(regexDB)+len(allowRegexDB)`` AFTER the static cap drops over-cap patterns —
-  the **admitted** count (pfb_unbound.py:755), which shrinks by design with the cap on.
+  ``len(regexDB)+len(allowRegexDB)+len(userRegexDB)+len(userAllowRegexDB)`` AFTER the static cap
+  drops over-cap patterns — the **admitted** count (pfb_unbound.py:755), which shrinks by design
+  with the cap on.
 
 HERMETIC PROBE NOTE (load-bearing, inherited from the ADR-04 matrix): during the
 per-case probe ``CaseContext`` blocks the runner's egress, so a name that is NOT
@@ -58,10 +59,10 @@ These need the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``),
 and the smoke deps; without them they skip cleanly.
 
 Items the harness does NOT automate (run by hand on a live box — see ADR.md
-"Live smoke"): the runtime regex warn→evict timing (no config key writes the
-warn/evict ceilings; the trip is CPU-bound and flaky in CI), the ABP×DNSBL-TLD
-live mode, and the async DNSBL-IP table populate (the ADR-04 matrix already defers
-``test_dnsblip_dual_stack_partition`` for the same reason).
+"Live smoke"): the runtime slow-match warning (the trip is CPU-bound and flaky
+in CI), the ABP×DNSBL-TLD live mode, and the async DNSBL-IP table populate (the
+ADR-04 matrix already defers ``test_dnsblip_dual_stack_partition`` for the same
+reason).
 """
 
 from __future__ import annotations
@@ -329,8 +330,8 @@ def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
     Two USER regex patterns — one short benign (``ads[0-9]+``), one long-but-benign
     (a >200-char literal alternation, structurally safe). With the opt-in length cap
     OFF both are admitted (count 2); with it ON the over-length pattern is dropped at
-    load (count 1). A catastrophic SHAPE would be dropped regardless of the cap — that
-    UNCONDITIONAL gate is asserted separately in ``test_abp_catastrophic_regex_dropped``;
+    load (count 1). A pattern outside the admission grammar would be dropped regardless of
+    the cap — that UNCONDITIONAL gate is asserted separately in ``test_abp_catastrophic_regex_dropped``;
     here the long-but-benign pattern proves the LENGTH ceiling stays gated. A minimal
     plain feed is present so the DNSBL build runs and emits the count file. (allowRegexDB
     is empty here, so the count is purely regexDB.)
@@ -338,9 +339,9 @@ def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
     domain = h.unique_domain("abpcnt")
     feed_url = h.write_local_feed(deployed_vm, "smoke_abp_cnt.txt", f"{domain}\n")
     # A long-but-structurally-safe pattern: a long concatenation of literal labels with a
-    # single optional group, over the 200-char length ceiling but with no catastrophic
-    # shape (no nested/overlapping quantifier, no stacked repeat, budget well under
-    # threshold) -- so only the opt-in LENGTH cap can drop it.
+    # single optional group, over the 200-char length ceiling but inside the admission
+    # grammar and cost bound (no quantified group, no unbounded run) -- so only the
+    # opt-in LENGTH cap can drop it.
     long_benign = r"^(sub)?" + "verylongsubdomainlabel" * 10 + r"\.example\.com$"
     assert len(long_benign) > 200
     patterns = [r"ads[0-9]+", long_benign]
@@ -367,12 +368,12 @@ def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
 
 
 def test_abp_catastrophic_regex_dropped(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """A catastrophic-SHAPE user regex is dropped at load with the length cap OFF.
+    """A user regex outside the admission grammar is dropped at load with the length cap OFF.
 
-    The always-on shape gate is independent of the opt-in "Limit long/complex regex"
-    setting: a nested-quantifier pattern (``(a+)+evil``) is never compiled into the
+    The always-on admission gate is independent of the opt-in "Limit long/complex regex"
+    setting: a quantified-group pattern (``(a+)+evil``) is never compiled into the
     regexDB even when ``regex_cap`` is OFF, while a benign sibling (``ads[0-9]+``) is
-    admitted. Proves the SHAPE half of the decoupled gate is unconditional (the key
+    admitted. Proves the admission half of the decoupled gate is unconditional (the key
     behaviour change) on the live box, not just in the unit suite. The count alone
     (``n == 1``) can't tell WHICH pattern survived — a regression that instead
     admitted the catastrophic one and dropped the benign one would also read as
@@ -392,7 +393,7 @@ def test_abp_catastrophic_regex_dropped(deployed_vm: SmokeVM, client_vm: SmokeVM
         n = h.regex_admitted_count(deployed_vm)
         ans = h.dns_probe_client(client_vm, ads_hit, "A")
         assert h.is_vip(ans), f"surviving ads[0-9]+ pattern should VIP-block {ads_hit}, got {ans}"
-    assert n == 1, f"cap OFF: catastrophic shape dropped unconditionally, only benign admitted, expected 1, got {n!r}"
+    assert n == 1, f"cap OFF: unsupported shape dropped unconditionally, only benign admitted, expected 1, got {n!r}"
 
 
 # --------------------------------------------------------------------------- #
@@ -434,8 +435,8 @@ def test_abp_whitelist_sovereign_over_important(
 def test_user_regex_blocks(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A user "Python Regex List" pattern blocks a matching name (VIP shape).
 
-    The user regex loads into regexDB (bare compiled pattern); a regex block forces
-    ``log_type='1'`` → VIP. This pins user-regex *functionality* end-to-end (a
+    The user regex loads into userRegexDB (a ``{"re", "important", "band"}`` payload); a regex
+    block forces ``log_type='1'`` → VIP. This pins user-regex *functionality* end-to-end (a
     sovereign whitelist still wins, proven above); a minimal plain feed is present so
     the DNSBL build runs.
     """

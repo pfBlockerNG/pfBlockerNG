@@ -29,14 +29,36 @@ start→finish + unbound RSS) — see issue #76 and `legacy/ADRs/ADR_06_DNSBL_Pr
 ### ADR-07 — ABP / EasyList support
 
 ABP/EasyList rule shapes are parsed **entirely in Python** — `parse_abp()` is the one DNS-only
-ABP parser: it adds `@@` allow exceptions, regex (block `regexDB` / allow `allowRegexDB`, with
+ABP parser: it adds `@@` allow exceptions, regex (feed block `regexDB` / feed allow `allowRegexDB`, with
 anchored patterns folded to dicts), and `$important`/`$badfilter` precedence resolved by a
 6-band numeric scale, with a build-emitted `important_rules` flag preserving a byte-identical
-fast path when no ABP precedence feature is loaded. (ADR-62 retired PHP's feed-level detection
+fast path when no ABP precedence feature or user regex is loaded (a loaded Regex List or
+Custom_List regex raises the flag, so a user regex outranks a plain feed block). (ADR-62 retired PHP's feed-level detection
 that used to route a whole feed here — see below; which lines reach `parse_abp()` is now a
-per-line decision, not a feed-level one.) At load, the always-on shared catastrophic-shape gate
-rejects unsafe feed and user regex; the opt-in "Limit long/complex regex" setting separately caps
-pattern length. An always-on runtime guard warns on and evicts slow matches. Pinned by
+per-line decision, not a feed-level one.) At load, the always-on shared admission gate
+refuses feed and user regex outside a bounded grammar (printable ASCII without spaces; literals, classes,
+plain or `(?:` groups, `|`, `^ $ \b`, bounded repeats; no backreference, lookaround, flag or
+other group form) or over a static bound on the matcher's backtracking steps (search-tree
+nodes, `REGEX_COST_MAX`; a quantified atom multiplies the work after it unless a disjoint
+mandatory atom follows or only `$` does) or over a bound on the ASCII characters its bracket
+classes list (`REGEX_CLASS_WIDTH_MAX`; compile time), judging the pattern text without
+compiling or matching it. A pattern the bound counts as anchored only through a leading `.*` /
+`.+` is compiled behind a written `^`, with each such run spelled `(?s:.*)` / `(?s:.*)[^\n]`
+(lazy forms likewise), so the engine skips every later start position without changing which
+names match, including CNAME targets decoded from Latin-1 that carry a newline. A pattern over
+the matching bound only because it is unanchored is refused with the remedy: anchor it with `^`.
+Unanchored open runs before a literal tail, such as `\S+\.example\.com` or `ad.*\.example\.com`,
+need that anchor. There is no limit on the number of rules or on their summed cost: every rule
+the gate admits loads, and each list (including the Regex List) writes at most 20 per-rule
+refusal lines plus one summary line. User regex (the Regex List and the
+Custom_List `/re/` and `@@/re/` rows) live in their own containers (`userRegexDB` /
+`userAllowRegexDB`, apart from the feed ones) and every scan visits them first. The opt-in
+"Limit long/complex regex" setting separately caps pattern length. The bound counts steps (about
+11-24 ns each on a desktop CPU), so one rule costs at most a few milliseconds; a list scan costs
+the sum of its rules and nothing caps it, and an uncached numeric-precedence query scans the
+block lists twice and the allow lists once. The always-on runtime guard times every match: it
+logs one warning per slow rule per list (user/feed, block/allow) and one line per list whose scan sums over the warn ceiling
+(`regex_warn_ms`, 10 ms), and never removes a rule from the live databases. Pinned by
 `tests/test_adr07_*` (decision spec/oracle, parser, matcher strata, emit/wire, regex safety, PHP boundary);
 the regex/ReDoS kill-gate is
 `legacy/benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
@@ -47,8 +69,8 @@ runnable via the manual-only CI `benchmarks` job. See `legacy/ADRs/ADR_07_ABP_DN
 Domain names are case-insensitive, so **everything that evaluates a domain-matching regex
 must be too** — by lowercasing for plain comparison, by `re.IGNORECASE` for a compiled
 pattern, never by folding a pattern's own text. Every regex that matches a query name carries
-`IGNORECASE` (feed/user regex load, the save-time validator, and the catastrophic-shape gate's
-atom-overlap probe); the domain-literal reduction grammar (prod `pfb_unbound.py`, the
+`IGNORECASE` (feed/user regex load and the save-time validator; the admission gate never
+compiles or matches pattern text); the domain-literal reduction grammar (prod `pfb_unbound.py`, the
 reference oracle `tests/test_adr07_decision_spec.py`, and the benchmark spike
 `legacy/benchmarks/spike_adr07_regex.py` — kept in lockstep) admits either case and lowercases the
 folded key at fold time, so a mixed-case literal reduces identically to its lowercase twin.
@@ -57,8 +79,8 @@ grammar that contains a letter (the other prefixes -- `^`, `(.+\.)?`, `(^|\.)` -
 metacharacters, so case never applied to them); that token is matched case-insensitively too
 (#2199) -- a source pattern spelling it `(WWW\.)?` folds exactly like the lowercase form.
 Two constructs stay deliberately case-sensitive because they analyse **pattern text**, not
-domains: the module-level `_REGEX_*` shape-detection constants in `pfb_dnsbl_regex_rules.py`
-(match regex syntax punctuation), and the plain-domain label charset `_DNSBL_LABEL_CHARS`
+domains: the admission gate in `pfb_dnsbl_regex_rules.py` (it reads regex syntax punctuation
+and the case-significant escape letters), and the plain-domain label charset `_DNSBL_LABEL_CHARS`
 (runs strictly after `normalise()`'s own lowercasing, so widening it would be redundant). A
 regex can never be safely case-folded when a case-sensitive metacharacter class (`\s`/`\S`,
 `\w`/`\W`, `\d`/`\D`, …) would change meaning under the fold — the domain-literal grammar's
