@@ -18,6 +18,7 @@ from frontend_helpers import FakeUnbound, build_query
 
 SEED = 3517
 ITERATIONS = 3000
+MIN_ITERATIONS = 100  # a shorter run says nothing: its verdict would be the seed's choice, not the code's
 CLIENT = "192.0.2.10"
 ZONE = {(ALLOWED, dnswire.TYPE_A): [f"{ALLOWED} 300 IN A 192.0.2.77"]}
 
@@ -69,10 +70,12 @@ def _mutate(rng: random.Random, wire: bytes) -> bytes:
 
 
 def test_parse_raises_only_wire_error_and_an_accepted_message_encodes_and_parses_again() -> None:
+    assert ITERATIONS >= MIN_ITERATIONS, f"ran {ITERATIONS} iterations; the parse property needs {MIN_ITERATIONS}"
     rng = random.Random(SEED)
     seeds = _seeds()
-    accepted = 0
+    ran = accepted = 0
     for step in range(ITERATIONS):
+        ran += 1
         wire = _mutate(rng, rng.choice(seeds))
         try:
             message = dnswire.parse(wire)
@@ -85,10 +88,14 @@ def test_parse_raises_only_wire_error_and_an_accepted_message_encodes_and_parses
             dnswire.parse(dnswire.encode(message))
         except Exception as exc:
             raise AssertionError(f"seed {SEED} step {step}: re-encoding failed {exc!r} for {wire!r}") from exc
-    assert accepted > ITERATIONS // 10, f"only {accepted} of {ITERATIONS} mutants parsed"
+    minimum = max(1, ITERATIONS // 10)
+    assert (ran, accepted >= minimum) == (ITERATIONS, True), (
+        f"ran {ran} of {ITERATIONS} iterations; {accepted} parsed, at least {minimum} needed"
+    )
 
 
 def test_resolve_never_raises_and_its_reply_is_none_or_a_message(booted: Booted) -> None:
+    assert ITERATIONS >= MIN_ITERATIONS, f"ran {ITERATIONS} iterations; the resolve property needs {MIN_ITERATIONS}"
     rng = random.Random(SEED)
     seeds = _seeds()
     frontend = pfb_dns_proxy.Frontend(booted.module)
@@ -117,4 +124,5 @@ def test_resolve_never_raises_and_its_reply_is_none_or_a_message(booted: Booted)
                 replies += 1
         return replies
 
-    assert asyncio.run(run()) > 0
+    replies = asyncio.run(run())
+    assert replies >= max(1, ITERATIONS // 10), f"{replies} of {ITERATIONS} iterations got a reply"
