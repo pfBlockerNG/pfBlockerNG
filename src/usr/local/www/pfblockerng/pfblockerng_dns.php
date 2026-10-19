@@ -141,7 +141,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns']) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
 		. 'Runs pfBlockerNG\'s DNS proxy on the DNS Resolver\'s network interfaces and Listen Port, with or without DNSBL. '
 		. 'The proxy forwards every query to the DNS Resolver with the client\'s address (PROXY protocol v2), so the Resolver sees and logs the real client. '
 		. 'With DNSBL enabled the proxy also answers DNSBL blocks itself and the Resolver no longer loads the DNSBL Python module; '
@@ -175,7 +175,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doh'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
 		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb-dns</code>). '
 		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
 		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
@@ -196,6 +196,7 @@ $section->addInput(new Form_Select(
 	TRUE
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
+  ->setAttribute('aria-label', gettext('DoH Interface(s)'))
   ->setHelp('Interface(s) DoH listens on, besides loopback (127.0.0.1 and ::1), which is always served for a local front end. None selected: the Resolver\'s own interfaces.');
 
 $section->addInput(new Form_Input(
@@ -216,7 +217,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doq'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning"><strong>Experimental.</strong></span> '
+))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
 		. 'Serves DNS over QUIC (RFC 9250) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb-dns</code>). DoQ is UDP. '
 		. 'Requires the DNS Resolver\'s SSL/TLS certificate: select one under Services &gt; DNS Resolver.'
 		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
@@ -237,6 +238,7 @@ $section->addInput(new Form_Select(
 	TRUE
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
+  ->setAttribute('aria-label', gettext('DoQ Interface(s)'))
   ->setHelp('Interface(s) DoQ listens on, besides loopback (127.0.0.1 and ::1). None selected: the Resolver\'s own interfaces.');
 $form->add($section);
 

@@ -2149,7 +2149,6 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
     help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
     for needle in (
         "Experimental",
-        "text-warning",
         "with or without DNSBL",
         "Network Interfaces becomes Localhost",
         "the Listen Port is not changed",
@@ -2352,7 +2351,6 @@ def test_pfb_dns_page_renders_the_doh_and_doq_settings_directly_after_the_enable
     block = html[start:end]
     for needle in (
         "Experimental",
-        "text-warning",
         "DNS Resolver",
         "SSL/TLS certificate",
         "DoQ is UDP",
