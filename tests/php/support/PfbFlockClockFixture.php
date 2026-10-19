@@ -14,6 +14,9 @@ final class PfbFlockClockFixture
 	/** A loop that ticks this often never reached its condition: stuck, not slow. Above the longest wait a loaded body can ask for. */
 	private const MAX_TICKS = 500_000;
 
+	/** Real seconds a write may wait for its peer to drain it: past this the run is STUCK, not a verdict. */
+	private const WRITE_WATCHDOG_S = 10;
+
 	private float $now = 0.0;
 	private ?Closure $onSleep = NULL;
 	private ?Closure $onIdle = NULL;
@@ -49,9 +52,9 @@ final class PfbFlockClockFixture
 	}
 
 	/**
-	 * stream_select() on the virtual clock. A stream ready now is answered by the real call, with no wait. Otherwise the idle
-	 * hook decides, and the clock moves on by the seconds it returns, or by the whole wait when it returns NULL.
-	 * Without a hook this is the real call.
+	 * stream_select() on the virtual clock. A stream ready now is answered by the real call, with no wait. A write that must
+	 * wait for its peer to drain it is real blocking, under a watchdog. Otherwise the idle hook decides, and the clock moves on
+	 * by the seconds it returns, or by the whole wait when it returns NULL. Without a hook this is the real call.
 	 */
 	public function select(?array &$read, ?array &$write, ?array &$except, ?int $seconds, ?int $microseconds = 0): int|false
 	{
@@ -60,6 +63,17 @@ final class PfbFlockClockFixture
 		}
 		$ready = self::pollNow($read, $write, $except);
 		if ($ready !== 0) {
+			return $ready;
+		}
+
+		if ($read === NULL) {
+			// Waiting for the peer to drain a write is an event the peer produces, not a deadline: block for real, under a
+			// watchdog that reports a peer which never drains as STUCK/ENVIRONMENT, never as a verdict.
+			$ready = stream_select($read, $write, $except, self::WRITE_WATCHDOG_S, 0);
+			if ($ready === 0) {
+				throw new RuntimeException('STUCK/ENVIRONMENT: the peer never drained the write');
+			}
+
 			return $ready;
 		}
 		$wait = ($seconds ?? 0) + ($microseconds ?? 0) / 1_000_000;

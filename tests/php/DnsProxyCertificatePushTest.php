@@ -32,11 +32,14 @@ final class DnsProxyCertificatePushTest extends TestCase
 	use DnsProxyReadySeedTrait;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
+	private const OK_AT_ONCE = [[0.0, "ok\n"]];
 
 	private string $dir = '';
 	private string $socket = '';
 	/** @var list<array{resource,array<int,resource>}> */
 	private array $servers = [];
+	/** @var list<PfbFlockClockFixture> kept for the whole test: a loaded body reaches its clock through a weak reference */
+	private array $clocks = [];
 	private array $savedGlobals = [];
 
 	protected function setUp(): void
@@ -59,6 +62,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 	protected function tearDown(): void
 	{
 		$this->finish();
+		$this->clocks = [];
 		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
@@ -71,12 +75,12 @@ final class DnsProxyCertificatePushTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	/** A gateway that listens on the control socket and takes one push, answering $mode (see support/ControlSocketServer.php); returns the file its frame is recorded in. */
-	private function listen(string $mode = 'ok'): string
+	/** A gateway that listens on the control socket and takes one push; it writes only what the test releases (see support/ControlSocketServer.php). Returns the file its frame is recorded in. */
+	private function listen(): string
 	{
 		@unlink($this->socket);
 		$record = "{$this->dir}/frame." . count($this->servers);
-		$proc = proc_open([PHP_BINARY, __DIR__ . '/support/ControlSocketServer.php', $this->socket, $record, $mode], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+		$proc = proc_open([PHP_BINARY, __DIR__ . '/support/ControlSocketServer.php', $this->socket, $record], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
 		$this->assertIsResource($proc);
 		$read = [$pipes[1]];
 		$write = $except = NULL;
@@ -121,7 +125,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 		$record = $this->listen();
 
 		// When the apply (or the tick) refreshes the certificate
-		$this->assertTrue(pfb_dns_proxy_certificate_refresh(TRUE));
+		$refresh = $this->refreshOnVirtualClock();
+		$this->assertTrue($refresh(TRUE));
 		$this->finish();
 
 		// Then it received the file's content, length first, and nothing else; nothing is wrong
@@ -136,7 +141,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 		// Given a certificate that was pushed
 		$this->proxyServes();
 		$this->listen();
-		$this->assertTrue(pfb_dns_proxy_certificate_refresh(TRUE));
+		$refresh = $this->refreshOnVirtualClock();
+		$this->assertTrue($refresh(TRUE));
 		$this->finish();
 		@unlink($this->socket); // nobody listens now: a second push would fail and say so
 
@@ -154,14 +160,16 @@ final class DnsProxyCertificatePushTest extends TestCase
 		// Given a certificate that was pushed
 		$this->proxyServes();
 		$this->listen();
-		$this->assertTrue(pfb_dns_proxy_certificate_refresh(TRUE));
+		$refresh = $this->refreshOnVirtualClock();
+		$this->assertTrue($refresh(TRUE));
 		$this->finish();
 		$first = $this->pem();
 
 		// When the Resolver's certificate is renewed and the next tick runs
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert123', DnsProxyCertificateFixtures::issue('localhost'))];
 		$record = $this->listen();
-		$this->assertTrue(pfb_dns_proxy_certificate_refresh(TRUE));
+		$refresh = $this->refreshOnVirtualClock();
+		$this->assertTrue($refresh(TRUE));
 		$this->finish();
 
 		// Then the gateway got the new one, and that is what is on record
@@ -189,10 +197,11 @@ final class DnsProxyCertificatePushTest extends TestCase
 	{
 		// Given a gateway that refuses the certificate it is sent
 		$this->proxyServes();
-		$this->listen('error:the key is not the certificate\'s');
+		$this->listen();
+		$refresh = $this->refreshOnVirtualClock([[0.0, "error: the key is not the certificate's\n"]]);
 
 		// When the refresh runs
-		$this->assertFalse(pfb_dns_proxy_certificate_refresh(TRUE), 'the gateway does not serve the certificate');
+		$this->assertFalse($refresh(TRUE), 'the gateway does not serve the certificate');
 		$this->finish();
 
 		// Then there is one notice with the gateway's reason, and nothing records the push as done
@@ -203,7 +212,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 
 		// When the next tick finds a gateway that takes it
 		$record = $this->listen();
-		$this->assertTrue(pfb_dns_proxy_certificate_refresh(TRUE));
+		$refresh = $this->refreshOnVirtualClock();
+		$this->assertTrue($refresh(TRUE));
 		$this->finish();
 
 		// Then the same content is sent again and is on record
@@ -231,7 +241,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 		// Given a certificate that was pushed, and a Resolver whose certificate then becomes unusable
 		$this->proxyServes();
 		$this->listen();
-		$this->assertTrue(pfb_dns_proxy_certificate_refresh(TRUE));
+		$refresh = $this->refreshOnVirtualClock();
+		$this->assertTrue($refresh(TRUE));
 		$this->finish();
 		@unlink($this->socket);
 		$GLOBALS['config']['unbound']['sslcertref'] = '';
@@ -246,19 +257,33 @@ final class DnsProxyCertificatePushTest extends TestCase
 		$this->assertStringNotContainsString('cannot connect', $this->notices()[0]);
 	}
 
-	/**
-	 * A push to a stand-in gateway that writes only what the test releases, on the virtual clock: each entry of $script is
-	 * [seconds after the previous write, the bytes written then]. The push's deadline is a count of virtual seconds, never a wait.
-	 *
-	 * @param list<array{float,string}> $script
-	 * @return array{0: ?string, 1: float} the push's verdict, and the virtual seconds it took
-	 */
-	private function pushOnVirtualClock(array $script, float $timeout): array
+	/** The verdict as the test prints it: the push's own reason, or that the push returned NULL. */
+	private static function verdictOf(?string $why): string
 	{
-		$this->listen('scripted');
+		return $why ?? 'ACKNOWLEDGED: the push returned NULL';
+	}
+
+	/** The verdict of a push that gave up on a gateway which never answered, after $seconds. */
+	private function noReply(float $seconds): string
+	{
+		return "no reply from {$this->socket} within {$seconds} s";
+	}
+
+	/**
+	 * Loads $functions onto a virtual clock, against the gateway listen() started last. $script is what that gateway writes, in
+	 * order: [seconds after the previous write, bytes], or [seconds, NULL] to hang up. Each write is released by the test, so the
+	 * clock, not the host, decides when it arrives. The clock lives until tearDown(), which the loaded bodies need.
+	 *
+	 * @param list<string> $functions
+	 * @param list<array{float,?string}> $script
+	 * @return array{0: string, 1: PfbFlockClockFixture} the namespace the functions were loaded into, and the clock
+	 */
+	private function onVirtualClock(array $functions, array $script): array
+	{
+		$this->assertNotEmpty($this->servers, 'a gateway must be listening before a push');
 		$pipes = end($this->servers)[1];
 		$clock = new PfbFlockClockFixture();
-		$push = $clock->loadChain(['pfb_dns_proxy_certificate_push']) . '\\pfb_dns_proxy_certificate_push';
+		$namespace = $clock->loadChain($functions);
 		$clock->setIdle(function (float $wait) use (&$script, $pipes): ?float {
 			if ($script === [] || $script[0][0] > $wait) {
 				return NULL;
@@ -268,14 +293,38 @@ final class DnsProxyCertificatePushTest extends TestCase
 
 			return $delay;
 		});
+		$this->clocks[] = $clock;
 
-		return [$push('certificate and key', $this->socket, $timeout), $clock->now()];
+		return [$namespace, $clock];
 	}
 
-	/** The stand-in gateway writes $bytes now, and acknowledges once they are in the socket, so PHP's next poll sees them. */
-	private function release($pipes, string $bytes): void
+	/** The certificate refresh on a virtual clock, against the gateway listen() started last: its name in that namespace. */
+	private function refreshOnVirtualClock(array $script = self::OK_AT_ONCE): string
 	{
-		fwrite($pipes[0], 'x' . bin2hex($bytes) . "\n");
+		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_certificate_refresh', 'pfb_dns_proxy_certificate_push'], $script);
+
+		return $namespace . '\\pfb_dns_proxy_certificate_refresh';
+	}
+
+	/**
+	 * A push (not a refresh) against a gateway that answers as $script says, on the virtual clock: [the verdict, the virtual
+	 * seconds it took]. The push's deadline is a count of virtual seconds, never a wait.
+	 *
+	 * @param list<array{float,?string}> $script
+	 * @return array{0: ?string, 1: float}
+	 */
+	private function pushOnVirtualClock(array $script, float $timeout): array
+	{
+		$this->listen();
+		[$namespace, $clock] = $this->onVirtualClock(['pfb_dns_proxy_certificate_push'], $script);
+
+		return [($namespace . '\\pfb_dns_proxy_certificate_push')('certificate and key', $this->socket, $timeout), $clock->now()];
+	}
+
+	/** The stand-in gateway writes $bytes now (or hangs up, for NULL), and acknowledges once it has: PHP's next poll sees the result. */
+	private function release($pipes, ?string $bytes): void
+	{
+		fwrite($pipes[0], ($bytes === NULL ? 'close' : 'x' . bin2hex($bytes)) . "\n");
 		fflush($pipes[0]);
 		stream_set_timeout($pipes[1], 10);
 		$ack = fgets($pipes[1]);
@@ -289,9 +338,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 		// Given a gateway that never writes
 		[$why, $took] = $this->pushOnVirtualClock([], 0.3);
 
-		// Then the push gives up when its timeout has passed on the virtual clock, with no reply
-		$this->assertNotNull($why);
-		$this->assertStringContainsString('no reply', (string) $why);
+		// Then the push gives up at its timeout, and says so
+		$this->assertSame($this->noReply(0.3), self::verdictOf($why), 'given up on with no reply');
 		$this->assertEqualsWithDelta(0.3, $took, 1e-9, 'given up on after exactly the timeout');
 	}
 
@@ -302,8 +350,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 		[$why, $took] = $this->pushOnVirtualClock([[0.1, 'o'], [0.1, 'k'], [0.25, "\n"]], 0.3);
 
 		// Then the push gives up at the deadline, and the ok line that would have completed later is not an acknowledgement
-		$this->assertNotNull($why, 'an ok line completed after the deadline is not an acknowledgement');
-		$this->assertStringContainsString('no reply', (string) $why);
+		$this->assertSame($this->noReply(0.3), self::verdictOf($why), 'an ok line completed after the deadline is not an acknowledgement');
 		$this->assertEqualsWithDelta(0.3, $took, 1e-9, 'the trickled bytes did not move the deadline');
 	}
 
@@ -313,27 +360,36 @@ final class DnsProxyCertificatePushTest extends TestCase
 		[$why, $took] = $this->pushOnVirtualClock([[0.1, 'ok']], 0.3);
 
 		// Then the push gives up at the deadline: an incomplete reply must not mark the certificate as pushed
-		$this->assertNotNull($why, 'an incomplete reply must not mark the certificate as pushed');
-		$this->assertStringContainsString('no reply', (string) $why);
+		$this->assertSame($this->noReply(0.3), self::verdictOf($why), 'an incomplete reply must not mark the certificate as pushed');
 		$this->assertEqualsWithDelta(0.3, $took, 1e-9, 'given up on at the deadline');
+	}
+
+	public function testAnOkLineAfterTheTimeoutIsNotAnAcknowledgement(): void
+	{
+		// Given a gateway whose ok line comes 3.5 s after the push, past the 3 s timeout
+		[$why, $took] = $this->pushOnVirtualClock([[3.5, "ok\n"]], 3.0);
+
+		// Then the push gives up at 3 s, and the late line is never read as an acknowledgement
+		$this->assertSame($this->noReply(3.0), self::verdictOf($why), 'a line after the timeout is not an acknowledgement');
+		$this->assertEqualsWithDelta(3.0, $took, 1e-9, 'given up on at the timeout, not when the line came');
 	}
 
 	public function testAnUnterminatedOkFollowedByEofIsNotAnAcknowledgement(): void
 	{
-		$this->listen('partial-close');
+		// Given a gateway that writes 'ok' with no newline, then hangs up
+		[$why] = $this->pushOnVirtualClock([[0.0, 'ok'], [0.0, NULL]], 0.3);
 
-		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
-
-		$this->assertNotNull($why, 'closing after an incomplete ok must not acknowledge the certificate');
+		// Then the push reports the hang-up, and does not take the partial reply for an acknowledgement
+		$this->assertSame("{$this->socket} closed the connection with no reply", self::verdictOf($why), 'closing after an incomplete ok must not acknowledge the certificate');
 	}
 
 	public function testAnOverlongReplyIsRejectedWithoutAcceptingTheCertificate(): void
 	{
-		$this->listen('long-reply');
+		// Given a gateway whose reply is longer than the reply cap, with no newline in it
+		[$why] = $this->pushOnVirtualClock([[0.0, str_repeat('a', 512)]], 0.3);
 
-		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
-
-		$this->assertNotNull($why);
+		// Then the push rejects it at the cap, and reads no further
+		$this->assertSame("{$this->socket} sent no complete reply", self::verdictOf($why), 'an overlong reply is rejected, not waited on');
 	}
 
 	public function testASocketNobodyListensOnIsAReasonThatNamesIt(): void
@@ -348,7 +404,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 		$pem = str_repeat("0123456789abcdef\n", 3600); // 61 200 bytes
 		$record = $this->listen();
 
-		$why = pfb_dns_proxy_certificate_push($pem, $this->socket);
+		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_certificate_push'], self::OK_AT_ONCE);
+		$why = ($namespace . '\\pfb_dns_proxy_certificate_push')($pem, $this->socket);
 		$this->finish();
 
 		$this->assertNull($why);
@@ -360,7 +417,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 		// Given a pushed certificate, its record, and a copy an earlier build left in the Unbound chroot
 		$this->proxyServes();
 		$this->listen();
-		$this->assertTrue(pfb_dns_proxy_certificate_refresh(TRUE));
+		$refresh = $this->refreshOnVirtualClock();
+		$this->assertTrue($refresh(TRUE));
 		$this->finish();
 		@unlink($this->socket);
 		$legacy = $GLOBALS['pfb']['dns_proxy_cert_legacy'];

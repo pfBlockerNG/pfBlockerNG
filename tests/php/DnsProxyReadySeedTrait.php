@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/PfbFlockClockFixture.php';
+
 /**
  * issue #3515 -- seeds the two files the DNS proxy's readiness is read from, as real files, and answers liveness through the
  * isvalidpid() double (a test never starts a process): the daemon's child pidfile ($pfb['dns_proxy_pidfile'], what
@@ -50,5 +52,22 @@ trait DnsProxyReadySeedTrait
 		@unlink($this->proxyPidfile());
 		@unlink($this->proxyMarker());
 		unset($GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()], $GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE]);
+	}
+
+	/**
+	 * pfb_reload_unbound() with the waits it reaches loaded onto a virtual clock: the proxy's readiness wait (restart, confirm,
+	 * await) and the DNSBL swap wait (wait applied, wait marker). Their polls are ticks, so no test waits on the host.
+	 *
+	 * @return array{0: PfbFlockClockFixture, 1: string} the clock, and the reload's name in the namespace it was loaded into
+	 */
+	private function clockedReload(): array
+	{
+		$clock = new PfbFlockClockFixture();
+		$namespace = $clock->loadChain(
+			['pfb_reload_unbound', 'pfb_unbound_py_wait_applied', 'pfb_unbound_py_wait_marker', 'pfb_dns_proxy_restart', 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready'],
+			['PFB_DNS_PROXY_START_WAIT' => 1]
+		);
+
+		return [$clock, $namespace . '\\pfb_reload_unbound'];
 	}
 }

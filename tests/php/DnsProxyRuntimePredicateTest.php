@@ -556,12 +556,14 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->setProxyUp(TRUE);
 		$starts = $this->startAttempts();
 
-		$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		[$clock, $reload] = $this->clockedReload();
+		$swapped = $reload('enabled', FALSE, FALSE, TRUE);
 
-		$this->assertFalse($swapped, 'an unconfirmed swap reads as not swapped');
+		$this->assertSame(FALSE, $swapped, 'an unconfirmed swap reads as not swapped');
 		$this->assertStringContainsString('swap still in flight', $this->logText(),
 			'the proxy is alive: slowness is in flight, not broken');
 		$this->assertSame($starts, $this->startAttempts(), 'a live module host is never restarted for being slow');
+		$this->assertSame(array_fill(0, 5, 200000), $clock->sleeps, 'the swap waited its whole 1 s budget in 200 ms polls, then reported in flight');
 	}
 
 	public function testProxyModeSwapRecoversViaRestartWhenTheProxyDiesDuringTheSwap(): void
