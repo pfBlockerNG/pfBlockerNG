@@ -33,7 +33,7 @@ from frontend_constants import (
     Booted,
     LogFeed,
 )
-from frontend_helpers import WATCHDOG, FakeUnbound, build_query
+from frontend_helpers import WATCHDOG, FakeUnbound, ManualClock, build_query
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
 MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 65535  # type + id + (transport + n + 255 IP text bytes + 65535 DNS wire bytes)
@@ -560,6 +560,52 @@ def test_a_resolve_that_raises_gets_a_drop_one_log_entry_and_the_session_goes_on
             await asyncio.wait_for(service, WATCHDOG)
         assert len(problems) == 1, problems
         assert "query 7" in problems[0] and "module crashed" in problems[0], problems
+
+    asyncio.run(main())
+
+
+def test_a_burst_of_failing_queries_writes_one_log_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every failed query is dropped, but one flood of failures must not fill the unrotated log: one line per window."""
+    clock = ManualClock()
+    monkeypatch.setattr(decision_service, "monotonic", clock, raising=False)
+
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+        raise RuntimeError("module crashed")
+
+    async def main() -> None:
+        gateway, service, problems = await _start_with(resolve)
+        try:
+            for fid in range(100):
+                await gateway.send(query_frame(fid, b"explode"))
+                assert await gateway.recv() == (DROP, fid, b"")
+        finally:
+            gateway.close()
+            await asyncio.wait_for(service, WATCHDOG)
+        assert len(problems) == 1 and "query 0" in problems[0], problems
+
+    asyncio.run(main())
+
+
+def test_a_failure_after_the_thirty_second_window_is_logged_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = ManualClock()
+    monkeypatch.setattr(decision_service, "monotonic", clock, raising=False)
+
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+        raise RuntimeError("module crashed")
+
+    async def main() -> None:
+        gateway, service, problems = await _start_with(resolve)
+        try:
+            for fid in (0, 1):
+                await gateway.send(query_frame(fid, b"explode"))
+                assert await gateway.recv() == (DROP, fid, b"")
+            clock.advance(30.0)  # the window ends exactly here
+            await gateway.send(query_frame(2, b"explode"))
+            assert await gateway.recv() == (DROP, 2, b"")
+        finally:
+            gateway.close()
+            await asyncio.wait_for(service, WATCHDOG)
+        assert [problem.split(":")[0] for problem in problems] == ["query 0 failed", "query 2 failed"], problems
 
     asyncio.run(main())
 

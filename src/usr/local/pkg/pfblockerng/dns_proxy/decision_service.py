@@ -14,6 +14,7 @@ import ipaddress
 import socket
 import struct
 from collections.abc import Awaitable, Callable
+from time import monotonic
 from typing import Protocol
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
@@ -23,6 +24,7 @@ STREAM, DATAGRAM = (
 )  # the QUERY's transport byte: TCP, DoT, DoH and DoQ clients have no size limit, plain UDP has one
 # type + id, then transport + n + up to 255 IP text bytes + up to 65535 DNS wire bytes
 MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 65535
+FAILURE_LOG_INTERVAL = 30.0  # seconds between two "query N failed" lines: the decider's no-reply window
 
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 
@@ -87,12 +89,15 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
     tasks: set[asyncio.Task[None]] = set()
     inflight: set[int] = set()
     replies: dict[int, asyncio.Future[bytes | None]] = {}
+    failed_logged = float("-inf")  # when a failed query was last logged
 
     async def send(ftype: int, fid: int, payload: bytes = b"") -> None:
         writer.write(encode_frame(ftype, fid, payload))  # one write() per frame: tasks cannot interleave bytes
         await writer.drain()
 
     async def decide(fid: int, datagram: bool, ip: str | None, wire: bytes) -> None:
+        nonlocal failed_logged
+
         async def forward(request: bytes) -> bytes | None:
             waiter = replies[fid] = asyncio.get_running_loop().create_future()
             try:
@@ -108,7 +113,9 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
             if ip is not None:
                 answer = await resolve(wire, ip, forward, datagram=datagram)
         except Exception as exc:
-            log(f"query {fid} failed: {exc!r}")
+            if (now := monotonic()) - failed_logged >= FAILURE_LOG_INTERVAL:
+                failed_logged = now
+                log(f"query {fid} failed: {exc!r}")
         inflight.discard(fid)  # before the final frame: the gateway may reuse the id the moment it has it
         try:
             await (send(DROP, fid) if answer is None else send(ANSWER, fid, answer))
