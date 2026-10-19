@@ -1005,6 +1005,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		}
 		$this->assertStringContainsString('manual repair required', end($texts));
 		$this->assertStringNotContainsString('still carries', end($texts));
+		$this->assertStringNotContainsString('see the notice before this one', end($texts), 'no restore was tried, so no earlier notice exists');
 	}
 
 	public function testAConfigLockHeldForOneWaitIsRetriedOnceAndTheRollbackStillRestoresTheResolver(): void

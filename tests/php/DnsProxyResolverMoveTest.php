@@ -415,6 +415,9 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('pfB-DNS is not active', $notice['notice']);
 		$this->assertStringContainsString('recovery is required', $notice['notice']);
 		$this->assertStringNotContainsString('restored', $notice['notice']);
+		$this->assertStringContainsString('cannot be confirmed', $notice['notice'], 'it says what the Resolver was before cannot be told');
+		$this->assertStringContainsString('manual repair is required', $notice['notice']);
+		$this->assertStringNotContainsString('still carries', $notice['notice'], 'and never that the Resolver carries our settings');
 		$this->assertSame('/services_unbound.php', $notice['url']);
 		$this->assertSame(2, $notice['priority']);
 	}
