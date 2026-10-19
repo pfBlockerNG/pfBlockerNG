@@ -31,6 +31,8 @@ func TestMain(m *testing.M) {
 			os.Exit(fakeDecider(os.Args[2]))
 		case "--as-dropper":
 			os.Exit(dropAndReport(os.Args[2]))
+		case "--as-ctl-client":
+			os.Exit(pushAsUser(os.Args[2], os.Args[3], os.Args[4]))
 		}
 	}
 	os.Exit(m.Run())

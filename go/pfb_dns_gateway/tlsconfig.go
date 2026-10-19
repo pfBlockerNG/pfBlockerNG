@@ -50,6 +50,14 @@ func newCertStore(path string, logf func(format string, args ...any)) (*certStor
 	return &certStore{path: path, logf: logf, now: time.Now, cert: &cert, seen: raw, checked: time.Now()}, nil
 }
 
+// newEmptyCertStore is a store with no certificate: every handshake fails until one is pushed.
+func newEmptyCertStore(logf func(format string, args ...any)) *certStore {
+	return &certStore{logf: logf, now: time.Now}
+}
+
+// push replaces the served certificate by the chain and key in pem.
+func (s *certStore) push(pem []byte) error { return errors.New("not implemented") }
+
 // reason is the cause of a file error without the operation and the path, which the caller names.
 func reason(err error) error {
 	var pe *fs.PathError
