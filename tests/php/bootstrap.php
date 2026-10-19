@@ -124,8 +124,9 @@ $GLOBALS['pfb']['chroot_cmd'] = $pfb_test_chroot_cmd;
 unset($pfb_test_chroot_cmd);
 
 // 4f. Seams for the experimental DNS proxy (issue #3515): its rc script path, so a unit test never reads or
-//     unlinks the appliance's, and the bounded wait for its pidfile, so a proxy that never comes up costs a
-//     test one second, not five.
+//     unlinks the appliance's, and the readiness wait for a proxy at 0 s. A start double makes the proxy ready
+//     synchronously, so the first probe decides and a proxy that never serves costs no wait; the tick-driven
+//     budget is proven on the virtual clock instead (DnsProxyReadinessTest).
 $pfb_test_rc_dir = "{$pfb_test_tmp}/rc.d";
 if (!mkdir($pfb_test_rc_dir, 0777, TRUE)) {
 	throw new RuntimeException("PHPUnit sandbox directory creation failed: {$pfb_test_rc_dir}");
@@ -134,7 +135,7 @@ if (!defined('PFB_DNS_PROXY_RCFILE')) {
 	define('PFB_DNS_PROXY_RCFILE', "{$pfb_test_rc_dir}/pfb_dns_proxy.sh");
 }
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
-	define('PFB_DNS_PROXY_START_WAIT', 1);
+	define('PFB_DNS_PROXY_START_WAIT', 0);
 }
 unset($pfb_test_rc_dir);
 

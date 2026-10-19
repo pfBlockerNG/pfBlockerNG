@@ -81,12 +81,8 @@ final class DnsProxyGatewayOnlyTest extends TestCase
 	private function runWhatDaemonLaunched(array $launch): array
 	{
 		$command = array_slice($launch, (int) array_search('/bin/sh', $launch, TRUE));
-		$proc = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, NULL, ['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')]);
-		$this->assertIsResource($proc, 'proc_open failed');
-		fclose($pipes[0]);
-		$output = (string) stream_get_contents($pipes[1]);
-		fclose($pipes[1]);
-		return [proc_close($proc), $output];
+		$run = pfb_test_run_process($command, 20.0, ['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')]);
+		return [$run['exit'], $run['stdout'] . $run['stderr']];
 	}
 
 	/** @return array<string,array{list<string>,int,string,int,string}> payload targets, their mode, the machine, the wrapper's status, what its message names */

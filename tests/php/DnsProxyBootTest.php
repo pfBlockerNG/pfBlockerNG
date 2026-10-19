@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/ProcessRunner.php';
+
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -84,19 +86,14 @@ final class DnsProxyBootTest extends TestCase
 			})();
 			echo json_encode(['calls' => $calls, 'leaked' => $leaked]);
 			PHP;
-		$proc = proc_open(
+		$run = pfb_test_run_process(
 			[PHP_BINARY, '-d', 'display_errors=stderr', '-r', substr($driver, strlen("<?php\n"))],
-			[1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-			$pipes,
-			NULL,
+			10.0,
 			['LIVE' => json_encode($livePidfiles), 'RC' => $rc, 'HOOK' => self::HOOK]
 		);
-		$this->assertIsResource($proc);
-		$out = (string) stream_get_contents($pipes[1]);
-		$err = (string) stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$status = proc_close($proc);
+		$out = $run['stdout'];
+		$err = $run['stderr'];
+		$status = $run['exit'];
 		$this->assertSame(0, $status, "the hook must run with core functions only: {$err}{$out}");
 		$this->assertSame('', $err, 'no warning or notice');
 		$result = json_decode($out, TRUE);

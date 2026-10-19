@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+require_once __DIR__ . '/support/ProcessRunner.php';
 
 /**
  * The sandbox the DNS proxy's generated rc script runs in (issue #3515): the real script executed under dash, every
@@ -348,24 +349,19 @@ trait DnsProxyRcSandboxTrait
 	}
 
 	/**
-	 * Run the generated script's verb with pipes (never /dev/null) on fds 0/1/2 under a hard watchdog.
+	 * Run the generated script's verb under pfb_test_run_process(): a hard deadline that reaps the shell and reports
+	 * STUCK/ENVIRONMENT, so a stalled script is never a status to decide on.
 	 *
-	 * @return array{0: int, 1: string} exit status and combined stdout/stderr
+	 * @return array{0: int, 1: string} exit status, then stdout and stderr
 	 */
 	private function rc(string $verb): array
 	{
-		$proc = proc_open(
-			[$GLOBALS['pfb']['timeout'], '-k', '2', '20', $this->shell, "{$this->dir}/run.sh", $verb],
-			[0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]],
-			$pipes,
-			NULL,
+		$run = pfb_test_run_process(
+			[$this->shell, "{$this->dir}/run.sh", $verb],
+			20.0,
 			['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')]
 		);
-		$this->assertIsResource($proc, 'proc_open failed');
-		fclose($pipes[0]);
-		$output = (string) stream_get_contents($pipes[1]);
-		fclose($pipes[1]);
-		return [proc_close($proc), $output];
+		return [$run['exit'], $run['stdout'] . $run['stderr']];
 	}
 
 	/**

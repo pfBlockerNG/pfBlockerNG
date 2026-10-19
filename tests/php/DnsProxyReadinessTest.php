@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/support/PfbFlockClockFixture.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -18,8 +19,8 @@ use PHPUnit\Framework\TestCase;
  * with no child, and a marker with no live child are all NOT ready. Liveness (pfb_dns_proxy_running(), pidfile only) stays
  * what it was: it answers "is the module host up?", readiness answers "did the activation work?".
  *
- * The marker and the pidfile are real files; only process liveness is the isvalidpid() double. The wait is the existing
- * startup budget (PFB_UNBOUND_START_WAIT, 30 s), which the bootstrap shortens for the suite (PFB_DNS_PROXY_START_WAIT).
+ * The marker and the pidfile are real files; only process liveness is the isvalidpid() double. The await is the production
+ * wait, loaded onto a virtual clock (clockedAwait()): it spends its budget in ticks, and never sleeps for real.
  */
 #[CoversFunction('pfb_dns_proxy_ready')]
 #[CoversFunction('pfb_dns_proxy_await_ready')]
@@ -28,6 +29,9 @@ final class DnsProxyReadinessTest extends TestCase
 	use DnsProxyReadySeedTrait;
 
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+
+	/** The wait's budget in seconds: the suite's former real one, which is now ten 100 ms ticks of the virtual clock. */
+	private const BUDGET_S = 1;
 
 	private array $savedValidPids = [];
 
@@ -48,7 +52,7 @@ final class DnsProxyReadinessTest extends TestCase
 	{
 		$this->proxyServes('4242');
 
-		$this->assertTrue(pfb_dns_proxy_ready());
+		$this->assertSame(TRUE, pfb_dns_proxy_ready(), 'the marker names the live child');
 	}
 
 	public function testAProcessThatLivesButNeverPublishedTheMarkerIsAliveAndNotReady(): void
@@ -57,8 +61,8 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->proxyLivesButNeverServes('4242');
 
 		// Then it is alive by the pidfile, and not ready
-		$this->assertTrue(pfb_dns_proxy_running(), 'alive: the module-host predicate is pidfile-based and unchanged');
-		$this->assertFalse(pfb_dns_proxy_ready(), 'a live pid without the marker is not a serving listener');
+		$this->assertSame(TRUE, pfb_dns_proxy_running(), 'alive: the module-host predicate is pidfile-based and unchanged');
+		$this->assertSame(FALSE, pfb_dns_proxy_ready(), 'a live pid without the marker is not a serving listener');
 	}
 
 	public function testAMarkerLeftByAnEarlierIncarnationIsNotReady(): void
@@ -66,7 +70,7 @@ final class DnsProxyReadinessTest extends TestCase
 		// Given the supervisor restarted the child as 4243, and 4242's marker is still on disk
 		$this->seedProxy('4243', "4242\n");
 
-		$this->assertFalse(pfb_dns_proxy_ready(), 'the marker names another pid than the current child');
+		$this->assertSame(FALSE, pfb_dns_proxy_ready(), 'the marker names another pid than the current child');
 	}
 
 	public function testALiveSupervisorAloneIsNotReady(): void
@@ -75,7 +79,7 @@ final class DnsProxyReadinessTest extends TestCase
 		file_put_contents($this->proxyMarker(), "1001\n");
 		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 
-		$this->assertFalse(pfb_dns_proxy_ready());
+		$this->assertSame(FALSE, pfb_dns_proxy_ready(), 'a live supervisor with no child is not readiness');
 	}
 
 	public function testAMarkerWithoutALiveChildIsNotReady(): void
@@ -83,7 +87,7 @@ final class DnsProxyReadinessTest extends TestCase
 		// Given a marker and a child pidfile that agree, and a child that has exited
 		$this->seedProxy('4242', "4242\n", FALSE);
 
-		$this->assertFalse(pfb_dns_proxy_ready(), 'a marker alone is not readiness');
+		$this->assertSame(FALSE, pfb_dns_proxy_ready(), 'a marker alone is not readiness');
 	}
 
 	/** @return array<string,array{string}> */
@@ -109,7 +113,7 @@ final class DnsProxyReadinessTest extends TestCase
 	{
 		$this->seedProxy('4242', $marker);
 
-		$this->assertFalse(pfb_dns_proxy_ready());
+		$this->assertSame(FALSE, pfb_dns_proxy_ready(), 'a malformed marker is not readiness, even with a live child');
 	}
 
 	public function testAMalformedChildPidfileIsNotReady(): void
@@ -118,7 +122,7 @@ final class DnsProxyReadinessTest extends TestCase
 		file_put_contents($this->proxyMarker(), "4242\n");
 		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = TRUE;
 
-		$this->assertFalse(pfb_dns_proxy_ready());
+		$this->assertSame(FALSE, pfb_dns_proxy_ready(), 'a malformed child pidfile is not readiness');
 	}
 
 	/** @return array<string,array{string}> a malformed pid that BOTH files can carry, so the two agreeing proves nothing */
@@ -138,14 +142,28 @@ final class DnsProxyReadinessTest extends TestCase
 	{
 		$this->seedProxy($pid, "{$pid}\n");
 
-		$this->assertFalse(pfb_dns_proxy_ready());
+		$this->assertSame(FALSE, pfb_dns_proxy_ready(), 'a malformed pid that both files agree on is not readiness');
 	}
 
 	public function testTheMarkerWithoutATrailingNewlineIsStillTheSamePid(): void
 	{
 		$this->seedProxy('4242', '4242');
 
-		$this->assertTrue(pfb_dns_proxy_ready(), 'a decimal pid is a decimal pid, with or without its newline');
+		$this->assertSame(TRUE, pfb_dns_proxy_ready(), 'a decimal pid is a decimal pid, with or without its newline');
+	}
+
+	/** @return array{PfbFlockClockFixture,string} the virtual clock the wait sleeps on, and the wait's name in the namespace it was loaded into */
+	private function clockedAwait(): array
+	{
+		$clock = new PfbFlockClockFixture();
+		$namespace = $clock->loadChain(['pfb_dns_proxy_await_ready'], ['PFB_DNS_PROXY_START_WAIT' => self::BUDGET_S]);
+		return [$clock, $namespace . '\\pfb_dns_proxy_await_ready'];
+	}
+
+	/** The sleeps of a wait that spent its whole budget: one 100 ms tick per poll, as the production loop sleeps. */
+	private static function fullBudget(): array
+	{
+		return array_fill(0, self::BUDGET_S * 10, 100000);
 	}
 
 	public function testTheAwaitReturnsAsSoonAsTheMarkerAppears(): void
@@ -159,13 +177,15 @@ final class DnsProxyReadinessTest extends TestCase
 			return TRUE;
 		};
 		file_put_contents($this->proxyPidfile(), "4242\n");
+		[$clock, $await] = $this->clockedAwait();
 
 		// When the activation waits for it
-		$ready = pfb_dns_proxy_await_ready();
+		$ready = $await();
 
-		// Then it returns ready, having looked at least until the marker was there
-		$this->assertTrue($ready);
-		$this->assertGreaterThanOrEqual(3, $probes);
+		// Then it returns ready on the probe that found the marker, two 100 ms ticks in, not after the whole budget
+		$this->assertSame(TRUE, $ready, 'the wait ends ready once the marker is there');
+		$this->assertSame(3, $probes, 'one probe per tick, stopping at the probe that found the marker');
+		$this->assertSame([100000, 100000], $clock->sleeps, 'the wait slept two ticks of 100 ms, then returned');
 	}
 
 	public function testTheAwaitGivesUpWhenOnlyTheSupervisorLives(): void
@@ -173,15 +193,28 @@ final class DnsProxyReadinessTest extends TestCase
 		// Given a child that never lives past its pidfile, and a supervisor that does
 		file_put_contents($this->proxyPidfile(), "4242\n");
 		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		[$clock, $await] = $this->clockedAwait();
 
-		$this->assertFalse(pfb_dns_proxy_await_ready(), 'a live supervisor is not readiness');
+		// When the activation waits for it
+		$ready = $await();
+
+		// Then the wait gives up once its whole budget has passed on the virtual clock: a live supervisor is not readiness
+		$this->assertSame(FALSE, $ready, 'a live supervisor is not readiness');
+		$this->assertSame(self::fullBudget(), $clock->sleeps, 'the wait gave up after its whole budget, tick by tick');
 	}
 
 	public function testTheAwaitGivesUpOnAProcessThatLivesButNeverServes(): void
 	{
+		// Given a process that lives and never publishes its marker
 		$this->proxyLivesButNeverServes('4242');
+		[$clock, $await] = $this->clockedAwait();
 
-		$this->assertFalse(pfb_dns_proxy_await_ready());
+		// When the activation waits for it
+		$ready = $await();
+
+		// Then the wait gives up once its whole budget has passed on the virtual clock
+		$this->assertSame(FALSE, $ready, 'a listener that never publishes its marker is not ready');
+		$this->assertSame(self::fullBudget(), $clock->sleeps, 'the wait gave up after its whole budget, tick by tick');
 	}
 
 	public function testTheAwaitFollowsTheProcessTheSupervisorRestartedAsNewChild(): void
@@ -200,10 +233,12 @@ final class DnsProxyReadinessTest extends TestCase
 			}
 			return TRUE;
 		};
+		[$clock, $await] = $this->clockedAwait();
 
 		// Then the wait ends only once the marker names the child the pidfile names at that moment
-		$this->assertTrue(pfb_dns_proxy_await_ready());
-		$this->assertGreaterThanOrEqual(4, $probes);
+		$this->assertSame(TRUE, $await(), 'the marker of the new child ends the wait');
+		$this->assertSame(4, $probes, 'the marker of the earlier incarnation did not end the wait');
+		$this->assertSame([100000, 100000, 100000], $clock->sleeps, 'three ticks of 100 ms, then ready');
 	}
 
 	public function testTheDefaultBudgetIsTheNativeUnboundStartupBudgetAndTheDefaultsPointAtTheRealFiles(): void
@@ -224,7 +259,7 @@ final class DnsProxyReadinessTest extends TestCase
 
 	public function testThePidfileOnlyAwaitIsReplacedEverywhere(): void
 	{
-		$this->assertFalse(function_exists('pfb_dns_proxy_await_running'), 'no alias is kept for the pidfile-only wait');
+		$this->assertSame(FALSE, function_exists('pfb_dns_proxy_await_running'), 'no alias is kept for the pidfile-only wait');
 
 		$root = dirname(__DIR__, 2);
 		$files = (string) shell_exec('grep -rl "pfb_dns_proxy_await_running" ' . escapeshellarg("{$root}/src") . ' ' . escapeshellarg("{$root}/docs") . ' 2>/dev/null');

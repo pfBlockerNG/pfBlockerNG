@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/support/PfbFlockClockFixture.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
@@ -239,6 +240,17 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertSame([], $seen, 'a Resolver being given back is not a reason to bring the proxy up');
 	}
 
+	/** pfb_reload_unbound() with the proxy wait it reaches (restart, confirm, await) loaded onto a virtual clock: its marker probes are ticks. */
+	private function clockedReload(): array
+	{
+		$clock = new PfbFlockClockFixture();
+		$namespace = $clock->loadChain(
+			['pfb_reload_unbound', 'pfb_dns_proxy_restart', 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready'],
+			['PFB_DNS_PROXY_START_WAIT' => 1]
+		);
+		return [$clock, $namespace . '\\pfb_reload_unbound'];
+	}
+
 	public function testTheLedgerWaitsForTheProxyToPublishItsReadyMarkerBeforeItDecides(): void
 	{
 		// Given a restart-path apply, and a proxy that publishes its marker only a few probes after the
@@ -257,10 +269,12 @@ final class DnsProxyReloadRestartTest extends TestCase
 		};
 
 		// When the Resolver is reloaded
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		[$clock, $reload] = $this->clockedReload();
+		$reload('enabled', FALSE, TRUE);
 
 		// Then the ledger saw the serving proxy: no "not converged" entry is open
 		$this->assertGreaterThanOrEqual(3, $state['probes'], 'the marker was waited for until it appeared');
+		$this->assertSame([100000, 100000], $clock->sleeps, 'the ledger waited two ticks of 100 ms for the marker, then read it');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'), 'a proxy that came up converged');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'and nothing was rolled back');
 	}
