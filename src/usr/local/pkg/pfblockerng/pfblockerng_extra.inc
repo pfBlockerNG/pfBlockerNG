@@ -6781,6 +6781,11 @@ function pfblockerng_tick(
 {
 	global $pfb;
 
+	// issue #3515: a DNS Resolver disabled under pfB-DNS must not wait for the next apply; a pass that is running does it itself
+	if (!pfb_update_pass_running($ps_lines)) {
+		pfb_dns_proxy_stand_down();
+	}
+
 	$now   = time();
 	$seed  = pfb_tick_seed();
 	$dbdir = $pfb['dbdir'];

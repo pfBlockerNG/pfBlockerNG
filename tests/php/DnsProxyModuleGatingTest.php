@@ -24,7 +24,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyModuleGatingTest extends TestCase
 {
 	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
-		. "proxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
+		. "proxy-protocol-port: 5353\nedns-buffer-size: 1432\n# end pfBlockerNG DNS proxy";
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	private const PFB_DNS = 'installedpackages/pfblockerngdns/config/0';

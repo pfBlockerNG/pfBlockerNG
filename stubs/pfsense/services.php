@@ -69,6 +69,13 @@ function services_dnsmasq_configure($restart_dhcp = true) {}
 /** @return mixed */
 function services_unbound_configure($restart_dhcp = true, $interface = '') {}
 
+/**
+ * pfSense unbound.inc (CE 2.8.0 and later): the automatic edns-buffer-size for the given interface names.
+ *
+ * @param array<int|string,string>|null $active_interfaces
+ */
+function unbound_auto_ednsbufsize($active_interfaces = null): int {}
+
 /** @return mixed */
 function services_snmpd_configure($interface='') {}
 

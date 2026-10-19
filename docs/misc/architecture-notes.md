@@ -430,6 +430,43 @@ Unbound options that open a socket without an `interface`, `port` or `include` w
 not read from the binary); other Unbound syntax errors, which Unbound rejects at start (a failure that predates the proxy); and
 the Network Interfaces field, which pfSense writes outside the custom text (the Listen Port is refused separately).
 
+An `interface`, `port` or `include` line the admin adds after the move is not refused (a refusal keeps serving, one Resolver
+restart away from an address-in-use failure): `pfb_dns_proxy_resolver()` reports it through its `$unsafe_line` argument, writes
+the admin's text as it stands (our block cut out) into the snapshot's `custom_options`, and `pfb_unbound_python()` takes the
+failed-activation rollback (`pfb_dns_proxy_roll_back()`, see "Readiness and rollback"): pfB-DNS off, the proxy stopped, the
+Resolver restored with the admin's line kept in Custom Options, one notice naming the line. The other refusals above (the Listen
+Port, a partial marker pair, a quote left open) stay refusals on a moved Resolver too.
+
+A Resolver the admin disables in Services > DNS Resolver while pfB-DNS fronts it (the toggle on, pfBlockerNG enabled, a
+snapshot, `unbound/enable` absent) leaves the proxy on the Resolver's addresses answering SERVFAIL for every allowed name (measured
+on CE 2.8.1: Unbound gone, the stale `unbound.pid` left, the proxy serving LAN:53), because pfSense runs no package hook when a
+Resolver is disabled and its disabled branch only kills Unbound. `pfb_dns_proxy_stand_down()` runs at the start of every apply
+(`pfb_unbound_python()`) and every tick (`pfblockerng_tick()`, unless an update pass is running: that pass runs it itself): it
+turns the pfB-DNS toggle Off under the config lock, stops the proxy and restores the saved settings through
+`pfb_dns_proxy_resolver(FALSE)` (the Resolver stays disabled), and raises one notice. A restore that does not finish (the proxy
+outlived its stop) is retried by the next apply's ordinary restore, because the toggle is already Off; a lock that stays taken
+changes nothing and is retried by the next apply or tick. With pfBlockerNG itself disabled the ordinary restore runs and the
+toggle stays as the admin set it. Pinned by `DnsProxyActivationRollbackTest` (sections E and F) and `TickEntrypointTest`; live
+in `tests/smoke/test_smoke_pfb_dns_resolver_state.py`.
+
+While the Advanced page's EDNS buffer size is automatic (`unbound/edns_buffer_size` absent, empty or `auto`) and the admin's
+Custom Options carry no `edns-buffer-size:` directive (read as above, wherever it stands on a line), the clause carries
+`edns-buffer-size: N` with N from pfSense's own `unbound_auto_ednsbufsize()` over the SAVED interface tokens
+(`pfb_dns_proxy_edns_line()`). pfSense derives the automatic size from the Resolver's Network Interfaces: the smallest MTU minus
+68, floored at 1232 (512 without IPv6), so a Resolver on `lo0` advertises 16316 where its 1500-byte LAN gave 1432 (measured at
+the stub upstream on CE 2.8.1), far above the 1232 and 1432 the Advanced page offers. Unbound takes the last `edns-buffer-size:`
+and our clause comes last, so the line restores the pre-move size; an explicit size or an admin directive carries no line and
+wins as before. N is recomputed whenever the clause is written, so an MTU change or a changed setting rewrites it in place and a
+clause from an earlier release gains it. `unbound_auto_ednsbufsize()` takes the interface list from CE 2.8.0 on (pinned
+`ed6c2eb8` and master `9363ac5b`); `unbound.inc` is loaded on demand like pfSense's own `services_unbound_configure()` does.
+
+The Resolver page's own save keeps our block: `services_unbound.php` (the same on `ed6c2eb8` and master `9363ac5b` apart from
+the validation call) fills the Custom options textarea from the stored `custom_options`, block included, and stores
+`base64_encode(str_replace("\r\n", "\n", $_POST['custom_options']))`, so a save that leaves the textarea alone is a round trip.
+Only an admin who deletes the block text unmoves the Resolver, and the next apply writes the block again. A raw config.xml write of
+Custom Options (the probe that first showed the block dropped and Unbound unable to bind) is not that path; the page's save is
+exercised live by `test_the_resolver_pages_own_save_keeps_pfblockerngs_block_and_the_resolver_moved`.
+
 The pfB-DNS page's save writes the toggle leaf of the section that holds the snapshot marker, and the Resolver move
 rewrites that section and the unbound keys, each from the copy of config.xml its own process read at start (`write_config()`
 writes that whole copy back). Both therefore hold one named lock, `pfb_dns_config_lock()` (pfSense `try_lock()`,

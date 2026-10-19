@@ -1757,6 +1757,26 @@
             }
         ]
     },
+    "pfb_dns_proxy_edns_line": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "admin_code",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_ensure_running": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1883,6 +1903,13 @@
                 "variadic": false,
                 "type": "bool",
                 "default": null
+            },
+            {
+                "name": "unsafe_line",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },
@@ -1896,6 +1923,13 @@
                 "variadic": false,
                 "type": "bool",
                 "default": null
+            },
+            {
+                "name": "unsafe_line",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },
@@ -1907,7 +1941,22 @@
     "pfb_dns_proxy_roll_back": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "what",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "next",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_dns_proxy_rollback_notice": {
         "returnsRef": false,
@@ -1944,6 +1993,11 @@
                 "default": "'/usr/local/pkg/pfblockerng/dns_proxy'"
             }
         ]
+    },
+    "pfb_dns_proxy_stand_down": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_dns_proxy_tls_flags": {
         "returnsRef": false,
@@ -1984,6 +2038,19 @@
         "params": [
             {
                 "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_turn_off": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "why",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
