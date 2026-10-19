@@ -87,10 +87,12 @@ def test_blocked_type_without_an_address_gets_nodata_with_soa(booted: Booted) ->
     assert unbound.queries == []
 
 
-def test_block_answer_keeps_the_client_case_clears_rd_and_echoes_edns(booted: Booted) -> None:
-    query = build_query("BlOcKeD.ExAmPlE.", rd=False, edns=True)
+@pytest.mark.parametrize("cd", [False, True], ids=["cd-clear", "cd-set"])
+def test_block_answer_keeps_the_client_case_clears_rd_and_echoes_edns(booted: Booted, cd: bool) -> None:
+    query = build_query("BlOcKeD.ExAmPlE.", rd=False, cd=cd, edns=True)
     reply = dnswire.parse(_resolve(booted, query, FakeUnbound(ZONE)) or b"")
     assert reply.flags & dnswire.RD == 0
+    assert bool(reply.flags & dnswire.CD) == cd
     assert reply.questions[0].name == "BlOcKeD.ExAmPlE."
     assert reply.answers[0].name == "BlOcKeD.ExAmPlE."  # compressed against the question, so the case follows it
     assert [rr.rtype for rr in reply.additional] == [dnswire.TYPE_OPT]
@@ -241,13 +243,15 @@ def test_packets_that_are_not_queries_are_dropped(booted: Booted) -> None:
     assert unbound.queries == []
 
 
-def test_unbound_not_answering_gives_servfail(booted: Booted) -> None:
+@pytest.mark.parametrize("do", [False, True], ids=["do-clear", "do-set"])
+def test_unbound_not_answering_gives_servfail(booted: Booted, do: bool) -> None:
     async def silent(_wire: bytes) -> None:
         return None
 
-    query = build_query(ALLOWED, qid=0x0B0B)
+    query = build_query(ALLOWED, qid=0x0B0B, edns=True, do=do)
     reply = dnswire.parse(_resolve(booted, query, silent) or b"")
     assert (reply.id, reply.rcode, reply.questions) == (0x0B0B, 2, dnswire.parse(query).questions)
+    assert [(rr.name, rr.rtype, bool(rr.ttl & 0x8000)) for rr in reply.additional] == [(".", dnswire.TYPE_OPT, do)]
 
 
 @pytest.mark.parametrize("cd", [False, True], ids=["cd-clear", "cd-set"])

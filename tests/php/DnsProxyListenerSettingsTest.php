@@ -61,6 +61,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'service name'     => ['domain'],
 			'padded'           => [' 443'],
 			'overflowing int'  => ['99999999999999999999'],
+			'excessive zero padding' => ['000443'],
 			'fullwidth digits' => ['４４４３'],
 		];
 	}
