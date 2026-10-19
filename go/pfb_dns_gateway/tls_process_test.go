@@ -75,14 +75,15 @@ func TestGatewayServesEveryTLSTransportAndReportsEachListener(t *testing.T) {
 	}
 }
 
-// An unusable certificate file with a TLS transport requested: the reason is logged once, no TLS listener is bound, and
-// plain UDP/TCP keeps serving (the Python --dot exits 1 instead; a broken certificate must not take :53 down).
-func TestUnusableCertificateDisablesTheTLSTransportsButPlainDNSKeepsServing(t *testing.T) {
+// An unusable certificate file at start: the reason is logged once, plain UDP/TCP keeps serving (a broken certificate must
+// not take :53 down), the TLS listeners are bound but have no certificate, so a handshake fails, and a certificate pushed
+// on the control socket is served by the next handshake of every transport with no restart.
+func TestAnUnusableCertificateFileLeavesTLSWithoutACertificateUntilOneIsPushed(t *testing.T) {
 	leaf, other := newPKI(t, nil, "localhost", false), newPKI(t, nil, "localhost", false)
 	encrypted := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: bytes.Repeat([]byte{7}, 64)})
 	file := func(content []byte) func(t *testing.T) string {
 		return func(t *testing.T) string {
-			path := filepath.Join(t.TempDir(), "pfb_dns_cert.pem")
+			path := filepath.Join(shortTempDir(t), "tls.pem")
 			if err := os.WriteFile(path, content, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -94,33 +95,35 @@ func TestUnusableCertificateDisablesTheTLSTransportsButPlainDNSKeepsServing(t *t
 		path func(t *testing.T) string
 		want string
 	}{
-		{"file absent", func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.pem") }, "cannot read"},
+		{"file absent", func(t *testing.T) string { return filepath.Join(shortTempDir(t), "absent.pem") }, "cannot read"},
 		{"no PEM text", file([]byte("hello\n")), "cannot load the certificate and key"},
 		{"key of another certificate", file(append(leaf.certPEM(), other.keyPEM(t)...)), "does not match"},
 		{"encrypted private key", file(append(leaf.certPEM(), encrypted...)), "cannot load the certificate and key"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gw := startGatewayProcess(t, []string{
-				"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
-				"--dot", "--dot-port", "0", "--tls-pem", c.path(t),
-				"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doq-listen", "127.0.0.1", "--doq-port", "0",
-			}, decider("serve"))
-			serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
-			gw.waitLine("ready upstream ")
-			reply := udpQuery(t, serving, buildQuery(t, 7, "example.", true))
-			if len(reply) == 0 {
+			root := newPKI(t, nil, "empty start root", true)
+			r := startReloadRig(t, c.path(t), root) // waits for every listening line and ready: the listeners are bound
+			if reply := udpQuery(t, r.plain, buildQuery(t, 7, "example.", true)); len(reply) == 0 {
 				t.Fatal("plain DNS must keep serving")
 			}
-			log := gw.logText()
+			log := r.gw.logText()
 			if n := strings.Count(log, c.want); n != 1 {
 				t.Fatalf("the reason %q must be logged exactly once, found %d times in:\n%s", c.want, n, log)
 			}
-			for _, kind := range []string{"dot", "doh", "doq"} {
-				if strings.Contains(log, "listening "+kind) {
-					t.Fatalf("a %s listener was bound without a usable certificate:\n%s", kind, log)
+			if n := strings.Count(log, "TLS certificate not loaded"); n != 1 {
+				t.Fatalf("the empty start must be logged once, found %d lines in:\n%s", n, log)
+			}
+			wire := buildQuery(t, 8, "example.", true)
+			for _, tr := range reloadTransports {
+				if leaf, err := tr.do(r, wire); err == nil {
+					t.Fatalf("%s: a handshake with no certificate loaded presented serial %v, want it to fail", tr.name, leaf.SerialNumber)
 				}
 			}
+
+			pushed := newPKI(t, root, "localhost", false)
+			r.rotate(pushed)
+			r.requireServing(pushed) // no restart: the same process, the same listeners
 		})
 	}
 }

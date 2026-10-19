@@ -23,6 +23,7 @@ import (
 // The test binary doubles as the gateway, the decider and the privilege-drop probe: the process-level tests
 // start it with a role as its first argument instead of building anything.
 func TestMain(m *testing.M) {
+	ctlUID = uint32(os.Getuid()) // the control socket takes pushes from the user running the tests, root or not
 	if len(os.Args) > 2 {
 		switch os.Args[1] {
 		case "--as-gateway":
