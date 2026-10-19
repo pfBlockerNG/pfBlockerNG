@@ -237,6 +237,14 @@ def _sh(vm: SmokeVM, script: str, *, timeout: float = 120.0) -> subprocess.Compl
     )
 
 
+def _discard_own_feed_cache(vm: SmokeVM) -> None:
+    """Remove the derived files of this module's own feed (`.orig`, `.norm`, `.txt`, markers) and nothing else."""
+    prefixes = (f"{h.PFB_DBDIR}/{folder}/{FEED_HEADER}." for folder in ("dnsblorig", "dnsbl"))
+    result = _sh(vm, "rm -f " + " ".join(f"{shlex.quote(prefix)}*" for prefix in prefixes))
+    if result.returncode != 0:
+        raise RuntimeError(f"discarding the {FEED_HEADER} feed cache failed: rc={result.returncode} {result.stderr!r}")
+
+
 def _php_ok(vm: SmokeVM, snippet: str, what: str, *, timeout: float = 180.0) -> str:
     result = h.php_eval(vm, snippet + f"\necho {h._php_str(DONE)};", timeout=timeout)
     if result.returncode != 0 or DONE not in result.stdout:
@@ -606,8 +614,9 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _configure_resolver(vm, refid)
         h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
-        # The feed cache outlives a module and `_apply` (a force reload) reparses it, so the module that
-        # runs second would be served the first one's names: download this module's feed once, up front.
+        # A package delete drops the manifest, so the next apply reuses a cached `.orig` of the module that ran
+        # before and ignores the feed offered now: start from this module's own cache, then force the re-read.
+        _discard_own_feed_cache(vm)
         h.force_dnsbl_refetch(vm, FEED_HEADER)
         h.reload(vm, "update")
         _configure_group_policy(vm)
@@ -618,6 +627,8 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
             "allowed": _query(client_vm, h.unique_domain("baseline"))[0],
             "blocked_dot": _query(client_vm, names.blocked, dot=True)[0],
         }
+        # An invalid setup fails here at once, not as a 240 s `_wait_proxy_serves` timeout in every toggle test.
+        assert h.is_vip(baseline["blocked"]), f"baseline: {names.blocked} should answer the VIP: {baseline['blocked']}"
         yield Rig(vm, client_vm, names, before, baseline)
     finally:
         try:
