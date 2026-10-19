@@ -1280,6 +1280,62 @@ if (!function_exists('get_real_interface')) {
 	}
 }
 
+if (!function_exists('get_interface_mtu')) {
+	// pfSense interfaces.inc: the MTU of a REAL interface, or an empty value when unknown. Tests seed
+	// $GLOBALS['pfb_test_interface_mtu'] (map of real-name => MTU); absent key: a 1500-byte interface, loopback 16384.
+	function get_interface_mtu($interface) {
+		return $GLOBALS['pfb_test_interface_mtu'][$interface] ?? ($interface === 'lo0' ? '16384' : '1500');
+	}
+}
+
+if (!function_exists('get_configured_interface_list')) {
+	// pfSense util.inc: name => name of every enabled, assigned interface. Tests seed $GLOBALS['pfb_test_interfaces']
+	// (the map get_configured_interface_with_descr() reads); absent: the one interface every box has, `lan`.
+	function get_configured_interface_list($with_disabled = false) {
+		$names = array_keys($GLOBALS['pfb_test_interfaces'] ?? ['lan' => 'LAN']);
+		return array_combine($names, $names);
+	}
+}
+
+if (!function_exists('is_numericint')) {
+	// pfSense util.inc: TRUE for an integer or a string of digits.
+	function is_numericint($arg) {
+		return is_int($arg) || (is_string($arg) && ctype_digit($arg));
+	}
+}
+
+if (!function_exists('unbound_auto_ednsbufsize')) {
+	// pfSense unbound.inc, CE 2.8.0 (ed6c2eb8) and master (9363ac5b): the automatic edns-buffer-size, the smallest MTU of
+	// the given interface names (all configured ones when the list is empty or holds `all`) minus the IPv4 and UDP
+	// headers, floored at 1232 when an interface that set a new minimum has IPv6, else 512. With no argument it reads the
+	// live active_interface, as pfSense does.
+	function unbound_auto_ednsbufsize($active_interfaces = null) {
+		if (!is_array($active_interfaces)) {
+			$active_interfaces = array_filter(explode(',', (string) config_get_path('unbound/active_interface')));
+		}
+		if (empty($active_interfaces) || in_array('all', $active_interfaces)) {
+			$active_interfaces = get_configured_interface_list();
+		}
+		$active_ipv6_interface = false;
+		$interface_mtu_minimum = null;
+		foreach ($active_interfaces as $interface) {
+			$interface_mtu = get_interface_mtu(get_real_interface($interface));
+			if (empty($interface_mtu) || !is_numericint($interface_mtu)) {
+				continue;
+			}
+			if ((!isset($interface_mtu_minimum)) || ($interface_mtu < $interface_mtu_minimum)) {
+				$interface_mtu_minimum = $interface_mtu;
+				if (!$active_ipv6_interface && get_interface_ipv6($interface)) {
+					$active_ipv6_interface = true;
+				}
+			}
+		}
+		$buffer_size = isset($interface_mtu_minimum) ? ($interface_mtu_minimum - 68) : 0;
+		$buffer_size_minimum = $active_ipv6_interface ? 1232 : 512;
+		return max($buffer_size, $buffer_size_minimum);
+	}
+}
+
 if (!function_exists('ip2long32')) {
 	// pfSense util.inc: like ip2long() but returns an UNSIGNED 32-bit integer
 	// (avoids sign issues on 64-bit PHP where ip2long returns a signed int for

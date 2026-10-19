@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -26,6 +27,12 @@ use PHPUnit\Framework\TestCase;
  *   - when the proxy cannot be stopped, or the config lock stays taken, the snapshot and the moved Resolver are kept as
  *     they are, nothing destructive runs, and the notice says recovery is needed: the rollback never claims success;
  *   - a proxy that does become ready is left alone: no toggle write, no stop, no notice.
+ *
+ * The same rollback, and the same restore, serve two later failures (owner, 2026-10): an unsafe Custom Options line
+ * (`interface:`, `port:` or `include:`) the admin adds after the move rolls pfB-DNS back like a failed activation, the line
+ * kept in the restored Custom Options and named in the one notice; and a DNS Resolver disabled while pfB-DNS fronts it makes
+ * the next apply or tick stop pfB-DNS, restore the saved settings (the Resolver stays disabled), turn pfB-DNS off and say so
+ * once, instead of leaving the proxy answering SERVFAIL for every allowed name.
  */
 #[CoversFunction('pfb_dns_proxy_roll_back')]
 #[CoversFunction('pfb_dns_proxy_confirm_ready')]
@@ -552,6 +559,318 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// E -- an unsafe Custom Options line added after the move rolls pfB-DNS back like a failed activation
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{0:string}> the admin's own lines that can take a listener, a second port or another file */
+	public static function unsafeLines(): array
+	{
+		return [
+			'a port line'                     => ['port: 5300'],
+			'an interface on the Listen Port' => ['interface: 0.0.0.0@53'],
+			'an interface on the proxy port'  => ['interface: 192.0.2.1@5353'],
+			'an include'                      => ['include: /tmp/extra.conf'],
+		];
+	}
+
+	private function customText(): string
+	{
+		return (string) base64_decode((string) config_get_path('unbound/custom_options'), TRUE);
+	}
+
+	/** @return list<string> the non-blank lines of Custom Options */
+	private function customLines(): array
+	{
+		return array_values(array_filter(array_map('trim', explode("\n", $this->customText())), 'strlen'));
+	}
+
+	/** The admin edits Custom Options on the Resolver page: the text stays, a line is appended after our block. */
+	private function adminAppends(string $line): void
+	{
+		config_set_path('unbound/custom_options', base64_encode($this->customText() . "\nserver:\n{$line}\n"));
+	}
+
+	#[DataProvider('unsafeLines')]
+	public function testAnUnsafeLineAddedAfterTheMoveTurnsPfbDnsOffRestoresTheResolverAndKeepsTheLine(string $line): void
+	{
+		// Given a moved Resolver with DNSBL on, and an admin who then adds an unsafe line to its Custom Options
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->adminAppends($line);
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is on');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the Resolver is moved');
+		$before = $this->startAttempts();
+
+		// When the next apply runs
+		$changed = pfb_unbound_python('enabled', TRUE);
+
+		// Then pfB-DNS is off and the Resolver is back to its saved settings: the admin's line is kept, our block is gone
+		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
+		$unbound = config_get_path('unbound');
+		unset($unbound['python'], $unbound['python_order'], $unbound['python_script']);
+		unset($unbound['custom_options']);
+		$expected = self::originalResolver();
+		unset($expected['custom_options']);
+		$this->assertSame(self::sorted($expected), self::sorted($unbound), 'every other key is exactly as saved');
+		$this->assertSame(['do-ip6: no', 'prefetch: yes', 'server:', $line], $this->customLines(), "the admin's line is kept, in their own text");
+		$this->assertStringNotContainsString('pfBlockerNG DNS proxy', $this->customText(), 'our block is gone');
+
+		// ... the proxy was stopped once, the DNSBL module is back in Unbound, which was regenerated and restarted once ...
+		$this->assertSame(['stop_service'], $this->proxyCalls);
+		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'));
+		$last = end($GLOBALS['pfb_test_unbound_configure_resolver']);
+		$this->assertSame('lan,opt1', $last['active_interface'], 'unbound.conf is rendered from the restored Resolver');
+		$this->assertSame($before + 1, $this->startAttempts(), 'Unbound was started once with it');
+		$this->assertFalse($changed, 'the rollback already regenerated and restarted: the apply has nothing left to signal');
+
+		// ... and the operator is told once, with the line, that it was kept
+		$notices = $this->notices();
+		$this->assertCount(1, $notices);
+		$this->assertStringContainsString($line, $notices[0]['notice']);
+		$this->assertStringContainsString('Custom Options', $notices[0]['notice']);
+		$this->assertStringContainsString('kept', $notices[0]['notice']);
+		$this->assertStringContainsString('turned off', $notices[0]['notice']);
+		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
+		$this->assertSame(2, $notices[0]['priority']);
+	}
+
+	public function testTheApplyAfterAnUnsafeLineRollbackRaisesNothingAndLeavesTheLine(): void
+	{
+		// Given an unsafe line that was rolled back
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->adminAppends('interface: 0.0.0.0@53');
+		pfb_unbound_python('enabled', TRUE);
+		$this->assertSame('', $this->toggleStored(), 'before: rolled back');
+		$calls = $this->proxyCalls;
+		$notices = count($this->notices());
+		$text = $this->customText();
+
+		// When the next apply runs
+		pfb_unbound_python('enabled');
+
+		// Then nothing happens again: no second notice, no proxy call, the admin's text byte for byte
+		$this->assertCount($notices, $this->notices());
+		$this->assertSame($calls, $this->proxyCalls);
+		$this->assertSame($text, $this->customText());
+		$this->assertSame('', $this->toggleStored());
+	}
+
+	public function testALineThatIsNotUnsafeAddedAfterTheMoveLeavesPfbDnsRunning(): void
+	{
+		// Given a moved Resolver and an admin who adds a harmless line to Custom Options
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->adminAppends('local-data: "x.example. A 192.0.2.1"');
+
+		// When the next apply runs
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then pfB-DNS keeps the Resolver: no rollback, no notice, nothing stopped
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertNotNull(pfb_dns_proxy_saved());
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertSame([], $this->notices());
+		$this->assertSame([], $this->proxyCalls);
+	}
+
+	public function testWithDnsblOffTheUnsafeLineRollbackPutsNoModuleBack(): void
+	{
+		// Given a moved Resolver with DNSBL off and an unsafe line added after the move
+		$this->activate(FALSE);
+		$this->useMountState(FALSE);
+		$this->proxyServes();
+		$this->adminAppends('port: 5300');
+
+		// When the next apply runs
+		pfb_unbound_python('disabled', TRUE);
+
+		// Then the Resolver is back with the line, plain: no python module or observer, and the notice does not mention DNSBL
+		$this->assertSame('', $this->toggleStored());
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertFalse(config_path_enabled('unbound', 'python'));
+		$this->assertSame(['do-ip6: no', 'prefetch: yes', 'server:', 'port: 5300'], $this->customLines());
+		$notices = $this->notices();
+		$this->assertCount(1, $notices);
+		$this->assertStringNotContainsString('DNSBL', $notices[0]['notice']);
+	}
+
+	public function testAnUnsafeLineRollbackThatCannotStopTheProxyKeepsTheLineInTheSnapshotAndSaysRecoveryIsNeeded(): void
+	{
+		// Given an unsafe line, and a proxy that survives its stop
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->survivesStop = TRUE;
+		$this->adminAppends('include: /tmp/extra.conf');
+		$moved = config_get_path('unbound');
+
+		// When the next apply runs
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then pfB-DNS is off (the next apply retries the restore), the moved Resolver and its snapshot are kept, and the snapshot
+		// holds the admin's line so the retry keeps it too
+		$this->assertSame('', $this->toggleStored());
+		$saved = pfb_dns_proxy_saved();
+		$this->assertNotNull($saved, 'the snapshot is kept');
+		$this->assertStringContainsString('include: /tmp/extra.conf', (string) base64_decode($saved['custom_options']['value'], TRUE));
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')), 'the moved Resolver is untouched');
+		$joined = implode("\n", array_column($this->notices(), 'notice'));
+		$this->assertStringContainsString('could not be restored', $joined);
+		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'no claim that the rollback worked');
+
+		// And once the proxy can be stopped, the next apply's ordinary restore puts the Resolver back with the line
+		$this->survivesStop = FALSE;
+		pfb_unbound_python('enabled');
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertSame(['do-ip6: no', 'prefetch: yes', 'server:', 'include: /tmp/extra.conf'], $this->customLines());
+	}
+
+	// -----------------------------------------------------------------------
+	// F -- a Resolver disabled underneath pfB-DNS: stand down
+	// -----------------------------------------------------------------------
+
+	/** The admin disables the DNS Resolver in Services > DNS Resolver while pfB-DNS fronts it. */
+	private function disableTheResolver(): void
+	{
+		config_del_path('unbound/enable');
+		$this->assertFalse(config_path_enabled('unbound'), 'before: the Resolver is disabled');
+	}
+
+	public function testADisabledResolverIsStoodDownOnTheNextApply(): void
+	{
+		// Given pfB-DNS on and serving, and the Resolver then disabled
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->disableTheResolver();
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is on');
+		$before = $this->startAttempts();
+
+		// When the next apply runs
+		$changed = pfb_unbound_python('');
+
+		// Then pfB-DNS is stopped and off, the Resolver has its saved settings and stays disabled, once and announced once
+		$this->assertTrue($changed);
+		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertSame(['stop_service'], $this->proxyCalls, 'the proxy is stopped');
+		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
+		$this->assertFalse(config_path_enabled('unbound'), 'the Resolver stays disabled');
+		$unbound = config_get_path('unbound');
+		unset($unbound['python'], $unbound['python_order'], $unbound['python_script']);
+		$expected = self::originalResolver();
+		unset($expected['enable']);
+		$this->assertSame(self::sorted($expected), self::sorted($unbound), 'exactly the saved settings');
+		$this->assertSame($before, $this->startAttempts(), 'nothing starts a Resolver the admin disabled');
+		$notices = $this->notices();
+		$this->assertCount(1, $notices);
+		$this->assertStringContainsString('DNS Resolver is disabled', $notices[0]['notice']);
+		$this->assertStringContainsString('turned off', $notices[0]['notice']);
+		$this->assertStringContainsString('restored', $notices[0]['notice']);
+		$this->assertSame(2, $notices[0]['priority']);
+	}
+
+	public function testTheApplyAfterTheStandDownRaisesNoSecondNotice(): void
+	{
+		// Given a stood-down Resolver
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->disableTheResolver();
+		pfb_unbound_python('');
+		$this->assertSame('', $this->toggleStored(), 'before: stood down');
+		$calls = $this->proxyCalls;
+
+		// When the next apply runs
+		$changed = pfb_unbound_python('');
+
+		// Then nothing happens again
+		$this->assertFalse($changed);
+		$this->assertCount(1, $this->notices(), 'one notice for the one stand-down');
+		$this->assertSame($calls, $this->proxyCalls);
+	}
+
+	public function testADisabledPfBlockerNgIsAnOrdinaryRestoreThatLeavesTheToggleAlone(): void
+	{
+		// Given pfB-DNS on and a moved Resolver, with pfBlockerNG itself disabled and the Resolver disabled too
+		$this->activate(TRUE);
+		$this->proxyServes();
+		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::Off);
+		$this->disableTheResolver();
+
+		// When the pass runs
+		pfb_unbound_python('disabled');
+
+		// Then the Resolver is restored as for any disabled package: the toggle the admin set stays, and there is no stand-down notice
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertSame([], $this->notices());
+	}
+
+	public function testADisabledResolverWithPfbDnsAlreadyOffIsAnOrdinaryRestoreWithoutANotice(): void
+	{
+		// Given a Resolver that is still moved (an earlier restore was abandoned), pfB-DNS off, and the Resolver disabled
+		$this->activate(TRUE);
+		$this->proxyServes();
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		$this->disableTheResolver();
+
+		// When the next apply runs
+		pfb_unbound_python('');
+
+		// Then the ordinary restore finishes the job without announcing a stand-down
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertSame('', $this->toggleStored());
+		$this->assertSame([], $this->notices());
+	}
+
+	public function testAStandDownThatCannotStopTheProxyKeepsTheSnapshotAndTheNextApplyFinishesTheRestore(): void
+	{
+		// Given a disabled Resolver and a proxy that survives its stop
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->survivesStop = TRUE;
+		$this->disableTheResolver();
+
+		// When the next apply runs
+		pfb_unbound_python('');
+
+		// Then pfB-DNS is off and the snapshot is kept, and the notices say the restore is pending
+		$this->assertSame('', $this->toggleStored());
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$joined = implode("\n", array_column($this->notices(), 'notice'));
+		$this->assertStringContainsString('turned off', $joined);
+		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'no claim that the restore worked');
+
+		// And once the proxy can be stopped, the next apply restores without a second stand-down notice
+		$notices = count($this->notices());
+		$this->survivesStop = FALSE;
+		pfb_unbound_python('');
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertCount($notices, $this->notices());
+	}
+
+	public function testAStandDownWhileConfigXmlIsLockedChangesNothing(): void
+	{
+		// Given a disabled Resolver and another process saving config.xml for as long as the apply tries
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->disableTheResolver();
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$moved = config_get_path('unbound');
+		$writes = count($GLOBALS['pfb_test_write_config_calls']);
+
+		// When the next apply runs
+		pfb_unbound_python('');
+
+		// Then nothing was stopped, written or restored: pfB-DNS stays on and the next apply or tick retries
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertNotNull(pfb_dns_proxy_saved());
+		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')));
+		$this->assertCount($writes, $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	// -----------------------------------------------------------------------
 	// D -- every caller consumes the result
 	// -----------------------------------------------------------------------
 
@@ -573,7 +892,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// The restore that was abandoned (the proxy outlived its stop) restarts the proxy WITHOUT waiting for readiness or
 		// rolling back: a rollback that waited for the proxy it restarts would recurse into itself
 		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$start = (int) strpos($source, 'function pfb_dns_proxy_resolver(bool $on)');
+		$start = (int) strpos($source, 'function pfb_dns_proxy_resolver(');
 		$end = (int) strpos($source, 'function pfb_dns_proxy_directive_text', $start);
 		$body = substr($source, $start, $end - $start);
 
