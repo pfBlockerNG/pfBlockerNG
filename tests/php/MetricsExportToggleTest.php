@@ -10,6 +10,7 @@ use PHPUnit\Framework\TestCase;
  * node_exporter package, and the General page wiring around both.
  */
 #[CoversFunction('pfb_metrics_export_allowed')]
+#[CoversFunction('pfb_metrics_export_value')]
 final class MetricsExportToggleTest extends TestCase
 {
 	private const PATH      = 'installedpackages/pfblockerng/config/0/pfb_metrics_export';
@@ -59,5 +60,19 @@ final class MetricsExportToggleTest extends TestCase
 	{
 		$this->assertNull(pfb_metrics_export_allowed('on', TRUE));
 		$this->assertNull(pfb_metrics_export_allowed('', FALSE));
+	}
+
+	public function testSaveWithoutNodeExporterKeepsTheStoredValue(): void
+	{
+		// The disabled checkbox is not posted, so the posted value is empty whatever is stored.
+		$this->assertSame('on', pfb_metrics_export_value('', FALSE, 'on'), 'an unrelated save must not turn a stored on off');
+		$this->assertSame('', pfb_metrics_export_value('', FALSE, ''));
+	}
+
+	public function testSaveWithNodeExporterStoresTheTickedBox(): void
+	{
+		$this->assertSame('on', pfb_metrics_export_value('on', TRUE, ''));
+		$this->assertSame('', pfb_metrics_export_value('', TRUE, 'on'), 'unticking the box turns it off');
+		$this->assertSame('', pfb_metrics_export_value(NULL, TRUE, 'on'));
 	}
 }

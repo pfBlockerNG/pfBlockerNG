@@ -5464,6 +5464,12 @@ function pfb_metrics_export_allowed(?string $posted, bool $pkg_present): ?string
 	return NULL;
 }
 
+// What a General save stores. Without node_exporter the checkbox is disabled and never posted, so the stored value
+// stands: writing the absent field as off would silently drop an export set before the package was removed.
+function pfb_metrics_export_value(?string $posted, bool $pkg_present, string $stored): string {
+	return $pkg_present ? ($posted ?: '') : $stored;
+}
+
 // Update-pass timing for the metrics exporter. A last_start without a later last_end reads as an unfinished pass.
 function pfb_pass_status_path(): string {
 	global $pfb;

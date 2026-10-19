@@ -1965,6 +1965,35 @@ def test_general_metrics_export_save_is_refused_without_node_exporter(
         helpers.config_restore_state(smoke_vm, cfg_path, prior)
 
 
+def test_general_save_keeps_a_stored_metrics_export_while_node_exporter_is_absent(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """#3522: with pfSense-pkg-node_exporter absent the checkbox renders disabled and is not posted, so an
+    unrelated General save must leave a stored ``on`` as it is instead of writing the absent field as off.
+
+    The stored value is seeded through the config helper (the page itself refuses ``on`` here).
+    """
+    _require_node_exporter_absent(smoke_vm)
+    metrics_path = "installedpackages/pfblockerng/config/0/pfb_metrics_export"
+    skipfeed_path = "installedpackages/pfblockerng/config/0/skipfeed"
+    prior_metrics = helpers.config_get_state(smoke_vm, metrics_path)
+    prior_skipfeed = helpers.config_get(smoke_vm, skipfeed_path)
+    changed = "2" if prior_skipfeed == "3" else "3"
+    try:
+        helpers.config_set(smoke_vm, metrics_path, "on")
+        assert helpers.config_get(smoke_vm, metrics_path) == "on", "precondition: the stored value is on"
+
+        webui.post("/pfblockerng/pfblockerng_general.php", {"skipfeed": changed}, timeout=120.0)
+
+        assert helpers.config_get(smoke_vm, skipfeed_path) == changed, "precondition: the unrelated save went through"
+        stored = helpers.config_get(smoke_vm, metrics_path)
+        assert stored == "on", f"an unrelated General save must keep the stored Metrics export value, got {stored!r}"
+    finally:
+        helpers.config_restore_state(smoke_vm, metrics_path, prior_metrics)
+        # A second save, now with the option back off, also drops the cron entry the first one installed.
+        webui.post("/pfblockerng/pfblockerng_general.php", {"skipfeed": prior_skipfeed or "0"}, timeout=120.0)
+
+
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The second Feeds panel — the one listing user-configured feeds that don't match the
     predefined catalog — is headed "Custom Feeds", not the former "Unknown user defined Feeds".

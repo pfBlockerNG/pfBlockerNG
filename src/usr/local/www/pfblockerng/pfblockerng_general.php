@@ -269,8 +269,8 @@ if ($_POST) {
 
 			$pfb['gconfig']['pfb_syntax_highlight']	= pfb_filter($_POST['pfb_syntax_highlight'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
-			// Server-side gate above refuses 'on' without node_exporter, so only a valid value reaches here.
-			$pfb['gconfig']['pfb_metrics_export']	= $metrics_export_posted ?: '';
+			// The gate above refuses 'on' without node_exporter; the disabled box is not posted then, so the stored value stands.
+			$pfb['gconfig']['pfb_metrics_export']	= pfb_metrics_export_value($metrics_export_posted, $metrics_export_pkg, PfbConfig::read('gen/pfb_metrics_export')->value);
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
