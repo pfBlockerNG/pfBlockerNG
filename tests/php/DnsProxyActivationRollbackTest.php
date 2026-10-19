@@ -732,6 +732,220 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// E2 -- a Listen Port set to the proxy's own port after the move rolls pfB-DNS back the same way
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{0:string,1:bool}> the proxy's own loopback ports, each with DNSBL on and off */
+	public static function reservedListenPorts(): array
+	{
+		return [
+			'5353 with DNSBL on'  => ['5353', TRUE],
+			'5353 with DNSBL off' => ['5353', FALSE],
+			'5354 with DNSBL on'  => ['5354', TRUE],
+			'5354 with DNSBL off' => ['5354', FALSE],
+		];
+	}
+
+	#[DataProvider('reservedListenPorts')]
+	public function testAListenPortSetOnTheMovedResolverRollsPfbDnsBackAndKeepsThatPort(string $port, bool $dnsbl): void
+	{
+		// Given a moved Resolver with DNSBL on or off, a proxy that serves, and an admin who then sets its Listen Port to the proxy's own port
+		$this->activate($dnsbl);
+		if (!$dnsbl) {
+			$this->useMountState(FALSE);
+		}
+		$this->proxyServes();
+		config_set_path('unbound/port', $port);
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is on');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the Resolver is moved');
+		$before = $this->startAttempts();
+		$rc = $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0;
+
+		// When the next apply runs
+		$changed = pfb_unbound_python($dnsbl ? 'enabled' : 'disabled', TRUE);
+
+		// Then pfB-DNS is off and the proxy is stopped once: every saved key is back, and the Listen Port is the admin's
+		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertSame(['stop_service'], $this->proxyCalls);
+		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
+		$expected = self::originalResolver();
+		$expected['port'] = $port;
+		$unbound = config_get_path('unbound');
+		unset($unbound['python'], $unbound['python_order'], $unbound['python_script']);
+		$this->assertSame(self::sorted($expected), self::sorted($unbound), 'the saved keys are back and the Listen Port stays as the admin set it');
+
+		// And DNSBL is back in the Resolver only when it is on; Unbound was regenerated and started once, and no regenerated
+		// config carries the proxy's clause or the proxy's rc script is written again
+		if ($dnsbl) {
+			$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'));
+		} else {
+			$this->assertFalse(config_path_enabled('unbound', 'python'));
+		}
+		$this->assertSame($before + 1, $this->startAttempts(), 'Unbound was started once');
+		$this->assertNotEmpty($GLOBALS['pfb_test_unbound_configure_resolver']);
+		foreach ($GLOBALS['pfb_test_unbound_configure_resolver'] as $rendered) {
+			$this->assertStringNotContainsString('pfBlockerNG DNS proxy',
+				(string) base64_decode((string) ($rendered['custom_options'] ?? ''), TRUE), 'the proxy\'s clause is not rendered again');
+		}
+		$this->assertSame($rc, $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0, 'the proxy\'s rc script is not written again');
+		$this->assertFalse($changed, 'the rollback already regenerated and restarted: the apply has nothing left to signal');
+
+		// And the operator is told once, naming the Listen Port and its port, and nothing about a Custom Options line
+		$notices = $this->notices();
+		$this->assertCount(1, $notices);
+		$this->assertStringContainsString('Listen Port', $notices[0]['notice']);
+		$this->assertStringContainsString($port, $notices[0]['notice']);
+		$this->assertStringContainsString('turned off', $notices[0]['notice']);
+		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
+		$this->assertStringNotContainsString('Custom Options', $notices[0]['notice']);
+		$this->assertStringNotContainsString('kept', $notices[0]['notice']);
+		if ($dnsbl) {
+			$this->assertStringContainsString('DNSBL runs in the DNS Resolver again', $notices[0]['notice']);
+		} else {
+			$this->assertStringNotContainsString('DNSBL', $notices[0]['notice']);
+		}
+		$this->assertSame(2, $notices[0]['priority']);
+
+		// When the next apply runs again, and a readiness check of the proxy follows
+		$calls = $this->proxyCalls;
+		$this->assertTrue(pfb_dns_proxy_ensure_running(), 'nothing is moved, so there is nothing to wait for');
+		pfb_unbound_python($dnsbl ? 'enabled' : 'disabled');
+
+		// Then nothing starts or restarts the proxy again, pfB-DNS stays off, and the operator is not told a second time
+		$this->assertSame($calls, $this->proxyCalls, 'no resurrection of the proxy');
+		$this->assertSame('', $this->toggleStored());
+		$this->assertCount(1, $this->notices());
+		$this->assertSame($port, config_get_path('unbound/port'));
+	}
+
+	public function testAListenPortRollbackThatCannotStopTheProxyKeepsTheMovedResolverAndSaysRecoveryIsNeeded(): void
+	{
+		// Given a Listen Port of 5353 set after the move, and a proxy that survives its stop
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->survivesStop = TRUE;
+		config_set_path('unbound/port', '5353');
+		$moved = self::sorted(config_get_path('unbound'));
+
+		// When the next apply runs
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then pfB-DNS is off, the moved Resolver and its snapshot are kept as they were, and the operator is told recovery is needed
+		$this->assertSame('', $this->toggleStored());
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$this->assertSame($moved, self::sorted(config_get_path('unbound')), 'the moved Resolver is untouched');
+		$joined = implode("\n", array_column($this->notices(), 'notice'));
+		$this->assertStringContainsString('could not be restored', $joined);
+		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'no claim that the rollback worked');
+
+		// And once the proxy can be stopped, the next apply restores the saved keys and keeps the Listen Port
+		$this->survivesStop = FALSE;
+		pfb_unbound_python('enabled');
+		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed by the ordinary restore');
+		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'));
+		$this->assertSame('5353', config_get_path('unbound/port'));
+	}
+
+	public function testAListenPortRollbackWhoseConfigLockIsTakenChangesNothingAndSaysSo(): void
+	{
+		// Given a moved Resolver whose Listen Port the admin set to 5353, and another process saving config.xml throughout
+		$this->activate(TRUE);
+		$this->proxyServes();
+		config_set_path('unbound/port', '5353');
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$calls = $this->proxyCalls;
+		$moved = self::sorted(config_get_path('unbound'));
+
+		// When the rollback runs
+		$restored = pfb_dns_proxy_roll_back("the DNS Resolver's Listen Port is 5353, a loopback port the DNS proxy gives Unbound, after pfB-DNS took the Resolver");
+
+		// Then nothing is stopped, written or restored: pfB-DNS stays on, the snapshot and the moved Resolver are kept, and the notice says so
+		$this->assertFalse($restored);
+		$this->assertSame($calls, $this->proxyCalls, 'the proxy is not stopped without the lock');
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$this->assertSame($moved, self::sorted(config_get_path('unbound')), 'the moved Resolver is untouched');
+		$joined = implode("\n", array_column($this->notices(), 'notice'));
+		$this->assertStringContainsString('locked', $joined);
+		$this->assertStringNotContainsString('DNS Resolver was restored', $joined);
+	}
+
+	public function testAValidListenPortSetAfterTheMoveLeavesPfbDnsRunning(): void
+	{
+		// Given a moved Resolver and an admin who sets its Listen Port to 5300, a port the proxy does not use
+		$this->activate(TRUE);
+		$this->proxyServes();
+		config_set_path('unbound/port', '5300');
+
+		// When the next apply runs
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then pfB-DNS keeps the Resolver: no rollback, no notice, nothing stopped, and the port is the admin's
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertNotNull(pfb_dns_proxy_saved());
+		$this->assertSame('5300', config_get_path('unbound/port'));
+		$this->assertSame([], $this->notices());
+		$this->assertSame([], $this->proxyCalls);
+	}
+
+	// -----------------------------------------------------------------------
+	// E3 -- a Listen Port set after the move never moves the gateway onto a proxy port while the rollback cannot finish
+	// -----------------------------------------------------------------------
+
+	/** The port the gateway's rc script serves, from its start command (`--port N`). */
+	private function servedPort(): ?string
+	{
+		$rc = (string) ($GLOBALS['pfb_test_rcfiles']['pfb_dns_proxy.sh']['start'] ?? '');
+		return preg_match('/--port (\d+) /', $rc, $m) === 1 ? $m[1] : NULL;
+	}
+
+	public function testALockedConfigCannotMoveTheGatewayOntoAListenPortSetAfterTheMove(): void
+	{
+		// Given a moved Resolver whose gateway serves the port it had at the move, and an admin who then sets the Listen Port to 5353
+		// while another save holds config.xml for the whole apply
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$served = $this->servedPort();
+		config_set_path('unbound/port', '5353');
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+
+		// When the apply runs its Resolver pass and then its proxy check
+		pfb_unbound_python('enabled', TRUE);
+		pfb_dns_proxy_ensure_running();
+
+		// Then the gateway still serves the port it had: its rc script is not rewritten onto the Listen Port, and nothing restarts it
+		$this->assertSame('53', $served, 'before: the gateway serves the port the Resolver had');
+		$this->assertSame('53', $this->servedPort(), 'the gateway keeps serving the port it had');
+		$this->assertSame([], $this->proxyCalls, 'the proxy is neither stopped nor restarted');
+		$this->assertSame('on', $this->toggleStored(), 'the lock kept the rollback from turning pfB-DNS off');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+	}
+
+	public function testAProxyThatOutlivesTheRollbackKeepsItsServingPortWhenTheListenPortIsSetAfterTheMove(): void
+	{
+		// Given a moved Resolver whose gateway serves the port it had at the move, a Listen Port of 5353 set after the move,
+		// and a proxy that survives the rollback's stop
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$served = $this->servedPort();
+		config_set_path('unbound/port', '5353');
+		$this->survivesStop = TRUE;
+		// A restart brings the proxy back serving, as a live one does: the check below must find it ready, not a new failure
+		$this->behaviour = 'serves';
+
+		// When the apply runs its Resolver pass, which rolls back and fails, and then its proxy check
+		pfb_unbound_python('enabled', TRUE);
+		$calls = $this->proxyCalls;
+		pfb_dns_proxy_ensure_running();
+
+		// Then the proxy check neither restarts nor rewrites the gateway: it keeps serving the port it had
+		$this->assertSame('53', $served, 'before: the gateway serves the port the Resolver had');
+		$this->assertSame($served, $this->servedPort(), 'the gateway keeps serving the port it had');
+		$this->assertSame($calls, $this->proxyCalls, 'the proxy check after the failed rollback does not restart the proxy');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+	}
+
+	// -----------------------------------------------------------------------
 	// F -- a Resolver disabled underneath pfB-DNS: stand down
 	// -----------------------------------------------------------------------
 
