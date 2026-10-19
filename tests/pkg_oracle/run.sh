@@ -5,7 +5,8 @@
 # is installed, changed or left running.
 #   recovered  the fixed code: pfB-DNS survives the aborted removal and a retry removes the package (exit 0 iff it held)
 #   broken     the base commit: the defect reproduces (no answer, nothing registered, the retry aborts again; exit 0 iff it did)
-#   ORACLE_DELETE_CAP=S  each pkg delete's cap in seconds
+#   ORACLE_DELETE_CAP=S  each pkg delete's cap in seconds: shortens only (1 to 180; anything else keeps 180)
+#   exit status: 0 PASS; 1 product FAIL; 8 STUCK/ENVIRONMENT (a deadline expired); 9 harness fault (README: "Exit status")
 # /repo is a staged copy of REPO's working tree (OUT_DIR/stage; no .git, no tool indexes), not REPO itself: the pfb-dns payload has to
 # sit inside the tree the appliance paths point at, and a read-only mount cannot add a directory. REPO is only read.
 set -eu

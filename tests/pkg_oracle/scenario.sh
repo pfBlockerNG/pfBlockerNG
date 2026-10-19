@@ -6,7 +6,28 @@
 #      3 inside pkg's DEINSTALL script; pkg exits 0 and leaves the package installed);
 #   3. what is left: is the proxy answering, is the package still registered, does a retry remove it.
 # ORACLE_EXPECT=recovered (the fixed code) or broken (the base: the defect reproduces); the exit status says whether it held.
+# exit status: 0 PASS; 1 product FAIL (a check failed, or the broken defect did not reproduce); 8 STUCK/ENVIRONMENT (a watchdog
+# expired); 9 harness fault (the pgrep stand-in's self-check, the package build). run.sh returns it unchanged.
 # ORACLE_DELETE_CAP=S shortens each pkg delete's cap (1 to 180 s); it cannot lengthen the 180 s default.
+holder=
+unbound_pid=
+trap 'if [ -n "$holder" ]; then kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; fi; if [ -n "$unbound_pid" ]; then kill "$unbound_pid" 2>/dev/null; wait "$unbound_pid" 2>/dev/null; fi' EXIT
+# Every wait observes an event and gives up at a real deadline: AWAIT_CAP seconds of monotonic time, checked between probes (a
+# probe can add its own timeout: 2 s for a silent port). Expiry is an environment stall: STUCK/ENVIRONMENT, never a product verdict.
+AWAIT_CAP=60
+stuck() { note "STUCK/ENVIRONMENT: $*"; exit 8; }
+now_cs() { # monotonic clock (CLOCK_BOOTTIME via /proc/uptime), in centiseconds
+	t=$(cut -d' ' -f1 /proc/uptime)
+	printf '%s' "${t%.*}${t#*.}"
+}
+await() { # description, command...: poll the command until it succeeds, within AWAIT_CAP seconds
+	desc=$1; shift
+	deadline=$(( $(now_cs) + AWAIT_CAP * 100 ))
+	until "$@"; do
+		[ "$(now_cs)" -lt "$deadline" ] || stuck "$desc was not observed within $AWAIT_CAP s"
+		sleep 0.2
+	done
+}
 set -u
 label=${1:-lock}
 expect=${ORACLE_EXPECT:-recovered}
@@ -22,8 +43,6 @@ mkdir -p "$out"
 export RACE_DIR=/sandbox/state ORACLE_REPO=/repo CORE_DIR=/core CORE_LABEL=${CORE_LABEL:-master}
 export PFB_PYTHON_DEPENDENCIES=py313 PFB_PYTHON_DIR=/opt/pybin PYTHONDONTWRITEBYTECODE=1
 fail=0
-holder=
-trap 'if [ -n "$holder" ]; then kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; fi' EXIT
 note() { printf '%s\n' "$*" | tee -a "$out/summary.txt"; }
 check() { # description, command...
 	desc=$1; shift
@@ -32,17 +51,6 @@ check() { # description, command...
 dns() { python3 /oracle/q.py 127.0.0.1 "$1"; }
 state() { php -f /oracle/probe.php state 2>/dev/null | tail -1; }
 has() { printf '%s' "$1" | grep -q -- "$2"; }
-# Every wait observes an event under one outer cap (300 polls, 0.2 s apart). Expiry is an environment stall: STUCK/ENVIRONMENT,
-# never a product verdict.
-stuck() { note "STUCK/ENVIRONMENT: $*"; exit 8; }
-await() { # description, command...: poll the command until it succeeds
-	desc=$1; shift
-	n=0
-	until "$@"; do
-		n=$((n + 1)); [ "$n" -le 300 ] || stuck "$desc was not observed"
-		sleep 0.2
-	done
-}
 unbound_up() { grep -q "start of service" /tmp/unbound.log 2>/dev/null; }
 answered() { case "$(dns "$1")" in ANSWERED*) ;; *) return 1 ;; esac; }
 absent() { case "$(dns probe.example.)" in *ConnectionRefusedError*) ;; *) return 1 ;; esac; }
@@ -67,6 +75,7 @@ server:
     local-data: "probe.example. 60 IN A 192.0.2.7"
 C
 unbound -d -c /tmp/unbound.conf >/tmp/unbound.log 2>&1 &
+unbound_pid=$!
 await "Unbound starts serving (its start-of-service line)" unbound_up
 
 note "== $label: core $CORE_LABEL, pkg $(/work/prefix/sbin/pkg --version), repo ${ORACLE_REV:-unknown}, delete cap ${delete_cap} s"
@@ -88,7 +97,7 @@ check "and 1 for a reaped pid" test "$(pid_rc "$RACE_DIR/dead.pid")" = 1
 # A failed stand-in is a fault in the harness, not a verdict on the product: report it as such and run no removal.
 if [ "$fail" -gt "$harness_fail" ]; then
 	note "== $label: FAIL ($((fail - harness_fail))): the pgrep stand-in failed its own self-check (a harness fault; no removal was run)"
-	exit "$fail"
+	exit 9
 fi
 
 # The real package manager and a package whose scripts are what pfSense's package builder ships: rc.packages DEINSTALL / POST-DEINSTALL.
@@ -145,14 +154,16 @@ if [ "$expect" = recovered ]; then
 	if [ "$fail" -gt "$gate_before" ]; then
 		note "== $label: FAIL ($((fail - gate_before))): after the aborted removal probe.php does not report pfB-DNS registered and running; readiness waits not run"
 		sed 's/^/  | /' "$out/delete1.out" | tail -12
-		exit "$fail"
+		exit 1
 	fi
 	await "pfB-DNS answers probe.example. after the aborted removal" answered probe.example.
 	await "pfB-DNS answers blocked.example. after the aborted removal" answered blocked.example.
 else
-	# The defect's proxy must be down after the aborted removal. The probe is read once: an answer is the outcome itself (the defect
-	# did not reproduce), so it FAILs here with no wait. Silence is not yet a verdict, since a stop may still be in flight: only that
-	# undecided state waits, the refusal that decides it is awaited, and expiry of that wait is STUCK/ENVIRONMENT.
+	# The proxy's stop is synchronous, so none is in flight once pkg delete has returned. stop_service() runs the proxy's rc stop with
+	# mwexec(), which exec()s and waits (master.service-utils.inc:136; master.util.inc mwexec). That stop returns once no proxy pid is
+	# alive (src/usr/local/pkg/pfblockerng/pfblockerng.inc:4611), or after KILL and a give-up at 7 s (:4619-4622). It runs before the
+	# hook (master.pkg-utils.inc:1035; the hook at :1097). So one read decides: a live answer is a proxy the removal started again, or a
+	# survivor of that give-up. The FAIL lists the live processes.
 	first=$(dns probe.example.)
 	case "$first" in
 		ANSWERED*)
@@ -160,7 +171,9 @@ else
 			note "  FAIL  defect did not reproduce: proxy answers after the aborted removal ($first)"
 			note "== $label: FAIL ($fail): defect did not reproduce: proxy answers after the aborted removal"
 			sed 's/^/  | /' "$out/delete1.out" | tail -12
-			exit "$fail" ;;
+			note "  live pfBlockerNG processes after the removal (a restart, or a survivor of a stop that gave up):"
+			ps -eo pid,args | grep "[p]fb" | sed 's/^/  | /' | tee -a "$out/summary.txt"
+			exit 1 ;;
 	esac
 	await "the proxy's port refuses once it is stopped (the stop is undecided until then)" absent
 	s1=$(state); note "state: $s1"
@@ -196,4 +209,5 @@ else
 	check "the base's retry removes the package only because nothing serves the Resolver any more (the outage is the defect)" test -z "$(installed)"
 fi
 note "== $label: $([ $fail -eq 0 ] && echo PASS || echo "FAIL ($fail)") (expect=$expect)"
-exit $fail
+if [ "$fail" -eq 0 ]; then exit 0; fi
+exit 1

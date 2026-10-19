@@ -56,9 +56,16 @@ sh tests/pkg_oracle/run.sh    OUT BASE broken   master    # the base commit: exi
 Scenario: pfB-DNS serving in module mode; `pkg delete` while another save holds the config lock until the removal's Resolver restore
 gives up (the lock double leaves `pfb_dns_config.refused`, and the holder lets go on it); then the aborted removal's leftovers are
 probed; then the retry with the lock free. Every wait observes an event (Unbound's start line, the holder's ready marker, the proxy's
-first answer, the proxy's port refusing once it is stopped) under one `STUCK/ENVIRONMENT` cap. Each `pkg delete` runs under the same
-cap, 180 s by default; `ORACLE_DELETE_CAP=S` can only shorten it (1 to 180 s), and expiry kills the process group. After the first
-removal probe.php's state is read once: the three services registered and the proxy running, or the run FAILs before any readiness
-wait. Broken mode reads the probe once after the removal: an answer FAILs at once ("defect did not reproduce"), and only silence waits,
-for the refusal that shows the stop. The pgrep stand-in is self-checked before the removal; a failed self-check is a harness fault, not
-a verdict on the product. Container only: nothing is installed on or changed on the host.
+first answer, the proxy's port refusing once it is stopped) and gives up at a 60 s monotonic deadline (`AWAIT_CAP`, read from
+/proc/uptime, checked between probes; a silent port's 2 s probe timeout can add to it). Expiry is `STUCK/ENVIRONMENT`. Each `pkg delete`
+runs under a cap, 180 s by default; `ORACLE_DELETE_CAP=S` can only shorten it (1 to 180 s), and expiry kills the process group and is
+also `STUCK/ENVIRONMENT`. After the first removal probe.php's state is read once: the three services registered and the proxy running,
+or the run FAILs before any readiness wait. Broken mode reads the probe once after the removal: an answer FAILs at once ("defect did
+not reproduce"), and only silence waits for the refusal that shows the stop. The stop is synchronous (scenario.sh, broken branch, with
+its source lines), so a live answer after `pkg delete` returns is not a stop still in flight. The pgrep stand-in is self-checked before
+the removal; a failed self-check is a harness fault.
+
+Exit status (`run.sh` returns scenario.sh's): 0 PASS; 1 product FAIL (a check failed, or in broken mode the defect did not reproduce);
+8 STUCK/ENVIRONMENT (a deadline expired, so the run decided nothing about the product); 9 harness fault (the pgrep stand-in failed its
+self-check, or the package build failed). Only exit 1 is a verdict on the product.
+Container only: nothing is installed on or changed on the host.
