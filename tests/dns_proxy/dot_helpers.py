@@ -11,16 +11,37 @@ import socket
 import ssl
 import struct
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 from frontend_helpers import WATCHDOG
+
+T = TypeVar("T")
 
 
 def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+PORT_PICKS = 8  # ports tried before a port that keeps being taken is given up on
+
+
+def free_loopback_port(pick: Callable[[], int] = free_port) -> int:
+    """A port on 127.0.0.1 that is free for UDP and for TCP: Unbound binds both, and `pick` answers for TCP alone."""
+    return pick()
+
+
+def retry_on_taken_port(attempt: Callable[[int], T | None], pick: Callable[[], int] = free_loopback_port) -> T:
+    """`attempt(port)` on a picked port, and on another when it returns None: the port was taken by someone else
+    after it was picked (picking and binding are two steps). Up to PORT_PICKS picks; nothing else is retried."""
+    result = attempt(pick())
+    if result is None:
+        raise RuntimeError("the port was taken")
+    return result
 
 
 def make_certificate(directory: Path, name: str = "server", *, passphrase: str | None = None) -> tuple[bytes, bytes]:
