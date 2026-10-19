@@ -2164,6 +2164,8 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         "turn the DNS Resolver sync off",
         "next Update",
         "Network Interfaces, SSL/TLS Service or Custom options in between are replaced",
+        "turns pfB-DNS off and restores the Resolver, keeping your line",
+        "restores the saved values (the Resolver stays disabled) and turns this option off",
         "DNS Reply Logging",
         "This one setting applies to both DNS modes",
         "keep this disabled where that must not be recorded",
