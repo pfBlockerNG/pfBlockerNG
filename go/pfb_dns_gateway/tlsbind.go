@@ -4,27 +4,27 @@ import "net"
 
 // tlsListeners are the DoT, DoH and DoQ sockets, bound while the gateway is still root; serving starts later.
 type tlsListeners struct {
-	settings tlsSettings
+	certs    *certStore
 	dot, doh []*net.TCPListener
 	doq      []*net.UDPConn
 }
 
-// bindTLS binds every requested TLS transport. When one is requested but the certificate is unusable the reason is
+// bindTLS binds every requested TLS transport. When one is requested but the certificate file is unusable the reason is
 // logged once and nothing is bound (nil): plain DNS keeps serving, as a broken certificate must not take :53 down.
-// An address that cannot be bound is logged and skipped. config.xml is not looked at unless a transport is requested.
+// An address that cannot be bound is logged and skipped. The file is not looked at unless a transport is requested.
 func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
 	if !cfg.dot && len(cfg.dohListen) == 0 && len(cfg.doqListen) == 0 {
 		return nil
 	}
-	settings, err := readTLSSettings(cfg.pfsenseConfig)
+	certs, err := newCertStore(cfg.tlsPEM, logf)
 	if err != nil {
 		logf("TLS transports disabled: %v", err)
 		return nil
 	}
-	t := &tlsListeners{settings: settings}
+	t := &tlsListeners{certs: certs}
 	if cfg.dot {
 		for _, host := range cfg.listen {
-			if ln, err := bindTCP(host, settings.port); err != nil {
+			if ln, err := bindTCP(host, cfg.dotPort); err != nil {
 				logf("%v", err)
 			} else {
 				t.dot = append(t.dot, ln)
@@ -85,15 +85,15 @@ func (t *tlsListeners) serve(g *gateway, trusted []string) {
 		return
 	}
 	for _, ln := range t.dot {
-		g.serveDoT(ln, t.settings.dot())
+		g.serveDoT(ln, t.certs.dot())
 	}
 	if len(t.doh) > 0 {
 		prefixes := parseTrusted(trusted, g.logf)
 		for _, ln := range t.doh {
-			g.serveDoH(ln, t.settings.doh(), prefixes)
+			g.serveDoH(ln, t.certs.doh(), prefixes)
 		}
 	}
 	for _, ln := range t.doq {
-		g.serveDoQ(ln, t.settings.doq())
+		g.serveDoQ(ln, t.certs.doq())
 	}
 }

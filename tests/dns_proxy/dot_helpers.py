@@ -1,4 +1,4 @@
-"""A test certificate, pfSense config.xml text and a DoT client for the DNS over TLS tests.
+"""A test certificate, the certificate file the gateway serves and a DoT client for the DNS over TLS tests.
 
 The certificate comes from the `openssl` CLI, which the tests REQUIRE: its absence fails the test, never skips it.
 """
@@ -6,7 +6,6 @@ The certificate comes from the `openssl` CLI, which the tests REQUIRE: its absen
 from __future__ import annotations
 
 import asyncio
-import base64
 import shutil
 import socket
 import ssl
@@ -16,8 +15,6 @@ from pathlib import Path
 
 import pytest
 from frontend_helpers import WATCHDOG
-
-REFID = "5f0a1b2c3d4e5"
 
 
 def free_port() -> int:
@@ -46,42 +43,12 @@ def make_certificate(directory: Path, name: str = "server", *, passphrase: str |
     return cert.read_bytes(), key.read_bytes()
 
 
-def b64(data: bytes) -> str:
-    return base64.b64encode(data).decode()
-
-
-def cert_element(refid: str, crt: str | None, prv: str | None, caref: str | None = None) -> str:
-    """A config.xml <cert> entry; `crt`/`prv` are the element TEXT (base64), None leaves the element out."""
-    parts = [f"<refid>{refid}</refid>", "<descr>DoT test cert</descr>", "<type>server</type>"]
-    parts += [f"<caref>{caref}</caref>"] if caref else []
-    parts += [f"<crt>{crt}</crt>"] if crt is not None else []
-    parts += [f"<prv>{prv}</prv>"] if prv is not None else []
-    return "<cert>" + "".join(parts) + "</cert>"
-
-
-def ca_element(refid: str, crt: str, caref: str | None = None) -> str:
-    return (
-        f"<ca><refid>{refid}</refid><descr>CA {refid}</descr>"
-        + (f"<caref>{caref}</caref>" if caref else "")
-        + (f"<crt>{crt}</crt></ca>")
-    )
-
-
-def config_xml(
-    *,
-    enablessl: bool = True,
-    certref: str | None = REFID,
-    tlsport: object | None = 853,
-    entries: str = "",
-    unbound: bool = True,
-) -> str:
-    """The relevant slice of a pfSense config.xml: <unbound> DoT settings plus whatever <cert>/<ca> `entries` say."""
-    settings = ["<enable></enable>"]
-    settings += ["<enablessl></enablessl>"] if enablessl else []
-    settings += [f"<sslcertref>{certref}</sslcertref>"] if certref is not None else []
-    settings += [f"<tlsport>{tlsport}</tlsport>"] if tlsport is not None else []
-    section = f"<unbound>{''.join(settings)}</unbound>" if unbound else ""
-    return f'<?xml version="1.0"?>\n<pfsense><version>23.3</version>{section}{entries}</pfsense>\n'
+def write_certificate_file(directory: Path, certificate: bytes, key: bytes) -> Path:
+    """The file pfBlockerNG writes for the gateway's `--tls-pem`: the certificate PEM, then the key PEM, mode 0600."""
+    pem = directory / "pfb_dns_cert.pem"
+    pem.write_bytes(certificate + key)
+    pem.chmod(0o600)
+    return pem
 
 
 async def dot_exchange(

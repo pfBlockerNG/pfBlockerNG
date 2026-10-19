@@ -12,16 +12,16 @@ func TestConfigTLSDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.dot || cfg.pfsenseConfig != "/cf/conf/config.xml" || cfg.dohPort != 4443 || cfg.doqPort != 853 ||
+	if cfg.dot || cfg.tlsPEM != "/var/unbound/pfb_dns_cert.pem" || cfg.dotPort != 853 || cfg.dohPort != 4443 || cfg.doqPort != 853 ||
 		len(cfg.dohListen) != 0 || len(cfg.dohTrusted) != 0 || len(cfg.doqListen) != 0 {
-		t.Fatalf("defaults: got dot=%v pfsense-config=%q doh-port=%d doq-port=%d doh-listen=%v doh-trusted=%v doq-listen=%v",
-			cfg.dot, cfg.pfsenseConfig, cfg.dohPort, cfg.doqPort, cfg.dohListen, cfg.dohTrusted, cfg.doqListen)
+		t.Fatalf("defaults: got dot=%v tls-pem=%q dot-port=%d doh-port=%d doq-port=%d doh-listen=%v doh-trusted=%v doq-listen=%v",
+			cfg.dot, cfg.tlsPEM, cfg.dotPort, cfg.dohPort, cfg.doqPort, cfg.dohListen, cfg.dohTrusted, cfg.doqListen)
 	}
 }
 
 func TestConfigTLSEveryFlag(t *testing.T) {
 	cfg, err := parse(t,
-		"--dot", "--pfsense-config", "/tmp/config.xml",
+		"--dot", "--dot-port", "8530", "--tls-pem", "/tmp/cert.pem",
 		"--doh-listen", "192.0.2.1", "--doh-listen", "::1", "--doh-port", "8443",
 		"--doh-trusted", "192.0.2.0/24", "--doh-trusted", "2001:db8::1",
 		"--doq-listen", "192.0.2.2", "--doq-port", "8853",
@@ -29,7 +29,7 @@ func TestConfigTLSEveryFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.dot || cfg.pfsenseConfig != "/tmp/config.xml" || cfg.dohPort != 8443 || cfg.doqPort != 8853 ||
+	if !cfg.dot || cfg.tlsPEM != "/tmp/cert.pem" || cfg.dotPort != 8530 || cfg.dohPort != 8443 || cfg.doqPort != 8853 ||
 		!reflect.DeepEqual(cfg.dohListen, []string{"192.0.2.1", "::1"}) ||
 		!reflect.DeepEqual(cfg.dohTrusted, []string{"192.0.2.0/24", "2001:db8::1"}) ||
 		!reflect.DeepEqual(cfg.doqListen, []string{"192.0.2.2"}) {
@@ -38,9 +38,9 @@ func TestConfigTLSEveryFlag(t *testing.T) {
 }
 
 func TestConfigTLSPortZeroPicksOne(t *testing.T) {
-	cfg, err := parse(t, "--doh-port", "0", "--doq-port", "0", "--", "decider")
-	if err != nil || cfg.dohPort != 0 || cfg.doqPort != 0 {
-		t.Fatalf("got doh-port=%d doq-port=%d err=%v, want 0 and 0 (a port picked per address)", cfg.dohPort, cfg.doqPort, err)
+	cfg, err := parse(t, "--dot-port", "0", "--doh-port", "0", "--doq-port", "0", "--", "decider")
+	if err != nil || cfg.dotPort != 0 || cfg.dohPort != 0 || cfg.doqPort != 0 {
+		t.Fatalf("got dot-port=%d doh-port=%d doq-port=%d err=%v, want 0, 0 and 0 (a port picked per address)", cfg.dotPort, cfg.dohPort, cfg.doqPort, err)
 	}
 }
 
@@ -49,13 +49,15 @@ func TestConfigRejectsBadTLSUsage(t *testing.T) {
 		args []string
 		want string
 	}{
+		"dot port above 65535": {[]string{"--dot-port", "70000"}, "--dot-port"},
+		"dot port negative":    {[]string{"--dot-port", "-1"}, "--dot-port"},
 		"doh port above 65535": {[]string{"--doh-port", "70000"}, "--doh-port"},
 		"doh port negative":    {[]string{"--doh-port", "-1"}, "--doh-port"},
 		"doq port above 65535": {[]string{"--doq-port", "70000"}, "--doq-port"},
 		"doq port negative":    {[]string{"--doq-port", "-1"}, "--doq-port"},
 		"doh listen empty":     {[]string{"--doh-listen", ""}, "--doh-listen"},
 		"doq listen empty":     {[]string{"--doq-listen", ""}, "--doq-listen"},
-		"pfsense config empty": {[]string{"--pfsense-config", ""}, "--pfsense-config"},
+		"tls pem empty":        {[]string{"--tls-pem", ""}, "--tls-pem"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

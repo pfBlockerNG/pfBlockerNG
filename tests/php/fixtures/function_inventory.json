@@ -1734,6 +1734,44 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_proxy_certificate_export": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "owner",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dns_proxy_certificate_refresh": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "wanted",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_certificate_sync": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
     "pfb_dns_proxy_confirm_ready": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1892,6 +1930,33 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_proxy_pem_field": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "field",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_port": {
         "returnsRef": false,
         "returnType": "string",
@@ -2040,6 +2105,19 @@
             {
                 "name": "warnings",
                 "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_tls_wanted": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
                 "variadic": false,
                 "type": "array",
                 "default": null
