@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 SOCKET = "pfb_upstream.sock"
 # Mirror of the decider's limits (pfb_dns_proxy.py); test_upstream_observer checks the copies agree. One report is one
-# datagram, and 2 KiB is the default AF_UNIX datagram size on FreeBSD (net.local.dgram.maxdgram; not probed on a box).
+# datagram; 2 KiB is a conservative per-report bound, not the AF_UNIX datagram limit (net.local.dgram.maxdgram).
 MAX_REPORT_BYTES = 2048
 MAX_REPORT_OPTIONS = 8
 MAX_REPORT_OPTION_HEX = 1024
