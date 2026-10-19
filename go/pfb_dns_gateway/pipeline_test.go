@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"net"
 	"net/netip"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -129,8 +131,34 @@ func TestAConnectionHasAtMostFourQueriesInFlightAndReadsOnWhenOneFinishes(t *tes
 	}
 }
 
+// gatewayIsDraining reports whether a connection of this process has read its client's EOF and now waits, in serveConn
+// itself and not in its cleanup after a return, for the queries the client still has in flight. A gateway that drains
+// changes nothing else a test can see (the slot stays held), so this is the barrier that makes "the gateway has seen
+// the close" observable before anything is asserted about what it keeps.
+func gatewayIsDraining() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		if n := runtime.Stack(buf, true); n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, goroutine := range strings.Split(string(buf), "\n\n") {
+		lines := strings.Split(goroutine, "\n")
+		for i, line := range lines {
+			// A frame is two lines, the function and its file; the caller of Wait is the next frame.
+			if strings.HasPrefix(line, "sync.(*WaitGroup).Wait(") && i+2 < len(lines) && strings.Contains(lines[i+2], "(*gateway).serveConn(") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // A client that closes its connection looks like one that half-closed (both are a FIN), so its queries are decided
-// and answered first; the connection closes, and its slot is freed, once they are.
+// first: until the decider answers, its slot is held and its query is still being waited for; the answer is taken as
+// the decision, never as the answer to an abandoned query; only then is the connection closed and the slot freed.
 func TestAClosedClientFreesItsSlotOnceItsQueriesAreDecided(t *testing.T) {
 	for _, k := range streamKinds {
 		t.Run(k.name, func(t *testing.T) {
@@ -138,16 +166,38 @@ func TestAClosedClientFreesItsSlotOnceItsQueriesAreDecided(t *testing.T) {
 			held := make(chan struct{})
 			release := sync.OnceFunc(func() { close(held) })
 			t.Cleanup(release)
-			r.autoAnswer(func(q decidedQuery) []byte { <-held; return echoAnswer(q) })
+			var answered atomic.Bool // the decider has sent its answer
+			r.autoAnswer(func(q decidedQuery) []byte {
+				<-held
+				answered.Store(true)
+				return echoAnswer(q)
+			})
 			c := k.dial(t, r)
 			tcpSend(t, c, buildQuery(t, 1, "held.example.", true))
-			r.nextQuery()
+			inFlight := r.g.dec.lookup(r.nextQuery().id)
 			if n := r.g.tcpConns.Load(); n != 1 {
 				t.Fatalf("one client is connected but %d slots are held", n)
 			}
 			_ = c.Close()
+			eventually(t, "the gateway to read the client's close and wait for the query it holds", gatewayIsDraining)
+
+			abandoned := func() bool {
+				inFlight.mu.Lock()
+				defer inFlight.mu.Unlock()
+				return inFlight.abandoned
+			}
+			if answered.Load() || abandoned() {
+				t.Fatalf("the client has closed and nothing is decided, yet its query is no longer waited for (answered=%v abandoned=%v)", answered.Load(), abandoned())
+			}
+			if n := r.g.tcpConns.Load(); n != 1 {
+				t.Fatalf("the closed client's slot is released (%d held) while its query is undecided", n)
+			}
+
 			release()
 			eventually(t, "the closed client's slot to be freed after its query was decided", func() bool { return r.g.tcpConns.Load() == 0 })
+			if !answered.Load() || abandoned() {
+				t.Fatalf("the slot was freed without the decider's answer being taken as the decision (answered=%v abandoned=%v)", answered.Load(), abandoned())
+			}
 		})
 	}
 }

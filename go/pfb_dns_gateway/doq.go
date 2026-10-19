@@ -7,9 +7,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/netip"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -19,6 +22,7 @@ import (
 
 // RFC 9250 4.3 error codes.
 const (
+	doqNoError          = 0x0
 	doqInternalError    = 0x1
 	doqProtocolError    = 0x2
 	doqRequestCancelled = 0x3
@@ -26,6 +30,38 @@ const (
 	maxDoQStreams  = 100              // concurrent query streams per connection
 	doqIdleTimeout = 30 * time.Second // QUIC idle timeout; RFC 9250 4.4 asks for it to be negotiated
 )
+
+// doqConns is the accepted connections of one DoQ listener. quic-go's Listener.Close leaves accepted connections
+// open and Transport.Close ends them without a CONNECTION_CLOSE, so stop() closes each one itself, before either.
+type doqConns struct {
+	mu   sync.Mutex
+	open map[*quic.Conn]struct{}
+}
+
+func (c *doqConns) add(conn *quic.Conn) {
+	c.mu.Lock()
+	c.open[conn] = struct{}{}
+	c.mu.Unlock()
+}
+
+func (c *doqConns) remove(conn *quic.Conn) {
+	c.mu.Lock()
+	delete(c.open, conn)
+	c.mu.Unlock()
+}
+
+// closeAll ends every connection with DOQ_NO_ERROR (RFC 9250 4.3: a graceful close) and returns once each
+// CONNECTION_CLOSE has been sent.
+func (c *doqConns) closeAll() {
+	c.mu.Lock()
+	open := slices.Collect(maps.Keys(c.open))
+	c.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, conn := range open {
+		wg.Go(func() { _ = conn.CloseWithError(doqNoError, "") })
+	}
+	wg.Wait()
+}
 
 // serveDoQ serves QUIC on udp until stop(). No 0-RTT (a replayed query is not harmless here) and no unidirectional
 // streams (RFC 9250 4.3.3 makes opening one a protocol error). Connections are admitted before their handshake.
@@ -38,12 +74,32 @@ func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
 		_ = udp.Close()
 		return
 	}
-	g.closeOnStop(func() { _ = ln.Close(); _ = tr.Close(); _ = udp.Close() }) // ln.Close also closes every connection of the listener
+	conns := &doqConns{open: map[*quic.Conn]struct{}{}}
+	acceptEnded := make(chan struct{})
+	g.closeOnStop(func() {
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			_ = ln.Close() // refuses the handshakes still running; Accept hands out what is queued, then ends
+			<-acceptEnded  // so every connection is registered, or already closed
+			conns.closeAll()
+		}()
+		t := time.NewTimer(g.stopBound)
+		defer t.Stop()
+		select {
+		case <-closed:
+		case <-t.C:
+			g.logf("DoQ on %s: connections still open after %s; closing the socket", udp.LocalAddr(), g.stopBound)
+		}
+		_ = tr.Close() // sends no CONNECTION_CLOSE: every connection was closed above
+		_ = udp.Close()
+	})
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
+		defer close(acceptEnded)
 		for {
-			conn, err := ln.Accept(g.ctx)
+			conn, err := ln.Accept(context.Background()) // not g.ctx: after Close it still hands out the queue
 			if err != nil {
 				if g.shuttingDown(err) || errors.Is(err, quic.ErrServerClosed) {
 					return
@@ -52,6 +108,8 @@ func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
 				g.pause()
 				continue
 			}
+			conns.add(conn)
+			context.AfterFunc(conn.Context(), func() { conns.remove(conn) }) // the context ends after the close is on the wire
 			g.wg.Add(1)
 			go g.serveQUICConn(conn)
 		}
@@ -74,7 +132,7 @@ func (g *gateway) admitDoQ(ctx context.Context, info *quic.ClientInfo) (context.
 
 func (g *gateway) serveQUICConn(conn *quic.Conn) {
 	defer g.wg.Done()
-	defer func() { _ = conn.CloseWithError(0, "") }()
+	defer func() { _ = conn.CloseWithError(doqNoError, "") }()
 	peer, local := addrPortOf(conn.RemoteAddr()), addrPortOf(conn.LocalAddr())
 	for {
 		s, err := conn.AcceptStream(g.ctx)
