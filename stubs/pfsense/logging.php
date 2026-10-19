@@ -45,13 +45,6 @@ function file_notice(
 ): void {}
 
 /**
- * The notice queue file_notice() writes, keyed by time: each row carries id, notice, url, category and priority.
- *
- * @return array<int|string,array<string,string>>|false
- */
-function get_notices(string $category = 'all'): array|false {}
-
-/**
  * Update the progress/status message shown during package operations
  * (visible in the pfSense package manager UI).
  */
