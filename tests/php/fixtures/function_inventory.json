@@ -1884,6 +1884,11 @@
             }
         ]
     },
+    "pfb_dns_proxy_listen_port_conflict": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": []
+    },
     "pfb_dns_proxy_listener_directive": {
         "returnsRef": false,
         "returnType": "?array",

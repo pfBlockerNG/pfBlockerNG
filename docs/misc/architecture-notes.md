@@ -458,8 +458,11 @@ An `interface`, `port` or `include` line the admin adds after the move is not re
 restart away from an address-in-use failure): `pfb_dns_proxy_resolver()` reports it through its `$unsafe_line` argument, writes
 the admin's text as it stands (our block cut out) into the snapshot's `custom_options`, and `pfb_unbound_python()` takes the
 failed-activation rollback (`pfb_dns_proxy_roll_back()`, see "Readiness and rollback"): pfB-DNS off, the proxy stopped, the
-Resolver restored with the admin's line kept in Custom Options, one notice naming the line. The other refusals above (the Listen
-Port, a partial marker pair, a quote left open) stay refusals on a moved Resolver too.
+Resolver restored with the admin's line kept in Custom Options, one notice naming the line. A Listen Port of 5353 or 5354 that the
+admin sets after the move takes the same rollback, but the move itself raises no notice and changes nothing: the saved keys come
+back, the Listen Port stays as the admin set it, and the one notice names that port. While such a rollback cannot run (config.xml
+locked, or the proxy outlives its stop) the gateway keeps the rc script it serves with, so the proxy is not restarted onto that port.
+The other refusals above (a partial marker pair, a quote left open) stay refusals on a moved Resolver too.
 
 A Resolver the admin disables in Services > DNS Resolver while pfB-DNS fronts it (the toggle on, pfBlockerNG enabled, a
 snapshot, `unbound/enable` absent) leaves the proxy on the Resolver's addresses answering SERVFAIL for every allowed name (measured

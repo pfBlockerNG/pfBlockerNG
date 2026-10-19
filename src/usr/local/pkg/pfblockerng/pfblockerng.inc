@@ -4457,6 +4457,11 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$pushed = escapeshellarg(pfb_dns_proxy_certificate_pushed_path());
 
 	$saved = pfb_dns_proxy_saved();
+	// A Listen Port set after the move on a proxy port while the snapshot still stands (the rollback has not run): keep the rc
+	// script the gateway serves with, since a regenerated one would restart it onto a port Unbound's own sockets hold.
+	if ($saved !== NULL && pfb_dns_proxy_listen_port_conflict() !== NULL) {
+		return;
+	}
 	$listen = ($saved === NULL) ? [] : pfb_dns_proxy_listen($saved);
 	$warnings = [];
 	$addresses = '';
@@ -4764,11 +4769,11 @@ function pfb_dns_proxy_turn_off(string $why): bool {
 }
 
 /**
- * The proxy took the Resolver's place and did not become ready, or an unsafe Custom Options line was added after the move ($what
+ * The proxy took the Resolver's place and did not become ready, or an unsafe Custom Options line or Listen Port was set after the move ($what
  * says which): give the Resolver, and with DNSBL on the DNSBL module, back to
  * Unbound. Under the DNS config lock the requested pfB-DNS toggle goes Off first, so a rollback that fails half way is retried
  * by the next apply's restore and that apply never enables pfB-DNS again; the lock is released before anything waits. Then
- * the proxy is stopped and the Resolver gets exactly its saved settings back (pfb_unbound_python($mode, FALSE), which also puts
+ * the proxy is stopped and the Resolver gets its saved settings back, keeping a Listen Port the admin set since the move (pfb_unbound_python($mode, FALSE), which also puts
  * the DNSBL module back into Unbound iff DNSBL is on), and unbound.conf is regenerated and Unbound restarted the way the apply
  * would (pfb_unbound_dnsbl(), pfb_update_unbound()). The restore consumes the snapshot, so the Unbound reload that follows
  * finds no proxy to restart: there is no loop.
@@ -13856,6 +13861,17 @@ function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 	    (pfb_dnsbl_active() ? ': DNSBL keeps running in the DNS Resolver as before.' : '.');
 }
 
+/** The DNS proxy's loopback port (5353 or 5354) that the Resolver's Listen Port takes, or NULL when it takes neither. */
+function pfb_dns_proxy_listen_port_conflict(): ?string {
+	$listen_port = (int) config_get_path('unbound/port', 0);
+	foreach ([PFB_DNS_PROXY_UNBOUND_PORT, PFB_DNS_PROXY_UNBOUND_PLAIN_PORT] as $own_port) {
+		if ($listen_port === (int) $own_port) {
+			return $own_port;
+		}
+	}
+	return NULL;
+}
+
 /** The toggle-on refusal: the operator gets a notice, not only a log line, saying what stays as it was and what to correct. */
 function pfb_dns_proxy_refuse(string $why): bool {
 	$text = "DNS proxy: {$why}. " . pfb_dns_proxy_unmoved_effect(pfb_dns_proxy_saved() !== NULL) .
@@ -13963,7 +13979,8 @@ function pfb_dns_proxy_stand_down(): bool {
  * size is automatic and nothing of the admin's sets one, the clause also carries `edns-buffer-size:` for the SAVED interfaces
  * (pfb_dns_proxy_edns_line()): the Resolver on lo0 would otherwise advertise the loopback MTU.
  *
- * @param string|null $unsafe_line set to the admin's line when one was found after the move (TRUE is returned: the saved copy changed)
+ * @param string|null $unsafe_line set to the admin's own setting that conflicts after the move: the Listen Port (FALSE is returned,
+ *        nothing changed) or a Custom Options line (TRUE is returned: the saved copy changed)
  * @return bool TRUE iff config.xml changed (write_config was called once).
  */
 function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
@@ -14111,8 +14128,9 @@ function pfb_dns_proxy_edns_line(array $saved, string $admin_code): ?string {
 /**
  * pfb_dns_proxy_resolver()'s move or restore, called with the config lock held and config.xml freshly read.
  *
- * @param string|null $unsafe_line set (TRUE returned) to the admin's own line when an interface:, port: or include: line stands
- *        in Custom Options of a Resolver that is already moved, instead of the refusal a move that has not happened yet gets
+ * @param string|null $unsafe_line set to the admin's own setting that conflicts with the proxy on a Resolver that is already moved,
+ *        instead of the refusal a move that has not happened yet gets: "Listen Port {port}" (FALSE returned, nothing changed), or
+ *        an interface:, port: or include: line of the admin's in Custom Options (TRUE returned: the saved copy changed)
  */
 function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): bool {
 	$saved = pfb_dns_proxy_saved();
@@ -14164,12 +14182,15 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 	// Our clause gives Unbound loopback ports 5353 (PROXYv2) and 5354 (plain, through a later `port:`). A Listen Port,
 	// interface line or `port:` line of the admin's that meets them makes Unbound exit at start ("address already in
 	// use") or listen elsewhere, although unbound-checkconf passes.
-	$listen_port = (int) config_get_path('unbound/port', 0);
-	foreach ([PFB_DNS_PROXY_UNBOUND_PORT, PFB_DNS_PROXY_UNBOUND_PLAIN_PORT] as $own_port) {
-		if ($listen_port === (int) $own_port) {
-			return pfb_dns_proxy_refuse("the DNS Resolver's Listen Port is {$own_port}, a loopback port the DNS proxy gives Unbound; " .
-			    'set the Listen Port to another port (the default is 53)');
+	$own_port = pfb_dns_proxy_listen_port_conflict();
+	if ($own_port !== NULL) {
+		if ($saved !== NULL) {
+			// Set after the move: the caller rolls pfB-DNS back, and the restore keeps the Listen Port the admin set
+			$unsafe_line = "Listen Port {$own_port}";
+			return FALSE;
 		}
+		return pfb_dns_proxy_refuse("the DNS Resolver's Listen Port is {$own_port}, a loopback port the DNS proxy gives Unbound; " .
+		    'set the Listen Port to another port (the default is 53)');
 	}
 	// pfBlockerNG's block is cut out only when the marker lines are exactly one complete block: a start line, then an end
 	// line, each found once and alone on its line (trimmed and exact alike), in that order. Anything else is refused whole,
@@ -14313,15 +14334,23 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	// Unbound loads the DNSBL module only while nothing owns the Resolver (a valid snapshot, or our block with none); while the
 	// proxy owns it, Unbound runs the observer in every mode: inert unless the proxy hosts the module and the Resolver forwards,
 	// and the one script that makes pfSense run the boot hook (pfb_upstream_observer_include.inc) which starts pfB-DNS early.
-	// A Resolver disabled under pfB-DNS is stood down first (pfb_dns_proxy_stand_down()); an unsafe Custom Options line added after
-	// the move is rolled back like a failed activation, which regenerates unbound.conf and restarts Unbound itself.
+	// A Resolver disabled under pfB-DNS is stood down first (pfb_dns_proxy_stand_down()); an unsafe Custom Options line or Listen
+	// Port set after the move is rolled back like a failed activation, which regenerates unbound.conf and restarts Unbound itself.
 	$unsafe_line = NULL;
 	$moved = pfb_dns_proxy_stand_down() || pfb_dns_proxy_resolver($dns_wanted ?? pfb_dns_wanted(), $unsafe_line);
 	if ($unsafe_line !== NULL) {
-		pfb_dns_proxy_roll_back(
-			"the DNS Resolver's Custom Options gained the line \"{$unsafe_line}\" after pfB-DNS took the Resolver, and an interface:, port: or include: line can take a listener the DNS proxy needs",
-			'Your line was kept in Custom Options (Services > DNS Resolver): remove it, then turn pfB-DNS on again.'
-		);
+		$own_port = pfb_dns_proxy_listen_port_conflict();
+		if ($own_port !== NULL) {
+			pfb_dns_proxy_roll_back(
+				"the DNS Resolver's Listen Port is {$own_port}, a loopback port the DNS proxy gives Unbound, after pfB-DNS took the Resolver",
+				"The Listen Port stays {$own_port}, as you set it: set it to another port (the default is 53) in Services > DNS Resolver, then turn pfB-DNS on again."
+			);
+		} else {
+			pfb_dns_proxy_roll_back(
+				"the DNS Resolver's Custom Options gained the line \"{$unsafe_line}\" after pfB-DNS took the Resolver, and an interface:, port: or include: line can take a listener the DNS proxy needs",
+				'Your line was kept in Custom Options (Services > DNS Resolver): remove it, then turn pfB-DNS on again.'
+			);
+		}
 		$moved = FALSE;
 	}
 	$owned = pfb_dns_proxy_owns_resolver();
