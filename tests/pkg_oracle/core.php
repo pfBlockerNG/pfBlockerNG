@@ -11,6 +11,10 @@ const ORACLE_CORE_FUNCTIONS = [
 	'util.inc'          => ['isvalidpid'],
 	'xmlparse.inc'      => ['listtags_pkg', 'startElement', 'endElement', 'cData', 'parse_xml_config_pkg', 'parse_xml_config_raw'],
 ];
+// Constants pfSense defines at top level in these files, taken as the pinned file writes them (never typed in here).
+const ORACLE_CORE_CONSTANTS = [
+	'util.inc' => ['POSIX_EPERM'],
+];
 
 /** The source text of one top-level function, from its `function` keyword to its closing brace. */
 function oracle_function_source(string $file, string $name): string
@@ -50,6 +54,15 @@ function oracle_function_source(string $file, string $name): string
 	throw new RuntimeException("function {$name} not found in {$file}");
 }
 
+/** The source text of one top-level define() of a constant, exactly as the pinned file writes it (one statement, one line). */
+function oracle_define_source(string $file, string $name): string
+{
+	if (preg_match('/^define\(\'' . preg_quote($name, '/') . '\',[^;]*;/m', (string) file_get_contents($file), $match) !== 1) {
+		throw new RuntimeException("define of {$name} not found in {$file}");
+	}
+	return $match[0];
+}
+
 $oracle_label = getenv('CORE_LABEL') ?: 'master';
 $oracle_core_dir = getenv('CORE_DIR') ?: '/core';
 foreach (ORACLE_CORE_FUNCTIONS as $oracle_file => $oracle_names) {
@@ -57,8 +70,13 @@ foreach (ORACLE_CORE_FUNCTIONS as $oracle_file => $oracle_names) {
 		eval(oracle_function_source("{$oracle_core_dir}/{$oracle_label}.{$oracle_file}", $oracle_name));
 	}
 }
+foreach (ORACLE_CORE_CONSTANTS as $oracle_file => $oracle_names) {
+	foreach ($oracle_names as $oracle_name) {
+		eval(oracle_define_source("{$oracle_core_dir}/{$oracle_label}.{$oracle_file}", $oracle_name));
+	}
+}
 
-// Constants and helpers pfSense defines elsewhere (globals.inc, util.inc, ...), at their appliance values.
+// Constants and helpers pfSense defines elsewhere (globals.inc, ...), at their appliance values.
 const RCFILEPREFIX = '/usr/local/etc/rc.d/';
 const PFB_DNS_PROXY_RCFILE = '/usr/local/etc/rc.d/pfb_dns_proxy.sh';
 const PFB_PACKAGE_XML = '/usr/local/pkg/pfblockerng.xml';

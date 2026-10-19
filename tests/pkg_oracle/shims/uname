@@ -1,0 +1,9 @@
+#!/bin/sh
+# Container-local stand-in (oracle only, never the developer's host): pfb_dns.sh picks its pfb-dns by `uname -p`, and the Debian
+# oracle answers 'unknown'. This answers that one call with the machine the staged pfb-dns is built for (linux/amd64, see run.sh).
+# Every other call is the real uname.
+if [ "$#" -eq 1 ] && [ "$1" = "-p" ]; then
+	echo amd64
+	exit 0
+fi
+exec /bin/uname "$@"

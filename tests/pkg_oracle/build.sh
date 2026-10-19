@@ -40,5 +40,6 @@ rm -rf "$out/ctx" && mkdir -p "$out/ctx"
 cp -R "$out/prefix" "$out/ctx/prefix"
 cp -R "$here/shims" "$out/ctx/shims"
 cp "$here/Dockerfile" "$out/ctx/Dockerfile"
-docker build -t pfb-pkg-oracle:2 "$out/ctx"
-echo "built pfb-pkg-oracle:2; core files and pkg $PKG_VERSION pinned by tests/pkg_oracle/PINS"
+image=${PFB_ORACLE_IMAGE:-pfb-pkg-oracle:2}
+docker build -t "$image" "$out/ctx"
+echo "built $image; core files and pkg $PKG_VERSION pinned by tests/pkg_oracle/PINS"
