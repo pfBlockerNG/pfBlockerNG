@@ -564,10 +564,10 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringContainsString("python:\npython-script: pfb_unbound.py", $patched);
 	}
 
-	public function testToggleOnWithALostMarkerOnAMovedResolverKeepsTheExistingModuleInBothSeams(): void
+	public function testToggleOnWithALostMarkerOnAMovedResolverGivesUnboundTheObserverNotTheModule(): void
 	{
-		// Given pfB-DNS on and DNSBL on, a Resolver that already looks moved, the marker lost, and the module loaded:
-		// pfb_dns_proxy_resolver() refuses (it will not snapshot moved values as the previous ones).
+		// Given pfB-DNS on and DNSBL on, a Resolver that still carries our block, the marker lost, and the module loaded:
+		// pfb_dns_proxy_resolver() refuses (it will not snapshot moved values as the previous ones), the block marks it as ours.
 		$this->setProxy(TRUE);
 		$this->enableDnsbl();
 		$GLOBALS['config']['unbound'] = self::movedResolver() + [
@@ -580,11 +580,12 @@ final class DnsProxyModuleGatingTest extends TestCase
 		pfb_unbound_python('enabled');
 		$changed = pfb_unbound_dnsbl('enabled');
 
-		// Then the refusal stored no snapshot, nothing fronts the Resolver, and the module the admin had stays in both seams.
+		// Then the refusal stored no snapshot, and Unbound runs the inert observer: the matcher is not loaded beside our block
 		$this->assertSame('', $this->savedRaw(), 'the refusal stored no snapshot');
-		$this->assertTrue($this->pythonModuleKeysSet(), 'config.xml python keys');
-		$this->assertFalse($changed, 'unbound.conf already loads the module');
-		$this->assertStringNotContainsString('pfb_upstream_observer', $this->patchedConf(), 'unbound.conf observer');
+		$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'), 'config.xml runs the observer');
+		$this->assertTrue($changed, 'unbound.conf is patched from the module to the observer');
+		$this->assertStringContainsString('pfb_upstream_observer', $this->patchedConf(), 'unbound.conf observer');
+		$this->assertStringNotContainsString('pfb_unbound.py', $this->patchedConf(), 'unbound.conf no matcher');
 	}
 
 	public function testDisabledPassStillRemovesTheModuleWithoutASnapshot(): void
@@ -788,7 +789,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 			'own loopback interface line in Custom Options' => ['interface'],
 			'own port: line in Custom Options'          => ['port'],
 			'Resolver value that cannot be stored'      => ['unstorable'],
-			'our block with no snapshot'                => ['marker'],
 			'config.xml locked by another save'         => ['lock'],
 			'config.xml cannot be re-read'              => ['read'],
 		];
@@ -813,9 +813,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 				break;
 			case 'unstorable':
 				$resolver['enablessl'] = ['not', 'a', 'scalar'];
-				break;
-			case 'marker':
-				$resolver = self::movedResolver() + self::MODULE_KEYS;
 				break;
 			case 'lock':
 				$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
