@@ -1616,21 +1616,28 @@ and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_
 pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
 `pfb_metrics_configure_cron()` installs it idempotently from `sync_package_pfblockerng()`, and
 removes it together with `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package
-deinstall. Both directions take an exclusive lock on `.metrics.lock` in `$pfb['dbdir']` around the
-`.metrics_enabled` sentinel and the published files only, and release it before the cron entry
-changes (`install_cron_job()` can start cron, which would inherit a held lock and block every
-publish); `pfb_metrics_write()` renders outside the lock and `pfb_metrics_publish()` publishes
-under it only while the sentinel exists, so a run that began before a disable cannot recreate the
-file after it. The `metrics` verb is not gated by
-`.pfb_cron_disable`. It publishes `pfblockerng.prom` (temp file, `chmod 0644`, `rename()`) and
-maintains a `.metrics_dir_missing` marker in `$pfb['dbdir']`: a missing node_exporter textfile
-directory logs once per outage, and the marker stays until a publish succeeds or the cron entry is
-removed. `timeout -k 5 50` stops a hung run from piling up behind the next minute's, KILLing one
-that ignores TERM. A source that fails or throws is reported through
-`pfblockerng_metrics_source_up` and never stops the file from being published. With DNSBL off the
-DNSBL databases are not read. Update-pass timing (`pfb_pass_status.json`) counts Update passes only,
-never settings-save passes (`$pfb['save']`).
-Spec: `docs/specs/metrics-export.md`.
+deinstall. Both directions take an exclusive lock on `pfb_metrics.lock` around the `pfb_metrics_enabled`
+sentinel and the published files only, and release it before the cron entry changes
+(`install_cron_job()` can start cron, which would inherit a held lock and block every publish);
+`pfb_metrics_write()` renders outside the lock and `pfb_metrics_publish()` publishes under it only
+while the sentinel exists, so a run that began before a disable cannot recreate the file after it.
+The sentinel, the lock, the two outage markers (`pfb_metrics_dir_missing`,
+`pfb_metrics_sentinel_missing`) and `pfb_pass_status.json` live in `/usr/local/etc` (`$pfb['metrics_*']`,
+`$pfb['pass_status']`), like the pending-changes marker and for the same reason: `$pfb['dbdir']` is
+RAM-disked on `use_mfs_tmpvar` while the cron entry survives a reboot in `config.xml`. A publish that
+finds the sentinel missing with the option and master enable both on logs once and publishes nothing;
+it never recreates the sentinel, which would undo a disable. The `metrics` verb deliberately runs
+regardless of `.pfb_cron_disable`: it is read-only observability, not a scheduled download. It
+publishes `pfblockerng.prom` (temp file, `chmod 0644`, `rename()`; stale `.pfbmetrics_*` temp files
+older than 300 s are swept first) and refuses a textfile directory that is a symlink: a missing or
+linked node_exporter textfile directory logs once per outage through `pfb_metrics_dir_missing`, and the
+marker stays until a publish succeeds or the cron entry is removed. `timeout -k 5 50` stops a hung run
+from piling up behind the next minute's, KILLing one that ignores TERM. A source that fails or throws is
+reported through `pfblockerng_metrics_source_up` and never stops the file from being published. With
+DNSBL off the DNSBL databases are not read. Aggregated aliases are never exported, whatever the
+widget's "Show Aggregated Aliases" setting. Update-pass timing (`pfb_pass_status.json`) counts Update
+passes only, never settings-save passes (`$pfb['save']`); a pass deferred by a MaxMind failure
+records its end, so `last_start > last_end` means a hung or killed pass.
 
 **Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process
 flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_feed_pass_*` in
