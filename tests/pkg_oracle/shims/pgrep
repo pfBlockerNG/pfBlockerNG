@@ -1,0 +1,11 @@
+#!/bin/sh
+# Linux stand-in for pgrep(1). pfSense's r272 isvalidpid() asks FreeBSD's `pgrep -qnF PIDFILE`: exit 0 iff the pid in PIDFILE is a
+# live process. procps has no -F, so every such call failed and "not running" was always the answer. This form is answered here;
+# every other form is procps' own (/usr/bin/pgrep.procps is the real binary, moved aside by the Dockerfile).
+if [ "$1" = -qnF ] && [ $# -eq 2 ]; then
+	pid=$(cat "$2" 2>/dev/null) || exit 1
+	case "$pid" in ''|*[!0-9]*) exit 1 ;; esac
+	kill -0 "$pid" 2>/dev/null
+	exit $?
+fi
+exec /usr/local/libexec/pgrep.procps "$@"

@@ -122,7 +122,7 @@ switch ($cmd) {
 		break;
 	case 'start':
 		start_service('pfb_dns_proxy');
-		usleep(2500000);
+		// start_service() returns before the proxy binds; scenario.sh waits for the proxy's first answer, not for its pid
 		echo 'start_service: ', oracle_state(), "\n";
 		break;
 	case 'rc_packages':   // /etc/rc.packages PKG_NAME (DEINSTALL|POST-DEINSTALL), pinned master rc.packages

@@ -2,7 +2,7 @@
 # scenario.sh -- runs INSIDE the oracle container (see run.sh). One real removal with the FreeBSD pkg, the pinned pfSense core
 # in front of the shipped hook, a real Unbound and the real DNS proxy:
 #   1. pfB-DNS serves (module mode: blocked.example is answered with the DNSBL VIP, probe.example is forwarded);
-#   2. `pkg delete` while another save holds the config lock for 15 s: the hook's Resolver restore gives up, the removal aborts (exit
+#   2. `pkg delete` while another save holds the config lock until the Resolver restore gives up: the removal aborts (exit
 #      3 inside pkg's DEINSTALL script; pkg exits 0 and leaves the package installed);
 #   3. what is left: is the proxy answering, is the package still registered, does a retry remove it.
 # ORACLE_EXPECT=recovered (the fixed code) or broken (the base: the defect reproduces); the exit status says whether it held.
@@ -14,6 +14,8 @@ mkdir -p "$out"
 export RACE_DIR=/sandbox/state ORACLE_REPO=/repo CORE_DIR=/core CORE_LABEL=${CORE_LABEL:-master}
 export PFB_PYTHON_DEPENDENCIES=py313 PFB_PYTHON_DIR=/opt/pybin PYTHONDONTWRITEBYTECODE=1
 fail=0
+holder=
+trap 'if [ -n "$holder" ]; then kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; fi' EXIT
 note() { printf '%s\n' "$*" | tee -a "$out/summary.txt"; }
 check() { # description, command...
 	desc=$1; shift
@@ -22,6 +24,21 @@ check() { # description, command...
 dns() { python3 /oracle/q.py 127.0.0.1 "$1"; }
 state() { php -f /oracle/probe.php state 2>/dev/null | tail -1; }
 has() { printf '%s' "$1" | grep -q -- "$2"; }
+# Every wait observes an event under one outer cap (300 polls, 0.2 s apart). Expiry is an environment stall: STUCK/ENVIRONMENT,
+# never a product verdict.
+stuck() { note "STUCK/ENVIRONMENT: $*"; exit 8; }
+await() { # description, command...: poll the command until it succeeds
+	desc=$1; shift
+	n=0
+	until "$@"; do
+		n=$((n + 1)); [ "$n" -le 300 ] || stuck "$desc was not observed"
+		sleep 0.2
+	done
+}
+unbound_up() { grep -q "start of service" /tmp/unbound.log 2>/dev/null; }
+answered() { case "$(dns "$1")" in ANSWERED*) ;; *) return 1 ;; esac; }
+absent() { case "$(dns probe.example.)" in *ConnectionRefusedError*) ;; *) return 1 ;; esac; }
+holder_settled() { [ -f "$RACE_DIR/holder.ready" ] || [ -f "$RACE_DIR/holder.failed" ]; }
 
 rm -rf /usr/local/pkg && ln -s /repo/src/usr/local/pkg /usr/local/pkg
 mkdir -p /var/log/pfblockerng /var/unbound && chown unbound /var/log/pfblockerng /var/unbound
@@ -42,11 +59,12 @@ server:
     local-data: "probe.example. 60 IN A 192.0.2.7"
 C
 unbound -d -c /tmp/unbound.conf >/tmp/unbound.log 2>&1 &
-sleep 1.5
+await "Unbound starts serving (its start-of-service line)" unbound_up
 
 note "== $label: core $CORE_LABEL, pkg $(/work/prefix/sbin/pkg --version), repo ${ORACLE_REV:-unknown}"
 php -f /oracle/probe.php seed 2>&1 | grep -v "Warning\|Deprecated" | tail -1 > "$out/seed.txt"
 php -f /oracle/probe.php start 2>&1 | grep -v "Warning\|Deprecated" | tail -1 > "$out/start.txt"
+await "pfB-DNS answers probe.example. before the removal" answered probe.example.
 before_ok=$(dns probe.example.); before_blocked=$(dns blocked.example.)
 note "before: probe.example. -> $before_ok | blocked.example. -> $before_blocked"
 check "pfB-DNS answers before the removal" has "$before_ok" "ANSWERED rcode=0 answers=1 last4=192.0.2.7"
@@ -77,15 +95,25 @@ $PKG $OPTS create -m $P/meta -r $P/stage -p $P/plist -o $P/out > "$out/create.lo
 installed() { $PKG $OPTS -r $P/root info -q 2>/dev/null | tr '\n' ' '; }
 check "the package is installed" has "$(installed)" pfSense-pkg-pfBlockerNG-devel
 
-note "-- removal 1: another save holds the config lock for 15 s"
-php -r '$f = fopen(getenv("RACE_DIR") . "/pfb_dns_config.lock", "c"); flock($f, LOCK_EX); sleep(15);' &
+note "-- removal 1: another save holds the config lock until the removal's Resolver restore gives up"
+# The holder lets go when a lock wait gives up (the lock double leaves $lock.refused), so the service registration that follows
+# can take the lock, as it can on the appliance once the save ends. pkg delete returning is the backstop: no holder outlives it.
+php -r '$d = getenv("RACE_DIR"); register_shutdown_function(function () use ($d) { if (!file_exists("$d/holder.ready")) { touch("$d/holder.failed"); } }); $k = fopen("$d/pfb_dns_config.lock", "c"); flock($k, LOCK_EX) or exit(1); touch("$d/holder.ready"); for ($i = 0; !file_exists("$d/pfb_dns_config.refused") && !file_exists("$d/holder.go") && $i < 1800; $i++) { usleep(100000); }' &
 holder=$!
-sleep 1
+await "the lock holder took pfb_dns_config" holder_settled
+[ -f "$RACE_DIR/holder.ready" ] || stuck "the lock holder could not take pfb_dns_config"
 $PKG $OPTS -r $P/root delete -y pfSense-pkg-pfBlockerNG-devel > "$out/delete1.out" 2>&1; rc1=$?
-wait "$holder"
+touch "$RACE_DIR/holder.go"
+wait "$holder"; holder=
 note "pkg delete exit status: $rc1; installed after: [$(installed)]"
+if [ "$expect" = recovered ]; then
+	await "pfB-DNS answers probe.example. after the aborted removal" answered probe.example.
+	await "pfB-DNS answers blocked.example. after the aborted removal" answered blocked.example.
+else
+	# The defect's proxy is down: a NO ANSWER proves the defect only once nothing listens on its port any more
+	await "the proxy is confirmed absent (its port refuses)" absent
+fi
 s1=$(state); note "state: $s1"
-sleep 2
 after_ok=$(dns probe.example.); after_blocked=$(dns blocked.example.)
 note "after the aborted removal: probe.example. -> $after_ok | blocked.example. -> $after_blocked"
 sed 's/^/  | /' "$out/delete1.out" | tail -12

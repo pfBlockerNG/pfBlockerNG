@@ -6,12 +6,15 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
     libarchive-tools procps bsdutils libarchive13t64 libssl3t64 libbsd0 libelf1t64 libzstd1 liblzma5 zlib1g libmd0 \
     && rm -rf /var/lib/apt/lists/*
 COPY prefix /work/prefix
-# Container-local stand-ins (README): daemon(8), lockf(1) over flock, uname -p for the appliance's pfb-dns path, read_xml_tag.sh.
+# Container-local stand-ins (README): daemon(8), lockf(1) over flock, uname -p for the appliance's pfb-dns path, read_xml_tag.sh, and
+# pgrep -qnF (the r272 core's pid liveness test; procps' pgrep has no -F, so the real binary moves aside to pgrep.procps).
 COPY shims/daemon /usr/sbin/daemon
 COPY shims/lockf /usr/bin/lockf
 COPY shims/uname /usr/local/bin/uname
 COPY shims/read_xml_tag.sh /usr/local/sbin/read_xml_tag.sh
-RUN chmod +x /usr/sbin/daemon /usr/bin/lockf /usr/local/bin/uname /usr/local/sbin/read_xml_tag.sh \
+RUN mkdir -p /usr/local/libexec && mv /usr/bin/pgrep /usr/local/libexec/pgrep.procps
+COPY shims/pgrep /usr/bin/pgrep
+RUN chmod +x /usr/sbin/daemon /usr/bin/lockf /usr/local/bin/uname /usr/local/sbin/read_xml_tag.sh /usr/bin/pgrep \
     && mkdir -p /opt/pybin /var/log/pfblockerng /var/unbound /usr/local/etc/rc.d \
     && ln -sf /usr/bin/python3 /opt/pybin/python3.13 \
     && (id unbound >/dev/null 2>&1 || useradd -r unbound)
