@@ -21,13 +21,18 @@ $repo = dirname(__DIR__, 3);
 $page = $repo . '/src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php';
 $disk = NULL;
 $input_errors = [];
+$returned = FALSE;
+$pconfig = [];
 
-register_shutdown_function(static function () use ($resultFile, &$disk, &$input_errors): void {
+register_shutdown_function(static function () use ($resultFile, &$disk, &$input_errors, &$returned, &$pconfig): void {
 	file_put_contents($resultFile, json_encode([
 		'disk'        => $disk,
 		'events'      => $GLOBALS['pfb_test_lock_events'] ?? [],
 		'lockHeld'    => !empty($GLOBALS['pfb_test_lock_held']),
 		'inputErrors' => $input_errors,
+		'pendingMarked' => is_file($GLOBALS['pfb']['pending_marker'] ?? ''),
+		'returned'      => $returned,
+		'postedPort'    => $pconfig['pfb_dnsport'] ?? NULL,
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -137,15 +142,20 @@ if ($scenario === 'interleave') {
 } elseif ($scenario === 'read_fails') {
 	$GLOBALS['pfb_test_config_read_fails'] = TRUE;
 	$disk = $other;
+} elseif ($scenario === 'write_refused') {
+	$GLOBALS['pfb_test_write_config_result'] = FALSE;
 }
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
 	if ($scenario === 'write_throws') {
 		throw new RuntimeException("config.xml could not be written: {$description}");
 	}
-	$disk = $GLOBALS['config'];
+	if ($scenario !== 'write_refused') {
+		$disk = $GLOBALS['config'];
+	}
 };
 
 $input_errors = [];
 ini_set('open_basedir', "{$tmp}:" . dirname($resultFile) . ":{$repo}:/usr/share/php:/dev/null:/dev/urandom");
 eval($block);
+$returned = TRUE;
