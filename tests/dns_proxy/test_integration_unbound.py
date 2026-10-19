@@ -18,7 +18,7 @@ from typing import TypeVar
 
 import pfb_dns_proxy
 import pytest
-from dot_helpers import free_port
+from dot_helpers import retry_on_taken_port
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, PROTO_DIR
 from frontend_helpers import (
     WATCHDOG,
@@ -91,6 +91,12 @@ def _conf(port: int, authoritative_port: int, *, observer: bool = False) -> str:
 """
 
 
+def first_needle_seen(needles: tuple[str, ...], lines: list[str]) -> str | None:
+    """The first of `needles` (lower case) that some line contains, in any case: Unbound spells "address already in use"
+    both ways, "error: bind: address already in use" for one socket and "can't bind socket: Address already in use"."""
+    return next((n for n in needles if any(n in line.lower() for line in lines)), None)
+
+
 class LogTail:
     """Follows `docker logs -f`; tests wait on a condition for a line instead of sleeping."""
 
@@ -123,6 +129,19 @@ class LogTail:
             if not self._cond.wait_for(lambda: any(needle in line for line in self.lines[since:]), WATCHDOG):
                 raise AssertionError(f"no log line containing {needle!r}; saw {self.lines[since:]!r}")
             return self.lines[since:]
+
+    def wait_for_any(self, needles: tuple[str, ...]) -> str:
+        """The first of `needles` (lower case) that a line contains, in any case; raises after the watchdog."""
+
+        def seen() -> str | None:
+            return first_needle_seen(needles, self.lines)
+
+        with self._cond:
+            if not self._cond.wait_for(lambda: seen() is not None, WATCHDOG):
+                raise AssertionError(f"no log line containing any of {needles!r}; saw {self.lines!r}")
+            found = seen()
+            assert found is not None
+            return found
 
     def close(self) -> None:
         self._proc.kill()
@@ -167,27 +186,46 @@ def _run_unbound(tmp_path_factory: pytest.TempPathFactory, *, observer: bool) ->
             pytest.fail(f"cannot build the Unbound test image:\n{build.stdout}\n{build.stderr}")
 
     authoritative = FakeAuthoritative(FakeUnbound(AUTHORITATIVE))
-    port = free_port()
     conf_dir: Path = tmp_path_factory.mktemp("unbound-conf")
-    (conf_dir / "unbound.conf").write_text(_conf(port, authoritative.port, observer=observer), encoding="utf-8")
     if observer:
         shutil.copy(PROTO_DIR / "pfb_upstream_observer.py", conf_dir)  # as the installer stages it into /var/unbound
-    name = f"pfb-frontend-unbound-{uuid.uuid4().hex[:8]}"
-    run = _docker(
-        "run", "-d", "--rm", "--network", "host", "--name", name, "-v", f"{conf_dir}:/conf:ro",
-        IMAGE, "unbound", "-d", "-c", "/conf/unbound.conf",
-    )  # fmt: skip
-    if run.returncode != 0:
-        authoritative.close()
-        pytest.fail(f"cannot start Unbound: {run.stderr}")
-    tail = LogTail(name)
     try:
-        tail.wait_for("start of service")
+        port, name, tail = retry_on_taken_port(lambda port: _start_unbound(port, authoritative, conf_dir, observer))
+    except BaseException:
+        authoritative.close()
+        raise
+    try:
         yield RunningUnbound(port, tail, authoritative, conf_dir, observer)
     finally:
         _docker("rm", "-f", name)
         tail.close()
         authoritative.close()
+
+
+def _start_unbound(
+    port: int, authoritative: FakeAuthoritative, conf_dir: Path, observer: bool
+) -> tuple[int, str, LogTail] | None:
+    """Unbound on `port`, once it serves; None when it exited because another process holds the port."""
+    (conf_dir / "unbound.conf").write_text(_conf(port, authoritative.port, observer=observer), encoding="utf-8")
+    name = f"pfb-frontend-unbound-{uuid.uuid4().hex[:8]}"
+    run = _docker(
+        "run", "-d", "--network", "host", "--name", name, "-v", f"{conf_dir}:/conf:ro",
+        IMAGE, "unbound", "-d", "-c", "/conf/unbound.conf",
+    )  # fmt: skip
+    if run.returncode != 0:
+        pytest.fail(f"cannot start Unbound: {run.stderr}")
+    tail = LogTail(name)
+    try:
+        served = tail.wait_for_any(("start of service", "address already in use")) == "start of service"
+    except BaseException:
+        _docker("rm", "-f", name)
+        tail.close()
+        raise
+    if served:
+        return port, name, tail
+    _docker("rm", "-f", name)
+    tail.close()
+    return None
 
 
 @pytest.fixture(scope="module")

@@ -32,16 +32,29 @@ PORT_PICKS = 8  # ports tried before a port that keeps being taken is given up o
 
 def free_loopback_port(pick: Callable[[], int] = free_port) -> int:
     """A port on 127.0.0.1 that is free for UDP and for TCP: Unbound binds both, and `pick` answers for TCP alone."""
-    return pick()
+    for _ in range(PORT_PICKS * 8):
+        port = pick()
+        try:
+            with (
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp,
+                socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp,
+            ):
+                udp.bind(("127.0.0.1", port))
+                tcp.bind(("127.0.0.1", port))
+        except OSError:
+            continue
+        return port
+    raise RuntimeError("no port free for UDP and TCP")
 
 
 def retry_on_taken_port(attempt: Callable[[int], T | None], pick: Callable[[], int] = free_loopback_port) -> T:
     """`attempt(port)` on a picked port, and on another when it returns None: the port was taken by someone else
     after it was picked (picking and binding are two steps). Up to PORT_PICKS picks; nothing else is retried."""
-    result = attempt(pick())
-    if result is None:
-        raise RuntimeError("the port was taken")
-    return result
+    for _ in range(PORT_PICKS):
+        result = attempt(pick())
+        if result is not None:
+            return result
+    raise RuntimeError(f"the port picked was taken {PORT_PICKS} times in a row")
 
 
 def make_certificate(directory: Path, name: str = "server", *, passphrase: str | None = None) -> tuple[bytes, bytes]:
