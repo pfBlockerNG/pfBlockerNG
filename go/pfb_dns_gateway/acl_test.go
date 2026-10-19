@@ -421,7 +421,6 @@ func TestACLHostileInput(t *testing.T) {
 		{"commented-out rule", ignored("#access-control: 10.0.0.0/8 deny"), skipped},
 		{"access-control-view names an implicit allow", ignored("access-control-view: 10.0.0.0/8 v1"),
 			[]lookupCheck{{"10.1.1.1", ACLForward}, {"12.1.1.1", ACLDrop}}},
-		{"keyword glued to netblock", ignored("access-control:10.0.0.0/8 deny"), skipped},
 		{"prefix /33", ignored("access-control: 10.0.0.0/33 deny"), skipped},
 		{"prefix /-1", ignored("access-control: 10.0.0.0/-1 deny"), skipped},
 		{"prefix /abc", ignored("access-control: 10.0.0.0/abc deny"), skipped},
@@ -447,6 +446,26 @@ func TestACLHostileInput(t *testing.T) {
 			for _, ch := range c.checks {
 				checkLookup(t, a, ch.client, ch.want)
 			}
+		})
+	}
+}
+
+// Unbound's lexer ends the keyword at its colon, so a netblock glued to `access-control:` is a row Unbound applies.
+// TestACLOracleGluedKeyRows checks the same spellings against a running Unbound.
+func TestACLGluedKeyRowsAreApplied(t *testing.T) {
+	cases := []struct{ name, row, client string }{
+		{"no space after the colon", "access-control:10.0.0.0/8 deny", "10.1.1.1"},
+		{"no space, trailing comment", "access-control:10.0.0.0/8 deny # x", "10.1.1.1"},
+		{"no space, tab before the action", "access-control:10.0.0.0/8\tdeny", "10.1.1.1"},
+		{"no space, double-quoted netblock", "access-control:\"10.0.0.0/8\" deny", "10.1.1.1"},
+		{"no space, single-quoted netblock", "access-control:'10.0.0.0/8' deny", "10.1.1.1"},
+		{"no space, IPv6 netblock", "access-control:2001:db8::/32 deny", "2001:db8::1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := newACL(t, c.row+"\n")
+			checkLookup(t, a, c.client, ACLDrop)
+			checkLookup(t, a, "12.1.1.1", ACLRefuse)
 		})
 	}
 }

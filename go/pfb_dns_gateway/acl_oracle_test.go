@@ -122,6 +122,9 @@ type oracleTree struct {
 	// implicit: access-control-view ("view") and access-control-tag ("tag") rows. Unbound allows each netblock that
 	// no access-control row names; the view and tag are the ones the template defines.
 	implicit []aclRow
+
+	// raw: verbatim lines appended to access_lists.conf, for spellings renderACL does not write.
+	raw string
 }
 
 // ordered is the rows in the order Unbound reads them; glob matches by name.
@@ -191,7 +194,7 @@ view:
 	if err := os.MkdirAll(filepath.Join(dir, "acl.d"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	files := map[string]string{"unbound.conf": conf, "access_lists.conf": renderACL(tree.access) + renderImplicit(tree.implicit)}
+	files := map[string]string{"unbound.conf": conf, "access_lists.conf": renderACL(tree.access) + renderImplicit(tree.implicit) + tree.raw}
 	for name, rows := range tree.globbed {
 		files["acl.d/"+name] = renderRows(rows, "")
 	}
@@ -652,6 +655,28 @@ func TestACLOracleNonLocalNames(t *testing.T) {
 		t.Logf("client=%s name=%s go=%v unbound=%s", c.client, elsewhere, got, out)
 		if got != ACLForward || out != c.unbound {
 			t.Errorf("%s asking %s: Go says %v and Unbound %s; want forward and %s", c.client, elsewhere, got, out, c.unbound)
+		}
+	}
+}
+
+// Glued spellings are read the way Unbound reads them: each client's outcome is Unbound's own, and the gateway acts on
+// it. The spellings are the ones TestACLGluedKeyRowsAreApplied pins, plus double quotes and a tab.
+func TestACLOracleGluedKeyRows(t *testing.T) {
+	un := startOracleUnbound(t, oracleTree{raw: "access-control:10.5.0.0/16 deny\n" +
+		"access-control:10.6.0.0/16 deny # note\n" +
+		"access-control:\"10.7.0.0/16\" deny\n" +
+		"access-control:10.8.0.0/16\tdeny\n" +
+		"access-control:2001:db8:5::/48 deny\n"})
+	a := NewACL(un.conf, t.Logf)
+	for _, c := range []struct{ client, unbound string }{
+		{"10.5.1.1", "dropped"}, {"10.6.1.1", "dropped"}, {"10.7.1.1", "dropped"}, {"10.8.1.1", "dropped"},
+		{"2001:db8:5::1", "dropped"}, {"10.9.1.1", "refused"},
+	} {
+		client := mustAddr(t, c.client)
+		got, out := a.Lookup(client), un.probe(t, client)
+		t.Logf("client=%s go=%v unbound=%s", c.client, got, out)
+		if out != c.unbound || got != outcomeAction[c.unbound] {
+			t.Errorf("%s: Unbound says %s, Go says %v; want Unbound %s and Go %v", c.client, out, got, c.unbound, outcomeAction[c.unbound])
 		}
 	}
 }

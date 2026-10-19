@@ -151,9 +151,10 @@ Every transport goes through the same path as plain DNS: the Resolver ACL, then 
 with the client in the header. The ACL is Unbound's own, read from `--unbound-conf` (`/var/unbound/unbound.conf`) and
 every file it includes, globs too: the `access-control` rows of `access_lists.conf`, of pfBlockerNG's marked clause and
 of the admin's Custom Options. The most specific prefix matches and, of identical prefixes, the row read last wins; deny:
-nothing is answered; refuse, and a client no row names (Unbound's default): REFUSED built by the gateway. A config
-Unbound could not load (a missing include, an include cycle, a brace pattern) is logged once and the gateway forwards
-everything; any file or glob match that changes is picked up within a second.
+nothing is answered; refuse, and a client no row names (Unbound's default): REFUSED built by the gateway. A row is read
+as Unbound's lexer reads it, so `access-control:10.0.0.0/8 deny` (no space after the colon) counts. A config Unbound could
+not load (a missing include, an include cycle, a brace pattern) is logged once and the gateway forwards everything; any file
+or glob match that changes is picked up within a second.
 
 Two Unbound rules the gateway follows too. A netblock named only by `access-control-view`, `access-control-tag`,
 `access-control-tag-action` or `access-control-tag-data` is allowed, unless an identical `access-control` row names it.

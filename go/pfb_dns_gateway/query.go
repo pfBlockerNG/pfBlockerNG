@@ -22,7 +22,7 @@ const (
 	defaultCloseWait = 250 * time.Millisecond // a DoT peer gets this long to take close_notify before the TCP connection is cut
 	defaultStopWait  = 500 * time.Millisecond // each of stop()'s two waits; with the decider's 3 s, under the rc stop loop's 5 s KILL
 	// What one client address may hold of each shared budget, keyed by the full address (a pfSense LAN is one /64: keying by
-	// prefix would make every IPv6 host there share one budget). Half of the budget, as the Python listener's 256 of 512.
+	// prefix would make every IPv6 host there share one budget). Half of each budget, so no address takes a whole one.
 	maxUDPPerAddr = maxUDPInflight / 2
 	maxMuxPerAddr = maxMuxInflight / 2
 	maxTCPPerAddr = maxTCPConns / 2
