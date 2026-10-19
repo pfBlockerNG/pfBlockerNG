@@ -3589,15 +3589,24 @@ if (!defined('PFB_DNS_PROXY_RCFILE')) {
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
+// Seconds pfb_dns_proxy_certificate_push() waits for each of its steps (connect, send, reply): below the 5 s the gateway gives a
+// connection on its control socket, above what a gateway that is serving needs.
+if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
+	define('PFB_DNS_PROXY_CTL_TIMEOUT', 3.0);
+}
 // Readiness is read from the daemon's child pidfile and from the marker the proxy publishes with --ready-file (its own PID,
 // written once it serves). Kept in $pfb like the other runtime paths, so a unit test reads its own files; the marker lives
 // in the Unbound chroot directory, where the proxy already writes as `unbound` (its module files).
 $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
-// The Resolver's certificate chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export()
-// for the user the gateway runs as; the gateway reads a new one within a second, without a restart.
-$pfb['dns_proxy_cert'] = '/var/unbound/pfb_dns_cert.pem';
-$pfb['dns_proxy_cert_owner'] = 'unbound';	// the gateway's --user: it owns the file after the privilege drop
+// The Resolver's certificate chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
+// It is root's alone, in a directory root alone can enter and outside the Unbound chroot: the gateway reads it once, at start, while it is
+// still root, and a renewal reaches the running gateway as a push on its control socket (pfb_dns_proxy_certificate_push()), because the
+// gateway is no longer root by then. The socket is the gateway's --ctl-socket; the third path is the copy an earlier build left in the
+// chroot, readable by Unbound's user, which every refresh removes.
+$pfb['dns_proxy_cert'] = '/var/etc/pfb_dns/tls.pem';
+$pfb['dns_proxy_ctl'] = '/var/run/pfb_dns/ctl.sock';
+$pfb['dns_proxy_cert_legacy'] = '/var/unbound/pfb_dns_cert.pem';
 // The installed package XML an aborted removal registers the package's menu entry and services from again (unit tests point it at
 // the shipped file).
 if (!defined('PFB_PACKAGE_XML')) {
@@ -4193,22 +4202,22 @@ function pfb_dns_proxy_pem_field(array $entry, string $kind, string $field): str
 /**
  * Write the DNS Resolver's certificate chain and private key (the ones unbound/sslcertref names) to one PEM file the gateway serves
  * DoT, DoH and DoQ from: the certificate, the CAs its caref leads to nearest first (a missing CA or a loop ends the chain), then
- * the key. The file is mode 0600 and owned by the user the gateway runs as after its privilege drop; pfSense writes the Resolver's
- * own sslcert.crt and sslcert.key the same way (unbound.inc unbound_generate_config(): lookup_cert(), the chain, chmod 0600 for the
- * key), but Unbound reads them as root, which the gateway no longer is. Content that is already in the file is not rewritten (only
- * its owner and mode are kept right); a changed one replaces it atomically, a temporary file in the same directory renamed over it, so
- * the gateway never reads half of it. A certificate that cannot be used (no sslcertref, no such certificate, bad base64, an
- * encrypted key, a key that is not the certificate's) writes nothing: the file keeps the certificate it has.
+ * the key. The file is mode 0600 in a directory of mode 0700 (made, or closed again, here), outside the Unbound chroot, and belongs
+ * to the user that writes it, root on a box: the gateway reads it once, at start, while it is still root (pfSense writes the Resolver's
+ * own sslcert.crt and sslcert.key the same way: unbound.inc unbound_generate_config(): lookup_cert(), the chain, chmod 0600 for the
+ * key), and a renewal reaches it later as a push (pfb_dns_proxy_certificate_push()), so that the user it runs as never has to read the
+ * key. Content that is already in the file is not rewritten (only its mode is kept right); a changed one replaces it atomically, a
+ * temporary file in the same directory renamed over it, so a reader never sees half of it. A certificate that cannot be used (no
+ * sslcertref, no such certificate, bad base64, an encrypted key, a key that is not the certificate's) writes nothing: the file keeps
+ * the certificate it has.
  *
  * @param string|null $path the file; NULL = $pfb['dns_proxy_cert'] (a test points it at a temporary directory)
- * @param string|null $owner the user, and its primary group, that own it; NULL = $pfb['dns_proxy_cert_owner'], the gateway's --user
  * @return string|null NULL once the file holds the Resolver's certificate; else why it could not be written
  */
-function pfb_dns_proxy_certificate_export(?string $path = NULL, ?string $owner = NULL): ?string {
+function pfb_dns_proxy_certificate_export(?string $path = NULL): ?string {
 	global $pfb;
 
 	$path ??= $pfb['dns_proxy_cert'];
-	$owner ??= $pfb['dns_proxy_cert_owner'];
 	$ref = trim((string) config_get_path('unbound/sslcertref', ''));
 	if ($ref === '') {
 		return 'unbound/sslcertref is empty; pick the SSL/TLS Certificate of the DNS Resolver';
@@ -4246,22 +4255,25 @@ function pfb_dns_proxy_certificate_export(?string $path = NULL, ?string $owner =
 		return "the private key of <cert> \"{$ref}\" does not belong to its certificate, or one of them is not valid PEM";
 	}
 
-	$account = posix_getpwnam($owner);
-	if ($account === FALSE) {
-		return "there is no user {$owner} to own the certificate file";
-	}
 	$content = implode("\n", array_map('trim', $chain)) . "\n" . trim($key) . "\n";
-	if (@file_get_contents($path) === $content) {
-		return (@chmod($path, 0600) && @chown($path, $account['uid']) && @chgrp($path, $account['gid'])) ? NULL : "cannot give {$path} to {$owner} with mode 0600";
-	}
+	// A directory only the user running this (root, on a box) can enter, closed again if it was left open; no chown anywhere: the file
+	// belongs to whoever wrote it, never to the gateway's user, which is not to read it
 	$dir = dirname($path);
-	$tmp = is_dir($dir) ? tempnam($dir, '.' . basename($path) . '.') : FALSE;
+	if (!is_dir($dir) && !@mkdir($dir, 0700, TRUE) && !is_dir($dir)) {
+		return "cannot create {$dir}";
+	}
+	if (!@chmod($dir, 0700)) {
+		return "cannot close {$dir} to everyone but its owner";
+	}
+	if (@file_get_contents($path) === $content) {
+		return @chmod($path, 0600) ? NULL : "cannot give {$path} mode 0600";
+	}
+	$tmp = tempnam($dir, '.' . basename($path) . '.');
 	if ($tmp === FALSE) {
 		return "cannot create a temporary file in {$dir}";
 	}
-	// Owner and mode before the key goes in, so it is never readable by anyone else; the rename is what the gateway sees
-	if (!@chmod($tmp, 0600) || !@chown($tmp, $account['uid']) || !@chgrp($tmp, $account['gid']) ||
-	    @file_put_contents($tmp, $content) !== strlen($content) || !@rename($tmp, $path)) {
+	// The mode before the key goes in, so it is never readable by anyone else; the rename is what a reader sees
+	if (!@chmod($tmp, 0600) || @file_put_contents($tmp, $content) !== strlen($content) || !@rename($tmp, $path)) {
 		@unlink($tmp);
 		return "cannot write {$path}";
 	}
@@ -4269,20 +4281,99 @@ function pfb_dns_proxy_certificate_export(?string $path = NULL, ?string $owner =
 }
 
 /**
- * Keep the gateway's certificate file as the Resolver's certificate: written (pfb_dns_proxy_certificate_export()) while an encrypted
- * transport is wanted, removed otherwise so that no key stays on disk for a service that does not use it. A certificate that cannot
- * be written is a notice, one per distinct reason (pfb_dns_proxy_notify()); a file already in place keeps being served.
+ * Where pfb_dns_proxy_certificate_refresh() records the digest of the certificate the running gateway last took: beside the
+ * certificate file, so it is as private, and gone with it. The gateway's start removes it (the new process has the file, not a push).
+ */
+function pfb_dns_proxy_certificate_pushed_path(): string {
+	global $pfb;
+
+	return dirname($pfb['dns_proxy_cert']) . '/tls.pushed';
+}
+
+/**
+ * Give the running gateway a renewed certificate on its control socket (--ctl-socket, go/pfb_dns_gateway ctl.go). It is no longer
+ * root, cannot read the root-only certificate file, and replaces what it serves for the handshakes that follow, with no restart
+ * and no failed handshake. The wire is one frame, the length of $pem as 4 bytes big-endian and then $pem (the chain, then the key),
+ * and the gateway answers one line, `ok` or `error: <reason>`; it takes it only from root (SO_PEERCRED / LOCAL_PEERCRED), which
+ * this is. The connection is made in this process, so that no other process is started and no external wait is involved; every step
+ * (connect, send, reply) is bounded by $timeout, so that a gateway that does not answer costs a bounded wait, not a hang.
  *
- * @return bool FALSE iff a certificate is wanted and the file does not hold it
+ * @param string $pem the certificate chain and private key, as pfb_dns_proxy_certificate_export() writes them
+ * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
+ * @param float $timeout seconds each step may take
+ * @return string|null NULL once the gateway serves it; else why not
+ */
+function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?string {
+	global $pfb;
+
+	$socket ??= $pfb['dns_proxy_ctl'];
+	$conn = @stream_socket_client("unix://{$socket}", $errno, $errstr, $timeout);
+	if ($conn === FALSE) {
+		return "cannot connect to {$socket}: {$errstr}";
+	}
+	$frame = pack('N', strlen($pem)) . $pem;
+	$deadline = hrtime(TRUE) + (int) ($timeout * 1000000000);
+	stream_set_blocking($conn, FALSE);
+	for ($sent = 0; $sent < strlen($frame); ) {
+		$left = ($deadline - hrtime(TRUE)) / 1000000000;
+		$read = $except = NULL;
+		$write = [$conn];
+		if ($left <= 0 || stream_select($read, $write, $except, (int) $left, (int) (fmod($left, 1.0) * 1000000)) !== 1) {
+			fclose($conn);
+			return "{$socket} did not take the certificate within {$timeout} s";
+		}
+		$wrote = @fwrite($conn, substr($frame, $sent));
+		if ($wrote === FALSE) {
+			fclose($conn);
+			return "cannot send the certificate to {$socket}";
+		}
+		$sent += $wrote;
+	}
+	stream_set_blocking($conn, TRUE);
+	stream_set_timeout($conn, (int) $timeout, (int) (fmod($timeout, 1.0) * 1000000));
+	$reply = fgets($conn, 512);
+	$timedOut = (bool) (stream_get_meta_data($conn)['timed_out'] ?? FALSE);
+	fclose($conn);
+	if ($reply === FALSE) {
+		return $timedOut ? "no reply from {$socket} within {$timeout} s" : "{$socket} closed the connection with no reply";
+	}
+	$reply = trim($reply);
+	return ($reply === 'ok') ? NULL : "the gateway did not take the certificate: {$reply}";
+}
+
+/**
+ * Keep the gateway's certificate as the Resolver's certificate: the root-only file written (pfb_dns_proxy_certificate_export())
+ * while an encrypted transport is wanted, and a renewal pushed to the running gateway (pfb_dns_proxy_certificate_push()) once it is
+ * READY and has not been given this content yet; the file, the record of the push and any copy an earlier build left in the Unbound
+ * chroot are removed otherwise, so that no key stays on disk for a service that does not use it. A certificate that cannot be
+ * written, or that the gateway does not take, is a notice, one per distinct reason (pfb_dns_proxy_notify()); the one the gateway
+ * serves keeps being served, and the next apply or tick tries again, because nothing records a push that failed. A gateway that is
+ * not ready is not pushed to: its start reads the file.
+ *
+ * @return bool FALSE iff a certificate is wanted and the gateway has not got it: it could not be written, or the push failed
  */
 function pfb_dns_proxy_certificate_refresh(bool $wanted): bool {
 	global $pfb;
 
+	unlink_if_exists($pfb['dns_proxy_cert_legacy']);
 	if (!$wanted) {
 		unlink_if_exists($pfb['dns_proxy_cert']);
+		unlink_if_exists(pfb_dns_proxy_certificate_pushed_path());
 		return TRUE;
 	}
 	$why = pfb_dns_proxy_certificate_export();
+	if ($why === NULL && pfb_dns_proxy_ready()) {
+		$content = (string) file_get_contents($pfb['dns_proxy_cert']);
+		$digest = hash('sha256', $content);
+		$pushed = pfb_dns_proxy_certificate_pushed_path();
+		if (@file_get_contents($pushed) !== $digest) {
+			$why = pfb_dns_proxy_certificate_push($content);
+			if ($why === NULL) {
+				@file_put_contents($pushed, $digest);
+				@chmod($pushed, 0600);
+			}
+		}
+	}
 	if ($why !== NULL) {
 		pfb_dns_proxy_notify('pfBlockerNG DNS Proxy certificate', "pfB-DNS: DoT, DoH and DoQ got no new certificate: {$why}. The one already in place, if any, keeps being served.",
 		    '/pfblockerng/pfblockerng_dns.php');
@@ -4290,18 +4381,10 @@ function pfb_dns_proxy_certificate_refresh(bool $wanted): bool {
 	return $why === NULL;
 }
 
-/** The cron tick's share of the certificate: the file follows the Resolver's certificate between applies, so a renewal reaches the gateway without one. */
+/** The cron tick's share of the certificate: the file follows the Resolver's certificate between applies and a renewal is pushed to the running gateway, so it reaches it without an apply or a restart. */
 function pfb_dns_proxy_certificate_sync(): void {
 	$saved = pfb_dns_proxy_saved();
 	pfb_dns_proxy_certificate_refresh($saved !== NULL && pfb_dns_proxy_tls_wanted($saved));
-}
-
-function pfb_dns_proxy_certificate_pushed_path(): string {
-	return '';
-}
-
-function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, float $timeout = 3.0): ?string {
-	return 'not implemented';
 }
 
 /**
@@ -4333,10 +4416,12 @@ function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, flo
  * installed pfb-dns's.
  *
  * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the Resolver's certificate and key are
- * written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the file the gateway's --tls-pem names, which it
- * reads again whenever it changes: a renewal never restarts the proxy), and removed when none is. A start that finds the file
- * missing, which is /var after a boot with RAM disks, has PHP write it first. The DoT port is the Resolver's unbound/tlsport
- * (--dot-port; 853 when it is not a port).
+ * written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the root-only file the gateway's --tls-pem
+ * names, which it reads once, at start, while it is still root) and a renewal is pushed to the running gateway on its --ctl-socket
+ * ($pfb['dns_proxy_ctl'], pfb_dns_proxy_certificate_push()): a renewal never restarts the proxy. Both are removed when no encrypted
+ * transport is wanted. A start that finds the file missing, which is /var after a boot with RAM disks, has PHP write it first, and
+ * forgets what was pushed to the proxy it replaces. The DoT port is the Resolver's unbound/tlsport (--dot-port; 853 when it is not
+ * a port).
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
@@ -4354,6 +4439,8 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$lockfile = PFB_DNS_PROXY_LOCKFILE;
 	$ready = escapeshellarg($pfb['dns_proxy_ready']);
 	$cert = escapeshellarg($pfb['dns_proxy_cert']);
+	$ctl = escapeshellarg($pfb['dns_proxy_ctl']);
+	$pushed = escapeshellarg(pfb_dns_proxy_certificate_pushed_path());
 
 	$saved = pfb_dns_proxy_saved();
 	$listen = ($saved === NULL) ? [] : pfb_dns_proxy_listen($saved);
@@ -4374,7 +4461,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
 	$wrapper = escapeshellarg("{$proxyDir}/pfb_dns.sh");
 	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? " --dot --dot-port {$dotport}" : '') .
-	    " --tls-pem {$cert}" . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
+	    " --tls-pem {$cert} --ctl-socket {$ctl}" . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
 	    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready .
 	    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	// The command lines of the processes this script keeps and signals: the supervisor and the decider behind the gateway
@@ -4386,7 +4473,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$certWrite = '';
 	if ($tls) {
 		$certWrite = <<<EOF
-	# The Resolver's certificate for DoT, DoH and DoQ; the apply and the cron tick keep the file current, and the gateway reads a new one without a restart
+	# The Resolver's certificate for DoT, DoH and DoQ (root only, read by the gateway once, at start); the apply and the cron tick keep the file current and push a renewal to the running gateway
 	[ -s {$cert} ] || /usr/bin/timeout -s TERM -k 5 30 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_cert >/dev/null 2>&1 ||
 		/usr/bin/logger -p daemon.warning -t pfb_dns_proxy "WARNING [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: the DNS Resolver's certificate could not be written - DoT, DoH and DoQ are not served until it is"
 
@@ -4463,8 +4550,9 @@ EOF;
 	rc_stop || return 1
 
 	# The marker an earlier proxy left (a killed proxy cannot remove its own) must never pass for this one's: only a fresh
-	# start removes it, after the stop and before the launch; the proxy writes its own once it serves
-	/bin/rm -f {$ready}
+	# start removes it, after the stop and before the launch; the proxy writes its own once it serves. The record of the certificate
+	# pushed to the proxy that is gone goes with it: the new process has the file, not that push, and the next apply or tick pushes again
+	/bin/rm -f {$ready} {$pushed}
 
 {$certWrite}	# Detach std fds (#662): the supervisor must not hold the caller's pipe; the proxy's own output goes to its log. The
 	# descriptors above stdio are closed too, defensively: FreeBSD's lockf(1) closes its lock descriptor before it runs the

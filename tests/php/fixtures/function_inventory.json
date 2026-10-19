@@ -1744,15 +1744,40 @@
                 "variadic": false,
                 "type": "?string",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dns_proxy_certificate_push": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "pem",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             },
             {
-                "name": "owner",
+                "name": "socket",
                 "byRef": false,
                 "variadic": false,
                 "type": "?string",
                 "default": "NULL"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "3.0"
             }
         ]
+    },
+    "pfb_dns_proxy_certificate_pushed_path": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
     },
     "pfb_dns_proxy_certificate_refresh": {
         "returnsRef": false,
