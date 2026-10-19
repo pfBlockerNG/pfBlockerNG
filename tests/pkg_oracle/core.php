@@ -11,7 +11,7 @@ const ORACLE_CORE_FUNCTIONS = [
 	'util.inc'          => ['isvalidpid'],
 	'xmlparse.inc'      => ['listtags_pkg', 'startElement', 'endElement', 'cData', 'parse_xml_config_pkg', 'parse_xml_config_raw'],
 ];
-// Constants pfSense defines at top level in these files, taken as the pinned file writes them (never typed in here).
+// Top-level constants used by the pinned master functions; the older r272 functions do not reference these.
 const ORACLE_CORE_CONSTANTS = [
 	'util.inc' => ['POSIX_EPERM'],
 ];
@@ -70,7 +70,7 @@ foreach (ORACLE_CORE_FUNCTIONS as $oracle_file => $oracle_names) {
 		eval(oracle_function_source("{$oracle_core_dir}/{$oracle_label}.{$oracle_file}", $oracle_name));
 	}
 }
-foreach (ORACLE_CORE_CONSTANTS as $oracle_file => $oracle_names) {
+foreach ($oracle_label === 'master' ? ORACLE_CORE_CONSTANTS : [] as $oracle_file => $oracle_names) {
 	foreach ($oracle_names as $oracle_name) {
 		eval(oracle_define_source("{$oracle_core_dir}/{$oracle_label}.{$oracle_file}", $oracle_name));
 	}
