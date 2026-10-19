@@ -187,7 +187,7 @@ func TestReadDoQQueryRejectsOneExtraByteThatArrivesWithTheFIN(t *testing.T) {
 // slots come back when the held queries are answered.
 func TestDoHAndDoQQueriesOverTheSharedInflightCapAreAnsweredWithAnError(t *testing.T) {
 	const wantCap, clients, perClient = 512, 4, 64 // 4 DoH + 4 DoQ clients x 64 queries = 512
-	r := newRig(t, rigConfig{acl: aclMixed})
+	r := newRig(t, rigConfig{acl: aclMixed, perAddr: noAddrCap})
 	m := newTLSMaterial(t)
 	dohAddr, doqAddr := r.serveDoH(m), r.serveDoQ(m)
 	release := make(chan struct{})
@@ -314,7 +314,7 @@ func TestDoHAndDoQDroppedQueriesFreeTheirSharedSlot(t *testing.T) {
 // F-5: the overload latch re-arms once the shared counter drains, so each flood is logged once and a later flood is
 // logged again. The queries go straight to resolveShared: no transport is needed to fill the cap.
 func TestSharedInflightCapLogsEachFloodOnce(t *testing.T) {
-	r := newRig(t, rigConfig{acl: aclMixed})
+	r := newRig(t, rigConfig{acl: aclMixed, perAddr: noAddrCap})
 	gates := map[byte]chan struct{}{'a': make(chan struct{}), 'b': make(chan struct{})} // first letter of a flood's names
 	r.autoAnswer(func(q decidedQuery) []byte {
 		if gate, ok := gates[q.wire[13]]; ok { // wire[12] is the first label's length

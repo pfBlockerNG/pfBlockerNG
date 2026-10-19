@@ -95,7 +95,7 @@ func TestDoTRefusesTLS11(t *testing.T) {
 // T5: the shared 128-connection cap is checked at accept, before any handshake byte; DoT and plain TCP count together.
 func TestDoTConnectionsOverTheCapAreClosedBeforeTheHandshake(t *testing.T) {
 	m := newTLSMaterial(t)
-	r := newRig(t, rigConfig{acl: aclMixed})
+	r := newRig(t, rigConfig{acl: aclMixed, perAddr: noAddrCap})
 	r.autoAnswer(echoAnswer)
 	addr := r.serveDoT(m)
 	conns := make([]net.Conn, 0, maxTCPConns)

@@ -32,7 +32,11 @@ type rigConfig struct {
 	grace    time.Duration // added to 2 x timeout for the whole query; default: the gateway's
 	tcpIdle  time.Duration // default: the gateway's
 	upstream []upstreamOption
+	perAddr  int // lifts the per-address shares of the UDP, DoH/DoQ and TCP budgets to this; 0 = the gateway's own (a test of a global cap sets noAddrCap)
 }
+
+// noAddrCap leaves a test of a global cap to the global cap: no single address reaches its own share first.
+const noAddrCap = 1 << 20
 
 // rig is a gateway on a loopback port with a fake Unbound and the test playing the decider on the socketpair.
 type rig struct {
@@ -81,6 +85,9 @@ func newRig(t *testing.T, cfg rigConfig) *rig {
 	}
 	if cfg.tcpIdle != 0 {
 		g.tcpIdle = cfg.tcpIdle
+	}
+	if cfg.perAddr != 0 {
+		g.udpPerAddr, g.muxPerAddr, g.tcpPerAddr = cfg.perAddr, cfg.perAddr, cfg.perAddr
 	}
 	l, err := bindPlain("127.0.0.1", 0)
 	if err != nil {
