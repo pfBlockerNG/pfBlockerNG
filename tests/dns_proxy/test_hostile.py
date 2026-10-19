@@ -141,6 +141,9 @@ FORWARDED = {
     "an OPT not owned by the root": _query(additional=[_opt(owner="example.")]),
     "class CH": _query(qclass=3),
     "class HS": _query(qclass=4),
+    "opcode UPDATE": _query(flags=dnswire.RD | (5 << 11)),
+    "opcode IQUERY": _query(flags=dnswire.RD | (1 << 11)),
+    "opcode STATUS": _query(flags=dnswire.RD | (2 << 11)),
     "an answer section the parser cannot read": _hdr(1, an=1) + dnswire.encode_name(BLOCKED) + QTC + b"\xff",
 }
 DECIDED = {

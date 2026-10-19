@@ -529,6 +529,20 @@ def test_a_truncated_query_for_a_blocked_name_gets_unbounds_formerr_from_the_rea
     assert (reply.rcode, reply.answers) == (1, [])
 
 
+# Unbound answers an opcode it does not implement itself (NOTIMP), so the decider must forward it and not block it.
+@pytest.mark.parametrize(
+    ("exchange", "source"), [(udp_exchange, ALLOWED_CLIENT), (tcp_exchange, ALLOWED_CLIENT_TCP)], ids=["udp", "tcp"]
+)
+@pytest.mark.parametrize("opcode", [5, 1, 2], ids=["update", "iquery", "status"])
+def test_an_opcode_unbound_does_not_implement_gets_unbounds_notimp_for_a_blocked_name(
+    gateway: Running, exchange: Callable[..., Coroutine[Any, Any, Any]], source: str, opcode: int
+) -> None:
+    query = bytearray(build_query(BLOCKED))
+    query[2] |= opcode << 3  # the opcode sits in bits 11-14 of the header flags
+    reply = dnswire.parse(_ask(exchange, gateway.server, bytes(query), source))
+    assert (reply.rcode, reply.answers) == (4, [])
+
+
 # E8
 def test_sigterm_ends_the_gateway_and_the_decider_and_the_module_shuts_down(gateway: Running) -> None:
     [decider_pid] = gateway.process.children()
