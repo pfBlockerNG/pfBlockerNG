@@ -582,4 +582,27 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringNotContainsString('pfb_dns_proxy_roll_back', $body);
 		$this->assertStringContainsString("restart_service('pfb_dns_proxy')", $body, 'it still brings the proxy that serves the moved Resolver back');
 	}
+
+	/**
+	 * A moved Resolver whose snapshot is lost cannot be put back: the rollback reports the old integration is not back, and no
+	 * notice says the Resolver was restored.
+	 */
+	public function testAnOrphanedResolverIsNeverReportedRestoredByTheRollback(): void
+	{
+		// Given the activation moved the Resolver and the snapshot is then lost while our block stays
+		$this->activate(TRUE);
+		config_set_path(self::SAVED, '');
+
+		// When the rollback runs
+		$restored = pfb_dns_proxy_roll_back();
+
+		// Then the rollback fails, and its notice names the hand recovery instead of a restore
+		$this->assertFalse($restored, 'the Resolver cannot be put back from a snapshot that is gone');
+		$texts = array_column($this->notices(), 'notice');
+		$this->assertNotEmpty($texts, 'the operator is told');
+		foreach ($texts as $text) {
+			$this->assertStringNotContainsString('to its previous settings', $text, 'no restore is claimed');
+		}
+		$this->assertStringContainsString('manual recovery required', end($texts));
+	}
 }
