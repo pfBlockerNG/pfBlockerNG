@@ -4291,7 +4291,7 @@ function pfb_dns_proxy_certificate_pushed_path(): string {
 }
 
 /**
- * Give the running gateway a renewed certificate on its control socket (--ctl-socket, go/pfb_dns_gateway ctl.go). It is no longer
+ * Give the running gateway a renewed certificate on its control socket (--ctl-socket; the gateway's ctl.go). It is no longer
  * root, cannot read the root-only certificate file, and replaces what it serves for the handshakes that follow, with no restart
  * and no failed handshake. The wire is one frame, the length of $pem as 4 bytes big-endian and then $pem (the chain, then the key),
  * and the gateway answers one line, `ok` or `error: <reason>`; it takes it only from root (SO_PEERCRED / LOCAL_PEERCRED), which
