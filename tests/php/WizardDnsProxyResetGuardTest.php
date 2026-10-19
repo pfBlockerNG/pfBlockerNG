@@ -19,11 +19,16 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		'asn_cache', 'dbdir', 'denydir', 'dnsbl_cache', 'dnsbl_info', 'dnsbl_resolver', 'dnsbl_supptxt', 'dnsdir',
 		'dnsorigdir', 'etdir', 'ip_cache', 'matchdir', 'nativedir', 'origdir', 'permitdir', 'snapdir', 'supptxt', 'supptxt_v6',
 	];
+	private const GLOBALS = ['pfb', 'config', 'input_errors', 'pfb_test_file_notices'];
 
 	private string $dir;
+	private array $savedGlobals = [];
 
 	protected function setUp(): void
 	{
+		foreach (self::GLOBALS as $name) {
+			$this->savedGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
+		}
 		$this->dir = sys_get_temp_dir() . '/pfb_wizard_reset_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0777, TRUE);
 		file_put_contents("{$this->dir}/feeds.json", '[]');
@@ -43,7 +48,14 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		$GLOBALS['input_errors'] = [];
+		foreach ($this->savedGlobals as $name => [$existed, $value]) {
+			if ($existed) {
+				$GLOBALS[$name] = $value;
+			} else {
+				unset($GLOBALS[$name]);
+			}
+		}
+		$this->savedGlobals = [];
 		rmdir_recursive($this->dir);
 	}
 
