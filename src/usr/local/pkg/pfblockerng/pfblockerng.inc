@@ -4296,6 +4296,14 @@ function pfb_dns_proxy_certificate_sync(): void {
 	pfb_dns_proxy_certificate_refresh($saved !== NULL && pfb_dns_proxy_tls_wanted($saved));
 }
 
+function pfb_dns_proxy_certificate_pushed_path(): string {
+	return '';
+}
+
+function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, float $timeout = 3.0): ?string {
+	return 'not implemented';
+}
+
 /**
  * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from the SAVED Resolver
  * (listen addresses, DoT), the DoH/DoQ settings and its Listen Port (unbound/port, which stays on loopback for Unbound;

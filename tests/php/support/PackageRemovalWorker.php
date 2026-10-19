@@ -321,8 +321,9 @@ $GLOBALS['pfb_test_config_read_hook'] = static function (): void {
 $pfb['dns_proxy_pidfile'] = "{$state}/pfb_dns_proxy.pid";
 $pfb['dns_proxy_ready'] = "{$state}/pfb_dns_ready";
 // The gateway's certificate file: DoT is on in the saved Resolver, so every apply writes the Resolver's certificate to it
-$pfb['dns_proxy_cert'] = "{$state}/pfb_dns_cert.pem";
-$pfb['dns_proxy_cert_owner'] = (string) posix_getpwuid(posix_geteuid())['name'];
+$pfb['dns_proxy_cert'] = "{$state}/etc/pfb_dns/tls.pem";
+$pfb['dns_proxy_cert_legacy'] = "{$state}/chroot/pfb_dns_cert.pem";
+$pfb['dns_proxy_ctl'] = "{$state}/ctl.sock";
 $alive = static fn (): bool => file_exists(WORKER_STATE . '/running.pfb_dns_proxy');
 $GLOBALS['pfb_test_valid_pids'] = [
 	PFB_DNS_PROXY_PIDFILE        => $alive,
