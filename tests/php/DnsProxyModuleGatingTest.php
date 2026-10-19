@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -67,6 +69,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		unset($GLOBALS['pfb']['dnsbl_python_unmount']);
 		$this->useMountState(TRUE);
 		$this->seedPackageConfig(FALSE);
+		DnsProxyCertificateFixtures::seedResolver($this->tmp);
 	}
 
 	protected function tearDown(): void

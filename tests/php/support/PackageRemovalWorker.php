@@ -320,6 +320,9 @@ $GLOBALS['pfb_test_config_read_hook'] = static function (): void {
 // The proxy's readiness files (child pidfile, listener-ready marker) are state a retry's process finds as the first one left it
 $pfb['dns_proxy_pidfile'] = "{$state}/pfb_dns_proxy.pid";
 $pfb['dns_proxy_ready'] = "{$state}/pfb_dns_ready";
+// The gateway's certificate file: DoT is on in the saved Resolver, so every apply writes the Resolver's certificate to it
+$pfb['dns_proxy_cert'] = "{$state}/pfb_dns_cert.pem";
+$pfb['dns_proxy_cert_owner'] = (string) posix_getpwuid(posix_geteuid())['name'];
 $alive = static fn (): bool => file_exists(WORKER_STATE . '/running.pfb_dns_proxy');
 $GLOBALS['pfb_test_valid_pids'] = [
 	PFB_DNS_PROXY_PIDFILE        => $alive,
@@ -359,10 +362,13 @@ if (is_file("{$state}/config.json")) {
 	// The Resolver as the DNS proxy leaves it, with the copy of the user's settings it saved.
 	$GLOBALS['config']['unbound'] = [
 		'port'             => '53',
+		'sslcertref'       => 'cert1',
 		'active_interface' => 'lo0',
 		'custom_options'   => base64_encode("do-ip6: no\nserver:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\n"
 			. "interface: ::1@5353\nproxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy"),
 	];
+	// The Resolver's certificate, made by the test process (the worker's file access is narrowed: no OpenSSL configuration to read)
+	$GLOBALS['config']['cert'] = [['refid' => 'cert1', 'caref' => '', 'crt' => base64_encode($scenario['certificate']['cert']), 'prv' => base64_encode($scenario['certificate']['key'])]];
 	if (!empty($scenario['unmigratedPolicy'])) {
 		// The re-enabled pass asks for pfB-DNS only while the Resolver is enabled (pfb_dns_wanted())
 		$GLOBALS['config']['unbound']['enable'] = '';

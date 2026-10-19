@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -67,7 +69,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		@mkdir($state, 0700, TRUE);
 		$process = pfb_test_run_process([
 			PHP_BINARY, __DIR__ . '/support/PackageRemovalWorker.php',
-			(string) json_encode(['failure' => $failure, 'keep' => $keep, 'state' => $state] + $scenario), $result,
+			(string) json_encode(['failure' => $failure, 'keep' => $keep, 'state' => $state, 'certificate' => DnsProxyCertificateFixtures::shared()] + $scenario), $result,
 		], 120.0);
 		$this->assertFileExists($result, "the worker reported nothing (exit {$process['exit']}): {$process['stderr']}");
 		return ['exit' => $process['exit'], 'state' => $state]

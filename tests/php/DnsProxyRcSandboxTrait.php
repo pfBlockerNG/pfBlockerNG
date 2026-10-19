@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+
 /**
  * The sandbox the DNS proxy's generated rc script runs in (issue #3515): the real script executed under dash, every
  * absolute executable path redirected to a command double, `sleep 1` one tick of a controlled clock. A test class
@@ -16,7 +18,7 @@ trait DnsProxyRcSandboxTrait
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const RC = 'pfb_dns_proxy.sh';
 
-	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger', 'lockf', 'uname'];
+	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger', 'lockf', 'uname', 'php', 'timeout'];
 
 	/** One script installed under every command name the rc body uses; $0 picks the role. */
 	private const DOUBLE = <<<'SH'
@@ -130,6 +132,23 @@ trait DnsProxyRcSandboxTrait
 			printf '%s\n' "3001|$supervisor|||daemon: $title[3002] (daemon)" >> "$S/procs"
 			printf '%s\n' "3002|$child|||$*" >> "$S/procs"
 			;;
+		timeout)
+			# timeout(1): -s TERM -k 5 <seconds> command ... -- the limits are not exercised here, the command runs
+			{ [ "$1" = -s ] && [ "$2" = TERM ] && [ "$3" = -k ] && [ "$#" -ge 6 ]; } || { ev bad-timeout; exit 2; }
+			echo "$*" >> "$S/timeout.args"
+			# A limit that fires: the command is killed before it did anything (status 124, as timeout(1) says)
+			[ -z "$TIMEOUT_FIRES" ] || exit 124
+			shift 5
+			exec "$@"
+			;;
+		php)
+			# What the start runs when the certificate file is missing: pfblockerng.inc's dns_cert verb, which writes the file
+			{ [ "$1" = -f ] && [ "$3" = dns_cert ]; } || { ev bad-php; exit 2; }
+			ev export
+			echo "$*" >> "$S/php.args"
+			[ -z "$EXPORT_FAIL" ] || exit 1
+			echo exported > "$PEM_FILE"
+			;;
 		uname)
 			# pfb_dns.sh asks which machine it runs on; the scenario answers
 			[ "$1" = -p ] || { ev bad-uname; exit 2; }
@@ -191,6 +210,8 @@ trait DnsProxyRcSandboxTrait
 			'logdir' => $this->dir,
 			'log'    => "{$this->dir}/pfb.log",
 			'errlog' => "{$this->dir}/pfb.err",
+			'dns_proxy_cert' => $this->certFile(),
+			'dns_proxy_cert_owner' => (string) posix_getpwuid(posix_geteuid())['name'],
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_rcfile_dir'] = "{$this->dir}/rc";
@@ -219,6 +240,9 @@ trait DnsProxyRcSandboxTrait
 			'custom_options'   => ['present' => FALSE, 'value' => NULL],
 		];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
+		// The Resolver's certificate, which the apply writes for the gateway whenever DoT, DoH or DoQ is on
+		$GLOBALS['config']['unbound']['sslcertref'] = 'cert1';
+		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::shared())];
 		$up = ['status' => 'up', 'enable' => TRUE];
 		$GLOBALS['pfb_test_interface_ip'] = $v4;
 		$GLOBALS['pfb_test_configured_ipv6'] = $v6;
@@ -246,14 +270,15 @@ trait DnsProxyRcSandboxTrait
 	{
 		$gates += ['GATE_DNSBL' => 'on', 'GATE_PROXY' => 'on', 'GATE_SAVED' => (string) config_get_path(self::SAVED, '')];
 		$state = "{$this->dir}/state";
-		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter, 'READY_FILE' => $this->readyFile(), 'LOCKF_BUSY' => '', 'MACHINE' => $machine];
+		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter, 'READY_FILE' => $this->readyFile(), 'LOCKF_BUSY' => '', 'MACHINE' => $machine,
+			'PEM_FILE' => $this->certFile(), 'EXPORT_FAIL' => '', 'TIMEOUT_FIRES' => ''];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls'] as $file) {
+		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls', 'timeout.args', 'php.args'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		if ($running) {
@@ -264,6 +289,12 @@ trait DnsProxyRcSandboxTrait
 				. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||python3.11 -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py\n");
 		}
 		file_put_contents("{$this->dir}/run.sh", $this->sandboxPaths($this->rcText()));
+	}
+
+	/** Where the gateway's certificate file is (the production path is $pfb['dns_proxy_cert']; the generated script names this one). */
+	private function certFile(): string
+	{
+		return "{$this->dir}/run/pfb_dns_cert.pem";
 	}
 
 	/** Where the sandboxed script keeps the proxy's ready marker (the production path is $pfb['dns_proxy_ready']). */
@@ -283,7 +314,7 @@ trait DnsProxyRcSandboxTrait
 					return $this->readyFile();
 				}
 				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
-				    str_starts_with($path, "{$this->dir}/dns_proxy/") ||
+				    str_starts_with($path, "{$this->dir}/dns_proxy/") || $path === $this->certFile() ||
 				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {
 					return $path;
 				}
