@@ -140,6 +140,24 @@ final class MetricsWriteTest extends TestCase
 		$this->assertTrue($s['source_up']['resolver_db']);
 	}
 
+	public function testTwoDnsblRowsForOneGroupGiveOneSampleAndTheLastRowWins(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER );',
+			"INSERT INTO dnsbl VALUES ('DNSBL_Ads', '2026-10-18 10:00:00', 5000, 17);",
+			"INSERT INTO dnsbl VALUES ('DNSBL_Malware', '2026-10-18 10:00:00', 70, 1);",
+			"INSERT INTO dnsbl VALUES ('DNSBL_Ads', '2026-10-18 10:05:00', 6000, 20);",
+		]);
+
+		$body = pfb_metrics_render(pfb_metrics_collect());
+
+		$this->assertSame(1, substr_count($body, 'pfblockerng_dnsbl_blocked_queries_total{group="DNSBL_Ads"}'), 'a repeated sample makes Prometheus reject the whole file');
+		$this->assertStringContainsString('pfblockerng_dnsbl_blocked_queries_total{group="DNSBL_Ads"} 20', $body);
+		$this->assertSame(1, substr_count($body, 'pfblockerng_dnsbl_group_entries{group="DNSBL_Ads"}'));
+		$this->assertStringContainsString('pfblockerng_dnsbl_group_entries{group="DNSBL_Ads"} 6000', $body);
+		$this->assertStringContainsString('pfblockerng_dnsbl_blocked_queries_total{group="DNSBL_Malware"} 1', $body);
+	}
+
 	public function testMissingSqliteFilesGiveEmptyFamiliesAndSourceUp(): void
 	{
 		$s = pfb_metrics_collect();
@@ -919,6 +937,24 @@ final class MetricsWriteTest extends TestCase
 		pfb_metrics_configure_cron(FALSE, $dir);
 
 		$this->assertSame('not ours', file_get_contents("{$target}/pfblockerng.prom"));
+	}
+
+	public function testPublishRemovesStaleTempFilesAndKeepsFreshOnes(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		touch("{$dir}/.pfbmetrics_stale", time() - 400);	// a run killed between tempnam() and rename()
+		touch("{$dir}/.pfbmetrics_fresh", time() - 30);
+		touch("{$dir}/other.prom", time() - 400);
+
+		$this->assertTrue(pfb_metrics_publish('body', $dir));
+
+		$this->assertSame(
+			['.pfbmetrics_fresh', 'other.prom', 'pfblockerng.prom'],
+			array_values(array_diff(scandir($dir), ['.', '..'])),
+			'only an old temp file goes: not a fresh one, and not another collector\'s file'
+		);
 	}
 }
 

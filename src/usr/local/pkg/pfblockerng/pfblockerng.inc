@@ -7776,7 +7776,8 @@ function pfb_metrics_render(array $s): string {
 		foreach ($rows as [$labels, $value]) {
 			$pairs = array();
 			foreach ($labels as $key => $val) {
-				$pairs[] = $key . '="' . str_replace(array('\\', '"', "\n"), array('\\\\', '\\"', '\\n'), (string) $val) . '"';
+				// Invalid UTF-8 makes the textfile collector drop the whole file.
+				$pairs[] = $key . '="' . str_replace(array('\\', '"', "\n"), array('\\\\', '\\"', '\\n'), mb_scrub((string) $val, 'UTF-8')) . '"';
 			}
 			$out .= $name . ($pairs ? '{' . implode(',', $pairs) . '}' : '') . " {$value}\n";
 		}
@@ -7914,20 +7915,21 @@ function pfb_metrics_collect(): array {
 	$resolver_queries = NULL;
 	if ($pfb['dnsbl'] === PfbToggle::On) {
 		$dnsbl_groups = $guard('dnsbl_db', function () use (&$up, $pfb, $num): ?array {
-			$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl');
+			$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl ORDER BY rowid');
 			$up['dnsbl_db'] = $groups !== NULL;
 			if ($groups === NULL) {
 				return NULL;
 			}
+			// One sample per group: a repeated label set rejects the whole file. The last row wins; summing would double count.
 			$out = array();
 			foreach ($groups as $row) {
-				$out[] = array(
+				$out[(string) $row['groupname']] = array(
 					'group'   => (string) $row['groupname'],
 					'entries' => $row['entries'] === 'disabled' ? NULL : $num($row['entries']),
 					'counter' => $num($row['counter']),
 				);
 			}
-			return $out;
+			return array_values($out);
 		});
 
 		$resolver_queries = $guard('resolver_db', function () use (&$up, $pfb, $num): ?int {
@@ -8032,6 +8034,12 @@ function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.
 				pfb_metrics_log_once($pfb['metrics_sentinel_missing'], "Metrics export: {$pfb['metrics_enabled']} is missing, so nothing is published; save the pfBlockerNG settings to restore it.\n");
 			}
 			return FALSE;
+		}
+		// A run killed between tempnam() and rename() leaves its temp file behind; the lock is held, so only an old one is stale.
+		foreach (glob("{$dir}/.pfbmetrics_*") ?: array() as $stale) {
+			if (time() - (int) @filemtime($stale) > 300) {
+				@unlink($stale);
+			}
 		}
 		$tmp = @tempnam($dir, '.pfbmetrics_');
 		if ($tmp === FALSE) {

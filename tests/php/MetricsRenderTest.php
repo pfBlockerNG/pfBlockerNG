@@ -102,6 +102,20 @@ final class MetricsRenderTest extends TestCase
 		$this->assertStringContainsString($line . "\n", $out);
 	}
 
+	public function testInvalidUtf8InALabel_IsScrubbedAndValidUtf8Survives(): void
+	{
+		$out = pfb_metrics_render($this->minimal([
+			'dnsbl_groups' => [
+				['group' => "bad\xFF\xFEgroup", 'entries' => 1, 'counter' => 2],
+				['group' => "caf\u{e9}", 'entries' => 1, 'counter' => 3],
+			],
+		]));
+
+		$this->assertTrue(mb_check_encoding($out, 'UTF-8'), 'invalid UTF-8 makes the textfile collector reject the whole file');
+		$this->assertStringContainsString('pfblockerng_dnsbl_blocked_queries_total{group="bad??group"} 2' . "\n", $out);
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"caf\u{e9}\"} 3\n", $out);
+	}
+
 	public function testDisabledDnsblRow_KeepsBlockedCounterAndOmitsEntries(): void
 	{
 		$out = pfb_metrics_render($this->minimal([
