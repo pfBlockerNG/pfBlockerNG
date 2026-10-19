@@ -199,12 +199,21 @@ func udpReply(t *testing.T, c *net.UDPConn) []byte {
 
 var udpProbeID atomic.Uint32
 
+// udpProbeRetry is how long udpJudged waits for the reply to a probe before it sends another.
+const udpProbeRetry = 500 * time.Millisecond
+
 // udpJudged returns once the gateway's read loop has judged every datagram sent before the call. The loop reads datagrams
 // in order and answers a client the ACL refuses by itself, so the reply to a probe from such a client says that the
 // datagrams before the probe are done. The kernel may drop a datagram under load, the probe or its reply: the probe is
 // sent again every half second until one is answered. Only a reply to a probe sent in this call counts, so a late reply
 // to an earlier call's probe cannot pass for it.
 func udpJudged(t *testing.T, probe *net.UDPConn) {
+	t.Helper()
+	udpJudgedEvery(t, probe, udpProbeRetry)
+}
+
+// udpJudgedEvery is udpJudged with the interval between probes a test sets.
+func udpJudgedEvery(t *testing.T, probe *net.UDPConn, every time.Duration) {
 	t.Helper()
 	first := uint16(udpProbeID.Add(1))
 	deadline := time.Now().Add(watchdog)
@@ -213,7 +222,7 @@ func udpJudged(t *testing.T, probe *net.UDPConn) {
 		if _, err := probe.Write(buildQuery(t, next, "example.", true)); err != nil {
 			t.Fatal(err)
 		}
-		for retry := time.Now().Add(500 * time.Millisecond); time.Now().Before(retry); {
+		for retry := time.Now().Add(every); time.Now().Before(retry); {
 			_ = probe.SetReadDeadline(retry)
 			n, err := probe.Read(buf)
 			if errors.Is(err, os.ErrDeadlineExceeded) {
