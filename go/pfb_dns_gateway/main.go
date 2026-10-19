@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	defaultReadyTimeout = 300 * time.Second // the decider boots the whole DNSBL database before it says READY
-	defaultKillAfter    = 3 * time.Second   // how long the decider gets to leave on EOF: under the rc stop loop's 5 s KILL
+	defaultReadyTimeout   = 300 * time.Second // the decider boots the whole DNSBL database before it says READY
+	defaultKillAfter      = 3 * time.Second   // how long the decider gets to leave on EOF
+	defaultShutdownBudget = 4 * time.Second   // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
 )
 
 type config struct {
@@ -62,11 +63,12 @@ type config struct {
 	decider       []string
 
 	// Test seams; the zero value is production.
-	drop         func() error      // replaces the privilege drop to --user
-	trace        func(step string) // called after bind, decider start and READY (the drop hook records itself)
-	readyTimeout time.Duration
-	killAfter    time.Duration
-	interrupt    <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
+	drop           func() error      // replaces the privilege drop to --user
+	trace          func(step string) // called after bind, decider start and READY (the drop hook records itself)
+	readyTimeout   time.Duration
+	killAfter      time.Duration
+	shutdownBudget time.Duration
+	interrupt      <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
 }
 
 type listFlag []string
@@ -186,9 +188,10 @@ func (c config) validate() error {
 
 // child is the decider process.
 type child struct {
-	cmd    *exec.Cmd
-	exited chan struct{}
-	err    error // how it ended; valid once exited is closed
+	cmd         *exec.Cmd
+	killProcess func() error // cmd.Process.Kill; a test makes it refuse
+	exited      chan struct{}
+	err         error // how it ended; valid once exited is closed
 }
 
 // startDecider runs argv with fd as its fd 3 and our stdout and stderr, and closes fd here.
@@ -201,7 +204,7 @@ func startDecider(argv []string, fd *os.File) (*child, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot start the decider: %w", err)
 	}
-	c := &child{cmd: cmd, exited: make(chan struct{})}
+	c := &child{cmd: cmd, killProcess: cmd.Process.Kill, exited: make(chan struct{})}
 	go func() { c.err = cmd.Wait(); close(c.exited) }()
 	return c, nil
 }
@@ -209,10 +212,12 @@ func startDecider(argv []string, fd *os.File) (*child, error) {
 // kill stops the decider and waits at most bound for it to be gone. After the privilege drop the gateway cannot
 // signal a decider that is still root (EPERM), and must not wait for that decider's boot to finish.
 func (c *child) kill(logf func(format string, args ...any), bound time.Duration) {
-	if err := c.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := c.killProcess(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		logf("cannot kill the decider: %v", err)
 	}
-	c.waitExit(bound)
+	if !c.waitExit(bound) {
+		logf("the decider is still running %s after the kill", bound.Round(time.Millisecond))
+	}
 }
 
 func (c *child) waitExit(d time.Duration) bool {
@@ -256,6 +261,9 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	if cfg.killAfter == 0 {
 		cfg.killAfter = defaultKillAfter
+	}
+	if cfg.shutdownBudget == 0 {
+		cfg.shutdownBudget = defaultShutdownBudget
 	}
 
 	acl := NewACL(cfg.unboundConf, logf)
@@ -374,18 +382,22 @@ func (s *server) watch() {
 func (s *server) fatal() <-chan error { return s.failed }
 
 // shutdown stops accepting, closes the decision socket (the decider reads EOF and exits), and waits for the
-// decider, killing it when it does not leave in time.
+// decider, killing it when it does not leave in time. Everything in it, the transports' stop included, fits in
+// shutdownBudget: the decider's patience for EOF is whatever the transports left, less an eighth of the budget
+// that the kill and its reap keep.
 func (s *server) shutdown() {
 	s.once.Do(func() {
+		deadline := time.Now().Add(s.cfg.shutdownBudget)
 		close(s.stopped)
 		if err := removeReady(s.cfg.readyFile); err != nil {
 			s.logf("cannot remove the ready file: %v", err)
 		}
 		s.dec.Close() // first: queries blocked writing to a decider that reads nothing would hold g.stop() up to the write deadline
 		s.g.stop()
-		if !s.child.waitExit(s.cfg.killAfter) {
-			s.logf("the decider did not exit within %s of EOF: killing it", s.cfg.killAfter)
-			s.child.kill(s.logf, s.cfg.killAfter)
+		patience := max(min(s.cfg.killAfter, time.Until(deadline)-s.cfg.shutdownBudget/8), 0)
+		if !s.child.waitExit(patience) {
+			s.logf("the decider did not exit within %s of EOF: killing it", patience.Round(time.Millisecond))
+			s.child.kill(s.logf, time.Until(deadline))
 		}
 	})
 }

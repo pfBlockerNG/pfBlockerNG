@@ -108,6 +108,9 @@ func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
 				g.pause()
 				continue
 			}
+			if g.doqAccepted != nil {
+				g.doqAccepted()
+			}
 			conns.add(conn)
 			context.AfterFunc(conn.Context(), func() { conns.remove(conn) }) // the context ends after the close is on the wire
 			g.wg.Add(1)
