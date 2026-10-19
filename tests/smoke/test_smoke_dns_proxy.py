@@ -1703,13 +1703,17 @@ def test_starts_that_race_each_other_leave_exactly_one_proxy(rig: Rig, proxy_on:
     Given the proxy stopped before each of RACE_ROUNDS rounds,
     When two `start`s run at once,
     Then both exit 0 and exactly one supervisor and one child are left, in every round;
-      the same race with the serialization taken away is printed too, as the evidence the lock answers a real race
-      (on this box's daemon(8) and sh; it is not asserted, a race may or may not fire in a given run).
+      the same starts with the serialization taken away are printed too, as a snapshot taken when both starts had
+      returned (not a race finding and not asserted: the proxies they launched may not have settled, and a race may
+      or may not fire in a given run).
     """
     vm = rig.vm
     try:
         unlocked = _race(vm, locked=False)
-        _say(f"unlocked start race (supervisors, children, exit statuses), per round: {unlocked}")
+        _say(
+            "unlocked starts, snapshot taken when both had returned (not a race finding; supervisors, children, "
+            f"exit statuses), per round: {unlocked}"
+        )
         _force_stop_proxy(vm)
         locked = _race(vm, locked=True)
         _say(f"locked start race (supervisors, children, exit statuses), per round: {locked}")

@@ -192,6 +192,23 @@ def test_a_failing_command_on_a_live_guest_is_not_the_guest_going_offline(monkey
         helpers.reboot_vm(cast(helpers.SmokeVM, fake_vm), timeout=10)
 
 
+def test_a_failing_read_that_prints_a_new_token_after_offline_is_not_a_new_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given the guest goes offline, then a sysctl that fails (exit 1) still prints a different boottime
+    When reboot_vm runs to its salvage cap
+    Then the failed read is not a new boot: the error says the guest went offline but did not come back with one,
+    and readiness never starts.
+    """
+    fake_vm = _FakeVM([(0, _BEFORE, ""), (_SSH_FAILED, "", "refused"), (1, _AFTER, "sysctl failed")])
+    ready_calls, _, _ = _patch_reboot_collaborators(monkeypatch, fake_vm)
+
+    with pytest.raises(RuntimeError, match=r"went offline but did not come"):
+        helpers.reboot_vm(cast(helpers.SmokeVM, fake_vm), timeout=10)
+
+    assert not ready_calls
+
+
 def test_a_guest_that_is_back_but_not_ready_is_told_apart_from_one_that_never_went_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

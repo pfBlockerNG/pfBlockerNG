@@ -97,9 +97,11 @@ def test_status_probes_that_hang_spend_the_deadline_and_cannot_stretch_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Given every `unbound-control status` hangs until its own ssh timeout
-    When wait_unbound_ready runs with a 100 s deadline
-    Then no probe is given more than the time left, so the wait ends at the deadline (the old loop gave each
-    of its 60 attempts the full 15 s on top of its 2 s delay), and the error carries the hung probe.
+    When wait_unbound_ready runs with a 99 s deadline
+    Then no probe is given more than the time left, so the wait ends at the deadline and not a probe past it (the
+    old loop gave each of its 60 attempts the full 15 s on top of its 2 s delay); 99 is not a multiple of the 17 s
+    probe-plus-delay cycle, so the last probe has 14 s left and only a clamp keeps it from spending 15;
+    the error carries the hung probe.
     """
     clock = _virtual_time(monkeypatch)
     probe_timeouts: list[float] = []
@@ -113,10 +115,10 @@ def test_status_probes_that_hang_spend_the_deadline_and_cannot_stretch_it(
             raise subprocess.TimeoutExpired(remote, timeout)
 
     with pytest.raises(RuntimeError, match=r"^stuck/environment: .*TimeoutExpired") as excinfo:
-        helpers.wait_unbound_ready(HungVM(), timeout=100.0, delay=2.0)  # type: ignore[arg-type]
+        helpers.wait_unbound_ready(HungVM(), timeout=99.0, delay=2.0)  # type: ignore[arg-type]
 
     assert max(probe_timeouts) == 15.0
-    assert clock.now == 100.0
+    assert clock.now == 99.0
     assert "PROC-LIST-SENTINEL" in str(excinfo.value)
 
 
