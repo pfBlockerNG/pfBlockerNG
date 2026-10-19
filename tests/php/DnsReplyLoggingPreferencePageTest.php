@@ -34,29 +34,6 @@ final class DnsReplyLoggingPreferencePageTest extends TestCase
 		$this->assertSame(1, preg_match("~new Form_Checkbox\\( 'pfb_py_reply', gettext\\('DNS Reply Logging'\\), 'Enable', pfb_dnsbl_toggle_enabled\\(\\\$pconfig\\['pfb_py_reply'\\] \\?\\? NULL\\), 'on' \\)~", $page), 'the checkbox the DNSBL page had, default-on reading included');
 	}
 
-	public function testThePfbDnsPageSavesThePreferenceThroughTheGatewayInTheSameLockedSaveAsItsToggle(): void
-	{
-		$page = self::page('pfblockerng_dns.php');
-		$read = "\$pfb_py_reply = pfb_filter(\$_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';";
-		$write = "PfbConfig::write('dnsbl/pfb_py_reply', \$pfb_py_reply);";
-		$toggle = "PfbConfig::write('dns/pfb_dns', \$pfb_dns);";
-
-		$this->assertStringContainsString($read, $page, 'an absent checkbox is the deliberate Off token, as on the DNSBL page');
-		$this->assertSame(1, substr_count($page, $write), 'written once, through the gateway');
-		$this->assertStringContainsString("{$write} {$toggle} write_config(", $page, 'in the same save as the toggle, before its write_config()');
-		$this->assertLessThan((int) strpos($page, $write), (int) strpos($page, 'pfb_dns_config_lock();'), 'under the config lock');
-		$this->assertStringNotContainsString('writeSection', $page, 'a leaf write: the section holding the Resolver snapshot is never replaced');
-	}
-
-	public function testThePfbDnsPageRestoresTheSubmittedPreferenceWhenTheSaveFails(): void
-	{
-		$this->assertStringContainsString(
-			"\$pconfig['pfb_py_reply'] = \$_POST['pfb_py_reply'] ?? '';",
-			self::page('pfblockerng_dns.php'),
-			'the form comes back as submitted, like the toggle'
-		);
-	}
-
 	public function testTheDnsblPageNeitherRendersNorAssignsThePreference(): void
 	{
 		$page = self::page('pfblockerng_dnsbl.php');

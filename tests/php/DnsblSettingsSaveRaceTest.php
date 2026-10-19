@@ -97,4 +97,11 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 		$this->assertFalse($result['lockHeld']);
 		$this->assertNotSame('8082', self::at($result['disk'], self::DNSBL . '/pfb_dnsport'), 'nothing posted was saved');
 	}
+
+	public function testAWriteThatThrowsStillReleasesTheConfigLock(): void
+	{
+		$result = $this->runScenario('write_throws');
+
+		$this->assertFalse($result['lockHeld'], 'the lock is released even when config.xml cannot be written');
+	}
 }

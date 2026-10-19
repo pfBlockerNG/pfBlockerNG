@@ -138,8 +138,11 @@ if ($scenario === 'interleave') {
 	$GLOBALS['pfb_test_config_read_fails'] = TRUE;
 	$disk = $other;
 }
-$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk): void {
+$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
+	if ($scenario === 'write_throws') {
+		throw new RuntimeException("config.xml could not be written: {$description}");
+	}
 	$disk = $GLOBALS['config'];
 };
 

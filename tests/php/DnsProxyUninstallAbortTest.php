@@ -168,11 +168,13 @@ final class DnsProxyUninstallAbortTest extends TestCase
 
 		$baseline = $this->baseline($removal['state']);
 		$this->assertStringContainsString("python_control\t= on", $baseline['ini'], 'before: the module\'s control integration is on in config.xml');
+		$this->assertStringContainsString("decisiondb_max\t= 777", $baseline['ini'], 'before: the decision cache cap the apply wrote');
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal aborted');
 
 		$this->assertTrue($removal['iniSameAsBaseline'], 'the ini is written again with what config.xml stores: VIP, logging and control as they were');
 		$this->assertStringContainsString("python_enable\t= on", $removal['ini'], 'with the module enabled, not the removal\'s disabled view');
 		$this->assertStringContainsString("dnsbl_ipv4\t= 10.10.10.1", $removal['ini']);
+		$this->assertStringContainsString("decisiondb_max\t= 777", $removal['ini'], 'and the recovery writes that cap, not the default');
 	}
 
 	#[DataProvider('unrestorableResolver')]
