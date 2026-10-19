@@ -275,6 +275,25 @@ final class MetricsWriteTest extends TestCase
 		], pfb_metrics_collect()['feed_failing']);
 	}
 
+	public function testTheSameFailureInBothLedgersGivesOneRowAndOneSeries(): void
+	{
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_sync_status.json", json_encode([
+			'ip' => ['ipv4:Alias_v4' => ['download' => ['message' => 'x', 'first_seen' => 1, 'last_seen' => 2]]],
+		]));
+		file_put_contents("{$GLOBALS['pfb']['dnsbldir']}/pfb_py_status.json", json_encode([
+			['facility' => 'ip', 'item' => 'ipv4:Alias_v4', 'stage' => 'download', 'message' => 'm', 'first_seen' => 1, 'last_seen' => 2],
+		]));
+
+		$s = pfb_metrics_collect();
+
+		$this->assertSame([['facility' => 'ip', 'feed' => 'ipv4:Alias_v4', 'stage' => 'download']], $s['feed_failing']);
+		$this->assertSame(
+			1,
+			substr_count(pfb_metrics_render($s), 'pfblockerng_feed_failing{facility="ip",feed="ipv4:Alias_v4",stage="download"} 1'),
+			'a repeated label set makes the whole file invalid'
+		);
+	}
+
 	public function testCollectMapsScheduleStateToFeedSuccess(): void
 	{
 		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_schedule_state.json", json_encode(['schema' => 1, 'items' => [
@@ -308,6 +327,7 @@ final class MetricsWriteTest extends TestCase
 	public function testAggregateTablesAreNeverExportedWhateverTheWidgetSettingIs(): void
 	{
 		config_set_path('installedpackages/pfblockerngglobal/widget-show_agg', 'on');
+		$GLOBALS['pfb']['show_agg'] = TRUE;	// what the widget reads: a collector that passed it on would reveal the aggregate
 		file_put_contents("{$GLOBALS['pfb']['pfctl']}.out", implode("\n", [
 			"-p-a---\tpfB_Deny_v4",
 			"\tAddresses: 1200",
@@ -661,6 +681,7 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame([], pfb_metrics_collect()['ip_rule_packets'], 'before: aggregates are hidden while show_agg is off');
 
 		config_set_path('installedpackages/pfblockerngglobal/widget-show_agg', 'on');
+		$GLOBALS['pfb']['show_agg'] = TRUE;	// what the widget reads: a collector that passed it on would reveal the aggregate
 
 		$this->assertSame([], pfb_metrics_collect()['ip_rule_packets'], 'the dashboard checkbox must not add series');
 	}

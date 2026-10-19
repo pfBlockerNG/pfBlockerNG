@@ -7982,10 +7982,12 @@ function pfb_metrics_collect(): array {
 		return $up['py_sync_status'] ? pfb_py_sync_status_list_open($pfb['dnsbldir']) : array();
 	});
 
+	// Keyed by the label set: a repeat across the two ledgers would make the whole file invalid. First wins; the order is kept.
 	$feed_failing = array();
 	foreach (array_merge($sync_rows ?? array(), $py_rows ?? array()) as $row) {
-		$feed_failing[] = array('facility' => $row['facility'], 'feed' => $row['item'], 'stage' => $row['stage']);
+		$feed_failing["{$row['facility']}\0{$row['item']}\0{$row['stage']}"] ??= array('facility' => $row['facility'], 'feed' => $row['item'], 'stage' => $row['stage']);
 	}
+	$feed_failing = array_values($feed_failing);
 
 	$pass = $guard('pass_status', function () use (&$up): ?array {
 		$pass = pfb_pass_status_read();
