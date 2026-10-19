@@ -9,9 +9,11 @@ declare(strict_types=1);
  * included whole: its validation reads files under /usr/local/www on the appliance. argv: scenario name, result file.
  *
  * Scenarios: `interleave` (an apply's Resolver move lands on disk after this request started), `lock_taken` (another
- * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written).
+ * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written),
+ * `write_refused` (pfSense's write_config() answers FALSE: config.xml is not written).
  * The result file holds what config.xml would contain afterwards ("disk"), the lock/read/write order, the page's input
- * errors and whether the config lock is still held.
+ * errors, whether the config lock is still held, the reply-logging preference the form would show ("reply") and whether
+ * the save marked the pending changes, which only a saved configuration does ("pendingMarked").
  */
 
 $workerArgv = $argv;
@@ -21,13 +23,16 @@ $repo = dirname(__DIR__, 3);
 $page = $repo . '/src/usr/local/www/pfblockerng/pfblockerng_dns.php';
 $disk = NULL;
 $input_errors = [];
+$pconfig = [];
 
-register_shutdown_function(static function () use ($resultFile, &$disk, &$input_errors): void {
+register_shutdown_function(static function () use ($resultFile, &$disk, &$input_errors, &$pconfig): void {
 	file_put_contents($resultFile, json_encode([
-		'disk'        => $disk,
-		'events'      => $GLOBALS['pfb_test_lock_events'] ?? [],
-		'lockHeld'    => !empty($GLOBALS['pfb_test_lock_held']),
-		'inputErrors' => $input_errors,
+		'disk'          => $disk,
+		'events'        => $GLOBALS['pfb_test_lock_events'] ?? [],
+		'lockHeld'      => !empty($GLOBALS['pfb_test_lock_held']),
+		'inputErrors'   => $input_errors,
+		'reply'         => $pconfig['pfb_py_reply'] ?? NULL,
+		'pendingMarked' => is_file($GLOBALS['pfb']['pending_marker'] ?? ''),
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -90,7 +95,8 @@ global $pfb;
 pfb_global();
 $tmp = $GLOBALS['pfb_test_tmp'];
 $pfb['pending_marker'] = "{$tmp}/pending";
-$pconfig = [];
+// The page renders the stored preference before the save: a failed save re-displays what the form posted, not this.
+$pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
 // The posted form: an absent toggle and an absent checkbox are the Off tokens, so the save turns pfB-DNS off and the
 // logging preference off. The page's first statements derive the two values the save writes.
 $_POST = ['save' => 'Save'];
@@ -113,13 +119,17 @@ if ($scenario === 'interleave') {
 } elseif ($scenario === 'read_fails') {
 	$GLOBALS['pfb_test_config_read_fails'] = TRUE;
 	$disk = $other;
+} elseif ($scenario === 'write_refused') {
+	$GLOBALS['pfb_test_write_config_result'] = FALSE;
 }
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
 	if ($scenario === 'write_throws') {
 		throw new RuntimeException("config.xml could not be written: {$description}");
 	}
-	$disk = $GLOBALS['config'];
+	if ($scenario !== 'write_refused') {
+		$disk = $GLOBALS['config'];
+	}
 };
 $input_errors = [];
 ini_set('open_basedir', "{$tmp}:" . dirname($resultFile) . ":{$repo}:/usr/share/php:/dev/null:/dev/urandom");

@@ -997,4 +997,27 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		pfb_dns_proxy_service();
 		$this->assertSame($GLOBALS['pfb_test_rcfiles']['pfb_dns_proxy.sh'], $seen, 'the script is the one for the moved Resolver\'s snapshot');
 	}
+
+	public function testARollbackFromAProcessThatDidNotRunTheAppliesLoaderKeepsTheDecisionCacheCapTheApplyWrote(): void
+	{
+		// Given a decision cache cap of 777 in the stored DNSBL settings, and the module's ini as the apply wrote it
+		$this->activate(TRUE);
+		config_set_path(self::DNSBL . '/pfb_py_cache_max', '777');
+		pfb_global();
+		pfb_dnsbl_ini_inputs();
+		file_put_contents($GLOBALS['pfb']['unbound_py_conf'], pfb_unbound_python_ini('enabled'));
+		$this->assertStringContainsString("decisiondb_max\t= 777", (string) file_get_contents($GLOBALS['pfb']['unbound_py_conf']),
+			'before: the ini carries the cap the apply wrote');
+
+		// And the process that rolls back did not run the apply's loader: nothing holds the cap's value in $pfb
+		unset($GLOBALS['pfb']['dnsbl_decisiondb_max']);
+
+		// When the proxy never serves and the activation is rolled back
+		$ok = pfb_dns_proxy_ensure_running();
+
+		// Then the module's ini is written again with the cap the stored settings hold, not the default
+		$this->assertFalse($ok, 'the activation failed');
+		$this->assertStringContainsString("decisiondb_max\t= 777", (string) file_get_contents($GLOBALS['pfb']['unbound_py_conf']),
+			'the rollback writes the cap the stored settings hold');
+	}
 }
