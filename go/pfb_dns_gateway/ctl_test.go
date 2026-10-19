@@ -309,9 +309,11 @@ func TestASlowOrSilentClientIsCutOffAtTheDeadline(t *testing.T) {
 	k.requireEmpty(t, "after the cut-off clients")
 }
 
-// The server takes one connection at a time, so a client that stalls holds up the next one until it is cut off, and the
-// next is then served. The deadlines are an hour; the stalled client's is ended by the test, once the next client has
-// queued its whole message behind it, so nothing here waits for a timeout and no real deadline can cut the next client short.
+// A client that stalls in the middle of its message is cut off when its deadline ends, with an error, and the next client,
+// whose whole message is already queued, is then served. The deadlines are an hour; the stalled client's is ended by the
+// test, so nothing here waits for a timeout and no real deadline can cut the next client short. Not claimed: that the
+// server handles one connection at a time. That is an absence, and nothing completes after which a server that handled
+// the connections at once would certainly have shown itself.
 func TestTheNextClientIsServedOnceAStalledOneIsCutOff(t *testing.T) {
 	k := newCtlRig(t, withDeadline(time.Hour))
 	leaf := k.leaf(t)
@@ -323,15 +325,14 @@ func TestTheNextClientIsServedOnceAStalledOneIsCutOff(t *testing.T) {
 	}
 	var held *net.UnixConn
 	select {
-	case held = <-k.handled: // the server is on the stalled connection: everything dialled from now on waits behind it
+	case held = <-k.handled: // the server's end of the stalled connection, whose deadline the test ends below
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the server never took up the stalled connection")
+		t.Fatal("STUCK/ENVIRONMENT: the server never took up the stalled connection")
 	}
 	next := dialCtl(t, k.path)
 	if _, err := next.Write(ctlFrame(pem)); err != nil {
 		t.Fatal(err)
 	}
-	k.requireEmpty(t, "while the stalled client holds the server")
 
 	_ = held.SetReadDeadline(time.Unix(1, 0)) // the stalled client's deadline expires
 	if reply := ctlReply(t, stalled); !strings.HasPrefix(reply, "error: ") {

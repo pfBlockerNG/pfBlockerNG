@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // udpJudged resends its probe until one of this call's own is answered; a reply that an earlier call left on the socket
@@ -52,4 +53,52 @@ func TestUDPJudgedDoesNotTakeAReplyToAnEarlierProbeForItsOwn(t *testing.T) {
 		t.Fatalf("the server saw %d probes, want 1: no retry was injected", got)
 	}
 	requireNoUDPReply(t, probe) // after the server's barrier: the proper reply was read, not left behind
+}
+
+// The retry is what answers a probe the kernel dropped: when it fires, the probe goes out again and the reply to the second
+// one is the answer. The server never answers the first probe, and the test fires the retry once the server has it, so
+// the retry is an event that follows the probe, not a time: a udpJudged that ignored the retry would wait for a reply that
+// never comes and end at the watchdog.
+func TestUDPJudgedSendsTheProbeAgainWhenTheRetryFiresAndTakesTheReplyToTheSecond(t *testing.T) {
+	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	var probes atomic.Int32
+	first := make(chan struct{}) // closed when the server has the first probe, which it leaves unanswered
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, from, err := server.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			if probes.Add(1) == 1 {
+				close(first)
+				continue
+			}
+			_, _ = server.WriteToUDP(buf[:n], from)
+		}
+	}()
+	probe, err := net.DialUDP("udp4", nil, server.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = probe.Close() })
+	retry := make(chan time.Time, 1)
+	go func() {
+		select {
+		case <-first:
+			retry <- time.Now()
+		case <-t.Context().Done():
+		}
+	}()
+
+	udpJudgedOn(t, probe, retry)
+
+	if got := probes.Load(); got != 2 {
+		t.Fatalf("the server saw %d probes, want 2: the retry fired once, after the first probe", got)
+	}
+	requireNoUDPReply(t, probe)
 }

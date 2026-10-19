@@ -409,6 +409,10 @@ func TestGatewaySIGTERMExitsZeroAfterTheDeciderIsGone(t *testing.T) {
 	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
 	t.Setenv("PFB_FAKE_EVENTS", events)
 	t.Setenv("PFB_FAKE_EXIT_DELAY", "300ms") // gives a gateway that does not wait for its child the time to leave first
+	// The race runtime keeps an exiting process alive for atexit_sleep_ms (1000 by default) to report late races: a gateway
+	// built with -race that did not wait for its child would still be the child's parent 300 ms later, and the recorded
+	// parent below would not show it. The gateway and its decider inherit this; options already set stay.
+	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0"}, decider("serve"))
 	serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("ready upstream")
