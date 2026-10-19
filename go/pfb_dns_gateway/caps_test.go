@@ -23,7 +23,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 
 // G17: 128 TCP connections at once; the 129th is closed at accept and the others are untouched.
 func TestTCPConnectionsOverTheCapAreClosedAtAccept(t *testing.T) {
-	r := newRig(t, rigConfig{acl: aclMixed})
+	r := newRig(t, rigConfig{acl: aclMixed, perAddr: noAddrCap})
 	r.autoAnswer(echoAnswer)
 	conns := make([]net.Conn, maxTCPConns)
 	for i := range conns {
@@ -64,7 +64,7 @@ func TestTCPConnectionsOverTheCapAreClosedAtAccept(t *testing.T) {
 
 // G17: 512 UDP queries in flight; more are dropped without a trace, one log line per flood.
 func TestUDPQueriesOverTheInflightCapAreDropped(t *testing.T) {
-	r := newRig(t, rigConfig{acl: aclMixed})
+	r := newRig(t, rigConfig{acl: aclMixed, perAddr: noAddrCap})
 	releaseFirst, releaseRest := make(chan struct{}), make(chan struct{})
 	r.autoAnswer(func(q decidedQuery) []byte {
 		if binary.BigEndian.Uint16(q.wire) == 1 {
@@ -122,7 +122,7 @@ func TestUDPQueriesOverTheInflightCapAreDropped(t *testing.T) {
 
 // G17: the over-limit line is one per flood, however many queries the flood loses, and the next flood logs again.
 func TestUDPOverloadIsLoggedAgainForTheNextFlood(t *testing.T) {
-	r := newRig(t, rigConfig{acl: aclMixed})
+	r := newRig(t, rigConfig{acl: aclMixed, perAddr: noAddrCap})
 	var gate atomic.Pointer[chan struct{}] // what the decider's queries wait for: one channel per flood
 	r.autoAnswer(func(q decidedQuery) []byte {
 		<-*gate.Load()

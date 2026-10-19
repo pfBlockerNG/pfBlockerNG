@@ -21,6 +21,11 @@ const (
 	defaultHandshake = 10 * time.Second       // TLS handshake, PROXY header and request headers of a new connection
 	defaultCloseWait = 250 * time.Millisecond // a DoT peer gets this long to take close_notify before the TCP connection is cut
 	defaultStopWait  = 500 * time.Millisecond // each of stop()'s two waits; with the decider's 3 s, under the rc stop loop's 5 s KILL
+	// What one client address may hold of each shared budget, keyed by the full address (a pfSense LAN is one /64: keying by
+	// prefix would make every IPv6 host there share one budget). Half of the budget, as the Python listener's 256 of 512.
+	maxUDPPerAddr = maxUDPInflight / 2
+	maxMuxPerAddr = maxMuxInflight / 2
+	maxTCPPerAddr = maxTCPConns / 2
 )
 
 // connLimit caps the connections of one transport; the refusals of one burst are logged once.
@@ -53,17 +58,18 @@ func (c *connLimit) release() {
 
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
-	acl         *ACL
-	dec         *Decider
-	up          *upstream
-	timeout     time.Duration // wait for Unbound per exchange
-	grace       time.Duration
-	tcpIdle     time.Duration // idle limit for reading a query and for writing a reply
-	handshake   time.Duration // limit for a TLS handshake, a PROXY header and request headers
-	closeBound  time.Duration // limit for sending close_notify
-	stopBound   time.Duration // limit for each of stop()'s waits for the serving goroutines
-	logf        func(format string, args ...any)
-	doqAccepted func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
+	acl                                *ACL
+	dec                                *Decider
+	up                                 *upstream
+	timeout                            time.Duration // wait for Unbound per exchange
+	grace                              time.Duration
+	tcpIdle                            time.Duration // idle limit for reading a query and for writing a reply
+	handshake                          time.Duration // limit for a TLS handshake, a PROXY header and request headers
+	closeBound                         time.Duration // limit for sending close_notify
+	stopBound                          time.Duration // limit for each of stop()'s waits for the serving goroutines
+	logf                               func(format string, args ...any)
+	udpPerAddr, muxPerAddr, tcpPerAddr int    // per-address shares of the budgets below; a test lifts one to look at the global cap alone
+	doqAccepted                        func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -118,6 +124,7 @@ func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, log
 	g := &gateway{
 		acl: acl, dec: dec, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, logf: logf,
 		closeBound: defaultCloseWait, stopBound: defaultStopWait,
+		udpPerAddr: maxUDPPerAddr, muxPerAddr: maxMuxPerAddr, tcpPerAddr: maxTCPPerAddr,
 		clients:  map[net.Conn]struct{}{},
 		dohConns: newConnLimit("DoH", maxDoHConns), doqConns: newConnLimit("DoQ", maxDoQConns),
 	}
