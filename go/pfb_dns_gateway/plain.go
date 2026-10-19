@@ -64,13 +64,21 @@ func bindUDP(host string, port int) (*net.UDPConn, error) {
 	return udp, nil
 }
 
+// bindPlainPicks is how many port numbers bindPlain tries for port 0 before it gives up.
+const bindPlainPicks = 8
+
 // bindPlain binds host on port, TCP first and UDP on the port TCP got, so port 0 picks one for both.
 func bindPlain(host string, port int) (*plainListener, error) {
+	return bindPlainWith(host, port, bindUDP)
+}
+
+// bindPlainWith is bindPlain with the UDP bind a test replaces.
+func bindPlainWith(host string, port int, listenUDP func(host string, port int) (*net.UDPConn, error)) (*plainListener, error) {
 	tcp, err := bindTCP(host, port)
 	if err != nil {
 		return nil, err
 	}
-	udp, err := bindUDP(host, int(tcp.Addr().(*net.TCPAddr).AddrPort().Port()))
+	udp, err := listenUDP(host, int(tcp.Addr().(*net.TCPAddr).AddrPort().Port()))
 	if err != nil {
 		_ = tcp.Close()
 		return nil, err
