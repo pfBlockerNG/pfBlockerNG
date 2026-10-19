@@ -85,9 +85,9 @@ final class MetricsRenderTest extends TestCase
 		pfblockerng_metrics_source_up{source="pfctl"} 1
 		pfblockerng_metrics_source_up{source="dnsbl_db"} 1
 		pfblockerng_metrics_source_up{source="pass_status"} 1
-		PROM . "\n";
+		PROM;
 
-		$this->assertSame($expected, $out);
+		$this->assertSame($expected . "\n", $out);
 	}
 
 	public function testHostileGroupLabel_IsEscapedOnOneLine(): void
@@ -125,9 +125,9 @@ final class MetricsRenderTest extends TestCase
 		# HELP pfblockerng_metrics_source_up 1 when the metrics source was collected, 0 when it failed.
 		# TYPE pfblockerng_metrics_source_up gauge
 		pfblockerng_metrics_source_up{source="pfctl"} 0
-		PROM . "\n";
+		PROM;
 
-		$this->assertSame($expected, $out);
+		$this->assertSame($expected . "\n", $out);
 	}
 
 	public function testEmptyInputFamilies_EmitNoOrphanHelpOrType(): void
@@ -143,8 +143,8 @@ final class MetricsRenderTest extends TestCase
 		# HELP pfblockerng_info pfBlockerNG package version.
 		# TYPE pfblockerng_info gauge
 		pfblockerng_info{version="3.3.3"} 1
-		PROM . "\n";
+		PROM;
 
-		$this->assertSame($expected, $out);
+		$this->assertSame($expected . "\n", $out);
 	}
 }
