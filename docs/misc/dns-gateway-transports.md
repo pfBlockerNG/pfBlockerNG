@@ -7,34 +7,69 @@ The decision protocol with the Python decider is in [dns-gateway-protocol.md](dn
 
 ## Certificate
 
-DoT, DoH and DoQ serve the DNS Resolver's certificate from one PEM file, `--tls-pem` (`/var/unbound/pfb_dns_cert.pem` in
-pfBlockerNG's rc script): the certificate, the CAs after it nearest first, then its private key. The gateway does not read
-`config.xml`. pfBlockerNG writes the file (`pfb_dns_proxy_certificate_export()`, see `architecture-notes.md`): mode 0600, owned
-by `unbound`, the user the gateway drops to, with `unbound/sslcertref`'s certificate, the chain its `caref` leads to (a missing
-CA or a loop ends it), and a key that is neither encrypted nor another certificate's; it replaces the file by rename, when the
-certificate changed, at every apply, at every cron tick (15 minutes) and at a start that finds no file. The DoT port is
-`--dot-port` (the Resolver's `unbound/tlsport` when it is a port, else 853). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted
-key is refused (a daemon cannot be asked for a passphrase).
+DoT, DoH and DoQ serve the DNS Resolver's certificate: the certificate, the CAs after it nearest first, then its private key,
+as one PEM text. The gateway does not read `config.xml`. It has the certificate from two places, and nowhere else:
 
-The file is read, as root, before the privilege drop, and not at all unless `--dot`, `--doh-listen` or `--doq-listen` is given.
-When one is given and the file is unusable at start the reason is logged once (`TLS transports disabled: <file>: <reason>`), no
-TLS listener is bound and plain UDP and TCP keep serving: under `daemon -r` a broken certificate must not crash-loop the only :53
-listener.
+1. **At start, from `--tls-pem`** (`/var/etc/pfb_dns/tls.pem` in pfBlockerNG's rc script). pfBlockerNG writes the file
+   (`pfb_dns_proxy_certificate_export()`, see `architecture-notes.md`): mode 0600 in a directory of mode 0700, both root's, outside
+   the Unbound chroot, with `unbound/sslcertref`'s certificate, the chain its `caref` leads to (a missing CA or a loop ends it), and a
+   key that is neither encrypted nor another certificate's; it replaces the file by rename, when the certificate changed, at every
+   apply, at every cron tick (15 minutes) and at a start that finds no file. The gateway reads it once, as root, before the privilege
+   drop, and not at all unless `--dot`, `--doh-listen` or `--doq-listen` is given. It never looks at the file again: what is in
+   it after the start is none of the running gateway's business. The DoT port is `--dot-port` (the Resolver's `unbound/tlsport`
+   when it is a port, else 853). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked for a
+   passphrase).
+2. **While it runs, as a push on the control socket** (`--ctl-socket`, `/var/run/pfb_dns/ctl.sock`), from root. The gateway is
+   `unbound` by then and cannot read a file only root can read, which is the point: the key of the Resolver's certificate is not
+   readable by the user of a network-facing daemon (nor by Unbound's user, which is why the file is no longer in the chroot).
 
-A renewal needs no restart. Every TLS config of the three transports takes its certificate from `GetCertificate`, which looks at
-the file again when a handshake arrives more than a second after the last look, and compares its content with what it serves:
+When a TLS transport is requested and the file is unusable or absent at start, the reason is logged once
+(`TLS certificate not loaded: <reason>; DoT, DoH and DoQ handshakes fail until one is pushed`), the TLS listeners are bound
+with no certificate (a handshake fails with `no TLS certificate is loaded`), plain UDP and TCP keep serving (under `daemon -r` a
+broken certificate must not crash-loop the only :53 listener), and the first certificate pushed is served by the listeners that were
+there all along, with no restart: the next apply or cron tick pushes it (the start has PHP write a missing file first).
 
-- a content that parses and whose key matches the certificate is served from the next handshake on (log line
-  `TLS certificate reloaded: <file>`); no handshake fails and no connection is touched: an open DoT, DoH or DoQ connection keeps
-  the certificate it was set up with and goes on answering;
-- a content that does not (half a file, no PEM, a key that is not the certificate's, an encrypted key) or a file that cannot be
-  read leaves the previous certificate in place and is logged once while that content stays
-  (`TLS certificate not reloaded: <file>: <reason>; keeping the previous certificate`); another bad content, or the same one
-  after a good file, is logged again;
-- a gateway that nobody connects to does not look at the file at all.
+### The control socket
 
-Pinned by `tls_reload_test.go` (a gateway process serving all three transports through a rotation, a half-written file and a
-rotation under load: no failed handshake, no unanswered query) and, on a controlled clock, by `tlsconfig_test.go`.
+- **Made** with the other TLS sockets, before the privilege drop, only when a TLS transport is requested (`--dot`, `--doh-listen`
+  or `--doq-listen`), and reported as `control socket <path>` before `ready upstream`. Its directory is created mode 0700 (or
+  must already be a real directory, not a symlink, owned by the user running the gateway, and is chmod'ed 0700 if it was left
+  open); the socket is mode 0600; a stale file at the path is replaced. A socket that cannot be made is logged once
+  (`control socket: <reason>; the certificate cannot be renewed without a restart`) and the gateway serves the certificate it
+  read at start: a renewal then needs a restart, which pfBlockerNG reports as a notice.
+- **Who may push.** One credential, read from the kernel for every connection: the peer's uid must be 0. Linux:
+  `getsockopt(SO_PEERCRED)` (`unix.GetsockoptUcred`, the `uid` field). FreeBSD (pfSense): `getsockopt(SOL_LOCAL, LOCAL_PEERCRED)`
+  (`unix.GetsockoptXucred`, `cr_uid`, `cr_version` must be 0). Any other OS reads no credential, so every connection is
+  refused. A connection from another user, or whose credential cannot be read, is closed without being read and logged once per
+  burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
+  line). The mode 0600 on the socket is a second wall, not the one relied on.
+- **Frame.** One message per connection: the length of the PEM as 4 bytes big-endian (1 to 65536; judged before the body is read),
+  then the PEM (the chain, then the key). Reads have a 5 s deadline. The one reply line is `ok` or `error: <reason>`. A push that does
+  not parse, or whose key is not the certificate's, changes nothing and logs
+  `TLS certificate not replaced: <reason>; keeping the previous one`; one that does logs `TLS certificate replaced by a push` and
+  is served from the next handshake on.
+
+A renewal needs no restart. Every TLS config of the three transports takes its certificate from `GetCertificate`, an atomic
+pointer the push replaces: no handshake fails and no connection is touched: an open DoT, DoH or DoQ connection keeps the
+certificate it was set up with and goes on answering, and a gateway that nobody connects to does nothing at all.
+
+pfBlockerNG's side (`pfb_dns_proxy_certificate_refresh()`, called by every `pfb_dns_proxy_service()` and by the cron tick):
+once the gateway is READY and the content of the file differs from what it was last given (a SHA-256 in `tls.pushed` beside the
+file, written after a push that got `ok`, and removed by the rc start of a new process), PHP connects to the socket in its own
+process (3 s per step: connect, send, reply; no external process, so no `timeout(1)`), sends the frame and reads the reply. A
+refusal, a gateway that does not answer, a missing socket: one notice per distinct reason (`pfBlockerNG DNS Proxy certificate`), the
+gateway keeps the certificate it has, and the next apply or tick tries again, because nothing records a push that failed.
+
+Pinned by `ctl_test.go` and `ctl_wiring_test.go` (peer credentials with a real unprivileged process, frame limits, directory and
+socket modes, bound before the drop and kept after a real one), `tls_reload_test.go` (a gateway process serving all three
+transports through a rotation, a refused push and a rotation under load: no failed handshake, no unanswered query),
+`tlsconfig_test.go`, `tests/dns_proxy/test_gateway_e2e.py` (the real binary, a pushed certificate, the modes of the socket and its
+directory) and, for the PHP side, `DnsProxyCertificateExportTest`, `DnsProxyCertificatePushTest` (a stand-in gateway on a real
+Unix socket records the bytes it was sent) and `DnsProxyCertificateStartTest`.
+
+**Not done, tracked as follow-up #3525: the chroot.** The gateway does not `chroot(2)` after the privilege drop. What keeps the
+key from the unprivileged gateway here is that the file is root's alone and a renewal is pushed; confining the daemon to a
+directory is a separate hardening and is not part of this change.
 
 ## Listeners
 
