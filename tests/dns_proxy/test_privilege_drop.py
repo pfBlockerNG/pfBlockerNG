@@ -10,6 +10,7 @@ import json
 import os
 import pwd
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -177,16 +178,23 @@ def test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no
 def test_an_interpreter_probe_that_never_returns_is_stuck_and_its_child_is_reaped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """subprocess.run kills and reaps the probe's child on expiry: a stuck run, not a missing interpreter."""
-    real_run = subprocess.run
+    """A probe past its limit is a stuck run, and subprocess.run has killed and waited for its child: the child's pid is
+    gone from the process table, not left as a zombie. Each child is recorded as Popen spawns it, so nothing races."""
+    spawned: list[subprocess.Popen[Any]] = []
 
-    def sleeping_child(_args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        kwargs.pop("user", None)  # the child runs as this process: the test needs no root
-        return real_run([sys.executable, "-c", "import time; time.sleep(5)"], **kwargs)  # outlives a zero limit
+    class StandIn(subprocess.Popen[Any]):
+        def __init__(self, *_args: Any, **kwargs: Any) -> None:
+            kwargs.pop("user", None)  # the stand-in runs as this process: the test needs no root
+            super().__init__([sys.executable, "-c", "import time; time.sleep(5)"], **kwargs)  # outlives a zero limit
+            spawned.append(self)
 
-    monkeypatch.setattr(subprocess, "run", sleeping_child)
+    monkeypatch.setattr(subprocess, "Popen", StandIn)
     monkeypatch.setattr(sys.modules[__name__], "INTERPRETER_PROBE_TIMEOUT", 0)
     message = r"^STUCK/ENVIRONMENT: the interpreter probe as 'nobody' did not finish within 0 s$"
     with pytest.raises(AssertionError, match=message) as raised:
         _interpreter_for("nobody")
     assert isinstance(raised.value.__cause__, subprocess.TimeoutExpired)
+    [child] = spawned  # the first candidate expired, so it is the only child started
+    assert child.returncode == -signal.SIGKILL, child.returncode  # killed, and waited for
+    with pytest.raises(ProcessLookupError):
+        os.kill(child.pid, 0)  # gone from the process table: reaped, not a zombie

@@ -364,6 +364,36 @@ def test_denied_client_gets_no_reply_over_udp_and_a_closed_connection_over_tcp(g
             pass  # the gateway shut the connection before reading anything
 
 
+PROBE, SENTINEL = b"probe", b"sentinel"
+
+
+def _sends_as_itself(address: str) -> bool:
+    """Whether a datagram sent from `address` reaches a loopback receiver with `address` as its source.
+
+    The probe and then a sentinel leave one socket, and loopback delivers one socket's datagrams in order. Reading up to
+    the sentinel is the drain barrier: a probe read before it answers, and none before it is absence, which ordering
+    decides and no timeout does. A send refused at bind or at send is absence too. A stuck read is STUCK/ENVIRONMENT.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+        receiver.bind(("127.0.0.1", 0))
+        receiver.settimeout(WATCHDOG)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            try:
+                sender.bind((address, 0))
+                sender.sendto(PROBE, receiver.getsockname())
+                sender.sendto(SENTINEL, receiver.getsockname())
+            except OSError:  # refused at bind or send: this address cannot send
+                return False
+            seen: str | None = None
+            while True:
+                with watched("the drain sentinel from the candidate address"):
+                    data, (source, _) = receiver.recvfrom(64)
+                if data == SENTINEL:
+                    return seen == address
+                assert data == PROBE, data
+                seen = source
+
+
 @pytest.fixture(scope="module")
 def nomatch_client() -> str:
     """A non-loopback address of this host that reaches the gateway as itself and that no ACL row names.
@@ -379,19 +409,9 @@ def nomatch_client() -> str:
     candidates = [
         fields[3].split("/")[0] for fields in (row.split() for row in found.stdout.splitlines()) if fields[3:]
     ]
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
-        receiver.bind(("127.0.0.1", 0))
-        receiver.setblocking(False)  # loopback sendto has queued the datagram when it returns: none means no send
-        for address in candidates:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
-                try:
-                    sender.bind((address, 0))
-                    sender.sendto(b"probe", receiver.getsockname())
-                    seen = receiver.recvfrom(16)[1][0]
-                except OSError:  # refused at bind or send, or no datagram at all (BlockingIOError)
-                    continue
-            if seen == address:
-                return address
+    for address in candidates:
+        if _sends_as_itself(address):
+            return address
     pytest.fail(f"no non-loopback IPv4 address of this host reaches a loopback listener as itself: {candidates}")
 
 
@@ -643,7 +663,7 @@ class TlsRunning(Running):
 
     def doq_lines(self, name: str) -> list[str]:
         """pfb_doq_probe's output for `name`: `rcode X`, then one `answer ...` line per record."""
-        with watched("the DoQ probe"):
+        with watched("the DoQ probe", limit=2 * WATCHDOG):
             run = subprocess.run(
                 [str(self.probe), "-server", f"{self.doq[0]}:{self.doq[1]}", "-name", name, "-ca", str(self.ca)]
                 + ["-sni", "localhost", "-timeout", f"{WATCHDOG}s"],
@@ -812,3 +832,26 @@ def test_dnsbl_rows_that_never_arrive_are_stuck_not_a_short_list(
     with pytest.raises(AssertionError, match=r"^STUCK/ENVIRONMENT: 0 of the 2 dnsbl\.log rows within 0 s") as raised:
         running.dnsbl_rows(2)
     assert "saw []" in str(raised.value)
+
+
+def test_a_doq_probe_that_never_answers_is_stuck_at_twice_the_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe's subprocess limit is twice WATCHDOG, and the expiry names the limit that was hit."""
+
+    def expire(args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", expire)
+    running = TlsRunning.__new__(TlsRunning)  # doq_lines reads only these three attributes
+    running.probe, running.doq, running.ca = Path("pfb_doq_probe"), ("127.0.0.1", 853), Path("ca.pem")
+    message = rf"^STUCK/ENVIRONMENT: the DoQ probe did not finish within {2 * WATCHDOG:g} s$"
+    with pytest.raises(AssertionError, match=message) as raised:
+        running.doq_lines("blocked.example.")
+    assert isinstance(raised.value.__cause__, subprocess.TimeoutExpired)
+
+
+def test_a_loopback_candidate_is_seen_as_itself_once_its_sentinel_has_drained() -> None:
+    assert _sends_as_itself("127.0.0.1") is True
+
+
+def test_a_candidate_whose_datagrams_arrive_as_another_address_is_not_taken() -> None:
+    assert _sends_as_itself("0.0.0.0") is False  # sent from no particular address, a loopback receiver sees 127.0.0.1
