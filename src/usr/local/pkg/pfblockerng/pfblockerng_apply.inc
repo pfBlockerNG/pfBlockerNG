@@ -1022,9 +1022,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		return TRUE;
 	}
 
-	// Advisory: a failed write never fails the pass; last_start without last_end reads as unfinished.
-	pfb_pass_status_record('last_start', $pfb_pass_started);
-
 	// ADR-43: normalize the trigger input.
 	// Array = new API (explicit request, no deprecation log).
 	// String = back-compat (routes through pfb_trigger_request(); deprecated verbs log once).
@@ -1075,6 +1072,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		unlink_if_exists("{$pfb['dbdir']}/masterfile");
 		unlink_if_exists("{$pfb['dbdir']}/mastercat");
 	}
+
+	// $pfb['save'] is final only here (the run plan above can set it), so the start is recorded now, after every early return.
+	// Advisory: a failed write never fails the pass; last_start without last_end reads as unfinished.
+	pfb_pass_status_record('last_start', $pfb_pass_started, $pfb['save']);
 
 	// Start of pfBlockerNG logging to 'pfblockerng.log'
 	if ($pfb['enable'] === PfbToggle::On && !$pfb['save']) {
@@ -5385,7 +5386,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 
-	pfb_pass_status_record('last_end', time());
+	pfb_pass_status_record('last_end', time(), $pfb['save']);
 	if ($pfb['enable'] === PfbToggle::On && !$pfb['save'] || $pfb['summary']) {
 		pfb_logger("\n UPDATE PROCESS ENDED\n", 1);
 	}

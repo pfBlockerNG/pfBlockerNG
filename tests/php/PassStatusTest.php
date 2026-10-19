@@ -110,4 +110,34 @@ final class PassStatusTest extends TestCase
 		$this->assertSame('unchanged', file_get_contents("{$target}/keep.txt"));
 		$this->assertSame([], glob("{$this->dir}/.pfbpass_*"));
 	}
+
+	public function testSettingsSavePassRecordsNothing(): void
+	{
+		$this->assertFalse(pfb_pass_status_record('last_start', 100, TRUE));
+		$this->assertFalse(pfb_pass_status_record('last_end', 160, TRUE));
+
+		$this->assertFileDoesNotExist(pfb_pass_status_path());
+	}
+
+	public function testSettingsSavePassLeavesTheRecordedUpdatePassTimesUntouched(): void
+	{
+		pfb_pass_status_record('last_start', 100);
+		pfb_pass_status_record('last_end', 160);
+		$before = file_get_contents(pfb_pass_status_path());
+
+		$this->assertFalse(pfb_pass_status_record('last_start', 999, TRUE));
+		$this->assertFalse(pfb_pass_status_record('last_end', 999, TRUE));
+
+		$this->assertSame($before, file_get_contents(pfb_pass_status_path()));
+		$this->assertSame(['last_start' => 100, 'last_end' => 160], pfb_pass_status_read());
+	}
+
+	public function testUpdatePassRecordsWhenTheSaveFlagIsFalseOrNeverSet(): void
+	{
+		// $pfb['save'] is never initialised on a pass that is not a settings save, so it reaches here as NULL.
+		$this->assertTrue(pfb_pass_status_record('last_start', 100, FALSE));
+		$this->assertTrue(pfb_pass_status_record('last_end', 160, NULL));
+
+		$this->assertSame(['last_start' => 100, 'last_end' => 160], pfb_pass_status_read());
+	}
 }

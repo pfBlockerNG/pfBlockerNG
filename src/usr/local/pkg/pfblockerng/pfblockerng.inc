@@ -5479,8 +5479,9 @@ function pfb_pass_status_read(): ?array {
 }
 
 // Staged in the same directory and renamed over the target. A corrupt file is replaced, not kept.
-function pfb_pass_status_record(string $field, int $ts): bool {
-	if (!in_array($field, array('last_start', 'last_end'), TRUE)) {
+// A settings-save pass ($pfb['save'], possibly unset) is not an Update pass and records nothing.
+function pfb_pass_status_record(string $field, int $ts, mixed $save = FALSE): bool {
+	if ($save || !in_array($field, array('last_start', 'last_end'), TRUE)) {
 		return FALSE;
 	}
 	$state = pfb_pass_status_read() ?? array('last_start' => 0, 'last_end' => 0);

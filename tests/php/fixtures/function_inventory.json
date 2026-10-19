@@ -9985,6 +9985,13 @@
                 "variadic": false,
                 "type": "int",
                 "default": null
+            },
+            {
+                "name": "save",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": "false"
             }
         ]
     },
