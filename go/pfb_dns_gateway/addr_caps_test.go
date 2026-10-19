@@ -55,11 +55,7 @@ func TestOneAddressCannotHoldMoreThanItsShareOfUDPQueries(t *testing.T) {
 	}
 	// A refused client is answered by the read loop itself: once its REFUSED arrives, the 44 datagrams above (read
 	// earlier, in order) have been judged.
-	refused := r.udpClient(clientRefused)
-	if _, err := refused.Write(buildQuery(t, 1, "example.", true)); err != nil {
-		t.Fatal(err)
-	}
-	udpReply(t, refused)
+	udpJudged(t, r.udpClient(clientRefused))
 	r.requireNoOtherQuery()
 	if n := addrLimitLogs(r); n != 1 {
 		t.Fatalf("44 queries over the share in one burst must log once, got %d lines: %s", n, r.logs.joined())
@@ -341,11 +337,7 @@ func TestARefusalByTheGlobalBudgetDoesNotCostTheAddressItsShare(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		refused := r.udpClient(clientRefused)
-		if _, err := refused.Write(buildQuery(t, 1, "example.", true)); err != nil {
-			t.Fatal(err)
-		}
-		udpReply(t, refused) // the 300 above were judged
+		udpJudged(t, r.udpClient(clientRefused)) // the 300 above were judged
 		r.requireNoOtherQuery()
 		close(release)
 		eventually(t, "the budget to drain", func() bool { return r.g.udpInflight.Load() == 0 })

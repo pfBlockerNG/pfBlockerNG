@@ -94,11 +94,7 @@ func TestUDPQueriesOverTheInflightCapAreDropped(t *testing.T) {
 
 	// A refused client is answered by the read loop itself, so once its REFUSED arrives, the flood above (read
 	// earlier, in order) has been judged and none of it can take the slot freed next.
-	refused := r.udpClient(clientRefused)
-	if _, err := refused.Write(buildQuery(t, 1, "example.", true)); err != nil {
-		t.Fatal(err)
-	}
-	udpReply(t, refused)
+	udpJudged(t, r.udpClient(clientRefused))
 
 	close(releaseFirst) // frees one slot; its reply is sent after the slot is released
 	if got := udpReply(t, c); binary.BigEndian.Uint16(got) != 1 {
@@ -151,10 +147,7 @@ func TestUDPOverloadIsLoggedAgainForTheNextFlood(t *testing.T) {
 		}
 		// A refused client is answered by the read loop itself: once its REFUSED arrives, the datagrams above (read
 		// earlier, in order) have been judged.
-		if _, err := refused.Write(buildQuery(t, 1, "example.", true)); err != nil {
-			t.Fatal(err)
-		}
-		udpReply(t, refused)
+		udpJudged(t, refused)
 		if n := strings.Count(r.logs.joined(), "UDP queries in flight"); n != flood {
 			t.Fatalf("flood %d: %d over-limit lines so far, want %d (one per flood, three queries lost in each): %s", flood, n, flood, r.logs.joined())
 		}
