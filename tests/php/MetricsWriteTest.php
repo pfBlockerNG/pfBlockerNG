@@ -21,6 +21,7 @@ final class MetricsWriteTest extends TestCase
 	private const CRON_NEEDLE = 'pfblockerng.php metrics';
 	private const MISSING     = 'is missing; is the node_exporter service running?';
 	private const NO_SENTINEL = 'is missing, so nothing is published';
+	private const SYMLINK     = 'is a symbolic link';
 
 	private string $root;
 	/** @var array<string,mixed> */
@@ -890,6 +891,34 @@ final class MetricsWriteTest extends TestCase
 		pfb_metrics_configure_cron(FALSE, "{$this->root}/export");
 
 		$this->assertFileDoesNotExist($marker, 're-enabling must log the next outage, not inherit this one');
+	}
+
+	public function testASymlinkedTextfileDirIsRefusedAndLoggedOncePerOutage(): void
+	{
+		$target = "{$this->root}/elsewhere";
+		mkdir($target);
+		$dir = "{$this->root}/node_exporter";
+		symlink($target, $dir);
+		$this->enableExport($dir);
+
+		$this->assertFalse(pfb_metrics_write($dir));
+		$this->assertFalse(pfb_metrics_write($dir));
+
+		$this->assertSame([], array_values(array_diff(scandir($target), ['.', '..'])), 'nothing may be created through the link');
+		$this->assertSame(1, $this->logCount(self::SYMLINK));
+	}
+
+	public function testDisableDoesNotUnlinkThroughASymlinkedTextfileDir(): void
+	{
+		$target = "{$this->root}/elsewhere";
+		mkdir($target);
+		file_put_contents("{$target}/pfblockerng.prom", 'not ours');
+		$dir = "{$this->root}/node_exporter";
+		symlink($target, $dir);
+
+		pfb_metrics_configure_cron(FALSE, $dir);
+
+		$this->assertSame('not ours', file_get_contents("{$target}/pfblockerng.prom"));
 	}
 }
 

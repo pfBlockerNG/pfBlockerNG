@@ -8053,6 +8053,11 @@ function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.
 // Collects, renders and publishes pfblockerng.prom; the body of the `pfblockerng.php metrics` verb.
 function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 	global $pfb;
+	// /var/tmp is world-writable: a link planted there would send root's writes and the disable-time unlink elsewhere.
+	if (is_link($dir)) {
+		pfb_metrics_log_once($pfb['metrics_dir_missing'], "Metrics export: {$dir} is a symbolic link; not publishing through it.\n");
+		return FALSE;
+	}
 	if (!is_dir($dir)) {
 		pfb_metrics_log_once($pfb['metrics_dir_missing'], "Metrics export: {$dir} is missing; is the node_exporter service running?\n");
 		return FALSE;
@@ -8075,7 +8080,9 @@ function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_
 			@touch($sentinel);
 		} else {
 			unlink_if_exists($sentinel);
-			unlink_if_exists("{$dir}/pfblockerng.prom");
+			if (!is_link($dir)) {
+				unlink_if_exists("{$dir}/pfblockerng.prom");
+			}
 			// Re-enabling must log the next outage, not inherit this one's markers.
 			unlink_if_exists($pfb['metrics_dir_missing']);
 			unlink_if_exists($pfb['metrics_sentinel_missing']);
