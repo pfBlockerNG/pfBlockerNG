@@ -186,6 +186,8 @@ ignore = [
 "tests/dns_proxy/test_gateway_chase.py"         = ["F811"]
 "tests/dns_proxy/test_gateway_safesearch.py"    = ["F811"]
 "tests/dns_proxy/test_gateway_upstream_blocks.py" = ["F811"]
+# issue #3515: imports the `rig` and `proxy_on` fixtures from test_smoke_dns_proxy.py
+"tests/smoke/test_smoke_pfb_dns_resolver_state.py" = ["F811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfb_unbound", "pfb_dnsbl_regex_rules"]
