@@ -9,9 +9,10 @@ declare(strict_types=1);
  * its validation reads files under /usr/local/www on the appliance. argv: scenario name, result file.
  *
  * Scenarios: `interleave` (a pfB-DNS save of Off and a Resolver move land on disk after this request started),
- * `lock_taken` (another process holds the config lock), `read_fails` (the fresh read fails).
- * The result file holds what config.xml would contain afterwards ("disk"), the lock/read/write order, and the page's
- * input errors.
+ * `lock_taken` (another process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (exception),
+ * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1).
+ * The result holds disk config, lock events, input errors, pending marker presence, whether control returned to render
+ * instead of exiting through the redirect, and the submitted port rendered after a failure.
  */
 
 $workerArgv = $argv;
@@ -144,13 +145,15 @@ if ($scenario === 'interleave') {
 	$disk = $other;
 } elseif ($scenario === 'write_refused') {
 	$GLOBALS['pfb_test_write_config_result'] = FALSE;
+} elseif ($scenario === 'write_failed') {
+	$GLOBALS['pfb_test_write_config_result'] = -1;
 }
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
 	if ($scenario === 'write_throws') {
 		throw new RuntimeException("config.xml could not be written: {$description}");
 	}
-	if ($scenario !== 'write_refused') {
+	if (!in_array($scenario, ['write_refused', 'write_failed'], TRUE)) {
 		$disk = $GLOBALS['config'];
 	}
 };
