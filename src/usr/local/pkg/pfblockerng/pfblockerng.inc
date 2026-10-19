@@ -4329,13 +4329,26 @@ function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, flo
 		}
 		$sent += $wrote;
 	}
-	stream_set_blocking($conn, TRUE);
-	stream_set_timeout($conn, (int) $timeout, (int) (fmod($timeout, 1.0) * 1000000));
-	$reply = fgets($conn, 512);
-	$timedOut = (bool) (stream_get_meta_data($conn)['timed_out'] ?? FALSE);
+	$reply = '';
+	$deadline = hrtime(TRUE) + (int) ($timeout * 1000000000);
+	while (!str_ends_with($reply, "\n") && strlen($reply) < 511) {
+		$left = ($deadline - hrtime(TRUE)) / 1000000000;
+		$read = [$conn];
+		$write = $except = NULL;
+		if ($left <= 0 || stream_select($read, $write, $except, (int) $left, (int) (fmod($left, 1.0) * 1000000)) !== 1) {
+			fclose($conn);
+			return "no reply from {$socket} within {$timeout} s";
+		}
+		$chunk = @fread($conn, 511 - strlen($reply));
+		if ($chunk === FALSE || $chunk === '') {
+			fclose($conn);
+			return "{$socket} closed the connection with no reply";
+		}
+		$reply .= $chunk;
+	}
 	fclose($conn);
-	if ($reply === FALSE) {
-		return $timedOut ? "no reply from {$socket} within {$timeout} s" : "{$socket} closed the connection with no reply";
+	if (!str_ends_with($reply, "\n")) {
+		return "{$socket} sent no complete reply";
 	}
 	$reply = trim($reply);
 	return ($reply === 'ok') ? NULL : "the gateway did not take the certificate: {$reply}";

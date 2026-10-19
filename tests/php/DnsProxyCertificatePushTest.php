@@ -255,6 +255,26 @@ final class DnsProxyCertificatePushTest extends TestCase
 		$this->assertStringContainsString('no reply', (string) $why);
 	}
 
+	public function testATrickledReplyCannotExtendTheReplyDeadline(): void
+	{
+		$this->listen('trickle');
+
+		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
+
+		$this->assertNotNull($why, 'an ok line completed after the deadline is not an acknowledgement');
+		$this->assertStringContainsString('no reply', $why);
+	}
+
+	public function testAnUnterminatedOkIsNotAnAcknowledgement(): void
+	{
+		$this->listen('partial');
+
+		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
+
+		$this->assertNotNull($why, 'an incomplete reply must not mark the certificate as pushed');
+		$this->assertStringContainsString('no reply', $why);
+	}
+
 	public function testASocketNobodyListensOnIsAReasonThatNamesIt(): void
 	{
 		$why = pfb_dns_proxy_certificate_push('certificate and key', "{$this->dir}/nobody.sock", 0.3);
