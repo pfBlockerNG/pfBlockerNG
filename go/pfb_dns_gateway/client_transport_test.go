@@ -228,8 +228,9 @@ func TestPlainUDPChaseIsNotRetriedWhenUnboundDidNotTruncateIt(t *testing.T) {
 	}
 }
 
-// T4: a stream client's FORWARDs all use its one upstream TCP connection; nothing is asked over UDP.
-func TestStreamClientForwardsStayOnItsOneUpstreamTCPConnection(t *testing.T) {
+// T4: every FORWARD of a stream client is asked over UDP first; a truncated reply is asked again over TCP, and all
+// those retries of one client connection share its one upstream TCP connection.
+func TestStreamClientForwardsGoOverUDPAndTruncatedOnesRetryOnItsOneUpstreamTCPConnection(t *testing.T) {
 	r := newRig(t, rigConfig{acl: aclMixed, upstream: []upstreamOption{truncatedOverUDP()}})
 	c := r.tcpClient("")
 	tcpSend(t, c, buildQuery(t, 0x3333, "duck.example.", true))
@@ -240,15 +241,15 @@ func TestStreamClientForwardsStayOnItsOneUpstreamTCPConnection(t *testing.T) {
 	for _, name := range []string{"duck.example.", "safe.duck.example."} {
 		wire := buildQuery(t, 0x5555, name, true)
 		r.p.send(tForward, q.id, wire)
-		seen := r.up.next()
-		if !seen.tcp || !bytes.Equal(seen.wire, wire) {
-			t.Fatalf("Unbound saw tcp=%v wire=%x for %s, want TCP with the FORWARD's wire", seen.tcp, seen.wire, name)
+		viaUDP, viaTCP := r.up.next(), r.up.next()
+		if viaUDP.tcp || !viaTCP.tcp || !bytes.Equal(viaUDP.wire, wire) || !bytes.Equal(viaTCP.wire, wire) {
+			t.Fatalf("Unbound saw tcp=%v wire=%x then tcp=%v wire=%x for %s, want the FORWARD's wire over UDP, then over TCP", viaUDP.tcp, viaUDP.wire, viaTCP.tcp, viaTCP.wire, name)
 		}
-		r.p.expect(tReply, q.id, append(echoWithQR(seen)[0], "full-answer"...))
+		r.p.expect(tReply, q.id, append(echoWithQR(viaTCP)[0], "full-answer"...))
 	}
-	r.requireNoUpstreamQuery("a stream client's query never goes out as a datagram")
-	if conns, _ := r.up.counts(); conns != 1 {
-		t.Fatalf("Unbound accepted %d TCP connections, want the client's one", conns)
+	r.requireNoUpstreamQuery("each FORWARD was asked once over UDP and once over TCP")
+	if conns, headers := r.up.counts(); conns != 1 || headers != 1 {
+		t.Fatalf("Unbound accepted %d TCP connections with %d headers, want the client's one connection and one header", conns, headers)
 	}
 	r.p.send(tAnswer, q.id, []byte("done"))
 	if got := tcpReply(t, c); string(got) != "done" {

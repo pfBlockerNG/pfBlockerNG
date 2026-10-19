@@ -38,12 +38,22 @@ DoQ ports are their own, so nothing collides with the plain DNS listeners there.
 One connection carries up to 4 queries at once (RFC 7766 6.2.1.1: a server SHOULD process them concurrently and MAY
 answer out of order). Each is decided and forwarded on its own and its reply is written when it is ready, so replies
 can come in another order than the queries. At 4 the connection is not read until one query is answered: TCP's flow
-control pushes back, and nothing already accepted is dropped. Each forward to Unbound takes one of the connection's own
-Unbound TCP connections, opened behind the client's PROXYv2 header and used for one exchange at a time; a connection that
-fails or times out is closed and never reused. A client that closes its connection, or stops reading its replies,
-abandons its queries and frees its slot. A connection at its 4 queries is not read, so it learns that its client left
-when one of them finishes (at most one whole-query limit). A FIN counts as a client that left, so one that sends a
-query and half-closes before the reply may get a SERVFAIL instead of its answer.
+control pushes back, and nothing already accepted is dropped.
+
+Unbound is asked over UDP first, as for a DoH or DoQ client: a PROXYv2 header for UDP naming the client, one datagram
+exchange. Unbound counts every TCP connection against its few TCP slots (`incoming-num-tcp`, 10 per thread by default
+in pfSense), so clients that ask small names open none. Only a reply with TC set is asked again over TCP, on one of the
+connection's own Unbound TCP connections: opened behind a TCP PROXYv2 header naming the same client, kept for that
+client's next truncated answer, used for one exchange at a time; a connection that fails or times out is closed and
+never reused. The client gets the whole TCP answer. The one consequence: a client that a custom `allow_cookie` ACL
+covers (the pfSense GUI does not offer it) is refused over UDP, where a native Unbound would answer it over TCP. DoH and
+DoQ clients already behave this way.
+
+A client that closes its sending side between two frames (a FIN, or a TLS close_notify) is still owed every answer: the
+queries it sent are decided and answered, then the connection is closed. Any other end of the client's stream (a reset,
+an end inside a frame, the idle timeout) and a reply that cannot be written abandon what is in flight and free the slot.
+A connection at its 4 queries is not read, so it learns of such an end when one of them finishes (at most one
+whole-query limit).
 
 A DoT connection ends with a TLS close_notify (RFC 8446 6.1) whatever ends it: the idle timeout, a failed write, or
 the gateway stopping. A client that does not take it is cut off at the TCP level after 250 ms.

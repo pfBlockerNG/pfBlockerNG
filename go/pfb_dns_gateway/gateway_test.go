@@ -308,7 +308,8 @@ func TestClientGetsTheDecidersAnswer(t *testing.T) {
 	}
 }
 
-// G3: FORWARD reaches Unbound behind a PROXYv2 header naming the client; REPLY carries Unbound's bytes back.
+// G3: FORWARD reaches Unbound behind a PROXYv2 header naming the client; REPLY carries Unbound's bytes back. Both
+// transports ask Unbound over UDP: a TCP client reaches it as a DoH or DoQ client does, TCP only for a truncated reply.
 func TestForwardReachesUnboundAsTheClientAndTheReplyComesBack(t *testing.T) {
 	for _, tr := range transports {
 		t.Run(tr.name, func(t *testing.T) {
@@ -332,10 +333,10 @@ func TestForwardReachesUnboundAsTheClientAndTheReplyComesBack(t *testing.T) {
 			q := r.recvQuery()
 			r.p.send(tForward, q.id, q.wire)
 			seen := r.up.next()
-			if !bytes.Equal(seen.wire, query) || seen.tcp != tr.tcp {
-				t.Fatalf("Unbound saw wire=%x tcp=%v, want wire=%x tcp=%v", seen.wire, seen.tcp, query, tr.tcp)
+			if !bytes.Equal(seen.wire, query) || seen.tcp {
+				t.Fatalf("Unbound saw wire=%x tcp=%v, want wire=%x over UDP", seen.wire, seen.tcp, query)
 			}
-			if want := wantHeader(t, tr, client, r.addr); !bytes.Equal(seen.header, want) {
+			if want := wantHeader(t, transport{"udp", false}, client, r.addr); !bytes.Equal(seen.header, want) {
 				t.Fatalf("PROXYv2 header:\n got  %x\n want %x", seen.header, want)
 			}
 			unboundReply := echoWithQR(seen)[0]

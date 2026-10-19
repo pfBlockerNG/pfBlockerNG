@@ -129,14 +129,15 @@ func TestAConnectionHasAtMostFourQueriesInFlightAndReadsOnWhenOneFinishes(t *tes
 	}
 }
 
-// A client that goes away abandons its queries at once and frees its slot, instead of leaving them to run out
-// their whole-query limit.
-func TestAClientThatLeavesAbandonsItsQueriesAndFreesItsSlot(t *testing.T) {
+// A client that closes its connection looks like one that half-closed (both are a FIN), so its queries are decided
+// and answered first; the connection closes, and its slot is freed, once they are.
+func TestAClosedClientFreesItsSlotOnceItsQueriesAreDecided(t *testing.T) {
 	for _, k := range streamKinds {
 		t.Run(k.name, func(t *testing.T) {
 			r := newRig(t, rigConfig{acl: aclMixed})
 			held := make(chan struct{})
-			t.Cleanup(sync.OnceFunc(func() { close(held) }))
+			release := sync.OnceFunc(func() { close(held) })
+			t.Cleanup(release)
 			r.autoAnswer(func(q decidedQuery) []byte { <-held; return echoAnswer(q) })
 			c := k.dial(t, r)
 			tcpSend(t, c, buildQuery(t, 1, "held.example.", true))
@@ -145,39 +146,69 @@ func TestAClientThatLeavesAbandonsItsQueriesAndFreesItsSlot(t *testing.T) {
 				t.Fatalf("one client is connected but %d slots are held", n)
 			}
 			_ = c.Close()
-			eventually(t, "the leaving client's slot to be freed while its query is still undecided", func() bool { return r.g.tcpConns.Load() == 0 })
+			release()
+			eventually(t, "the closed client's slot to be freed after its query was decided", func() bool { return r.g.tcpConns.Load() == 0 })
 		})
 	}
 }
 
-// Two forwards in flight at once from one client connection travel on two Unbound connections, each opened with the
-// PROXYv2 header of that client: the upstream connection is taken per forward, not per query or per client connection.
-func TestTwoForwardsInFlightFromOneConnectionUseTwoUpstreamConnections(t *testing.T) {
+// Two truncated forwards in flight at once from one client connection retry over two Unbound TCP connections, each
+// opened with the TCP PROXYv2 header of that client: the upstream connection is taken per forward, not per query or per
+// client connection. Their UDP legs carry the UDP header of the same client.
+func TestTwoTruncatedForwardsInFlightFromOneConnectionUseTwoUpstreamTCPConnections(t *testing.T) {
 	for _, k := range streamKinds {
 		t.Run(k.name, func(t *testing.T) {
 			held := make(chan struct{})
 			release := sync.OnceFunc(func() { close(held) })
 			t.Cleanup(release)
 			r := newRig(t, rigConfig{acl: aclMixed, upstream: []upstreamOption{answering(func(q seenQuery) [][]byte {
+				reply := echoWithQR(q)[0]
+				if !q.tcp {
+					reply[2] |= 0x02
+					return [][]byte{reply[:12]}
+				}
 				<-held
-				return echoWithQR(q)
+				return [][]byte{append(reply, "full-answer"...)}
 			})}})
 			r.autoForward()
 			c := k.dial(t, r)
 			tcpSend(t, c, buildQuery(t, 1, "one.example.", true))
 			tcpSend(t, c, buildQuery(t, 2, "two.example.", true))
-			a, b := r.up.next(), r.up.next() // both reached Unbound while neither was answered
-			if conns, headers := r.up.counts(); conns != 2 || headers != 2 {
-				t.Fatalf("two forwards in flight need two upstream connections with one header each, got %d connections / %d headers", conns, headers)
+			var udp, tcp []seenQuery
+			for range 4 { // both queries were asked over UDP, and both TCP retries reached Unbound while neither was answered
+				if seen := r.up.next(); seen.tcp {
+					tcp = append(tcp, seen)
+				} else {
+					udp = append(udp, seen)
+				}
 			}
-			want := wantHeader(t, transport{"tcp", true}, c.LocalAddr(), netip.MustParseAddrPort(c.RemoteAddr().String()))
-			for _, seen := range []seenQuery{a, b} {
-				if !seen.tcp || !bytes.Equal(seen.header, want) {
-					t.Fatalf("Unbound saw tcp=%v header=%x, want TCP behind the client's header %x", seen.tcp, seen.header, want)
+			if len(udp) != 2 || len(tcp) != 2 {
+				t.Fatalf("Unbound saw %d UDP and %d TCP queries, want 2 and 2", len(udp), len(tcp))
+			}
+			if conns, headers := r.up.counts(); conns != 2 || headers != 2 {
+				t.Fatalf("two retries in flight need two upstream connections with one header each, got %d connections / %d headers", conns, headers)
+			}
+			gw := netip.MustParseAddrPort(c.RemoteAddr().String())
+			for _, leg := range []struct {
+				seen []seenQuery
+				tr   transport
+			}{{udp, transport{"udp", false}}, {tcp, transport{"tcp", true}}} {
+				want := wantHeader(t, leg.tr, c.LocalAddr(), gw)
+				for _, seen := range leg.seen {
+					if !bytes.Equal(seen.header, want) {
+						t.Fatalf("%s leg header:\n got  %x\n want %x", leg.tr.name, seen.header, want)
+					}
 				}
 			}
 			release()
-			got := map[uint16]bool{queryID(tcpReply(t, c)): true, queryID(tcpReply(t, c)): true}
+			got := map[uint16]bool{}
+			for range 2 {
+				reply := tcpReply(t, c)
+				if !bytes.HasSuffix(reply, []byte("full-answer")) {
+					t.Fatalf("reply %x is not the whole TCP answer", reply)
+				}
+				got[queryID(reply)] = true
+			}
 			if !got[1] || !got[2] {
 				t.Fatalf("replies for queries %v, want 1 and 2", got)
 			}

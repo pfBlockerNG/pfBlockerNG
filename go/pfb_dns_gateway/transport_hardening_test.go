@@ -81,9 +81,9 @@ func TestPoolKeepsAConnectionThatAnsweredAndNeverOneThatFailed(t *testing.T) {
 }
 
 // A client that resets its connection while queries are in flight (one short of the pipeline limit: a connection at
-// the limit is not read, so it learns of the reset when a query finishes): the read fails, every handler is cancelled
-// and finds its reply unwritable at about the same time, and the connection still frees its slot. Under -race it is
-// the guard on the failure flag the handlers share.
+// the limit is not read, so it learns of the reset when a query finishes): the read fails, every handler is cancelled,
+// and the connection frees its slot. The handlers also reach the write path together, which -race may flag if its
+// failure flag is unguarded; race detection is intermittent, so the assertion here is the freed slot.
 func TestAClientThatResetsWithQueriesInFlightFreesItsSlot(t *testing.T) {
 	r := newRig(t, rigConfig{acl: aclMixed})
 	held := make(chan struct{})

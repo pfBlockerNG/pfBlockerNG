@@ -286,9 +286,11 @@ func closeTLS(tc *tls.Conn, raw net.Conn, bound time.Duration) {
 }
 
 // serveConn answers one client connection: up to connPipeline queries at once, each reply written when it is ready
-// (RFC 7766 6.2.1.1), forwarding over the connection's own Unbound connections. At the limit the connection is not
-// read until a query is answered. The slot was taken at accept, so the TLS handshake (bounded by g.handshake) happens
-// inside it.
+// (RFC 7766 6.2.1.1). Unbound is asked over UDP, as a DoH or DoQ client's query is; a truncated reply is asked again
+// over the connection's own Unbound TCP connections. At the limit the connection is not read until a query is
+// answered. A client that closes its sending side between frames still gets its answers before the connection is
+// closed; any other read error, or a reply that cannot be written, abandons what is in flight. The slot was taken at
+// accept, so the TLS handshake (bounded by g.handshake) happens inside it.
 func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls.Config) {
 	defer g.wg.Done()
 	defer func() {
@@ -318,7 +320,14 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	if err != nil {
 		return
 	}
+	udpHeader, err := proxyHeader(src, dst, false)
+	if err != nil {
+		return
+	}
 	pool := g.up.newPool(header)
+	fwd := func(ctx context.Context, wire []byte) []byte {
+		return g.up.exchangeUDPThenPool(ctx, udpHeader, pool, wire)
+	}
 	ctx, cancel := context.WithCancel(g.ctx)
 	var (
 		handlers sync.WaitGroup
@@ -348,6 +357,9 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		}
 		wire, err := g.readQuery(ctx, stream)
 		if err != nil {
+			if errors.Is(err, io.EOF) { // the client half-closed after its last frame: what it asked is still owed an answer
+				handlers.Wait()
+			}
 			return
 		}
 		switch disp, reply := g.screen(src.Addr(), wire); disp {
@@ -363,7 +375,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 			go func() {
 				defer handlers.Done()
 				defer func() { <-slots }()
-				if reply := g.resolve(ctx, src.Addr(), false, wire, pool.exchange); reply != nil {
+				if reply := g.resolve(ctx, src.Addr(), false, wire, fwd); reply != nil {
 					write(reply)
 				}
 			}()
@@ -371,13 +383,19 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	}
 }
 
+// readQuery reads one length-framed query. io.EOF means the client closed between frames; EOF inside a frame is
+// io.ErrUnexpectedEOF.
 func (g *gateway) readQuery(ctx context.Context, conn net.Conn) ([]byte, error) {
 	var size [2]byte
 	if err := g.readFull(ctx, conn, size[:]); err != nil {
 		return nil, err
 	}
 	wire := make([]byte, binary.BigEndian.Uint16(size[:]))
-	return wire, g.readFull(ctx, conn, wire)
+	err := g.readFull(ctx, conn, wire)
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return wire, err
 }
 
 // readFull fills buf within one idle timeout. A ctx that ended wakes the read by moving the deadline back; the check
