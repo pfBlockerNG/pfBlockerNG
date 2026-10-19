@@ -53,16 +53,17 @@ func (c *connLimit) release() {
 
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
-	acl        *ACL
-	dec        *Decider
-	up         *upstream
-	timeout    time.Duration // wait for Unbound per exchange
-	grace      time.Duration
-	tcpIdle    time.Duration // idle limit for reading a query and for writing a reply
-	handshake  time.Duration // limit for a TLS handshake, a PROXY header and request headers
-	closeBound time.Duration // limit for sending close_notify
-	stopBound  time.Duration // limit for each of stop()'s waits for the serving goroutines
-	logf       func(format string, args ...any)
+	acl         *ACL
+	dec         *Decider
+	up          *upstream
+	timeout     time.Duration // wait for Unbound per exchange
+	grace       time.Duration
+	tcpIdle     time.Duration // idle limit for reading a query and for writing a reply
+	handshake   time.Duration // limit for a TLS handshake, a PROXY header and request headers
+	closeBound  time.Duration // limit for sending close_notify
+	stopBound   time.Duration // limit for each of stop()'s waits for the serving goroutines
+	logf        func(format string, args ...any)
+	doqAccepted func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
 
 	ctx     context.Context
 	cancel  context.CancelFunc

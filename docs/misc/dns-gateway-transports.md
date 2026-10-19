@@ -68,7 +68,10 @@ wire before the UDP socket goes: an accepted one with a CONNECTION_CLOSE and `DO
 `CONNECTION_REFUSED` (quic-go's `Transport.Close` and `Listener.Close` send neither for an accepted connection, which
 would stay open at the client until its 30 s idle timeout); that wait is bounded by 500 ms. The gateway waits for its
 goroutines, DoH requests being served included, for 500 ms; the client connections still open then are closed, and
-after another 500 ms the gateway stops waiting and exits (the decider is waited for apart, up to its own limit).
+after another 500 ms the gateway stops waiting. The decider gets EOF with the transports' stop, and then the time
+left of the shutdown's 4 s budget, less an eighth of it, to exit; after that it is killed (a kill that is refused is
+logged) and the gateway exits at the end of the budget whatever the decider does, inside the 5 s the rc stop allows
+before its KILL.
 
 Every transport goes through the same path as plain DNS: the Resolver ACL, then the decider, then PROXYv2 to Unbound
 with the client in the header. The ACL is Unbound's own, read from `--unbound-conf` (`/var/unbound/unbound.conf`) and
