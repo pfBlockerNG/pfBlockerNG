@@ -154,22 +154,118 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(0, $status, "rc start failed: {$output}");
 		$argv = $this->daemonArgv();
 		$this->assertSame($dot, in_array('--dot', $argv, TRUE), '--dot iff the saved Resolver had enablessl');
-		$this->assertContains('--pfsense-config', $argv, 'the gateway is always told where the Resolver settings are: it reads them only for a TLS transport');
+		$this->assertContains('--tls-pem', $argv, 'the gateway is always told where the certificate file is: it reads it only for a TLS transport');
+		$this->assertNotContains('--pfsense-config', $argv, 'the gateway no longer reads config.xml');
 		if ($dot) {
 			$at = array_search('--dot', $argv, TRUE);
-			$this->assertSame(['--dot', '--pfsense-config', '/cf/conf/config.xml'], array_slice($argv, (int) $at, 3));
+			$this->assertSame(['--dot', '--dot-port', '853', '--tls-pem', $this->certFile()], array_slice($argv, (int) $at, 5));
+		} else {
+			$this->assertNotContains('--dot-port', $argv, 'a DoT port with DoT off would restart the proxy for nothing');
 		}
 	}
 
-	public function testANonNumericTlsPortInConfigNeverReachesTheScript(): void
+	/** @return array<string,array{?string,string}> the Resolver's `tlsport` as config.xml holds it => the DoT port the gateway is told */
+	public static function tlsPortRows(): array
 	{
-		$this->moveResolver(TRUE);
-		$GLOBALS['config']['unbound']['tlsport'] = '853; reboot';
-		$this->generate();
+		return [
+			'a port' => ['8530', '8530'],
+			'absent' => [NULL, '853'],
+			'empty' => ['', '853'],
+			'zero' => ['0', '853'],
+			'above 65535' => ['70000', '853'],
+			'padded' => ['0853', '853'],
+			'not a number: the text never reaches the script' => ['853; reboot', '853'],
+		];
+	}
 
-		$this->assertStringNotContainsString('tlsport', $this->rcText());
-		$this->assertStringNotContainsString('reboot', $this->rcText(),
-			'the proxy reads the DoT port from config.xml itself; the rc script passes no port');
+	#[DataProvider('tlsPortRows')]
+	public function testTheDoTPortIsTheResolversTlsportWhenItIsAPortAnd853Otherwise(?string $tlsport, string $expected): void
+	{
+		// Given a Resolver saved with DoT and this tlsport (the gateway no longer reads config.xml, so the script says it)
+		$this->moveResolver(TRUE);
+		if ($tlsport !== NULL) {
+			$GLOBALS['config']['unbound']['tlsport'] = $tlsport;
+		}
+
+		// When the script is generated and started
+		$this->generate();
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then the gateway is given exactly that port, and nothing else of the text
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$argv = $this->daemonArgv();
+		$this->assertSame($expected, $argv[(int) array_search('--dot-port', $argv, TRUE) + 1]);
+		$this->assertStringNotContainsString('reboot', $this->rcText());
+	}
+
+	public function testTheCertificateFileIsWrittenByTheApplyBeforeTheProxyStartsAndTheStartFindsIt(): void
+	{
+		// Given DoT wanted and no file yet
+		$this->moveResolver(TRUE);
+		$this->assertFileDoesNotExist($this->certFile());
+
+		// When the script is generated (an apply) and later started
+		$this->generate();
+		$this->assertFileExists($this->certFile(), 'the apply writes the Resolver\'s certificate for the gateway');
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then the start launches at once: it does not run PHP for a file that is there
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events());
+	}
+
+	public function testAStartThatFindsNoCertificateFileHasPhpWriteItBeforeTheProxyLaunches(): void
+	{
+		// Given DoT wanted and a /var that came up empty: the script exists, the certificate file does not
+		$this->moveResolver(TRUE);
+		$this->generate();
+		unlink($this->certFile());
+
+		// When the proxy starts
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then PHP is asked for the file (the pfblockerng.inc dns_cert verb) before the launch
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['export', 'launch'], $this->events());
+		$this->assertFileExists($this->certFile());
+	}
+
+	public function testAFailedCertificateWriteIsLoggedAndTheProxyStillStarts(): void
+	{
+		// Given the same start, and PHP that cannot write the file
+		$this->moveResolver(TRUE);
+		$this->generate();
+		unlink($this->certFile());
+		$this->arrange(['EXPORT_FAIL' => '1']);
+
+		// When the proxy starts
+		[$status, $output] = $this->rc('start');
+
+		// Then plain DNS is served: the start goes on, and says what it could not do
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['export', 'log', 'launch', 'log'], $this->events(TRUE), 'the warning, the launch, then the usual "started" line');
+		$this->assertStringContainsString('certificate could not be written', (string) file_get_contents("{$this->dir}/state/logger"));
+	}
+
+	public function testNoCertificateIsInvolvedWhenNoEncryptedTransportIsWanted(): void
+	{
+		// Given a saved Resolver without DoT, DoH and DoQ off, and a certificate file left by an earlier configuration
+		$this->moveResolver(FALSE);
+		file_put_contents($this->certFile(), 'stale');
+
+		// When the script is generated and started
+		$this->generate();
+		$this->arrange();
+		[$status] = $this->rc('start');
+
+		// Then the key is gone from the disk and the script never mentions PHP or the file's content
+		$this->assertSame(0, $status);
+		$this->assertFileDoesNotExist($this->certFile());
+		$this->assertSame(['launch'], $this->events());
+		$this->assertStringNotContainsString('pfblockerng.inc dns_cert', $this->rcText());
 	}
 
 	/** @return array<string,array{?string,string}> the Resolver's `port` as config.xml holds it => the port the proxy is told to bind */
@@ -1090,7 +1186,7 @@ final class DnsProxyServiceTest extends TestCase
 	 * @param list<string> $module the pfB-DNS mode flags, which are the gateway's own: no DNSBL (the state of these tests) is --no-module
 	 * @return list<string>
 	 */
-	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = [], string $port = '53', array $module = ['--no-module']): array
+	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = [], string $port = '53', array $module = ['--no-module'], string $dotPort = '853'): array
 	{
 		$addresses = [];
 		foreach ([...$listen, '127.0.0.1', '::1'] as $address) {
@@ -1101,8 +1197,8 @@ final class DnsProxyServiceTest extends TestCase
 			'-P', $this->pidfile('pfb_dns_proxy_daemon.pid'), '-p', $this->pidfile('pfb_dns_proxy.pid'),
 			'-o', "{$this->dir}/log/dns_proxy.log",
 			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
-			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot'] : []),
-			'--pfsense-config', '/cf/conf/config.xml', ...$tls, ...$module,
+			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot', '--dot-port', $dotPort] : []),
+			'--tls-pem', $this->certFile(), ...$tls, ...$module,
 			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', $this->readyFile(), ...self::DECIDER,
 		];
 	}
@@ -1223,7 +1319,7 @@ final class DnsProxyServiceTest extends TestCase
 		// When the script starts
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then the DoH group sits between --pfsense-config and --unbound-conf, loopback after its interfaces' addresses;
+		// Then the DoH group sits between --tls-pem and --unbound-conf, loopback after its interfaces' addresses;
 		// the plain DNS addresses are untouched
 		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1', '198.51.100.1', '2001:db8:1::1'], FALSE, $expected),

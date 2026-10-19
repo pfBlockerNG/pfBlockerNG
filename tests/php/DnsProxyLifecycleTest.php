@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -63,6 +65,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		$GLOBALS['pfb_test_file_notices'] = [];
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		@unlink(PFB_DNS_PROXY_RCFILE);
+		DnsProxyCertificateFixtures::seedResolver($this->tmp);
 	}
 
 	protected function tearDown(): void
@@ -393,6 +396,33 @@ final class DnsProxyLifecycleTest extends TestCase
 		// from Status > Services, which can only run a script that exists
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is kept');
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE);
+	}
+
+	public function testRemovalLeavesNoCertificateKeyBehindOnceTheProxyIsGone(): void
+	{
+		// Given a Resolver that was moved and a gateway certificate file (certificate and key) on disk
+		$this->seedMovedResolver();
+		file_put_contents($GLOBALS['pfb']['dns_proxy_cert'], "certificate and key\n");
+
+		// When the package is removed and the Resolver is back
+		$this->assertTrue(pfb_dns_proxy_deinstall());
+
+		// Then the key is not left in the Unbound chroot for a service that no longer exists
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_cert']);
+	}
+
+	public function testRemovalKeepsTheCertificateWhileTheProxyStillServesTheMovedResolver(): void
+	{
+		// Given a moved Resolver that cannot be put back, and the certificate file the proxy serves DoT with
+		$this->seedMovedResolver();
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		file_put_contents($GLOBALS['pfb']['dns_proxy_cert'], "certificate and key\n");
+
+		// When the removal stops
+		$this->assertFalse(pfb_dns_proxy_deinstall());
+
+		// Then the proxy, which keeps serving, keeps its certificate
+		$this->assertFileExists($GLOBALS['pfb']['dns_proxy_cert']);
 	}
 
 	public function testRemovalOfABoxThatNeverMovedTheResolverStopsTheProxyAndChangesNothingElse(): void

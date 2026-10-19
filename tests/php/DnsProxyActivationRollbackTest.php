@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
@@ -98,6 +100,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$GLOBALS['pfb_test_unbound_configure_resolver'] = [];
 		$GLOBALS['pfb_test_file_notices'] = [];
 		$GLOBALS['pfb_test_lock_events'] = [];
+		DnsProxyCertificateFixtures::seedResolver($this->tmp);
 		$GLOBALS['pfb_test_lock_held'] = FALSE;
 		unset($GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles']);
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];

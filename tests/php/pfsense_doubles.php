@@ -284,6 +284,40 @@ if (!function_exists('unlink_if_exists')) {
 	}
 }
 
+if (!function_exists('lookup_ca')) {
+	// pfSense certs.inc lookup_ca() and lookup_cert(), verbatim apart from the sandbox config reader (master 9363ac5b and
+	// RELENG_2_7_2): the first <ca> / <cert> entry whose refid matches, with its config index; item NULL when none does.
+	function lookup_ca($refid) {
+		$ca_item = ['idx' => null, 'item' => null];
+		foreach (config_get_path('ca', []) as $idx => $ca) {
+			if (!is_array($ca) || empty($ca)) {
+				continue;
+			}
+			if ($ca['refid'] == $refid) {
+				$ca_item = ['idx' => $idx, 'item' => $ca];
+				break;
+			}
+		}
+
+		return $ca_item;
+	}
+
+	function lookup_cert($refid) {
+		$cert_item = ['idx' => null, 'item' => null];
+		foreach (config_get_path('cert', []) as $idx => $cert) {
+			if (!is_array($cert) || empty($cert)) {
+				continue;
+			}
+			if ($cert['refid'] == $refid) {
+				$cert_item = ['idx' => $idx, 'item' => $cert];
+				break;
+			}
+		}
+
+		return $cert_item;
+	}
+}
+
 if (!function_exists('resolve_host_addresses')) {
 	// pfSense util.inc returns a list of ['type'=>'A'|'AAAA'|'CNAME','data'=>...]
 	// records (or [] when a host does not resolve). FeedHostAllowedTest drives the
