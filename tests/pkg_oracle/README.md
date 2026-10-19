@@ -69,7 +69,9 @@ removal leaves no proxy behind.
 
 Exit status: 0 PASS; 1 product FAIL (a check failed, or in broken mode the defect did not reproduce); 8 STUCK/ENVIRONMENT (a deadline
 expired, so the run decided nothing about the product); 9 harness fault: run.sh's own staging (the Go toolchain is not the pinned one,
-the gateway build or its ELF check failed, or any other failure before the container starts: run.sh's EXIT trap turns it into 9), or the
-scenario's (the pgrep stand-in's self-check, the package build). 2 is usage. 125, 126 and 127 are docker's own failures (daemon, container
-command cannot run, not found): harness errors, returned unchanged. Only exit 1 is a verdict on the product.
+the gateway build failed or its ELF check did, a missing output dir, or any other failure before the container starts: run.sh's EXIT
+trap turns each into 9), or the scenario's (the pgrep stand-in's self-check, the package build). 2 is usage only (run.sh with too few
+arguments, before any work). A container status of 2 (a scenario shell error) passes through unchanged and is a harness fault too. 125,
+126 and 127 are docker's own failures (daemon, container command cannot run, not found): harness errors, returned unchanged.
+Only exit 1 is a verdict on the product.
 Container only: nothing is installed on or changed on the host.

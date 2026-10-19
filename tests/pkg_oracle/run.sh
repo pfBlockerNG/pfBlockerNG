@@ -16,7 +16,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 # Exit 1 is a product FAIL only when the container ran the scenario. Any other failure of this script before the container starts
 # (the staging, the pinned Go toolchain, the gateway build, its ELF check) is a harness fault: the EXIT trap turns it into 9.
 ran=0
-trap 'rc=$?; if [ "$ran" -eq 0 ] && [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then echo "run.sh: harness fault: staging failed before the container ran (exit $rc)" >&2; exit 9; fi' EXIT
+trap 'rc=$?; if [ "$ran" -eq 0 ] && [ "$rc" -ne 0 ]; then echo "run.sh: harness fault: staging failed before the container ran (exit $rc)" >&2; exit 9; fi' EXIT
 out=$(cd "$1" && pwd); repo=$(cd "$2" && pwd)
 expect=${3:-recovered}; core=${4:-master}
 image=${PFB_ORACLE_IMAGE:-pfb-pkg-oracle:2}

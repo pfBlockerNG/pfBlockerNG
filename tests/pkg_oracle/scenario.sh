@@ -35,14 +35,23 @@ await() { # description, command...: poll the command until it succeeds, within 
 # The proxy the scenario started (probe.php start) is stopped by its recorded pids, the supervisor first (pfblockerng.inc:3572-3573):
 # a supervisor that outlives its child would be left to restart it. Each pid gets TERM, then KILL if it is still alive after 7 s of
 # monotonic time. The EXIT trap runs this on every exit, so a STUCK before the removal leaves no proxy behind.
+# A pid is signalled only while its command line is the proxy's: a stale pidfile may name a reused pid (pfblockerng.inc:4591-4592).
+# The patterns are the product's $proxyArgs (pfblockerng.inc:4489) with PFB_DNS_PROXY_DIR (:3619) spelled out.
+proxy_pid() { # pid: succeeds while ps shows the pid running the proxy's command line
+	case "$(/bin/ps -ww -o args= -p "$1" 2>/dev/null)" in
+		*pfb_dns_proxy*|/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-*/pfb-dns*) return 0 ;;
+	esac
+	return 1
+}
 proxy_stop() {
 	for f in /var/run/pfb_dns_proxy_daemon.pid /var/run/pfb_dns_proxy.pid; do
 		p=$(cat "$f" 2>/dev/null) || continue
 		case "$p" in ''|*[!0-9]*) continue ;; esac
+		proxy_pid "$p" || continue
 		kill -TERM "$p" 2>/dev/null
 		deadline=$(( $(now_cs) + 700 ))
-		while kill -0 "$p" 2>/dev/null && [ "$(now_cs)" -lt "$deadline" ]; do sleep 0.2; done
-		if kill -0 "$p" 2>/dev/null; then kill -KILL "$p" 2>/dev/null; fi
+		while proxy_pid "$p" && [ "$(now_cs)" -lt "$deadline" ]; do sleep 0.2; done
+		if proxy_pid "$p"; then kill -KILL "$p" 2>/dev/null; fi
 	done
 }
 cleanup() {
