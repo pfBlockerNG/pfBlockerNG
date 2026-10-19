@@ -113,8 +113,7 @@ func (u *upstream) exchangeUDPThenTCP(ctx context.Context, src, dst netip.AddrPo
 	return conn.exchange(ctx, wire)
 }
 
-// tcpUpstream is the upstream connection of one client connection: opened on first use, header first, reused.
-// Exchanges must not overlap.
+// tcpUpstream is one upstream connection: opened on first use, header first, reused. Exchanges must not overlap.
 type tcpUpstream struct {
 	u      *upstream
 	header []byte
@@ -128,6 +127,47 @@ func (t *tcpUpstream) close() {
 		_ = t.conn.Close()
 		t.conn = nil
 	}
+}
+
+// tcpPool is the upstream connections of one client connection: single-flight tcpUpstreams, one taken per forward and
+// put back after it. At most connPipeline forwards are in flight, so the pool never holds more.
+type tcpPool struct {
+	u      *upstream
+	header []byte
+	mu     sync.Mutex
+	idle   []*tcpUpstream
+}
+
+func (u *upstream) newPool(header []byte) *tcpPool { return &tcpPool{u: u, header: header} }
+
+// exchange sends wire on an idle connection, or on a new one. A connection that failed is closed and not put back.
+func (p *tcpPool) exchange(ctx context.Context, wire []byte) []byte {
+	var t *tcpUpstream
+	p.mu.Lock()
+	if n := len(p.idle); n > 0 {
+		t, p.idle = p.idle[n-1], p.idle[:n-1]
+	}
+	p.mu.Unlock()
+	if t == nil {
+		t = p.u.newTCP(p.header)
+	}
+	reply := t.exchange(ctx, wire)
+	if t.conn != nil {
+		p.mu.Lock()
+		p.idle = append(p.idle, t)
+		p.mu.Unlock()
+	}
+	return reply
+}
+
+// close closes the idle connections; call it once no exchange is running.
+func (p *tcpPool) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, t := range p.idle {
+		t.close()
+	}
+	p.idle = nil
 }
 
 // exchange sends one length-framed query. A connection Unbound closed while idle gets one fresh try; a fresh

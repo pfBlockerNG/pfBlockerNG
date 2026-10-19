@@ -135,6 +135,12 @@ func (g *gateway) serveDoH(ln *net.TCPListener, conf *tls.Config, trusted []neti
 }
 
 func (g *gateway) serveDoHRequest(w http.ResponseWriter, r *http.Request, trusted []netip.Prefix) {
+	if !g.enter() { // stopping
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
+	defer g.wg.Done()
 	if r.URL.Path != dohPath {
 		http.NotFound(w, r)
 		return

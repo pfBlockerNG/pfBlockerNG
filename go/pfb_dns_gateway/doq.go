@@ -87,8 +87,8 @@ func (g *gateway) serveQUICConn(conn *quic.Conn) {
 }
 
 // serveDoQStream answers one query stream. A malformed stream is reset with DOQ_PROTOCOL_ERROR and the connection
-// carries on; a non-zero Message ID closes the connection (RFC 9250 4.3.3 lists it as a protocol error to be
-// answered with CONNECTION_CLOSE and DOQ_PROTOCOL_ERROR).
+// carries on; a non-zero Message ID, or an edns-tcp-keepalive option, closes the connection (RFC 9250 4.3.3 lists the
+// first as a protocol error to be answered with CONNECTION_CLOSE and DOQ_PROTOCOL_ERROR, 5.5.2 the second).
 func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local netip.AddrPort) {
 	defer g.wg.Done()
 	_ = s.SetReadDeadline(time.Now().Add(g.timeout)) // a client sends the query and its FIN at once: no idle wait as on a TCP connection
@@ -99,6 +99,10 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local ne
 	}
 	if len(wire) >= 2 && wire[0]|wire[1] != 0 {
 		_ = conn.CloseWithError(doqProtocolError, "Message ID must be 0")
+		return
+	}
+	if hasTCPKeepalive(wire) {
+		_ = conn.CloseWithError(doqProtocolError, "edns-tcp-keepalive is not allowed")
 		return
 	}
 	src, dst := proxyEndpoints(peer, local)
