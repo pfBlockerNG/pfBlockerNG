@@ -1729,6 +1729,11 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_proxy_block_present": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_dns_proxy_confirm_ready": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1835,12 +1840,22 @@
             }
         ]
     },
+    "pfb_dns_proxy_owns_resolver": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_dns_proxy_port": {
         "returnsRef": false,
         "returnType": "string",
         "params": []
     },
     "pfb_dns_proxy_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_recovery_required": {
         "returnsRef": false,
         "returnType": "bool",
         "params": []
