@@ -19,7 +19,13 @@ if ($server === FALSE) {
 	exit(2);
 }
 fwrite(STDOUT, "ready\n");
-$conn = @stream_socket_accept($server, 30);
+// Wait for the one connection, or for the test to close our stdin (it is done with us: nothing was pushed)
+$waiting = [$server, STDIN];
+$write = $except = NULL;
+if (stream_select($waiting, $write, $except, 30) < 1 || !in_array($server, $waiting, TRUE)) {
+	exit(3);
+}
+$conn = @stream_socket_accept($server, 5);
 if ($conn === FALSE) {
 	exit(3);
 }
