@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -133,23 +134,39 @@ func TestOneAddressCannotHoldMoreThanItsShareOfDoTConnections(t *testing.T) {
 	r := newRig(t, rigConfig{acl: aclMixed})
 	r.autoAnswer(echoAnswer)
 	addr := r.serveDoT(m)
+	var conns []*tls.Conn
 	for range maxTCPConns/2 - 1 {
-		dialDoT(t, addr, m, clientAllowed)
+		conns = append(conns, dialDoT(t, addr, m, clientAllowed))
 	}
 	r.tcpClient(clientAllowed) // plain TCP from the same address: the 64th
 	d := net.Dialer{Timeout: watchdog, LocalAddr: &net.TCPAddr{IP: net.ParseIP(clientAllowed)}}
-	over, err := d.Dial("tcp4", addr.String())
-	if err == nil {
-		defer over.Close()
-		err = tlsClientHandshake(over, m)
+	refusedAtAccept := func() error {
+		over, err := d.Dial("tcp4", addr.String())
+		if err == nil {
+			defer over.Close()
+			err = tlsClientHandshake(over, m)
+		}
+		return err
 	}
-	if err == nil {
+	if refusedAtAccept() == nil {
 		t.Fatal("a 65th connection of the address completed a TLS handshake, want it closed at accept")
 	}
 	other := dialDoT(t, addr, m, otherClient)
 	tcpSend(t, other, buildQuery(t, 11, "example.", true))
 	if got := tcpReply(t, other); len(got) == 0 {
 		t.Fatal("another address must be served over DoT while one is over its share")
+	}
+
+	// A closed DoT connection gives back its share, and exactly one: the address takes it again and is then refused again.
+	_ = conns[3].Close()
+	eventually(t, "the closed connection's slot to be freed", func() bool { return r.g.tcpConns.Load() == maxTCPConns/2 })
+	again := dialDoT(t, addr, m, clientAllowed)
+	tcpSend(t, again, buildQuery(t, 12, "example.", true))
+	if got := tcpReply(t, again); len(got) == 0 {
+		t.Fatal("a DoT connection that arrives after the address's share was freed must be served")
+	}
+	if refusedAtAccept() == nil {
+		t.Fatal("after one DoT connection closed and another opened, a further one of the address completed a TLS handshake: the release gave back more than one share")
 	}
 }
 
