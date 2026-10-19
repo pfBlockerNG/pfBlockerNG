@@ -375,10 +375,12 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// When the proxy is turned on.
 		$changed = pfb_dns_proxy_resolver(TRUE);
 
-		// Then the user's values are recorded and our block is added after their text.
+		// Then the user's values are recorded and our block is added after their text. The Resolver was already on loopback, so
+		// pfSense's own automatic size for it was the loopback one (16316), and the block carries exactly that, not the LAN's 1432.
 		$this->assertTrue($changed);
 		$this->assertSame(['present' => TRUE, 'value' => 'lo0'], pfb_dns_proxy_saved()['active_interface']);
-		$this->assertSame("server:\nproxy-protocol-port: 5353\n" . self::block(), implode("\n", $this->customLines()));
+		$this->assertSame("server:\nproxy-protocol-port: 5353\n" . str_replace('edns-buffer-size: 1432', 'edns-buffer-size: 16316', self::block()),
+			implode("\n", $this->customLines()));
 		$this->assertSame('', $this->errorLog());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
@@ -621,23 +623,69 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertSame('/services_unbound.php', $notice['url']);
 	}
 
-	public function testMoveOnRefusesWhenTheAdminAddsAPortLineAfterOurBlockWasWritten(): void
+	/** @return array<string,array{0:string}> the admin's own `port:`, `interface:` and `include:` lines, each appended after our block once it was written */
+	public static function unsafeLinesAddedAfterTheMove(): array
 	{
-		// Given a moved Resolver, then an admin who appends their own `port:` line to its Custom options.
+		return [
+			'a port line'                    => ['port: 5300'],
+			'an interface on the proxy port' => ['interface: ::1@5353'],
+			'an interface on the Listen Port' => ['interface: 0.0.0.0@53'],
+			'an include'                     => ['include: /tmp/extra.conf'],
+			'an include-toplevel'            => ['include-toplevel: /tmp/extra.conf'],
+		];
+	}
+
+	#[DataProvider('unsafeLinesAddedAfterTheMove')]
+	public function testAnUnsafeLineAddedAfterTheMoveIsReportedForRollbackAndTheAdminsLineIsKeptInTheSnapshot(string $line): void
+	{
+		// Given a moved Resolver, then an admin who appends a line that can take a listener, a second port or another file.
 		$this->seedResolver();
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
-		$edited = base64_encode(implode("\n", $this->customLines()) . "\nserver:\nport: 5300\n");
+		$this->assertSame(['present' => TRUE, 'value' => base64_encode("do-ip6: no\nprefetch: yes")], pfb_dns_proxy_saved()['custom_options'], 'before: the snapshot holds the original text');
+		$edited = base64_encode(implode("\n", $this->customLines()) . "\nserver:\n{$line}\n");
 		config_set_path('unbound/custom_options', $edited);
 
 		// When the proxy is applied again.
-		$changed = pfb_dns_proxy_resolver(TRUE);
+		$unsafe = NULL;
+		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
-		// Then the admin's text is left as written, with our one block, and the operator is told.
-		$this->assertFalse($changed);
+		// Then the line is reported to the caller, which rolls pfB-DNS back (a refusal that keeps serving would leave Unbound one
+		// restart away from a bind collision): nothing here refuses, and the Resolver text is not touched ...
+		$this->assertSame($line, $unsafe);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'the rollback speaks, not a refusal');
 		$this->assertSame($edited, config_get_path('unbound/custom_options'));
 		$this->assertSame(1, $this->markerCount());
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
-		$this->assertStringContainsString('port:', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+
+		// ... and the snapshot now holds the admin's text as it stands, minus our block, so that the restore keeps the line.
+		$this->assertTrue($changed, 'the snapshot was rewritten');
+		$saved = pfb_dns_proxy_saved();
+		$this->assertNotNull($saved);
+		$kept = (string) base64_decode($saved['custom_options']['value'] ?? '', TRUE);
+		$this->assertStringNotContainsString(self::MARKER, $kept);
+		$this->assertSame(["do-ip6: no", "prefetch: yes", "server:", $line], array_values(array_filter(explode("\n", $kept), 'strlen')));
+		$this->assertSame(['present' => TRUE, 'value' => 'lan,opt1'], $saved['active_interface'], 'the other saved keys are as they were');
+	}
+
+	public function testALineThatIsNotUnsafeAddedAfterTheMoveIsNotReportedAndNothingIsRewritten(): void
+	{
+		// Given a moved Resolver, then an admin who appends a harmless line.
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$snapshot = config_get_path(self::SAVED);
+		$edited = base64_encode(implode("\n", $this->customLines()) . "\nserver:\nlocal-data: \"x.example. A 192.0.2.1\"\n");
+		config_set_path('unbound/custom_options', $edited);
+		$writes = $this->writeCalls();
+
+		// When the proxy is applied again.
+		$unsafe = NULL;
+		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
+
+		// Then nothing is reported and nothing is written.
+		$this->assertNull($unsafe);
+		$this->assertFalse($changed);
+		$this->assertSame($writes, $this->writeCalls());
+		$this->assertSame($snapshot, config_get_path(self::SAVED));
+		$this->assertSame($edited, config_get_path('unbound/custom_options'));
 	}
 
 	/** @return array<string,array{0:string}> lines that are not the admin's own `port:`: other option names, comments, and a quoted phrase with the word */
@@ -664,25 +712,6 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertTrue($changed);
 		$this->assertSame(1, $this->markerCount());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
-	}
-
-	public function testMoveOnRefusesWhenTheAdminAddsThatInterfaceLineAfterOurBlockWasWritten(): void
-	{
-		// Given a moved Resolver, then an admin who appends their own loopback 5353 line to its Custom options.
-		$this->seedResolver();
-		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
-		$edited = base64_encode(implode("\n", $this->customLines()) . "\ninterface: ::1@5353\n");
-		config_set_path('unbound/custom_options', $edited);
-
-		// When the proxy is applied again.
-		$changed = pfb_dns_proxy_resolver(TRUE);
-
-		// Then the admin's text is left as written, with our one block, and the operator is told.
-		$this->assertFalse($changed);
-		$this->assertSame($edited, config_get_path('unbound/custom_options'));
-		$this->assertSame(1, $this->markerCount());
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
-		$this->assertStringContainsString('Custom Options', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
 	public function testMoveOnRefusesAStrayCopyOfOurMarkerThatWouldHideAnInterfaceLine(): void
@@ -766,28 +795,6 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('Custom Options', $notice['notice']);
 		$this->assertStringContainsString('include:', $notice['notice']);
 		$this->assertSame('/services_unbound.php', $notice['url']);
-	}
-
-	public function testMoveOnRefusesAnIncludeAddedAfterOurBlockWasWrittenAndKeepsTheSnapshot(): void
-	{
-		// Given a moved Resolver, then an admin who appends an include to its Custom options.
-		$this->seedResolver();
-		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
-		$saved = pfb_dns_proxy_saved();
-		$edited = base64_encode(implode("\n", $this->customLines()) . "\ninclude: /tmp/extra.conf\n");
-		config_set_path('unbound/custom_options', $edited);
-		$writes = $this->writeCalls();
-
-		// When the proxy is applied again.
-		$changed = pfb_dns_proxy_resolver(TRUE);
-
-		// Then the admin's text is left as written and the snapshot is kept.
-		$this->assertFalse($changed);
-		$this->assertSame($writes, $this->writeCalls());
-		$this->assertSame($edited, config_get_path('unbound/custom_options'));
-		$this->assertSame($saved, pfb_dns_proxy_saved());
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
-		$this->assertStringContainsString('include:', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
 	public function testMoveOffIsNeverRefusedForAnIncludeTheAdminKeeps(): void

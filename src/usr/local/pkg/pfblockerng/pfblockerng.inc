@@ -4452,7 +4452,28 @@ function pfb_dns_proxy_rollback_notice(string $text): void {
 }
 
 /**
- * The proxy took the Resolver's place and did not become ready: give the Resolver, and with DNSBL on the DNSBL module, back to
+ * Turn the requested pfB-DNS toggle Off, written to config.xml under the DNS config lock from a fresh read: the next apply then
+ * never enables it again, and retries a restore that did not finish.
+ *
+ * @return bool TRUE iff the toggle was written; FALSE when the lock stayed taken or the read failed (nothing was written)
+ */
+function pfb_dns_proxy_turn_off(string $why): bool {
+	$lock = pfb_dns_config_lock();
+	if ($lock === NULL) {
+		return FALSE;
+	}
+	try {
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		write_config("pfBlockerNG: pfB-DNS turned off: {$why}");
+	} finally {
+		unlock($lock);
+	}
+	return TRUE;
+}
+
+/**
+ * The proxy took the Resolver's place and did not become ready, or an unsafe Custom Options line was added after the move ($what
+ * says which): give the Resolver, and with DNSBL on the DNSBL module, back to
  * Unbound. Under the DNS config lock the requested pfB-DNS toggle goes Off first, so a rollback that fails half way is retried
  * by the next apply's restore and that apply never enables pfB-DNS again; the lock is released before anything waits. Then
  * the proxy is stopped and the Resolver gets exactly its saved settings back (pfb_unbound_python($mode, FALSE), which also puts
@@ -4465,24 +4486,20 @@ function pfb_dns_proxy_rollback_notice(string $text): void {
  * needed: a rollback that did not finish never says it did. There is no retry state of its own: with the toggle Off the next
  * apply's ordinary restore tries again.
  *
+ * @param string|null $what why pfB-DNS is rolled back, as a clause that follows "pfB-DNS: "; NULL = the proxy did not become ready
+ * @param string|null $next the operator's last sentence after a rollback that worked; NULL = read the proxy log, then turn pfB-DNS on
  * @return bool TRUE iff the DNS Resolver is restored and Unbound was restarted with its previous integration
  */
-function pfb_dns_proxy_roll_back(): bool {
+function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL): bool {
 	global $pfb;
 
-	$what = 'the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' seconds of its start';
-	$lock = pfb_dns_config_lock();
-	if ($lock === NULL) {
+	$what ??= 'the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' seconds of its start';
+	$next ??= 'Read ' . PFB_DNS_PROXY_LOG . ' for the cause, correct it, then turn pfB-DNS on again.';
+	if (!pfb_dns_proxy_turn_off($what)) {
 		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and config.xml was locked by another save, so pfB-DNS could not be turned off and " .
 		    'the DNS Resolver could not be restored. Nothing was changed and its saved settings are kept; the next pfBlockerNG update retries. ' .
 		    'If DNS stays down, stop the pfBlockerNG DNS proxy service in Status > Services and turn pfB-DNS off.');
 		return FALSE;
-	}
-	try {
-		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
-		write_config("pfBlockerNG: pfB-DNS turned off: {$what}");
-	} finally {
-		unlock($lock);
 	}
 
 	pfb_global();
@@ -4503,8 +4520,7 @@ function pfb_dns_proxy_roll_back(): bool {
 
 	pfb_update_unbound($mode, pfb_unbound_dnsbl($mode), TRUE);
 	pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, so pfB-DNS was turned off and the DNS Resolver was restored to its previous settings" .
-	    ($mode == 'enabled' ? '; DNSBL runs in the DNS Resolver again, as before' : '') . '. ' .
-	    'Read ' . PFB_DNS_PROXY_LOG . ' for the cause, correct it, then turn pfB-DNS on again.');
+	    ($mode == 'enabled' ? '; DNSBL runs in the DNS Resolver again, as before' : '') . ". {$next}");
 	return TRUE;
 }
 
@@ -13526,6 +13542,39 @@ function pfb_dns_config_lock() {
 }
 
 /**
+ * pfB-DNS fronts a DNS Resolver that was disabled in Services > DNS Resolver (a snapshot, the toggle on, pfBlockerNG enabled).
+ * The proxy would keep the Resolver's addresses and answer SERVFAIL for every allowed name, and nothing starts a disabled
+ * Resolver, so pfB-DNS stands down: the toggle goes Off first, under the config lock (the next apply or tick then retries a
+ * restore that did not finish, and nothing enables it again), then the proxy is stopped and the saved settings are restored (the
+ * Resolver stays disabled) like any restore, and the operator is told once. Every apply and every tick calls it.
+ *
+ * @return bool TRUE iff it stood pfB-DNS down; FALSE when there was nothing to do, or the lock stayed taken (nothing was changed)
+ */
+function pfb_dns_proxy_stand_down(): bool {
+	if (PfbConfig::read('dns/pfb_dns') !== PfbToggle::On || PfbConfig::read('gen/enable_cb') !== PfbToggle::On ||
+	    config_path_enabled('unbound') || pfb_dns_proxy_saved() === NULL) {
+		return FALSE;
+	}
+
+	$what = 'the DNS Resolver is disabled in Services > DNS Resolver, so the DNS proxy has nothing to front';
+	if (!pfb_dns_proxy_turn_off($what)) {
+		pfb_logger("\npfB-DNS: {$what}, but config.xml was locked by another save; the next apply or tick retries", 2);
+		return FALSE;
+	}
+
+	// A concurrent apply or tick that stood down first leaves nothing here to restore and nothing to say.
+	$restored = pfb_dns_proxy_resolver(FALSE);
+	if ($restored || pfb_dns_proxy_owns_resolver()) {
+		pfb_dns_proxy_rollback_notice(pfb_dns_proxy_owns_resolver()
+		    ? "pfB-DNS: {$what}, so pfB-DNS was turned off, but the DNS Resolver could not be restored yet (see the notice before this one). " .
+		      'Its saved settings are kept and the next pfBlockerNG update retries.'
+		    : "pfB-DNS: {$what}, so the DNS proxy was stopped, pfB-DNS was turned off and the DNS Resolver was restored to its previous settings; " .
+		      'it stays disabled. Enable the DNS Resolver, then turn pfB-DNS on again.');
+	}
+	return TRUE;
+}
+
+/**
  * Move the DNS Resolver aside for the DNS proxy ($on), or put it back ($on = FALSE).
  *
  * The proxy takes the Resolver's client-facing addresses on the Resolver's own Listen Port, and ALSO serves that port
@@ -13561,9 +13610,16 @@ function pfb_dns_config_lock() {
  * config.xml read afresh under it, through write_config(). A lock that stays taken abandons the call: nothing is
  * written or stopped, the snapshot is kept, and a notice says the next apply retries.
  *
+ * ON with the Resolver already moved reads the admin's Custom Options the same way, but an `interface`, `port` or `include` line
+ * of theirs is not refused there: it is reported through $unsafe_line, the saved copy of Custom Options takes the admin's text
+ * as it stands (our block cut out), and the caller rolls pfB-DNS back, so the restore keeps the line. While the Advanced page's EDNS
+ * size is automatic and nothing of the admin's sets one, the clause also carries `edns-buffer-size:` for the SAVED interfaces
+ * (pfb_dns_proxy_edns_line()): the Resolver on lo0 would otherwise advertise the loopback MTU.
+ *
+ * @param string|null $unsafe_line set to the admin's line when one was found after the move (TRUE is returned: the saved copy changed)
  * @return bool TRUE iff config.xml changed (write_config was called once).
  */
-function pfb_dns_proxy_resolver(bool $on): bool {
+function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 	if (!$on && !pfb_dns_proxy_owns_resolver()) {
 		return FALSE;
 	}
@@ -13578,7 +13634,7 @@ function pfb_dns_proxy_resolver(bool $on): bool {
 		return FALSE;
 	}
 	try {
-		$changed = pfb_dns_proxy_resolver_locked($on);
+		$changed = pfb_dns_proxy_resolver_locked($on, $unsafe_line);
 	} finally {
 		unlock($lock);
 	}
@@ -13687,8 +13743,32 @@ function pfb_dns_proxy_listener_directive(string $code): ?array {
 	return NULL;
 }
 
-/** pfb_dns_proxy_resolver()'s move or restore, called with the config lock held and config.xml freshly read. */
-function pfb_dns_proxy_resolver_locked(bool $on): bool {
+/**
+ * The `edns-buffer-size:` line our clause carries, or NULL for none. Unbound takes the last one and our clause comes last, so the
+ * line would override pfSense's own: it is written only while nothing else sets the size, i.e. the Advanced page says automatic
+ * and the admin's Custom Options carry no such directive ($admin_code: their text as pfb_dns_proxy_directive_text() reads it,
+ * our block cut out). The size is pfSense's own unbound_auto_ednsbufsize() over the SAVED interfaces: over the lo0 the Resolver
+ * is moved to it advertises the loopback MTU (16316) instead of the LAN's (1432).
+ *
+ * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
+ */
+function pfb_dns_proxy_edns_line(array $saved, string $admin_code): ?string {
+	$setting = config_get_path('unbound/edns_buffer_size', '');
+	if (!(empty($setting) || $setting === 'auto') ||
+	    preg_match('/(?<![a-z0-9_-])edns-buffer-size[[:space:]]*:/i', $admin_code) === 1) {
+		return NULL;
+	}
+	require_once('unbound.inc');	// services_unbound_configure() loads it on demand: it may not be loaded yet
+	return 'edns-buffer-size: ' . unbound_auto_ednsbufsize(array_filter(explode(',', (string) $saved['active_interface']['value'])));
+}
+
+/**
+ * pfb_dns_proxy_resolver()'s move or restore, called with the config lock held and config.xml freshly read.
+ *
+ * @param string|null $unsafe_line set (TRUE returned) to the admin's own line when an interface:, port: or include: line stands
+ *        in Custom Options of a Resolver that is already moved, instead of the refusal a move that has not happened yet gets
+ */
+function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): bool {
 	$saved = pfb_dns_proxy_saved();
 	$custom = str_replace("\r\n", "\n", (string) base64_decode((string) config_get_path('unbound/custom_options', '')));
 	$has_marker = pfb_dns_proxy_block_present();
@@ -13772,6 +13852,21 @@ function pfb_dns_proxy_resolver_locked(bool $on): bool {
 	$found = pfb_dns_proxy_listener_directive($code);
 	if ($found !== NULL) {
 		[$class, $name] = $found;
+		if ($saved !== NULL) {
+			// Added after the move: reported to the caller, which rolls pfB-DNS back. The snapshot takes the admin's text as it
+			// stands, our block cut out, so that the restore keeps their line.
+			$unsafe_line = "{$name}:";
+			foreach (explode("\n", $theirs) as $candidate) {
+				if (pfb_dns_proxy_listener_directive(pfb_dns_proxy_directive_text($candidate)[0]) !== NULL) {
+					$unsafe_line = substr(trim($candidate), 0, 200);
+					break;
+				}
+			}
+			$saved['custom_options'] = ['present' => TRUE, 'value' => pfb_text_area_encode($theirs)];
+			PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode((string) json_encode($saved)));
+			write_config('pfBlockerNG: kept the admin\'s Custom Options line in the saved Resolver settings');
+			return TRUE;
+		}
 		if ($class === 'include') {
 			return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain "' . $name . ':", and every include: and include-toplevel: ' .
 			    'line is refused: the DNS proxy cannot read the file an include names, which can hold a listener; remove the line');
@@ -13821,6 +13916,10 @@ function pfb_dns_proxy_resolver_locked(bool $on): bool {
 	$lines = ['server:', PFB_DNS_PROXY_MARKER, 'port: ' . PFB_DNS_PROXY_UNBOUND_PLAIN_PORT,
 	    'interface: 127.0.0.1@' . PFB_DNS_PROXY_UNBOUND_PORT, 'interface: ::1@' . PFB_DNS_PROXY_UNBOUND_PORT,
 	    'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT];
+	$size_line = pfb_dns_proxy_edns_line($saved, $code);
+	if ($size_line !== NULL) {
+		$lines[] = $size_line;
+	}
 	foreach (pfb_dns_proxy_acl_networks($saved) as $network) {
 		$lines[] = "access-control: {$network} allow";
 	}
@@ -13864,7 +13963,17 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	// Unbound loads the DNSBL module only while nothing owns the Resolver (a valid snapshot, or our block with none); while the
 	// proxy owns it, Unbound runs the observer in every mode: inert unless the proxy hosts the module and the Resolver forwards,
 	// and the one script that makes pfSense run the boot hook (pfb_upstream_observer_include.inc) which starts pfB-DNS early.
-	$moved = pfb_dns_proxy_resolver($dns_wanted ?? pfb_dns_wanted());
+	// A Resolver disabled under pfB-DNS is stood down first (pfb_dns_proxy_stand_down()); an unsafe Custom Options line added after
+	// the move is rolled back like a failed activation, which regenerates unbound.conf and restarts Unbound itself.
+	$unsafe_line = NULL;
+	$moved = pfb_dns_proxy_stand_down() || pfb_dns_proxy_resolver($dns_wanted ?? pfb_dns_wanted(), $unsafe_line);
+	if ($unsafe_line !== NULL) {
+		pfb_dns_proxy_roll_back(
+			"the DNS Resolver's Custom Options gained the line \"{$unsafe_line}\" after pfB-DNS took the Resolver, and an interface:, port: or include: line can take a listener the DNS proxy needs",
+			'Your line was kept in Custom Options (Services > DNS Resolver): remove it, then turn pfB-DNS on again.'
+		);
+		$moved = FALSE;
+	}
 	$owned = pfb_dns_proxy_owns_resolver();
 	$module = $mode == 'enabled' && !$owned;
 	$observer = $owned;
