@@ -94,6 +94,11 @@ for it. A gateway that stops waiting earlier (its own deadline, a client that we
 then; the late ANSWER or DROP is read and discarded. A late FORWARD for such an id is answered at once with an
 empty REPLY and no exchange with Unbound takes place.
 
+The gateway keeps at most 4096 ids reserved, in flight or abandoned. Live queries never reach that many (512 UDP,
+512 DoH and DoQ, and 4 for each of 128 TCP and DoT connections), so the rest is room for abandoned ones; a decider that
+never sends a final frame fills it. At the cap a new query is answered SERVFAIL by the gateway, with no QUERY sent,
+nothing reserved is evicted, and one log line per burst says so; a final frame frees a place.
+
 An unknown or finished id is not an error: a REPLY the decider is not waiting for (finished query, never-seen id,
 or an id with no FORWARD outstanding) is ignored, and so is any frame the gateway receives for an id it no longer
 tracks.

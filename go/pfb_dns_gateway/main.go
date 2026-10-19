@@ -458,7 +458,7 @@ func realMain(args []string, stderr io.Writer) int {
 		logger.Printf("pfb_dns_gateway: %v\nusage: pfb_dns_gateway [flags] -- <decider command...>   (-h lists the flags)", err)
 		return 2
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP) // SIGHUP's default action would leave a stale ready file
 	defer stop()
 	cfg.interrupt = ctx.Done()
 	srv, err := start(cfg, logger.Printf)
