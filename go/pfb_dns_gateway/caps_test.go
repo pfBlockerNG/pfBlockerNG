@@ -120,7 +120,7 @@ func TestUDPQueriesOverTheInflightCapAreDropped(t *testing.T) {
 	}
 }
 
-// G17: the over-limit line is one per flood, not one per run: once the queries have drained, the next flood logs again.
+// G17: the over-limit line is one per flood, however many queries the flood loses, and the next flood logs again.
 func TestUDPOverloadIsLoggedAgainForTheNextFlood(t *testing.T) {
 	r := newRig(t, rigConfig{acl: aclMixed})
 	var gate atomic.Pointer[chan struct{}] // what the decider's queries wait for: one channel per flood
@@ -146,15 +146,17 @@ func TestUDPOverloadIsLoggedAgainForTheNextFlood(t *testing.T) {
 				r.nextQuery()
 			}
 		}
-		send(maxUDPInflight + 1) // over the cap: dropped
-		// A refused client is answered by the read loop itself: once its REFUSED arrives, the datagram above (read
-		// earlier, in order) has been judged.
+		for id := maxUDPInflight + 1; id <= maxUDPInflight+3; id++ { // over the cap: three dropped, one line
+			send(id)
+		}
+		// A refused client is answered by the read loop itself: once its REFUSED arrives, the datagrams above (read
+		// earlier, in order) have been judged.
 		if _, err := refused.Write(buildQuery(t, 1, "example.", true)); err != nil {
 			t.Fatal(err)
 		}
 		udpReply(t, refused)
 		if n := strings.Count(r.logs.joined(), "UDP queries in flight"); n != flood {
-			t.Fatalf("flood %d: %d over-limit lines so far, want %d (one per flood): %s", flood, n, flood, r.logs.joined())
+			t.Fatalf("flood %d: %d over-limit lines so far, want %d (one per flood, three queries lost in each): %s", flood, n, flood, r.logs.joined())
 		}
 		r.requireNoOtherQuery()
 
