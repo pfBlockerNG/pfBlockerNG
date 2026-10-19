@@ -351,13 +351,15 @@ func TestARefusalByTheGlobalBudgetDoesNotCostTheAddressItsShare(t *testing.T) {
 				}
 			}
 		}
-		third := r.udpClient("127.0.0.7")
-		for id := 1; id <= 300; id++ { // each one is refused by the global budget, 300 in all: more than a share
-			if _, err := third.Write(buildQuery(t, uint16(id), "example.", true)); err != nil {
-				t.Fatal(err)
+		third, refused := r.udpClient("127.0.0.7"), r.udpClient(clientRefused)
+		for batch := 0; batch < 304; batch += 8 { // each one is refused by the global budget, 304 in all: more than a share
+			for i := 1; i <= 8; i++ {
+				if _, err := third.Write(buildQuery(t, uint16(batch+i), "example.", true)); err != nil {
+					t.Fatal(err)
+				}
 			}
+			udpJudged(t, refused) // paced: the kernel's socket buffer never drops one, so every datagram is judged before the next batch
 		}
-		udpJudged(t, r.udpClient(clientRefused)) // the 300 above were judged
 		r.requireNoOtherQuery()
 		close(release)
 		eventually(t, "the budget to drain", func() bool { return r.g.udpInflight.Load() == 0 })
