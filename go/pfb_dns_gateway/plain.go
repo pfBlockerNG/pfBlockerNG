@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -106,18 +107,41 @@ func (g *gateway) closeOnStop(closeFn func()) {
 	g.mu.Unlock()
 }
 
-// stop ends serving: listeners and client connections are closed, queries in flight are cancelled.
+// stop ends serving: listeners are closed and queries in flight are cancelled. TCP and DoT connections answer what
+// they hold with SERVFAIL and close, DoT with close_notify. What is still running after stopBound is closed, and
+// after another stopBound stop gives up waiting.
 func (g *gateway) stop() {
 	g.cancel()
 	g.mu.Lock()
 	for _, closeFn := range g.closers {
 		closeFn()
 	}
+	g.mu.Unlock()
+	done := make(chan struct{})
+	go func() { g.wg.Wait(); close(done) }()
+	if g.waited(done) {
+		return
+	}
+	g.mu.Lock()
 	for c := range g.clients {
 		_ = c.Close()
 	}
 	g.mu.Unlock()
-	g.wg.Wait()
+	if !g.waited(done) {
+		g.logf("stop: serving goroutines still running after %s; not waiting for them", 2*g.stopBound)
+	}
+}
+
+// waited reports whether done was closed within stopBound.
+func (g *gateway) waited(done <-chan struct{}) bool {
+	t := time.NewTimer(g.stopBound)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // pause backs off after an accept or read error, so a persistent one cannot spin the CPU.
@@ -241,12 +265,33 @@ func (g *gateway) track(conn net.Conn) bool {
 	return true
 }
 
-// serveConn answers one client connection: length-framed queries one at a time over one upstream connection. The
-// slot was taken at accept, so the TLS handshake (bounded by g.handshake) happens inside it.
+// enter registers a request handler that stop() waits for, one the serving goroutine does not own (DoH: an
+// http.Server does not wait for its handlers); false when the gateway is already stopping. The caller calls g.wg.Done.
+func (g *gateway) enter() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ctx.Err() != nil {
+		return false
+	}
+	g.wg.Add(1)
+	return true
+}
+
+// closeTLS ends a TLS connection with close_notify (RFC 8446 6.1). A peer that does not take it within bound is cut
+// off at the TCP level: tls.Conn.Close alone gives it 5 s, and the rc stop loop kills after 5 s.
+func closeTLS(tc *tls.Conn, raw net.Conn, bound time.Duration) {
+	cut := time.AfterFunc(bound, func() { _ = raw.Close() })
+	_ = tc.Close()
+	cut.Stop()
+}
+
+// serveConn answers one client connection: up to connPipeline queries at once, each reply written when it is ready
+// (RFC 7766 6.2.1.1), forwarding over the connection's own Unbound connections. At the limit the connection is not
+// read until a query is answered. The slot was taken at accept, so the TLS handshake (bounded by g.handshake) happens
+// inside it.
 func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls.Config) {
 	defer g.wg.Done()
 	defer func() {
-		_ = conn.Close()
 		g.mu.Lock()
 		delete(g.clients, conn)
 		g.mu.Unlock()
@@ -254,6 +299,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 			g.tcpOverload.Store(false)
 		}
 	}()
+	defer conn.Close()
 	if !g.track(conn) {
 		return
 	}
@@ -264,6 +310,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		if tc.HandshakeContext(g.ctx) != nil {
 			return
 		}
+		defer closeTLS(tc, conn, g.closeBound)
 		stream = tc
 	}
 	src, dst := proxyEndpoints(peer, conn.LocalAddr().(*net.TCPAddr).AddrPort())
@@ -271,36 +318,77 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	if err != nil {
 		return
 	}
-	up := g.up.newTCP(header)
-	defer up.close()
+	pool := g.up.newPool(header)
+	ctx, cancel := context.WithCancel(g.ctx)
+	var (
+		handlers sync.WaitGroup
+		wmu      sync.Mutex // frames are written one at a time, each by one Write
+		broken   bool       // a reply could not be written; guarded by wmu
+		slots    = make(chan struct{}, connPipeline)
+	)
+	defer func() { // the handlers end before the stream closes: a Close during a Write sends no close_notify
+		cancel()
+		handlers.Wait()
+		pool.close()
+	}()
+	context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Unix(1, 0)) }) // ends the read below: the client left, a write failed, or stop()
+	write := func(reply []byte) {
+		wmu.Lock()
+		defer wmu.Unlock()
+		if !broken && g.writeReply(stream, reply) != nil {
+			broken = true
+			cancel() // a client that cannot be written to is as good as gone
+		}
+	}
 	for {
-		wire, err := g.readQuery(stream)
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		wire, err := g.readQuery(ctx, stream)
 		if err != nil {
 			return
 		}
-		disp, reply := g.screen(src.Addr(), wire)
-		switch disp {
+		switch disp, reply := g.screen(src.Addr(), wire); disp {
 		case hangUp:
 			return
+		case replyNow:
+			write(reply)
+			<-slots
+		case discard:
+			<-slots
 		case toDecider:
-			reply = g.resolve(g.ctx, src.Addr(), false, wire, up.exchange)
-		}
-		if reply != nil && g.writeReply(stream, reply) != nil {
-			return
+			handlers.Add(1)
+			go func() {
+				defer handlers.Done()
+				defer func() { <-slots }()
+				if reply := g.resolve(ctx, src.Addr(), false, wire, pool.exchange); reply != nil {
+					write(reply)
+				}
+			}()
 		}
 	}
 }
 
-func (g *gateway) readQuery(conn net.Conn) ([]byte, error) {
+func (g *gateway) readQuery(ctx context.Context, conn net.Conn) ([]byte, error) {
 	var size [2]byte
-	_ = conn.SetReadDeadline(time.Now().Add(g.tcpIdle))
-	if _, err := io.ReadFull(conn, size[:]); err != nil {
+	if err := g.readFull(ctx, conn, size[:]); err != nil {
 		return nil, err
 	}
 	wire := make([]byte, binary.BigEndian.Uint16(size[:]))
+	return wire, g.readFull(ctx, conn, wire)
+}
+
+// readFull fills buf within one idle timeout. A ctx that ended wakes the read by moving the deadline back; the check
+// after the new deadline is set keeps that wake-up from being overwritten.
+func (g *gateway) readFull(ctx context.Context, conn net.Conn, buf []byte) error {
 	_ = conn.SetReadDeadline(time.Now().Add(g.tcpIdle))
-	_, err := io.ReadFull(conn, wire)
-	return wire, err
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := io.ReadFull(conn, buf)
+	return err
 }
 
 // writeReply gives a client that never reads one idle timeout, then gives up on it.

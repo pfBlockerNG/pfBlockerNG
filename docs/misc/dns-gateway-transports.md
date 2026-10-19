@@ -22,7 +22,7 @@ serving: under `daemon -r` a broken certificate must not crash-loop the only :53
 
 | Transport | Flags | Socket | TLS | Cap |
 |---|---|---|---|---|
-| DoT | `--dot`, on every `--listen` address at the config's tlsport | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s |
+| DoT | `--dot`, on every `--listen` address at the config's tlsport | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
 | DoH | `--doh-listen` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
 | DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle 30 s; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 
@@ -32,6 +32,30 @@ dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracket
 pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
 `--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoH and
 DoQ ports are their own, so nothing collides with the plain DNS listeners there.
+
+## TCP and DoT connections
+
+One connection carries up to 4 queries at once (RFC 7766 6.2.1.1: a server SHOULD process them concurrently and MAY
+answer out of order). Each is decided and forwarded on its own and its reply is written when it is ready, so replies
+can come in another order than the queries. At 4 the connection is not read until one query is answered: TCP's flow
+control pushes back, and nothing already accepted is dropped. Each forward to Unbound takes one of the connection's own
+Unbound TCP connections, opened behind the client's PROXYv2 header and used for one exchange at a time; a connection that
+fails or times out is closed and never reused. A client that closes its connection, or stops reading its replies,
+abandons its queries and frees its slot. A connection at its 4 queries is not read, so it learns that its client left
+when one of them finishes (at most one whole-query limit). A FIN counts as a client that left, so one that sends a
+query and half-closes before the reply may get a SERVFAIL instead of its answer.
+
+A DoT connection ends with a TLS close_notify (RFC 8446 6.1) whatever ends it: the idle timeout, a failed write, or
+the gateway stopping. A client that does not take it is cut off at the TCP level after 250 ms.
+
+## Stopping
+
+SIGTERM, SIGINT and SIGHUP stop the gateway the same way: the ready file is removed, the listeners are closed and
+what is in flight is cancelled. A query still being decided is answered SERVFAIL, built by the gateway; the reply Unbound
+sends later is never relayed, because the decider did not approve it. TCP and DoT clients get that answer and then the
+close; DoH and DoQ connections are closed with their listeners. The gateway waits for its goroutines, DoH requests being
+served included, for 500 ms; the client connections still open then are closed, and after another 500 ms the gateway
+stops waiting and exits (the decider is waited for apart, up to its own limit).
 
 Every transport goes through the same path as plain DNS: the Resolver ACL, then the decider, then PROXYv2 to Unbound
 with the client in the header. The ACL is Unbound's own, read from `--unbound-conf` (`/var/unbound/unbound.conf`) and
@@ -77,6 +101,9 @@ resolved client and the local listener, never the front end's own addresses.
 - A query with a non-zero Message ID: RFC 9250 4.3.3 lists it as a protocol error ("It SHOULD forcibly abort the
   connection using QUIC's CONNECTION_CLOSE mechanism and SHOULD use the DoQ error code DOQ_PROTOCOL_ERROR"). The
   connection is closed with `DOQ_PROTOCOL_ERROR`.
+- A query that carries the edns-tcp-keepalive option (code 11, RFC 7828): RFC 9250 4.3.3 lists receiving it as a
+  protocol error and 5.5.2 forbids sending it on DoQ ("because it is specific to the use of TCP/TLS as a transport").
+  The connection is closed with `DOQ_PROTOCOL_ERROR`, as for a non-zero Message ID. Other options, padding for one, pass.
 - Other malformed streams (FIN before the announced length, more bytes than announced, a second query, no FIN within
   the query timeout, fewer bytes than a DNS header, a response instead of a query) are reset with `DOQ_PROTOCOL_ERROR`
   and the connection goes on. RFC 9250 4.3.3 lists most of these as connection-fatal with the same SHOULD; the gateway
@@ -155,3 +182,6 @@ exercised with hand-built headers in `doh_test.go`.
 
 - [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html) sections 4.1, 4.2, 5.1.
 - [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) sections 4.1 to 4.3.
+- [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) sections 4.3.3 and 5.5.2 for the keepalive option.
+- [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) section 6.2.1.1 (query pipelining over TCP) and
+  [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446.html) section 6.1 (close_notify).

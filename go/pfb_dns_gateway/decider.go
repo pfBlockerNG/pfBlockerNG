@@ -28,6 +28,9 @@ const (
 	maxFrameLen         = 5 + 1 + 1 + 255 + 65535 // type + id, then transport + n + IP text + DNS wire
 	maxWire             = 65535
 	defaultWriteTimeout = 10 * time.Second
+	// Ids reserved at once, in flight or abandoned until the decider's final frame. Live queries top out at 1536 (512 UDP,
+	// 512 DoH and DoQ, 4 for each of 128 TCP and DoT connections); the rest is room for abandoned ones.
+	maxOutstanding = 4096
 )
 
 // protocolError is a framing violation: the session cannot be trusted any further.
@@ -36,6 +39,7 @@ type protocolError string
 func (e protocolError) Error() string { return string(e) }
 
 var errDeciderClosed = errors.New("decision socket closed by the gateway")
+var errDeciderBusy = errors.New("decider has too many queries outstanding")
 
 // writeFrame sends the frame with one Write, so concurrent callers cannot interleave bytes.
 func writeFrame(w io.Writer, typ byte, id uint32, payload []byte) error {
@@ -162,6 +166,7 @@ type Decider struct {
 	nextID  uint32
 	err     error
 	closing bool
+	capHit  bool // the burst over maxOutstanding is logged; cleared when the table drains
 }
 
 // NewDecider starts reading conn; READY, failure and queries are observed through the methods below.
@@ -245,6 +250,9 @@ func (d *Decider) finish(id uint32, answer []byte) {
 	d.mu.Lock()
 	c := d.calls[id]
 	delete(d.calls, id)
+	if len(d.calls) == 0 {
+		d.capHit = false
+	}
 	d.mu.Unlock()
 	if c != nil {
 		c.final <- answer
@@ -302,6 +310,13 @@ func (d *Decider) register(c *call) (uint32, error) {
 	case <-d.done:
 		return 0, d.err
 	default:
+	}
+	if len(d.calls) >= maxOutstanding {
+		if !d.capHit {
+			d.capHit = true
+			d.logf("%d decider queries outstanding: answering new ones SERVFAIL until they finish", maxOutstanding)
+		}
+		return 0, errDeciderBusy
 	}
 	for {
 		d.nextID++

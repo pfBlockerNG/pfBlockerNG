@@ -10,14 +10,17 @@ import (
 )
 
 const (
-	maxUDPInflight   = 512              // concurrent UDP queries, each holding an upstream socket; more are dropped
-	maxMuxInflight   = 512              // DoH and DoQ queries in flight together; more get 503 (DoH) or SERVFAIL (DoQ)
-	maxTCPConns      = 128              // TCP and DoT connections at once; more are closed at accept
-	maxDoHConns      = 128              // DoH connections at once; more are closed at accept
-	maxDoQConns      = 128              // DoQ connections at once; more are refused before their handshake
-	defaultTCPIdle   = 30 * time.Second // Unbound's tcp-idle-timeout default
-	defaultGrace     = time.Second      // added to 2 x timeout for the whole query
-	defaultHandshake = 10 * time.Second // TLS handshake, PROXY header and HTTP request headers of a new connection
+	maxUDPInflight   = 512                    // concurrent UDP queries, each holding an upstream socket; more are dropped
+	maxMuxInflight   = 512                    // DoH and DoQ queries in flight together; more get 503 (DoH) or SERVFAIL (DoQ)
+	maxTCPConns      = 128                    // TCP and DoT connections at once; more are closed at accept
+	connPipeline     = 4                      // queries of one TCP or DoT connection in flight at once; the connection is not read past them
+	maxDoHConns      = 128                    // DoH connections at once; more are closed at accept
+	maxDoQConns      = 128                    // DoQ connections at once; more are refused before their handshake
+	defaultTCPIdle   = 30 * time.Second       // Unbound's tcp-idle-timeout default
+	defaultGrace     = time.Second            // added to 2 x timeout for the whole query
+	defaultHandshake = 10 * time.Second       // TLS handshake, PROXY header and request headers of a new connection
+	defaultCloseWait = 250 * time.Millisecond // a DoT peer gets this long to take close_notify before the TCP connection is cut
+	defaultStopWait  = 500 * time.Millisecond // each of stop()'s two waits; with the decider's 3 s, under the rc stop loop's 5 s KILL
 )
 
 // connLimit caps the connections of one transport; the refusals of one burst are logged once.
@@ -50,14 +53,16 @@ func (c *connLimit) release() {
 
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
-	acl       *ACL
-	dec       *Decider
-	up        *upstream
-	timeout   time.Duration // wait for Unbound per exchange
-	grace     time.Duration
-	tcpIdle   time.Duration // idle limit for reading a query and for writing a reply
-	handshake time.Duration // limit for a TLS handshake, a PROXY header and request headers
-	logf      func(format string, args ...any)
+	acl        *ACL
+	dec        *Decider
+	up         *upstream
+	timeout    time.Duration // wait for Unbound per exchange
+	grace      time.Duration
+	tcpIdle    time.Duration // idle limit for reading a query and for writing a reply
+	handshake  time.Duration // limit for a TLS handshake, a PROXY header and request headers
+	closeBound time.Duration // limit for sending close_notify
+	stopBound  time.Duration // limit for each of stop()'s waits for the serving goroutines
+	logf       func(format string, args ...any)
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -111,6 +116,7 @@ func (q *idleGroup) Wait() {
 func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, logf func(format string, args ...any)) *gateway {
 	g := &gateway{
 		acl: acl, dec: dec, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, logf: logf,
+		closeBound: defaultCloseWait, stopBound: defaultStopWait,
 		clients:  map[net.Conn]struct{}{},
 		dohConns: newConnLimit("DoH", maxDoHConns), doqConns: newConnLimit("DoQ", maxDoQConns),
 	}
