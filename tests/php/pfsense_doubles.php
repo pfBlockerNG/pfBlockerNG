@@ -1670,9 +1670,10 @@ function listtags() {
 }
 
 // --- pfSense_get_pf_rules() double (widget packet counts) ---
-// Widget packet counts read the live pf rule set; tests seed $GLOBALS['pfb_test_pf_rules'].
+// Widget packet counts read the live pf rule set; tests seed $GLOBALS['pfb_test_pf_rules'], returned as-is
+// (untyped, so a test can seed the non-array a failed kernel read gives).
 if (!function_exists('pfSense_get_pf_rules')) {
-	function pfSense_get_pf_rules(): array {
+	function pfSense_get_pf_rules() {
 		return $GLOBALS['pfb_test_pf_rules'] ?? [];
 	}
 }

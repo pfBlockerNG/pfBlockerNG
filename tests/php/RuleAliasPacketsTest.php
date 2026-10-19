@@ -45,4 +45,48 @@ final class RuleAliasPacketsTest extends TestCase
 			pfb_rule_alias_packets($filter_rules, $pf_rules)
 		);
 	}
+
+	public function testTwoEnabledRulesOnOneAliasCountTwoAndTheirTrackersSumTheirPackets(): void
+	{
+		$filter_rules = [
+			['descr' => 'pfB_Alpha in', 'tracker' => 201, 'type' => 'block',
+				'source' => ['address' => 'pfB_Alpha_v4'], 'destination' => ['address' => 'any']],
+			['descr' => 'pfB_Alpha out', 'tracker' => 202, 'type' => 'block',
+				'source' => ['address' => 'any'], 'destination' => ['address' => 'pfB_Alpha_v4']],
+		];
+		$pf_rules = [
+			['tracker' => 201, 'packets' => 30],
+			['tracker' => 202, 'packets' => 12],
+		];
+
+		$this->assertSame(
+			['pfB_Alpha_v4' => ['rule' => 2, 'packets' => 42, 'type' => 'Block']],
+			pfb_rule_alias_packets($filter_rules, $pf_rules)
+		);
+	}
+
+	public function testDnsblPermitRuleIsSkippedLikeThePingRule(): void
+	{
+		$filter_rules = [
+			['descr' => 'pfB_DNSBL_Permit', 'tracker' => 301, 'type' => 'pass',
+				'source' => ['address' => 'pfB_Delta_v4'], 'destination' => ['address' => 'any']],
+		];
+		$pf_rules = [['tracker' => 301, 'packets' => 500]];
+
+		$this->assertSame([], pfb_rule_alias_packets($filter_rules, $pf_rules));
+	}
+
+	public function testRuleWithAnEmptyTypeIsLabelledUnknown(): void
+	{
+		$filter_rules = [
+			['descr' => 'pfB_Epsilon', 'tracker' => 401, 'type' => '',
+				'source' => ['address' => 'pfB_Epsilon_v4'], 'destination' => ['address' => 'any']],
+		];
+		$pf_rules = [['tracker' => 401, 'packets' => 5]];
+
+		$this->assertSame(
+			['pfB_Epsilon_v4' => ['rule' => 1, 'packets' => 5, 'type' => 'unknown']],
+			pfb_rule_alias_packets($filter_rules, $pf_rules)
+		);
+	}
 }

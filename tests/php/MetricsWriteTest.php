@@ -594,4 +594,67 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame([], $this->cronItems());
 		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
 	}
+
+	public function testNonArrayPfRulesReadIsDownWithoutThrowing(): void
+	{
+		$GLOBALS['pfb_test_pf_rules'] = FALSE;
+
+		$s = pfb_metrics_collect();
+
+		$this->assertFalse($s['source_up']['pf_rules']);
+		$this->assertNull($s['ip_rule_packets']);
+	}
+
+	public function testNonSqliteResolverFileGivesNullAndSourceDown(): void
+	{
+		file_put_contents($GLOBALS['pfb']['dnsbl_resolver'], str_repeat('not a sqlite database ', 64));
+
+		$s = pfb_metrics_collect();
+
+		$this->assertNull($s['resolver_queries']);
+		$this->assertFalse($s['source_up']['resolver_db']);
+		$this->assertTrue($s['source_up']['dnsbl_db'], 'the other database is independent');
+	}
+
+	public function testShowAggRevealsAggregateRulePacketsButNotTheVip(): void
+	{
+		config_set_path('filter/rule', [
+			['descr' => 'pfB_Deny_Aggregated_v4 block', 'tracker' => 1001, 'type' => 'block', 'source' => ['address' => 'pfB_Deny_Aggregated_v4']],
+			['descr' => 'pfB_DNSBL VIP pass', 'tracker' => 1002, 'type' => 'pass', 'destination' => ['address' => 'pfB_DNSBL_VIPs']],
+		]);
+		$GLOBALS['pfb_test_pf_rules'] = [
+			['tracker' => 1001, 'packets' => 42],
+			['tracker' => 1002, 'packets' => 7],
+		];
+		$this->assertSame([], pfb_metrics_collect()['ip_rule_packets'], 'before: aggregates are hidden while show_agg is off');
+
+		config_set_path('installedpackages/pfblockerngglobal/widget-show_agg', 'on');
+
+		$this->assertSame(['pfB_Deny_Aggregated_v4' => 42], pfb_metrics_collect()['ip_rule_packets']);
+	}
+
+	public function testEnablingAgainLeavesAnExistingCronEntryAlone(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		pfb_metrics_configure_cron(TRUE, $dir);
+		// The install double overwrites a matching entry with who=root, so a reinstall would erase this marker.
+		config_set_path('cron/item/0/who', 'marker');
+
+		pfb_metrics_configure_cron(TRUE, $dir);
+
+		$this->assertSame('marker', $this->cronItems()[0]['who'], 'an entry that already matches must not be reinstalled');
+	}
+
+	public function testSuccessfulWriteReplacesAnExistingPromFile(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		file_put_contents("{$dir}/pfblockerng.prom", 'previous publish');
+
+		$this->assertTrue(pfb_metrics_write($dir));
+
+		$this->assertSame(pfb_metrics_render(pfb_metrics_collect()), file_get_contents("{$dir}/pfblockerng.prom"));
+	}
 }
