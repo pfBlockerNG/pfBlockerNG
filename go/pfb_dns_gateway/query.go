@@ -26,6 +26,8 @@ const (
 	maxUDPPerAddr = maxUDPInflight / 2
 	maxMuxPerAddr = maxMuxInflight / 2
 	maxTCPPerAddr = maxTCPConns / 2
+	maxDoHPerAddr = maxDoHConns / 2
+	maxDoQPerAddr = maxDoQConns / 2
 )
 
 // connLimit caps the connections of one transport; the refusals of one burst are logged once.
@@ -103,30 +105,30 @@ func (l *addrLimit) release(a netip.Addr) {
 
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
-	acl                                *ACL
-	dec                                *Decider
-	up                                 *upstream
-	timeout                            time.Duration // wait for Unbound per exchange
-	grace                              time.Duration
-	tcpIdle                            time.Duration // idle limit for reading a query and for writing a reply
-	handshake                          time.Duration // limit for a TLS handshake, a PROXY header and request headers
-	closeBound                         time.Duration // limit for sending close_notify
-	stopBound                          time.Duration // limit for each of stop()'s waits for the serving goroutines
-	logf                               func(format string, args ...any)
-	udpPerAddr, muxPerAddr, tcpPerAddr int    // per-address shares of the budgets below; a test lifts one to look at the global cap alone
-	doqAccepted                        func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
+	acl                                                        *ACL
+	dec                                                        *Decider
+	up                                                         *upstream
+	timeout                                                    time.Duration // wait for Unbound per exchange
+	grace                                                      time.Duration
+	tcpIdle                                                    time.Duration // idle limit for reading a query and for writing a reply
+	handshake                                                  time.Duration // limit for a TLS handshake, a PROXY header and request headers
+	closeBound                                                 time.Duration // limit for sending close_notify
+	stopBound                                                  time.Duration // limit for each of stop()'s waits for the serving goroutines
+	logf                                                       func(format string, args ...any)
+	udpPerAddr, muxPerAddr, tcpPerAddr, dohPerAddr, doqPerAddr int    // per-address shares of the budgets below; a test lifts one to look at the global cap alone
+	doqAccepted                                                func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
 
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup // every serving goroutine; stop() waits for them
 	queries idleGroup      // UDP queries from their datagram to the end of their handler, reply included
 
-	udpInflight, tcpConns        atomic.Int64
-	udpOverload, tcpOverload     atomic.Bool // one log line per burst: set when logged, cleared when drained
-	muxInflight                  atomic.Int64
-	muxOverload                  atomic.Bool
-	dohConns, doqConns           *connLimit
-	udpAddrs, muxAddrs, tcpAddrs addrLimit // what each client address holds of the budgets above
+	udpInflight, tcpConns                            atomic.Int64
+	udpOverload, tcpOverload                         atomic.Bool // one log line per burst: set when logged, cleared when drained
+	muxInflight                                      atomic.Int64
+	muxOverload                                      atomic.Bool
+	dohConns, doqConns                               *connLimit
+	udpAddrs, muxAddrs, tcpAddrs, dohAddrs, doqAddrs addrLimit // what each client address holds of the budgets above
 
 	mu      sync.Mutex
 	closers []func() // what stop() closes besides client connections: listeners, servers
@@ -170,7 +172,7 @@ func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, log
 	g := &gateway{
 		acl: acl, dec: dec, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, logf: logf,
 		closeBound: defaultCloseWait, stopBound: defaultStopWait,
-		udpPerAddr: maxUDPPerAddr, muxPerAddr: maxMuxPerAddr, tcpPerAddr: maxTCPPerAddr,
+		udpPerAddr: maxUDPPerAddr, muxPerAddr: maxMuxPerAddr, tcpPerAddr: maxTCPPerAddr, dohPerAddr: maxDoHPerAddr, doqPerAddr: maxDoQPerAddr,
 		clients:  map[net.Conn]struct{}{},
 		dohConns: newConnLimit("DoH", maxDoHConns), doqConns: newConnLimit("DoQ", maxDoQConns),
 	}
