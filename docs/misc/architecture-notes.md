@@ -560,8 +560,8 @@ The gateway reads the file once, at start, as root, and never again. A renewal r
 gateway makes a Unix socket, `--ctl-socket` (`$pfb['dns_proxy_ctl']`, `/var/run/pfb_dns/ctl.sock`: directory 0700, socket 0600),
 before its privilege drop and serves it after, and accepts a push from uid 0 only (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on
 FreeBSD: a connection from another user, or whose credential cannot be read, is closed unread). `pfb_dns_proxy_certificate_refresh()`
-connects in its own process (3 s per step: connect, send, reply; no external process, so no `timeout(1)` applies), sends one
-frame, the length of the PEM as 4 bytes big-endian and then the PEM, and reads one reply line, `ok` or `error: <reason>`; it does so
+connects in its own process (an absolute 3 s deadline per step: connect, send, complete reply; partial progress does not extend it),
+sends one frame, the length of the PEM as 4 bytes big-endian and then the PEM, and reads one complete reply line, `ok` or `error: <reason>`; it does so
 only once the gateway is READY and the file differs from what was last pushed (`$pfb['dns_proxy_cert']`'s sibling `tls.pushed`, a
 SHA-256 written after an `ok` and removed by the rc start of a new process). A refused push, a gateway that does not answer and a gateway with no
 socket are one notice per reason; the gateway keeps the certificate it has and the next apply or tick tries again. The gateway
