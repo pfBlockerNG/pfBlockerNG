@@ -18,6 +18,7 @@ TC = 0x0200
 RD = 0x0100
 RA = 0x0080
 CD = 0x0010
+OPCODE_MASK = 0x7800  # header bits 11-14: the opcode
 
 CLASS_IN = 1
 CLASS_ANY = 255

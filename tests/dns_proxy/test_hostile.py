@@ -206,6 +206,40 @@ def test_a_query_unbound_answers_itself_that_gets_no_reply_is_a_servfail(booted:
     assert dnswire.parse(reply).rcode == 2  # SERVFAIL, as a module-decided query gets when Unbound is silent
 
 
+@pytest.mark.parametrize(
+    "wire",
+    [FORWARDED["opcode UPDATE"], FORWARDED["opcode IQUERY"], FORWARDED["opcode STATUS"]],
+    ids=["update", "iquery", "status"],
+)
+def test_an_opcode_query_unbound_gives_no_reply_to_gets_a_header_only_servfail_with_its_id_and_opcode(
+    booted: Booted, wire: bytes
+) -> None:
+    """An opcode the decider forwards unchanged is answered like every other forwarded query when Unbound is silent: a
+    SERVFAIL that keeps the id and the opcode, header only, as the decider builds for a query it does not parse."""
+
+    async def silent(_wire: bytes) -> bytes | None:
+        return None
+
+    reply = _resolve(booted, wire, silent)
+    assert reply is not None
+    query, message = dnswire.parse(wire), dnswire.parse(reply)
+    assert (
+        len(reply),
+        message.id,
+        message.flags & 0x7800,
+        message.flags & dnswire.QR,
+        message.rcode,
+        message.questions,
+    ) == (
+        12,
+        query.id,
+        query.flags & 0x7800,
+        dnswire.QR,
+        2,
+        [],
+    )
+
+
 # --- a response is never answered ------------------------------------------------------------
 
 
