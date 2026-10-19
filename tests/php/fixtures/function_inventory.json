@@ -9661,7 +9661,7 @@
                 "name": "wait_s",
                 "byRef": false,
                 "variadic": false,
-                "type": "?float",
+                "type": "float",
                 "default": null
             }
         ]

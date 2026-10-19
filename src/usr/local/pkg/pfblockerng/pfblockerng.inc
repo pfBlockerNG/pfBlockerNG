@@ -8009,14 +8009,14 @@ function pfb_metrics_collect(): array {
 }
 
 // Exclusive lock that orders a publish against an enable or disable; the handle, or FALSE when it is not free within $wait_s
-// (NULL waits for it) or cannot be taken at all. Closing the handle releases it.
-function pfb_metrics_lock(?float $wait_s) {
+// or cannot be taken at all. Closing the handle releases it.
+function pfb_metrics_lock(float $wait_s) {
 	global $pfb;
 	$lock = @fopen($pfb['metrics_lock'], 'c');
 	if ($lock === FALSE) {
 		return FALSE;
 	}
-	if (!($wait_s === NULL ? @flock($lock, LOCK_EX) : pfb_flock_bounded($lock, LOCK_EX, $wait_s))) {
+	if (!pfb_flock_bounded($lock, LOCK_EX, $wait_s)) {
 		fclose($lock);
 		return FALSE;
 	}
@@ -8097,15 +8097,14 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 // The lock covers the sentinel and the published files only, and is released before the cron entry changes: install_cron_job()
 // can start cron, which would inherit the lock fd and block every publish.
 // $lock_wait_s bounds only an enable: an enable that cannot get the lock goes ahead, as touching the sentinel races with nothing.
-// A disable waits for the lock however long: it must not run past a publisher that already passed its sentinel check, which would
-// rename its file in after the removal. That wait is bounded because the holder keeps the lock only around the sweep, the sentinel
-// check and the rename, and the cron's KILL at 55 s releases it.
+// A disable waits past the cron's KILL at 55 s: it must not run past a publisher that already passed its sentinel check, which
+// would rename its file in after the removal, and no live metrics run can still hold the lock once that wait has run out.
 function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter', float $lock_wait_s = 10.0): void {
 	global $pfb;
 	// TERM at 50 s, KILL 5 s later: a run that ignores TERM still dies before it can pile up behind the next minute's.
 	$pfb_metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
 	$sentinel = $pfb['metrics_enabled'];
-	$lock = pfb_metrics_lock($enabled ? $lock_wait_s : NULL);
+	$lock = pfb_metrics_lock($enabled ? $lock_wait_s : 60.0);
 	try {
 		if ($enabled) {
 			@touch($sentinel);
