@@ -165,26 +165,44 @@ func unquote(s string) string {
 	return s
 }
 
+// aclKeys are the keywords a row may start with: access-control (netblock and action), and the four implicit-allow keywords,
+// of which the gateway reads only the netblock. Unbound allows an implicit netblock unless an identical access-control row names it.
+var aclKeys = map[string]bool{
+	"access-control": true, "access-control-view": true, "access-control-tag": true,
+	"access-control-tag-action": true, "access-control-tag-data": true,
+}
+
+// ruleHead reads a row's keyword and the netblock it names. The keyword ends at its first colon; a netblock written straight
+// after that colon is glued to the keyword (`access-control:10.0.0.0/8`), otherwise the netblock is the next word. tail is
+// the words after the netblock. ok is false unless the keyword is one of aclKeys.
+func ruleHead(words []string) (key, netblock string, tail []string, ok bool) {
+	if len(words) == 0 {
+		return "", "", nil, false
+	}
+	key, glued, found := strings.Cut(words[0], ":")
+	if !found || !aclKeys[key] {
+		return "", "", nil, false
+	}
+	if glued != "" {
+		return key, glued, words[1:], true
+	}
+	if len(words) < 2 {
+		return "", "", nil, false
+	}
+	return key, words[1], words[2:], true
+}
+
 // parseACLLine accepts `access-control: <netblock> <action>`; a netblock glued to the keyword counts too, as Unbound 1.26.1 reads it.
 func parseACLLine(line string) (netip.Prefix, ACLAction, bool) {
-	f, ok := aclWords(line)
+	words, ok := aclWords(line)
 	if !ok {
 		return netip.Prefix{}, 0, false
 	}
-	var netblock, actionName string
-	switch {
-	case len(f) == 3 && f[0] == "access-control:":
-		netblock, actionName = f[1], f[2]
-	case len(f) == 2:
-		netblock, ok = strings.CutPrefix(f[0], "access-control:")
-		if !ok || netblock == "" {
-			return netip.Prefix{}, 0, false
-		}
-		actionName = f[1]
-	default:
+	key, netblock, tail, ok := ruleHead(words)
+	if !ok || key != "access-control" || len(tail) != 1 {
 		return netip.Prefix{}, 0, false
 	}
-	action, known := aclActions[unquote(actionName)]
+	action, known := aclActions[unquote(tail[0])]
 	if !known {
 		return netip.Prefix{}, 0, false
 	}
@@ -192,19 +210,17 @@ func parseACLLine(line string) (netip.Prefix, ACLAction, bool) {
 	return prefix, action, ok
 }
 
-// implicitAllowRows make Unbound allow their netblock when no access-control row names the same netblock.
-var implicitAllowRows = map[string]bool{
-	"access-control-view:": true, "access-control-tag:": true,
-	"access-control-tag-action:": true, "access-control-tag-data:": true,
-}
-
 // parseImplicitRow reads the netblock of an implicit-allow row.
 func parseImplicitRow(line string) (netip.Prefix, bool) {
-	f, ok := aclWords(line)
-	if !ok || len(f) < 2 || !implicitAllowRows[f[0]] {
+	words, ok := aclWords(line)
+	if !ok {
 		return netip.Prefix{}, false
 	}
-	return parseNetblock(unquote(f[1]))
+	key, netblock, _, ok := ruleHead(words)
+	if !ok || key == "access-control" {
+		return netip.Prefix{}, false
+	}
+	return parseNetblock(unquote(netblock))
 }
 
 // parseNetblock masks host bits and turns a bare address into a host prefix; zones are rejected.
