@@ -52,6 +52,8 @@ func TestOneAddressCannotHoldMoreThanItsShareOfDoHConnections(t *testing.T) {
 	if resp, _ := again.do(again.get(dnsParam(buildQuery(t, 0, "again.example.", true)))); resp.StatusCode != 200 {
 		t.Fatalf("an address whose connection closed got status %d, want 200: the share was not released", resp.StatusCode)
 	}
+	// Back at its share, exactly: a release that gave back more than the one connection closed would let it hold one over.
+	requireTCPClosed(t, dialRawFrom(t, addr.String(), clientAllowed))
 }
 
 // A peer in --doh-trusted may hold more than a share: a front end's connections carry many clients. An address that
@@ -116,6 +118,8 @@ func TestOneAddressCannotHoldMoreThanItsShareOfDoQConnections(t *testing.T) {
 	if got := dialDoQ(t, addr, m, clientAllowed).query(doqQuery(t, "again.example.")); len(got) < 2 {
 		t.Fatalf("an address whose connection closed got %x: the share was not released", got)
 	}
+	// Back at its share, exactly: a release that gave back more than the one connection closed would let it hold one over.
+	requireDoQRefusedBeforeTheHandshake(t, addr, m, clientAllowed)
 }
 
 // A connection that the global budget refuses must not cost its address a share: the share is taken before the global
