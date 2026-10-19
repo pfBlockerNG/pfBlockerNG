@@ -313,6 +313,11 @@ func closeTLS(tc *tls.Conn, raw net.Conn, bound time.Duration) {
 	cut.Stop()
 }
 
+// handshakeTLS runs tc's handshake and reports whether it completed.
+func (g *gateway) handshakeTLS(tc *tls.Conn) bool {
+	return tc.HandshakeContext(g.ctx) == nil
+}
+
 // serveConn answers one client connection: up to connPipeline queries at once, each reply written when it is ready
 // (RFC 7766 6.2.1.1). Unbound is asked over UDP, as a DoH or DoQ client's query is; a truncated reply is asked again
 // over the connection's own Unbound TCP connections. At the limit the connection is not read until a query is
@@ -338,7 +343,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	if tlsConf != nil {
 		tc := tls.Server(conn, tlsConf)
 		_ = tc.SetDeadline(time.Now().Add(g.handshake))
-		if tc.HandshakeContext(g.ctx) != nil {
+		if !g.handshakeTLS(tc) {
 			return
 		}
 		defer closeTLS(tc, conn, g.closeBound)
