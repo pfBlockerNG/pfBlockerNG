@@ -566,7 +566,8 @@ if (!function_exists('write_config')) {
 			$GLOBALS['pfb_test_write_config_hook']($desc);
 		}
 		$GLOBALS['pfb_test_write_config_calls'][] = $desc;
-		return true;
+		// pfb_test_write_config_result: -1 or FALSE fails the save the way pfSense's write_config() does.
+		return $GLOBALS['pfb_test_write_config_result'] ?? true;
 	}
 }
 
@@ -601,6 +602,9 @@ if (!function_exists('services_unbound_configure')) {
 	function services_unbound_configure($restart_dhcp = true, $interface = '') {
 		$GLOBALS['pfb_test_unbound_configure_calls'][] = $restart_dhcp;
 		$GLOBALS['pfb_test_unbound_configure_resolver'][] = config_get_path('unbound');
+		if (isset($GLOBALS['pfb_test_unbound_configure_hook'])) {
+			$GLOBALS['pfb_test_unbound_configure_hook']();
+		}
 		return 0;
 	}
 }
@@ -1911,5 +1915,23 @@ if (!function_exists('pfSense_get_pf_rules')) {
 if (!function_exists('is_pkg_installed')) {
 	function is_pkg_installed(string $n): bool {
 		return in_array($n, $GLOBALS['pfb_test_installed_pkgs'] ?? [], TRUE);
+	}
+}
+
+if (!function_exists('get_notices')) {
+	// pfSense notices.inc: the queue as file_notice() filed it, keyed by time; the doubled file_notice() keeps its rows in
+	// $GLOBALS['pfb_test_file_notices'], escaped as the real queue stores them.
+	function get_notices($category = 'all') {
+		$rows = [];
+		foreach ($GLOBALS['pfb_test_file_notices'] ?? [] as $key => $notice) {
+			$rows[$key] = [
+				'id'       => htmlentities((string) $notice['id']),
+				'notice'   => htmlentities((string) $notice['notice']),
+				'url'      => htmlentities((string) $notice['url']),
+				'category' => htmlentities((string) $notice['category']),
+				'priority' => htmlentities((string) $notice['priority']),
+			];
+		}
+		return $rows ?: false;
 	}
 }

@@ -350,6 +350,7 @@ if (is_file("{$state}/config.json")) {
 	config_set_path("{$dnsbl}/pfb_dnsvip4", '_vip_test_a');
 	config_set_path("{$dnsbl}/pfb_py_reply", 'on');
 	config_set_path("{$dnsbl}/pfb_control", 'on');
+	config_set_path("{$dnsbl}/pfb_py_cache_max", '777');	// a cap the apply writes into the ini: the recovery must not reset it to the default
 	// The DNSBL logging policy an earlier apply already migrated (issue #3288): without the key the disable pass's policy
 	// upgrade calls pfb_global() again, which re-reads enable_cb and turns the uninstall's disable back on (unmigratedPolicy).
 	if (empty($scenario['unmigratedPolicy'])) {
