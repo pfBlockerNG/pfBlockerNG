@@ -82,6 +82,9 @@ pytest:tests.dns_proxy.test_privilege_drop::test_the_real_decider_serves_as_the_
 pytest:tests.dns_proxy.test_privilege_drop::test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no_module_dir[nobody]  # skipped when os.geteuid() != 0: the test starts the decider as root so that it can give root up; a root run executes it
 pytest:tests.dns_proxy.test_privilege_drop::test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no_module_dir[root]  # skipped when os.geteuid() != 0: the test starts the decider as root so that it can give root up; a root run executes it
 
+# pytest -- the TLS control-socket push: the gateway takes a push only from uid 0 (ctl.go ctlUID); the pytest job's root step runs it.
+pytest:tests.dns_proxy.test_gateway_e2e::test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing  # skipped when os.geteuid() != 0: the control socket takes pushes from uid 0 only; the pytest job's root step runs it as root
+
 # ui -- the live-VM Tier-B browser legs. Whether any pre-defined feed exposes an
 # Alternate-URL radio is feed-data dependent, so the case has always skipped cleanly when
 # none render; the `ui-tests` label gates that fan-out, so the gate had not observed it.

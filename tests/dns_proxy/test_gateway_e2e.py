@@ -59,6 +59,11 @@ BOOT_WATCHDOG = 45.0  # for the decider to boot the real module; under hang_guar
 DENIED_CLIENT = "127.0.0.10"
 ALLOWED_ANSWER = (ALLOWED, dnswire.TYPE_A, bytes([192, 0, 2, 77]))
 
+# The control socket takes a push only from uid 0 (ctl.go ctlUID); the pytest job's root step runs that test as root.
+NEEDS_ROOT = pytest.mark.skipif(
+    os.geteuid() != 0, reason="the control socket takes pushes from uid 0 only; the pytest job's root step runs it"
+)
+
 # What pfSense's unbound_acls_config() writes into access_lists.conf (note the trailing space after `allow_snoop`),
 # plus one client refused.
 ACL_FILE = "\n".join([
@@ -683,6 +688,7 @@ def tls_gateway(
             )
 
 
+@NEEDS_ROOT
 def test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing(
     tls_gateway: TlsRunning, tmp_path: Path
 ) -> None:

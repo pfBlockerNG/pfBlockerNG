@@ -191,6 +191,18 @@ jobs:
         # step at exit 0 avoids a spurious error annotation on a green job.
         run: uv run pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing || echo "branch-coverage run is informational; non-zero exit ignored (canonical 'Run tests' step gates)"
 
+      - name: Root-only integration (control-socket push needs uid 0)
+        # The gateway takes a push only from uid 0 (ctl.go ctlUID), so the runner's account skips the test. This step runs
+        # it as root; the euid guard runs in the same process before pytest is imported and fails, never skips, when not root.
+        run: |
+          sudo -n env PATH="$PATH" "$PWD/.venv/bin/python" -c '
+          import os, sys
+          if os.geteuid() != 0:
+              sys.exit(f"root-only integration: euid {os.geteuid()}, not 0")
+          import pytest
+          sys.exit(pytest.main(["-o", "addopts=", "tests/dns_proxy/test_gateway_e2e.py::test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing"]))
+          '
+
   test-typing:
     name: Test type checking (mypy)
     runs-on: ubuntu-latest
