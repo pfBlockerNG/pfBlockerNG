@@ -75,15 +75,27 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
   and both markers. The lock is released before the cron entry is installed or removed,
   because `install_cron_job()` can start cron, which would inherit a held lock and block
   every publish. `pfb_metrics_write()` collects and renders outside the lock, then takes
-  the same lock and publishes only while the sentinel exists, so a run that began before
-  a disable cannot recreate the file after it. The lock wait is bounded at 10 seconds; a
-  publish that cannot get the lock drops its output, and an enable or disable that cannot
-  get it proceeds without it, so a wedged holder never blocks a settings change.
+  the same lock and publishes only while the sentinel exists and the settings still turn
+  the export on, so a run that began before a disable cannot recreate the file after it.
+- Lock waits: a publish waits at most 10 seconds and drops its output when it cannot get
+  the lock. An enable waits at most 10 seconds and then goes ahead without it, because
+  touching the sentinel races with nothing. A disable waits for the lock however long:
+  going ahead without it would let a publisher that already passed its sentinel check
+  rename its file in after the removal, leaving a stale file exposed once the cron entry
+  is gone. The wait is bounded because a publisher holds the lock only around the temp
+  file sweep, the sentinel check and the rename, and the cron's KILL at 55 seconds
+  releases it.
 - A publish that finds the sentinel missing while pfBlockerNG's master enable and the
   option are both on in the configuration the process loaded at start logs once per
   outage (marker `pfb_metrics_sentinel_missing`, cleared by the next successful publish
   or a disable) and publishes nothing. It never recreates the sentinel, because that
   would undo a disable; the next sync pass or settings save does.
+- A publish that finds the sentinel present while the loaded configuration turns the
+  export off (the option off, or the master enable off) publishes nothing, removes the
+  stale sentinel under the lock and logs that once. A sync pass that returned before it
+  reconciled the cron entry (a lock or recovery gate) can leave the sentinel behind after
+  a stored disable; the configuration decides, not the leftover. The cron process loads
+  the configuration fresh every minute, so the read is current.
 - The cron state is reconciled wherever pfBlockerNG already reconciles its other cron
   entries on save and install. No separate daemon is added.
 - If `/var/tmp/node_exporter` does not exist (node_exporter disabled or never started),
@@ -221,7 +233,9 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
   disable is not published after it; a write waiting for the lock is refused when the
   export is disabled meanwhile (a second process holds the lock); a publish gives up
   while another run holds the lock; a disable waits out a publish in flight and removes
-  what it wrote; a disable goes ahead when the lock is wedged; the lock is free while the
+  what it wrote even when the disable's budget is short; an enable goes ahead when the
+  lock is wedged; a stale sentinel under a stored disable (option off, or master off)
+  publishes nothing and is removed; the lock is free while the
   cron entry is installed or removed.
 - PHPUnit: source health: a throwing source is down while the others still publish; a
   non-zero `pfctl` exit is down even with output; a damaged, empty, absent, or locked

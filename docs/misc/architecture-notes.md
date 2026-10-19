@@ -1620,7 +1620,14 @@ deinstall. Both directions take an exclusive lock on `pfb_metrics.lock` around t
 sentinel and the published files only, and release it before the cron entry changes
 (`install_cron_job()` can start cron, which would inherit a held lock and block every publish);
 `pfb_metrics_write()` renders outside the lock and `pfb_metrics_publish()` publishes under it only
-while the sentinel exists, so a run that began before a disable cannot recreate the file after it.
+while the sentinel exists and the settings this process loaded still turn the export on, so a run that
+began before a disable cannot recreate the file after it. A sentinel that outlives a stored disable
+(a sync pass that returned before reconciling the cron) is removed by the next publish, which logs once
+and publishes nothing. A publish and an enable wait at most 10 s for the lock (the enable then goes
+ahead, as touching the sentinel races with nothing); a disable, and so deinstall, waits for it however
+long, because a publisher that already passed its sentinel check would otherwise rename its file in
+after the removal. The wait is bounded: the holder keeps the lock only around the temp-file sweep, the
+sentinel check and the rename, and the cron's KILL at 55 s releases it.
 The sentinel, the lock, the two outage markers (`pfb_metrics_dir_missing`,
 `pfb_metrics_sentinel_missing`) and `pfb_pass_status.json` live in `/usr/local/etc` (`$pfb['metrics_*']`,
 `$pfb['pass_status']`), like the pending-changes marker and for the same reason: `$pfb['dbdir']` is

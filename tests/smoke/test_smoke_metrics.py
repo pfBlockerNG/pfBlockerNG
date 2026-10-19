@@ -18,6 +18,7 @@ Tests:
     test_metrics_master_disable_removes_cron_and_file — master switch off tears the export down
     test_metrics_toggle_off_removes_cron_and_file     — option off tears the export down
     test_metrics_verb_publishes_nothing_while_disabled — the verb leaves no file while the option is off
+    test_metrics_verb_ignores_a_stale_sentinel_while_the_option_is_off — a leftover sentinel cannot outvote a disable
     test_metrics_dir_missing_logs_once                — a missing textfile dir logs once, exits 0
 
 DESELECTED from the default ``python -m pytest`` (smoke-only). Run via::
@@ -339,11 +340,34 @@ def test_metrics_verb_publishes_nothing_while_disabled(deployed_vm: SmokeVM) -> 
 
 @pytest.mark.smoke
 @pytest.mark.timeout(300)
+def test_metrics_verb_ignores_a_stale_sentinel_while_the_option_is_off(deployed_vm: SmokeVM) -> None:
+    """A sentinel left behind by a sync that returned before reconciling does not authorize a publish.
+
+    Scenario:
+        Given the option is off in the configuration but the enabled sentinel is still there,
+        When the verb runs,
+        Then it exits 0, publishes nothing, and removes the stale sentinel.
+    """
+    vm = deployed_vm
+    assert _cron_lines(vm) == [], "precondition: the option must be off"
+    touched = vm.ssh("/usr/bin/touch", _SENTINEL)
+    assert touched.returncode == 0, f"could not create {_SENTINEL}: {touched.stderr!r}"
+
+    _run_verb(vm)
+
+    assert not _exists(vm, _PROM), "a stale sentinel must not outvote the stored disable"
+    assert not _exists(vm, _SENTINEL), "the stale sentinel must be removed"
+    names = vm.ssh("/bin/ls", "-A", _TEXTFILE_DIR).stdout.split()
+    assert names == [], f"the verb must leave nothing in the textfile directory: {names!r}"
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(300)
 def test_metrics_dir_missing_logs_once(deployed_vm: SmokeVM) -> None:
     """A missing textfile directory is logged once per outage and never fatal.
 
-    The option stays off, so no minute cron run can add a log line of its own to the count; the enabled
-    sentinel the publisher checks is created directly instead of by a sync pass.
+    No sync pass runs, so no cron line is installed and no minute run can add a log line of its own to the
+    count: the option is turned on in the configuration and the enabled sentinel is created directly.
 
     Scenario:
         Given a successful publish has run (re-arming the log) and the directory is then removed,
@@ -352,7 +376,8 @@ def test_metrics_dir_missing_logs_once(deployed_vm: SmokeVM) -> None:
             gains exactly one 'Metrics export:' line.
     """
     vm = deployed_vm
-    assert _cron_lines(vm) == [], "precondition: the option must be off, so no cron run touches the log"
+    assert _cron_lines(vm) == [], "precondition: no cron line, so no cron run touches the log"
+    _set_export(vm, True)
     touched = vm.ssh("/usr/bin/touch", _SENTINEL)
     assert touched.returncode == 0, f"could not create {_SENTINEL}: {touched.stderr!r}"
     _run_verb(vm)
