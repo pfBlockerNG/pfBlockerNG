@@ -36,8 +36,7 @@ type certStore struct {
 	checked time.Time // when the file was last looked at
 }
 
-// newCertStore loads the file; every error names it and the reason. A gateway that cannot load its certificate at
-// start serves no TLS (bindTLS): there is no previous certificate to keep.
+// newCertStore loads the file; every error names it and the reason. bindTLS starts an empty store when it fails.
 func newCertStore(path string, logf func(format string, args ...any)) (*certStore, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
