@@ -19,6 +19,7 @@ import shutil
 import signal
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -31,7 +32,7 @@ from typing import Any
 
 import dnswire
 import pytest
-from dot_helpers import dot_exchange, make_certificate, write_certificate_file
+from dot_helpers import control_socket, dot_exchange, make_certificate, push_certificate, write_certificate_file
 from frontend_constants import (
     ALLOWED,
     BLOCKED,
@@ -586,8 +587,9 @@ class _FrontEndConnection(http.client.HTTPSConnection):
 class TlsRunning(Running):
     """The gateway with DoT, DoH (127.0.0.1 trusted as a front end) and DoQ on loopback ports."""
 
-    def __init__(self, base: Running, ca: Path, probe: Path) -> None:
+    def __init__(self, base: Running, ca: Path, probe: Path, ctl: Path) -> None:
         super().__init__(base.process, base.server, base.log_dir)
+        self.ctl = ctl
         self.dot = base.process.listening("dot")
         self.doh = base.process.listening("doh")
         self.doq = base.process.listening("doq")
@@ -669,13 +671,41 @@ def tls_gateway(
     """The gateway with the certificate file pfBlockerNG writes serving DoT, DoH and DoQ."""
     certificate, key = make_certificate(tmp_path)
     pem = write_certificate_file(tmp_path, certificate, key)
-    flags = [
-        "--dot", "--dot-port", "0", "--tls-pem", str(pem),
-        "--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "127.0.0.1/32",
-        "--doq-listen", "127.0.0.1", "--doq-port", "0",
-    ]  # fmt: skip
-    with _gateway_process(gateway_binary, module_dir, unbound, tmp_path, acl_text, flags) as (process, log_dir):
-        yield TlsRunning(Running(process, process.server(), log_dir), tmp_path / "server.crt", doq_probe_binary)
+    with control_socket() as ctl:
+        flags = [
+            "--dot", "--dot-port", "0", "--tls-pem", str(pem), "--ctl-socket", str(ctl),
+            "--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "127.0.0.1/32",
+            "--doq-listen", "127.0.0.1", "--doq-port", "0",
+        ]  # fmt: skip
+        with _gateway_process(gateway_binary, module_dir, unbound, tmp_path, acl_text, flags) as (process, log_dir):
+            yield TlsRunning(
+                Running(process, process.server(), log_dir), tmp_path / "server.crt", doq_probe_binary, ctl
+            )
+
+
+def test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing(
+    tls_gateway: TlsRunning, tmp_path: Path
+) -> None:
+    renewed = tmp_path / "renewed"
+    renewed.mkdir()
+    certificate, key = make_certificate(renewed)
+    # The socket and its directory as the gateway made them: nobody but the user that started it
+    assert stat.S_IMODE(tls_gateway.ctl.stat().st_mode) == 0o600
+    assert stat.S_IMODE(tls_gateway.ctl.parent.stat().st_mode) == 0o700
+
+    assert push_certificate(tls_gateway.ctl, certificate, key) == "ok"
+
+    reply = asyncio.run(
+        dot_exchange(tls_gateway.dot, build_query(ALLOWED), renewed / "server.crt", source=ALLOWED_CLIENT_TCP)
+    )[0]
+    assert dnswire.parse(reply).rcode == 0, "a handshake that trusts only the pushed certificate succeeds"
+    with pytest.raises(ssl.SSLCertVerificationError):
+        asyncio.run(dot_exchange(tls_gateway.dot, build_query(ALLOWED), tls_gateway.ca, source=ALLOWED_CLIENT_TCP))
+    assert push_certificate(tls_gateway.ctl, certificate, b"not a key").startswith("error: ")
+    reply = asyncio.run(
+        dot_exchange(tls_gateway.dot, build_query(ALLOWED), renewed / "server.crt", source=ALLOWED_CLIENT_TCP)
+    )[0]
+    assert dnswire.parse(reply).rcode == 0, "the refused push left the pushed certificate in place"
 
 
 def test_readiness_lines_name_every_tls_listener_before_ready(tls_gateway: TlsRunning) -> None:
