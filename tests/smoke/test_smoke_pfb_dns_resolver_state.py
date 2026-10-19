@@ -174,6 +174,25 @@ def _notices(vm: SmokeVM) -> list[str]:
     return texts
 
 
+_NOTICE_CLEAR_LIMIT = 20
+
+
+@pytest.fixture
+def _clear_dns_proxy_notices(rig: Rig) -> None:
+    """Stand-down cases start with no NOTICE_ID row. pfb_dns_proxy_notify() files nothing while the newest row with the
+    same id already says the same text, and an earlier case's row stands on the shared VM. Only NOTICE_ID rows go."""
+    vm = rig.vm
+    removed = 0
+    while _notices(vm):
+        assert removed < _NOTICE_CLEAR_LIMIT, f"notices with id {NOTICE_ID!r} survive {removed} close_notice calls"
+        res = h.php_eval(vm, f"require_once('notices.inc');\nclose_notice({h._php_str(NOTICE_ID)});\necho 'OK';")
+        assert res.returncode == 0 and "OK" in res.stdout, (
+            f"close_notice failed: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
+        removed += 1
+    print(f"[3515] stand-down case starts with {removed} {NOTICE_ID!r} notice(s) closed", flush=True)
+
+
 def _toggle_on_in_config(vm: SmokeVM) -> bool:
     """The requested pfB-DNS toggle as config.xml holds it."""
     present, value = h.config_get_state(vm, CFG_PROXY)
@@ -409,6 +428,7 @@ _STAND_DOWN_TRIGGERS = {
 
 
 @pytest.mark.parametrize("how", list(_STAND_DOWN_TRIGGERS))
+@pytest.mark.usefixtures("proxy_on", "_clear_dns_proxy_notices")
 def test_a_resolver_disabled_under_pfb_dns_is_stood_down_by_the_next_apply_or_tick(
     rig: Rig, proxy_on: State, how: str
 ) -> None:
