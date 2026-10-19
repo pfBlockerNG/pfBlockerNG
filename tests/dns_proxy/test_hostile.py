@@ -134,6 +134,7 @@ FORWARDED = {
     "an answer record": _query(answers=[ANSWER]),
     "an authority record": _query(authority=[ANSWER]),
     "two additional records": _query(additional=[_opt(), NULL_RR]),
+    "two OPT records": _query(additional=[_opt(), _opt()]),
     "nine additional records": _query(additional=[NULL_RR] * 9),
     "one additional record that is not an OPT": _query(additional=[NULL_RR]),
     "an OPT of EDNS version 1": _query(additional=[_opt(version=1)]),
@@ -171,8 +172,8 @@ def _decide(booted: Booted, monkeypatch: pytest.MonkeyPatch, wire: bytes) -> tup
 def test_a_query_unbound_answers_without_resolving_goes_to_unbound_unchanged(
     booted: Booted, monkeypatch: pytest.MonkeyPatch, wire: bytes
 ) -> None:
-    """Unbound rejects or answers these before it resolves anything, so its reply is the exact answer and the module
-    never decides a name it would not have decided."""
+    """Unbound rejects or answers these before it resolves a name, so its reply is the exact answer and the module does
+    not decide them."""
     assert _decide(booted, monkeypatch, wire) == (UNBOUND_SAID, [wire], 0)
 
 
