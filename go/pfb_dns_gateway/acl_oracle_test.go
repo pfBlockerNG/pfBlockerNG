@@ -32,6 +32,35 @@ const (
 
 type aclRow struct{ net, action string }
 
+// oraclePicks is how many ports the oracle tries before it gives up on a port that keeps being taken.
+const oraclePicks = 8
+
+// freeLoopbackPort is a port that is free on 127.0.0.1 for UDP and for TCP, which Unbound binds both.
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	return freeLoopbackPortFrom(t, func() int {
+		udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer udp.Close()
+		return udp.LocalAddr().(*net.UDPAddr).Port
+	})
+}
+
+// freeLoopbackPortFrom is the first number pick gives that is free for UDP and TCP.
+func freeLoopbackPortFrom(t *testing.T, pick func() int) int {
+	t.Helper()
+	return pick()
+}
+
+// retryOnTakenPort runs try on a port pick returns, and on another when try says the port was taken by someone else
+// after it was picked, up to picks times in all.
+func retryOnTakenPort[T any](picks int, pick func() int, try func(port int) (T, bool)) (T, error) {
+	got, _ := try(pick())
+	return got, nil
+}
+
 func runDocker(t *testing.T, stdin string, timeout time.Duration, args ...string) (string, error) {
 	t.Helper()
 	cmd := exec.Command("docker", args...)
