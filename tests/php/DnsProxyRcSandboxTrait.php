@@ -349,19 +349,34 @@ trait DnsProxyRcSandboxTrait
 	}
 
 	/**
-	 * Run the generated script's verb under pfb_test_run_process(): a hard deadline that reaps the shell and reports
-	 * STUCK/ENVIRONMENT, so a stalled script is never a status to decide on.
+	 * Run the generated script's verb under timeout(1), which signals the whole process group when its limit fires: a stuck
+	 * script leaves no background child behind. The runner's own deadline is longer than that limit, so the limit always fires
+	 * first, and a stopped command is a STUCK/ENVIRONMENT verdict (stuckIfStopped()), never a status to decide on.
 	 *
 	 * @return array{0: int, 1: string} exit status, then stdout and stderr
 	 */
-	private function rc(string $verb): array
+	private function rc(string $verb, int $seconds = 20): array
 	{
 		$run = pfb_test_run_process(
-			[$this->shell, "{$this->dir}/run.sh", $verb],
-			20.0,
+			[$GLOBALS['pfb']['timeout'], '-k', '2', (string) $seconds, $this->shell, "{$this->dir}/run.sh", $verb],
+			$seconds + 5.0,
 			['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')]
 		);
-		return [$run['exit'], $run['stdout'] . $run['stderr']];
+		$output = $run['stdout'] . $run['stderr'];
+		$this->stuckIfStopped($run['exit'], "rc {$verb}", $output);
+
+		return [$run['exit'], $output];
+	}
+
+	/**
+	 * Status 124 is timeout(1)'s limit firing; 137 is that KILL was needed to end the command. Either is the harness stopping
+	 * the command, which is a STUCK/ENVIRONMENT verdict, never a product status.
+	 */
+	private function stuckIfStopped(int $status, string $what, string $output): void
+	{
+		if ($status === 124 || $status === 137) {
+			throw new RuntimeException("STUCK/ENVIRONMENT: {$what} was stopped by its time limit (status {$status}): {$output}");
+		}
 	}
 
 	/**

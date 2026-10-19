@@ -1007,14 +1007,22 @@ final class DnsProxyServiceTest extends TestCase
 	/** @return array{0: resource, 1: array<int, resource>, 2: string} the running verb, for finishVerb() */
 	private function startVerb(string $verb): array
 	{
-		return pfb_test_start_process([$this->shell, "{$this->dir}/run.sh", $verb]);
+		return pfb_test_start_process([$GLOBALS['pfb']['timeout'], '-k', '2', '30', $this->shell, "{$this->dir}/run.sh", $verb]);
 	}
 
-	/** @param array{0: resource, 1: array<int, resource>, 2: string} $started @return array{0: int, 1: string} */
-	private function finishVerb(array $started, float $timeoutSeconds = 30.0): array
+	/**
+	 * Collects a verb started by startVerb(). Its runner deadline is longer than startVerb()'s 30 s limit, so that limit fires first.
+	 *
+	 * @param array{0: resource, 1: array<int, resource>, 2: string} $started
+	 * @return array{0: int, 1: string}
+	 */
+	private function finishVerb(array $started, float $timeoutSeconds = 35.0): array
 	{
 		$run = pfb_test_finish_process($started, $timeoutSeconds);
-		return [$run['exit'], $run['stdout'] . $run['stderr']];
+		$output = $run['stdout'] . $run['stderr'];
+		$this->stuckIfStopped($run['exit'], 'a start verb', $output);
+
+		return [$run['exit'], $output];
 	}
 
 	private function launchCount(): int
