@@ -313,9 +313,22 @@ func closeTLS(tc *tls.Conn, raw net.Conn, bound time.Duration) {
 	cut.Stop()
 }
 
-// handshakeTLS runs tc's handshake and reports whether it completed.
+// handshakeTLS runs tc's handshake and reports whether it completed. stop() ends one that is still going by moving the
+// connection's deadline back, the way serveConn wakes its reads, and not by a context given to crypto/tls: that closes the
+// raw connection when the context is cancelled before HandshakeContext returns even if the handshake had finished, and a
+// connection closed under its TLS session ends with no close_notify (RFC 8446 6.1). A handshake that did finish is served
+// (serveConn sees the stop at its first read) and closed with the alert.
 func (g *gateway) handshakeTLS(tc *tls.Conn) bool {
-	return tc.HandshakeContext(g.ctx) == nil
+	woken := make(chan struct{})
+	stop := context.AfterFunc(g.ctx, func() {
+		defer close(woken)
+		_ = tc.SetDeadline(time.Unix(1, 0))
+	})
+	err := tc.Handshake()
+	if !stop() {
+		<-woken // it has run or is running: it must not land on the close_notify's write
+	}
+	return err == nil
 }
 
 // serveConn answers one client connection: up to connPipeline queries at once, each reply written when it is ready
