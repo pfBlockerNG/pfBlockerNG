@@ -1650,17 +1650,14 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
 
     Returns (supervisors, children, the two exit statuses) per round. The unlocked variant sets the rc script's own
     inner-run variable, which makes it skip lockf: the same script, with only the serialization taken away.
-    A start returns once it has launched the proxy, not once the proxy serves, so a round is counted when a proxy has
-    published its ready marker naming a live process; a round whose proxy never does is stuck, not a count.
+    A start returns once it has launched the proxy, not once the proxy serves. The locked race, which is asserted,
+    is therefore counted when a proxy has published its ready marker naming a live process; a round whose proxy never
+    does is stuck, not a count. The unlocked race is evidence only and promises no settled state (two supervisors
+    whose children cannot bind keep restarting them, and a start's removal of the marker can follow a proxy's
+    write of it), so it is counted when both starts have returned and awaits nothing.
     """
     env = "" if locked else "PFB_DNS_PROXY_START_LOCKED=1 "
-    script = (
-        f"i=0\nwhile [ $i -lt {RACE_ROUNDS} ]; do\n"
-        f"  {PROXY_RC} stop || {{ echo 'round='$i' stop-failed'; exit 1; }}\n"
-        f"  s1=$(mktemp /tmp/pfb3515_race.XXXXXX); s2=$(mktemp /tmp/pfb3515_race.XXXXXX)\n"
-        f"  ( {env}{PROXY_RC} start; echo $? > $s1 ) &\n"
-        f"  ( {env}{PROXY_RC} start; echo $? > $s2 ) &\n"
-        "  wait\n"
+    wait_for_proxy = (
         "  t=0\n"
         f"  until pid=''; {{ read -r pid < {READY_FILE}; }} 2>/dev/null \\\n"
         '    && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do\n'
@@ -1670,6 +1667,15 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
         "    fi\n"
         "    sleep 0.2\n"
         "  done\n"
+    )
+    script = (
+        f"i=0\nwhile [ $i -lt {RACE_ROUNDS} ]; do\n"
+        f"  {PROXY_RC} stop || {{ echo 'round='$i' stop-failed'; exit 1; }}\n"
+        f"  s1=$(mktemp /tmp/pfb3515_race.XXXXXX); s2=$(mktemp /tmp/pfb3515_race.XXXXXX)\n"
+        f"  ( {env}{PROXY_RC} start; echo $? > $s1 ) &\n"
+        f"  ( {env}{PROXY_RC} start; echo $? > $s2 ) &\n"
+        "  wait\n"
+        f"{wait_for_proxy if locked else ''}"
         "  sup=$(ps -axww -o args= | grep -c 'daemon: pfb_dns_prox[y]')\n"
         "  kids=$(ps -axww -o args= | awk '$1 ~ /python/ && /pfb_dns_prox[y][.]py/' | wc -l | tr -d ' ')\n"
         '  echo "round=$i supervisors=$sup children=$kids rc=$(cat $s1)/$(cat $s2)"\n'
