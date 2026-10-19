@@ -272,7 +272,7 @@ func TestDoQRefusesAnotherALPN(t *testing.T) {
 
 // The 129th connection is refused before its handshake; the log says so once per burst; a slot freed is reusable.
 func TestDoQConnectionsOverTheCapAreRefusedBeforeTheHandshake(t *testing.T) {
-	r, m, addr := newDoQRig(t, rigConfig{})
+	r, m, addr := newDoQRig(t, rigConfig{perAddr: noAddrCap})
 	r.autoAnswer(echoAnswer)
 	conns := make([]*doqClient, 0, maxDoQConns)
 	for range maxDoQConns {
