@@ -179,7 +179,7 @@ final class PfbDnsStatusTest extends TestCase
 		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
 		$this->moved(FALSE);
 
-		$this->assertSame('On, without DNSBL: the proxy forwards every query', pfb_dns_status()['mode']);
+		$this->assertSame('Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices', pfb_dns_status()['mode']);
 	}
 
 	/** @return array<string,array{PfbToggle,bool,string}> the pfB-DNS toggle, whether the proxy serves, the service the status shows */
