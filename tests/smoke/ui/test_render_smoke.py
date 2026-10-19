@@ -1910,19 +1910,21 @@ def test_general_private_address_label_renders(webui: WebUI, php_error_log_guard
     )
 
 
-def test_general_metrics_export_requires_node_exporter(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:
-    """#3522: with pfSense-pkg-node_exporter absent, the General tab's Metrics export checkbox
-    renders disabled, with the red notice and its installer link.
-
-    Absence is the smoke VM's default and is asserted, not assumed: a VM that has the package
-    fails the precondition instead of being checked against the wrong state.
-    """
+def _require_node_exporter_absent(smoke_vm: SmokeVM) -> None:
+    """Absence is the smoke VM's default and is asserted, not assumed: a VM that has the package
+    fails the precondition instead of being checked against the wrong state."""
     absent = smoke_vm.ssh("/usr/local/sbin/pkg", "info", "-e", "pfSense-pkg-node_exporter")
     assert absent.returncode != 0, (
         f"precondition: pfSense-pkg-node_exporter must be absent on the smoke VM (pkg info -e rc={absent.returncode})"
     )
+
+
+def test_general_metrics_export_requires_node_exporter(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """#3522: with pfSense-pkg-node_exporter absent, the General tab's Metrics export checkbox
+    renders disabled, with the red notice and its installer link."""
+    _require_node_exporter_absent(smoke_vm)
 
     path = "/pfblockerng/pfblockerng_general.php"
     resp = webui.get(path)
@@ -1939,6 +1941,28 @@ def test_general_metrics_export_requires_node_exporter(
         '<span class="text-danger">Requires the <a href="/pkg_mgr_install.php?pkg=pfSense-pkg-node_exporter">'
         "node_exporter package</a>.</span>"
     ) in body, "General page is missing the red node_exporter notice with its installer link"
+
+
+def test_general_metrics_export_save_is_refused_without_node_exporter(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """#3522: a General save that turns Metrics export on while pfSense-pkg-node_exporter is absent
+    is refused with the exact error, and the stored option stays off.
+
+    The checkbox renders disabled, so the field is posted directly, as a crafted request would.
+    """
+    _require_node_exporter_absent(smoke_vm)
+    cfg_path = "installedpackages/pfblockerng/config/0/pfb_metrics_export"
+    prior = helpers.config_get_state(smoke_vm, cfg_path)
+    try:
+        resp = webui.post("/pfblockerng/pfblockerng_general.php", {"pfb_metrics_export": "on"})
+        assert "Metrics export requires the node_exporter package." in resp.text, (
+            "the General save must refuse 'on' without node_exporter and show the exact error"
+        )
+        stored = helpers.config_get(smoke_vm, cfg_path)
+        assert stored == "", f"a refused save must not store the toggle, got {stored!r}"
+    finally:
+        helpers.config_restore_state(smoke_vm, cfg_path, prior)
 
 
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
