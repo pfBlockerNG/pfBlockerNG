@@ -1616,10 +1616,12 @@ and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_
 pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
 `pfb_metrics_configure_cron()` installs it idempotently from `sync_package_pfblockerng()`, and
 removes it together with `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package
-deinstall. Both directions run under an exclusive lock on `.metrics.lock` in `$pfb['dbdir']` and
-maintain a `.metrics_enabled` sentinel there; `pfb_metrics_write()` renders outside the lock and
-`pfb_metrics_publish()` publishes under it only while the sentinel exists, so a run that began
-before a disable cannot recreate the file after it. The `metrics` verb is not gated by
+deinstall. Both directions take an exclusive lock on `.metrics.lock` in `$pfb['dbdir']` around the
+`.metrics_enabled` sentinel and the published files only, and release it before the cron entry
+changes (`install_cron_job()` can start cron, which would inherit a held lock and block every
+publish); `pfb_metrics_write()` renders outside the lock and `pfb_metrics_publish()` publishes
+under it only while the sentinel exists, so a run that began before a disable cannot recreate the
+file after it. The `metrics` verb is not gated by
 `.pfb_cron_disable`. It publishes `pfblockerng.prom` (temp file, `chmod 0644`, `rename()`) and
 maintains a `.metrics_dir_missing` marker in `$pfb['dbdir']`: a missing node_exporter textfile
 directory logs once per outage, and the marker stays until a publish succeeds or the cron entry is

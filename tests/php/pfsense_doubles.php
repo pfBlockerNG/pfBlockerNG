@@ -1488,6 +1488,10 @@ if (!function_exists('configure_cron')) {
 
 if (!function_exists('install_cron_job')) {
 	function install_cron_job($command, $active = FALSE, $minute = '0', $hour = '*', $mday = '*', $month = '*', $wday = '*', $who = 'root', $write_config = TRUE) {
+		// Opt-in probe: $GLOBALS['pfb_test_install_cron_hook'](string $command, bool $active) runs where the real one may start cron.
+		if (isset($GLOBALS['pfb_test_install_cron_hook'])) {
+			$GLOBALS['pfb_test_install_cron_hook']($command, (bool) $active);
+		}
 		$items = config_get_path('cron/item', []);
 		$found = null;
 		foreach ($items as $idx => $item) {

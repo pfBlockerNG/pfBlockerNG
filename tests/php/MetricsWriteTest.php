@@ -657,4 +657,198 @@ final class MetricsWriteTest extends TestCase
 
 		$this->assertSame(pfb_metrics_render(pfb_metrics_collect()), file_get_contents("{$dir}/pfblockerng.prom"));
 	}
+
+	public function testTheLockIsFreeWhileTheCronEntryIsChanged(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$lockPath = "{$GLOBALS['pfb']['dbdir']}/.metrics.lock";
+		$seen = [];
+		// Real install_cron_job() can start cron, which would inherit a held lock fd and wedge every publish.
+		$GLOBALS['pfb_test_install_cron_hook'] = static function (string $command, bool $active) use ($lockPath, &$seen): void {
+			$probe = fopen($lockPath, 'c');
+			$seen[] = [$active, flock($probe, LOCK_EX | LOCK_NB)];
+			fclose($probe);
+		};
+
+		try {
+			pfb_metrics_configure_cron(TRUE, $dir);
+			pfb_metrics_configure_cron(FALSE, $dir);
+		} finally {
+			unset($GLOBALS['pfb_test_install_cron_hook']);
+		}
+
+		$this->assertSame([[TRUE, TRUE], [FALSE, TRUE]], $seen, 'each cron change must run with the lock free: [active, lock was free]');
+	}
+
+	/**
+	 * Starts a second process that takes the metrics lock, announces it, runs $then (PHP; $lock and $argv[2..] are in scope)
+	 * and releases. Returns once the lock is held, so the caller acts against a lock that is really taken.
+	 *
+	 * @return array{0: resource, 1: resource} process and its stdout pipe
+	 */
+	private function lockHolder(string $then, string ...$args): array
+	{
+		$code = '$lock = fopen($argv[1], "c"); flock($lock, LOCK_EX); echo "locked\n"; fflush(STDOUT); ' . $then . ' flock($lock, LOCK_UN);';
+		$proc = proc_open([PHP_BINARY, '-r', $code, "{$GLOBALS['pfb']['dbdir']}/.metrics.lock", ...$args], [1 => ['pipe', 'w']], $pipes);
+		$this->assertIsResource($proc);
+		$this->assertSame("locked\n", fgets($pipes[1]), 'the holder must hold the lock before the test acts');
+		return [$proc, $pipes[1]];
+	}
+
+	/** @param array{0: resource, 1: resource} $holder */
+	private function releaseHolder(array $holder): void
+	{
+		fclose($holder[1]);
+		proc_close($holder[0]);
+	}
+
+	public function testAWriteWaitingForTheLockIsRefusedWhenTheExportIsDisabledMeanwhile(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		// The fake pfctl runs during collection, before the lock is wanted, so it tells the holder the write is under way.
+		$started = "{$this->root}/write.started";
+		file_put_contents($GLOBALS['pfb']['pfctl'], "#!/bin/sh\ntouch " . escapeshellarg($started) . "\nexit 0\n");
+		$holder = $this->lockHolder(
+			'for ($i = 0; $i < 500 && !file_exists($argv[2]); $i++) { usleep(10000); } usleep(300000); unlink($argv[3]);',
+			$started,
+			$this->sentinel()
+		);
+
+		try {
+			$published = pfb_metrics_write($dir);
+		} finally {
+			$this->releaseHolder($holder);
+		}
+
+		$this->assertFalse($published, 'the enabled check must be made once the lock is held, not before waiting for it');
+		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
+		$this->assertSame([], glob("{$dir}/.pfbmetrics_*"));
+	}
+
+	public function testADisableWaitsForAPublishInFlightAndRemovesWhatItWrote(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		$holder = $this->lockHolder('usleep(400000); file_put_contents($argv[2], "late");', "{$dir}/pfblockerng.prom");
+
+		try {
+			pfb_metrics_configure_cron(FALSE, $dir, 10.0);
+		} finally {
+			$this->releaseHolder($holder);
+		}
+
+		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom", 'a disable must wait out a publish in flight, or the file outlives it');
+		$this->assertFileDoesNotExist($this->sentinel());
+		$this->assertSame([], $this->cronItems());
+	}
+
+	public function testSyncLedgerWhoseReadLockTimesOutIsDownWithNoRows(): void
+	{
+		$path = "{$GLOBALS['pfb']['dbdir']}/pfb_sync_status.json";
+		file_put_contents($path, json_encode([
+			'ip' => ['ipv4:Alias_v4' => ['download' => ['message' => 'x', 'first_seen' => 1, 'last_seen' => 2]]],
+		]));
+		$writer = fopen($path, 'r');
+		$this->assertNotFalse($writer);
+		$this->assertTrue(flock($writer, LOCK_EX));
+
+		try {
+			$s = pfb_metrics_collect();	// waits out the collector's 5 s read budget
+		} finally {
+			flock($writer, LOCK_UN);
+			fclose($writer);
+		}
+
+		$this->assertFalse($s['source_up']['sync_status'], 'a ledger that could not be read is down, not an empty ledger');
+		$this->assertSame([], $s['feed_failing']);
+	}
+
+	public function testSyncLedgerRowsAreTakenFromTheSnapshotThatSetTheHealth(): void
+	{
+		$ledger = static fn (string $alias): string => (string) json_encode([
+			'ip' => ["ipv4:{$alias}" => ['download' => ['message' => 'x', 'first_seen' => 1, 'last_seen' => 2]]],
+		]);
+		// Each open of the ledger hands out the next body: a second read would show the second one.
+		MetricsLedgerStream::$bodies = [$ledger('First_v4'), $ledger('Second_v4')];
+		MetricsLedgerStream::$opens = 0;
+		$this->assertTrue(stream_wrapper_register('pfbledger', MetricsLedgerStream::class));
+		$GLOBALS['pfb']['dbdir'] = 'pfbledger://db';
+
+		try {
+			$s = pfb_metrics_collect();
+		} finally {
+			stream_wrapper_unregister('pfbledger');
+		}
+
+		$this->assertSame(1, MetricsLedgerStream::$opens, 'the ledger must be read once');
+		$this->assertTrue($s['source_up']['sync_status']);
+		$this->assertSame([['facility' => 'ip', 'feed' => 'ipv4:First_v4', 'stage' => 'download']], $s['feed_failing']);
+	}
+}
+
+/**
+ * Serves pfb_sync_status.json from memory under pfbledger://, one queued body per open, and counts the opens.
+ * Everything else under the scheme does not exist.
+ */
+final class MetricsLedgerStream
+{
+	/** @var list<string> */
+	public static array $bodies = [];
+	public static int $opens = 0;
+	/** @var resource|null set by PHP */
+	public $context;
+	private string $body = '';
+	private int $pos = 0;
+
+	private static function isLedger(string $path): bool
+	{
+		return str_ends_with($path, '/pfb_sync_status.json');
+	}
+
+	public function stream_open(string $path, string $mode, int $options, ?string &$opened_path): bool
+	{
+		if (!self::isLedger($path)) {
+			return FALSE;
+		}
+		$this->body = self::$bodies[min(self::$opens, count(self::$bodies) - 1)];
+		self::$opens++;
+		return TRUE;
+	}
+
+	public function stream_read(int $count): string
+	{
+		$chunk = substr($this->body, $this->pos, $count);
+		$this->pos += strlen($chunk);
+		return $chunk;
+	}
+
+	public function stream_eof(): bool
+	{
+		return $this->pos >= strlen($this->body);
+	}
+
+	public function stream_lock(int $operation): bool
+	{
+		return TRUE;
+	}
+
+	public function stream_close(): void
+	{
+	}
+
+	/** @return array<string,int> */
+	public function stream_stat(): array
+	{
+		return ['mode' => 0100644, 'size' => strlen($this->body)];
+	}
+
+	/** @return array<string,int>|false */
+	public function url_stat(string $path, int $flags): array|false
+	{
+		return self::isLedger($path) ? ['mode' => 0100644, 'size' => 0] : FALSE;
+	}
 }

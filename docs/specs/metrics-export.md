@@ -54,15 +54,16 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
   `interface-collector.py`.
 - Turning the option off, or turning pfBlockerNG's master enable off, removes the cron
   entry and deletes `pfblockerng.prom`. Package deinstall does the same.
-- Enable and disable run under an exclusive lock on `.metrics.lock` in the pfBlockerNG
-  db directory: enabling creates the `.metrics_enabled` sentinel and then installs the
-  cron entry, and disabling removes the sentinel, the cron entry, `pfblockerng.prom`
-  and the dir-missing marker. `pfb_metrics_write()` collects and renders outside the
-  lock, then takes the same lock and publishes only while the sentinel exists, so a run
-  that began before a disable cannot recreate the file after it. The lock wait is
-  bounded at 10 seconds; a publish that cannot get the lock drops its output, and an
-  enable or disable that cannot get it proceeds without it, so a wedged holder never
-  blocks a settings change.
+- Enable and disable take an exclusive lock on `.metrics.lock` in the pfBlockerNG db
+  directory around the files only: enabling creates the `.metrics_enabled` sentinel, and
+  disabling removes the sentinel, `pfblockerng.prom` and the dir-missing marker. The lock
+  is released before the cron entry is installed or removed, because
+  `install_cron_job()` can start cron, which would inherit a held lock and block every
+  publish. `pfb_metrics_write()` collects and renders outside the lock, then takes the
+  same lock and publishes only while the sentinel exists, so a run that began before a
+  disable cannot recreate the file after it. The lock wait is bounded at 10 seconds; a
+  publish that cannot get the lock drops its output, and an enable or disable that cannot
+  get it proceeds without it, so a wedged holder never blocks a settings change.
 - The cron state is reconciled wherever pfBlockerNG already reconciles its other cron
   entries on save and install. No separate daemon is added.
 - If `/var/tmp/node_exporter` does not exist (node_exporter disabled or never started),
@@ -180,8 +181,11 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
   package, and cron install/removal on toggle (including that enable and disable keep the
   sentinel in step with the cron entry).
 - PHPUnit: a write without the sentinel publishes nothing; a body rendered before a
-  disable is not published after it; a publish gives up while another run holds the
-  lock; a disable goes ahead when the lock is wedged.
+  disable is not published after it; a write waiting for the lock is refused when the
+  export is disabled meanwhile (a second process holds the lock); a publish gives up
+  while another run holds the lock; a disable waits out a publish in flight and removes
+  what it wrote; a disable goes ahead when the lock is wedged; the lock is free while the
+  cron entry is installed or removed.
 - PHPUnit: source health: a throwing source is down while the others still publish; a
   non-zero `pfctl` exit is down even with output; a damaged, empty, absent, or locked
   `pfb_sync_status.json` and a corrupt resolver database each read as specified;

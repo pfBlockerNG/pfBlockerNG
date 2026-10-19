@@ -8047,7 +8047,8 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 }
 
 // Runs the verb every minute while the option is on; turning it off removes the entry and the published file.
-// Both directions hold the lock; one that stays held past $lock_wait_s is wedged, so the change goes ahead rather than block a save.
+// The lock covers the sentinel and the published files only, and is released before the cron entry changes: install_cron_job()
+// can start cron, which would inherit the lock fd and block every publish. One held past $lock_wait_s is wedged, so the change goes ahead rather than block a save.
 function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter', float $lock_wait_s = 10.0): void {
 	global $pfb;
 	// TERM at 50 s, KILL 5 s later: a run that ignores TERM still dies before it can pile up behind the next minute's.
@@ -8057,20 +8058,22 @@ function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_
 	try {
 		if ($enabled) {
 			@touch($sentinel);
-			if (!pfblockerng_cron_exists($pfb_metrics_cmd, '*', '*', '*', '*')) {
-				install_cron_job($pfb_metrics_cmd, TRUE, '*', '*', '*', '*', '*', 'root');
-			}
-			return;
+		} else {
+			unlink_if_exists($sentinel);
+			unlink_if_exists("{$dir}/pfblockerng.prom");
+			// Re-enabling must log the next outage, not inherit this one's marker.
+			unlink_if_exists("{$pfb['dbdir']}/.metrics_dir_missing");
 		}
-		unlink_if_exists($sentinel);
-		install_cron_job('pfblockerng.php metrics', FALSE);
-		unlink_if_exists("{$dir}/pfblockerng.prom");
-		// Re-enabling must log the next outage, not inherit this one's marker.
-		unlink_if_exists("{$pfb['dbdir']}/.metrics_dir_missing");
 	} finally {
 		if ($lock !== FALSE) {
 			fclose($lock);
 		}
+	}
+
+	if (!$enabled) {
+		install_cron_job('pfblockerng.php metrics', FALSE);
+	} elseif (!pfblockerng_cron_exists($pfb_metrics_cmd, '*', '*', '*', '*')) {
+		install_cron_job($pfb_metrics_cmd, TRUE, '*', '*', '*', '*', '*', 'root');
 	}
 }
 
