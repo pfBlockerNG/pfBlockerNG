@@ -4404,7 +4404,8 @@ function pfb_dns_proxy_certificate_sync(): void {
  * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from the SAVED Resolver
  * (listen addresses, DoT), the DoH/DoQ settings and its Listen Port (unbound/port, which stays on loopback for Unbound;
  * 53 when absent or not a port) and DNSBL's runtime state ($pfb as pfb_global() left it, so callers hold a fresh one).
- * Written on every call, like the other pfBlockerNG rc services; its warnings are logged only when the content changed.
+ * Written on each call unless a moved Resolver's Listen Port conflicts with a backend port; then the current script is kept.
+ * Warnings are logged only when the content changed.
  *
  * DNSBL on: the proxy boots pfb_unbound.py, and while the Resolver forwards it also listens for the upstream observer
  * Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query, and with the DNS Reply
@@ -13973,9 +13974,11 @@ function pfb_dns_proxy_stand_down(): bool {
  * config.xml read afresh under it, through write_config(). A lock that stays taken abandons the call: nothing is
  * written or stopped, the snapshot is kept, and a notice says the next apply retries.
  *
- * ON with the Resolver already moved reads the admin's Custom Options the same way, but an `interface`, `port` or `include` line
- * of theirs is not refused there: it is reported through $unsafe_line, the saved copy of Custom Options takes the admin's text
- * as it stands (our block cut out), and the caller rolls pfB-DNS back, so the restore keeps the line. While the Advanced page's EDNS
+ * ON with the Resolver already moved reports a conflicting Listen Port through $unsafe_line without changing the snapshot.
+ * The caller rolls pfB-DNS back, keeping the admin's selected port for the restored Resolver.
+ * It reads the admin's Custom Options the same way, but an `interface`, `port` or `include` line is reported through
+ * $unsafe_line instead of refused there: the saved copy takes the admin's text as it stands (our block cut out), and the
+ * caller rolls pfB-DNS back so the restore keeps the line. While the Advanced page's EDNS
  * size is automatic and nothing of the admin's sets one, the clause also carries `edns-buffer-size:` for the SAVED interfaces
  * (pfb_dns_proxy_edns_line()): the Resolver on lo0 would otherwise advertise the loopback MTU.
  *
