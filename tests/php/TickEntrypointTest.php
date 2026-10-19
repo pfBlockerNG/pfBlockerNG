@@ -520,7 +520,7 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('dcc', $now);
 		$this->seedFutureLedgerEntry('bl',  $now);
 
-		$saved = ['cert' => $GLOBALS['pfb']['dns_proxy_cert'] ?? NULL, 'owner' => $GLOBALS['pfb']['dns_proxy_cert_owner'] ?? NULL];
+		$saved = array_intersect_key($GLOBALS['pfb'], array_flip(['dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl']));
 		try {
 			DnsProxyCertificateFixtures::seedResolver($this->dbdir);
 			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
@@ -529,6 +529,7 @@ final class TickEntrypointTest extends TestCase
 				'custom_options'   => ['present' => FALSE, 'value' => NULL],
 			])));
 			$pem = $GLOBALS['pfb']['dns_proxy_cert'];
+			mkdir(dirname($pem), 0700, TRUE);
 			file_put_contents($pem, "an older certificate\n");
 			$psLines = $this->settledSuiteWorkerPsLines();
 
@@ -540,8 +541,7 @@ final class TickEntrypointTest extends TestCase
 				'the tick writes the Resolver\'s certificate where the gateway reads it'
 			);
 		} finally {
-			$GLOBALS['pfb']['dns_proxy_cert'] = $saved['cert'];
-			$GLOBALS['pfb']['dns_proxy_cert_owner'] = $saved['owner'];
+			$GLOBALS['pfb'] = $saved + array_diff_key($GLOBALS['pfb'], array_flip(['dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl']));
 		}
 	}
 

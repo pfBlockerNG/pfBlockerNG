@@ -402,12 +402,13 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// Given a Resolver that was moved and a gateway certificate file (certificate and key) on disk
 		$this->seedMovedResolver();
+		mkdir(dirname($GLOBALS['pfb']['dns_proxy_cert']), 0700, TRUE);
 		file_put_contents($GLOBALS['pfb']['dns_proxy_cert'], "certificate and key\n");
 
 		// When the package is removed and the Resolver is back
 		$this->assertTrue(pfb_dns_proxy_deinstall());
 
-		// Then the key is not left in the Unbound chroot for a service that no longer exists
+		// Then the key is not left on the disk for a service that no longer exists
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_cert']);
 	}
 
@@ -416,6 +417,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		// Given a moved Resolver that cannot be put back, and the certificate file the proxy serves DoT with
 		$this->seedMovedResolver();
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		mkdir(dirname($GLOBALS['pfb']['dns_proxy_cert']), 0700, TRUE);
 		file_put_contents($GLOBALS['pfb']['dns_proxy_cert'], "certificate and key\n");
 
 		// When the removal stops
