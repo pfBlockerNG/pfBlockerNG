@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -41,11 +42,12 @@ func ctlFrame(pem []byte) []byte {
 }
 
 type ctlRig struct {
-	r     *rig
-	c     *ctlServer
-	store *certStore
-	path  string
-	root  *pki
+	r       *rig
+	c       *ctlServer
+	store   *certStore
+	path    string
+	root    *pki
+	handled chan *net.UnixConn // the server's end of each connection it has taken up, in order
 
 	peer    atomic.Uint32 // the uid the credential of the next peer says; ctlUID, the one allowed, unless a test changes it
 	peerErr atomic.Bool   // the credential cannot be read
@@ -62,9 +64,13 @@ func newCtlRig(t *testing.T, options ...func(*ctlServer)) *ctlRig {
 	if err != nil {
 		t.Fatalf("bindCtl: %v", err)
 	}
-	k := &ctlRig{r: r, c: c, store: store, path: path, root: newPKI(t, nil, "ctl root", true)}
+	k := &ctlRig{r: r, c: c, store: store, path: path, root: newPKI(t, nil, "ctl root", true), handled: make(chan *net.UnixConn, 16)}
 	k.peer.Store(ctlUID)
-	c.peerUID = func(*net.UnixConn) (uint32, error) {
+	c.peerUID = func(conn *net.UnixConn) (uint32, error) {
+		select { // the server's end of each connection, as it takes it up: a test can end the connection's deadline itself
+		case k.handled <- conn:
+		default:
+		}
 		if k.peerErr.Load() {
 			return 0, syscall.ENOTSUP
 		}
@@ -96,6 +102,9 @@ func ctlReply(t *testing.T, c *net.UnixConn) string {
 	t.Helper()
 	_ = c.SetReadDeadline(time.Now().Add(watchdog))
 	line, err := bufio.NewReader(c).ReadString('\n')
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("STUCK: the control socket neither replied nor closed within the watchdog (read so far: %q)", line)
+	}
 	if err != nil && !isClosed(err) {
 		t.Fatalf("reading the control socket's reply: %q, %v", line, err)
 	}
@@ -280,11 +289,11 @@ func TestOnlyTheFirstMessageOfAConnectionIsRead(t *testing.T) {
 	k.requireServing(t, first, "after a connection that sent two messages")
 }
 
-// A client that sends part of its message, or nothing, is cut off at the deadline with an error, and the next one is served.
-func TestASlowOrSilentClientIsCutOffAndTheNextOneIsServed(t *testing.T) {
+// A client that sends part of its message, or nothing, is cut off at the deadline with an error. The deadline is a real,
+// short one: its expiry is what the replies wait for, and nothing else rides it (a slow machine only delays the cut-off).
+func TestASlowOrSilentClientIsCutOffAtTheDeadline(t *testing.T) {
 	k := newCtlRig(t, withDeadline(100*time.Millisecond))
-	leaf := k.leaf(t)
-	pem := chainPEM(t, leaf)
+	pem := chainPEM(t, k.leaf(t))
 
 	short := dialCtl(t, k.path)
 	if _, err := short.Write(ctlFrame(pem)[:len(pem)/2]); err != nil { // the length and half the body
@@ -298,7 +307,37 @@ func TestASlowOrSilentClientIsCutOffAndTheNextOneIsServed(t *testing.T) {
 		t.Fatalf("a client that sent nothing: reply %q, want an error", reply)
 	}
 	k.requireEmpty(t, "after the cut-off clients")
-	if got := k.push(t, pem); got != "ok" {
+}
+
+// The server takes one connection at a time, so a client that stalls holds up the next one until it is cut off, and the
+// next is then served. The deadlines are an hour; the stalled client's is ended by the test, once the next client has
+// queued its whole message behind it, so nothing here waits for a timeout and no real deadline can cut the next client short.
+func TestTheNextClientIsServedOnceAStalledOneIsCutOff(t *testing.T) {
+	k := newCtlRig(t, withDeadline(time.Hour))
+	leaf := k.leaf(t)
+	pem := chainPEM(t, leaf)
+
+	stalled := dialCtl(t, k.path)
+	if _, err := stalled.Write(ctlFrame(pem)[:len(pem)/2]); err != nil {
+		t.Fatal(err)
+	}
+	var held *net.UnixConn
+	select {
+	case held = <-k.handled: // the server is on the stalled connection: everything dialled from now on waits behind it
+	case <-time.After(watchdog):
+		t.Fatal("STUCK: the server never took up the stalled connection")
+	}
+	next := dialCtl(t, k.path)
+	if _, err := next.Write(ctlFrame(pem)); err != nil {
+		t.Fatal(err)
+	}
+	k.requireEmpty(t, "while the stalled client holds the server")
+
+	_ = held.SetReadDeadline(time.Unix(1, 0)) // the stalled client's deadline expires
+	if reply := ctlReply(t, stalled); !strings.HasPrefix(reply, "error: ") {
+		t.Fatalf("the stalled client: reply %q, want an error", reply)
+	}
+	if got := ctlReply(t, next); got != "ok" {
 		t.Fatalf("the next client got %q, want ok", got)
 	}
 	k.requireServing(t, leaf, "after the next client")

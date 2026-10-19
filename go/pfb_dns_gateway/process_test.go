@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,8 +50,12 @@ func TestMain(m *testing.M) {
 //	bad-frame       READY, then a frame whose length is below the minimum
 //	ignore-eof      READY, then ignore everything, EOF included
 //
-// PFB_FAKE_PIDFILE gets its pid and PFB_FAKE_ARGVFILE its arguments before anything else; PFB_FAKE_EXIT_DELAY (a duration) holds the exit after EOF,
-// which makes a gateway that exits before its child reaches the pid check with the child still alive.
+// PFB_FAKE_PIDFILE gets its pid and PFB_FAKE_ARGVFILE its arguments before anything else. PFB_FAKE_EVENTS names an append-only
+// file the decider writes what it saw to, in order, so a test reads the order of events from the processes themselves rather
+// than from when the test happened to look: "before-ready ready-file=absent|present" is the state of the file PFB_FAKE_WATCH
+// names, taken just before READY is sent; "exit parent=PID" is the decider's parent at its last moment. PFB_FAKE_EXIT_DELAY (a
+// duration) holds the exit after EOF: it only gives a gateway that exits before its child the time to do so, and the verdict is
+// the recorded parent, not how long anything took.
 func fakeDecider(mode string) int {
 	conn, err := net.FileConn(os.NewFile(3, "decision"))
 	if err != nil {
@@ -72,6 +77,13 @@ func fakeDecider(mode string) int {
 	case "boot-ignores-eof": // a module that is still booting reads no socket, so EOF goes unnoticed
 		time.Sleep(time.Hour)
 		return 0
+	}
+	if watch := os.Getenv("PFB_FAKE_WATCH"); watch != "" {
+		state := "absent"
+		if _, err := os.Lstat(watch); err == nil {
+			state = "present"
+		}
+		fakeEvent("before-ready ready-file=%s", state)
 	}
 	_, _ = conn.Write(pack(tReady, 0, nil))
 	switch mode {
@@ -106,7 +118,33 @@ func fakeDecider(mode string) int {
 	if delay, err := time.ParseDuration(os.Getenv("PFB_FAKE_EXIT_DELAY")); err == nil {
 		time.Sleep(delay)
 	}
+	fakeEvent("exit parent=%d", os.Getppid())
 	return 0
+}
+
+// fakeEvent appends one line to the file PFB_FAKE_EVENTS names (nothing when it is unset).
+func fakeEvent(format string, args ...any) {
+	path := os.Getenv("PFB_FAKE_EVENTS")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake decider: events:", err)
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, format+"\n", args...)
+}
+
+// readEvents is the lines of an events file, in the order the processes wrote them.
+func readEvents(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
 }
 
 // dropAndReport gives up root for the named user and reports what the process is afterwards.
@@ -366,9 +404,11 @@ func TestGatewayExitsWithoutServingWhenTheDeciderNeverBecomesReady(t *testing.T)
 
 // G20: SIGTERM stops accepting, ends the decider and exits 0; the child is gone before the gateway is.
 func TestGatewaySIGTERMExitsZeroAfterTheDeciderIsGone(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "decider.pid")
+	dir := t.TempDir()
+	pidfile, events := filepath.Join(dir, "decider.pid"), filepath.Join(dir, "events")
 	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	t.Setenv("PFB_FAKE_EXIT_DELAY", "300ms") // a gateway that does not wait for its child leaves it alive here
+	t.Setenv("PFB_FAKE_EVENTS", events)
+	t.Setenv("PFB_FAKE_EXIT_DELAY", "300ms") // gives a gateway that does not wait for its child the time to leave first
 	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0"}, decider("serve"))
 	serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("ready upstream")
@@ -381,6 +421,11 @@ func TestGatewaySIGTERMExitsZeroAfterTheDeciderIsGone(t *testing.T) {
 	}
 	if code := gw.exit(); code != 0 {
 		t.Fatalf("exit code %d after SIGTERM, want 0; log:\n%s", code, gw.logText())
+	}
+	// Recorded by the decider at its last moment, so it does not depend on when this test looks: the gateway was still its
+	// parent, i.e. had not exited, and so waited for it.
+	if got, want := readEvents(t, events), []string{"exit parent=" + strconv.Itoa(gw.cmd.Process.Pid)}; !slices.Equal(got, want) {
+		t.Fatalf("decider events %q, want %q: the gateway exited before its child did", got, want)
 	}
 	requireGone(t, pid)
 	if c, err := net.DialTimeout("tcp", serving.String(), watchdog); err == nil {

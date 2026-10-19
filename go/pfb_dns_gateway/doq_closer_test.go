@@ -1,15 +1,10 @@
 package main
 
 import (
-	"context"
-	"net"
-	"net/netip"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/quic-go/quic-go"
 )
 
 // holdDoQAccept makes the gateway's DoQ accept loop stop, with the connection it just took in hand, until the
@@ -28,22 +23,12 @@ func holdDoQAccept(t *testing.T, g *gateway) (entered <-chan struct{}, release f
 	return in, release
 }
 
-// doqAnswersWithin reports whether a new DoQ client completes its handshake inside d: a listener that was closed
-// drops the Initial without an answer, which is how the tests below tell that stop() got past ln.Close().
-func doqAnswersWithin(t *testing.T, addr netip.AddrPort, m tlsMaterial, d time.Duration) bool {
-	t.Helper()
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP(clientAllowed)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = udp.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), d)
-	defer cancel()
-	conn, err := quic.Dial(ctx, udp, net.UDPAddrFromAddrPort(addr), doqConfig(m), nil)
-	if err == nil {
-		_ = conn.CloseWithError(0, "probe")
-	}
-	return err == nil
+// closedDoQListener makes the gateway's DoQ closer report, on the returned channel, that it has closed the listener
+// (ln.Close() has returned and it goes on to wait for the accept loop). Set it before serveDoQ: stop() reads the hook.
+func closedDoQListener(g *gateway) <-chan struct{} {
+	closed := make(chan struct{})
+	g.doqListenerClosed = sync.OnceFunc(func() { close(closed) })
+	return closed
 }
 
 // stop() sends every DoQ connection its close only after the accept loop has handed out what the listener had queued:
@@ -53,6 +38,7 @@ func TestStopClosesADoQConnectionTheAcceptLoopRegistersAfterTheListenerClosed(t 
 	r := newRig(t, rigConfig{acl: aclMixed})
 	r.g.stopBound = time.Hour // only the release below may let the closer go on
 	m := newTLSMaterial(t)
+	listenerClosed := closedDoQListener(r.g)
 	entered, release := holdDoQAccept(t, r.g)
 	addr := r.serveDoQ(m)
 
@@ -60,7 +46,7 @@ func TestStopClosesADoQConnectionTheAcceptLoopRegistersAfterTheListenerClosed(t 
 	waitClosed(t, entered, "the accept loop to take the connection")
 	stopped := make(chan struct{})
 	go func() { r.g.stop(); close(stopped) }()
-	eventually(t, "the DoQ listener to be closed", func() bool { return !doqAnswersWithin(t, addr, m, 300*time.Millisecond) })
+	waitClosed(t, listenerClosed, "stop() to close the DoQ listener")
 
 	release()
 	waitClosed(t, stopped, "stop() to return once the accept loop was released")

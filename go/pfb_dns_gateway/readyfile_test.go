@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // issue #3513 (readiness for #3515): with --ready-file the gateway publishes its own pid, mode 0600, once it serves,
@@ -82,20 +82,32 @@ func TestReadyFilePublishesTheGatewayPidOnceItServes(t *testing.T) {
 	stopGateway(t, gw)
 }
 
-// A decider that never says READY means the gateway never publishes, not even briefly.
+// READY is what publishes: the decider looks at the ready file just before it sends READY and records what it saw, so the
+// order is read from the decider's own events, not inferred from a window in which a test saw no file. The file is absent
+// at that moment and, once the gateway reports that it serves, names the gateway.
 func TestReadyFileIsNotPublishedBeforeTheDeciderIsReady(t *testing.T) {
+	dir := t.TempDir()
+	ready, events := filepath.Join(dir, "ready"), filepath.Join(dir, "events")
+	t.Setenv("PFB_FAKE_EVENTS", events)
+	t.Setenv("PFB_FAKE_WATCH", ready)
+	gw := startGatewayProcess(t, readyFileFlags(ready), decider("serve"))
+	gw.waitLine("ready upstream ")
+	if got, want := readEvents(t, events), []string{"before-ready ready-file=absent"}; !slices.Equal(got, want) {
+		t.Fatalf("decider events %q, want %q: the ready file was published before the decider sent READY", got, want)
+	}
+	if pid := readReadyPid(t, ready); pid != gw.cmd.Process.Pid {
+		t.Fatalf("ready file names pid %d once the gateway serves, want the gateway's %d", pid, gw.cmd.Process.Pid)
+	}
+	stopGateway(t, gw)
+}
+
+// A decider that never says READY means the gateway never published: after it stopped, nothing is left behind.
+func TestReadyFileIsNotLeftBehindByAGatewayThatNeverBecameReady(t *testing.T) {
 	dir := t.TempDir()
 	ready, pidfile := filepath.Join(dir, "ready"), filepath.Join(dir, "decider.pid")
 	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
 	gw := startGatewayProcess(t, readyFileFlags(ready), decider("no-ready-hang"))
 	waitForPid(t, pidfile) // the decider is running and the gateway waits for its READY
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(ready); err == nil {
-			t.Fatal("ready file published before the decider sent READY")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 	stopGateway(t, gw)
 	if _, err := os.Stat(ready); err == nil {
 		t.Fatal("ready file left behind by a gateway that never became ready")

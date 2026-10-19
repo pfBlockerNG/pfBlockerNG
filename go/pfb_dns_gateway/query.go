@@ -117,6 +117,7 @@ type gateway struct {
 	logf                                                       func(format string, args ...any)
 	udpPerAddr, muxPerAddr, tcpPerAddr, dohPerAddr, doqPerAddr int    // per-address shares of the budgets below; a test lifts one to look at the global cap alone
 	doqAccepted                                                func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
+	doqListenerClosed                                          func() // test seam: DoQ's closer calls it once ln.Close() has returned, before it waits for the accept loop
 
 	ctx     context.Context
 	cancel  context.CancelFunc

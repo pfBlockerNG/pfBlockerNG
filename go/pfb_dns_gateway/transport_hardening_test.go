@@ -48,7 +48,9 @@ func TestPipelinedRepliesOfDifferentSizesComeBackWhole(t *testing.T) {
 	}
 }
 
-// A connection that failed is closed and not put back; one that answered is kept for the next forward.
+// A connection that failed is closed and not put back; one that answered is kept for the next forward. The failure is the
+// exchange being ended while Unbound is silent, as the timeout would end it (the connection is closed the same way), once
+// Unbound has the query: no real deadline sits under either exchange, so none races the one that must succeed.
 func TestPoolKeepsAConnectionThatAnsweredAndNeverOneThatFailed(t *testing.T) {
 	var asked atomic.Int32
 	f := newFakeUpstream(t, answering(func(q seenQuery) [][]byte {
@@ -57,16 +59,22 @@ func TestPoolKeepsAConnectionThatAnsweredAndNeverOneThatFailed(t *testing.T) {
 		}
 		return echoWithQR(q)
 	}))
-	u := newUpstream(f.addr, 150*time.Millisecond)
+	u := newUpstream(f.addr, watchdog)
 	p := u.newPool(headerFor(t, "ipv4 tcp"))
 	t.Cleanup(p.close)
 	query := buildQuery(t, 1, "example.", true)
 
-	if got := p.exchange(context.Background(), query); got != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	silent := make(chan []byte, 1)
+	go func() { silent <- p.exchange(ctx, query) }()
+	f.next() // Unbound has the query and says nothing: the exchange is parked waiting for its reply
+	cancel()
+	if got := awaitBytes(t, silent); got != nil {
 		t.Fatalf("a silent Unbound answered %x", got)
 	}
 	if n := len(p.idle); n != 0 {
-		t.Fatalf("a connection that timed out went back to the pool (%d idle)", n)
+		t.Fatalf("a connection that failed went back to the pool (%d idle)", n)
 	}
 	if got := p.exchange(context.Background(), query); !bytes.Equal(got, echoWithQR(seenQuery{wire: query})[0]) {
 		t.Fatalf("the exchange after a failed one got %x", got)

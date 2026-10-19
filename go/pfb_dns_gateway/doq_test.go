@@ -106,6 +106,9 @@ func TestDoQACLRefuseAnswersRefusedAndDenyRefusesTheConnection(t *testing.T) {
 	r.requireNoOtherQuery()
 }
 
+// stalledDoQStream names the case of the table below that no protocol error ends: a query whose FIN never comes.
+const stalledDoQStream = "a complete query that never gets its FIN"
+
 // T17 + hostile rows: a malformed query stream is reset with DOQ_PROTOCOL_ERROR and the connection carries on:
 // the next stream is answered. (RFC 9250 4.3.3 names these as protocol errors that SHOULD abort the connection;
 // the gateway resets the stream only, so one bad stream cannot cancel the other queries on the connection.)
@@ -151,13 +154,19 @@ func TestDoQMalformedStreamIsResetAndTheConnectionSurvives(t *testing.T) {
 			_ = s.Close()
 		}},
 		{"an empty stream", func(t *testing.T, s *quic.Stream) { _ = s.Close() }},
-		{"a complete query that never gets its FIN", func(t *testing.T, s *quic.Stream) {
+		{stalledDoQStream, func(t *testing.T, s *quic.Stream) {
 			put(t, s, framed(good))
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, m, addr := newDoQRig(t, rigConfig{timeout: 300 * time.Millisecond}) // a stalled stream is cut at the query timeout
+			// Every stream but one ends at once, in a protocol error, and the gateway's own wait for it never comes into play. The
+			// stalled one is cut off only by the query timeout, which is the one real deadline here; the next stream shares it.
+			timeout := time.Duration(0) // the rig's default: the watchdog
+			if tc.name == stalledDoQStream {
+				timeout = 300 * time.Millisecond
+			}
+			r, m, addr := newDoQRig(t, rigConfig{timeout: timeout})
 			r.autoAnswer(echoAnswer)
 			c := dialDoQ(t, addr, m, clientAllowed)
 			bad := c.stream()

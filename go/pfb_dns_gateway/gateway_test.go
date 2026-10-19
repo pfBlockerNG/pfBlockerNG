@@ -209,31 +209,23 @@ const udpProbeRetry = 500 * time.Millisecond
 // to an earlier call's probe cannot pass for it.
 func udpJudged(t *testing.T, probe *net.UDPConn) {
 	t.Helper()
-	udpJudgedEvery(t, probe, udpProbeRetry)
+	retry := time.NewTicker(udpProbeRetry)
+	defer retry.Stop()
+	udpJudgedOn(t, probe, retry.C)
 }
 
-// udpJudgedEvery is udpJudged with the interval between probes a test sets.
-func udpJudgedEvery(t *testing.T, probe *net.UDPConn, every time.Duration) {
+// udpJudgedOn is udpJudged with the event that sends the probe again injected: each receive from retry is one retry (a nil
+// channel never retries).
+func udpJudgedOn(t *testing.T, probe *net.UDPConn, retry <-chan time.Time) {
 	t.Helper()
 	first := uint16(udpProbeID.Add(1))
 	deadline := time.Now().Add(watchdog)
-	buf := make([]byte, 65535)
 	for next := first; ; next = uint16(udpProbeID.Add(1)) {
 		if _, err := probe.Write(buildQuery(t, next, "example.", true)); err != nil {
 			t.Fatal(err)
 		}
-		for retry := time.Now().Add(every); time.Now().Before(retry); {
-			_ = probe.SetReadDeadline(retry)
-			n, err := probe.Read(buf)
-			if errors.Is(err, os.ErrDeadlineExceeded) {
-				break
-			}
-			if err != nil {
-				t.Fatalf("UDP read: %v", err)
-			}
-			if n >= 2 && binary.BigEndian.Uint16(buf) >= first {
-				return
-			}
+		if ownReplyBeforeRetry(t, probe, first, retry, deadline) {
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("STUCK: the gateway never answered the probe that says its earlier datagrams were judged")
@@ -241,14 +233,59 @@ func udpJudgedEvery(t *testing.T, probe *net.UDPConn, every time.Duration) {
 	}
 }
 
-// requireNoUDPReply asserts that nothing is waiting on c: call it only after a completion barrier.
+// ownReplyBeforeRetry reads probe until a reply to a probe of this call (id first or later) arrives, and reports true; it
+// reports false when retry fires, or the watchdog does, first. The firing of retry ends the read in progress.
+func ownReplyBeforeRetry(t *testing.T, probe *net.UDPConn, first uint16, retry <-chan time.Time, watchdogAt time.Time) bool {
+	t.Helper()
+	_ = probe.SetReadDeadline(watchdogAt)
+	stop, woken := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(woken)
+		select {
+		case <-retry:
+			_ = probe.SetReadDeadline(time.Unix(1, 0)) // wakes the blocked read
+		case <-stop:
+		}
+	}()
+	defer func() { close(stop); <-woken }()
+	buf := make([]byte, 65535)
+	for {
+		n, err := probe.Read(buf)
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return false
+		}
+		if err != nil {
+			t.Fatalf("UDP read: %v", err)
+		}
+		if n >= 2 && binary.BigEndian.Uint16(buf) >= first {
+			return true
+		}
+	}
+}
+
+// requireNoUDPReply asserts that nothing is waiting on c: call it only after a completion barrier. It asks the kernel what
+// is queued right now: a Read with an expired deadline never reaches the socket, whatever is queued, so it would pass for
+// any reply.
 func requireNoUDPReply(t *testing.T, c *net.UDPConn) {
 	t.Helper()
-	_ = c.SetReadDeadline(time.Now())
-	if n, err := c.Read(make([]byte, 65535)); err == nil {
+	raw, err := c.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Time{}) // a deadline left by an earlier read would end RawConn.Read before it looks
+	buf := make([]byte, 65535)
+	var n int
+	var rerr error
+	if err := raw.Read(func(fd uintptr) bool { // true: look once and never wait
+		n, _, rerr = syscall.Recvfrom(int(fd), buf, 0)
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rerr == nil {
 		t.Fatalf("a reply of %d bytes arrived where none is allowed", n)
-	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("UDP read: %v", err)
+	} else if !errors.Is(rerr, syscall.EAGAIN) {
+		t.Fatalf("UDP read: %v", rerr)
 	}
 }
 
@@ -296,7 +333,11 @@ func isClosed(err error) bool {
 func requireTCPClosed(t *testing.T, c net.Conn) {
 	t.Helper()
 	_ = c.SetReadDeadline(time.Now().Add(watchdog))
-	if n, err := c.Read(make([]byte, 1)); !isClosed(err) {
+	n, err := c.Read(make([]byte, 1))
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("STUCK: the gateway left the connection open for the whole watchdog (read %d bytes)", n)
+	}
+	if !isClosed(err) {
 		t.Fatalf("the gateway must close the connection silently: read %d bytes, err=%v", n, err)
 	}
 }

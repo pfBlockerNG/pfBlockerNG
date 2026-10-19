@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -69,7 +71,8 @@ func TestShutdownDoesNotWaitForQueriesBlockedWritingToAWedgedDecider(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(srv.dec.Close) // frees a shutdown that is stuck, so a failure does not leak it
+	t.Cleanup(srv.dec.Close)    // frees a shutdown that is stuck, so a failure does not leak it
+	srv.g.stopBound = time.Hour // stop() gives up on a handler after 2 x this: at the default a shutdown that waits for the blocked query still ends in about a second and the test could not tell
 	var serving string
 	for _, l := range strings.Split(logs.text(), "\n") {
 		if strings.HasPrefix(l, "listening udp+tcp ") {
@@ -79,16 +82,7 @@ func TestShutdownDoesNotWaitForQueriesBlockedWritingToAWedgedDecider(t *testing.
 	d := srv.dec
 	d.writeTimeout = time.Hour // a write that cannot complete would hold the shutdown this long
 	d.wmu.Lock()
-	for chunk := make([]byte, 64*1024); ; {
-		_ = d.conn.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
-		if _, err := d.conn.Write(chunk); err != nil {
-			if !errors.Is(err, os.ErrDeadlineExceeded) {
-				d.wmu.Unlock()
-				t.Fatalf("filling the decision socket: %v", err)
-			}
-			break
-		}
-	}
+	fillSocket(t, d.conn)
 	d.wmu.Unlock()
 	c, err := net.Dial("udp", serving)
 	if err != nil {
@@ -109,23 +103,91 @@ func TestShutdownDoesNotWaitForQueriesBlockedWritingToAWedgedDecider(t *testing.
 }
 
 // F4: the SafeSearch chase is a second FORWARD; two silent Unbound exchanges of one timeout each must still fit the
-// whole-query limit of 2 x timeout + grace. (grace < timeout, so a limit of timeout + grace would cut it short.)
+// whole-query limit of 2 x timeout + grace. (grace < timeout, so a limit of timeout + grace would cut it short.) The limit
+// is the deadline of the context each forward runs under, which the test reads instead of waiting out two timeouts: the
+// query was started somewhere between `started` and the moment its forward ran, so the limit lies between the two
+// distances, however slow the machine. The timeouts are hours, so a limit that is wrong by a whole timeout cannot hide in
+// that gap, and nothing here waits for them: a silent exchange is a forwarder that returns nil at once.
 func TestChaseOfTwoSilentForwardsStillGetsItsAnswer(t *testing.T) {
-	for _, tr := range transports {
-		t.Run(tr.name, func(t *testing.T) {
-			r := newRig(t, rigConfig{acl: aclMixed, timeout: 600 * time.Millisecond, grace: 400 * time.Millisecond, upstream: []upstreamOption{silent()}})
+	const timeout, grace = 6 * time.Hour, 4 * time.Hour
+	client := netip.MustParseAddr(clientAllowed)
+	for _, c := range []struct {
+		name string
+		ask  func(g *gateway, wire []byte, fwd forwarder) []byte
+	}{
+		{"udp", func(g *gateway, wire []byte, fwd forwarder) []byte {
+			return g.resolve(context.Background(), client, true, wire, fwd)
+		}},
+		{"tcp", func(g *gateway, wire []byte, fwd forwarder) []byte {
+			return g.resolve(context.Background(), client, false, wire, fwd)
+		}},
+		{"doh and doq", func(g *gateway, wire []byte, fwd forwarder) []byte {
+			reply, _ := g.resolveShared(context.Background(), client, wire, fwd)
+			return reply
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t, rigConfig{acl: aclMixed, timeout: timeout, grace: grace})
+			type forward struct {
+				deadline, ran time.Time
+				hasDeadline   bool
+			}
+			var forwards []forward // appended by the asking goroutine, read once it has answered
+			fwd := func(ctx context.Context, wire []byte) []byte {
+				deadline, ok := ctx.Deadline()
+				forwards = append(forwards, forward{deadline, time.Now(), ok})
+				return nil // Unbound said nothing for a whole timeout
+			}
+			wire := buildQuery(t, 0x5151, "duck.example.", true)
+			started := time.Now()
 			done := make(chan []byte, 1)
-			go func() { done <- r.roundTrip(tr, "", buildQuery(t, 0x5151, "duck.example.", true)) }()
+			go func() { done <- c.ask(r.g, wire, fwd) }()
 			q := r.recvQuery()
 			for range 2 {
 				r.p.send(tForward, q.id, q.wire)
-				r.p.expect(tReply, q.id, nil) // Unbound said nothing for a whole timeout
+				r.p.expect(tReply, q.id, nil)
 			}
 			r.p.send(tAnswer, q.id, []byte("chased answer"))
 			if got := awaitBytes(t, done); string(got) != "chased answer" {
 				t.Fatalf("client reply %x, want the decider's answer: the query was cut off before the chase finished", got)
 			}
+			want := 2*timeout + grace
+			if len(forwards) != 2 {
+				t.Fatalf("%d forwards ran, want 2", len(forwards))
+			}
+			for i, f := range forwards {
+				if !f.hasDeadline {
+					t.Fatalf("forward %d ran under a context with no deadline, want a whole-query limit of %v", i, want)
+				}
+				if lo, hi := f.deadline.Sub(f.ran), f.deadline.Sub(started); want < lo || want > hi {
+					t.Fatalf("forward %d: the whole-query limit is between %v and %v, want 2 x timeout + grace = %v", i, lo, hi, want)
+				}
+			}
 		})
+	}
+}
+
+// fillSocket writes to c until the kernel refuses more (EAGAIN): the socket is full because the kernel says so, not because
+// a write was slow.
+func fillSocket(t *testing.T, c net.Conn) {
+	t.Helper()
+	raw, err := c.(syscall.Conn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var werr error
+	chunk := make([]byte, 64*1024)
+	if err := raw.Control(func(fd uintptr) { // the runtime made the descriptor non-blocking: a full socket answers EAGAIN
+		for {
+			if _, werr = syscall.Write(int(fd), chunk); werr != nil && !errors.Is(werr, syscall.EINTR) {
+				return
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(werr, syscall.EAGAIN) {
+		t.Fatalf("filling the decision socket ended with %v, want EAGAIN once it is full", werr)
 	}
 }
 

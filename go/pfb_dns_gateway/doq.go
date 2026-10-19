@@ -81,7 +81,10 @@ func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
 		go func() {
 			defer close(closed)
 			_ = ln.Close() // refuses the handshakes still running; Accept hands out what is queued, then ends
-			<-acceptEnded  // so every connection is registered, or already closed
+			if g.doqListenerClosed != nil {
+				g.doqListenerClosed()
+			}
+			<-acceptEnded // so every connection is registered, or already closed
 			conns.closeAll()
 		}()
 		t := time.NewTimer(g.stopBound)

@@ -79,14 +79,15 @@ func TestDoTConnectionEndsWithCloseNotify(t *testing.T) {
 			if err := c.Handshake(); err != nil {
 				t.Fatal(err)
 			}
-			handshake := len(tap.bytes())
 
 			how.end(r)
 			_ = c.SetReadDeadline(time.Now().Add(watchdog))
 			if _, err := io.Copy(io.Discard, c); err != nil {
 				t.Fatalf("the connection ended with %v, want a clean close", err)
 			}
-			types := recordTypes(t, tap.bytes()[handshake:])
+			// The whole stream, not what came after the handshake: where the handshake ends is only known by looking at the tap
+			// while the gateway may already have closed (100 ms idle), and a handshake carries no alert record anyway.
+			types := recordTypes(t, tap.bytes())
 			if len(types) == 0 || types[len(types)-1] != tlsAlertRecord {
 				t.Fatalf("the gateway closed the connection after %v TLS records with no alert (content type %d) last: close_notify was not sent", types, tlsAlertRecord)
 			}
