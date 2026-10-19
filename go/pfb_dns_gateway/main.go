@@ -37,30 +37,32 @@ import (
 )
 
 const (
-	defaultReadyTimeout   = 300 * time.Second // the decider boots the whole DNSBL database before it says READY
-	defaultKillAfter      = 3 * time.Second   // how long the decider gets to leave on EOF
-	defaultShutdownBudget = 4 * time.Second   // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
+	defaultReadyTimeout   = 300 * time.Second               // the decider boots the whole DNSBL database before it says READY
+	defaultKillAfter      = 3 * time.Second                 // how long the decider gets to leave on EOF
+	defaultShutdownBudget = 4 * time.Second                 // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
+	defaultTLSPEM         = "/var/unbound/pfb_dns_cert.pem" // pfBlockerNG's export of the Resolver's certificate, in the Unbound chroot
 )
 
 type config struct {
-	listen        []string
-	port          int
-	upstream      string
-	timeout       time.Duration
-	unboundConf   string
-	user          string
-	dot           bool
-	pfsenseConfig string
-	dohListen     []string
-	dohPort       int
-	dohTrusted    []string
-	doqListen     []string
-	doqPort       int
-	noModule      bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
-	observer      bool
-	replyLog      bool
-	readyFile     string // --ready-file: the gateway's pid is published here once it serves; "" = none
-	decider       []string
+	listen      []string
+	port        int
+	upstream    string
+	timeout     time.Duration
+	unboundConf string
+	user        string
+	dot         bool
+	dotPort     int
+	tlsPEM      string
+	dohListen   []string
+	dohPort     int
+	dohTrusted  []string
+	doqListen   []string
+	doqPort     int
+	noModule    bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
+	observer    bool
+	replyLog    bool
+	readyFile   string // --ready-file: the gateway's pid is published here once it serves; "" = none
+	decider     []string
 
 	// Test seams; the zero value is production.
 	drop           func() error      // replaces the privilege drop to --user
@@ -81,7 +83,7 @@ func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 func parseConfig(args []string, usage io.Writer) (config, error) {
 	cfg := config{
 		port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second, unboundConf: "/var/unbound/unbound.conf",
-		pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
+		tlsPEM: defaultTLSPEM, dotPort: defaultDoTPort, dohPort: 4443, doqPort: 853,
 	}
 	split := slices.Index(args, "--")
 	if split < 0 {
@@ -99,8 +101,9 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "wait for Unbound per exchange")
 	fs.StringVar(&cfg.unboundConf, "unbound-conf", cfg.unboundConf, "Unbound's config: the access-control rows of it and of every file it includes are the ACL")
 	fs.StringVar(&cfg.user, "user", "", "give up root for this user once the sockets are bound and the decider runs")
-	fs.BoolVar(&cfg.dot, "dot", false, "serve DoT on every --listen address at unbound/tlsport (853 if unset) of --pfsense-config")
-	fs.StringVar(&cfg.pfsenseConfig, "pfsense-config", cfg.pfsenseConfig, "config.xml with unbound/sslcertref, tlsport and the <cert>/<ca>")
+	fs.BoolVar(&cfg.dot, "dot", false, "serve DoT on every --listen address at --dot-port")
+	fs.IntVar(&cfg.dotPort, "dot-port", cfg.dotPort, "DoT port; 0 picks one per address")
+	fs.StringVar(&cfg.tlsPEM, "tls-pem", cfg.tlsPEM, "certificate chain and private key of DoT, DoH and DoQ, one PEM file; read again when it changes")
 	var dohListen, dohTrusted, doqListen listFlag
 	fs.Var(&dohListen, "doh-listen", "DoH address (HTTPS GET and POST on /dns-query), repeatable; none = DoH off")
 	fs.IntVar(&cfg.dohPort, "doh-port", cfg.dohPort, "DoH port; 0 picks one per address")
@@ -170,8 +173,11 @@ func (c config) validate() error {
 	if slices.Contains(c.doqListen, "") {
 		return errors.New("--doq-listen must not be empty")
 	}
-	if c.pfsenseConfig == "" {
-		return errors.New("--pfsense-config must not be empty")
+	if c.tlsPEM == "" {
+		return errors.New("--tls-pem must not be empty")
+	}
+	if c.dotPort < 0 || c.dotPort > 65535 {
+		return fmt.Errorf("--dot-port %d is outside 0..65535", c.dotPort)
 	}
 	if c.dohPort < 0 || c.dohPort > 65535 {
 		return fmt.Errorf("--doh-port %d is outside 0..65535", c.dohPort)
@@ -286,7 +292,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	if len(listeners) == 0 {
 		return nil, errors.New("no address could be bound")
 	}
-	secure = bindTLS(cfg, logf) // config.xml is root-only: read it, and bind, before the privilege drop
+	secure = bindTLS(cfg, logf) // the certificate file is read, and the sockets are bound, before the privilege drop
 	trace("bind")
 
 	conn, deciderEnd, err := newSocketpair()

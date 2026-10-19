@@ -6788,6 +6788,9 @@ function pfblockerng_tick(
 		pfb_dns_proxy_stand_down();
 	}
 
+	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies; it reads the file again within a second
+	pfb_dns_proxy_certificate_sync();
+
 	$now   = time();
 	$seed  = pfb_tick_seed();
 	$dbdir = $pfb['dbdir'];

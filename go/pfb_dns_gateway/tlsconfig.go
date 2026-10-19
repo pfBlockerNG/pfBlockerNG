@@ -3,155 +3,108 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/pem"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"strconv"
-	"strings"
+	"sync"
+	"time"
 )
 
-// The DNS Resolver's certificate, read from config.xml exactly as dns_proxy/pfsense_dot.py reads it (issue #3513):
-// unbound/sslcertref names a top-level <cert> whose crt and prv are base64 PEM; the CAs its caref leads to follow
-// it, nearest first, as Unbound is given them. unbound/enablessl is not read: the gateway's flags decide.
+// What DoT, DoH and DoQ serve is one PEM file: the DNS Resolver's certificate, the CAs after it nearest first, then its
+// private key, written by pfBlockerNG (pfb_dns_proxy_certificate_export(), docs/misc/dns-gateway-transports.md) for the
+// user the gateway runs as. The gateway hands it out through tls.Config.GetCertificate and looks at it again at most
+// once a second. A new content that parses, key included, replaces the certificate for the handshakes that follow; one
+// that does not is reported once and the previous certificate stays. A connection that is open keeps the certificate
+// it was set up with. So a renewal needs no restart and fails no handshake.
 
-const defaultDoTPort = 853
+const (
+	defaultDoTPort = 853
+	certRecheck    = time.Second // how often the file is looked at, at most
+)
 
-// tlsSettings is what DoT, DoH and DoQ serve: the DoT port and the certificate chain with its key.
-type tlsSettings struct {
-	port int
-	cert tls.Certificate
+// certStore is the certificate the transports serve and the file it is read from.
+type certStore struct {
+	path string
+	logf func(format string, args ...any)
+	now  func() time.Time // the clock; a test replaces it
+
+	mu      sync.Mutex
+	cert    *tls.Certificate
+	seen    []byte    // the content last read, whether it parsed or not: the same content is neither parsed nor reported again
+	readErr string    // why the file could not be read, while it cannot
+	checked time.Time // when the file was last looked at
 }
 
-// pfsenseConfig is the slice of config.xml that is read; encoding/xml ignores the rest.
-type pfsenseConfig struct {
-	Unbound struct {
-		SSLCertRef string `xml:"sslcertref"`
-		TLSPort    string `xml:"tlsport"`
-	} `xml:"unbound"`
-	Certs []xmlCert `xml:"cert"`
-	CAs   []xmlCert `xml:"ca"`
-}
-
-type xmlCert struct {
-	RefID string `xml:"refid"`
-	CARef string `xml:"caref"`
-	CRT   string `xml:"crt"`
-	PRV   string `xml:"prv"`
-}
-
-// readTLSSettings is the Resolver's certificate and DoT port in the config.xml at path; every error names the
-// file and the reason.
-func readTLSSettings(path string) (tlsSettings, error) {
+// newCertStore loads the file; every error names it and the reason. A gateway that cannot load its certificate at
+// start serves no TLS (bindTLS): there is no previous certificate to keep.
+func newCertStore(path string, logf func(format string, args ...any)) (*certStore, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		var pe *fs.PathError
-		if errors.As(err, &pe) {
-			err = pe.Err
-		}
-		return tlsSettings{}, fmt.Errorf("%s: cannot read: %w", path, err)
+		return nil, fmt.Errorf("%s: cannot read: %w", path, reason(err))
 	}
-	var cfg pfsenseConfig
-	if err := xml.Unmarshal(raw, &cfg); err != nil {
-		return tlsSettings{}, fmt.Errorf("%s: not well-formed XML: %w", path, err)
-	}
-
-	ref := strings.TrimSpace(cfg.Unbound.SSLCertRef)
-	if ref == "" {
-		return tlsSettings{}, fmt.Errorf("%s: unbound/sslcertref is empty; pick the SSL/TLS Certificate of the DNS Resolver", path)
-	}
-	var cert *xmlCert
-	for i := range cfg.Certs {
-		if strings.TrimSpace(cfg.Certs[i].RefID) == ref {
-			cert = &cfg.Certs[i]
-			break
-		}
-	}
-	if cert == nil {
-		return tlsSettings{}, fmt.Errorf("%s: no <cert> with refid %q (unbound/sslcertref)", path, ref)
-	}
-
-	leaf, err := decodePEM(path, "cert", cert, "crt", cert.CRT)
+	cert, err := tls.X509KeyPair(raw, raw)
 	if err != nil {
-		return tlsSettings{}, err
+		return nil, fmt.Errorf("%s: cannot load the certificate and key: %w", path, err)
 	}
-	chain := [][]byte{leaf}
-	// each CA the certificate's caref leads to, nearest first; a missing CA or a loop ends the chain
-	authorities := map[string]*xmlCert{}
-	for i := range cfg.CAs {
-		authorities[strings.TrimSpace(cfg.CAs[i].RefID)] = &cfg.CAs[i]
-	}
-	seen := map[string]bool{}
-	for caref := strings.TrimSpace(cert.CARef); caref != "" && !seen[caref] && authorities[caref] != nil; {
-		seen[caref] = true
-		ca := authorities[caref]
-		pemBytes, err := decodePEM(path, "ca", ca, "crt", ca.CRT)
-		if err != nil {
-			return tlsSettings{}, err
-		}
-		chain = append(chain, pemBytes)
-		caref = strings.TrimSpace(ca.CARef)
-	}
-	key, err := decodePEM(path, "cert", cert, "prv", cert.PRV)
-	if err != nil {
-		return tlsSettings{}, err
-	}
-	if encryptedKey(key) {
-		return tlsSettings{}, fmt.Errorf("%s: the private key of the DNS Resolver's certificate is encrypted with a passphrase; use a key without one", path)
-	}
-	pair, err := tls.X509KeyPair(bytes.Join(chain, []byte("\n")), key)
-	if err != nil {
-		return tlsSettings{}, fmt.Errorf("%s: cannot load the DNS Resolver's certificate and key: %w", path, err)
-	}
-
-	port := defaultDoTPort
-	if p, err := strconv.ParseUint(strings.TrimSpace(cfg.Unbound.TLSPort), 10, 16); err == nil && p > 0 {
-		port = int(p)
-	}
-	return tlsSettings{port: port, cert: pair}, nil
+	return &certStore{path: path, logf: logf, now: time.Now, cert: &cert, seen: raw, checked: time.Now()}, nil
 }
 
-// decodePEM is the base64 text of an element (whitespace ignored) as bytes.
-func decodePEM(path, kind string, entry *xmlCert, field, text string) ([]byte, error) {
-	label := fmt.Sprintf("<%s> %q", kind, strings.TrimSpace(entry.RefID))
-	compact := strings.Join(strings.Fields(text), "")
-	if compact == "" {
-		return nil, fmt.Errorf("%s: %s has no %s", path, label, field)
+// reason is the cause of a file error without the operation and the path, which the caller names.
+func reason(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
 	}
-	decoded, err := base64.StdEncoding.DecodeString(compact)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %s of %s is not valid base64", path, field, label)
-	}
-	return decoded, nil
+	return err
 }
 
-// encryptedKey reports a PEM key that needs a passphrase: a daemon cannot be asked for one.
-func encryptedKey(keyPEM []byte) bool {
-	for rest := keyPEM; ; {
-		var block *pem.Block
-		if block, rest = pem.Decode(rest); block == nil {
-			return false
-		}
-		if block.Type == "ENCRYPTED PRIVATE KEY" || strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") {
-			return true
-		}
+// getCertificate is tls.Config.GetCertificate.
+func (s *certStore) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if now := s.now(); now.Sub(s.checked) >= certRecheck {
+		s.checked = now
+		s.reload()
 	}
+	return s.cert, nil
+}
+
+// reload looks at the file once; the caller holds mu.
+func (s *certStore) reload() {
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		if msg := reason(err).Error(); msg != s.readErr {
+			s.readErr = msg
+			s.logf("TLS certificate not reloaded: %s: cannot read: %s; keeping the previous certificate", s.path, msg)
+		}
+		return
+	}
+	s.readErr = ""
+	if bytes.Equal(raw, s.seen) {
+		return
+	}
+	s.seen = raw
+	cert, err := tls.X509KeyPair(raw, raw)
+	if err != nil {
+		s.logf("TLS certificate not reloaded: %s: cannot load the certificate and key: %v; keeping the previous certificate", s.path, err)
+		return
+	}
+	s.cert = &cert
+	s.logf("TLS certificate reloaded: %s", s.path)
 }
 
 // dot is the TLS 1.2+ configuration of DoT.
-func (s tlsSettings) dot() *tls.Config {
-	return &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12}
+func (s *certStore) dot() *tls.Config {
+	return &tls.Config{GetCertificate: s.getCertificate, MinVersion: tls.VersionTLS12}
 }
 
 // doh is the TLS 1.2+ configuration of DoH, HTTP/2 preferred.
-func (s tlsSettings) doh() *tls.Config {
-	return &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12, NextProtos: []string{"h2", "http/1.1"}}
+func (s *certStore) doh() *tls.Config {
+	return &tls.Config{GetCertificate: s.getCertificate, MinVersion: tls.VersionTLS12, NextProtos: []string{"h2", "http/1.1"}}
 }
 
 // doq is the TLS 1.3 configuration of DoQ (RFC 9250 4.1: ALPN "doq").
-func (s tlsSettings) doq() *tls.Config {
-	return &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS13, NextProtos: []string{"doq"}}
+func (s *certStore) doq() *tls.Config {
+	return &tls.Config{GetCertificate: s.getCertificate, MinVersion: tls.VersionTLS13, NextProtos: []string{"doq"}}
 }

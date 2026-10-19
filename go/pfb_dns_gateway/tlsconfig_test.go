@@ -7,166 +7,92 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
-// chainConfig is a config.xml whose certificate hangs below an intermediate CA below a root CA.
-func chainConfig(t *testing.T, extra ...string) (path string, leaf, mid, root *pki) {
+// chainStore is a store loaded from a file as pfBlockerNG writes it for a certificate below an intermediate CA below
+// a root CA: the certificate, the intermediate, the root (nearest first), then the key.
+func chainStore(t *testing.T) (store *certStore, leaf, mid, root *pki) {
 	t.Helper()
 	root = newPKI(t, nil, "chain root", true)
 	mid = newPKI(t, root, "chain intermediate", true)
 	leaf = newPKI(t, mid, "localhost", false)
-	sections := []string{
-		unboundEl(el("sslcertref", testRefid)),
-		certEl(testRefid, el("caref", "mid"), el("crt", b64(leaf.certPEM())), el("prv", b64(leaf.keyPEM(t)))),
-		caEl("mid", el("caref", "root"), el("crt", b64(mid.certPEM()))),
-		caEl("root", el("crt", b64(root.certPEM()))),
-	}
-	return writeConfig(t, configXML(append(sections, extra...)...)), leaf, mid, root
+	store, _ = storeAt(t, chainPEM(t, leaf, mid, root))
+	return store, leaf, mid, root
 }
 
-// T1: the certificate, then each CA up its chain, exactly what Unbound is given.
-func TestCertificateChainIsServedLeafFirstThenTheCAs(t *testing.T) {
-	path, leaf, mid, root := chainConfig(t)
-	s, err := readTLSSettings(path)
+// storeAt loads a store from a file of its own holding content.
+func storeAt(t *testing.T, content []byte) (*certStore, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "pfb_dns_cert.pem")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := newCertStore(path, func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return store, path
+}
+
+// The certificate, then each CA up its chain, exactly as the file holds them (pfBlockerNG writes nearest first).
+func TestCertificateChainIsServedAsTheFileHoldsIt(t *testing.T) {
+	store, leaf, mid, root := chainStore(t)
 	want := [][]byte{leaf.der, mid.der, root.der}
-	if len(s.cert.Certificate) != len(want) {
-		t.Fatalf("chain length: got %d certificates, want %d (leaf, intermediate, root)", len(s.cert.Certificate), len(want))
+	got := store.cert.Certificate
+	if len(got) != len(want) {
+		t.Fatalf("chain length: got %d certificates, want %d (leaf, intermediate, root)", len(got), len(want))
 	}
 	for i, der := range want {
-		if !bytes.Equal(s.cert.Certificate[i], der) {
+		if !bytes.Equal(got[i], der) {
 			t.Fatalf("certificate %d of the chain is not the expected one (want order leaf, intermediate, root)", i)
 		}
 	}
 }
 
-// A CA that is missing or a caref loop ends the chain instead of failing or looping.
-func TestCAChainStopsAtAMissingCAAndAtALoop(t *testing.T) {
-	root := newPKI(t, nil, "root", true)
-	a := newPKI(t, root, "a", true)
-	b := newPKI(t, a, "b", true)
-	leaf := newPKI(t, b, "localhost", false)
-	cert := certEl(testRefid, el("caref", "a"), el("crt", b64(leaf.certPEM())), el("prv", b64(leaf.keyPEM(t))))
-	cases := []struct {
-		name string
-		cas  []string
-		want [][]byte
-	}{
-		{"missing CA", []string{caEl("a", el("caref", "gone"), el("crt", b64(a.certPEM())))}, [][]byte{leaf.der, a.der}},
-		{"caref loop", []string{
-			caEl("a", el("caref", "b"), el("crt", b64(a.certPEM()))),
-			caEl("b", el("caref", "a"), el("crt", b64(b.certPEM()))),
-		}, [][]byte{leaf.der, a.der, b.der}},
-		{"no CA at all", nil, [][]byte{leaf.der}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			path := writeConfig(t, configXML(append([]string{unboundEl(el("sslcertref", testRefid)), cert}, c.cas...)...))
-			s, err := readTLSSettings(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(s.cert.Certificate) != len(c.want) {
-				t.Fatalf("got %d certificates, want %d", len(s.cert.Certificate), len(c.want))
-			}
-			for i := range c.want {
-				if !bytes.Equal(s.cert.Certificate[i], c.want[i]) {
-					t.Fatalf("certificate %d differs from the expected chain", i)
-				}
-			}
-		})
-	}
-}
-
-// T2: every way the certificate can be unusable names its reason; the error mentions the file.
-func TestUnusableCertificateIsReportedWithTheReason(t *testing.T) {
-	leaf := newPKI(t, nil, "localhost", false)
-	crt, prv := b64(leaf.certPEM()), b64(leaf.keyPEM(t))
-	other := newPKI(t, nil, "localhost", false)
-	legacyEncrypted := pem.EncodeToMemory(&pem.Block{ // the Proc-Type header openssl writes for traditional encrypted keys
-		Type: "EC PRIVATE KEY", Headers: map[string]string{"Proc-Type": "4,ENCRYPTED", "DEK-Info": "AES-256-CBC,00112233445566778899AABBCCDDEEFF"},
+// Every way the file can be unusable at start names its reason and the file.
+func TestUnusableCertificateFileIsRefusedAtStartWithTheReason(t *testing.T) {
+	leaf, other := newPKI(t, nil, "localhost", false), newPKI(t, nil, "localhost", false)
+	legacyEncrypted := pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Headers: map[string]string{"Proc-Type": "4,ENCRYPTED", "DEK-Info": "AES-128-CBC,00112233445566778899AABBCCDDEEFF"},
 		Bytes: bytes.Repeat([]byte{7}, 32),
 	})
 	pkcs8Encrypted := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: bytes.Repeat([]byte{7}, 64)})
-	notWellFormed := `<?xml version="1.0"?><pfsense><unbound><sslcertref>x</unbound></pfsense>`
-
-	cases := []struct {
-		name string
-		xml  string
-		want string
-	}{
-		{"sslcertref empty", configXML(unboundEl(el("sslcertref", "")), certEl(testRefid, el("crt", crt), el("prv", prv))), "unbound/sslcertref is empty"},
-		{"sslcertref element missing", configXML(unboundEl(el("enable", "")), certEl(testRefid, el("crt", crt), el("prv", prv))), "unbound/sslcertref is empty"},
-		{"no unbound section", configXML(certEl(testRefid, el("crt", crt), el("prv", prv))), "unbound/sslcertref is empty"},
-		{"unknown refid", configXML(unboundEl(el("sslcertref", "nope")), certEl(testRefid, el("crt", crt), el("prv", prv))), `no <cert> with refid "nope"`},
-		{"cert element without refid", configXML(unboundEl(el("sslcertref", testRefid)), "<cert>"+el("crt", crt)+el("prv", prv)+"</cert>"), "no <cert> with refid"},
-		{"crt is not base64", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", "!!not base64!!"), el("prv", prv))), "crt of <cert>"},
-		{"prv is not base64", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", crt), el("prv", "%%%"))), "prv of <cert>"},
-		{"crt element empty", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", ""), el("prv", prv))), "has no crt"},
-		{"crt element missing", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("prv", prv))), "has no crt"},
-		{"prv element empty", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", crt), el("prv", ""))), "has no prv"},
-		{"prv element missing", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", crt))), "has no prv"},
-		{"crt is base64 of something that is not PEM", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", b64([]byte("hello"))), el("prv", prv))), "cannot load the DNS Resolver's certificate and key"},
-		{"key does not belong to the certificate", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", crt), el("prv", b64(other.keyPEM(t))))), "cannot load the DNS Resolver's certificate and key"},
-		{"key encrypted (traditional PEM)", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", crt), el("prv", b64(legacyEncrypted)))), "encrypted with a passphrase"},
-		{"key encrypted (PKCS#8)", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", crt), el("prv", b64(pkcs8Encrypted)))), "encrypted with a passphrase"},
-		{"CA with invalid base64 crt", configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("caref", "ca"), el("crt", crt), el("prv", prv)), caEl("ca", el("crt", "$$$"))), "crt of <ca>"},
-		{"config.xml not well-formed", notWellFormed, "not well-formed XML"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			path := writeConfig(t, c.xml)
-			_, err := readTLSSettings(path)
-			if err == nil {
-				t.Fatalf("an unusable certificate (%s) was accepted", c.name)
-			}
-			if !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("error:\n got  %v\n want it to contain %q", err, c.want)
-			}
-			if !strings.Contains(err.Error(), path) {
-				t.Fatalf("the error must name the file %s, got: %v", path, err)
-			}
-		})
-	}
-	t.Run("config.xml absent", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "absent.xml")
-		_, err := readTLSSettings(path)
-		if err == nil || !strings.Contains(err.Error(), "cannot read") || !strings.Contains(err.Error(), path) {
-			t.Fatalf("want a cannot-read error naming %s, got %v", path, err)
-		}
-	})
-}
-
-// T3: tlsport is the DoT port when it is a port, 853 otherwise.
-func TestDoTPortComesFromTlsportAnd853WhenItIsNotAPort(t *testing.T) {
-	leaf := newPKI(t, nil, "localhost", false)
-	cert := certEl(testRefid, el("crt", b64(leaf.certPEM())), el("prv", b64(leaf.keyPEM(t))))
+	whole := chainPEM(t, leaf)
 	cases := []struct {
 		name    string
-		tlsport string // "-" leaves the element out
-		want    int
+		content []byte
+		want    string
 	}{
-		{"unset", "-", 853}, {"empty", "", 853}, {"letters", "abc", 853}, {"above 65535", "70000", 853},
-		{"zero", "0", 853}, {"negative", "-5", 853}, {"huge", "99999999999999999999", 853}, {"padded with spaces", " 8853 ", 8853},
-		{"8853", "8853", 8853}, {"65535", "65535", 65535}, {"1", "1", 1},
+		{"empty file", nil, "cannot load the certificate and key"},
+		{"no PEM text", []byte("hello\n"), "cannot load the certificate and key"},
+		{"certificate without a key", leaf.certPEM(), "cannot load the certificate and key"},
+		{"key without a certificate", leaf.keyPEM(t), "cannot load the certificate and key"},
+		{"key of another certificate", append(leaf.certPEM(), other.keyPEM(t)...), "does not match"},
+		{"truncated file", whole[:len(whole)/2], "cannot load the certificate and key"},
+		{"key encrypted (traditional PEM)", append(leaf.certPEM(), legacyEncrypted...), "cannot load the certificate and key"},
+		{"key encrypted (PKCS#8)", append(leaf.certPEM(), pkcs8Encrypted...), "cannot load the certificate and key"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			children := []string{el("sslcertref", testRefid)}
-			if c.tlsport != "-" {
-				children = append(children, el("tlsport", c.tlsport))
-			}
-			s, err := readTLSSettings(writeConfig(t, configXML(unboundEl(children...), cert)))
-			if err != nil {
+			path := filepath.Join(t.TempDir(), "pfb_dns_cert.pem")
+			if err := os.WriteFile(path, c.content, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if s.port != c.want {
-				t.Fatalf("tlsport %q: got DoT port %d, want %d", c.tlsport, s.port, c.want)
+			_, err := newCertStore(path, func(string, ...any) {})
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), path) {
+				t.Fatalf("got %v, want an error naming %s and containing %q", err, path, c.want)
 			}
 		})
+	}
+	dir := t.TempDir()
+	for name, path := range map[string]string{"absent file": filepath.Join(dir, "absent.pem"), "a directory": dir} {
+		if _, err := newCertStore(path, func(string, ...any) {}); err == nil || !strings.Contains(err.Error(), "cannot read") {
+			t.Fatalf("%s: got %v, want a cannot-read error", name, err)
+		}
 	}
 }
 
@@ -182,32 +108,19 @@ func TestPrivateKeyEncodingsLoad(t *testing.T) {
 	}{{"PKCS#8", pkcs8, pkcs8.keyPEM(t)}, {"PKCS#1 RSA", rsaLeaf, rsaPEM}, {"SEC1 EC", ecLeaf, ecPEM}}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			xml := configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", b64(c.leaf.certPEM())), el("prv", b64(c.key))))
-			s, err := readTLSSettings(writeConfig(t, xml))
-			if err != nil {
-				t.Fatalf("a %s key must load: %v", c.name, err)
-			}
-			if len(s.cert.Certificate) != 1 || !bytes.Equal(s.cert.Certificate[0], c.leaf.der) {
-				t.Fatalf("the loaded certificate is not the configured one")
+			store, _ := storeAt(t, append(c.leaf.certPEM(), c.key...))
+			if got := store.cert.Certificate; len(got) != 1 || !bytes.Equal(got[0], c.leaf.der) {
+				t.Fatalf("the loaded certificate is not the one in the file")
 			}
 		})
 	}
 }
 
-// Whitespace inside the base64 text (pfSense wraps nothing, but an editor might) is ignored, as in the Python reader.
-func TestBase64TextWithWhitespaceLoads(t *testing.T) {
-	leaf := newPKI(t, nil, "localhost", false)
-	wrap := func(s string) string { return "\n  " + s[:20] + "\r\n\t" + s[20:] + "\n" }
-	xml := configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", wrap(b64(leaf.certPEM()))), el("prv", wrap(b64(leaf.keyPEM(t))))))
-	if _, err := readTLSSettings(writeConfig(t, xml)); err != nil {
-		t.Fatalf("whitespace inside base64 must be ignored: %v", err)
-	}
-}
-
-// DoT and DoH speak TLS 1.2 or later; DoQ is TLS 1.3 with ALPN doq; DoH offers HTTP/2 first.
+// DoT and DoH speak TLS 1.2 or later; DoQ is TLS 1.3 with ALPN doq; DoH offers HTTP/2 first. All three take the
+// certificate from the store at each handshake, not once.
 func TestTLSConfigsPerTransport(t *testing.T) {
 	m := newTLSMaterial(t)
-	dot, doh, doq := m.settings.dot(), m.settings.doh(), m.settings.doq()
+	dot, doh, doq := m.certs.dot(), m.certs.doh(), m.certs.doq()
 	if dot.MinVersion != tls.VersionTLS12 || doh.MinVersion != tls.VersionTLS12 {
 		t.Fatalf("DoT/DoH minimum TLS version: got %#x/%#x, want %#x", dot.MinVersion, doh.MinVersion, tls.VersionTLS12)
 	}
@@ -221,24 +134,192 @@ func TestTLSConfigsPerTransport(t *testing.T) {
 		t.Fatalf("DoQ ALPN: got %q, want doq", got)
 	}
 	for name, c := range map[string]*tls.Config{"DoT": dot, "DoH": doh, "DoQ": doq} {
-		if len(c.Certificates) != 1 {
-			t.Fatalf("%s serves %d certificates, want the Resolver's one", name, len(c.Certificates))
+		if c.GetCertificate == nil || len(c.Certificates) != 0 {
+			t.Fatalf("%s must serve through GetCertificate alone, so that a renewal reaches the next handshake", name)
 		}
 	}
 }
 
-// The files read here are unaffected by who runs the test: a config.xml that is not readable is a reason, not a crash.
-func TestUnreadableConfigIsAReason(t *testing.T) {
-	dir := t.TempDir()
-	_, err := readTLSSettings(dir) // a directory
-	if err == nil || !strings.Contains(err.Error(), "cannot read") {
-		t.Fatalf("want a cannot-read error for a directory, got %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "empty.xml"), nil, 0o600); err != nil {
+// --- the reload, on a clock the test drives ---
+
+// reloadClock is the store's clock: the tests move it, a recheck is never waited for.
+type reloadClock struct{ nanos atomic.Int64 }
+
+func (c *reloadClock) now() time.Time          { return time.Unix(0, c.nanos.Load()) }
+func (c *reloadClock) advance(d time.Duration) { c.nanos.Add(int64(d)) }
+
+type clockedStore struct {
+	*certStore
+	clock *reloadClock
+	path  string
+	logs  *capturedLog
+	root  *pki
+}
+
+func newClockedStore(t *testing.T) (*clockedStore, *pki) {
+	t.Helper()
+	root := newPKI(t, nil, "clocked root", true)
+	first := newPKI(t, root, "localhost", false)
+	path := filepath.Join(t.TempDir(), "pfb_dns_cert.pem")
+	write(t, path, chainPEM(t, first))
+	logs := &capturedLog{}
+	store, err := newCertStore(path, logs.logf)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = readTLSSettings(filepath.Join(dir, "empty.xml"))
-	if err == nil {
-		t.Fatal("an empty config.xml has no certificate")
+	clock := &reloadClock{}
+	clock.nanos.Store(time.Now().UnixNano())
+	store.now, store.checked = clock.now, clock.now()
+	return &clockedStore{certStore: store, clock: clock, path: path, logs: logs, root: root}, first
+}
+
+func write(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// served is the leaf the next handshake would present.
+func (s *clockedStore) served(t *testing.T) []byte {
+	t.Helper()
+	cert, err := s.getCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert.Certificate[0]
+}
+
+func (s *clockedStore) requireServed(t *testing.T, want *pki, when string) {
+	t.Helper()
+	if got := s.served(t); !bytes.Equal(got, want.der) {
+		t.Fatalf("%s: a handshake got another certificate than serial %v", when, want.cert.SerialNumber)
+	}
+}
+
+// A new content is served from the first handshake after a second has gone by since the file was last looked at;
+// until then the previous one is, and the same content is never read as a new one.
+func TestCertificateFileIsLookedAtOnceASecondAtMost(t *testing.T) {
+	s, first := newClockedStore(t)
+	second, third := newPKI(t, s.root, "localhost", false), newPKI(t, s.root, "localhost", false)
+
+	s.clock.advance(10 * time.Second)
+	s.requireServed(t, first, "unchanged file")
+	if n := s.logs.count(); n != 0 {
+		t.Fatalf("an unchanged file must log nothing, got:\n%s", s.logs.joined())
+	}
+	write(t, s.path, chainPEM(t, second))
+	s.clock.advance(time.Second - time.Nanosecond)
+	s.requireServed(t, first, "just under a second after the last look")
+	s.clock.advance(time.Nanosecond)
+	s.requireServed(t, second, "a second after the last look")
+	write(t, s.path, chainPEM(t, third))
+	s.clock.advance(500 * time.Millisecond)
+	s.requireServed(t, second, "half a second after a look that found a change")
+	s.clock.advance(500 * time.Millisecond)
+	s.requireServed(t, third, "a second after it")
+	if got := strings.Count(s.logs.joined(), "TLS certificate reloaded: "+s.path); got != 2 {
+		t.Fatalf("each reload is logged once, got %d in:\n%s", got, s.logs.joined())
+	}
+}
+
+// A file that does not parse, or whose key is another certificate's, leaves the previous certificate in place and is
+// reported once for as long as its content stays; another bad content, or the same one coming back after a good file,
+// is a new report.
+func TestUnusableReplacementKeepsThePreviousCertificateAndIsReportedOnce(t *testing.T) {
+	s, first := newClockedStore(t)
+	other := newPKI(t, s.root, "localhost", false)
+	good := chainPEM(t, first)
+	half, mismatch := good[:len(good)/2], append(first.certPEM(), other.keyPEM(t)...)
+	reports := func() int { return strings.Count(s.logs.joined(), "TLS certificate not reloaded: "+s.path) }
+	tick := func(when string) {
+		t.Helper()
+		s.clock.advance(time.Second)
+		s.requireServed(t, first, when)
+	}
+
+	write(t, s.path, half)
+	for i := range 5 {
+		tick("half-written file, look " + string(rune('1'+i)))
+	}
+	if reports() != 1 {
+		t.Fatalf("the same bad content is reported once, got:\n%s", s.logs.joined())
+	}
+	write(t, s.path, mismatch)
+	tick("key of another certificate")
+	tick("key of another certificate, again")
+	if reports() != 2 || !strings.Contains(s.logs.joined(), "does not match") {
+		t.Fatalf("another bad content is a report of its own, naming the mismatch; got:\n%s", s.logs.joined())
+	}
+
+	second := newPKI(t, s.root, "localhost", false)
+	write(t, s.path, chainPEM(t, second))
+	s.clock.advance(time.Second)
+	s.requireServed(t, second, "the good file")
+	write(t, s.path, half)
+	s.clock.advance(time.Second)
+	s.requireServed(t, second, "the bad content again")
+	if reports() != 3 {
+		t.Fatalf("a condition that returns is reported again, got:\n%s", s.logs.joined())
+	}
+}
+
+// A file that cannot be read for a while leaves the previous certificate in place and is reported once; its return
+// with the content the store already serves is not a reload.
+func TestUnreadableCertificateFileKeepsThePreviousCertificateAndIsReportedOnce(t *testing.T) {
+	s, first := newClockedStore(t)
+	if err := os.Remove(s.path); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		s.clock.advance(time.Second)
+		s.requireServed(t, first, "file gone")
+	}
+	if got := strings.Count(s.logs.joined(), "cannot read"); got != 1 {
+		t.Fatalf("an unreadable file is reported once, got %d in:\n%s", got, s.logs.joined())
+	}
+	write(t, s.path, chainPEM(t, first))
+	s.clock.advance(time.Second)
+	s.requireServed(t, first, "file back with the same content")
+	if strings.Contains(s.logs.joined(), "TLS certificate reloaded") {
+		t.Fatalf("the same certificate is not a reload:\n%s", s.logs.joined())
+	}
+}
+
+// Handshakes on every transport share one store: a replacement while they run never hands out nothing or a mixture.
+func TestHandshakesDuringAReplacementGetOneCertificateOrTheOther(t *testing.T) {
+	s, first := newClockedStore(t)
+	second := newPKI(t, s.root, "localhost", false)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	var bad atomic.Int64
+	for range 8 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				cert, err := s.getCertificate(nil)
+				if err != nil || cert == nil || len(cert.Certificate) != 1 ||
+					(!bytes.Equal(cert.Certificate[0], first.der) && !bytes.Equal(cert.Certificate[0], second.der)) {
+					bad.Add(1)
+				}
+			}
+		})
+	}
+	for i := range 40 {
+		content := chainPEM(t, first)
+		if i%2 == 0 {
+			content = chainPEM(t, second)
+		}
+		write(t, s.path, content)
+		s.clock.advance(time.Second)
+	}
+	close(stop)
+	wg.Wait()
+	if n := bad.Load(); n != 0 {
+		t.Fatalf("%d handshakes got no certificate or one that was never in the file", n)
 	}
 }
