@@ -431,7 +431,7 @@ exactly one complete start and end pair (a partial pair is never cut, so the adm
 cannot be stored verbatim; our block already in `custom_options` with no snapshot, which would save the moved values as the
 "previous" ones; or a stored marker that is not a valid snapshot, kept as stored with a notice that recovery is required (the
 Resolver's current values are then no evidence of what it was, loopback or not; only an empty marker means never moved, and the
-admin empties it by hand once the Resolver is checked). Both module seams, `pfb_unbound_python()` and `pfb_unbound_dnsbl()`, follow the effective takeover (a valid
+admin empties it by hand once the Resolver is checked: see "recovery required" below). Both module seams, `pfb_unbound_python()` and `pfb_unbound_dnsbl()`, follow the effective takeover (a valid
 snapshot), not the requested toggle. A refused move or failed config lock leaves DNSBL running in Unbound as before;
 with DNSBL off, Unbound gets no DNSBL module. A takeover already in place keeps only the observer in Unbound. The notice
 and pfB-DNS status panel explain when pfB-DNS is not active. The restore is abandoned (snapshot kept, `file_notice`, retried by
@@ -610,7 +610,7 @@ the zero-downtime swap never restarts it; every apply calls `pfb_dns_proxy_ensur
 stage`) and only then regenerates the script and restarts the proxy while the Resolver is moved, stops it otherwise. A Resolver that still carries our block while the saved
 copy is lost or malformed cannot be put back (a user's own lo0 Resolver or PROXYv2 line has no marker and is left
 alone): the apply raises a `file_notice` naming the Resolver settings to check and leaves the proxy running
-(stopping it would take LAN DNS down). Pinned by `DnsProxyResolverMoveTest`, `DnsProxyAclTest`, `DnsProxyListenTest`,
+(stopping it would take LAN DNS down). A stored marker that is no valid snapshot with none of our block is recovery required too, but it is not ownership (`pfb_dns_proxy_recovery_required()` against `pfb_dns_proxy_owns_resolver()`, which decides where Unbound loads the DNSBL module): corruption is no evidence that the Resolver was moved. The move is refused and the marker and the Resolver are kept as stored, the pfB-DNS status and the rc script ask for a manual repair, the DNSBL module stays in Unbound, and the package removal (status 3) and the wizard's reset stop instead of sweeping the marker, the only record of what the Resolver was. The repair: check the Resolver in Services > DNS Resolver, restore a known-good configuration backup if needed, and empty `pfb_dns_saved` in the `pfblockerngdns` section of config.xml only after that check; a Resolver on loopback alone is never taken as proof that pfB-DNS moved it. Pinned by `DnsProxyResolverMoveTest`, `DnsProxyAclTest`, `DnsProxyListenTest`,
 `DnsProxyServiceTest`, `DnsProxyLifecycleTest`, `DnsProxyReloadRestartTest`, `DnsProxyApplyStartTest`,
 `DnsProxySettingsSaveTest`, `DnsProxyUninstallAbortTest` (the removal after pfSense's own half of it, the abort rows, the
 recovery and the retry round trip), `DnsProxyGatewayOnlyTest` (the single launch line and the wrapper's failure for a package it cannot run), `PackageRegistrationRestoreTest` and the gateway's own tests under `go/pfb_dns_gateway` (`process_test.go`: an unbindable address is skipped, none binding exits 1); the live

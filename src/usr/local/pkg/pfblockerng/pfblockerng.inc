@@ -4414,8 +4414,9 @@ function pfb_dns_proxy_certificate_sync(): void {
  *
  * Start: only while the moved-Resolver snapshot is set and is still the one this script was written for (the stored
  * marker is baked in and compared; not the toggle or DNSBL: an abandoned restore leaves the Resolver moved with them
- * off, and the proxy keeps serving it); a stored marker that is no valid snapshot logs one error and exits 1 instead of
- * starting a proxy that could not bind; never over a survivor; every address shell-quoted. Loopback is always among
+ * off, and the proxy keeps serving it); with no valid snapshot it exits 1 instead of starting a proxy that could not bind,
+ * and logs one error when the stored marker is no snapshot or our block stands with none (a manual repair); never over a
+ * survivor; every address shell-quoted. Loopback is always among
  * the addresses, so a Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. It
  * runs pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and runs the Python decider as its decision service,
  * through pfb_dns.sh (which execs this machine's binary), with --ready-file $pfb['dns_proxy_ready'] ahead of the
@@ -4518,11 +4519,14 @@ EOF;
 
 EOF;
 	if ($saved === NULL) {
-		// Nothing valid to serve: quiet when the marker is empty (the normal off state), loud when one is stored that is no
-		// snapshot, and loud when our block is in the Resolver with none: the operator corrects the Resolver by hand
+		// Nothing valid to serve: quiet when the marker is empty (the normal off state); loud when our block is in the Resolver
+		// with none, and when a stored marker is no snapshot (nothing says whether the Resolver was moved): repaired by hand
 		if (pfb_dns_proxy_recovery_required()) {
+			$unserved = pfb_dns_proxy_block_present()
+			    ? 'the DNS Resolver carries the DNS proxy settings, but pfb_dns_saved holds no valid snapshot - not started, manual recovery required'
+			    : 'pfb_dns_saved holds a value that is not a valid Resolver snapshot, so what the DNS Resolver was before cannot be confirmed - not started, manual repair required';
 			$rc['start'] .= <<<EOF
-	/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: the DNS Resolver carries the DNS proxy settings, but pfb_dns_saved holds no valid snapshot - not started, manual recovery required"
+	/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: {$unserved}"
 	exit 1
 
 EOF;
@@ -4795,11 +4799,18 @@ function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL): bo
 	// The Unbound reload below reads state only an apply pass sets; a rollback from the installer or a Reports page has none
 	$pfb += ['reuse_dnsbl' => '', 'save' => FALSE, 'install' => FALSE];
 	pfb_unbound_python($mode, FALSE);
-	if (pfb_dns_proxy_owns_resolver()) {
-		$kept = pfb_dns_proxy_recovery_required()
-		    ? 'The DNS Resolver still carries the DNS proxy settings with no saved copy to restore from: manual recovery required.'
-		    : 'The DNS Resolver is still moved aside for the DNS proxy and its saved settings are kept; the next pfBlockerNG update retries the restore.';
-		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and pfB-DNS was turned off, but the DNS Resolver could not be restored (see the notice before this one). " .
+	if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
+		// No ownership with recovery required: only a stored marker that is no snapshot. No restore was tried, so there is no
+		// earlier notice to point at, and nothing says whether the Resolver was moved.
+		$unconfirmed = !pfb_dns_proxy_owns_resolver();
+		if ($unconfirmed) {
+			$kept = 'pfB-DNS\'s saved copy of the DNS Resolver\'s previous settings is invalid, so what they were cannot be confirmed and nothing was put back: manual repair required.';
+		} elseif (pfb_dns_proxy_recovery_required()) {
+			$kept = 'The DNS Resolver still carries the DNS proxy settings with no saved copy to restore from: manual recovery required.';
+		} else {
+			$kept = 'The DNS Resolver is still moved aside for the DNS proxy and its saved settings are kept; the next pfBlockerNG update retries the restore.';
+		}
+		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and pfB-DNS was turned off, but the DNS Resolver could not be restored" . ($unconfirmed ? '' : ' (see the notice before this one)') . '. ' .
 		    "{$kept} " .
 		    'If that fails too, stop the pfBlockerNG DNS proxy service in Status > Services, then correct Network Interfaces, SSL/TLS Service and ' .
 		    'Custom Options in Services > DNS Resolver by hand.');
@@ -4859,13 +4870,15 @@ const PFB_PKG_REMOVAL_ABORT = 3;
  * would leave a Resolver that cannot be restored (lock taken, proxy survived) with nothing serving its port.
  *
  * @return bool FALSE iff the restore left the snapshot (config locked or unreadable, proxy outlived its stop): the
- *         Resolver is still moved, so the proxy and its rc script are kept and the removal must not go on
+ *         Resolver is still moved, so the proxy and its rc script are kept and the removal must not go on; or iff recovery is
+ *         required (our block, or a stored marker that is no snapshot, with nothing to restore from): the marker and the
+ *         Resolver are kept for a manual repair, since what the Resolver was before cannot be confirmed
  */
 function pfb_dns_proxy_deinstall(): bool {
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
 	}
-	if (pfb_dns_proxy_owns_resolver()) {
+	if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
 		return FALSE;
 	}
 	stop_service('pfb_dns_proxy');
@@ -5027,11 +5040,16 @@ function pfb_package_removal_stopped(): bool {
 	// pfSense's own half of the removal has already stopped the proxy and deleted what registers it: put that back
 	$failed = pfb_package_removal_recover();
 	if (pfb_dns_proxy_recovery_required()) {
-		$text = 'pfBlockerNG removal was stopped: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings and pfBlockerNG has no ' .
-		    'valid saved copy of its previous settings: manual recovery required (see the DNS proxy notice above). pfBlockerNG\'s files ' .
-		    'and settings were left in place' . ($failed === [] ? ', and its service entries were registered again' :
-		    ', but the recovery did not complete: ' . implode('; ', $failed)) . '. Correct the Resolver in Services > DNS Resolver, ' .
-		    'then remove the package again.';
+		$tail = ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed));
+		$text = pfb_dns_proxy_block_present()
+		    ? 'pfBlockerNG removal was stopped: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings and pfBlockerNG has no ' .
+		      'valid saved copy of its previous settings: manual recovery required (see the DNS proxy notice above). pfBlockerNG\'s files ' .
+		      "and settings were left in place{$tail}. Correct the Resolver in Services > DNS Resolver, then remove the package again."
+		    : 'pfBlockerNG removal was stopped: pfBlockerNG\'s saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, ' .
+		      'so what the Resolver was before cannot be confirmed and nothing was put back: manual repair required. pfBlockerNG\'s files and ' .
+		      "settings, that value included, were left in place{$tail}. Check the Resolver in Services > DNS Resolver (restore a known-good " .
+		      'configuration backup if needed), empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then ' .
+		      'remove the package again.';
 	} else {
 		$text = 'pfBlockerNG removal was stopped: the DNS Resolver could not be put back (see the DNS proxy notice above), so it still ' .
 		    'depends on the DNS proxy. pfBlockerNG\'s files and settings were left in place';
@@ -13651,11 +13669,13 @@ function pfb_dns_proxy_owns_resolver(): bool {
 }
 
 /**
- * Our block with no valid snapshot: nothing can put the Resolver back automatically, and the proxy cannot start without the
- * snapshot. The operator corrects the Resolver by hand (recovery required).
+ * pfB-DNS cannot say what the Resolver was before: our block with no valid snapshot, or a stored marker that is no valid
+ * snapshot at all. Nothing can put the Resolver back automatically and the proxy cannot start without a snapshot; the operator
+ * repairs the Resolver by hand (recovery required). A marker that is merely corrupt is no evidence that the Resolver was moved,
+ * so it is not ownership: pfb_dns_proxy_owns_resolver() decides where Unbound loads the DNSBL module and stays as it is.
  */
 function pfb_dns_proxy_recovery_required(): bool {
-	return pfb_dns_proxy_saved() === NULL && pfb_dns_proxy_block_present();
+	return pfb_dns_proxy_saved() === NULL && (pfb_dns_proxy_block_present() || PfbConfig::read('dns/pfb_dns_saved') !== '');
 }
 
 /** TRUE iff the DNS proxy's pid file names a live process. */
@@ -13723,7 +13743,9 @@ function pfb_dns_status(): array {
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
 		return [
 			'service' => $service,
-			'mode'    => 'Recovery required: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings, but pfBlockerNG has no valid saved copy of its previous settings to put back. Correct the Resolver in Services > DNS Resolver (see the notices).',
+			'mode'    => pfb_dns_proxy_block_present()
+			    ? 'Recovery required: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings, but pfBlockerNG has no valid saved copy of its previous settings to put back. Correct the Resolver in Services > DNS Resolver (see the notices).'
+			    : 'Recovery required: the saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so whether pfBlockerNG moved the Resolver cannot be confirmed, and nothing was put back; manual repair is required in Services > DNS Resolver (see the notices).',
 			'listen'  => '-',
 			'dot'     => '-',
 		];
@@ -13823,7 +13845,12 @@ function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 		return 'The DNS proxy keeps serving the DNS Resolver as it was moved.';
 	}
 	if (pfb_dns_proxy_recovery_required()) {
-		return 'pfB-DNS is not active, and recovery is required: the DNS Resolver still carries the DNS proxy settings and they cannot be put back automatically.';
+		return pfb_dns_proxy_block_present()
+		    ? 'pfB-DNS is not active, and recovery is required: the DNS Resolver still carries the DNS proxy settings and they cannot be put back automatically.'
+		    : 'pfB-DNS is not active, and recovery is required: the saved copy of the DNS Resolver\'s previous settings is invalid, so what they were cannot be confirmed. ' .
+		      'The Resolver and the saved value were left as they are and nothing was put back; manual repair is required: check the Resolver in Services > DNS Resolver ' .
+		      '(restore a known-good configuration backup if needed), and empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check.' .
+		      (pfb_dnsbl_active() ? ' DNSBL keeps running in the DNS Resolver as before.' : '');
 	}
 	return 'pfB-DNS is not active and the DNS Resolver is unchanged' .
 	    (pfb_dnsbl_active() ? ': DNSBL keeps running in the DNS Resolver as before.' : '.');
@@ -14220,9 +14247,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		// the previous ones, so it is kept as it is. Empty means never moved, however the Resolver sits (loopback included).
 		if (PfbConfig::read('dns/pfb_dns_saved') !== '') {
 			return pfb_dns_proxy_refuse('pfb_dns_saved holds a value that is not a valid Resolver snapshot, so pfBlockerNG cannot tell whether the ' .
-			    'DNS Resolver was already moved aside for the DNS proxy; refusing to snapshot it as it stands and keeping the stored value and ' .
-			    'the Resolver untouched: recovery is required. In Services > DNS Resolver check Network Interfaces and Enable SSL/TLS Service, ' .
-			    'then empty pfb_dns_saved in the pfblockerngdns section of config.xml');
+			    'DNS Resolver was already moved aside for the DNS proxy; refusing to snapshot it as it stands');
 		}
 		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode($json));
 		$saved = $current;

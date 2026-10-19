@@ -512,6 +512,137 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertStringNotContainsString('still depends on the DNS proxy', end($texts));
 	}
 
+	/** @return array<string,array{string}> a stored marker that is no snapshot, on a Resolver that carries no block of ours */
+	public static function unconfirmedMarkers(): array
+	{
+		return [
+			'the single character 0'             => ['0'],
+			'the text of an interrupted write'   => ['!!!truncated-snapshot!!!'],
+			'base64 of text that is not JSON'    => [base64_encode('not json')],
+			'a snapshot cut off inside its JSON' => [substr(self::snapshotOfOriginal(), 0, 40)],
+		];
+	}
+
+	/** @return array<string,array{?string}> a marker with nothing in it: never stored, or stored empty (the normal state) */
+	public static function emptyMarkers(): array
+	{
+		return ['no marker stored' => [NULL], 'an empty marker' => ['']];
+	}
+
+	/** No block of ours and a stored marker nothing can read as a snapshot: whether pfB-DNS ever moved this Resolver cannot be told. */
+	private function seedUnconfirmedResolver(string $marker, string $interface = 'lo0'): void
+	{
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$GLOBALS['config']['unbound']['active_interface'] = $interface;
+		config_set_path(self::SAVED, $marker);
+	}
+
+	#[DataProvider('unconfirmedMarkers')]
+	public function testAMarkerThatIsNoSnapshotIsRecoveryRequiredWithoutMakingPfbDnsTheOwnerOfTheResolver(string $marker): void
+	{
+		// Given a stored marker that is no snapshot and no block of ours in the Resolver
+		$this->seedUnconfirmedResolver($marker);
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: the marker is no snapshot');
+		$this->assertFalse(pfb_dns_proxy_block_present(), 'before: no block of ours');
+
+		// Then recovery is required, but ownership is not claimed: it decides where Unbound loads the DNSBL module, and a
+		// corrupted value is no evidence that the Resolver was moved
+		$this->assertTrue(pfb_dns_proxy_recovery_required());
+		$this->assertFalse(pfb_dns_proxy_owns_resolver());
+		$this->assertFalse(pfb_dns_proxy_hosts_module());
+	}
+
+	#[DataProvider('emptyMarkers')]
+	public function testALoopbackOnlyResolverWithAnEmptyMarkerIsNeitherOwnedNorRecoveryRequired(?string $marker): void
+	{
+		// Given a Resolver that has always sat on loopback and nothing stored
+		$this->seedUnconfirmedResolver('');
+		if ($marker === NULL) {
+			config_del_path(self::SAVED);
+		}
+
+		// Then loopback alone is no evidence of anything
+		$this->assertFalse(pfb_dns_proxy_recovery_required());
+		$this->assertFalse(pfb_dns_proxy_owns_resolver());
+	}
+
+	#[DataProvider('unconfirmedMarkers')]
+	public function testRemovalWithAMarkerThatIsNoSnapshotAbortsBeforeAnythingIsStoppedOrErased(string $marker): void
+	{
+		// Given a stored marker that is no snapshot, no block of ours, and the proxy's rc script on disk
+		$this->seedUnconfirmedResolver($marker);
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+		$before = $GLOBALS['config'];
+
+		// When the package removal asks for the restore
+		$removable = pfb_dns_proxy_deinstall();
+
+		// Then the removal is refused: the marker, the Resolver and the rc script are kept for a manual repair
+		$this->assertFalse($removable, 'the saved state cannot be confirmed: the removal must not go on');
+		$this->assertSame([], $this->serviceCalls(), 'the proxy is not stopped');
+		$this->assertFileExists(PFB_DNS_PROXY_RCFILE);
+		$this->assertSame($before, $GLOBALS['config'], 'config.xml and the stored marker are kept verbatim');
+		$this->assertSame($marker, (string) config_get_path(self::SAVED, ''));
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	#[DataProvider('emptyMarkers')]
+	public function testRemovalOfALoopbackOnlyResolverWithAnEmptyMarkerStopsTheProxyAndGoesOn(?string $marker): void
+	{
+		// Given a Resolver that has always sat on loopback: no block, nothing stored
+		$this->seedUnconfirmedResolver('');
+		if ($marker === NULL) {
+			config_del_path(self::SAVED);
+		}
+
+		// When the package is removed
+		$removable = pfb_dns_proxy_deinstall();
+
+		// Then nothing was moved, so the removal goes on
+		$this->assertTrue($removable);
+		$this->assertSame([['stop_service', 'pfb_dns_proxy']], $this->serviceCalls());
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	#[DataProvider('unconfirmedMarkers')]
+	public function testTheRcScriptRefusesToStartWhenTheSavedStateCannotBeConfirmedAndClaimsNoMovedResolver(string $marker): void
+	{
+		// Given a stored marker that is no snapshot and no block of ours
+		$this->seedUnconfirmedResolver($marker);
+
+		// When the rc script is written
+		pfb_dns_proxy_service();
+
+		// Then its start refuses with exit 1 and asks for a manual repair, without saying the Resolver carries our settings
+		$start = $GLOBALS['pfb_test_rcfiles']['pfb_dns_proxy.sh']['start'] ?? '';
+		$this->assertMatchesRegularExpression('/manual repair required[^\n]*\n\texit 1\n/', $start);
+		$this->assertStringNotContainsString('carries the DNS proxy settings', $start);
+	}
+
+	#[DataProvider('unconfirmedMarkers')]
+	public function testARemovalStoppedByAMarkerThatIsNoSnapshotSaysItCannotBeConfirmedAndNeverThatTheProxyRunsOrTheResolverIsMoved(string $marker): void
+	{
+		// Given a stored marker that is no snapshot and no block of ours
+		$this->seedUnconfirmedResolver($marker);
+
+		// When the removal is stopped
+		$this->assertFalse(pfb_dns_proxy_deinstall(), 'before: the removal must stop');
+		pfb_package_removal_stopped();
+
+		// Then the notice says the saved state cannot be confirmed and a manual repair is required; it claims no moved
+		// Resolver and no running proxy, and the proxy is not started (its rc script refuses)
+		$texts = array_column($GLOBALS['pfb_test_file_notices'], 'notice');
+		$this->assertNotEmpty($texts, 'the operator is told');
+		$text = (string) end($texts);
+		$this->assertStringContainsString('cannot be confirmed', $text);
+		$this->assertStringContainsString('manual repair required', $text);
+		foreach (['the DNS proxy is running', 'still depends on the DNS proxy', 'still carries'] as $wrong) {
+			$this->assertStringNotContainsString($wrong, $text);
+		}
+		$this->assertNotContains(['start_service', 'pfb_dns_proxy'], $this->serviceCalls(), 'the proxy cannot start without a snapshot');
+		$this->assertSame($marker, (string) config_get_path(self::SAVED, ''), 'the marker is kept verbatim');
+	}
+
 	/** @return array<string,array{bool}> whether the Resolver was moved when the package is removed */
 	public static function removalStates(): array
 	{

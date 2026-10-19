@@ -219,4 +219,51 @@ final class PfbDnsStatusTest extends TestCase
 		}
 		$this->assertSame(['-', '-'], [$status['listen'], $status['dot']]);
 	}
+
+	/** @return array<string,array{string}> a stored marker that is no snapshot, on a Resolver that carries no block of ours */
+	public static function unconfirmedMarkers(): array
+	{
+		return [
+			'the single character 0'           => ['0'],
+			'the text of an interrupted write' => ['!!!truncated-snapshot!!!'],
+			'base64 of text that is not JSON'  => [base64_encode('not json')],
+		];
+	}
+
+	#[DataProvider('unconfirmedMarkers')]
+	public function testAMarkerThatIsNoSnapshotIsRecoveryRequiredAndSaysItCannotBeConfirmed(string $marker): void
+	{
+		// Given a stored marker that is no snapshot and no block of ours in a Resolver on loopback
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode("do-ip6: no")];
+		config_set_path(self::SAVED, $marker);
+		// (reading a marker that is no snapshot logs it once: the log paths are this test's)
+		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'], ['logdir' => $this->dir, 'log' => "{$this->dir}/pfb.log", 'errlog' => "{$this->dir}/pfb.err"]);
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$this->seedProxy('4242', "4242\n", FALSE);
+
+		// When the status is read
+		$status = pfb_dns_status();
+
+		// Then it asks for a manual repair and says the saved state cannot be confirmed; it never says the Resolver is moved,
+		// unchanged or not moved yet, and claims no listen address
+		$this->assertStringStartsWith('Recovery required', $status['mode']);
+		$this->assertStringContainsString('cannot be confirmed', $status['mode']);
+		$this->assertStringContainsString('manual repair', $status['mode']);
+		foreach (['still carries', 'not been moved', 'serves clients itself', 'unchanged', 'Off:'] as $wrong) {
+			$this->assertStringNotContainsString($wrong, $status['mode']);
+		}
+		$this->assertSame(['-', '-'], [$status['listen'], $status['dot']]);
+	}
+
+	public function testALoopbackOnlyResolverWithAnEmptyMarkerIsNotRecoveryRequired(): void
+	{
+		// Given the same Resolver and an empty marker, with the toggle on
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode("do-ip6: no")];
+		config_set_path(self::SAVED, '');
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$GLOBALS['pfb']['unbound_state'] = PfbToggle::On;
+
+		// Then the status is the ordinary "not moved yet" one
+		$this->assertStringNotContainsString('Recovery required', pfb_dns_status()['mode']);
+	}
 }

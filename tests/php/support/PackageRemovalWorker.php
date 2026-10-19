@@ -27,7 +27,9 @@ declare(strict_types=1);
  * `proxyWontStart` (the rc script returns and nothing serves). `unmigratedPolicy`: the DNSBL logging policy was never migrated
  * (no apply has run since the key was introduced) and the Resolver is enabled, so the disable pass's policy upgrade turns the
  * uninstall's disable back off and the pass moves the Resolver again. `lockAfterMove`: another save holds the config lock from
- * the moment the Resolver was moved again until the recovery announces itself.
+ * the moment the Resolver was moved again until the recovery announces itself. `marker` (with `interface`): a Resolver pfB-DNS
+ * never moved (no block of ours, on `interface`, loopback by default) beside this stored pfb_dns_saved, which is no snapshot
+ * unless empty: nothing to restore from, and no evidence that anything was moved.
  */
 
 $workerArgv = $argv;
@@ -261,6 +263,7 @@ register_shutdown_function(static function () use ($resultFile, &$paths, &$retur
 		'returned'  => $returned,
 		// What survived on disk: the only thing that outlives the process
 		'snapshot'  => ($disk['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] ?? '') !== '',
+		'marker'    => (string) ($disk['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] ?? ''),
 		'interface' => $disk['unbound']['active_interface'] ?? NULL,
 		'sections'  => array_keys($disk['installedpackages'] ?? []),
 		'services'  => array_values(array_map(static fn (array $s): string => (string) ($s['name'] ?? ''), $services)),
@@ -379,6 +382,11 @@ if (is_file("{$state}/config.json")) {
 		$saved[$key] = ['present' => TRUE, 'value' => $value];
 	}
 	config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode($saved)));
+	if (isset($scenario['marker'])) {
+		$GLOBALS['config']['unbound']['active_interface'] = $scenario['interface'] ?? 'lo0';
+		$GLOBALS['config']['unbound']['custom_options'] = base64_encode('do-ip6: no');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', $scenario['marker']);
+	}
 
 	// The package installed next to another package's service and menu entry, before and after its own
 	config_set_path('installedpackages/service', [WORKER_FOREIGN_SERVICE]);
