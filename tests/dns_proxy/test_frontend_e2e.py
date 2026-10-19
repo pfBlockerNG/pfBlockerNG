@@ -399,4 +399,58 @@ def test_module_without_a_log_dir_gets_a_stderr_sink_instead_of_recursing(
     assert logging.root.handlers == []
 
 
+# --- a module that rebuilds a relayed reply -----------------------------------------------------------
+
+
+async def _nxdomain_from_unbound(wire: bytes) -> bytes:
+    """Unbound's NXDOMAIN for any name: validated, so AD is set, with the zone's SOA in the authority section."""
+    query = dnswire.parse(wire)
+    soa = dnswire.rr_from_text("example. 60 IN SOA ns.example. hostmaster.example. 1 2 3 4 60")
+    flags = dnswire.QR | dnswire.RA | AD | dnswire.RD | shim.RCODE_NXDOMAIN
+    return dnswire.encode(dnswire.Message(query.id, flags, query.questions, [], [soa]))
+
+
+def _rebuild_in_moddone(booted: Booted, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The module's MODDONE replaces Unbound's message with its own: the same header flags, the SOA's TTL edited. The
+    client's reply is then built by the proxy, not relayed as Unbound sent it."""
+    real = booted.module.operate
+
+    def rebuild(id: int, event: int, qstate: Any, qdata: Any) -> bool:
+        if event != shim.MODULE_EVENT_MODDONE:
+            return real(id, event, qstate, qdata)
+        soa = dnswire.rr_from_text("example. 30 IN SOA ns.example. hostmaster.example. 1 2 3 4 30")
+        qstate.return_msg = shim.DnsMsg(qstate.return_msg.qinfo, qstate.return_msg.rep.flags, [], [soa], [])
+        qstate.ext_state[id] = shim.MODULE_FINISHED
+        return True
+
+    monkeypatch.setattr(booted.module, "operate", rebuild)
+
+
+def test_a_module_that_rebuilds_a_relayed_nxdomain_keeps_the_rcode_and_does_not_claim_ad(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AD says Unbound validated the data. A message the module rebuilt is not the one Unbound validated, so AD goes;
+    the rcode is the client's answer and stays."""
+    _rebuild_in_moddone(booted, monkeypatch)
+    reply = _resolve(booted, build_query("nx.example."), _nxdomain_from_unbound)
+    assert reply is not None
+    message = dnswire.parse(reply)
+    assert (message.rcode, message.flags & AD, [rr.ttl for rr in message.authority]) == (
+        shim.RCODE_NXDOMAIN,
+        0,
+        [30],
+    )
+
+
+def test_a_relayed_nxdomain_the_module_leaves_alone_keeps_ad_as_unbound_sent_it(booted: Booted) -> None:
+    reply = _resolve(booted, build_query("nx.example."), _nxdomain_from_unbound)
+    assert reply is not None
+    message = dnswire.parse(reply)
+    assert (message.rcode, message.flags & AD, [rr.ttl for rr in message.authority]) == (
+        shim.RCODE_NXDOMAIN,
+        AD,
+        [60],
+    )
+
+
 # --- real sockets --------------------------------------------------------------------------------

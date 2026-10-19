@@ -190,12 +190,13 @@ def _error(query: dnswire.Message, rcode: int) -> bytes:
 
 
 def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> bytes:
-    """The module's replacement message, addressed to this client. Over `limit` bytes (a UDP client's) it becomes the
-    question alone with TC set, which makes the client ask again over TCP."""
+    """The module's replacement message, addressed to this client, with its rcode. AD is not kept: the data is no longer
+    the one Unbound validated. Over `limit` bytes (a UDP client's) it becomes the question alone with TC set, so the
+    client asks again over TCP."""
     flags = (
         dnswire.QR
         | dnswire.RA
-        | (msg.rep.flags & (dnswire.AA | dnswire.TC))
+        | (msg.rep.flags & (dnswire.AA | dnswire.TC | 0xF))  # 0xF: the rcode, NXDOMAIN included
         | (query.flags & (dnswire.RD | dnswire.CD))
     )
     additional = [*msg.additional, *_edns_for(query)]
