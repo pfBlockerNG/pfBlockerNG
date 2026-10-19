@@ -119,8 +119,8 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	private function setPythonKeys(bool $on): void
 	{
 		$GLOBALS['config']['unbound'] = $on
-			? ['python' => 'on', 'python_script' => 'pfb_unbound']
-			: ['python' => '', 'python_script' => ''];
+			? ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound']
+			: ['enable' => '', 'python' => '', 'python_script' => ''];
 	}
 
 	private function setProxyUp(bool|callable $up): void
@@ -423,7 +423,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	public function testTheObserversPythonKeysAloneDoNotMakeThePythonRuntimeActive(): void
 	{
 		// Given Unbound's python keys naming the observer and no proxy snapshot (a stale state before the next apply)
-		$GLOBALS['config']['unbound'] = ['python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
+		$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
 		$this->setProxyMode(FALSE);
 
 		// Then the DNSBL runtime is not active: the swap and the retries must not target a module nobody hosts
@@ -443,7 +443,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	{
 		$this->setProxyMode(TRUE);
 		$this->writeUnboundConfWithObserver();
-		$GLOBALS['config']['unbound'] = ['python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
+		$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
 
 		$this->setProxyUp(FALSE);
 		$this->assertFalse(pfb_unbound_py_module_wired(), 'proxy down: not wired, though Unbound loads the observer');

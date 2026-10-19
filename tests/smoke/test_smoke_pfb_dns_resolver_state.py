@@ -95,13 +95,19 @@ class _UpstreamEdns:
         def record(data: bytes, client: str = "") -> bytes | None:
             try:
                 request = dns.message.from_wire(data)
+                opt = [rr for rr in request.additional if rr.rdtype == dns.rdatatype.OPT]
                 if request.question:
-                    opt = [rr for rr in request.additional if rr.rdtype == dns.rdatatype.OPT]
                     key = request.question[0].name.to_text().lower().rstrip(".")
                     sizes[key] = int(opt[0].rdclass) if opt else None
-            except Exception as exc:  # noqa: BLE001 -- the recorder keeps the failure for the test, never breaks the stub's thread
+                wire = original(data, client)
+                if opt and wire is not None:
+                    response = dns.message.from_wire(wire)
+                    response.use_edns(0, 0, 1232)
+                    return response.to_wire()
+                return wire
+            except Exception as exc:  # noqa: BLE001 -- the recorder keeps the failure for the test, never breaks the stub
                 errors.append(repr(exc))
-            return original(data, client)
+                return original(data, client)
 
         self.stub._build_response = record  # type: ignore[method-assign]  # shadows the bound method on the instance
         return self
@@ -111,14 +117,20 @@ class _UpstreamEdns:
 
 
 def _advertised_size(rig: Rig, stub: _StubDnsServer) -> int | None:
-    """The EDNS buffer Unbound advertises to its upstream, read on the wire for a name nobody asked before."""
+    """The EDNS buffer Unbound advertises to its upstream, read on the wire for a name nobody asked before.
+
+    The stub answers without an OPT record, and Unbound then remembers the upstream as EDNS-lame and stops sending one
+    (earlier queries of the rig taught it): the infra cache is flushed first and the recorder answers EDNS, so the
+    query measured is the first one Unbound sends with its own advertised size.
+    """
+    flush = rig.vm.ssh(f"/usr/local/sbin/unbound-control -c {h.UNBOUND_CONF} flush_infra all")
+    assert flush.returncode == 0, f"flush_infra failed: {flush.stdout!r} {flush.stderr!r}"
     name = h.unique_domain("edns")
     with _UpstreamEdns(stub) as seen:
         answer, raw = _query(rig.client, name)
     assert h.resolves_to(answer, STUB_DNS_A), f"the stub's answer did not come back through the Resolver: {raw}"
-    sizes = seen.sizes.get(name)
-    print(f"[3515] upstream saw {seen.sizes} errors={seen.errors} stub log tail={stub.queries()[-4:]}", flush=True)
-    return sizes
+    print(f"[3515] upstream saw {seen.sizes} errors={seen.errors}", flush=True)
+    return seen.sizes.get(name)
 
 
 def _custom_options(vm: SmokeVM) -> str:

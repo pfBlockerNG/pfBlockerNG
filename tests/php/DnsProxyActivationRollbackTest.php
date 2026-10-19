@@ -870,6 +870,45 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertCount($writes, $GLOBALS['pfb_test_write_config_calls']);
 	}
 
+	public function testAPassNeverStartsAResolverTheAdminDisabled(): void
+	{
+		// Given a Resolver with nothing of ours moved, and Unbound stopped; first enabled: a restart starts it once
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$before = $this->startAttempts();
+		$started = pfb_stop_start_unbound('');
+		$this->assertSame(0, $started['retval']);
+		$this->assertSame($before + 1, $this->startAttempts(), 'before: an enabled Resolver is started by the restart');
+
+		// When the admin disables the Resolver (the stand-down above leaves it so) and a pass restarts Unbound again
+		config_del_path('unbound/enable');
+		$disabled = pfb_stop_start_unbound('');
+
+		// Then nothing is started, and the restart reports no failure
+		$this->assertSame($before + 1, $this->startAttempts(), 'a disabled Resolver is not started');
+		$this->assertTrue($disabled['start_completed']);
+		$this->assertSame(0, $disabled['retval']);
+		$this->assertStringContainsString('disabled', $this->pfbLog());
+	}
+
+	public function testADnsblReloadWithPfbDnsOffRestartsAnEnabledResolverAndLeavesADisabledOneStopped(): void
+	{
+		// Given pfB-DNS off and nothing moved (the DNSBL-only path), and Unbound stopped
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->assertSame('', $this->toggleStored(), 'before: pfB-DNS is off');
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: nothing is moved');
+		$before = $this->startAttempts();
+
+		// When the DNSBL reload restarts Unbound with the Resolver enabled, then again with it disabled
+		pfb_reload_unbound('enabled', FALSE, TRUE);
+		$enabled = $this->startAttempts();
+		config_del_path('unbound/enable');
+		pfb_reload_unbound('', FALSE, TRUE);
+
+		// Then only the enabled Resolver was started
+		$this->assertSame($before + 1, $enabled, 'an enabled Resolver is restarted as before');
+		$this->assertSame($enabled, $this->startAttempts(), 'a disabled Resolver is left stopped');
+	}
+
 	// -----------------------------------------------------------------------
 	// D -- every caller consumes the result
 	// -----------------------------------------------------------------------
