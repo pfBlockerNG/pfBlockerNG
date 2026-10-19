@@ -428,8 +428,10 @@ write, stop or snapshot, with a log line and a `file_notice`: a Resolver Listen 
 own in `custom_options` that could take a listener, a second port or another file (an `interface`, `port` or `include` word,
 comments aside, see below); a quote or a backslash left open at a line's end; pfBlockerNG's marker lines unless they are
 exactly one complete start and end pair (a partial pair is never cut, so the admin's text survives byte for byte); values that
-cannot be stored verbatim; or our block already in `custom_options` with no snapshot, which would save the moved values as the
-"previous" ones. Both module seams, `pfb_unbound_python()` and `pfb_unbound_dnsbl()`, follow the effective takeover (a valid
+cannot be stored verbatim; our block already in `custom_options` with no snapshot, which would save the moved values as the
+"previous" ones; or a stored marker that is not a valid snapshot, kept as stored with a notice that recovery is required (the
+Resolver's current values are then no evidence of what it was, loopback or not; only an empty marker means never moved, and the
+admin empties it by hand once the Resolver is checked). Both module seams, `pfb_unbound_python()` and `pfb_unbound_dnsbl()`, follow the effective takeover (a valid
 snapshot), not the requested toggle. A refused move or failed config lock leaves DNSBL running in Unbound as before;
 with DNSBL off, Unbound gets no DNSBL module. A takeover already in place keeps only the observer in Unbound. The notice
 and pfB-DNS status panel explain when pfB-DNS is not active. The restore is abandoned (snapshot kept, `file_notice`, retried by

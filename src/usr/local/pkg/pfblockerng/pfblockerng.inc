@@ -13910,8 +13910,9 @@ function pfb_dns_proxy_stand_down(): bool {
  * announced with a notice, and nothing is changed: a Listen Port of 5353 or 5354; a directive of the admin's own in Custom
  * Options that could take a listener, a second port or another file (any `interface`, `port` or `include` line, comments
  * aside: see pfb_dns_proxy_directive_text()); a quote or backslash left open at a line's end; our marker lines that are not
- * exactly one complete block (a partial or repeated pair is never cut); values that cannot be stored verbatim; or our
- * block with no snapshot (never snapshot moved values as the "previous" ones). A refused move stores no snapshot, so
+ * exactly one complete block (a partial or repeated pair is never cut); values that cannot be stored verbatim; our
+ * block with no snapshot (never snapshot moved values as the "previous" ones); or a stored marker that is no valid snapshot
+ * (kept as it is: only an empty marker means never moved, loopback or not). A refused move stores no snapshot, so
  * DNSBL keeps its module in Unbound (pfb_unbound_python(), pfb_unbound_dnsbl()).
  *
  * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, and only then stops the
@@ -14214,6 +14215,14 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		if ($has_marker) {
 			return pfb_dns_proxy_refuse('the Resolver already carries the DNS proxy block in Custom Options and ' .
 			    'pfb_dns_saved holds no snapshot; refusing to snapshot the moved values as the previous ones');
+		}
+		// A stored marker that is no snapshot is the only evidence of what an earlier takeover moved: the current values are not
+		// the previous ones, so it is kept as it is. Empty means never moved, however the Resolver sits (loopback included).
+		if (PfbConfig::read('dns/pfb_dns_saved') !== '') {
+			return pfb_dns_proxy_refuse('pfb_dns_saved holds a value that is not a valid Resolver snapshot, so pfBlockerNG cannot tell whether the ' .
+			    'DNS Resolver was already moved aside for the DNS proxy; refusing to snapshot it as it stands and keeping the stored value and ' .
+			    'the Resolver untouched: recovery is required. In Services > DNS Resolver check Network Interfaces and Enable SSL/TLS Service, ' .
+			    'then empty pfb_dns_saved in the pfblockerngdns section of config.xml');
 		}
 		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode($json));
 		$saved = $current;
