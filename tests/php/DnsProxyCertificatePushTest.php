@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/support/PfbFlockClockFixture.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
@@ -245,34 +246,76 @@ final class DnsProxyCertificatePushTest extends TestCase
 		$this->assertStringNotContainsString('cannot connect', $this->notices()[0]);
 	}
 
+	/**
+	 * A push to a stand-in gateway that writes only what the test releases, on the virtual clock: each entry of $script is
+	 * [seconds after the previous write, the bytes written then]. The push's deadline is a count of virtual seconds, never a wait.
+	 *
+	 * @param list<array{float,string}> $script
+	 * @return array{0: ?string, 1: float} the push's verdict, and the virtual seconds it took
+	 */
+	private function pushOnVirtualClock(array $script, float $timeout): array
+	{
+		$this->listen('scripted');
+		$pipes = end($this->servers)[1];
+		$clock = new PfbFlockClockFixture();
+		$push = $clock->loadChain(['pfb_dns_proxy_certificate_push']) . '\\pfb_dns_proxy_certificate_push';
+		$clock->setIdle(function (float $wait) use (&$script, $pipes): ?float {
+			if ($script === [] || $script[0][0] > $wait) {
+				return NULL;
+			}
+			[$delay, $bytes] = array_shift($script);
+			$this->release($pipes, $bytes);
+
+			return $delay;
+		});
+
+		return [$push('certificate and key', $this->socket, $timeout), $clock->now()];
+	}
+
+	/** The stand-in gateway writes $bytes now, and acknowledges once they are in the socket, so PHP's next poll sees them. */
+	private function release($pipes, string $bytes): void
+	{
+		fwrite($pipes[0], 'x' . bin2hex($bytes) . "\n");
+		fflush($pipes[0]);
+		stream_set_timeout($pipes[1], 10);
+		$ack = fgets($pipes[1]);
+		if ($ack !== "ack\n") {
+			throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in gateway did not acknowledge its write: ' . var_export($ack, TRUE));
+		}
+	}
+
 	public function testAGatewayThatNeverRepliesIsGivenUpOnAndNothingIsRecorded(): void
 	{
-		$this->listen('silent');
+		// Given a gateway that never writes
+		[$why, $took] = $this->pushOnVirtualClock([], 0.3);
 
-		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
-
+		// Then the push gives up when its timeout has passed on the virtual clock, with no reply
 		$this->assertNotNull($why);
 		$this->assertStringContainsString('no reply', (string) $why);
+		$this->assertEqualsWithDelta(0.3, $took, 1e-9, 'given up on after exactly the timeout');
 	}
 
 	public function testATrickledReplyCannotExtendTheReplyDeadline(): void
 	{
-		$this->listen('trickle');
+		// Given a gateway that trickles its ok line: 'o' 0.1 s after the push, 'k' 0.1 s later, and the newline 0.25 s after
+		// that, which is 0.45 s in, past the 0.3 s deadline
+		[$why, $took] = $this->pushOnVirtualClock([[0.1, 'o'], [0.1, 'k'], [0.25, "\n"]], 0.3);
 
-		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
-
+		// Then the push gives up at the deadline, and the ok line that would have completed later is not an acknowledgement
 		$this->assertNotNull($why, 'an ok line completed after the deadline is not an acknowledgement');
-		$this->assertStringContainsString('no reply', $why);
+		$this->assertStringContainsString('no reply', (string) $why);
+		$this->assertEqualsWithDelta(0.3, $took, 1e-9, 'the trickled bytes did not move the deadline');
 	}
 
 	public function testAnUnterminatedOkIsNotAnAcknowledgement(): void
 	{
-		$this->listen('partial');
+		// Given a gateway that writes 'ok' with no newline 0.1 s after the push, and nothing after it
+		[$why, $took] = $this->pushOnVirtualClock([[0.1, 'ok']], 0.3);
 
-		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
-
+		// Then the push gives up at the deadline: an incomplete reply must not mark the certificate as pushed
 		$this->assertNotNull($why, 'an incomplete reply must not mark the certificate as pushed');
-		$this->assertStringContainsString('no reply', $why);
+		$this->assertStringContainsString('no reply', (string) $why);
+		$this->assertEqualsWithDelta(0.3, $took, 1e-9, 'given up on at the deadline');
 	}
 
 	public function testAnUnterminatedOkFollowedByEofIsNotAnAcknowledgement(): void

@@ -7,9 +7,11 @@ declare(strict_types=1);
  * pfb_dns_proxy_certificate_push(): listens on a Unix socket, takes ONE connection, reads the frame (4-byte big-endian length,
  * then that many bytes), stores the raw frame in a file, and answers as told. Prints "ready" once it listens.
  *
- *   php ControlSocketServer.php <socket> <record file> <ok | error:<text> | silent | close>
+ *   php ControlSocketServer.php <socket> <record file> <ok | error:<text> | partial-close | long-reply | scripted>
  *
- * silent: reads the frame, never answers, and exits when its stdin closes (the test's barrier). close: hangs up without a reply.
+ * scripted: reads the frame, then writes only what the test releases. Each stdin line `x<hex>` writes those bytes, and is
+ * acknowledged on stdout once they are in the socket; its stdin closing is the test's barrier. Any other mode hangs up without
+ * a reply.
  */
 [, $socket, $record, $mode] = $argv + [NULL, NULL, NULL, 'ok'];
 
@@ -46,24 +48,23 @@ file_put_contents($record, $head . $read($conn, $length));
 
 if ($mode === 'ok') {
 	fwrite($conn, "ok\n");
-} elseif ($mode === 'partial' || $mode === 'partial-close') {
+} elseif ($mode === 'partial-close') {
 	fwrite($conn, 'ok');
-	if ($mode === 'partial') {
-		fgets(STDIN);
-	}
 } elseif ($mode === 'long-reply') {
 	fwrite($conn, str_repeat('a', 512));
 	fgets(STDIN);
 } elseif (str_starts_with($mode, 'error:')) {
 	fwrite($conn, 'error: ' . substr($mode, 6) . "\n");
-} elseif ($mode === 'trickle') {
-	foreach (str_split("ok\n") as $byte) {
-		usleep(150000);
-		if (@fwrite($conn, $byte) === FALSE) {
+} elseif ($mode === 'scripted') {
+	while (($command = fgets(STDIN)) !== FALSE) {
+		if (preg_match('/\Ax([0-9a-f]*)\n\z/', $command, $hex) !== 1) {
+			fwrite(STDERR, 'unknown command: ' . var_export($command, TRUE) . "\n");
+			exit(4);
+		}
+		if (@fwrite($conn, (string) hex2bin($hex[1])) === FALSE) {
 			break;
 		}
+		fwrite(STDOUT, "ack\n");
 	}
-} elseif ($mode === 'silent') {
-	fgets(STDIN);
 }
 fclose($conn);

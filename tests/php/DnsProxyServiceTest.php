@@ -130,11 +130,8 @@ final class DnsProxyServiceTest extends TestCase
 		$this->moveResolver(TRUE);
 		$this->generate();
 
-		$proc = proc_open([$this->shell, '-n', "{$this->dir}/rc/" . self::RC], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes);
-		$this->assertIsResource($proc);
-		$output = (string) stream_get_contents($pipes[1]);
-		fclose($pipes[1]);
-		$this->assertSame(0, proc_close($proc), "sh -n rejected the generated script: {$output}");
+		$run = pfb_test_run_process([$this->shell, '-n', "{$this->dir}/rc/" . self::RC], 10.0);
+		$this->assertSame(0, $run['exit'], "sh -n rejected the generated script: {$run['stdout']}{$run['stderr']}");
 	}
 
 	/** @return array<string,array{bool}> */
@@ -1007,25 +1004,17 @@ final class DnsProxyServiceTest extends TestCase
 	// S7 -- starts are serialized: the boot hook's background start and an apply's start_service() must not both launch
 	// -----------------------------------------------------------------------
 
-	/** @return array{0: resource, 1: resource} the running verb and its output pipe */
+	/** @return array{0: resource, 1: array<int, resource>, 2: string} the running verb, for finishVerb() */
 	private function startVerb(string $verb): array
 	{
-		$proc = proc_open(
-			[$GLOBALS['pfb']['timeout'], '-k', '2', '30', $this->shell, "{$this->dir}/run.sh", $verb],
-			[0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]],
-			$pipes
-		);
-		$this->assertIsResource($proc, 'proc_open failed');
-		fclose($pipes[0]);
-		return [$proc, $pipes[1]];
+		return pfb_test_start_process([$this->shell, "{$this->dir}/run.sh", $verb]);
 	}
 
-	/** @param array{0: resource, 1: resource} $started @return array{0: int, 1: string} */
-	private function finishVerb(array $started): array
+	/** @param array{0: resource, 1: array<int, resource>, 2: string} $started @return array{0: int, 1: string} */
+	private function finishVerb(array $started, float $timeoutSeconds = 30.0): array
 	{
-		$output = (string) stream_get_contents($started[1]);
-		fclose($started[1]);
-		return [proc_close($started[0]), $output];
+		$run = pfb_test_finish_process($started, $timeoutSeconds);
+		return [$run['exit'], $run['stdout'] . $run['stderr']];
 	}
 
 	private function launchCount(): int
@@ -1112,6 +1101,27 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(0, $secondStatus, "second start failed: {$secondOutput}");
 		$this->assertSame(['launch'], $this->events(), 'one daemon launch for two concurrent starts');
 		$this->assertSame(['3001', '3002'], $this->livePids(), 'one supervisor and one child');
+	}
+
+	public function testAStartHeldPastItsWaitIsReportedStuckNotAwaitedForever(): void
+	{
+		// Given a start held inside the daemon launch, which it leaves only when the barrier is gone
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange();
+		touch("{$this->dir}/state/barrier");
+
+		try {
+			$held = $this->startVerb('start');
+			$this->waitUntil(fn (): bool => $this->launchCount() >= 1, 'the start never reached the daemon launch');
+
+			// When the wait for it runs out: the start is reported STUCK and reaped, and its status is not read as a verdict
+			$this->expectException(RuntimeException::class);
+			$this->expectExceptionMessage('STUCK/ENVIRONMENT: process exceeded hard deadline');
+			$this->finishVerb($held, 0.5);
+		} finally {
+			@unlink("{$this->dir}/state/barrier");
+		}
 	}
 
 	public function testAStartThatCannotTakeTheLockWithinItsWaitFailsLoudlyAndLaunchesNothing(): void
