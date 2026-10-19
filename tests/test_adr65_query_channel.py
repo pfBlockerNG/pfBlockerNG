@@ -45,7 +45,6 @@ from pfb_unbound import (
     PRIO_FEED_ALLOW,
     PRIO_FEED_BLOCK,
     PRIO_FEED_BLOCK_IMPORTANT,
-    REGEX_EVICT_MS_DEFAULT,
     REGEX_WARN_MS_DEFAULT,
 )
 from tests.test_adr06_init_from_raw import _build_from_manifest
@@ -82,7 +81,9 @@ def _snapshot_from_containers(containers: dict[str, Any], *, important_rules: bo
         zone_db=containers["zoneDB"],
         white_db=containers["whiteDB"],
         regex_db=containers["regexDB"],
-        allow_regex_db=containers.get("allowRegexDB", {}),
+        allow_regex_db=containers["allowRegexDB"],
+        user_regex_db=containers["userRegexDB"],
+        user_allow_regex_db=containers["userAllowRegexDB"],
         feed_group_index_db=containers["feedGroupIndexDB"],
         hsts_db=containers["hstsDB"],
         important_rules=important_rules,
@@ -96,7 +97,6 @@ def _seed_pfb_from_cfg(cfg: dict[str, Any]) -> None:
     P.pfb["python_idn_block_malicious"] = cfg.get("python_idn_block_malicious", True)
     P.pfb["python_idn_escalate_suspicious"] = cfg.get("python_idn_escalate_suspicious", False)
     P.pfb["regex_warn_ms"] = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
-    P.pfb["regex_evict_ms"] = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
 
 
 def _channel_and_oracle(

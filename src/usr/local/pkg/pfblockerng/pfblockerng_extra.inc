@@ -622,7 +622,7 @@ function pfb_dnsbl_regex_help_text(): string
 		Keep the Description to 15 characters or fewer — it is shown on the Alerts Tab, and a longer one is flagged in this editor. If no Description is entered a default Regex line number will be utilized.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
 		Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.<br /><br />
-		Patterns use Python regular-expression syntax (the <a target="_blank" rel="noopener noreferrer" href="https://docs.python.org/3/library/re.html#regular-expression-syntax">re</a> module) and are validated on save by the same Python engine that runs them &mdash; that result is authoritative. The inline checker in this editor is an editing aid and may flag a valid pattern; if a line saves without an input error, it compiles.';
+		Patterns use a bounded subset of Python regular-expression syntax (the <a target="_blank" rel="noopener noreferrer" href="https://docs.python.org/3/library/re.html#regular-expression-syntax">re</a> module): printable ASCII without spaces, at most 256 characters, no lookarounds, backreferences, named groups, inline flags or numeric escapes, and a fixed limit on matching work and on the characters listed in [...] classes. Unanchored patterns with an open run before a literal tail, such as <code>\S+\\.example\\.com</code> or <code>ad.*\\.example\\.com</code>, are refused unless anchored with <code>^</code>. They are validated on save by the same Python admission rules and engine that load them &mdash; that result is authoritative. The inline checker in this editor is an editing aid and may flag a valid pattern; if a line saves without an input error, it compiles.';
 }
 
 /** Whether regex validation must run for a save request. */
@@ -4123,15 +4123,15 @@ function pfb_dnsbl_regex_upgrade_comment_out(
 	}
 
 	ksort($blocked, SORT_NUMERIC);
-	$named = [];
-	foreach ($blocked as $line => $_message) {
-		$idx = $line - 1;
-		if (!isset($rows[$idx])) {
-			continue;
+	// Line numbers of the "blocked" comments in the REWRITTEN list: each rejected row gets
+	// a comment row above it, which moves every row below it down by one.
+	$where = [];
+	foreach (array_keys($blocked) as $line) {
+		if (isset($rows[$line - 1])) {
+			$where[] = $line + count($where);
 		}
-		$named[] = $rows[$idx]['text'];
 	}
-	if ($named === []) {
+	if ($where === []) {
 		return;
 	}
 
@@ -4161,13 +4161,15 @@ function pfb_dnsbl_regex_upgrade_comment_out(
 	$write('dnsbl/pfb_regex_list', base64_encode($rewritten));
 	$flush('[pfBlockerNG] commented out invalid Regex List patterns at package upgrade');
 
-	$shown = array_slice($named, 0, 10);
-	$more = count($named) - count($shown);
-	$summary = implode(', ', $shown);
+	// Line numbers only: a rejected row stays in the stored list (the admin's own text) and
+	// is never echoed into the install log or the persistent notification.
+	$shown = array_slice($where, 0, 10);
+	$more = count($where) - count($shown);
+	$summary = (count($where) === 1 ? 'comment on line ' : 'comments on lines ') . implode(', ', $shown);
 	if ($more > 0) {
 		$summary .= " and {$more} more";
 	}
-	$text_notice = "pfBlockerNG commented out invalid Regex List pattern(s) at package upgrade: {$summary}";
+	$text_notice = "pfBlockerNG commented out invalid Regex List pattern(s) at package upgrade; see the '# blocked at package upgrade' {$summary}";
 	$status($text_notice);
 	$notice('pfBlockerNG', $text_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
 }

@@ -122,10 +122,11 @@ final class DnsblRegexDescriptionLintTest extends TestCase
 	public function testAnEscapedHashInThePatternIsNotCountedAsADescription(): void
 	{
 		// Composes with #1867: the length rule measures the REAL description, so
-		// an escaped hash inside the pattern must not fabricate one.
+		// an escaped hash inside the pattern must not fabricate one. The tail has no
+		// space so the pattern itself stays inside the admission grammar.
 		$this->assertSame(
 			[],
-			self::lint("^ads\\#" . self::OVER_LIMIT . "$\n"),
+			self::lint("^ads\\#" . str_replace(' ', '-', self::OVER_LIMIT) . "$\n"),
 			'an escaped hash keeps the rest of the line in the pattern, so there is no description to measure'
 		);
 	}

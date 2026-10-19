@@ -169,7 +169,7 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 
 	public function testAValidListIsLeftUnchangedAndRaisesNoNotice(): void
 	{
-		$list = "^keep\\.example\\.com$\n(?P<X>A)\n";
+		$list = "^keep\\.example\\.com$\n(X)A\n";
 		$result = $this->runUpgrade(['list' => $list]);
 		$this->assertSame(1, $result['probe_calls'], 'a non-empty list must still be probed');
 		$this->assertSilent($result);
@@ -215,7 +215,9 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 		$this->assertTrue(str_starts_with($lines[1], self::WHY), 'the why-line must use the specified prefix');
 		$this->assertStringNotContainsString("\n", substr($lines[1], strlen(self::WHY)));
 		$this->assertSame('# (unclosed', $lines[2], 'the original line must remain recoverable by deleting the "# " prefix');
-		$this->assertStringContainsString('(unclosed', (string) $result['notices'][0][1]);
+		$notice = (string) $result['notices'][0][1];
+		$this->assertStringContainsString('on line 2', $notice, 'the notice names the line, not the row');
+		$this->assertStringNotContainsString('(unclosed', $notice);
 	}
 
 	public function testAlreadyCommentedLinesAreLeftUntouched(): void
@@ -242,29 +244,32 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 		$this->assertSilent($second);
 	}
 
-	// ---- notice cap -------------------------------------------------------------------
+	// ---- notice: line numbers only, capped --------------------------------------------
+	//
+	// The rewrite puts a "# blocked at package upgrade" comment above every rejected row, so
+	// the k-th rejected row's comment sits at its original line + (k - 1). The notice names
+	// those lines of the REWRITTEN list: they are where the admin looks. It never carries a
+	// row's text -- the commented-out row stays in the stored list (the admin's own text).
 
-	public function testOneInvalidPatternIsNamedAndHasNoMoreTail(): void
+	public function testOneInvalidPatternIsNamedByLineNumberAndHasNoMoreTail(): void
 	{
 		$result = $this->runUpgrade([
 			'list'  => "(unclosed\n",
 			'probe' => static fn(): array => ['line 1: leftover: broken'],
 		]);
 		$notice = (string) $result['notices'][0][1];
-		$this->assertStringContainsString('(unclosed', $notice);
+		$this->assertStringContainsString('on line 1', $notice);
+		$this->assertStringNotContainsString('(unclosed', $notice);
 		$this->assertStringNotContainsString(' more', $notice);
 		$this->assertSame(1, substr_count((string) $result['decoded'], self::WHY));
 	}
 
-	public function testExactlyTenInvalidPatternsAreAllNamedWithNoMoreTail(): void
+	public function testExactlyTenInvalidPatternsAreAllNamedByLineWithNoMoreTail(): void
 	{
 		$lines = [];
 		$errors = [];
-		$patterns = [];
 		for ($i = 1; $i <= 10; $i++) {
-			$pattern = '(unclosed_' . sprintf('%02d', $i);
-			$patterns[] = $pattern;
-			$lines[] = $pattern;
+			$lines[] = '(unclosed_' . sprintf('%02d', $i);
 			$errors[] = "line {$i}: leftover: broken";
 		}
 		$result = $this->runUpgrade([
@@ -272,22 +277,18 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 			'probe' => static fn(): array => $errors,
 		]);
 		$notice = (string) $result['notices'][0][1];
-		foreach ($patterns as $pattern) {
-			$this->assertStringContainsString($pattern, $notice);
-		}
+		$this->assertStringContainsString('on lines 1, 3, 5, 7, 9, 11, 13, 15, 17, 19', $notice);
+		$this->assertStringNotContainsString('(unclosed', $notice);
 		$this->assertStringNotContainsString(' more', $notice);
 		$this->assertSame(10, substr_count((string) $result['decoded'], self::WHY));
 	}
 
-	public function testElevenInvalidPatternsNameTheFirstTenThenAndOneMoreAndStillRewriteAll(): void
+	public function testElevenInvalidPatternsNameTheFirstTenLinesThenAndOneMoreAndStillRewriteAll(): void
 	{
 		$lines = [];
 		$errors = [];
-		$patterns = [];
 		for ($i = 1; $i <= 11; $i++) {
-			$pattern = '(unclosed_' . sprintf('%02d', $i);
-			$patterns[] = $pattern;
-			$lines[] = $pattern;
+			$lines[] = '(unclosed_' . sprintf('%02d', $i);
 			$errors[] = "line {$i}: leftover: broken";
 		}
 		$result = $this->runUpgrade([
@@ -295,12 +296,39 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 			'probe' => static fn(): array => $errors,
 		]);
 		$notice = (string) $result['notices'][0][1];
-		foreach (array_slice($patterns, 0, 10) as $pattern) {
-			$this->assertStringContainsString($pattern, $notice);
-		}
-		$this->assertStringNotContainsString($patterns[10], $notice);
-		$this->assertStringContainsString('and 1 more', $notice);
+		$this->assertStringContainsString('on lines 1, 3, 5, 7, 9, 11, 13, 15, 17, 19 and 1 more', $notice);
+		$this->assertStringNotContainsString('21', $notice, 'the 11th reject is counted, not named');
+		$this->assertStringNotContainsString('(unclosed', $notice);
 		$this->assertSame(11, substr_count((string) $result['decoded'], self::WHY), 'the 11th reject is still commented out');
+	}
+
+	public function testTheNoticeAndStatusNameLinesOfTheRewrittenListAndNeverEchoARejectedRow(): void
+	{
+		// Real probe, two rejected rows carrying distinctive markers in their text.
+		$list = "^keep\\.example\\.com$\n(FIRSTMARKER-unclosed\n^also\\.keep$\n(SECONDMARKER-unclosed\n";
+		$result = $this->runUpgrade(['list' => $list]);
+		$decoded = (string) $result['decoded'];
+		$this->assertPersistedAndAnnounced($result, $decoded);
+
+		// Vacuity: both markers ARE in the rewritten list (the rows are commented, not deleted).
+		$this->assertStringContainsString("# (FIRSTMARKER-unclosed\n", $decoded);
+		$this->assertStringContainsString("# (SECONDMARKER-unclosed\n", $decoded);
+
+		// ... but neither the install-log status nor the persistent notification carries them.
+		$notice = (string) $result['notices'][0][1];
+		foreach ([$notice, $result['statuses'][0]] as $text) {
+			$this->assertStringNotContainsString('FIRSTMARKER', $text);
+			$this->assertStringNotContainsString('SECONDMARKER', $text);
+			$this->assertStringNotContainsString('unclosed', $text);
+			$this->assertStringContainsString('on lines 2, 5', $text);
+		}
+
+		// The named numbers point at the "blocked" comments of the rewritten list.
+		$rows = explode("\n", $decoded);
+		$this->assertTrue(str_starts_with($rows[2 - 1], self::WHY), 'line 2 is the first blocked comment');
+		$this->assertTrue(str_starts_with($rows[5 - 1], self::WHY), 'line 5 is the second blocked comment');
+		$this->assertSame('# (FIRSTMARKER-unclosed', $rows[3 - 1]);
+		$this->assertSame('# (SECONDMARKER-unclosed', $rows[6 - 1]);
 	}
 
 	// ---- hostile stored input ---------------------------------------------------------
@@ -424,15 +452,15 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 	{
 		$src = self::source(self::UNBOUND);
 		$this->assertStringContainsString(
-			'[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ]',
+			'[pfBlockerNG]: dropping user regex [ {} ] pattern [ {} ]',
 			$src,
 			'positive control: the user-regex drop path still logs'
 		);
 		$this->assertStringContainsString(
-			'[pfBlockerNG]: dropping pathological {} regex feed [ {} ] pattern [ {} ] (catastrophic shape)',
+			'[pfBlockerNG]: dropping {} regex feed [ {} ] pattern [ {} ] ({})',
 			$src
 		);
-		$feed_at = strpos($src, '[pfBlockerNG]: dropping pathological {} regex feed [ {} ] pattern [ {} ] (catastrophic shape)');
+		$feed_at = strpos($src, '[pfBlockerNG]: dropping {} regex feed [ {} ] pattern [ {} ] ({})');
 		$this->assertNotFalse($feed_at);
 		$region = substr($src, $feed_at, 400);
 		$this->assertStringNotContainsString('file_notice', $region);

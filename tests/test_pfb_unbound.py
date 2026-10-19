@@ -81,12 +81,12 @@ def _psl_rules(lines: list[str], *_ignored: object) -> pfb_unbound.PslRules:
 
 
 def add_data(domain: str, log: str = "1", index: int = 0) -> None:
-    pfb_unbound.dataDB[domain] = {"log": log, "index": index}
+    pfb_unbound.dataDB[domain] = {"log": log, "index": index, "band": 1}
     pfb_unbound.pfb["dataDB"] = True
 
 
 def add_zone(domain: str, log: str = "1", index: int = 0) -> None:
-    pfb_unbound.zoneDB[domain] = {"log": log, "index": index}
+    pfb_unbound.zoneDB[domain] = {"log": log, "index": index, "band": 1}
     pfb_unbound.pfb["zoneDB"] = True
 
 
@@ -1943,7 +1943,7 @@ class TestOperateDnsbl:
     def test_regex_block(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         pfb_unbound.pfb["regexDB"] = True
-        pfb_unbound.regexDB["bad-pattern"] = re.compile(r"evil")
+        pfb_unbound.regexDB["bad-pattern"] = _regex_entry(r"evil")
         qstate = make_qstate("evil-domain.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True, f"expected True, got {rcd!r}"
@@ -1956,7 +1956,7 @@ class TestOperateDnsbl:
         pfb_unbound.pfb["idn_mode"] = pfb_unbound.IDN_MODE_CONFUSABLE
         pfb_unbound.pfb["python_idn_block_malicious"] = False
         pfb_unbound.pfb["python_idn_escalate_suspicious"] = False
-        pfb_unbound.regexDB["user-overlap"] = re.compile(r"xn--bnk-1ce")
+        pfb_unbound.regexDB["user-overlap"] = _regex_entry(r"xn--bnk-1ce")
         logs: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: logs.append((path, line)))
 
@@ -1994,7 +1994,7 @@ class TestOperateDnsbl:
         pfb_unbound.pfb["idn_mode"] = pfb_unbound.IDN_MODE_CONFUSABLE
         pfb_unbound.pfb["python_idn_block_malicious"] = False
         pfb_unbound.pfb["python_idn_escalate_suspicious"] = False
-        pfb_unbound.regexDB["user-overlap"] = re.compile(r"xn--bnk-1ce")
+        pfb_unbound.regexDB["user-overlap"] = _regex_entry(r"xn--bnk-1ce")
         add_white("xn--bnk-1ce.com", wildcard=False)
         logs: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: logs.append((path, line)))
@@ -3621,24 +3621,24 @@ class TestIterDomainSuffixes:
 
 class TestFindZoneMatch:
     def test_exact_self_match(self) -> None:
-        zone_db = {"example.com": {"log": "1", "index": 0}}
+        zone_db = {"example.com": {"log": "1", "index": 0, "band": 1}}
         matched, entry = find_zone_match("example.com", zone_db)
         assert matched == "example.com", f"expected 'example.com', got {matched!r}"
-        assert entry == {"log": "1", "index": 0}, f"expected {'log': '1', 'index': 0}, got {entry!r}"
+        assert entry == {"log": "1", "index": 0, "band": 1}, f"expected {'log': '1', 'index': 0}, got {entry!r}"
 
     def test_subdomain_matches_parent_zone(self) -> None:
-        zone_db = {"example.com": {"log": "1", "index": 0}}
+        zone_db = {"example.com": {"log": "1", "index": 0, "band": 1}}
         matched, entry = find_zone_match("sub.example.com", zone_db)
         assert matched == "example.com", f"expected 'example.com', got {matched!r}"
         assert entry is not None, f"expected not None, got {entry!r}"
 
     def test_deep_subdomain_matches(self) -> None:
-        zone_db = {"example.com": {"log": "1", "index": 0}}
+        zone_db = {"example.com": {"log": "1", "index": 0, "band": 1}}
         matched, entry = find_zone_match("a.b.example.com", zone_db)
         assert matched == "example.com", f"expected 'example.com', got {matched!r}"
 
     def test_no_match_returns_none_none(self) -> None:
-        zone_db = {"evil.com": {"log": "1", "index": 0}}
+        zone_db = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         matched, entry = find_zone_match("good.com", zone_db)
         assert matched is None, f"expected None, got {matched!r}"
         assert entry is None, f"expected None, got {entry!r}"
@@ -3648,21 +3648,21 @@ class TestFindZoneMatch:
         # but query is 'x.evil.com' — zone DOES match (wildcard incl. self),
         # while a separate exact-only check would not.
         # This test pins that find_zone_match IS the wildcard matcher.
-        zone_db = {"evil.com": {"log": "1", "index": 0}}
+        zone_db = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         matched, _ = find_zone_match("x.evil.com", zone_db)
         assert matched == "evil.com", f"expected 'evil.com', got {matched!r}"
 
     def test_matched_parent_string_correct(self) -> None:
         # b_eval = matched parent string; must be the zone key, not the query name
-        zone_db = {"example.com": {"log": "1", "index": 0}}
+        zone_db = {"example.com": {"log": "1", "index": 0, "band": 1}}
         matched, _ = find_zone_match("deep.sub.example.com", zone_db)
         assert matched == "example.com", f"expected 'example.com', got {matched!r}"
 
     def test_most_specific_match_wins(self) -> None:
         # iter_domain_suffixes walks q_name → ... TLD, so first hit is most specific
         zone_db = {
-            "sub.example.com": {"log": "1", "index": 1},
-            "example.com": {"log": "1", "index": 2},
+            "sub.example.com": {"log": "1", "index": 1, "band": 1},
+            "example.com": {"log": "1", "index": 2, "band": 1},
         }
         matched, entry = find_zone_match("sub.example.com", zone_db)
         assert matched == "sub.example.com", f"expected 'sub.example.com', got {matched!r}"
@@ -3906,8 +3906,8 @@ class TestParseIniInt:
     """issue #713: ``config.getint()`` raises ``ValueError`` on a non-integer ini
     value. init_standard's ``python_tld_seg``/``decisiondb_max`` reads called it
     UNGUARDED, so a malformed ini value crashed the whole Unbound Python module at
-    init. ``_parse_ini_int`` guards it (mirrors the existing ``regex_warn_ms``/
-    ``regex_evict_ms`` try/except-ValueError pattern) and reports failure via
+    init. ``_parse_ini_int`` guards it (mirrors the existing ``regex_warn_ms``
+    try/except-ValueError pattern) and reports failure via
     ``None`` instead of raising, so the caller keeps its current default."""
 
     def _config(self, value: str) -> ConfigParser:
@@ -4053,7 +4053,7 @@ class TestPureMatcherProperties:
         zone_db: dict = {}
         entries = [self._rand_domain(rng) for _ in range(self.N_ENTRIES)]
         for d in entries:
-            zone_db[d] = {"log": "1", "index": 0}
+            zone_db[d] = {"log": "1", "index": 0, "band": 1}
 
         def brute_zone(q: str) -> str | None:
             # Check every suffix from most-specific to least-specific
@@ -4133,6 +4133,11 @@ class TestPureMatcherProperties:
 # ---------------------------------------------------------------------------
 
 
+def _regex_entry(pattern: str) -> dict[str, Any]:
+    """A block-regex DB value: every regex DB holds the ``{"re", "important", "band"}`` payload."""
+    return {"re": re.compile(pattern), "important": False, "band": pfb_unbound.PRIO_FEED_BLOCK}
+
+
 def _make_cfg(**overrides: Any) -> dict:
     """Return a minimal cfg dict with safe defaults; caller overrides as needed."""
     base = {
@@ -4145,6 +4150,9 @@ def _make_cfg(**overrides: Any) -> dict:
         "dnsbl_ipv6": "::1",
         "python_idn": False,
         "regexDB": False,
+        "userRegexDB": False,
+        "allowRegexDB": False,
+        "userAllowRegexDB": False,
         "whiteDB": False,
         "python_tld_seg": 2,
         "hstsDB": False,
@@ -4164,6 +4172,9 @@ def _make_containers(**overrides: Any) -> dict:
         "whiteDB": {},
         "hstsDB": {},
         "regexDB": defaultdict(str),
+        "userRegexDB": defaultdict(str),
+        "allowRegexDB": defaultdict(str),
+        "userAllowRegexDB": defaultdict(str),
         "feedGroupIndexDB": defaultdict(list),
     }
     base.update(overrides)
@@ -4172,7 +4183,7 @@ def _make_containers(**overrides: Any) -> dict:
 
 class TestEvaluateDomainGolden:
     def test_data_hit(self) -> None:
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "BadFeed", "group": "BadGroup"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)
@@ -4192,14 +4203,14 @@ class TestEvaluateDomainGolden:
         )  # VIP is neither null nor NXDOMAIN (issue #31 contrast)
 
     def test_data_exact_does_not_match_subdomain(self) -> None:
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         containers = _make_containers(dataDB=data_db)
         cfg = _make_cfg(dataDB=True)
         dec = evaluate_domain("sub.evil.com", "sub.evil.com", "com", False, cfg, containers)
         assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
 
     def test_zone_hit_wildcard_incl_self(self) -> None:
-        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"example.com": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "ZoneFeed", "group": "ZoneGroup"}}
         containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(zoneDB=True)
@@ -4217,7 +4228,7 @@ class TestEvaluateDomainGolden:
         )  # matched parent, not query name
 
     def test_zone_b_eval_is_parent_not_query(self) -> None:
-        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"example.com": {"log": "1", "index": 0, "band": 1}}
         containers = _make_containers(zoneDB=zone_db)
         cfg = _make_cfg(zoneDB=True)
         dec = evaluate_domain("deep.sub.example.com", "deep.sub.example.com", "com", False, cfg, containers)
@@ -4295,7 +4306,7 @@ class TestEvaluateDomainGolden:
         assert dec.group == "DNSBL_IDN", f"expected 'DNSBL_IDN', got {dec.group!r}"
 
     def test_regex_block(self) -> None:
-        regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
+        regex_db: dict = {"bad-pattern": _regex_entry(r"tracker")}
         cfg = _make_cfg(regexDB=True)
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("tracker.evil.com", "tracker.evil.com", "com", False, cfg, containers)
@@ -4307,7 +4318,7 @@ class TestEvaluateDomainGolden:
         # An empty q_name must not be run against the regex set. This preserves
         # the pre-ADR `pfb_regex_match` guard (`if q_name:`); an empty-matching
         # pattern (e.g. r"") would otherwise spuriously flag an empty query.
-        regex_db: dict = {"match-all": re.compile(r"")}
+        regex_db: dict = {"match-all": _regex_entry(r"")}
         cfg = _make_cfg(regexDB=True)
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("", "", "", False, cfg, containers)
@@ -4315,7 +4326,7 @@ class TestEvaluateDomainGolden:
 
     def test_regex_first_matching_pattern_wins(self) -> None:
         # Linear scan over regex_db.items() in insertion order; first hit wins.
-        regex_db: dict = {"first": re.compile(r"foo"), "second": re.compile(r"bar")}
+        regex_db: dict = {"first": _regex_entry(r"foo"), "second": _regex_entry(r"bar")}
         cfg = _make_cfg(regexDB=True)
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("barfoo.com", "barfoo.com", "com", False, cfg, containers)
@@ -4323,7 +4334,7 @@ class TestEvaluateDomainGolden:
         assert dec.feed == "first", f"expected 'first', got {dec.feed!r}"
 
     def test_whitelist_override(self) -> None:
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         white_db: dict = {"evil.com": False}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
@@ -4335,7 +4346,7 @@ class TestEvaluateDomainGolden:
         assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_hsts_null_blocking(self) -> None:
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         hsts_db: dict = {"evil.com": 0}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, hstsDB=hsts_db, feedGroupIndexDB=fgi_db)
@@ -4348,7 +4359,7 @@ class TestEvaluateDomainGolden:
         assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_hsts_tld_null_blocking(self) -> None:
-        data_db: dict = {"evil.app": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.app": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=("app",))
@@ -4363,7 +4374,7 @@ class TestEvaluateDomainGolden:
         # as its lowercase form) -- not fall through to a VIP block and serve the
         # block page under the wrong certificate (an HSTS violation) because
         # get_tld() returned the raw wire-case label.
-        data_db: dict = {"evil.app": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.app": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=("app",))
@@ -4384,7 +4395,7 @@ class TestEvaluateDomainGolden:
         assert dec_mixed.null_blocking is True, f"expected True, got {dec_mixed.null_blocking!r}"
 
     def test_cname_b_type_suffix(self) -> None:
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)
@@ -4408,7 +4419,7 @@ class TestEvaluateDomainGolden:
         assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_python_blocking_false_skips_data_zone(self) -> None:
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         containers = _make_containers(dataDB=data_db)
         cfg = _make_cfg(dataDB=True, python_blocking=False)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
@@ -4416,7 +4427,7 @@ class TestEvaluateDomainGolden:
 
     def test_log_type_2_does_not_change_null_blocking(self) -> None:
         # log_type != "1" → null_blocking stays True (default)
-        data_db: dict = {"evil.com": {"log": "2", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "2", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)
@@ -4446,7 +4457,7 @@ class TestEvaluateDomainNxdomain:
 
     def _dec(self, log: str, **cfg_kw: Any) -> Any:
         # Given a single-entry dataDB whose log flag is `log`
-        data_db: dict = {"evil.com": {"log": log, "index": 0}}
+        data_db: dict = {"evil.com": {"log": log, "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, **cfg_kw)
@@ -4476,7 +4487,7 @@ class TestEvaluateDomainNxdomain:
         # the block must not be MISreported as HSTS in the logs (issue #31 / PR review).
         # Given evil.com is in the HSTS DB AND its mode is NXDOMAIN-logging ("3") --
         # hsts_check_domain WILL match it, so without the clear it would set in_hsts/p_type.
-        data_db: dict = {"evil.com": {"log": "3", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "3", "index": 0, "band": 1}}
         hsts_db: dict = {"evil.com": 0}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, hstsDB=hsts_db, feedGroupIndexDB=fgi_db)
@@ -4505,7 +4516,7 @@ class TestEvaluateDomainNodata:
     """
 
     def _dec(self, log: str, **cfg_kw: Any) -> Any:
-        data_db: dict = {"evil.com": {"log": log, "index": 0}}
+        data_db: dict = {"evil.com": {"log": log, "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, **cfg_kw)
@@ -4522,7 +4533,7 @@ class TestEvaluateDomainNodata:
     def test_nodata_does_not_inherit_hsts_attribution(self, log_flag: str) -> None:
         # Given evil.com is in the HSTS DB AND its mode is NODATA ("5"/"6") --
         # hsts_check_domain WILL match it, so without a clear it sets in_hsts/p_type.
-        data_db: dict = {"evil.com": {"log": log_flag, "index": 0}}
+        data_db: dict = {"evil.com": {"log": log_flag, "index": 0, "band": 1}}
         hsts_db: dict = {"evil.com": 0}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, hstsDB=hsts_db, feedGroupIndexDB=fgi_db)
@@ -4604,7 +4615,7 @@ class TestADR02PythonOnlyBlocking:
     def test_python_blocking_true_enables_data_lookup(self) -> None:
         # With python_blocking=True (the ADR-02 invariant), an exact domain in
         # dataDB is found and returned as a DNSBL block.
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "TestFeed", "group": "TestGroup"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)  # python_blocking defaults to True
@@ -4617,7 +4628,7 @@ class TestADR02PythonOnlyBlocking:
     def test_python_blocking_true_enables_zone_lookup(self) -> None:
         # Zone/wildcard lookup is also inside the python_blocking gate.
         # Subdomain of a zone entry → found via zone path.
-        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"example.com": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "ZoneFeed", "group": "ZoneGroup"}}
         containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(zoneDB=True)  # python_blocking defaults to True
@@ -4631,8 +4642,8 @@ class TestADR02PythonOnlyBlocking:
         # When a domain appears in BOTH dataDB (exact) and zoneDB (wildcard),
         # data is checked first (evaluate_domain lines 1471 before 1481).
         # After ADR-02 this ordering is always active because python_blocking=True.
-        data_db: dict = {"example.com": {"log": "1", "index": 0}}
-        zone_db: dict = {"example.com": {"log": "1", "index": 1}}
+        data_db: dict = {"example.com": {"log": "1", "index": 0, "band": 1}}
+        zone_db: dict = {"example.com": {"log": "1", "index": 1, "band": 1}}
         fgi_db: dict = {
             0: {"feed": "DataFeed", "group": "DataGroup"},
             1: {"feed": "ZoneFeed", "group": "ZoneGroup"},
@@ -4648,7 +4659,7 @@ class TestADR02PythonOnlyBlocking:
     def test_zone_lookup_fires_only_when_data_misses(self) -> None:
         # If a domain is absent from dataDB (even when the flag is enabled) but
         # present in zoneDB, the zone path fires as a fallback.
-        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"example.com": {"log": "1", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "ZoneFeed", "group": "ZoneGroup"}}
         # dataDB flag enabled but backing dict is empty → miss → falls through to zoneDB
         containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
@@ -4675,7 +4686,7 @@ class TestADR02PythonOnlyBlocking:
 
     def test_whitelist_overrides_data_match(self) -> None:
         # An exact whitelist entry suppresses a data-path block.
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
         white_db: dict = {"evil.com": False}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
@@ -4689,7 +4700,7 @@ class TestADR02PythonOnlyBlocking:
         # A whitelisted subdomain is not blocked even when its parent zone entry
         # would otherwise match.  Confirms the whitelist check runs after is_found
         # regardless of which lookup path (data or zone) set is_found.
-        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"example.com": {"log": "1", "index": 0, "band": 1}}
         white_db: dict = {"sub.example.com": False}
         fgi_db: dict = {0: {"feed": "ZoneFeed", "group": "ZoneGroup"}}
         containers = _make_containers(zoneDB=zone_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
@@ -4703,7 +4714,7 @@ class TestADR02PythonOnlyBlocking:
         # A wildcard whitelist entry (wildcard=True) covers the domain and its
         # children.  A zone match on the parent should still be suppressed for a
         # whitelisted subdomain.
-        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"example.com": {"log": "1", "index": 0, "band": 1}}
         white_db: dict = {"example.com": True}  # wildcard: covers *.example.com too
         fgi_db: dict = {0: {"feed": "ZF", "group": "ZG"}}
         containers = _make_containers(zoneDB=zone_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
@@ -4722,7 +4733,7 @@ class TestADR02PythonOnlyBlocking:
         # fires even when python_blocking=False.  (In practice, python_blocking is
         # now always True after ADR-02; this test pins that the gate boundary is
         # not accidentally moved.)
-        regex_db: dict = {"bad-pattern": re.compile(r"malicious")}
+        regex_db: dict = {"bad-pattern": _regex_entry(r"malicious")}
         containers = _make_containers(regexDB=regex_db)
         cfg = _make_cfg(regexDB=True, python_blocking=False)
         dec = evaluate_domain("malicious.tracker.com", "malicious.tracker.com", "com", False, cfg, containers)
@@ -4752,8 +4763,8 @@ class TestADR02PythonOnlyBlocking:
     def test_data_skipped_but_regex_fires_when_python_blocking_false(self) -> None:
         # Compound case: python_blocking=False disables data/zone lookups but regex
         # still runs, producing a block via a different code path.
-        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
-        regex_db: dict = {"catch-evil": re.compile(r"evil")}
+        data_db: dict = {"evil.com": {"log": "1", "index": 0, "band": 1}}
+        regex_db: dict = {"catch-evil": _regex_entry(r"evil")}
         containers = _make_containers(dataDB=data_db, regexDB=regex_db)
         cfg = _make_cfg(dataDB=True, regexDB=True, python_blocking=False)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
@@ -5263,9 +5274,9 @@ class TestBuiltinLogFlagCoverageMatrix:
 
     @pytest.mark.parametrize("hsts_on", [False, True])
     @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
-    def test_user_regex_bare_pattern(self, flag: str, hsts_on: bool) -> None:
+    def test_user_regex_entry(self, flag: str, hsts_on: bool) -> None:
         q = "tracker.evil.com"
-        regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
+        regex_db: dict = {"bad-pattern": _regex_entry(r"tracker")}
         cfg = _make_cfg(regexDB=True, builtin_log_flag=flag, hstsDB=hsts_on, hsts_tlds=())
         containers = _make_containers(regexDB=regex_db, hstsDB=({q: 0} if hsts_on else {}))
         dec = evaluate_domain(q, q, "com", False, cfg, containers)
@@ -5294,7 +5305,7 @@ class TestBuiltinLogFlagCoverageMatrix:
         # numeric scan finds a STRICTLY higher-band regex match on the same name and
         # re-attributes feed/group/log_type to the regex rule (issue #47).
         q = "evil.com"
-        data_db: dict = {q: {"log": "9", "index": 0}}  # sentinel: must be overridden
+        data_db: dict = {q: {"log": "9", "index": 0, "band": 1}}  # sentinel: must be overridden
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         regex_db: dict = {
             "important-rule": {"re": re.compile(r"evil"), "important": True, "band": PRIO_FEED_BLOCK_IMPORTANT}
@@ -5324,7 +5335,7 @@ class TestBuiltinLogFlagPreservation:
     silently break what builtin_log_flag threading must never touch."""
 
     def test_cfg_without_builtin_log_flag_defaults_to_one(self) -> None:
-        regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
+        regex_db: dict = {"bad-pattern": _regex_entry(r"tracker")}
         cfg = _make_cfg(regexDB=True)  # no builtin_log_flag key at all
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("tracker.evil.com", "tracker.evil.com", "com", False, cfg, containers)
@@ -5332,7 +5343,7 @@ class TestBuiltinLogFlagPreservation:
 
     def test_whitelisted_builtin_with_flag_three_still_whitelists(self) -> None:
         q = "tracker.evil.com"
-        regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
+        regex_db: dict = {"bad-pattern": _regex_entry(r"tracker")}
         white_db: dict = {q: False}
         cfg = _make_cfg(regexDB=True, whiteDB=True, builtin_log_flag="3")
         containers = _make_containers(regexDB=regex_db, whiteDB=white_db)
@@ -5353,7 +5364,7 @@ class TestBuiltinLogFlagPreservation:
         assert dec.log_type is False, f"expected False, got {dec.log_type!r}"
 
     def test_feed_data_entry_log_not_overridden_by_builtin_log_flag(self) -> None:
-        data_db: dict = {"evil.com": {"log": "3", "index": 0}}
+        data_db: dict = {"evil.com": {"log": "3", "index": 0, "band": 1}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         cfg = _make_cfg(dataDB=True, builtin_log_flag="5")
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
@@ -5406,6 +5417,8 @@ class TestBuiltinLogFlagTransport:
             white_db=result.white_db,
             regex_db=result.regex_db,
             allow_regex_db=result.allow_regex_db,
+            user_regex_db=result.user_regex_db,
+            user_allow_regex_db=result.user_allow_regex_db,
             feed_group_index_db=result.feed_group_index_db,
             hsts_db={},
             builtin_log_flag=result.builtin_log_flag,
@@ -5423,8 +5436,12 @@ class TestBuiltinLogFlagTransport:
                 data_db=result.data_db,
                 zone_db=result.zone_db,
                 white_db=result.white_db,
-                regex_db={"builtin-swap": re.compile(r"evil")},
+                regex_db={
+                    "builtin-swap": {"re": re.compile(r"evil"), "important": False, "band": pfb_unbound.PRIO_FEED_BLOCK}
+                },
                 allow_regex_db=result.allow_regex_db,
+                user_regex_db=result.user_regex_db,
+                user_allow_regex_db=result.user_allow_regex_db,
                 feed_group_index_db=result.feed_group_index_db,
                 hsts_db={},
                 builtin_log_flag=result.builtin_log_flag,
@@ -5509,7 +5526,7 @@ class TestBuiltinLogFlagWire:
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = True
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
-        pfb_unbound._snapshot.regex_db["builtin-wire"] = re.compile(r"evil")
+        pfb_unbound._snapshot.regex_db["builtin-wire"] = _regex_entry(r"evil")
         pfb_unbound.pfb["regexDB"] = True
         pfb_unbound._snapshot = dataclasses.replace(pfb_unbound._snapshot, builtin_log_flag=flag)
         lines: list[tuple[str, str]] = []
@@ -5577,6 +5594,8 @@ def _tld_blacklist_snapshot(result: Any, *, hsts_on: bool) -> Any:
         white_db=result.white_db,
         regex_db=result.regex_db,
         allow_regex_db=result.allow_regex_db,
+        user_regex_db=result.user_regex_db,
+        user_allow_regex_db=result.user_allow_regex_db,
         feed_group_index_db=result.feed_group_index_db,
         hsts_db=({"x.bad": 0} if hsts_on else {}),
         builtin_log_flag=result.builtin_log_flag,

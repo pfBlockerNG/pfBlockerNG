@@ -256,16 +256,16 @@ class DnsblCase:
                        B acting on a block in feed A) is exercised end-to-end.
       user_regex    -> the user "Python Regex List" (CFG_DNSBL_SETTINGS/pfb_regex
                        'on' + pfb_regex_list, newline list, inc:849-850,2711). User
-                       regex are sovereign block patterns; they load into regexDB
+                       regex are sovereign block patterns; they load into userRegexDB
                        and count toward pfb_py_regex_count.
       regex_cap     -> the opt-in "Limit long/complex regex" static cap
                        (CFG_DNSBL_SETTINGS/pfb_regex_cap 'on', inc:2685 -> ini
                        regex_cap=on). When on, an over-length (>200) pattern is
                        DROPPED at load for FEED and USER regex (the inlined
-                       len > REGEX_STATIC_LEN_CAP check), so it never enters regexDB
-                       or the admitted count. Catastrophic shapes (nested-quantifier
-                       / alternation-overlap) are dropped always-on via
-                       pfb_dnsbl_regex_rules.py:_regex_is_catastrophic_shape (which
+                       len > REGEX_STATIC_LEN_CAP check), so it never enters a regex container
+                       or the admitted count. A pattern outside the bounded admission
+                       grammar or over its cost bound is dropped always-on via
+                       pfb_dnsbl_regex_rules.py:pfb_regex_admission (which
                        pfb_unbound.py imports), independent of this flag.
       custom_domains -> the DNSBL Group "Custom_List" (the list's base64 'custom'
                        field). pfBlockerNG auto-generates a synthetic
@@ -3298,8 +3298,8 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         settings["pfb_regex_list"] = _b64_textarea(spec.user_regex)
     if spec.regex_cap:
         # Opt-in length cap (inc:2685 -> ini regex_cap=on). Drops over-LENGTH feed AND
-        # user regex at load. The catastrophic-SHAPE gate is separate and ALWAYS on
-        # (pfb_dnsbl_regex_rules.py:_regex_is_catastrophic_shape, imported by
+        # user regex at load. The admission gate is separate and ALWAYS on
+        # (pfb_dnsbl_regex_rules.py:pfb_regex_admission, imported by
         # pfb_unbound.py), independent of this flag.
         settings["pfb_regex_cap"] = "on"
     if spec.cname_validation:
@@ -5130,8 +5130,9 @@ def read_py_int(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> int | None:
 def regex_admitted_count(vm: SmokeVM, *, timeout: float = 30.0) -> int | None:
     """The ADMITTED feed+user regex total the DNSBL_Regex alias renders.
 
-    pfb_unbound.py emits ``len(regexDB) + len(allowRegexDB)`` AFTER the user
-    REGEX-ini load and the feed-regex merge AND after the opt-in static cap drops
+    pfb_unbound.py emits ``len(regexDB) + len(allowRegexDB) + len(userRegexDB) +
+    len(userAllowRegexDB)`` AFTER the user REGEX-ini load, the feed and Custom_List
+    regex load AND after the opt-in static cap drops
     over-cap patterns — so this is the *admitted* count, which legitimately shrinks
     when ``regex_cap`` is on (pfb_unbound.py:755; ADR-07 "Counts change by design").
     """

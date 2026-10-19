@@ -2992,8 +2992,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
 			dnsbl_stats_update('update', 'DNSBL_TLD_Allow', $tld_allow_cnt);
 		}
-		// ADR-07: use Python's admitted feed + user regex count after the shared
-		// catastrophic-shape gate and opt-in length cap; otherwise fall back to the
+		// ADR-07: use Python's admitted regex count (feed and user, block and allow) after the
+		// shared admission gate and opt-in length cap; otherwise fall back to the
 		// configured user-regex count.
 		$py_regex_cnt = NULL;
 		if (file_exists($pfb['unbound_py_regex_count'])) {

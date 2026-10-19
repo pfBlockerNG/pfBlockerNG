@@ -102,6 +102,9 @@ class TestIniBridgeRoundTrip:
                 "dataDB": False,
                 "zoneDB": False,
                 "regexDB": False,
+                "userRegexDB": False,
+                "allowRegexDB": False,
+                "userAllowRegexDB": False,
                 "whiteDB": False,
                 "hstsDB": False,
                 "dnsbl_ipv4": "10.10.10.1",
@@ -115,6 +118,9 @@ class TestIniBridgeRoundTrip:
                 "whiteDB": {},
                 "hstsDB": {},
                 "regexDB": {},
+                "userRegexDB": {},
+                "allowRegexDB": {},
+                "userAllowRegexDB": {},
                 "feedGroupIndexDB": {},
             }
             # A tld NOT on the ini-loaded allow-list is a real TLD_Allow block --

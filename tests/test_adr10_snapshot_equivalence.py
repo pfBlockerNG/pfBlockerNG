@@ -45,6 +45,8 @@ _CONTAINER_KEYS = frozenset(
         "whiteDB",
         "regexDB",
         "allowRegexDB",
+        "userRegexDB",
+        "userAllowRegexDB",
         "feedGroupIndexDB",
         "hstsDB",
         "psl_rules",
@@ -110,6 +112,8 @@ def _snapshot_from_result(result: P.BuildResult, *, hsts: dict[str, Any] | None 
         white_db=result.white_db,
         regex_db=result.regex_db,
         allow_regex_db=result.allow_regex_db,
+        user_regex_db=result.user_regex_db,
+        user_allow_regex_db=result.user_allow_regex_db,
         feed_group_index_db=result.feed_group_index_db,
         hsts_db=hsts if hsts is not None else {},
         important_rules=result.important_rules,
@@ -134,6 +138,8 @@ def _legacy_containers(result: P.BuildResult, *, hsts: dict[str, Any] | None = N
         "whiteDB": result.white_db,
         "regexDB": result.regex_db,
         "allowRegexDB": result.allow_regex_db,
+        "userRegexDB": result.user_regex_db,
+        "userAllowRegexDB": result.user_allow_regex_db,
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": hsts if hsts is not None else {},
         "psl_rules": result.psl_rules,
@@ -153,6 +159,8 @@ def _cfg(result: P.BuildResult, *, hsts: bool = False) -> dict[str, Any]:
         "whiteDB": bool(result.white_db),
         "regexDB": bool(result.regex_db),
         "allowRegexDB": bool(result.allow_regex_db),
+        "userRegexDB": bool(result.user_regex_db),
+        "userAllowRegexDB": bool(result.user_allow_regex_db),
         "important_rules": result.important_rules,
         "hstsDB": hsts,
         "tld_allow": False,
@@ -163,7 +171,6 @@ def _cfg(result: P.BuildResult, *, hsts: bool = False) -> dict[str, Any]:
         "dnsbl_ipv6": "::1",
         "hsts_tlds": (),
         "regex_warn_ms": P.REGEX_WARN_MS_DEFAULT,
-        "regex_evict_ms": P.REGEX_EVICT_MS_DEFAULT,
     }
 
 
@@ -241,6 +248,8 @@ class TestSnapshotType:
             white_db={},
             regex_db={},
             allow_regex_db={},
+            user_regex_db={},
+            user_allow_regex_db={},
             feed_group_index_db={},
             hsts_db={},
         )
@@ -260,18 +269,22 @@ class TestSnapshotType:
             white_db={"c": 3},
             regex_db={"d": 4},
             allow_regex_db={"e": 5},
+            user_regex_db={"g": 8},
+            user_allow_regex_db={"h": 9},
             feed_group_index_db={0: 6},
             hsts_db={"f": 7},
         )
         containers = snap.containers()
         assert set(containers) == _CONTAINER_KEYS
-        # Each value is the SAME dict object the field holds -- evaluate_domain mutates
-        # regexDB in place (eviction); identity must hold or eviction would target a copy.
+        # Each value is the SAME dict object the field holds: the containers are views of
+        # the snapshot, never copies.
         assert containers["dataDB"] is snap.data_db
         assert containers["zoneDB"] is snap.zone_db
         assert containers["whiteDB"] is snap.white_db
         assert containers["regexDB"] is snap.regex_db
         assert containers["allowRegexDB"] is snap.allow_regex_db
+        assert containers["userRegexDB"] is snap.user_regex_db
+        assert containers["userAllowRegexDB"] is snap.user_allow_regex_db
         assert containers["feedGroupIndexDB"] is snap.feed_group_index_db
         assert containers["hstsDB"] is snap.hsts_db
 

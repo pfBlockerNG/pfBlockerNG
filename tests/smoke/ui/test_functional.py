@@ -1813,10 +1813,10 @@ def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(
 @pytest.mark.parametrize(
     ("bad", "why"),
     [
-        ("(a+)+$", "catastrophic-backtracking shape (nested quantifier)"),
-        ("(unclosed", "malformed (does not compile)"),
+        ("(a+)+$", "outside the bounded grammar (quantified group)"),
+        ("(unclosed", "malformed (unbalanced group)"),
     ],
-    ids=["catastrophic-shape", "malformed"],
+    ids=["unsupported-shape", "malformed"],
 )
 def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
     bad: str,
@@ -1827,8 +1827,8 @@ def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
 ) -> None:
     """A regex entry the resolver would DROP at load is REJECTED at save (issue #1656).
 
-    The DNSBL resolver (``pfb_unbound.py``) silently drops a user regex whose
-    pattern has a catastrophic-backtracking shape (``_regex_is_catastrophic_shape``)
+    The DNSBL resolver (``pfb_unbound.py``) silently drops a user regex that falls
+    outside the bounded admission grammar (``pfb_regex_admission``)
     or that fails ``re.compile``. The save handler mirrors those load-time guards:
     such an entry -> ``$input_errors`` -> the WHOLE save aborts -> the
     ``pfb_regex_list`` node is UNCHANGED (the same hard-abort contract the sibling

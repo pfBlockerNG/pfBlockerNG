@@ -87,6 +87,8 @@ def _cfg_from_result(result: P.BuildResult) -> dict[str, Any]:
         "whiteDB": bool(result.white_db),
         "regexDB": bool(result.regex_db),
         "allowRegexDB": bool(result.allow_regex_db),
+        "userRegexDB": bool(result.user_regex_db),
+        "userAllowRegexDB": bool(result.user_allow_regex_db),
         "important_rules": result.important_rules,
         "hstsDB": False,
         "tld_allow": False,
@@ -106,6 +108,8 @@ def _containers_from_result(result: P.BuildResult) -> dict[str, Any]:
         "whiteDB": result.white_db,
         "regexDB": result.regex_db,
         "allowRegexDB": result.allow_regex_db,
+        "userRegexDB": result.user_regex_db,
+        "userAllowRegexDB": result.user_allow_regex_db,
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": {},
     }

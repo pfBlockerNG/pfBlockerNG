@@ -119,7 +119,7 @@ def test_dnsbl_textarea_save_normalizes_line_endings_and_controls(
       sanitizer, it does NOT treat a bare ``\\r`` as a line break, so a raw
       ``\\r`` stays embedded INSIDE whatever Python "line" it falls in; a
       non-comment line containing an embedded control byte then trips its
-      "contains ASCII control character" rejection and aborts the WHOLE
+      "non-ASCII, space or control character" rejection and aborts the WHOLE
       DNSBL settings save (confirmed empirically: an early draft without the
       leading ``#`` failed with both before/after reading '', i.e. no save
       at all). Prefixing the CR/VT-bearing row with ``#`` sidesteps it: the

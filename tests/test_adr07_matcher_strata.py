@@ -62,6 +62,8 @@ def _cfg(**overrides: Any) -> dict[str, Any]:
         "regexDB": False,
         "whiteDB": False,
         "allowRegexDB": False,
+        "userRegexDB": False,
+        "userAllowRegexDB": False,
         "important_rules": False,
         "python_tld_seg": 2,
         "hstsDB": False,
@@ -69,6 +71,16 @@ def _cfg(**overrides: Any) -> dict[str, Any]:
     }
     base.update(overrides)
     return base
+
+
+def _allow_entry(value: Any) -> dict[str, Any]:
+    """An allow-regex DB value: a pattern string is a plain feed ``@@/re/`` (band 2); a payload
+    dict (``re``, ``important``, ``band``) is used as given."""
+    import re
+
+    if isinstance(value, str):
+        return {"re": re.compile(value), "important": False, "band": PRIO_FEED_ALLOW}
+    return value
 
 
 def _containers(**overrides: Any) -> dict[str, Any]:
@@ -79,6 +91,8 @@ def _containers(**overrides: Any) -> dict[str, Any]:
         "hstsDB": {},
         "regexDB": defaultdict(str),
         "allowRegexDB": defaultdict(str),
+        "userRegexDB": defaultdict(str),
+        "userAllowRegexDB": defaultdict(str),
         "feedGroupIndexDB": defaultdict(list),
     }
     base.update(overrides)
@@ -86,7 +100,7 @@ def _containers(**overrides: Any) -> dict[str, Any]:
 
 
 def _data(important: bool = False, log: str = "1", index: int = 0) -> dict[str, Any]:
-    return {"log": log, "index": index, "important": important}
+    return {"log": log, "index": index, "important": important, "band": _block_priority(important)}
 
 
 # --------------------------------------------------------------------------- #
@@ -194,12 +208,11 @@ class TestFastPathPreserved:
 
     def test_fast_path_does_not_consult_allow_regex(self) -> None:
         # allowRegexDB is a numeric-branch-only structure; the fast path never reads it.
-        import re
 
         cfg = _cfg(dataDB=True, allowRegexDB=True)  # important_rules False
         containers = _containers(
             dataDB={"evil.com": _data()},
-            allowRegexDB={"r": re.compile(r"evil")},
+            allowRegexDB={"r": _allow_entry("evil")},
         )
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
         # Fast path: no whiteDB hit -> blocked, allow-regex ignored.
@@ -213,7 +226,6 @@ class TestFastPathPreserved:
 # --------------------------------------------------------------------------- #
 class TestNumericBandResolution:
     def _decide(self, block_important: bool, white_db: dict, allow_regex_db: dict) -> bool:
-        import re
 
         cfg = _cfg(
             dataDB=True,
@@ -221,7 +233,7 @@ class TestNumericBandResolution:
             allowRegexDB=bool(allow_regex_db),
             important_rules=True,
         )
-        compiled = {k: (re.compile(v) if isinstance(v, str) else v) for k, v in allow_regex_db.items()}
+        compiled = {k: _allow_entry(v) for k, v in allow_regex_db.items()}
         containers = _containers(
             dataDB={"evil.com": _data(important=block_important)},
             whiteDB=white_db,
@@ -250,7 +262,7 @@ class TestNumericBandResolution:
     def test_b4_important_feed_allow_beats_b3_important_block(self) -> None:
         import re
 
-        ar = {"r": {"re": re.compile(r"evil"), "important": True}}
+        ar = {"r": {"re": re.compile(r"evil"), "important": True, "band": PRIO_FEED_ALLOW_IMPORTANT}}
         assert self._decide(True, {}, ar) is True
 
     # band 3 feed block+important vs band 6 user allow -> allow wins (sovereignty)
@@ -293,7 +305,6 @@ class TestTldAllowNumericBand:
     """
 
     def _decide(self, tld: str, allow_regex_db: dict) -> Any:
-        import re
 
         cfg = _cfg(
             tld_allow=True,
@@ -301,7 +312,7 @@ class TestTldAllowNumericBand:
             allowRegexDB=bool(allow_regex_db),
             important_rules=True,
         )
-        compiled = {k: (re.compile(v) if isinstance(v, str) else v) for k, v in allow_regex_db.items()}
+        compiled = {k: _allow_entry(v) for k, v in allow_regex_db.items()}
         containers = _containers(allowRegexDB=compiled)
         return evaluate_domain(f"host.{tld}", f"host.{tld}", tld, False, cfg, containers)
 
@@ -332,8 +343,8 @@ class TestUserRegexSovereign:
     @@$important band 4) but still loses to the user whitelist (band 6).
 
     Pins the ADR-07 fix where the init loads a user ``pfb_regex_list`` pattern as the
-    ``{"re","important","band": PRIO_USER_BLOCK}`` payload (not a bare compiled pattern,
-    which ``_block_entry_band`` would score at feed band 1 and a feed @@ would override).
+    ``{"re","important","band": PRIO_USER_BLOCK}`` payload (band 5, which a feed @@ cannot
+    override).
     """
 
     def _decide(self, *, white_db: dict, allow_regex_db: dict) -> bool:
@@ -345,7 +356,7 @@ class TestUserRegexSovereign:
             allowRegexDB=bool(allow_regex_db),
             important_rules=True,
         )
-        compiled = {k: (re.compile(v) if isinstance(v, str) else v) for k, v in allow_regex_db.items()}
+        compiled = {k: _allow_entry(v) for k, v in allow_regex_db.items()}
         user_regex = {"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_USER_BLOCK}}
         containers = _containers(regexDB=user_regex, whiteDB=white_db, allowRegexDB=compiled)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
@@ -362,7 +373,7 @@ class TestUserRegexSovereign:
         # band 5 user regex vs band 4 feed @@...$important -> block stands (5 > 4).
         import re
 
-        ar = {"r": {"re": re.compile(r"evil"), "important": True}}
+        ar = {"r": {"re": re.compile(r"evil"), "important": True, "band": PRIO_FEED_ALLOW_IMPORTANT}}
         assert self._decide(white_db={}, allow_regex_db=ar) is False
 
     def test_user_regex_beats_feed_domain_allow(self) -> None:
@@ -487,10 +498,10 @@ class TestNumericBranchUnreachableInProduction:
 # --------------------------------------------------------------------------- #
 class TestWidenedPayloadCompat:
     def test_payload_without_important_key_still_works(self) -> None:
-        # Existing seeds (add_data/add_zone, the ADR-06 oracle) omit the important key;
-        # the matcher must default it to False via .get and decide as today.
+        # Existing seeds (add_data/add_zone, the ADR-06 oracle) omit the important key; the
+        # matcher decides from the band alone.
         cfg = _cfg(dataDB=True)
-        containers = _containers(dataDB={"evil.com": {"log": "1", "index": 0}})  # no "important"
+        containers = _containers(dataDB={"evil.com": {"log": "1", "index": 0, "band": PRIO_FEED_BLOCK}})
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
         assert dec.is_found is True and dec.null_blocking is False
 
@@ -498,7 +509,7 @@ class TestWidenedPayloadCompat:
     def test_zone_payload_important_field_carried(self, important: bool) -> None:
         cfg = _cfg(zoneDB=True, whiteDB=True, allowRegexDB=True, important_rules=True)
         containers = _containers(
-            zoneDB={"evil.com": {"log": "1", "index": 0, "important": important}},
+            zoneDB={"evil.com": {"log": "1", "index": 0, "important": important, "band": _block_priority(important)}},
             allowRegexDB={},
             whiteDB={},
         )

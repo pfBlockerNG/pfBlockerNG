@@ -9,7 +9,7 @@ smoke harness and are tracked as later passes).
 
 Every test names the branch it covers; trivial branch pins stay plain (intent-named
 assertion), and the few non-trivial transitions (numeric re-attribution, $badfilter
-user-immunity, regex warn/evict) carry a Given/When/Then so the behaviour -- not the
+user-immunity, regex warn) carry a Given/When/Then so the behaviour -- not the
 mechanics -- is on record. These ASSERT the outcome, never merely execute the line.
 """
 
@@ -30,7 +30,6 @@ from pfb_unbound import (
     PRIO_FEED_BLOCK,
     PRIO_FEED_BLOCK_IMPORTANT,
     PRIO_USER_ALLOW,
-    REGEX_EVICT_MS_DEFAULT,
     REGEX_WARN_MS_DEFAULT,
     RULE_PROV_FEED,
     RULE_PROV_USER,
@@ -47,8 +46,8 @@ from pfb_unbound import (
     _dnsbl_reduce_regex,
     _dnsbl_strip_hosts_prefix,
     _idn_dual_form,
-    _regex_should_evict,
     _regex_timed_search,
+    _regex_warn_slow,
     _scan_allow_regex_band,
     _scan_block_band,
     build,
@@ -127,7 +126,6 @@ def _install_clock(monkeypatch: Any, elapsed_ms_per_match: list[float]) -> None:
 
 def _reset_regex_runtime_state() -> None:
     pfb_unbound._regex_warned.clear()
-    pfb_unbound._regex_perf_strikes.clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -272,33 +270,34 @@ class TestNormaliseWhitelistBlanks:
 
 
 # --------------------------------------------------------------------------- #
-# _regex_should_evict -- warn-band re-warn skip + perf-counter fallback warn-band
+# _regex_warn_slow -- the rate-limited warn branch (a slow rule is never removed)
 # --------------------------------------------------------------------------- #
-class TestRegexShouldEvictBranches:
-    def test_warn_band_warns_once_then_skips_rewarn(self) -> None:
+class TestRegexWarnSlowBranches:
+    def test_warn_band_warns_once_then_skips_rewarn(self, capsys: Any) -> None:
         """
-        Given a pattern matching twice in the WARN band (over warn, under evict),
-        When _regex_should_evict is called for each hit,
-        Then it warns on the first (recording the name) and SKIPS the re-warn on the
-          second -- neither evicts. Pins the rate-limited warn branch (both sides).
+        Given a pattern matching twice over the warn ceiling,
+        When _regex_warn_slow is called for each hit,
+        Then it warns on the first and SKIPS the re-warn on the second. Pins the rate-limited
+          warn branch (both sides).
         """
         _reset_regex_runtime_state()
-        # thread_time present -> single-strike semantics; 50ms is between warn(10)/evict(100).
-        first = _regex_should_evict("RX", 50.0, REGEX_WARN_MS_DEFAULT, REGEX_EVICT_MS_DEFAULT, "DNSBL_Regex", "RX")
-        assert first is False
-        assert "RX" in pfb_unbound._regex_warned
-        second = _regex_should_evict("RX", 50.0, REGEX_WARN_MS_DEFAULT, REGEX_EVICT_MS_DEFAULT, "DNSBL_Regex", "RX")
-        assert second is False  # already warned -> no re-warn, still not evicted
+        assert _regex_warn_slow("RX", 50.0, REGEX_WARN_MS_DEFAULT, "DNSBL_Regex") is None
+        first_err = capsys.readouterr().err
+        assert first_err.count("slow DNSBL_Regex regex [ RX ]") == 1, first_err
+        assert _regex_warn_slow("RX", 50.0, REGEX_WARN_MS_DEFAULT, "DNSBL_Regex") is None
+        assert capsys.readouterr().err == ""  # already warned -> no re-warn
 
-    def test_perf_fallback_warn_band_clears_strikes(self, monkeypatch: Any) -> None:
-        # perf_counter fallback + a warn-band match clears any accumulated strike streak
-        # (the !thread_time arm inside the warn band).
+    def test_a_match_at_or_under_the_warn_ceiling_is_silent(self, capsys: Any) -> None:
         _reset_regex_runtime_state()
-        monkeypatch.setattr(pfb_unbound, "_REGEX_HAVE_THREAD_TIME", False)
-        pfb_unbound._regex_perf_strikes["RX"] = 1
-        out = _regex_should_evict("RX", 50.0, REGEX_WARN_MS_DEFAULT, REGEX_EVICT_MS_DEFAULT, "DNSBL_Regex", "RX")
-        assert out is False
-        assert "RX" not in pfb_unbound._regex_perf_strikes
+        assert _regex_warn_slow("RX", REGEX_WARN_MS_DEFAULT, REGEX_WARN_MS_DEFAULT, "DNSBL_Regex") is None
+        assert pfb_unbound._regex_warned == set()
+        assert capsys.readouterr().err == ""
+
+    def test_the_warning_names_the_list_rule_and_both_times(self, capsys: Any) -> None:
+        _reset_regex_runtime_state()
+        _regex_warn_slow("RX#7", 123.4, 10.0, "DNSBL_AllowRegex")
+        err = capsys.readouterr().err
+        assert err == "[pfBlockerNG]: slow DNSBL_AllowRegex regex [ RX#7 ] took 123.4 ms (warn ceiling 10.0 ms)\n", err
 
 
 class TestRegexTimedSearchFallback:
@@ -312,7 +311,7 @@ class TestRegexTimedSearchFallback:
 
 
 # --------------------------------------------------------------------------- #
-# _scan_block_band -- max-band zone selection + numeric block-regex eviction
+# _scan_block_band -- max-band zone selection + numeric block-regex matching
 # --------------------------------------------------------------------------- #
 class TestScanBlockBand:
     def test_deeper_zone_lower_band_does_not_lower_best(self) -> None:
@@ -322,37 +321,40 @@ class TestScanBlockBand:
         When _scan_block_band walks the suffixes (specific -> general),
         Then the higher band wins and the later, lower-band suffix does NOT replace it.
         """
-        cfg: dict[str, Any] = {"dataDB": False, "zoneDB": True, "regexDB": False}
+        cfg: dict[str, Any] = {"dataDB": False, "zoneDB": True, "regexDB": False, "userRegexDB": False}
         zone_db = {
             "evil.com": {"log": "1", "index": 0, "important": True, "band": PRIO_FEED_BLOCK_IMPORTANT},
             "com": {"log": "1", "index": 1, "important": False, "band": PRIO_FEED_BLOCK},
         }
-        band, meta = _scan_block_band("x.evil.com", cfg, {}, zone_db, {})
+        band, meta = _scan_block_band("x.evil.com", cfg, {}, zone_db, {}, {})
         assert band == PRIO_FEED_BLOCK_IMPORTANT
         assert meta is not None and meta["kind"] == "zone" and meta["matched"] == "evil.com"
 
-    def test_numeric_block_regex_over_evict_is_evicted(self, monkeypatch: Any) -> None:
-        # A block-regex match over the evict ceiling is collected and popped AFTER the
-        # scan; nothing then matches -> (0, None) and the live regexDB is emptied.
+    def test_numeric_block_regex_over_the_old_evict_ceiling_is_kept_and_matches(self, monkeypatch: Any) -> None:
+        # A block-regex match measured at 300 ms (over the warn ceiling, and over the
+        # old 100 ms evict ceiling) is warned about but the rule stays: it counts as a
+        # match and is still in the live regexDB for the next scan.
         _reset_regex_runtime_state()
-        _install_clock(monkeypatch, [300.0])  # one match, 300ms > evict(100)
-        regex_db: dict[str, Any] = {"RX": re.compile(r"evil")}
+        _install_clock(monkeypatch, [300.0, 300.0])
+        regex_db: dict[str, Any] = {"RX": {"re": re.compile(r"evil"), "important": False, "band": PRIO_FEED_BLOCK}}
         cfg: dict[str, Any] = {
             "dataDB": False,
             "zoneDB": False,
             "regexDB": True,
+            "userRegexDB": False,
             "regex_warn_ms": REGEX_WARN_MS_DEFAULT,
-            "regex_evict_ms": REGEX_EVICT_MS_DEFAULT,
         }
-        band, meta = _scan_block_band("evil.com", cfg, {}, {}, regex_db)
-        assert (band, meta) == (0, None)
-        assert "RX" not in regex_db  # evicted from the live DB
+        first = _scan_block_band("evil.com", cfg, {}, {}, regex_db, {})
+        second = _scan_block_band("evil.com", cfg, {}, {}, regex_db, {})
+        assert first == second == (PRIO_FEED_BLOCK, {"kind": "regex", "key": "RX"})
+        assert "RX" in regex_db
 
 
 class TestScanAllowRegexBand:
     def test_empty_q_name_returns_zero(self) -> None:
         # The empty-name guard: no allow-regex is evaluated for a blank query.
-        assert _scan_allow_regex_band("", {"R": re.compile(r"x")}) == 0
+        regex_db = {"R": {"re": re.compile(r"x"), "important": False, "band": PRIO_FEED_ALLOW}}
+        assert _scan_allow_regex_band("", regex_db, {}) == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -400,12 +402,13 @@ class TestEvaluateDomainNumericDataReattribution:
             "regexDB": True,
             "whiteDB": False,
             "allowRegexDB": False,
+            "userRegexDB": False,
+            "userAllowRegexDB": False,
             "important_rules": True,
             "python_tld_seg": 2,
             "hstsDB": False,
             "hsts_tlds": (),
             "regex_warn_ms": REGEX_WARN_MS_DEFAULT,
-            "regex_evict_ms": REGEX_EVICT_MS_DEFAULT,
         }
         containers: dict[str, Any] = {
             "dataDB": {q: {"log": "1", "index": 0, "important": True, "band": PRIO_FEED_BLOCK_IMPORTANT}},
@@ -413,6 +416,8 @@ class TestEvaluateDomainNumericDataReattribution:
             "whiteDB": {},
             "regexDB": {"RXFEED": {"re": re.compile(r"^evil\.com$"), "important": False, "band": PRIO_FEED_BLOCK}},
             "allowRegexDB": {},
+            "userRegexDB": {},
+            "userAllowRegexDB": {},
             "feedGroupIndexDB": {0: {"feed": "DataFeed", "group": "DataGroup"}},
             "hstsDB": {},
         }

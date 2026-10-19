@@ -15,12 +15,12 @@ def test_extra_hash_in_description_is_not_part_of_regex_name(tmp_path: Path, mon
 
     try:
         _initial_load(tmp_path, monkeypatch, _ini(encoded))
-        assert set(P.regexDB) == {"foo"}
-        assert P.regexDB["foo"]["re"].pattern == "alpha"
+        assert set(P.userRegexDB) == {"foo"}
+        assert P.userRegexDB["foo"]["re"].pattern == "alpha"
 
         swapped = P._build_swap_snapshot()
         assert swapped is not None
-        assert set(swapped.regex_db) == {"foo"}
-        assert swapped.regex_db["foo"]["re"].pattern == "alpha"
+        assert set(swapped.user_regex_db) == {"foo"}
+        assert swapped.user_regex_db["foo"]["re"].pattern == "alpha"
     finally:
         P.deinit(0)

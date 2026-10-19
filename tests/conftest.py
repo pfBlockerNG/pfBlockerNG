@@ -89,7 +89,6 @@ def reset_pfb_globals() -> None:
         "important_rules": False,
         "regex_cap": False,
         "regex_warn_ms": pfb_unbound.REGEX_WARN_MS_DEFAULT,
-        "regex_evict_ms": pfb_unbound.REGEX_EVICT_MS_DEFAULT,
         "whiteDB": False,
         "hstsDB": False,
         "gpListDB": False,
@@ -134,13 +133,16 @@ def reset_pfb_globals() -> None:
     pfb_unbound.feedGroupIndexDB = defaultdict(list)
     pfb_unbound.regexDB = defaultdict(str)
     pfb_unbound.allowRegexDB = defaultdict(str)
-    # ADR-07 P7: reset the per-pattern warn rate-limit + perf-fallback strike state so
-    # each test starts with a clean runtime warn/evict bookkeeping.
+    pfb_unbound.userRegexDB = defaultdict(str)
+    pfb_unbound.userAllowRegexDB = defaultdict(str)
+    # ADR-07 P7: reset the per-pattern warn rate-limit so each test starts with a clean
+    # runtime warn bookkeeping.
     pfb_unbound._regex_warned.clear()
-    pfb_unbound._regex_perf_strikes.clear()
     # Reset the literal-prefilter index caches so each test starts with a clean index.
     pfb_unbound._block_regex_index = None
     pfb_unbound._allow_regex_index = None
+    pfb_unbound._user_block_regex_index = None
+    pfb_unbound._user_allow_regex_index = None
     pfb_unbound.whiteDB = defaultdict(str)
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)
@@ -160,6 +162,8 @@ def reset_pfb_globals() -> None:
         white_db=pfb_unbound.whiteDB,
         regex_db=pfb_unbound.regexDB,
         allow_regex_db=pfb_unbound.allowRegexDB,
+        user_regex_db=pfb_unbound.userRegexDB,
+        user_allow_regex_db=pfb_unbound.userAllowRegexDB,
         feed_group_index_db=pfb_unbound.feedGroupIndexDB,
         hsts_db=pfb_unbound.hstsDB,
         important_rules=False,

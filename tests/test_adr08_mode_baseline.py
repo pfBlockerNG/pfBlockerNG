@@ -67,6 +67,9 @@ def _make_cfg(**overrides: Any) -> dict:
         "dnsbl_ipv4": "10.10.10.1",
         "dnsbl_ipv6": "::1",
         "regexDB": False,
+        "userRegexDB": False,
+        "allowRegexDB": False,
+        "userAllowRegexDB": False,
         "whiteDB": False,
         "python_tld_seg": 2,
         "hstsDB": False,
@@ -83,6 +86,9 @@ def _make_containers() -> dict:
         "whiteDB": {},
         "hstsDB": {},
         "regexDB": defaultdict(str),
+        "userRegexDB": defaultdict(str),
+        "allowRegexDB": defaultdict(str),
+        "userAllowRegexDB": defaultdict(str),
         "feedGroupIndexDB": defaultdict(list),
     }
 

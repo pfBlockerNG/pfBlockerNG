@@ -108,12 +108,14 @@ def test_init_standard_reports_duration_and_the_exact_loaded_total(tmp_path: Pat
     assert data_len, "fixture built no dataDB rows; the count assertion below would be vacuous"
     assert zone_len, "fixture built no zoneDB rows; dropping the zoneDB term would go unnoticed"
     assert data_len != zone_len, "equal halves make a swapped/duplicated term invisible"
-    assert len(pfb_unbound.regexDB), "fixture loaded no user regex; the regex term would be vacuous"
+    assert len(pfb_unbound.userRegexDB), "fixture loaded no user regex; the regex term would be vacuous"
     assert len(pfb_unbound.whiteDB), "fixture loaded no whitelist; the whitelist term would be vacuous"
     assert len(pfb_unbound.allowRegexDB), "fixture loaded no allow-regex; half the regex term would be vacuous"
 
     # Each structure is asserted against its own live length, so no term can be
     # dropped, swapped or folded into another without changing the line.
     assert int(match.group(2)) == data_len + zone_len
-    assert int(match.group(3)) == len(pfb_unbound.regexDB) + len(pfb_unbound.allowRegexDB)
+    regex_len = len(pfb_unbound.regexDB) + len(pfb_unbound.allowRegexDB)
+    regex_len += len(pfb_unbound.userRegexDB) + len(pfb_unbound.userAllowRegexDB)
+    assert int(match.group(3)) == regex_len
     assert int(match.group(4)) == len(pfb_unbound.whiteDB)

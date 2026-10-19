@@ -1,8 +1,9 @@
 """pfb_dnsbl_regex_rules.py -- DNSBL regex admission rules (issue #1765 / #1711).
 
 Single source of the pure static predicates that decide whether a DNSBL regex
-pattern is admitted: the catastrophic-shape gate, the complexity-budget
-backstop, the opt-in length cap, and the pattern/description line-splitter.
+pattern is admitted: the bounded-grammar admission gate (an allowlist of
+constructs plus a static cost bound), the text a pattern is compiled from, the
+log excerpt, the opt-in length cap, and the pattern/description line-splitter.
 Two consumers share this ONE module instead of duplicating the literals:
 
   - pfb_unbound.py imports it at load (Unbound's pythonmod loader `chdir()`s
@@ -10,6 +11,10 @@ Two consumers share this ONE module instead of duplicating the literals:
     pfb_unbound.py, so a plain module-scope import resolves).
   - pfblockerng_extra.inc's pfb_dnsbl_regex_validation_errors() runs it
     standalone as the save-time probe (this file's ``main()``).
+
+The admission gate reads the pattern text once, left to right, with an explicit
+stack. It never compiles, matches or otherwise executes pattern text, so judging
+a pattern costs time linear in its (capped) length however hostile it is.
 
 Stdlib only, no ``unboundmodule`` reference at module scope or in any
 function here -- import-safe standalone in a plain interpreter.
@@ -19,17 +24,16 @@ Probe usage:
     /usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py [1]
   argv[1] == "1" enables the opt-in length cap (absent argv -> cap off).
   Reads regex-list lines from stdin; each rejected line is reported on
-  stderr as ``line <n>: <pattern!r>: <message>``. Exits 1 if any line
+  stderr as ``line <n>: <excerpt>: <message>``. Exits 1 if any line
   failed, else 0.
 """
 
 from __future__ import annotations
 
 import re
-import string
 import sys
 import warnings
-from functools import lru_cache
+from dataclasses import dataclass, field
 
 # Length ceiling (heuristic): a pattern over this many characters is dropped
 # at load ONLY when the opt-in "Limit long/complex regex" setting is enabled.
@@ -37,454 +41,421 @@ from functools import lru_cache
 # pattern is not inherently pathological -- so it stays behind the flag.
 REGEX_STATIC_LEN_CAP = 200
 
-# A quantified group that itself sits inside a quantifier: (a+)+, (a*)*, (\w+\.)+,
-# ([a-z]+)*, (.*a){20}. Measured to catch 1/1 catastrophic patterns in
-# the corpus with no false-negatives and no false-positives on the cap-passing set.
-_REGEX_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
+# Admission bounds, always on. A pattern is matched against names of at most 253
+# characters; the bounds below keep the matcher's work on one name within a fixed budget
+# of backtracking steps.
+REGEX_PATTERN_MAX_LEN = 256  # refused on length alone, before any scan
+REGEX_REPEAT_MAX = 255  # largest m and n in {m}, {m,n}, {m,}
+REGEX_GROUP_DEPTH_MAX = 8  # deepest nesting of ( ... )
+REGEX_COST_MAX = 1 << 18  # largest admitted bound on backtracking steps (search-tree nodes)
+# Largest sum, over the bracket classes of one pattern, of the ASCII characters each class
+# lists, counted before any `^` negation and after case folding (`[a-z]` lists 52). It bounds
+# compile time for wide classes (a pattern 4600 wide took about 5.5 ms). It does not bound the
+# IGNORECASE case-fold cost of `s`/`i` in a class (about 0.16 ms per class): a 1000-rule list of
+# `[sx]`-heavy rules compiled in about 10 s on a desktop CPU, against about 0.2 s for typical
+# hostname rules. That is load time only; matching is unaffected. `re.ASCII` would remove it but
+# changes verdicts on the Latin-1 CNAME targets `convert_other()` decodes, so it is not used.
+REGEX_CLASS_WIDTH_MAX = 256
+# Attempts of one unbounded quantifier (*, +, {m,}), and of an unanchored search (it
+# starts a match at every position of the name).
+REGEX_COST_UNBOUNDED = 256
 
-# Alternation-overlap: a quantified group whose body contains an alternation `|`,
-# e.g. (a|a)+, (a|ab)*, (foo|foobar)+. Overlapping/ambiguous alternatives under a
-# quantifier backtrack catastrophically just like a nested quantifier, yet the
-# nested-quantifier shape above does not catch them (no inner quantifier). Kept
-# conservative: a single `(...)` (no inner parens) with a `|`, then a quantifier.
-_REGEX_ALTERNATION_OVERLAP = re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]")
+# Cost saturates here so a refusal reason stays short.
+_COST_SATURATION = 1 << 64
+_EXCERPT_CHARS = 32
+_QUANTIFIER_START = ("?", "*", "+", "{")
+_SET_OPERATION_CHARS = "-&~|"
+_OPTIONAL = (0, 1)
 
-# Multi-group adjacent quantified groups: (a+)(a+)+, (a+)(b+)*, (...)(...)+ -- two
-# back-to-back groups where the SECOND carries a trailing quantifier. The first
-# group's unbounded body and the quantified second group share input, so the engine
-# explores an exponential partition of the matched span. The single-group
-# _REGEX_NESTED_QUANTIFIER above misses this (the outer quantifier sits on a sibling
-# group, not the enclosing one). Each group body is paren-free (kept conservative).
-_REGEX_ADJACENT_GROUP_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]")
+# (minimum, maximum) repeat count; maximum None = unbounded.
+_Quantifier = tuple[int, int | None]
 
-# Stacked bounded repeats: a{1000}{1000}, (x){500}{500}, [a-z]{50}{50} -- a `{m}`/`{m,n}`
-# repeat immediately followed by another `{...}`. Python's re multiplies the bounds, so a
-# pair of large counts is a polynomial/exponential blow-up with a tiny source string. A
-# group/atom (optionally already quantified) then two consecutive brace quantifiers.
-_REGEX_STACKED_BOUNDED_REPEAT = re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}")
+# Character sets of single-character atoms, as bit sets: bits 0-127 are the ASCII
+# characters and bit 128 is one pseudo-member standing for every non-ASCII character (`re` reads `\d` and
+# `\w` as Unicode, so they carry it like `.` and the negated escapes).
+# Two atoms are disjoint when their sets share no bit. Sets are case-folded (a letter in
+# a set adds its other case) because every pattern is compiled with IGNORECASE.
+_ASCII = (1 << 128) - 1
+_NONASCII = 1 << 128
+_UPPER = ((1 << 26) - 1) << 65
+_LOWER = ((1 << 26) - 1) << 97
+_DIGITS = sum(1 << code for code in range(128) if chr(code).isdecimal())
+_WORD = sum(1 << code for code in range(128) if chr(code).isalnum() or chr(code) == "_")
+_SPACE = sum(1 << code for code in range(128) if chr(code).isspace())
+_DOT = (_ASCII & ~(1 << ord("\n"))) | _NONASCII
+_CLASS_ESCAPES = {
+    "d": _DIGITS | _NONASCII,
+    "D": (_ASCII & ~_DIGITS) | _NONASCII,
+    "w": _WORD | _NONASCII,
+    "W": (_ASCII & ~_WORD) | _NONASCII,
+    "s": _SPACE | _NONASCII,
+    "S": (_ASCII & ~_SPACE) | _NONASCII,
+}
 
-# Adjacent unbounded quantifiers over OVERLAPPING atoms, grouped or not: [a-z]+[a-z]+[a-z]+,
-# ([a-z]+)([a-z]+)([a-z]+), \w+\w+\w+, a{2,}a{2,}a{2,}. Each atom can cede characters to its
-# neighbour, so a failing tail walks a partition of the matched span -- the mechanism the
-# group-keyed shapes above already cover, minus the parentheses they all key on. Measured
-# against a 253-character name (the longest the matcher can be handed): a run of 3 costs
-# 7 ms and a run of 4 costs 462 ms, versus 0.08 ms for a run of 2 -- so a pair stays
-# admitted (a pair is what real host patterns use). A mandatory atom whose character set
-# overlaps the run is NOT a boundary (issue #2082): its position floats inside the span,
-# so `[a-z]+[a-z]+a[a-z]+[a-z]+` multiplies through the `a` (1533 ms measured) -- such an
-# atom bridges the chain while breaking pair-adjacency, and a chain is rejected once it
-# carries more than this many quantifiers AND at least one back-to-back pair (single
-# quantifiers between floating separators stay admitted: 5.8 ms worst-case measured).
-_REGEX_ADJACENT_ATOM_MAX = 2
-
-# Ceiling for chains connected ONLY by floating separators (no back-to-back pair): they
-# blow up one quantifier later. Measured at 253 characters (CI image): 3 quantifiers cost
-# 23 ms (the runtime warn layer's accepted residual; rejecting 3 would drop the admitted
-# single-gap shapes above) while 4 cost 1753 ms, far over the 100 ms evict ceiling.
-_REGEX_CHAIN_ATOM_MAX = 3
-
-# Character sets are compared by probing both atoms with one character at a time: this
-# alphabet only has to be big enough to separate the classes a domain pattern is written
-# over (letters, digits, punctuation, whitespace, non-ASCII word characters).
-_REGEX_OVERLAP_ALPHABET = string.printable + "é"
-
-_REGEX_REPEAT = re.compile(r"\{(?P<min>\d+)(?P<comma>,?)(?P<max>\d*)\}")
-
-# How deep the scan follows lookarounds nested inside lookarounds. Real patterns never nest
-# more than one or two; the bound only stops a hostile line from exhausting the stack.
-_REGEX_NESTED_SCAN_MAX = 8
-
-# Complexity-budget backstop: cap the combined count of unbounded quantifiers (`+`/`*`,
-# unescaped) and alternations (`|`, unescaped) in one pattern. The structural regexes
-# above catch KNOWN bad shapes; this catches novel compositions of many quantifiers /
-# alternatives that together create a large backtracking surface even when no single
-# pair matches a structural template. The threshold (12) is generous: realistic ABP/DNS
-# feed regex carries a handful of anchors + one or two trailing quantifiers (a domain
-# pattern like `^(.+\.)?ads?[0-9]*\.example\.(com|net|org)$` counts ~5), so 12 clears
-# every benign pattern in the corpus while still bounding adversarial stacking.
-_REGEX_BUDGET_MAX = 12
-_REGEX_UNBOUNDED_QUANTIFIER = re.compile(r"(?<!\\)[+*]")
-_REGEX_ALTERNATION = re.compile(r"(?<!\\)\|")
-
-# The four regex-matched structural shapes, tried in the order above (the adjacent-atom
-# run below needs a scan rather than a pattern, so it is a predicate of its own).
-_REGEX_SHAPE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    _REGEX_NESTED_QUANTIFIER,
-    _REGEX_ALTERNATION_OVERLAP,
-    _REGEX_ADJACENT_GROUP_QUANTIFIER,
-    _REGEX_STACKED_BOUNDED_REPEAT,
-)
+# Item kinds of a branch.
+_ZERO = 0
+_ATOM = 1
+_GROUP = 2
 
 
-def _regex_atom_end(pattern: str, index: int) -> int:
-    """End offset of the single-character atom starting at ``index`` -- a character class,
-    an escape, ``.``, or a literal. An unterminated class swallows the rest of the string."""
-    character = pattern[index]
-    if character == "\\":
-        marker = pattern[index + 1 : index + 2]
-        width = {"x": 2, "u": 4, "U": 8}.get(marker, 0)
-        if width:
-            end = index + 2 + width
-            if end <= len(pattern) and all(digit in string.hexdigits for digit in pattern[index + 2 : end]):
-                return end
-        # `\N{NAME}` is one atom; lowercase `\n{2,}` is a newline carrying a REPEAT.
-        elif marker == "N" and pattern[index + 2 : index + 3] == "{":
-            closing = pattern.find("}", index + 3)
-            if closing != -1:
-                return closing + 1
-        return min(index + 2, len(pattern))
-    if character != "[":
-        return index + 1
-    end = index + 1
-    if pattern[end : end + 1] == "^":
-        end += 1
-    if pattern[end : end + 1] == "]":
-        end += 1
-    while end < len(pattern):
-        if pattern[end] == "\\":
-            end += 2
-            continue
-        if pattern[end] == "]":
-            return end + 1
-        end += 1
-    return len(pattern)
+def _fold(members: int) -> int:
+    """``members`` with the other case of every letter in it added."""
+    return members | ((members & _UPPER) << 32) | ((members & _LOWER) >> 32)
 
 
-def _regex_quantifier(pattern: str, index: int) -> tuple[int, str]:
-    """Classify the quantifier at ``index`` as ``(end offset, role in a run)``:
-
-    "run"    -- backtracking and unbounded (`+`, `*`, `{m,}`, lazy forms): extends a run.
-    "bridge" -- can match nothing (`?`, `{0,n}`): cannot separate its neighbours, so it
-                neither extends nor ends a run.
-    "break"  -- absent, fixed (`{m}`, `{m,n}`), or possessive: ends the run. A possessive
-                quantifier never gives characters back, so it cannot partition a span.
-    """
-    end = index
-    unbounded = True
-    if pattern[index : index + 1] in ("+", "*"):
-        end = index + 1
-        optional = pattern[index] == "*"
-    elif pattern[index : index + 1] == "{":
-        repeat = _REGEX_REPEAT.match(pattern, index)
-        if repeat is None:
-            return index, "break"
-        end = repeat.end()
-        unbounded = repeat.group("max") == "" and repeat.group("comma") == ","
-        optional = repeat.group("min") == "0"
-    elif pattern[index : index + 1] == "?":
-        end = index + 1
-        unbounded = False
-        optional = True
-    else:
-        return index, "break"
-    modifier = pattern[end : end + 1]
-    if modifier == "+":  # possessive
-        return end + 1, "bridge" if optional else "break"
-    if modifier == "?":  # lazy
-        end += 1
-    return end, "run" if unbounded else ("bridge" if optional else "break")
+class _Refusal(Exception):
+    """A pattern outside the grammar; the message is the short fixed reason."""
 
 
-def _regex_group_metadata(pattern: str) -> tuple[dict[int, int], set[int]]:
-    """Map group ends and the groups owning each top-level alternation in one pass."""
-    stack: list[int] = []
-    ends: dict[int, int] = {}
-    alternates: set[int] = set()
-    index = 0
+@dataclass(slots=True)
+class _Item:
+    """One element of a branch: an atom, a zero-width token or a group."""
+
+    kind: int
+    members: int = 0  # atom: the characters it matches
+    quantified: bool = False
+    low: int = 1  # repeat count, minimum
+    high: int | None = 1  # repeat count, maximum; None = unbounded
+    dollar: bool = False  # zero-width: a `$`
+    nodes: int = 0  # group: search-tree nodes of its body
+    out: int = 1  # group: ways its body can have been walked when it ends
+    length: int = 0  # group: atoms in its body (a plain run when the group is repeated)
+
+
+@dataclass(slots=True)
+class _Frame:
+    """One alternation level: the whole pattern (``top``) or the body of one open group."""
+
+    top: bool
+    items: list[_Item] = field(default_factory=list)  # the current branch
+    nodes: int = 0  # search-tree nodes of the finished branches, summed
+    out: int = 0  # ways the finished branches can end, summed
+    atoms: int = 0  # atoms in the body (all branches)
+    simple: bool = True  # body is only plain atoms: no quantifier, group, `|` or zero-width
+    unanchored: int = 0  # finished branches that did not begin with `^` or a leading `.*` / `.+`
+    branch_anchored: bool = False  # the current branch began with `^` (or a leading `.*` / `.+`)
+    dot_runs: list[tuple[int, int]] = field(default_factory=list)  # top level: offsets of each leading dot run
+
+    def end_branch(self) -> None:
+        nodes, out = _branch_cost(self.items, self.top)
+        self.nodes = min(self.nodes + nodes, _COST_SATURATION)
+        self.out = min(self.out + out, _COST_SATURATION)
+        self.unanchored += int(not self.branch_anchored)
+        self.items = []
+        self.branch_anchored = False
+
+
+def _escape(pattern: str, index: int) -> tuple[str, int]:
+    """Classify the escape at ``index`` as (``class`` | ``zero`` | ``literal``, next index)."""
+    if index + 1 >= len(pattern):
+        raise _Refusal(f"trailing backslash at {index}")
+    escaped = pattern[index + 1]
+    if escaped in "dDwWsS":
+        return "class", index + 2
+    if escaped in "bB":
+        return "zero", index + 2
+    if escaped.isalnum():  # backreferences, octal and every letter escape
+        raise _Refusal(f"unsupported escape at {index}")
+    return "literal", index + 2
+
+
+def _check_set_operation(pattern: str, index: int) -> None:
+    char = pattern[index]
+    if char in _SET_OPERATION_CHARS and pattern[index + 1 : index + 2] == char:
+        raise _Refusal(f"set operation in class at {index}")
+
+
+def _class_item(pattern: str, index: int) -> tuple[int | None, int, int]:
+    """One class item as ``(code point, its character set, next index)``; a class escape
+    has no code point (it cannot end a range)."""
+    char = pattern[index]
+    if char == "\\":
+        kind, end = _escape(pattern, index)
+        if kind == "zero":
+            raise _Refusal(f"unsupported escape in class at {index}")
+        escaped = pattern[index + 1]
+        if kind == "class":
+            return None, _CLASS_ESCAPES[escaped], end
+        return ord(escaped), 1 << ord(escaped), end
+    if char == "[":
+        raise _Refusal(f"nested class at {index}")
+    return ord(char), 1 << ord(char), index + 1
+
+
+def _class_end(pattern: str, index: int) -> tuple[int, int, int]:
+    """``(index after the class, its character set, the ASCII characters it lists)`` for the
+    class whose ``[`` precedes ``index``; a negated class lists the characters it excludes."""
+    negated = pattern[index : index + 1] == "^"
+    if negated:
+        index += 1
+    members = 0
+    items = 0
     while index < len(pattern):
-        character = pattern[index]
-        if character in ("\\", "["):
-            index = _regex_atom_end(pattern, index)
-            continue
-        if character == "(":
-            stack.append(index)
-        elif character == ")" and stack:
-            ends[stack.pop()] = index + 1
-        elif character == "|" and stack:
-            alternates.add(stack[-1])
-        index += 1
-    end = len(pattern)
-    for opening in stack:
-        ends[opening] = end
-    return ends, alternates
+        if pattern[index] == "]":
+            if not items:
+                raise _Refusal(f"empty class at {index}")
+            members = _fold(members)
+            listed = (members & _ASCII).bit_count()
+            return index + 1, ((_ASCII & ~members) | _NONASCII) if negated else members, listed
+        _check_set_operation(pattern, index)
+        low, found, index = _class_item(pattern, index)
+        members |= found
+        items += 1
+        # A `-` that ends the class is a literal; any other `-` joins two literal ends.
+        if pattern[index : index + 1] == "-" and pattern[index + 1 : index + 2] not in ("", "]"):
+            _check_set_operation(pattern, index)
+            high, found, index = _class_item(pattern, index + 1)
+            if low is None or high is None:
+                raise _Refusal(f"class escape in range at {index}")
+            if low > high:
+                raise _Refusal(f"reversed range at {index}")
+            members |= ((1 << (high + 1)) - 1) ^ ((1 << low) - 1)
+    raise _Refusal("unclosed class")
 
 
-def _regex_group_end(pattern: str, index: int, group_ends: dict[int, int] | None = None) -> int:
-    """End offset past the matching ``)`` or the string when the group is unclosed."""
-    return (group_ends if group_ends is not None else _regex_group_metadata(pattern)[0]).get(index, len(pattern))
+def _quantifier(pattern: str, index: int) -> tuple[int, _Quantifier | None]:
+    """Read the quantifier starting at ``index`` -- ``?`` ``*`` ``+`` ``{m}`` ``{m,}``
+    ``{m,n}`` with an optional lazy ``?`` -- as (next index, (min, max)); (index, None)
+    when none starts there."""
+    char = pattern[index : index + 1]
+    if char not in _QUANTIFIER_START:
+        return index, None
+    if char == "{":
+        close = pattern.find("}", index)
+        if close < 0:
+            raise _Refusal(f"invalid repeat at {index}")
+        low_text, comma, high_text = pattern[index + 1 : close].partition(",")
+        if not low_text.isdigit() or (high_text and not high_text.isdigit()):
+            raise _Refusal(f"invalid repeat at {index}")
+        low = int(low_text)
+        high = (int(high_text) if high_text else None) if comma else low
+        end = close + 1
+    else:
+        low, high = {"?": (0, 1), "*": (0, None), "+": (1, None)}[char]
+        end = index + 1
+    if low > REGEX_REPEAT_MAX or (high is not None and (high > REGEX_REPEAT_MAX or low > high)):
+        raise _Refusal(f"repeat out of bounds at {index}")
+    if pattern[end : end + 1] == "?":  # lazy
+        end += 1
+    return end, (low, high)
 
 
-@lru_cache(maxsize=512)
-def _regex_atoms_share_character(first: str, second: str) -> bool:
-    """True when both units can match one common character."""
-    if first == second:
+def _hands_nothing_on(items: list[_Item], index: int, top: bool, trailing: int) -> bool:
+    """Whether the quantified atom ``items[index]`` leaves the work after it unmultiplied:
+    nothing but ``$`` follows it in a top-level branch (the match ends or fails at once),
+    or a mandatory atom that shares no character with it follows directly (the run cannot
+    give a character to that atom, so each attempt of the run has one way on)."""
+    if top and index + 1 >= trailing:
         return True
-    try:
-        # Warnings are suppressed for the same reason main() suppresses them: PHP turns
-        # every stderr line into an admin-facing validation error.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            left = re.compile(first, re.IGNORECASE)
-            right = re.compile(second, re.IGNORECASE)
-    except (re.error, RecursionError):
+    if index + 1 >= len(items):
         return False
-    return any(left.fullmatch(probe) and right.fullmatch(probe) for probe in _REGEX_OVERLAP_ALPHABET)
+    following = items[index + 1]
+    return following.kind == _ATOM and following.low >= 1 and not items[index].members & following.members
 
 
-@lru_cache(maxsize=512)
-def _regex_atoms_overlap(first: str, second: str) -> bool:
-    """True when ``first`` can also consume the mandatory text matched by ``second``."""
-    if _regex_atoms_share_character(first, second):
-        return True
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            re.compile(first, re.IGNORECASE)
-            re.compile(second, re.IGNORECASE)
-    except (re.error, RecursionError):
-        return False
-    return _regex_body_overlaps_atom(first, second)
+def _attempts(item: _Item) -> int:
+    """Ways to end a quantified item's repeat after its ``low`` mandatory steps."""
+    return REGEX_COST_UNBOUNDED if item.high is None else item.high - item.low + 1
 
 
-def _regex_top_level_branches(body: str) -> tuple[str, ...]:
-    """Split an alternation body without treating nested or escaped pipes as separators."""
-    branches: list[str] = []
-    depth = 0
-    start = 0
+def _branch_cost(items: list[_Item], top: bool) -> tuple[int, int]:
+    """``(nodes, out)`` of one branch of an alternation: the matcher's search-tree nodes
+    below this branch and the number of ways the branch can have been walked when it ends
+    (what a following item multiplies by). ``top`` marks a branch of the whole pattern,
+    not of a group."""
+    nodes = 0 if items else 1  # an empty branch is still one step
+    paths = 1
+    trailing = len(items)  # index from which only `$` items remain
+    while trailing and items[trailing - 1].dollar:
+        trailing -= 1
+    for index, item in enumerate(items):
+        if item.kind == _ATOM and item.quantified:
+            attempts = _attempts(item)
+            nodes += paths * (item.low + attempts)
+            if not _hands_nothing_on(items, index, top, trailing):
+                paths *= attempts
+        elif item.kind == _GROUP and item.quantified and (item.low, item.high) == _OPTIONAL:
+            nodes += paths * (1 + item.nodes)  # the body, or skipping it
+            paths *= 1 + item.out
+        elif item.kind == _GROUP and item.quantified:
+            # a plain run of `length` atoms repeated: every repeat walks the whole run
+            attempts = _attempts(item)
+            nodes += paths * item.length * (item.low + attempts)
+            paths *= attempts
+        elif item.kind == _GROUP:
+            nodes += paths * item.nodes
+            paths *= item.out
+        else:  # an unquantified atom or a zero-width token
+            nodes += paths
+        nodes = min(nodes, _COST_SATURATION)
+        paths = min(paths, _COST_SATURATION)
+    return nodes, paths
+
+
+# A leading dot run as written and as compiled: `(?s:.*)` crosses a newline (a CNAME target decoded from
+# Latin-1 bytes may hold one), `[^\n]` is the character a `+` run needs besides.
+_DOT_RUNS = {".*": "(?s:.*)", ".*?": "(?s:.*?)", ".+": r"(?s:.*)[^\n]", ".+?": r"(?s:.*?)[^\n]"}
+
+
+def _compile_text(pattern: str, dot_runs: list[tuple[int, int]]) -> str:
+    """``pattern`` behind a written ``^``, each leading dot run (as the ``(start, end)`` offsets) spelled
+    so that it crosses a newline."""
+    parts: list[str] = []
+    last = 0
+    for start, end in dot_runs:
+        parts += (pattern[last:start], _DOT_RUNS[pattern[start:end]])
+        last = end
+    parts.append(pattern[last:])
+    return "^(?:" + "".join(parts) + ")"
+
+
+def _admit(pattern: str) -> tuple[int, str]:
+    """``(cost, compile_text)`` of an admitted pattern: ``compile_text`` wraps a pattern that is
+    anchored only through leading ``.*`` / ``.+`` runs behind a ``^``, so the compile text carries the anchor."""
+    if len(pattern) == 0:
+        raise _Refusal("empty pattern")
+    if len(pattern) > REGEX_PATTERN_MAX_LEN:
+        raise _Refusal(f"over {REGEX_PATTERN_MAX_LEN} characters")
+    if any(not "!" <= char <= "~" for char in pattern):
+        raise _Refusal("non-ASCII, space or control character")
+    stack = [_Frame(top=True)]
     index = 0
-    while index < len(body):
-        character = body[index]
-        if character in ("\\", "["):
-            index = _regex_atom_end(body, index)
-            continue
-        if character == "(":
-            depth += 1
-        elif character == ")":
-            depth = max(depth - 1, 0)
-        elif character == "|" and depth == 0:
-            branches.append(body[start:index])
-            start = index + 1
-        index += 1
-    branches.append(body[start:])
-    return tuple(branches)
-
-
-def _regex_conditional_body(
-    pattern: str,
-    index: int,
-    group_ends: dict[int, int] | None = None,
-) -> str | None:
-    """The post-condition body of a closed ``(?(id/name)yes|no)`` group."""
-    if not pattern.startswith("(?(", index):
-        return None
-    group_end = _regex_group_end(pattern, index, group_ends)
-    if pattern[group_end - 1 : group_end] != ")":
-        return None
-    condition_end = pattern.find(")", index + 3, group_end)
-    if condition_end == -1 or condition_end >= group_end - 1:
-        return None
-    return pattern[condition_end + 1 : group_end - 1]
-
-
-def _regex_next_unit(
-    pattern: str,
-    index: int,
-    group_ends: dict[int, int],
-    group_alternates: set[int],
-    depth: int = 0,
-) -> tuple[str, str, int]:
-    """Read one unit as ``(atom, quantifier role, next index)``."""
-    if pattern[index] == ")":
-        quantifier_end, _ = _regex_quantifier(pattern, index + 1)
-        return "", "bridge", max(quantifier_end, index + 1)
-    if pattern[index] != "(":
-        if pattern[index] in "|^$*+?{}":
-            return "", "break", index + 1
-        atom_end = _regex_atom_end(pattern, index)
-        quantifier_end, role = _regex_quantifier(pattern, atom_end)
-        return pattern[index:atom_end], role, max(quantifier_end, atom_end)
-
-    group_end = _regex_group_end(pattern, index, group_ends)
-    closed = pattern[group_end - 1 : group_end] == ")"
-    if pattern.startswith(("(?#", "(?=", "(?!", "(?<=", "(?<!"), index):
-        if not closed:
-            return "", "break", index + 2
-        if pattern.startswith("(?#", index):
-            return "", "bridge", group_end
-        body_start = index + 4 if pattern[index + 2] == "<" else index + 3
-        return pattern[body_start : group_end - 1], "nested", group_end
-    if pattern.startswith("(?P<", index):
-        name_end = pattern.find(">", index)
-        if name_end == -1:
-            return "", "break", group_end
-        body_start = name_end + 1
-    elif pattern.startswith("(?:", index):
-        body_start = index + 3
-    elif pattern.startswith("(?(", index):
-        body = _regex_conditional_body(pattern, index, group_ends)
-        if body is None:
-            return "", "break", group_end
-        quantifier_end, role = _regex_quantifier(pattern, group_end)
-        if role == "bridge" or not body:
-            return "", "bridge", max(quantifier_end, group_end)
-        return body, role, max(quantifier_end, group_end)
-    elif pattern.startswith("(?>", index):
-        if not closed:
-            return "", "break", group_end
-        body = pattern[index + 3 : group_end - 1]
-        quantifier_end, role = _regex_quantifier(pattern, group_end)
-        if role == "bridge" or not body:
-            return "", "bridge", max(quantifier_end, group_end)
-        return body, role, max(quantifier_end, group_end)
-    elif pattern.startswith("(?P=", index):
-        return "", "float", group_end
-    elif pattern.startswith("(?", index):
-        flags_end = index + 2
-        while flags_end < len(pattern) and pattern[flags_end] in "aiLmsux-":
-            flags_end += 1
-        if flags_end > index + 2 and pattern[flags_end : flags_end + 1] == ":":
-            body_start = flags_end + 1
+    width = 0
+    while index < len(pattern):
+        char = pattern[index]
+        frame = stack[-1]
+        if char == "(":
+            if pattern.startswith("(?", index):
+                if not pattern.startswith("(?:", index):
+                    raise _Refusal(f"unsupported group at {index}")
+                index += 3
+            else:
+                index += 1
+            if len(stack) > REGEX_GROUP_DEPTH_MAX:
+                raise _Refusal(f"groups nested over {REGEX_GROUP_DEPTH_MAX} at {index}")
+            frame.simple = False
+            stack.append(_Frame(top=False))
+        elif char == ")":
+            if len(stack) == 1:
+                raise _Refusal(f"unbalanced ) at {index}")
+            body = stack.pop()
+            body.end_branch()
+            index, quantifier = _quantifier(pattern, index + 1)
+            # A group repeated more than optionally must be a plain run of atoms, so its
+            # repeat count stays one factor of the cost instead of nesting.
+            if quantifier not in (None, _OPTIONAL) and not (body.simple and body.atoms):
+                raise _Refusal("quantified group")
+            group = _Item(_GROUP, nodes=body.nodes, out=body.out, length=body.atoms)
+            if quantifier is not None:
+                group.quantified = True
+                group.low, group.high = quantifier
+            stack[-1].items.append(group)
+        elif char == "|":
+            frame.simple = False
+            frame.end_branch()
+            index += 1
+        elif char in "^$" or pattern.startswith(("\\b", "\\B"), index):
+            if char == "^" and not frame.items:
+                frame.branch_anchored = True
+            frame.simple = False
+            frame.items.append(_Item(_ZERO, dollar=char == "$"))
+            index += 1 if char in "^$" else 2
+        elif char in _QUANTIFIER_START:
+            raise _Refusal(f"misplaced quantifier at {index}")
         else:
-            return "", "break", group_end
-    else:
-        body_start = index + 1
-    quantifier_end, role = _regex_quantifier(pattern, group_end)
-    if not closed:
-        return "", "bridge", body_start
-    body: str | None = None
-    if role == "run":
-        body = pattern[body_start : group_end - 1]
-        if body and not any(character in body for character in "()|"):
-            return body, "run", quantifier_end
-    if role != "bridge" and index in group_alternates:
-        if depth >= _REGEX_NESTED_SCAN_MAX:
-            return "", "float", max(quantifier_end, group_end)
-        body = body if body is not None else pattern[body_start : group_end - 1]
-        if body and not _regex_body_has_run(body, depth + 1):
-            return body, role, max(quantifier_end, group_end)
-    return "", "bridge", body_start
-
-
-def _regex_body_has_run(body: str, depth: int = 0) -> bool:
-    """Whether a body contains a genuine backtracking, unbounded quantifier."""
-    group_ends, group_alternates = _regex_group_metadata(body)
-    index = 0
-    while index < len(body):
-        unit_start = index
-        conditional = _regex_conditional_body(body, unit_start, group_ends)
-        if conditional is not None and depth < _REGEX_NESTED_SCAN_MAX:
-            if any(_regex_body_has_run(branch, depth + 1) for branch in _regex_top_level_branches(conditional)):
-                return True
-        atom, role, index = _regex_next_unit(body, index, group_ends, group_alternates, depth)
-        if role == "run":
-            return True
-        if role == "nested" and depth < _REGEX_NESTED_SCAN_MAX and _regex_body_has_run(atom, depth + 1):
-            return True
-    return False
-
-
-def _regex_body_overlaps_atom(anchor: str, body: str, depth: int = 0) -> bool:
-    """Whether one body branch consists only of text consumable by repeated ``anchor``."""
-    if depth > _REGEX_NESTED_SCAN_MAX:
-        return False
-    for branch in _regex_top_level_branches(body):
-        group_ends, group_alternates = _regex_group_metadata(branch)
-        index = 0
-        overlaps = True
-        while index < len(branch):
-            unit_start = index
-            atom, role, index = _regex_next_unit(branch, index, group_ends, group_alternates, depth)
-            if role == "nested":
-                overlaps = False
-                break
-            if role in ("bridge", "float"):
-                continue
-            if not atom:
-                overlaps = False
-                break
-            if branch[unit_start] == "(":
-                unit_overlaps = _regex_body_overlaps_atom(anchor, atom, depth + 1)
+            if char == "[":
+                index, members, listed = _class_end(pattern, index + 1)
+                width += listed
+            elif char == "\\":
+                kind, end = _escape(pattern, index)  # refuses an unsupported or trailing escape
+                escaped = pattern[index + 1]
+                members = _CLASS_ESCAPES[escaped] if kind == "class" else _fold(1 << ord(escaped))
+                index = end
+            elif char in "]}":
+                raise _Refusal(f"unescaped {char} at {index}")
             else:
-                unit_overlaps = _regex_atoms_share_character(anchor, atom)
-            if not unit_overlaps:
-                overlaps = False
-                break
-        if overlaps:
-            return True
-    return False
+                members = _DOT if char == "." else _fold(1 << ord(char))
+                index += 1
+            # A leading `.*` / `.+` (greedy or lazy) anchors its branch: the run can stand for everything
+            # before the match, so a match from any start position can start at 0 instead. It costs what a
+            # written `^` costs.
+            leading_dot_run = char == "." and frame.top and not frame.items and pattern[index : index + 1] in ("*", "+")
+            run_start = index - 1  # the `.` just read
+            index, quantifier = _quantifier(pattern, index)
+            if leading_dot_run:
+                frame.dot_runs.append((run_start, index))
+                frame.items.append(_Item(_ZERO))
+                frame.branch_anchored = True
+            atom = _Item(_ATOM, members=members)
+            if quantifier is not None:
+                atom.quantified = True
+                atom.low, atom.high = quantifier
+            frame.atoms += 1
+            frame.simple = frame.simple and quantifier is None
+            frame.items.append(atom)
+    if len(stack) != 1:
+        raise _Refusal("unbalanced (")
+    top = stack[0]
+    top.end_branch()
+    anchored = top.unanchored == 0
+    cost = min(top.nodes * (1 if anchored else REGEX_COST_UNBOUNDED), _COST_SATURATION)
+    if cost > REGEX_COST_MAX:
+        # Each unanchored branch needs one caret (one node and one character).
+        # Suggest it only when the anchored text fits every admission bound.
+        if (
+            top.nodes + top.unanchored <= REGEX_COST_MAX
+            and len(pattern) + top.unanchored <= REGEX_PATTERN_MAX_LEN
+            and width <= REGEX_CLASS_WIDTH_MAX
+        ):
+            raise _Refusal(f"too costly to match unanchored (bound {cost} > {REGEX_COST_MAX}); anchor it with ^")
+        raise _Refusal(f"too costly to match (bound {cost} > {REGEX_COST_MAX})")
+    if width > REGEX_CLASS_WIDTH_MAX:
+        raise _Refusal(f"character classes too wide (width {width} > {REGEX_CLASS_WIDTH_MAX})")
+    return cost, (_compile_text(pattern, top.dot_runs) if anchored and top.dot_runs else pattern)
 
 
-def _regex_is_backref(atom: str) -> bool:
-    """``\\1``..``\\9`` as read by ``_regex_atom_end`` (two characters; ``\\0`` is the
-    octal null escape, a literal atom, never a group reference)."""
-    return len(atom) == 2 and atom[0] == "\\" and atom[1] in "123456789"
+def pfb_regex_admission(pattern: str) -> tuple[int, str | None, str]:
+    """``(cost, None, compile_text)`` when ``pattern`` is admitted, ``(0, reason, pattern)``
+    when refused.
+
+    ``compile_text`` is the text to hand ``re.compile``: ``pattern`` as written, except that when every
+    top-level branch starts with ``^``, ``.*`` or ``.+`` and at least one relies on its leading dot run it
+    is ``^(?:`` + the pattern with each such run spelled to cross a newline (``.*`` as ``(?s:.*)``,
+    ``.+`` as ``(?s:.*)[^\\n]``) + ``)``. A dot run stands for everything before the match, so with or
+    without it the pattern matches exactly the same names, newline or not, and ``re`` skips every later
+    start position of a pattern that begins with ``^``; the cost counts that pattern as anchored, so it is
+    compiled as one. A refused pattern is never compiled.
+
+    The gate is applied to FEED and user regex UNCONDITIONALLY at load (independent
+    of the opt-in length cap). It admits only the constructs a host-name pattern
+    needs -- printable ASCII without spaces; literals, ``.``, ``\\d\\D\\w\\W\\s\\S`` and punctuation
+    escapes, ``[...]`` classes, ``(...)`` / ``(?:...)`` groups, ``|``, ``^ $ \\b \\B`` and
+    the quantifiers ``? * + {m} {m,} {m,n}`` -- and bounds the work of one failed match:
+    ``cost`` counts the nodes of the matcher's backtracking search tree, from every start
+    position unless every top-level branch starts with ``^``, ``.*`` or ``.+`` (a leading dot
+    run costs what a written ``^`` costs). A quantified atom multiplies the work
+    after it, unless a disjoint mandatory atom follows it directly or nothing but ``$``
+    follows it in a top-level branch; a group repeated more than
+    optionally must be a plain run of atoms. The bracket classes of one pattern list at
+    most ``REGEX_CLASS_WIDTH_MAX`` ASCII characters in total, because compiling a class
+    costs time in proportion to what it lists. Pure static analysis of the text, one
+    left-to-right parse: nothing is compiled or matched, and the reason never quotes the
+    pattern. A pattern over the bound only because of the unanchored search is refused with the
+    remedy: a ``^`` in front of every branch."""
+    try:
+        cost, compile_text = _admit(pattern)
+    except _Refusal as refusal:
+        return 0, str(refusal), pattern
+    return cost, None, compile_text
 
 
-def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
-    """True when a pattern carries a dangerous overlap-connected quantifier chain."""
-    anchor = ""
-    quantified = 0
-    pairs = 0
-    adjacent = False
-    group_ends, group_alternates = _regex_group_metadata(pattern)
-    index = 0
-    while index < len(pattern):
-        unit_start = index
-        conditional = _regex_conditional_body(pattern, unit_start, group_ends)
-        if conditional is not None and depth < _REGEX_NESTED_SCAN_MAX:
-            for branch in _regex_top_level_branches(conditional):
-                if _regex_has_adjacent_unbounded_atoms(branch, depth + 1):
-                    return True
-        atom, role, index = _regex_next_unit(pattern, index, group_ends, group_alternates, depth)
-        if role == "nested":
-            if depth < _REGEX_NESTED_SCAN_MAX and _regex_has_adjacent_unbounded_atoms(atom, depth + 1):
-                return True
-            continue
-        if role == "bridge":
-            continue
-        if role == "run":
-            if anchor and _regex_atoms_overlap(anchor, atom):
-                quantified += 1
-                if adjacent:
-                    pairs += 1
-            else:
-                quantified, pairs = 1, 0
-            anchor, adjacent = atom, True
-            if (pairs and quantified > _REGEX_ADJACENT_ATOM_MAX) or quantified > _REGEX_CHAIN_ATOM_MAX:
-                return True
-            continue
-        if role == "float" or (atom and anchor and (_regex_atoms_overlap(anchor, atom) or _regex_is_backref(atom))):
-            adjacent = False
-            continue
-        anchor, quantified, pairs, adjacent = "", 0, 0, False
-    return False
-
-
-def _regex_has_catastrophic_shape(pattern: str) -> bool:
-    """True when ``pattern`` matches any of the four structural shapes above or carries a
-    run of adjacent unbounded quantifiers over overlapping atoms."""
-    return any(shape.search(pattern) is not None for shape in _REGEX_SHAPE_PATTERNS) or (
-        _regex_has_adjacent_unbounded_atoms(pattern)
-    )
-
-
-def _regex_complexity_budget(pattern: str) -> int:
-    """Combined count of unbounded quantifiers + alternations in ``pattern``
-    (the complexity-budget backstop's input; compare against ``_REGEX_BUDGET_MAX``)."""
-    return len(_REGEX_UNBOUNDED_QUANTIFIER.findall(pattern)) + len(_REGEX_ALTERNATION.findall(pattern))
-
-
-def _regex_is_catastrophic_shape(pattern: str) -> bool:
-    """Pure static analysis (NO execution): True when ``pattern`` carries a structurally
-    catastrophic shape -- a nested / adjacent / overlapping unbounded quantifier, a
-    stacked bounded repeat, or so many unbounded quantifiers + alternations combined that
-    its backtracking surface is unsafe. This is the SAFETY gate: it is applied to FEED and
-    user regex UNCONDITIONALLY at load (independent of the opt-in length cap) because these
-    shapes drive catastrophic backtracking in the `re` engine. It only inspects the pattern
-    STRING -- it never runs the candidate against any input -- so it is itself cheap and
-    safe. Length is deliberately NOT part of this gate (a long pattern is not inherently
-    catastrophic; the length ceiling is the separate opt-in convenience cap)."""
-    return _regex_has_catastrophic_shape(pattern) or _regex_complexity_budget(pattern) > _REGEX_BUDGET_MAX
+def pfb_regex_excerpt(pattern: str) -> str:
+    """Log form of a pattern: ``ascii()`` of its first 32 characters, plus its length
+    when longer. Keeps feed-supplied text short and free of raw control characters."""
+    excerpt = ascii(pattern[:_EXCERPT_CHARS])
+    if len(pattern) <= _EXCERPT_CHARS:
+        return excerpt
+    return f"{excerpt} ... ({len(pattern)} chars)"
 
 
 def pfb_split_regex_line(line: str) -> tuple[str, str | None]:
@@ -516,7 +487,7 @@ def pfb_split_regex_line(line: str) -> tuple[str, str | None]:
 
 
 def _report(line_number: int, pattern: str, message: str) -> None:
-    print(f"line {line_number}: {pattern!r}: {message}", file=sys.stderr)
+    print(f"line {line_number}: {pfb_regex_excerpt(pattern)}: {message}", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
@@ -533,16 +504,9 @@ def main(argv: list[str]) -> int:
         pattern = pfb_split_regex_line(line)[0].strip()
         if not pattern:
             continue
-        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in pattern):
-            _report(line_number, pattern, "contains ASCII control character")
-            failed = True
-            continue
-        if _regex_has_catastrophic_shape(pattern):
-            _report(line_number, pattern, "catastrophic-backtracking shape")
-            failed = True
-            continue
-        if _regex_complexity_budget(pattern) > _REGEX_BUDGET_MAX:
-            _report(line_number, pattern, "too many quantifiers/alternations")
+        _cost, refusal, compile_text = pfb_regex_admission(pattern)
+        if refusal is not None:
+            _report(line_number, pattern, refusal)
             failed = True
             continue
         if regex_cap and len(pattern) > REGEX_STATIC_LEN_CAP:
@@ -555,15 +519,14 @@ def main(argv: list[str]) -> int:
             continue
         try:
             # Only real "line N:" diagnostics may reach stderr: PHP turns EVERY
-            # non-empty stderr line into an admin-facing validation error. A pattern
-            # that compiles but warns (e.g. "[[a]]" -> FutureWarning "Possible nested
-            # set") would otherwise leak this file's absolute path AND its source line
-            # as two bogus errors -- warnings can resolve the source now that the probe
-            # runs as a FILE rather than via ``python -c``. The resolver compiles the
-            # same patterns at load without surfacing warnings either.
+            # non-empty stderr line into an admin-facing validation error. A warning
+            # raised while compiling would otherwise leak this file's absolute path AND
+            # its source line as two bogus errors -- warnings can resolve the source now
+            # that the probe runs as a FILE rather than via ``python -c``. The resolver
+            # compiles the same patterns at load without surfacing warnings either.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                re.compile(pattern, re.IGNORECASE)
+                re.compile(compile_text, re.IGNORECASE)
         except Exception as error:
             _report(line_number, pattern, f"Python regex compile error: {error}")
             failed = True

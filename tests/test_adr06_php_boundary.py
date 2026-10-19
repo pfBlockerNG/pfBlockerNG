@@ -147,6 +147,9 @@ def _evaluate(result: pfb_unbound.BuildResult, config: dict[str, Any], q_name: s
         "zoneDB": result.zone_db,
         "whiteDB": result.white_db,
         "regexDB": {},
+        "userRegexDB": {},
+        "allowRegexDB": {},
+        "userAllowRegexDB": {},
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": {d: 0 for d in config.get("hsts_domains", [])},
     }

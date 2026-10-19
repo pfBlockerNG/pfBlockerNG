@@ -25,7 +25,7 @@ BLOCK (gen1 blocked, gen2 allowed -- except the per-mechanism CONTROL, still blo
   m3 abp anchored    -> dataDB  band 1  (||sub.d.com^, 3-part -> DATA)
   m4 abp regex       -> regexDB band 1  (irreducible /re/)
   m5 abp $important  -> dataDB  band 3  (||sub.d.com^$important)
-  m6 user regex      -> regexDB band 5  (base64 MAIN.regex_list row -- lives in the ini)
+  m6 user regex      -> userRegexDB band 5  (base64 MAIN.regex_list row -- lives in the ini)
   m7 user block      -> dataDB  band 5  (feed provenance=user, plain exact line)
 ALLOW (gen1 allowed via an allow out-ranking a co-listed block; gen2 blocked -- except
 the per-mechanism CONTROL, still allowed):
@@ -123,7 +123,7 @@ LANES_BLOCK: dict[str, Lane] = {
     "m4_abpre": Lane("m4_abpre", _stems("m4abpre", _N_FLIP), "m4abprectl"),
     # m5 abp $important (DATA band 3): ||sub.d.com^$important, 3-part -> DATA.
     "m5_imp": Lane("m5_imp", _d3("m5imp", _N_FLIP), _d3_ctl("m5imp")),
-    # m6 user regex (regexDB band 5): base64 MAIN.regex_list row (probe = <stem>7.com).
+    # m6 user regex (userRegexDB band 5): base64 MAIN.regex_list row (probe = <stem>7.com).
     "m6_userre": Lane("m6_userre", _stems("m6userre", _N_FLIP), "m6userrectl"),
     # m7 user block (DATA band 5): feed provenance=user, plain exact 3-part line -> DATA.
     "m7_userblk": Lane("m7_userblk", _d3("m7ublk", _N_FLIP), _d3_ctl("m7ublk")),
@@ -401,13 +401,6 @@ def _wire_module(
     P.pfb["pfb_py_reload_applied"] = applied
     P.pfb["python_hsts"] = False  # skip the hsts file load (not part of this matrix)
     P.pfb["regex_cap"] = False
-    # This test is about the ATOMIC SWAP, not regex safety: lift the runtime warn/evict
-    # ceilings so the always-on timer never EVICTS a regex pattern mid-scan under load
-    # (an eviction would drop a regex-lane block and look like a non-oracle "torn" view --
-    # a measurement artifact, not a torn read of the swap). ADR-07's eviction is pinned
-    # by its own suite; here we hold the regexDB stable across the swap.
-    P.pfb["regex_warn_ms"] = 1.0e9
-    P.pfb["regex_evict_ms"] = 1.0e9
     P.pfb["mod_threading"] = True
     P.pfb["python_blocking"] = True
     P.pfb["tld_allow"] = False
@@ -438,9 +431,10 @@ def _scan(snap: Any) -> dict[str, bool]:
         "regexDB": bool(snap.regex_db),
         "whiteDB": bool(snap.white_db),
         "allowRegexDB": bool(snap.allow_regex_db),
+        "userRegexDB": bool(snap.user_regex_db),
+        "userAllowRegexDB": bool(snap.user_allow_regex_db),
         "important_rules": bool(snap.important_rules),
         "regex_warn_ms": P.pfb["regex_warn_ms"],
-        "regex_evict_ms": P.pfb["regex_evict_ms"],
         "python_tld_seg": P.pfb["python_tld_seg"],
         "hstsDB": bool(snap.hsts_db),
         "hsts_tlds": P.pfb["hsts_tlds"],
@@ -459,6 +453,8 @@ def _scan(snap: Any) -> dict[str, bool]:
         cfg["regexDB"] = bool(snap.regex_db)
         cfg["whiteDB"] = bool(snap.white_db)
         cfg["allowRegexDB"] = bool(snap.allow_regex_db)
+        cfg["userRegexDB"] = bool(snap.user_regex_db)
+        cfg["userAllowRegexDB"] = bool(snap.user_allow_regex_db)
         cfg["important_rules"] = bool(snap.important_rules)
         cfg["hstsDB"] = bool(snap.hsts_db)
         containers = snap.containers()
