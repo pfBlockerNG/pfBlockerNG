@@ -184,8 +184,9 @@ def _udp_limit(query: dnswire.Message) -> int:
 
 
 def _error(query: dnswire.Message, rcode: int) -> bytes:
-    """A bare error reply as Unbound's error_encode builds it: question echoed, RD and CD copied, EDNS echoed."""
-    flags = dnswire.QR | dnswire.RA | (query.flags & (dnswire.RD | dnswire.CD)) | rcode
+    """A bare error reply as Unbound's error_encode builds it: question echoed, RD and CD copied, opcode kept,
+    EDNS echoed."""
+    flags = dnswire.QR | dnswire.RA | (query.flags & (dnswire.RD | dnswire.CD | dnswire.OPCODE_MASK)) | rcode
     return dnswire.encode(dnswire.Message(query.id, flags, query.questions, additional=_edns_for(query)))
 
 
@@ -300,7 +301,7 @@ class Frontend:
             return None
         msg_id, flags, qdcount, ancount, nscount, arcount = struct.unpack("!HHHHHH", wire[:12])
         if (flags >> 11) & 0xF:
-            return await forward(wire)
+            return await self._unchanged(wire, dnswire.Message(msg_id, flags), forward)
         if qdcount != 1:
             return _error(dnswire.Message(msg_id, flags), RCODE_FORMERR)
         if flags & dnswire.TC or ancount or nscount or arcount > 1:
