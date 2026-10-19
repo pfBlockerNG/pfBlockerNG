@@ -58,8 +58,11 @@ func addrPortOf(a net.Addr) netip.AddrPort {
 // limitedListener closes the connections over the cap at accept, so a flood cannot queue up in the backlog.
 type limitedListener struct {
 	net.Listener
-	limit *connLimit
-	logf  func(format string, args ...any)
+	limit   *connLimit
+	addrs   *addrLimit // what one address may hold of limit, at most perAddr
+	perAddr int
+	trusted []netip.Prefix // front ends: their connections carry many clients, so they hold no share
+	logf    func(format string, args ...any)
 }
 
 func (l *limitedListener) Accept() (net.Conn, error) {
@@ -68,8 +71,22 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
+		peer := addrPortOf(conn.RemoteAddr()).Addr()
+		metered := !trusts(l.trusted, peer) // the TCP peer: a PROXY header or X-Forwarded-For is only believed from a trusted one
+		if metered && !l.addrs.take(peer, l.perAddr, "DoH connections", l.logf) {
+			_ = conn.Close()
+			continue
+		}
 		if l.limit.take(l.logf) {
-			return &countedConn{Conn: conn, release: sync.OnceFunc(l.limit.release)}, nil
+			return &countedConn{Conn: conn, release: sync.OnceFunc(func() {
+				l.limit.release()
+				if metered {
+					l.addrs.release(peer)
+				}
+			})}, nil
+		}
+		if metered {
+			l.addrs.release(peer)
 		}
 		_ = conn.Close()
 	}
@@ -103,7 +120,7 @@ func rawConnInfo(c net.Conn) connInfo {
 // serveDoH answers DoH on ln until stop(). Connections: TCP, the cap, PROXY header parsing for trusted peers only
 // (everyone else's bytes are never parsed as one), TLS, HTTP.
 func (g *gateway) serveDoH(ln *net.TCPListener, conf *tls.Config, trusted []netip.Prefix) {
-	limited := &limitedListener{Listener: ln, limit: g.dohConns, logf: g.logf}
+	limited := &limitedListener{Listener: ln, limit: g.dohConns, addrs: &g.dohAddrs, perAddr: g.dohPerAddr, trusted: trusted, logf: g.logf}
 	proxied := &proxyproto.Listener{
 		Listener:          limited,
 		ReadHeaderTimeout: g.handshake,
