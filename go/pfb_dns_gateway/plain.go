@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -108,15 +109,17 @@ func (g *gateway) closeOnStop(closeFn func()) {
 }
 
 // stop ends serving: listeners are closed and queries in flight are cancelled. TCP and DoT connections answer what
-// they hold with SERVFAIL and close, DoT with close_notify. What is still running after stopBound is closed, and
-// after another stopBound stop gives up waiting.
+// they hold with SERVFAIL and close, DoT with close_notify; DoQ connections get a CONNECTION_CLOSE (its closer waits
+// up to stopBound for them). What is still running after stopBound is closed, and after another stopBound stop gives
+// up waiting.
 func (g *gateway) stop() {
 	g.cancel()
 	g.mu.Lock()
-	for _, closeFn := range g.closers {
+	closers := slices.Clone(g.closers) // a closer may wait: not under g.mu, which new connections and handlers take
+	g.mu.Unlock()
+	for _, closeFn := range closers {
 		closeFn()
 	}
-	g.mu.Unlock()
 	done := make(chan struct{})
 	go func() { g.wg.Wait(); close(done) }()
 	if g.waited(done) {

@@ -63,9 +63,12 @@ the gateway stopping. A client that does not take it is cut off at the TCP level
 SIGTERM, SIGINT and SIGHUP stop the gateway the same way: the ready file is removed, the listeners are closed and
 what is in flight is cancelled. A query still being decided is answered SERVFAIL, built by the gateway; the reply Unbound
 sends later is never relayed, because the decider did not approve it. TCP and DoT clients get that answer and then the
-close; DoH and DoQ connections are closed with their listeners. The gateway waits for its goroutines, DoH requests being
-served included, for 500 ms; the client connections still open then are closed, and after another 500 ms the gateway
-stops waiting and exits (the decider is waited for apart, up to its own limit).
+close; DoH connections are closed with their listener. DoQ connections, accepted or still handshaking, are ended on the
+wire before the UDP socket goes: an accepted one with a CONNECTION_CLOSE and `DOQ_NO_ERROR`, one still handshaking with
+`CONNECTION_REFUSED` (quic-go's `Transport.Close` and `Listener.Close` send neither for an accepted connection, which
+would stay open at the client until its 30 s idle timeout); that wait is bounded by 500 ms. The gateway waits for its
+goroutines, DoH requests being served included, for 500 ms; the client connections still open then are closed, and
+after another 500 ms the gateway stops waiting and exits (the decider is waited for apart, up to its own limit).
 
 Every transport goes through the same path as plain DNS: the Resolver ACL, then the decider, then PROXYv2 to Unbound
 with the client in the header. The ACL is Unbound's own, read from `--unbound-conf` (`/var/unbound/unbound.conf`) and
