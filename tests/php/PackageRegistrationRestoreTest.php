@@ -156,6 +156,41 @@ final class PackageRegistrationRestoreTest extends TestCase
 		$this->assertSame($menu, config_get_path('installedpackages/menu/1'), 'and kept as it was');
 	}
 
+	public function testAMenuEntryOfTheSameNameInAnotherSectionDoesNotCountAsRegistered(): void
+	{
+		// Given a menu entry named like the package's, in the Services section (pfSense matches a menu by name and section)
+		$GLOBALS['config']['installedpackages']['menu'][] = ['name' => 'pfBlockerNG', 'section' => 'Services', 'url' => '/pfblockerng/other.php'];
+
+		$why = pfb_package_registration_restore();
+
+		$this->assertNull($why);
+		$this->assertSame(['Services:Squid', 'Services:pfBlockerNG', 'Firewall:pfBlockerNG'], $this->menuNames(),
+			'the package entry is added beside the one in another section');
+	}
+
+	/** @return array<string,array{mixed}> pfSense's write_config() answers for a write it did not make: -1 (config.xml not written), FALSE (refused) */
+	public static function refusedWrites(): array
+	{
+		return ['config.xml could not be written' => [-1], 'the write is refused' => [FALSE]];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('refusedWrites')]
+	public function testAWriteThatPfSenseRefusesIsNotReportedAsARegistration(mixed $answer): void
+	{
+		// Given pfSense does not write config.xml for the registration
+		$GLOBALS['pfb_test_write_config_result'] = $answer;
+		try {
+			// When the registration is written
+			$why = pfb_package_registration_restore();
+		} finally {
+			unset($GLOBALS['pfb_test_write_config_result']);
+		}
+
+		// Then it is not reported as registered
+		$this->assertIsString($why, 'the registration is not written, so it is not registered');
+		$this->assertStringContainsString('could not be written', $why);
+	}
+
 	public function testKeepsASaveAnotherProcessMadeSinceThisOneReadConfigXml(): void
 	{
 		// Given config.xml on disk holds a service another process registered after this process read it.

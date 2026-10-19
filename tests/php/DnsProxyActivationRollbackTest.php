@@ -963,4 +963,38 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		}
 		$this->assertStringContainsString('manual recovery required', end($texts));
 	}
+
+	public function testAConfigLockHeldForOneWaitIsRetriedOnceAndTheRollbackStillRestoresTheResolver(): void
+	{
+		// Given a proxy that never serves, and a save that holds config.xml for longer than one lock wait but not two
+		$this->activate(TRUE);
+		$GLOBALS['pfb_test_try_lock_busy_for'] = PFB_DNS_CONFIG_LOCK_WAIT + 5;
+
+		// When the activation fails and the rollback runs
+		$ok = pfb_dns_proxy_ensure_running();
+
+		// Then the rollback retried the lock once, after the save released it, and put the Resolver back
+		$this->assertFalse($ok, 'the activation failed');
+		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertResolverIsTheOriginal('rolled back');
+	}
+
+	public function testTheProxysRcScriptNamesTheSnapshotWhenUnboundIsRegeneratedForTheMove(): void
+	{
+		// Given Unbound regenerated for the move: pfSense's boot hook runs the proxy's rc script at that moment
+		$seen = NULL;
+		$GLOBALS['pfb_test_unbound_configure_hook'] = static function () use (&$seen): void {
+			$seen ??= $GLOBALS['pfb_test_rcfiles']['pfb_dns_proxy.sh'] ?? NULL;
+		};
+
+		// When the proxy takes the Resolver
+		$this->activate(TRUE);
+		unset($GLOBALS['pfb_test_unbound_configure_hook']);
+
+		// Then the script that Unbound's boot hook runs names the snapshot: generated for it, not the install-time one that
+		// refuses to start ("not a valid snapshot")
+		$this->assertNotNull($seen, 'Unbound was regenerated for the move with the proxy\'s rc script already written');
+		pfb_dns_proxy_service();
+		$this->assertSame($GLOBALS['pfb_test_rcfiles']['pfb_dns_proxy.sh'], $seen, 'the script is the one for the moved Resolver\'s snapshot');
+	}
 }

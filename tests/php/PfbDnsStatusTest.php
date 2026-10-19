@@ -104,6 +104,20 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame('-', $status['listen']);
 	}
 
+	public function testAMovedBoxWithThePackageDisabledSaysTheRestoreIsPendingNotThatTheProxyIsOn(): void
+	{
+		// Given a moved Resolver, pfB-DNS still on in config.xml, and pfBlockerNG disabled: no apply runs the proxy's mode
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
+		$this->moved(TRUE);
+
+		// When the status is read
+		$mode = pfb_dns_status()['mode'];
+
+		// Then it does not claim the proxy is on: the Resolver restore is pending and the notices say what to do
+		$this->assertSame('Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices', $mode);
+	}
+
 	public function testAMovedBoxWithDnsblOnNamesTheAddressesTheTlsPortAndTheRunningService(): void
 	{
 		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;

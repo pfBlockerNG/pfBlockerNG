@@ -451,6 +451,20 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('Listen Port', $this->errorLog());
 	}
 
+	public function testARefusalThatRepeatsOnEveryApplyRaisesOneNoticeNotOnePerApply(): void
+	{
+		// Given a Resolver whose Listen Port is 5353: every apply and cron tick refuses the move again
+		$this->seedResolver(['port' => '5353']);
+
+		// When three applies run
+		pfb_dns_proxy_resolver(TRUE);
+		pfb_dns_proxy_resolver(TRUE);
+		pfb_dns_proxy_resolver(TRUE);
+
+		// Then the operator is told once: the notice stays pending until it is closed, so a repeat adds nothing
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the same refusal is one notice');
+	}
+
 	public function testMoveOnRefusesAMovedResolverWhoseListenPortWasLaterSetToTheProxysLoopbackPort(): void
 	{
 		// Given a moved Resolver, then an admin who sets its Listen Port to 5353 on the Resolver page.
@@ -549,6 +563,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 			'an interface after a hash inside a word'           => ["server:\nlog-identity: a#b interface: 0.0.0.0@5300"],
 			'an interface after a single-quoted hash'           => ["server:\nlog-identity: '#' interface: 0.0.0.0@5300"],
 			'an interface after an escaped quote inside quotes' => ["server:\nlog-identity: \"a\\\" # \" interface: 0.0.0.0@5300"],
+			'an interface after a quoted phrase with a spaced hash' => ["server:\nlog-identity: \"a #\" interface: 10.0.0.1@53"],
 			'an interface after a directive on its line'        => ["server:\nprefetch: yes interface: 0.0.0.0@5300"],
 			'an outgoing-interface line (refused too: every interface key is)' => ["server:\noutgoing-interface: 192.0.2.1"],
 			'the admin\'s control-interface'                    => ["remote-control:\n    control-enable: no\n    control-interface: 127.0.0.1"],
@@ -1098,6 +1113,23 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// Then it is "no snapshot", and the log names the field.
 		$this->assertNull($saved);
 		$this->assertStringContainsString('pfb_dns_saved', $this->errorLog());
+	}
+
+	public function testAMalformedMarkerIsLoggedOnceForAsLongAsItIsUnchangedAndAgainWhenItChanges(): void
+	{
+		// Given a marker that is not the documented shape, read by every apply and page load
+		config_set_path(self::SAVED, 'not-a-snapshot');
+		for ($read = 0; $read < 3; $read++) {
+			$this->assertNull(pfb_dns_proxy_saved());
+		}
+		$this->assertSame(1, substr_count($this->errorLog(), 'pfb_dns_saved is not a valid Resolver snapshot'), 'logged once, not per read');
+
+		// When the marker changes to another malformed value
+		config_set_path(self::SAVED, 'still-not-a-snapshot');
+		$this->assertNull(pfb_dns_proxy_saved());
+
+		// Then that change is logged
+		$this->assertSame(2, substr_count($this->errorLog(), 'pfb_dns_saved is not a valid Resolver snapshot'), 'a new malformed value is logged');
 	}
 
 	public function testSavedReadsAValidMarkerBackExactly(): void
