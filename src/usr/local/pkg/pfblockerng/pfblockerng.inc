@@ -4446,22 +4446,26 @@ function pfb_dns_proxy_confirm_ready(): bool {
 }
 
 /**
- * A DNS proxy condition: logged, and raised as a notice unless that notice is already standing. pfSense's file_notice()
- * files a new row on every call, so an apply or cron tick that meets a standing condition would add one each time.
+ * A DNS proxy condition: logged, and raised as a notice unless the newest notice with this id already says the same. A
+ * standing condition is not filed again by the next apply or cron tick; a change of condition is, and so is a condition that
+ * returns. pfSense stores the id and text htmlentities()-encoded, so both are compared in that form.
  */
-function pfb_dns_proxy_notify(string $text, string $url): void {
+function pfb_dns_proxy_notify(string $id, string $text, string $url): void {
 	pfb_logger("\n{$text}", 2);
+	$standing = NULL;
 	foreach (get_notices() ?: [] as $row) {
-		if (($row['id'] ?? '') === 'pfBlockerNG DNS Proxy' && ($row['notice'] ?? '') === htmlentities($text)) {
-			return;
+		if (($row['id'] ?? NULL) === htmlentities($id)) {
+			$standing = $row['notice'] ?? NULL;
 		}
 	}
-	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', $url, 2);
+	if ($standing !== htmlentities($text)) {
+		file_notice($id, $text, 'pfBlockerNG', $url, 2);
+	}
 }
 
 /** A rollback outcome: in the log and as a notice, so the operator is told in the GUI. */
 function pfb_dns_proxy_rollback_notice(string $text): void {
-	pfb_dns_proxy_notify($text, '/pfblockerng/pfblockerng_dns.php');
+	pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/pfblockerng/pfblockerng_dns.php');
 }
 
 /**
@@ -13553,7 +13557,7 @@ function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 function pfb_dns_proxy_refuse(string $why): bool {
 	$text = "DNS proxy: {$why}. " . pfb_dns_proxy_unmoved_effect(pfb_dns_proxy_saved() !== NULL) .
 	    ' Correct the Resolver in Services > DNS Resolver, or turn the DNS proxy option off.';
-	pfb_dns_proxy_notify($text, '/services_unbound.php');
+	pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/services_unbound.php');
 	return FALSE;
 }
 
@@ -13668,7 +13672,7 @@ function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 		$fronted = pfb_dns_proxy_saved() !== NULL;
 		$text = 'DNS proxy: the DNS Resolver was not ' . ($on ? ($fronted ? 're-applied' : 'moved') : 'put back') .
 		    ' because config.xml was locked by another save; the next apply retries.' . ($on ? ' ' . pfb_dns_proxy_unmoved_effect($fronted) : '');
-		pfb_dns_proxy_notify($text, '/services_unbound.php');
+		pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/services_unbound.php');
 		return FALSE;
 	}
 	try {
@@ -13823,7 +13827,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 				    'Network Interfaces and Enable SSL/TLS Service, and remove from Custom Options the "server:" clause that ' .
 				    'starts with the line "' . PFB_DNS_PROXY_MARKER . '" and ends with "' . PFB_DNS_PROXY_MARKER_END . '", ' .
 				    'then stop the pfBlockerNG DNS proxy service in Status > Services.';
-				pfb_dns_proxy_notify($text, '/services_unbound.php');
+				pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/services_unbound.php');
 			}
 			return FALSE;
 		}
@@ -13835,7 +13839,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 			$text = 'DNS proxy: the DNS proxy is still running after it was stopped, so the DNS Resolver was not restored ' .
 			    '(Unbound would collide with the proxy on the Resolver\'s port). Stop the pfBlockerNG DNS proxy service in ' .
 			    'Status > Services; the next apply restores the Resolver.';
-			pfb_dns_proxy_notify($text, '/services_unbound.php');
+			pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/services_unbound.php');
 			return FALSE;
 		}
 		foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {

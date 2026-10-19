@@ -1865,6 +1865,13 @@
         "returnType": "void",
         "params": [
             {
+                "name": "id",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
                 "name": "text",
                 "byRef": false,
                 "variadic": false,
