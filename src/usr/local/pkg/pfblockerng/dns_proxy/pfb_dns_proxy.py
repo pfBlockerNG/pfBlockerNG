@@ -95,6 +95,7 @@ OBSERVER_SOCKET = (
 )
 MAX_REPORT_OPTIONS = 8  # EDNS options in one observer report; an upstream reply carries a handful
 MAX_REPORT_OPTION_HEX = 1024  # hex of one option's data: fits a 2 KiB datagram with a typical name
+MAX_REPORT_BYTES = 2048  # one report is one datagram from the observer, which never sends more
 OBSERVER_RCVBUF = 256 * 1024  # bytes asked for the observer socket, so a burst queues (FreeBSD default: 4 KiB)
 MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
 Forward = Callable[[bytes], Awaitable[bytes | None]]
@@ -214,6 +215,8 @@ def _is_u16(value: object) -> bool:
 def _upstream_report(data: bytes) -> tuple[shim.module_qstate, shim.DnsMsg]:
     """What pythonmod would give inplace_cb_query_response for one observer report: the qstate carrying the upstream's
     EDNS options and the raw response. ValueError if the datagram is not a well-formed report."""
+    if len(data) > MAX_REPORT_BYTES:
+        raise ValueError(f"{len(data)} bytes: a report is one datagram of at most {MAX_REPORT_BYTES}")
     try:
         report = json.loads(data)
         client, qname, qtype, flags, opts = (report[key] for key in ("client", "qname", "qtype", "flags", "opts"))
