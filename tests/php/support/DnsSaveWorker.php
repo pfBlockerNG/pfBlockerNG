@@ -10,10 +10,10 @@ declare(strict_types=1);
  *
  * Scenarios: `interleave` (an apply's Resolver move lands on disk after this request started), `lock_taken` (another
  * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written),
- * `write_refused` (pfSense's write_config() answers FALSE: config.xml is not written).
+ * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1).
  * The result file holds what config.xml would contain afterwards ("disk"), the lock/read/write order, the page's input
  * errors, whether the config lock is still held, the reply-logging preference the form would show ("reply") and whether
- * the save marked the pending changes, which only a saved configuration does ("pendingMarked").
+ * the save marked pending changes ("pendingMarked") or returned to render instead of exiting via redirect ("returned").
  */
 
 $workerArgv = $argv;
@@ -24,8 +24,9 @@ $page = $repo . '/src/usr/local/www/pfblockerng/pfblockerng_dns.php';
 $disk = NULL;
 $input_errors = [];
 $pconfig = [];
+$returned = FALSE;
 
-register_shutdown_function(static function () use ($resultFile, &$disk, &$input_errors, &$pconfig): void {
+register_shutdown_function(static function () use ($resultFile, &$disk, &$input_errors, &$pconfig, &$returned): void {
 	file_put_contents($resultFile, json_encode([
 		'disk'          => $disk,
 		'events'        => $GLOBALS['pfb_test_lock_events'] ?? [],
@@ -33,6 +34,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$input_
 		'inputErrors'   => $input_errors,
 		'reply'         => $pconfig['pfb_py_reply'] ?? NULL,
 		'pendingMarked' => is_file($GLOBALS['pfb']['pending_marker'] ?? ''),
+		'returned'      => $returned,
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -121,16 +123,19 @@ if ($scenario === 'interleave') {
 	$disk = $other;
 } elseif ($scenario === 'write_refused') {
 	$GLOBALS['pfb_test_write_config_result'] = FALSE;
+} elseif ($scenario === 'write_failed') {
+	$GLOBALS['pfb_test_write_config_result'] = -1;
 }
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
 	if ($scenario === 'write_throws') {
 		throw new RuntimeException("config.xml could not be written: {$description}");
 	}
-	if ($scenario !== 'write_refused') {
+	if (!in_array($scenario, ['write_refused', 'write_failed'], TRUE)) {
 		$disk = $GLOBALS['config'];
 	}
 };
 $input_errors = [];
 ini_set('open_basedir', "{$tmp}:" . dirname($resultFile) . ":{$repo}:/usr/share/php:/dev/null:/dev/urandom");
 eval($block);
+$returned = TRUE;
