@@ -1,0 +1,2 @@
+go test fuzz v1
+string("access-control: fe80::1%eth0 allow")
