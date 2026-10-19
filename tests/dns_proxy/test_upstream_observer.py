@@ -1,10 +1,10 @@
-"""The upstream observer: how an upstream DNS block (issue #267) is still logged while the proxy hosts pfb_unbound.py.
+"""The upstream observer: how an upstream DNS block (issue #267) is still logged while the decider hosts pfb_unbound.py.
 
-Unbound rewrites every reply it sends (RA set, AA clear, the upstream's EDNS options gone), so the proxy never sees what
-makes a reply an upstream block: only a python callback INSIDE Unbound sees the raw response. pfb_upstream_observer.py
-is that callback and nothing else: it hands the raw facts to the proxy over a Unix datagram socket, and the proxy
-fires the module's own inplace_cb_query_response on them. These tests cover both ends without a real Unbound; the
-signatures against a real one are in test_integration_unbound.py.
+Unbound rewrites every reply it sends (RA set, AA clear, the upstream's EDNS options gone), so the decider never sees
+what makes a reply an upstream block: only a python callback INSIDE Unbound sees the raw response.
+pfb_upstream_observer.py is that callback and nothing else: it hands the raw facts to the decider over a Unix datagram
+socket, and the decider fires the module's own inplace_cb_query_response on them. These tests cover both ends without a
+real Unbound; the signatures against a real one are in test_gateway_upstream_blocks.py.
 """
 
 from __future__ import annotations
@@ -24,12 +24,11 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, TypeVar
 
-import dnswire
 import pfb_dns_proxy
 import pytest
 import unbound_shim as shim
 from frontend_constants import PROTO_DIR, Booted
-from frontend_helpers import WATCHDOG, build_query, serving, udp_exchange
+from frontend_helpers import WATCHDOG, serving_decisions
 
 OBSERVER = PROTO_DIR / "pfb_upstream_observer.py"
 T = TypeVar("T")
@@ -243,7 +242,7 @@ def _report(**overrides: Any) -> bytes:
 
 
 def _frontend(booted: Booted) -> pfb_dns_proxy.Frontend:
-    return pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
+    return pfb_dns_proxy.Frontend(booted.module)
 
 
 def _upstream_blocks(booted: Booted) -> list[list[str]]:
@@ -450,15 +449,12 @@ def quiet_boot(module_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pfb_dns_proxy, "boot", boot_without_log_files)
 
 
-def _serving(module_dir: Path, during: Callable[[tuple[str, int]], Awaitable[T]], *flags: str) -> T:
-    """Run serve() on an ephemeral loopback port with `module_dir` as the module dir; `during` runs once it is ready."""
-    args = pfb_dns_proxy.parse_args(
-        ["--upstream", "127.0.0.1:9", "--listen", "127.0.0.1", "--port", "0", "--module-dir", str(module_dir), *flags]
-    )
+def _serving(module_dir: Path, during: Callable[[], Awaitable[T]], *flags: str) -> T:
+    """Run the decider with `module_dir` as its module dir on a decision socket; `during` runs once it is ready."""
 
     async def scenario() -> T:
-        async with serving(args) as bound:
-            return await during(bound[0])
+        async with serving_decisions(["--module-dir", str(module_dir), *flags]):
+            return await during()
 
     return asyncio.run(scenario())
 
@@ -469,7 +465,7 @@ def _serving(module_dir: Path, during: Callable[[tuple[str, int]], Awaitable[T]]
 def test_the_proxy_listens_for_the_observer_in_the_module_dir_only_when_asked_to_and_removes_it_when_it_stops(
     module_dir: Path, quiet_boot: None, flags: list[str], socket_exists: bool
 ) -> None:
-    async def during(_server: tuple[str, int]) -> bool:
+    async def during() -> bool:
         return os.path.lexists(module_dir / pfb_dns_proxy.OBSERVER_SOCKET)
 
     assert _serving(module_dir, during, *flags) is socket_exists
@@ -477,33 +473,7 @@ def test_the_proxy_listens_for_the_observer_in_the_module_dir_only_when_asked_to
 
 
 def test_the_observer_socket_is_a_socket_while_the_proxy_serves(module_dir: Path, quiet_boot: None) -> None:
-    async def during(_server: tuple[str, int]) -> bool:
+    async def during() -> bool:
         return stat.S_ISSOCK((module_dir / pfb_dns_proxy.OBSERVER_SOCKET).stat().st_mode)
 
     assert _serving(module_dir, during, "--observer") is True
-
-
-def test_observer_is_off_unless_asked_for() -> None:
-    assert pfb_dns_proxy.parse_args([]).observer is False
-    assert pfb_dns_proxy.parse_args(["--observer"]).observer is True
-
-
-def test_observer_without_the_module_is_an_argument_error(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as refused:
-        pfb_dns_proxy.parse_args(["--observer", "--no-module"])
-    assert refused.value.code == 2
-    assert "--observer cannot be used with --no-module" in capsys.readouterr().err
-
-
-def test_dns_is_served_without_upstream_block_logging_when_the_socket_cannot_be_made(
-    module_dir: Path, quiet_boot: None, capfd: pytest.CaptureFixture[str]
-) -> None:
-    (module_dir / pfb_dns_proxy.OBSERVER_SOCKET).write_text("in the way", encoding="utf-8")
-
-    async def during(server: tuple[str, int]) -> list[bytes]:
-        reply = (await udp_exchange(server, build_query("blocked.example.")))[0]
-        return [rr.rdata for rr in dnswire.parse(reply).answers]
-
-    assert len(_serving(module_dir, during, "--observer")) == 1  # the module's DNSBL answer: the proxy still serves
-    assert "upstream-block detection is off" in capfd.readouterr().err
-    assert (module_dir / pfb_dns_proxy.OBSERVER_SOCKET).read_text(encoding="utf-8") == "in the way"

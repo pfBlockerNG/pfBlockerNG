@@ -143,12 +143,13 @@ func (g *gateway) screen(client netip.Addr, wire []byte) (disposition, []byte) {
 	return toDecider, nil
 }
 
-// resolve asks the decider and serves its FORWARDs through fwd. nil means the decider dropped the query; a
-// decider that fails or does not decide within 2 x timeout + grace gets SERVFAIL built here.
-func (g *gateway) resolve(ctx context.Context, client netip.Addr, wire []byte, fwd forwarder) []byte {
+// resolve asks the decider and serves its FORWARDs through fwd. datagram says the client is a plain-UDP one. nil
+// means the decider dropped the query; a decider that fails or does not decide within 2 x timeout + grace gets
+// SERVFAIL built here.
+func (g *gateway) resolve(ctx context.Context, client netip.Addr, datagram bool, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(ctx, 2*g.timeout+g.grace)
 	defer cancel()
-	answer, err := g.dec.Decide(ctx, client, wire, fwd)
+	answer, err := g.dec.Decide(ctx, client, datagram, wire, fwd)
 	if err != nil {
 		return buildServfail(wire)
 	}
@@ -170,5 +171,5 @@ func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, wire []b
 			g.muxOverload.Store(false)
 		}
 	}()
-	return g.resolve(ctx, client, wire, fwd), true
+	return g.resolve(ctx, client, false, wire, fwd), true
 }

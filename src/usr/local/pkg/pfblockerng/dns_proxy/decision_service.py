@@ -1,9 +1,9 @@
 """Decision protocol service (issue #3513): the Go gateway sends each client query, the module decides.
 
 One AF_UNIX stream carries length-prefixed frames both ways; docs/misc/dns-gateway-protocol.md is normative. The
-gateway sends QUERY (client IP text + the client's DNS wire) and REPLY (Unbound's answer to the last FORWARD, empty =
-none). For each QUERY `resolve` runs in its own task; its `forward` sends FORWARD and waits for the REPLY, and the
-result goes back as ANSWER (bytes) or DROP (None). Standard library only; Python 3.11+.
+gateway sends QUERY (the client's transport, its IP text and its DNS wire) and REPLY (Unbound's answer to the last
+FORWARD, empty = none). For each QUERY `resolve` runs in its own task; its `forward` sends FORWARD and waits for the
+REPLY, and the result goes back as ANSWER (bytes) or DROP (None). Standard library only; Python 3.11+.
 """
 
 from __future__ import annotations
@@ -14,12 +14,24 @@ import ipaddress
 import socket
 import struct
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
-MAX_FRAME_LEN = 5 + 1 + 255 + 65535  # type + id, then n + up to 255 IP text bytes + up to 65535 DNS wire bytes
+STREAM, DATAGRAM = (
+    0,
+    1,
+)  # the QUERY's transport byte: TCP, DoT, DoH and DoQ clients have no size limit, plain UDP has one
+# type + id, then transport + n + up to 255 IP text bytes + up to 65535 DNS wire bytes
+MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 65535
 
 Forward = Callable[[bytes], Awaitable[bytes | None]]
-Resolve = Callable[[bytes, str, Forward], Awaitable[bytes | None]]
+
+
+class Resolve(Protocol):
+    """Decide one client query: the answer to send it, or None to send nothing. `datagram`: the client is a plain-UDP
+    one, whose answer has to fit the UDP size it advertised."""
+
+    def __call__(self, wire: bytes, client_ip: str, forward: Forward, *, datagram: bool) -> Awaitable[bytes | None]: ...
 
 
 class ProtocolError(Exception):
@@ -43,11 +55,16 @@ async def _read_frame(reader: asyncio.StreamReader) -> tuple[int, int, bytes] | 
     return ftype, fid, body[5:]
 
 
-def _split_query(payload: bytes) -> tuple[bytes, bytes]:
-    """(client IP text, DNS wire) of a QUERY payload: u8 n, n IP text bytes, the rest is the wire."""
-    if not payload or payload[0] == 0 or payload[0] > len(payload) - 1:
+def _split_query(payload: bytes) -> tuple[bool, bytes, bytes]:
+    """(client is a datagram one, client IP text, DNS wire) of a QUERY payload: u8 transport (STREAM or DATAGRAM), u8 n,
+    n IP text bytes, the rest is the wire."""
+    if len(payload) < 2 or payload[0] not in (STREAM, DATAGRAM):
+        raise ProtocolError(
+            "QUERY payload does not start with a transport byte (0 stream, 1 datagram) and an IP length"
+        )
+    if payload[1] == 0 or payload[1] > len(payload) - 2:
         raise ProtocolError("QUERY payload does not hold a client IP of its stated length")
-    return payload[1 : 1 + payload[0]], payload[1 + payload[0] :]
+    return payload[0] == DATAGRAM, payload[2 : 2 + payload[1]], payload[2 + payload[1] :]
 
 
 def _client_ip(text: bytes) -> str | None:
@@ -75,7 +92,7 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
         writer.write(encode_frame(ftype, fid, payload))  # one write() per frame: tasks cannot interleave bytes
         await writer.drain()
 
-    async def decide(fid: int, ip: str | None, wire: bytes) -> None:
+    async def decide(fid: int, datagram: bool, ip: str | None, wire: bytes) -> None:
         async def forward(request: bytes) -> bytes | None:
             waiter = replies[fid] = asyncio.get_running_loop().create_future()
             try:
@@ -89,7 +106,7 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
         answer: bytes | None = None
         try:
             if ip is not None:
-                answer = await resolve(wire, ip, forward)
+                answer = await resolve(wire, ip, forward, datagram=datagram)
         except Exception as exc:
             log(f"query {fid} failed: {exc!r}")
         inflight.discard(fid)  # before the final frame: the gateway may reuse the id the moment it has it
@@ -107,11 +124,11 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
                 if waiter is not None and not waiter.done():
                     waiter.set_result(payload or None)
             elif ftype == QUERY:
-                ip_text, wire = _split_query(payload)
+                datagram, ip_text, wire = _split_query(payload)
                 if fid in inflight:
                     raise ProtocolError(f"QUERY id {fid} is already in flight")
                 inflight.add(fid)
-                task = asyncio.ensure_future(decide(fid, _client_ip(ip_text), wire))
+                task = asyncio.ensure_future(decide(fid, datagram, _client_ip(ip_text), wire))
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
             else:

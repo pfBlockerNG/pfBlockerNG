@@ -98,8 +98,8 @@ func (r *rig) recvQuery() decidedQuery {
 	if typ != tQuery {
 		r.t.Fatalf("frame from the gateway: type %d, want QUERY", typ)
 	}
-	n := int(payload[0])
-	return decidedQuery{id: id, ip: string(payload[1 : 1+n]), wire: payload[1+n:]}
+	n := int(payload[1]) // payload[0] is the transport byte
+	return decidedQuery{id: id, ip: string(payload[2 : 2+n]), wire: payload[2+n:]}
 }
 
 // autoAnswer plays a decider that answers every QUERY with fn's bytes (DROP for nil); QUERYs are recorded.
@@ -114,8 +114,8 @@ func (r *rig) autoAnswer(fn func(q decidedQuery) []byte) {
 			if typ != tQuery {
 				continue
 			}
-			n := int(payload[0])
-			q := decidedQuery{id: id, ip: string(payload[1 : 1+n]), wire: payload[1+n:]}
+			n := int(payload[1]) // payload[0] is the transport byte
+			q := decidedQuery{id: id, ip: string(payload[2 : 2+n]), wire: payload[2+n:]}
 			r.queries <- q
 			go func() { // a held query must not stop the next one from being read
 				if answer := fn(q); answer == nil {

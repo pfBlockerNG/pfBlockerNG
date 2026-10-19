@@ -36,7 +36,8 @@ from frontend_constants import (
 from frontend_helpers import WATCHDOG, FakeUnbound, build_query
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
-MAX_FRAME_LEN = 5 + 1 + 255 + 65535  # type + id + (n + 255 IP text bytes + 65535 DNS wire bytes)
+MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 65535  # type + id + (transport + n + 255 IP text bytes + 65535 DNS wire bytes)
+STREAM, DATAGRAM = 0, 1  # the QUERY's transport byte
 CLIENT = "192.0.2.10"
 VIP4 = bytes(int(octet) for octet in DNSBL_IPV4.split("."))
 DUCK, TARGET = "duck.example.", "safe.duck.example."
@@ -58,9 +59,9 @@ def frame(ftype: int, fid: int, payload: bytes = b"") -> bytes:
     return struct.pack("!IBI", 5 + len(payload), ftype, fid) + payload
 
 
-def query_frame(fid: int, wire: bytes, ip: str | bytes = CLIENT) -> bytes:
+def query_frame(fid: int, wire: bytes, ip: str | bytes = CLIENT, transport: int = STREAM) -> bytes:
     text = ip.encode("ascii") if isinstance(ip, str) else ip
-    return frame(QUERY, fid, bytes([len(text)]) + text + wire)
+    return frame(QUERY, fid, bytes([transport, len(text)]) + text + wire)
 
 
 def _answers(wire: bytes) -> list[tuple[str, int, bytes]]:
@@ -109,7 +110,7 @@ async def _start_with(
 
 async def _start(booted: Booted, timeout: float = WATCHDOG) -> tuple[Gateway, asyncio.Task[None], list[str]]:
     """The decision service over the booted module's resolve; the gateway has read READY."""
-    frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=timeout)
+    frontend = pfb_dns_proxy.Frontend(booted.module)
     return await _start_with(frontend.resolve, timeout)
 
 
@@ -470,7 +471,9 @@ def test_a_reply_for_an_unknown_or_finished_id_is_ignored(booted: Booted, finish
 
 
 def test_a_query_of_exactly_the_maximum_frame_length_is_read_whole(booted: Booted) -> None:
-    payload = bytes([255]) + b"9" * 255 + bytes(65535)  # 255 IP text bytes (not an IP: a DROP) + a 65535 byte wire
+    payload = (
+        bytes([STREAM, 255]) + b"9" * 255 + bytes(65535)
+    )  # 255 IP text bytes (not an IP: a DROP) + a 65535 byte wire
     assert 5 + len(payload) == MAX_FRAME_LEN
 
     async def scenario(gateway: Gateway) -> None:
@@ -540,7 +543,7 @@ async def _serve_raw(
 
 
 def test_a_resolve_that_raises_gets_a_drop_one_log_entry_and_the_session_goes_on() -> None:
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward) -> bytes | None:
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
         if wire == b"explode":
             raise RuntimeError("module crashed")
         return b"fine"
@@ -561,6 +564,28 @@ def test_a_resolve_that_raises_gets_a_drop_one_log_entry_and_the_session_goes_on
     asyncio.run(main())
 
 
+@pytest.mark.parametrize(("transport", "datagram"), [(STREAM, False), (DATAGRAM, True)], ids=["stream", "datagram"])
+def test_the_clients_transport_byte_reaches_resolve_as_the_datagram_flag(transport: int, datagram: bool) -> None:
+    seen: list[tuple[bytes, str, bool]] = []
+
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+        seen.append((wire, ip, datagram))
+        return b"fine"
+
+    async def main() -> None:
+        gateway, service, problems = await _start_with(resolve)
+        try:
+            await gateway.send(query_frame(7, b"query", transport=transport))
+            assert await gateway.recv() == (ANSWER, 7, b"fine")
+        finally:
+            gateway.close()
+            await asyncio.wait_for(service, WATCHDOG)
+        assert problems == []
+
+    asyncio.run(main())
+    assert seen == [(b"query", CLIENT, datagram)]
+
+
 def test_a_gateway_that_stops_reading_makes_the_senders_wait_and_every_frame_arrives_whole_under_its_id() -> None:
     count, size = 64, 60_000  # ~3.8 MB against ~16 KB of socket buffers and the transport's 64 KiB high-water mark
 
@@ -573,7 +598,7 @@ def test_a_gateway_that_stops_reading_makes_the_senders_wait_and_every_frame_arr
         problems: list[str] = []
         all_resolved = asyncio.Event()
 
-        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward) -> bytes | None:
+        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
             task = asyncio.current_task()
             assert task is not None
             tasks.append(task)
@@ -619,7 +644,7 @@ def test_a_gateway_that_resets_the_connection_ends_the_session_quietly(monkeypat
 
     monkeypatch.setattr(asyncio.StreamReader, "readexactly", spy)
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward) -> bytes | None:
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
         return await forward(wire)
 
     async def main() -> None:
@@ -648,7 +673,7 @@ def test_an_answer_the_gateway_can_no_longer_receive_ends_its_query_without_an_e
         problems: list[str] = []
         started = asyncio.Event()
 
-        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward) -> bytes | None:
+        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
             task = asyncio.current_task()
             assert task is not None
             tasks.append(task)
@@ -686,9 +711,11 @@ PROTOCOL_ERRORS = {
     "drop-from-gateway": frame(DROP, 1),
     "ready-from-gateway": frame(READY, 0),
     "query-without-payload": frame(QUERY, 1),
-    "query-ip-length-zero": frame(QUERY, 1, b"\x00" + WIRE),
-    "query-ip-length-beyond-payload": frame(QUERY, 1, bytes([10]) + b"1.2.3.4"),
-    "query-ip-length-one-past-payload": frame(QUERY, 1, bytes([8]) + b"1.2.3.4"),  # n = 8, 7 bytes follow
+    "query-with-a-transport-byte-only": frame(QUERY, 1, bytes([STREAM])),
+    "query-with-an-unknown-transport": frame(QUERY, 1, bytes([2, 10]) + b"192.0.2.10" + WIRE),
+    "query-ip-length-zero": frame(QUERY, 1, bytes([STREAM, 0]) + WIRE),
+    "query-ip-length-beyond-payload": frame(QUERY, 1, bytes([STREAM, 10]) + b"1.2.3.4"),
+    "query-ip-length-one-past-payload": frame(QUERY, 1, bytes([DATAGRAM, 8]) + b"1.2.3.4"),  # n = 8, 7 bytes follow
 }
 
 
@@ -711,24 +738,6 @@ def test_the_gateway_going_away_ends_the_process_cleanly_with_exit_0(module_dir:
 
 
 # --- the command line and the lifecycle ----------------------------------------------------------
-
-
-def test_decision_fd_defaults_to_off_and_the_listener_defaults_are_unchanged() -> None:
-    assert pfb_dns_proxy.parse_args([]).decision_fd is None
-    args = pfb_dns_proxy.parse_args(["--decision-fd", "3", "--module-dir", "/var/unbound", "--user", "unbound"])
-    assert (args.decision_fd, args.user) == (3, "unbound")
-
-
-@pytest.mark.parametrize(
-    "extra", [["--listen", "127.0.0.1"], ["--port", "5300"], ["--dot"]], ids=["listen", "port", "dot"]
-)
-def test_decision_fd_cannot_be_combined_with_a_listener_option(
-    extra: list[str], capsys: pytest.CaptureFixture[str]
-) -> None:
-    with pytest.raises(SystemExit) as exit_info:
-        pfb_dns_proxy.main(["--decision-fd", "3", *extra])
-    assert exit_info.value.code == 2
-    assert "--decision-fd cannot be combined with --listen, --port or --dot" in capsys.readouterr().err
 
 
 def _serve_decisions(

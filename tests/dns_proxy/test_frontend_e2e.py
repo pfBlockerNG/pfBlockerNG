@@ -1,6 +1,7 @@
-"""DNS proxy end-to-end with the REAL shipped pfb_unbound.py booted through the shim.
+"""The decider's decisions with the REAL shipped pfb_unbound.py booted through the shim.
 
-Unbound is replaced by FakeUnbound (a table); test_integration_unbound.py runs the same flows against a real one.
+Unbound is replaced by FakeUnbound (a table); test_gateway_e2e.py runs the same flows through the real gateway against
+a real one.
 """
 
 from __future__ import annotations
@@ -12,25 +13,17 @@ import logging
 import struct
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import dnswire
 import pfb_dns_proxy
-import proxyv2
 import pytest
 import unbound_shim as shim
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, DNSBL_IPV6, Booted
 from frontend_helpers import (
     AD,
-    WATCHDOG,
-    FakeProxyUpstream,
     FakeUnbound,
     build_query,
-    serve_plain,
-    serving,
-    tcp_exchange,
-    udp_exchange,
 )
 
 CLIENT = "192.0.2.10"
@@ -49,7 +42,7 @@ ZONE = {
 
 
 def _resolve(booted: Booted, wire: bytes, forward: Any, client: str = CLIENT) -> bytes | None:
-    frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
+    frontend = pfb_dns_proxy.Frontend(booted.module)
     return asyncio.run(frontend.resolve(wire, client, forward))
 
 
@@ -374,22 +367,6 @@ def test_servfail_goes_to_the_servfail_callback_not_the_reply_callback(
 # --- addressing and CLI --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("client", "local", "expected"),
-    [
-        (("::ffff:192.0.2.10", 1), ("::", 53), (("192.0.2.10", 1), ("0.0.0.0", 53))),
-        (("::ffff:192.0.2.10", 1), ("::ffff:192.0.2.1", 53), (("192.0.2.10", 1), ("192.0.2.1", 53))),
-        (("192.0.2.10", 1), ("0.0.0.0", 53), (("192.0.2.10", 1), ("0.0.0.0", 53))),
-        (("2001:db8::1", 1), ("0.0.0.0", 53), (("2001:db8::1", 1), ("::", 53))),
-        (("fe80::1%eth0", 1), ("::1", 53), (("fe80::1", 1), ("::1", 53))),
-    ],
-)
-def test_proxy_endpoints_share_one_family_and_drop_scope_ids(
-    client: tuple[str, int], local: tuple[str, int], expected: tuple[tuple[str, int], tuple[str, int]]
-) -> None:
-    assert pfb_dns_proxy.proxy_endpoints(client, local) == expected
-
-
 def test_shutdown_gives_back_the_stderr_init_standard_replaced(
     module_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -422,117 +399,4 @@ def test_module_without_a_log_dir_gets_a_stderr_sink_instead_of_recursing(
     assert logging.root.handlers == []
 
 
-def test_parse_hostport_handles_ipv4_ipv6_and_rejects_garbage() -> None:
-    assert pfb_dns_proxy.parse_hostport("127.0.0.1:5353") == ("127.0.0.1", 5353)
-    assert pfb_dns_proxy.parse_hostport("[::1]:5353") == ("::1", 5353)
-    for bad in ("5353", "host:port", "127.0.0.1:99999"):
-        with pytest.raises(ValueError):
-            pfb_dns_proxy.parse_hostport(bad)
-
-
-def test_cli_defaults_match_the_documented_contract() -> None:
-    args = pfb_dns_proxy.parse_args([])
-    assert (args.listen, args.port, args.upstream, args.module_dir) == (None, 53, "127.0.0.1:5353", "/var/unbound")
-    args = pfb_dns_proxy.parse_args(["--listen", "127.0.0.1", "--listen", "::1", "--port", "5300"])
-    assert (args.listen, args.port) == (["127.0.0.1", "::1"], 5300)
-
-
 # --- real sockets --------------------------------------------------------------------------------
-
-
-def test_udp_and_tcp_listeners_block_locally_and_forward_with_a_proxyv2_header(booted: Booted) -> None:
-    unbound = FakeUnbound(ZONE)
-
-    async def scenario() -> SimpleNamespace:
-        async with FakeProxyUpstream(unbound) as upstream:
-            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            try:
-                out = SimpleNamespace(server=server)
-                out.udp_blocked, _ = await udp_exchange(server, build_query(BLOCKED))
-                out.tcp_blocked, _ = await tcp_exchange(server, build_query(BLOCKED))
-                assert upstream.headers == []  # nothing forwarded yet
-                out.udp_allowed, out.udp_client = await udp_exchange(server, build_query(ALLOWED), source="127.0.0.5")
-                out.tcp_allowed, out.tcp_client = await tcp_exchange(server, build_query(ALLOWED), source="127.0.0.6")
-                out.headers = list(upstream.headers)
-                return out
-            finally:
-                await frontend.stop()
-
-    out = asyncio.run(scenario())
-    for blocked in (out.udp_blocked, out.tcp_blocked):
-        assert _answers(dnswire.parse(blocked)) == [(BLOCKED, dnswire.TYPE_A, VIP4)]
-    expected = FakeUnbound(ZONE).answer(build_query(ALLOWED))
-    assert (out.udp_allowed, out.tcp_allowed) == (expected, expected)
-    assert out.headers == [
-        proxyv2.header(out.udp_client, out.server, tcp=False),
-        proxyv2.header(out.tcp_client, out.server, tcp=True),
-    ]
-    assert out.udp_client[0] == "127.0.0.5" and out.tcp_client[0] == "127.0.0.6"
-
-
-def test_tcp_client_connection_reuses_one_upstream_connection_and_header(booted: Booted) -> None:
-    async def scenario() -> tuple[list[bytes], list[bytes]]:
-        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
-            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            try:
-                reader, writer = await asyncio.open_connection(*server)
-                replies = []
-                for qid in (1, 2):
-                    wire = build_query(ALLOWED, qid=qid)
-                    writer.write(struct.pack("!H", len(wire)) + wire)
-                    size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), WATCHDOG))[0]
-                    replies.append(await asyncio.wait_for(reader.readexactly(size), WATCHDOG))
-                writer.close()
-                return replies, list(upstream.headers)
-            finally:
-                await frontend.stop()
-
-    replies, headers = asyncio.run(scenario())
-    assert [dnswire.parse(reply).id for reply in replies] == [1, 2]
-    assert len(headers) == 1
-
-
-def test_udp_query_unanswered_by_unbound_gets_servfail(booted: Booted) -> None:
-    async def scenario() -> bytes:
-        async with FakeProxyUpstream(FakeUnbound(ZONE), silent=True) as upstream:
-            frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", upstream.port), timeout=0.05)
-            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            try:
-                return (await udp_exchange(server, build_query(ALLOWED, qid=9)))[0]
-            finally:
-                await frontend.stop()
-
-    reply = dnswire.parse(asyncio.run(scenario()))
-    assert (reply.id, reply.rcode) == (9, 2)
-
-
-def test_serve_boots_the_module_from_the_module_dir_and_shuts_it_down(
-    module_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(module_dir)
-    monkeypatch.setattr(sys, "stderr", sys.stderr)
-    before = sys.modules.get("pfb_unbound")  # the repo-wide conftest has already imported its own copy
-    real_boot = pfb_dns_proxy.boot
-    booted_modules: list[Any] = []
-
-    def boot_without_log_files(directory: str) -> Any:
-        module = real_boot(directory)
-        booted_modules.append(module)
-        monkeypatch.setattr(module, "pfb_log", lambda name, line: None)  # the module logs to /var/log/pfblockerng
-        return module
-
-    monkeypatch.setattr(pfb_dns_proxy, "boot", boot_without_log_files)
-    args = pfb_dns_proxy.parse_args(
-        ["--listen", "127.0.0.1", "--port", "0", "--upstream", "127.0.0.1:9", "--module-dir", str(module_dir)]
-    )
-
-    async def scenario() -> bytes:
-        async with serving(args) as [server]:
-            return (await udp_exchange(server, build_query(BLOCKED)))[0]
-
-    reply = asyncio.run(scenario())
-    assert _answers(dnswire.parse(reply)) == [(BLOCKED, dnswire.TYPE_A, VIP4)]
-    assert booted_modules[0] is not before  # serve() imported the module dir's pfb_unbound ...
-    assert sys.modules.get("pfb_unbound") is before  # ... and shutdown() uninstalled the shim

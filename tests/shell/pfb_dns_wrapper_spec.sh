@@ -7,7 +7,7 @@
 # the packaged one finds its own `bin/`.
 #
 #   exit status of the binary  — a matching binary exists and ran (exec)
-#   exit status 3              — no pfb-dns payload shipped at all (legacy package)
+#   exit status 3              — no pfb-dns payload shipped at all: nothing to run, and nothing to fall back to
 #   exit status 1              — payload shipped but unusable here (unknown machine, own-arch binary
 #                                missing or not executable): the caller must not fall back
 
@@ -159,7 +159,7 @@ EOF
     cleanup
   End
 
-  It 'reports a legacy package (no payload at all) with status 3, distinct from every failure'
+  It 'fails with status 3 and its reason on stderr when no payload is shipped at all, distinct from every other failure'
     setup
     machine=amd64
     When call run_wrapper
@@ -168,7 +168,7 @@ EOF
     cleanup
   End
 
-  It 'reports an empty bin tree as a legacy package too'
+  It 'fails with status 3 for an empty bin tree too'
     setup
     mkdir -p "${work}/dns_proxy/bin/freebsd-amd64" "${work}/dns_proxy/bin/freebsd-arm64"
     machine=amd64

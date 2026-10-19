@@ -1,6 +1,6 @@
 """pfB-DNS with DNSBL off writes the existing DNS Reply log when the DNS Reply Logging preference is on (issue #3515).
 
-`--no-module --reply-log` keeps the proxy a plain forwarder (no feeds, no decisions, no DNSBL lifecycle) and logs each
+`--no-module --reply-log` keeps the decider a plain forwarder (no feeds, no decisions, no DNSBL lifecycle) and logs each
 reply with the shipped pfb_unbound.py's own get_details_reply(), so dns_reply.log gets the rows, the escaping and the
 columns that Reports and Stats already read. The module mode is the reference: every case below is pinned in BOTH modes
 against the same expected rows (tests/fixtures/dns_reply_standalone_rows.json, which the PHP viewer tests read too).
@@ -28,14 +28,10 @@ import pytest
 import unbound_shim as shim
 from frontend_constants import ALLOWED, REPO_ROOT, SHIPPED_DIR, Booted, LogFeed
 from frontend_helpers import (
-    WATCHDOG,
-    FakeProxyUpstream,
     FakeUnbound,
     UpstreamVerdict,
     build_query,
-    running_proxy,
-    serving,
-    udp_exchange,
+    serving_decisions,
 )
 
 if TYPE_CHECKING:
@@ -110,7 +106,7 @@ def _upstream(case: Case) -> Forward:
 
 
 def _ask(module: Any, qname: str, qtype: int, forward: Forward, **frontend: Any) -> bytes | None:
-    asked = pfb_dns_proxy.Frontend(module, ("127.0.0.1", 9), timeout=WATCHDOG, **frontend)
+    asked = pfb_dns_proxy.Frontend(module, **frontend)
     return asyncio.run(asked.resolve(build_query(qname, qtype), CLIENT, forward))
 
 
@@ -173,20 +169,6 @@ def _written(handlers: list[_RecordingHandler]) -> list[str]:
 
 
 # --- the flag ----------------------------------------------------------------------------------------
-
-
-def test_reply_log_is_off_unless_asked_for() -> None:
-    assert pfb_dns_proxy.parse_args(["--no-module"]).reply_log is False
-    assert pfb_dns_proxy.parse_args(["--no-module", "--reply-log"]).reply_log is True
-
-
-def test_reply_log_is_refused_while_the_module_runs_because_the_module_has_its_own_log(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as refused:
-        pfb_dns_proxy.parse_args(["--reply-log"])
-    assert refused.value.code == 2
-    assert "--reply-log needs --no-module" in capsys.readouterr().err
 
 
 # --- the rows: the same in both modes ------------------------------------------------------------------------
@@ -273,7 +255,7 @@ def test_a_packet_that_is_not_a_query_is_dropped_before_anything_is_logged(reply
     async def forward(_wire: bytes) -> bytes:
         raise AssertionError("never forwarded")
 
-    frontend = pfb_dns_proxy.Frontend(None, ("127.0.0.1", 9), timeout=WATCHDOG, reply_log=replylog.log)
+    frontend = pfb_dns_proxy.Frontend(None, reply_log=replylog.log)
     assert asyncio.run(frontend.resolve(wire, CLIENT, forward)) is None
     assert _lines(replylog.rows) == []
 
@@ -419,16 +401,13 @@ def test_the_geoip_column_is_unk_without_the_database(replylog: Logged) -> None:
     assert _iso(replylog, "geo.example.") == "unk"
 
 
-# --- serve(): off, on, and a start that must not depend on the module's runtime dir -------------------------
+# --- serve_decisions(): off, on, and a start that must not depend on the module's runtime dir --------------------
 
 
 def _serve_and_ask(argv: list[str], qname: str = ALLOWED) -> bytes:
     async def scenario() -> bytes:
-        async with FakeProxyUpstream(FakeUnbound(ZONE)) as upstream:
-            args = pfb_dns_proxy.parse_args(["--listen", "127.0.0.1", "--port", "0", *argv])
-            args.upstream = f"127.0.0.1:{upstream.port}"
-            async with serving(args) as [server]:  # a client that is not the firewall itself (127.0.0.1)
-                return (await udp_exchange(server, build_query(qname), source=CLIENT_ON_LOOPBACK))[0]
+        async with serving_decisions(argv) as gateway:  # a client that is not the firewall itself (127.0.0.1)
+            return await gateway.ask(build_query(qname), FakeUnbound(ZONE), client=CLIENT_ON_LOOPBACK)
 
     return asyncio.run(scenario())
 
@@ -483,12 +462,3 @@ def test_a_module_mode_proxy_ignores_a_reply_log_it_was_handed_so_a_row_is_never
     _ask(booted.module, ALLOWED, dnswire.TYPE_A, _upstream(CASES["a"]), reply_log=spy)
     assert calls == []
     assert len(_lines(booted.log)) == 1  # the module's own row, and only that
-
-
-def test_the_real_process_starts_with_a_reply_log_and_no_module_dir_and_stops_cleanly_on_sigterm(
-    tmp_path: Path,
-) -> None:
-    argv = ["--no-module", "--reply-log", "--listen", "127.0.0.1", "--port", "0"]
-    argv += ["--upstream", "127.0.0.1:9", "--module-dir", str(tmp_path / "absent")]
-    with running_proxy(argv, cwd=tmp_path):
-        pass  # listening was seen; leaving the block sends SIGTERM and requires exit status 0

@@ -9,8 +9,8 @@ DoH and DoQ on next to the toggle, and watches the box and the LAN client VM. On
 ``pfb_doq_probe``, is built here, from ``go/``, with the Go that built the package (smoke-on-box.sh's, CI's, or, when
 there is none, the pinned one scripts/go_toolchain.py installs in this module's scratch directory and deletes).
 
-Module setup, put back in ``finally`` (``test_smoke_dns_proxy.py`` hides the payload itself, to see the Python
-listener of a legacy package)::
+Module setup, put back in ``finally`` (``test_smoke_dns_proxy.py`` drives the same gateway through the toggle's
+lifecycle: modes, restarts, boot, rollback, removal)::
 
     Resolver: DoT on with a self-signed certificate, ``log-queries: yes`` in Custom Options
     DNSBL:    one feed listing every name the tests expect to be blocked; DoH on 4443 and DoQ on 853 on the LAN
@@ -877,12 +877,14 @@ def test_unbound_runs_the_upstream_observer_never_the_module_in_gateway_mode(gw:
 
     Given the Resolver forwards to the System DNS server and the gateway serves,
     Then unbound.conf's only `python-script` is `pfb_upstream_observer.py` (the module is in the chain) and
-      `pfb_unbound.py` is not named.
+      `pfb_unbound.py` is not named; the observer is staged in the chroot beside the shipped module.
     """
     scripts = re.findall(r"^\s*python-script\s*:\s*(\S+)", gateway_on.conf, re.MULTILINE)
     assert scripts == [OBSERVER_SCRIPT], f"python-script lines: {scripts}\n{gateway_on.conf}"
     assert MODULE_LINE.search(gateway_on.conf), f"the python module is not in the module chain:\n{gateway_on.conf}"
     assert "pfb_unbound.py" not in gateway_on.conf, gateway_on.conf
+    staged = gw.vm.ssh(f"ls -l /var/unbound/{OBSERVER_SCRIPT} /var/unbound/pfb_unbound.py 2>&1").stdout
+    assert OBSERVER_SCRIPT in staged and "No such file" not in staged, f"staged files: {staged}"
 
 
 def test_an_upstream_ede_block_is_logged_with_the_real_client_in_gateway_mode(
@@ -917,9 +919,14 @@ def test_the_firewalls_own_lookup_of_a_listed_name_gets_the_vip_from_the_gateway
 ) -> None:
     """The gateway serves loopback at the Listen Port, so the firewall's own lookups are DNSBL-filtered.
 
-    When the box asks `drill @127.0.0.1` (and gethostbyname through /etc/resolv.conf) for a listed name,
-    Then the answer is the DNSBL VIP and dnsbl.log names 127.0.0.1 as the client.
+    When pfSense regenerates /etc/resolv.conf (a reboot, a WAN event, a settings save do the same) and the box asks
+      `drill @127.0.0.1` (and gethostbyname through /etc/resolv.conf) for a listed name,
+    Then resolv.conf still names 127.0.0.1 (pfSense lists it while the Resolver's port is 53 and lo0 is bound: both
+      stay), the answer is the DNSBL VIP and dnsbl.log names 127.0.0.1 as the client.
     """
+    _php_ok(gw.vm, "require_once('system.inc');\nsystem_resolvconf_generate();", "system_resolvconf_generate")
+    resolv = gw.vm.ssh("cat /etc/resolv.conf").stdout
+    assert re.search(r"^nameserver\s+127\.0\.0\.1\s*$", resolv, re.MULTILINE), f"/etc/resolv.conf:\n{resolv}"
     name = gw.names.firewall
     drilled = gw.vm.ssh(f"drill @127.0.0.1 {name} A 2>&1").stdout
     assert h.DEFAULT_DNSBL_VIP4 in drilled, f"drill @127.0.0.1 {name}:\n{drilled}"

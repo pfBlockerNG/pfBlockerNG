@@ -1,8 +1,9 @@
-"""SafeSearch CNAME redirect (MODULE_RESTART_NEXT) through the DNS proxy, with the REAL shipped pfb_unbound.py.
+"""SafeSearch CNAME redirect (MODULE_RESTART_NEXT) in the decider, with the REAL shipped pfb_unbound.py.
 
-The module plants `orig -> CNAME -> target` and asks for a restart so Unbound's iterator chases the target. The proxy
-plays that iterator: it asks Unbound (as the same client) for the target and gives the module the combined message.
-test_integration_unbound.py runs the same flows against a real Unbound.
+The module plants `orig -> CNAME -> target` and asks for a restart so Unbound's iterator chases the target. The decider
+plays that iterator: it has Unbound asked (as the same client, through the gateway) for the target and gives the module
+the combined message. test_gateway_e2e.py, test_gateway_safesearch.py and test_gateway_chase.py run the same flows
+through the real gateway against a real Unbound.
 """
 
 from __future__ import annotations
@@ -15,19 +16,13 @@ from typing import Any
 
 import dnswire
 import pfb_dns_proxy
-import proxyv2
 import pytest
 import unbound_shim as shim
 from frontend_constants import DNSBL_IPV4, Booted
 from frontend_helpers import (
     AD,
-    WATCHDOG,
-    FakeProxyUpstream,
     FakeUnbound,
     build_query,
-    serve_plain,
-    tcp_exchange,
-    udp_exchange,
 )
 
 CLIENT = "192.0.2.10"
@@ -99,16 +94,17 @@ def cache_calls(ss_booted: Booted) -> list[tuple[Any, ...]]:
 
 
 def _resolve_wire(
-    booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, over_tcp: Any = None
+    booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, datagram: bool = False
 ) -> bytes | None:
-    """What the client is sent; `over_tcp` makes the client a UDP one (see Frontend.resolve)."""
-    frontend = pfb_dns_proxy.Frontend(booted.module, ("127.0.0.1", 9), timeout=WATCHDOG)
-    extra = {} if over_tcp is None else {"over_tcp": over_tcp}
-    return asyncio.run(frontend.resolve(wire, client, forward, **extra))
+    """What the client is sent; `datagram` makes the client a plain-UDP one (see Frontend.resolve)."""
+    frontend = pfb_dns_proxy.Frontend(booted.module)
+    return asyncio.run(frontend.resolve(wire, client, forward, datagram=datagram))
 
 
-def _resolve(booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, over_tcp: Any = None) -> dnswire.Message:
-    return dnswire.parse(_resolve_wire(booted, wire, forward, client, over_tcp) or b"")
+def _resolve(
+    booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, datagram: bool = False
+) -> dnswire.Message:
+    return dnswire.parse(_resolve_wire(booted, wire, forward, client, datagram) or b"")
 
 
 def _answers(reply: dnswire.Message) -> list[tuple[str, int, bytes]]:
@@ -220,53 +216,6 @@ def _target_zone(count: int) -> dict[tuple[str, int], list[str]]:
     return ZONE | {(TARGET, dnswire.TYPE_A): addresses}
 
 
-class TruncatesTarget(FakeUnbound):
-    """Unbound over UDP for a target whose addresses do not fit a datagram: TC set and no answer, as Unbound does."""
-
-    def answer(self, wire: bytes) -> bytes:
-        query = dnswire.parse(wire)
-        if query.questions[0].name != TARGET:
-            return super().answer(wire)
-        self.queries.append(wire)
-        flags = dnswire.QR | dnswire.RA | dnswire.TC | (query.flags & dnswire.RD)
-        return dnswire.encode(dnswire.Message(query.id, flags, query.questions))
-
-
-BAKED_V4 = ipaddress.IPv4Address("198.51.100.7").packed
-
-
-def test_a_chase_truncated_over_udp_is_repeated_over_tcp_and_the_client_gets_the_targets_real_addresses(
-    ss_booted: Booted,
-) -> None:
-    """Issue #3517 review: a TC reply with no answers read as 'the target has no address' and served the baked one."""
-    udp, tcp = TruncatesTarget(_target_zone(3)), FakeUnbound(_target_zone(3))
-    reply = _resolve(ss_booted, build_query(DUCK, edns=True), udp, over_tcp=tcp)
-    assert reply.flags & dnswire.TC == 0
-    assert [(rr.name, rr.rtype) for rr in reply.answers] == [(DUCK, dnswire.TYPE_CNAME)] + [
-        (TARGET, dnswire.TYPE_A)
-    ] * 3
-    assert [rr.rdata for rr in reply.answers[1:]] == [bytes([10, 0, 0, n]) for n in (1, 2, 3)]
-    assert BAKED_V4 not in [rr.rdata for rr in reply.answers]
-    assert _asked(udp) == [(DUCK, dnswire.TYPE_A), (TARGET, dnswire.TYPE_A)]
-    assert _asked(tcp) == [(TARGET, dnswire.TYPE_A)]  # the chase, once, as the same query that was truncated
-    assert tcp.queries == [udp.queries[1]]
-
-
-def test_a_chase_that_was_not_truncated_is_not_repeated_over_tcp(ss_booted: Booted) -> None:
-    udp, tcp = FakeUnbound(ZONE), FakeUnbound(ZONE)
-    reply = _resolve(ss_booted, build_query(DUCK, edns=True), udp, over_tcp=tcp)
-    assert _answers(reply) == [CNAME_TO_TARGET, (TARGET, dnswire.TYPE_A, TARGET_A)]
-    assert tcp.queries == []
-
-
-def test_a_chase_truncated_over_udp_and_unanswered_over_tcp_gets_the_baked_address(ss_booted: Booted) -> None:
-    async def silent(_wire: bytes) -> None:
-        return None
-
-    reply = _resolve(ss_booted, build_query(DUCK, edns=True), TruncatesTarget(ZONE), over_tcp=silent)
-    assert _answers(reply) == [(DUCK, dnswire.TYPE_A, BAKED_V4)]  # as for any chase that gets no reply
-
-
 # --- the client's UDP size is kept -----------------------------------------------------------------
 
 # (client's EDNS size or None, target addresses, whether the reply has to be truncated). The reply holds the CNAME and
@@ -290,7 +239,7 @@ def test_a_reply_the_proxy_builds_is_cut_to_the_udp_size_the_client_advertised(
     ss_booted: Booted, size: int | None, count: int, truncated: bool
 ) -> None:
     """Issue #3517 review: a no-EDNS client was sent 530 bytes and one advertising 512 was sent 796, TC clear."""
-    wire = _resolve_wire(ss_booted, _udp_query(size), FakeUnbound(_target_zone(count)), over_tcp=FakeUnbound(ZONE))
+    wire = _resolve_wire(ss_booted, _udp_query(size), FakeUnbound(_target_zone(count)), datagram=True)
     assert wire is not None
     reply = dnswire.parse(wire)
     limit = min(max(size or 512, 512), 1232)
@@ -314,16 +263,12 @@ def test_a_reply_exactly_as_big_as_the_clients_udp_size_is_not_truncated(ss_boot
     full = _resolve_wire(ss_booted, build_query(DUCK, edns=True, udp_size=4096), FakeUnbound(zone))  # TCP: no limit
     assert full is not None and 512 < len(full) < 1232
     for size, truncated in ((len(full), False), (len(full) - 1, True)):
-        reply = _resolve(
-            ss_booted, build_query(DUCK, edns=True, udp_size=size), FakeUnbound(zone), over_tcp=FakeUnbound(zone)
-        )
+        reply = _resolve(ss_booted, build_query(DUCK, edns=True, udp_size=size), FakeUnbound(zone), datagram=True)
         assert (size, bool(reply.flags & dnswire.TC)) == (size, truncated)
 
 
-def test_over_tcp_a_reply_larger_than_any_udp_size_is_sent_whole(ss_booted: Booted) -> None:
-    wire = _resolve_wire(
-        ss_booted, build_query(DUCK), FakeUnbound(_target_zone(94))
-    )  # no over_tcp: a TCP or DoT client
+def test_to_a_stream_client_a_reply_larger_than_any_udp_size_is_sent_whole(ss_booted: Booted) -> None:
+    wire = _resolve_wire(ss_booted, build_query(DUCK), FakeUnbound(_target_zone(94)))  # a stream client
     assert wire is not None and len(wire) > 1232
     reply = dnswire.parse(wire)
     assert (reply.flags & dnswire.TC, len(reply.answers)) == (0, 95)
@@ -443,46 +388,3 @@ def test_a_restart_with_nothing_planted_is_servfail_without_a_chase(
 
 
 # --- real sockets: the chase is made as the client -----------------------------------------------
-
-
-def test_the_chase_reaches_unbound_behind_the_same_proxyv2_header_as_the_clients_query(ss_booted: Booted) -> None:
-    async def scenario() -> tuple[Any, ...]:
-        unbound = FakeUnbound(ZONE)
-        async with FakeProxyUpstream(unbound) as upstream:
-            frontend = pfb_dns_proxy.Frontend(ss_booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            try:
-                udp, udp_client = await udp_exchange(server, build_query(DUCK), source="127.0.0.5")
-                udp_headers = list(upstream.headers)
-                upstream.headers.clear()
-                tcp, tcp_client = await tcp_exchange(server, build_query(DUCK), source="127.0.0.6")
-                return server, udp, udp_client, udp_headers, tcp, tcp_client, list(upstream.headers), _asked(unbound)
-            finally:
-                await frontend.stop()
-
-    server, udp, udp_client, udp_headers, tcp, tcp_client, tcp_headers, asked = asyncio.run(scenario())
-    for reply in (udp, tcp):
-        assert _answers(dnswire.parse(reply)) == [CNAME_TO_TARGET, (TARGET, dnswire.TYPE_A, TARGET_A)]
-    udp_header = proxyv2.header(udp_client, server, tcp=False)
-    assert udp_headers == [udp_header, udp_header]  # the query and its chase, one client
-    assert tcp_headers == [proxyv2.header(tcp_client, server, tcp=True)]  # both over the client's one connection
-    assert asked == [(DUCK, 1), (TARGET, 1)] * 2
-    assert struct.unpack("!H", udp[:2])[0] == 0x1234  # the client's id, not the chase's
-
-
-def test_a_chase_repeated_over_tcp_opens_the_connection_to_unbound_with_a_stream_header_for_the_same_client(
-    ss_booted: Booted,
-) -> None:
-    async def scenario() -> tuple[tuple[str, int], tuple[str, int], list[bytes]]:
-        async with FakeProxyUpstream(TruncatesTarget(_target_zone(3))) as upstream:
-            frontend = pfb_dns_proxy.Frontend(ss_booted.module, ("127.0.0.1", upstream.port), timeout=WATCHDOG)
-            [server] = await serve_plain(frontend, ["127.0.0.1"], 0)
-            try:
-                _, client = await udp_exchange(server, build_query(DUCK, edns=True), source="127.0.0.5")
-                return server, client, list(upstream.headers)
-            finally:
-                await frontend.stop()
-
-    server, client, headers = asyncio.run(scenario())
-    datagram = proxyv2.header(client, server, tcp=False)
-    assert headers == [datagram, datagram, proxyv2.header(client, server, tcp=True)]  # query, chase, chase over TCP

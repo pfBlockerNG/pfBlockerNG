@@ -1,4 +1,4 @@
-"""pfB-DNS's modes in the decision service (issue #3513): `--decision-fd` with the flags of the Python proxy.
+"""pfB-DNS's modes in the decision service (issue #3513): `--decision-fd` with the mode flags the gateway hands on.
 
 DNSBL off is `--no-module [--reply-log]`: the decider boots no pfb_unbound.py, decides nothing and forwards every query
 through the FORWARD/REPLY exchange; with the DNS Reply Logging preference on it writes the existing DNS Reply log row

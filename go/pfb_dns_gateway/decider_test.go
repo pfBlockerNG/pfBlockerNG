@@ -19,7 +19,7 @@ const watchdog = 10 * time.Second // stuck-run guard for waits; never asserted o
 
 const (
 	tQuery, tForward, tReply, tAnswer, tDrop, tReady byte = 1, 2, 3, 4, 5, 6
-	maxFrameBytes                                         = 5 + 1 + 255 + 65535
+	maxFrameBytes                                         = 5 + 1 + 1 + 255 + 65535
 )
 
 // pack builds a frame from the protocol document alone: u32 len | u8 type | u32 id | payload.
@@ -31,8 +31,9 @@ func pack(typ byte, id uint32, payload []byte) []byte {
 	return append(b, payload...)
 }
 
-func queryPayload(ip string, wire []byte) []byte {
-	return append(append([]byte{byte(len(ip))}, ip...), wire...)
+// queryPayload is a QUERY payload by the documented layout: u8 transport, u8 n, n bytes of IP text, the DNS wire.
+func queryPayload(transport byte, ip string, wire []byte) []byte {
+	return append(append([]byte{transport, byte(len(ip))}, ip...), wire...)
 }
 
 // peer plays the decider (the Python side) on the other end of the socketpair.
@@ -121,7 +122,7 @@ type decided struct {
 func decide(d *Decider, ctx context.Context, ip string, wire []byte, fwd forwarder) <-chan decided {
 	out := make(chan decided, 1)
 	go func() {
-		a, err := d.Decide(ctx, netip.MustParseAddr(ip), wire, fwd)
+		a, err := d.Decide(ctx, netip.MustParseAddr(ip), false, wire, fwd)
 		out <- decided{a, err}
 	}()
 	return out
@@ -152,7 +153,7 @@ func TestFrameCodecMatchesTheDocumentedLayout(t *testing.T) {
 		payload []byte
 		golden  string
 	}{
-		{"QUERY", tQuery, 7, queryPayload("192.0.2.10", wire), "0000001401" + "00000007" + "0a" + hex.EncodeToString([]byte("192.0.2.10")) + "abcd0100"},
+		{"QUERY", tQuery, 7, queryPayload(1, "192.0.2.10", wire), "0000001501" + "00000007" + "01" + "0a" + hex.EncodeToString([]byte("192.0.2.10")) + "abcd0100"},
 		{"FORWARD", tForward, 7, wire, "0000000902" + "00000007" + "abcd0100"},
 		{"REPLY", tReply, 258, wire, "0000000903" + "00000102" + "abcd0100"},
 		{"REPLY empty", tReply, 7, nil, "0000000503" + "00000007"},
@@ -232,8 +233,8 @@ func TestDeciderAnswerReachesTheCaller(t *testing.T) {
 	wire := []byte{0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 1, 'a', 0, 0, 1, 0, 1}
 	out := decide(d, context.Background(), "2001:db8::1", wire, noForward(t))
 	typ, id, payload := p.recv()
-	if typ != tQuery || !bytes.Equal(payload, queryPayload("2001:db8::1", wire)) {
-		t.Fatalf("QUERY frame: got type=%d payload=%x, want type=%d payload=%x", typ, payload, tQuery, queryPayload("2001:db8::1", wire))
+	if typ != tQuery || !bytes.Equal(payload, queryPayload(0, "2001:db8::1", wire)) {
+		t.Fatalf("QUERY frame: got type=%d payload=%x, want type=%d payload=%x", typ, payload, tQuery, queryPayload(0, "2001:db8::1", wire))
 	}
 	if id == 0 {
 		t.Fatal("QUERY id 0 is reserved for READY")
@@ -521,7 +522,7 @@ func TestProtocolViolationsFromTheDeciderAreFatal(t *testing.T) {
 		{"unknown type 0x00", pack(0, 1, nil), "type"},
 		{"unknown type 0x07", pack(7, 1, nil), "type"},
 		{"unknown type 0xff", pack(0xff, 1, nil), "type"},
-		{"QUERY from the decider", pack(tQuery, 1, queryPayload("192.0.2.1", nil)), "not valid from the decider"},
+		{"QUERY from the decider", pack(tQuery, 1, queryPayload(0, "192.0.2.1", nil)), "not valid from the decider"},
 		{"REPLY from the decider", pack(tReply, 1, nil), "not valid from the decider"},
 		{"ANSWER with an empty payload", pack(tAnswer, 1, nil), "empty"},
 		{"ANSWER larger than a DNS message", pack(tAnswer, 1, over), "65535"},
@@ -576,7 +577,7 @@ func TestWriteThatCannotCompleteEndsTheSession(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = d.Decide(ctx, netip.MustParseAddr("192.0.2.10"), big, noForward(t))
+			_, _ = d.Decide(ctx, netip.MustParseAddr("192.0.2.10"), false, big, noForward(t))
 		}()
 	}
 	waitClosed(t, d.Done(), "session end after a write timeout")

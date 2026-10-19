@@ -25,7 +25,7 @@ const (
 )
 
 const (
-	maxFrameLen         = 5 + 1 + 255 + 65535 // type + id, then n + IP text + DNS wire
+	maxFrameLen         = 5 + 1 + 1 + 255 + 65535 // type + id, then transport + n + IP text + DNS wire
 	maxWire             = 65535
 	defaultWriteTimeout = 10 * time.Second
 )
@@ -313,16 +313,28 @@ func (d *Decider) register(c *call) (uint32, error) {
 	return d.nextID, nil
 }
 
+// Transport byte of a QUERY: what kind of client asked. A datagram client (plain UDP) has a size limit the decider
+// holds its own answers to; every other client (TCP, DoT, DoH, DoQ) has none.
+const (
+	clientStream   byte = 0
+	clientDatagram byte = 1
+)
+
 // Decide sends the query to the decider and serves its FORWARDs through fwd until it answers: the ANSWER wire,
-// or nil for DROP. ctx ending abandons the query; the id stays reserved until the decider's final frame.
-func (d *Decider) Decide(ctx context.Context, client netip.Addr, wire []byte, fwd forwarder) ([]byte, error) {
+// or nil for DROP. datagram says the client is a plain-UDP one. ctx ending abandons the query; the id stays reserved
+// until the decider's final frame.
+func (d *Decider) Decide(ctx context.Context, client netip.Addr, datagram bool, wire []byte, fwd forwarder) ([]byte, error) {
 	c := &call{forward: make(chan []byte, 1), final: make(chan []byte, 1)}
 	id, err := d.register(c)
 	if err != nil {
 		return nil, err
 	}
 	ip := client.String()
-	if err := d.send(frameQuery, id, append(append([]byte{byte(len(ip))}, ip...), wire...)); err != nil {
+	transport := clientStream
+	if datagram {
+		transport = clientDatagram
+	}
+	if err := d.send(frameQuery, id, append(append([]byte{transport, byte(len(ip))}, ip...), wire...)); err != nil {
 		return nil, err
 	}
 	for {
