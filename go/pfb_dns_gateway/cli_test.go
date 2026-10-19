@@ -26,7 +26,7 @@ func TestConfigDefaults(t *testing.T) {
 	want := config{
 		listen: []string{"127.0.0.1"}, port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second,
 		unboundConf: "/var/unbound/unbound.conf", decider: []string{"/usr/local/pkg/pfblockerng/pfb_python.sh", "-u", "pfb_dns_proxy.py"},
-		pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
+		tlsPEM: "/var/unbound/pfb_dns_cert.pem", dotPort: 853, dohPort: 4443, doqPort: 853,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("defaults:\n got  %+v\n want %+v", cfg, want)
@@ -43,7 +43,7 @@ func TestConfigEveryFlag(t *testing.T) {
 	}
 	want := config{
 		listen: []string{"192.0.2.1", "::1"}, port: 5300, upstream: "[::1]:5454", timeout: 2500 * time.Millisecond,
-		unboundConf: "/tmp/unbound.conf", user: "unbound", pfsenseConfig: "/cf/conf/config.xml", dohPort: 4443, doqPort: 853,
+		unboundConf: "/tmp/unbound.conf", user: "unbound", tlsPEM: "/var/unbound/pfb_dns_cert.pem", dotPort: 853, dohPort: 4443, doqPort: 853,
 		// everything after `--` is the decider's, flags and all
 		decider: []string{"/usr/bin/python3", "-u", "decider.py", "--decision-fd", "3", "--module-dir", "/var/unbound"},
 	}

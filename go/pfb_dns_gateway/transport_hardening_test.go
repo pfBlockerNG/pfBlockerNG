@@ -114,7 +114,7 @@ func (deadlineless) SetWriteDeadline(time.Time) error { return nil }
 // A peer that never reads cannot hold a close: closeTLS cuts the connection after its bound.
 func TestCloseTLSGivesUpOnAPeerThatDoesNotRead(t *testing.T) {
 	m := newTLSMaterial(t)
-	serverConf := m.settings.dot().Clone()
+	serverConf := m.certs.dot().Clone()
 	serverConf.SessionTicketsDisabled = true // a ticket would block the handshake on a pipe nobody reads
 	clientEnd, serverEnd := net.Pipe()
 	raw := deadlineless{serverEnd}

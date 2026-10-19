@@ -10,16 +10,13 @@ import (
 	"time"
 )
 
-// T1 (live): a DoT client is shown the chain exactly as configured, leaf first.
+// T1 (live): a DoT client is shown the chain exactly as the file holds it, leaf first.
 func TestDoTServesTheConfiguredChainLeafFirst(t *testing.T) {
-	path, leaf, mid, root := chainConfig(t)
-	s, err := readTLSSettings(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store, leaf, mid, root := chainStore(t)
 	r := newRig(t, rigConfig{acl: aclMixed})
-	addr := r.serveDoT(tlsMaterial{settings: s, pool: root.pool()})
-	c := dialDoT(t, addr, tlsMaterial{settings: s, pool: root.pool()}, "")
+	m := tlsMaterial{certs: store, pool: root.pool()}
+	addr := r.serveDoT(m)
+	c := dialDoT(t, addr, m, "")
 	peers := c.ConnectionState().PeerCertificates
 	if len(peers) != 3 || !bytes.Equal(peers[0].Raw, leaf.der) || !bytes.Equal(peers[1].Raw, mid.der) || !bytes.Equal(peers[2].Raw, root.der) {
 		t.Fatalf("the server presented %d certificates; want leaf, intermediate, root in that order", len(peers))

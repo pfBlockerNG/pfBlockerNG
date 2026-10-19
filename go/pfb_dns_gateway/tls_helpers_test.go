@@ -8,13 +8,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/pem"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -92,70 +90,34 @@ func (p *pki) pool() *x509.CertPool {
 
 // tlsMaterial is what a TLS listener of a rig serves and what its clients trust.
 type tlsMaterial struct {
-	settings tlsSettings
-	pool     *x509.CertPool
+	certs *certStore
+	pool  *x509.CertPool
 }
 
 func newTLSMaterial(t *testing.T) tlsMaterial {
 	t.Helper()
-	root := newPKI(t, nil, "test root", true)
-	leaf := newPKI(t, root, "localhost", false)
-	cert, err := tls.X509KeyPair(leaf.certPEM(), leaf.keyPEM(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tlsMaterial{settings: tlsSettings{port: 853, cert: cert}, pool: root.pool()}
+	_, m := goodPEM(t)
+	return m
 }
 
 func (m tlsMaterial) clientConfig(protos ...string) *tls.Config {
 	return &tls.Config{RootCAs: m.pool, ServerName: "localhost", NextProtos: protos}
 }
 
-// config.xml in the shape of pfSense (the elements dns_proxy/pfsense_dot.py reads) ---------------------------------
-
-const testRefid = "5f0a1b2c3d4e5"
-
-func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
-
-func el(name, text string) string { return "<" + name + ">" + text + "</" + name + ">" }
-
-func certEl(refid string, children ...string) string {
-	return "<cert>" + el("refid", refid) + strings.Join(children, "") + "</cert>"
-}
-
-func caEl(refid string, children ...string) string {
-	return "<ca>" + el("refid", refid) + strings.Join(children, "") + "</ca>"
-}
-
-func unboundEl(children ...string) string {
-	return "<unbound>" + strings.Join(children, "") + "</unbound>"
-}
-
-func configXML(sections ...string) string {
-	return `<?xml version="1.0"?>` + "\n<pfsense><version>23.3</version>" + strings.Join(sections, "") + "</pfsense>\n"
-}
-
-func writeConfig(t *testing.T, content string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.xml")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-// goodConfig is a config.xml whose Resolver certificate is a fresh leaf; clients trust the returned pool.
-func goodConfig(t *testing.T, tlsport string) (path string, m tlsMaterial) {
+// goodPEM is a certificate file (a fresh leaf, then its key) alone in its directory and the store loaded from it;
+// clients trust the returned pool.
+func goodPEM(t *testing.T) (path string, m tlsMaterial) {
 	t.Helper()
 	root := newPKI(t, nil, "test root", true)
-	leaf := newPKI(t, root, "localhost", false)
-	children := []string{el("enable", ""), el("enablessl", ""), el("sslcertref", testRefid)}
-	if tlsport != "" {
-		children = append(children, el("tlsport", tlsport))
+	path = filepath.Join(t.TempDir(), "pfb_dns_cert.pem")
+	if err := os.WriteFile(path, chainPEM(t, newPKI(t, root, "localhost", false)), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	xml := configXML(unboundEl(children...),
-		certEl(testRefid, el("crt", b64(leaf.certPEM())), el("prv", b64(leaf.keyPEM(t)))))
-	return writeConfig(t, xml), tlsMaterial{pool: root.pool()}
+	certs, err := newCertStore(path, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path, tlsMaterial{certs: certs, pool: root.pool()}
 }
 
 // rsaPKCS1PEM and ecSEC1PEM are the legacy key encodings (PKCS#1 and SEC1) that openssl also writes.

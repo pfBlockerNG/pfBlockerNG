@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/pem"
 	"net"
 	"net/netip"
 	"os"
@@ -22,14 +23,14 @@ func listeningAddr(t *testing.T, line, kind string) netip.AddrPort {
 }
 
 // every TLS transport on: the flags reach the listeners, each bound one is reported before `ready`, and each
-// serves with the certificate of config.xml through the shared decision path.
+// serves with the certificate of the PEM file through the shared decision path.
 func TestGatewayServesEveryTLSTransportAndReportsEachListener(t *testing.T) {
 	ports := distinctPorts(t, 2)
 	tlsport := ports[0]
-	path, m := goodConfig(t, strconv.Itoa(tlsport))
+	path, m := goodPEM(t)
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", strconv.Itoa(ports[1]), "--unbound-conf", "/nonexistent/unbound.conf",
-		"--dot", "--pfsense-config", path,
+		"--dot", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 		"--doq-listen", "127.0.0.1", "--doq-port", "0",
 	}, decider("serve"))
@@ -39,7 +40,7 @@ func TestGatewayServesEveryTLSTransportAndReportsEachListener(t *testing.T) {
 	doq := listeningAddr(t, gw.waitLine("listening doq "), "doq") // plain, dot, doh, doq, then ready: the order is the contract
 	gw.waitLine("ready upstream ")
 	if dot.Addr() != netip.MustParseAddr("127.0.0.1") || int(dot.Port()) != tlsport {
-		t.Fatalf("DoT listens on %s, want 127.0.0.1:%d (unbound/tlsport)", dot, tlsport)
+		t.Fatalf("DoT listens on %s, want 127.0.0.1:%d (--dot-port)", dot, tlsport)
 	}
 	if doh.Port() == 0 || doq.Port() == 0 {
 		t.Fatalf("--doh-port 0 and --doq-port 0 must report the port picked: doh=%s doq=%s", doh, doq)
@@ -74,29 +75,35 @@ func TestGatewayServesEveryTLSTransportAndReportsEachListener(t *testing.T) {
 	}
 }
 
-// An unusable certificate with a TLS transport requested: the reason is logged once, no TLS listener is bound, and
+// An unusable certificate file with a TLS transport requested: the reason is logged once, no TLS listener is bound, and
 // plain UDP/TCP keeps serving (the Python --dot exits 1 instead; a broken certificate must not take :53 down).
 func TestUnusableCertificateDisablesTheTLSTransportsButPlainDNSKeepsServing(t *testing.T) {
-	leaf := newPKI(t, nil, "localhost", false)
-	encrypted := b64([]byte("-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n"))
+	leaf, other := newPKI(t, nil, "localhost", false), newPKI(t, nil, "localhost", false)
+	encrypted := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: bytes.Repeat([]byte{7}, 64)})
+	file := func(content []byte) func(t *testing.T) string {
+		return func(t *testing.T) string {
+			path := filepath.Join(t.TempDir(), "pfb_dns_cert.pem")
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		}
+	}
 	cases := []struct {
 		name string
 		path func(t *testing.T) string
 		want string
 	}{
-		{"config.xml absent", func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.xml") }, "cannot read"},
-		{"sslcertref empty", func(t *testing.T) string {
-			return writeConfig(t, configXML(unboundEl(el("sslcertref", "")), certEl(testRefid, el("crt", b64(leaf.certPEM())), el("prv", b64(leaf.keyPEM(t))))))
-		}, "unbound/sslcertref is empty"},
-		{"encrypted private key", func(t *testing.T) string {
-			return writeConfig(t, configXML(unboundEl(el("sslcertref", testRefid)), certEl(testRefid, el("crt", b64(leaf.certPEM())), el("prv", encrypted))))
-		}, "encrypted with a passphrase"},
+		{"file absent", func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.pem") }, "cannot read"},
+		{"no PEM text", file([]byte("hello\n")), "cannot load the certificate and key"},
+		{"key of another certificate", file(append(leaf.certPEM(), other.keyPEM(t)...)), "does not match"},
+		{"encrypted private key", file(append(leaf.certPEM(), encrypted...)), "cannot load the certificate and key"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			gw := startGatewayProcess(t, []string{
 				"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
-				"--dot", "--pfsense-config", c.path(t),
+				"--dot", "--dot-port", "0", "--tls-pem", c.path(t),
 				"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doq-listen", "127.0.0.1", "--doq-port", "0",
 			}, decider("serve"))
 			serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
@@ -118,24 +125,25 @@ func TestUnusableCertificateDisablesTheTLSTransportsButPlainDNSKeepsServing(t *t
 	}
 }
 
-// No TLS transport requested: config.xml is never looked at, so a missing one costs nothing and logs nothing.
-func TestConfigXMLIsNotReadWhenNoTLSTransportIsRequested(t *testing.T) {
+// No TLS transport requested: the certificate file is never looked at, so a missing one costs nothing and logs nothing.
+func TestCertificateFileIsNotReadWhenNoTLSTransportIsRequested(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
-		"--pfsense-config", "/nonexistent/config.xml",
+		"--tls-pem", "/nonexistent/pfb_dns_cert.pem",
 	}, decider("serve"))
 	gw.waitLine("ready upstream ")
-	if log := gw.logText(); strings.Contains(log, "config.xml") || strings.Contains(log, "TLS") {
-		t.Fatalf("nothing about TLS or config.xml may be logged when no TLS transport is requested:\n%s", log)
+	if log := gw.logText(); strings.Contains(log, "pfb_dns_cert") || strings.Contains(log, "TLS") {
+		t.Fatalf("nothing about TLS or the certificate file may be logged when no TLS transport is requested:\n%s", log)
 	}
 }
 
-// config.xml is root-only: the certificate is read before the privilege drop, not after.
+// The file is owned by the run-as user and unreadable to anyone else: the certificate is read before the privilege
+// drop, so the first read is not the run-as user's.
 func TestCertificateIsReadBeforeThePrivilegeDrop(t *testing.T) {
 	ports := distinctPorts(t, 2)
-	path, _ := goodConfig(t, strconv.Itoa(ports[0]))
+	path, _ := goodPEM(t)
 	cfg, logs := lifecycleConfig(t, "serve")
-	cfg.port, cfg.dot, cfg.pfsenseConfig = ports[1], true, path
+	cfg.port, cfg.dot, cfg.dotPort, cfg.tlsPEM = ports[1], true, ports[0], path
 	cfg.drop = func() error { return os.Remove(path) } // once the drop has happened the file is out of reach
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
@@ -149,9 +157,9 @@ func TestCertificateIsReadBeforeThePrivilegeDrop(t *testing.T) {
 
 // A --doh-trusted value that is not an address or prefix is logged and ignored; the gateway does not exit.
 func TestUnparseableTrustedPrefixIsLoggedAndTheGatewayStillServesDoH(t *testing.T) {
-	path, m := goodConfig(t, strconv.Itoa(freePort(t)))
+	path, m := goodPEM(t)
 	gw := startGatewayProcess(t, []string{
-		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--pfsense-config", path,
+		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "junk", "--doh-trusted", "192.0.2.0/24",
 	}, decider("serve"))
 	doh := listeningAddr(t, gw.waitLine("listening doh "), "doh")
@@ -173,9 +181,9 @@ func TestTLSAddressThatCannotBeBoundIsSkipped(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = held.Close() })
 	tlsport := held.Addr().(*net.TCPAddr).Port
-	path, m := goodConfig(t, strconv.Itoa(tlsport))
+	path, m := goodPEM(t)
 	gw := startGatewayProcess(t, []string{
-		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--dot", "--pfsense-config", path,
+		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--dot", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 	}, decider("serve"))
 	skipped := gw.waitLine("cannot listen on 127.0.0.1:" + strconv.Itoa(tlsport))

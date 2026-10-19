@@ -28,6 +28,12 @@ function isAllowedPage($page) {}
 /** The friendly interface name a gateway sits on, FALSE for an unknown gateway name (gwlb.inc; stable CE 2.8.0..master). */
 function lookup_gateway_interface_by_name($name) {}
 
+/** The <ca> entry whose refid matches, as ['idx' => config index, 'item' => the entry], item NULL when none does (certs.inc; read in pfSense master 9363ac5b). */
+function lookup_ca($refid) {}
+
+/** The <cert> entry whose refid matches, as ['idx' => config index, 'item' => the entry], item NULL when none does (certs.inc; read in pfSense master 9363ac5b). */
+function lookup_cert($refid) {}
+
 /**
  * HA/XMLRPC config-sync client (etc/inc/xmlrpc_client.inc; stable CE 2.8.0..master,
  * dated commit ed6c2eb8 2025-05-28 — mirror carries no RELENG_2_8_0 ref). Upstream

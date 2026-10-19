@@ -505,11 +505,11 @@ none of this applies and the predicates read Unbound as before.
 script has one launch line:
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log /bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1
---port P --upstream 127.0.0.1:5353 [--dot] --pfsense-config /cf/conf/config.xml [the DoH/DoQ flags below]
+--port P --upstream 127.0.0.1:5353 [--dot --dot-port D] --tls-pem /var/unbound/pfb_dns_cert.pem [the DoH/DoQ flags below]
 [--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
 /var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
 --module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53; `--dot` iff the saved Resolver had
-`enablessl`; `--no-module` iff DNSBL is off, so the decider boots no `pfb_unbound.py` and every query is forwarded;
+`enablessl`, and `D` is `unbound/tlsport` when it is a port, else 853; `--no-module` iff DNSBL is off, so the decider boots no `pfb_unbound.py` and every query is forwarded;
 `--observer` iff DNSBL is on and the Resolver forwards, so the decider creates the observer's report socket). The gateway
 starts the decider as its child and hands the three mode flags on to it.
 `pfb_dns_proxy_listen()` derives the addresses the way `unbound.inc` binds them (explicit interfaces that are up
@@ -518,7 +518,7 @@ address pfSense lists for the box (`get_configured_ip_addresses()` / `get_config
 alias/carp VIPs), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. The gateway binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
 disabled interface) is logged once and skipped, the others are served, and it exits non-zero only when
-no address binds. A DoT/DoH/DoQ setup that cannot be served (no or unusable certificate, a passphrase-protected
+no address binds. A DoT/DoH/DoQ setup that cannot be served (no or unusable certificate file, a passphrase-protected
 key) no longer stops the gateway: one line `TLS transports disabled: <file>: <reason>` and the plain listeners keep serving.
 An address added since the last reload gets a listener at the next apply:
 `pfb_dns_proxy_ensure_running()` regenerates the script and restarts a live proxy when the script changed. The
@@ -534,6 +534,27 @@ machine can run (no payload, another architecture's only, no execute bit) makes 
 which `daemon -o` writes to `dns_proxy.log`, and the supervisor starts it again every 5 s; no ready marker is ever published,
 so the activation's readiness wait fails and rolls pfB-DNS back (see "Readiness and rollback" below). Nothing else
 starts a DNS front end instead.
+
+**Certificate for DoT, DoH and DoQ (issue #3515).** The gateway never reads `config.xml` (it is root-only, and a renewal must not
+cost a restart). While an encrypted transport is wanted (`pfb_dns_proxy_tls_wanted()`: the saved Resolver had `enablessl`, or a
+DoH or DoQ group is on) `pfb_dns_proxy_certificate_export()` writes the Resolver's certificate (`unbound/sslcertref`, found with
+pfSense's `lookup_cert()` and `lookup_ca()`) to `$pfb['dns_proxy_cert']`, `/var/unbound/pfb_dns_cert.pem`: the certificate, the
+CAs its `caref` leads to nearest first (a missing CA or a loop ends the chain), then the key, mode 0600, owned by `unbound`, the
+user the gateway drops to. pfSense writes the Resolver's own `sslcert.crt` and `sslcert.key` the same way in `unbound.inc`
+(`unbound_generate_config()`, pfSense master `9363ac5b` and RELENG_2_7_2: `lookup_cert()`, `ca_chain()`, `chmod 0600` for the
+key), but root-owned and only while the Resolver's own SSL/TLS Service is on, which pfB-DNS moves off; Unbound reads them before
+it drops privileges and the gateway cannot. A key that is encrypted, a key that is not the certificate's, bad base64 and a missing
+certificate write nothing: the file keeps what it has and one notice per reason (`pfBlockerNG DNS Proxy certificate`) says why.
+A file whose content is already right is not rewritten; a changed one replaces it by rename, so the gateway never reads half of
+it. The file is written by every `pfb_dns_proxy_service()` call (the apply, a restart, the installer, a removal's recovery), by
+the cron tick (`pfblockerng_tick()` calls `pfb_dns_proxy_certificate_sync()`, every 15 minutes) and, when it is missing (`/var`
+came up empty on a RAM disk), by the rc script's start (`php -f pfblockerng.inc dns_cert`, under `timeout(1)`, before the launch;
+a failure is logged and the start goes on). It is removed by the next apply or cron tick once no encrypted transport is wanted
+or pfB-DNS is off, and by a package removal that puts the Resolver back. The gateway serves it through
+`GetCertificate` and reads it again at most once a second, on the next handshake: a renewal needs no restart, fails no
+handshake and leaves open connections as they are; a file that does not parse, or whose key does not match, is reported once and
+the previous certificate stays (`docs/misc/dns-gateway-transports.md`). Pinned by `DnsProxyCertificateExportTest`,
+`DnsProxyServiceTest` and the gateway's `tls_reload_test.go`.
 
 Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores the Resolver, under the config lock (toggle
 off, pfBlockerNG or the Resolver disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds the Resolver's port free;
@@ -655,7 +676,9 @@ separate times; a launch is not an answer.
   regenerates the script with the addresses it finds.
 - When the Resolver listened on "All", tunnel addresses that are not assigned interfaces (OpenVPN, WireGuard) and
   addresses that are only link-local IPv6 are not served by the proxy; pfSense lists neither.
-- DNS over TLS reads the Resolver's certificate when the proxy starts: a renewed certificate needs a proxy restart.
+- A renewed Resolver certificate reaches the gateway at the next apply or cron tick (at most 15 minutes), not the moment it is
+  saved; from then on new connections get it with no restart. A key the owner of `/var/unbound` can read is the price of a gateway
+  that is not root: the decider, which runs as the same user, could read it too.
 - High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
   toggle and the snapshot marker are per-node (`local`). With the sync on, two orders are unsafe:
   - Enabling pfB-DNS on the primary before the secondary: the secondary receives the moved section with no snapshot, so

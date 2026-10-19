@@ -57,7 +57,7 @@ func (r *rig) serveDoT(m tlsMaterial) netip.AddrPort {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.g.serveDoT(ln, m.settings.dot())
+	r.g.serveDoT(ln, m.certs.dot())
 	return ln.Addr().(*net.TCPAddr).AddrPort()
 }
 
@@ -67,7 +67,7 @@ func (r *rig) serveDoH(m tlsMaterial, trusted ...string) netip.AddrPort {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.g.serveDoH(ln, m.settings.doh(), parseTrusted(trusted, r.logs.logf))
+	r.g.serveDoH(ln, m.certs.doh(), parseTrusted(trusted, r.logs.logf))
 	return ln.Addr().(*net.TCPAddr).AddrPort()
 }
 
@@ -77,7 +77,7 @@ func (r *rig) serveDoQ(m tlsMaterial) netip.AddrPort {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.g.serveDoQ(udp, m.settings.doq())
+	r.g.serveDoQ(udp, m.certs.doq())
 	return udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 

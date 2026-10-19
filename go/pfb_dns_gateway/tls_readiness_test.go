@@ -3,7 +3,6 @@ package main
 import (
 	"net"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -17,10 +16,10 @@ func TestReadinessLinesBracketIPv6Addresses(t *testing.T) {
 	}
 	_ = held.Close()
 	ports := distinctPorts(t, 2)
-	path, _ := goodConfig(t, strconv.Itoa(ports[0]))
+	path, _ := goodPEM(t)
 	cfg, logs := lifecycleConfig(t, "serve")
-	cfg.port = ports[1]
-	cfg.listen, cfg.dot, cfg.pfsenseConfig = []string{"::1"}, true, path
+	cfg.port, cfg.dotPort = ports[1], ports[0]
+	cfg.listen, cfg.dot, cfg.tlsPEM = []string{"::1"}, true, path
 	cfg.dohListen, cfg.doqListen = []string{"::1"}, []string{"::1"}
 	srv, err := start(cfg, logs.logf)
 	if err != nil {

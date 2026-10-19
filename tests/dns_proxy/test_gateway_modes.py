@@ -21,7 +21,7 @@ from pathlib import Path
 
 import dnswire
 import pytest
-from dot_helpers import REFID, b64, cert_element, config_xml, dot_exchange, free_port, make_certificate
+from dot_helpers import dot_exchange, free_port, make_certificate, write_certificate_file
 from frontend_constants import BLOCKED, REPO_ROOT
 from frontend_helpers import UpstreamVerdict, build_query
 from test_gateway_e2e import ACL_FILE, Running, _answers, _gateway_process, _tcp, _udp, gateway_binary  # noqa: F401
@@ -114,10 +114,11 @@ def test_with_dnsbl_off_dot_forwards_a_listed_name_and_unbound_logs_the_tls_clie
     start_gateway: StartGateway, no_module_dir: Path, unbound: RunningUnbound, tmp_path: Path
 ) -> None:
     crt, key = make_certificate(tmp_path)
-    config = tmp_path / "config.xml"
-    config.write_text(config_xml(tlsport=free_port(), entries=cert_element(REFID, b64(crt), b64(key))), "utf-8")
+    pem = write_certificate_file(tmp_path, crt, key)
     mark = unbound.tail.mark()
-    pfb_dns = start_gateway(no_module_dir, "--no-module", "--dot", "--pfsense-config", str(config))
+    pfb_dns = start_gateway(
+        no_module_dir, "--no-module", "--dot", "--dot-port", str(free_port()), "--tls-pem", str(pem)
+    )
 
     reply = asyncio.run(
         dot_exchange(

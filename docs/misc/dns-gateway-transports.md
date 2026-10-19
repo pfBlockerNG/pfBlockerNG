@@ -7,22 +7,40 @@ The decision protocol with the Python decider is in [dns-gateway-protocol.md](dn
 
 ## Certificate
 
-DoT, DoH and DoQ serve the DNS Resolver's certificate, read from `config.xml` by `tlsconfig.go`: `unbound/sslcertref` names a top-level `<cert>`; its `crt` and `prv` are
-base64 PEM; the CAs its `caref` leads to follow the certificate, nearest first, and a missing CA or a loop ends the
-chain. `unbound/tlsport` is the DoT port when it is a port (1 to 65535), else 853. `unbound/enablessl` is not read:
-the gateway flags decide. PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked
-for a passphrase).
+DoT, DoH and DoQ serve the DNS Resolver's certificate from one PEM file, `--tls-pem` (`/var/unbound/pfb_dns_cert.pem` in
+pfBlockerNG's rc script): the certificate, the CAs after it nearest first, then its private key. The gateway does not read
+`config.xml`. pfBlockerNG writes the file (`pfb_dns_proxy_certificate_export()`, see `architecture-notes.md`): mode 0600, owned
+by `unbound`, the user the gateway drops to, with `unbound/sslcertref`'s certificate, the chain its `caref` leads to (a missing
+CA or a loop ends it), and a key that is neither encrypted nor another certificate's; it replaces the file by rename, when the
+certificate changed, at every apply, at every cron tick (15 minutes) and at a start that finds no file. The DoT port is
+`--dot-port` (the Resolver's `unbound/tlsport` when it is a port, else 853). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted
+key is refused (a daemon cannot be asked for a passphrase).
 
-`config.xml` is root-only, so it is read, and every TLS socket bound, before the privilege drop. It is not read at all
-unless `--dot`, `--doh-listen` or `--doq-listen` is given. When one is given and the certificate is unusable the reason
-is logged once (`TLS transports disabled: <file>: <reason>`), no TLS listener is bound and plain UDP and TCP keep
-serving: under `daemon -r` a broken certificate must not crash-loop the only :53 listener.
+The file is read, as root, before the privilege drop, and not at all unless `--dot`, `--doh-listen` or `--doq-listen` is given.
+When one is given and the file is unusable at start the reason is logged once (`TLS transports disabled: <file>: <reason>`), no
+TLS listener is bound and plain UDP and TCP keep serving: under `daemon -r` a broken certificate must not crash-loop the only :53
+listener.
+
+A renewal needs no restart. Every TLS config of the three transports takes its certificate from `GetCertificate`, which looks at
+the file again when a handshake arrives more than a second after the last look, and compares its content with what it serves:
+
+- a content that parses and whose key matches the certificate is served from the next handshake on (log line
+  `TLS certificate reloaded: <file>`); no handshake fails and no connection is touched: an open DoT, DoH or DoQ connection keeps
+  the certificate it was set up with and goes on answering;
+- a content that does not (half a file, no PEM, a key that is not the certificate's, an encrypted key) or a file that cannot be
+  read leaves the previous certificate in place and is logged once while that content stays
+  (`TLS certificate not reloaded: <file>: <reason>; keeping the previous certificate`); another bad content, or the same one
+  after a good file, is logged again;
+- a gateway that nobody connects to does not look at the file at all.
+
+Pinned by `tls_reload_test.go` (a gateway process serving all three transports through a rotation, a half-written file and a
+rotation under load: no failed handshake, no unanswered query) and, on a controlled clock, by `tlsconfig_test.go`.
 
 ## Listeners
 
 | Transport | Flags | Socket | TLS | Cap |
 |---|---|---|---|---|
-| DoT | `--dot`, on every `--listen` address at the config's tlsport | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
+| DoT | `--dot`, on every `--listen` address at `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
 | DoH | `--doh-listen` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
 | DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle 30 s; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 

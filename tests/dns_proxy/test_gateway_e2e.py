@@ -31,7 +31,7 @@ from typing import Any
 
 import dnswire
 import pytest
-from dot_helpers import REFID, b64, cert_element, config_xml, dot_exchange, free_port, make_certificate
+from dot_helpers import dot_exchange, free_port, make_certificate, write_certificate_file
 from frontend_constants import (
     ALLOWED,
     BLOCKED,
@@ -666,14 +666,11 @@ def tls_gateway(
     tmp_path: Path,
     acl_text: str,
 ) -> Iterator[TlsRunning]:
-    """The gateway with the certificate of a crafted config.xml serving DoT, DoH and DoQ."""
+    """The gateway with the certificate file pfBlockerNG writes serving DoT, DoH and DoQ."""
     certificate, key = make_certificate(tmp_path)
-    config = tmp_path / "config.xml"
-    config.write_text(
-        config_xml(tlsport=free_port(), entries=cert_element(REFID, b64(certificate), b64(key))), encoding="utf-8"
-    )
+    pem = write_certificate_file(tmp_path, certificate, key)
     flags = [
-        "--dot", "--pfsense-config", str(config),
+        "--dot", "--dot-port", str(free_port()), "--tls-pem", str(pem),
         "--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "127.0.0.1/32",
         "--doq-listen", "127.0.0.1", "--doq-port", "0",
     ]  # fmt: skip
