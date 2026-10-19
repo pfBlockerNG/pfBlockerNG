@@ -1052,15 +1052,18 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
 			try {
-				write_config('[pfBlockerNG] save DNSBL settings');
+				$pfb_written = write_config('[pfBlockerNG] save DNSBL settings');
 			} finally {
 				unlock($pfb_config_lock);
 			}
-			pfb_mark_pending_changes();	// applies on the next Update, not on save
-			header('Location: /pfblockerng/pfblockerng_dnsbl.php');
-			exit;
+			if ($pfb_written !== FALSE && $pfb_written !== -1) {
+				pfb_mark_pending_changes();	// applies on the next Update, not on save
+				header('Location: /pfblockerng/pfblockerng_dnsbl.php');
+				exit;
+			}
+			$input_errors[] = 'DNSBL: the configuration could not be written, so these settings were not saved. Save again in a moment.';
 		}
-		else {
+		if ($input_errors) {
 			$pconfig = $_POST;	// Restore $_POST data on input errors
 		}
 	}
