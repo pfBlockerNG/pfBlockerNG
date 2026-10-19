@@ -14261,6 +14261,12 @@ function pfb_stop_start_unbound($type) {
 		pfb_unbound_python_unmount();
 	}
 
+	// issue #3515: this restart only reloads the Resolver's configuration; a Resolver the admin disabled stays stopped
+	if (config_get_path('unbound') !== NULL && !config_path_enabled('unbound')) {
+		pfb_logger("\nThe DNS Resolver is disabled: Unbound is not started", 1);
+		return array('start_completed' => TRUE, 'retval' => 0, 'result' => array());
+	}
+
 	pfb_logger("\nStarting Unbound Resolver", 1);
 	$outfile = @tempnam(sys_get_temp_dir(), 'pfbus');
 	if ($outfile === FALSE) {
