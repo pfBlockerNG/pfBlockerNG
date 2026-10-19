@@ -53,6 +53,7 @@ type config struct {
 	dot         bool
 	dotPort     int
 	tlsPEM      string
+	ctlSocket   string
 	dohListen   []string
 	dohPort     int
 	dohTrusted  []string

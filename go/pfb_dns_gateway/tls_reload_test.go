@@ -21,33 +21,23 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// A certificate renewal never restarts the gateway, never fails a handshake and never drops a connection: pfBlockerNG
-// replaces the PEM file the gateway serves (certificate chain, then key) and the gateway picks it up. These tests run
-// the gateway as its own process with the three TLS transports on and a client of each; the decider echoes queries.
+// A certificate renewal never restarts the gateway, never fails a handshake and never drops a connection: root pushes
+// the new certificate chain and key over the gateway's control socket and new handshakes get it from then on. These tests
+// run the gateway as its own process with the three TLS transports on and a client of each; the decider echoes queries.
 
-// reloadRig is a gateway serving every TLS transport from the PEM file at pem.
+// reloadRig is a gateway serving every TLS transport, with the control socket at ctl.
 type reloadRig struct {
 	t             *testing.T
-	pem           string
+	file          string
+	ctl           string
+	plain         netip.AddrPort
 	root          *pki
 	m             tlsMaterial
 	gw            *gatewayProcess
 	dot, doh, doq netip.AddrPort
 }
 
-// replacePEM swaps the file the way pfBlockerNG's export does: a temporary file in the same directory, renamed over it.
-func replacePEM(t *testing.T, path string, content []byte) {
-	t.Helper()
-	tmp := filepath.Join(filepath.Dir(path), ".swap")
-	if err := os.WriteFile(tmp, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// chainPEM is what the file holds: the certificate, the CAs after it, then the key.
+// chainPEM is what a PEM message or file holds: the certificate, the CAs after it, then the key.
 func chainPEM(t *testing.T, leaf *pki, cas ...*pki) []byte {
 	t.Helper()
 	out := leaf.certPEM()
@@ -61,20 +51,47 @@ func newReloadRig(t *testing.T) (*reloadRig, *pki) {
 	t.Helper()
 	root := newPKI(t, nil, "reload root", true)
 	first := newPKI(t, root, "localhost", false)
-	path := filepath.Join(t.TempDir(), "pfb_dns_cert.pem")
-	replacePEM(t, path, chainPEM(t, first))
+	file := filepath.Join(shortTempDir(t), "tls.pem")
+	if err := os.WriteFile(file, chainPEM(t, first), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return startReloadRig(t, file, root), first
+}
+
+// startReloadRig is a gateway process that reads file at start (as root, before the privilege drop) and takes pushes on a
+// control socket of its own; the clients trust root.
+func startReloadRig(t *testing.T, file string, root *pki) *reloadRig {
+	t.Helper()
+	ctl := filepath.Join(shortTempDir(t), "run", "ctl.sock")
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
-		"--dot", "--dot-port", "0", "--tls-pem", path,
+		"--dot", "--dot-port", "0", "--tls-pem", file, "--ctl-socket", ctl,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doq-listen", "127.0.0.1", "--doq-port", "0",
 	}, decider("serve"))
-	gw.waitLine("listening udp+tcp ")
-	r := &reloadRig{t: t, pem: path, root: root, m: tlsMaterial{pool: root.pool()}, gw: gw}
+	plain := listenAddr(t, gw.waitLine("listening udp+tcp "))
+	r := &reloadRig{t: t, file: file, ctl: ctl, plain: plain, root: root, m: tlsMaterial{pool: root.pool()}, gw: gw}
 	r.dot = listeningAddr(t, gw.waitLine("listening dot "), "dot")
 	r.doh = listeningAddr(t, gw.waitLine("listening doh "), "doh")
 	r.doq = listeningAddr(t, gw.waitLine("listening doq "), "doq")
 	gw.waitLine("ready upstream ")
-	return r, first
+	return r
+}
+
+// push sends one message to the control socket and returns the reply line.
+func (r *reloadRig) push(pem []byte) string {
+	r.t.Helper()
+	c := dialCtl(r.t, r.ctl)
+	_, _ = c.Write(ctlFrame(pem))
+	return ctlReply(r.t, c)
+}
+
+// rotate pushes a usable certificate and requires the gateway to have taken it: the reply is the barrier, so the next
+// handshake on any transport gets it, with nothing to wait for.
+func (r *reloadRig) rotate(c *pki) {
+	r.t.Helper()
+	if got := r.push(chainPEM(r.t, c)); got != "ok" {
+		r.t.Fatalf("the push of serial %v got the reply %q, want ok; log:\n%s", c.cert.SerialNumber, got, r.gw.logText())
+	}
 }
 
 // An exchange is one new connection, its handshake and one query; it returns the certificate the server presented. It
@@ -207,56 +224,6 @@ var reloadTransports = []struct {
 	do   tlsExchange
 }{{"DoT", dotExchange}, {"DoH", dohExchange}, {"DoQ", doqExchange}}
 
-// waitServing polls a fresh exchange on every transport until it presents want. A reload is read at most once a second, so
-// the first exchanges after a rotation still present the old certificate; none may fail meanwhile.
-func (r *reloadRig) waitServing(want *pki) {
-	r.t.Helper()
-	wire := buildQuery(r.t, 0, "example.", true)
-	for _, tr := range reloadTransports {
-		deadline := time.Now().Add(watchdog)
-		for {
-			leaf, err := tr.do(r, wire)
-			if err != nil {
-				r.t.Fatalf("%s: a handshake failed while waiting for the new certificate: %v", tr.name, err)
-			}
-			if leaf.Equal(want.cert) {
-				break
-			}
-			if time.Now().After(deadline) {
-				r.t.Fatalf("STUCK: %s still serves serial %v, want serial %v", tr.name, leaf.SerialNumber, want.cert.SerialNumber)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-}
-
-// waitReport keeps handshaking, which is what makes the gateway look at the file, until it logs a line with the prefix.
-func (r *reloadRig) waitReport(prefix string) string {
-	r.t.Helper()
-	wire := buildQuery(r.t, 0, "example.", true)
-	deadline := time.Now().Add(watchdog)
-	for {
-		if _, err := dotExchange(r, wire); err != nil {
-			r.t.Fatalf("a handshake failed while waiting for the gateway to report: %v", err)
-		}
-		for {
-			select {
-			case line := <-r.gw.lines:
-				if strings.HasPrefix(line, prefix) {
-					return line
-				}
-				continue
-			default:
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			r.t.Fatalf("STUCK: no %q line within the watchdog; log:\n%s", prefix, r.gw.logText())
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
 func (r *reloadRig) requireServing(want *pki) {
 	r.t.Helper()
 	wire := buildQuery(r.t, 0, "example.", true)
@@ -271,12 +238,12 @@ func (r *reloadRig) requireServing(want *pki) {
 	}
 }
 
-func TestRotatedCertificateIsServedToNewHandshakesOnDoTDoHAndDoQ(t *testing.T) {
+func TestPushedCertificateIsServedToTheNextHandshakeOnDoTDoHAndDoQ(t *testing.T) {
 	r, first := newReloadRig(t)
 	r.requireServing(first) // before the rotation, so that what follows is the rotation's doing
 	second := newPKI(t, r.root, "localhost", false)
-	replacePEM(t, r.pem, chainPEM(t, second))
-	r.waitServing(second)
+	r.rotate(second)
+	r.requireServing(second)
 }
 
 func TestOpenConnectionsKeepAnsweringAcrossARotation(t *testing.T) {
@@ -314,41 +281,35 @@ func TestOpenConnectionsKeepAnsweringAcrossARotation(t *testing.T) {
 	queryAll("before the rotation")
 
 	second := newPKI(t, r.root, "localhost", false)
-	replacePEM(t, r.pem, chainPEM(t, second))
-	r.waitServing(second)
+	r.rotate(second)
+	r.requireServing(second)
 	queryAll("after the rotation")
 }
 
-func TestUnusableCertificateFileKeepsTheServingCertificateAndIsReported(t *testing.T) {
+func TestAPushThatIsNotUsableKeepsTheServingCertificateOnEveryTransportAndIsReported(t *testing.T) {
 	r, first := newReloadRig(t)
-	good, err := os.ReadFile(r.pem)
-	if err != nil {
-		t.Fatal(err)
-	}
+	good := chainPEM(t, first)
 	other := newPKI(t, r.root, "localhost", false)
 	for name, content := range map[string][]byte{
-		"half a file":                  good[:len(good)/2],
+		"half a message":               good[:len(good)/2],
 		"a key that is not the cert's": append(first.certPEM(), other.keyPEM(t)...),
 		"no PEM at all":                []byte("not a certificate\n"),
 	} {
-		replacePEM(t, r.pem, content)
-		line := r.waitReport("TLS certificate not reloaded")
-		if !strings.Contains(line, r.pem) {
-			t.Fatalf("%s: the report must name the file %s: %q", name, r.pem, line)
+		if reply := r.push(content); !strings.HasPrefix(reply, "error: ") {
+			t.Fatalf("%s: reply %q, want `error: <reason>`", name, reply)
 		}
+		r.gw.waitLine("TLS certificate not replaced")
 		r.requireServing(first)
 	}
 
 	second := newPKI(t, r.root, "localhost", false)
-	replacePEM(t, r.pem, chainPEM(t, second))
-	r.waitServing(second)
-	if line := r.gw.waitLine("TLS certificate reloaded"); !strings.Contains(line, r.pem) {
-		t.Fatalf("the reload must name the file %s: %q", r.pem, line)
-	}
+	r.rotate(second)
+	r.gw.waitLine("TLS certificate replaced by a push")
+	r.requireServing(second)
 }
 
 // The load test: clients of every transport open new connections without a pause, and some keep one connection for
-// the whole run, while the file goes through two certificates and a half-written file. Not one handshake fails, not
+// the whole run, while the gateway is pushed two certificates and a message cut in half. Not one handshake fails, not
 // one query goes unanswered, and every certificate presented is one of the two that were ever valid.
 func TestRotatingTheCertificateUnderLoadFailsNoHandshakeAndDropsNoQuery(t *testing.T) {
 	for _, tr := range reloadTransports {
@@ -417,12 +378,12 @@ func TestRotatingTheCertificateUnderLoadFailsNoHandshakeAndDropsNoQuery(t *testi
 				})
 			}
 			waitFor(first)
-			replacePEM(t, r.pem, chainPEM(t, second))
+			r.rotate(second)
 			waitFor(second)
-			good, _ := os.ReadFile(r.pem)
-			replacePEM(t, r.pem, good[:len(good)/2]) // a writer that is not atomic leaves this behind
-			r.gw.waitLine("TLS certificate not reloaded")
-			replacePEM(t, r.pem, chainPEM(t, third))
+			if reply := r.push(chainPEM(t, third)[:100]); !strings.HasPrefix(reply, "error: ") { // a writer that dies half way
+				t.Fatalf("a cut message got the reply %q, want an error", reply)
+			}
+			r.rotate(third)
 			waitFor(third)
 			close(stop)
 			wg.Wait()
