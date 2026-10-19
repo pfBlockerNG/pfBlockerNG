@@ -55,8 +55,30 @@ func newEmptyCertStore(logf func(format string, args ...any)) *certStore {
 	return &certStore{logf: logf, now: time.Now}
 }
 
-// push replaces the served certificate by the chain and key in pem.
-func (s *certStore) push(pem []byte) error { return errors.New("not implemented") }
+// parseCertPEM is the certificate chain and key of one PEM text, the certificate first and its key somewhere in it. The key
+// has to belong to the certificate, and an encrypted key is refused (a daemon cannot be asked for a passphrase).
+func parseCertPEM(raw []byte) (*tls.Certificate, error) {
+	cert, err := tls.X509KeyPair(raw, raw)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load the certificate and key: %w", err)
+	}
+	return &cert, nil
+}
+
+// push replaces the served certificate by the chain and key in pem; one that does not parse, or whose key is not the
+// certificate's, changes nothing. New handshakes get the new certificate, connections that are open keep theirs.
+func (s *certStore) push(pem []byte) error {
+	cert, err := parseCertPEM(pem)
+	if err != nil {
+		s.logf("TLS certificate not replaced: %v; keeping the previous one", err)
+		return err
+	}
+	s.mu.Lock()
+	s.cert = cert
+	s.mu.Unlock()
+	s.logf("TLS certificate replaced by a push")
+	return nil
+}
 
 // reason is the cause of a file error without the operation and the path, which the caller names.
 func reason(err error) error {
@@ -71,9 +93,12 @@ func reason(err error) error {
 func (s *certStore) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if now := s.now(); now.Sub(s.checked) >= certRecheck {
+	if now := s.now(); s.path != "" && now.Sub(s.checked) >= certRecheck {
 		s.checked = now
 		s.reload()
+	}
+	if s.cert == nil {
+		return nil, errors.New("no TLS certificate is loaded")
 	}
 	return s.cert, nil
 }
