@@ -56,6 +56,51 @@ func (c *connLimit) release() {
 	}
 }
 
+// addrLimit caps what one client address holds of a shared budget. A newcomer over its share is refused; what the address
+// already holds is never touched. The refusals of one burst are logged once, without naming the address, and the latch
+// re-arms when nothing is held any more.
+type addrLimit struct {
+	mu   sync.Mutex
+	held map[netip.Addr]int
+	over bool
+}
+
+// addrKey is the address as the ACL and the decider see it: IPv4-mapped IPv6 is IPv4, a zone is not part of who it is.
+func addrKey(a netip.Addr) netip.Addr { return a.Unmap().WithZone("") }
+
+// take reserves one of the max slots of a; false means a holds them all.
+func (l *addrLimit) take(a netip.Addr, max int, what string, logf func(format string, args ...any)) bool {
+	a = addrKey(a)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.held[a] < max {
+		if l.held == nil {
+			l.held = map[netip.Addr]int{}
+		}
+		l.held[a]++
+		return true
+	}
+	if !l.over {
+		l.over = true
+		logf("client address limit of %d %s reached: refusing that address's new ones until they drain", max, what)
+	}
+	return false
+}
+
+func (l *addrLimit) release(a netip.Addr) {
+	a = addrKey(a)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n := l.held[a] - 1; n > 0 {
+		l.held[a] = n
+		return
+	}
+	delete(l.held, a)
+	if len(l.held) == 0 {
+		l.over = false
+	}
+}
+
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
 	acl                                *ACL
@@ -76,11 +121,12 @@ type gateway struct {
 	wg      sync.WaitGroup // every serving goroutine; stop() waits for them
 	queries idleGroup      // UDP queries from their datagram to the end of their handler, reply included
 
-	udpInflight, tcpConns    atomic.Int64
-	udpOverload, tcpOverload atomic.Bool // one log line per burst: set when logged, cleared when drained
-	muxInflight              atomic.Int64
-	muxOverload              atomic.Bool
-	dohConns, doqConns       *connLimit
+	udpInflight, tcpConns        atomic.Int64
+	udpOverload, tcpOverload     atomic.Bool // one log line per burst: set when logged, cleared when drained
+	muxInflight                  atomic.Int64
+	muxOverload                  atomic.Bool
+	dohConns, doqConns           *connLimit
+	udpAddrs, muxAddrs, tcpAddrs addrLimit // what each client address holds of the budgets above
 
 	mu      sync.Mutex
 	closers []func() // what stop() closes besides client connections: listeners, servers
@@ -173,6 +219,10 @@ func (g *gateway) resolve(ctx context.Context, client netip.Addr, datagram bool,
 // resolveShared is resolve under the cap DoH and DoQ share: they carry many queries on one connection, so their
 // queries in flight (each holds an upstream socket) are counted apart from UDP's. ok is false over the cap.
 func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, wire []byte, fwd forwarder) (reply []byte, ok bool) {
+	if !g.muxAddrs.take(client, g.muxPerAddr, "DoH and DoQ queries", g.logf) {
+		return nil, false
+	}
+	defer g.muxAddrs.release(client)
 	if g.muxInflight.Add(1) > maxMuxInflight {
 		g.muxInflight.Add(-1)
 		if g.muxOverload.CompareAndSwap(false, true) {
