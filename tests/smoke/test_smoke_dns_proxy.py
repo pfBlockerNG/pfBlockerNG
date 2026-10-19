@@ -484,12 +484,13 @@ def _unbound_clients(vm: SmokeVM, name: str) -> list[str]:
 def _wait_unbound_logged(vm: SmokeVM, name: str) -> list[str]:
     try:
         h.wait_until(lambda: bool(_unbound_clients(vm, name)), timeout=30.0, interval=2.0)
-    except RuntimeError:
+    except RuntimeError as exc:
         grep = vm.ssh(f"grep -F -- {shlex.quote(name)} {RESOLVER_LOG} 2>&1; tail -n 15 {RESOLVER_LOG} 2>&1").stdout
         logging = vm.ssh(f"grep -E 'log-|logfile|use-syslog|verbosity|proxy' {h.UNBOUND_CONF}").stdout
-        raise AssertionError(
-            f"{RESOLVER_LOG} has no query line for {name}.\nmatching and last lines:\n{grep}\nlogging conf:\n{logging}"
-        ) from None
+        raise RuntimeError(
+            f"{exc}\n{RESOLVER_LOG} has no query line for {name}.\nmatching and last lines:\n{grep}\n"
+            f"logging conf:\n{logging}"
+        ) from exc
     return _unbound_clients(vm, name)
 
 
@@ -501,8 +502,8 @@ def _dnsbl_rows(vm: SmokeVM, name: str) -> list[list[str]]:
 def _wait_dnsbl_row(vm: SmokeVM, name: str) -> None:
     try:
         h.wait_until(lambda: bool(_dnsbl_rows(vm, name)), timeout=30.0)
-    except RuntimeError:
-        raise AssertionError(f"dnsbl.log gained no row for {name}:\n{_proxy_log(vm)}") from None
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\ndnsbl.log gained no row for {name}:\n{_proxy_log(vm)}") from exc
 
 
 def _assert_answered_by_upstream(rig: Rig, name: str, answer: h.DnsAnswer, raw: str, how: str) -> None:
@@ -849,8 +850,8 @@ def test_listed_name_gets_the_vip_and_a_feed_attributed_log_row(rig: Rig, proxy_
     assert h.is_vip(answer), f"{rig.names.blocked}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
     try:
         h.wait_until(lambda: len(_dnsbl_rows(rig.vm, rig.names.blocked)) > rows_before, timeout=30.0)
-    except RuntimeError:
-        raise AssertionError(f"dnsbl.log gained no row for {rig.names.blocked}:\n{_proxy_log(rig.vm)}") from None
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\ndnsbl.log gained no row for {rig.names.blocked}:\n{_proxy_log(rig.vm)}") from exc
     new_rows = _dnsbl_rows(rig.vm, rig.names.blocked)[rows_before:]
     assert {row[3] for row in new_rows} == {CLIENT_LAN_IP}, f"dnsbl.log client: expected {CLIENT_LAN_IP}: {new_rows}"
     assert {row[8] for row in new_rows} == {FEED_HEADER}, f"dnsbl.log feed: expected {FEED_HEADER}: {new_rows}"
@@ -1107,15 +1108,15 @@ def test_pfb_dns_without_dnsbl_logs_replies_for_the_client_only_while_dns_reply_
             assert h.resolves_to(answer, STUB_DNS_A), f"{logged} was not answered by the upstream: {answer}\n{raw}"
             try:
                 h.wait_until(lambda: bool(_reply_rows(vm, logged)), timeout=30.0)
-            except RuntimeError:
-                raise AssertionError(f"dns_reply.log gained no row for {logged}:\n{_proxy_log(vm)}") from None
+            except RuntimeError as exc:
+                raise RuntimeError(f"{exc}\ndns_reply.log gained no row for {logged}:\n{_proxy_log(vm)}") from exc
             [row] = _reply_rows(vm, logged)
             assert row[2:5] == ["reply", "A", "A"] and row[5].isdigit(), f"row: {row}"
             assert row[6:9] == [logged, CLIENT_LAN_IP, STUB_DNS_A], f"row: {row}"
             try:
                 h.wait_until(lambda: bool(_reply_rows(vm, logged, UNIFIED_LOG)), timeout=30.0)
-            except RuntimeError:
-                raise AssertionError(f"unified.log (Reports, Stats) gained no row for {logged}") from None
+            except RuntimeError as exc:
+                raise RuntimeError(f"{exc}\nunified.log (Reports, Stats) gained no row for {logged}") from exc
             assert _reply_rows(vm, logged, UNIFIED_LOG) == [row], "unified.log keeps the row as it was written"
             assert _dnsbl_rows(vm, logged) == [], "DNSBL is off: dnsbl.log must gain no row"
         with _reply_logging(rig, False) as args:
@@ -1152,8 +1153,8 @@ def test_a_resolver_restart_brings_a_stopped_proxy_back_through_the_start_hook(r
     h.wait_unbound_ready(vm)
     try:
         h.wait_until(lambda: _pid_file(vm, PROXY_PID_FILE) is not None, timeout=60.0, interval=2.0)
-    except RuntimeError:
-        raise AssertionError(f"the Resolver restart did not start the proxy:\n{_diagnostics(vm)}") from None
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\nthe Resolver restart did not start the proxy:\n{_diagnostics(vm)}") from exc
     _wait_proxy_serves(rig)
 
 
@@ -1166,28 +1167,39 @@ PROBE_ORIG = f"{PROBE_DIR}/hook.orig"  # the hook as it was, bytes and mode (PRO
 PROBE_NO_HOOK = f"{PROBE_DIR}/hook.absent"
 PROBE_PROCESS = "pfb3515_boot_probe[.]d/probe[.]sh"  # for pgrep/pkill -f; the brackets keep it off its own command
 PROBE_DEADLINE = 300  # s from the hook: the probe exits by then whatever happens
-PROBE_GRACE = (
-    45  # s the probe keeps asking after rc.start_packages begins: the package rc scripts start in the background
+PROBE_REAP_CAP = (
+    30  # s: a SIGKILLed probe is gone as soon as pgrep says so; only a process stuck in the kernel outlasts it
 )
 BOOT_ID_SLACK = 5  # s: the probe's kern.boottime may differ this much from the one read later
 _PROBE_TEMPLATE = r"""#!/bin/sh
 # Issue #3515 smoke probe, test-only: /etc/rc.custom_boot_early starts it detached. From early boot it asks the DNS
-# proxy on 127.0.0.1:53 for a LISTED name and a never-asked ALLOWED name twice a second and logs what answers, until
-# GRACE s after rc.start_packages began or DEADLINE s have passed: it always exits.
+# proxy on 127.0.0.1:53 for a LISTED name and a never-asked ALLOWED name twice a second and logs what answers, until the
+# package stage is over (rc.start_packages has returned and the rc scripts it started have exited) or DEADLINE s have
+# passed: it always exits.
 DIR=/conf/pfb3515_boot_probe.d
 LOG=$DIR/log
 DEADLINE=@DEADLINE@
-GRACE=@GRACE@
 LISTED=${PROBE_LISTED:?}
 STEM=${PROBE_STEM:?}
 # kern.boottime is "{ sec = N, usec = M } <date>": the first number is N (a greedy "sec = " would catch usec)
 BOOT=$(/sbin/sysctl -n kern.boottime | /usr/bin/sed 's/^[^0-9]*\([0-9]*\).*/\1/')
 START=$(/bin/date +%s)
-n=0 seen_at='' last=''
+n=0 pkg=0 last=''
 # rc.start_packages logs this when it begins; system.log outlives a reboot, so count against what it holds now
 MARK='Restarting/Starting all packages'
 packages() { c=$(/usr/bin/grep -c "$MARK" /var/log/system.log 2>/dev/null); echo "${c:-0}"; }
 base=$(packages)
+# rc.start_packages creates RUNNING before it logs MARK and removes it as its last act, after it has started every other
+# package rc script in the background (`<script> start &`): the package stage is over when RUNNING is gone and none of
+# those scripts is left. shortcut: a script forked but not yet exec'd still shows as a bare `/bin/sh`, so one sample
+# can miss it; the proxy pids the test compares after the probe's end still show a proxy that start replaced
+RUNNING=/tmp/.rc.start_packages.running
+STAGE_RC='/usr/local/etc/rc[.]d/[^ ]*[.]sh start'
+# pkg: 0 the package stage has not begun, 1 it has, 2 it is over
+stage() {
+	if [ "$pkg" -eq 0 ] && [ "$(packages)" -gt "$base" ]; then pkg=1; fi
+	if [ "$pkg" -eq 1 ] && [ ! -e "$RUNNING" ] && ! /bin/pgrep -f "$STAGE_RC" >/dev/null; then pkg=2; fi
+}
 say() { printf '@@ %s boot=%s %s\n' "$(/bin/date +%s)" "$BOOT" "$*" >>"$LOG"; }
 # RCODE:addresses of the A answer, NONE:- when nothing answered in 3 s
 ask() {
@@ -1204,32 +1216,31 @@ say "start pid=$$ deadline=$DEADLINE"
 while true; do
 	now=$(/bin/date +%s)
 	if [ $((now - START)) -ge "$DEADLINE" ]; then say "end reason=deadline"; exit 0; fi
+	n=$((n + 1))
+	a=$STEM-$n.com
+	l=$(ask "$LISTED")
+	r=$(ask "$a")
+	# sampled after the answers: the state row logged before this query row is what the proxy and the package stage
+	# were by the time the query had been answered
 	ub=$(/bin/pgrep -x unbound | /usr/bin/head -n 1)
 	px=$(/bin/cat /var/run/pfb_dns_proxy.pid 2>/dev/null)
 	dm=$(/bin/cat /var/run/pfb_dns_proxy_daemon.pid 2>/dev/null)
 	up=0
 	if [ -n "$px" ] && /usr/bin/sockstat -4l -p 53 | /usr/bin/awk -v p="$px" "$held"; then up=1; fi
-	pk=0
-	if [ -n "$seen_at" ]; then
-		pk=1
-	elif [ "$(packages)" -gt "$base" ]; then
-		pk=1 seen_at=$now
-	fi
-	cur="unbound=$ub proxy=$px daemon=$dm listening=$up pkg=$pk"
+	stage
+	cur="unbound=$ub proxy=$px daemon=$dm listening=$up pkg=$pkg"
 	if [ "$cur" != "$last" ]; then
 		age=
 		[ -n "$ub" ] && age=$(/bin/ps -o etimes= -p "$ub" | /usr/bin/tr -d ' ')
 		say "state $cur unbound_age=$age"
 		last=$cur
 	fi
-	n=$((n + 1))
-	a=$STEM-$n.com
-	say "query n=$n allowed=$a listed=$(ask "$LISTED") answer=$(ask "$a")"
-	if [ -n "$seen_at" ] && [ $((now - seen_at)) -ge "$GRACE" ]; then say "end reason=packages"; exit 0; fi
+	say "query n=$n allowed=$a listed=$l answer=$r"
+	if [ "$pkg" -eq 2 ]; then say "end reason=packages"; exit 0; fi
 	/bin/sleep 0.5
 done
 """
-PROBE_SCRIPT = _PROBE_TEMPLATE.replace("@DEADLINE@", str(PROBE_DEADLINE)).replace("@GRACE@", str(PROBE_GRACE))
+PROBE_SCRIPT = _PROBE_TEMPLATE.replace("@DEADLINE@", str(PROBE_DEADLINE))
 
 BOOT_TIMELINE_PHP = r"""
 $boot = 0;
@@ -1287,8 +1298,15 @@ def _unplant_probe_script() -> str:
     return (
         "rc=0\n"
         f"pkill -KILL -f '{PROBE_PROCESS}'\n"
-        f"for i in 1 2 3 4 5; do pgrep -f '{PROBE_PROCESS}' >/dev/null || break; sleep 0.2; done\n"
-        f"if pgrep -f '{PROBE_PROCESS}' >/dev/null; then echo 'probe still running'; rc=1; fi\n"
+        "n=0\n"
+        f"while pgrep -f '{PROBE_PROCESS}' >/dev/null; do\n"
+        "    n=$((n + 1))\n"
+        f'    if [ "$n" -gt {PROBE_REAP_CAP * 5} ]; then\n'
+        f"        echo 'STUCK/ENVIRONMENT: the probe is still running {PROBE_REAP_CAP} s after SIGKILL'; rc=1; break\n"
+        "    fi\n"
+        f"    pkill -KILL -f '{PROBE_PROCESS}'\n"
+        "    sleep 0.2\n"
+        "done\n"
         f"if [ -e {PROBE_NO_HOOK} ]; then\n"
         f"    rm -f {EARLY_HOOK}\n"
         f"    [ ! -e {EARLY_HOOK} ] || {{ echo 'hook not removed'; rc=1; }}\n"
@@ -1313,6 +1331,8 @@ def _early_boot_probe(vm: SmokeVM, *, listed: str, stem: str) -> Iterator[None]:
         yield
     finally:
         removed = _sh(vm, _unplant_probe_script())
+        if "STUCK/ENVIRONMENT" in removed.stdout:
+            raise RuntimeError(f"{removed.stdout.strip()} (removing the early-boot probe: rc={removed.returncode})")
         assert removed.returncode == 0, (
             f"removing the early-boot probe: rc={removed.returncode} {removed.stdout}{removed.stderr}"
         )
@@ -1322,22 +1342,29 @@ def _probe_log(vm: SmokeVM) -> str:
     return vm.ssh("cat", PROBE_LOG).stdout
 
 
+def _probe_over(vm: SmokeVM) -> bool:
+    """The probe logged `end`, or is gone without having logged it: either way nothing is left to wait for."""
+    if re.search(r"^@@ \d+ boot=\d+ end\b", _probe_log(vm), re.MULTILINE):
+        return True
+    return vm.ssh(f"pgrep -f '{PROBE_PROCESS}'").returncode == 1  # pgrep's 1 is no process; ssh's own failure is 255
+
+
 def _wait_probe_end(vm: SmokeVM) -> None:
-    """The probe logs `end` as its last act; it is bounded by PROBE_DEADLINE, so this wait is bounded too."""
+    """Wait for the probe to log `end` as its last act, or to be gone; the judge reads what it wrote either way.
+
+    The probe is bounded by PROBE_DEADLINE; this wait's own cap, a minute past it, only salvages a stuck poll.
+    """
     try:
-        h.wait_until(
-            lambda: re.search(r"^@@ \d+ boot=\d+ end\b", _probe_log(vm), re.MULTILINE) is not None,
-            timeout=PROBE_DEADLINE + 60.0,
-            interval=3.0,
-        )
-    except RuntimeError:
-        raise AssertionError(f"the early-boot probe did not end:\n{_probe_log(vm)[-4000:]}") from None
+        h.wait_until(lambda: _probe_over(vm), timeout=PROBE_DEADLINE + 60.0, interval=3.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\nthe early-boot probe did not end:\n{_probe_log(vm)[-4000:]}") from exc
 
 
 # One probe record: (epoch, the kern.boottime second the probe read, kind, key=value fields).
 #   start   pid, deadline
-#   state   unbound/proxy/daemon pids, listening (the proxy child holds 127.0.0.1:53), pkg (rc.start_packages began),
-#           unbound_age (ps etimes of Unbound); written on every change
+#   state   unbound/proxy/daemon pids, listening (the proxy child holds 127.0.0.1:53), pkg (0 the package stage has not
+#           begun, 1 rc.start_packages began, 2 it is over), unbound_age (ps etimes of Unbound); written on every
+#           change, sampled after the answers of the query row that follows it
 #   query   n, allowed (the fresh name), listed and answer (RCODE:addresses for the listed and the fresh name)
 #   end     reason
 ProbeRow = tuple[int, int, str, dict[str, str]]
@@ -1382,18 +1409,24 @@ class BootProbe:
     listening: int  # the first sample that found the proxy child on 127.0.0.1:53
     unbound_start: int | None  # first sight of the Unbound serving at `ready`, minus its age; None when ps gave no age
     pids: tuple[str, str]  # proxy child, supervisor: the same in every sample from `listening` to the end
-    packages_seen: int  # the first sample after rc.start_packages logged that it began
+    packages_seen: int  # the first sample that found rc.start_packages begun
 
 
-def _judge_boot_probe(log: str, *, boot: int, packages: int, listed_address: str, upstream_address: str) -> BootProbe:
-    """Raise AssertionError unless the probe saw correct answers before `packages` and an undisturbed proxy after."""
+def _judge_boot_probe(log: str, *, boot: int, listed_address: str, upstream_address: str) -> BootProbe:
+    """Raise AssertionError unless the probe saw correct answers before the package stage and an undisturbed proxy.
+
+    Order is the order of the probe's own log, which one process wrote in sequence; each `state` row is sampled after
+    the answers of the `query` row that follows it, so a `state` row that shows the package stage begun comes before
+    every answer that may have been given after it. No epoch and no other clock decides an order.
+    """
     rows = _probe_rows(log)
     assert rows and rows[0][2] == "start", f"the early-boot probe never started; its log:\n{log}"
     digest = _digest(rows)
     assert all(abs(row[1] - boot) <= BOOT_ID_SLACK for row in rows), (
         f"records of another boot (this one began at {boot}):\n{digest}"
     )
-    assert rows[-1][2] == "end", f"the early-boot probe did not finish:\n{digest}"
+    assert rows[-1][2] == "end", f"STUCK/ENVIRONMENT: the early-boot probe did not finish (it was killed?):\n{digest}"
+    position = {id(row): at for at, row in enumerate(rows)}
     queries = [row for row in rows if row[2] == "query"]
     states = [row for row in rows if row[2] == "state"]
 
@@ -1404,12 +1437,16 @@ def _judge_boot_probe(log: str, *, boot: int, packages: int, listed_address: str
 
     ready = next((row for row in queries if served(row)), None)
     assert ready is not None, f"none of {len(queries)} probe queries was answered as expected:\n{digest}"
-    assert ready[0] < packages, (
-        f"the first correct answers came at boot+{ready[0] - boot} s, not before rc.start_packages began at "
-        f"boot+{packages - boot} s:\n{digest}"
+    began = next((row for row in states if row[3].get("pkg") in ("1", "2")), None)
+    assert began is not None, (
+        f"the probe never saw rc.start_packages begin (it ended: {rows[-1][3].get('reason')}):\n{digest}"
+    )
+    assert position[id(ready)] < position[id(began)], (
+        f"the first correct answers came at boot+{ready[0] - boot} s, not before rc.start_packages began "
+        f"(the probe saw it begun at boot+{began[0] - boot} s):\n{digest}"
     )
     heard = next((i for i, row in enumerate(states) if row[3].get("listening") == "1"), None)
-    assert heard is not None and states[heard][0] <= ready[0], (
+    assert heard is not None and position[id(states[heard])] < position[id(ready)], (
         f"the probe never saw the proxy listening by the first answers:\n{digest}"
     )
     pair = (states[heard][3].get("proxy", ""), states[heard][3].get("daemon", ""))
@@ -1422,17 +1459,16 @@ def _judge_boot_probe(log: str, *, boot: int, packages: int, listed_address: str
         f"the proxy (child, supervisor) {pair} was listening, then the probe saw {len(disturbed)} other state(s) "
         f"before it ended (query rows that repeat the answers before them are left out):\n{digest}"
     )
-    began = next((row for row in states if row[3].get("pkg") == "1"), None)
-    assert began is not None, f"the probe never saw rc.start_packages begin:\n{digest}"
     failed = [row for row in queries[queries.index(ready) :] if not served(row)]
     assert not failed, f"{len(failed)} quer(ies) failed after the first correct answers, first {failed[0]}:\n{digest}"
     assert rows[-1][3].get("reason") == "packages", (
-        f"the probe hit its deadline before it had watched the package stage for {PROBE_GRACE} s:\n{digest}"
+        f"STUCK/ENVIRONMENT: the probe hit its {PROBE_DEADLINE} s deadline before the package stage was over "
+        f"(rc.start_packages returned and the rc scripts it started exited):\n{digest}"
     )
     unbound = [
         row
         for row in states
-        if row[0] <= ready[0] and row[3].get("unbound") and row[3].get("unbound_age", "").isdigit()
+        if position[id(row)] < position[id(ready)] and row[3].get("unbound") and row[3].get("unbound_age", "").isdigit()
     ]
     return BootProbe(
         ready=ready[0],
@@ -1474,13 +1510,14 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
     Given pfB-DNS on, with DNSBL on or off, applied, and a bounded probe in /etc/rc.custom_boot_early that asks
       127.0.0.1:53 from early boot for a listed name and for a fresh allowed name (the upstream is a stub on the host),
     When the firewall reboots,
-    Then the probe's first correct answers are logged before `Restarting/Starting all packages` (rc.start_packages):
+    Then the probe's first correct answers come before rc.start_packages begins (it logs `Restarting/Starting all
+      packages`):
       the DNSBL VIP for the listed name with DNSBL on, the upstream's address for it with DNSBL off, and with both
       the upstream's address for the fresh name, which the stub saw; a `DNS proxy started` line is a launch and does
       not count;
-      And from the first answers to the end of the probe (45 s after rc.start_packages began, which covers the package
-      rc scripts it launches in the background) the proxy keeps its child and supervisor pids, stays on 127.0.0.1:53,
-      and no probe query fails;
+      And from the first answers to the end of the probe (the package stage over: rc.start_packages has returned and
+      the package rc scripts it started in the background have exited) the proxy keeps its child and supervisor pids,
+      stays on 127.0.0.1:53, and no probe query fails;
       And the launch, the listening socket, the first answers and Unbound's sync are reported as separate times;
       And the Resolver is still moved and the proxy runs, and a lookup from the firewall after the boot succeeds
       through the proxy (the upstream's answer with DNSBL off, the DNSBL VIP for a listed name with it on), and so
@@ -1501,14 +1538,7 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
             _wait_probe_end(vm)
             log = _probe_log(vm)
         boot, events = _boot_timeline(vm)
-        assert events["packages_started"], f"no `Restarting/Starting all packages` line this boot: {events}"
-        probe = _judge_boot_probe(
-            log,
-            boot=boot,
-            packages=events["packages_started"][0],
-            listed_address=expected,
-            upstream_address=STUB_DNS_A,
-        )
+        probe = _judge_boot_probe(log, boot=boot, listed_address=expected, upstream_address=STUB_DNS_A)
         state = _capture(vm)
         upstream_saw = stub_dns.received(probe.ready_name)
         _say(
@@ -1546,6 +1576,7 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
 READY_FILE = "/var/unbound/pfb_dns_ready"  # the gateway's own pid, written by it (--ready-file) once it serves
 START_LOCK = "/var/run/pfb_dns_proxy.lock"  # lockf(1): `rc start` runs under it, the file is kept between starts
 RACE_ROUNDS = 6
+RACE_READY_CAP = 90  # s per round: a start whose proxy has not published its ready marker by then is stuck, not slow
 
 
 def _marker(vm: SmokeVM) -> str | None:
@@ -1597,10 +1628,10 @@ def test_the_start_lock_is_free_while_the_proxy_runs(rig: Rig, proxy_on: State) 
     the lock itself.
 
     Given the proxy running,
-    When the lock is taken for one second,
-    Then lockf gets it at once (status 0).
+    When the lock is tried without waiting (`lockf -t 0` is a state probe: status 75 means held),
+    Then lockf gets it (status 0).
     """
-    probe = _sh(rig.vm, f"/usr/bin/lockf -k -t 1 {START_LOCK} /usr/bin/true; echo rc=$?")
+    probe = _sh(rig.vm, f"/usr/bin/lockf -k -t 0 {START_LOCK} /usr/bin/true; echo rc=$?")
     assert "rc=0" in probe.stdout, (
         f"the start lock is still held while the proxy runs (rc 75 = held): {probe.stdout!r} {probe.stderr!r}\n"
         f"{_sh(rig.vm, f'ls -l {START_LOCK}; fstat {START_LOCK} 2>&1').stdout}"
@@ -1612,6 +1643,8 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
 
     Returns (supervisors, children, the two exit statuses) per round. The unlocked variant sets the rc script's own
     inner-run variable, which makes it skip lockf: the same script, with only the serialization taken away.
+    A start returns once it has launched the proxy, not once the proxy serves, so a round is counted when a proxy has
+    published its ready marker naming a live process; a round whose proxy never does is stuck, not a count.
     """
     env = "" if locked else "PFB_DNS_PROXY_START_LOCKED=1 "
     script = (
@@ -1621,7 +1654,15 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
         f"  ( {env}{PROXY_RC} start; echo $? > $s1 ) &\n"
         f"  ( {env}{PROXY_RC} start; echo $? > $s2 ) &\n"
         "  wait\n"
-        "  sleep 3\n"
+        "  t=0\n"
+        f"  until pid=''; {{ read -r pid < {READY_FILE}; }} 2>/dev/null \\\n"
+        '    && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do\n'
+        "    t=$((t + 1))\n"
+        f"    if [ $t -gt {RACE_READY_CAP * 5} ]; then\n"
+        f'      echo "round=$i stuck: no live proxy published {READY_FILE} in {RACE_READY_CAP} s"; exit 1\n'
+        "    fi\n"
+        "    sleep 0.2\n"
+        "  done\n"
         "  sup=$(ps -axww -o args= | grep -c 'daemon: pfb_dns_prox[y]')\n"
         "  kids=$(ps -axww -o args= | awk '$1 ~ /python/ && /pfb_dns_prox[y][.]py/' | wc -l | tr -d ' ')\n"
         '  echo "round=$i supervisors=$sup children=$kids rc=$(cat $s1)/$(cat $s2)"\n'
@@ -1629,7 +1670,13 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
         "  i=$((i + 1))\n"
         "done\n"
     )
-    out = _sh(vm, script, timeout=300.0).stdout
+    try:
+        out = _sh(vm, script, timeout=RACE_ROUNDS * (RACE_READY_CAP + 30.0) + 60.0).stdout
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"STUCK/ENVIRONMENT: the race probe did not return within {exc.timeout:.0f}s") from exc
+    stuck = [line for line in out.splitlines() if " stuck: " in line]
+    if stuck:
+        raise RuntimeError(f"STUCK/ENVIRONMENT: {stuck[0]}\nrace probe output:\n{out}")
     rounds = [re.fullmatch(r"round=\d+ supervisors=(\d+) children=(\d+) rc=(\S+)", line) for line in out.splitlines()]
     parsed = [(int(m.group(1)), int(m.group(2)), m.group(3)) for m in rounds if m]
     assert len(parsed) == RACE_ROUNDS, f"race probe output:\n{out}"
@@ -1751,9 +1798,9 @@ def _occupy(vm: SmokeVM, addresses: list[str], port: str) -> None:
 
     try:
         h.wait_until(held, timeout=30.0, interval=1.0)
-    except RuntimeError:
+    except RuntimeError as exc:
         have = sorted((s.command, s.proto, s.local) for s in _listeners(vm) if s.port == int(port))
-        raise AssertionError(f"the listeners do not hold {sorted(wanted)}; sockets on {port}: {have}") from None
+        raise RuntimeError(f"{exc}\nthe listeners do not hold {sorted(wanted)}; sockets on {port}: {have}") from exc
 
 
 def _release(vm: SmokeVM) -> None:
@@ -1883,9 +1930,13 @@ def _await_delete(vm: SmokeVM, done: Callable[[str], bool], *, timeout: float) -
     return h.read_log_file(vm, _DELETE_OUT)
 
 
-def _delete_in_background(vm: SmokeVM) -> None:
+def _delete_in_background(vm: SmokeVM) -> str:
+    """Start `pkg delete` detached; returns the pid of the shell that runs it and then writes `RC=`."""
     command = f"env ASSUME_ALWAYS_YES=yes pkg delete -y {PKG_NAME} > {_DELETE_OUT} 2>&1; echo RC=$? >> {_DELETE_OUT}"
-    vm.ssh(f"nohup /bin/sh -c '{command}' >/dev/null 2>&1 &")
+    started = vm.ssh(f"nohup /bin/sh -c '{command}' >/dev/null 2>&1 & echo $!")
+    pid = started.stdout.strip()
+    assert pid.isdigit(), f"no pid for the background pkg delete: {started.stdout!r} {started.stderr!r}"
+    return pid
 
 
 def _registered_services(vm: SmokeVM) -> list[str]:
@@ -1917,6 +1968,7 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
         "shipped core, /etc/inc/pkg-utils.inc:\n"
         + vm.ssh("grep", "-n", _CORE_PRELUDE_LINES, "/etc/inc/pkg-utils.inc").stdout
     )
+    delete_pid = ""  # the background pkg delete the `finally` must see finished
     try:
         before, raw = _query(client, rig.names.blocked)
         assert h.is_vip(before), f"before: the listed name is not blocked with the VIP: {before}\n{raw}"
@@ -1946,7 +1998,7 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
             + vm.ssh("ls -l /tmp/pfb_dns_config.lock /pfb_dns_config.lock 2>&1").stdout
         )
 
-        _delete_in_background(vm)
+        delete_pid = _delete_in_background(vm)
         # The recovery announces itself before it waits for the lock; an RC= first means it never waited.
         out = _await_delete(vm, lambda text: _RECOVERING in text or "RC=" in text, timeout=300.0)
         assert _RECOVERING in out, f"pkg delete finished without the recovery waiting for the config lock:\n{out}"
@@ -1971,7 +2023,7 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
             f"after the aborted removal an allowed name is not answered: {allowed}\n{raw}"
         )
 
-        _delete_in_background(vm)
+        delete_pid = _delete_in_background(vm)
         h.wait_until(lambda: "RC=" in h.read_log_file(vm, _DELETE_OUT), timeout=600.0, interval=2.0)
         out = h.read_log_file(vm, _DELETE_OUT)
         assert out.rstrip().endswith("RC=0"), f"the retry's pkg delete failed:\n{out}"
@@ -1982,8 +2034,19 @@ def test_an_aborted_removal_keeps_pfb_dns_serving_and_a_retry_removes_the_packag
         assert h.resolves_to(allowed, STUB_DNS_A), f"after the removal Unbound does not answer: {allowed}\n{raw}"
     finally:
         vm.ssh(f"mkdir -p {_ABORT_DIR}; touch {_LOCK_GO}")
-        with contextlib.suppress(RuntimeError):
-            h.wait_until(lambda: "RC=" in h.read_log_file(vm, _DELETE_OUT), timeout=300.0, interval=2.0)
+        stuck: RuntimeError | None = None
+        if delete_pid:
+            try:
+                h.wait_until(lambda: vm.ssh(f"kill -0 {delete_pid}").returncode != 0, timeout=300.0, interval=2.0)
+            except RuntimeError as exc:
+                stuck = exc
+                # shortcut: kills the shell and pkg, not what pkg's own hooks started; upgrade when a hook outlives it
+                vm.ssh(f"pkill -KILL -P {delete_pid}; kill -KILL {delete_pid}")
         vm.ssh(f"rm -rf {_ABORT_DIR}")
         if pkg_installed_version(vm) is None:
             h.deploy(vm)
+        if stuck is not None:
+            raise RuntimeError(
+                f"STUCK/ENVIRONMENT: pkg delete (pid {delete_pid}) was still running 300 s after the config lock was "
+                f"released; it was killed and the cleanup finished: {stuck}"
+            ) from stuck

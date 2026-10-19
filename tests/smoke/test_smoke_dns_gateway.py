@@ -594,8 +594,8 @@ def _wait_udp(gw: Gateway, name: str, ok: Callable[[h.DnsAnswer], bool], expecte
 
     try:
         h.wait_until(seen, timeout=60.0, interval=1.0)
-    except RuntimeError:
-        raise AssertionError(f"UDP never gave {expected}; last answer {last}\n{_proxy_log(gw.vm)}") from None
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\nUDP never gave {expected}; last answer {last}\n{_proxy_log(gw.vm)}") from exc
     return last[0]
 
 
@@ -906,8 +906,8 @@ def test_an_upstream_ede_block_is_logged_with_the_real_client_in_gateway_mode(
 
     try:
         h.wait_until(lambda: bool(upstream_rows()), timeout=30.0)
-    except RuntimeError:
-        raise AssertionError(f"dnsbl.log gained no Upstream_Block row for {name}:\n{_proxy_log(gw.vm)}") from None
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\ndnsbl.log gained no Upstream_Block row for {name}:\n{_proxy_log(gw.vm)}") from exc
     [row] = upstream_rows()
     assert row[0] == "DNSBL-python" and row[6] == "Upstream", row
     assert row[7] == "EDE15 (Blocked)" and row[8] == "Quad9", f"evaluation / extra text: {row}"
