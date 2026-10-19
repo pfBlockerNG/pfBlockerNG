@@ -297,12 +297,24 @@ def test_a_non_query_opcode_is_forwarded_unchanged_and_its_reply_relayed(booted:
     _run(booted, scenario)
 
 
-def test_an_empty_reply_to_a_forwarded_non_query_opcode_is_a_drop(booted: Booted) -> None:
+def test_an_empty_reply_to_a_forwarded_non_query_opcode_is_a_servfail_keeping_its_id_and_opcode(booted: Booted) -> None:
+    query = dnswire.parse(NOTIFY)
+
     async def scenario(gateway: Gateway) -> None:
         await gateway.send(query_frame(6, NOTIFY))
         assert await gateway.recv() == (FORWARD, 6, NOTIFY)
-        await gateway.send(frame(REPLY, 6))  # no reply from Unbound: nothing to relay, so nothing to send
-        assert await gateway.recv() == (DROP, 6, b"")
+        await gateway.send(frame(REPLY, 6))  # no reply from Unbound: a SERVFAIL, as for any query the decider forwards
+        ftype, fid, answer = await gateway.recv()
+        assert (ftype, fid) == (ANSWER, 6)  # a SERVFAIL for the query, not a drop
+        message = dnswire.parse(answer)
+        assert (ftype, fid, len(answer), message.id, message.flags & dnswire.OPCODE_MASK, message.rcode) == (
+            ANSWER,
+            6,
+            12,
+            query.id,
+            query.flags & dnswire.OPCODE_MASK,
+            2,
+        )
 
     _run(booted, scenario)
 
