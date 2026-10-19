@@ -151,10 +151,10 @@ Every transport goes through the same path as plain DNS: the Resolver ACL, then 
 with the client in the header. The ACL is Unbound's own, read from `--unbound-conf` (`/var/unbound/unbound.conf`) and
 every file it includes, globs too: the `access-control` rows of `access_lists.conf`, of pfBlockerNG's marked clause and
 of the admin's Custom Options. The most specific prefix matches and, of identical prefixes, the row read last wins; deny:
-nothing is answered; refuse, and a client no row names (Unbound's default): REFUSED built by the gateway. A row is read
-as Unbound 1.26.1 reads it, so `access-control:10.0.0.0/8 deny` (no space after the colon) counts. A config Unbound could
-not load (a missing include, an include cycle, a brace pattern) is logged once and the gateway forwards everything; any file
-or glob match that changes is picked up within a second.
+nothing is answered; refuse, and a client no row names (Unbound's default): REFUSED built by the gateway. Supported
+rows accept a netblock immediately after the colon, as Unbound 1.26.1 does: `access-control:10.0.0.0/8 deny` counts.
+Include-loading failures (a missing include, an include cycle, a brace pattern) are logged once and the gateway
+forwards everything; any file or glob match that changes is picked up within a second.
 
 Two Unbound rules the gateway follows too. A netblock named only by `access-control-view`, `access-control-tag`,
 `access-control-tag-action` or `access-control-tag-data` is allowed, unless an identical `access-control` row names it.
@@ -163,6 +163,9 @@ listed name for them; Unbound's own refusal or drop for a non-local name is not 
 without a valid DNS cookie, and the client retries over TCP. Known divergence: two statements on one line (`access-control:
 … allow access-control: …`) and a `server:` on a row's line are not split. The gateway ignores that row where Unbound
 applies it. Splitting them needs a tokenizer rewrite; pfSense and pfBlockerNG never write them.
+Scoped netblocks (`fe80::1%em0`) and prefixes with trailing text (`10.1.0.0/16x`) are also ignored locally even though
+Unbound accepts them. This reader is not a configuration validator: an implicit row missing its required view/tag
+argument can match locally although Unbound refuses to load that configuration.
 
 ## Who is the client
 
