@@ -23,14 +23,16 @@ final class DnsProxyCertificateFixtures
 
 	/**
 	 * Give a test a usable Resolver certificate, so that DoT (or DoH, DoQ) on means what it does on a box: the apply writes
-	 * it to $dir/pfb_dns_cert.pem for the gateway, and no notice says it could not. Seeds config.xml and $pfb.
+	 * it to $dir/etc/pfb_dns/tls.pem for the gateway, and no notice says it could not. Seeds config.xml and $pfb (the certificate
+	 * file, the control socket's path and the Unbound chroot copy an earlier build left, all under $dir).
 	 */
 	public static function seedResolver(string $dir, string $refid = 'cert123'): void
 	{
 		$GLOBALS['config']['unbound']['sslcertref'] = $refid;
 		$GLOBALS['config']['cert'] = [self::certEntry($refid, self::shared())];
-		$GLOBALS['pfb']['dns_proxy_cert'] = "{$dir}/pfb_dns_cert.pem";
-		$GLOBALS['pfb']['dns_proxy_cert_owner'] = (string) posix_getpwuid(posix_geteuid())['name'];
+		$GLOBALS['pfb']['dns_proxy_cert'] = "{$dir}/etc/pfb_dns/tls.pem";
+		$GLOBALS['pfb']['dns_proxy_cert_legacy'] = "{$dir}/chroot/pfb_dns_cert.pem";
+		$GLOBALS['pfb']['dns_proxy_ctl'] = "{$dir}/ctl.sock";
 	}
 
 	/**

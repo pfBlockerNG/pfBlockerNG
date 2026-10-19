@@ -86,6 +86,41 @@ final class DnsProxyCertificateStartTest extends TestCase
 		$this->assertSame([], $this->recorded('timeout.args'), 'PHP is not even started');
 	}
 
+	public function testAStartForgetsWhatWasPushedToTheGatewayBeforeIt(): void
+	{
+		// Given a certificate pushed to the gateway that is now to be replaced by a new process
+		$this->moveResolver(TRUE);
+		pfb_dns_proxy_service();
+		file_put_contents($this->pushedFile(), hash('sha256', (string) file_get_contents($this->certFile())));
+		$this->arrange();
+
+		// When the proxy starts
+		[$status, $output] = $this->rc('start');
+
+		// Then the record is gone, so the next apply or tick pushes to the new process whatever it read at start; the file stays
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events());
+		$this->assertFileDoesNotExist($this->pushedFile());
+		$this->assertFileExists($this->certFile());
+	}
+
+	public function testAStartThatKeepsTheRunningGatewayKeepsTheRecordOfWhatItWasPushed(): void
+	{
+		// Given a gateway that serves, and what was pushed to it on record
+		$this->moveResolver(TRUE);
+		pfb_dns_proxy_service();
+		file_put_contents($this->pushedFile(), 'the digest of what the running gateway has');
+		$this->arrange([], '2', '1', TRUE);
+
+		// When a second start finds it serving
+		[$status, $output] = $this->rc('start');
+
+		// Then nothing is launched and the record still describes that gateway
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame([], $this->events());
+		$this->assertSame('the digest of what the running gateway has', (string) file_get_contents($this->pushedFile()));
+	}
+
 	public function testAnExportThatTheLimitKillsLeavesPlainDnsServingAndSaysWhatIsNotServed(): void
 	{
 		// Given the same start, and a limit that fires before PHP did anything

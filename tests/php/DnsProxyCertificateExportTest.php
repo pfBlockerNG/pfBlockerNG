@@ -10,16 +10,18 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #3515 -- a renewed Resolver certificate reaches the running pfB-DNS gateway with no restart: PHP writes the certificate
- * chain and key the Resolver uses (unbound/sslcertref) to one PEM file, readable only by the user the gateway runs as, and the
- * gateway reads it again whenever it changes (go/pfb_dns_gateway, tlsconfig.go). Intent pinned here:
+ * chain and key the Resolver uses (unbound/sslcertref) to one PEM file that only root can read (the gateway reads it once, at
+ * start, while it is still root) and pushes a renewal to the running gateway on its control socket
+ * (DnsProxyCertificatePushTest). Intent pinned here:
  *   - the file holds the certificate, the CAs its caref leads to nearest first (a missing CA or a loop ends the chain), then the
- *     key, mode 0600, owned by the gateway's user;
+ *     key, mode 0600, in a directory of mode 0700, both owned by the user that wrote them (root on a box), never by the
+ *     gateway's user and never inside the Unbound chroot;
  *   - a certificate that is already in the file is not written again, and a new one replaces it in one rename: a reader that
  *     has the old file open never sees a mixture, and no temporary file is left;
  *   - a certificate that cannot be used (no certificate chosen, bad base64, a key that is encrypted or is not the
  *     certificate's) writes nothing: the file keeps the certificate the gateway serves, and the reason comes back;
  *   - the file exists exactly while DoT, DoH or DoQ is wanted, and is renewed by the apply (pfb_dns_proxy_service()) and by the
- *     cron tick (pfb_dns_proxy_certificate_sync()).
+ *     cron tick (pfb_dns_proxy_certificate_sync()); a copy an earlier build left in the Unbound chroot is removed.
  */
 #[CoversFunction('pfb_dns_proxy_certificate_export')]
 #[CoversFunction('pfb_dns_proxy_certificate_refresh')]
@@ -32,7 +34,7 @@ final class DnsProxyCertificateExportTest extends TestCase
 
 	private string $dir = '';
 	private string $pem = '';
-	private string $owner = '';
+	private string $legacy = '';
 	private array $savedGlobals = [];
 
 	protected function setUp(): void
@@ -42,9 +44,12 @@ final class DnsProxyCertificateExportTest extends TestCase
 		}
 		$this->dir = sys_get_temp_dir() . '/pfb_dns_cert_' . bin2hex(random_bytes(6));
 		$this->assertTrue(mkdir($this->dir, 0777, TRUE));
-		$this->pem = "{$this->dir}/pfb_dns_cert.pem";
-		$this->owner = (string) posix_getpwuid(posix_geteuid())['name'];
-		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], ['dns_proxy_cert' => $this->pem, 'dns_proxy_cert_owner' => $this->owner, 'log' => "{$this->dir}/pfb.log", 'errlog' => "{$this->dir}/pfb.err"]);
+		$this->pem = "{$this->dir}/etc/pfb_dns/tls.pem";
+		$this->legacy = "{$this->dir}/chroot/pfb_dns_cert.pem";
+		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
+			'dns_proxy_cert' => $this->pem, 'dns_proxy_cert_legacy' => $this->legacy, 'dns_proxy_ctl' => "{$this->dir}/ctl.sock",
+			'log' => "{$this->dir}/pfb.log", 'errlog' => "{$this->dir}/pfb.err",
+		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_file_notices'] = [];
 	}
@@ -72,7 +77,7 @@ final class DnsProxyCertificateExportTest extends TestCase
 
 	private function export(): ?string
 	{
-		return pfb_dns_proxy_certificate_export($this->pem, $this->owner);
+		return pfb_dns_proxy_certificate_export($this->pem);
 	}
 
 	/** @return list<string> the PEM blocks of the file as [type, body] concatenated, in file order */
@@ -111,7 +116,7 @@ final class DnsProxyCertificateExportTest extends TestCase
 		], $this->blocks());
 	}
 
-	public function testTheFileIsPrivateToTheGatewaysUser(): void
+	public function testTheFileAndItsDirectoryAreRootsAndNobodyElses(): void
 	{
 		$this->install(DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost')));
 
@@ -119,8 +124,34 @@ final class DnsProxyCertificateExportTest extends TestCase
 
 		clearstatcache();
 		$this->assertSame(0600, fileperms($this->pem) & 0777, 'a private key is readable by its owner only');
-		$this->assertSame($this->owner, posix_getpwuid((int) fileowner($this->pem))['name']);
+		$this->assertSame(0700, fileperms(dirname($this->pem)) & 0777, 'and its directory is closed to everyone else');
+		$this->assertSame(posix_geteuid(), fileowner($this->pem), 'the user that wrote it owns it: the gateway user never does');
+		$this->assertSame(posix_geteuid(), fileowner(dirname($this->pem)));
 		$this->assertSame(posix_getegid(), filegroup($this->pem), 'and its primary group');
+	}
+
+	public function testADirectoryThatWasLeftOpenIsClosedBeforeTheKeyGoesIn(): void
+	{
+		$this->install(DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost')));
+		$this->assertTrue(mkdir(dirname($this->pem), 0755, TRUE));
+		chmod(dirname($this->pem), 0755);
+
+		$this->assertNull($this->export());
+
+		clearstatcache();
+		$this->assertSame(0700, fileperms(dirname($this->pem)) & 0777);
+	}
+
+	public function testOnABoxTheKeyIsKeptOutsideTheUnboundChrootAndTheGatewayUserHasNoPartInIt(): void
+	{
+		$box = $this->savedGlobals['pfb'][1];
+
+		$this->assertSame('/var/etc/pfb_dns/tls.pem', $box['dns_proxy_cert'], 'a root-only directory, not the chroot Unbound\'s user reads');
+		$this->assertSame('/var/run/pfb_dns/ctl.sock', $box['dns_proxy_ctl']);
+		$this->assertSame('/var/unbound/pfb_dns_cert.pem', $box['dns_proxy_cert_legacy'], 'where an earlier build left a copy, for removal');
+		$this->assertArrayNotHasKey('dns_proxy_cert_owner', $box, 'no user is given the file');
+		$GLOBALS['pfb']['dns_proxy_cert'] = $box['dns_proxy_cert'];
+		$this->assertSame('/var/etc/pfb_dns/tls.pushed', pfb_dns_proxy_certificate_pushed_path());
 	}
 
 	public function testAnUnchangedCertificateIsNotWrittenAgain(): void
@@ -173,7 +204,7 @@ final class DnsProxyCertificateExportTest extends TestCase
 		$this->assertStringContainsString($this->body($first['key']), $old);
 		clearstatcache();
 		$this->assertSame(0600, fileperms($this->pem) & 0777);
-		$this->assertSame(['pfb_dns_cert.pem'], array_values(array_diff((array) scandir($this->dir), ['.', '..'])));
+		$this->assertSame(['tls.pem'], array_values(array_diff((array) scandir(dirname($this->pem)), ['.', '..'])));
 	}
 
 	public function testBase64TextWrappedByAnEditorIsAccepted(): void
@@ -248,16 +279,19 @@ final class DnsProxyCertificateExportTest extends TestCase
 		$this->assertNotNull($why);
 		$this->assertStringContainsString($reason, (string) $why);
 		$this->assertSame($served, (string) file_get_contents($this->pem));
-		$this->assertSame(['pfb_dns_cert.pem'], array_values(array_diff((array) scandir($this->dir), ['.', '..'])));
+		$this->assertSame(['tls.pem'], array_values(array_diff((array) scandir(dirname($this->pem)), ['.', '..'])));
 	}
 
-	public function testADirectoryThatDoesNotExistIsAReason(): void
+	public function testAMissingDirectoryIsMadePrivateAndOneThatCannotBeMadeIsAReason(): void
 	{
 		$this->install(DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost')));
+		$this->assertNull($this->export());
+		$this->assertDirectoryExists(dirname($this->pem));
 
-		$why = pfb_dns_proxy_certificate_export("{$this->dir}/absent/pfb_dns_cert.pem", $this->owner);
+		file_put_contents("{$this->dir}/afile", 'a file, not a directory');
+		$why = pfb_dns_proxy_certificate_export("{$this->dir}/afile/pfb_dns/tls.pem");
 
-		$this->assertStringContainsString('cannot create a temporary file', (string) $why);
+		$this->assertStringContainsString('cannot create', (string) $why);
 	}
 
 	// -----------------------------------------------------------------------
@@ -289,9 +323,12 @@ final class DnsProxyCertificateExportTest extends TestCase
 	#[DataProvider('wantedRows')]
 	public function testTheCronTickWritesTheFileWhileAnEncryptedTransportIsWantedAndRemovesItOtherwise(?bool $dot, string $doh, string $doq, bool $wanted): void
 	{
-		// Given a good certificate and a stale file
+		// Given a good certificate, a stale file, and the copy an earlier build left in the Unbound chroot
 		$this->install(DnsProxyCertificateFixtures::certEntry('cert1', $leaf = DnsProxyCertificateFixtures::issue('localhost')));
+		$this->assertTrue(mkdir(dirname($this->pem), 0700, TRUE));
 		file_put_contents($this->pem, 'stale');
+		$this->assertTrue(mkdir(dirname($this->legacy), 0755, TRUE));
+		file_put_contents($this->legacy, 'a key that Unbound\'s user can read');
 		if ($dot !== NULL) {
 			$this->moveResolver($dot);
 		}
@@ -301,7 +338,8 @@ final class DnsProxyCertificateExportTest extends TestCase
 		// When the cron tick looks at it
 		pfb_dns_proxy_certificate_sync();
 
-		// Then the file is the Resolver's certificate, or gone
+		// Then the file is the Resolver's certificate, or gone, and the key copy in the chroot is gone either way
+		$this->assertFileDoesNotExist($this->legacy);
 		if ($wanted) {
 			$this->assertStringContainsString($this->body($leaf['cert']), (string) file_get_contents($this->pem));
 		} else {

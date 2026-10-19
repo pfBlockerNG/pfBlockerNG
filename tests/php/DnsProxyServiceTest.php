@@ -155,10 +155,11 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->daemonArgv();
 		$this->assertSame($dot, in_array('--dot', $argv, TRUE), '--dot iff the saved Resolver had enablessl');
 		$this->assertContains('--tls-pem', $argv, 'the gateway is always told where the certificate file is: it reads it only for a TLS transport');
+		$this->assertContains('--ctl-socket', $argv, 'and where root pushes a renewed certificate: it makes the socket only for a TLS transport');
 		$this->assertNotContains('--pfsense-config', $argv, 'the gateway no longer reads config.xml');
 		if ($dot) {
 			$at = array_search('--dot', $argv, TRUE);
-			$this->assertSame(['--dot', '--dot-port', '853', '--tls-pem', $this->certFile()], array_slice($argv, (int) $at, 5));
+			$this->assertSame(['--dot', '--dot-port', '853', '--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket()], array_slice($argv, (int) $at, 7));
 		} else {
 			$this->assertNotContains('--dot-port', $argv, 'a DoT port with DoT off would restart the proxy for nothing');
 		}
@@ -1198,7 +1199,7 @@ final class DnsProxyServiceTest extends TestCase
 			'-o', "{$this->dir}/log/dns_proxy.log",
 			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot', '--dot-port', $dotPort] : []),
-			'--tls-pem', $this->certFile(), ...$tls, ...$module,
+			'--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket(), ...$tls, ...$module,
 			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', $this->readyFile(), ...self::DECIDER,
 		];
 	}

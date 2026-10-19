@@ -191,7 +191,7 @@ trait DnsProxyRcSandboxTrait
 			unset($GLOBALS[$name]);
 		}
 		$this->dir = sys_get_temp_dir() . '/pfb_dns_proxy_rc_' . bin2hex(random_bytes(6));
-		foreach (['bin', 'state', 'run', 'log', 'rc'] as $sub) {
+		foreach (['bin', 'state', 'run', 'log', 'rc', 'etc/pfb_dns'] as $sub) {
 			$this->assertTrue(mkdir("{$this->dir}/{$sub}", 0777, TRUE), "sandbox mkdir failed: {$this->dir}/{$sub}");
 		}
 		$double = "{$this->dir}/double.sh";
@@ -211,7 +211,8 @@ trait DnsProxyRcSandboxTrait
 			'log'    => "{$this->dir}/pfb.log",
 			'errlog' => "{$this->dir}/pfb.err",
 			'dns_proxy_cert' => $this->certFile(),
-			'dns_proxy_cert_owner' => (string) posix_getpwuid(posix_geteuid())['name'],
+			'dns_proxy_cert_legacy' => "{$this->dir}/chroot/pfb_dns_cert.pem",
+			'dns_proxy_ctl' => $this->ctlSocket(),
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_rcfile_dir'] = "{$this->dir}/rc";
@@ -294,7 +295,19 @@ trait DnsProxyRcSandboxTrait
 	/** Where the gateway's certificate file is (the production path is $pfb['dns_proxy_cert']; the generated script names this one). */
 	private function certFile(): string
 	{
-		return "{$this->dir}/run/pfb_dns_cert.pem";
+		return "{$this->dir}/etc/pfb_dns/tls.pem";
+	}
+
+	/** The record of the certificate pushed to the running gateway, beside the certificate file (pfb_dns_proxy_certificate_pushed_path()). */
+	private function pushedFile(): string
+	{
+		return "{$this->dir}/etc/pfb_dns/tls.pushed";
+	}
+
+	/** The gateway's control socket (the production path is $pfb['dns_proxy_ctl']; the generated script names this one). */
+	private function ctlSocket(): string
+	{
+		return "{$this->dir}/run/ctl.sock";
 	}
 
 	/** Where the sandboxed script keeps the proxy's ready marker (the production path is $pfb['dns_proxy_ready']). */
@@ -314,7 +327,7 @@ trait DnsProxyRcSandboxTrait
 					return $this->readyFile();
 				}
 				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
-				    str_starts_with($path, "{$this->dir}/dns_proxy/") || $path === $this->certFile() ||
+				    str_starts_with($path, "{$this->dir}/dns_proxy/") || in_array($path, [$this->certFile(), $this->pushedFile(), $this->ctlSocket()], TRUE) ||
 				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {
 					return $path;
 				}
