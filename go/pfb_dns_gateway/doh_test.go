@@ -618,7 +618,9 @@ func TestDoHMalformedProxyHeaderFromATrustedPeerEndsTheConnection(t *testing.T) 
 
 // T-cap: 128 connections to the DoH listener; the 129th is closed at accept, the log says so once.
 func TestDoHConnectionsOverTheCapAreClosedAtAccept(t *testing.T) {
-	r, m, addr := newDoHRig(t)
+	r := newRig(t, rigConfig{acl: aclMixed, perAddr: noAddrCap})
+	m := newTLSMaterial(t)
+	addr := r.serveDoH(m)
 	r.autoAnswer(echoAnswer)
 	conns := make([]net.Conn, 0, maxDoHConns)
 	for range maxDoHConns {
