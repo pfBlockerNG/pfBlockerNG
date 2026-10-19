@@ -191,8 +191,12 @@ func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort
 	if err != nil {
 		return
 	}
+	if !g.udpAddrs.take(src.Addr(), g.udpPerAddr, "UDP queries", g.logf) {
+		return
+	}
 	if g.udpInflight.Add(1) > maxUDPInflight {
 		g.udpInflight.Add(-1)
+		g.udpAddrs.release(src.Addr())
 		if g.udpOverload.CompareAndSwap(false, true) {
 			g.logf("%d UDP queries in flight: dropping new ones until they drain", maxUDPInflight)
 		}
@@ -215,6 +219,7 @@ func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort
 			return g.up.exchangeUDPThenTCP(ctx, src, dst, w)
 		}
 		reply := g.resolve(g.ctx, src.Addr(), true, wire, fwd)
+		g.udpAddrs.release(src.Addr())
 		if g.udpInflight.Add(-1) == 0 { // the slot is free before the reply goes out
 			g.udpOverload.Store(false)
 		}
@@ -244,8 +249,13 @@ func (g *gateway) serveTCP(ln *net.TCPListener, tlsConf *tls.Config) {
 			_ = conn.Close()
 			continue
 		}
+		if !g.tcpAddrs.take(peer.Addr(), g.tcpPerAddr, "TCP and DoT connections", g.logf) {
+			_ = conn.Close()
+			continue
+		}
 		if g.tcpConns.Add(1) > maxTCPConns {
 			g.tcpConns.Add(-1)
+			g.tcpAddrs.release(peer.Addr())
 			if g.tcpOverload.CompareAndSwap(false, true) {
 				g.logf("TCP client limit of %d reached: closing new connections until the clients drain", maxTCPConns)
 			}
@@ -300,6 +310,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		g.mu.Lock()
 		delete(g.clients, conn)
 		g.mu.Unlock()
+		g.tcpAddrs.release(peer.Addr())
 		if g.tcpConns.Add(-1) == 0 {
 			g.tcpOverload.Store(false)
 		}
