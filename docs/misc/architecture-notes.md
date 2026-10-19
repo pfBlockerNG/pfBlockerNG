@@ -1611,16 +1611,23 @@ job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
-**Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout 50
-/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while
+**Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout -s TERM
+-k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while
 pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
 `pfb_metrics_configure_cron()` installs it idempotently from `sync_package_pfblockerng()`, and
 removes it together with `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package
-deinstall. The `metrics` verb is not gated by `.pfb_cron_disable`. It publishes `pfblockerng.prom`
-(temp file, `chmod 0644`, `rename()`) and maintains a `.metrics_dir_missing` marker in
-`$pfb['dbdir']`: a missing node_exporter textfile directory logs once per outage, and the marker
-stays until a publish succeeds or the cron entry is removed. `timeout 50` stops a hung run from
-piling up behind the next minute's.
+deinstall. Both directions run under an exclusive lock on `.metrics.lock` in `$pfb['dbdir']` and
+maintain a `.metrics_enabled` sentinel there; `pfb_metrics_write()` renders outside the lock and
+`pfb_metrics_publish()` publishes under it only while the sentinel exists, so a run that began
+before a disable cannot recreate the file after it. The `metrics` verb is not gated by
+`.pfb_cron_disable`. It publishes `pfblockerng.prom` (temp file, `chmod 0644`, `rename()`) and
+maintains a `.metrics_dir_missing` marker in `$pfb['dbdir']`: a missing node_exporter textfile
+directory logs once per outage, and the marker stays until a publish succeeds or the cron entry is
+removed. `timeout -k 5 50` stops a hung run from piling up behind the next minute's, KILLing one
+that ignores TERM. A source that fails or throws is reported through
+`pfblockerng_metrics_source_up` and never stops the file from being published. With DNSBL off the
+DNSBL databases are not read. Update-pass timing (`pfb_pass_status.json`) counts Update passes only,
+never settings-save passes (`$pfb['save']`).
 Spec: `docs/specs/metrics-export.md`.
 
 **Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process

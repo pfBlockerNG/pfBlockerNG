@@ -48,11 +48,21 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
   `pfb_metrics_write()`.
 - While pfBlockerNG's master enable and the option are both on, a cron entry runs that
   verb every minute (`* * * * *`), installed with `install_cron_job()`. The command is
-  `/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`,
-  bounded so a hung source cannot pile up runs. The one-minute cadence matches
-  node_exporter's own `interface-collector.py`.
+  `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`,
+  which sends TERM at 50 seconds and KILL 5 seconds later, so a hung source cannot pile
+  up runs even if it ignores TERM. The one-minute cadence matches node_exporter's own
+  `interface-collector.py`.
 - Turning the option off, or turning pfBlockerNG's master enable off, removes the cron
   entry and deletes `pfblockerng.prom`. Package deinstall does the same.
+- Enable and disable run under an exclusive lock on `.metrics.lock` in the pfBlockerNG
+  db directory: enabling creates the `.metrics_enabled` sentinel and then installs the
+  cron entry, and disabling removes the sentinel, the cron entry, `pfblockerng.prom`
+  and the dir-missing marker. `pfb_metrics_write()` collects and renders outside the
+  lock, then takes the same lock and publishes only while the sentinel exists, so a run
+  that began before a disable cannot recreate the file after it. The lock wait is
+  bounded at 10 seconds; a publish that cannot get the lock drops its output, and an
+  enable or disable that cannot get it proceeds without it, so a wedged holder never
+  blocks a settings change.
 - The cron state is reconciled wherever pfBlockerNG already reconciles its other cron
   entries on save and install. No separate daemon is added.
 - If `/var/tmp/node_exporter` does not exist (node_exporter disabled or never started),
@@ -63,17 +73,21 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
 - `pfb_metrics_render(array $sources): string` is a pure function in `pfblockerng.inc`.
   It turns already-collected source data into exposition text and does no I/O, so tests
   can drive it from fixtures.
-- `pfb_metrics_write()` collects each source, calls the renderer, and publishes the
-  file atomically: a temp file in the same directory without a `.prom` suffix (the
-  collector ignores it), `chmod 0644`, then `rename()`.
+- `pfb_metrics_write()` collects each source and calls the renderer, then
+  `pfb_metrics_publish()` publishes the file atomically under the lock: a temp file in
+  the same directory without a `.prom` suffix (the collector ignores it), `chmod 0644`,
+  then `rename()`.
 - The per-rule packet aggregation currently inline in `pfBlockerNG_update_table()`
   (`pfblockerng.widget.php`) moves into a shared `pfblockerng.inc` helper. The widget
   and the exporter both call it, and the widget's output does not change.
-- Update-pass timing: `sync_package_pfblockerng()` records its start time when a pass
-  begins and its end time when it reaches `UPDATE PROCESS ENDED`. Both go into a new
-  state file, `/var/db/pfblockerng/pfb_pass_status.json`
+- Update-pass timing: `sync_package_pfblockerng()` records its start time when an
+  Update pass begins and its end time when it reaches `UPDATE PROCESS ENDED`. Both go
+  into a new state file, `/var/db/pfblockerng/pfb_pass_status.json`
   (`{"last_start": int, "last_end": int}`), written atomically. No other state file
-  records whole-pass timing today.
+  records whole-pass timing today. Settings-save passes (`$pfb['save']`, which includes
+  the `noupdates` verb) are not counted: the start is recorded only after the pass's run
+  plan has fixed `$pfb['save']`, and neither the start nor the end is recorded for a
+  save pass.
 
 ### Metrics
 
@@ -112,15 +126,24 @@ Semantics operators rely on:
 
 ### Error handling
 
-Each source is collected independently. A failing source (pfctl exits non-zero, a
-SQLite file cannot be opened or queried, or a JSON file fails to parse) drops only its
-own families and sets `pfblockerng_metrics_source_up{source="…"} 0`. A source that is
-absent because its feature is off (a missing SQLite or status file) reports
-`source_up 1` with no series; only an open, query, or parse failure reports 0. The one
+Each source is collected independently. A failing source drops only its own families
+and sets `pfblockerng_metrics_source_up{source="…"} 0`. A source fails when:
+
+- `pfctl` exits non-zero, even if it printed some tables first (a zero exit with no
+  output is up with an empty table set);
+- a SQLite file cannot be opened or queried (an open waits for a locked database for
+  `$pfb['sqlite_timeout']`, capped at 5 seconds, before it counts as a failure);
+- a status or state file fails to parse, including `pfb_sync_status.json` that is
+  unreadable, is not JSON, or is not an object, or whose read lock times out;
+- the source's collection code throws.
+
+A source that is absent because its feature is off (a missing SQLite or status file, an
+absent or empty `pfb_sync_status.json`, an empty Python status file) reports
+`source_up 1` with no series. While the DNSBL option is off the DNSBL and resolver
+databases are not read at all: both sources report `source_up 1` with no series. The one
 exception is an absent `pfb_pass_status.json` (no pass recorded yet): it reports
-`source_up 1` and both update timestamps as 0. An empty Python status file counts as
-valid. The file is still published. A failed atomic publish leaves the previous file in
-place and removes the temp file.
+`source_up 1` and both update timestamps as 0. The file is still published. A failed
+atomic publish leaves the previous file in place and removes the temp file.
 
 ## Acceptance criteria
 
@@ -149,16 +172,31 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
   rows and hidden tables).
 - PHPUnit: the extracted rule-packet helper against the widget's current aggregation,
   using fixture rules and pf rule counters.
-- PHPUnit: atomic publish (target replaced on success; previous file kept and temp file
-  removed on a write or rename failure; mode 0644).
+- PHPUnit: atomic publish (target replaced on success; mode 0644; the previous file is
+  preserved on a failure because publishing is a single `rename()`, which is atomic, and
+  the failure test puts a directory at the target so `rename()` fails even as root; no
+  temp file survives either way).
 - PHPUnit: config registry entry, toggle round-trip, the save rejecting `on` without the
-  package, and cron install/removal on toggle.
+  package, and cron install/removal on toggle (including that enable and disable keep the
+  sentinel in step with the cron entry).
+- PHPUnit: a write without the sentinel publishes nothing; a body rendered before a
+  disable is not published after it; a publish gives up while another run holds the
+  lock; a disable goes ahead when the lock is wedged.
+- PHPUnit: source health: a throwing source is down while the others still publish; a
+  non-zero `pfctl` exit is down even with output; a damaged, empty, absent, or locked
+  `pfb_sync_status.json` and a corrupt resolver database each read as specified;
+  DNSBL off skips both databases; a busy database is waited for.
+- PHPUnit: update-pass timing records Update passes and nothing for a settings-save
+  pass.
 - UI tier (per architecture-notes "Web UI test tiers"): disabled checkbox, red notice,
-  and link target when the package is absent; enabled checkbox when present.
+  and link target when the package is absent, and a General save POSTing `on` without the
+  package is refused with the exact error and the stored value stays off; enabled
+  checkbox when present.
 - Smoke (VM): run the `metrics` verb and assert the published file's families and that it
-  parses with the Prometheus Python client's text parser. The smoke image installs
-  packages offline and cannot install node_exporter, so the smoke creates the textfile
-  directory itself and enables the option through the config gateway.
+  parses with the Prometheus Python client's text parser; a settings-save pass leaves the
+  pass times alone; the verb publishes nothing while the option is off. The smoke image
+  installs packages offline and cannot install node_exporter, so the smoke creates the
+  textfile directory itself and enables the option through the config gateway.
 
 ## Out of scope
 
