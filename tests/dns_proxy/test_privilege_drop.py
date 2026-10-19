@@ -21,7 +21,7 @@ import dnswire
 import pfb_dns_proxy
 import pytest
 from frontend_constants import BLOCKED, INI, PROTO_DIR, SHIPPED_DIR
-from frontend_helpers import WATCHDOG, build_query
+from frontend_helpers import WATCHDOG, build_query, watched
 from test_decision_transport import ANSWER, DATAGRAM, FORWARD, READY, REPLY, Gateway, frame, query_frame
 
 NEEDS_ROOT = pytest.mark.skipif(
@@ -126,7 +126,8 @@ def test_the_real_decider_serves_as_the_named_user_and_its_files_belong_to_that_
         created = os.stat(module_dir / "pfb_py_count").st_uid  # written by init_standard()
         provided = os.stat(module_dir / "pfb_unbound.ini").st_uid  # written by this test, as root
         gateway.sock.close()  # EOF: the decider shuts the module down and exits 0
-        _, stderr = child.communicate(timeout=WATCHDOG)
+        with watched("the decider to exit after EOF"):
+            _, stderr = child.communicate(timeout=WATCHDOG)
     finally:
         gateway.sock.close()
         if child.poll() is None:
@@ -158,7 +159,8 @@ def test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no
         gateway.send(frame(REPLY, 1))  # Unbound said nothing
         ftype, fid, wire = gateway.recv()
         gateway.sock.close()
-        _, stderr = child.communicate(timeout=WATCHDOG)
+        with watched("the decider to exit after EOF"):
+            _, stderr = child.communicate(timeout=WATCHDOG)
     finally:
         gateway.sock.close()
         if child.poll() is None:

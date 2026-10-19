@@ -19,7 +19,7 @@ from pathlib import Path
 import dnswire
 import pytest
 from frontend_constants import ALLOWED, PROTO_DIR
-from frontend_helpers import WATCHDOG, FakeUnbound, build_query
+from frontend_helpers import WATCHDOG, FakeUnbound, build_query, watched
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
 STREAM, DATAGRAM = 0, 1
@@ -54,7 +54,8 @@ class Gateway:
     def _read(self, size: int) -> bytes:
         data = b""
         while len(data) < size:
-            chunk = self.sock.recv(size - len(data))
+            with watched("the decider's frame"):
+                chunk = self.sock.recv(size - len(data))
             assert chunk, f"the decider closed the socket after {len(data)} of {size} expected bytes"
             data += chunk
         return data
@@ -100,7 +101,8 @@ def running_decider(module_dir: Path, *flags: str) -> Iterator[Gateway]:
         assert gateway.recv() == (READY, 0, b"")
         yield gateway
         go.close()
-        _, stderr = child.communicate(timeout=WATCHDOG)
+        with watched("the decider to exit after EOF"):
+            _, stderr = child.communicate(timeout=WATCHDOG)
         assert child.returncode == 0, stderr
     finally:
         go.close()
@@ -199,9 +201,10 @@ def test_a_transport_byte_that_is_neither_stream_nor_datagram_is_a_protocol_erro
         assert gateway.recv() == (READY, 0, b"")
         gateway.send(query_frame(1, build_query(ALLOWED), transport))
         tail = b""
-        while chunk := go.recv(4096):
-            tail += chunk
-        _, stderr = child.communicate(timeout=WATCHDOG)
+        with watched("the decider to end its session"):
+            while chunk := go.recv(4096):
+                tail += chunk
+            _, stderr = child.communicate(timeout=WATCHDOG)
     finally:
         go.close()
         if child.poll() is None:

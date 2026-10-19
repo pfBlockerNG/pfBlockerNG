@@ -29,7 +29,7 @@ import pfb_dns_proxy
 import pytest
 import unbound_shim as shim
 from frontend_constants import PROTO_DIR, Booted
-from frontend_helpers import WATCHDOG, serving_decisions
+from frontend_helpers import WATCHDOG, serving_decisions, watched
 
 OBSERVER = PROTO_DIR / "pfb_upstream_observer.py"
 T = TypeVar("T")
@@ -113,6 +113,12 @@ def _drain(receiver: socket.socket) -> None:
     receiver.settimeout(WATCHDOG)
 
 
+def _next_report(receiver: socket.socket) -> bytes:
+    """The next report on the observer's socket: one that never comes is a stuck run, not a verdict."""
+    with watched("the observer's report"):
+        return receiver.recv(65535)
+
+
 # --- the script inside Unbound -------------------------------------------------------------------
 
 
@@ -132,7 +138,7 @@ def test_the_observer_sends_the_raw_upstream_facts_in_one_datagram(
             "Blocked.Example.", shim.RR_TYPE_AAAA, options=(EDE15_BLOCKED, (10, b"\x01\x02"))
         )
         assert observer.registered["query_response"](qstate, response) is True
-        report = json.loads(receiver.recv(65535))
+        report = json.loads(_next_report(receiver))
     assert report == {
         "client": CLIENT,
         "qname": "Blocked.Example.",  # the client's case, as Unbound has it
@@ -176,7 +182,7 @@ def test_reports_lost_in_one_burst_are_warned_about_once_and_a_later_burst_again
         counts.append(len(warned))
         _drain(receiver)
         assert relay(*_upstream_response()) is True  # gets through, so the burst is over
-        assert json.loads(receiver.recv(65535))["qname"] == "blocked.example."
+        assert json.loads(_next_report(receiver))["qname"] == "blocked.example."
         _fill_queue(path, senders)
         assert relay(*_upstream_response()) is True
         counts.append(len(warned))
@@ -213,7 +219,7 @@ def test_the_observer_keeps_the_extended_dns_error_first_and_sends_only_what_fit
     qstate, response = _upstream_response(options=options)
     with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver:
         assert observer.registered["query_response"](qstate, response) is True
-        raw = receiver.recv(65535)
+        raw = _next_report(receiver)
     assert len(raw) <= DEFAULT_DATAGRAM
     assert [code for code, _ in json.loads(raw)["opts"]] == sent_codes
 
@@ -255,7 +261,7 @@ def test_the_observer_sends_no_more_options_than_the_decider_accepts(
     qstate, response = _upstream_response(options=((10, b"\x01"),) * 8 + (EDE15_BLOCKED,))
     with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver:
         assert observer.registered["query_response"](qstate, response) is True
-        opts = json.loads(receiver.recv(65535))["opts"]
+        opts = json.loads(_next_report(receiver))["opts"]
     assert (len(opts), opts[0][0]) == (pfb_dns_proxy.MAX_REPORT_OPTIONS, 15)
 
 
@@ -333,7 +339,7 @@ def test_a_response_is_not_even_read_while_nobody_is_listening_for_the_report(
     path = tmp_path / pfb_dns_proxy.OBSERVER_SOCKET
     with _listen(path) as receiver:
         assert relay(spy, response) is True
-        assert json.loads(receiver.recv(65535))["qname"] == "blocked.example."
+        assert json.loads(_next_report(receiver))["qname"] == "blocked.example."
     assert spy.reads != []  # before: with the proxy listening the response is read and reported
     path.unlink()
     spy.reads.clear()
@@ -648,5 +654,5 @@ def test_a_later_option_that_fits_is_sent_past_one_that_does_not(
     qstate, response = _upstream_response(options=options)
     with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver:
         assert observer.registered["query_response"](qstate, response) is True
-        raw = receiver.recv(65535)
+        raw = _next_report(receiver)
     assert [code for code, _ in json.loads(raw)["opts"]] == [15, 10, 10, 11]

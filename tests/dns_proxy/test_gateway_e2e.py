@@ -28,7 +28,7 @@ import time
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import dnswire
 import pytest
@@ -42,7 +42,7 @@ from frontend_constants import (
     PROTO_DIR,
     REPO_ROOT,
 )
-from frontend_helpers import WATCHDOG, build_query, tcp_concurrent, tcp_exchange, udp_concurrent, udp_exchange
+from frontend_helpers import WATCHDOG, build_query, tcp_concurrent, tcp_exchange, udp_concurrent, udp_exchange, watched
 from test_integration_unbound import (  # noqa: F401  (fixtures: the Docker Unbound and its gated zone)
     ALLOWED_CLIENT,
     ALLOWED_CLIENT_TCP,
@@ -159,12 +159,15 @@ class GatewayProcess:
         with self._cond:
             self._cond.wait_for(lambda: seen() is not None or self.proc.poll() is not None, timeout)
             match = seen()
-            if match is None:
-                state = (
-                    f"exited with {self.proc.returncode}" if self.proc.poll() is not None else "STUCK at the watchdog"
+            if match is not None:
+                return match
+            if self.proc.poll() is not None:
+                raise AssertionError(
+                    f"no line starting {prefix!r} (exited with {self.proc.returncode}); saw {self.lines!r}"
                 )
-                raise AssertionError(f"no line starting {prefix!r} ({state}); saw {self.lines!r}")
-            return match
+            raise AssertionError(
+                f"STUCK/ENVIRONMENT: no line starting {prefix!r} within {timeout:g} s; saw {self.lines!r}"
+            )
 
     def listening(self, kind: str) -> tuple[str, int]:
         """The address of the `listening <kind> host:port` line (udp+tcp, dot, doh or doq)."""
@@ -177,8 +180,11 @@ class GatewayProcess:
 
     def finish(self) -> int:
         """Wait for the process to end (it must have been told to); returns its exit status, with stderr fully read."""
-        status = self.proc.wait(timeout=WATCHDOG)
+        with watched("the gateway to exit"):
+            status = self.proc.wait(timeout=WATCHDOG)
         self._pump_thread.join(WATCHDOG)
+        if self._pump_thread.is_alive():
+            raise AssertionError(f"STUCK/ENVIRONMENT: the gateway's stderr did not end within {WATCHDOG:g} s")
         return status
 
     def stop(self) -> None:
@@ -212,8 +218,12 @@ class Running:
         deadline = time.monotonic() + WATCHDOG
         while True:
             rows = [next(csv.reader([line])) for line in path.read_text().splitlines()] if path.exists() else []
-            if len(rows) >= count or time.monotonic() > deadline:
+            if len(rows) >= count:
                 return rows
+            if time.monotonic() > deadline:
+                raise AssertionError(
+                    f"STUCK/ENVIRONMENT: {len(rows)} of the {count} dnsbl.log rows within {WATCHDOG:g} s; saw {rows!r}"
+                )
             time.sleep(0.02)  # polling a file another process appends to; the watchdog bounds the loop
 
 
@@ -348,7 +358,8 @@ def test_denied_client_gets_no_reply_over_udp_and_a_closed_connection_over_tcp(g
         stream.bind((DENIED_CLIENT, 0))
         stream.connect(gateway.server)
         try:
-            assert stream.recv(1) == b""
+            with watched("the gateway to close a denied TCP client"):
+                assert stream.recv(1) == b""
         except ConnectionResetError:
             pass  # the gateway shut the connection before reading anything
 
@@ -370,14 +381,14 @@ def nomatch_client() -> str:
     ]
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
         receiver.bind(("127.0.0.1", 0))
-        receiver.settimeout(WATCHDOG)  # a datagram that never comes marks a candidate that cannot send
+        receiver.setblocking(False)  # loopback sendto has queued the datagram when it returns: none means no send
         for address in candidates:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
                 try:
                     sender.bind((address, 0))
                     sender.sendto(b"probe", receiver.getsockname())
                     seen = receiver.recvfrom(16)[1][0]
-                except OSError:
+                except OSError:  # refused at bind or send, or no datagram at all (BlockingIOError)
                     continue
             if seen == address:
                 return address
@@ -614,28 +625,30 @@ class TlsRunning(Running):
             headers["X-Forwarded-For"] = forwarded_for
         conn = _FrontEndConnection(self.doh[1], self.ca, source, header)
         try:
-            if method == "GET":
-                conn.request(
-                    "GET", "/dns-query?dns=" + base64.urlsafe_b64encode(wire).rstrip(b"=").decode(), headers=headers
-                )
-            else:
-                conn.request(
-                    "POST", "/dns-query", body=wire, headers={**headers, "Content-Type": "application/dns-message"}
-                )
-            response = conn.getresponse()
-            assert (response.status, response.getheader("Content-Type")) == (200, "application/dns-message")
-            body: bytes = response.read()
-            return body
+            with watched("the DoH reply"):
+                if method == "GET":
+                    conn.request(
+                        "GET", "/dns-query?dns=" + base64.urlsafe_b64encode(wire).rstrip(b"=").decode(), headers=headers
+                    )
+                else:
+                    conn.request(
+                        "POST", "/dns-query", body=wire, headers={**headers, "Content-Type": "application/dns-message"}
+                    )
+                response = conn.getresponse()
+                assert (response.status, response.getheader("Content-Type")) == (200, "application/dns-message")
+                body: bytes = response.read()
+                return body
         finally:
             conn.close()
 
     def doq_lines(self, name: str) -> list[str]:
         """pfb_doq_probe's output for `name`: `rcode X`, then one `answer ...` line per record."""
-        run = subprocess.run(
-            [str(self.probe), "-server", f"{self.doq[0]}:{self.doq[1]}", "-name", name, "-ca", str(self.ca)]
-            + ["-sni", "localhost", "-timeout", f"{WATCHDOG}s"],
-            capture_output=True, text=True, timeout=2 * WATCHDOG, check=False,
-        )  # fmt: skip
+        with watched("the DoQ probe"):
+            run = subprocess.run(
+                [str(self.probe), "-server", f"{self.doq[0]}:{self.doq[1]}", "-name", name, "-ca", str(self.ca)]
+                + ["-sni", "localhost", "-timeout", f"{WATCHDOG}s"],
+                capture_output=True, text=True, timeout=2 * WATCHDOG, check=False,
+            )  # fmt: skip
         assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
         return run.stdout.splitlines()
 
@@ -777,7 +790,8 @@ def test_denied_client_gets_a_closed_connection_before_any_tls_handshake(tls_gat
         stream.bind((DENIED_CLIENT, 0))
         stream.connect(tls_gateway.dot)
         try:
-            assert stream.recv(1) == b""
+            with watched("the gateway to close a denied TLS-side client"):
+                assert stream.recv(1) == b""
         except ConnectionResetError:
             pass  # the gateway shut the connection before reading anything
 
@@ -788,3 +802,13 @@ def test_sigterm_with_tls_listeners_ends_the_gateway_and_the_decider(tls_gateway
     assert tls_gateway.process.finish() == 0
     with pytest.raises(ProcessLookupError):
         os.kill(decider_pid, 0)
+
+
+def test_dnsbl_rows_that_never_arrive_are_stuck_not_a_short_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "WATCHDOG", 0)  # the deadline has passed before the first look
+    running = Running(cast(GatewayProcess, None), ("127.0.0.1", 1), tmp_path)  # dnsbl_rows reads only the log dir
+    with pytest.raises(AssertionError, match=r"^STUCK/ENVIRONMENT: 0 of the 2 dnsbl\.log rows within 0 s") as raised:
+        running.dnsbl_rows(2)
+    assert "saw []" in str(raised.value)

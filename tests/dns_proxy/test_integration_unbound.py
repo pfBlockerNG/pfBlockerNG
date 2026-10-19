@@ -8,11 +8,12 @@ accepts the gateway's PROXYv2 header and applies cache, access control and loggi
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TypeVar
 
@@ -98,10 +99,12 @@ def first_needle_seen(needles: tuple[str, ...], lines: list[str]) -> str | None:
 
 
 class LogTail:
-    """Follows `docker logs -f`; tests wait on a condition for a line instead of sleeping."""
+    """Follows `docker logs -f`; tests wait on a condition for a line instead of sleeping. The stream ends when the
+    container stops, and the waits say so at once: a dead container is 'log ended', never a stuck run."""
 
     def __init__(self, container: str) -> None:
         self.lines: list[str] = []
+        self.ended = False
         self._cond = threading.Condition()
         self._proc = subprocess.Popen(
             ["docker", "logs", "-f", container],
@@ -118,35 +121,62 @@ class LogTail:
             with self._cond:
                 self.lines.append(line.rstrip("\n"))
                 self._cond.notify_all()
+        with self._cond:
+            self.ended = True
+            self._cond.notify_all()
 
     def mark(self) -> int:
         with self._cond:
             return len(self.lines)
 
-    def wait_for(self, needle: str, *, since: int = 0) -> list[str]:
-        """Lines since `since`, once one of them contains `needle`; raises after the watchdog with what was seen."""
+    def _wait_until(self, expected: str, found: Callable[[list[str]], T | None], since: int = 0) -> T:
+        """What `found` returns for the lines since `since`, once it does. A stream that ends first means the container
+        stopped; no result within the watchdog is a stuck run. Both raise with the lines seen."""
         with self._cond:
-            if not self._cond.wait_for(lambda: any(needle in line for line in self.lines[since:]), WATCHDOG):
-                raise AssertionError(f"no log line containing {needle!r}; saw {self.lines[since:]!r}")
-            return self.lines[since:]
+            if not self._cond.wait_for(lambda: found(self.lines[since:]) is not None or self.ended, WATCHDOG):
+                raise AssertionError(
+                    f"STUCK/ENVIRONMENT: no {expected} within {WATCHDOG:g} s; saw {self.lines[since:]!r}"
+                )
+            result = found(self.lines[since:])
+            if result is None:
+                raise AssertionError(f"log ended (the container stopped) before {expected}; saw {self.lines[since:]!r}")
+            return result
+
+    def wait_for(self, needle: str, *, since: int = 0) -> list[str]:
+        """Lines since `since`, once one of them contains `needle`."""
+
+        def seen(lines: list[str]) -> list[str] | None:
+            return lines if any(needle in line for line in lines) else None
+
+        return self._wait_until(f"a log line containing {needle!r}", seen, since)
 
     def wait_for_any(self, needles: tuple[str, ...]) -> str:
-        """The first of `needles` (lower case) that a line contains, in any case; raises after the watchdog."""
-
-        def seen() -> str | None:
-            return first_needle_seen(needles, self.lines)
-
-        with self._cond:
-            if not self._cond.wait_for(lambda: seen() is not None, WATCHDOG):
-                raise AssertionError(f"no log line containing any of {needles!r}; saw {self.lines!r}")
-            found = seen()
-            assert found is not None
-            return found
+        """The first of `needles` (lower case) that a line contains, in any case."""
+        return self._wait_until(
+            f"a log line containing any of {needles!r}", lambda lines: first_needle_seen(needles, lines)
+        )
 
     def close(self) -> None:
         self._proc.kill()
         self._proc.wait()
         self._thread.join()
+
+
+def test_a_log_that_ends_before_its_line_is_reported_as_ended_not_stuck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A container that stopped: its log stream ends, and the wait says so at once instead of spending the watchdog."""
+    docker = tmp_path / "docker"
+    docker.write_text("#!/bin/sh\necho booting\n", encoding="utf-8")
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    tail = LogTail("pfb-stopped")
+    try:
+        with pytest.raises(AssertionError, match="log ended") as raised:
+            tail.wait_for("start of service")
+    finally:
+        tail.close()
+    assert "STUCK" not in str(raised.value) and "booting" in str(raised.value), str(raised.value)
 
 
 def _docker(*args: str, stdin: str | None = None, timeout: float = 120) -> subprocess.CompletedProcess[str]:

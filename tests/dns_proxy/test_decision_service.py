@@ -33,7 +33,7 @@ from frontend_constants import (
     Booted,
     LogFeed,
 )
-from frontend_helpers import WATCHDOG, FakeUnbound, ManualClock, build_query
+from frontend_helpers import WATCHDOG, FakeUnbound, ManualClock, build_query, watchdog, watched
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
 MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 65535  # type + id + (transport + n + 255 IP text bytes + 65535 DNS wire bytes)
@@ -83,14 +83,14 @@ class Gateway:
         await self.writer.drain()
 
     async def recv(self) -> Frame:
-        (size,) = struct.unpack("!I", await asyncio.wait_for(self.reader.readexactly(4), WATCHDOG))
-        body = await asyncio.wait_for(self.reader.readexactly(size), WATCHDOG)
+        (size,) = struct.unpack("!I", await watchdog(self.reader.readexactly(4), "the decider's frame header"))
+        body = await watchdog(self.reader.readexactly(size), "the decider's frame body")
         ftype, fid = struct.unpack_from("!BI", body)
         return ftype, fid, body[5:]
 
     async def expect_eof(self) -> None:
         """The decider closed its end and sent nothing more (read() runs to EOF, so a stray frame shows up)."""
-        assert await asyncio.wait_for(self.reader.read(), WATCHDOG) == b""
+        assert await watchdog(self.reader.read(), "the decider's EOF") == b""
 
     def close(self) -> None:
         self.writer.close()
@@ -123,7 +123,7 @@ def _run(booted: Booted, scenario: Callable[[Gateway], Awaitable[None]], timeout
             await scenario(gateway)
         finally:
             gateway.close()
-            await asyncio.wait_for(service, WATCHDOG)
+            await watchdog(service, "the decision service to end")
         assert problems == []
 
     asyncio.run(main())
@@ -163,14 +163,15 @@ def _feed_real_process(module_dir: Path, payload: bytes, *, half_close: bool) ->
     child = _decider(module_dir, py.fileno())
     py.close()
     try:
-        assert _recv_exactly(go, 4 + 5) == struct.pack("!IBI", 5, READY, 0)
-        go.sendall(payload)
-        if half_close:
-            go.shutdown(socket.SHUT_WR)
-        tail = b""
-        while chunk := go.recv(4096):
-            tail += chunk
-        _, stderr = child.communicate(timeout=WATCHDOG)
+        with watched("the decider to end its session"):
+            assert _recv_exactly(go, 4 + 5) == struct.pack("!IBI", 5, READY, 0)
+            go.sendall(payload)
+            if half_close:
+                go.shutdown(socket.SHUT_WR)
+            tail = b""
+            while chunk := go.recv(4096):
+                tail += chunk
+            _, stderr = child.communicate(timeout=WATCHDOG)
         return child.returncode, stderr, tail
     finally:
         go.close()
@@ -503,7 +504,7 @@ def test_a_query_id_that_is_already_in_flight_is_a_protocol_error(booted: Booted
         assert (await gateway.recv())[:2] == (FORWARD, 5)
         await gateway.send(query_frame(5, build_query(ALLOWED)))
         with pytest.raises(decision_service.ProtocolError, match="already in flight"):
-            await asyncio.wait_for(service, WATCHDOG)
+            await watchdog(service, "the decision service to end")
         await gateway.expect_eof()
 
     asyncio.run(main())
@@ -528,7 +529,7 @@ async def _sock_frame(sock: socket.socket) -> Frame:
     async def read(size: int) -> bytes:
         data = b""
         while len(data) < size:
-            chunk = await asyncio.wait_for(loop.sock_recv(sock, size - len(data)), WATCHDOG)
+            chunk = await watchdog(loop.sock_recv(sock, size - len(data)), "the decider's bytes")
             assert chunk, f"the decider closed the socket after {len(data)} of {size} expected bytes"
             data += chunk
         return data
@@ -569,7 +570,7 @@ def test_a_resolve_that_raises_gets_a_drop_one_log_entry_and_the_session_goes_on
             assert await gateway.recv() == (ANSWER, 7, b"fine")
         finally:
             gateway.close()
-            await asyncio.wait_for(service, WATCHDOG)
+            await watchdog(service, "the decision service to end")
         assert len(problems) == 1, problems
         assert "query 7" in problems[0] and "module crashed" in problems[0], problems
 
@@ -592,7 +593,7 @@ def test_a_burst_of_failing_queries_writes_one_log_line(monkeypatch: pytest.Monk
                 assert await gateway.recv() == (DROP, fid, b"")
         finally:
             gateway.close()
-            await asyncio.wait_for(service, WATCHDOG)
+            await watchdog(service, "the decision service to end")
         assert len(problems) == 1 and "query 0" in problems[0], problems
 
     asyncio.run(main())
@@ -616,7 +617,7 @@ def test_a_failure_after_the_thirty_second_window_is_logged_again(monkeypatch: p
             assert await gateway.recv() == (DROP, 2, b"")
         finally:
             gateway.close()
-            await asyncio.wait_for(service, WATCHDOG)
+            await watchdog(service, "the decision service to end")
         assert [problem.split(":")[0] for problem in problems] == ["query 0 failed", "query 2 failed"], problems
 
     asyncio.run(main())
@@ -637,7 +638,7 @@ def test_the_clients_transport_byte_reaches_resolve_as_the_datagram_flag(transpo
             assert await gateway.recv() == (ANSWER, 7, b"fine")
         finally:
             gateway.close()
-            await asyncio.wait_for(service, WATCHDOG)
+            await watchdog(service, "the decision service to end")
         assert problems == []
 
     asyncio.run(main())
@@ -668,7 +669,7 @@ def test_a_gateway_that_stops_reading_makes_the_senders_wait_and_every_frame_arr
         try:
             for qid in range(count):
                 await loop.sock_sendall(go, query_frame(1000 + qid, build_query(ALLOWED, qid=qid)))
-            await asyncio.wait_for(all_resolved.wait(), WATCHDOG)
+            await watchdog(all_resolved.wait(), "the queries to be answered")
             waiting = [task for task in tasks if not task.done()]
             # Nothing was read from the gateway's end: only ~2 answers fit in the buffers, the senders of the rest wait.
             assert len(waiting) > count // 2, f"{len(waiting)} of {count} senders were waiting for the gateway to read"
@@ -680,10 +681,10 @@ def test_a_gateway_that_stops_reading_makes_the_senders_wait_and_every_frame_arr
                 assert payload == blob(fid - 1000), f"the frame for id {fid} carries another payload"
                 seen.add(fid)
             assert seen == {1000 + qid for qid in range(count)}
-            await asyncio.wait_for(asyncio.gather(*tasks), WATCHDOG)  # raises if a query task failed
+            await watchdog(asyncio.gather(*tasks), "the query tasks")  # raises if a query task failed
         finally:
             go.close()  # also on failure: serve() cannot finish closing while answers are buffered for the gateway
-        await asyncio.wait_for(service, WATCHDOG)
+        await watchdog(service, "the decision service to end")
         assert problems == []
 
     asyncio.run(main())
@@ -713,11 +714,11 @@ def test_a_gateway_that_resets_the_connection_ends_the_session_quietly(monkeypat
         unread = asyncio.Event()
         loop.add_reader(go, unread.set)  # the FORWARD is queued for the gateway, which never reads it
         try:
-            await asyncio.wait_for(unread.wait(), WATCHDOG)
+            await watchdog(unread.wait(), "the decider's FORWARD to be queued")
         finally:
             loop.remove_reader(go)
         go.close()  # closing with unread data is how an AF_UNIX peer is reset: its next read fails, it does not see EOF
-        await asyncio.wait_for(service, WATCHDOG)  # raises if the reset escaped
+        await watchdog(service, "the decision service to end")  # raises if the reset escaped
         assert problems == []
 
     asyncio.run(main())
@@ -743,11 +744,10 @@ def test_an_answer_the_gateway_can_no_longer_receive_ends_its_query_without_an_e
             socket.SHUT_RD
         )  # the gateway still writes but reads nothing more: the decider's send fails with EPIPE
         await asyncio.get_running_loop().sock_sendall(go, query_frame(1, build_query(ALLOWED)))
-        await asyncio.wait_for(started.wait(), WATCHDOG)
-        _, pending = await asyncio.wait(tasks, timeout=WATCHDOG)
-        assert not pending, "the query task never finished"
+        await watchdog(started.wait(), "the query to start")
+        await watchdog(asyncio.wait(tasks), "the query task to finish")
         go.close()
-        await asyncio.wait_for(service, WATCHDOG)
+        await watchdog(service, "the decision service to end")
         assert problems == []
 
     asyncio.run(main())
@@ -836,7 +836,7 @@ def _serve_decisions(
             await scenario(gateway)
         finally:
             gateway.close()
-            await asyncio.wait_for(service, WATCHDOG)
+            await watchdog(service, "the decision service to end")
 
     asyncio.run(main())
     return events, waiting_at_boot == [True]

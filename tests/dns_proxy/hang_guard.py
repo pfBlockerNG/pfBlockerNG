@@ -20,7 +20,7 @@ def hang_guard() -> Iterator[None]:
     seconds = float(os.environ.get("PFB_TEST_TIMEOUT", "60"))
 
     def on_alarm(_signum: int, _frame: FrameType | None) -> None:
-        raise TimeoutError(f"test exceeded {seconds:g} s: hung?")
+        raise TimeoutError(f"STUCK/ENVIRONMENT: test exceeded {seconds:g} s: hung?")
 
     previous = signal.signal(signal.SIGALRM, on_alarm)
     signal.setitimer(signal.ITIMER_REAL, seconds)

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TypeVar
 
 import pytest
-from frontend_helpers import WATCHDOG
+from frontend_helpers import WATCHDOG, watchdog, watched
 
 T = TypeVar("T")
 
@@ -103,14 +103,15 @@ def push_certificate(socket_path: Path, certificate: bytes, key: bytes) -> str:
     pem = certificate + key
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(WATCHDOG)
-        client.connect(str(socket_path))
-        client.sendall(struct.pack("!I", len(pem)) + pem)
-        reply = b""
-        while not reply.endswith(b"\n"):
-            chunk = client.recv(256)
-            if not chunk:
-                break
-            reply += chunk
+        with watched("the certificate push to the gateway"):
+            client.connect(str(socket_path))
+            client.sendall(struct.pack("!I", len(pem)) + pem)
+            reply = b""
+            while not reply.endswith(b"\n"):
+                chunk = client.recv(256)
+                if not chunk:
+                    break
+                reply += chunk
     return reply.decode().strip()
 
 
@@ -129,14 +130,15 @@ async def dot_exchange(
     context = ssl.create_default_context(cafile=str(trust))
     if max_version is not None:
         context.maximum_version = max_version
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(*server, ssl=context, server_hostname="localhost", local_addr=(source, 0)), WATCHDOG
+    reader, writer = await watchdog(
+        asyncio.open_connection(*server, ssl=context, server_hostname="localhost", local_addr=(source, 0)),
+        "the TLS connection",
     )
     try:
         writer.write(struct.pack("!H", len(wire)) + wire)
         await writer.drain()
-        size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), WATCHDOG))[0]
-        reply = await asyncio.wait_for(reader.readexactly(size), WATCHDOG)
+        size = struct.unpack("!H", await watchdog(reader.readexactly(2), "the TLS reply length"))[0]
+        reply = await watchdog(reader.readexactly(size), "the TLS reply")
         return reply, writer.get_extra_info("sockname")[:2], writer.get_extra_info("ssl_object").version()
     finally:
         writer.close()
@@ -147,6 +149,7 @@ async def open_dot(
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """A TLS connection to `server` that stays open, trusting only the certificate PEM at `trust`."""
     context = ssl.create_default_context(cafile=str(trust))
-    return await asyncio.wait_for(
-        asyncio.open_connection(*server, ssl=context, server_hostname="localhost", local_addr=(source, 0)), WATCHDOG
+    return await watchdog(
+        asyncio.open_connection(*server, ssl=context, server_hostname="localhost", local_addr=(source, 0)),
+        "the TLS connection",
     )

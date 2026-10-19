@@ -323,7 +323,7 @@ def test_a_hung_test_is_failed_by_the_alarm_instead_of_stalling_the_run(tmp_path
         cwd=tmp_path,
         env=env,
     )
-    assert run.returncode == 1 and "test exceeded 1 s" in run.stdout
+    assert run.returncode == 1 and "STUCK/ENVIRONMENT: test exceeded 1 s" in run.stdout, run.stdout
 
 
 # --- qclass, 14-bit offsets -------------------------------------------------------------------

@@ -7,14 +7,35 @@ import contextlib
 import selectors
 import socket
 import struct
+import subprocess
 import threading
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
+from typing import TypeVar
 
 import dnswire
 
 WATCHDOG = 10.0  # stuck-run guard for socket waits; never asserted on
+
+
+T = TypeVar("T")
+
+
+@contextlib.contextmanager
+def watched(what: str) -> Iterator[None]:
+    """Inside the block a WATCHDOG expiry means a stuck run: the environment's fault, never a product verdict. It is
+    raised as STUCK/ENVIRONMENT, chained to the timeout that caused it."""
+    try:
+        yield
+    except (TimeoutError, subprocess.TimeoutExpired) as exc:
+        raise AssertionError(f"STUCK/ENVIRONMENT: {what} did not finish within {WATCHDOG:g} s") from exc
+
+
+async def watchdog(awaitable: Awaitable[T], what: str) -> T:
+    """`awaitable` within WATCHDOG: the wait is cancelled on expiry, and `watched` reports the expiry."""
+    with watched(what):
+        return await asyncio.wait_for(awaitable, WATCHDOG)
 
 
 class ManualClock:
@@ -179,7 +200,7 @@ async def udp_exchange(
     )
     try:
         transport.sendto(wire)
-        return await asyncio.wait_for(result, WATCHDOG), transport.get_extra_info("sockname")[:2]
+        return await watchdog(result, "the UDP reply"), transport.get_extra_info("sockname")[:2]
     finally:
         transport.close()
 
@@ -188,12 +209,12 @@ async def tcp_exchange(
     server: tuple[str, int], wire: bytes, *, source: str = "127.0.0.1"
 ) -> tuple[bytes, tuple[str, int]]:
     """One length-framed query over a fresh TCP connection from `source`; return (reply, client socket address)."""
-    reader, writer = await asyncio.wait_for(asyncio.open_connection(*server, local_addr=(source, 0)), WATCHDOG)
+    reader, writer = await watchdog(asyncio.open_connection(*server, local_addr=(source, 0)), "the TCP connection")
     try:
         writer.write(struct.pack("!H", len(wire)) + wire)
         await writer.drain()
-        size = struct.unpack("!H", await asyncio.wait_for(reader.readexactly(2), WATCHDOG))[0]
-        reply = await asyncio.wait_for(reader.readexactly(size), WATCHDOG)
+        size = struct.unpack("!H", await watchdog(reader.readexactly(2), "the TCP reply length"))[0]
+        reply = await watchdog(reader.readexactly(size), "the TCP reply")
         return reply, writer.get_extra_info("sockname")[:2]
     finally:
         writer.close()
@@ -213,7 +234,7 @@ async def udp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
     try:
         for transport, (_, wire) in zip(transports, queries, strict=True):
             transport.sendto(wire)
-        return list(await asyncio.wait_for(asyncio.gather(*results), WATCHDOG))
+        return list(await watchdog(asyncio.gather(*results), "the UDP replies"))
     finally:
         for transport in transports:
             transport.close()
@@ -225,7 +246,7 @@ async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
     The queries are written in list order, but the proxy may service the connections in either order.
     """
     connections = [
-        await asyncio.wait_for(asyncio.open_connection(*server, local_addr=(source, 0)), WATCHDOG)
+        await watchdog(asyncio.open_connection(*server, local_addr=(source, 0)), "the TCP connection")
         for source, _ in queries
     ]
 
@@ -237,7 +258,7 @@ async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
         for (_, writer), (_, wire) in zip(connections, queries, strict=True):
             writer.write(struct.pack("!H", len(wire)) + wire)
         return list(
-            await asyncio.wait_for(asyncio.gather(*(read_reply(reader) for reader, _ in connections)), WATCHDOG)
+            await watchdog(asyncio.gather(*(read_reply(reader) for reader, _ in connections)), "the TCP replies")
         )
     finally:
         for _, writer in connections:
@@ -261,8 +282,8 @@ class DecisionGateway:
         await self.writer.drain()
 
     async def recv(self) -> tuple[int, int, bytes]:
-        (size,) = struct.unpack("!I", await asyncio.wait_for(self.reader.readexactly(4), WATCHDOG))
-        body = await asyncio.wait_for(self.reader.readexactly(size), WATCHDOG)
+        (size,) = struct.unpack("!I", await watchdog(self.reader.readexactly(4), "the decider's frame header"))
+        body = await watchdog(self.reader.readexactly(size), "the decider's frame body")
         ftype, fid = struct.unpack_from("!BI", body)
         return ftype, fid, body[5:]
 
@@ -298,4 +319,4 @@ async def serving_decisions(argv: Sequence[str]) -> AsyncIterator[DecisionGatewa
         yield gateway
     finally:
         writer.close()
-        await asyncio.wait_for(task, WATCHDOG)
+        await watchdog(task, "the decider's session to end")
