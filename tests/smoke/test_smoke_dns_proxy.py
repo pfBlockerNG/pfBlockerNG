@@ -606,6 +606,10 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _configure_resolver(vm, refid)
         h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
+        # The feed cache outlives a module and `_apply` (a force reload) reparses it, so the module that
+        # runs second would be served the first one's names: download this module's feed once, up front.
+        h.force_dnsbl_refetch(vm, FEED_HEADER)
+        h.reload(vm, "update")
         _configure_group_policy(vm)
         _apply(vm)  # toggle off: pfBlockerNG's own wiring, the module inside Unbound
         before = _capture(vm)
