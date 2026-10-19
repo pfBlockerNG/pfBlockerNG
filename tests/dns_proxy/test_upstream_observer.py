@@ -184,6 +184,81 @@ def test_reports_lost_in_one_burst_are_warned_about_once_and_a_later_burst_again
     assert [re.findall(r"(\d+) lost so far", line) for line in warned] == [["1"], ["6"]]  # every loss is counted
 
 
+LONG_NAME = "\\000" * 250  # 250 octets written as Unbound writes an unprintable byte: 1000 characters
+EDE_AT_CAP = b"\x00\x0f" + b"x" * 510  # an EDE option whose data is exactly MAX_REPORT_OPTION_HEX hex digits
+
+
+@pytest.mark.parametrize(
+    ("options", "sent_codes"),
+    [
+        pytest.param(
+            ((10, b"a" * 400), (10, b"b" * 400), (10, b"c" * 400), EDE15_BLOCKED),
+            [15, 10, 10],
+            id="total over a datagram",
+        ),
+        pytest.param(((10, b"x" * 600), EDE15_BLOCKED), [15], id="option over the cap"),
+    ],
+)
+def test_the_observer_keeps_the_extended_dns_error_first_and_sends_only_what_fits(
+    observer: Observer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: tuple[tuple[int, bytes], ...],
+    sent_codes: list[int],
+) -> None:
+    """A report never leaves bigger than a datagram, and never without the Extended DNS Error that makes it a block:
+    that option goes first, the others keep their order, and only those that still fit are sent."""
+    monkeypatch.chdir(tmp_path)
+    observer.module.init_standard(shim.MODULE_ID, shim.module_env())
+    qstate, response = _upstream_response(options=options)
+    with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver:
+        assert observer.registered["query_response"](qstate, response) is True
+        raw = receiver.recv(65535)
+    assert len(raw) <= DEFAULT_DATAGRAM
+    assert [code for code, _ in json.loads(raw)["opts"]] == sent_codes
+
+
+@pytest.mark.parametrize(
+    ("name", "options"),
+    [
+        pytest.param(LONG_NAME, ((15, EDE_AT_CAP),), id="a name this long leaves no room for the block"),
+        pytest.param("blocked.example.", ((15, b"x" * 600),), id="an EDE over the option cap"),
+    ],
+)
+def test_a_block_that_cannot_be_sent_whole_is_counted_lost_and_nothing_is_sent(
+    observer: Observer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    options: tuple[tuple[int, bytes], ...],
+) -> None:
+    """The Extended DNS Error is the block itself: when it cannot be sent, nothing is, and the loss is counted and
+    warned about like one the socket refused."""
+    monkeypatch.chdir(tmp_path)
+    warned: list[str] = []
+    monkeypatch.setattr(observer.module, "log_warn", warned.append)
+    observer.module.init_standard(shim.MODULE_ID, shim.module_env())
+    qstate, response = _upstream_response(name, options=options)
+    with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver:
+        receiver.setblocking(False)
+        assert observer.registered["query_response"](qstate, response) is True
+        with pytest.raises(BlockingIOError):
+            receiver.recv(65535)
+    assert [re.findall(r"(\d+) lost so far", line) for line in warned] == [["1"]]
+
+
+def test_the_observer_sends_no_more_options_than_the_decider_accepts(
+    observer: Observer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    observer.module.init_standard(shim.MODULE_ID, shim.module_env())
+    qstate, response = _upstream_response(options=((10, b"\x01"),) * 8 + (EDE15_BLOCKED,))
+    with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver:
+        assert observer.registered["query_response"](qstate, response) is True
+        opts = json.loads(receiver.recv(65535))["opts"]
+    assert (len(opts), opts[0][0]) == (pfb_dns_proxy.MAX_REPORT_OPTIONS, 15)
+
+
 def test_the_observer_socket_asks_for_a_receive_buffer_that_holds_a_burst(fwd_booted: Booted, tmp_path: Path) -> None:
     """The buffer must be the size the proxy asks for, or a burst of reports is refused while it is busy."""
 
@@ -288,6 +363,11 @@ def test_the_observer_and_the_proxy_agree_on_the_socket_name(observer: Observer)
     assert observer.module.SOCKET == pfb_dns_proxy.OBSERVER_SOCKET
 
 
+def test_the_observer_and_the_proxy_agree_on_the_report_limits(observer: Observer) -> None:
+    limits = ("MAX_REPORT_BYTES", "MAX_REPORT_OPTIONS", "MAX_REPORT_OPTION_HEX")
+    assert [getattr(observer.module, name) for name in limits] == [getattr(pfb_dns_proxy, name) for name in limits]
+
+
 # --- the proxy end -------------------------------------------------------------------------------
 
 
@@ -357,6 +437,11 @@ def _block_with_options(count: int) -> bytes:
     return _report(opts=[[15, EDE15_BLOCKED[1].hex()], *[[10, "0102"]] * (count - 1)])
 
 
+def _oversize_report() -> bytes:
+    """A block report every field of which is within its own cap, yet which is more than a datagram carries."""
+    return _report(opts=[[15, EDE15_BLOCKED[1].hex()], *[[10, "ab" * 512]] * 7])
+
+
 MALFORMED = {
     "not json": b"not json",
     "empty": b"",
@@ -384,6 +469,7 @@ MALFORMED = {
     "option data not a string": _report(opts=[[15, 5]]),
     "option data over the cap": _report(opts=[_block_option_of_hex_size(pfb_dns_proxy.MAX_REPORT_OPTION_HEX + 2)]),
     "too many options": _block_with_options(pfb_dns_proxy.MAX_REPORT_OPTIONS + 1),
+    "over a datagram in all": _oversize_report(),
 }
 
 
