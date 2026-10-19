@@ -1,24 +1,25 @@
 # DNS gateway decision protocol
 
 Scope: the wire protocol between the Go connectivity layer (`pfb-dns`, the *gateway*) and the Python DNSBL
-decider (`dns_proxy/pfb_dns_proxy.py --decision-fd N`, the *decider*). Load when: changing either side or the frame
-format. Normative: where code and this page disagree, one of them is a bug. Issue #3513.
+decider (`dns_proxy/pfb_dns_proxy.py --decision-fd N`, the *decider*): the only process besides the gateway that
+pfB-DNS runs. Load when: changing either side or the frame format. Normative: where code and this page disagree, one
+of them is a bug. Issues #3513, #3517.
 
 The gateway owns every client-facing and Unbound-facing socket. The decider owns the DNSBL decision: for each client
 query it either answers itself (block answer, FORMERR, SafeSearch rewrite) or asks the gateway to put a wire on the
 way to Unbound and hand the reply back, so reply handling (CNAME validation, reply logging, the SafeSearch chase)
-runs exactly as in the Python-only proxy.
+stays in the decider: the gateway never unpacks a DNS message.
 
 ## Transport
 
 One `AF_UNIX`, `SOCK_STREAM` socketpair, created by the gateway. The gateway starts the decider as a child with the
-other end inherited as file descriptor N (the gateway uses 3) and passes `--decision-fd N`. In that mode the decider
-binds no DNS socket; `--listen`, `--port` and `--dot` are rejected (exit 2). It takes the Python proxy's mode flags: with
-`--no-module` (pfB-DNS with DNSBL off) it boots no module and forwards every query, with `--no-module --reply-log` it also
-writes the DNS Reply log row of each reply. Otherwise it hosts the module, and with `--observer` it makes the
-observer socket `pfb_upstream.sock` in `--module-dir` exactly as the Python-only proxy does: Unbound's upstream observer
-(`pfb_upstream_observer.py`) reports each raw upstream response there and the module logs an upstream block (mode 0600;
-a socket that cannot be made is one error line, and the decider serves without upstream-block detection).
+other end inherited as file descriptor N (the gateway uses 3) and passes `--decision-fd N`, which is required: the decider
+binds no DNS socket and has no flag for one. Its flags are `--decision-fd`, `--module-dir`, `--user` and the three mode flags
+the gateway appends from its own flags of the same names: with `--no-module` (pfB-DNS with DNSBL off) it boots no module and
+forwards every query, with `--no-module --reply-log` it also writes the DNS Reply log row of each reply. Otherwise it hosts
+the module, and with `--observer` it makes the observer socket `pfb_upstream.sock` in `--module-dir`: Unbound's upstream
+observer (`pfb_upstream_observer.py`) reports each raw upstream response there and the module logs an upstream block (mode
+0600; a socket that cannot be made is one error line, and the decider serves without upstream-block detection).
 
 ## Frame
 
@@ -31,13 +32,13 @@ All integers are big-endian. The stream is a sequence of frames, in both directi
 | `id` | `u32` | the gateway's id for one client query; 0 for READY |
 | payload | `len - 5` bytes | per type |
 
-`len` is at least 5 and at most 65796 (5 + 1 + 255 + 65535).
+`len` is at least 5 and at most 65797 (5 + 1 + 1 + 255 + 65535).
 
 ## Frame types
 
 | type | direction | name | payload |
 |---|---|---|---|
-| `0x01` | gateway to decider | QUERY | `u8 n`, then `n` bytes of client IP text, then the client's DNS wire (may be empty) |
+| `0x01` | gateway to decider | QUERY | `u8 transport` (0 stream, 1 datagram), `u8 n`, then `n` bytes of client IP text, then the client's DNS wire (may be empty) |
 | `0x02` | decider to gateway | FORWARD | DNS wire to send to Unbound on behalf of that client |
 | `0x03` | gateway to decider | REPLY | Unbound's reply wire for the last FORWARD of that id; empty = no reply (timeout, error) |
 | `0x04` | decider to gateway | ANSWER | the final DNS wire to send to the client |
@@ -75,6 +76,18 @@ The first FORWARD of a query carries the client's own bytes; a later FORWARD is 
 SafeSearch chase: fresh DNS id, RD set, EDNS as the client's). The gateway forwards each as given, to Unbound, as that
 client, and answers with Unbound's reply bytes, or an empty REPLY when there is none.
 
+For a plain-UDP client the first FORWARD goes to Unbound over UDP only and its reply, truncated or not, is the REPLY as it
+is (Unbound saw the client's own UDP size). Every FORWARD after the first within one QUERY goes over UDP and, when Unbound's
+reply has TC set, again over TCP behind a stream PROXYv2 header for the same client; the REPLY is the TCP reply, or empty when
+that failed. Only the SafeSearch chase issues a second FORWARD today: it must read the target's addresses whole, and a
+truncated reply says nothing about them. For a stream client (TCP, DoT, DoH, DoQ) every FORWARD uses the client's stream or,
+for a transport with no connection of its own, the same UDP-then-TCP exchange; nothing is truncated for it.
+
+The transport byte tells the decider whether the client has a UDP size limit: for a datagram client an answer the decider
+builds itself is held to the UDP size the client advertised (512 without EDNS, at most the 1232 the decider advertises
+itself; over it the answer is the question alone with TC set, so the client asks again over TCP), for a stream client it is
+sent whole. A relayed reply is never cut: it is Unbound's own.
+
 Frames of different ids interleave freely and complete in any order; the decider never waits for one query before
 reading the next. An id is in flight from the gateway's QUERY until the gateway has read the decider's ANSWER or DROP
 for it. A gateway that stops waiting earlier (its own deadline, a client that went away) keeps the id reserved until
@@ -99,11 +112,12 @@ connection ends it the same way. EOF from the decider means it exited; the gatew
 These are fatal. The receiver logs the reason, closes the socket and stops; the decider exits 1 (its log line starts
 `decision protocol error:`), the gateway exits non-zero:
 
-- `len` below 5 or above 65796 (detected on the 4 length bytes, before any payload is read);
+- `len` below 5 or above 65797 (detected on the 4 length bytes, before any payload is read);
 - an unknown type;
 - a type that is only valid in the other direction: FORWARD, ANSWER, DROP or READY from the gateway; QUERY or
   REPLY from the decider;
-- a QUERY whose payload is empty, has `n = 0`, or has fewer than `n` bytes after the `n` byte;
+- a QUERY whose payload is shorter than its two header bytes, has a transport byte other than 0 or 1, has `n = 0`, or has
+  fewer than `n` bytes after the `n` byte;
 - a QUERY whose id is already in flight;
 - READY more than once, or with an id other than 0 or a payload;
 - an ANSWER with an empty payload (a decider with nothing to send uses DROP);
@@ -111,7 +125,7 @@ These are fatal. The receiver logs the reason, closes the socket and stops; the 
 
 These are not, and the session goes on: a QUERY whose IP text is not a valid IP address (not ASCII, `999.1.1.1`,
 `192.0.2.10/24`) is answered with DROP for that id; a QUERY whose DNS wire is empty or shorter than a header gets
-DROP too, as the Python-only proxy never answers a packet that short; a FORWARD that arrives while the previous
+DROP too, as a response or a packet that short is never answered; a FORWARD that arrives while the previous
 FORWARD of its id is still unanswered is ignored.
 
 ## Client IP text
@@ -123,23 +137,25 @@ client address (Group Policy bypass and DNSBL logging key on it).
 
 ## Timeouts
 
-- Unbound: the gateway's. It waits `--timeout` per exchange with Unbound and turns silence or an error into an empty
-  REPLY.
-- REPLY: the decider's guard against a gateway that never answers. A FORWARD with no REPLY within twice the decider's
-  own `--timeout` is treated as an empty REPLY, and a REPLY that arrives after that is ignored.
+- Unbound: the gateway's. It waits `--timeout` (default 5 s; the rc script never changes it) per exchange with Unbound and
+  turns silence or an error into an empty REPLY.
+- REPLY: the decider's guard against a gateway that never answers. A FORWARD with no REPLY within 10 s (twice the gateway's
+  default `--timeout`; `UNBOUND_TIMEOUT` in `pfb_dns_proxy.py`) is treated as an empty REPLY, and a REPLY that arrives after
+  that is ignored.
 - A query as a whole: the gateway's. It sends SERVFAIL to the client if it has no decision within twice the timeout
   plus one second; the decider enforces no overall deadline.
 
 ## Limits
 
-- Frames: 65796 bytes at most (above); the DNS wire in QUERY, FORWARD, REPLY and ANSWER is at most 65535 bytes, the
+- Frames: 65797 bytes at most (above); the DNS wire in QUERY, FORWARD, REPLY and ANSWER is at most 65535 bytes, the
   client IP text at most 255.
 - In flight: the protocol sets no cap. The gateway bounds it through its own client limits; the decider starts one
   task per QUERY and keeps no queue.
 
 Implementation: decider side `dns_proxy/decision_service.py` (framing and loop) and `serve_decisions()` in
-`dns_proxy/pfb_dns_proxy.py`, tests `tests/dns_proxy/test_decision_service.py`; gateway side
-`go/pfb_dns_gateway/decider.go`, tests `decider_test.go`, `gateway_test.go` and `process_test.go` in that directory.
+`dns_proxy/pfb_dns_proxy.py`, tests `tests/dns_proxy/test_decision_service.py` and `test_decision_transport.py`; gateway side
+`go/pfb_dns_gateway/decider.go` (the frames) and `plain.go` (the FORWARD rule), tests `decider_test.go`, `gateway_test.go`,
+`client_transport_test.go` and `process_test.go` in that directory.
 
 The client-facing transports beyond plain UDP and TCP (DoT, DoH, DoQ), the certificate they serve and how a client
 address is decided on each are in [dns-gateway-transports.md](dns-gateway-transports.md).

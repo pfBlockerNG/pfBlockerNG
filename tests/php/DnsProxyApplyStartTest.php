@@ -261,19 +261,6 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->assertSame([['start_service', 'pfb_dns_proxy']], $GLOBALS['pfb_test_service_calls']);
 	}
 
-	public function testASettingTheScriptIgnoresRestartsNothing(): void
-	{
-		// Given no gateway binary: the Python listener serves no DoH/DoQ, so those settings do not change the script
-		$absent = "{$this->dir}/no_such_gateway";
-		$this->runningGatewayBox();
-		pfb_dns_proxy_service($absent);
-
-		$this->configure(['pfb_dns_doh' => 'on', 'pfb_dns_doq' => 'on']);
-		pfb_dns_proxy_ensure_running($absent);
-
-		$this->assertSame([], $GLOBALS['pfb_test_service_calls'], 'an unchanged script is no reason to restart');
-	}
-
 	public function testWithoutProxyModeTheProxyIsNeverStartedEvenThoughItIsNotRunning(): void
 	{
 		// Given the toggle is off: no snapshot, and the proxy is of course not running (same state as the first test)

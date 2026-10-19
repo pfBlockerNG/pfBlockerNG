@@ -3599,10 +3599,10 @@ $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 if (!defined('PFB_PACKAGE_XML')) {
 	define('PFB_PACKAGE_XML', '/usr/local/pkg/pfblockerng.xml');
 }
-// issue #3513: the package ships pfb-dns, the Go gateway that serves DoH/DoQ and runs the Python proxy as its decision
-// service, once per FreeBSD architecture (bin/<target>/pfb-dns). pfb_dns.sh picks this machine's and execs it, so the
-// daemon(8) child's pid is the gateway's own. Any such file makes the rc script run the wrapper; none (a legacy
-// package) leaves the Python listener alone, as before.
+// issue #3513: the package ships pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and runs the Python decider as its
+// decision service, once per FreeBSD architecture (bin/<target>/pfb-dns). pfb_dns.sh picks this machine's and execs it, so the
+// daemon(8) child's pid is the gateway's own. pfB-DNS has no other front end: a package with no pfb-dns this machine can run
+// cannot start it (see pfb_dns_proxy_service()).
 const PFB_DNS_PROXY_DIR = '/usr/local/pkg/pfblockerng/dns_proxy';
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
@@ -4175,12 +4175,14 @@ function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
  * off, and the proxy keeps serving it); a stored marker that is no valid snapshot logs one error and exits 1 instead of
  * starting a proxy that could not bind; never over a survivor; every address shell-quoted. Loopback is always among
  * the addresses, so a Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. It
- * runs pfb-dns, the Go gateway that serves DoH/DoQ and runs the Python proxy as its decision service, through pfb_dns.sh
- * (which execs this machine's binary) as soon as the package ships any bin/<target>/pfb-dns, with --ready-file
- * $pfb['dns_proxy_ready'] ahead of the decider's `--` (the gateway, not the decider, publishes its pid there once it
- * serves, so the marker names the daemon(8) child): a payload this
- * machine cannot run fails in the wrapper, it never starts the Python listener; with no payload (a legacy package) it
- * runs the Python proxy alone through pfb_python.sh, which serves no DoH/DoQ (a warning says so).
+ * runs pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and runs the Python decider as its decision service,
+ * through pfb_dns.sh (which execs this machine's binary), with --ready-file $pfb['dns_proxy_ready'] ahead of the
+ * decider's `--` (the gateway, not the decider, publishes its pid there once it serves, so the marker names the
+ * daemon(8) child). There is no other front end: the script has this one launch line whatever the package ships. A
+ * package with no pfb-dns this machine can run (no payload, another architecture's only, no execute bit) makes the
+ * wrapper exit with its reason on stderr, which daemon(8) writes to the proxy log, and the supervisor start it again
+ * every 5 s: no ready marker is ever published, so the activation's readiness wait fails and rolls pfB-DNS back
+ * (pfb_dns_proxy_confirm_ready()).
  * Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's or the
  * installed pfb-dns's.
  *
@@ -4214,20 +4216,13 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$port = pfb_dns_proxy_port();
 
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
-	if ((glob("{$proxyDir}/bin/*/pfb-dns") ?: []) !== []) {
-		$command = '/bin/sh ' . escapeshellarg("{$proxyDir}/pfb_dns.sh") . "{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? ' --dot' : '') .
-		    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
-		    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready .
-		    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
-	} else {
-		$command = "{$python}{$addresses} --port {$port} --upstream {$upstream} --module-dir /var/unbound --user unbound --ready-file {$ready}" .
-		    ($dot ? ' --dot --pfsense-config /cf/conf/config.xml' : '') . $module;
-		if ($saved !== NULL && (PfbConfig::read('dns/pfb_dns_doh') === PfbToggle::On || PfbConfig::read('dns/pfb_dns_doq') === PfbToggle::On)) {
-			$warnings[] = 'DNS proxy: DoH/DoQ are enabled but the pfb-dns binary is not installed; they are not served';
-		}
-	}
-	// The command lines of the processes this script keeps and signals: the supervisor, the Python proxy and the decider
-	// behind the gateway all name pfb_dns_proxy; pfb-dns itself, as the wrapper execs it, is known by its installed path.
+	$wrapper = escapeshellarg("{$proxyDir}/pfb_dns.sh");
+	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? ' --dot' : '') .
+	    ' --pfsense-config /cf/conf/config.xml' . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
+	    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready .
+	    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
+	// The command lines of the processes this script keeps and signals: the supervisor and the decider behind the gateway
+	// name pfb_dns_proxy; pfb-dns itself, as the wrapper execs it, is known by its installed path.
 	$proxyArgs = '*pfb_dns_proxy*|' . PFB_DNS_PROXY_DIR . '/bin/freebsd-*/pfb-dns*';
 
 	$rc		= array();

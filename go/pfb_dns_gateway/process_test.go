@@ -93,7 +93,7 @@ func fakeDecider(mode string) int {
 			break
 		}
 		if head[4] == tQuery {
-			wire := payload[1+int(payload[0]):]
+			wire := payload[2+int(payload[1]):] // payload[0] is the transport byte
 			answer := bytes.Clone(wire)
 			answer[2] |= 0x80
 			id := uint32(head[5])<<24 | uint32(head[6])<<16 | uint32(head[7])<<8 | uint32(head[8])

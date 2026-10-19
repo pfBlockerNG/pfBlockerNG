@@ -1,41 +1,26 @@
-"""Wire builders and a fake PROXYv2-speaking Unbound shared by the DNS proxy tests."""
+"""Wire builders, a fake Unbound, client exchanges and the decision socket's gateway end, shared by the DNS tests."""
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import contextlib
-import errno
-import os
-import re
 import selectors
-import signal
 import socket
-import ssl
 import struct
-import subprocess
-import sys
 import threading
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
-from typing import Self, TextIO
-from unittest import mock
 
 import dnswire
-import pfb_dns_proxy
-import pytest
-from frontend_constants import PROTO_DIR
 
 WATCHDOG = 10.0  # stuck-run guard for socket waits; never asserted on
-PROXY_FIXED = 16  # 12-byte signature + ver/cmd + family + 2-byte length
 
 
 class ManualClock:
-    """Stands in for pfb_dns_proxy.monotonic: it reads the same every time until a test moves it. The proxy's admission
-    and log windows run on that clock, so a test ages a query, a connection or a silence by `advance`, never by waiting.
-    The tests use steps that are exact in binary (0.5, 1, 2...), so a boundary is hit exactly."""
+    """Stands in for pfb_dns_proxy.monotonic: it reads the same every time until a test moves it. The decider's log
+    window runs on that clock, so a test ages a silence by `advance`, never by waiting. The tests use steps that are
+    exact in binary (0.5, 1, 2...), so a boundary is hit exactly."""
 
     def __init__(self) -> None:
         self.now = 1000.0
@@ -45,11 +30,6 @@ class ManualClock:
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
-
-
-async def drained(frontend: pfb_dns_proxy.Frontend) -> None:
-    """Wait until every UDP query task of `frontend` has ended (answered, timed out or dropped for a newer one)."""
-    await asyncio.gather(*list(frontend._tasks), return_exceptions=True)
 
 
 def build_query(
@@ -72,46 +52,6 @@ def build_query(
         qid, flags, [dnswire.Question(name, qtype)], additional=[opt] if edns or do or options else []
     )
     return dnswire.encode(message)
-
-
-BIND_TRIES = 5  # port 0's UDP twin can be held by another process; see _bind_one
-
-
-def _bind_one(host: str, port: int, *, udp: bool) -> pfb_dns_proxy.Listener:
-    """pfb_dns_proxy.bind() on one address. With port 0 the TCP port picked may have its UDP twin held by another
-    process: that EADDRINUSE alone is tried again, BIND_TRIES times in all. An explicit port is never retried."""
-    for _ in range(BIND_TRIES - 1):
-        try:
-            return pfb_dns_proxy.bind(host, port, udp=udp)
-        except pfb_dns_proxy.ListenError as exc:
-            if port != 0 or not str(exc).endswith(os.strerror(errno.EADDRINUSE)):
-                raise
-    return pfb_dns_proxy.bind(host, port, udp=udp)  # the last try: its error is the caller's
-
-
-def _bind_strict(listen: Sequence[str], port: int, *, udp: bool) -> list[pfb_dns_proxy.Listener]:
-    """pfb_dns_proxy.bind() on each address; the first ListenError propagates once the ones already bound are closed."""
-    bound: list[pfb_dns_proxy.Listener] = []
-    try:
-        for host in listen:
-            bound.append(_bind_one(host, port, udp=udp))
-    except BaseException:
-        for listener in bound:
-            listener.close()
-        raise
-    return bound
-
-
-async def serve_plain(frontend: pfb_dns_proxy.Frontend, listen: Sequence[str], port: int) -> list[tuple[str, int]]:
-    """Serve UDP and TCP on each address (port 0 picks one port per address); returns the bound (host, port)s."""
-    return await frontend.serve_listeners(_bind_strict(listen, port, udp=True))
-
-
-async def serve_dot(
-    frontend: pfb_dns_proxy.Frontend, listen: Sequence[str], port: int, context: ssl.SSLContext
-) -> list[tuple[str, int]]:
-    """Serve DNS over TLS on each address; returns the bound (host, port)s."""
-    return await frontend.serve_listeners(_bind_strict(listen, port, udp=False), context)
 
 
 EDNS_OPTION_EDE = 15  # RFC 8914 Extended DNS Error
@@ -219,74 +159,6 @@ class FakeAuthoritative:
             resource.close()
 
 
-def split_proxy_header(data: bytes) -> tuple[bytes, bytes]:
-    """(PROXYv2 header, the rest) of a buffer that starts with one."""
-    length = struct.unpack("!H", data[14:16])[0]
-    return data[: PROXY_FIXED + length], data[PROXY_FIXED + length :]
-
-
-class FakeProxyUpstream:
-    """UDP+TCP listener on one loopback port that records each PROXYv2 header and answers via FakeUnbound.
-
-    `silent` leaves every UDP query unanswered, `unanswered_prefix` only those whose lower-case name starts with it."""
-
-    def __init__(self, unbound: FakeUnbound, *, silent: bool = False, unanswered_prefix: str | None = None) -> None:
-        self.unbound = unbound
-        self.silent = silent
-        self.unanswered_prefix = unanswered_prefix
-        self.headers: list[bytes] = []
-        self.port = 0
-        self._tcp: asyncio.Server | None = None
-        self._udp: asyncio.DatagramTransport | None = None
-
-    async def __aenter__(self) -> Self:
-        loop = asyncio.get_running_loop()
-        self._tcp = await asyncio.start_server(self._tcp_client, "127.0.0.1", 0)
-        self.port = self._tcp.sockets[0].getsockname()[1]
-        udp, _ = await loop.create_datagram_endpoint(lambda: _UdpUpstream(self), local_addr=("127.0.0.1", self.port))
-        self._udp = udp
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        assert self._tcp is not None and self._udp is not None
-        self._udp.close()
-        self._tcp.close()
-        await self._tcp.wait_closed()
-
-    async def _tcp_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            fixed = await reader.readexactly(PROXY_FIXED)
-            header = fixed + await reader.readexactly(struct.unpack("!H", fixed[14:16])[0])
-            self.headers.append(header)
-            while True:
-                size = struct.unpack("!H", await reader.readexactly(2))[0]
-                reply = self.unbound.answer(await reader.readexactly(size))
-                writer.write(struct.pack("!H", len(reply)) + reply)
-                await writer.drain()
-        except asyncio.IncompleteReadError:
-            pass
-        finally:
-            writer.close()
-
-
-class _UdpUpstream(asyncio.DatagramProtocol):
-    def __init__(self, owner: FakeProxyUpstream) -> None:
-        self.owner = owner
-        self.transport: asyncio.DatagramTransport | None = None
-
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        self.transport = transport  # type: ignore[assignment]
-
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        header, wire = split_proxy_header(data)
-        self.owner.headers.append(header)
-        if self.transport is None or self.owner.silent:
-            return
-        prefix = self.owner.unanswered_prefix
-        if prefix is None or not dnswire.parse(wire).questions[0].name.lower().startswith(prefix):
-            self.transport.sendto(self.owner.unbound.answer(wire), addr)
-
-
 class _OneReply(asyncio.DatagramProtocol):
     def __init__(self, result: asyncio.Future[bytes]) -> None:
         self.result = result
@@ -310,33 +182,6 @@ async def udp_exchange(
         return await asyncio.wait_for(result, WATCHDOG), transport.get_extra_info("sockname")[:2]
     finally:
         transport.close()
-
-
-class UdpClient(asyncio.DatagramProtocol):
-    """A UDP client socket's replies, in arrival order, and a way to wait for the n-th one."""
-
-    def __init__(self) -> None:
-        self.replies: list[bytes] = []
-        self._arrived = asyncio.Event()
-
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        self.replies.append(data)
-        self._arrived.set()
-
-    async def until(self, count: int) -> list[bytes]:
-        while len(self.replies) < count:
-            self._arrived.clear()
-            await asyncio.wait_for(self._arrived.wait(), WATCHDOG)  # a stuck run fails here, not by sleeping
-        return self.replies
-
-
-async def udp_client(server: tuple[str, int], source: str = "127.0.0.1") -> tuple[asyncio.DatagramTransport, UdpClient]:
-    """A UDP socket bound to `source` and connected to `server`, for sending several queries and counting replies."""
-    client = UdpClient()
-    transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
-        lambda: client, remote_addr=server, local_addr=(source, 0)
-    )
-    return transport, client
 
 
 async def tcp_exchange(
@@ -399,80 +244,58 @@ async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
             writer.close()
 
 
-@contextlib.contextmanager
-def running_proxy(
-    argv: Sequence[str], *, interpreter: str = sys.executable, cwd: Path | None = None
-) -> Iterator[tuple[subprocess.Popen[str], int]]:
-    """The real pfb_dns_proxy.py as a child process, once it says it listens: (child, its first UDP+TCP port).
+# --- the gateway end of the decision socket, for tests that run the decider in this process ---------------------
 
-    Leaving the block cleanly stops it with SIGTERM and requires exit status 0; leaving it by an exception just
-    reaps it. A proxy that never says it listens fails at EOF of its stderr (the watchdog kills it), with what it said.
-    """
-    command = [interpreter, str(PROTO_DIR / "pfb_dns_proxy.py"), *argv]
-    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, cwd=cwd)
-    watchdog = threading.Timer(WATCHDOG, child.kill)
-    watchdog.start()
-    try:
-        assert child.stderr is not None
-        seen: list[str] = []
-        port = None
-        for line in child.stderr:
-            seen.append(line)
-            if match := re.search(r"listening on 127\.0\.0\.1:(\d+)", line):
-                port = int(match.group(1))
-                break
-        assert port is not None, f"the proxy never listened; it printed:\n{''.join(seen)}"
-        yield child, port
-        child.send_signal(signal.SIGTERM)
-        assert child.wait(timeout=WATCHDOG) == 0
-    finally:
-        watchdog.cancel()
-        if child.poll() is None:
-            child.kill()
-        child.wait()
-        if child.stderr is not None:
-            child.stderr.close()
+QUERY, FORWARD, REPLY, ANSWER, READY = 1, 2, 3, 4, 6  # the frame types of docs/misc/dns-gateway-protocol.md
+STREAM, DATAGRAM = 0, 1  # the QUERY's transport byte
 
 
-class _LogTap:
-    """Stands in for sys.__stderr__ while serve() runs: passes every write on, and sets `ready` from the 'listening on'
-    log line the proxy prints."""
+class DecisionGateway:
+    """The Go gateway's end of the decision socket, played in the test's event loop; frames are packed here."""
 
-    def __init__(self, real: TextIO, ready: asyncio.Future[list[tuple[str, int]]]) -> None:
-        self.real, self.ready, self.text = real, ready, ""
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.reader, self.writer = reader, writer
 
-    def write(self, text: str) -> int:
-        self.text += text
-        if not self.ready.done() and (match := re.search(r"listening on ([^\n]*); upstream ", self.text)):
-            self.ready.set_result([_bound(entry) for entry in match.group(1).split(", ")])
-        return self.real.write(text)
+    async def send(self, ftype: int, fid: int, payload: bytes = b"") -> None:
+        self.writer.write(struct.pack("!IBI", 5 + len(payload), ftype, fid) + payload)
+        await self.writer.drain()
 
-    def flush(self) -> None:
-        self.real.flush()
+    async def recv(self) -> tuple[int, int, bytes]:
+        (size,) = struct.unpack("!I", await asyncio.wait_for(self.reader.readexactly(4), WATCHDOG))
+        body = await asyncio.wait_for(self.reader.readexactly(size), WATCHDOG)
+        ftype, fid = struct.unpack_from("!BI", body)
+        return ftype, fid, body[5:]
 
-
-def _bound(entry: str) -> tuple[str, int]:
-    host, port = entry.removesuffix(" (DoT)").rsplit(":", 1)
-    return host, int(port)
+    async def ask(
+        self, wire: bytes, unbound: FakeUnbound, *, client: str = "127.0.0.2", datagram: bool = True, fid: int = 1
+    ) -> bytes:
+        """QUERY `wire` as `client`, answer every FORWARD from `unbound`, and return the final ANSWER's wire."""
+        text = client.encode("ascii")
+        await self.send(QUERY, fid, bytes([DATAGRAM if datagram else STREAM, len(text)]) + text + wire)
+        while True:
+            ftype, got, payload = await self.recv()
+            assert got == fid
+            if ftype == ANSWER:
+                return payload
+            assert ftype == FORWARD, f"frame type {ftype}: want FORWARD or ANSWER"
+            await self.send(REPLY, fid, unbound.answer(payload))
 
 
 @contextlib.asynccontextmanager
-async def serving(args: argparse.Namespace) -> AsyncIterator[list[tuple[str, int]]]:
-    """pfb_dns_proxy.serve(args) as a task of this process, until it logs 'listening on': yields the bound
-    (host, port)s, UDP+TCP first, then DoT. Leaving the block cancels the task, which shuts the proxy down."""
-    assert sys.__stderr__ is not None
-    ready: asyncio.Future[list[tuple[str, int]]] = asyncio.get_running_loop().create_future()
-    tap = _LogTap(sys.__stderr__, ready)
-    with mock.patch.object(sys, "__stderr__", tap):
-        task = asyncio.create_task(pfb_dns_proxy.serve(args))
-        try:
-            await asyncio.wait({ready, task}, timeout=WATCHDOG, return_when=asyncio.FIRST_COMPLETED)
-            if task.done():
-                task.result()  # serve() ended before it listened: raise the reason it gave
-            if not ready.done():
-                pytest.fail(f"STUCK: serve() did not listen in time; it logged:\n{tap.text}")
-            yield ready.result()
-        finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.wait_for(task, WATCHDOG)
+async def serving_decisions(argv: Sequence[str]) -> AsyncIterator[DecisionGateway]:
+    """pfb_dns_proxy.serve_decisions() as a task of this process on one end of a socketpair, with `argv` after
+    `--decision-fd`: yields the gateway end once READY has been read. Leaving ends the session by EOF, and a decider
+    that failed raises here."""
+    import pfb_dns_proxy  # the shipped decider: the tests' conftest puts its directory on sys.path
+
+    gateway_end, decider_end = socket.socketpair()
+    args = pfb_dns_proxy.parse_args(["--decision-fd", str(decider_end.detach()), *argv])
+    task = asyncio.ensure_future(pfb_dns_proxy.serve_decisions(args))
+    reader, writer = await asyncio.open_connection(sock=gateway_end)
+    gateway = DecisionGateway(reader, writer)
+    try:
+        assert await gateway.recv() == (READY, 0, b"")
+        yield gateway
+    finally:
+        writer.close()
+        await asyncio.wait_for(task, WATCHDOG)

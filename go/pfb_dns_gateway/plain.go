@@ -176,8 +176,18 @@ func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort
 	go func() {
 		defer g.wg.Done()
 		defer g.queries.Done()
-		fwd := func(ctx context.Context, w []byte) []byte { return g.up.exchangeUDP(ctx, header, w) }
-		reply := g.resolve(g.ctx, src.Addr(), wire, fwd)
+		// The first FORWARD carries the client's own bytes (Unbound saw its UDP size) and its reply goes to the decider as
+		// it is. Every later one is a query the decider built (the SafeSearch chase, whose answers it must read whole):
+		// a truncated reply to it is asked again over TCP, as a client of a transport without a connection of its own is.
+		first := true
+		fwd := func(ctx context.Context, w []byte) []byte {
+			if first {
+				first = false
+				return g.up.exchangeUDP(ctx, header, w)
+			}
+			return g.up.exchangeUDPThenTCP(ctx, src, dst, w)
+		}
+		reply := g.resolve(g.ctx, src.Addr(), true, wire, fwd)
 		if g.udpInflight.Add(-1) == 0 { // the slot is free before the reply goes out
 			g.udpOverload.Store(false)
 		}
@@ -273,7 +283,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		case hangUp:
 			return
 		case toDecider:
-			reply = g.resolve(g.ctx, src.Addr(), wire, up.exchange)
+			reply = g.resolve(g.ctx, src.Addr(), false, wire, up.exchange)
 		}
 		if reply != nil && g.writeReply(stream, reply) != nil {
 			return
