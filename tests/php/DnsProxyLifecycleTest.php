@@ -434,7 +434,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// Given the Resolver still carries our block and no snapshot can put it back
 		$this->seedOrphanedResolver($marker, $custom);
-		pfb_dns_proxy_service();
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
 		$before = $GLOBALS['config'];
 
 		// When the package removal asks for the restore
@@ -459,8 +459,8 @@ final class DnsProxyLifecycleTest extends TestCase
 		pfb_dns_proxy_service();
 
 		// Then its start refuses with exit 1 and says that a hand recovery is needed, rather than exiting quietly
-		$this->assertMatchesRegularExpression('/manual recovery required[^\n]*\n\texit 1\n/',
-			(string) file_get_contents(PFB_DNS_PROXY_RCFILE));
+		$start = $GLOBALS['pfb_test_rcfiles']['pfb_dns_proxy.sh']['start'] ?? '';
+		$this->assertMatchesRegularExpression('/manual recovery required[^\n]*\n\texit 1\n/', $start);
 	}
 
 	#[DataProvider('orphanedResolvers')]
