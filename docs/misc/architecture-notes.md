@@ -447,7 +447,12 @@ turns the pfB-DNS toggle Off under the config lock, stops the proxy and restores
 outlived its stop) is retried by the next apply's ordinary restore, because the toggle is already Off; a lock that stays taken
 changes nothing and is retried by the next apply or tick. With pfBlockerNG itself disabled the ordinary restore runs and the
 toggle stays as the admin set it. Pinned by `DnsProxyActivationRollbackTest` (sections E and F) and `TickEntrypointTest`; live
-in `tests/smoke/test_smoke_pfb_dns_resolver_state.py`.
+in `tests/smoke/test_smoke_pfb_dns_resolver_state.py`. The pass that follows a stand-down (the apply itself, or a pass the tick
+dispatches) still has python integration to remove and mounts to unmount, which pfBlockerNG does with an Unbound restart, and
+`pfb_stop_start_unbound()` used to start Unbound whatever `unbound/enable` said (live: the start log count rose by one after
+each, the stand-down alone left it stopped). It now stops, unmounts and returns without starting while the `unbound` section
+exists and is not enabled, for the DNSBL-only path (pfB-DNS off) too; an enabled Resolver restarts as before, pinned by
+`DnsProxyActivationRollbackTest::testADnsblReloadWithPfbDnsOffRestartsAnEnabledResolverAndLeavesADisabledOneStopped`.
 
 While the Advanced page's EDNS buffer size is automatic (`unbound/edns_buffer_size` absent, empty or `auto`) and the admin's
 Custom Options carry no `edns-buffer-size:` directive (read as above, wherever it stands on a line), the clause carries

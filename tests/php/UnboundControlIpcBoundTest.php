@@ -294,7 +294,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 	 */
 	private function reloadBody(): string
 	{
-		return "\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+		return "\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 			. "\$GLOBALS['pfb_test_process_running']['unbound'] = static function (): bool {\n"
 			. "\tforeach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as \$frame) {\n"
 			. "\t\tif ((\$frame['function'] ?? '') === 'pfb_stop_start_unbound') { return FALSE; }\n"
@@ -665,7 +665,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$start = $this->startCommand('never-ran', 'exit 0');
 		$phpCli = $this->startCommand('supervisor-exit-zero', 'exit 0');
 		$run = $this->runIsolated(
-			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
 				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
@@ -732,7 +732,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 				. "n=\$((n + 1)); printf '%s\\n' \"\$n\" > {$count}\n"
 				. "[ \"\$n\" -eq 1 ] && exit 1\nexit 0");
 		$run = $this->runIsolated(
-			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
 				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
@@ -756,7 +756,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 				. "n=\$((n + 1)); printf '%s\\n' \"\$n\" > {$count}\n"
 				. "[ \"\$n\" -eq 1 ] && exit 1\nexec sleep 20");
 		$run = $this->runIsolated(
-			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
 				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
@@ -781,7 +781,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 				. "n=\$((n + 1)); printf '%s\\n' \"\$n\" > {$count}\n"
 				. "[ \"\$n\" -eq 1 ] && exec {$realPhp} \"\$@\"\nexit 0");
 		$run = $this->runIsolated(
-			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
 				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
