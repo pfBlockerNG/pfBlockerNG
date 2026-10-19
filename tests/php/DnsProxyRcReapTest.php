@@ -7,9 +7,11 @@ require_once __DIR__ . '/DnsProxyRcSandboxTrait.php';
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- a stuck rc() reaps everything it started. The script under test starts a background child, records its pid and
- * hangs. Once rc() has reported STUCK/ENVIRONMENT, that child must be gone: the runner terminates only its direct child, so the
- * timeout(1) wrapper around rc() is what signals the whole process group and takes the background child down with it.
+ * issue #3515 -- a stuck rc() reaps everything it started, and a stuck rc() is never a product status. The script under test
+ * starts a background child, records its pid and hangs. Once rc() has reported STUCK/ENVIRONMENT, that child must be gone: the
+ * runner terminates only its direct child, so the timeout(1) wrapper around rc() is what signals the whole process group and
+ * takes the background child down with it. A script that ignores TERM is ended by timeout(1)'s KILL, which also takes timeout
+ * itself: PHP then sees a signal, not an exit status, and that is still a STUCK verdict.
  */
 final class DnsProxyRcReapTest extends TestCase
 {
@@ -52,6 +54,25 @@ final class DnsProxyRcReapTest extends TestCase
 				posix_kill($grandchild, SIGKILL);
 			}
 		}
+	}
+
+	public function testAScriptThatIgnoresTermIsStuckNotAProductStatus(): void
+	{
+		// Given a script that ignores TERM and keeps running; the loop is bounded so that nothing can outlive the test
+		file_put_contents("{$this->dir}/run.sh", "#!/bin/sh\ntrap '' TERM\ni=0\nwhile [ \$i -lt 30 ]; do /bin/sleep 1; i=\$((i + 1)); done\n");
+
+		// When rc() runs past its 1 s limit: TERM is ignored, so timeout(1) has to KILL the group
+		$returned = NULL;
+		$verdict = '';
+		try {
+			[$returned] = $this->rc('start', 1);
+		} catch (RuntimeException $e) {
+			$verdict = $e->getMessage();
+		}
+
+		// Then the stopped script is a STUCK verdict; a status handed back to the test would be read as a product result
+		$this->assertSame(NULL, $returned, 'a script the limit stopped returned a product status: ' . var_export($returned, TRUE));
+		$this->assertStringStartsWith('STUCK/ENVIRONMENT:', $verdict, 'the limit stopped the script');
 	}
 
 	/**

@@ -357,25 +357,29 @@ trait DnsProxyRcSandboxTrait
 	 */
 	private function rc(string $verb, int $seconds = 20): array
 	{
-		$run = pfb_test_run_process(
-			[$GLOBALS['pfb']['timeout'], '-k', '2', (string) $seconds, $this->shell, "{$this->dir}/run.sh", $verb],
-			$seconds + 5.0,
-			['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')]
+		$run = pfb_test_finish_process(
+			pfb_test_start_process(
+				[$GLOBALS['pfb']['timeout'], '-k', '2', (string) $seconds, $this->shell, "{$this->dir}/run.sh", $verb],
+				['PATH' => "{$this->dir}/bin:" . (string) getenv('PATH')]
+			),
+			$seconds + 5.0
 		);
 		$output = $run['stdout'] . $run['stderr'];
-		$this->stuckIfStopped($run['exit'], "rc {$verb}", $output);
+		$this->stuckIfStopped($run['exit'], $run['termsig'], "rc {$verb}", $output);
 
 		return [$run['exit'], $output];
 	}
 
 	/**
-	 * Status 124 is timeout(1)'s limit firing; 137 is that KILL was needed to end the command. Either is the harness stopping
-	 * the command, which is a STUCK/ENVIRONMENT verdict, never a product status.
+	 * Status 124 is timeout(1)'s limit firing. 137, or a SIGKILL that ended the command (termsig 9), is its KILL escalation: the
+	 * KILL takes timeout itself too, so PHP sees a signal rather than a status. Either is the harness stopping the command, which
+	 * is a STUCK/ENVIRONMENT verdict, never a product status.
 	 */
-	private function stuckIfStopped(int $status, string $what, string $output): void
+	private function stuckIfStopped(int $status, int $termsig, string $what, string $output): void
 	{
-		if ($status === 124 || $status === 137) {
-			throw new RuntimeException("STUCK/ENVIRONMENT: {$what} was stopped by its time limit (status {$status}): {$output}");
+		// A script that SIGKILLs itself reads the same way; no generator path does that.
+		if ($status === 124 || $status === 137 || $termsig === 9) {
+			throw new RuntimeException("STUCK/ENVIRONMENT: {$what} was stopped by its time limit (status {$status}, signal {$termsig}): {$output}");
 		}
 	}
 

@@ -1020,7 +1020,7 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$run = pfb_test_finish_process($started, $timeoutSeconds);
 		$output = $run['stdout'] . $run['stderr'];
-		$this->stuckIfStopped($run['exit'], 'a start verb', $output);
+		$this->stuckIfStopped($run['exit'], $run['termsig'], 'a start verb', $output);
 
 		return [$run['exit'], $output];
 	}
