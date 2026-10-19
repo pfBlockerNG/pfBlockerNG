@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -51,14 +52,35 @@ func freeLoopbackPort(t *testing.T) int {
 // freeLoopbackPortFrom is the first number pick gives that is free for UDP and TCP.
 func freeLoopbackPortFrom(t *testing.T, pick func() int) int {
 	t.Helper()
-	return pick()
+	for range 64 {
+		port := strconv.Itoa(pick())
+		udp, err := net.ListenPacket("udp", "127.0.0.1:"+port)
+		if err != nil {
+			continue
+		}
+		tcp, err := net.Listen("tcp", "127.0.0.1:"+port)
+		_ = udp.Close()
+		if err != nil {
+			continue
+		}
+		_ = tcp.Close()
+		n, _ := strconv.Atoi(port)
+		return n
+	}
+	t.Fatal("no port free for UDP and TCP in 64 picks")
+	return 0
 }
 
 // retryOnTakenPort runs try on a port pick returns, and on another when try says the port was taken by someone else
-// after it was picked, up to picks times in all.
+// after it was picked (picking and binding are two steps), up to picks times in all. Nothing else is retried.
 func retryOnTakenPort[T any](picks int, pick func() int, try func(port int) (T, bool)) (T, error) {
-	got, _ := try(pick())
-	return got, nil
+	var none T
+	for range picks {
+		if got, taken := try(pick()); !taken {
+			return got, nil
+		}
+	}
+	return none, fmt.Errorf("the port picked was taken %d times in a row", picks)
 }
 
 func runDocker(t *testing.T, stdin string, timeout time.Duration, args ...string) (string, error) {
@@ -133,13 +155,17 @@ func startOracleUnbound(t *testing.T, tree oracleTree) *oracleUnbound {
 			t.Fatalf("cannot build the Unbound test image: %v\n%s", err, out)
 		}
 	}
-	probe, err := net.ListenPacket("udp", "127.0.0.1:0")
+	o, err := retryOnTakenPort(oraclePicks, func() int { return freeLoopbackPort(t) },
+		func(port int) (*oracleUnbound, bool) { return tryOracleUnbound(t, tree, port) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := probe.LocalAddr().(*net.UDPAddr).Port
-	_ = probe.Close()
+	return o
+}
 
+// tryOracleUnbound starts Unbound on port; taken says that it exited because another process holds the port.
+func tryOracleUnbound(t *testing.T, tree oracleTree, port int) (o *oracleUnbound, taken bool) {
+	t.Helper()
 	dir := t.TempDir()
 	conf := fmt.Sprintf(`server:
     verbosity: 1
@@ -211,12 +237,13 @@ view:
 			}
 		}
 	}()
-	t.Cleanup(func() {
+	stop := sync.OnceFunc(func() {
 		_ = exec.Command("docker", "rm", "-f", name).Run()
 		_ = cmd.Wait()
 		<-exited
 		_ = logR.Close()
 	})
+	t.Cleanup(stop)
 	seen := func() string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -225,6 +252,10 @@ view:
 	select {
 	case <-ready:
 	case <-exited:
+		if strings.Contains(strings.ToLower(seen()), "address already in use") { // Unbound spells it both ways
+			stop()
+			return nil, true
+		}
 		t.Fatalf("Unbound exited before it was ready:\n%s", seen())
 	case <-time.After(oracleWatchdog):
 		t.Fatalf("STUCK/ENVIRONMENT: Unbound never printed its readiness line:\n%s", seen())
@@ -235,7 +266,7 @@ view:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return &oracleUnbound{conn: conn, port: port, conf: filepath.Join(dir, "unbound.conf")}
+	return &oracleUnbound{conn: conn, port: port, conf: filepath.Join(dir, "unbound.conf")}, false
 }
 
 func dnsQuery(id uint16, name string) []byte {

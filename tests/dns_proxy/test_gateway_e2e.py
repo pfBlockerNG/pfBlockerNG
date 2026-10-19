@@ -31,7 +31,7 @@ from typing import Any
 
 import dnswire
 import pytest
-from dot_helpers import dot_exchange, free_port, make_certificate, write_certificate_file
+from dot_helpers import dot_exchange, make_certificate, write_certificate_file
 from frontend_constants import (
     ALLOWED,
     BLOCKED,
@@ -670,7 +670,7 @@ def tls_gateway(
     certificate, key = make_certificate(tmp_path)
     pem = write_certificate_file(tmp_path, certificate, key)
     flags = [
-        "--dot", "--dot-port", str(free_port()), "--tls-pem", str(pem),
+        "--dot", "--dot-port", "0", "--tls-pem", str(pem),
         "--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "127.0.0.1/32",
         "--doq-listen", "127.0.0.1", "--doq-port", "0",
     ]  # fmt: skip
