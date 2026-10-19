@@ -50,17 +50,15 @@ the logic that matters; the live 2.8.1 case is `test_an_aborted_removal_*` in `t
 sh tests/pkg_oracle/build.sh  OUT                    # fetch + sha256-verify core files, build pkg 2.1.0, build image $PFB_ORACLE_IMAGE
 sh tests/pkg_oracle/run.sh    OUT REPO recovered master   # the fixed code against core master (9363ac5b): exit 0 iff it held
 sh tests/pkg_oracle/run.sh    OUT REPO recovered r272     # ... against RELENG_2_7_2 (ec956d34)
-sh tests/pkg_oracle/run.sh    OUT BASE broken   master    # the base commit: exit 0 iff the defect reproduces
+sh tests/pkg_oracle/run.sh    OUT BASE broken   master    # the base commit: exit 0 iff the defect reproduces (on the fixed code: FAIL at once)
 ```
 
 Scenario: pfB-DNS serving in module mode; `pkg delete` while another save holds the config lock until the removal's Resolver restore
 gives up (the lock double leaves `pfb_dns_config.refused`, and the holder lets go on it); then the aborted removal's leftovers are
 probed; then the retry with the lock free. Every wait observes an event (Unbound's start line, the holder's ready marker, the proxy's
 first answer, the proxy's port refusing once it is stopped) under one `STUCK/ENVIRONMENT` cap. Each `pkg delete` runs under the same
-kind of cap (`ORACLE_DELETE_CAP`, default 180 s); expiry kills its process group. After the first removal the product's state is read
-once: the three services registered and the proxy running, or the run FAILs before any readiness wait. Container only: nothing is
-installed on or changed on the host.
-
-Mutants: a product FAIL is the expected result, never STUCK. `ORACLE_MUTANT=C` lets the holder go only when `pkg delete` returns, so
-the registration cannot take the lock. `ORACLE_MUTANT=D` (r272) drops the `pgrep -qnF` stand-in, so the proxy never reads as running.
-Example: `ORACLE_MUTANT=C sh tests/pkg_oracle/run.sh OUT . recovered master`.
+cap, 180 s by default; `ORACLE_DELETE_CAP=S` can only shorten it (1 to 180 s), and expiry kills the process group. After the first
+removal probe.php's state is read once: the three services registered and the proxy running, or the run FAILs before any readiness
+wait. Broken mode reads the probe once after the removal: an answer FAILs at once ("defect did not reproduce"), and only silence waits,
+for the refusal that shows the stop. The pgrep stand-in is self-checked before the removal; a failed self-check is a harness fault, not
+a verdict on the product. Container only: nothing is installed on or changed on the host.

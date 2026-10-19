@@ -5,7 +5,7 @@
 # is installed, changed or left running.
 #   recovered  the fixed code: pfB-DNS survives the aborted removal and a retry removes the package (exit 0 iff it held)
 #   broken     the base commit: the defect reproduces (no answer, nothing registered, the retry aborts again; exit 0 iff it did)
-#   ORACLE_MUTANT=C|D  a deliberate harness defect that must FAIL (README); ORACLE_DELETE_CAP=S  each pkg delete's cap in seconds
+#   ORACLE_DELETE_CAP=S  each pkg delete's cap in seconds
 # /repo is a staged copy of REPO's working tree (OUT_DIR/stage; no .git, no tool indexes), not REPO itself: the pfb-dns payload has to
 # sit inside the tree the appliance paths point at, and a read-only mount cannot add a directory. REPO is only read.
 set -eu
@@ -53,5 +53,5 @@ fi
 docker run --rm --init \
 	-v "$stage:/repo:ro" -v "$here:/oracle:ro" -v "$out/core:/core:ro" -v "$out/results:/results" \
 	-e "ORACLE_EXPECT=$expect" -e "CORE_LABEL=$core" -e "ORACLE_REV=$rev" \
-	-e "ORACLE_MUTANT=${ORACLE_MUTANT:-}" -e "ORACLE_DELETE_CAP=${ORACLE_DELETE_CAP:-}" \
+	-e "ORACLE_DELETE_CAP=${ORACLE_DELETE_CAP:-}" \
 	"$image" sh /oracle/scenario.sh "${expect}-${core}"
