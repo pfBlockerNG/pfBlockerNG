@@ -29,9 +29,12 @@ the output filter per render -- it must be re-extracted, never cached).
 
 from __future__ import annotations
 
+import base64
 import json
+import shlex
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -2632,3 +2635,111 @@ def test_force_mode_parse_keeps_sidecars(
         vm.ssh("/bin/rm", "-f", sidecar_etag)
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
+
+
+# --------------------------------------------------------------------------- #
+# Setup wizard Finish on a stored Resolver marker that is no snapshot (issue #3515). Finish puts the Resolver back, then
+# refuses while pfBlockerNG still owns it or a stored marker may have moved it. The refusal must come before the sweep,
+# which erases the marker, the package config and the masterfile. Step index 4 is the Finalize step (<id>5</id>).
+# --------------------------------------------------------------------------- #
+
+WIZARD_FINISH_PATH = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=4"
+PFB_INC_PATH = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+PFB_FEEDS_JSON = "/usr/local/www/pfblockerng/pfblockerng_feeds.json"
+PFB_DNS_SAVED_CFG = "installedpackages/pfblockerngdns/config/0/pfb_dns_saved"
+PFB_MASTERFILE = "/var/db/pfblockerng/masterfile"
+WIZARD_CONFIG_BACKUP = "/root/pfb_wizard_finish_config.xml"
+WIZARD_MASTERFILE_BACKUP = "/root/pfb_wizard_finish_masterfile.bak"
+RECOVERY_REFUSAL = "so what the Resolver was before cannot be confirmed and pfBlockerNG was not reset"
+OWNED_REFUSAL = "the DNS Resolver could not be put back"
+FEEDS_REFUSAL = "Feeds database missing"
+_RESOLVER_SNAPSHOT = json.dumps(
+    {
+        "active_interface": {"present": True, "value": "lan"},
+        "enablessl": {"present": False, "value": None},
+        "custom_options": {"present": True, "value": ""},
+    }
+).encode()
+
+
+def _truncated_snapshot() -> str:
+    """A real snapshot's base64 cut short: strict base64 refuses it, so it is no snapshot."""
+    encoded = base64.b64encode(_RESOLVER_SNAPSHOT).decode("ascii")
+    return encoded[: len(encoded) // 2]
+
+
+# Stored markers that are no snapshot and have no block in Custom Options: the raw-only recovery branch.
+CORRUPT_RAW_MARKERS = {
+    "zero": "0",
+    "truncated-snapshot": _truncated_snapshot(),
+    "non-json": base64.b64encode(b"not a Resolver snapshot").decode("ascii"),
+}
+
+
+def _guest_ok(vm: helpers.SmokeVM, *argv: str) -> None:
+    result = vm.ssh(*argv, timeout=60.0)
+    if result.returncode != 0:
+        raise RuntimeError(f"guest command {argv!r} failed: rc={result.returncode} stderr={result.stderr!r}")
+
+
+def _recovery_branch(vm: helpers.SmokeVM) -> str:
+    """Owns and recovery as the wizard guard reads them: '01' is the raw-only recovery branch."""
+    pre = f"require_once({helpers._php_str(PFB_INC_PATH)});\nglobal $pfb; pfb_global();"
+    expr = "(pfb_dns_proxy_owns_resolver() ? '1' : '0') . (pfb_dns_proxy_recovery_required() ? '1' : '0')"
+    return helpers._php_read_scalar(vm, pre, expr, timeout=120.0)
+
+
+@pytest.mark.parametrize("marker", list(CORRUPT_RAW_MARKERS.values()), ids=list(CORRUPT_RAW_MARKERS))
+def test_wizard_finish_refuses_a_corrupt_marker_and_sweeps_nothing(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    marker: str,
+) -> None:
+    """Finish refuses a stored marker that is no snapshot, and the refused reset erases none of its sweep targets.
+
+    The marker is raw-only, so pfb_dns_proxy_owns_resolver() is FALSE and only the recovery clause stops the reset.
+    The sentinel config section and the masterfile are what the reset would sweep.
+    """
+    vm = smoke_vm
+    token = uuid.uuid4().hex
+    payload = f"uitest-3517-{token}"
+    sentinel_cfg = "installedpackages/pfblockerngwizardsentinel/config/0/uitest"
+    had_masterfile = vm.ssh("/bin/test", "-f", PFB_MASTERFILE).returncode == 0
+    _guest_ok(vm, "/bin/cp", "/conf/config.xml", WIZARD_CONFIG_BACKUP)
+    if had_masterfile:
+        _guest_ok(vm, "/bin/cp", "-p", PFB_MASTERFILE, WIZARD_MASTERFILE_BACKUP)
+    try:
+        assert vm.ssh("/bin/test", "-s", PFB_FEEDS_JSON).returncode == 0, "precondition: packaged feeds JSON is missing"
+        _guest_ok(vm, f"printf '%s' {shlex.quote(payload)} > {shlex.quote(PFB_MASTERFILE)}")
+        helpers.config_set(vm, sentinel_cfg, token)
+        helpers.config_set(vm, PFB_DNS_SAVED_CFG, marker)
+        marker_before = helpers.config_get_state(vm, PFB_DNS_SAVED_CFG)
+        assert marker_before == (True, marker), f"precondition: marker not stored verbatim: {marker_before!r}"
+        branch = _recovery_branch(vm)
+        assert branch == "01", f"precondition: raw-only recovery branch is owns=0 recovery=1, got {branch!r}"
+        digest_before = helpers.pfb_config_digest(vm)
+
+        resp = webui.post(WIZARD_FINISH_PATH, {}, submit=("finish", "Finish"), timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(resp.text), "Finish POST returned the login form (session lost)"
+
+        # State first: a reset that wipes these fails here, for the reason that matters.
+        marker_after = helpers.config_get_state(vm, PFB_DNS_SAVED_CFG)
+        assert marker_after == (True, marker), f"Finish changed or swept the stored marker: {marker_after!r}"
+        sentinel_after = helpers.config_get_state(vm, sentinel_cfg)
+        assert sentinel_after == (True, token), f"Finish swept the pfBlockerNG config section: {sentinel_after!r}"
+        assert helpers.pfb_config_digest(vm) == digest_before, "config.xml changed across the refused Finish"
+        masterfile = vm.ssh("/bin/cat", PFB_MASTERFILE)
+        assert masterfile.returncode == 0 and masterfile.stdout == payload, (
+            f"Finish swept or changed the masterfile: rc={masterfile.returncode} stdout={masterfile.stdout!r}"
+        )
+        assert RECOVERY_REFUSAL in resp.text, "Finish did not render the recovery refusal for the corrupt marker"
+        assert OWNED_REFUSAL not in resp.text, "refusal came from the owned-Resolver branch, not the recovery branch"
+        assert FEEDS_REFUSAL not in resp.text, "refusal came from the missing-feeds check, not the recovery branch"
+    finally:
+        try:
+            helpers.restore_pfb_config_baseline(vm, snapshot_path=WIZARD_CONFIG_BACKUP)
+        finally:
+            if had_masterfile:
+                _guest_ok(vm, "/bin/cp", "-p", WIZARD_MASTERFILE_BACKUP, PFB_MASTERFILE)
+            else:
+                _guest_ok(vm, "/bin/rm", "-f", PFB_MASTERFILE)
