@@ -46,8 +46,18 @@ file_put_contents($record, $head . $read($conn, $length));
 
 if ($mode === 'ok') {
 	fwrite($conn, "ok\n");
+} elseif ($mode === 'partial') {
+	fwrite($conn, 'ok');
+	fgets(STDIN);
 } elseif (str_starts_with($mode, 'error:')) {
 	fwrite($conn, 'error: ' . substr($mode, 6) . "\n");
+} elseif ($mode === 'trickle') {
+	foreach (str_split("ok\n") as $byte) {
+		usleep(150000);
+		if (@fwrite($conn, $byte) === FALSE) {
+			break;
+		}
+	}
 } elseif ($mode === 'silent') {
 	fgets(STDIN);
 }
