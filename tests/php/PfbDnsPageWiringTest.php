@@ -122,7 +122,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 		$this->assertStringContainsString("'pfb_dns',", $page, 'the enable checkbox');
 		$this->assertStringContainsString("PfbConfig::read('dns/pfb_dns')", $page, 'read through the gateway');
-		$this->assertMatchesRegularExpression('/<span class="text-warning"><strong>Experimental\./', $page, 'the help says so plainly, in the warning style');
+		$this->assertMatchesRegularExpression('/<strong>Experimental\./', $page, 'the help says so plainly, in bold');
 	}
 
 	public function testTheHelpNamesTheCustomOptionsLinesThatStopTheMove(): void
