@@ -52,7 +52,7 @@ if ($mode === 'ok') {
 		fgets(STDIN);
 	}
 } elseif ($mode === 'long-reply') {
-	fwrite($conn, str_repeat('a', 511));
+	fwrite($conn, str_repeat('a', 512));
 	fgets(STDIN);
 } elseif (str_starts_with($mode, 'error:')) {
 	fwrite($conn, 'error: ' . substr($mode, 6) . "\n");

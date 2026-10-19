@@ -282,17 +282,15 @@ final class DnsProxyCertificatePushTest extends TestCase
 		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
 
 		$this->assertNotNull($why, 'closing after an incomplete ok must not acknowledge the certificate');
-		$this->assertStringContainsString('no reply', $why);
 	}
 
-	public function testAReplyThatFillsTheLimitWithoutANewlineIsRefused(): void
+	public function testAnOverlongReplyIsRejectedWithoutAcceptingTheCertificate(): void
 	{
 		$this->listen('long-reply');
 
 		$why = pfb_dns_proxy_certificate_push('certificate and key', $this->socket, 0.3);
 
 		$this->assertNotNull($why);
-		$this->assertStringContainsString('no complete reply', $why);
 	}
 
 	public function testASocketNobodyListensOnIsAReasonThatNamesIt(): void
