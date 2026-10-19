@@ -3508,6 +3508,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					pfb_mark_pending_changes();
 					pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 					pfb_logger("MaxMind processing failed; update deferred.\n", 2);
+					// A deferral is not a hung pass: record the end, so last_start > last_end means hung or killed only.
+					pfb_pass_status_record('last_end', time(), $pfb['save']);
 					if ($pfb_feed_pass_owner) {
 						pfb_feed_pass_release();
 					}
