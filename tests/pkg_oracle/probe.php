@@ -113,9 +113,7 @@ switch ($cmd) {
 			'version' => 1, 'config' => new stdClass(),
 			'feeds' => [['raw' => 'pfb_py_raw/feed.txt', 'feed' => 'TestFeed', 'group' => 'TestGroup', 'log_flag' => '1']],
 		]));
-		$pfb['dnsbl_tld_wildcard'] = $pfb['dnsblconfig']['tld_wildcard'] ?? '';
-		$pfb['dnsbl_control'] = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control'] ?? '');
-		$pfb['dnsbl_control_legacy'] = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control_legacy'] ?? '');
+		pfb_dnsbl_ini_inputs();
 		file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled', 'BASELINE'));
 		pfb_dns_proxy_service();
 		pfb_filter_service();
