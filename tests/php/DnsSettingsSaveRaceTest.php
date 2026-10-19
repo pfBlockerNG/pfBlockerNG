@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 require_once __DIR__ . '/support/ProcessRunner.php';
 
@@ -16,6 +17,7 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  *   - the move the apply made survives a pfB-DNS save, and the posted toggle and preference are saved;
  *   - a lock that stays taken, or a failed fresh read, is an input error: nothing is written;
  *   - a config.xml write that throws still releases the lock.
+ *   - a failed save re-displays the reply-logging preference the form submitted, not the stored one;
  *
  * The save runs in a child process (support/DnsSaveWorker.php: the page's real save code over the doubles), because the
  * page ends with exit().
@@ -90,5 +92,28 @@ final class DnsSettingsSaveRaceTest extends TestCase
 		$result = $this->runScenario('write_throws');
 
 		$this->assertFalse($result['lockHeld'], 'the lock is released even when config.xml cannot be written');
+	}
+
+	/** @return array<string,array{string}> the failed saves: the lock stays taken, the fresh read fails, pfSense refuses the write */
+	public static function failedSaves(): array
+	{
+		return [
+			'the config lock stays taken'     => ['lock_taken'],
+			'the fresh config.xml read fails' => ['read_fails'],
+			'pfSense refuses the write'       => ['write_refused'],
+		];
+	}
+
+	#[DataProvider('failedSaves')]
+	public function testAFailedSaveRedisplaysTheSubmittedReplyLoggingPreferenceNotTheStoredOne(string $scenario): void
+	{
+		// Given the stored preference On, and a form that posts it Off (the checkbox absent)
+		$result = $this->runScenario($scenario);
+
+		// Then the save is an input error, the form comes back with the submitted Off, and nothing was saved
+		$this->assertNotSame([], $result['inputErrors'], 'before: the save failed');
+		$this->assertSame('', $result['reply'], 'the form re-displays the preference it submitted, not the stored one');
+		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'and config.xml keeps the stored preference');
+		$this->assertFalse($result['pendingMarked'], 'a failed save marks no pending change');
 	}
 }
