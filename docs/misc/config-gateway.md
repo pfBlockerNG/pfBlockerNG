@@ -229,8 +229,8 @@ Authorization = property of **write**, not call site (generalises
     (the toggle and the seven DoH/DoQ settings), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
     (`pfblockerng_sync_sections()`), so neither key can leave the node. New key, no grandfather.
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
-    the invalid marker only after that check. Run a pfBlockerNG apply afterward to regenerate the refusing service script
-    before retrying a start or removal.
+    the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
+    service script. Package removal can instead be retried directly after the repair.
   - **`dns/pfb_dns_doh` / `dns/pfb_dns_doq` → `PfbToggle`** (issue #3513, the pfB-DNS section): default Off, sync
     `local`; serve DoH / DoQ from pfB-DNS through the Go binary, with or without DNSBL. New keys, no grandfather:
     absent reads Off = pre-feature behaviour. They never lived anywhere else in a release: the first version kept them
