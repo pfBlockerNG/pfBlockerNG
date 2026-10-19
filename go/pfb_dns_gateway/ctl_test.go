@@ -10,7 +10,9 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -44,10 +46,14 @@ type ctlRig struct {
 	store *certStore
 	path  string
 	root  *pki
+
+	peer    atomic.Uint32 // the uid the credential of the next peer says; 0 = root
+	peerErr atomic.Bool   // the credential cannot be read
 }
 
-// newCtlRig is a control socket in front of an empty store; its peers are root unless a test says otherwise.
-func newCtlRig(t *testing.T) *ctlRig {
+// newCtlRig is a control socket in front of an empty store; its peers are root unless a test says otherwise. Options
+// set what the server reads while it runs, so they go in before it starts.
+func newCtlRig(t *testing.T, options ...func(*ctlServer)) *ctlRig {
 	t.Helper()
 	r := newRig(t, rigConfig{acl: aclMixed})
 	store := newEmptyCertStore(r.logs.logf)
@@ -56,10 +62,21 @@ func newCtlRig(t *testing.T) *ctlRig {
 	if err != nil {
 		t.Fatalf("bindCtl: %v", err)
 	}
-	c.peerUID = func(*net.UnixConn) (uint32, error) { return 0, nil }
+	k := &ctlRig{r: r, c: c, store: store, path: path, root: newPKI(t, nil, "ctl root", true)}
+	c.peerUID = func(*net.UnixConn) (uint32, error) {
+		if k.peerErr.Load() {
+			return 0, syscall.ENOTSUP
+		}
+		return k.peer.Load(), nil
+	}
+	for _, option := range options {
+		option(c)
+	}
 	c.serve(r.g)
-	return &ctlRig{r: r, c: c, store: store, path: path, root: newPKI(t, nil, "ctl root", true)}
+	return k
 }
+
+func withDeadline(d time.Duration) func(*ctlServer) { return func(c *ctlServer) { c.deadline = d } }
 
 func (k *ctlRig) leaf(t *testing.T) *pki { return newPKI(t, k.root, "localhost", false) }
 
@@ -88,9 +105,7 @@ func ctlReply(t *testing.T, c *net.UnixConn) string {
 func (k *ctlRig) push(t *testing.T, pem []byte) string {
 	t.Helper()
 	c := dialCtl(t, k.path)
-	if _, err := c.Write(ctlFrame(pem)); err != nil {
-		t.Fatalf("writing to the control socket: %v", err)
-	}
+	_, _ = c.Write(ctlFrame(pem)) // a server that refuses the peer has closed already: the reply is what tells
 	return ctlReply(t, c)
 }
 
@@ -146,7 +161,7 @@ func TestAPushedChainIsServedAsSent(t *testing.T) {
 // Anyone but root: not read, not answered, not logged by name; one line per burst of them.
 func TestAPeerThatIsNotRootIsClosedOnUnreadAndLoggedOncePerBurst(t *testing.T) {
 	k := newCtlRig(t)
-	k.c.peerUID = func(*net.UnixConn) (uint32, error) { return 1001, nil }
+	k.peer.Store(1001)
 	leaf := k.leaf(t)
 	for range 3 {
 		if got := k.push(t, chainPEM(t, leaf)); got != "" {
@@ -162,11 +177,11 @@ func TestAPeerThatIsNotRootIsClosedOnUnreadAndLoggedOncePerBurst(t *testing.T) {
 	}
 
 	// A push from root ends the burst: the next refusal is a burst of its own
-	k.c.peerUID = func(*net.UnixConn) (uint32, error) { return 0, nil }
+	k.peer.Store(0)
 	if got := k.push(t, chainPEM(t, leaf)); got != "ok" {
 		t.Fatalf("root's push got %q", got)
 	}
-	k.c.peerUID = func(*net.UnixConn) (uint32, error) { return 1001, nil }
+	k.peer.Store(1001)
 	if got := k.push(t, chainPEM(t, k.leaf(t))); got != "" {
 		t.Fatalf("a peer that is not root got the reply %q, want none", got)
 	}
@@ -179,7 +194,7 @@ func TestAPeerThatIsNotRootIsClosedOnUnreadAndLoggedOncePerBurst(t *testing.T) {
 // A credential that cannot be read is no credential: closed on, like a peer that is not root.
 func TestAPeerWhoseCredentialCannotBeReadIsRefused(t *testing.T) {
 	k := newCtlRig(t)
-	k.c.peerUID = func(*net.UnixConn) (uint32, error) { return 0, syscall.ENOTSUP }
+	k.peerErr.Store(true)
 	if got := k.push(t, chainPEM(t, k.leaf(t))); got != "" {
 		t.Fatalf("got the reply %q, want none", got)
 	}
@@ -230,8 +245,8 @@ func TestAMessageWhoseLengthIsOutOfBoundsIsRefusedBeforeItIsRead(t *testing.T) {
 		if _, err := c.Write(binary.BigEndian.AppendUint32(nil, n)); err != nil {
 			t.Fatal(err)
 		}
-		if reply := ctlReply(t, c); !strings.HasPrefix(reply, "error: ") {
-			t.Fatalf("%s: reply %q, want an error with no body sent", name, reply)
+		if reply := ctlReply(t, c); !strings.HasPrefix(reply, "error: ") || !strings.Contains(reply, "not between 1 and") {
+			t.Fatalf("%s: reply %q, want the error for a length out of bounds, with no body sent", name, reply)
 		}
 	}
 	k.requireEmpty(t, "after the refused lengths")
@@ -266,8 +281,7 @@ func TestOnlyTheFirstMessageOfAConnectionIsRead(t *testing.T) {
 
 // A client that sends part of its message, or nothing, is cut off at the deadline with an error, and the next one is served.
 func TestASlowOrSilentClientIsCutOffAndTheNextOneIsServed(t *testing.T) {
-	k := newCtlRig(t)
-	k.c.deadline = 100 * time.Millisecond
+	k := newCtlRig(t, withDeadline(100*time.Millisecond))
 	leaf := k.leaf(t)
 	pem := chainPEM(t, leaf)
 
@@ -488,4 +502,34 @@ func pushAsUser(sock, pemFile, name string) int {
 		os.Stdout.WriteString("read: " + err.Error() + "\n")
 	}
 	return 0
+}
+
+// A directory that someone else owns is refused, however it is moded: its owner could replace the socket in it. Root only,
+// like every test that needs a second user.
+func TestADirectoryOwnedByAnotherUserIsRefused(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("a second owner: needs root to chown")
+	}
+	nobody, err := user.Lookup("nobody")
+	if err != nil {
+		t.Skip("no user `nobody` to give the directory to")
+	}
+	dir := filepath.Join(shortTempDir(t), "theirs")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := strconv.Atoi(nobody.Uid)
+	gid, _ := strconv.Atoi(nobody.Gid)
+	if err := os.Chown(dir, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	logf := func(string, ...any) {}
+	c, err := bindCtl(filepath.Join(dir, "ctl.sock"), newEmptyCertStore(logf), logf)
+	if err == nil {
+		_ = c.ln.Close()
+		t.Fatal("a directory owned by another user was accepted")
+	}
+	if !strings.Contains(err.Error(), "not owned by") {
+		t.Fatalf("the refusal must say why: %v", err)
+	}
 }
