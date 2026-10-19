@@ -5011,7 +5011,7 @@ function pfb_package_removal_recover(): array {
 		}
 
 		if ($why === NULL) {
-			// Our block with no snapshot: the proxy cannot start (its rc script refuses), so it is not tried
+			// No valid snapshot: a block or corrupt stored marker makes the rc script refuse, so no proxy start is tried
 			if (!pfb_dns_proxy_recovery_required()) {
 				start_service('pfb_dns_proxy');
 				if (!pfb_dns_proxy_await_ready()) {
@@ -5049,7 +5049,7 @@ function pfb_package_removal_stopped(): bool {
 		      'so what the Resolver was before cannot be confirmed and nothing was put back: manual repair required. pfBlockerNG\'s files and ' .
 		      "settings, that value included, were left in place{$tail}. Check the Resolver in Services > DNS Resolver (restore a known-good " .
 		      'configuration backup if needed), empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then ' .
-		      'remove the package again.';
+		      'run a pfBlockerNG apply to regenerate its service script before removing the package again.';
 	} else {
 		$text = 'pfBlockerNG removal was stopped: the DNS Resolver could not be put back (see the DNS proxy notice above), so it still ' .
 		    'depends on the DNS proxy. pfBlockerNG\'s files and settings were left in place';
@@ -13849,7 +13849,7 @@ function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 		    ? 'pfB-DNS is not active, and recovery is required: the DNS Resolver still carries the DNS proxy settings and they cannot be put back automatically.'
 		    : 'pfB-DNS is not active, and recovery is required: the saved copy of the DNS Resolver\'s previous settings is invalid, so what they were cannot be confirmed. ' .
 		      'The Resolver and the saved value were left as they are and nothing was put back; manual repair is required: check the Resolver in Services > DNS Resolver ' .
-		      '(restore a known-good configuration backup if needed), and empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check.' .
+		      '(restore a known-good configuration backup if needed), and empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then run a pfBlockerNG apply to regenerate its service script.' .
 		      (pfb_dnsbl_active() ? ' DNSBL keeps running in the DNS Resolver as before.' : '');
 	}
 	return 'pfB-DNS is not active and the DNS Resolver is unchanged' .
