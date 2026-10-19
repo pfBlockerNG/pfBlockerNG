@@ -4065,7 +4065,7 @@ function pfb_dns_proxy_tokens(string $list): array {
 	return array_values(array_unique(preg_split('/[\s,]+/', $list, -1, PREG_SPLIT_NO_EMPTY) ?: []));
 }
 
-/** The port as the gateway parses it (a whole number 1-65535, no leading zeros, no sign or padding), else NULL. */
+/** The port as the gateway is given it: 1-65535 in at most 5 decimal digits, leading zeros canonicalized away ("00443" gives "443"), no sign or whitespace; else NULL. */
 function pfb_dns_proxy_listener_port(mixed $port): ?string {
 	return (is_string($port) && ctype_digit($port) && strlen($port) <= 5 && (int) $port >= 1 && (int) $port <= 65535) ? (string) (int) $port : NULL;
 }
@@ -4716,9 +4716,9 @@ function pfb_dns_proxy_confirm_ready(): bool {
 }
 
 /**
- * A DNS proxy condition: logged, and raised as a notice unless the newest notice with this id already says the same. A
- * standing condition is not filed again by the next apply or cron tick; a change of condition is, and so is a condition that
- * returns. pfSense stores the id and text htmlentities()-encoded, so both are compared in that form.
+ * A DNS proxy condition: logged, and filed as a notice unless the newest notice with this id already says the same: an unchanged
+ * row stands until it is dismissed or another text follows it, so a returning condition is filed again only then (a success clears
+ * nothing). pfSense stores the id and text htmlentities()-encoded, so both are compared in that form.
  */
 function pfb_dns_proxy_notify(string $id, string $text, string $url): void {
 	pfb_logger("\n{$text}", 2);
