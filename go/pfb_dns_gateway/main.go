@@ -37,10 +37,10 @@ import (
 )
 
 const (
-	defaultReadyTimeout   = 300 * time.Second               // the decider boots the whole DNSBL database before it says READY
-	defaultKillAfter      = 3 * time.Second                 // how long the decider gets to leave on EOF
-	defaultShutdownBudget = 4 * time.Second                 // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
-	defaultTLSPEM         = "/var/unbound/pfb_dns_cert.pem" // pfBlockerNG's export of the Resolver's certificate, in the Unbound chroot
+	defaultReadyTimeout   = 300 * time.Second          // the decider boots the whole DNSBL database before it says READY
+	defaultKillAfter      = 3 * time.Second            // how long the decider gets to leave on EOF
+	defaultShutdownBudget = 4 * time.Second            // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
+	defaultTLSPEM         = "/var/etc/pfb_dns/tls.pem" // the Resolver's certificate and key as pfBlockerNG writes them: root only
 )
 
 type config struct {
@@ -84,7 +84,7 @@ func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 func parseConfig(args []string, usage io.Writer) (config, error) {
 	cfg := config{
 		port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second, unboundConf: "/var/unbound/unbound.conf",
-		tlsPEM: defaultTLSPEM, dotPort: defaultDoTPort, dohPort: 4443, doqPort: 853,
+		tlsPEM: defaultTLSPEM, ctlSocket: defaultCtlSocket, dotPort: defaultDoTPort, dohPort: 4443, doqPort: 853,
 	}
 	split := slices.Index(args, "--")
 	if split < 0 {
@@ -104,7 +104,8 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.StringVar(&cfg.user, "user", "", "give up root for this user once the sockets are bound and the decider runs")
 	fs.BoolVar(&cfg.dot, "dot", false, "serve DoT on every --listen address at --dot-port")
 	fs.IntVar(&cfg.dotPort, "dot-port", cfg.dotPort, "DoT port; 0 picks one per address")
-	fs.StringVar(&cfg.tlsPEM, "tls-pem", cfg.tlsPEM, "certificate chain and private key of DoT, DoH and DoQ, one PEM file; read again when it changes")
+	fs.StringVar(&cfg.tlsPEM, "tls-pem", cfg.tlsPEM, "certificate chain and private key of DoT, DoH and DoQ, one PEM file, read once at start while still root")
+	fs.StringVar(&cfg.ctlSocket, "ctl-socket", cfg.ctlSocket, "Unix socket on which root pushes a renewed certificate; made in a root-only directory before the privilege drop")
 	var dohListen, dohTrusted, doqListen listFlag
 	fs.Var(&dohListen, "doh-listen", "DoH address (HTTPS GET and POST on /dns-query), repeatable; none = DoH off")
 	fs.IntVar(&cfg.dohPort, "doh-port", cfg.dohPort, "DoH port; 0 picks one per address")
@@ -176,6 +177,9 @@ func (c config) validate() error {
 	}
 	if c.tlsPEM == "" {
 		return errors.New("--tls-pem must not be empty")
+	}
+	if c.ctlSocket == "" {
+		return errors.New("--ctl-socket must not be empty")
 	}
 	if c.dotPort < 0 || c.dotPort > 65535 {
 		return fmt.Errorf("--dot-port %d is outside 0..65535", c.dotPort)
