@@ -8,6 +8,7 @@ the decider hosts the module and hears Unbound's observer, so an upstream block 
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import re
@@ -20,8 +21,9 @@ from pathlib import Path
 
 import dnswire
 import pytest
+from dot_helpers import REFID, b64, cert_element, config_xml, dot_exchange, free_port, make_certificate
 from frontend_constants import BLOCKED, REPO_ROOT
-from frontend_helpers import UpstreamVerdict
+from frontend_helpers import UpstreamVerdict, build_query
 from test_gateway_e2e import ACL_FILE, Running, _answers, _gateway_process, _tcp, _udp, gateway_binary  # noqa: F401
 from test_integration_unbound import (  # noqa: F401  (fixtures: the Docker Unbound, with and without the observer)
     ALLOWED_CLIENT,
@@ -106,6 +108,27 @@ def test_with_dnsbl_off_the_resolver_acl_still_refuses_before_anything_is_forwar
     assert _answers(_udp(pfb_dns.server, BLOCKED, ALLOWED_CLIENT)) == [UNBOUNDS_ANSWER_FOR_BLOCKED]  # the barrier
     logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT} {BLOCKED} A IN", since=mark)
     assert not any(REFUSED_CLIENT in line for line in logged), "the refused client never reached Unbound"
+
+
+def test_with_dnsbl_off_dot_forwards_a_listed_name_and_unbound_logs_the_tls_client(
+    start_gateway: StartGateway, no_module_dir: Path, unbound: RunningUnbound, tmp_path: Path
+) -> None:
+    crt, key = make_certificate(tmp_path)
+    config = tmp_path / "config.xml"
+    config.write_text(config_xml(tlsport=free_port(), entries=cert_element(REFID, b64(crt), b64(key))), "utf-8")
+    mark = unbound.tail.mark()
+    pfb_dns = start_gateway(no_module_dir, "--no-module", "--dot", "--pfsense-config", str(config))
+
+    reply = asyncio.run(
+        dot_exchange(
+            pfb_dns.process.listening("dot"), build_query(BLOCKED), tmp_path / "server.crt", source=ALLOWED_CLIENT_TCP
+        )
+    )[0]
+
+    assert _answers(reply) == [UNBOUNDS_ANSWER_FOR_BLOCKED], "Unbound's answer, not the DNSBL VIP"
+    logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {BLOCKED} A IN", since=mark)
+    assert not any(f"127.0.0.1 {BLOCKED}" in line for line in logged), "the TLS client, not the gateway"
+    assert not no_module_dir.exists(), "the decider needed no module directory at all"
 
 
 def _reply_rows(running: Running) -> list[str]:

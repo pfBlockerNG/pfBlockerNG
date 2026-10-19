@@ -456,33 +456,53 @@ def test_safesearch_name_gets_the_planted_cname_and_the_chased_address(
     assert any(f"{ALLOWED_CLIENT} duck.example. A IN" in line for line in logged)
 
 
-# E7: issue #3508 through the gateway
+# E7: issue #3508 through the gateway. A Group Policy bypassed client and a filtered client query the same
+# CNAME-to-a-listed-name at the same moment, Unbound resolves it (once or twice: merging is not asserted), and each
+# client is answered from its own verdict: the filtered one the block, the bypassed one Unbound's real reply. One round
+# catches a verdict handed from one asker to the other only about half the time (TCP's two connections are accepted one
+# after the other, so even less), so each transport runs 20 rounds on fresh names, in both orders.
+ROUNDS = {"udp": 20, "tcp": 20}
+
+
+@pytest.mark.parametrize("filtered_first", [False, True], ids=["bypassed-first", "filtered-first"])
 @pytest.mark.parametrize("transport", ["udp", "tcp"])
 def test_bypassed_and_filtered_clients_asking_at_once_each_get_their_own_answer(
-    bypass_list: None, gateway: Running, unbound: RunningUnbound, gated_authoritative: None, transport: str
+    bypass_list: None,
+    gateway: Running,
+    unbound: RunningUnbound,
+    gated_authoritative: None,
+    transport: str,
+    filtered_first: bool,
 ) -> None:
     exchange = udp_concurrent if transport == "udp" else tcp_concurrent
-    name = f"shared-{uuid.uuid4().hex[:12]}.example."  # fresh: nothing cached
-    unbound.zone[(name, dnswire.TYPE_A)] = [f"{name} 300 IN CNAME {BLOCKED}", f"{BLOCKED} 300 IN A 192.0.2.99"]
-    clients = [BYPASSED_CLIENT, FILTERED_CLIENT]
+    clients = [FILTERED_CLIENT, BYPASSED_CLIENT] if filtered_first else [BYPASSED_CLIENT, FILTERED_CLIENT]
+    names = [f"shared-{uuid.uuid4().hex[:12]}.example." for _ in range(ROUNDS[transport])]  # fresh: nothing cached
+    for name in names:
+        unbound.zone[(name, dnswire.TYPE_A)] = [f"{name} 300 IN CNAME {BLOCKED}", f"{BLOCKED} 300 IN A 192.0.2.99"]
     mark = unbound.tail.mark()
-    gate = unbound.authoritative.gate = threading.Event()  # the reply waits for it: both queries are in flight together
 
-    async def scenario() -> list[bytes]:
-        opened = asyncio.create_task(asyncio.to_thread(_open_gate_once_logged, unbound, gate, clients, name, mark))
-        replies = await exchange(gateway.server, [(client, build_query(name)) for client in clients])
-        await opened
-        return replies
+    async def scenario() -> list[list[bytes]]:
+        rounds = []
+        for name in names:
+            # the reply waits for the gate: both queries are in flight together, however fast Unbound is
+            gate = unbound.authoritative.gate = threading.Event()
+            opened = asyncio.create_task(asyncio.to_thread(_open_gate_once_logged, unbound, gate, clients, name, mark))
+            rounds.append(await exchange(gateway.server, [(client, build_query(name)) for client in clients]))
+            await opened
+        return rounds
 
-    replies = asyncio.run(scenario())
-    by_client = dict(zip(clients, replies, strict=True))
-    assert _answers(by_client[FILTERED_CLIENT]) == [(name, dnswire.TYPE_A, VIP4)]
-    assert _answers(by_client[BYPASSED_CLIENT]) == [
-        (name, dnswire.TYPE_CNAME, dnswire.encode_name(BLOCKED)),
-        (BLOCKED, dnswire.TYPE_A, bytes([192, 0, 2, 99])),
-    ]
-    [row] = gateway.dnsbl_rows(1)  # the block was decided for the filtered client alone
-    assert (row[2], row[3]) == (name.rstrip("."), FILTERED_CLIENT)
+    rounds = asyncio.run(scenario())
+
+    for name, replies in zip(names, rounds, strict=True):
+        by_client = dict(zip(clients, replies, strict=True))
+        assert _answers(by_client[FILTERED_CLIENT]) == [(name, dnswire.TYPE_A, VIP4)], name
+        assert _answers(by_client[BYPASSED_CLIENT]) == [
+            (name, dnswire.TYPE_CNAME, dnswire.encode_name(BLOCKED)),
+            (BLOCKED, dnswire.TYPE_A, bytes([192, 0, 2, 99])),
+        ], name
+    # the block was decided for the filtered client alone, once per name: the bypassed client was never blocked
+    rows = gateway.dnsbl_rows(len(names))
+    assert [(row[2], row[3]) for row in rows] == [(n.rstrip("."), FILTERED_CLIENT) for n in names]
 
 
 # hostile input: a header with no question is the decider's to judge

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -116,5 +117,48 @@ func TestUDPQueriesOverTheInflightCapAreDropped(t *testing.T) {
 	eventually(t, "every query to finish", func() bool { return r.g.udpInflight.Load() == 0 })
 	if r.g.udpOverload.Load() {
 		t.Fatal("the over-limit log latch must reset once the queries have drained")
+	}
+}
+
+// G17: the over-limit line is one per flood, not one per run: once the queries have drained, the next flood logs again.
+func TestUDPOverloadIsLoggedAgainForTheNextFlood(t *testing.T) {
+	r := newRig(t, rigConfig{acl: aclMixed})
+	var gate atomic.Pointer[chan struct{}] // what the decider's queries wait for: one channel per flood
+	r.autoAnswer(func(q decidedQuery) []byte {
+		<-*gate.Load()
+		return echoAnswer(q)
+	})
+	c := r.udpClient("")
+	send := func(id int) {
+		if _, err := c.Write(buildQuery(t, uint16(id), "example.", true)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := r.udpClient(clientRefused)
+	for flood := 1; flood <= 2; flood++ {
+		hold := make(chan struct{})
+		gate.Store(&hold)
+		for batch := 0; batch < maxUDPInflight; batch += 8 { // paced, so the kernel's socket buffer never drops one
+			for i := 1; i <= 8; i++ {
+				send(batch + i)
+			}
+			for range 8 {
+				r.nextQuery()
+			}
+		}
+		send(maxUDPInflight + 1) // over the cap: dropped
+		// A refused client is answered by the read loop itself: once its REFUSED arrives, the datagram above (read
+		// earlier, in order) has been judged.
+		if _, err := refused.Write(buildQuery(t, 1, "example.", true)); err != nil {
+			t.Fatal(err)
+		}
+		udpReply(t, refused)
+		if n := strings.Count(r.logs.joined(), "UDP queries in flight"); n != flood {
+			t.Fatalf("flood %d: %d over-limit lines so far, want %d (one per flood): %s", flood, n, flood, r.logs.joined())
+		}
+		r.requireNoOtherQuery()
+
+		close(hold)
+		eventually(t, "the flood to drain", func() bool { return r.g.udpInflight.Load() == 0 && !r.g.udpOverload.Load() })
 	}
 }

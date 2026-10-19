@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"testing"
+	"time"
 )
 
 // issue #3517: the decider learns which kind of client asked (a datagram client has a UDP size limit, a stream
@@ -45,7 +48,30 @@ func (r *rig) requireNoUpstreamQuery(what string) {
 	}
 }
 
-// T1: every transport says what it is, and DoH and DoQ, which carry no UDP limit, are streams.
+// clientResult is what a client goroutine reports: the reply bytes, or why it got none. A goroutine never calls
+// t.Fatal (that is for the test's own goroutine only), it sends here and the test reads it.
+type clientResult struct {
+	body []byte
+	err  error
+}
+
+func awaitClient(t *testing.T, ch <-chan clientResult) []byte {
+	t.Helper()
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			t.Fatalf("the client got no reply: %v", res.err)
+		}
+		return res.body
+	case <-time.After(watchdog):
+		t.Fatal("STUCK: the client never got its reply")
+		return nil
+	}
+}
+
+// T1: every transport says what it is, and DoH and DoQ, which carry no UDP limit, are streams. Each case sends its
+// query from the test's goroutine where the transport lets it (a write does not wait for the reply) and from one
+// that only reports through a channel where it does not (DoH, DoQ).
 func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 	query := buildQuery(t, 0x0000, "allowed.example.", true)
 	cases := []struct {
@@ -55,38 +81,68 @@ func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 	}{
 		{"udp", transportDatagram, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
-			done := make(chan []byte, 1)
-			go func() { done <- r.roundTrip(transport{"udp", false}, clientAllowed, query) }()
-			return r, func() []byte { return awaitBytes(t, done) }
+			c := r.udpClient(clientAllowed)
+			if _, err := c.Write(query); err != nil {
+				t.Fatal(err)
+			}
+			return r, func() []byte { return udpReply(t, c) }
 		}},
 		{"tcp", transportStream, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
-			done := make(chan []byte, 1)
-			go func() { done <- r.roundTrip(transport{"tcp", true}, clientAllowed, query) }()
-			return r, func() []byte { return awaitBytes(t, done) }
+			c := r.tcpClient(clientAllowed)
+			tcpSend(t, c, query)
+			return r, func() []byte { return tcpReply(t, c) }
 		}},
 		{"dot", transportStream, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
 			m := newTLSMaterial(t)
 			c := dialDoT(t, r.serveDoT(m), m, clientAllowed)
-			done := make(chan []byte, 1)
-			go func() { tcpSend(t, c, query); done <- tcpReply(t, c) }()
-			return r, func() []byte { return awaitBytes(t, done) }
+			tcpSend(t, c, query)
+			return r, func() []byte { return tcpReply(t, c) }
 		}},
 		{"doh", transportStream, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
 			m := newTLSMaterial(t)
 			c := newDoHClient(t, r.serveDoH(m), m, dohOptions{source: clientAllowed})
-			done := make(chan []byte, 1)
-			go func() { _, body := c.do(c.get(dnsParam(query))); done <- body }()
-			return r, func() []byte { return awaitBytes(t, done) }
+			req := c.get(dnsParam(query))
+			done := make(chan clientResult, 1)
+			go func() {
+				resp, err := c.http.Do(req)
+				if err != nil {
+					done <- clientResult{err: err}
+					return
+				}
+				defer resp.Body.Close()
+				body, err := io.ReadAll(resp.Body)
+				done <- clientResult{body: body, err: err}
+			}()
+			return r, func() []byte { return awaitClient(t, done) }
 		}},
 		{"doq", transportStream, func(t *testing.T) (*rig, func() []byte) {
 			r, m, addr := newDoQRig(t, rigConfig{})
 			c := dialDoQ(t, addr, m, clientAllowed)
-			done := make(chan []byte, 1)
-			go func() { done <- c.query(doqQuery(t, "allowed.example.")) }()
-			return r, func() []byte { return awaitBytes(t, done) }
+			wire := doqQuery(t, "allowed.example.")
+			done := make(chan clientResult, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), watchdog)
+				defer cancel()
+				s, err := c.conn.OpenStreamSync(ctx)
+				if err != nil {
+					done <- clientResult{err: err}
+					return
+				}
+				if _, err := s.Write(framed(wire)); err == nil {
+					err = s.Close()
+				}
+				if err != nil {
+					done <- clientResult{err: err}
+					return
+				}
+				_ = s.SetReadDeadline(time.Now().Add(watchdog))
+				data, err := io.ReadAll(s)
+				done <- clientResult{body: data, err: err}
+			}()
+			return r, func() []byte { return unframe(t, awaitClient(t, done)) }
 		}},
 	}
 	for _, c := range cases {
