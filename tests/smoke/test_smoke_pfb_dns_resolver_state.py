@@ -33,7 +33,9 @@ import contextlib
 import json
 import os
 import re
+import shlex
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Self
 
 import dns.message
@@ -83,17 +85,22 @@ class _UpstreamEdns:
     def __init__(self, stub: _StubDnsServer) -> None:
         self.stub = stub
         self.sizes: dict[str, int | None] = {}
+        self.errors: list[str] = []
 
     def __enter__(self) -> Self:
         original = self.stub._build_response
         sizes = self.sizes
+        errors = self.errors
 
         def record(data: bytes, client: str = "") -> bytes | None:
-            with contextlib.suppress(Exception):  # the recorder must never break the stub's thread
+            try:
                 request = dns.message.from_wire(data)
                 if request.question:
                     opt = [rr for rr in request.additional if rr.rdtype == dns.rdatatype.OPT]
-                    sizes[request.question[0].name.to_text().lower().rstrip(".")] = int(opt[0].rdclass) if opt else None
+                    key = request.question[0].name.to_text().lower().rstrip(".")
+                    sizes[key] = int(opt[0].rdclass) if opt else None
+            except Exception as exc:  # noqa: BLE001 -- the recorder keeps the failure for the test, never breaks the stub's thread
+                errors.append(repr(exc))
             return original(data, client)
 
         self.stub._build_response = record  # type: ignore[method-assign]  # shadows the bound method on the instance
@@ -109,7 +116,9 @@ def _advertised_size(rig: Rig, stub: _StubDnsServer) -> int | None:
     with _UpstreamEdns(stub) as seen:
         answer, raw = _query(rig.client, name)
     assert h.resolves_to(answer, STUB_DNS_A), f"the stub's answer did not come back through the Resolver: {raw}"
-    return seen.sizes.get(name)
+    sizes = seen.sizes.get(name)
+    print(f"[3515] upstream saw {seen.sizes} errors={seen.errors} stub log tail={stub.queries()[-4:]}", flush=True)
+    return sizes
 
 
 def _custom_options(vm: SmokeVM) -> str:
@@ -340,7 +349,31 @@ def _disable_resolver_like_the_page(vm: SmokeVM) -> None:
     )
 
 
-def _assert_stood_down(rig: Rig, prior_notices: int, how: str) -> None:
+@dataclass(frozen=True)
+class _UnboundState:
+    """Unbound as the box shows it at one moment, with how often pfBlockerNG's log says it started Unbound."""
+
+    running: bool
+    pids: str
+    pidfile: str
+    starts_logged: int
+
+
+def _unbound_state(vm: SmokeVM, label: str) -> _UnboundState:
+    pgrep = vm.ssh("pgrep -x unbound")
+    pidfile = vm.ssh("cat", h.UNBOUND_PID_FILE)
+    starts = vm.ssh(f"grep -c 'Starting Unbound Resolver' {h.PFB_LOG} 2>/dev/null; true").stdout.strip()
+    state = _UnboundState(
+        running=pgrep.returncode == 0,
+        pids=pgrep.stdout.split()[0] if pgrep.returncode == 0 and pgrep.stdout.split() else "",
+        pidfile=pidfile.stdout.strip() if pidfile.returncode == 0 else "",
+        starts_logged=int(starts) if starts.isdigit() else -1,
+    )
+    print(f"[3515] unbound {label}: {state}", flush=True)
+    return state
+
+
+def _assert_stood_down(rig: Rig, prior_notices: int, how: str, unbound: _UnboundState) -> None:
     vm = rig.vm
     assert not _toggle_on_in_config(vm), f"{how}: pfB-DNS is turned off"
     assert _service_status(vm) == "stopped", f"{how}: the proxy is stopped"
@@ -348,21 +381,39 @@ def _assert_stood_down(rig: Rig, prior_notices: int, how: str) -> None:
     for key in RESTORED_KEYS:
         assert _config_text(vm, f"unbound/{key}") == rig.before.resolver[key], f"{how}: {key} is not as saved"
     assert not _resolver_enabled(vm), f"{how}: the Resolver stays disabled"
-    assert vm.ssh("pgrep -x unbound").returncode != 0, f"{how}: nothing started the Resolver the admin disabled"
+    assert not unbound.running, f"{how}: something started the Resolver the admin disabled: {unbound}"
     new = _notices(vm)[prior_notices:]
     assert len(new) == 1 and "disabled" in new[0], f"{how}: exactly one notice says so: {new}"
 
 
-@pytest.mark.parametrize("how", ["apply", "tick"])
+def _stand_down_on_its_own(vm: SmokeVM) -> None:
+    """pfb_dns_proxy_stand_down() alone, in a plain CLI php process as the package's own scripts load it."""
+    code = (
+        "require_once('config.inc'); require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
+        "pfb_dns_proxy_stand_down();"
+    )
+    result = vm.ssh(f"{h.PHP_BIN} -r {shlex.quote(code)} 2>&1", timeout=300.0)
+    assert result.returncode == 0, f"pfb_dns_proxy_stand_down() failed: rc={result.returncode} {result.stdout[-1500:]}"
+
+
+_STAND_DOWN_TRIGGERS = {
+    "apply": lambda vm: h.reload(vm, "updatednsbl", wait_unbound=False),
+    "tick": lambda vm: h.reload(vm, "tick", wait_unbound=False),
+    "direct": _stand_down_on_its_own,
+}
+
+
+@pytest.mark.parametrize("how", list(_STAND_DOWN_TRIGGERS))
 def test_a_resolver_disabled_under_pfb_dns_is_stood_down_by_the_next_apply_or_tick(
     rig: Rig, proxy_on: State, how: str
 ) -> None:
     """Given pfB-DNS serving and the Resolver then disabled (the proxy keeps LAN:53 and cannot answer an allowed name),
-    When the next apply or tick runs, Then pfB-DNS is stopped and off, the Resolver has its saved settings and stays
-    disabled, one notice says why, and a second run raises no second notice.
+    When the next apply or tick runs (or the stand-down is called on its own), Then pfB-DNS is stopped and off, the
+    Resolver has its saved settings and stays disabled with nothing started, one notice says why, and a second run
+    raises no second notice.
     """
     vm = rig.vm
-    scope = "updatednsbl" if how == "apply" else "tick"
+    trigger = _STAND_DOWN_TRIGGERS[how]
     prior_notices = len(_notices(vm))
     with _unmoved_afterwards(rig):
         _moved(rig)
@@ -374,11 +425,14 @@ def test_a_resolver_disabled_under_pfb_dns_is_stood_down_by_the_next_apply_or_ti
         assert _toggle_on_in_config(vm) and _snapshot_present(vm), (
             "before: pfB-DNS is on and still holds the moved Resolver"
         )
+        before = _unbound_state(vm, f"{how}: before the trigger")
+        assert not before.running, f"before: the disable step left Unbound running: {before}"
 
-        h.reload(vm, scope, wait_unbound=False)
-        _assert_stood_down(rig, prior_notices, how)
+        trigger(vm)
+        after = _unbound_state(vm, f"{how}: after the trigger")
+        _assert_stood_down(rig, prior_notices, how, after)
 
-        h.reload(vm, scope, wait_unbound=False)
+        trigger(vm)
         assert len(_notices(vm)) == prior_notices + 1, f"{how}: a second run raised another notice"
 
 
