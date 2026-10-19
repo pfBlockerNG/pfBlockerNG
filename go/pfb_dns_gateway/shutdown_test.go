@@ -94,7 +94,7 @@ func TestStopWaitsForADoHHandlerThatIsStillRunning(t *testing.T) {
 	select {
 	case <-gone: // stop() closed the connection, so it is past its listeners and is waiting for what still runs
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: stop() never closed the DoH connection")
+		t.Fatal("STUCK/ENVIRONMENT: stop() never closed the DoH connection")
 	}
 	select {
 	case <-stopped:

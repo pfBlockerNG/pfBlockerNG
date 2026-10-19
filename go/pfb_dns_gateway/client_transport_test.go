@@ -64,7 +64,7 @@ func awaitClient(t *testing.T, ch <-chan clientResult) []byte {
 		}
 		return res.body
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the client never got its reply")
+		t.Fatal("STUCK/ENVIRONMENT: the client never got its reply")
 		return nil
 	}
 }

@@ -87,7 +87,7 @@ func TestAConnectionHasAtMostFourQueriesInFlightAndReadsOnWhenOneFinishes(t *tes
 				case id := <-entered:
 					return id
 				case <-time.After(watchdog):
-					t.Fatal("STUCK: the decider never got another query")
+					t.Fatal("STUCK/ENVIRONMENT: the decider never got another query")
 					return 0
 				}
 			}

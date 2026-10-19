@@ -144,7 +144,7 @@ func (r *rig) nextQuery() decidedQuery {
 	case q := <-r.queries:
 		return q
 	case <-time.After(watchdog):
-		r.t.Fatal("STUCK: the decider never saw a query")
+		r.t.Fatal("STUCK/ENVIRONMENT: the decider never saw a query")
 		return decidedQuery{}
 	}
 }
@@ -228,7 +228,7 @@ func udpJudgedOn(t *testing.T, probe *net.UDPConn, retry <-chan time.Time) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("STUCK: the gateway never answered the probe that says its earlier datagrams were judged")
+			t.Fatal("STUCK/ENVIRONMENT: the gateway never answered the probe that says its earlier datagrams were judged")
 		}
 	}
 }
@@ -320,7 +320,7 @@ func awaitBytes(t *testing.T, ch <-chan []byte) []byte {
 	case b := <-ch:
 		return b
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the client never got its reply")
+		t.Fatal("STUCK/ENVIRONMENT: the client never got its reply")
 		return nil
 	}
 }

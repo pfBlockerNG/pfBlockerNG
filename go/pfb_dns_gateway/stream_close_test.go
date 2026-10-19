@@ -112,7 +112,7 @@ func TestAClientThatKeepsSendingButNeverReadsIsClosedWhenAReplyCannotBeWritten(t
 			for {
 				_, err := c.Write(query)
 				if errors.Is(err, os.ErrDeadlineExceeded) {
-					t.Fatal("STUCK: the client kept sending and the gateway never closed the connection of a client it cannot write to")
+					t.Fatal("STUCK/ENVIRONMENT: the client kept sending and the gateway never closed the connection of a client it cannot write to")
 				}
 				if err != nil {
 					break // closed by the gateway, while the client was still sending

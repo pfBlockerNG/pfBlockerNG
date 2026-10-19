@@ -175,7 +175,7 @@ func (f *fakeUpstream) next() seenQuery {
 	case q := <-f.queries:
 		return q
 	case <-time.After(watchdog):
-		f.t.Fatal("STUCK: the fake Unbound never saw a query")
+		f.t.Fatal("STUCK/ENVIRONMENT: the fake Unbound never saw a query")
 		return seenQuery{}
 	}
 }
@@ -284,7 +284,7 @@ func exchange(t *testing.T, ch <-chan []byte) []byte {
 	case r := <-ch:
 		return r
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the exchange never returned")
+		t.Fatal("STUCK/ENVIRONMENT: the exchange never returned")
 		return nil
 	}
 }

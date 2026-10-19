@@ -142,7 +142,7 @@ func runProbe(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	select {
 	case code = <-done:
 	case <-time.After(30 * time.Second):
-		t.Fatal("STUCK: the probe did not return")
+		t.Fatal("STUCK/ENVIRONMENT: the probe did not return")
 	}
 	return code, out.String(), errOut.String()
 }
@@ -153,7 +153,7 @@ func nextQuery(t *testing.T, f *fakeDoQ) dnsmessage.Message {
 	case q := <-f.queries:
 		return q
 	case <-time.After(10 * time.Second):
-		t.Fatal("STUCK: the server never saw a query")
+		t.Fatal("STUCK/ENVIRONMENT: the server never saw a query")
 		return dnsmessage.Message{}
 	}
 }

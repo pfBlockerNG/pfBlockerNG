@@ -244,7 +244,7 @@ func (p *gatewayProcess) waitLine(prefix string) string {
 			}
 			p.t.Fatalf("the gateway exited (code %d) before logging %q; log:\n%s", p.code, prefix, p.logText())
 		case <-time.After(watchdog):
-			p.t.Fatalf("STUCK: no %q line within the watchdog; log:\n%s", prefix, p.logText())
+			p.t.Fatalf("STUCK/ENVIRONMENT: no %q line within the watchdog; log:\n%s", prefix, p.logText())
 		}
 	}
 }
@@ -262,7 +262,7 @@ func (p *gatewayProcess) exit() int {
 	case <-p.exited:
 		return p.code
 	case <-time.After(watchdog):
-		p.t.Fatalf("STUCK: the gateway is still running; log:\n%s", p.logText())
+		p.t.Fatalf("STUCK/ENVIRONMENT: the gateway is still running; log:\n%s", p.logText())
 		return -1
 	}
 }
@@ -620,7 +620,7 @@ func TestDeciderKilledWhileServingIsFatal(t *testing.T) {
 			t.Fatalf("fatal error: got %v, want one naming the decider", err)
 		}
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: no fatal error after the decider was killed")
+		t.Fatal("STUCK/ENVIRONMENT: no fatal error after the decider was killed")
 	}
 }
 

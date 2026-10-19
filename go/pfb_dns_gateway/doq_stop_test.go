@@ -69,7 +69,7 @@ func requireEndedByTheServer(t *testing.T, conn *quic.Conn) {
 	select {
 	case <-conn.Context().Done():
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the server never ended the connection")
+		t.Fatal("STUCK/ENVIRONMENT: the server never ended the connection")
 	}
 	var app *quic.ApplicationError
 	var transport *quic.TransportError

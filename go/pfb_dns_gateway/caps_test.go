@@ -15,7 +15,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	deadline := time.Now().Add(watchdog)
 	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatalf("STUCK: %s never became true", what)
+			t.Fatalf("STUCK/ENVIRONMENT: %s never became true", what)
 		}
 		time.Sleep(time.Millisecond)
 	}

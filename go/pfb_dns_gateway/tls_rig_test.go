@@ -367,7 +367,7 @@ func requireConnClosed(t *testing.T, conn *quic.Conn, code quic.ApplicationError
 	select {
 	case <-conn.Context().Done():
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the server did not close the connection")
+		t.Fatal("STUCK/ENVIRONMENT: the server did not close the connection")
 	}
 	var ae *quic.ApplicationError
 	if err := context.Cause(conn.Context()); !errors.As(err, &ae) || !ae.Remote || ae.ErrorCode != code {

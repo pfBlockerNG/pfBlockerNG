@@ -198,7 +198,7 @@ func TestOneAddressCannotHoldMoreThanItsShareOfTheDoHAndDoQBudget(t *testing.T) 
 			select {
 			case <-held:
 			case <-time.After(watchdog):
-				t.Fatalf("STUCK: the decider never saw the %s queries: they were refused or are still waiting", client)
+				t.Fatalf("STUCK/ENVIRONMENT: the decider never saw the %s queries: they were refused or are still waiting", client)
 			}
 		}
 	}

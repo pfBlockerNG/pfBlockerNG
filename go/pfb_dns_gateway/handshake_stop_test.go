@@ -85,7 +85,7 @@ func TestAStopThatLandsAsTheHandshakeCompletesStillEndsTheConnectionWithCloseNot
 			t.Fatal("the gateway reported a failed handshake for a client that completed it: the stop closed the connection under the TLS session")
 		}
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the server's handshake never returned")
+		t.Fatal("STUCK/ENVIRONMENT: the server's handshake never returned")
 	}
 	_ = c.SetReadDeadline(time.Now().Add(watchdog))
 	if _, err := io.Copy(io.Discard, c); err != nil {

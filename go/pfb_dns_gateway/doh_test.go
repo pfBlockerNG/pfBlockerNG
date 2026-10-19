@@ -505,7 +505,7 @@ func TestDoHPostWithAShortBodyEndsAtTheReadTimeout(t *testing.T) {
 	resp, _, err := readHTTPResponse(t, c)
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		t.Fatal("STUCK: the server never ended the request whose body stops short of its Content-Length")
+		t.Fatal("STUCK/ENVIRONMENT: the server never ended the request whose body stops short of its Content-Length")
 	}
 	if err == nil && resp.StatusCode == 200 {
 		t.Fatal("a body shorter than its Content-Length was answered")

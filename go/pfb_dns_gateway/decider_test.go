@@ -109,7 +109,7 @@ func waitClosed(t *testing.T, ch <-chan struct{}, what string) {
 	select {
 	case <-ch:
 	case <-time.After(watchdog):
-		t.Fatalf("STUCK: %s never happened", what)
+		t.Fatalf("STUCK/ENVIRONMENT: %s never happened", what)
 	}
 }
 
@@ -134,7 +134,7 @@ func result(t *testing.T, ch <-chan decided) decided {
 	case r := <-ch:
 		return r
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: Decide never returned")
+		t.Fatal("STUCK/ENVIRONMENT: Decide never returned")
 		return decided{}
 	}
 }

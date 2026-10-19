@@ -312,6 +312,6 @@ func TestStopClosesDoQConnections(t *testing.T) {
 	select {
 	case <-c.conn.Context().Done():
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: the DoQ connection is still open after stop()")
+		t.Fatal("STUCK/ENVIRONMENT: the DoQ connection is still open after stop()")
 	}
 }
