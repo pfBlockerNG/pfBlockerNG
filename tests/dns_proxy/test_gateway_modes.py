@@ -21,7 +21,7 @@ from pathlib import Path
 
 import dnswire
 import pytest
-from dot_helpers import dot_exchange, make_certificate, write_certificate_file
+from dot_helpers import control_socket, dot_exchange, make_certificate, write_certificate_file
 from frontend_constants import BLOCKED, REPO_ROOT
 from frontend_helpers import UpstreamVerdict, build_query
 from test_gateway_e2e import ACL_FILE, Running, _answers, _gateway_process, _tcp, _udp, gateway_binary  # noqa: F401
@@ -116,13 +116,18 @@ def test_with_dnsbl_off_dot_forwards_a_listed_name_and_unbound_logs_the_tls_clie
     crt, key = make_certificate(tmp_path)
     pem = write_certificate_file(tmp_path, crt, key)
     mark = unbound.tail.mark()
-    pfb_dns = start_gateway(no_module_dir, "--no-module", "--dot", "--dot-port", "0", "--tls-pem", str(pem))
-
-    reply = asyncio.run(
-        dot_exchange(
-            pfb_dns.process.listening("dot"), build_query(BLOCKED), tmp_path / "server.crt", source=ALLOWED_CLIENT_TCP
+    with control_socket() as ctl:
+        pfb_dns = start_gateway(
+            no_module_dir, "--no-module", "--dot", "--dot-port", "0", "--tls-pem", str(pem), "--ctl-socket", str(ctl)
         )
-    )[0]
+        reply = asyncio.run(
+            dot_exchange(
+                pfb_dns.process.listening("dot"),
+                build_query(BLOCKED),
+                tmp_path / "server.crt",
+                source=ALLOWED_CLIENT_TCP,
+            )
+        )[0]
 
     assert _answers(reply) == [UNBOUNDS_ANSWER_FOR_BLOCKED], "Unbound's answer, not the DNSBL VIP"
     logged = unbound.tail.wait_for(f"{ALLOWED_CLIENT_TCP} {BLOCKED} A IN", since=mark)

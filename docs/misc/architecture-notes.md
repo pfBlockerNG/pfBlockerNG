@@ -505,7 +505,7 @@ none of this applies and the predicates read Unbound as before.
 script has one launch line:
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log /bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1
---port P --upstream 127.0.0.1:5353 [--dot --dot-port D] --tls-pem /var/unbound/pfb_dns_cert.pem [the DoH/DoQ flags below]
+--port P --upstream 127.0.0.1:5353 [--dot --dot-port D] --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [the DoH/DoQ flags below]
 [--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
 /var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
 --module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53; `--dot` iff the saved Resolver had
@@ -518,8 +518,9 @@ address pfSense lists for the box (`get_configured_ip_addresses()` / `get_config
 alias/carp VIPs), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. The gateway binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
 disabled interface) is logged once and skipped, the others are served, and it exits non-zero only when
-no address binds. A DoT/DoH/DoQ setup that cannot be served (no or unusable certificate file, a passphrase-protected
-key) no longer stops the gateway: one line `TLS transports disabled: <file>: <reason>` and the plain listeners keep serving.
+no address binds. A DoT/DoH/DoQ setup whose certificate file is unusable or absent at start (a passphrase-protected key, no file)
+no longer stops the gateway: one line `TLS certificate not loaded: <reason>; ...`, the plain listeners keep serving, and the TLS
+listeners are bound with no certificate until one is pushed.
 An address added since the last reload gets a listener at the next apply:
 `pfb_dns_proxy_ensure_running()` regenerates the script and restarts a live proxy when the script changed. The
 script starts only while the moved-Resolver snapshot is set (so a disabled package never starts a proxy against a
@@ -536,25 +537,42 @@ so the activation's readiness wait fails and rolls pfB-DNS back (see "Readiness 
 starts a DNS front end instead.
 
 **Certificate for DoT, DoH and DoQ (issue #3515).** The gateway never reads `config.xml` (it is root-only, and a renewal must not
-cost a restart). While an encrypted transport is wanted (`pfb_dns_proxy_tls_wanted()`: the saved Resolver had `enablessl`, or a
+cost a restart), and the key of the Resolver's certificate must not be readable by the user a network-facing daemon runs as, nor
+by Unbound's. While an encrypted transport is wanted (`pfb_dns_proxy_tls_wanted()`: the saved Resolver had `enablessl`, or a
 DoH or DoQ group is on) `pfb_dns_proxy_certificate_export()` writes the Resolver's certificate (`unbound/sslcertref`, found with
-pfSense's `lookup_cert()` and `lookup_ca()`) to `$pfb['dns_proxy_cert']`, `/var/unbound/pfb_dns_cert.pem`: the certificate, the
-CAs its `caref` leads to nearest first (a missing CA or a loop ends the chain), then the key, mode 0600, owned by `unbound`, the
-user the gateway drops to. pfSense writes the Resolver's own `sslcert.crt` and `sslcert.key` the same way in `unbound.inc`
+pfSense's `lookup_cert()` and `lookup_ca()`) to `$pfb['dns_proxy_cert']`, `/var/etc/pfb_dns/tls.pem`: the certificate, the
+CAs its `caref` leads to nearest first (a missing CA or a loop ends the chain), then the key, mode 0600, in a directory of mode
+0700 (made, or closed again, by the export), both root's and outside the Unbound chroot; nothing is `chown`ed to `unbound`.
+pfSense writes the Resolver's own `sslcert.crt` and `sslcert.key` the same way in `unbound.inc`
 (`unbound_generate_config()`, pfSense master `9363ac5b` and RELENG_2_7_2: `lookup_cert()`, `ca_chain()`, `chmod 0600` for the
-key), but root-owned and only while the Resolver's own SSL/TLS Service is on, which pfB-DNS moves off; Unbound reads them before
-it drops privileges and the gateway cannot. A key that is encrypted, a key that is not the certificate's, bad base64 and a missing
-certificate write nothing: the file keeps what it has and one notice per reason (`pfBlockerNG DNS Proxy certificate`) says why.
-A file whose content is already right is not rewritten; a changed one replaces it by rename, so the gateway never reads half of
-it. The file is written by every `pfb_dns_proxy_service()` call (the apply, a restart, the installer, a removal's recovery), by
-the cron tick (`pfblockerng_tick()` calls `pfb_dns_proxy_certificate_sync()`, every 15 minutes) and, when it is missing (`/var`
-came up empty on a RAM disk), by the rc script's start (`php -f pfblockerng.inc dns_cert`, under `timeout(1)`, before the launch;
-a failure is logged and the start goes on). It is removed by the next apply or cron tick once no encrypted transport is wanted
-or pfB-DNS is off, and by a package removal that puts the Resolver back. The gateway serves it through
-`GetCertificate` and reads it again at most once a second, on the next handshake: a renewal needs no restart, fails no
-handshake and leaves open connections as they are; a file that does not parse, or whose key does not match, is reported once and
-the previous certificate stays (`docs/misc/dns-gateway-transports.md`). Pinned by `DnsProxyCertificateExportTest`,
-`DnsProxyServiceTest` and the gateway's `tls_reload_test.go`.
+key), root-owned and only while the Resolver's own SSL/TLS Service is on, which pfB-DNS moves off. A key that is encrypted, a key
+that is not the certificate's, bad base64 and a missing certificate write nothing: the file keeps what it has and one notice per
+reason (`pfBlockerNG DNS Proxy certificate`) says why. A file whose content is already right is not rewritten; a changed one
+replaces it by rename. The file is written by every `pfb_dns_proxy_service()` call (the apply, a restart, the installer, a
+removal's recovery), by the cron tick (`pfblockerng_tick()` calls `pfb_dns_proxy_certificate_sync()`, every 15 minutes) and, when it
+is missing (`/var` came up empty on a RAM disk), by the rc script's start (`php -f pfblockerng.inc dns_cert`, under `timeout(1)`,
+before the launch; a failure is logged and the start goes on). It is removed, with the record of the last push, by the next apply
+or cron tick once no encrypted transport is wanted or pfB-DNS is off, and by a package removal that puts the Resolver back; every
+refresh also removes `/var/unbound/pfb_dns_cert.pem` (`$pfb['dns_proxy_cert_legacy']`), the Unbound-readable copy builds of this
+branch wrote before the key was made root's alone.
+
+The gateway reads the file once, at start, as root, and never again. A renewal reaches the RUNNING gateway as a **push**: the
+gateway makes a Unix socket, `--ctl-socket` (`$pfb['dns_proxy_ctl']`, `/var/run/pfb_dns/ctl.sock`: directory 0700, socket 0600),
+before its privilege drop and serves it after, and accepts a push from uid 0 only (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on
+FreeBSD: a connection from another user, or whose credential cannot be read, is closed unread). `pfb_dns_proxy_certificate_refresh()`
+connects in its own process (3 s per step: connect, send, reply; no external process, so no `timeout(1)` applies), sends one
+frame, the length of the PEM as 4 bytes big-endian and then the PEM, and reads one reply line, `ok` or `error: <reason>`; it does so
+only once the gateway is READY and the file differs from what was last pushed (`$pfb['dns_proxy_cert']`'s sibling `tls.pushed`, a
+SHA-256 written after an `ok` and removed by the rc start of a new process). A refused push, a gateway that does not answer and a gateway with no
+socket are one notice per reason; the gateway keeps the certificate it has and the next apply or tick tries again. The gateway
+serves the pushed certificate through `GetCertificate` from the next handshake on: a renewal needs no restart, fails no
+handshake and leaves open connections as they are; a push that does not parse, or whose key does not match, is refused and
+logged and the previous certificate stays; a start whose file is unusable binds the TLS listeners with no certificate, so that
+the first push is served with no restart. A control socket that cannot be made is logged and costs the renewal (a restart is then
+needed), not the service. Confining the gateway to a directory after the drop (`chroot(2)`) is not done here: follow-up #3525.
+Protocol, limits and log lines: `docs/misc/dns-gateway-transports.md`. Pinned by `DnsProxyCertificateExportTest`,
+`DnsProxyCertificatePushTest`, `DnsProxyCertificateStartTest`, `DnsProxyServiceTest` and the gateway's `ctl_test.go`,
+`ctl_wiring_test.go`, `tls_reload_test.go` and `tlsconfig_test.go`.
 
 Lifecycle: `pfb_dns_proxy_resolver(FALSE)` stops the proxy BEFORE it restores the Resolver, under the config lock (toggle
 off, pfBlockerNG or the Resolver disabled, wizard, the uninstall disable pass), so Unbound's regeneration finds the Resolver's port free;
