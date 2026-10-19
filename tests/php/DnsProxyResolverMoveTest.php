@@ -571,7 +571,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the same refusal is one notice');
 	}
 
-	public function testMoveOnRefusesAMovedResolverWhoseListenPortWasLaterSetToTheProxysLoopbackPort(): void
+	public function testMoveOnSignalsAMovedResolverWhoseListenPortWasLaterSetToTheProxysLoopbackPort(): void
 	{
 		// Given a moved Resolver, then an admin who sets its Listen Port to 5353 on the Resolver page.
 		$this->seedResolver();
@@ -581,14 +581,16 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$writes = $this->writeCalls();
 
 		// When the proxy is applied again.
-		$changed = pfb_dns_proxy_resolver(TRUE);
+		$unsafe = NULL;
+		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
-		// Then it changes nothing and says which setting is the problem.
+		// Then nothing changes, the setting is named for the caller's rollback, and no notice is raised here: a notice would
+		// say the proxy keeps serving the Resolver, which the rollback that follows ends
 		$this->assertFalse($changed);
+		$this->assertSame('Listen Port 5353', $unsafe);
 		$this->assertSame($writes, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
-		$this->assertStringContainsString('Listen Port', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 
 	/** @return array<string,array{0:string}> the loopback ports our clause owns: 5353 (PROXYv2) and 5354 (Unbound's plain listener) */
@@ -618,7 +620,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 	}
 
 	#[DataProvider('ownedPorts')]
-	public function testMoveOnRefusesAMovedResolverWhoseListenPortWasLaterSetToOneOfThem(string $port): void
+	public function testMoveOnSignalsAMovedResolverWhoseListenPortWasLaterSetToOneOfThem(string $port): void
 	{
 		// Given a moved Resolver, then an admin who sets its Listen Port to that port on the Resolver page.
 		$this->seedResolver();
@@ -628,14 +630,15 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$writes = $this->writeCalls();
 
 		// When the proxy is applied again.
-		$changed = pfb_dns_proxy_resolver(TRUE);
+		$unsafe = NULL;
+		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
-		// Then it changes nothing and says which setting is the problem.
+		// Then nothing changes, and the setting is named for the caller's rollback instead of a notice
 		$this->assertFalse($changed);
+		$this->assertSame("Listen Port {$port}", $unsafe);
 		$this->assertSame($writes, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
-		$this->assertStringContainsString('Listen Port', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 
 
