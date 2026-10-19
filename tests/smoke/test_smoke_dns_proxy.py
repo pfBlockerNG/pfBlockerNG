@@ -1174,8 +1174,8 @@ BOOT_ID_SLACK = 5  # s: the probe's kern.boottime may differ this much from the 
 _PROBE_TEMPLATE = r"""#!/bin/sh
 # Issue #3515 smoke probe, test-only: /etc/rc.custom_boot_early starts it detached. From early boot it asks the DNS
 # proxy on 127.0.0.1:53 for a LISTED name and a never-asked ALLOWED name twice a second and logs what answers, until the
-# package stage is over (rc.start_packages has returned and the proxy's own rc start it launched has exited) or
-# DEADLINE s have passed: it always exits.
+# package stage is over (rc.start_packages has returned, the proxy's own rc start it launched has exited and the boot is
+# complete) or DEADLINE s have passed: it always exits.
 DIR=/conf/pfb3515_boot_probe.d
 LOG=$DIR/log
 DEADLINE=@DEADLINE@
@@ -1197,10 +1197,13 @@ base=$(packages)
 # the test compares after the probe's end still show a proxy that start replaced
 RUNNING=/tmp/.rc.start_packages.running
 STAGE_RC='@PROXY_START@'
-# pkg: 0 the package stage has not begun, 1 it has, 2 it is over
+# is_platform_booting() holds while this file exists: rc.bootup removes it when the boot is complete
+BOOTING=/var/run/booting
+# pkg: 0 the package stage has not begun, 1 it has, 2 it is over and the boot is complete
 stage() {
 	if [ "$pkg" -eq 0 ] && [ "$(packages)" -gt "$base" ]; then pkg=1; fi
-	if [ "$pkg" -eq 1 ] && [ ! -e "$RUNNING" ] && ! /bin/pgrep -f "$STAGE_RC" >/dev/null; then pkg=2; fi
+	if [ "$pkg" -eq 1 ] && [ ! -e "$RUNNING" ] && [ ! -e "$BOOTING" ] \
+		&& ! /bin/pgrep -f "$STAGE_RC" >/dev/null; then pkg=2; fi
 }
 say() { printf '@@ %s boot=%s %s\n' "$(/bin/date +%s)" "$BOOT" "$*" >>"$LOG"; }
 # RCODE:addresses of the A answer, NONE:- when nothing answered in 3 s
@@ -1467,7 +1470,7 @@ def _judge_boot_probe(log: str, *, boot: int, listed_address: str, upstream_addr
     assert not failed, f"{len(failed)} quer(ies) failed after the first correct answers, first {failed[0]}:\n{digest}"
     assert rows[-1][3].get("reason") == "packages", (
         f"STUCK/ENVIRONMENT: the probe hit its {PROBE_DEADLINE} s deadline before the package stage was over "
-        f"(rc.start_packages returned and the proxy's own rc start it launched exited):\n{digest}"
+        f"(rc.start_packages returned, the proxy's own rc start exited and the boot completed):\n{digest}"
     )
     unbound = [
         row
@@ -1519,9 +1522,9 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
       the DNSBL VIP for the listed name with DNSBL on, the upstream's address for it with DNSBL off, and with both
       the upstream's address for the fresh name, which the stub saw; a `DNS proxy started` line is a launch and does
       not count;
-      And from the first answers to the end of the probe (the package stage over: rc.start_packages has returned and
-      the proxy's own rc start, which it launches in the background, has exited) the proxy keeps its child and
-      supervisor pids, stays on 127.0.0.1:53, and no probe query fails;
+      And from the first answers to the end of the probe (the package stage over: rc.start_packages has returned, the
+      proxy's own rc start, which it launches in the background, has exited and the boot is complete) the proxy keeps
+      its child and supervisor pids, stays on 127.0.0.1:53, and no probe query fails;
       And the launch, the listening socket, the first answers and Unbound's sync are reported as separate times;
       And the Resolver is still moved and the proxy runs, and a lookup from the firewall after the boot succeeds
       through the proxy (the upstream's answer with DNSBL off, the DNSBL VIP for a listed name with it on), and so
