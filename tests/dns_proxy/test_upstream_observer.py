@@ -15,6 +15,7 @@ import csv
 import importlib.util
 import json
 import os
+import re
 import socket
 import stat
 import sys
@@ -180,6 +181,7 @@ def test_reports_lost_in_one_burst_are_warned_about_once_and_a_later_burst_again
         assert relay(*_upstream_response()) is True
         counts.append(len(warned))
     assert counts == [1, 2]
+    assert [re.findall(r"(\d+) lost so far", line) for line in warned] == [["1"], ["6"]]  # every loss is counted
 
 
 def test_the_observer_socket_asks_for_a_receive_buffer_that_holds_a_burst(fwd_booted: Booted, tmp_path: Path) -> None:
