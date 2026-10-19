@@ -195,7 +195,8 @@ func (c config) validate() error {
 // child is the decider process.
 type child struct {
 	cmd         *exec.Cmd
-	killProcess func() error // cmd.Process.Kill; a test makes it refuse
+	killProcess func() error          // cmd.Process.Kill; a test makes it refuse
+	waiting     func(d time.Duration) // test seam: called with the bound of every wait for the decider to leave
 	exited      chan struct{}
 	err         error // how it ended; valid once exited is closed
 }
@@ -227,6 +228,9 @@ func (c *child) kill(logf func(format string, args ...any), bound time.Duration)
 }
 
 func (c *child) waitExit(d time.Duration) bool {
+	if c.waiting != nil {
+		c.waiting(d)
+	}
 	select {
 	case <-c.exited:
 		return true
