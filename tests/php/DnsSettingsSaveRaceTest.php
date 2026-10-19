@@ -101,6 +101,7 @@ final class DnsSettingsSaveRaceTest extends TestCase
 			'the config lock stays taken'     => ['lock_taken'],
 			'the fresh config.xml read fails' => ['read_fails'],
 			'pfSense refuses the write'       => ['write_refused'],
+			'config.xml file write fails'      => ['write_failed'],
 		];
 	}
 
@@ -115,5 +116,6 @@ final class DnsSettingsSaveRaceTest extends TestCase
 		$this->assertSame('', $result['reply'], 'the form re-displays the preference it submitted, not the stored one');
 		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'and config.xml keeps the stored preference');
 		$this->assertFalse($result['pendingMarked'], 'a failed save marks no pending change');
+		$this->assertTrue($result['returned'], 'a failed save renders its errors instead of exiting through a redirect');
 	}
 }
