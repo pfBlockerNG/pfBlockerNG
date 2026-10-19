@@ -122,6 +122,9 @@ func TestOneAddressCannotHoldMoreThanItsShareOfTCPConnections(t *testing.T) {
 	if got := tcpReply(t, again); len(got) == 0 {
 		t.Fatal("a connection that arrives after the address's slot was freed must be served")
 	}
+	// The address is back at its share, exactly: a release that gave back more than the one connection closed would let
+	// it hold one over.
+	requireTCPClosed(t, r.tcpClient(clientAllowed))
 }
 
 // DoT connections take the same TCP slots, so an address's DoT and plain TCP connections count together.
