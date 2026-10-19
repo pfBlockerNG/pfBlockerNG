@@ -5456,18 +5456,19 @@ function pfb_reentry_timeout($raw): int {
 	return PFB_REENTRY_TIMEOUT;
 }
 
-// Save gate for the metrics export toggle: 'on' needs node_exporter's textfile collector.
-function pfb_metrics_export_allowed(?string $posted, bool $pkg_present): ?string {
-	if ($posted === 'on' && !$pkg_present) {
+// Save gate for the metrics export toggle: turning it 'on' needs node_exporter's textfile collector. A value already stored
+// 'on' is let through: the enabled box re-posts it with every General save, and refusing it would block them all.
+function pfb_metrics_export_allowed(?string $posted, bool $pkg_present, bool $stored_on): ?string {
+	if ($posted === 'on' && !$pkg_present && !$stored_on) {
 		return 'Metrics export requires the node_exporter package.';
 	}
 	return NULL;
 }
 
-// What a General save stores. Without node_exporter the checkbox is disabled and never posted, so the stored value
-// stands: writing the absent field as off would silently drop an export set before the package was removed.
-function pfb_metrics_export_value(?string $posted, bool $pkg_present, string $stored): string {
-	return $pkg_present ? ($posted ?: '') : $stored;
+// The box is disabled only when it could neither be ticked nor needs unticking: without node_exporter and not stored 'on'.
+// A stored 'on' keeps it enabled so an operator can turn off an export whose package was removed.
+function pfb_metrics_export_box_disabled(bool $pkg_present, bool $stored_on): bool {
+	return !$pkg_present && !$stored_on;
 }
 
 // Update-pass timing for the metrics exporter. A last_start without a later last_end reads as an unfinished pass.

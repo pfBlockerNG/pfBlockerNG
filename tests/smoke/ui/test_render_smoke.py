@@ -1968,10 +1968,10 @@ def test_general_metrics_export_save_is_refused_without_node_exporter(
 def test_general_save_keeps_a_stored_metrics_export_while_node_exporter_is_absent(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """#3522: with pfSense-pkg-node_exporter absent the checkbox renders disabled and is not posted, so an
-    unrelated General save must leave a stored ``on`` as it is instead of writing the absent field as off.
+    """#3522: with pfSense-pkg-node_exporter absent and Metrics export stored ``on``, the checkbox renders enabled and
+    checked, so an unrelated General save re-posts ``on`` and the stored value stays.
 
-    The stored value is seeded through the config helper (the page itself refuses ``on`` here).
+    The stored value is seeded through the config helper (the page itself refuses turning ``on`` here).
     """
     _require_node_exporter_absent(smoke_vm)
     metrics_path = "installedpackages/pfblockerng/config/0/pfb_metrics_export"
@@ -1992,6 +1992,55 @@ def test_general_save_keeps_a_stored_metrics_export_while_node_exporter_is_absen
         helpers.config_restore_state(smoke_vm, metrics_path, prior_metrics)
         # A second save, now with the option back off, also drops the cron entry the first one installed.
         webui.post("/pfblockerng/pfblockerng_general.php", {"skipfeed": prior_skipfeed or "0"}, timeout=120.0)
+
+
+def test_general_metrics_export_box_stays_operable_for_a_stored_on_without_node_exporter(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """#3522: with pfSense-pkg-node_exporter absent and Metrics export stored ``on``, the checkbox renders checked and
+    NOT disabled, so the operator can untick it; the red notice is still shown."""
+    _require_node_exporter_absent(smoke_vm)
+    metrics_path = "installedpackages/pfblockerng/config/0/pfb_metrics_export"
+    prior_metrics = helpers.config_get_state(smoke_vm, metrics_path)
+    try:
+        helpers.config_set(smoke_vm, metrics_path, "on")
+
+        path = "/pfblockerng/pfblockerng_general.php"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("General Settings",))
+        assert result.ok, f"General render oracle failed: {result.detail}"
+        body = resp.text
+
+        checkbox = re.search(r'<input\b[^>]*\bname="pfb_metrics_export"[^>]*>', body)
+        assert checkbox is not None, "General page is missing the Metrics export checkbox"
+        assert re.search(r"\bchecked\b", checkbox.group(0)), "a stored on must render the box checked"
+        assert not re.search(r"\bdisabled\b", checkbox.group(0)), (
+            "a stored on must keep the box enabled so it can be unticked"
+        )
+        assert "Requires the <a" in body, "the red node_exporter notice must stay while the package is absent"
+    finally:
+        helpers.config_restore_state(smoke_vm, metrics_path, prior_metrics)
+
+
+def test_general_save_can_turn_metrics_export_off_without_node_exporter(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """#3522: with pfSense-pkg-node_exporter absent and Metrics export stored ``on``, unticking the box and saving
+    stores it off. ``WebUI.post`` cannot drop a field, so the unticked box is posted as the empty value."""
+    _require_node_exporter_absent(smoke_vm)
+    metrics_path = "installedpackages/pfblockerng/config/0/pfb_metrics_export"
+    prior_metrics = helpers.config_get_state(smoke_vm, metrics_path)
+    try:
+        helpers.config_set(smoke_vm, metrics_path, "on")
+        assert helpers.config_get(smoke_vm, metrics_path) == "on", "precondition: the stored value is on"
+
+        resp = webui.post("/pfblockerng/pfblockerng_general.php", {"pfb_metrics_export": ""}, timeout=120.0)
+
+        assert "Metrics export requires the node_exporter package." not in resp.text, "unticking must not be refused"
+        stored = helpers.config_get(smoke_vm, metrics_path)
+        assert stored == "", f"unticking the box must store the option off, got {stored!r}"
+    finally:
+        helpers.config_restore_state(smoke_vm, metrics_path, prior_metrics)
 
 
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

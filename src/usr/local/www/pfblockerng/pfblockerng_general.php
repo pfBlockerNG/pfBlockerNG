@@ -114,8 +114,9 @@ $pconfig['pfb_syntax_highlight']	= PfbConfig::read('gen/pfb_syntax_highlight')->
 // #3522: metrics export toggle (default off). Read here for the render; the save gate reads the POST.
 $pconfig['pfb_metrics_export']	= PfbConfig::read('gen/pfb_metrics_export')->value;
 
-// Read once per request: the save gate and the render both depend on it.
+// Read once per request: the save gate and the render both depend on them.
 $metrics_export_pkg = is_pkg_installed('pfSense-pkg-node_exporter');
+$metrics_export_stored_on = PfbConfig::read('gen/pfb_metrics_export') === PfbToggle::On;
 
 // issue #1875 step 2b: gate the CM6 live-highlight overlay for pfb_feed_internal_allowlist,
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
@@ -208,9 +209,9 @@ if ($_POST) {
 		// array (crafted POST) reaches the untyped resolver and lands on the default.
 		$_POST['pfb_reentry_timeout'] = (string) pfb_reentry_timeout($_POST['pfb_reentry_timeout'] ?? NULL);
 
-		// Server-side gate: a crafted POST cannot enable the option without the package.
+		// Server-side gate: a crafted POST cannot turn the option on without the package.
 		$metrics_export_posted = pfb_filter($_POST['pfb_metrics_export'] ?? '', PFB_FILTER_ON_OFF, 'general');
-		$metrics_export_error = pfb_metrics_export_allowed($metrics_export_posted, $metrics_export_pkg);
+		$metrics_export_error = pfb_metrics_export_allowed($metrics_export_posted, $metrics_export_pkg, $metrics_export_stored_on);
 		if ($metrics_export_error !== NULL) {
 			$input_errors[] = $metrics_export_error;
 		}
@@ -269,8 +270,8 @@ if ($_POST) {
 
 			$pfb['gconfig']['pfb_syntax_highlight']	= pfb_filter($_POST['pfb_syntax_highlight'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
-			// The gate above refuses 'on' without node_exporter; the disabled box is not posted then, so the stored value stands.
-			$pfb['gconfig']['pfb_metrics_export']	= pfb_metrics_export_value($metrics_export_posted, $metrics_export_pkg, PfbConfig::read('gen/pfb_metrics_export')->value);
+			// The gate above refuses a new 'on' without node_exporter, so only a valid value reaches here.
+			$pfb['gconfig']['pfb_metrics_export']	= $metrics_export_posted ?: '';
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
@@ -428,7 +429,7 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp(pfb_general_toggle_help());
 
-// Disabled without node_exporter: the save gate refuses 'on' there, so the box must not offer it.
+// Disabled without node_exporter unless the option is stored on: then it stays enabled so it can be turned off.
 $metrics_export_box = new Form_Checkbox(
 	'pfb_metrics_export',
 	'Metrics export',
@@ -436,7 +437,7 @@ $metrics_export_box = new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_metrics_export']) === PfbToggle::On,
 	'on'
 );
-if (!$metrics_export_pkg) {
+if (pfb_metrics_export_box_disabled($metrics_export_pkg, $metrics_export_stored_on)) {
 	$metrics_export_box->setAttribute('disabled', 'disabled');
 }
 $section->addInput($metrics_export_box)->setHelp(

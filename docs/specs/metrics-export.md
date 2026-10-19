@@ -36,14 +36,18 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
 - The General tab gets a **Metrics export** checkbox. Its help text says the option
   publishes Prometheus metrics through the node_exporter package's textfile collector.
 - When `pfSense-pkg-node_exporter` is not installed:
-  - The checkbox is rendered disabled.
+  - The checkbox is rendered disabled, unless the option is already stored `on`: then it
+    stays enabled (and checked), so an operator can turn off an export whose package was
+    removed.
   - Red text below it reads "Requires the node_exporter package", linking to
     `/pkg_mgr_install.php?pkg=pfSense-pkg-node_exporter`.
-  - Saving `on` is rejected with an input error, so a crafted POST cannot enable the
-    option without the package. Saving `off` is always accepted.
-  - While the checkbox is disabled it is not posted, so a General save leaves the stored
-    value as it is: an unrelated save cannot turn a stored `on` off. A crafted `on` is
-    still refused.
+  - Turning the option `on` is rejected with an input error, so a crafted POST cannot
+    enable the option without the package. An `on` that is already stored is accepted
+    (the enabled box re-posts it with every General save), and saving `off` is always
+    accepted.
+  - A disabled checkbox is not posted, so a General save with the option stored off
+    leaves it off; a stored `on` is never rewritten by an unrelated save, because the
+    enabled box posts it again.
 
 ### Scheduling and lifecycle
 
@@ -229,8 +233,8 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
 - UI tier (per architecture-notes "Web UI test tiers"): disabled checkbox, red notice,
   and link target when the package is absent, and a General save POSTing `on` without the
   package is refused with the exact error and the stored value stays off; enabled
-  checkbox when present; an unrelated General save keeps a stored `on` while the
-  package is absent.
+  checkbox when present; with the package absent and `on` stored, the checkbox is enabled
+  and checked, an unrelated General save keeps the `on`, and unticking stores off.
 - Smoke (VM): run the `metrics` verb and assert the published file's families and that it
   parses with the Prometheus Python client's text parser; a settings-save pass leaves the
   pass times alone; the verb publishes nothing while the option is off. The smoke image

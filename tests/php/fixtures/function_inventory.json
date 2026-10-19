@@ -9623,20 +9623,20 @@
                 "variadic": false,
                 "type": "bool",
                 "default": null
+            },
+            {
+                "name": "stored_on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
             }
         ]
     },
-    "pfb_metrics_export_value": {
+    "pfb_metrics_export_box_disabled": {
         "returnsRef": false,
-        "returnType": "string",
+        "returnType": "bool",
         "params": [
-            {
-                "name": "posted",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": null
-            },
             {
                 "name": "pkg_present",
                 "byRef": false,
@@ -9645,10 +9645,10 @@
                 "default": null
             },
             {
-                "name": "stored",
+                "name": "stored_on",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
+                "type": "bool",
                 "default": null
             }
         ]
