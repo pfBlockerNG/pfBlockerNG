@@ -364,6 +364,109 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertSame(2, $notice['priority']);
 	}
 
+	/** @return array<string,array{0:string}> a stored marker that is no snapshot: the malformed shapes, plus what a truthiness test or a short read would let through */
+	public static function unusableMarkers(): array
+	{
+		$valid = self::snapshotOf(self::validSnapshot());
+		return self::malformedSnapshots() + [
+			'the single character 0'                   => ['0'],
+			'the text of an interrupted write'         => ['!!!truncated-snapshot!!!'],
+			'a snapshot cut off inside its JSON'       => [substr($valid, 0, 40)],
+			'a snapshot cut off inside a base64 group' => [substr($valid, 0, 41)],
+		];
+	}
+
+	/** @return array<string,array{0:string,1:array<string,string>}> each unusable marker on a Resolver on loopback and on one still on its own interfaces */
+	public static function unusableMarkersOnEveryResolver(): array
+	{
+		$rows = [];
+		foreach (self::unusableMarkers() as $name => [$marker]) {
+			$rows["{$name}, Resolver on loopback"] = [$marker, ['active_interface' => 'lo0']];
+			$rows["{$name}, Resolver on its own interfaces"] = [$marker, []];
+		}
+		return $rows;
+	}
+
+	#[DataProvider('unusableMarkersOnEveryResolver')]
+	public function testMoveOnRefusesAStoredMarkerThatIsNoSnapshotAndKeepsItAndTheResolverAsTheyAre(string $marker, array $resolver): void
+	{
+		// Given a stored marker nothing can read as a snapshot and no block of ours in Custom Options: whether an earlier
+		// takeover already moved this Resolver is unknown, and the marker is the only evidence of what it was.
+		$this->seedResolver($resolver);
+		config_set_path(self::SAVED, $marker);
+		$config = $GLOBALS['config'];
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: the marker is no snapshot');
+		$this->assertFalse(pfb_dns_proxy_block_present(), 'before: no block of ours');
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the move is refused and nothing is written: the marker, every Resolver key and Custom Options are as they were,
+		// and the Resolver as it stands is not recorded as the previous one.
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($marker, $this->savedRaw(), 'the stored marker is kept verbatim');
+		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertNull(pfb_dns_proxy_saved(), 'no snapshot was invented from the current Resolver');
+
+		// ... and the operator is told that pfB-DNS is not active and recovery is required, never that anything was restored.
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
+		$notice = $GLOBALS['pfb_test_file_notices'][0];
+		$this->assertStringContainsString('pfB-DNS is not active', $notice['notice']);
+		$this->assertStringContainsString('recovery is required', $notice['notice']);
+		$this->assertStringNotContainsString('restored', $notice['notice']);
+		$this->assertSame('/services_unbound.php', $notice['url']);
+		$this->assertSame(2, $notice['priority']);
+	}
+
+	/** @return array<string,array{0:?string}> a marker with nothing in it: never stored, or stored empty (the normal state) */
+	public static function emptyMarkers(): array
+	{
+		return ['no marker stored' => [NULL], 'an empty marker' => ['']];
+	}
+
+	#[DataProvider('emptyMarkers')]
+	public function testMoveOnStillTakesALoopbackOnlyResolverThatWasNeverFrontedWhoseMarkerIsEmpty(?string $marker): void
+	{
+		// Given a Resolver that has always sat on loopback (an earlier takeover never touched it): no block, an empty marker.
+		$this->seedResolver(['active_interface' => 'lo0']);
+		if ($marker !== NULL) {
+			config_set_path(self::SAVED, $marker);
+		}
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: no snapshot');
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the move goes ahead and records loopback as what the Resolver was: loopback alone is no evidence of an earlier move.
+		$this->assertTrue($changed);
+		$this->assertSame(['present' => TRUE, 'value' => 'lo0'], pfb_dns_proxy_saved()['active_interface']);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	public function testMoveOnWithOurBlockAndAMarkerThatIsNoSnapshotKeepsTheBlockRefusal(): void
+	{
+		// Given our complete block on a Resolver on loopback, and a stored marker that is no snapshot.
+		$this->seedResolver([
+			'active_interface' => 'lo0',
+			'enablessl'        => NULL,
+			'custom_options'   => base64_encode("do-ip6: no\nprefetch: yes\n" . self::block()),
+		]);
+		config_set_path(self::SAVED, '!!!not-a-snapshot!!!');
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned on.
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then it is the block's refusal that answers, with nothing written and the marker kept for a hand recovery.
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+		$this->assertStringContainsString('refusing to snapshot the moved values', $this->errorLog());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('recovery is required', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
 	public function testMoveOnSnapshotsAResolverThatOnlyHalfLooksMoved(): void
 	{
 		// Given the admin's own loopback Resolver, with their own PROXYv2 line but without our marked block.
@@ -992,6 +1095,24 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// Then there is nothing to restore: nothing is guessed and nothing is written.
 		$this->assertFalse($changed);
 		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($config, $GLOBALS['config']);
+	}
+
+	#[DataProvider('unusableMarkers')]
+	public function testMoveOffKeepsAStoredMarkerThatIsNoSnapshotAndTheResolverAsTheyAre(string $marker): void
+	{
+		// Given a Resolver on loopback, no block of ours, and a stored marker nothing can read as a snapshot.
+		$this->seedResolver(['active_interface' => 'lo0']);
+		config_set_path(self::SAVED, $marker);
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned off.
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the unknown saved state is not erased and nothing is restored from it.
+		$this->assertFalse($changed);
+		$this->assertSame(0, $this->writeCalls());
+		$this->assertSame($marker, $this->savedRaw());
 		$this->assertSame($config, $GLOBALS['config']);
 	}
 
