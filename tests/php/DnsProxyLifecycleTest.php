@@ -407,15 +407,77 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 
-	public function testRemovalWithALostSnapshotStillStopsTheProxyAndTellsTheOperator(): void
+	/** @return array<string,array{?string,string}> our block with no usable snapshot: the marker as stored (NULL = absent), the Custom Options */
+	public static function orphanedResolvers(): array
+	{
+		$block = base64_encode("do-ip6: no\nprefetch: yes\n" . self::BLOCK);
+		$partial = base64_encode("do-ip6: no\nprefetch: yes\n" . self::MARKER);
+		return [
+			'marker lost, block complete'           => [NULL, $block],
+			'marker not a snapshot, block complete' => ['!!!not-a-snapshot!!!', $block],
+			'marker empty, block partial'           => ['', $partial],
+		];
+	}
+
+	/** Our block with no snapshot is a Resolver nothing can put back: the Resolver is seeded as the move left it. */
+	private function seedOrphanedResolver(?string $marker, string $custom): void
 	{
 		$GLOBALS['config']['unbound'] = self::movedResolver();
+		$GLOBALS['config']['unbound']['custom_options'] = $custom;
+		if ($marker !== NULL) {
+			config_set_path(self::SAVED, $marker);
+		}
+	}
 
-		$this->assertTrue(pfb_dns_proxy_deinstall(), 'no snapshot to restore from: the removal goes on, with the operator told');
+	#[DataProvider('orphanedResolvers')]
+	public function testRemovalWithOurBlockAndNoSnapshotAbortsBeforeAnythingIsStopped(?string $marker, string $custom): void
+	{
+		// Given the Resolver still carries our block and no snapshot can put it back
+		$this->seedOrphanedResolver($marker, $custom);
+		pfb_dns_proxy_service();
+		$before = $GLOBALS['config'];
 
-		$this->assertSame([['stop_service', 'pfb_dns_proxy']], $this->serviceCalls());
-		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], 'nothing was restored, so nothing to regenerate');
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		// When the package removal asks for the restore
+		$removable = pfb_dns_proxy_deinstall();
+
+		// Then the removal is refused before the proxy is stopped or its rc script removed, and config.xml keeps the raw metadata
+		$this->assertFalse($removable, 'no snapshot to restore from: the removal must not go on');
+		$this->assertSame([], $this->serviceCalls(), 'the proxy is not stopped, so nothing is left unserved by a stop');
+		$this->assertFileExists(PFB_DNS_PROXY_RCFILE);
+		$this->assertSame($before, $GLOBALS['config'], 'config.xml and the stored marker are kept for a hand recovery');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the operator is told through a notice');
+	}
+
+	#[DataProvider('orphanedResolvers')]
+	public function testTheRcScriptRefusesToStartAnOrphanedResolverAndSaysRecoveryIsNeeded(?string $marker, string $custom): void
+	{
+		// Given the Resolver still carries our block and no snapshot can put it back
+		$this->seedOrphanedResolver($marker, $custom);
+
+		// When the rc script is written
+		pfb_dns_proxy_service();
+
+		// Then its start refuses with exit 1 and says that a hand recovery is needed, rather than exiting quietly
+		$this->assertMatchesRegularExpression('/manual recovery required[^\n]*\n\texit 1\n/',
+			(string) file_get_contents(PFB_DNS_PROXY_RCFILE));
+	}
+
+	#[DataProvider('orphanedResolvers')]
+	public function testARemovalStoppedByAnOrphanedResolverNeverClaimsTheProxyIsRunning(?string $marker, string $custom): void
+	{
+		// Given the Resolver still carries our block and no snapshot can put it back
+		$this->seedOrphanedResolver($marker, $custom);
+
+		// When the removal is stopped
+		pfb_package_removal_stopped();
+
+		// Then the notice says a manual recovery is required and never that the proxy is running or the Resolver still depends on it
+		$texts = array_column($GLOBALS['pfb_test_file_notices'], 'notice');
+		$this->assertNotEmpty($texts, 'the operator is told');
+		$this->assertStringContainsString('manual recovery required', end($texts));
+		$this->assertStringNotContainsString('the DNS proxy is running', end($texts));
+		$this->assertStringNotContainsString('still depends on the DNS proxy', end($texts));
 	}
 
 	/** @return array<string,array{bool}> whether the Resolver was moved when the package is removed */

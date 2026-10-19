@@ -1258,4 +1258,29 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertResolverRestored('uninstall disable pass');
 		$this->assertFalse(config_path_enabled('unbound', 'python'));
 	}
+
+	/** @return array<string,array{string}> the DNSBL mode the apply runs with */
+	public static function dnsblModes(): array
+	{
+		return ['DNSBL on' => ['enabled'], 'DNSBL off' => ['disabled']];
+	}
+
+	/**
+	 * Our block with no snapshot still marks the Resolver as the proxy's: Unbound neither loads the DNSBL matcher, which would
+	 * filter for a proxy that cannot serve and double-filter once it can, nor drops the inert observer.
+	 */
+	#[DataProvider('dnsblModes')]
+	public function testAnOrphanedResolverKeepsTheMatcherOutOfUnboundAndTheObserverIn(string $mode): void
+	{
+		// Given pfB-DNS is on, the Resolver carries our block and no snapshot survives
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::movedResolver();
+		config_set_path(self::SAVED, '');
+
+		// When the module is applied
+		pfb_unbound_python($mode);
+
+		// Then Unbound runs the observer, never the matcher
+		$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'));
+	}
 }

@@ -167,4 +167,42 @@ final class PfbDnsStatusTest extends TestCase
 
 		$this->assertSame('On, without DNSBL: the proxy forwards every query', pfb_dns_status()['mode']);
 	}
+
+	/** @return array<string,array{PfbToggle,bool,string}> the pfB-DNS toggle, whether the proxy serves, the service the status shows */
+	public static function orphanedStatuses(): array
+	{
+		return [
+			'toggle on, proxy serving'  => [PfbToggle::On, TRUE, 'Running'],
+			'toggle off, proxy serving' => [PfbToggle::Off, TRUE, 'Running'],
+			'toggle on, proxy down'     => [PfbToggle::On, FALSE, 'Stopped'],
+		];
+	}
+
+	/**
+	 * Our block with no snapshot is a Resolver that cannot be put back: the status says so whatever the toggle, and the service
+	 * is what the proxy really does (a serving proxy is not "Not in use").
+	 */
+	#[DataProvider('orphanedStatuses')]
+	public function testAnOrphanedResolverIsRecoveryRequiredAndTheServiceIsWhatTheProxyDoes(PfbToggle $toggle, bool $serving, string $service): void
+	{
+		// Given our block is in the Resolver and its snapshot is gone
+		$GLOBALS['config']['unbound'] = [
+			'active_interface' => 'lo0',
+			'custom_options'   => base64_encode("server:\n# pfBlockerNG DNS proxy\nport: 5354\n# end pfBlockerNG DNS proxy"),
+		];
+		config_set_path(self::SAVED, '');
+		$GLOBALS['pfb']['pfb_dns'] = $toggle;
+		$this->seedProxy('4242', "4242\n", $serving);
+
+		// When the status is read
+		$status = pfb_dns_status();
+
+		// Then it says recovery is required, not that the Resolver is unchanged or not moved, and claims no listen address
+		$this->assertSame($service, $status['service']);
+		$this->assertStringStartsWith('Recovery required', $status['mode']);
+		foreach (['not been moved', 'serves clients itself', 'unchanged', 'Off:'] as $wrong) {
+			$this->assertStringNotContainsString($wrong, $status['mode']);
+		}
+		$this->assertSame(['-', '-'], [$status['listen'], $status['dot']]);
+	}
 }
