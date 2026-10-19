@@ -657,10 +657,16 @@ separate times; a launch is not an answer.
   addresses that are only link-local IPv6 are not served by the proxy; pfSense lists neither.
 - DNS over TLS reads the Resolver's certificate when the proxy starts: a renewed certificate needs a proxy restart.
 - High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
-  toggle and the snapshot marker are per-node (`local`). A secondary that receives the moved section before its own
-  option is on has no snapshot and finds our block already there, so it refuses the move with a notice, pfB-DNS stays
-  inactive on it and DNSBL, if on, keeps its module in Unbound (with the option off it only raises the notice). Enable pfB-DNS on the secondary FIRST,
-  before the primary syncs a moved Resolver, or turn the DNS Resolver sync off.
+  toggle and the snapshot marker are per-node (`local`). With the sync on, two orders are unsafe:
+  - Enabling pfB-DNS on the primary before the secondary: the secondary receives the moved section with no snapshot, so
+    it refuses the move with a notice on every apply. pfB-DNS stays inactive there, and DNSBL, if on, keeps its module
+    in Unbound.
+  - Turning pfB-DNS off on the primary while the secondary still has it on: the restored Resolver settings reach the
+    secondary, whose Unbound collides with its running proxy on the client port.
+  Enable pfB-DNS on the secondary first, or turn the DNS Resolver sync off before changing either node.
+- Queries Unbound answers itself are forwarded unchanged, so the DNSBL does not decide them and the DNS Reply log does not
+  record them: a truncated query, one with more than one additional record, a class other than IN or ANY, or an OPT
+  other than EDNS version 0.
 
 **Gateway binary and DoH/DoQ (issues #3513, #3517).** The package ships the Go gateway as `pfb-dns`, one raw binary per FreeBSD
 architecture (`dns_proxy/bin/freebsd-amd64/pfb-dns` and `dns_proxy/bin/freebsd-arm64/pfb-dns`, both mode 0555; the package

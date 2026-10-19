@@ -91,6 +91,27 @@ def _listen(path: Path) -> socket.socket:
     return receiver
 
 
+def _fill_queue(path: str, senders: contextlib.ExitStack) -> None:
+    """Fill the receiver's queue: from then on every report is lost until the queue is drained."""
+    sent = 1
+    while sent:  # each sender is stopped by its own buffer; one refused at once finds the receiver's queue full
+        filler = senders.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM))
+        filler.setblocking(False)
+        sent = 0
+        with contextlib.suppress(BlockingIOError):
+            while True:
+                filler.sendto(b"x", path)
+                sent += 1
+
+
+def _drain(receiver: socket.socket) -> None:
+    receiver.setblocking(False)
+    with contextlib.suppress(BlockingIOError):
+        while True:
+            receiver.recv(65535)
+    receiver.settimeout(WATCHDOG)
+
+
 # --- the script inside Unbound -------------------------------------------------------------------
 
 
@@ -132,17 +153,55 @@ def test_a_full_proxy_socket_loses_the_report_and_never_holds_up_the_answer(
     assert observer.module._sock.getblocking() is False
     path = str(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET)
     with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET), contextlib.ExitStack() as senders:
-        sent = 1
-        while sent:  # each sender is stopped by its own buffer; one refused at once finds the receiver's queue full
-            filler = senders.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM))
-            filler.setblocking(False)
-            sent = 0
-            with contextlib.suppress(BlockingIOError):
-                while True:
-                    filler.sendto(b"x", path)
-                    sent += 1
+        _fill_queue(path, senders)
         assert observer.registered["query_response"](*_upstream_response()) is True
-    assert warned == []  # a full socket is routine under load, not a fault to log for every response
+    assert len(warned) == 1  # a full socket is routine under load: one line for the burst, not one per response
+
+
+def test_reports_lost_in_one_burst_are_warned_about_once_and_a_later_burst_again(
+    observer: Observer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    warned: list[str] = []
+    monkeypatch.setattr(observer.module, "log_warn", warned.append)
+    observer.module.init_standard(shim.MODULE_ID, shim.module_env())
+    relay = observer.registered["query_response"]
+    path = str(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET)
+    counts: list[int] = []
+    with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver, contextlib.ExitStack() as senders:
+        _fill_queue(path, senders)
+        for _ in range(5):
+            assert relay(*_upstream_response()) is True
+        counts.append(len(warned))
+        _drain(receiver)
+        assert relay(*_upstream_response()) is True  # gets through, so the burst is over
+        assert json.loads(receiver.recv(65535))["qname"] == "blocked.example."
+        _fill_queue(path, senders)
+        assert relay(*_upstream_response()) is True
+        counts.append(len(warned))
+    assert counts == [1, 2]
+
+
+def test_the_observer_socket_asks_for_a_receive_buffer_that_holds_a_burst(fwd_booted: Booted, tmp_path: Path) -> None:
+    """The buffer must be the size the proxy asks for, or a burst of reports is refused while it is busy."""
+
+    async def scenario() -> int:
+        frontend = _frontend(fwd_booted)
+        await frontend.serve_observer(str(tmp_path / "observer.sock"))
+        try:
+            assert frontend._observer is not None
+            return frontend._observer[0].get_extra_info("socket").getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        finally:
+            await frontend.stop()
+
+    assert asyncio.run(scenario()) >= pfb_dns_proxy.OBSERVER_RCVBUF
+
+
+DEFAULT_DATAGRAM = 2048  # net.local.dgram.maxdgram, FreeBSD's default: the largest AF_UNIX datagram the observer sends
+
+
+def test_one_option_at_the_cap_fits_a_default_datagram() -> None:
+    assert len(_report(opts=[_block_option_of_hex_size(pfb_dns_proxy.MAX_REPORT_OPTION_HEX)])) <= DEFAULT_DATAGRAM
 
 
 @pytest.mark.parametrize("listener", ["no socket file", "stale socket file nobody listens on"])

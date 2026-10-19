@@ -88,14 +88,14 @@ import unbound_shim as shim
 LOG_DIR = "/var/log/pfblockerng"
 RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
-MAX_QUERY_RRS = 8  # answer, authority and additional records together; a real query carries an OPT, maybe a TSIG
 SILENCE_LOG_INTERVAL = 30.0  # seconds between two "no reply from Unbound" lines, whatever Unbound answers in between
 UNBOUND_TIMEOUT = 5.0  # the gateway's default wait for Unbound (--timeout): a FORWARD waits twice that for the REPLY
 OBSERVER_SOCKET = (
     "pfb_upstream.sock"  # in --module-dir, which is the working directory; pfb_upstream_observer.py SOCKET
 )
 MAX_REPORT_OPTIONS = 8  # EDNS options in one observer report; an upstream reply carries a handful
-MAX_REPORT_OPTION_HEX = 8192  # hex digits of one option's data (4 KiB: more than an upstream UDP reply holds)
+MAX_REPORT_OPTION_HEX = 1024  # hex of one option's data: fits a 2 KiB datagram with a typical name
+OBSERVER_RCVBUF = 256 * 1024  # bytes asked for the observer socket, so a burst queues (FreeBSD default: 4 KiB)
 MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 ReplyLogger = Callable[[dnswire.Message, str, bytes | None], None]  # query, client, Unbound's reply
@@ -236,6 +236,17 @@ def _upstream_report(data: bytes) -> tuple[shim.module_qstate, shim.DnsMsg]:
     return qstate, shim.DnsMsg(qinfo, flags, [], [], [])
 
 
+def _module_decides(query: dnswire.Message) -> bool:
+    """Whether the module decides this query. Unbound answers a class other than IN or ANY itself, and an additional
+    record that is not one root OPT of EDNS version 0, so those go to it unchanged."""
+    if any(question.qclass not in (dnswire.CLASS_IN, dnswire.CLASS_ANY) for question in query.questions):
+        return False
+    return all(
+        rr.name == "." and rr.rtype == dnswire.TYPE_OPT and ((rr.ttl >> 16) & 0xFF) == 0  # EDNS version: TTL bits 16-23
+        for rr in query.additional
+    )
+
+
 # --- the decider ---------------------------------------------------------------------------------
 
 
@@ -268,6 +279,12 @@ class Frontend:
             shim.log_warn(f"no reply from Unbound for {question.name} {dnswire.type_str(question.qtype)}")
         return reply
 
+    async def _unchanged(self, wire: bytes, query: dnswire.Message, forward: Forward) -> bytes:
+        """Unbound's reply to a query it answers itself, relayed as it is; SERVFAIL when it gives none, as the module
+        path does for a query Unbound does not answer."""
+        reply = await forward(wire)
+        return _error(query, RCODE_SERVFAIL) if reply is None else reply
+
     async def resolve(self, wire: bytes, client_ip: str, forward: Forward, *, datagram: bool = False) -> bytes | None:
         """Answer one client query: parse it, let the module decide, forward to Unbound when it defers.
 
@@ -276,18 +293,23 @@ class Frontend:
         parsed, so a hostile packet costs a constant, and every FORMERR is header-only. `datagram` is for a plain-UDP
         client: a reply built here is held to the UDP size it advertised (a relayed reply already is: Unbound saw the
         client's size). The gateway asks Unbound again over TCP for a truncated reply to a SafeSearch chase.
+        A query Unbound answers itself (see _module_decides) is forwarded unchanged: its reply is the client's answer.
         """
         if len(wire) < 12 or wire[2] & 0x80:  # no header, or a response: never answered (no reflection loops)
             return None
         msg_id, flags, qdcount, ancount, nscount, arcount = struct.unpack("!HHHHHH", wire[:12])
         if (flags >> 11) & 0xF:
             return await forward(wire)
-        if qdcount != 1 or ancount + nscount + arcount > MAX_QUERY_RRS:
+        if qdcount != 1:
             return _error(dnswire.Message(msg_id, flags), RCODE_FORMERR)
+        if flags & dnswire.TC or ancount or nscount or arcount > 1:
+            return await self._unchanged(wire, dnswire.Message(msg_id, flags), forward)  # refused before it is read
         try:
             query = dnswire.parse(wire)
         except dnswire.WireError:
             return _error(dnswire.Message(msg_id, flags), RCODE_FORMERR)
+        if not _module_decides(query):
+            return await self._unchanged(wire, query, forward)
 
         question = query.questions[0]
         if self.module is None:
@@ -400,6 +422,7 @@ class Frontend:
         try:
             sock.bind(path)
             os.chmod(path, 0o600)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, OBSERVER_RCVBUF)
             sock.setblocking(False)
             transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
                 lambda: _ObserverServer(self), sock=sock

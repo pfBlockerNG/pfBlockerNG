@@ -45,6 +45,8 @@ SOCKET = "pfb_upstream.sock"
 
 _sock: socket.socket | None = None
 _warned = False
+_lost = 0  # reports the proxy did not get, since Unbound loaded the script
+_losing = False  # inside a burst of losses: one warning for the burst
 
 
 def init_standard(id, env):
@@ -81,7 +83,7 @@ def operate(id, event, qstate, qdata):
 
 
 def relay_upstream_response(qstate, response, **kwargs):
-    global _warned
+    global _warned, _lost, _losing
     # No socket file: no proxy asked for reports, so build nothing (this runs for every upstream response).
     if not os.path.exists(SOCKET):
         return True
@@ -96,8 +98,13 @@ def relay_upstream_response(qstate, response, **kwargs):
         }
         if _sock is not None:
             _sock.sendto(json.dumps(report).encode(), SOCKET)
-    except OSError:
-        pass  # the proxy is not listening, or its socket is full: the report is lost, the answer is not
+            _losing = False
+    except OSError as exc:
+        # the proxy is not listening, or its socket is full: the report is lost, the answer is not
+        _lost += 1
+        if not _losing:  # one warning for a burst of losses, however many reports it takes
+            _losing = True
+            log_warn(f"pfb_upstream_observer: upstream reports are not reaching the proxy ({exc}); {_lost} lost so far")
     except Exception as exc:  # noqa: BLE001
         if not _warned:  # once: this runs for every upstream response
             _warned = True
