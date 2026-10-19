@@ -40,7 +40,7 @@ func TestStopClosesEveryDoQConnectionWithDoQNoError(t *testing.T) {
 	const conns = 100 // under the cap of 128 connections: more of them, more chances for a close to be lost
 	for _, mode := range stopModes {
 		t.Run(mode.name, func(t *testing.T) {
-			r, m, addr := newDoQRig(t, rigConfig{})
+			r, m, addr := newDoQRig(t, rigConfig{perAddr: noAddrCap})
 			held := make(chan struct{})
 			release := sync.OnceFunc(func() { close(held) })
 			t.Cleanup(release)
@@ -85,7 +85,7 @@ func TestStopEndsDoQConnectionsThatAreNotServedYetOnTheWire(t *testing.T) {
 	const conns = 100
 	for _, mode := range stopModes {
 		t.Run(mode.name, func(t *testing.T) {
-			r, m, addr := newDoQRig(t, rigConfig{})
+			r, m, addr := newDoQRig(t, rigConfig{perAddr: noAddrCap})
 			clients := make([]*doqClient, conns)
 			for i := range clients {
 				clients[i] = dialDoQ(t, addr, m, clientAllowed) // returns when the client's handshake is done, not the server's accept
