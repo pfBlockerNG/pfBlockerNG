@@ -111,8 +111,56 @@ func TestOneAddressCannotHoldMoreThanItsShareOfDoQConnections(t *testing.T) {
 	conns[3].query(doqQuery(t, "inside.example.")) // a connection inside the share is untouched
 
 	_ = conns[7].conn.CloseWithError(0, "")
-	eventually(t, "the closed connection's share to be freed", func() bool { return r.g.doqConns.n.Load() <= maxDoQConns/2-1 })
+	// 64 of the address and one of the other: closing one of the 64 leaves 64
+	eventually(t, "the closed connection's share to be freed", func() bool { return r.g.doqConns.n.Load() <= maxDoQConns/2 })
 	if got := dialDoQ(t, addr, m, clientAllowed).query(doqQuery(t, "again.example.")); len(got) < 2 {
 		t.Fatalf("an address whose connection closed got %x: the share was not released", got)
 	}
+}
+
+// A connection that the global budget refuses must not cost its address a share: the share is taken before the global
+// check and given back when that refuses. If it were not, a third address turned away while two others fill the
+// budget would find its own share gone for good.
+func TestARefusalByTheGlobalConnectionBudgetDoesNotCostTheAddressItsShare(t *testing.T) {
+	t.Run("doh", func(t *testing.T) {
+		r, m, addr := newDoHRig(t)
+		r.autoAnswer(echoAnswer)
+		var held []net.Conn
+		for _, source := range []string{clientAllowed, otherClient} { // two addresses fill the 128 at their share each
+			for range maxDoHConns / 2 {
+				held = append(held, dialRawFrom(t, addr.String(), source))
+			}
+		}
+		for range maxDoHConns/2 + 6 { // more than a share, every one turned away by the global budget
+			requireTCPClosed(t, dialRawFrom(t, addr.String(), "127.0.0.7"))
+		}
+		for _, c := range held {
+			_ = c.Close()
+		}
+		eventually(t, "the connections to drain", func() bool { return r.g.dohConns.n.Load() == 0 })
+		third := newDoHClient(t, addr, m, dohOptions{source: "127.0.0.7"})
+		if resp, _ := third.do(third.get(dnsParam(buildQuery(t, 0, "example.", true)))); resp.StatusCode != 200 {
+			t.Fatalf("the third address got status %d once the budget drained, want 200: its share leaked", resp.StatusCode)
+		}
+	})
+	t.Run("doq", func(t *testing.T) {
+		r, m, addr := newDoQRig(t, rigConfig{})
+		r.autoAnswer(echoAnswer)
+		var held []*doqClient
+		for _, source := range []string{clientAllowed, otherClient} {
+			for range maxDoQConns / 2 {
+				held = append(held, dialDoQ(t, addr, m, source))
+			}
+		}
+		for range maxDoQConns/2 + 2 {
+			requireDoQRefusedBeforeTheHandshake(t, addr, m, "127.0.0.7")
+		}
+		for _, c := range held {
+			_ = c.conn.CloseWithError(0, "")
+		}
+		eventually(t, "the connections to drain", func() bool { return r.g.doqConns.n.Load() == 0 })
+		if got := dialDoQ(t, addr, m, "127.0.0.7").query(doqQuery(t, "example.")); len(got) < 2 {
+			t.Fatalf("the third address got %x once the budget drained: its share leaked", got)
+		}
+	})
 }
