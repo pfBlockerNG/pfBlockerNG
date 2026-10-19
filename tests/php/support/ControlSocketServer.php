@@ -46,8 +46,13 @@ file_put_contents($record, $head . $read($conn, $length));
 
 if ($mode === 'ok') {
 	fwrite($conn, "ok\n");
-} elseif ($mode === 'partial') {
+} elseif ($mode === 'partial' || $mode === 'partial-close') {
 	fwrite($conn, 'ok');
+	if ($mode === 'partial') {
+		fgets(STDIN);
+	}
+} elseif ($mode === 'long-reply') {
+	fwrite($conn, str_repeat('a', 511));
 	fgets(STDIN);
 } elseif (str_starts_with($mode, 'error:')) {
 	fwrite($conn, 'error: ' . substr($mode, 6) . "\n");
