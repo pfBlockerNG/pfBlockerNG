@@ -495,8 +495,9 @@ jobs:
         # both fixtures first (testing.md red canary). `gofmt -l` exits 0 even when it lists files, so the gate
         # tests its output; no pipe, because a pipe hides go test's exit status.
         run: |
+          # Privilege-drop and ownership checks must execute, not skip on the runner's unprivileged account.
           go_gate() (
-            cd "$1" && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .
+            cd "$1" && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && sudo -n "$(command -v go)" test -race -count=1 -v ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .
           )
           canary="$(mktemp -d)"
           mkdir "$canary/unformatted" "$canary/failing"
