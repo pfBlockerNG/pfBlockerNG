@@ -13131,8 +13131,9 @@ function pfb_unbound_python_sources_unlock() {
 
 
 /**
- * The DNSBL module's ini inputs that only the apply pass derives from config.xml (pfb_global() does not): every writer of the
- * ini calls this first, so a recovery that rewrites the ini writes what the apply wrote (the decision cache cap included).
+ * The DNSBL module's ini inputs that only the apply pass derives from config.xml (pfb_global() does not). Every writer of the
+ * ini calls this first: pfb_unbound_python() (the apply, the rollback, the installer's regeneration) and
+ * pfb_package_removal_recover(), so a rewrite outside the apply writes what the apply wrote, the decision cache cap included.
  */
 function pfb_dnsbl_ini_inputs(): void {
 	global $pfb;
@@ -13143,7 +13144,7 @@ function pfb_dnsbl_ini_inputs(): void {
 	$pfb_dcm_raw = (string) ($dnsblconfig['pfb_py_cache_max'] ?? '');
 	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
 	$pfb['dnsbl_tld_wildcard'] = $dnsblconfig['tld_wildcard'] ?? '';
-	$pfb['dnsbl_control'] = pfb_cfg_toggle_read($dnsblconfig['pfb_control'] ?: '');
+	$pfb['dnsbl_control'] = pfb_cfg_toggle_read($dnsblconfig['pfb_control'] ?? '');
 	$pfb['dnsbl_control_legacy'] = pfb_cfg_toggle_read($dnsblconfig['pfb_control_legacy'] ?? '');
 }
 
@@ -14073,6 +14074,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		}
 
 		$now = date('Y-m-d H:i:s', time());
+		pfb_dnsbl_ini_inputs();	// the apply's loader: a process that did not run the apply writes the stored decision cache cap too
 		$pfb_py_conf = pfb_unbound_python_ini($mode, $now);
 
 		// Compare previous ini file to new ini (bypass file timestamp string)
