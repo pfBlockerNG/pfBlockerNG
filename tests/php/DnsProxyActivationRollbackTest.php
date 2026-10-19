@@ -509,10 +509,11 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	public function testAHealthyProxyThatIsAlreadyServingNeedsNoStartAndIsNeverRolledBack(): void
 	{
-		// Given a proxy that serves since before this apply
+		// Given a proxy that serves since before this apply, with the Resolver's certificate it was given (nothing to push to it)
 		$this->activate(TRUE);
 		pfb_dns_proxy_service();
 		$this->proxyServes();
+		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
 		$GLOBALS['pfb_test_service_calls'] = [];
 
 		$ok = pfb_dns_proxy_ensure_running();
