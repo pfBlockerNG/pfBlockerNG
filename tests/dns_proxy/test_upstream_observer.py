@@ -363,9 +363,11 @@ def test_the_observer_and_the_proxy_agree_on_the_socket_name(observer: Observer)
     assert observer.module.SOCKET == pfb_dns_proxy.OBSERVER_SOCKET
 
 
-def test_the_observer_and_the_proxy_agree_on_the_report_limits(observer: Observer) -> None:
+def test_the_observer_and_the_proxy_agree_on_the_report_limits(observer: Observer, booted: Booted) -> None:
     limits = ("MAX_REPORT_BYTES", "MAX_REPORT_OPTIONS", "MAX_REPORT_OPTION_HEX")
     assert [getattr(observer.module, name) for name in limits] == [getattr(pfb_dns_proxy, name) for name in limits]
+    # the option the observer sends first is the code the classifier reads as an Extended DNS Error
+    assert observer.module.EDE_OPTION == booted.module.EDNS_OPT_CODE_EDE
 
 
 # --- the proxy end -------------------------------------------------------------------------------
@@ -508,6 +510,17 @@ def test_malformed_reports_are_warned_about_once_not_once_each(
     assert len(warnings) == 1
 
 
+def test_an_oversize_report_is_refused_before_anything_parses_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The size is checked on the bytes: a report bigger than one datagram never reaches the JSON parser."""
+
+    def parsed(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("json.loads was called on an oversize report")
+
+    monkeypatch.setattr(pfb_dns_proxy.json, "loads", parsed)
+    with pytest.raises(ValueError, match=f"at most {pfb_dns_proxy.MAX_REPORT_BYTES}"):
+        pfb_dns_proxy._upstream_report(b"x" * (pfb_dns_proxy.MAX_REPORT_BYTES + 1))
+
+
 async def _row_logged(booted: Booted, name: str) -> list[list[str]]:
     """The upstream-block rows once one for `name` is in the log (the datagram arrives on the event loop)."""
     await asyncio.to_thread(booted.log.wait_for, lambda _log: any(row[2] == name for row in _upstream_blocks(booted)))
@@ -624,3 +637,16 @@ def test_the_observer_socket_is_a_socket_while_the_proxy_serves(module_dir: Path
         return stat.S_ISSOCK((module_dir / pfb_dns_proxy.OBSERVER_SOCKET).stat().st_mode)
 
     assert _serving(module_dir, during, "--observer") is True
+
+
+def test_a_later_option_that_fits_is_sent_past_one_that_does_not(
+    observer: Observer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    observer.module.init_standard(shim.MODULE_ID, shim.module_env())
+    options = ((10, b"a" * 400), (10, b"b" * 400), (10, b"c" * 400), (11, b"d"), EDE15_BLOCKED)
+    qstate, response = _upstream_response(options=options)
+    with _listen(tmp_path / pfb_dns_proxy.OBSERVER_SOCKET) as receiver:
+        assert observer.registered["query_response"](qstate, response) is True
+        raw = receiver.recv(65535)
+    assert [code for code, _ in json.loads(raw)["opts"]] == [15, 10, 10, 11]
