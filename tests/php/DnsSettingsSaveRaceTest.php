@@ -16,8 +16,8 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  * and holds the lock through write_config():
  *   - the move the apply made survives a pfB-DNS save, and the posted toggle and preference are saved;
  *   - a lock that stays taken, or a failed fresh read, is an input error: nothing is written;
- *   - a config.xml write that throws still releases the lock;
- *   - a failed save re-displays the reply-logging preference the form submitted, not the stored one.
+ *   - a config.xml write that throws still releases the lock.
+ *   - a failed save re-displays the reply-logging preference the form submitted, not the stored one;
  *
  * The save runs in a child process (support/DnsSaveWorker.php: the page's real save code over the doubles), because the
  * page ends with exit().
