@@ -80,13 +80,18 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/pfb_py_reply', $pfb_py_reply);
 			PfbConfig::write('dns/pfb_dns', $pfb_dns);
 			try {
-				write_config('[pfBlockerNG] save pfB-DNS settings');
+				$pfb_written = write_config('[pfBlockerNG] save pfB-DNS settings');
 			} finally {
 				unlock($pfb_config_lock);
 			}
-			pfb_mark_pending_changes();	// applies on the next Update, not on save
-			header('Location: /pfblockerng/pfblockerng_dns.php');
-			exit;
+			// pfSense's write_config() answers FALSE when it refuses the write and -1 when config.xml was not written: nothing was
+			// saved, so the save is an input error and the form comes back as submitted
+			if ($pfb_written !== FALSE && $pfb_written !== -1) {
+				pfb_mark_pending_changes();	// applies on the next Update, not on save
+				header('Location: /pfblockerng/pfblockerng_dns.php');
+				exit;
+			}
+			$input_errors[] = 'pfB-DNS: the configuration could not be written, so these settings were not saved. Save again in a moment.';
 		}
 
 		$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
