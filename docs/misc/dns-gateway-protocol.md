@@ -80,8 +80,10 @@ For a plain-UDP client the first FORWARD goes to Unbound over UDP only and its r
 is (Unbound saw the client's own UDP size). Every FORWARD after the first within one QUERY goes over UDP and, when Unbound's
 reply has TC set, again over TCP behind a stream PROXYv2 header for the same client; the REPLY is the TCP reply, or empty when
 that failed. Only the SafeSearch chase issues a second FORWARD today: it must read the target's addresses whole, and a
-truncated reply says nothing about them. For a stream client (TCP, DoT, DoH, DoQ) every FORWARD uses the client's stream or,
-for a transport with no connection of its own, the same UDP-then-TCP exchange; nothing is truncated for it.
+truncated reply says nothing about them. For a stream client (TCP, DoT, DoH, DoQ) every FORWARD goes over UDP and, when
+Unbound's reply has TC set, again over TCP behind a stream PROXYv2 header for the same client, so the client gets the
+whole answer; a TCP or DoT client keeps one pool of upstream TCP connections for those retries, DoH and DoQ open one per
+retry.
 
 The transport byte tells the decider whether the client has a UDP size limit: for a datagram client an answer the decider
 builds itself is held to the UDP size the client advertised (512 without EDNS, at most the 1232 the decider advertises

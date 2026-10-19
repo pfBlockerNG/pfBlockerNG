@@ -45,8 +45,8 @@ func TestDoTQueryGetsTheDecidersAnswer(t *testing.T) {
 	}
 }
 
-// T4: an allowed name goes to Unbound over TCP behind a PROXYv2 header naming the DoT client, and the connection
-// serves a second query over the same upstream connection.
+// T4: an allowed name goes to Unbound over UDP (a stream client reaches Unbound as DoH and DoQ clients do) behind a
+// PROXYv2 header naming the DoT client, and no upstream TCP connection is opened for it.
 func TestDoTAllowedNameReachesUnboundAsTheClient(t *testing.T) {
 	m := newTLSMaterial(t)
 	r := newRig(t, rigConfig{acl: aclMixed})
@@ -58,18 +58,18 @@ func TestDoTAllowedNameReachesUnboundAsTheClient(t *testing.T) {
 		tcpSend(t, c, query)
 		got := tcpReply(t, c)
 		seen := r.up.next()
-		if !seen.tcp || !bytes.Equal(seen.wire, query) {
-			t.Fatalf("Unbound saw tcp=%v wire=%x, want TCP and %x", seen.tcp, seen.wire, query)
+		if seen.tcp || !bytes.Equal(seen.wire, query) {
+			t.Fatalf("Unbound saw tcp=%v wire=%x, want UDP and %x", seen.tcp, seen.wire, query)
 		}
-		if want := wantHeader(t, transport{"tcp", true}, c.LocalAddr(), addr); !bytes.Equal(seen.header, want) {
+		if want := wantHeader(t, transport{"udp", false}, c.LocalAddr(), addr); !bytes.Equal(seen.header, want) {
 			t.Fatalf("PROXYv2 header:\n got  %x\n want %x", seen.header, want)
 		}
 		if want := echoWithQR(seen)[0]; !bytes.Equal(got, want) {
 			t.Fatalf("reply: got %x, want Unbound's reply %x", got, want)
 		}
 	}
-	if conns, headers := r.up.counts(); conns != 1 || headers != 1 {
-		t.Fatalf("one DoT connection must use one upstream connection and one header, got %d connections / %d headers", conns, headers)
+	if conns, _ := r.up.counts(); conns != 0 {
+		t.Fatalf("an untruncated answer needs no upstream TCP connection, Unbound accepted %d", conns)
 	}
 }
 
