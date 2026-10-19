@@ -1,0 +1,2 @@
+go test fuzz v1
+string("access-control: 2001:db8::/32 allow_snoop")

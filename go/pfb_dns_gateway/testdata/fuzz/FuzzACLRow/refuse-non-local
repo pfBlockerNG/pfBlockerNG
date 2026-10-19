@@ -1,0 +1,2 @@
+go test fuzz v1
+string("access-control: 0.0.0.0/0 refuse_non_local")

@@ -51,6 +51,25 @@ pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
 `--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoH and
 DoQ ports are their own, so nothing collides with the plain DNS listeners there.
 
+## Fairness: what one address may hold
+
+The caps in the table are global. On top of them one client address may hold at most half of each shared budget, so that
+one host cannot fill it: 256 of the 512 UDP queries in flight, 256 of the 512 DoH and DoQ queries in flight (one share for
+both transports together) and 64 of the 128 TCP and DoT connections (plain TCP and DoT count together). The share is
+counted per full address, never per prefix: a pfSense LAN is normally one /64, and prefix keying would make every IPv6
+host on it share one share. For DoH behind a trusted front end the address is the client the front end names, not the
+front end.
+
+A query over its address's share is refused as one over the global cap is (UDP: dropped; DoH: 503 with `Retry-After: 1`;
+DoQ: SERVFAIL on the stream; TCP and DoT: the connection is closed at accept). Nothing already accepted is ever evicted to
+make room: a newcomer is refused, queries that were accepted are answered. The first refusal of a burst is logged
+(`client address limit of N <what> reached`, without the address) and the log re-arms once nothing is held.
+
+Known limit: a client that rotates its source address (many /128s of one /64, spoofed UDP sources) is held to the global
+cap only, because each address has a share of its own; the cap then bounds the gateway, and since nothing is evicted the
+others' accepted queries are not displaced, but new ones from everyone are refused until the flood drains. DoH and DoQ
+connection counts have the global cap only (128 each).
+
 ## TCP and DoT connections
 
 One connection carries up to 4 queries at once (RFC 7766 6.2.1.1: a server SHOULD process them concurrently and MAY
@@ -123,6 +142,19 @@ PROXY header library behaviour (go-proxyproto v0.15.0), pinned by tests: version
 peer are accepted; a LOCAL command and an AF_UNIX source leave the client as the TCP peer; a malformed header, or a
 PROXY command with an unspecified address family, ends the connection. The header sent on to Unbound always names the
 resolved client and the local listener, never the front end's own addresses.
+
+## Hostile messages and fuzzing
+
+The same messages get the same result on every listener (`hostile_transports_test.go`, UDP, TCP, DoT, DoH and DoQ). The
+gateway judges only a runt (under 12 bytes) and a message that is already a response: neither is answered or sent to
+Unbound (DoH: 400; DoQ: the stream is reset with `DOQ_PROTOCOL_ERROR`). Everything else, malformed or not (another opcode,
+QDCOUNT 0 or 2, oversized counts, TC set, a bad OPT), goes through the decider to Unbound as the client sent it, and Unbound
+owns the answer; the client gets it back unchanged. A DoQ message differs only in the Message ID the gateway picks (RFC 9250
+4.2.1). The parsers of what comes from outside have fuzz targets with a committed seed corpus (`testdata/fuzz/`): the
+decider's frames (`FuzzReadFrame`), Unbound config rows (`FuzzACLRow`) and the DoH GET parameter and POST body
+(`FuzzDoHGet`, `FuzzDoHPost`). `go test` runs the corpus as ordinary tests, as the Go step of `scripts/agent/run-gates.sh`
+does; `go test -fuzz=FuzzReadFrame -fuzztime=30s` (and the others) explores from it, and what it finds is minimised into the
+same directory.
 
 ## DoQ details (RFC 9250)
 

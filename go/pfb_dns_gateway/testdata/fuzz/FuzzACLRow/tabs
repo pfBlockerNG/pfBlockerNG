@@ -1,0 +1,2 @@
+go test fuzz v1
+string("access-control:\x09192.0.2.0/24\x09allow")
