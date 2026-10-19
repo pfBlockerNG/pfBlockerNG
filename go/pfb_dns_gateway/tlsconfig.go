@@ -1,39 +1,27 @@
 package main
 
 import (
-	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"sync"
-	"time"
+	"sync/atomic"
 )
 
-// What DoT, DoH and DoQ serve is one PEM file: the DNS Resolver's certificate, the CAs after it nearest first, then its
-// private key, written by pfBlockerNG (pfb_dns_proxy_certificate_export(), docs/misc/dns-gateway-transports.md) for the
-// user the gateway runs as. The gateway hands it out through tls.Config.GetCertificate and looks at it again at most
-// once a second. A new content that parses, key included, replaces the certificate for the handshakes that follow; one
-// that does not is reported once and the previous certificate stays. A connection that is open keeps the certificate
-// it was set up with. So a renewal needs no restart and fails no handshake.
+// What DoT, DoH and DoQ serve is one certificate chain and its private key. The gateway reads the PEM file pfBlockerNG
+// writes (pfb_dns_proxy_certificate_export(), docs/misc/dns-gateway-transports.md) once, at start, while it is still root,
+// and never looks at it again: a renewal arrives as a push on the control socket (ctl.go), from root, and replaces the
+// certificate for the handshakes that follow. A push that does not parse, key included, is reported and the previous
+// certificate stays. A connection that is open keeps the certificate it was set up with. So a renewal needs no restart,
+// fails no handshake, and the key never has to be readable by the user the gateway runs as.
 
-const (
-	defaultDoTPort = 853
-	certRecheck    = time.Second // how often the file is looked at, at most
-)
+const defaultDoTPort = 853
 
-// certStore is the certificate the transports serve and the file it is read from.
+// certStore is the certificate the transports serve.
 type certStore struct {
-	path string
 	logf func(format string, args ...any)
-	now  func() time.Time // the clock; a test replaces it
-
-	mu      sync.Mutex
-	cert    *tls.Certificate
-	seen    []byte    // the content last read, whether it parsed or not: the same content is neither parsed nor reported again
-	readErr string    // why the file could not be read, while it cannot
-	checked time.Time // when the file was last looked at
+	cert atomic.Pointer[tls.Certificate] // nil until the file at start or a push provides one
 }
 
 // newCertStore loads the file; every error names it and the reason. bindTLS starts an empty store when it fails.
@@ -46,12 +34,14 @@ func newCertStore(path string, logf func(format string, args ...any)) (*certStor
 	if err != nil {
 		return nil, fmt.Errorf("%s: cannot load the certificate and key: %w", path, err)
 	}
-	return &certStore{path: path, logf: logf, now: time.Now, cert: &cert, seen: raw, checked: time.Now()}, nil
+	s := &certStore{logf: logf}
+	s.cert.Store(&cert)
+	return s, nil
 }
 
 // newEmptyCertStore is a store with no certificate: every handshake fails until one is pushed.
 func newEmptyCertStore(logf func(format string, args ...any)) *certStore {
-	return &certStore{logf: logf, now: time.Now}
+	return &certStore{logf: logf}
 }
 
 // parseCertPEM is the certificate chain and key of one PEM text, the certificate first and its key somewhere in it. The key
@@ -72,9 +62,7 @@ func (s *certStore) push(pem []byte) error {
 		s.logf("TLS certificate not replaced: %v; keeping the previous one", err)
 		return err
 	}
-	s.mu.Lock()
-	s.cert = cert
-	s.mu.Unlock()
+	s.cert.Store(cert)
 	s.logf("TLS certificate replaced by a push")
 	return nil
 }
@@ -90,40 +78,10 @@ func reason(err error) error {
 
 // getCertificate is tls.Config.GetCertificate.
 func (s *certStore) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if now := s.now(); s.path != "" && now.Sub(s.checked) >= certRecheck {
-		s.checked = now
-		s.reload()
+	if cert := s.cert.Load(); cert != nil {
+		return cert, nil
 	}
-	if s.cert == nil {
-		return nil, errors.New("no TLS certificate is loaded")
-	}
-	return s.cert, nil
-}
-
-// reload looks at the file once; the caller holds mu.
-func (s *certStore) reload() {
-	raw, err := os.ReadFile(s.path)
-	if err != nil {
-		if msg := reason(err).Error(); msg != s.readErr {
-			s.readErr = msg
-			s.logf("TLS certificate not reloaded: %s: cannot read: %s; keeping the previous certificate", s.path, msg)
-		}
-		return
-	}
-	s.readErr = ""
-	if bytes.Equal(raw, s.seen) {
-		return
-	}
-	s.seen = raw
-	cert, err := tls.X509KeyPair(raw, raw)
-	if err != nil {
-		s.logf("TLS certificate not reloaded: %s: cannot load the certificate and key: %v; keeping the previous certificate", s.path, err)
-		return
-	}
-	s.cert = &cert
-	s.logf("TLS certificate reloaded: %s", s.path)
+	return nil, errors.New("no TLS certificate is loaded")
 }
 
 // dot is the TLS 1.2+ configuration of DoT.
