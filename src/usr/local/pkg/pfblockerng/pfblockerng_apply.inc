@@ -1137,15 +1137,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['dnsbl_ip']	= pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL);	// Enable/Disable IP blocking from DNSBL lists
 	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
 	$pfb['dnsbl_top1m_cnt']	= $pfb['dnsblconfig']['top1m_count']	?: '1000';		// TOP1M whitelist domain setting
-	// DNSBL Python decision-cache cap (LRU); 0 = unlimited. 0 is meaningful so avoid the
-	// ?: idiom (0 is falsy), and reject non-numeric input -- else the intval() at the ini
-	// emit would coerce a malformed value to 0 = silently unlimited. Clamp to the WebUI range.
-	$pfb_dcm_raw = (string) ($pfb['dnsblconfig']['pfb_py_cache_max'] ?? '');
-	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
 	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['top1m_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
-	$pfb['dnsbl_tld_wildcard']	= $pfb['dnsblconfig']['tld_wildcard'];				// Enable TLD Function
-	$pfb['dnsbl_control']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control']	?: '');			// Python Control integration
-	$pfb['dnsbl_control_legacy']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control_legacy']	?? '');	// PFBL-03: deprecated legacy DNS-TXT control transport
+	pfb_dnsbl_ini_inputs();	// the module's ini inputs, derived by the same loader the removal's recovery uses
 
 	// Validate pfB Script variable
 	$pfb['dnsbl_top1m_inc'] = pfb_filter($pfb['dnsbl_top1m_inc'], PFB_FILTER_CSV, 'Validate pfB Script variable');
