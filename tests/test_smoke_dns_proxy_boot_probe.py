@@ -7,8 +7,8 @@ fails here without a VM.
 The probe samples the proxy and the package stage after the answers of each query and logs a `state` row, when
 something changed, before that query's row. The judge therefore reads every order from the position of rows in the
 probe's own log: the first correct answers must come before the first `state` row that shows the package stage begun
-(`pkg=1`; `pkg=2` is rc.start_packages returned and its rc scripts exited, which ends the probe). No epoch decides an
-order, so a clock that steps while the probe runs cannot change the verdict (see
+(`pkg=1`; `pkg=2` is rc.start_packages returned and the proxy's own rc start exited, which ends the probe). No epoch
+decides an order, so a clock that steps while the probe runs cannot change the verdict (see
 `test_a_clock_that_steps_backwards_does_not_change_an_order_read_from_the_log`).
 """
 

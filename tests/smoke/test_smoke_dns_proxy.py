@@ -1174,8 +1174,8 @@ BOOT_ID_SLACK = 5  # s: the probe's kern.boottime may differ this much from the 
 _PROBE_TEMPLATE = r"""#!/bin/sh
 # Issue #3515 smoke probe, test-only: /etc/rc.custom_boot_early starts it detached. From early boot it asks the DNS
 # proxy on 127.0.0.1:53 for a LISTED name and a never-asked ALLOWED name twice a second and logs what answers, until the
-# package stage is over (rc.start_packages has returned and the rc scripts it started have exited) or DEADLINE s have
-# passed: it always exits.
+# package stage is over (rc.start_packages has returned and the proxy's own rc start it launched has exited) or
+# DEADLINE s have passed: it always exits.
 DIR=/conf/pfb3515_boot_probe.d
 LOG=$DIR/log
 DEADLINE=@DEADLINE@
@@ -1190,11 +1190,13 @@ MARK='Restarting/Starting all packages'
 packages() { c=$(/usr/bin/grep -c "$MARK" /var/log/system.log 2>/dev/null); echo "${c:-0}"; }
 base=$(packages)
 # rc.start_packages creates RUNNING before it logs MARK and removes it as its last act, after it has started every other
-# package rc script in the background (`<script> start &`): the package stage is over when RUNNING is gone and none of
-# those scripts is left. shortcut: a script forked but not yet exec'd still shows as a bare `/bin/sh`, so one sample
-# can miss it; the proxy pids the test compares after the probe's end still show a proxy that start replaced
+# package rc script in the background (`<script> start &`); the proxy's rc script is one of them, and its repeated start
+# is the one thing in that stage that can replace the proxy. The package stage is over when RUNNING is gone and that
+# start is not running. Other package rc scripts are no measure: pfb_filter.sh stays resident with its own daemons.
+# shortcut: a start forked but not yet exec'd still shows as a bare `/bin/sh`, so one sample can miss it; the proxy pids
+# the test compares after the probe's end still show a proxy that start replaced
 RUNNING=/tmp/.rc.start_packages.running
-STAGE_RC='/usr/local/etc/rc[.]d/[^ ]*[.]sh start'
+STAGE_RC='@PROXY_START@'
 # pkg: 0 the package stage has not begun, 1 it has, 2 it is over
 stage() {
 	if [ "$pkg" -eq 0 ] && [ "$(packages)" -gt "$base" ]; then pkg=1; fi
@@ -1240,7 +1242,9 @@ while true; do
 	/bin/sleep 0.5
 done
 """
-PROBE_SCRIPT = _PROBE_TEMPLATE.replace("@DEADLINE@", str(PROBE_DEADLINE))
+PROBE_SCRIPT = _PROBE_TEMPLATE.replace("@DEADLINE@", str(PROBE_DEADLINE)).replace(
+    "@PROXY_START@", f"{PROXY_RC.replace('.', '[.]')} start"
+)
 
 BOOT_TIMELINE_PHP = r"""
 $boot = 0;
@@ -1463,7 +1467,7 @@ def _judge_boot_probe(log: str, *, boot: int, listed_address: str, upstream_addr
     assert not failed, f"{len(failed)} quer(ies) failed after the first correct answers, first {failed[0]}:\n{digest}"
     assert rows[-1][3].get("reason") == "packages", (
         f"STUCK/ENVIRONMENT: the probe hit its {PROBE_DEADLINE} s deadline before the package stage was over "
-        f"(rc.start_packages returned and the rc scripts it started exited):\n{digest}"
+        f"(rc.start_packages returned and the proxy's own rc start it launched exited):\n{digest}"
     )
     unbound = [
         row
@@ -1516,8 +1520,8 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
       the upstream's address for the fresh name, which the stub saw; a `DNS proxy started` line is a launch and does
       not count;
       And from the first answers to the end of the probe (the package stage over: rc.start_packages has returned and
-      the package rc scripts it started in the background have exited) the proxy keeps its child and supervisor pids,
-      stays on 127.0.0.1:53, and no probe query fails;
+      the proxy's own rc start, which it launches in the background, has exited) the proxy keeps its child and
+      supervisor pids, stays on 127.0.0.1:53, and no probe query fails;
       And the launch, the listening socket, the first answers and Unbound's sync are reported as separate times;
       And the Resolver is still moved and the proxy runs, and a lookup from the firewall after the boot succeeds
       through the proxy (the upstream's answer with DNSBL off, the DNSBL VIP for a listed name with it on), and so
