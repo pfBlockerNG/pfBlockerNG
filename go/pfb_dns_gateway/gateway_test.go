@@ -335,7 +335,7 @@ func requireTCPClosed(t *testing.T, c net.Conn) {
 	_ = c.SetReadDeadline(time.Now().Add(watchdog))
 	n, err := c.Read(make([]byte, 1))
 	if errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("STUCK: the gateway left the connection open for the whole watchdog (read %d bytes)", n)
+		t.Fatalf("STUCK/ENVIRONMENT: the gateway left the connection open for the whole watchdog (read %d bytes)", n)
 	}
 	if !isClosed(err) {
 		t.Fatalf("the gateway must close the connection silently: read %d bytes, err=%v", n, err)

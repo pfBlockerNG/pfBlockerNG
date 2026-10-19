@@ -103,7 +103,7 @@ func ctlReply(t *testing.T, c *net.UnixConn) string {
 	_ = c.SetReadDeadline(time.Now().Add(watchdog))
 	line, err := bufio.NewReader(c).ReadString('\n')
 	if errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("STUCK: the control socket neither replied nor closed within the watchdog (read so far: %q)", line)
+		t.Fatalf("STUCK/ENVIRONMENT: the control socket neither replied nor closed within the watchdog (read so far: %q)", line)
 	}
 	if err != nil && !isClosed(err) {
 		t.Fatalf("reading the control socket's reply: %q, %v", line, err)

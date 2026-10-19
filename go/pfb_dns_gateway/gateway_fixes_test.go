@@ -98,7 +98,7 @@ func TestShutdownDoesNotWaitForQueriesBlockedWritingToAWedgedDecider(t *testing.
 	select {
 	case <-done:
 	case <-time.After(watchdog):
-		t.Fatal("STUCK: shutdown waits for a query blocked writing to a decider that reads nothing")
+		t.Fatal("STUCK/ENVIRONMENT: shutdown waits for a query blocked writing to a decider that reads nothing")
 	}
 }
 
