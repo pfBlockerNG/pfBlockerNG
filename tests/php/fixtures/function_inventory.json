@@ -9639,6 +9639,26 @@
             }
         ]
     },
+    "pfb_metrics_log_once": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "marker",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "message",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_metrics_publish": {
         "returnsRef": false,
         "returnType": "bool",

@@ -317,6 +317,13 @@ $pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar';
 // marker here survives a reboot (the change really is still unapplied) until a real Update clears
 // it. See pfb_pending_changes_marker().
 $pfb['pending_marker']	= '/usr/local/etc/pfb_pending_changes';
+// #3522: metrics export state, also in /usr/local/etc and not $pfb['dbdir'] (RAM-disked /var): the cron entry survives
+// a reboot in config.xml, so the enabled sentinel that lets it publish and the pass times must survive it too.
+$pfb['metrics_enabled']		= '/usr/local/etc/pfb_metrics_enabled';
+$pfb['metrics_lock']		= '/usr/local/etc/pfb_metrics.lock';
+$pfb['metrics_dir_missing']	= '/usr/local/etc/pfb_metrics_dir_missing';
+$pfb['metrics_sentinel_missing']= '/usr/local/etc/pfb_metrics_sentinel_missing';
+$pfb['pass_status']		= '/usr/local/etc/pfb_pass_status.json';
 
 $pfb['dnsbl_conf']	= '/var/unbound/pfb_dnsbl_lighty.conf';
 $pfb['dnsbl_cert']	= '/var/unbound/dnsbl_cert.pem';
@@ -5460,7 +5467,7 @@ function pfb_metrics_export_allowed(?string $posted, bool $pkg_present): ?string
 // Update-pass timing for the metrics exporter. A last_start without a later last_end reads as an unfinished pass.
 function pfb_pass_status_path(): string {
 	global $pfb;
-	return "{$pfb['dbdir']}/pfb_pass_status.json";
+	return $pfb['pass_status'];
 }
 
 // [0, 0] when the file is absent, NULL when it is corrupt. A missing field reads as 0.
@@ -7995,12 +8002,20 @@ function pfb_metrics_collect(): array {
 // Closing the handle releases it.
 function pfb_metrics_lock(float $wait_s) {
 	global $pfb;
-	$lock = @fopen("{$pfb['dbdir']}/.metrics.lock", 'c');
+	$lock = @fopen($pfb['metrics_lock'], 'c');
 	if ($lock !== FALSE && !pfb_flock_bounded($lock, LOCK_EX, $wait_s)) {
 		fclose($lock);
 		return FALSE;
 	}
 	return $lock;
+}
+
+// One log line per outage: $marker stays until a publish succeeds or the export is turned off.
+function pfb_metrics_log_once(string $marker, string $message): void {
+	if (!file_exists($marker)) {
+		pfb_logger($message, 2);
+		@touch($marker);
+	}
 }
 
 // Publishes a rendered body atomically for node_exporter's textfile collector, unless the export was disabled since
@@ -8012,7 +8027,11 @@ function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.
 		return FALSE;
 	}
 	try {
-		if (!file_exists("{$pfb['dbdir']}/.metrics_enabled")) {
+		if (!file_exists($pfb['metrics_enabled'])) {
+			// Never recreated here: a disable removes it under this lock, and recreating it would undo the disable.
+			if ($pfb['enable'] === PfbToggle::On && PfbConfig::read('gen/pfb_metrics_export') === PfbToggle::On) {
+				pfb_metrics_log_once($pfb['metrics_sentinel_missing'], "Metrics export: {$pfb['metrics_enabled']} is missing, so nothing is published; save the pfBlockerNG settings to restore it.\n");
+			}
 			return FALSE;
 		}
 		$tmp = @tempnam($dir, '.pfbmetrics_');
@@ -8023,7 +8042,8 @@ function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.
 			@unlink($tmp);
 			return FALSE;
 		}
-		@unlink("{$pfb['dbdir']}/.metrics_dir_missing");
+		@unlink($pfb['metrics_dir_missing']);
+		@unlink($pfb['metrics_sentinel_missing']);
 		return TRUE;
 	} finally {
 		fclose($lock);
@@ -8033,13 +8053,8 @@ function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.
 // Collects, renders and publishes pfblockerng.prom; the body of the `pfblockerng.php metrics` verb.
 function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 	global $pfb;
-	$marker = "{$pfb['dbdir']}/.metrics_dir_missing";
 	if (!is_dir($dir)) {
-		// Logged once per outage: the marker stays until a write succeeds.
-		if (!file_exists($marker)) {
-			pfb_logger("Metrics export: {$dir} is missing; is the node_exporter service running?\n", 2);
-			@touch($marker);
-		}
+		pfb_metrics_log_once($pfb['metrics_dir_missing'], "Metrics export: {$dir} is missing; is the node_exporter service running?\n");
 		return FALSE;
 	}
 	// Collected and rendered before the lock: collection can take seconds and must not hold up an enable or disable.
@@ -8053,7 +8068,7 @@ function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_
 	global $pfb;
 	// TERM at 50 s, KILL 5 s later: a run that ignores TERM still dies before it can pile up behind the next minute's.
 	$pfb_metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
-	$sentinel = "{$pfb['dbdir']}/.metrics_enabled";
+	$sentinel = $pfb['metrics_enabled'];
 	$lock = pfb_metrics_lock($lock_wait_s);
 	try {
 		if ($enabled) {
@@ -8061,8 +8076,9 @@ function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_
 		} else {
 			unlink_if_exists($sentinel);
 			unlink_if_exists("{$dir}/pfblockerng.prom");
-			// Re-enabling must log the next outage, not inherit this one's marker.
-			unlink_if_exists("{$pfb['dbdir']}/.metrics_dir_missing");
+			// Re-enabling must log the next outage, not inherit this one's markers.
+			unlink_if_exists($pfb['metrics_dir_missing']);
+			unlink_if_exists($pfb['metrics_sentinel_missing']);
 		}
 	} finally {
 		if ($lock !== FALSE) {
@@ -21763,6 +21779,9 @@ function pfblockerng_php_pre_deinstall_command() {
 	unlink_if_exists("{$pfb['dnsbl_info']}");
 	unlink_if_exists("{$pfb['dnsbl_resolver']}");
 	pfb_metrics_configure_cron(FALSE);
+	// Outside dbdir like the pending-changes marker, so the keep=off sweep below never reaches them.
+	unlink_if_exists($pfb['metrics_lock']);
+	unlink_if_exists($pfb['pass_status']);
 
 	// The chrooted Unbound python integration nullfs-mounts host dirs into the chroot
 	// (var/log/pfblockerng for the DNSBL logs, usr/local/share/GeoIP).  A disable goes

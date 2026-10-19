@@ -16,15 +16,19 @@ final class PassStatusTest extends TestCase
 {
 	private string $dir;
 	private mixed $priorDbdir;
+	private mixed $priorPassStatus;
 
 	protected function setUp(): void
 	{
 		global $pfb;
 
 		$this->priorDbdir = $pfb['dbdir'] ?? NULL;
+		$this->priorPassStatus = $pfb['pass_status'] ?? NULL;
 		$this->dir = sys_get_temp_dir() . '/pfb_pass_status_' . bin2hex(random_bytes(8));
-		mkdir($this->dir, 0777, TRUE);
-		$pfb['dbdir'] = $this->dir;
+		mkdir("{$this->dir}/db", 0777, TRUE);
+		mkdir("{$this->dir}/etc", 0777, TRUE);
+		$pfb['dbdir'] = "{$this->dir}/db";
+		$pfb['pass_status'] = "{$this->dir}/etc/pfb_pass_status.json";
 	}
 
 	protected function tearDown(): void
@@ -32,7 +36,26 @@ final class PassStatusTest extends TestCase
 		global $pfb;
 
 		$pfb['dbdir'] = $this->priorDbdir;
+		$pfb['pass_status'] = $this->priorPassStatus;
 		rmdir_recursive($this->dir);
+	}
+
+	public function testTheRecordLivesInUsrLocalEtcWhichSurvivesARamDiskVar(): void
+	{
+		global $pfb;
+
+		$pfb['pass_status'] = $this->priorPassStatus;
+
+		$this->assertSame('/usr/local/etc/pfb_pass_status.json', pfb_pass_status_path());
+	}
+
+	public function testTheRecordSurvivesAWipeOfTheRamDiskVar(): void
+	{
+		pfb_pass_status_record('last_start', 1700000000);
+		rmdir_recursive($GLOBALS['pfb']['dbdir']);	// use_mfs_tmpvar: /var is empty again after a reboot
+		mkdir($GLOBALS['pfb']['dbdir']);
+
+		$this->assertSame(['last_start' => 1700000000, 'last_end' => 0], pfb_pass_status_read());
 	}
 
 	public function testStartThenEndProduceBothFields(): void
@@ -108,7 +131,7 @@ final class PassStatusTest extends TestCase
 		$this->assertDirectoryExists($target);
 		$this->assertSame(['keep.txt'], array_values(array_diff(scandir($target), ['.', '..'])));
 		$this->assertSame('unchanged', file_get_contents("{$target}/keep.txt"));
-		$this->assertSame([], glob("{$this->dir}/.pfbpass_*"));
+		$this->assertSame([], glob(dirname($target) . '/.pfbpass_*'));
 	}
 
 	public function testSettingsSavePassRecordsNothing(): void

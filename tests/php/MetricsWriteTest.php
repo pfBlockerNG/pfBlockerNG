@@ -20,6 +20,7 @@ final class MetricsWriteTest extends TestCase
 	private const CRON_CMD    = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
 	private const CRON_NEEDLE = 'pfblockerng.php metrics';
 	private const MISSING     = 'is missing; is the node_exporter service running?';
+	private const NO_SENTINEL = 'is missing, so nothing is published';
 
 	private string $root;
 	/** @var array<string,mixed> */
@@ -31,7 +32,7 @@ final class MetricsWriteTest extends TestCase
 
 		$this->priorPfb = $pfb;
 		$this->root = sys_get_temp_dir() . '/pfb_metrics_write_' . bin2hex(random_bytes(8));
-		foreach (['db', 'alias', 'log'] as $sub) {
+		foreach (['db', 'alias', 'log', 'etc'] as $sub) {
 			mkdir("{$this->root}/{$sub}", 0777, TRUE);
 		}
 		$pfb['dbdir']              = "{$this->root}/db";
@@ -44,6 +45,13 @@ final class MetricsWriteTest extends TestCase
 		$pfb['errlog']             = "{$this->root}/log/error.log";
 		$pfb['pfctl']              = "{$this->root}/pfctl";
 		$pfb['dnsbl']              = PfbToggle::On;
+		$pfb['enable']             = PfbToggle::Off;
+		// /usr/local/etc stands in: it is outside the RAM-disked /var, which is why the state lives there.
+		$pfb['metrics_enabled']          = "{$this->root}/etc/pfb_metrics_enabled";
+		$pfb['metrics_lock']             = "{$this->root}/etc/pfb_metrics.lock";
+		$pfb['metrics_dir_missing']      = "{$this->root}/etc/pfb_metrics_dir_missing";
+		$pfb['metrics_sentinel_missing'] = "{$this->root}/etc/pfb_metrics_sentinel_missing";
+		$pfb['pass_status']              = "{$this->root}/etc/pfb_pass_status.json";
 
 		// Fake pfctl: prints whatever the test wrote to pfctl.out and exits with the status in pfctl.rc.
 		file_put_contents("{$this->root}/pfctl.out", '');
@@ -75,10 +83,15 @@ final class MetricsWriteTest extends TestCase
 		$db->close();
 	}
 
-	private function missingLogCount(): int
+	private function logCount(string $needle): int
 	{
 		$log = is_file($GLOBALS['pfb']['errlog']) ? (string) file_get_contents($GLOBALS['pfb']['errlog']) : '';
-		return substr_count($log, self::MISSING);
+		return substr_count($log, $needle);
+	}
+
+	private function missingLogCount(): int
+	{
+		return $this->logCount(self::MISSING);
 	}
 
 	/** @return list<array<string,mixed>> */
@@ -92,7 +105,7 @@ final class MetricsWriteTest extends TestCase
 
 	private function sentinel(): string
 	{
-		return "{$GLOBALS['pfb']['dbdir']}/.metrics_enabled";
+		return $GLOBALS['pfb']['metrics_enabled'];
 	}
 
 	/** Turns the export on the way a sync pass does, which is what lets a write publish. */
@@ -387,7 +400,7 @@ final class MetricsWriteTest extends TestCase
 
 	public function testDisableClearsTheDirMissingMarker(): void
 	{
-		$marker = "{$GLOBALS['pfb']['dbdir']}/.metrics_dir_missing";
+		$marker = $GLOBALS['pfb']['metrics_dir_missing'];
 		file_put_contents($marker, '');
 
 		pfb_metrics_configure_cron(FALSE, "{$this->root}/export");
@@ -397,7 +410,7 @@ final class MetricsWriteTest extends TestCase
 
 	public function testCorruptPassStatusReadsAsNullAndSourceDown(): void
 	{
-		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_pass_status.json", 'not json');
+		file_put_contents($GLOBALS['pfb']['pass_status'], 'not json');
 
 		$s = pfb_metrics_collect();
 
@@ -557,7 +570,7 @@ final class MetricsWriteTest extends TestCase
 		$dir = "{$this->root}/export";
 		mkdir($dir);
 		$this->enableExport($dir);
-		$held = fopen("{$GLOBALS['pfb']['dbdir']}/.metrics.lock", 'c');
+		$held = fopen($GLOBALS['pfb']['metrics_lock'], 'c');
 		$this->assertNotFalse($held);
 		$this->assertTrue(flock($held, LOCK_EX));
 
@@ -579,7 +592,7 @@ final class MetricsWriteTest extends TestCase
 		mkdir($dir);
 		$this->enableExport($dir);
 		file_put_contents("{$dir}/pfblockerng.prom", 'stale');
-		$held = fopen("{$GLOBALS['pfb']['dbdir']}/.metrics.lock", 'c');
+		$held = fopen($GLOBALS['pfb']['metrics_lock'], 'c');
 		$this->assertNotFalse($held);
 		$this->assertTrue(flock($held, LOCK_EX));
 
@@ -662,7 +675,7 @@ final class MetricsWriteTest extends TestCase
 	{
 		$dir = "{$this->root}/export";
 		mkdir($dir);
-		$lockPath = "{$GLOBALS['pfb']['dbdir']}/.metrics.lock";
+		$lockPath = $GLOBALS['pfb']['metrics_lock'];
 		$seen = [];
 		// Real install_cron_job() can start cron, which would inherit a held lock fd and wedge every publish.
 		$GLOBALS['pfb_test_install_cron_hook'] = static function (string $command, bool $active) use ($lockPath, &$seen): void {
@@ -690,7 +703,7 @@ final class MetricsWriteTest extends TestCase
 	private function lockHolder(string $then, string ...$args): array
 	{
 		$code = '$lock = fopen($argv[1], "c"); flock($lock, LOCK_EX); echo "locked\n"; fflush(STDOUT); ' . $then . ' flock($lock, LOCK_UN);';
-		$proc = proc_open([PHP_BINARY, '-r', $code, "{$GLOBALS['pfb']['dbdir']}/.metrics.lock", ...$args], [1 => ['pipe', 'w']], $pipes);
+		$proc = proc_open([PHP_BINARY, '-r', $code, $GLOBALS['pfb']['metrics_lock'], ...$args], [1 => ['pipe', 'w']], $pipes);
 		$this->assertIsResource($proc);
 		$this->assertSame("locked\n", fgets($pipes[1]), 'the holder must hold the lock before the test acts');
 		return [$proc, $pipes[1]];
@@ -787,6 +800,96 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame(1, MetricsLedgerStream::$opens, 'the ledger must be read once');
 		$this->assertTrue($s['source_up']['sync_status']);
 		$this->assertSame([['facility' => 'ip', 'feed' => 'ipv4:First_v4', 'stage' => 'download']], $s['feed_failing']);
+	}
+
+	public function testTheStateFilesDefaultToUsrLocalEtcWhichSurvivesARamDiskVar(): void
+	{
+		$keys = ['metrics_enabled', 'metrics_lock', 'metrics_dir_missing', 'metrics_sentinel_missing', 'pass_status'];
+
+		// setUp saved the values the package defined at load, before it pointed them at the sandbox.
+		$this->assertSame([
+			'metrics_enabled'          => '/usr/local/etc/pfb_metrics_enabled',
+			'metrics_lock'             => '/usr/local/etc/pfb_metrics.lock',
+			'metrics_dir_missing'      => '/usr/local/etc/pfb_metrics_dir_missing',
+			'metrics_sentinel_missing' => '/usr/local/etc/pfb_metrics_sentinel_missing',
+			'pass_status'              => '/usr/local/etc/pfb_pass_status.json',
+		], array_intersect_key($this->priorPfb, array_flip($keys)));
+	}
+
+	public function testAnEnabledExportKeepsPublishingWhenTheRamDiskVarIsWipedAtBoot(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->enableExport($dir);
+		pfb_pass_status_record('last_start', 1700000000);
+		// use_mfs_tmpvar: /var starts empty at every boot, while config.xml still has the cron entry.
+		rmdir_recursive($GLOBALS['pfb']['dbdir']);
+		mkdir($GLOBALS['pfb']['dbdir']);
+
+		$this->assertTrue(pfb_metrics_write($dir), 'the sentinel must outlive a wipe of /var, or the export stops silently');
+		$this->assertStringContainsString(
+			'pfblockerng_update_last_start_timestamp_seconds 1700000000',
+			(string) file_get_contents("{$dir}/pfblockerng.prom"),
+			'the pass times must outlive it too'
+		);
+	}
+
+	private function wantExport(PfbToggle $enable, string $option): void
+	{
+		$GLOBALS['pfb']['enable'] = $enable;
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_export', $option);
+	}
+
+	public function testAMissingSentinelWithTheExportWantedIsLoggedOncePerOutageAndNothingIsPublished(): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->wantExport(PfbToggle::On, 'on');
+
+		$this->assertFalse(pfb_metrics_write($dir));
+		$this->assertFalse(pfb_metrics_write($dir));
+
+		$this->assertSame(1, $this->logCount(self::NO_SENTINEL), 'the cron runs every minute: one line per outage, not per run');
+		$this->assertFileDoesNotExist($this->sentinel(), 'recreating it here would undo a disable');
+		$this->assertFileDoesNotExist("{$dir}/pfblockerng.prom");
+
+		$this->enableExport($dir);
+		$this->assertTrue(pfb_metrics_write($dir));
+		unlink($this->sentinel());
+
+		$this->assertFalse(pfb_metrics_write($dir));
+		$this->assertSame(2, $this->logCount(self::NO_SENTINEL), 'a successful publish re-arms the log');
+	}
+
+	/** @return array<string,array{0:PfbToggle,1:string}> */
+	public static function exportNotWantedProvider(): array
+	{
+		return [
+			'master switch off' => [PfbToggle::Off, 'on'],
+			'option off'        => [PfbToggle::On, ''],
+		];
+	}
+
+	#[DataProvider('exportNotWantedProvider')]
+	public function testAMissingSentinelIsNotLoggedWhileTheExportIsNotWanted(PfbToggle $enable, string $option): void
+	{
+		$dir = "{$this->root}/export";
+		mkdir($dir);
+		$this->wantExport($enable, $option);
+
+		$this->assertFalse(pfb_metrics_write($dir));
+
+		$this->assertSame(0, $this->logCount(self::NO_SENTINEL));
+	}
+
+	public function testDisableClearsTheSentinelMissingMarker(): void
+	{
+		$marker = $GLOBALS['pfb']['metrics_sentinel_missing'];
+		file_put_contents($marker, '');
+
+		pfb_metrics_configure_cron(FALSE, "{$this->root}/export");
+
+		$this->assertFileDoesNotExist($marker, 're-enabling must log the next outage, not inherit this one');
 	}
 }
 
