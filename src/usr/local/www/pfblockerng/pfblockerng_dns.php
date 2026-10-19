@@ -160,7 +160,9 @@ $section->addInput(new Form_Checkbox(
 		. 'Disabling the DNS Resolver while this option is on stops the proxy, restores the saved values (the Resolver stays disabled) and turns this option off, with a notice.<br />'
 		. 'The firewall\'s own DNS lookups go through the proxy. The proxy starts together with the DNS Resolver, also at boot, so they are served while the system starts.<br />'
 		. '<strong>High availability:</strong> the DNS Resolver sync copies these settings to the secondary node. '
-		. 'Enable this option on the secondary node first, before the primary syncs the changed DNS Resolver, or turn the DNS Resolver sync off.<br />'
+		. 'With the sync on, do not enable this option on the primary before the secondary: the secondary then gets the moved Resolver with no saved snapshot and refuses it on every apply. '
+		. 'Do not turn it off on the primary while the secondary still has it on: the restored Resolver settings reach the secondary, whose Unbound then collides with its running proxy on the client port. '
+		. 'Enable it on the secondary first, or turn the DNS Resolver sync off.<br />'
 		. 'The change is applied on the next Update.<br />'
 		. 'Default: <strong>Disabled</strong>'
 		. '</div>');

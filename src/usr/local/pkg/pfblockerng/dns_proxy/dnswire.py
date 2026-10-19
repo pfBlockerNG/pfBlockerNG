@@ -20,6 +20,7 @@ RA = 0x0080
 CD = 0x0010
 
 CLASS_IN = 1
+CLASS_ANY = 255
 TYPE_A = 1
 TYPE_NS = 2
 TYPE_CNAME = 5
@@ -353,10 +354,17 @@ def _soa_rdata(rest: str) -> bytes:
     return encode_name(fields[0]) + encode_name(fields[1]) + struct.pack("!IIIII", *numbers)
 
 
+def _cname_rdata(rest: str) -> bytes:
+    fields = rest.split()
+    if len(fields) != 1:
+        raise ValueError("CNAME rdata is one target name")
+    return encode_name(fields[0])
+
+
 _TEXT_RDATA = {
     "A": (TYPE_A, lambda rest: ipaddress.IPv4Address(rest.strip()).packed),
     "AAAA": (TYPE_AAAA, lambda rest: ipaddress.IPv6Address(rest.strip()).packed),
-    "CNAME": (TYPE_CNAME, lambda rest: encode_name(rest.strip())),
+    "CNAME": (TYPE_CNAME, _cname_rdata),
     "TXT": (TYPE_TXT, _txt_rdata),
     "SOA": (TYPE_SOA, _soa_rdata),
 }
