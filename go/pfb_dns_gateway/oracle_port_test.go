@@ -4,6 +4,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // The oracle's Unbound is given a port the test picked: picking and binding are two steps, and under load another
@@ -59,5 +60,31 @@ func TestAPortThatIsFreeForUDPButHeldForTCPIsNotThePortTheOracleGets(t *testing.
 	pick := func() int { n := candidates[0]; candidates = candidates[1:]; return n }
 	if got := freeLoopbackPortFrom(t, pick); got != free {
 		t.Fatalf("got port %d, want %d: %d is held for TCP", got, free, held)
+	}
+}
+
+// An Unbound that finds its port held exits with "Address already in use", and the oracle says the port was taken rather
+// than failing the test. The port is held here for UDP and TCP, as another process would hold it.
+func TestTheOracleUnboundReportsAPortThatIsHeldAsTaken(t *testing.T) {
+	if _, err := runDocker(t, "", time.Minute, "image", "inspect", oracleImage); err != nil {
+		if out, err := runDocker(t, oracleDockerfile, oracleBuildTimeout, "build", "-t", oracleImage, "-"); err != nil {
+			t.Fatalf("cannot build the Unbound test image: %v\n%s", err, out)
+		}
+	}
+	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	port := udp.LocalAddr().(*net.UDPAddr).Port
+	tcp, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		t.Skipf("the TCP side of %d is held by someone else: %v", port, err)
+	}
+	defer tcp.Close()
+
+	o, taken := tryOracleUnbound(t, oracleTree{}, port)
+	if !taken || o != nil {
+		t.Fatalf("Unbound on the held port %d: taken=%v unbound=%v, want taken and none", port, taken, o)
 	}
 }
