@@ -64,7 +64,7 @@ func TestAPortThatWasAskedForIsNotPickedAgain(t *testing.T) {
 	}
 }
 
-// A port 0 that is taken every time is given up on, with the error, after a few picks, and holds no socket.
+// A port 0 that is taken every time is given up on, with the error, after a few picks.
 func TestPortZeroIsGivenUpOnAfterAFewPicks(t *testing.T) {
 	var calls int
 	l, err := bindPlainWith("127.0.0.1", 0, failingUDP(1<<20, inUse(), &calls))

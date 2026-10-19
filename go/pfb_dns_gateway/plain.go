@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -72,18 +73,24 @@ func bindPlain(host string, port int) (*plainListener, error) {
 	return bindPlainWith(host, port, bindUDP)
 }
 
-// bindPlainWith is bindPlain with the UDP bind a test replaces.
+// bindPlainWith is bindPlain with the UDP bind a test replaces. Port 0 takes TCP's number for UDP too, and another socket
+// may hold that number for UDP: a new pick is a new number, up to bindPlainPicks of them. A port that was asked for is not
+// exchanged for another, and no other error is retried.
 func bindPlainWith(host string, port int, listenUDP func(host string, port int) (*net.UDPConn, error)) (*plainListener, error) {
-	tcp, err := bindTCP(host, port)
-	if err != nil {
-		return nil, err
-	}
-	udp, err := listenUDP(host, int(tcp.Addr().(*net.TCPAddr).AddrPort().Port()))
-	if err != nil {
+	for pick := 1; ; pick++ {
+		tcp, err := bindTCP(host, port)
+		if err != nil {
+			return nil, err
+		}
+		udp, err := listenUDP(host, int(tcp.Addr().(*net.TCPAddr).AddrPort().Port()))
+		if err == nil {
+			return &plainListener{udp: udp, tcp: tcp}, nil
+		}
 		_ = tcp.Close()
-		return nil, err
+		if port != 0 || pick == bindPlainPicks || !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, err
+		}
 	}
-	return &plainListener{udp: udp, tcp: tcp}, nil
 }
 
 func listenError(hostport string, err error) error {
