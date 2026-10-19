@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -495,6 +497,52 @@ final class TickEntrypointTest extends TestCase
 			"After tick with pfb_interval='Disabled': expected 'log' trimmed to [l3,l4,l5], got "
 			. var_export($linesAfter, TRUE)
 			. ' -- pfb_log_mgmt() must run every tick, not only when the feed cron is enabled');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #3515 — a renewed Resolver certificate reaches the pfB-DNS gateway between applies.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Scenario:
+	 *   Given pfB-DNS fronting a Resolver that had DoT on, and the Resolver's certificate in config.xml.
+	 *   And   the gateway's certificate file holds an older certificate.
+	 *   When  pfblockerng_tick() is called, with no apply anywhere.
+	 *   Then  the file holds the Resolver's current certificate: the gateway reads it again within a second and a
+	 *         renewal needs no restart.
+	 */
+	public function testTheTickRenewsTheGatewaysCertificateFileWithNoApply(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$this->ensureLogDir();
+		$now = time();
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+
+		$saved = ['cert' => $GLOBALS['pfb']['dns_proxy_cert'] ?? NULL, 'owner' => $GLOBALS['pfb']['dns_proxy_cert_owner'] ?? NULL];
+		try {
+			DnsProxyCertificateFixtures::seedResolver($this->dbdir);
+			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
+				'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+				'enablessl'        => ['present' => TRUE, 'value' => ''],
+				'custom_options'   => ['present' => FALSE, 'value' => NULL],
+			])));
+			$pem = $GLOBALS['pfb']['dns_proxy_cert'];
+			file_put_contents($pem, "an older certificate\n");
+			$psLines = $this->settledSuiteWorkerPsLines();
+
+			pfblockerng_tick($psLines);
+
+			$this->assertStringContainsString(
+				trim(DnsProxyCertificateFixtures::shared()['cert']),
+				(string) file_get_contents($pem),
+				'the tick writes the Resolver\'s certificate where the gateway reads it'
+			);
+		} finally {
+			$GLOBALS['pfb']['dns_proxy_cert'] = $saved['cert'];
+			$GLOBALS['pfb']['dns_proxy_cert_owner'] = $saved['owner'];
+		}
 	}
 
 	// -----------------------------------------------------------------------
