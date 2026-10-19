@@ -393,3 +393,43 @@ func TestARefusalByTheGlobalBudgetDoesNotCostTheAddressItsShare(t *testing.T) {
 		}
 	})
 }
+
+// A share is held per endpoint, keyed by the address as the ACL sees it: an IPv4-mapped IPv6 address is the IPv4 one, and
+// a zone names an interface, not the client. Each spelling of one endpoint draws on the same share.
+func TestAddrLimitSharesOneShareAcrossSpellingsOfAnEndpoint(t *testing.T) {
+	cases := []struct{ name, first, second string }{
+		{"IPv4 and its IPv4-mapped IPv6 form", "10.5.1.1", "::ffff:10.5.1.1"},
+		{"scoped and unscoped link-local IPv6", "fe80::1%em0", "fe80::1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var l addrLimit
+			first, second := netip.MustParseAddr(c.first), netip.MustParseAddr(c.second)
+			if !l.take(first, 1, "queries", t.Logf) {
+				t.Fatalf("%s: the first take of a share of 1 was refused", c.first)
+			}
+			if l.take(second, 1, "queries", t.Logf) {
+				t.Errorf("%s took a second slot of the share %s holds; want refused", c.second, c.first)
+			}
+			l.release(first)
+			if !l.take(second, 1, "queries", t.Logf) {
+				t.Errorf("%s was refused after %s released its share; want the share back", c.second, c.first)
+			}
+		})
+	}
+}
+
+// A share is per full address, not per prefix: a pfSense LAN is one /64, and two hosts on it keep separate shares.
+func TestAddrLimitKeepsEachFullIPv6AddressApart(t *testing.T) {
+	var l addrLimit
+	host1, host2 := netip.MustParseAddr("2001:db8:5::1"), netip.MustParseAddr("2001:db8:5::2")
+	if !l.take(host1, 1, "queries", t.Logf) {
+		t.Fatalf("%s: the first take of a share of 1 was refused", host1)
+	}
+	if !l.take(host2, 1, "queries", t.Logf) {
+		t.Errorf("%s was refused because %s holds the share of its /64; want each full address to have its own", host2, host1)
+	}
+	if l.take(host1, 1, "queries", t.Logf) {
+		t.Errorf("%s took a second slot of its own share; want refused", host1)
+	}
+}

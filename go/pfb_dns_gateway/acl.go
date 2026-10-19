@@ -165,10 +165,17 @@ func unquote(s string) string {
 	return s
 }
 
-// parseACLLine accepts `access-control: <netblock> <action>`.
+// parseACLLine accepts `access-control: <netblock> <action>`; a netblock glued to the keyword counts too, as Unbound's
+// lexer ends the keyword at its colon.
 func parseACLLine(line string) (netip.Prefix, ACLAction, bool) {
 	f, ok := aclWords(line)
-	if !ok || len(f) != 3 || f[0] != "access-control:" {
+	if !ok || len(f) == 0 {
+		return netip.Prefix{}, 0, false
+	}
+	if netblock, glued := strings.CutPrefix(f[0], "access-control:"); glued && netblock != "" {
+		f = append([]string{"access-control:", netblock}, f[1:]...)
+	}
+	if len(f) != 3 || f[0] != "access-control:" {
 		return netip.Prefix{}, 0, false
 	}
 	action, known := aclActions[unquote(f[2])]
