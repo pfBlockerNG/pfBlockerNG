@@ -176,10 +176,10 @@ function step4_submitphpaction() {
 	$pfb_general_schedule = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 
 	// issue #3515: the Resolver snapshot lives in the package config swept below; put the Resolver back first.
-	// The return value is FALSE both for "nothing to restore" and for an abandoned restore: only a snapshot that
+	// The return value is FALSE both for "nothing to restore" and for an abandoned restore: a snapshot or our block that
 	// survived the call says the Resolver is still moved, and the sweep would delete what the next attempt needs.
 	pfb_dns_proxy_resolver(FALSE);
-	if (pfb_dns_proxy_saved() !== NULL) {
+	if (pfb_dns_proxy_owns_resolver()) {
 		$input_errors[] = 'DNS proxy: the DNS Resolver could not be put back, so pfBlockerNG was not reset. ' .
 		    'Follow the DNS proxy notice, then run the wizard again.';
 		return;
