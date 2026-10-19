@@ -619,6 +619,13 @@ alone): the apply raises a `file_notice` naming the Resolver settings to check a
 recovery and the retry round trip), `DnsProxyGatewayOnlyTest` (the single launch line and the wrapper's failure for a package it cannot run), `PackageRegistrationRestoreTest` and the gateway's own tests under `go/pfb_dns_gateway` (`process_test.go`: an unbindable address is skipped, none binding exits 1); the live
 sockets and resolv.conf are pinned by `tests/smoke/test_smoke_dns_gateway.py` and `tests/smoke/test_smoke_dns_proxy.py`.
 
+A conflicting Listen Port added after the move is a recovery limit. While a snapshot remains and the selected port is
+5353 or 5354, service generation keeps the old script when it exists rather than write a colliding gateway listener.
+If pfSense has already unlinked that script, the last serving listener cannot be reconstructed: the snapshot does not
+record its port. Recovery reports that the proxy did not become ready, and DNS can remain unavailable pending repair.
+After resolving the lock or stop failure, turn pfB-DNS off and apply to restore the ordinary Resolver on its currently
+selected port, or correct the Listen Port and apply. Retry removal after DNS is restored; no fallback port is guessed.
+
 **Readiness and rollback.** A proxy is READY, not merely alive, when its listener can handle queries (`pfb_dns_proxy_ready()`).
 The rc script passes `--ready-file /var/unbound/pfb_dns_ready` (`$pfb['dns_proxy_ready']`) to the gateway; the gateway writes its own PID
 there (atomically, mode 0600, as `unbound`, in the chroot directory the module already writes to) only after its sockets
