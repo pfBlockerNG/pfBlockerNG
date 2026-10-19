@@ -61,11 +61,15 @@ first answer, the proxy's port refusing once it is stopped) and gives up at a 60
 runs under a cap, 180 s by default; `ORACLE_DELETE_CAP=S` can only shorten it (1 to 180 s), and expiry kills the process group and is
 also `STUCK/ENVIRONMENT`. After the first removal probe.php's state is read once: the three services registered and the proxy running,
 or the run FAILs before any readiness wait. Broken mode reads the probe once after the removal: an answer FAILs at once ("defect did
-not reproduce"), and only silence waits for the refusal that shows the stop. The stop is synchronous (scenario.sh, broken branch, with
-its source lines), so a live answer after `pkg delete` returns is not a stop still in flight. The pgrep stand-in is self-checked before
-the removal; a failed self-check is a harness fault.
+not reproduce"), and only silence waits for the refusal that shows the stop. In this scenario the proxy's stop is synchronous (the broken
+branch in scenario.sh cites the source lines), so a live answer after `pkg delete` returns is not a stop still in flight; the recovery's
+own restart waits for READY first. The pgrep stand-in is self-checked before the removal; a failed self-check is a harness fault. The
+EXIT trap stops the proxy the scenario started (its recorded pids, supervisor first) and the scenario's Unbound, so a STUCK before the
+removal leaves no proxy behind.
 
-Exit status (`run.sh` returns scenario.sh's): 0 PASS; 1 product FAIL (a check failed, or in broken mode the defect did not reproduce);
-8 STUCK/ENVIRONMENT (a deadline expired, so the run decided nothing about the product); 9 harness fault (the pgrep stand-in failed its
-self-check, or the package build failed). Only exit 1 is a verdict on the product.
+Exit status: 0 PASS; 1 product FAIL (a check failed, or in broken mode the defect did not reproduce); 8 STUCK/ENVIRONMENT (a deadline
+expired, so the run decided nothing about the product); 9 harness fault: run.sh's own staging (the Go toolchain is not the pinned one,
+the gateway build or its ELF check failed, or any other failure before the container starts: run.sh's EXIT trap turns it into 9), or the
+scenario's (the pgrep stand-in's self-check, the package build). 2 is usage. 125, 126 and 127 are docker's own failures (daemon, container
+command cannot run, not found): harness errors, returned unchanged. Only exit 1 is a verdict on the product.
 Container only: nothing is installed on or changed on the host.

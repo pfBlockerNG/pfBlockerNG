@@ -11,15 +11,19 @@
 # ORACLE_DELETE_CAP=S shortens each pkg delete's cap (1 to 180 s); it cannot lengthen the 180 s default.
 holder=
 unbound_pid=
-trap 'if [ -n "$holder" ]; then kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; fi; if [ -n "$unbound_pid" ]; then kill "$unbound_pid" 2>/dev/null; wait "$unbound_pid" 2>/dev/null; fi' EXIT
 # Every wait observes an event and gives up at a real deadline: AWAIT_CAP seconds of monotonic time, checked between probes (a
 # probe can add its own timeout: 2 s for a silent port). Expiry is an environment stall: STUCK/ENVIRONMENT, never a product verdict.
 AWAIT_CAP=60
 stuck() { note "STUCK/ENVIRONMENT: $*"; exit 8; }
-now_cs() { # monotonic clock (CLOCK_BOOTTIME via /proc/uptime), in centiseconds
-	t=$(cut -d' ' -f1 /proc/uptime)
-	printf '%s' "${t%.*}${t#*.}"
+# Centiseconds of monotonic time from a /proc/uptime value ("SS.CC"), with no leading zeros: dash reads "008" in arithmetic as an
+# invalid octal number, and await() does arithmetic on the result.
+cs_of() {
+	n=${1%.*}${1#*.}
+	z=${n%%[!0]*}
+	n=${n#"$z"}
+	printf '%s' "${n:-0}"
 }
+now_cs() { cs_of "$(cut -d' ' -f1 /proc/uptime)"; }
 await() { # description, command...: poll the command until it succeeds, within AWAIT_CAP seconds
 	desc=$1; shift
 	deadline=$(( $(now_cs) + AWAIT_CAP * 100 ))
@@ -28,6 +32,25 @@ await() { # description, command...: poll the command until it succeeds, within 
 		sleep 0.2
 	done
 }
+# The proxy the scenario started (probe.php start) is stopped by its recorded pids, the supervisor first (pfblockerng.inc:3572-3573):
+# a supervisor that outlives its child would be left to restart it. Each pid gets TERM, then KILL if it is still alive after 7 s of
+# monotonic time. The EXIT trap runs this on every exit, so a STUCK before the removal leaves no proxy behind.
+proxy_stop() {
+	for f in /var/run/pfb_dns_proxy_daemon.pid /var/run/pfb_dns_proxy.pid; do
+		p=$(cat "$f" 2>/dev/null) || continue
+		case "$p" in ''|*[!0-9]*) continue ;; esac
+		kill -TERM "$p" 2>/dev/null
+		deadline=$(( $(now_cs) + 700 ))
+		while kill -0 "$p" 2>/dev/null && [ "$(now_cs)" -lt "$deadline" ]; do sleep 0.2; done
+		if kill -0 "$p" 2>/dev/null; then kill -KILL "$p" 2>/dev/null; fi
+	done
+}
+cleanup() {
+	if [ -n "$holder" ]; then kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; fi
+	proxy_stop
+	if [ -n "$unbound_pid" ]; then kill "$unbound_pid" 2>/dev/null; wait "$unbound_pid" 2>/dev/null; fi
+}
+trap cleanup EXIT
 set -u
 label=${1:-lock}
 expect=${ORACLE_EXPECT:-recovered}
@@ -159,11 +182,12 @@ if [ "$expect" = recovered ]; then
 	await "pfB-DNS answers probe.example. after the aborted removal" answered probe.example.
 	await "pfB-DNS answers blocked.example. after the aborted removal" answered blocked.example.
 else
-	# The proxy's stop is synchronous, so none is in flight once pkg delete has returned. stop_service() runs the proxy's rc stop with
-	# mwexec(), which exec()s and waits (master.service-utils.inc:136; master.util.inc mwexec). That stop returns once no proxy pid is
-	# alive (src/usr/local/pkg/pfblockerng/pfblockerng.inc:4611), or after KILL and a give-up at 7 s (:4619-4622). It runs before the
-	# hook (master.pkg-utils.inc:1035; the hook at :1097). So one read decides: a live answer is a proxy the removal started again, or a
-	# survivor of that give-up. The FAIL lists the live processes.
+	# In this scenario the proxy's stop has finished when pkg delete returns: stop_service() runs the proxy's rc stop with mwexec(),
+	# which waits (master.service-utils.inc:136; master.util.inc mwexec), and that stop returns once no proxy pid is alive
+	# (src/usr/local/pkg/pfblockerng/pfblockerng.inc:4611), or after KILL and a give-up at 7 s (:4619-4622). The hook runs after the
+	# stop (master.pkg-utils.inc:1035; the hook at :1097). A proxy the removal starts again is not a stop: the recovery's restart waits
+	# for READY before pkg delete returns (pfblockerng.inc:5022-5023). So one read decides: a live answer is a proxy the recovery
+	# restarted, or a survivor of that give-up. The FAIL lists the live processes.
 	first=$(dns probe.example.)
 	case "$first" in
 		ANSWERED*)
