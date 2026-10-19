@@ -7,7 +7,7 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
     && rm -rf /var/lib/apt/lists/*
 COPY prefix /work/prefix
 # Container-local stand-ins (README): daemon(8), lockf(1) over flock, uname -p for the appliance's pfb-dns path, read_xml_tag.sh, and
-# pgrep -qnF (the r272 core's pid liveness test; procps' pgrep has no -F, so the real binary moves aside to pgrep.procps).
+# pgrep -qnF (the r272 core's pid liveness test; procps-ng 4.0.4 takes -F but rejects -q, so the real binary moves aside to pgrep.procps).
 COPY shims/daemon /usr/sbin/daemon
 COPY shims/lockf /usr/bin/lockf
 COPY shims/uname /usr/local/bin/uname

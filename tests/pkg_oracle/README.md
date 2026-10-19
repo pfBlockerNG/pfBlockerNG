@@ -15,8 +15,9 @@ DEINSTALL step and the shipped hook is real:
 | locks / config | real `flock`-based `try_lock()`; a file-backed config.xml written whole by `write_config()` |
 
 Stand-ins (listed in `core.php`): `update_status`, `logger`, `gettext`, `init_config_arr` and `platform_booting` (RELENG_2_7_2
-only), `is_process_running`, `daemon(8)`, `lockf(1)` (over `flock`), `uname -p`, `read_xml_tag.sh` and `pgrep -qnF` (`shims/`; procps has no
-`-F`, so the r272 core's pid liveness test was always false without it), and the pfb-dns
+only), `is_process_running`, `daemon(8)`, `lockf(1)` (over `flock`), `uname -p`, `read_xml_tag.sh` and `pgrep -qnF` (`shims/`:
+procps-ng 4.0.4's `pgrep` takes `-F` but rejects `-q` (exit 2), and the r272 core's `isvalidpid()` makes that call, so every pid read as
+dead without it), and the pfb-dns
 payload of the Go gateway (below). The shared PHPUnit bootstrap loads `pfblockerng.inc`
 before core does, so core's load-time rewrite of `pfb_filter.sh` / `pfb_dnsbl.sh` is not reproduced (the PHPUnit worker models it);
 the recovery writes all three rc scripts itself.
@@ -55,5 +56,11 @@ sh tests/pkg_oracle/run.sh    OUT BASE broken   master    # the base commit: exi
 Scenario: pfB-DNS serving in module mode; `pkg delete` while another save holds the config lock until the removal's Resolver restore
 gives up (the lock double leaves `pfb_dns_config.refused`, and the holder lets go on it); then the aborted removal's leftovers are
 probed; then the retry with the lock free. Every wait observes an event (Unbound's start line, the holder's ready marker, the proxy's
-first answer, the proxy's port refusing once it is stopped) under one `STUCK/ENVIRONMENT` cap. Container only: nothing is installed on
-or changed on the host.
+first answer, the proxy's port refusing once it is stopped) under one `STUCK/ENVIRONMENT` cap. Each `pkg delete` runs under the same
+kind of cap (`ORACLE_DELETE_CAP`, default 180 s); expiry kills its process group. After the first removal the product's state is read
+once: the three services registered and the proxy running, or the run FAILs before any readiness wait. Container only: nothing is
+installed on or changed on the host.
+
+Mutants: a product FAIL is the expected result, never STUCK. `ORACLE_MUTANT=C` lets the holder go only when `pkg delete` returns, so
+the registration cannot take the lock. `ORACLE_MUTANT=D` (r272) drops the `pgrep -qnF` stand-in, so the proxy never reads as running.
+Example: `ORACLE_MUTANT=C sh tests/pkg_oracle/run.sh OUT . recovered master`.
