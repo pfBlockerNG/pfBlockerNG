@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // One address cannot take the whole of a shared budget: a newcomer over its share is refused, nothing already accepted
@@ -35,6 +36,7 @@ func TestOneAddressCannotHoldMoreThanItsShareOfUDPQueries(t *testing.T) {
 		return echoAnswer(q)
 	})
 	c := r.udpClient(clientAllowed)
+	_ = c.SetReadBuffer(4 << 20) // 256 replies arrive together: each costs a datagram's worth of buffer, and the default is about that
 	send := func(id int) {
 		if _, err := c.Write(buildQuery(t, uint16(id), "example.", true)); err != nil {
 			t.Fatal(err)
@@ -177,7 +179,11 @@ func TestOneAddressCannotHoldMoreThanItsShareOfTheDoHAndDoQBudget(t *testing.T) 
 			}()
 		}
 		for range maxMuxInflight / 2 {
-			<-held
+			select {
+			case <-held:
+			case <-time.After(watchdog):
+				t.Fatalf("STUCK: the decider never saw the %s queries: they were refused or are still waiting", client)
+			}
 		}
 	}
 	hold256(a, "a")
@@ -301,4 +307,75 @@ func TestOneAddressIsRefusedOnDoHAndDoQOnceItHoldsItsShare(t *testing.T) {
 	for f := range failures {
 		t.Error(f)
 	}
+}
+
+// A query or connection that the global budget refuses must not cost its address a share: the address took one before
+// the global check and gives it back when that refuses. If it did not, a flood from other addresses that fills the global
+// budget would also use up the shares of everyone who asked meanwhile, for as long as the process runs.
+func TestARefusalByTheGlobalBudgetDoesNotCostTheAddressItsShare(t *testing.T) {
+	t.Run("udp", func(t *testing.T) {
+		r := newRig(t, rigConfig{acl: aclMixed})
+		release := make(chan struct{})
+		r.autoAnswer(func(q decidedQuery) []byte {
+			if q.ip != "127.0.0.7" {
+				<-release
+			}
+			return echoAnswer(q)
+		})
+		for _, source := range []string{clientAllowed, otherClient} { // two addresses fill the global budget at their share each
+			c := r.udpClient(source)
+			for batch := 0; batch < maxUDPInflight/2; batch += 8 {
+				for i := 1; i <= 8; i++ {
+					if _, err := c.Write(buildQuery(t, uint16(batch+i), "example.", true)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for range 8 {
+					r.nextQuery()
+				}
+			}
+		}
+		third := r.udpClient("127.0.0.7")
+		for id := 1; id <= 300; id++ { // each one is refused by the global budget, 300 in all: more than a share
+			if _, err := third.Write(buildQuery(t, uint16(id), "example.", true)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		refused := r.udpClient(clientRefused)
+		if _, err := refused.Write(buildQuery(t, 1, "example.", true)); err != nil {
+			t.Fatal(err)
+		}
+		udpReply(t, refused) // the 300 above were judged
+		r.requireNoOtherQuery()
+		close(release)
+		eventually(t, "the budget to drain", func() bool { return r.g.udpInflight.Load() == 0 })
+		if _, err := third.Write(buildQuery(t, 999, "example.", true)); err != nil {
+			t.Fatal(err)
+		}
+		if q := r.nextQuery(); q.ip != "127.0.0.7" {
+			t.Fatalf("the decider saw %s, want the third address: its share leaked", q.ip)
+		}
+	})
+	t.Run("tcp", func(t *testing.T) {
+		r := newRig(t, rigConfig{acl: aclMixed})
+		r.autoAnswer(echoAnswer)
+		var held []net.Conn
+		for _, source := range []string{clientAllowed, otherClient} {
+			for range maxTCPConns / 2 {
+				held = append(held, r.tcpClient(source))
+			}
+		}
+		for range maxTCPConns / 2 * 2 { // 128 turned away by the global cap: more than a share
+			requireTCPClosed(t, r.tcpClient("127.0.0.7"))
+		}
+		for _, c := range held {
+			_ = c.Close()
+		}
+		eventually(t, "the connections to drain", func() bool { return r.g.tcpConns.Load() == 0 })
+		again := r.tcpClient("127.0.0.7")
+		tcpSend(t, again, buildQuery(t, 5, "example.", true))
+		if got := tcpReply(t, again); len(got) == 0 {
+			t.Fatal("the third address must be served once the budget drained: its share leaked")
+		}
+	})
 }
