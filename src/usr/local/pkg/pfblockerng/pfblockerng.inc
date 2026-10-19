@@ -4615,7 +4615,7 @@ function pfb_dns_proxy_deinstall(): bool {
  *
  * @param string|null $xml_file the package XML to register from; NULL = PFB_PACKAGE_XML (a default of the constant itself would put the
  *        host's path into the function inventory golden: Reflection evaluates it)
- * @return string|null NULL once the registration is back and written; else why not (nothing was written)
+ * @return string|null NULL once the registration is back and written; else why not (a refused or failed write counts as not written)
  */
 function pfb_package_registration_restore(?string $xml_file = NULL): ?string {
 	$xml_file ??= PFB_PACKAGE_XML;
