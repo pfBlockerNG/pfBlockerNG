@@ -285,7 +285,7 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame(['pfB_Deny_v4' => 1200], pfb_metrics_collect()['ip_tables']);
 	}
 
-	public function testShowAggRevealsAggregateTablesButNotTheVip(): void
+	public function testAggregateTablesAreNeverExportedWhateverTheWidgetSettingIs(): void
 	{
 		config_set_path('installedpackages/pfblockerngglobal/widget-show_agg', 'on');
 		file_put_contents("{$GLOBALS['pfb']['pfctl']}.out", implode("\n", [
@@ -298,7 +298,7 @@ final class MetricsWriteTest extends TestCase
 			'',
 		]));
 
-		$this->assertSame(['pfB_Deny_v4' => 1200, 'pfB_Deny_Aggregated_v4' => 900], pfb_metrics_collect()['ip_tables']);
+		$this->assertSame(['pfB_Deny_v4' => 1200], pfb_metrics_collect()['ip_tables'], 'the dashboard checkbox must not add series');
 	}
 
 	public function testRulePacketsCountVisibleAliasesOnly(): void
@@ -630,7 +630,7 @@ final class MetricsWriteTest extends TestCase
 		$this->assertTrue($s['source_up']['dnsbl_db'], 'the other database is independent');
 	}
 
-	public function testShowAggRevealsAggregateRulePacketsButNotTheVip(): void
+	public function testAggregateRulePacketsAreNeverExportedWhateverTheWidgetSettingIs(): void
 	{
 		config_set_path('filter/rule', [
 			['descr' => 'pfB_Deny_Aggregated_v4 block', 'tracker' => 1001, 'type' => 'block', 'source' => ['address' => 'pfB_Deny_Aggregated_v4']],
@@ -644,7 +644,7 @@ final class MetricsWriteTest extends TestCase
 
 		config_set_path('installedpackages/pfblockerngglobal/widget-show_agg', 'on');
 
-		$this->assertSame(['pfB_Deny_Aggregated_v4' => 42], pfb_metrics_collect()['ip_rule_packets']);
+		$this->assertSame([], pfb_metrics_collect()['ip_rule_packets'], 'the dashboard checkbox must not add series');
 	}
 
 	public function testEnablingAgainLeavesAnExistingCronEntryAlone(): void

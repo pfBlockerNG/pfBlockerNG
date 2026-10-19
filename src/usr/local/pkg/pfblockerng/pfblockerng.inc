@@ -7873,9 +7873,8 @@ function pfb_metrics_collect(): array {
 		}
 	};
 
-	$show_agg = (PfbConfig::readSection('installedpackages/pfblockerngglobal')['widget-show_agg'] ?? '') === 'on';
-
-	$ip_tables = $guard('pfctl', function () use (&$up, $pfb, $show_agg): ?array {
+	// Aggregated aliases are never exported (FALSE below): a dashboard checkbox must not add or drop series.
+	$ip_tables = $guard('pfctl', function () use (&$up, $pfb): ?array {
 		// A non-zero exit is a failed read even if pfctl printed some tables first; a zero exit with no output is an empty set.
 		$rc = NULL;
 		$raw = pfb_pfctl_tables_raw('', $rc);
@@ -7886,7 +7885,7 @@ function pfb_metrics_collect(): array {
 		$ip_ph = pfb_ip_placeholder();
 		$tables = array();
 		foreach (pfb_pfctl_tables_parse($raw) as $alias => $info) {
-			if (!str_starts_with($alias, 'pfB_') || pfb_widget_alias_hidden($alias, $show_agg)) {
+			if (!str_starts_with($alias, 'pfB_') || pfb_widget_alias_hidden($alias, FALSE)) {
 				continue;
 			}
 			$placeholder = pfb_placeholder_for_family($ip_ph, str_ends_with($alias, '_v6') ? 'v6' : 'v4');
@@ -7895,7 +7894,7 @@ function pfb_metrics_collect(): array {
 		return $tables;
 	});
 
-	$ip_rule_packets = $guard('pf_rules', function () use (&$up, $show_agg): ?array {
+	$ip_rule_packets = $guard('pf_rules', function () use (&$up): ?array {
 		$pf_rules = pfSense_get_pf_rules();
 		$up['pf_rules'] = is_array($pf_rules);
 		if (!$up['pf_rules']) {
@@ -7903,7 +7902,7 @@ function pfb_metrics_collect(): array {
 		}
 		$packets = array();
 		foreach (pfb_rule_alias_packets(config_get_path('filter/rule', []), $pf_rules) as $alias => $agg) {
-			if (!pfb_widget_alias_hidden($alias, $show_agg)) {
+			if (!pfb_widget_alias_hidden($alias, FALSE)) {
 				$packets[$alias] = $agg['packets'];
 			}
 		}
