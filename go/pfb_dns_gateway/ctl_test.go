@@ -47,7 +47,7 @@ type ctlRig struct {
 	path  string
 	root  *pki
 
-	peer    atomic.Uint32 // the uid the credential of the next peer says; 0 = root
+	peer    atomic.Uint32 // the uid the credential of the next peer says; ctlUID, the one allowed, unless a test changes it
 	peerErr atomic.Bool   // the credential cannot be read
 }
 
@@ -63,6 +63,7 @@ func newCtlRig(t *testing.T, options ...func(*ctlServer)) *ctlRig {
 		t.Fatalf("bindCtl: %v", err)
 	}
 	k := &ctlRig{r: r, c: c, store: store, path: path, root: newPKI(t, nil, "ctl root", true)}
+	k.peer.Store(ctlUID)
 	c.peerUID = func(*net.UnixConn) (uint32, error) {
 		if k.peerErr.Load() {
 			return 0, syscall.ENOTSUP
@@ -161,7 +162,7 @@ func TestAPushedChainIsServedAsSent(t *testing.T) {
 // Anyone but root: not read, not answered, not logged by name; one line per burst of them.
 func TestAPeerThatIsNotRootIsClosedOnUnreadAndLoggedOncePerBurst(t *testing.T) {
 	k := newCtlRig(t)
-	k.peer.Store(1001)
+	k.peer.Store(ctlUID + 1001)
 	leaf := k.leaf(t)
 	for range 3 {
 		if got := k.push(t, chainPEM(t, leaf)); got != "" {
@@ -172,16 +173,16 @@ func TestAPeerThatIsNotRootIsClosedOnUnreadAndLoggedOncePerBurst(t *testing.T) {
 	if n := k.logsAbout("control socket: refused"); n != 1 {
 		t.Fatalf("three refusals in one burst must log once, got %d lines: %s", n, k.r.logs.joined())
 	}
-	if !strings.Contains(k.r.logs.joined(), "1001") {
+	if !strings.Contains(k.r.logs.joined(), strconv.Itoa(int(ctlUID+1001))) {
 		t.Fatalf("the refusal must name the uid: %s", k.r.logs.joined())
 	}
 
 	// A push from root ends the burst: the next refusal is a burst of its own
-	k.peer.Store(0)
+	k.peer.Store(ctlUID)
 	if got := k.push(t, chainPEM(t, leaf)); got != "ok" {
 		t.Fatalf("root's push got %q", got)
 	}
-	k.peer.Store(1001)
+	k.peer.Store(ctlUID + 1001)
 	if got := k.push(t, chainPEM(t, k.leaf(t))); got != "" {
 		t.Fatalf("a peer that is not root got the reply %q, want none", got)
 	}
