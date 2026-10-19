@@ -168,20 +168,27 @@ func unquote(s string) string {
 // parseACLLine accepts `access-control: <netblock> <action>`; a netblock glued to the keyword counts too, as Unbound 1.26.1 reads it.
 func parseACLLine(line string) (netip.Prefix, ACLAction, bool) {
 	f, ok := aclWords(line)
-	if !ok || len(f) == 0 {
+	if !ok {
 		return netip.Prefix{}, 0, false
 	}
-	if netblock, glued := strings.CutPrefix(f[0], "access-control:"); glued && netblock != "" {
-		f = append([]string{"access-control:", netblock}, f[1:]...)
-	}
-	if len(f) != 3 || f[0] != "access-control:" {
+	var netblock, actionName string
+	switch {
+	case len(f) == 3 && f[0] == "access-control:":
+		netblock, actionName = f[1], f[2]
+	case len(f) == 2:
+		netblock, ok = strings.CutPrefix(f[0], "access-control:")
+		if !ok || netblock == "" {
+			return netip.Prefix{}, 0, false
+		}
+		actionName = f[1]
+	default:
 		return netip.Prefix{}, 0, false
 	}
-	action, known := aclActions[unquote(f[2])]
+	action, known := aclActions[unquote(actionName)]
 	if !known {
 		return netip.Prefix{}, 0, false
 	}
-	prefix, ok := parseNetblock(unquote(f[1]))
+	prefix, ok := parseNetblock(unquote(netblock))
 	return prefix, action, ok
 }
 
