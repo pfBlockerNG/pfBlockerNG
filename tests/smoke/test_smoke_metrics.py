@@ -4,8 +4,8 @@ The smoke image installs packages offline, so ``pfSense-pkg-node_exporter`` is a
 cannot be installed here. The tests therefore:
 
 * enable the option through the config gateway (the General page refuses ``on`` without the
-  package; that refusal is covered by the ui-render test
-  ``test_general_metrics_export_requires_node_exporter``),
+  package; that refusal is POSTed and checked by the ui-render test
+  ``test_general_metrics_export_save_is_refused_without_node_exporter``),
 * create ``/var/tmp/node_exporter`` themselves as the stand-in for node_exporter's textfile
   directory, and remove it again,
 * validate the published file runner-side with the Prometheus Python client's text parser
@@ -14,8 +14,10 @@ cannot be installed here. The tests therefore:
 Tests:
     test_metrics_toggle_installs_cron_and_publishes   — cron line + a parseable, complete file
     test_metrics_pass_status_after_update_pass        — a real update pass records start/end
+    test_metrics_pass_status_ignores_a_settings_save_pass — a settings-save pass leaves the pass times alone
     test_metrics_master_disable_removes_cron_and_file — master switch off tears the export down
     test_metrics_toggle_off_removes_cron_and_file     — option off tears the export down
+    test_metrics_verb_publishes_nothing_while_disabled — the verb leaves no file while the option is off
     test_metrics_dir_missing_logs_once                — a missing textfile dir logs once, exits 0
 
 DESELECTED from the default ``python -m pytest`` (smoke-only). Run via::
@@ -42,7 +44,8 @@ _TEXTFILE_DIR = "/var/tmp/node_exporter"
 _PROM = f"{_TEXTFILE_DIR}/pfblockerng.prom"
 _CRONTAB = "/etc/crontab"
 _CRON_NEEDLE = "pfblockerng.php metrics"
-_CRON_COMMAND = "/usr/bin/timeout 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics"
+_CRON_COMMAND = "/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics"
+_SENTINEL = f"{h.PFB_DBDIR}/.metrics_enabled"
 _ERROR_LOG = f"{h.PFB_LOGDIR}/error.log"
 _ERROR_MARKER = "Metrics export:"
 _SOURCES = {
@@ -144,6 +147,14 @@ def _guest_epoch(vm: SmokeVM) -> int:
     return int(result.stdout.strip())
 
 
+def _pass_times(vm: SmokeVM) -> tuple[float, float]:
+    """Published (last_start, last_end) of the update pass."""
+    families = _fetch_families(vm)
+    start = families["pfblockerng_update_last_start_timestamp_seconds"].samples[0].value
+    end = families["pfblockerng_update_last_end_timestamp_seconds"].samples[0].value
+    return start, end
+
+
 @pytest.mark.smoke
 @pytest.mark.timeout(300)
 def test_metrics_toggle_installs_cron_and_publishes(deployed_vm: SmokeVM) -> None:
@@ -151,7 +162,7 @@ def test_metrics_toggle_installs_cron_and_publishes(deployed_vm: SmokeVM) -> Non
 
     Scenario:
         Given the option is on and a sync pass has run,
-        Then /etc/crontab carries exactly one metrics line: minute '*', run as root, wrapped in timeout 50;
+        Then /etc/crontab carries exactly one metrics line: minute '*', run as root, hard-bounded by timeout -k 5 50;
         When the verb runs,
         Then pfblockerng.prom exists with mode 0644, parses cleanly, carries pfblockerng_info (non-empty
             version), pfblockerng_metrics_source_up 1 for all eight sources (a source absent because its
@@ -167,7 +178,7 @@ def test_metrics_toggle_installs_cron_and_publishes(deployed_vm: SmokeVM) -> Non
     minute, hour, mday, month, wday, who, command = lines[0].split(None, 6)
     assert (minute, hour, mday, month, wday) == ("*",) * 5, f"metrics cron must run every minute: {lines[0]!r}"
     assert who == "root", f"metrics cron must run as root: {lines[0]!r}"
-    assert command.startswith(_CRON_COMMAND), f"metrics cron must be bounded by timeout 50: {lines[0]!r}"
+    assert command.startswith(_CRON_COMMAND), f"metrics cron must be hard-bounded by timeout -k 5 50: {lines[0]!r}"
 
     _run_verb(vm)
 
@@ -218,11 +229,43 @@ def test_metrics_pass_status_after_update_pass(deployed_vm: SmokeVM) -> None:
     _sync(vm)
     _run_verb(vm)
 
-    families = _fetch_families(vm)
-    start = families["pfblockerng_update_last_start_timestamp_seconds"].samples[0].value
-    end = families["pfblockerng_update_last_end_timestamp_seconds"].samples[0].value
+    start, end = _pass_times(vm)
     assert start >= before, f"last_start {start} predates the pass (guest clock before it: {before})"
     assert end >= start > 0, f"a finished pass must have last_end >= last_start > 0: start={start} end={end}"
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(600)
+def test_metrics_pass_status_ignores_a_settings_save_pass(deployed_vm: SmokeVM) -> None:
+    """A settings-save pass is not an Update pass, so the recorded pass times do not move.
+
+    Scenario:
+        Given an update pass has recorded its start and end and the guest clock has moved past them,
+        When a settings-save pass runs (``sync_package_pfblockerng('noupdates')`` sets ``$pfb['save']``),
+        Then the published last_start and last_end are still exactly the update pass's.
+    """
+    vm = deployed_vm
+    _set_export(vm, True)
+    _sync(vm)
+    _run_verb(vm)
+    recorded = _pass_times(vm)
+    assert recorded[1] >= recorded[0] > 0, f"precondition: the update pass must have recorded its times: {recorded}"
+    assert h.wait_until(lambda: _guest_epoch(vm) > recorded[1], timeout=15.0, interval=1.0), (
+        "precondition: the guest clock must move past the recorded pass, or a recording save pass could not show"
+    )
+
+    saved = h.php_eval(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+        "global $pfb; pfb_global();"
+        "sync_package_pfblockerng('noupdates');"
+        "echo 'OK';",
+        timeout=300,
+    )
+    assert "OK" in saved.stdout, f"settings-save pass failed: rc={saved.returncode} {saved.stdout!r} {saved.stderr!r}"
+    _run_verb(vm)
+
+    assert _pass_times(vm) == recorded, "a settings-save pass must leave last_start and last_end untouched"
 
 
 @pytest.mark.smoke
@@ -275,10 +318,32 @@ def test_metrics_toggle_off_removes_cron_and_file(deployed_vm: SmokeVM) -> None:
 
 @pytest.mark.smoke
 @pytest.mark.timeout(300)
+def test_metrics_verb_publishes_nothing_while_disabled(deployed_vm: SmokeVM) -> None:
+    """The verb never publishes while the option is off, so a run that outlives a disable leaves no file.
+
+    Scenario:
+        Given the option is off (no cron line, no enabled sentinel) and the textfile directory exists,
+        When the verb runs,
+        Then it exits 0 and neither pfblockerng.prom nor a temp file is created.
+    """
+    vm = deployed_vm
+    assert _cron_lines(vm) == [], "precondition: the option must be off"
+    assert not _exists(vm, _SENTINEL), "precondition: the enabled sentinel must be absent"
+
+    _run_verb(vm)
+
+    assert not _exists(vm, _PROM), "the verb must not publish while the option is off"
+    names = vm.ssh("/bin/ls", "-A", _TEXTFILE_DIR).stdout.split()
+    assert names == [], f"the verb must leave nothing in the textfile directory while disabled: {names!r}"
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(300)
 def test_metrics_dir_missing_logs_once(deployed_vm: SmokeVM) -> None:
     """A missing textfile directory is logged once per outage and never fatal.
 
-    The option stays off, so no minute cron run can add a log line of its own to the count.
+    The option stays off, so no minute cron run can add a log line of its own to the count; the enabled
+    sentinel the publisher checks is created directly instead of by a sync pass.
 
     Scenario:
         Given a successful publish has run (re-arming the log) and the directory is then removed,
@@ -288,6 +353,8 @@ def test_metrics_dir_missing_logs_once(deployed_vm: SmokeVM) -> None:
     """
     vm = deployed_vm
     assert _cron_lines(vm) == [], "precondition: the option must be off, so no cron run touches the log"
+    touched = vm.ssh("/usr/bin/touch", _SENTINEL)
+    assert touched.returncode == 0, f"could not create {_SENTINEL}: {touched.stderr!r}"
     _run_verb(vm)
     assert _exists(vm, _PROM), "precondition: a publish into the existing directory must succeed"
 
