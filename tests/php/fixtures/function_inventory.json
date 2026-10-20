@@ -1711,6 +1711,19 @@
         "returnType": null,
         "params": []
     },
+    "pfb_dns_config_write_failed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "written",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_acl_networks": {
         "returnsRef": false,
         "returnType": "array",
@@ -2052,6 +2065,26 @@
                 "variadic": false,
                 "type": "?string",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dns_proxy_resolver_unchanged": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "why",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },
