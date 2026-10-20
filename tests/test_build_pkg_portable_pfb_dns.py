@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -49,6 +50,9 @@ TINY_GO = {
     "main.go": 'package main\n\nvar marker = "COMMITTED-SOURCE"\n\nfunc main() { println(marker) }\n',
 }
 FORGED = b"\x7fELF-forged-by-the-source-tree"
+RECIPES = ["legacy", "go"]
+by_recipe = pytest.mark.parametrize("recipe", RECIPES)
+GO_VENDOR = "../go/pfb_dns_gateway/vendor"
 
 
 class Fixture(NamedTuple):
@@ -65,6 +69,16 @@ def commit_all(repo: Path, message: str) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
+def go_do_build(*, modules_txt: bool) -> str:
+    """The `do-build` body of the ports recipe that builds pfb-dns: one `make` command over three lines."""
+    modules = "--modules-txt ${FILESDIR}/modules.txt " if modules_txt else ""
+    return (
+        "\t(cd ${WRKSRC:H} && ${SETENVI} ${WRK_ENV} ${GO_ENV} ${PYTHON_CMD} scripts/build-pfb-dns.py \\\n"
+        "\t\t--source-root . --out-dir ${WRKDIR}/pfb-dns --go ${GO_CMD} --vendored \\\n"
+        f"\t\t{modules}--freebsd-major ${{OSREL:R}})\n"
+    )
+
+
 def make_fixture(
     root: Path,
     *,
@@ -73,6 +87,10 @@ def make_fixture(
     source_files: dict[str, bytes] | None = None,
     gitignore: str | None = None,
     php_version: str = "8.3",
+    recipe: str = "legacy",
+    gh_tuple: tuple[str, ...] = (),
+    modules_txt: str | None = None,
+    do_build: str | None = None,
 ) -> Fixture:
     """A GitHub-style stable port plus its source repo.
 
@@ -80,6 +98,9 @@ def make_fixture(
     a plist derived from the stage); without it the port is the static-plist shape that installs only
     info.xml. ``go_files`` is the `go/pfb_dns_gateway` module the source repo carries (None: legacy source).
     ``php_version`` is the PHP the target's dependency ports are for (a matrix row's).
+    ``recipe`` "legacy" installs no binaries (the builder stages them itself); "go" is the recipe that
+    builds them in `do-build` (``do_build`` replaces its body) and installs them with INSTALL_PROGRAM, with
+    the vendored modules named by ``gh_tuple`` and the port's ``modules_txt`` file.
     """
     ports, portdir, ports_sha, _ = _make_channel_port(root, "stable", github=True, php_version=php_version)
     if ships_dns_proxy:
@@ -87,11 +108,20 @@ def make_fixture(
         makefile = portdir / "Makefile"
         text = makefile.read_text()
         text = text.replace("USES=\tphp python", "NO_ARCH=\tyes\nUSES=\tphp python")
-        text = text.replace(
-            "do-install:\n",
-            "do-install:\n\t(cd ${WRKSRC}/usr/local/pkg && ${COPYTREE_SHARE} . ${STAGEDIR}${PREFIX}/pkg)\n",
-        )
-        makefile.write_text(text)
+        install = "do-install:\n\t(cd ${WRKSRC}/usr/local/pkg && ${COPYTREE_SHARE} . ${STAGEDIR}${PREFIX}/pkg)\n"
+        if recipe == "go":
+            bindir = "${STAGEDIR}${PREFIX}/pkg/pfblockerng/dns_proxy/bin"
+            tuples = "GH_TUPLE=\t" + " \\\n\t\t".join(gh_tuple) + "\n" if gh_tuple else ""
+            body = do_build if do_build is not None else go_do_build(modules_txt=modules_txt is not None)
+            text = text.replace(
+                "do-install:\n", f"NO_ARCH_IGNORE=\tpfb-dns\nSTRIP=\n{tuples}do-build:\n{body}\ndo-install:\n"
+            )
+            install += f"\t${{MKDIR}} {bindir}/freebsd-amd64 {bindir}/freebsd-arm64\n"
+            for target in TARGETS:
+                install += f"\t${{INSTALL_PROGRAM}} ${{WRKDIR}}/pfb-dns/{target}/pfb-dns {bindir}/{target}\n"
+        makefile.write_text(text.replace("do-install:\n", install))
+        if modules_txt is not None:
+            (portdir / "files" / "modules.txt").write_text(modules_txt)
         ports_sha = commit_all(ports, "ship the pkg tree")
     source = root / "source"
     proxy = source / "src" / DNS_PROXY
@@ -186,14 +216,17 @@ def shipped_binaries(pkg: Path) -> list[str]:
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
-def test_package_ships_both_architectures_and_keeps_its_existing_metadata(tmp_path: Path, mode: str) -> None:
+@by_recipe
+def test_package_ships_both_architectures_and_keeps_its_existing_metadata(
+    tmp_path: Path, mode: str, recipe: str
+) -> None:
     """
     Scenario: a source tree with the gateway module, built by a port that ships the DNS proxy
       When the package is built
       Then both FreeBSD binaries are in it, executable and intact
        And the package is still NO_ARCH with every other manifest field unchanged
     """
-    with_go = make_fixture(tmp_path / "with-go")
+    with_go = make_fixture(tmp_path / "with-go", recipe=recipe)
     legacy = make_fixture(tmp_path / "legacy", go_files=None)
     assert build(legacy, mode, tmp_path / "legacy-out") == 0
     assert build(with_go, mode, tmp_path / "go-out") == 0
@@ -217,8 +250,9 @@ def test_package_ships_both_architectures_and_keeps_its_existing_metadata(tmp_pa
     )
 
 
-def test_project_package_validates_against_its_record_and_pins_every_mtime(tmp_path: Path) -> None:
-    fx = make_fixture(tmp_path)
+@by_recipe
+def test_project_package_validates_against_its_record_and_pins_every_mtime(tmp_path: Path, recipe: str) -> None:
+    fx = make_fixture(tmp_path, recipe=recipe)
     assert build(fx, "project", tmp_path / "out") == 0
     pkg = tmp_path / "out" / PKG_NAME
     assert_dual_arch_payload(pkg)
@@ -227,17 +261,19 @@ def test_project_package_validates_against_its_record_and_pins_every_mtime(tmp_p
     assert {entry["mtime"] for entry in full["files"].values()} == {EPOCH}
 
 
-def test_project_package_with_binaries_is_byte_reproducible(tmp_path: Path) -> None:
-    fx = make_fixture(tmp_path)
+@by_recipe
+def test_project_package_with_binaries_is_byte_reproducible(tmp_path: Path, recipe: str) -> None:
+    fx = make_fixture(tmp_path, recipe=recipe)
     assert build(fx, "project", tmp_path / "one") == 0
     assert build(fx, "project", tmp_path / "two") == 0
     assert_dual_arch_payload(tmp_path / "one" / PKG_NAME)
     assert_same_package_bytes(tmp_path / "one" / PKG_NAME, tmp_path / "two" / PKG_NAME)
 
 
-def test_real_gateway_source_cross_builds_into_the_package(tmp_path: Path) -> None:
+@by_recipe
+def test_real_gateway_source_cross_builds_into_the_package(tmp_path: Path, recipe: str) -> None:
     """The shipped gateway itself, not a stand-in, rides the package for both architectures."""
-    fx = make_fixture(tmp_path, go_files=None)
+    fx = make_fixture(tmp_path, go_files=None, recipe=recipe)
     shutil.copytree(ROOT / "go" / "pfb_dns_gateway", fx.source / "go" / "pfb_dns_gateway")
     sha = commit_all(fx.source, "the real gateway module")
     _git(fx.source, "tag", "-f", "v4.0.0")
@@ -250,10 +286,11 @@ def test_real_gateway_source_cross_builds_into_the_package(tmp_path: Path) -> No
         assert tf.getmember(f"{BIN}/{target}/pfb-dns").size > 1_000_000, f"{target} binary is implausibly small"
 
 
+@by_recipe
 def test_project_build_compiles_the_attested_commit_not_the_mutated_worktree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str
 ) -> None:
-    fx = make_fixture(tmp_path)
+    fx = make_fixture(tmp_path, recipe=recipe)
     real_attest = bpp._attest_checkout
 
     def attest_then_mutate(*args: Any, **kwargs: Any) -> None:
@@ -272,8 +309,9 @@ def test_project_build_compiles_the_attested_commit_not_the_mutated_worktree(
         assert b"TAMPERED-SOURCE" not in data, f"{target} compiled the post-attestation worktree"
 
 
-def test_untracked_binary_cannot_bypass_project_attestation(tmp_path: Path) -> None:
-    fx = make_fixture(tmp_path)
+@by_recipe
+def test_untracked_binary_cannot_bypass_project_attestation(tmp_path: Path, recipe: str) -> None:
+    fx = make_fixture(tmp_path, recipe=recipe)
     assert build(fx, "project", tmp_path / "clean") == 0
     assert_dual_arch_payload(tmp_path / "clean" / PKG_NAME)
 
@@ -284,8 +322,9 @@ def test_untracked_binary_cannot_bypass_project_attestation(tmp_path: Path) -> N
     assert not list((tmp_path / "dirty").glob("*.pkg")), "a package was written from a dirty source tree"
 
 
-def test_ignored_binary_in_the_tree_is_neither_shipped_nor_trusted(tmp_path: Path) -> None:
-    fx = make_fixture(tmp_path, gitignore="bin/\n")
+@by_recipe
+def test_ignored_binary_in_the_tree_is_neither_shipped_nor_trusted(tmp_path: Path, recipe: str) -> None:
+    fx = make_fixture(tmp_path, gitignore="bin/\n", recipe=recipe)
     forged = fx.source / "src" / DNS_PROXY / "bin" / "freebsd-amd64" / "pfb-dns"
     forged.parent.mkdir(parents=True)
     forged.write_bytes(FORGED)
@@ -298,10 +337,12 @@ def test_ignored_binary_in_the_tree_is_neither_shipped_nor_trusted(tmp_path: Pat
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
+@by_recipe
 def test_binary_already_in_the_source_tree_fails_the_build(
-    tmp_path: Path, capfd: pytest.CaptureFixture[str], mode: str
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], mode: str, recipe: str
 ) -> None:
-    fx = make_fixture(tmp_path, source_files={f"src/{DNS_PROXY}/bin/freebsd-amd64/pfb-dns": FORGED})
+    forged = {f"src/{DNS_PROXY}/bin/freebsd-amd64/pfb-dns": FORGED}
+    fx = make_fixture(tmp_path, source_files=forged, recipe=recipe)
     assert build(fx, mode, tmp_path / "out") == 1
     assert "dns_proxy/bin" in capfd.readouterr().err
     assert not list((tmp_path / "out").glob("*.pkg")), "a package shipped a source-tree binary"
@@ -320,10 +361,11 @@ def test_legacy_source_without_a_go_module_needs_no_go_and_ships_no_binaries(
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
+@by_recipe
 def test_go_source_without_a_go_toolchain_fails_and_writes_no_package(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str, recipe: str
 ) -> None:
-    fx = make_fixture(tmp_path)
+    fx = make_fixture(tmp_path, recipe=recipe)
     without_go_on_path(tmp_path, monkeypatch)
     assert build(fx, mode, tmp_path / "out") == 1
     assert "pfB-DNS" in capfd.readouterr().err
@@ -331,10 +373,12 @@ def test_go_source_without_a_go_toolchain_fails_and_writes_no_package(
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
+@by_recipe
 def test_go_compile_error_fails_the_build_and_writes_no_package(
-    tmp_path: Path, capfd: pytest.CaptureFixture[str], mode: str
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], mode: str, recipe: str
 ) -> None:
-    fx = make_fixture(tmp_path, go_files={**TINY_GO, "broken.go": "package main\n\nvar _ = undefinedSymbol\n"})
+    broken = {**TINY_GO, "broken.go": "package main\n\nvar _ = undefinedSymbol\n"}
+    fx = make_fixture(tmp_path, go_files=broken, recipe=recipe)
     assert build(fx, mode, tmp_path / "out") == 1
     assert "pfB-DNS" in capfd.readouterr().err
     assert not list((tmp_path / "out").glob("*.pkg")), "a package was written after the Go build failed"
@@ -351,9 +395,10 @@ def test_port_that_does_not_ship_the_dns_proxy_skips_the_go_build(
     assert shipped_binaries(tmp_path / "out" / PKG_NAME) == []
 
 
-def test_remote_tag_source_includes_the_go_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@by_recipe
+def test_remote_tag_source_includes_the_go_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str) -> None:
     """The codeload tarball carries go/ beside src/, so a tag build gets the binaries too."""
-    fx = make_fixture(tmp_path)
+    fx = make_fixture(tmp_path, recipe=recipe)
     archive = subprocess.run(
         ["git", "-C", str(fx.source), "archive", "--format=tar", "--prefix=pfsense-4.0.0/", "HEAD"],
         capture_output=True,
@@ -371,9 +416,10 @@ def test_remote_tag_source_includes_the_go_module(tmp_path: Path, monkeypatch: p
     assert_dual_arch_payload(tmp_path / "out" / PKG_NAME)
 
 
-def test_project_rejects_a_go_tree_that_is_a_symlink(tmp_path: Path) -> None:
+@by_recipe
+def test_project_rejects_a_go_tree_that_is_a_symlink(tmp_path: Path, recipe: str) -> None:
     """The snapshot now carries `go/` too, so a tracked link there must fail like one under src/."""
-    fx = make_fixture(tmp_path, go_files=None)
+    fx = make_fixture(tmp_path, go_files=None, recipe=recipe)
     outside = tmp_path / "outside-module"
     outside.mkdir()
     for name, text in TINY_GO.items():
@@ -408,8 +454,8 @@ def matrix_row(major: int) -> dict[str, object]:
     return dict(next(r for r in _LIVE_BUILD_ROWS if r["freebsd_major"] == str(major) and r["variant"] == "CE"))
 
 
-def leg_make_fixture(root: Path, major: int) -> Fixture:
-    return make_fixture(root, php_version=str(matrix_row(major)["php_version"]))
+def leg_make_fixture(root: Path, major: int, recipe: str) -> Fixture:
+    return make_fixture(root, php_version=str(matrix_row(major)["php_version"]), recipe=recipe)
 
 
 def leg_args(fx: Fixture, mode: str, out: Path, major: int) -> list[str]:
@@ -427,11 +473,12 @@ def leg_args(fx: Fixture, mode: str, out: Path, major: int) -> list[str]:
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
+@by_recipe
 def test_a_binary_linked_for_a_newer_freebsd_than_the_leg_fails_and_writes_no_package(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str, recipe: str
 ) -> None:
     # Given a toolchain whose binaries carry the ABI tag of FreeBSD 16
-    fx = leg_make_fixture(tmp_path, 15)
+    fx = leg_make_fixture(tmp_path, 15, recipe)
     forged_go_on_path(tmp_path, monkeypatch, forgery="abi-note", value=1600000)
 
     # When the FreeBSD 15 leg builds the package
@@ -444,11 +491,12 @@ def test_a_binary_linked_for_a_newer_freebsd_than_the_leg_fails_and_writes_no_pa
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
+@by_recipe
 def test_the_same_binaries_ship_on_the_leg_whose_freebsd_is_new_enough(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, recipe: str
 ) -> None:
     # Given the same toolchain, which the FreeBSD 15 leg refuses
-    fx = leg_make_fixture(tmp_path, 16)
+    fx = leg_make_fixture(tmp_path, 16, recipe)
     forged_go_on_path(tmp_path, monkeypatch, forgery="abi-note", value=1600000)
 
     # When the FreeBSD 16 leg builds the package
@@ -460,3 +508,188 @@ def test_the_same_binaries_ship_on_the_leg_whose_freebsd_is_new_enough(
     full, _compact, tf = _read_pkg(pkg)
     assert full["abi"] == "FreeBSD:16:*"
     assert {freebsd_abi_note(member(tf, f"{BIN}/{target}/pfb-dns")) for target in TARGETS} == {1600000}
+
+
+def direct_helper_binaries(source: Path, out: Path) -> dict[str, bytes]:
+    """What build-pfb-dns.py itself writes for ``source`` at the default leg (FreeBSD 15)."""
+    helper = ROOT / "scripts" / "build-pfb-dns.py"
+    argv = [sys.executable, str(helper), "--source-root", str(source), "--out-dir", str(out), "--freebsd-major", "15"]
+    subprocess.run(argv, check=True, capture_output=True)
+    return {target: (out / target / "pfb-dns").read_bytes() for target in TARGETS}
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_recipe_do_build_and_install_program_ship_both_binaries(tmp_path: Path, mode: str) -> None:
+    """
+    Scenario: a port whose `do-build` builds pfb-dns and whose `do-install` uses INSTALL_PROGRAM
+      When the package is built
+      Then both binaries ship at mode 0555, byte for byte what build-pfb-dns.py writes for that source
+    """
+    fx = make_fixture(tmp_path, recipe="go")
+
+    assert build(fx, mode, tmp_path / "out") == 0
+
+    pkg = tmp_path / "out" / PKG_NAME
+    assert_dual_arch_payload(pkg)
+    _full, _compact, tf = _read_pkg(pkg)
+    for target, direct in direct_helper_binaries(fx.source, tmp_path / "direct").items():
+        assert member(tf, f"{BIN}/{target}/pfb-dns") == direct, f"{target} is not what the helper builds"
+
+
+def test_the_go_recipe_ships_the_same_package_as_the_builders_own_staging(tmp_path: Path) -> None:
+    legacy = make_fixture(tmp_path / "legacy")
+    recipe = make_fixture(tmp_path / "recipe", recipe="go")
+
+    assert build(legacy, "native", tmp_path / "legacy-out") == 0
+    assert build(recipe, "native", tmp_path / "recipe-out") == 0
+
+    assert_same_package_bytes(tmp_path / "legacy-out" / PKG_NAME, tmp_path / "recipe-out" / PKG_NAME)
+
+
+def modules_txt_for(*modules: tuple[str, str]) -> str:
+    return "".join(f"# {path} {version}\n## explicit; go 1.21\n{path}\n" for path, version in modules)
+
+
+def gh_tuples_for(*modules: tuple[str, str]) -> tuple[str, ...]:
+    """GH_TUPLE entries that unpack the given (module path, version) pairs into the vendor tree."""
+    return tuple(
+        f"owner:project{index}:{version}:group{index}/{GO_VENDOR}/{path}"
+        for index, (path, version) in enumerate(modules)
+    )
+
+
+QUIC = ("github.com/quic-go/quic-go", "v0.64.0")
+OLDER_QUIC = ("github.com/quic-go/quic-go", "v0.63.0")
+NET = ("golang.org/x/net", "v0.56.0")
+PSEUDO = ("example.test/dep", "v0.0.0-20260101000000-0123456789ab")
+REPLACED = "# github.com/quic-go/quic-go v0.64.0 => example.test/fork v1.0.0\n## explicit; go 1.21\n"
+UNVENDORED = "o:p:v0.64.0:g/vendor/github.com/quic-go/quic-go"
+
+# (id, the port's GH_TUPLE, the port's modules.txt (None: the recipe names none), what the error must say)
+PARITY_FAILURES = [
+    ("version-differs", gh_tuples_for(OLDER_QUIC, NET), modules_txt_for(QUIC, NET), "quic-go"),
+    ("tuple-missing", gh_tuples_for(NET), modules_txt_for(QUIC, NET), "quic-go"),
+    ("module-missing-from-modules-txt", gh_tuples_for(QUIC, NET), modules_txt_for(NET), "quic-go"),
+    ("empty-gh-tuple", (), modules_txt_for(QUIC), "quic-go"),
+    ("no-modules-txt", gh_tuples_for(QUIC), None, "quic-go"),
+    ("replace-directive", gh_tuples_for(QUIC), REPLACED + "github.com/quic-go/quic-go\n", "=>"),
+    ("pseudo-version", gh_tuples_for(PSEUDO), modules_txt_for(PSEUDO), "pseudo-version"),
+    ("tuple-outside-the-vendor-tree", (UNVENDORED,), modules_txt_for(QUIC), "vendor"),
+]
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+@pytest.mark.parametrize(
+    ("gh_tuple", "modules_txt", "says"), [row[1:] for row in PARITY_FAILURES], ids=[row[0] for row in PARITY_FAILURES]
+)
+def test_gh_tuple_that_disagrees_with_modules_txt_fails_before_go_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    mode: str,
+    gh_tuple: tuple[str, ...],
+    modules_txt: str | None,
+    says: str,
+) -> None:
+    fx = make_fixture(tmp_path, recipe="go", gh_tuple=gh_tuple, modules_txt=modules_txt)
+    without_go_on_path(tmp_path, monkeypatch)
+
+    assert build(fx, mode, tmp_path / "out") == 1
+
+    err = capfd.readouterr().err
+    assert says in err, err
+    assert "Go toolchain not found" not in err, "Go was started although the recipe's modules disagree"
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was written from disagreeing modules"
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_a_gh_tuple_that_matches_modules_txt_goes_on_to_the_go_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str
+) -> None:
+    fx = make_fixture(tmp_path, recipe="go", gh_tuple=gh_tuples_for(QUIC, NET), modules_txt=modules_txt_for(QUIC, NET))
+    without_go_on_path(tmp_path, monkeypatch)
+
+    assert build(fx, mode, tmp_path / "out") == 1
+
+    assert "Go toolchain not found" in capfd.readouterr().err, "the matching modules were refused before Go"
+
+
+DO_BUILD = go_do_build(modules_txt=False)
+UNRECOGNISED_DO_BUILD = {
+    "raw-go-build": "\t${GO_CMD} build -o ${WRKDIR}/pfb-dns/freebsd-amd64/pfb-dns .\n",
+    "extra-flag": DO_BUILD.replace("--vendored", "--vendored --debug"),
+    "other-source-root": DO_BUILD.replace("--source-root .", "--source-root .."),
+    "not-vendored": DO_BUILD.replace(" --vendored", ""),
+    "other-go": DO_BUILD.replace("${GO_CMD}", "/opt/go/bin/go"),
+    "other-major": DO_BUILD.replace("${OSREL:R}", "99"),
+    "out-dir-outside-wrkdir": DO_BUILD.replace("${WRKDIR}/pfb-dns", "${STAGEDIR}/pfb-dns"),
+    "second-command": DO_BUILD + "\t${ECHO_MSG} done\n",
+}
+
+
+@pytest.mark.parametrize("do_build", UNRECOGNISED_DO_BUILD.values(), ids=UNRECOGNISED_DO_BUILD.keys())
+def test_an_unrecognised_do_build_fails(tmp_path: Path, capfd: pytest.CaptureFixture[str], do_build: str) -> None:
+    fx = make_fixture(tmp_path, recipe="go", do_build=do_build)
+
+    assert build(fx, "native", tmp_path / "out") == 1
+
+    assert "do-build" in capfd.readouterr().err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was built from a do-build the builder cannot follow"
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_go_recipe_with_a_legacy_source_fails(tmp_path: Path, capfd: pytest.CaptureFixture[str], mode: str) -> None:
+    fx = make_fixture(tmp_path, go_files=None, recipe="go")
+
+    assert build(fx, mode, tmp_path / "out") == 1
+
+    err = capfd.readouterr().err
+    assert "go/pfb_dns_gateway" in err and "rebase" in err, err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package without pfb-dns was built from a go recipe"
+
+
+@pytest.fixture(scope="module")
+def real_modules_txt(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """The vendor/modules.txt Go writes for this checkout's real gateway."""
+    module = tmp_path_factory.mktemp("real-modules") / "pfb_dns_gateway"
+    shutil.copytree(ROOT / "go" / "pfb_dns_gateway", module)
+    subprocess.run(["go", "mod", "vendor"], cwd=module, check=True, capture_output=True, timeout=1800)
+    return (module / "vendor" / "modules.txt").read_text()
+
+
+def real_gateway_fixture(root: Path, modules_txt: str) -> Fixture:
+    """The go recipe over the real gateway, its GH_TUPLE naming the modules ``modules_txt`` lists."""
+    modules = [tuple(line[2:].split()) for line in modules_txt.splitlines() if line.startswith("# ")]
+    pairs = [(path, version) for path, version in modules]
+    fx = make_fixture(root, go_files=None, recipe="go", gh_tuple=gh_tuples_for(*pairs), modules_txt=modules_txt)
+    shutil.copytree(ROOT / "go" / "pfb_dns_gateway", fx.source / "go" / "pfb_dns_gateway")
+    sha = commit_all(fx.source, "the real gateway module")
+    _git(fx.source, "tag", "-f", "v4.0.0")
+    return fx._replace(source_sha=sha)
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_the_ports_modules_of_the_real_gateway_build_the_package(
+    tmp_path: Path, real_modules_txt: str, mode: str
+) -> None:
+    fx = real_gateway_fixture(tmp_path, real_modules_txt)
+
+    assert build(fx, mode, tmp_path / "out") == 0
+
+    assert_dual_arch_payload(tmp_path / "out" / PKG_NAME)
+
+
+def test_port_modules_txt_that_differs_from_the_source_fails(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], real_modules_txt: str
+) -> None:
+    # Given a port whose tuples still match its modules.txt headers, but whose file lost a package line
+    lines = real_modules_txt.splitlines(keepends=True)
+    del lines[next(index for index, line in enumerate(lines) if not line.startswith("#"))]
+    fx = real_gateway_fixture(tmp_path, "".join(lines))
+
+    assert build(fx, "project", tmp_path / "out") == 1
+
+    assert "modules.txt" in capfd.readouterr().err
+    assert not list((tmp_path / "out").glob("*.pkg")), (
+        "a package was built from a modules.txt the source disagrees with"
+    )

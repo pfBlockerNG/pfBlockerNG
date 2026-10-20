@@ -11,9 +11,11 @@
 # hardcoded, pfBlockerNG-specific file list. So when the port gains files or
 # changes dependencies, this tool keeps up with the real `make package` inputs.
 #
-# One addition has no port recipe: a source carrying go/pfb_dns_gateway also ships the pfB-DNS
-# gateway, cross-compiled for FreeBSD amd64 and arm64 by build-pfb-dns.py and staged beside the
-# DNS proxy (stage_pfb_dns); the package stays NO_ARCH. See docs/build-pkg-portable.md.
+# A source carrying go/pfb_dns_gateway also ships the pfB-DNS gateway, cross-compiled for FreeBSD
+# amd64 and arm64 by build-pfb-dns.py, the package staying NO_ARCH. A port whose recipe has a
+# `do-build` (the go recipe: GH_TUPLE vendor tree, files/modules.txt, INSTALL_PROGRAM) builds it
+# there: run_do_build emulates that one line. A recipe without `do-build` gets the binaries from
+# stage_pfb_dns. See docs/build-pkg-portable.md.
 #
 # It supports both source layouts used by the four static native recipes:
 #   * USE_GITHUB: source fetched from GitHub into ${WRKSRC}
@@ -63,6 +65,7 @@ import tempfile
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, NoReturn
 
 from pfb_pkg import (
     CANONICAL_EMITTED_IDENTITY,
@@ -486,6 +489,10 @@ class Recipe:
         # (installed scripts/binaries are not writable) — NOT 0755.
         self._install(args, "0555")
 
+    def _cmd_install_program(self, args: list[str]) -> None:
+        # INSTALL_PROGRAM also installs with ${BINMODE} (0555); the go recipe sets STRIP=, so no strip step is lost.
+        self._install(args, "0555")
+
     def _cmd_copytree_share(self, args: list[str]) -> None:
         if len(args) != 2:
             raise BuildError(f"COPYTREE_SHARE expects source and destination: {args!r}")
@@ -514,10 +521,9 @@ class Recipe:
         for s in paths[:-1]:
             shutil.move(s, paths[-1])
 
-    # NB: cp / ln / rm / install_program are intentionally NOT implemented. The
-    # three pfBlockerNG port Makefiles drive only MKDIR / INSTALL_DATA /
-    # INSTALL_SCRIPT / SED / REINPLACE_CMD (plus MV, handled above); an unknown
-    # ${MACRO} is a hard error (see _exec), so re-add a command the day a port
+    # NB: cp / ln / rm are intentionally NOT implemented. The pfBlockerNG port Makefiles drive only
+    # MKDIR / INSTALL_DATA / INSTALL_SCRIPT / INSTALL_PROGRAM / SED / REINPLACE_CMD (plus MV, handled
+    # above); an unknown ${MACRO} is a hard error (see _exec), so re-add a command the day a port
     # actually needs it.
 
     def _cmd_reinplace_cmd(self, args: list[str]) -> None:
@@ -1059,14 +1065,36 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
 
 # The tracked top-level dir holding the Go modules build-pfb-dns.py builds from (go/pfb_dns_gateway).
 _GO_SOURCE_DIR = "go"
+_GO_MODULE = Path(_GO_SOURCE_DIR) / "pfb_dns_gateway"
 _PFB_DNS_HELPER = Path(__file__).resolve().with_name("build-pfb-dns.py")
 _DNS_PROXY_DIR = "pkg/pfblockerng/dns_proxy"
+
+
+def _run_pfb_dns_helper(
+    source_tree: Path, out_dir: Path, freebsd_major: str, modules_txt: Path | None = None
+) -> dict[str, Any]:
+    """Run this checkout's build-pfb-dns.py (never the source's) on the acquired source; returns its record."""
+    argv = [
+        sys.executable,
+        str(_PFB_DNS_HELPER),
+        "--source-root", str(source_tree),
+        "--out-dir", str(out_dir),
+        "--freebsd-major", freebsd_major,
+    ]  # fmt: skip
+    if modules_txt is not None:
+        argv += ["--modules-txt", str(modules_txt)]
+    result = subprocess.run(argv, stdout=subprocess.PIPE, text=True, check=False)  # stderr streams through
+    if result.returncode != 0:
+        raise BuildError("pfB-DNS cross-build failed")
+    record: dict[str, Any] = json.loads(result.stdout)
+    return record
 
 
 def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, workdir: Path, freebsd_major: str) -> None:
     """Cross-build pfB-DNS from the acquired source and stage both binaries under ``dns_proxy``/bin.
 
-    The package stays NO_ARCH: every architecture's binary ships and the runtime picks one. The
+    For a port whose recipe has no `do-build` (it builds and installs nothing of pfB-DNS itself). The
+    package stays NO_ARCH: every architecture's binary ships and the runtime picks one. The
     binaries are built here, never read from the source, so a tree that already carries a bin/ fails.
     A port that installs no dns_proxy payload, or a legacy source without the Go module, gets none.
     The leg's ``freebsd_major`` goes to the helper, which refuses a binary linked for a newer FreeBSD.
@@ -1079,18 +1107,104 @@ def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, wor
         )
     if source_tree is None or not dns_proxy.is_dir():
         return
-    argv = [
-        sys.executable,
-        str(_PFB_DNS_HELPER),
-        "--source-root", str(source_tree),
-        "--out-dir", str(workdir),
-        "--freebsd-major", freebsd_major,
-    ]  # fmt: skip
-    result = subprocess.run(argv, stdout=subprocess.PIPE, text=True, check=False)  # stderr streams through
-    if result.returncode != 0:
-        raise BuildError("pfB-DNS cross-build failed")
-    for target, built in json.loads(result.stdout)["targets"].items():
+    for target, built in _run_pfb_dns_helper(source_tree, workdir, freebsd_major)["targets"].items():
         recipe._cmd_install_script([built["path"], f"{bin_dir / target}/"])
+
+
+# The one `do-build` line of the go recipe (FreeBSD-ports): its args are checked, its env words are not
+# needed (the helper scrubs its own), and the helper that runs is the builder's trusted copy.
+_DO_BUILD_LINE = re.compile(
+    r"\(cd \$\{WRKSRC:H\} && \$\{SETENVI\} \$\{WRK_ENV\} \$\{GO_ENV\} \$\{PYTHON_CMD\} "
+    r"scripts/build-pfb-dns\.py (?P<args>.+)\)"
+)
+_VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
+_PSEUDO_VERSION = re.compile(r"-\d{14}-[0-9a-f]{12}$")
+
+
+class _DoBuildArgs(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise BuildError(f"unsupported do-build arguments ({message}): teach build-pkg-portable.py")
+
+
+def _parse_do_build(mk: Makefile) -> tuple[Path, Path | None]:
+    """The (--out-dir, --modules-txt) of the port's do-build, which must be exactly the line this builder emulates."""
+    lines = [line for line in (line.strip().lstrip("@-").strip() for line in mk.recipes["do-build"]) if line]
+    match = _DO_BUILD_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
+    if match is None:
+        raise BuildError(
+            "unsupported do-build: the only recipe this builder follows is the single "
+            "`(cd ${WRKSRC:H} && ... scripts/build-pfb-dns.py ...)` line; "
+            f"teach build-pkg-portable.py (got {lines!r})"
+        )
+    parser = _DoBuildArgs(add_help=False, allow_abbrev=False)
+    parser.add_argument("--source-root", required=True, choices=["."])
+    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--go", required=True, choices=["${GO_CMD}"])
+    parser.add_argument("--vendored", action="store_true", required=True)
+    parser.add_argument("--modules-txt")
+    parser.add_argument("--freebsd-major", required=True, choices=["${OSREL:R}"])
+    try:
+        parsed = parser.parse_args(shlex.split(match["args"]))
+    except ValueError as exc:
+        raise BuildError(f"unsupported do-build arguments ({exc}): teach build-pkg-portable.py") from None
+    wrkdir = Path(os.path.normpath(mk.get("WRKDIR")))
+    out_dir = Path(os.path.normpath(mk.expand(parsed.out_dir)))
+    if not out_dir.is_relative_to(wrkdir):
+        raise BuildError(f"unsupported do-build: --out-dir {out_dir} is not under ${{WRKDIR}} ({wrkdir})")
+    return out_dir, Path(mk.expand(parsed.modules_txt)) if parsed.modules_txt else None
+
+
+def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
+    """GH_TUPLE (what the port unpacks into vendor/) must name exactly the modules, at the versions, of modules.txt."""
+    unpacked: set[tuple[str, str]] = set()
+    for entry in shlex.split(mk.get("GH_TUPLE")):
+        parts = entry.split(":", 3)
+        if len(parts) != 4:
+            raise BuildError(f"GH_TUPLE entry {entry!r} is not account:project:tag:group/subdir")
+        _group, _, subdir = parts[3].partition("/")
+        if not subdir.startswith(_VENDOR_PREFIX) or subdir == _VENDOR_PREFIX:
+            raise BuildError(f"GH_TUPLE entry {entry!r} does not unpack under {_VENDOR_PREFIX} (the gateway's vendor/)")
+        unpacked.add((subdir[len(_VENDOR_PREFIX) :], parts[2]))
+    listed: set[tuple[str, str]] = set()
+    for line in modules_txt.read_text(encoding="utf-8").splitlines() if modules_txt else []:
+        if not line.startswith("# "):
+            continue
+        fields = line[2:].split()
+        if len(fields) != 2:  # also every `# path version => replacement` line: no GH_TUPLE entry can supply it
+            raise BuildError(f"{modules_txt}: unsupported module line {line!r}")
+        if _PSEUDO_VERSION.search(fields[1]):
+            raise BuildError(f"{modules_txt}: {fields[1]} is a pseudo-version, which no GH_TUPLE tag can name")
+        listed.add((fields[0], fields[1]))
+    if unpacked != listed:
+        differences = [f"GH_TUPLE only: {path} {version}" for path, version in sorted(unpacked - listed)]
+        differences += [f"modules.txt only: {path} {version}" for path, version in sorted(listed - unpacked)]
+        raise BuildError("GH_TUPLE and the recipe's modules.txt disagree:\n  " + "\n  ".join(differences))
+
+
+def _refuse_committed_binaries(wrksrc: Path) -> None:
+    found = next(wrksrc.rglob("dns_proxy/bin"), None)
+    if found is not None:
+        raise BuildError(
+            f"the source ships {found.relative_to(wrksrc)}: "
+            "pfB-DNS binaries are built by the package builder, never committed"
+        )
+
+
+def run_do_build(mk: Makefile, source_tree: Path | None, freebsd_major: str) -> None:
+    """Emulate the go recipe's `do-build`: build pfb-dns into its ${WRKDIR}/pfb-dns, as `make` would.
+
+    The recipe runs the source's `build-pfb-dns.py --vendored` over GH_TUPLE's vendor tree; here the
+    builder's own copy builds the same module from go.mod, and the shared checks (modules.txt, the
+    leg's FreeBSD, the ELF facts) hold either way. The recipe's two modules lists must agree first.
+    """
+    out_dir, modules_txt = _parse_do_build(mk)
+    _check_gh_tuple_parity(mk, modules_txt)
+    if source_tree is None or not (source_tree / _GO_MODULE / "go.mod").is_file():
+        raise BuildError(
+            f"this FreeBSD-ports recipe builds pfb-dns, but the source has no {_GO_MODULE} "
+            "(it predates the gateway): rebase onto a commit that carries it"
+        )
+    _run_pfb_dns_helper(source_tree, out_dir, freebsd_major, modules_txt)
 
 
 def _download(url: str, dest: Path) -> None:
@@ -1916,18 +2030,24 @@ def run_build(args: argparse.Namespace) -> Build:
         recipe.run("do-extract")
     if "post-extract" in mk.recipes:
         recipe.run("post-extract")
+    freebsd_major = str(project_record["matrix_row"]["freebsd_major"]) if project_record else abi.split(":")[1]
+    source_tree = getattr(args, "_source_tree", None)
+    if "do-build" in mk.recipes:
+        _refuse_committed_binaries(Path(mk.get("WRKSRC")))
+        run_do_build(mk, source_tree, freebsd_major)
     if "do-install" not in mk.recipes:
         raise BuildError("port has no do-install target — unexpected for a pfSense pkg port")
     recipe.run("do-install")
     if "post-install" in mk.recipes:
         recipe.run("post-install")
-    stage_pfb_dns(
-        recipe,
-        Path(seed["STAGEDIR"]) / prefix.lstrip("/") / _DNS_PROXY_DIR,
-        getattr(args, "_source_tree", None),
-        workdir / "pfb-dns",
-        str(project_record["matrix_row"]["freebsd_major"]) if project_record else abi.split(":")[1],
-    )
+    if "do-build" not in mk.recipes:
+        stage_pfb_dns(
+            recipe,
+            Path(seed["STAGEDIR"]) / prefix.lstrip("/") / _DNS_PROXY_DIR,
+            source_tree,
+            workdir / "pfb-dns",
+            freebsd_major,
+        )
 
     if project_record:
         epoch = _checked_mtime(project_record["source_date_epoch"], "build record source_date_epoch")

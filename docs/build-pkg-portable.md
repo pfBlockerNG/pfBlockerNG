@@ -23,6 +23,7 @@ contain only `src/`.
 - [Target facts (ABI / Python / PHP)](#target-facts-abi--python--php)
 - [Dependency resolution](#dependency-resolution)
 - [pfB-DNS binaries (dual-architecture payload)](#pfb-dns-binaries-dual-architecture-payload)
+- [Ports recipe for pfB-DNS](#ports-recipe-for-pfb-dns)
 - [Fidelity vs `make package`](#fidelity-vs-make-package)
 - [Output format](#output-format)
 - [Exit status and output streams](#exit-status-and-output-streams)
@@ -50,10 +51,11 @@ or dependencies, so it tracks changes to the port automatically:
    `GH_TAGNAME`, or use a local checkout (`--local-src`). Embedded-files recipes
    install from their `files/` directory, so nothing is fetched.
 3. **Replay the recipe.** The tool interprets the port's `do-extract`,
-   `post-extract` and `do-install` targets with a small command vocabulary
-   (`MKDIR`, `INSTALL_DATA`, `INSTALL_SCRIPT`, `MV`, `REINPLACE_CMD`/`SED` —
-   `CP`/`LN`/`RM`/`INSTALL_PROGRAM` were deliberately dropped, #502, as no port
-   recipe uses them) into a controlled staging directory — the
+   `post-extract`, `do-build` and `do-install` targets with a small command vocabulary
+   (`MKDIR`, `INSTALL_DATA`, `INSTALL_SCRIPT`, `INSTALL_PROGRAM`, `MV`,
+   `REINPLACE_CMD`/`SED` — `CP`/`LN`/`RM` were deliberately dropped, #502, as no port
+   recipe uses them; `do-build` is accepted in exactly one shape, see
+   [Ports recipe for pfB-DNS](#ports-recipe-for-pfb-dns)) into a controlled staging directory — the
    same effect `make` would have, minus the shell. `REINPLACE_CMD` keeps the
    `<file>.bak` backup `bsd.port.mk` defaults to unless the recipe passes
    `-i ''`, so a stray backup is staged (or fails the plist check) exactly as
@@ -321,11 +323,77 @@ marker is ever published, and the activation's readiness wait rolls pfB-DNS back
 - **Provenance.** Each binary's sha256 is the file checksum in `+MANIFEST`; in project
   mode the build record's `source_sha` pins the source. The same source and toolchain give
   the same bytes (file mtime is `go.mod`'s, or the record's `source_date_epoch`).
-- **Skipped.** A legacy source without the module, or a port that installs no
-  `dns_proxy` payload (the static-plist channels), builds nothing and needs no Go.
-- **Native `make package`.** The ports `Makefile` builds nothing, so a native FreeBSD
-  `make package` has no Go step and its Go build is **not exercised**; no parity with the
-  portable output is claimed for these binaries.
+- **Skipped.** A port that installs no `dns_proxy` payload (the static-plist channels)
+  builds nothing and needs no Go. A legacy source without the module is skipped only by a
+  recipe without `do-build`; with the [ports recipe](#ports-recipe-for-pfb-dns) it fails,
+  naming the rebase it needs.
+- **Which step builds.** A recipe with a `do-build` target builds the binaries itself and
+  the builder follows it. A recipe without one builds nothing, and the builder stages
+  the binaries from this script (the transitional path for channels whose ports have not
+  adopted the recipe).
+- **Parity with `make package`.** The port compiles with the Go of its own `USES=go`
+  (the fork's `lang/go126`), the builder with the toolchain pinned in
+  [`scripts/go_toolchain.py`](../scripts/go_toolchain.py). Byte parity between the two is
+  **not required and not claimed**; what both share is the source, the build flags, the
+  vendored modules (`files/modules.txt`) and the ELF and ABI checks above. A real FreeBSD
+  `make package` of the recipe has not been run.
+
+## Ports recipe for pfB-DNS
+
+A FreeBSD-ports recipe that builds pfB-DNS itself (nightly now; edge once its release
+line carries `go/`) has these parts:
+
+- `USES=go:1.26+,modules,no_targets`, `NO_ARCH_IGNORE=pfb-dns` (`qa.sh` flags every
+  FreeBSD ELF in a `NO_ARCH` package otherwise) and an empty `STRIP=` (Go linked the
+  binaries stripped already; `INSTALL_PROGRAM` must not rewrite the bytes `do-build` checked).
+- `GH_TUPLE`: one entry per module the gateway vendors, each unpacked to
+  `../go/pfb_dns_gateway/vendor/<module path>` (the module sits beside `src/`, which is
+  `WRKSRC`).
+- `files/modules.txt`: Go's own `vendor/modules.txt` for that tree. GH_TUPLE alone does
+  not build, because Go 1.23 and later refuse a vendor tree without it.
+- `do-build`, exactly this one line (its continuation lines are indented with tabs in the
+  port):
+
+  ```make
+  do-build:
+      (cd ${WRKSRC:H} && ${SETENVI} ${WRK_ENV} ${GO_ENV} ${PYTHON_CMD} scripts/build-pfb-dns.py \
+          --source-root . --out-dir ${WRKDIR}/pfb-dns --go ${GO_CMD} --vendored \
+          --modules-txt ${FILESDIR}/modules.txt --freebsd-major ${OSREL:R})
+  ```
+
+- `do-install`: the `COPYTREE_SHARE` of the tree, then one `INSTALL_PROGRAM` (mode `0555`)
+  per `${WRKDIR}/pfb-dns/freebsd-<arch>/pfb-dns` into
+  `${PREFIX}/pkg/pfblockerng/dns_proxy/bin/freebsd-<arch>/`. Never an `INSTALL` line for
+  `dns_proxy/pfb_dns.sh`: it stays `0644` and runs as `/bin/sh`.
+
+The builder follows that recipe instead of re-deriving it. It accepts only that `do-build`
+line (any other shape, flag or value is an error that says to teach the builder), refuses a
+source tree that already carries `dns_proxy/bin`, and builds the attested source with its
+own copy of `build-pfb-dns.py` (never the source's), with the same `--modules-txt` and the leg's
+FreeBSD major. Before any Go runs it checks that `GH_TUPLE` and `files/modules.txt` name the
+same modules at the same versions: every entry unpacks under
+`../go/pfb_dns_gateway/vendor/`, `=>` replace lines and pseudo-versions (which no tag can
+name) are refused, and so are a tuple without a `modules.txt` line and the reverse.
+
+### Regenerating GH_TUPLE and modules.txt
+
+Do this whenever `go/pfb_dns_gateway/go.mod` or `go.sum` changes:
+
+1. `cd go/pfb_dns_gateway`
+2. `go mod vendor -o "$VENDOR"` (any empty directory)
+3. `modules2tuple "$VENDOR/modules.txt"` prints the `GH_TUPLE` lines; prefix each
+   subdirectory with `../go/pfb_dns_gateway/` (`vendor/<path>` becomes
+   `../go/pfb_dns_gateway/vendor/<path>`).
+4. `cp "$VENDOR/modules.txt" <port>/files/modules.txt`
+
+### Paired-PR rule
+
+A change to `go.mod` or `go.sum` needs a paired FreeBSD-ports PR that updates `GH_TUPLE` and
+`files/modules.txt` of every recipe that tracks that source: nightly for `devel`, edge for its
+release line. Until both repositories agree the builder fails closed, nightly included.
+`release-published.yml` bumps only `PORTVERSION` and `PORTREVISION`, so a release whose
+`go.mod` differs from the edge recipe fails at build time, before anything is published.
+Check the pair before either lands by dispatching the build with `ports_ref=<the ports PR branch>`.
 
 ## Fidelity vs `make package`
 
@@ -337,8 +405,8 @@ files matches exactly:
   `abi`, `arch`, `prefix`, `flatsize`, `licenselogic`, `licenses`, `categories`,
   `desc`, `annotations`;
 - every payload file: path, `sha256` checksum, and **permissions**
-  (`INSTALL_DATA` → `0644`, `INSTALL_SCRIPT` → `0555` — FreeBSD `BINMODE`; the builder
-  has no `INSTALL_PROGRAM`, so the pfB-DNS binaries are staged by the step above);
+  (`INSTALL_DATA` → `0644`, `INSTALL_SCRIPT` and `INSTALL_PROGRAM` → `0555` — FreeBSD
+  `BINMODE`);
 - `directories`; the `install` and `deinstall` scripts (byte-identical, with the
   trailing newline stripped as `pkg create` does);
 - the full dependency set: **names and origins**.

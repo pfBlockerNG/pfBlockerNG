@@ -370,6 +370,26 @@ def test_recipe_sed_rewrites_a_read_only_file_by_rename_and_keeps_its_mode(
     assert sorted(p.name for p in work.iterdir()) == sorted(["tpl.sh"] + ([f"tpl.sh{backup}"] if backup else []))
 
 
+def test_recipe_install_program_installs_with_binmode(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "prog").write_bytes(b"\x7fELF")
+    stage = tmp_path / "stage"
+    (stage / "usr/local/bin").mkdir(parents=True)
+    mk = make_mk(
+        tmp_path,
+        f"SRC=\t{src}\nSTAGEDIR=\t{stage}\nPREFIX=\t/usr/local\n"
+        "do-install:\n\t${INSTALL_PROGRAM} ${SRC}/prog ${STAGEDIR}${PREFIX}/bin\n",
+    )
+    recipe = bpp.Recipe(mk)
+
+    recipe.run("do-install")
+
+    assert (stage / "usr/local/bin/prog").read_bytes() == b"\x7fELF"
+    assert (stage / "usr/local/bin/prog").stat().st_mode & 0o777 == 0o555  # INSTALL_PROGRAM == BINMODE 0555
+    assert recipe.modes["/usr/local/bin/prog"] == "0555"
+
+
 def test_recipe_copytree_share_then_script_glob_preserves_payload_and_modes(tmp_path: Path) -> None:
     src = tmp_path / "src"
     (src / "usr/local/pkg/app").mkdir(parents=True)
@@ -437,10 +457,10 @@ def test_recipe_bare_mv_and_unknown_command(tmp_path: Path) -> None:
 
 
 def test_recipe_unused_commands_are_unsupported(tmp_path: Path) -> None:
-    # cp / ln / rm / install_program were removed (#502 B4): the port Makefiles
-    # never emit them, so they must now fail as hard errors rather than silently
-    # carrying a maintenance burden. mv stays (exercised above), so it is NOT here.
-    for cmd in ("CP", "LN", "RM", "INSTALL_PROGRAM"):
+    # cp / ln / rm were removed (#502 B4): the port Makefiles never emit them, so they must now
+    # fail as hard errors rather than silently carrying a maintenance burden. mv stays (exercised
+    # above), so it is NOT here.
+    for cmd in ("CP", "LN", "RM"):
         mk = make_mk(tmp_path, f"do-install:\n\t${{{cmd}}} a b\n")
         with pytest.raises(bpp.BuildError, match="unsupported recipe command"):
             bpp.Recipe(mk).run("do-install")
