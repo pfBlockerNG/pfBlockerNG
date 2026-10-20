@@ -9,6 +9,8 @@ Pins that:
   added by #318 and all existing headers against collision).
 - Both Maltrail feeds carry their live endpoints and neither retired (404) URL
   is shipped anywhere in the catalog (issue #3205).
+- The ADs group offers the upstream AdGuard DNS filter, and the Firebog copy
+  stays in Firebog_Advertising (issue #3533).
 """
 
 from __future__ import annotations
@@ -37,6 +39,9 @@ _MALTRAIL_FEEDS = (
         "Maltrail_BD",
     ),
 )
+
+_ADGUARD_DNS_URL = "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
+_FIREBOG_ADGUARD_URL = "https://v.firebog.net/hosts/AdguardDNS.txt"
 
 
 @pytest.fixture(scope="module")
@@ -151,3 +156,18 @@ def test_maltrail_feeds_use_their_live_endpoints(catalog: dict) -> None:  # type
         # Scanned in the file text, not the parsed feed rows: the retired endpoint
         # must be gone from alternates and comments too, not just from a feed row.
         assert retired not in raw, f"retired (404) Maltrail endpoint still shipped: {retired}"
+
+
+def test_ads_group_offers_upstream_adguard_dns_filter_beside_firebog_copy(catalog: dict) -> None:  # type: ignore[type-arg]
+    """ADs offers AdGuard's own ABP filter; the Firebog plain-domain copy stays (issue #3533).
+
+    The Firebog copy drops the filter's @@ exceptions and every rule a plain domain
+    list cannot express, so the upstream file is offered too, not instead.
+    """
+    dnsbl = catalog.get("dnsbl", {})
+    ads = {feed.get("url"): feed.get("header") for feed in dnsbl.get("ADs", {}).get("feeds", [])}
+    assert ads.get(_ADGUARD_DNS_URL) == "AdGuard_DNS_Filter", f"ADs must offer {_ADGUARD_DNS_URL} — got {ads}"
+    firebog = {feed.get("url"): feed.get("header") for feed in dnsbl.get("Firebog_Advertising", {}).get("feeds", [])}
+    assert firebog.get(_FIREBOG_ADGUARD_URL) == "Adguard_DNS", f"Firebog copy must stay — got {firebog}"
+    headers = [h.lower() for h in _all_headers(catalog)]
+    assert headers.count("adguard_dns_filter") == 1, "AdGuard_DNS_Filter header must be unique across the catalog"
