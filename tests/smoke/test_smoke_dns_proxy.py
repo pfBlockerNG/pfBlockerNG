@@ -1213,7 +1213,10 @@ BOOTING=/var/run/booting
 # in SEEN, which `stage` reads; it ends with the probe, or as soon as it has seen RUNNING
 SEEN=$DIR/stage_seen
 /bin/rm -f "$SEEN"
-( while [ ! -e "$RUNNING" ] && kill -0 $$ 2>/dev/null; do /bin/sleep 0.05; done; [ ! -e "$RUNNING" ] || : >"$SEEN" ) &
+(
+	while [ ! -e "$RUNNING" ] && kill -0 $$ 2>/dev/null; do /bin/sleep 0.05; done
+	[ ! -e "$RUNNING" ] || true >"$SEEN"
+) &
 # pkg: 0 the package stage has not begun, 1 it has, 2 it is over and the boot is complete
 stage() {
 	if [ "$pkg" -eq 0 ] && { [ -e "$SEEN" ] || [ "$(packages)" -gt "$base" ]; }; then pkg=1; fi
