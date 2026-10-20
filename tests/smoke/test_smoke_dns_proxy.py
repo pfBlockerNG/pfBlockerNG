@@ -373,9 +373,16 @@ def _xml_text(root: ET.Element, path: str) -> str | None:
 
 
 def _listeners(vm: SmokeVM) -> list[Listener]:
-    """Every socket `sockstat -46l` shows: USER COMMAND PID FD PROTO LOCAL FOREIGN."""
+    """Every socket `sockstat -46l` shows: USER COMMAND PID FD PROTO LOCAL FOREIGN.
+
+    FreeBSD 16 brackets an IPv6 local address (``[::1]:53``); the listener keeps it bare (``::1:53``), as IPv4 does.
+    """
     rows = (line.split() for line in vm.ssh("sockstat -46l").stdout.splitlines()[1:])
-    return [Listener(row[1], int(row[2]), row[4], row[5]) for row in rows if len(row) >= 6 and row[2].isdigit()]
+    return [
+        Listener(row[1], int(row[2]), row[4], re.sub(r"^\[(.+)\]:", r"\1:", row[5]))
+        for row in rows
+        if len(row) >= 6 and row[2].isdigit()
+    ]
 
 
 def _pid_file(vm: SmokeVM, path: str) -> int | None:

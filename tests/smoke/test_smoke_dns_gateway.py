@@ -59,6 +59,8 @@ import subprocess
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -1204,3 +1206,28 @@ def test_a_listener_on_a_wildcard_socket_has_no_port() -> None:
     assert Listener("unbound", 1, "udp4", "*:*").port is None
     assert Listener("unbound", 1, "tcp4", "127.0.0.1:53").port == 53
     assert Listener("unbound", 1, "tcp6", "::1:5353").port == 5353
+
+
+class _SockstatBox:
+    """Stands in for the box: ``_listeners`` asks it for ``sockstat -46l`` and nothing else."""
+
+    def __init__(self, stdout: str) -> None:
+        self._stdout = stdout
+
+    def ssh(self, *args: str, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(stdout=self._stdout)
+
+
+def test_an_ipv6_local_address_in_brackets_reads_as_the_bare_form() -> None:
+    """FreeBSD 16 writes an IPv6 local address as ``[::1]:53``; the listener carries ``::1:53``, the form IPv4 and the
+    expected socket sets use."""
+    sockstat = (
+        "USER     COMMAND    PID   FD PROTO  LOCAL ADDRESS         FOREIGN ADDRESS\n"
+        "unbound  unbound    9001  5  tcp6   [::1]:53              *:*\n"
+        "unbound  unbound    9001  6  udp6   [::1]:53              *:*\n"
+        "unbound  unbound    9001  7  tcp4   127.0.0.1:53         *:*\n"
+        "root     sshd       9002  3  tcp4   *:22                  *:*\n"
+    )
+    listeners = _listeners(cast(SmokeVM, _SockstatBox(sockstat)))
+    got = [(s.proto, s.local) for s in listeners]
+    assert got == [("tcp6", "::1:53"), ("udp6", "::1:53"), ("tcp4", "127.0.0.1:53"), ("tcp4", "*:22")], got
