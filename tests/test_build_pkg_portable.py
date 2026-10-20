@@ -347,6 +347,29 @@ def test_recipe_plain_sed_in_place_leaves_no_backup(tmp_path: Path) -> None:
     assert (work / "tpl.sh").read_text() == "v=1\n"
 
 
+@pytest.mark.parametrize("flags,backup", [("-i '' -e", None), ("-e", ".bak")])
+def test_recipe_sed_rewrites_a_read_only_file_by_rename_and_keeps_its_mode(
+    tmp_path: Path, flags: str, backup: str | None
+) -> None:
+    # INSTALL_SCRIPT leaves a staged file 0555; real sed -i writes a temp file beside it and
+    # renames that over the original, so a later REINPLACE_CMD works for a non-root builder,
+    # keeps the mode, and never writes through a hard link to the original.
+    work = tmp_path / "work"
+    work.mkdir()
+    script = work / "tpl.sh"
+    script.write_text("v=%%TOKEN%%\n")
+    script.chmod(0o555)
+    linked = tmp_path / "linked.sh"
+    os.link(script, linked)
+    text = f"WRK=\t{work}\ndo-install:\n\t${{REINPLACE_CMD}} {flags} 's|%%TOKEN%%|1|' ${{WRK}}/tpl.sh\n"
+    bpp.Recipe(make_mk(tmp_path, text)).run("do-install")
+
+    assert script.read_text() == "v=1\n"
+    assert script.stat().st_mode & 0o7777 == 0o555
+    assert linked.read_text() == "v=%%TOKEN%%\n"
+    assert sorted(p.name for p in work.iterdir()) == sorted(["tpl.sh"] + ([f"tpl.sh{backup}"] if backup else []))
+
+
 def test_recipe_copytree_share_then_script_glob_preserves_payload_and_modes(tmp_path: Path) -> None:
     src = tmp_path / "src"
     (src / "usr/local/pkg/app").mkdir(parents=True)

@@ -576,12 +576,21 @@ class Recipe:
             text = self._sed_s(text, expr)
         if backup:
             shutil.copy2(path, path.with_name(path.name + backup))
-        # Restore the mtime the staged copy inherited from the source tree: the rewrite
-        # is a deterministic function of that source plus the port variables, so letting
-        # it stamp the build clock would make otherwise identical builds differ.
-        stat = path.stat()
-        path.write_text(text)
-        os.utime(path, (stat.st_atime, stat.st_mtime))
+        # Like sed -i: temp file + rename, so a 0555 staged script is rewritable by a non-root
+        # builder, keeps its mode, and a hard link to it is untouched. The source mtime is kept
+        # so identical builds stay byte-identical.
+        original = path.stat()
+        fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+        os.close(fd)
+        temp = Path(name)
+        try:
+            temp.write_text(text)
+            os.chmod(temp, stat.S_IMODE(original.st_mode))
+            os.utime(temp, (original.st_atime, original.st_mtime))
+            os.replace(temp, path)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
 
     def _sed_s(self, text: str, expr: str) -> str:
         m = self.SED_S.match(expr)
