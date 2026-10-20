@@ -253,7 +253,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 
 		// Then the one notice is the export's reason, and the file that is still there was not sent anywhere
 		$this->assertCount(1, $this->notices());
-		$this->assertStringContainsString('unbound/sslcertref is empty', $this->notices()[0]);
+		$this->assertStringContainsString('no certificate is selected in the pfB-DNS SSL/TLS Certificate field', $this->notices()[0]);
 		$this->assertStringNotContainsString('cannot connect', $this->notices()[0]);
 	}
 

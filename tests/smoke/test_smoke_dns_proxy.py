@@ -1804,7 +1804,7 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
 global $g, $pfb;
 pfb_global();
 pfb_unbound_python('enabled', TRUE);
-$addresses = array_merge(pfb_dns_proxy_listen((array) pfb_dns_proxy_saved()), PFB_DNS_PROXY_LOOPBACK);
+$addresses = array_merge(pfb_dns_proxy_listen(), PFB_DNS_PROXY_LOOPBACK);
 echo '<<<ADDR>>>' . implode(',', $addresses) . '|' . pfb_dns_proxy_port() . '<<<END>>>';
 """
 

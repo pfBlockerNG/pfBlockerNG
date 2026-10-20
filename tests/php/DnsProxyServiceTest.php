@@ -11,15 +11,16 @@ use PHPUnit\Framework\TestCase;
 /**
  * issue #3515 -- the DNS proxy runs as the supervised rc service pfb_dns_proxy.
  *
- * Function under test: pfb_dns_proxy_service() -- writes /usr/local/etc/rc.d/pfb_dns_proxy.sh from the SAVED
- * Resolver (listen addresses, DoT). Intent pinned here:
+ * Function under test: pfb_dns_proxy_service() -- writes /usr/local/etc/rc.d/pfb_dns_proxy.sh from pfB-DNS's own settings
+ * (issue #3538: dns/pfb_dns_interface, pfb_dns_dot*, pfb_dns_doh*, pfb_dns_doq*; the SAVED Resolver only seeds them once, before
+ * they are stored, and is otherwise the restore source). Intent pinned here:
  *   - the rc script launches pfb-dns, the Go gateway, only through pfb_dns.sh (the shipped Python proxy is its decider, run
- *     through pfb_python.sh), on exactly the saved addresses, as the unprivileged `unbound` user, with every value
+ *     through pfb_python.sh), on exactly pfB-DNS's addresses, as the unprivileged `unbound` user, with every value
  *     shell-quoted and stdio detached (DnsProxyGatewayOnlyTest: whatever the package ships);
  *   - it starts while the moved-Resolver snapshot is set, whatever the proxy toggle and DNSBL say (a restore that
  *     was abandoned leaves the Resolver moved, and the proxy must keep serving it until a retry succeeds), and never
- *     launches over a survivor; the proxy listens on the saved Resolver's non-loopback addresses plus loopback, so a
- *     Resolver saved on Localhost only, or on an interface with no address, still gets a proxy;
+ *     launches over a survivor; the proxy listens on pfB-DNS's non-loopback addresses plus loopback, so an interface list on
+ *     Localhost only, or on an interface with no address, still gets a proxy;
  *   - a start over a proxy whose supervisor and child both serve keeps it: nothing is signalled or launched, so the
  *     package start after the boot hook does not bounce it; a restart always stops first, and starts only when that stop succeeded;
  *   - it stops by TERM, KILL at 5 s, giving up (status 1) at 7 s, signalling only live processes that its
@@ -141,24 +142,25 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	#[DataProvider('dotRows')]
-	public function testDotIsPassedExactlyWhenTheSavedResolverHadIt(bool $dot): void
+	public function testABoxNotSeededYetServesDotExactlyWhenTheSavedResolverHadIt(bool $dot): void
 	{
+		// Given a moved box whose pfB-DNS settings are not stored yet: they are what the seed would write from the saved Resolver
 		$this->moveResolver($dot);
 		$this->generate();
-		$this->arrange();
-		[$status, $output] = $this->rc('start');
+		$text = $this->rcText();
 
-		$this->assertSame(0, $status, "rc start failed: {$output}");
-		$argv = $this->daemonArgv();
-		$this->assertSame($dot, in_array('--dot', $argv, TRUE), '--dot iff the saved Resolver had enablessl');
-		$this->assertContains('--tls-pem', $argv, 'the gateway is always told where the certificate file is: it reads it only for a TLS transport');
-		$this->assertContains('--ctl-socket', $argv, 'and where root pushes a renewed certificate: it makes the socket only for a TLS transport');
-		$this->assertNotContains('--pfsense-config', $argv, 'the gateway no longer reads config.xml');
+		$this->assertSame($dot, str_contains($text, ' --dot-listen '), '--dot-listen iff the saved Resolver had enablessl');
+		$this->assertDoesNotMatchRegularExpression('/ --dot(?!-)/', $text, 'the gateway has no --dot: DoT is --dot-listen and --dot-port');
+		$this->assertStringContainsString(' --tls-pem ' . escapeshellarg($this->certFile()) . ' --ctl-socket ' . escapeshellarg($this->ctlSocket()), $text,
+			'the gateway is always told where the certificate file is and where root pushes a renewal: it reads them only for a TLS transport');
+		$this->assertStringNotContainsString('--pfsense-config', $text, 'the gateway no longer reads config.xml');
 		if ($dot) {
-			$at = array_search('--dot', $argv, TRUE);
-			$this->assertSame(['--dot', '--dot-port', '853', '--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket()], array_slice($argv, (int) $at, 7));
+			$this->assertStringContainsString(
+				' --ctl-socket ' . escapeshellarg($this->ctlSocket()) . " --dot-listen '192.0.2.1' --dot-listen '127.0.0.1' --dot-listen '::1' --dot-port '853' ",
+				$text
+			);
 		} else {
-			$this->assertNotContains('--dot-port', $argv, 'a DoT port with DoT off would restart the proxy for nothing');
+			$this->assertStringNotContainsString('--dot-port', $text, 'a DoT port with DoT off would restart the proxy for nothing');
 		}
 	}
 
@@ -1208,16 +1210,23 @@ final class DnsProxyServiceTest extends TestCase
 	private function gatewayArgv(string $gateway, array $listen, bool $dot = FALSE, array $tls = [], string $port = '53', array $module = ['--no-module'], string $dotPort = '853'): array
 	{
 		$addresses = [];
+		$dotFlags = [];
 		foreach ([...$listen, '127.0.0.1', '::1'] as $address) {
 			array_push($addresses, '--listen', $address);
+			if ($dot) {
+				array_push($dotFlags, '--dot-listen', $address);
+			}
+		}
+		if ($dot) {
+			array_push($dotFlags, '--dot-port', $dotPort);
 		}
 		return [
 			'-r', '-R', '5', '-t', 'pfb_dns_proxy',
 			'-P', $this->pidfile('pfb_dns_proxy_daemon.pid'), '-p', $this->pidfile('pfb_dns_proxy.pid'),
 			'-o', "{$this->dir}/log/dns_proxy.log",
 			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
-			'--port', $port, '--upstream', '127.0.0.1:5353', ...($dot ? ['--dot', '--dot-port', $dotPort] : []),
-			'--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket(), ...$tls, ...$module,
+			'--port', $port, '--upstream', '127.0.0.1:5353',
+			'--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket(), ...$dotFlags, ...$tls, ...$module,
 			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', $this->readyFile(), ...self::DECIDER,
 		];
 	}
@@ -1872,5 +1881,175 @@ final class DnsProxyServiceTest extends TestCase
 		$this->generateWith($gateway);
 
 		$this->assertCount(1, $this->portWarnings(), 'warnings: ' . json_encode($this->portWarnings()));
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #3538 -- pfB-DNS serves its own settings: neither the saved Resolver nor the Resolver's SSL/TLS Service decides
+	// -----------------------------------------------------------------------
+
+	/** Store these settings. The interface is stored too (the sign of a seeded box), so no value comes from the saved Resolver any more. */
+	private function ownSettings(array $values): void
+	{
+		foreach ($values + ['pfb_dns_interface' => 'lan'] as $key => $value) {
+			$this->setting($key, $value);
+		}
+	}
+
+	/** The pfBlockerNG error log, where the generator's warnings go. */
+	private function errorLog(): string
+	{
+		return (string) @file_get_contents("{$this->dir}/pfb.err");
+	}
+
+	/** @return list<string> every value the generated script gives `$flag`, as the script spells it (quoted), in order */
+	private function scriptValues(string $flag): array
+	{
+		preg_match_all('/ ' . preg_quote($flag, '/') . " ('[^']*'|[^ ]+)/", $this->rcText(), $found);
+		return $found[1];
+	}
+
+	public function testDotIsServedOnItsOwnInterfaceAndLoopbackWhenItsSettingIsOnWhateverTheSavedResolverHad(): void
+	{
+		// Given a moved box whose saved Resolver had no SSL, and pfB-DNS's own DoT: on, on lan, port 853
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->ownSettings(['pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'lan', 'pfb_dns_dot_port' => '853', 'pfb_dns_sslcertref' => 'cert1']);
+
+		// When the script is generated
+		$this->generate();
+
+		// Then the gateway has one --dot-listen per address of the interface and loopback, and the port
+		$this->assertStringContainsString("--dot-listen '192.0.2.1' --dot-listen '127.0.0.1' --dot-listen '::1' --dot-port '853'", $this->rcText());
+		$this->assertFileExists($this->certFile(), 'an encrypted transport is wanted: the certificate is written');
+	}
+
+	public function testDotIsNotServedWhenItsSettingIsOffEvenThoughTheSavedResolverHadSsl(): void
+	{
+		// Given a moved box whose saved Resolver had SSL on, and pfB-DNS's own DoT off
+		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1']);
+		$this->ownSettings(['pfb_dns_dot' => '']);
+
+		// When the script is generated
+		$this->generate();
+
+		// Then no DoT flag is passed at all, and no certificate is involved
+		$this->assertSame([], $this->scriptValues('--dot-listen'));
+		$this->assertSame([], $this->scriptValues('--dot-port'));
+		$this->assertDoesNotMatchRegularExpression('/ --dot(?!-)/', $this->rcText(), 'the gateway has no --dot: DoT is --dot-listen and --dot-port');
+		$this->assertFileDoesNotExist($this->certFile(), 'no encrypted transport is wanted: no certificate is written');
+	}
+
+	public function testEveryDotFlagValueIsShellQuotedIncludingAnIpv6Address(): void
+	{
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
+		$this->ownSettings(['pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '8853']);
+
+		$this->generate();
+
+		$this->assertSame(["'192.0.2.1'", "'2001:db8::1'", "'127.0.0.1'", "'::1'"], $this->scriptValues('--dot-listen'), 'each value is its own quoted word');
+		$this->assertSame(["'8853'"], $this->scriptValues('--dot-port'));
+	}
+
+	/** @return array<string,array{string}> a DoT port the gateway could not parse, as a hand-edited config.xml holds it */
+	public static function unparsableDotPorts(): array
+	{
+		return ['zero' => ['0'], 'one past the top' => ['65536'], 'a word' => ['abc'], 'padded' => [' 853']];
+	}
+
+	#[DataProvider('unparsableDotPorts')]
+	public function testAStoredDotPortTheGatewayCouldNotParseLeavesDotOutAndWarns(string $port): void
+	{
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->ownSettings(['pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => $port]);
+
+		$this->generate();
+
+		$this->assertSame([], $this->scriptValues('--dot-listen'));
+		$this->assertSame([], $this->scriptValues('--dot-port'));
+		$this->assertCount(1, $this->portWarnings(), 'one warning: ' . json_encode($this->portWarnings()));
+		$this->assertStringContainsString('DNS proxy: the stored DoT port is not a whole number from 1 to 65535; DoT is not served', $this->errorLog());
+	}
+
+	public function testALocalhostOnlyInterfaceListServesPlainDnsOnLoopbackAlone(): void
+	{
+		// Given a moved box whose saved Resolver listened on lan and opt1, and pfB-DNS's own list: Localhost
+		$this->moveTwoInterfaceResolver();
+		$this->ownSettings(['pfb_dns_interface' => 'lo0']);
+
+		$this->generate();
+
+		// Then the only --listen values are the loopback pair, and a working list is nothing to warn about
+		$this->assertSame(["'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'));
+		$this->assertSame('', $this->errorLog());
+	}
+
+	public function testAnAllInterfaceListServesEveryNonLinkLocalAddressOfTheBoxAndLoopback(): void
+	{
+		// Given pfB-DNS's list `all`, whatever the saved Resolver listened on, on a box with four configured addresses
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$GLOBALS['pfb_test_configured_ip_addresses'] = ['lan' => '192.0.2.1', 'wan' => '198.51.100.1'];
+		$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => '2001:db8::1', 'opt1' => 'fe80::1'];
+		$this->ownSettings(['pfb_dns_interface' => 'all']);
+
+		$this->generate();
+
+		// Then every configured address but the link-local one is served, then loopback
+		$this->assertSame(["'192.0.2.1'", "'198.51.100.1'", "'2001:db8::1'", "'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'));
+	}
+
+	public function testOneListedInterfaceServesOnlyItsAddressesWhileAnotherIsConfiguredAndWasSaved(): void
+	{
+		// Given a saved Resolver on lan and opt1, and pfB-DNS's own list: lan
+		$this->moveTwoInterfaceResolver();
+		$this->ownSettings(['pfb_dns_interface' => 'lan']);
+
+		$this->generate();
+
+		$this->assertSame(["'192.0.2.1'", "'2001:db8::1'", "'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'));
+	}
+
+	public function testAPlainInterfaceListThatNamesNoInterfaceServesLoopbackAloneAndWarns(): void
+	{
+		$this->moveTwoInterfaceResolver();
+		$this->ownSettings(['pfb_dns_interface' => ',']);
+
+		$this->generate();
+
+		$this->assertSame(["'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'));
+		$this->assertStringContainsString('DNS proxy: the stored plain DNS interface list names no interface; plain DNS is not served', $this->errorLog());
+	}
+
+	public function testAStoredDohListThatNamesNoInterfaceLeavesDohOutAndWarns(): void
+	{
+		// Given DoH on with a stored list of separators only
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->ownSettings(['pfb_dns_doh' => 'on', 'pfb_dns_doh_interface' => ',']);
+
+		$this->generate();
+
+		// Then no DoH flag is passed (not the plain addresses either), and the warning says so
+		$this->assertSame([], $this->scriptValues('--doh-listen'));
+		$this->assertSame([], $this->scriptValues('--doh-port'));
+		$this->assertStringContainsString('DNS proxy: the stored DoH interface list names no interface; DoH is not served', $this->errorLog());
+	}
+
+	/** @return array<string,array{string}> hand-edited stored interface names: none is an interface, and none may reach the script */
+	public static function hostileInterfaceNames(): array
+	{
+		return ['a shell command' => ['lo0;rm'], 'a path' => ['../x'], 'an unknown name' => ['wan2']];
+	}
+
+	#[DataProvider('hostileInterfaceNames')]
+	public function testAnUnknownStoredInterfaceNameNeverReachesTheScriptAndIsWarnedAboutVerbatim(string $name): void
+	{
+		// Given pfB-DNS's list: lan and a name that is no interface
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->ownSettings(['pfb_dns_interface' => "lan,{$name}"]);
+
+		$this->generate();
+
+		// Then only lan is served, the name is nowhere in the script, and the warning names it as stored
+		$this->assertSame(["'192.0.2.1'", "'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'));
+		$this->assertStringNotContainsString($name, $this->rcText());
+		$this->assertStringContainsString("DNS proxy: plain DNS interface \"{$name}\" is not a configured interface; it is skipped", $this->errorLog());
 	}
 }

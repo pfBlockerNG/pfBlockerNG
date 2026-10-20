@@ -413,7 +413,7 @@ one for every `interface:` line without its own port, so Unbound's `127.0.0.1`/`
 plain and unused), has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
 stream (`proxy-protocol-port: 5353`) and grants the IPv6 networks pfSense would no longer grant:
 `unbound_acls_config()` derives its IPv6 `access-control` rows from `active_interface` (the IPv4 rows come from
-the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for the SAVED interfaces
+the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for pfB-DNS's interface lists (plain DNS, DoT, DoH and DoQ together)
 (non-link-local subnet of each interface without a gateway, plus the enabled static routes through such an
 interface; nothing when "disable auto-added access control" is on). Every later apply recomputes the clause and
 replaces a stale one in place (a changed delegated prefix); lines the admin put around it are kept. Everything
@@ -483,7 +483,7 @@ exists and is not enabled, for the DNSBL-only path (pfB-DNS off) too; an enabled
 
 While the Advanced page's EDNS buffer size is automatic (`unbound/edns_buffer_size` absent, empty or `auto`) and the admin's
 Custom Options carry no `edns-buffer-size:` directive (read as above, wherever it stands on a line), the clause carries
-`edns-buffer-size: N` with N from pfSense's own `unbound_auto_ednsbufsize()` over the SAVED interface tokens
+`edns-buffer-size: N` with N from pfSense's own `unbound_auto_ednsbufsize()` over pfB-DNS's plain DNS interface list
 (`pfb_dns_proxy_edns_line()`). pfSense derives the automatic size from the Resolver's Network Interfaces: the smallest MTU minus
 68, floored at 1232 (512 without IPv6), so a Resolver on `lo0` advertises 16316 where its 1500-byte LAN gave 1432 (measured at
 the stub upstream on CE 2.8.1), far above the 1232 and 1432 the Advanced page offers. Unbound takes the last `edns-buffer-size:`
@@ -528,21 +528,21 @@ none of this applies and the predicates read Unbound as before.
 
 **Service.** The gateway runs as the supervised rc service `pfb_dns_proxy` (`pfblockerng.xml` `<service>`, status =
 `isvalidpid('/var/run/pfb_dns_proxy.pid')`): `pfb_dns_proxy_service()` writes
-`/usr/local/etc/rc.d/pfb_dns_proxy.sh` (on every call, like the other rc services) from the SAVED Resolver, and the
+`/usr/local/etc/rc.d/pfb_dns_proxy.sh` (on every call, like the other rc services) from pfB-DNS's own settings (the saved Resolver only seeds them once: `pfb_dns_proxy_seed()`), and the
 script has one launch line:
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log /bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1
---port P --upstream 127.0.0.1:5353 [--dot --dot-port D] --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [the DoH/DoQ flags below]
+--port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [the DoT/DoH/DoQ flags below]
 [--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
 /var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
---module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53; `--dot` iff the saved Resolver had
-`enablessl`, and `D` is `unbound/tlsport` when it is a port, else 853; `--no-module` iff DNSBL is off, so the decider boots no `pfb_unbound.py` and every query is forwarded;
+--module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53;
+`--no-module` iff DNSBL is off, so the decider boots no `pfb_unbound.py` and every query is forwarded;
 `--observer` iff DNSBL is on and the Resolver forwards, so the decider creates the observer's report socket). The gateway
 starts the decider as its child and hands the three mode flags on to it.
-`pfb_dns_proxy_listen()` derives the addresses the way `unbound.inc` binds them (explicit interfaces that are up
-and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for an empty/`all` Resolver, every
+`pfb_dns_proxy_listen()` derives the addresses of pfB-DNS's own interface list (`dns/pfb_dns_interface`) the way `unbound.inc` binds them (explicit interfaces that are up
+and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for `all`, every
 address pfSense lists for the box (`get_configured_ip_addresses()` / `get_configured_ipv6_addresses()`, which carry
-alias/carp VIPs), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. The gateway binds each
+alias/carp VIPs; a list that names no interface gives none), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. An entry that adds no address (not a configured interface, down or disabled, no usable address) is warned about by name (`pfb_dns_proxy_skipped_warnings()`). The gateway binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
 disabled interface) is logged once and skipped, the others are served, and it exits non-zero only when
 no address binds. A DoT/DoH/DoQ setup whose certificate file is unusable or absent at start (a passphrase-protected key, no file)
@@ -553,7 +553,7 @@ An address added since the last reload gets a listener at the next apply:
 script starts only while the moved-Resolver snapshot is set (so a disabled package never starts a proxy against a
 restored Resolver), never over a survivor; the toggle and DNSBL are not consulted, because an abandoned restore leaves
 the Resolver moved with them off and the proxy must keep serving it. The script bakes in the stored marker and compares it at start (a changed marker means the script is stale: nothing starts until the next apply regenerates it), and a stored marker that is no valid snapshot makes `start` log one error and exit 1, never start a proxy on loopback alone. It always listens on loopback as well, so a
-Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. Stop sends TERM to the supervisor and child named by the pidfiles (only while their command line is the
+interface list on Localhost only, or on an interface with no address, still gets a proxy. Stop sends TERM to the supervisor and child named by the pidfiles (only while their command line is the
 proxy's) and KILL after 5 s; it removes the pidfiles once both are gone, and gives up after 7 s with status 1,
 keeping the pidfiles, because a process that survived KILL is still alive.
 
@@ -565,8 +565,8 @@ starts a DNS front end instead.
 
 **Certificate for DoT, DoH and DoQ (issue #3515).** The gateway never reads `config.xml` (it is root-only, and a renewal must not
 cost a restart), and the key of the Resolver's certificate must not be readable by the user a network-facing daemon runs as, nor
-by Unbound's. While an encrypted transport is wanted (`pfb_dns_proxy_tls_wanted()`: the saved Resolver had `enablessl`, or a
-DoH or DoQ group is on) `pfb_dns_proxy_certificate_export()` writes the Resolver's certificate (`unbound/sslcertref`, found with
+by Unbound's. While an encrypted transport is wanted (`pfb_dns_proxy_tls_wanted()`: pfB-DNS's DoT, DoH or DoQ toggle is on)
+`pfb_dns_proxy_certificate_export()` writes the certificate selected on the pfB-DNS page (`dns/pfb_dns_sslcertref`, found with
 pfSense's `lookup_cert()` and `lookup_ca()`) to `$pfb['dns_proxy_cert']`, `/var/etc/pfb_dns/tls.pem`: the certificate, the
 CAs its `caref` leads to nearest first (a missing CA or a loop ends the chain), then the key, mode 0600, in a directory of mode
 0700 (made, or closed again, by the export), both root's and outside the Unbound chroot; nothing is `chown`ed to `unbound`.
@@ -764,10 +764,10 @@ once and forwards everything. Forwarded, not mirrored: `deny_non_local`, `refuse
 `dns/pfb_dns_doh`, `_doh_port` (4443), `_doh_interface`, `_doh_trusted`, `dns/pfb_dns_doq`, `_doq_port`
 (853) and `_doq_interface` (sync
 `local`, DoH/DoQ off) are the pfB-DNS tab's, in the `dns` section beside the enable toggle (they started on the DNSBL
-page; the feature never shipped, so the old keys are gone with no alias or migration); an interface list (empty = the derived addresses, loopback not
-among them) goes through the same `pfb_dns_proxy_interface_addresses()` derivation as `pfb_dns_proxy_listen()`, and every
+page; the feature never shipped, so the old keys are gone with no alias or migration); an interface list (loopback not
+among it; one that names no interface leaves its group out with one warning) goes through the same `pfb_dns_proxy_interface_addresses()` derivation as `pfb_dns_proxy_listen()`, and every
 group also listens on `127.0.0.1` and `::1` (a stable backend for a local HAProxy; the ports are their own, so nothing
-collides), a `--doh-*`/`--doq-*`
+collides), a `--dot-*`/`--doh-*`/`--doq-*`
 group appears only while its toggle is on, its stored port is a whole number 1-65535 (else the group is left out with
 one warning), and the trusted entries (IPs or CIDRs without zero-padded prefixes, a bare
 address passed as a host prefix) are validated again when the script is generated, so a hand-edited `config.xml` cannot

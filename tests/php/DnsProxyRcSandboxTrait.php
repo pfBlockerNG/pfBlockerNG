@@ -187,7 +187,7 @@ trait DnsProxyRcSandboxTrait
 	private function sandboxUp(): void
 	{
 		foreach (['pfb', 'config', 'pfb_test_rcfile_dir', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_interface_ip',
-			'pfb_test_configured_ipv6', 'pfb_test_interface_info', 'pfb_test_configured_ip_addresses'] as $name) {
+			'pfb_test_configured_ipv6', 'pfb_test_interface_info', 'pfb_test_configured_ip_addresses', 'pfb_test_interfaces'] as $name) {
 			$this->savedGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
 			unset($GLOBALS[$name]);
 		}
@@ -249,6 +249,8 @@ trait DnsProxyRcSandboxTrait
 		$GLOBALS['pfb_test_interface_ip'] = $v4;
 		$GLOBALS['pfb_test_configured_ipv6'] = $v6;
 		$GLOBALS['pfb_test_interface_info'] = array_fill_keys(array_keys($v4 + $v6), $up);
+		// The configured interfaces: an entry that is none of them is not an interface pfB-DNS can bind
+		$GLOBALS['pfb_test_interfaces'] = array_fill_keys(array_keys($v4 + $v6), '');
 	}
 
 

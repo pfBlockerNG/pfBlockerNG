@@ -200,6 +200,20 @@ final class DnsProxyResolverEdnsTest extends TestCase
 		$this->assertSame(['edns-buffer-size: 1332'], $this->sizeLines());
 	}
 
+	public function testTheSizeIsComputedOverPfbDnsOwnInterfaceListNotTheSavedResolversInterfaces(): void
+	{
+		// Given a Resolver that listened on opt1 (a 1400-byte interface) and pfB-DNS's own plain DNS list: lan (1500 bytes).
+		$GLOBALS['pfb_test_interface_mtu'] = ['lan' => '1500', 'opt1' => '1400', 'lo0' => '16384'];
+		$this->seedResolver(['active_interface' => 'opt1']);
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+
+		// When the proxy takes the Resolver.
+		pfb_dns_proxy_resolver(TRUE);
+
+		// Then the size is lan's (1500 - 68), not the saved opt1's (1400 - 68).
+		$this->assertSame(['edns-buffer-size: 1432'], $this->sizeLines());
+	}
+
 	// -----------------------------------------------------------------------
 	// Nothing else may be overridden: an explicit setting and the admin's directive win, as before the move
 	// -----------------------------------------------------------------------

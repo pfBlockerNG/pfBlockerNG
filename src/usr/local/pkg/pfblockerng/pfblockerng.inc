@@ -4005,59 +4005,88 @@ EOF;
 /**
  * Addresses a DNS proxy listener binds for an interface list, derived the way pfSense's unbound.inc binds them.
  * An explicit list: each interface that is up and enabled (an IP entry verbatim, else its IPv4 and IPv6 address).
- * Empty or 'all' makes Unbound bind a wildcard, which the proxy cannot (one wildcard UDP socket cannot answer from
+ * 'all' makes Unbound bind a wildcard, which the proxy cannot (one wildcard UDP socket cannot answer from
  * the address a client queried), so it gets every address of the box as pfSense lists them, CARP and IP-alias VIPs
- * included. Valid, unscoped, non-link-local, non-loopback addresses only, once each, in derivation order: loopback
- * is not derived here, pfb_dns_proxy_service() adds PFB_DNS_PROXY_LOOPBACK itself.
+ * included; an empty list is no address at all, not a wildcard. Valid, unscoped, non-link-local, non-loopback addresses
+ * only, once each, in derivation order: loopback is not derived here, pfb_dns_proxy_service() adds PFB_DNS_PROXY_LOOPBACK itself.
+ *
+ * $skipped gets, in list order, each entry that added no address and why: 'unknown' (not 'all', 'lo0' or an IP, and no configured
+ * interface), 'down' (down or disabled) or 'no address' (nothing usable after the filters above). 'lo0' (Localhost, which the
+ * callers add) is never reported, and with 'all' in the list no named entry is.
  *
  * @param list<string> $interfaces
+ * @param list<array{interface:string,why:string}>|null $skipped
  * @return list<string>
  */
-function pfb_dns_proxy_interface_addresses(array $interfaces): array {
+function pfb_dns_proxy_interface_addresses(array $interfaces, ?array &$skipped = NULL): array {
 	// shortcut: addresses are read at apply time and baked into the rc script. The proxy skips one that has gone away
 	// since (logged, the others are served) but does not listen on one added since until the next apply, which restarts
 	// the proxy when they changed (pfb_dns_proxy_ensure_running()).
-	$found = [];
-	if ($interfaces === [] || in_array('all', $interfaces, TRUE)) {
-		array_push($found, ...array_values((array) get_configured_ip_addresses()),
-		    ...array_values((array) get_configured_ipv6_addresses()));
-	} else {
-		foreach ($interfaces as $interface) {
+	$skipped = [];
+	$listen = [];
+	foreach (in_array('all', $interfaces, TRUE) ? ['all'] : $interfaces as $interface) {
+		if ($interface === 'all') {
+			$found = array_merge(array_values((array) get_configured_ip_addresses()), array_values((array) get_configured_ipv6_addresses()));
+		} else {
 			// Same skip as unbound.inc: an interface that is down or disabled is not bound.
 			$info = get_interface_info($interface);
 			if ($info && (($info['status'] != 'up') || !$info['enable'])) {
+				$skipped[] = ['interface' => $interface, 'why' => 'down'];
 				continue;
 			}
-			if (is_ipaddr($interface)) {
-				$found[] = $interface;
-				continue;
-			}
-			array_push($found, get_interface_ip($interface), get_interface_ipv6($interface));
+			$found = is_ipaddr($interface) ? [$interface] : [get_interface_ip($interface), get_interface_ipv6($interface)];
 		}
-	}
 
-	$listen = [];
-	foreach ($found as $address) {
-		if (!is_string($address) || !is_ipaddr($address) || strpos($address, '%') !== FALSE || is_linklocal($address)) {
-			continue;
+		$usable = FALSE;
+		foreach ($found as $address) {
+			if (!is_string($address) || !is_ipaddr($address) || strpos($address, '%') !== FALSE || is_linklocal($address)) {
+				continue;
+			}
+			$packed = (string) inet_pton($address);
+			if ($packed === inet_pton('::1') || (strlen($packed) === 4 && $packed[0] === "\x7f")) {
+				continue;
+			}
+			$listen[$address] = $address;
+			$usable = TRUE;
 		}
-		$packed = (string) inet_pton($address);
-		if ($packed === inet_pton('::1') || (strlen($packed) === 4 && $packed[0] === "\x7f")) {
-			continue;
+		if (!$usable && $interface !== 'all' && $interface !== 'lo0') {
+			$known = is_ipaddr($interface) || array_key_exists($interface, (array) get_configured_interface_with_descr());
+			$skipped[] = ['interface' => $interface, 'why' => $known ? 'no address' : 'unknown'];
 		}
-		$listen[$address] = $address;
 	}
 	return array_values($listen);
 }
 
 /**
- * Addresses the DNS proxy binds, from the Resolver's SAVED active_interface.
+ * Addresses the DNS proxy binds for plain DNS: those of pfB-DNS's own interface list (dns/pfb_dns_interface).
  *
- * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
+ * @param list<array{interface:string,why:string}>|null $skipped as in pfb_dns_proxy_interface_addresses()
  * @return list<string>
  */
-function pfb_dns_proxy_listen(array $saved): array {
-	return pfb_dns_proxy_interface_addresses(array_filter(explode(',', (string) $saved['active_interface']['value'])));
+function pfb_dns_proxy_listen(?array &$skipped = NULL): array {
+	return pfb_dns_proxy_interface_addresses(pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface')), $skipped);
+}
+
+/**
+ * One "DNS proxy: ..." line per entry pfb_dns_proxy_interface_addresses() reported. The name is the stored text, verbatim: the
+ * line reaches the log and a notice (pfb_dns_proxy_notify(), whose file_notice() stores the text encoded itself), so
+ * encoding it here would encode it twice.
+ *
+ * @param string $label which listener the list belongs to: 'plain DNS', 'DoT', 'DoH' or 'DoQ'
+ * @param list<array{interface:string,why:string}> $skipped
+ * @return list<string>
+ */
+function pfb_dns_proxy_skipped_warnings(string $label, array $skipped): array {
+	$warnings = [];
+	foreach ($skipped as $entry) {
+		$name = $entry['interface'];
+		$warnings[] = match ($entry['why']) {
+			'unknown' => "DNS proxy: {$label} interface \"{$name}\" is not a configured interface; it is skipped",
+			'down' => "DNS proxy: {$label} interface {$name} is down or disabled; it adds no listener",
+			default => "DNS proxy: {$label} interface {$name} has no usable address; it adds no listener",
+		};
+	}
+	return $warnings;
 }
 
 /** The distinct, non-empty words of a space/comma separated settings list, in order. */
@@ -4198,27 +4227,31 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 }
 
 /**
- * The gateway's --doh-* / --doq-* arguments for each group that is on and has a parsable port. A group listens on its
- * interfaces' addresses (the plain ones when it names none) and always on loopback too, a stable backend for a local
- * HAProxy. Stored values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a
- * host prefix.
+ * The gateway's --dot-* / --doh-* / --doq-* arguments for each group that is on and has a parsable port and an interface list that
+ * names an interface. A group listens on its own interface list's addresses and always on loopback too, a stable backend for a
+ * local HAProxy. Stored values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a
+ * host prefix; an interface that is none, is down or has no address is warned about by name and adds no listener.
  *
- * @param list<string> $plain the plain DNS listen addresses, used when a group names no interface
- * @param list<string> $warnings gets one line per group left out for its port
+ * @param list<string> $warnings gets one line per group left out (its port, or its interface list, is unusable) and per interface that adds no listener
  */
-function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
+function pfb_dns_proxy_tls_flags(array &$warnings): string {
 	$flags = '';
-	foreach (['doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
-		if (PfbConfig::read("dns/pfb_dns_{$kind}") !== PfbToggle::On) {
+	foreach (['dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
+		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
 			continue;
 		}
-		$port = pfb_dns_proxy_listener_port(PfbConfig::read("dns/pfb_dns_{$kind}_port"));
+		$port = pfb_dns_proxy_listener_port(pfb_dns_proxy_setting("pfb_dns_{$kind}_port"));
 		if ($port === NULL) {
 			$warnings[] = "DNS proxy: the stored {$label} port is not a whole number from 1 to 65535; {$label} is not served";
 			continue;
 		}
-		$interfaces = pfb_dns_proxy_tokens((string) PfbConfig::read("dns/pfb_dns_{$kind}_interface"));
-		$addresses = array_merge(($interfaces === []) ? $plain : pfb_dns_proxy_interface_addresses($interfaces), PFB_DNS_PROXY_LOOPBACK);
+		$interfaces = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
+		if ($interfaces === []) {
+			$warnings[] = "DNS proxy: the stored {$label} interface list names no interface; {$label} is not served";
+			continue;
+		}
+		$addresses = array_merge(pfb_dns_proxy_interface_addresses($interfaces, $skipped), PFB_DNS_PROXY_LOOPBACK);
+		array_push($warnings, ...pfb_dns_proxy_skipped_warnings($label, $skipped));
 		foreach ($addresses as $address) {
 			$flags .= " --{$kind}-listen " . escapeshellarg($address);
 		}
@@ -4235,12 +4268,15 @@ function pfb_dns_proxy_tls_flags(array $plain, array &$warnings): string {
 }
 
 /**
- * Does the gateway serve an encrypted transport: DoT (the saved Resolver had SSL/TLS Service on) or a DoH or DoQ group that is on?
- *
- * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
+ * Does the gateway serve an encrypted transport: is pfB-DNS's DoT, DoH or DoQ toggle on?
  */
-function pfb_dns_proxy_tls_wanted(array $saved): bool {
-	return $saved['enablessl']['present'] || PfbConfig::read('dns/pfb_dns_doh') === PfbToggle::On || PfbConfig::read('dns/pfb_dns_doq') === PfbToggle::On;
+function pfb_dns_proxy_tls_wanted(): bool {
+	foreach (['dot', 'doh', 'doq'] as $kind) {
+		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") === PfbToggle::On) {
+			return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 /**
@@ -4263,31 +4299,32 @@ function pfb_dns_proxy_pem_field(array $entry, string $kind, string $field): str
 }
 
 /**
- * Write the DNS Resolver's certificate chain and private key (the ones unbound/sslcertref names) to one PEM file the gateway serves
- * DoT, DoH and DoQ from: the certificate, the CAs its caref leads to nearest first (a missing CA or a loop ends the chain), then
+ * Write the certificate chain and private key of the certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref) to one PEM file the
+ * gateway serves DoT, DoH and DoQ from: the certificate, the CAs its caref leads to nearest first (a missing CA or a loop ends the chain), then
  * the key. The file is mode 0600 in a directory of mode 0700 (made, or closed again, here), outside the Unbound chroot, and belongs
  * to the user that writes it, root on a box: the gateway reads it once, at start, while it is still root (pfSense writes the Resolver's
  * own sslcert.crt and sslcert.key the same way: unbound.inc unbound_generate_config(): lookup_cert(), the chain, chmod 0600 for the
  * key), and a renewal reaches it later as a push (pfb_dns_proxy_certificate_push()), so that the user it runs as never has to read the
  * key. Content that is already in the file is not rewritten (only its mode is kept right); a changed one replaces it atomically, a
- * temporary file in the same directory renamed over it, so a reader never sees half of it. A certificate that cannot be used (no
- * sslcertref, no such certificate, bad base64, an encrypted key, a key that is not the certificate's) writes nothing: the file keeps
+ * temporary file in the same directory renamed over it, so a reader never sees half of it. A certificate that cannot be used (none
+ * selected, no such certificate, bad base64, an encrypted key, a key that is not the certificate's) writes nothing: the file keeps
  * the certificate it has.
  *
  * @param string|null $path the file; NULL = $pfb['dns_proxy_cert'] (a test points it at a temporary directory)
- * @return string|null NULL once the file holds the Resolver's certificate; else why it could not be written
+ * @return string|null NULL once the file holds the pfB-DNS certificate; else why it could not be written. The refid in the text is the
+ *         stored one, verbatim: pfb_dns_proxy_notify() has file_notice() encode the text, so encoding it here would encode it twice
  */
 function pfb_dns_proxy_certificate_export(?string $path = NULL): ?string {
 	global $pfb;
 
 	$path ??= $pfb['dns_proxy_cert'];
-	$ref = trim((string) config_get_path('unbound/sslcertref', ''));
+	$ref = trim((string) pfb_dns_proxy_setting('pfb_dns_sslcertref'));
 	if ($ref === '') {
-		return 'unbound/sslcertref is empty; pick the SSL/TLS Certificate of the DNS Resolver';
+		return 'no certificate is selected in the pfB-DNS SSL/TLS Certificate field';
 	}
 	$cert = lookup_cert($ref)['item'] ?? NULL;
 	if (!is_array($cert)) {
-		return "there is no certificate with refid \"{$ref}\" (unbound/sslcertref)";
+		return "there is no certificate with refid \"{$ref}\" (the pfB-DNS SSL/TLS Certificate field)";
 	}
 
 	try {
@@ -4308,7 +4345,7 @@ function pfb_dns_proxy_certificate_export(?string $path = NULL): ?string {
 		return $e->getMessage();
 	}
 	if (str_contains($key, '-----BEGIN ENCRYPTED PRIVATE KEY-----') || str_contains($key, 'Proc-Type: 4,ENCRYPTED')) {
-		return 'the private key of the DNS Resolver\'s certificate is encrypted with a passphrase; use a key without one';
+		return 'the private key of the pfB-DNS certificate is encrypted with a passphrase; use a key without one';
 	}
 	$matches = @openssl_x509_check_private_key($leaf, $key);
 	while (openssl_error_string() !== FALSE) {
@@ -4418,7 +4455,7 @@ function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, flo
 }
 
 /**
- * Keep the gateway's certificate as the Resolver's certificate: the root-only file written (pfb_dns_proxy_certificate_export())
+ * Keep the gateway's certificate as the one selected on the pfB-DNS page (dns/pfb_dns_sslcertref): the root-only file written (pfb_dns_proxy_certificate_export())
  * while an encrypted transport is wanted, and a renewal pushed to the running gateway (pfb_dns_proxy_certificate_push()) once it is
  * READY and has not been given this content yet; the file, the record of the push and any copy an earlier build left in the Unbound
  * chroot are removed otherwise, so that no key stays on disk for a service that does not use it. A certificate that cannot be
@@ -4457,15 +4494,15 @@ function pfb_dns_proxy_certificate_refresh(bool $wanted): bool {
 	return $why === NULL;
 }
 
-/** The cron tick's share of the certificate: the file follows the Resolver's certificate between applies and a renewal is pushed to the running gateway, so it reaches it without an apply or a restart. */
+/** The cron tick's share of the certificate: the file follows the certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref) between applies and a renewal is pushed to the running gateway, so it reaches it without an apply or a restart. */
 function pfb_dns_proxy_certificate_sync(): void {
-	$saved = pfb_dns_proxy_saved();
-	pfb_dns_proxy_certificate_refresh($saved !== NULL && pfb_dns_proxy_tls_wanted($saved));
+	pfb_dns_proxy_certificate_refresh(pfb_dns_proxy_saved() !== NULL && pfb_dns_proxy_tls_wanted());
 }
 
 /**
- * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from the SAVED Resolver
- * (listen addresses, DoT), the DoH/DoQ settings and its Listen Port (unbound/port, which stays on loopback for Unbound;
+ * (Re)generate /usr/local/etc/rc.d/pfb_dns_proxy.sh, the supervised DNS proxy service, from pfB-DNS's own settings (issue #3538: the
+ * plain DNS interface list dns/pfb_dns_interface, DoT dns/pfb_dns_dot*, the DoH/DoQ settings and the certificate dns/pfb_dns_sslcertref;
+ * the SAVED Resolver is the restore source only), the Resolver's Listen Port (unbound/port, which stays on loopback for Unbound;
  * 53 when absent or not a port) and DNSBL's runtime state ($pfb as pfb_global() left it, so callers hold a fresh one).
  * Written on each call unless a moved Resolver's Listen Port conflicts with a backend port; then the current script is kept.
  * Warnings are logged only when the content changed.
@@ -4481,7 +4518,7 @@ function pfb_dns_proxy_certificate_sync(): void {
  * off, and the proxy keeps serving it); with no valid snapshot it exits 1 instead of starting a proxy that could not bind,
  * and logs one error when the stored marker is no snapshot or our block stands with none (a manual repair); never over a
  * survivor; every address shell-quoted. Loopback is always among
- * the addresses, so a Resolver saved on Localhost only, or on an interface with no address, still gets a proxy. It
+ * the addresses, so an interface list on Localhost only, or on an interface with no address, still gets a proxy. It
  * runs pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and runs the Python decider as its decision service,
  * through pfb_dns.sh (which execs this machine's binary), with --ready-file $pfb['dns_proxy_ready'] ahead of the
  * decider's `--` (the gateway, not the decider, publishes its pid there once it serves, so the marker names the
@@ -4493,13 +4530,13 @@ function pfb_dns_proxy_certificate_sync(): void {
  * Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's or the
  * installed pfb-dns's.
  *
- * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the Resolver's certificate and key are
- * written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the root-only file the gateway's --tls-pem
+ * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the certificate and key selected on the pfB-DNS page
+ * are written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the root-only file the gateway's --tls-pem
  * names, which it reads once, at start, while it is still root) and a renewal is pushed to the running gateway on its --ctl-socket
  * ($pfb['dns_proxy_ctl'], pfb_dns_proxy_certificate_push()): a renewal never restarts the proxy. Both are removed when no encrypted
  * transport is wanted. A start that finds the file missing, which is /var after a boot with RAM disks, has PHP write it first, and
- * forgets what was pushed to the proxy it replaces. The DoT port is the Resolver's unbound/tlsport (--dot-port; 853 when it is not
- * a port).
+ * forgets what was pushed to the proxy it replaces. DoT, DoH and DoQ each listen on their own interface list's addresses and on loopback
+ * (--dot-listen, --doh-listen, --doq-listen) at their own port (pfb_dns_proxy_tls_flags()).
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
@@ -4526,16 +4563,22 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	if ($saved !== NULL && pfb_dns_proxy_listen_port_conflict() !== NULL) {
 		return;
 	}
-	$listen = ($saved === NULL) ? [] : pfb_dns_proxy_listen($saved);
 	$warnings = [];
+	$listen = [];
+	if ($saved !== NULL) {
+		$listen = pfb_dns_proxy_listen($skipped);
+		$warnings = pfb_dns_proxy_skipped_warnings('plain DNS', $skipped);
+		if (pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface')) === []) {
+			$warnings[] = 'DNS proxy: the stored plain DNS interface list names no interface; plain DNS is not served';
+		}
+	}
 	$addresses = '';
 	foreach (array_merge($listen, PFB_DNS_PROXY_LOOPBACK) as $address) {
 		$addresses .= ' --listen ' . escapeshellarg($address);
 	}
-	$dot = ($saved !== NULL && $saved['enablessl']['present']);
-	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted($saved));
+	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted());
 	pfb_dns_proxy_certificate_refresh($tls);
-	$dotport = pfb_dns_proxy_listener_port(config_get_path('unbound/tlsport', '')) ?? '853';
+	$tlsFlags = ($saved === NULL) ? '' : pfb_dns_proxy_tls_flags($warnings);
 	$replylog = (($pfb['dnsbl_py_reply'] ?? NULL) === PfbToggle::On) ? ' --reply-log' : '';
 	$module = !pfb_dnsbl_active() ? " --no-module{$replylog}" : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
 
@@ -4543,8 +4586,8 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
 	$wrapper = escapeshellarg("{$proxyDir}/pfb_dns.sh");
-	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" . ($dot ? " --dot --dot-port {$dotport}" : '') .
-	    " --tls-pem {$cert} --ctl-socket {$ctl}" . pfb_dns_proxy_tls_flags($listen, $warnings) . $module .
+	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" .
+	    " --tls-pem {$cert} --ctl-socket {$ctl}{$tlsFlags}" . $module .
 	    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready .
 	    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	// The command lines of the processes this script keeps and signals: the supervisor and the decider behind the gateway
@@ -4556,9 +4599,9 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$certWrite = '';
 	if ($tls) {
 		$certWrite = <<<EOF
-	# The Resolver's certificate for DoT, DoH and DoQ (root only, read by the gateway once, at start); the apply and the cron tick keep the file current and push a renewal to the running gateway
+	# The pfB-DNS certificate for DoT, DoH and DoQ (root only, read by the gateway once, at start); the apply and the cron tick keep the file current and push a renewal to the running gateway
 	[ -s {$cert} ] || /usr/bin/timeout -s TERM -k 5 30 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_cert >/dev/null 2>&1 ||
-		/usr/bin/logger -p daemon.warning -t pfb_dns_proxy "WARNING [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: the DNS Resolver's certificate could not be written - DoT, DoH and DoQ are not served until it is"
+		/usr/bin/logger -p daemon.warning -t pfb_dns_proxy "WARNING [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: the pfB-DNS certificate could not be written - DoT, DoH and DoQ are not served until it is"
 
 
 EOF;
@@ -13872,7 +13915,7 @@ function pfb_dns_status(): array {
 
 	$port = pfb_dns_proxy_port();
 	$listen = [];
-	foreach (array_merge(pfb_dns_proxy_listen($saved), PFB_DNS_PROXY_LOOPBACK) as $address) {
+	foreach (array_merge(pfb_dns_proxy_listen(), PFB_DNS_PROXY_LOOPBACK) as $address) {
 		$listen[] = (strpos($address, ':') === FALSE ? $address : "[{$address}]") . ":{$port}";
 	}
 
@@ -13890,29 +13933,32 @@ function pfb_dns_status(): array {
 		'service' => $service,
 		'mode'    => $mode,
 		'listen'  => implode(', ', $listen),
-		'dot'     => $saved['enablessl']['present'] ? 'On, port ' . (config_get_path('unbound/tlsport', '') ?: '853') : 'Off',
+		'dot'     => (pfb_dns_proxy_setting('pfb_dns_dot') === PfbToggle::On) ? 'On, port ' . pfb_dns_proxy_setting('pfb_dns_dot_port') : 'Off',
 	];
 }
 
 /**
  * The networks pfSense's unbound_acls_config() would grant through `access-control` from the Resolver's
- * active_interface, derived from the SAVED active_interface: the non-link-local IPv6 subnet of each interface that
- * has no gateway (a LAN-type one; an Internet-facing interface is never granted), plus the enabled static routes
- * that leave through such an interface. pfSense derives these from active_interface, so with the Resolver on
- * loopback they vanish from unbound.conf (the IPv4 grants come from the NAT networks and stay) and the proxy's
- * IPv6 clients, whose address Unbound only learns from the PROXYv2 header, would be REFUSED.
+ * active_interface, derived from pfB-DNS's interface lists (plain DNS, DoT, DoH, DoQ: the interfaces its clients arrive on): the
+ * non-link-local IPv6 subnet of each interface that has no gateway (a LAN-type one; an Internet-facing interface is never
+ * granted), plus the enabled static routes that leave through such an interface. pfSense derives these from active_interface, so
+ * with the Resolver on loopback they vanish from unbound.conf (the IPv4 grants come from the NAT networks and stay) and the
+ * proxy's IPv6 clients, whose address Unbound only learns from the PROXYv2 header, would be REFUSED.
  *
- * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
  * @return list<string> valid CIDR networks (they are written into custom_options), once each; none when the
  *         admin turned the automatic access control off
  */
-function pfb_dns_proxy_acl_networks(array $saved): array {
+function pfb_dns_proxy_acl_networks(): array {
 	if (config_path_enabled('unbound', 'disable_auto_added_access_control')) {
 		return [];
 	}
 
-	$interfaces = array_filter(explode(',', (string) $saved['active_interface']['value']));
-	if ($interfaces === [] || in_array('all', $interfaces, TRUE)) {
+	$interfaces = [];
+	foreach (['pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface'] as $key) {
+		array_push($interfaces, ...pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting($key)));
+	}
+	$interfaces = array_unique($interfaces);
+	if (in_array('all', $interfaces, TRUE)) {
 		$interfaces = array_keys(get_configured_interface_with_descr());
 	}
 
@@ -14262,19 +14308,17 @@ function pfb_dns_proxy_listener_directive(string $code): ?array {
  * The `edns-buffer-size:` line our clause carries, or NULL for none. Unbound takes the last one and our clause comes last, so the
  * line would override pfSense's own: it is written only while nothing else sets the size, i.e. the Advanced page says automatic
  * and the admin's Custom Options carry no such directive ($admin_code: their text as pfb_dns_proxy_directive_text() reads it,
- * our block cut out). The size is pfSense's own unbound_auto_ednsbufsize() over the SAVED interfaces: over the lo0 the Resolver
- * is moved to it advertises the loopback MTU (16316) instead of the LAN's (1432).
- *
- * @param array<string,array{present:bool,value:?string}> $saved the pfb_dns_proxy_saved() snapshot
+ * our block cut out). The size is pfSense's own unbound_auto_ednsbufsize() over pfB-DNS's plain DNS interface list
+ * (dns/pfb_dns_interface): over the lo0 the Resolver is moved to it advertises the loopback MTU (16316) instead of the LAN's (1432).
  */
-function pfb_dns_proxy_edns_line(array $saved, string $admin_code): ?string {
+function pfb_dns_proxy_edns_line(string $admin_code): ?string {
 	$setting = config_get_path('unbound/edns_buffer_size', '');
 	if (!(empty($setting) || $setting === 'auto') ||
 	    preg_match('/(?<![a-z0-9_-])edns-buffer-size[[:space:]]*:/i', $admin_code) === 1) {
 		return NULL;
 	}
 	require_once('unbound.inc');	// services_unbound_configure() loads it on demand: it may not be loaded yet
-	return 'edns-buffer-size: ' . unbound_auto_ednsbufsize(array_filter(explode(',', (string) $saved['active_interface']['value'])));
+	return 'edns-buffer-size: ' . unbound_auto_ednsbufsize(pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface')));
 }
 
 /**
@@ -14450,11 +14494,11 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 	$lines = ['server:', PFB_DNS_PROXY_MARKER, 'port: ' . PFB_DNS_PROXY_UNBOUND_PLAIN_PORT,
 	    'interface: 127.0.0.1@' . PFB_DNS_PROXY_UNBOUND_PORT, 'interface: ::1@' . PFB_DNS_PROXY_UNBOUND_PORT,
 	    'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT];
-	$size_line = pfb_dns_proxy_edns_line($saved, $code);
+	$size_line = pfb_dns_proxy_edns_line($code);
 	if ($size_line !== NULL) {
 		$lines[] = $size_line;
 	}
-	foreach (pfb_dns_proxy_acl_networks($saved) as $network) {
+	foreach (pfb_dns_proxy_acl_networks() as $network) {
 		$lines[] = "access-control: {$network} allow";
 	}
 	$lines[] = PFB_DNS_PROXY_MARKER_END;

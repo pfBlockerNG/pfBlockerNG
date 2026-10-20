@@ -1732,15 +1732,7 @@
     "pfb_dns_proxy_acl_networks": {
         "returnsRef": false,
         "returnType": "array",
-        "params": [
-            {
-                "name": "saved",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
+        "params": []
     },
     "pfb_dns_proxy_await_ready": {
         "returnsRef": false,
@@ -1843,13 +1835,6 @@
         "returnType": "?string",
         "params": [
             {
-                "name": "saved",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            },
-            {
                 "name": "admin_code",
                 "byRef": false,
                 "variadic": false,
@@ -1886,6 +1871,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "skipped",
+                "byRef": true,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -1894,11 +1886,11 @@
         "returnType": "array",
         "params": [
             {
-                "name": "saved",
-                "byRef": false,
+                "name": "skipped",
+                "byRef": true,
                 "variadic": false,
-                "type": "array",
-                "default": null
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -2177,6 +2169,26 @@
             }
         ]
     },
+    "pfb_dns_proxy_skipped_warnings": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "label",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "skipped",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_stand_down": {
         "returnsRef": false,
         "returnType": "bool",
@@ -2186,13 +2198,6 @@
         "returnsRef": false,
         "returnType": "string",
         "params": [
-            {
-                "name": "plain",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            },
             {
                 "name": "warnings",
                 "byRef": true,
@@ -2205,15 +2210,7 @@
     "pfb_dns_proxy_tls_wanted": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": [
-            {
-                "name": "saved",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
+        "params": []
     },
     "pfb_dns_proxy_tokens": {
         "returnsRef": false,

@@ -21,6 +21,7 @@ final class PfbDnsStatusTest extends TestCase
 	use DnsProxyReadySeedTrait;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
+	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private string $dir;
 
 	private array $savedGlobals = [];
@@ -130,6 +131,53 @@ final class PfbDnsStatusTest extends TestCase
 			'listen'  => '192.0.2.1:53, 127.0.0.1:53, [::1]:53',
 			'dot'     => 'On, port 8853',
 		], pfb_dns_status());
+	}
+
+	/** Store these pfB-DNS settings; the interface is stored too (the sign of a seeded box), so the saved Resolver supplies nothing. */
+	private function ownSettings(array $values): void
+	{
+		foreach ($values + ['pfb_dns_interface' => 'lan'] as $key => $value) {
+			config_set_path(self::SETTINGS . $key, $value);
+		}
+	}
+
+	public function testTheDotLineIsPfbDnsOwnToggleAndPortWhateverTheSavedResolverHad(): void
+	{
+		// Given a moved box whose saved Resolver had no SSL (and a TLS port of its own), with pfB-DNS's own DoT on at 8853
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$this->moved(FALSE);
+		config_set_path('unbound/tlsport', '9999');
+		$this->ownSettings(['pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '8853']);
+
+		$this->assertSame('On, port 8853', pfb_dns_status()['dot']);
+	}
+
+	public function testTheDotLineIsOffWhenPfbDnsHasDotOffWhateverTheSavedResolverHad(): void
+	{
+		// Given a moved box whose saved Resolver had SSL on, with pfB-DNS's own DoT off
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$this->moved(TRUE);
+		$this->ownSettings(['pfb_dns_dot' => '']);
+
+		$this->assertSame('Off', pfb_dns_status()['dot']);
+	}
+
+	public function testTheListenLineIsPfbDnsOwnInterfaceListNotTheSavedResolversInterfaces(): void
+	{
+		// Given a saved Resolver that listened on opt1, and pfB-DNS's own list: lan
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$this->moved(FALSE);
+		$keys = [
+			'active_interface' => ['present' => TRUE, 'value' => 'opt1'],
+			'enablessl'        => ['present' => FALSE, 'value' => NULL],
+			'custom_options'   => ['present' => FALSE, 'value' => NULL],
+		];
+		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
+		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE], 'opt1' => ['status' => 'up', 'enable' => TRUE]];
+		$this->ownSettings(['pfb_dns_interface' => 'lan']);
+
+		$this->assertSame('192.0.2.1:53, 127.0.0.1:53, [::1]:53', pfb_dns_status()['listen']);
 	}
 
 	/** @return array<string,array{?string}> the marker a live proxy child has not published: none yet, or one an earlier proxy left */

@@ -9,8 +9,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- a renewed Resolver certificate reaches the running pfB-DNS gateway with no restart: PHP writes the certificate
- * chain and key the Resolver uses (unbound/sslcertref) to one PEM file that only root can read (the gateway reads it once, at
+ * issue #3515 -- a renewed certificate reaches the running pfB-DNS gateway with no restart: PHP writes the certificate
+ * chain and key that the pfB-DNS page selected (issue #3538: dns/pfb_dns_sslcertref, not the Resolver's unbound/sslcertref) to one PEM file that only root can read (the gateway reads it once, at
  * start, while it is still root) and pushes a renewal to the running gateway on its control socket
  * (DnsProxyCertificatePushTest). Intent pinned here:
  *   - the file holds the certificate, the CAs its caref leads to nearest first (a missing CA or a loop ends the chain), then the
@@ -67,10 +67,15 @@ final class DnsProxyCertificateExportTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	/** Install the Resolver's certificate (and the authorities above it) in config.xml. @param list<array> $authorities <ca> entries */
+	/**
+	 * Install the certificate pfB-DNS serves (and the authorities above it) in config.xml: its own certificate setting names it, and the
+	 * Resolver's own field names one that must never be read. @param list<array> $authorities <ca> entries
+	 */
 	private function install(array $cert, array $authorities = [], string $ref = 'cert1'): void
 	{
-		$GLOBALS['config']['unbound']['sslcertref'] = $ref;
+		config_set_path(self::SETTINGS . 'pfb_dns_interface', 'lan');
+		config_set_path(self::SETTINGS . 'pfb_dns_sslcertref', $ref);
+		$GLOBALS['config']['unbound']['sslcertref'] = 'resolver-only';
 		$GLOBALS['config']['cert'] = [$cert];
 		$GLOBALS['config']['ca'] = $authorities;
 	}
@@ -247,8 +252,8 @@ final class DnsProxyCertificateExportTest extends TestCase
 	public static function unusableRows(): array
 	{
 		return [
-			'no certificate chosen' => [static function (): void { $GLOBALS['config']['unbound']['sslcertref'] = ''; }, 'unbound/sslcertref is empty'],
-			'no sslcertref at all' => [static function (): void { unset($GLOBALS['config']['unbound']['sslcertref']); }, 'unbound/sslcertref is empty'],
+			'no certificate chosen' => [static function (): void { config_set_path(self::SETTINGS . 'pfb_dns_sslcertref', ''); }, 'no certificate is selected in the pfB-DNS SSL/TLS Certificate field'],
+			'no certificate setting at all' => [static function (): void { config_del_path(self::SETTINGS . 'pfb_dns_sslcertref'); }, 'no certificate is selected in the pfB-DNS SSL/TLS Certificate field'],
 			'the chosen certificate is gone' => [static function (): void { $GLOBALS['config']['cert'] = []; }, 'no certificate with refid "cert1"'],
 			'crt is not base64' => [static function (): void { $GLOBALS['config']['cert'][0]['crt'] = '!!not base64!!'; }, 'crt of <cert> "cert1" is not valid base64'],
 			'prv is not base64' => [static function (): void { $GLOBALS['config']['cert'][0]['prv'] = '%%%'; }, 'prv of <cert> "cert1" is not valid base64'],
@@ -298,17 +303,19 @@ final class DnsProxyCertificateExportTest extends TestCase
 	// when the file exists: the apply and the cron tick
 	// -----------------------------------------------------------------------
 
+	/** config.xml of a moved box whose pfB-DNS has DoT $dot; the saved Resolver had the opposite SSL setting, so it cannot be what decides. */
 	private function moveResolver(bool $dot): void
 	{
 		$keys = [
 			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
-			'enablessl'        => ['present' => $dot, 'value' => $dot ? '' : NULL],
+			'enablessl'        => ['present' => !$dot, 'value' => $dot ? NULL : ''],
 			'custom_options'   => ['present' => FALSE, 'value' => NULL],
 		];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
+		config_set_path(self::SETTINGS . 'pfb_dns_dot', $dot ? 'on' : '');
 	}
 
-	/** @return array<string,array{?bool,string,string,bool}> moved Resolver had DoT (NULL = not moved), DoH, DoQ => is a certificate wanted */
+	/** @return array<string,array{?bool,string,string,bool}> stored DoT toggle on a moved box (NULL = not moved), DoH, DoQ => is a certificate wanted */
 	public static function wantedRows(): array
 	{
 		return [
@@ -365,5 +372,72 @@ final class DnsProxyCertificateExportTest extends TestCase
 		$this->assertSame($served, (string) file_get_contents($this->pem));
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
 		$this->assertStringContainsString('encrypted with a passphrase', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/** @return array<string,array{string,string,string,bool}> stored DoT, DoH, DoQ toggles => is an encrypted transport wanted */
+	public static function toggleRows(): array
+	{
+		return [
+			'DoT only' => ['on', '', '', TRUE],
+			'DoH only' => ['', 'on', '', TRUE],
+			'DoQ only' => ['', '', 'on', TRUE],
+			'none' => ['', '', '', FALSE],
+		];
+	}
+
+	#[DataProvider('toggleRows')]
+	public function testAnEncryptedTransportIsWantedExactlyWhileOneOfThePfbDnsTogglesIsOn(string $dot, string $doh, string $doq, bool $wanted): void
+	{
+		// Given pfB-DNS's own stored toggles (no saved Resolver is consulted)
+		config_set_path(self::SETTINGS . 'pfb_dns_interface', 'lan');
+		config_set_path(self::SETTINGS . 'pfb_dns_dot', $dot);
+		config_set_path(self::SETTINGS . 'pfb_dns_doh', $doh);
+		config_set_path(self::SETTINGS . 'pfb_dns_doq', $doq);
+
+		$this->assertSame($wanted, pfb_dns_proxy_tls_wanted());
+	}
+
+	public function testTheCertificateWrittenIsTheOneSelectedOnThePfbDnsPageNotTheResolversOwn(): void
+	{
+		// Given two certificates, the Resolver set to certA and pfB-DNS set to certB
+		$a = DnsProxyCertificateFixtures::issue('a.example');
+		$b = DnsProxyCertificateFixtures::issue('b.example');
+		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('certA', $a), DnsProxyCertificateFixtures::certEntry('certB', $b)];
+		$GLOBALS['config']['unbound']['sslcertref'] = 'certA';
+		config_set_path(self::SETTINGS . 'pfb_dns_interface', 'lan');
+		config_set_path(self::SETTINGS . 'pfb_dns_sslcertref', 'certB');
+
+		// When it is exported
+		$this->assertNull($this->export());
+
+		// Then the file is certB's certificate and key, not certA's
+		$this->assertSame(['CERTIFICATE:' . $this->body($b['cert']), 'PRIVATE KEY:' . $this->body($b['key'])], $this->blocks());
+	}
+
+	/** @return array<string,array{string,string}> the stored certificate setting => the reason the export gives */
+	public static function unselectableRefs(): array
+	{
+		return [
+			'none selected' => ['', 'no certificate is selected in the pfB-DNS SSL/TLS Certificate field'],
+			'a refid that is no certificate' => ['gone', 'there is no certificate with refid "gone" (the pfB-DNS SSL/TLS Certificate field)'],
+			'a hand-edited refid is named as stored' => ['x" onmouseover=', 'there is no certificate with refid "x" onmouseover=" (the pfB-DNS SSL/TLS Certificate field)'],
+		];
+	}
+
+	#[DataProvider('unselectableRefs')]
+	public function testASettingThatSelectsNoCertificateSaysSoVerbatimAndLeavesTheServedFileAlone(string $ref, string $reason): void
+	{
+		// Given a certificate that was exported
+		$this->install(DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost')));
+		$this->assertNull($this->export());
+		$served = (string) file_get_contents($this->pem);
+
+		// When the setting selects none, or one that does not exist
+		config_set_path(self::SETTINGS . 'pfb_dns_sslcertref', $ref);
+
+		// Then the reason is exactly this one (the text is stored encoded by the notice, so it is not encoded here), and nothing was written
+		$this->assertSame($reason, $this->export());
+		$this->assertSame($served, (string) file_get_contents($this->pem));
+		$this->assertSame(['tls.pem'], array_values(array_diff((array) scandir(dirname($this->pem)), ['.', '..'])));
 	}
 }

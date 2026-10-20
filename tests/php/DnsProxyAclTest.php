@@ -197,6 +197,35 @@ final class DnsProxyAclTest extends TestCase
 		$this->assertSame([], $this->grants(), 'only interfaces have a subnet; an address entry is not one');
 	}
 
+	public function testAnInterfaceOnlyAnEncryptedListenerUsesIsGrantedToo(): void
+	{
+		// Given plain DNS on lan, DoH on opt1 (a LAN-type interface with an IPv6 subnet and no gateway), and a Resolver that had lan alone
+		$this->seedBox(['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1'], ['lan' => '64', 'opt1' => '64']);
+		$this->seedResolver('lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh_interface', 'opt1');
+
+		$this->moveOn();
+
+		$this->assertSame(
+			['access-control: 2001:db8:1::/64 allow', 'access-control: 2001:db8:2::/64 allow'],
+			$this->grants(),
+			'the IPv6 clients of every interface pfB-DNS listens on are granted, not only the plain DNS ones'
+		);
+	}
+
+	public function testTheGrantsFollowPfbDnsInterfaceListNotTheResolversOwnInterfaces(): void
+	{
+		// Given a Resolver that had opt1 and pfB-DNS's lists all on lan
+		$this->seedBox(['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1'], ['lan' => '64', 'opt1' => '64']);
+		$this->seedResolver('opt1');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+
+		$this->moveOn();
+
+		$this->assertSame(['access-control: 2001:db8:1::/64 allow'], $this->grants());
+	}
+
 	// -----------------------------------------------------------------------
 	// Static routes
 	// -----------------------------------------------------------------------
