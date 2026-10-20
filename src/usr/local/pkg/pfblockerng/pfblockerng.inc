@@ -4879,13 +4879,17 @@ const PFB_PKG_REMOVAL_ABORT = 3;
  * @return bool FALSE iff the restore left the snapshot (config locked or unreadable, proxy outlived its stop): the
  *         Resolver is still moved, so the proxy and its rc script are kept and the removal must not go on; or iff recovery is
  *         required (our block, or a stored marker that is no snapshot, with nothing to restore from): the marker and the
- *         Resolver are kept for a manual repair, since what the Resolver was before cannot be confirmed
+ *         Resolver are kept for a manual repair, since what the Resolver was before cannot be confirmed; or iff the disable pass
+ *         could not remove Unbound's python settings ($pfb['python_removal_failed']): they name a script the teardown after this
+ *         call deletes, and the Resolver is already back
  */
 function pfb_dns_proxy_deinstall(): bool {
+	global $pfb;
+
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
 	}
-	if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
+	if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || !empty($pfb['python_removal_failed'])) {
 		return FALSE;
 	}
 	stop_service('pfb_dns_proxy');
@@ -5017,8 +5021,8 @@ function pfb_package_removal_recover(): array {
 		}
 
 		if ($why === NULL) {
-			// No valid snapshot: a block or corrupt stored marker makes the rc script refuse, so no proxy start is tried
-			if (!pfb_dns_proxy_recovery_required()) {
+			// No snapshot to serve (a block or corrupt stored marker makes the rc script refuse; a Resolver already put back needs no proxy)
+			if (pfb_dns_proxy_saved() !== NULL) {
 				start_service('pfb_dns_proxy');
 				if (!pfb_dns_proxy_await_ready()) {
 					$failed[] = 'the DNS proxy did not become ready';
@@ -5038,8 +5042,9 @@ function pfb_package_removal_recover(): array {
 }
 
 /**
- * The removal stops with the Resolver still moved to the DNS proxy: put back what pfSense took, then say so. FALSE is the
- * hook's answer, which keeps the package installed.
+ * The removal stops: the Resolver is still moved to the DNS proxy, or config.xml did not take the removal of Unbound's python
+ * settings ($pfb['python_removal_failed']). Put back what pfSense took, then say so. FALSE is the hook's answer, which keeps
+ * the package installed.
  */
 function pfb_package_removal_stopped(): bool {
 	pfb_stdout_close_line();
@@ -5056,7 +5061,7 @@ function pfb_package_removal_stopped(): bool {
 		      "settings, that value included, were left in place{$tail}. Check the Resolver in Services > DNS Resolver (restore a known-good " .
 		      'configuration backup if needed), empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then ' .
 		      'remove the package again.';
-	} else {
+	} elseif (pfb_dns_proxy_owns_resolver()) {
 		$text = 'pfBlockerNG removal was stopped: the DNS Resolver could not be put back (see the DNS proxy notice above), so it still ' .
 		    'depends on the DNS proxy. pfBlockerNG\'s files and settings were left in place';
 		if ($failed === []) {
@@ -5067,6 +5072,12 @@ function pfb_package_removal_stopped(): bool {
 			    'proxy runs: start it with ' . PFB_DNS_PROXY_RCFILE . ' start. Then, once no other configuration save is in progress ' .
 			    'and the DNS proxy can be stopped, remove the package again.';
 		}
+	} else {
+		// The Resolver is back: Unbound still names the script the teardown would delete, and no proxy has a snapshot to serve
+		$text = 'pfBlockerNG removal was stopped: config.xml could not be written, so the DNS Resolver still loads pfBlockerNG\'s Unbound python ' .
+		    'script, which the removal would delete. The DNS Resolver itself was put back. pfBlockerNG\'s files and settings were left in place' .
+		    ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed)) .
+		    '. Once config.xml can be written, remove the package again.';
 	}
 	pfb_logger("\n{$text}", 2);
 	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
@@ -13905,9 +13916,10 @@ function pfb_dns_config_lock() {
 }
 
 /**
- * Did config.xml fail to take the write the caller just made under pfb_dns_config_lock()? pfSense's write_config() answers FALSE
- * when a rule forbids the write and -1 when config.xml could not be written. Either way what this process changed in its copy
- * of config.xml is not what the file holds, so the copy is read again from the file: nothing written next puts that half
+ * Did config.xml fail to take the write the caller just made (under pfb_dns_config_lock() for the Resolver and the toggle)?
+ * pfSense's write_config() answers FALSE when a rule forbids the write and -1 when config.xml could not be written. Either way
+ * what this process changed in its copy of config.xml is not what the file holds, so the copy is read again from the file:
+ * nothing written next puts that half
  * state into config.xml, and nothing that reads the copy (the ownership predicates, the restore's callers) takes the change
  * for made.
  *
@@ -13918,7 +13930,7 @@ function pfb_dns_config_write_failed(mixed $written): bool {
 	if ($written !== FALSE && $written !== -1) {
 		return FALSE;
 	}
-	// shortcut: a re-read that fails leaves the unwritten change in this copy; the lock's own fresh read just succeeded, so it is a second fault
+	// shortcut: a re-read that fails leaves the unwritten change in this copy; the caller's own read just succeeded, so it is a second fault
 	config_read_file(FALSE, FALSE);
 	return TRUE;
 }
@@ -13954,7 +13966,7 @@ function pfb_dns_proxy_stand_down(): bool {
 
 	$what = 'the DNS Resolver is disabled in Services > DNS Resolver, so the DNS proxy has nothing to front';
 	if (!pfb_dns_proxy_turn_off($what)) {
-		pfb_logger("\npfB-DNS: {$what}, but config.xml was locked by another save or could not be written; the next apply or tick retries", 2);
+		pfb_logger("\npfB-DNS: {$what}, but pfB-DNS could not be turned off (config.xml was locked by another save or could not be written); the next apply or tick retries", 2);
 		return FALSE;
 	}
 
@@ -14375,6 +14387,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	config_read_file(FALSE, TRUE);
 
 	$pfbpython = FALSE;
+	$pfb['python_removal_failed'] = FALSE;
 
 	// issue #3515: pfB-DNS asks for the Resolver whenever it is wanted, DNSBL on or off ($mode only says whether DNSBL is).
 	// Unbound loads the DNSBL module only while nothing owns the Resolver (a valid snapshot, or our block with none); while the
@@ -14441,7 +14454,11 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 		$log = 'Removing DNSBL Unbound python integration settings';
 		pfb_logger("\n{$log}", 1);
-		write_config("pfBlockerNG: {$log}");
+		if (pfb_dns_config_write_failed(write_config("pfBlockerNG: {$log}"))) {
+			// Stored and loaded as before: Unbound keeps its script, so nothing below unmounts its libraries and a package removal stops
+			$pfb['python_removal_failed'] = TRUE;
+			pfb_logger("\nNot completed: config.xml could not be written, so the DNS Resolver still loads the pfBlockerNG Unbound python script; the next apply retries", 2);
+		}
 	}
 
 	if ($mode == 'enabled') {
@@ -14531,7 +14548,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 	// Set flag to unmount python folders after the next reboot is completed to avoid crashing Unbound (the observer,
 	// while pfB-DNS fronts the Resolver, still runs in it)
-	if ($mode == 'disabled' && !$observer) {
+	if ($mode == 'disabled' && !$observer && empty($pfb['python_removal_failed'])) {
 		$pfb['dnsbl_python_unmount'] = TRUE;
 	}
 	return $pfbpython;
@@ -23718,9 +23735,10 @@ function pfb_deinstall_sweep_managed_objects(): void {
 /**
  * Function to De-Install pfBlockerNG.
  *
- * @return bool FALSE iff the removal must stop because the DNS Resolver is still moved to the DNS proxy: the Resolver check runs
- *         before the disable pass, so nothing it tears down was removed; what pfSense removed before the hook ran is put back
- *         (pfb_package_removal_recover()); TRUE otherwise
+ * @return bool FALSE iff the removal must stop: the DNS Resolver is still moved to the DNS proxy (the first check runs before the
+ *         disable pass, so nothing it tears down was removed), or config.xml did not take the write that removes Unbound's python
+ *         settings (the check after the pass, before the teardown deletes the scripts they name); what pfSense removed before the
+ *         hook ran is put back (pfb_package_removal_recover()); TRUE otherwise
  */
 function pfblockerng_php_pre_deinstall_command(): bool {
 	require_once('config.inc');
@@ -23774,7 +23792,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
 	// issue #3515: the disable pass can move the Resolver again (pfb_dns_wanted() reads enable_cb, which its policy upgrade may
-	// re-read), so it is put back once more; a refused restore stops the removal the same way as the check above.
+	// re-read), so it is put back once more; a refused restore, or Unbound's python settings the pass could not remove, stop the removal
 	if (!pfb_dns_proxy_deinstall()) {
 		return pfb_package_removal_stopped();
 	}
