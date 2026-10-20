@@ -4880,8 +4880,9 @@ const PFB_PKG_REMOVAL_ABORT = 3;
  *         Resolver is still moved, so the proxy and its rc script are kept and the removal must not go on; or iff recovery is
  *         required (our block, or a stored marker that is no snapshot, with nothing to restore from): the marker and the
  *         Resolver are kept for a manual repair, since what the Resolver was before cannot be confirmed; or iff the disable pass
- *         could not remove Unbound's python settings ($pfb['python_removal_failed']): they name a script the teardown after this
- *         call deletes, and the Resolver is already back
+ *         could not remove Unbound's python settings ($pfb['python_removal_failed']): the Resolver is already back, and the
+ *         scripts those settings name are kept (the pass's own staging follows config.xml, pfb_unbound_dnsbl()) until the
+ *         teardown that follows this call, which the abort skips
  */
 function pfb_dns_proxy_deinstall(): bool {
 	global $pfb;
@@ -11296,6 +11297,11 @@ function pfb_unbound_dnsbl($mode) {
 	$owned = pfb_dns_proxy_owns_resolver();
 	$module = $mode == 'enabled' && !$owned;
 	$script = $module ? 'pfb_unbound.py' : ($owned ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL);
+	// config.xml still names our script when its removal was refused (pfb_unbound_python()): unbound.conf and the staged files keep it
+	$stored = config_get_path('unbound/python_script', '');
+	if ($script === NULL && !empty($pfb['python_removal_failed']) && in_array($stored, ['pfb_unbound', PFB_DNS_PROXY_OBSERVER], TRUE)) {
+		$script = "{$stored}.py";
+	}
 
 	// Collect Unbound custom option pfSense conf line
 	$pfb['unboundconfig']	= config_get_path('unbound/custom_options');
