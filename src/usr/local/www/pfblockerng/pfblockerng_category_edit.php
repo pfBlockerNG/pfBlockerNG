@@ -1512,7 +1512,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			</div>";
 }
 else {
-	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Unbound</strong> to enable 'Domain Name' blocking for this Alias.";
+	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Block</strong> to enable 'Domain Name' blocking for this Alias.";
 }
 
 $form->add($section);
