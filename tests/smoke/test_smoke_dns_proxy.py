@@ -107,7 +107,8 @@ SERVICE = "pfb_dns_proxy"
 CONFIG_XML = "/cf/conf/config.xml"
 RESOLVER_LOG = "/var/log/resolver.log"
 DNSBL_LOG = f"{h.PFB_LOGDIR}/dnsbl.log"
-SNAPSHOT_FILE = "/tmp/pfb3515_cfg_snapshot.json"  # on the guest: survives a dead test process
+# on the guest: survives a dead test process and the reboot test (pfSense CE 2.9 empties /tmp at boot, CE 2.8 does not)
+SNAPSHOT_FILE = "/var/tmp/pfb3515_cfg_snapshot.json"
 CERT_GUEST = "/tmp/pfb3515_cert.pem"
 CERT_CLIENT = "/tmp/pfb3515_ca.pem"
 
@@ -373,11 +374,12 @@ def _xml_text(root: ET.Element, path: str) -> str | None:
 
 
 def _listeners(vm: SmokeVM) -> list[Listener]:
-    """Every socket `sockstat -46l` shows: USER COMMAND PID FD PROTO LOCAL FOREIGN.
+    """Every socket `sockstat -46lw` shows: USER COMMAND PID FD PROTO LOCAL FOREIGN.
 
-    FreeBSD 16 brackets an IPv6 local address (``[::1]:53``); the listener keeps it bare (``::1:53``), as IPv4 does.
+    FreeBSD 16 cuts a long local address at 21 columns unless `-w` widens the columns. It also brackets an IPv6 local
+    address (``[::1]:53``); the listener keeps it bare (``::1:53``), as IPv4 does.
     """
-    rows = (line.split() for line in vm.ssh("sockstat -46l").stdout.splitlines()[1:])
+    rows = (line.split() for line in vm.ssh("sockstat -46lw").stdout.splitlines()[1:])
     return [
         Listener(row[1], int(row[2]), row[4], re.sub(r"^\[(.+)\]:", r"\1:", row[5]))
         for row in rows
@@ -1192,7 +1194,8 @@ STEM=${PROBE_STEM:?}
 BOOT=$(/sbin/sysctl -n kern.boottime | /usr/bin/sed 's/^[^0-9]*\([0-9]*\).*/\1/')
 START=$(/bin/date +%s)
 n=0 pkg=0 last=''
-# rc.start_packages logs this when it begins; system.log outlives a reboot, so count against what it holds now
+# rc.start_packages logs this when it begins; system.log outlives a reboot, so count against what it holds now. CE 2.9's
+# syslog drops INFO and never writes it: there RUNNING (below) is what shows the stage begun.
 MARK='Restarting/Starting all packages'
 packages() { c=$(/usr/bin/grep -c "$MARK" /var/log/system.log 2>/dev/null); echo "${c:-0}"; }
 base=$(packages)
@@ -1206,9 +1209,14 @@ RUNNING=/tmp/.rc.start_packages.running
 STAGE_RC='@PROXY_START@'
 # is_platform_booting() holds while this file exists: rc.bootup removes it when the boot is complete
 BOOTING=/var/run/booting
+# RUNNING can exist for less than one sampling round (two queries and a pause), so the watcher latches its first sight
+# in SEEN, which `stage` reads; it ends with the probe, or as soon as it has seen RUNNING
+SEEN=$DIR/stage_seen
+/bin/rm -f "$SEEN"
+( while [ ! -e "$RUNNING" ] && kill -0 $$ 2>/dev/null; do /bin/sleep 0.05; done; [ ! -e "$RUNNING" ] || : >"$SEEN" ) &
 # pkg: 0 the package stage has not begun, 1 it has, 2 it is over and the boot is complete
 stage() {
-	if [ "$pkg" -eq 0 ] && [ "$(packages)" -gt "$base" ]; then pkg=1; fi
+	if [ "$pkg" -eq 0 ] && { [ -e "$SEEN" ] || [ "$(packages)" -gt "$base" ]; }; then pkg=1; fi
 	if [ "$pkg" -eq 1 ] && [ ! -e "$RUNNING" ] && [ ! -e "$BOOTING" ] \
 		&& ! /bin/pgrep -f "$STAGE_RC" >/dev/null; then pkg=2; fi
 }
@@ -1524,8 +1532,8 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
     Given pfB-DNS on, with DNSBL on or off, applied, and a bounded probe in /etc/rc.custom_boot_early that asks
       127.0.0.1:53 from early boot for a listed name and for a fresh allowed name (the upstream is a stub on the host),
     When the firewall reboots,
-    Then the probe's first correct answers come before rc.start_packages begins (it logs `Restarting/Starting all
-      packages`):
+    Then the probe's first correct answers come before rc.start_packages begins (it creates its running marker and,
+      on CE 2.8, logs `Restarting/Starting all packages`; CE 2.9's syslog drops that line):
       the DNSBL VIP for the listed name with DNSBL on, the upstream's address for it with DNSBL off, and with both
       the upstream's address for the fresh name, which the stub saw; a `DNS proxy started` line is a launch and does
       not count;

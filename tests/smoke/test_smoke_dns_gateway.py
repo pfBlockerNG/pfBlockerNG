@@ -1209,7 +1209,7 @@ def test_a_listener_on_a_wildcard_socket_has_no_port() -> None:
 
 
 class _SockstatBox:
-    """Stands in for the box: ``_listeners`` asks it for ``sockstat -46l`` and nothing else."""
+    """Stands in for the box: ``_listeners`` asks it for ``sockstat -46lw`` and nothing else."""
 
     def __init__(self, stdout: str) -> None:
         self._stdout = stdout
