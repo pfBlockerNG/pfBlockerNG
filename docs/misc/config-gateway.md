@@ -239,11 +239,20 @@ Authorization = property of **write**, not call site (generalises
     sync `local`; the page validates a whole number 1-65535 and stores it without leading zeros. New keys, no
     grandfather.
   - **`dns/pfb_dns_doh_interface` / `dns/pfb_dns_doq_interface`** (issue #3513, plain strings): comma-joined
-    configured interface names, default `''` = the proxy's own addresses, sync `local`. New keys, no grandfather.
+    configured interface names, default `''` = not seeded yet, filled from `dns/pfb_dns_interface` by
+    `pfb_dns_proxy_seed()`, sync `local`. New keys, no grandfather.
   - **`dns/pfb_dns_doh_trusted`** (issue #3513, plain string): space-joined IPs/CIDRs of front ends trusted to
     send PROXY protocol v2 / X-Forwarded-For, default `''`, sync `local`. New key, no grandfather. All seven are
     written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`, under `pfb_dns_config_lock()` beside the
     toggle), read through `PfbConfig::read()` by `pfb_dns_proxy_service()`.
+  - **`dns/pfb_dns_interface` / `dns/pfb_dns_dot` / `dns/pfb_dns_dot_port` / `dns/pfb_dns_dot_interface` /
+    `dns/pfb_dns_sslcertref`** (issue #3538, pfB-DNS's own listener settings): defaults `''` (interface, DoT
+    interface, certificate), Off (`dns/pfb_dns_dot`, a `PfbToggle`) and `'853'` (DoT port), sync `local`. New keys,
+    no grandfather. `pfb_dns_proxy_seed()` fills each one not seeded yet, from the DNS Resolver or, once pfB-DNS has
+    moved it, from its snapshot, on every apply that turns the proxy on. The seed is keyed on
+    `dns/pfb_dns_interface` being `''`, not on absence: the installer's registry pass materialises every absent key's
+    default, so absence cannot mark "never seeded". Only the seed writes these keys so far; the pfB-DNS page and the
+    consumers switch to them in later steps.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

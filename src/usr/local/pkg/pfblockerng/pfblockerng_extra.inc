@@ -2424,7 +2424,7 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoH is turned on',
+			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from dns/pfb_dns_interface, only matters once DoH is turned on',
 		],
 		'dns/pfb_dns_doh_trusted' => [
 			'default'       => '',
@@ -2452,7 +2452,44 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoQ is turned on',
+			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from dns/pfb_dns_interface, only matters once DoQ is turned on',
+		],
+
+		// issue #3538: pfB-DNS's own listener settings; pfb_dns_proxy_seed() fills each one that is not seeded yet.
+		'dns/pfb_dns_interface' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from the Resolver\'s interfaces (or its snapshot), \'all\' when it had none',
+		],
+		'dns/pfb_dns_dot' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = no DoT listener, and pfb_dns_proxy_seed() fills it once from the Resolver\'s SSL setting',
+		],
+		'dns/pfb_dns_dot_port' => [
+			'default'       => '853',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads the 853 default, and pfb_dns_proxy_seed() fills it once from the Resolver\'s TLS port (853 when that is not a port)',
+		],
+		'dns/pfb_dns_dot_interface' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from dns/pfb_dns_interface',
+		],
+		'dns/pfb_dns_sslcertref' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = no certificate, and pfb_dns_proxy_seed() fills it once from the Resolver\'s certificate',
 		],
 	];
 

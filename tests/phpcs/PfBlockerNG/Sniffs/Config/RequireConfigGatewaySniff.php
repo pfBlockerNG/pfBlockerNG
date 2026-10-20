@@ -286,6 +286,12 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_doq_port',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_doq_interface',
+		// issue #3538: pfB-DNS's own listener settings (DoT, the listener interface, the certificate)
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_interface',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_dot',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_dot_port',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_sslcertref',
 		// issue #3450: IP-page scalars registered as plain strings
 		'installedpackages/pfblockerngipsettings/config/0/ip_placeholder',
 		'installedpackages/pfblockerngipsettings/config/0/maxmind_locale',

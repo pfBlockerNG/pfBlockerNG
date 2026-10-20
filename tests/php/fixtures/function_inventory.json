@@ -2141,6 +2141,16 @@
         "returnType": "?array",
         "params": []
     },
+    "pfb_dns_proxy_seed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_seed_values": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dns_proxy_service": {
         "returnsRef": false,
         "returnType": "void",
@@ -2151,6 +2161,19 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'/usr/local/pkg/pfblockerng/dns_proxy'"
+            }
+        ]
+    },
+    "pfb_dns_proxy_setting": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },

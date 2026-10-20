@@ -161,6 +161,7 @@ final class CfgGatewayTest extends TestCase
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
 			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
 			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
+			'dns/pfb_dns_dot' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_dot',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
 			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
@@ -201,6 +202,7 @@ final class CfgGatewayTest extends TestCase
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
 			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
 			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
+			'dns/pfb_dns_dot' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_dot',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -458,7 +460,7 @@ final class CfgGatewayTest extends TestCase
 	/** @return array<string,array{string}> */
 	public static function dnsProxyListenerToggleKeys(): array
 	{
-		return ['DoH' => ['dns/pfb_dns_doh'], 'DoQ' => ['dns/pfb_dns_doq']];
+		return ['DoT' => ['dns/pfb_dns_dot'], 'DoH' => ['dns/pfb_dns_doh'], 'DoQ' => ['dns/pfb_dns_doq']];
 	}
 
 	/** issue #3513: DoH/DoQ are opt-in; an absent key must leave them off. */
@@ -478,6 +480,10 @@ final class CfgGatewayTest extends TestCase
 			'DoH trusted'    => ['dns/pfb_dns_doh_trusted', '', '192.0.2.10 2001:db8::/32'],
 			'DoQ port'       => ['dns/pfb_dns_doq_port', '853', '8853'],
 			'DoQ interfaces' => ['dns/pfb_dns_doq_interface', '', 'lan'],
+			'DoT port'            => ['dns/pfb_dns_dot_port', '853', '8853'],
+			'DoT interfaces'      => ['dns/pfb_dns_dot_interface', '', 'lan'],
+			'listener interfaces' => ['dns/pfb_dns_interface', '', 'lan,opt1'],
+			'certificate'         => ['dns/pfb_dns_sslcertref', '', 'cert123'],
 		];
 	}
 
@@ -1619,6 +1625,12 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dns_doq',
 			'pfb_dns_doq_port',
 			'pfb_dns_doq_interface',
+			// issue #3538: pfB-DNS's own listener settings (DoT, the listener interface, the certificate)
+			'pfb_dns_interface',
+			'pfb_dns_dot',
+			'pfb_dns_dot_port',
+			'pfb_dns_dot_interface',
+			'pfb_dns_sslcertref',
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',

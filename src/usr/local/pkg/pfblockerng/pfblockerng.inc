@@ -4070,6 +4070,69 @@ function pfb_dns_proxy_listener_port(mixed $port): ?string {
 	return (is_string($port) && ctype_digit($port) && strlen($port) <= 5 && (int) $port >= 1 && (int) $port <= 65535) ? (string) (int) $port : NULL;
 }
 
+/**
+ * The listener settings pfb_dns_proxy_seed() writes, bare key => runtime value, for every one not seeded yet (the listener
+ * interface is '' in config.xml). Taken from the DNS Resolver, or from its snapshot once pfB-DNS has moved it. [] when none
+ * is unseeded, or when recovery is required (the live Resolver is then the moved one, never a seed source).
+ *
+ * @return array<string,mixed>
+ */
+function pfb_dns_proxy_seed_values(): array {
+	if (pfb_dns_proxy_recovery_required()) {
+		return [];
+	}
+	$saved = pfb_dns_proxy_saved();
+	if ($saved !== NULL) {
+		$active = (string) $saved['active_interface']['value'];
+		$ssl = $saved['enablessl']['present'];
+	} else {
+		$live = config_get_path('unbound/active_interface', '');
+		$active = is_string($live) ? $live : '';
+		$ssl = config_get_path('unbound/enablessl', NULL) !== NULL;
+	}
+	$tlsport = config_get_path('unbound/tlsport', '');
+	$sslcertref = config_get_path('unbound/sslcertref', '');
+	$sslcertref = is_scalar($sslcertref) ? trim((string) $sslcertref) : '';
+
+	$values = [];
+	$stored = PfbConfig::read('dns/pfb_dns_interface');
+	if ($stored === '') {
+		$tokens = implode(',', pfb_dns_proxy_tokens($active));
+		$values['pfb_dns_interface'] = ($tokens === '') ? 'all' : $tokens;
+		$values['pfb_dns_dot'] = $ssl ? PfbToggle::On : PfbToggle::Off;
+		$values['pfb_dns_dot_port'] = pfb_dns_proxy_listener_port($tlsport) ?? '853';
+		$values['pfb_dns_sslcertref'] = $sslcertref;
+	}
+	$list = $values['pfb_dns_interface'] ?? $stored;
+	foreach (['pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface'] as $key) {
+		if (PfbConfig::read("dns/{$key}") === '') {
+			$values[$key] = $list;
+		}
+	}
+	return $values;
+}
+
+/**
+ * The value pfB-DNS serves a listener setting with: the stored one, or for a setting not seeded yet the one
+ * pfb_dns_proxy_seed() would write. Reads only; $key is bare, e.g. 'pfb_dns_dot_port'.
+ */
+function pfb_dns_proxy_setting(string $key): mixed {
+	$seed = pfb_dns_proxy_seed_values();
+	return array_key_exists($key, $seed) ? $seed[$key] : PfbConfig::read("dns/{$key}");
+}
+
+/**
+ * Write pfb_dns_proxy_seed_values() into this process's config copy (PfbConfig::writeSystem); TRUE iff anything was written.
+ * The caller holds the DNS config lock and calls write_config().
+ */
+function pfb_dns_proxy_seed(): bool {
+	$values = pfb_dns_proxy_seed_values();
+	foreach ($values as $key => $value) {
+		PfbConfig::writeSystem("dns/{$key}", $value);
+	}
+	return $values !== [];
+}
+
 /** TRUE iff $entry is an IP address or an address/prefix a DoH front end may be trusted as: no zone id, no zero-padded prefix, no shell text. */
 function pfb_dns_proxy_trusted_entry(string $entry): bool {
 	// is_subnet() accepts a zero-padded prefix ("/08"); the gateway's netip.ParsePrefix rejects it, so only plain numbers pass.
@@ -14372,6 +14435,9 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		$changed = TRUE;
 	}
 
+	// After the refusals and the snapshot (which hold the live values), before enablessl is deleted.
+	$seeded = pfb_dns_proxy_seed();
+
 	if (config_get_path('unbound/active_interface', NULL) !== 'lo0') {
 		config_set_path('unbound/active_interface', 'lo0');
 		$changed = TRUE;
@@ -14407,8 +14473,9 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		$changed = TRUE;
 	}
 
-	if ($changed) {
-		$log = 'Moved the DNS Resolver onto loopback for the DNS proxy';
+	if ($changed || $seeded) {
+		$log = $changed ? 'Moved the DNS Resolver onto loopback for the DNS proxy' :
+		    'pfB-DNS took its listener settings from the DNS Resolver';
 		if (pfb_dns_config_write_failed(write_config("pfBlockerNG: {$log}"))) {
 			pfb_dns_proxy_resolver_unchanged(TRUE, 'config.xml could not be written');
 			return FALSE;

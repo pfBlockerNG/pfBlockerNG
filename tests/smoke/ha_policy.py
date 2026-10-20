@@ -244,6 +244,11 @@ UNSEEDED_LOCAL_KEYS = {
     f"{GEN}/pfb_metrics_export": "'on' needs pfSense-pkg-node_exporter on the node (the save gate refuses it without), and no HA guest installs that package",
     f"{DNS}/pfb_dns": "turns pfB-DNS on, which moves the node's Resolver off its port and ends the DNSBL probes the harness runs",
     f"{DNS}/pfb_dns_saved": "the Resolver snapshot the apply writes itself when it moves the Resolver; a seeded value reads as a moved one",
+    f"{DNS}/pfb_dns_interface": "read once pfB-DNS is on, which this harness leaves off: a seeded value changes nothing",
+    f"{DNS}/pfb_dns_dot": "turns the TLS listener on, which needs the Resolver's certificate the guests do not have",
+    f"{DNS}/pfb_dns_dot_port": "read only while DoT is on, which this harness leaves off: a seeded value changes nothing",
+    f"{DNS}/pfb_dns_dot_interface": "read only while DoT is on, which this harness leaves off: a seeded value changes nothing",
+    f"{DNS}/pfb_dns_sslcertref": "names the Resolver's certificate, which the guests do not have: a seeded value would dangle",
     **{
         f"{DNS}/pfb_dns_{kind}": "turns the TLS listener on, which needs the Resolver's certificate the guests do not have"
         for kind in ("doh", "doq")
