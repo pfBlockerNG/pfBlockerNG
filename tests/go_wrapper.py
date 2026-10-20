@@ -66,8 +66,9 @@ def _forge_abi_note_wrong_size(data: bytes, _value: int | None) -> bytes:
     return _patched(data, _located_abi_note(data)[0] + 4, "<I", 8)
 
 
-def _forge_truncated_note(data: bytes, _value: int | None) -> bytes:
-    """The note segment ends 4 bytes into the ABI-tag note's descriptor (header and name present, value cut)."""
+def _end_note_segment_after(data: bytes, size: int) -> bytes:
+    """End the note segment ``size`` bytes after the ABI-tag note's start: 20 cuts its 4-byte value off (header and
+    name stay), 24 leaves the whole note as the segment's last bytes."""
     note = _located_abi_note(data)[0]
     (e_phoff,) = struct.unpack_from("<Q", data, E_PHOFF_OFFSET)
     e_phentsize, e_phnum = struct.unpack_from("<HH", data, E_PHENTSIZE_OFFSET)
@@ -75,7 +76,7 @@ def _forge_truncated_note(data: bytes, _value: int | None) -> bytes:
         header = e_phoff + index * e_phentsize
         p_offset, _va, _pa, p_filesz = struct.unpack_from("<QQQQ", data, header + 8)
         if struct.unpack_from("<I", data, header)[0] == PT_NOTE and p_offset <= note < p_offset + p_filesz:
-            return _patched(data, header + 32, "<Q", note - p_offset + 20)
+            return _patched(data, header + 32, "<Q", note - p_offset + size)
     raise AssertionError("no PT_NOTE segment holds the ABI-tag note")
 
 
@@ -103,7 +104,8 @@ FORGERIES: dict[str, Callable[[bytes, int | None], bytes]] = {
     "second-abi-note": _forge_second_abi_note,
     "no-abi-note": _forge_no_abi_note,
     "abi-note-wrong-size": _forge_abi_note_wrong_size,
-    "truncated-note": _forge_truncated_note,
+    "truncated-note": lambda data, _value: _end_note_segment_after(data, 20),
+    "last-note": lambda data, _value: _end_note_segment_after(data, 24),
     "foreign-note-name": _forge_foreign_note_name,
     "interpreter": lambda data, _value: _retype_segment(data, PT_PHDR, PT_INTERP),
     "dynamic-section": lambda data, _value: _retype_segment(data, PT_PHDR, PT_DYNAMIC),

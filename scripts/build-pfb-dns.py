@@ -9,8 +9,9 @@
 #                  built, nothing is written, no Go is needed, and the result is {"targets": {}}.
 #   --out-dir      receives freebsd-amd64/pfb-dns and freebsd-arm64/pfb-dns (mtime = go.mod's, so
 #                  the bytes and stamps are a function of the source alone). Relative paths are
-#                  taken from the caller's directory.
-#   --go           the Go toolchain to run (default: `go` on PATH).
+#                  taken from the caller's directory; a directory inside the module is refused.
+#   --go           the Go toolchain to run (default: `go` on PATH); a relative path is resolved from the
+#                  caller's directory.
 #   --vendored     build the module in place from its ready-made vendor/ tree (a ports recipe's
 #                  GH_TUPLE extraction). Default: copy the module without vendor/ to a scratch
 #                  directory under --out-dir and let `go mod vendor` fill it (go.sum verifies every

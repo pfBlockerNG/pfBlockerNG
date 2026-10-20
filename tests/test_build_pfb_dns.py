@@ -635,14 +635,22 @@ def test_vendored_mode_compiles_the_vendor_tree_without_the_module_cache_or_netw
         assert b"FROM-THE-VENDOR-TREE" in (tmp_path / "out" / target / "pfb-dns").read_bytes()
 
 
+@pytest.mark.parametrize("source_root", ["direct", "symlink"])
 @pytest.mark.parametrize("mode", ["builder", "vendored"])
-def test_an_out_dir_inside_the_module_is_refused_and_writes_nothing(tmp_path: Path, mode: str) -> None:
-    # Given a caller whose directory is the module itself and whose --out-dir is relative to it
+def test_an_out_dir_inside_the_module_is_refused_and_writes_nothing(
+    tmp_path: Path, mode: str, source_root: str
+) -> None:
+    # Given a caller whose directory is the module itself and whose --out-dir is relative to it,
+    # with --source-root given directly or through a symlink (a symlinked checkout, macOS /tmp)
     root = write_tiny_module(tmp_path / "src-tree")
     module = root / "go" / "pfb_dns_gateway"
+    given = root
+    if source_root == "symlink":
+        given = tmp_path / "link"
+        given.symlink_to(root)
 
     # When the gateway is built (in place or from a copy)
-    result = run_helper(root, "out", extra=["--vendored"] if mode == "vendored" else [], cwd=module)
+    result = run_helper(given, "out", extra=["--vendored"] if mode == "vendored" else [], cwd=module)
 
     # Then the build says so, instead of copying the module into itself or building into its own tree
     assert result.returncode == 1, f"an --out-dir inside the module was accepted ({mode}):\n{result.stderr}"
@@ -741,3 +749,19 @@ def test_the_binaries_are_stripped(real_build: tuple[Path, dict[str, Any]]) -> N
         assert ".text" in names, f"{target}: the section headers were not read: {names}"
         assert ".symtab" not in names, f"{target} ships a symbol table: {names}"
         assert [n for n in names if n.startswith(".debug")] == [], f"{target} ships debug sections: {names}"
+
+
+def test_an_abi_note_that_ends_where_its_segment_ends_is_accepted(tmp_path: Path) -> None:
+    # Given a binary whose ABI tag is the last thing in its note segment (the descriptor ends at p_filesz)
+    root = write_tiny_module(tmp_path / "src-tree")
+    clean = run_helper(root, tmp_path / "clean")
+    assert clean.returncode == 0, clean.stderr
+    own = {t: v["freebsd_abi_note"] for t, v in json.loads(clean.stdout)["targets"].items()}
+    go = write_go_wrapper(tmp_path / "wrapper" / "go", forgery="last-note")
+
+    # When it is built
+    result = run_helper(root, tmp_path / "out", go=str(go))
+
+    # Then it is a complete note, accepted, and its value is recorded
+    assert result.returncode == 0, f"a note that fits its segment was refused:\n{result.stderr}"
+    assert {t: v["freebsd_abi_note"] for t, v in json.loads(result.stdout)["targets"].items()} == own
