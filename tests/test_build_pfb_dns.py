@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,12 +37,19 @@ WATCHDOG_SECONDS = 1800
 
 
 def run_helper(
-    source_root: Path, out_dir: Path, *, go: str | None = None, env: dict[str, str] | None = None
+    source_root: Path,
+    out_dir: Path | str,
+    *,
+    go: str | None = None,
+    env: dict[str, str] | None = None,
+    extra: list[str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     argv = [sys.executable, str(HELPER), "--source-root", str(source_root), "--out-dir", str(out_dir)]
     if go is not None:
         argv += ["--go", go]
-    return subprocess.run(argv, capture_output=True, text=True, env=env, check=False, timeout=WATCHDOG_SECONDS)
+    argv += extra or []
+    return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=cwd, check=False, timeout=WATCHDOG_SECONDS)
 
 
 def write_tiny_module(root: Path, *, go_directive: str = "1.21", extra: dict[str, str] | None = None) -> Path:
@@ -244,3 +252,171 @@ def test_an_output_that_is_not_the_targets_freebsd_elf_is_rejected_and_removed(
     assert result.returncode != 0, "a file that is not the target's FreeBSD ELF was accepted"
     assert "is not a FreeBSD ELF" in result.stderr, result.stderr
     assert list((tmp_path / "out").rglob("pfb-dns")) == [], "a rejected build left binaries behind"
+
+
+def written_files(directory: Path) -> list[Path]:
+    return [p for p in directory.rglob("*") if p.is_file()] if directory.exists() else []
+
+
+@pytest.fixture(scope="module")
+def vendored_gateway(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, bytes]:
+    """A copy of the real gateway beside its `go mod vendor` tree, plus the vendor/modules.txt Go wrote.
+
+    Tests that change the tree copy it first; this one stays pristine for the module.
+    """
+    root = tmp_path_factory.mktemp("pfb-dns-vendored")
+    shutil.copytree(ROOT / "go", root / "go")
+    module = root / "go" / "pfb_dns_gateway"
+    vendor = subprocess.run(
+        ["go", "mod", "vendor"], cwd=module, capture_output=True, text=True, check=False, timeout=WATCHDOG_SECONDS
+    )
+    assert vendor.returncode == 0, f"go mod vendor failed on the real gateway:\n{vendor.stderr}"
+    return root, (module / "vendor" / "modules.txt").read_bytes()
+
+
+def test_vendored_and_builder_modes_build_identical_bytes(
+    real_build: tuple[Path, dict[str, Any]], vendored_gateway: tuple[Path, bytes], tmp_path: Path
+) -> None:
+    # Given the bytes the builder produces by vendoring the real gateway itself
+    _out_dir, builder = real_build
+    root, _modules_txt = vendored_gateway
+
+    # When the same gateway is built from a ready-made vendor tree, as the ports recipe does
+    result = run_helper(root, tmp_path / "out", extra=["--vendored"])
+
+    # Then both modes ship the same bytes for both architectures
+    assert result.returncode == 0, f"--vendored build failed:\n{result.stderr}"
+    vendored = json.loads(result.stdout)
+    for target in TARGETS:
+        assert vendored["targets"][target]["sha256"] == builder["targets"][target]["sha256"], (
+            f"{target}: --vendored and builder modes differ"
+        )
+    assert_freebsd_elf(tmp_path / "out")
+
+
+def test_builder_mode_accepts_a_modules_txt_equal_to_the_one_go_generates_and_records_its_digest(
+    real_build: tuple[Path, dict[str, Any]], vendored_gateway: tuple[Path, bytes], tmp_path: Path
+) -> None:
+    _out_dir, builder = real_build
+    _root, modules_txt = vendored_gateway
+    given = tmp_path / "modules.txt"
+    given.write_bytes(modules_txt)
+
+    result = run_helper(ROOT, tmp_path / "out", extra=["--modules-txt", str(given)])
+
+    assert result.returncode == 0, f"a matching modules.txt was refused:\n{result.stderr}"
+    record = json.loads(result.stdout)
+    assert record["modules_txt_sha256"] == hashlib.sha256(modules_txt).hexdigest()
+    assert builder["modules_txt_sha256"] == record["modules_txt_sha256"], (
+        "the digest differs from the unchecked build's"
+    )
+    for target in TARGETS:
+        assert record["targets"][target]["sha256"] == builder["targets"][target]["sha256"]
+
+
+def test_vendored_mode_installs_the_given_modules_txt_into_a_tree_that_lacks_it(
+    real_build: tuple[Path, dict[str, Any]], vendored_gateway: tuple[Path, bytes], tmp_path: Path
+) -> None:
+    # Given the ports shape: module zips unpacked under vendor/ (GH_TUPLE) without Go's modules.txt
+    _out_dir, builder = real_build
+    root, modules_txt = vendored_gateway
+    tree = tmp_path / "tuple-tree"
+    shutil.copytree(root / "go", tree / "go")
+    vendor = tree / "go" / "pfb_dns_gateway" / "vendor"
+    (vendor / "modules.txt").unlink()
+    given = tmp_path / "modules.txt"
+    given.write_bytes(modules_txt)
+
+    # When it is built in place with the port's own modules.txt
+    result = run_helper(tree, tmp_path / "out", extra=["--vendored", "--modules-txt", str(given)])
+
+    # Then Go builds from it, to the bytes of the builder mode, and the file went where Go reads it
+    assert result.returncode == 0, f"the GH_TUPLE-shaped tree did not build:\n{result.stderr}"
+    record = json.loads(result.stdout)
+    for target in TARGETS:
+        assert record["targets"][target]["sha256"] == builder["targets"][target]["sha256"]
+    assert (vendor / "modules.txt").read_bytes() == modules_txt
+    assert record["modules_txt_sha256"] == hashlib.sha256(modules_txt).hexdigest()
+
+
+def altered_modules_txt(kind: str, modules_txt: bytes) -> bytes:
+    text = modules_txt.decode("utf-8")
+    if kind == "quic-go-version":
+        changed = re.sub(r"(# github\.com/quic-go/quic-go )v\S+", r"\1v0.0.1", text)
+    elif kind == "trailing-newline-stripped":
+        changed = text.rstrip("\n")
+    else:
+        changed = text.replace("\n", "\r\n")
+    assert changed != text, f"{kind} did not alter the gateway's modules.txt"
+    return changed.encode("utf-8")
+
+
+@pytest.mark.parametrize("mode", ["builder", "vendored"])
+@pytest.mark.parametrize("kind", ["quic-go-version", "trailing-newline-stripped", "crlf"])
+def test_a_modules_txt_that_differs_from_the_source_fails_and_writes_nothing(
+    vendored_gateway: tuple[Path, bytes], tmp_path: Path, mode: str, kind: str
+) -> None:
+    # Given a port modules.txt that is not the one the source's go.mod and go.sum vendor to
+    root, modules_txt = vendored_gateway
+    given = tmp_path / "modules.txt"
+    given.write_bytes(altered_modules_txt(kind, modules_txt))
+    source, extra = (ROOT, []) if mode == "builder" else (root, ["--vendored"])
+    before = (root / "go" / "pfb_dns_gateway" / "vendor" / "modules.txt").read_bytes()
+
+    # When the gateway is built with it
+    result = run_helper(source, tmp_path / "out", extra=[*extra, "--modules-txt", str(given)])
+
+    # Then the build stops on the mismatch, prints no record, and leaves no file behind or changed
+    assert result.returncode == 1, f"a differing modules.txt was accepted ({mode}, {kind}):\n{result.stderr}"
+    assert "modules.txt" in result.stderr, f"the error does not name modules.txt:\n{result.stderr}"
+    assert result.stdout.strip() == ""
+    assert written_files(tmp_path / "out") == [], "a rejected modules.txt left files behind"
+    assert (root / "go" / "pfb_dns_gateway" / "vendor" / "modules.txt").read_bytes() == before
+
+
+def test_a_modules_txt_for_a_module_that_vendors_nothing_fails(tmp_path: Path) -> None:
+    root = write_tiny_module(tmp_path / "src-tree")
+    given = tmp_path / "modules.txt"
+    given.write_text("# example.test/dep v1.0.0\n")
+
+    result = run_helper(root, tmp_path / "out", extra=["--modules-txt", str(given)])
+
+    assert result.returncode == 1, f"a modules.txt was accepted for a dependency-free module:\n{result.stderr}"
+    assert "modules.txt" in result.stderr
+    assert written_files(tmp_path / "out") == []
+
+
+def test_a_missing_modules_txt_file_fails_and_writes_nothing(tmp_path: Path) -> None:
+    root = write_tiny_module(tmp_path / "src-tree")
+
+    result = run_helper(root, tmp_path / "out", extra=["--modules-txt", str(tmp_path / "absent.txt")])
+
+    assert result.returncode == 1, f"a --modules-txt that is not a file was ignored:\n{result.stderr}"
+    assert "absent.txt" in result.stderr
+    assert written_files(tmp_path / "out") == []
+
+
+def test_a_dependency_free_module_records_no_modules_txt_digest(tmp_path: Path) -> None:
+    root = write_tiny_module(tmp_path / "src-tree")
+    for extra in ([], ["--vendored"]):
+        result = run_helper(root, tmp_path / f"out{len(extra)}", extra=extra)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["modules_txt_sha256"] is None
+
+
+@pytest.mark.parametrize("outcome", ["builds", "fails"])
+def test_a_relative_out_dir_writes_nothing_into_the_source_tree(tmp_path: Path, outcome: str) -> None:
+    # Given an --out-dir relative to the caller's directory, which is not the module's directory
+    extra = {"broken_arm64.go": "package main\n\nvar _ = undefinedSymbol\n"} if outcome == "fails" else None
+    root = write_tiny_module(tmp_path / "src-tree", extra=extra)
+
+    # When the gateway is built, successfully or not
+    result = run_helper(root, "out", cwd=tmp_path)
+
+    # Then the binaries land (or are cleaned up) under that directory and nothing is stranded in the source
+    assert (result.returncode == 0) == (outcome == "builds"), result.stderr
+    assert list(root.rglob("pfb-dns")) == [], "a build artefact was written into the source tree"
+    if outcome == "builds":
+        assert_freebsd_elf(tmp_path / "out")
+    else:
+        assert written_files(tmp_path / "out") == []
