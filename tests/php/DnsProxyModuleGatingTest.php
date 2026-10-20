@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+require_once __DIR__ . '/ConfigXmlDiskTrait.php';
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -25,6 +26,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class DnsProxyModuleGatingTest extends TestCase
 {
+	use ConfigXmlDiskTrait;
+
 	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 		. "proxy-protocol-port: 5353\nedns-buffer-size: 1432\n# end pfBlockerNG DNS proxy";
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
@@ -91,7 +94,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 		}
 		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_unbound_configure_calls'], $GLOBALS['pfb_test_unbound_configure_resolver'],
 			$GLOBALS['pfb_test_valid_pids'], $GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_lock_held'],
-			$GLOBALS['pfb_test_config_read_fails']);
+			$GLOBALS['pfb_test_config_read_fails'], $GLOBALS['pfb_test_write_config_hook'], $GLOBALS['pfb_test_write_config_result'],
+			$GLOBALS['pfb_test_config_read_hook'], $GLOBALS['pfb_test_config_read_calls'], $GLOBALS['pfb_test_config_read_lock_held']);
 		rmdir_recursive($this->tmp);
 	}
 
@@ -1317,5 +1321,65 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 		// Then Unbound runs the observer, never the matcher
 		$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'));
+	}
+
+	// -----------------------------------------------------------------------
+	// The write that removes Unbound's python settings: refused is not removed
+	// -----------------------------------------------------------------------
+
+	/** The observer's python keys as the proxy-On apply gave them to Unbound, beside the moved Resolver. */
+	private function seedObserverInUnbound(): void
+	{
+		$this->seedMovedResolver();
+		config_set_path('unbound/python', '');
+		config_set_path('unbound/python_order', 'pre_validator');
+		config_set_path('unbound/python_script', 'pfb_upstream_observer');
+	}
+
+	private function pfbLogs(): string
+	{
+		return (string) @file_get_contents($GLOBALS['pfb']['log']) . (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+	}
+
+	public function testTheDisabledPassRemovesTheObserverAndSchedulesTheUnmountWhenConfigXmlTakesTheWrite(): void
+	{
+		// Given the observer in Unbound beside a moved Resolver, pfB-DNS off and DNSBL disabled
+		$this->seedObserverInUnbound();
+		$this->setProxy(FALSE);
+		$this->configXmlOnDisk();
+		$this->assertSame('pfb_upstream_observer', $this->onDisk('unbound/python_script'), 'before: config.xml names the observer');
+
+		// When the disabled pass runs and config.xml takes every write
+		pfb_unbound_python('disabled');
+
+		// Then the settings are gone from config.xml, and the python mounts are scheduled for unmounting
+		$this->assertNull($this->onDisk('unbound/python'), 'no python key remains in config.xml');
+		$this->assertSame('', $this->onDisk('unbound/python_script'));
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_python_unmount']);
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testTheDisabledPassWhoseRemovalOfTheObserverConfigXmlRefusesKeepsItStoredAndUnmountsNothing(mixed $answer): void
+	{
+		// Given the same state, and a config.xml that refuses the write that removes the python settings (it takes the Resolver's restore)
+		$this->seedObserverInUnbound();
+		$this->setProxy(FALSE);
+		$this->configXmlOnDisk($answer, 'Removing DNSBL Unbound python');
+		$this->assertSame('pfb_upstream_observer', $this->onDisk('unbound/python_script'), 'before: config.xml names the observer');
+
+		// When the disabled pass runs
+		pfb_unbound_python('disabled');
+
+		// Then the Resolver is back, and the settings are still stored, here and in config.xml: Unbound keeps its script
+		$this->assertSame('lan,opt1', $this->onDisk('unbound/active_interface'), 'the restore was written');
+		$this->assertSame('pfb_upstream_observer', $this->onDisk('unbound/python_script'), 'config.xml still names the observer');
+		$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'), 'and this process holds the stored settings');
+		$this->assertTrue(config_path_enabled('unbound', 'python'));
+
+		// ... the python mounts the observer needs are not scheduled for unmounting ...
+		$this->assertEmpty($GLOBALS['pfb']['dnsbl_python_unmount'] ?? NULL, 'Unbound still loads the script, so its libraries stay mounted');
+
+		// ... and the log says the settings were not removed, not that they were
+		$this->assertStringContainsString('could not be written', $this->pfbLogs());
 	}
 }

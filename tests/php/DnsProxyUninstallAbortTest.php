@@ -56,8 +56,8 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	}
 
 	/**
-	 * @param array<string,mixed> $scenario extra worker scenario keys: stored, permanent, unmigratedPolicy, lockAfterMove, marker and interface (a Resolver pfB-DNS never moved beside that stored marker), state (a directory a second run continues from)
-	 * @return array{returned:bool,snapshot:bool,marker:string,interface:?string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,rawFeed:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,writes:list<string>,exit:int,state:string}
+	 * @param array<string,mixed> $scenario extra worker scenario keys: stored, permanent, unmigratedPolicy, lockAfterMove, marker and interface (a Resolver pfB-DNS never moved beside that stored marker), state (a directory a second run continues from), observer (Unbound runs the proxy's observer), refuseWrite (a write_config() that pfSense refuses: match and answer)
+	 * @return array{returned:bool,snapshot:bool,marker:string,interface:?string,pythonScript:?string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,rawFeed:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,writes:list<string>,exit:int,state:string}
 	 */
 	private function removal(string $failure, string $keep, array $scenario = []): array
 	{
@@ -330,6 +330,66 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		// Then the removal goes through and the Resolver is back on the user's interfaces
 		$this->assertSame(0, $retry['exit'], 'the retry removes the package: ' . json_encode($retry['notices']));
 		$this->assertFalse($retry['snapshot']);
+		$this->assertSame('lan,opt1', $retry['interface']);
+		$this->assertSame(self::THEIRS, $retry['services']);
+		$this->assertSame([], $retry['notices']);
+	}
+
+	/**
+	 * The disable pass removes Unbound's python settings (the observer while pfB-DNS fronted the Resolver), and the teardown that follows
+	 * deletes the staged scripts they name: a removal of those settings that config.xml does not take must stop the removal, or the next
+	 * Unbound start loads a script that is gone. The Resolver is already back by then, so there is no proxy to run.
+	 */
+	#[DataProvider('refusedWrites')]
+	public function testARemovalOfUnboundsPythonSettingsThatConfigXmlDoesNotTakeStopsTheRemovalBeforeTheScriptsTheyNameAreDeleted(mixed $answer): void
+	{
+		// Given pfB-DNS serving (Unbound runs the observer), and a config.xml that refuses the write that removes those settings
+		$removal = $this->removal('none', 'off', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing DNSBL Unbound python integration settings', 'answer' => $answer]]);
+
+		// When the removal runs: the Resolver is put back, then the disable pass tries to remove the python settings
+		$writes = $this->writes($removal);
+		$this->assertContains('Restored the DNS Resolver settings the DNS proxy had moved', $writes, 'before: the Resolver was put back: ' . json_encode($writes));
+		$this->assertContains('Removing DNSBL Unbound python integration settings', $writes, 'before: the settings\' removal was attempted: ' . json_encode($writes));
+
+		// Then the removal stops with pkg's abort status, before the teardown that deletes the staged scripts
+		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'the package hook exits with the one status that makes pkg abandon the removal: ' . json_encode($removal['notices']));
+		$this->assertFalse($removal['returned'], 'and never returns into the rest of the removal');
+		$this->assertSame('pfb_upstream_observer', $removal['pythonScript'], 'config.xml still names the observer, whose script is therefore kept');
+		$this->assertTrue($removal['pending'], 'the pending-changes marker, the first thing the teardown clears, is still there');
+		$this->assertTrue($removal['dbCanary'], 'the data directory, which a Keep Settings off removal wipes after the teardown, is kept');
+		$this->assertTrue($removal['logCanary'], 'and so is the log directory');
+		$this->assertContains('pfblockerngipsettings', $removal['sections'], 'and the package config sections are not wiped');
+		$this->assertFalse($removal['snapshot'], 'the Resolver itself was put back: nothing is moved');
+		$this->assertSame('lan,opt1', $removal['interface'], 'and sits on the user\'s interfaces');
+
+		// ... what pfSense took before the hook is put back, but no proxy is started: there is no snapshot for it to serve
+		$services = $removal['services'];
+		sort($services);
+		$this->assertSame(['pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
+		$this->assertNotContains('pfb_dns_proxy', $removal['running'], 'nothing is started for a proxy that has nothing to serve');
+		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
+
+		// ... and the operator is told why, and never that a proxy runs or failed to start
+		$text = implode("\n", $removal['notices']);
+		$this->assertNotSame([], array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped')
+			&& str_contains($notice, 'could not be written') && str_contains($notice, 'remove the package again')), 'the notice says why and what to do: ' . json_encode($removal['notices']));
+		$this->assertStringNotContainsString('did not become ready', $text);
+		$this->assertStringNotContainsString('DNS proxy is running', $text);
+	}
+
+	public function testARemovalStoppedOnARefusedPythonSettingsRemovalFinishesOnceConfigXmlTakesTheWrite(): void
+	{
+		// Given a removal that stopped because config.xml did not take the write that removes Unbound's python settings
+		$aborted = $this->removal('none', 'on', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing DNSBL Unbound python integration settings', 'answer' => FALSE]]);
+		$this->assertSame(self::PKG_ABORT, $aborted['exit'], 'before: the removal stopped');
+		$this->assertSame('pfb_upstream_observer', $aborted['pythonScript'], 'before: the settings are still stored');
+
+		// When the operator removes the package again and config.xml takes the write
+		$retry = $this->removal('none', 'on', ['state' => $aborted['state']]);
+
+		// Then the removal goes through: the python settings are gone and nothing of the package remains registered
+		$this->assertSame(0, $retry['exit'], 'the retry removes the package: ' . json_encode($retry['notices']));
+		$this->assertSame('', $retry['pythonScript'], 'Unbound no longer names a script the removal deletes');
 		$this->assertSame('lan,opt1', $retry['interface']);
 		$this->assertSame(self::THEIRS, $retry['services']);
 		$this->assertSame([], $retry['notices']);

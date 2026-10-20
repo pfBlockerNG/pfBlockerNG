@@ -31,7 +31,8 @@ declare(strict_types=1);
  * never moved (no block of ours, on `interface`, loopback by default) beside this stored pfb_dns_saved, which is no snapshot
  * unless empty: nothing to restore from, and no evidence that anything was moved. `refuseWrite` ({match, answer}): pfSense answers
  * `answer` (FALSE: refused, -1: not written) for each write_config() whose description contains `match`, and config.xml on disk
- * is left as it was; every other write goes through.
+ * is left as it was; every other write goes through. `observer`: Unbound runs the proxy's upstream observer, as an apply leaves it
+ * while pfB-DNS fronts the Resolver (its python keys are stored); without it the seed carries none.
  */
 
 $workerArgv = $argv;
@@ -267,6 +268,7 @@ register_shutdown_function(static function () use ($resultFile, &$paths, &$retur
 		'snapshot'  => ($disk['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] ?? '') !== '',
 		'marker'    => (string) ($disk['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] ?? ''),
 		'interface' => $disk['unbound']['active_interface'] ?? NULL,
+		'pythonScript' => $disk['unbound']['python_script'] ?? NULL,
 		'sections'  => array_keys($disk['installedpackages'] ?? []),
 		'services'  => array_values(array_map(static fn (array $s): string => (string) ($s['name'] ?? ''), $services)),
 		'menus'     => array_values(array_map(static fn (array $m): string => ($m['section'] ?? '') . ':' . ($m['name'] ?? ''), $menus)),
@@ -379,6 +381,9 @@ if (is_file("{$state}/config.json")) {
 		'custom_options'   => base64_encode("do-ip6: no\nserver:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\n"
 			. "interface: ::1@5353\nproxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy"),
 	];
+	if (!empty($scenario['observer'])) {
+		$GLOBALS['config']['unbound'] += ['python' => '', 'python_order' => 'pre_validator', 'python_script' => PFB_DNS_PROXY_OBSERVER];
+	}
 	// The Resolver's certificate, made by the test process (the worker's file access is narrowed: no OpenSSL configuration to read)
 	$GLOBALS['config']['cert'] = [['refid' => 'cert1', 'caref' => '', 'crt' => base64_encode($scenario['certificate']['cert']), 'prv' => base64_encode($scenario['certificate']['key'])]];
 	if (!empty($scenario['unmigratedPolicy'])) {

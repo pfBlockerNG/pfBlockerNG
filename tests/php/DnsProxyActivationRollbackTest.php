@@ -1363,6 +1363,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringNotContainsString('was turned off', $joined, 'nothing says pfB-DNS was turned off');
 		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'nothing says the Resolver was restored');
 		$this->assertStringNotContainsString('restored to its previous settings', $joined);
+		$this->assertStringContainsString('could not be turned off', $this->pfbLog(), 'the log says pfB-DNS could not be turned off, so the retry is understood');
 	}
 
 	#[DataProvider('refusedWrites')]
