@@ -1439,5 +1439,6 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Then only what config.xml names is kept: our observer is patched out as for any removal
 		$this->assertTrue($changed);
 		$this->assertStringNotContainsString('pfb_upstream_observer.py', $this->patchedConf());
+		$this->assertStringNotContainsString('someone_elses_script', $this->patchedConf(), 'a python script that is not pfBlockerNG\'s is never kept or added to unbound.conf, whatever config.xml stores');
 	}
 }
