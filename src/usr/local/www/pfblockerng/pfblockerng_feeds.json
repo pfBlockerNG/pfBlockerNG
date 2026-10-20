@@ -1337,6 +1337,12 @@
 					"header":	"Adaway"
 				},
 				{
+					"feed":		"AdGuard DNS filter",
+					"website":	"https://github.com/AdguardTeam/AdGuardSDNSFilter",
+					"url":		"https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
+					"header":	"AdGuard_DNS_Filter"
+				},
+				{
 					"feed":		"Disconnect.Me",
 					"website":	"https://disconnect.me/disconnect",
 					"url":		"https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt",
