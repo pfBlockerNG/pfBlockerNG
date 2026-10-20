@@ -536,14 +536,26 @@ def test_recipe_do_build_and_install_program_ship_both_binaries(tmp_path: Path, 
         assert member(tf, f"{BIN}/{target}/pfb-dns") == direct, f"{target} is not what the helper builds"
 
 
+def payload_without_mtimes(pkg: Path) -> dict[str, Any]:
+    """The manifest and every file entry (path, mode, checksum) of ``pkg``, minus the mtimes of its source tree."""
+    full, _compact, _tf = _read_pkg(pkg)
+    files = {path: {k: v for k, v in entry.items() if k != "mtime"} for path, entry in full["files"].items()}
+    return {**{k: v for k, v in full.items() if k != "files"}, "files": files}
+
+
 def test_the_go_recipe_ships_the_same_package_as_the_builders_own_staging(tmp_path: Path) -> None:
+    # Given the same source built by a recipe without do-build and by the go recipe, in two source trees
     legacy = make_fixture(tmp_path / "legacy")
     recipe = make_fixture(tmp_path / "recipe", recipe="go")
 
+    # When each is built
     assert build(legacy, "native", tmp_path / "legacy-out") == 0
     assert build(recipe, "native", tmp_path / "recipe-out") == 0
 
-    assert_same_package_bytes(tmp_path / "legacy-out" / PKG_NAME, tmp_path / "recipe-out" / PKG_NAME)
+    # Then the manifests and every file's mode and checksum agree (mtimes follow each tree's own clock)
+    shipped = payload_without_mtimes(tmp_path / "recipe-out" / PKG_NAME)
+    assert shipped == payload_without_mtimes(tmp_path / "legacy-out" / PKG_NAME)
+    assert shipped["files"], "the package lists no files"
 
 
 def modules_txt_for(*modules: tuple[str, str]) -> str:
