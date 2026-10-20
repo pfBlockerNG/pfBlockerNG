@@ -12,16 +12,16 @@ func TestConfigTLSDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.dot || cfg.tlsPEM != "/var/etc/pfb_dns/tls.pem" || cfg.ctlSocket != "/var/run/pfb_dns/ctl.sock" || cfg.dotPort != 853 || cfg.dohPort != 4443 || cfg.doqPort != 853 ||
+	if len(cfg.dotListen) != 0 || cfg.tlsPEM != "/var/etc/pfb_dns/tls.pem" || cfg.ctlSocket != "/var/run/pfb_dns/ctl.sock" || cfg.dotPort != 853 || cfg.dohPort != 4443 || cfg.doqPort != 853 ||
 		len(cfg.dohListen) != 0 || len(cfg.dohTrusted) != 0 || len(cfg.doqListen) != 0 {
-		t.Fatalf("defaults: got dot=%v tls-pem=%q ctl-socket=%q dot-port=%d doh-port=%d doq-port=%d doh-listen=%v doh-trusted=%v doq-listen=%v",
-			cfg.dot, cfg.tlsPEM, cfg.ctlSocket, cfg.dotPort, cfg.dohPort, cfg.doqPort, cfg.dohListen, cfg.dohTrusted, cfg.doqListen)
+		t.Fatalf("defaults: got dot-listen=%v tls-pem=%q ctl-socket=%q dot-port=%d doh-port=%d doq-port=%d doh-listen=%v doh-trusted=%v doq-listen=%v",
+			cfg.dotListen, cfg.tlsPEM, cfg.ctlSocket, cfg.dotPort, cfg.dohPort, cfg.doqPort, cfg.dohListen, cfg.dohTrusted, cfg.doqListen)
 	}
 }
 
 func TestConfigTLSEveryFlag(t *testing.T) {
 	cfg, err := parse(t,
-		"--dot", "--dot-port", "8530", "--tls-pem", "/tmp/cert.pem", "--ctl-socket", "/tmp/ctl.sock",
+		"--dot-listen", "192.0.2.1", "--dot-listen", "::1", "--dot-port", "8530", "--tls-pem", "/tmp/cert.pem", "--ctl-socket", "/tmp/ctl.sock",
 		"--doh-listen", "192.0.2.1", "--doh-listen", "::1", "--doh-port", "8443",
 		"--doh-trusted", "192.0.2.0/24", "--doh-trusted", "2001:db8::1",
 		"--doq-listen", "192.0.2.2", "--doq-port", "8853",
@@ -29,7 +29,7 @@ func TestConfigTLSEveryFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.dot || cfg.tlsPEM != "/tmp/cert.pem" || cfg.ctlSocket != "/tmp/ctl.sock" || cfg.dotPort != 8530 || cfg.dohPort != 8443 || cfg.doqPort != 8853 ||
+	if !reflect.DeepEqual(cfg.dotListen, []string{"192.0.2.1", "::1"}) || cfg.tlsPEM != "/tmp/cert.pem" || cfg.ctlSocket != "/tmp/ctl.sock" || cfg.dotPort != 8530 || cfg.dohPort != 8443 || cfg.doqPort != 8853 ||
 		!reflect.DeepEqual(cfg.dohListen, []string{"192.0.2.1", "::1"}) ||
 		!reflect.DeepEqual(cfg.dohTrusted, []string{"192.0.2.0/24", "2001:db8::1"}) ||
 		!reflect.DeepEqual(cfg.doqListen, []string{"192.0.2.2"}) {

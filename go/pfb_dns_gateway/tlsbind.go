@@ -18,7 +18,7 @@ type tlsListeners struct {
 // skipped, and so is a control socket that cannot be made: the certificate read at start is then served until a restart.
 // The file is not looked at, and no socket is made, unless a transport is requested.
 func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
-	if !cfg.dot && len(cfg.dohListen) == 0 && len(cfg.doqListen) == 0 {
+	if len(cfg.dotListen) == 0 && len(cfg.dohListen) == 0 && len(cfg.doqListen) == 0 {
 		return nil
 	}
 	certs, err := newCertStore(cfg.tlsPEM, logf)
@@ -34,13 +34,11 @@ func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
 			t.ctl = ctl
 		}
 	}
-	if cfg.dot {
-		for _, host := range cfg.listen {
-			if ln, err := bindTCP(host, cfg.dotPort); err != nil {
-				logf("%v", err)
-			} else {
-				t.dot = append(t.dot, ln)
-			}
+	for _, host := range cfg.dotListen {
+		if ln, err := bindTCP(host, cfg.dotPort); err != nil {
+			logf("%v", err)
+		} else {
+			t.dot = append(t.dot, ln)
 		}
 	}
 	for _, host := range cfg.dohListen {

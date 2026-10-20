@@ -50,10 +50,10 @@ type config struct {
 	timeout     time.Duration
 	unboundConf string
 	user        string
-	dot         bool
 	dotPort     int
 	tlsPEM      string
 	ctlSocket   string
+	dotListen   []string
 	dohListen   []string
 	dohPort     int
 	dohTrusted  []string
@@ -102,11 +102,11 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "wait for Unbound per exchange")
 	fs.StringVar(&cfg.unboundConf, "unbound-conf", cfg.unboundConf, "Unbound's config: the access-control rows of it and of every file it includes are the ACL")
 	fs.StringVar(&cfg.user, "user", "", "give up root for this user once the sockets are bound and the decider runs")
-	fs.BoolVar(&cfg.dot, "dot", false, "serve DoT on every --listen address at --dot-port")
 	fs.IntVar(&cfg.dotPort, "dot-port", cfg.dotPort, "DoT port; 0 picks one per address")
 	fs.StringVar(&cfg.tlsPEM, "tls-pem", cfg.tlsPEM, "certificate chain and private key of DoT, DoH and DoQ, one PEM file, read once at start while still root")
 	fs.StringVar(&cfg.ctlSocket, "ctl-socket", cfg.ctlSocket, "Unix socket on which root pushes a renewed certificate; made in a root-only directory before the privilege drop")
-	var dohListen, dohTrusted, doqListen listFlag
+	var dotListen, dohListen, dohTrusted, doqListen listFlag
+	fs.Var(&dotListen, "dot-listen", "DoT address, repeatable; none = DoT off")
 	fs.Var(&dohListen, "doh-listen", "DoH address (HTTPS GET and POST on /dns-query), repeatable; none = DoH off")
 	fs.IntVar(&cfg.dohPort, "doh-port", cfg.dohPort, "DoH port; 0 picks one per address")
 	fs.Var(&dohTrusted, "doh-trusted", "front end trusted to send PROXYv2 and X-Forwarded-For to DoH (CIDR or address), repeatable")
@@ -126,7 +126,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	if fs.NArg() > 0 {
 		return config{}, fmt.Errorf("unexpected argument %q before `--`", fs.Arg(0))
 	}
-	cfg.listen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dohListen, dohTrusted, doqListen
+	cfg.listen, cfg.dotListen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dotListen, dohListen, dohTrusted, doqListen
 	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
@@ -168,6 +168,9 @@ func (c config) validate() error {
 	}
 	if slices.Contains(c.listen, "") {
 		return errors.New("--listen must not be empty")
+	}
+	if slices.Contains(c.dotListen, "") {
+		return errors.New("--dot-listen must not be empty")
 	}
 	if slices.Contains(c.dohListen, "") {
 		return errors.New("--doh-listen must not be empty")

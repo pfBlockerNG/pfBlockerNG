@@ -16,7 +16,7 @@ func ctlConfig(t *testing.T) (config, *capture, string) {
 	cfg, logs := lifecycleConfig(t, "serve")
 	path, _ := goodPEM(t)
 	sock := filepath.Join(shortTempDir(t), "run", "ctl.sock")
-	cfg.dot, cfg.dotPort, cfg.tlsPEM, cfg.ctlSocket = true, freePort(t), path, sock
+	cfg.dotListen, cfg.dotPort, cfg.tlsPEM, cfg.ctlSocket = cfg.listen, freePort(t), path, sock
 	return cfg, logs, sock
 }
 
@@ -55,7 +55,7 @@ func TestTheControlSocketIsReportedBeforeReady(t *testing.T) {
 // A gateway that serves no TLS has no certificate to renew: nothing is bound, nothing is made.
 func TestNoControlSocketIsBoundWhenNoTLSTransportIsRequested(t *testing.T) {
 	cfg, logs, sock := ctlConfig(t)
-	cfg.dot = false
+	cfg.dotListen = nil
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestTheControlSocketTakesPushesAfterTheRealPrivilegeDrop(t *testing.T) {
 	ctl := filepath.Join(shortTempDir(t), "run", "ctl.sock")
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--user", "nobody",
-		"--dot", "--dot-port", "0", "--tls-pem", file, "--ctl-socket", ctl,
+		"--dot-listen", "127.0.0.1", "--dot-port", "0", "--tls-pem", file, "--ctl-socket", ctl,
 	}, decider("serve"))
 	dot := listeningAddr(t, gw.waitLine("listening dot "), "dot")
 	gw.waitLine("ready upstream ")

@@ -65,7 +65,7 @@ func startReloadRig(t *testing.T, file string, root *pki) *reloadRig {
 	ctl := filepath.Join(shortTempDir(t), "run", "ctl.sock")
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
-		"--dot", "--dot-port", "0", "--tls-pem", file, "--ctl-socket", ctl,
+		"--dot-listen", "127.0.0.1", "--dot-port", "0", "--tls-pem", file, "--ctl-socket", ctl,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doq-listen", "127.0.0.1", "--doq-port", "0",
 	}, decider("serve"))
 	plain := listenAddr(t, gw.waitLine("listening udp+tcp "))

@@ -15,7 +15,7 @@ as one PEM text. The gateway does not read `config.xml`. It has the certificate 
    the Unbound chroot, with `unbound/sslcertref`'s certificate, the chain its `caref` leads to (a missing CA or a loop ends it), and a
    key that is neither encrypted nor another certificate's; it replaces the file by rename, when the certificate changed, at every
    apply, at every cron tick (15 minutes) and at a start that finds no file. The gateway reads it once, as root, before the privilege
-   drop, and not at all unless `--dot`, `--doh-listen` or `--doq-listen` is given. It never looks at the file again: what is in
+   drop, and not at all unless `--dot-listen`, `--doh-listen` or `--doq-listen` is given. It never looks at the file again: what is in
    it after the start is none of the running gateway's business. The DoT port is `--dot-port` (the Resolver's `unbound/tlsport`
    when it is a port, else 853). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked for a
    passphrase).
@@ -31,7 +31,7 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
 
 ### The control socket
 
-- **Made** with the other TLS sockets, before the privilege drop, only when a TLS transport is requested (`--dot`, `--doh-listen`
+- **Made** with the other TLS sockets, before the privilege drop, only when a TLS transport is requested (`--dot-listen`, `--doh-listen`
   or `--doq-listen`), and reported as `control socket <path>` before `ready upstream`. Its directory is created mode 0700 (or
   must already be a real directory, not a symlink, owned by the user running the gateway, and is chmod'ed 0700 if it was left
   open); the socket is mode 0600; a stale file at the path is replaced. A socket that cannot be made is logged once
@@ -75,7 +75,7 @@ directory is a separate hardening and is not part of this change.
 
 | Transport | Flags | Socket | TLS | Cap |
 |---|---|---|---|---|
-| DoT | `--dot`, on every `--listen` address at `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
+| DoT | `--dot-listen` (repeatable), `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
 | DoH | `--doh-listen` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
 | DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle 30 s; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 

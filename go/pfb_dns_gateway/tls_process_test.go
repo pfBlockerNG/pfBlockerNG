@@ -30,7 +30,7 @@ func TestGatewayServesEveryTLSTransportAndReportsEachListener(t *testing.T) {
 	path, m := goodPEM(t)
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", strconv.Itoa(ports[1]), "--unbound-conf", "/nonexistent/unbound.conf",
-		"--dot", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
+		"--dot-listen", "127.0.0.1", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 		"--doq-listen", "127.0.0.1", "--doq-port", "0",
 	}, decider("serve"))
@@ -146,7 +146,7 @@ func TestCertificateIsReadBeforeThePrivilegeDrop(t *testing.T) {
 	ports := distinctPorts(t, 2)
 	path, _ := goodPEM(t)
 	cfg, logs := lifecycleConfig(t, "serve")
-	cfg.port, cfg.dot, cfg.dotPort, cfg.tlsPEM = ports[1], true, ports[0], path
+	cfg.port, cfg.dotListen, cfg.dotPort, cfg.tlsPEM = ports[1], cfg.listen, ports[0], path
 	cfg.drop = func() error { return os.Remove(path) } // once the drop has happened the file is out of reach
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
@@ -167,6 +167,9 @@ func TestUnparseableTrustedPrefixIsLoggedAndTheGatewayStillServesDoH(t *testing.
 	}, decider("serve"))
 	doh := listeningAddr(t, gw.waitLine("listening doh "), "doh")
 	gw.waitLine("ready upstream ")
+	if strings.Contains(gw.logText(), "listening dot") {
+		t.Fatalf("DoT is on without --dot-listen:\n%s", gw.logText())
+	}
 	h := newDoHClient(t, doh, m, dohOptions{})
 	if resp, _ := h.do(h.get(dnsParam(buildQuery(t, 0, "example.", true)))); resp.StatusCode != 200 {
 		t.Fatalf("DoH status %d", resp.StatusCode)
@@ -186,7 +189,7 @@ func TestTLSAddressThatCannotBeBoundIsSkipped(t *testing.T) {
 	tlsport := held.Addr().(*net.TCPAddr).Port
 	path, m := goodPEM(t)
 	gw := startGatewayProcess(t, []string{
-		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--dot", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
+		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--dot-listen", "127.0.0.1", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 	}, decider("serve"))
 	skipped := gw.waitLine("cannot listen on 127.0.0.1:" + strconv.Itoa(tlsport))

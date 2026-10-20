@@ -118,7 +118,16 @@ def test_with_dnsbl_off_dot_forwards_a_listed_name_and_unbound_logs_the_tls_clie
     mark = unbound.tail.mark()
     with control_socket() as ctl:
         pfb_dns = start_gateway(
-            no_module_dir, "--no-module", "--dot", "--dot-port", "0", "--tls-pem", str(pem), "--ctl-socket", str(ctl)
+            no_module_dir,
+            "--no-module",
+            "--dot-listen",
+            "127.0.0.1",
+            "--dot-port",
+            "0",
+            "--tls-pem",
+            str(pem),
+            "--ctl-socket",
+            str(ctl),
         )
         reply = asyncio.run(
             dot_exchange(

@@ -711,7 +711,7 @@ def tls_gateway(
     pem = write_certificate_file(tmp_path, certificate, key)
     with control_socket() as ctl:
         flags = [
-            "--dot", "--dot-port", "0", "--tls-pem", str(pem), "--ctl-socket", str(ctl),
+            "--dot-listen", "127.0.0.1", "--dot-port", "0", "--tls-pem", str(pem), "--ctl-socket", str(ctl),
             "--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "127.0.0.1/32",
             "--doq-listen", "127.0.0.1", "--doq-port", "0",
         ]  # fmt: skip
