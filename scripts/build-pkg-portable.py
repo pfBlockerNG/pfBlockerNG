@@ -65,7 +65,7 @@ import tempfile
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 from pfb_pkg import (
     CANONICAL_EMITTED_IDENTITY,
@@ -1111,19 +1111,16 @@ def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, wor
         recipe._cmd_install_script([built["path"], f"{bin_dir / target}/"])
 
 
-# The one `do-build` line of the go recipe (FreeBSD-ports): its args are checked, its env words are not
-# needed (the helper scrubs its own), and the helper that runs is the builder's trusted copy.
+# The one `do-build` line of the go recipe (FreeBSD-ports), flag for flag: the helper that runs is the
+# builder's trusted copy, so only --out-dir and --modules-txt are read from it.
 _DO_BUILD_LINE = re.compile(
-    r"\(cd \$\{WRKSRC:H\} && \$\{SETENVI\} \$\{WRK_ENV\} \$\{GO_ENV\} \$\{PYTHON_CMD\} "
-    r"scripts/build-pfb-dns\.py (?P<args>.+)\)"
+    r"\(cd \$\{WRKSRC:H\} && \$\{SETENVI\} \$\{WRK_ENV\} \$\{GO_ENV\} \$\{PYTHON_CMD\} scripts/build-pfb-dns\.py "
+    r"--source-root \. --out-dir (?P<out>\S+) --go \$\{GO_CMD\} --vendored "
+    r"(?:--modules-txt (?P<modules>\S+) )?--freebsd-major \$\{OSREL:R\}\)"
 )
 _VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
-_PSEUDO_VERSION = re.compile(r"-\d{14}-[0-9a-f]{12}$")
-
-
-class _DoBuildArgs(argparse.ArgumentParser):
-    def error(self, message: str) -> NoReturn:
-        raise BuildError(f"unsupported do-build arguments ({message}): teach build-pkg-portable.py")
+# Go's three pseudo-version forms: vX.0.0-<ts>-<sha>, vX.Y.Z-0.<ts>-<sha>, vX.Y.Z-pre.0.<ts>-<sha>.
+_PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]{12}(?:\+.*)?$")
 
 
 def _parse_do_build(mk: Makefile) -> tuple[Path, Path | None]:
@@ -1136,37 +1133,39 @@ def _parse_do_build(mk: Makefile) -> tuple[Path, Path | None]:
             "`(cd ${WRKSRC:H} && ... scripts/build-pfb-dns.py ...)` line; "
             f"teach build-pkg-portable.py (got {lines!r})"
         )
-    parser = _DoBuildArgs(add_help=False, allow_abbrev=False)
-    parser.add_argument("--source-root", required=True, choices=["."])
-    parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--go", required=True, choices=["${GO_CMD}"])
-    parser.add_argument("--vendored", action="store_true", required=True)
-    parser.add_argument("--modules-txt")
-    parser.add_argument("--freebsd-major", required=True, choices=["${OSREL:R}"])
-    try:
-        parsed = parser.parse_args(shlex.split(match["args"]))
-    except ValueError as exc:
-        raise BuildError(f"unsupported do-build arguments ({exc}): teach build-pkg-portable.py") from None
     wrkdir = Path(os.path.normpath(mk.get("WRKDIR")))
-    out_dir = Path(os.path.normpath(mk.expand(parsed.out_dir)))
+    out_dir = Path(os.path.normpath(mk.expand(match["out"])))
     if not out_dir.is_relative_to(wrkdir):
         raise BuildError(f"unsupported do-build: --out-dir {out_dir} is not under ${{WRKDIR}} ({wrkdir})")
-    return out_dir, Path(mk.expand(parsed.modules_txt)) if parsed.modules_txt else None
+    return out_dir, Path(mk.expand(match["modules"])) if match["modules"] else None
+
+
+def _read_modules_txt(path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BuildError(f"cannot read the recipe's modules.txt {path}: {exc}") from None
 
 
 def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
     """GH_TUPLE (what the port unpacks into vendor/) must name exactly the modules, at the versions, of modules.txt."""
     unpacked: set[tuple[str, str]] = set()
-    for entry in shlex.split(mk.get("GH_TUPLE")):
+    try:
+        entries = shlex.split(mk.get("GH_TUPLE"))
+    except ValueError as exc:
+        raise BuildError(f"GH_TUPLE is not a list of words ({exc})") from None
+    for entry in entries:
         parts = entry.split(":", 3)
         if len(parts) != 4:
             raise BuildError(f"GH_TUPLE entry {entry!r} is not account:project:tag:group/subdir")
         _group, _, subdir = parts[3].partition("/")
-        if not subdir.startswith(_VENDOR_PREFIX) or subdir == _VENDOR_PREFIX:
+        if not subdir.startswith(_VENDOR_PREFIX):
             raise BuildError(f"GH_TUPLE entry {entry!r} does not unpack under {_VENDOR_PREFIX} (the gateway's vendor/)")
         unpacked.add((subdir[len(_VENDOR_PREFIX) :], parts[2]))
     listed: set[tuple[str, str]] = set()
-    for line in modules_txt.read_text(encoding="utf-8").splitlines() if modules_txt else []:
+    for line in _read_modules_txt(modules_txt).splitlines():
         if not line.startswith("# "):
             continue
         fields = line[2:].split()
@@ -1204,7 +1203,12 @@ def run_do_build(mk: Makefile, source_tree: Path | None, freebsd_major: str) -> 
             f"this FreeBSD-ports recipe builds pfb-dns, but the source has no {_GO_MODULE} "
             "(it predates the gateway): rebase onto a commit that carries it"
         )
-    _run_pfb_dns_helper(source_tree, out_dir, freebsd_major, modules_txt)
+    record = _run_pfb_dns_helper(source_tree, out_dir, freebsd_major, modules_txt)
+    if modules_txt is None and record.get("modules_txt_sha256") is not None:
+        raise BuildError(
+            "the source vendors modules, but the recipe's do-build names no --modules-txt: "
+            "the port cannot supply them, and real `make` would fail in `go build -mod=vendor`"
+        )
 
 
 def _download(url: str, dest: Path) -> None:

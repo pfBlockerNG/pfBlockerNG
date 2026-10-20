@@ -89,7 +89,7 @@ def make_fixture(
     php_version: str = "8.3",
     recipe: str = "legacy",
     gh_tuple: tuple[str, ...] = (),
-    modules_txt: str | None = None,
+    modules_txt: str | bytes | None = None,
     do_build: str | None = None,
 ) -> Fixture:
     """A GitHub-style stable port plus its source repo.
@@ -121,7 +121,10 @@ def make_fixture(
                 install += f"\t${{INSTALL_PROGRAM}} ${{WRKDIR}}/pfb-dns/{target}/pfb-dns {bindir}/{target}\n"
         makefile.write_text(text.replace("do-install:\n", install))
         if modules_txt is not None:
-            (portdir / "files" / "modules.txt").write_text(modules_txt)
+            if isinstance(modules_txt, bytes):
+                (portdir / "files" / "modules.txt").write_bytes(modules_txt)
+            else:
+                (portdir / "files" / "modules.txt").write_text(modules_txt)
         ports_sha = commit_all(ports, "ship the pkg tree")
     source = root / "source"
     proxy = source / "src" / DNS_PROXY
@@ -271,13 +274,12 @@ def test_project_package_with_binaries_is_byte_reproducible(tmp_path: Path, reci
 
 
 @by_recipe
-def test_real_gateway_source_cross_builds_into_the_package(tmp_path: Path, recipe: str) -> None:
+def test_real_gateway_source_cross_builds_into_the_package(tmp_path: Path, recipe: str, real_modules_txt: str) -> None:
     """The shipped gateway itself, not a stand-in, rides the package for both architectures."""
-    fx = make_fixture(tmp_path, go_files=None, recipe=recipe)
-    shutil.copytree(ROOT / "go" / "pfb_dns_gateway", fx.source / "go" / "pfb_dns_gateway")
-    sha = commit_all(fx.source, "the real gateway module")
-    _git(fx.source, "tag", "-f", "v4.0.0")
-    real = fx._replace(source_sha=sha)
+    if recipe == "go":  # the go recipe must carry the modules the gateway vendors (its GH_TUPLE and modules.txt)
+        real = real_gateway_fixture(tmp_path, real_modules_txt)
+    else:
+        real = with_the_real_gateway(make_fixture(tmp_path, go_files=None, recipe=recipe))
     assert build(real, "project", tmp_path / "out") == 0
     pkg = tmp_path / "out" / PKG_NAME
     assert_dual_arch_payload(pkg)
@@ -574,9 +576,13 @@ QUIC = ("github.com/quic-go/quic-go", "v0.64.0")
 OLDER_QUIC = ("github.com/quic-go/quic-go", "v0.63.0")
 NET = ("golang.org/x/net", "v0.56.0")
 PSEUDO = ("example.test/dep", "v0.0.0-20260101000000-0123456789ab")
+PSEUDO_AFTER_A_TAG = ("example.test/dep", "v1.2.4-0.20260101000000-0123456789ab")
+PSEUDO_AFTER_A_PRERELEASE = ("example.test/dep", "v1.2.3-pre.0.20260101000000-0123456789ab")
 REPLACED = "# github.com/quic-go/quic-go v0.64.0 => example.test/fork v1.0.0\n## explicit; go 1.21\n"
 UNVENDORED = "o:p:v0.64.0:g/vendor/github.com/quic-go/quic-go"
 THREE_FIELDS = "o:p:v0.64.0"
+UNBALANCED_QUOTE = 'o:p:v0.64.0:g/../go/pfb_dns_gateway/vendor/github.com/quic-go/quic-go"'
+BARE_VENDOR_DIR = "o:p:v0.64.0:g/../go/pfb_dns_gateway/vendor/"
 
 # (id, the port's GH_TUPLE, the port's modules.txt (None: the recipe names none), what the error must say)
 PARITY_FAILURES = [
@@ -587,8 +593,18 @@ PARITY_FAILURES = [
     ("no-modules-txt", gh_tuples_for(QUIC), None, "quic-go"),
     ("replace-directive", gh_tuples_for(QUIC), REPLACED + "github.com/quic-go/quic-go\n", "=>"),
     ("pseudo-version", gh_tuples_for(PSEUDO), modules_txt_for(PSEUDO), "pseudo-version"),
+    ("pseudo-version-after-a-tag", gh_tuples_for(PSEUDO_AFTER_A_TAG), modules_txt_for(PSEUDO_AFTER_A_TAG), "pseudo"),
+    (
+        "pseudo-version-after-a-prerelease",
+        gh_tuples_for(PSEUDO_AFTER_A_PRERELEASE),
+        modules_txt_for(PSEUDO_AFTER_A_PRERELEASE),
+        "pseudo",
+    ),
     ("tuple-outside-the-vendor-tree", (UNVENDORED,), modules_txt_for(QUIC), "vendor"),
     ("tuple-with-three-fields", (THREE_FIELDS,), modules_txt_for(QUIC), "account:project:tag"),
+    ("tuple-with-an-unbalanced-quote", (UNBALANCED_QUOTE,), modules_txt_for(QUIC), "GH_TUPLE"),
+    ("tuple-at-the-bare-vendor-dir", (BARE_VENDOR_DIR,), modules_txt_for(QUIC), "GH_TUPLE"),
+    ("modules-txt-that-is-not-utf-8", gh_tuples_for(QUIC), b"# \xff\xfe v1\n", "modules.txt"),
 ]
 
 
@@ -602,7 +618,7 @@ def test_gh_tuple_that_disagrees_with_modules_txt_fails_before_go_runs(
     capfd: pytest.CaptureFixture[str],
     mode: str,
     gh_tuple: tuple[str, ...],
-    modules_txt: str | None,
+    modules_txt: str | bytes | None,
     says: str,
 ) -> None:
     fx = make_fixture(tmp_path, recipe="go", gh_tuple=gh_tuple, modules_txt=modules_txt)
@@ -638,6 +654,9 @@ UNRECOGNISED_DO_BUILD = {
     "other-major": DO_BUILD.replace("${OSREL:R}", "99"),
     "out-dir-outside-wrkdir": DO_BUILD.replace("${WRKDIR}/pfb-dns", "${STAGEDIR}/pfb-dns"),
     "second-command": DO_BUILD + "\t${ECHO_MSG} done\n",
+    "flags-in-another-order": DO_BUILD.replace(
+        "--source-root . --out-dir ${WRKDIR}/pfb-dns", "--out-dir ${WRKDIR}/pfb-dns --source-root ."
+    ),
     "command-after-the-closing-paren": DO_BUILD.rstrip("\n") + " ; ${RM} -rf ${WRKDIR}\n",
 }
 
@@ -672,15 +691,20 @@ def real_modules_txt(tmp_path_factory: pytest.TempPathFactory) -> str:
     return (module / "vendor" / "modules.txt").read_text()
 
 
+def with_the_real_gateway(fx: Fixture) -> Fixture:
+    """``fx`` with this checkout's gateway module committed (and tagged) in its source repo."""
+    shutil.copytree(ROOT / "go" / "pfb_dns_gateway", fx.source / "go" / "pfb_dns_gateway")
+    sha = commit_all(fx.source, "the real gateway module")
+    _git(fx.source, "tag", "-f", "v4.0.0")
+    return fx._replace(source_sha=sha)
+
+
 def real_gateway_fixture(root: Path, modules_txt: str) -> Fixture:
     """The go recipe over the real gateway, its GH_TUPLE naming the modules ``modules_txt`` lists."""
     modules = [tuple(line[2:].split()) for line in modules_txt.splitlines() if line.startswith("# ")]
     pairs = [(path, version) for path, version in modules]
     fx = make_fixture(root, go_files=None, recipe="go", gh_tuple=gh_tuples_for(*pairs), modules_txt=modules_txt)
-    shutil.copytree(ROOT / "go" / "pfb_dns_gateway", fx.source / "go" / "pfb_dns_gateway")
-    sha = commit_all(fx.source, "the real gateway module")
-    _git(fx.source, "tag", "-f", "v4.0.0")
-    return fx._replace(source_sha=sha)
+    return with_the_real_gateway(fx)
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
@@ -708,3 +732,45 @@ def test_port_modules_txt_that_differs_from_the_source_fails(
     assert not list((tmp_path / "out").glob("*.pkg")), (
         "a package was built from a modules.txt the source disagrees with"
     )
+
+
+def test_a_do_build_without_modules_txt_over_a_source_that_vendors_modules_fails(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    # Given a recipe whose do-build leaves out --modules-txt, over the real gateway (it vendors five modules)
+    fx = make_fixture(tmp_path, go_files=None, recipe="go", do_build=go_do_build(modules_txt=False))
+    fx = with_the_real_gateway(fx)
+
+    # When it is built
+    assert build(fx, "native", tmp_path / "out") == 1
+
+    # Then the build says the recipe cannot supply the modules the source vendors, and writes no package
+    err = capfd.readouterr().err
+    assert "--modules-txt" in err and "vendors" in err, err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was built from a recipe that has no vendor tree"
+
+
+def test_a_modules_txt_the_port_does_not_ship_fails_with_a_message(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    # Given a do-build that names ${FILESDIR}/modules.txt, which the port does not have
+    fx = make_fixture(tmp_path, recipe="go", do_build=go_do_build(modules_txt=True))
+
+    assert build(fx, "native", tmp_path / "out") == 1
+
+    err = capfd.readouterr().err
+    assert "modules.txt" in err, err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was built without the port's modules.txt"
+
+
+@pytest.mark.parametrize("tag", ["v1.2.3-pre.1", "v1.2.3-rc.1", "v0.64.0"])
+def test_a_prerelease_tag_that_is_not_a_pseudo_version_goes_on_to_the_go_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], tag: str
+) -> None:
+    module = ("example.test/dep", tag)
+    fx = make_fixture(tmp_path, recipe="go", gh_tuple=gh_tuples_for(module), modules_txt=modules_txt_for(module))
+    without_go_on_path(tmp_path, monkeypatch)
+
+    assert build(fx, "native", tmp_path / "out") == 1
+
+    assert "Go toolchain not found" in capfd.readouterr().err, f"{tag} was refused before Go"
