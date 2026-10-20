@@ -203,6 +203,30 @@ EOF
     cleanup
   End
 
+  It 'requires the build-recorded interpreter to be executable when printing it'
+    setup
+    suffix=312
+    install_wrapper
+    When run env PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" "${wrapper}" --print-interpreter
+    The status should equal 127
+    The output should equal ''
+    The stderr should include "interpreter is not executable (expected ${bindir}/python3.12)"
+    The path "${work}/pkg-called" should not be exist
+    cleanup
+  End
+
+  It 'requires the build-recorded interpreter to be executable when running it'
+    setup
+    suffix=312
+    install_wrapper
+    When run env PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" "${wrapper}" 'a b'
+    The status should equal 127
+    The output should equal ''
+    The stderr should include "interpreter is not executable (expected ${bindir}/python3.12)"
+    The path "${work}/pkg-called" should not be exist
+    cleanup
+  End
+
   It 'distinguishes an unavailable interpreter from a validator rejection'
     setup
     deps=python312
