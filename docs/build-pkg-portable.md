@@ -5,10 +5,13 @@ Build a pfSense-installable FreeBSD package (`.pkg`) for the pfBlockerNG port on
 `.pkg` builder for both CI and releases — it reproduces the port's `make package`
 off-box, so the FreeBSD VM build it once cross-checked against has been retired.
 
-It exists because pfBlockerNG is a `NO_BUILD` port: nothing is compiled.
+It exists because pfBlockerNG's ports compile almost nothing: the channel ports are
+`NO_BUILD`, except the go recipe (nightly), whose `do-build` compiles only pfb-dns (see
+[Ports recipe for pfB-DNS](#ports-recipe-for-pfb-dns)).
 "Building" the package is just (a) laying the production files out at their
-install paths, (b) applying the port's textual substitutions, and (c) emitting a
-libpkg-format archive with the right manifest. This tool does exactly that.
+install paths, (b) applying the port's textual substitutions, (c) building pfb-dns
+where the recipe says so, and (d) emitting a libpkg-format archive with the right
+manifest. This tool does exactly that.
 
 **Dev-only.** Like the rest of `scripts/`, it is not shipped — release archives
 contain only `src/`.
@@ -379,13 +382,18 @@ line carries `go/`) has these parts:
   `dns_proxy/pfb_dns.sh`: it stays `0644` and runs as `/bin/sh`.
 
 The builder follows that recipe instead of re-deriving it. It accepts only that `do-build`
-line (any other shape, flag or value is an error that says to teach the builder), refuses a
-source tree that already carries `dns_proxy/bin`, and builds the attested source with its
-own copy of `build-pfb-dns.py` (never the source's), with the same `--modules-txt` and the leg's
-FreeBSD major. Before any Go runs it checks that `GH_TUPLE` and `files/modules.txt` name the
-same modules at the same versions: every entry unpacks under
+line, flag for flag and in that order (any other shape, flag or value is an error that says to
+teach the builder), refuses a source tree that already carries `dns_proxy/bin`, and builds the
+attested source with its own copy of `build-pfb-dns.py` (never the source's), with the same
+`--modules-txt` and the leg's FreeBSD major. Before any Go runs it checks that `GH_TUPLE` and
+`files/modules.txt` name the same modules at the same versions: every entry unpacks under
 `../go/pfb_dns_gateway/vendor/`, `=>` replace lines and pseudo-versions (which no tag can
-name) are refused, and so are a tuple without a `modules.txt` line and the reverse.
+name) are refused, and so are a tuple without a `modules.txt` line and the reverse. A
+`do-build` without `--modules-txt` is refused when the source vendors modules, because a real
+`make` would have no vendor tree to build from.
+
+The check compares each module's path and tag, not the repository a tuple fetches: whoever
+reviews the ports PR confirms that every `GH_TUPLE` account and project is the module's own.
 
 ### Regenerating GH_TUPLE and modules.txt
 
@@ -569,7 +577,8 @@ FreeBSD build it replaced. Because `pkg add` checks a dependency is *present* (n
 its version), the portable `.pkg` installs on the baked-deps smoke image
 identically to a `make package` one. This tool is the **sole** `.pkg` builder for
 both CI and releases — the FreeBSD `make package` workflow (`build-pkg.yml` /
-`scripts/build-pkg.sh`) was retired, since a `NO_BUILD` port has nothing to compile.
+`scripts/build-pkg.sh`) was retired, since the one thing a port compiles, pfb-dns in the
+go recipe's `do-build`, is built here by the same `scripts/build-pfb-dns.py` the recipe runs.
 
 ## See also
 

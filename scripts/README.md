@@ -165,7 +165,8 @@ default.
 **Portable Linux builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) is the
 **sole** `.pkg` builder for both CI and releases: it runs on a plain Linux runner and
 reproduces `make package` from the port's Makefile + pkg-plist off-FreeBSD. Because
-pfBlockerNG is a `NO_BUILD` port (nothing compiles) and `pkg add` checks a dependency is
+pfBlockerNG's ports compile almost nothing (`NO_BUILD`, except the nightly go recipe, whose
+`do-build` compiles only pfb-dns) and `pkg add` checks a dependency is
 *present* (not its version), the portable `.pkg` installs identically to a real
 `make package` one — so the FreeBSD `make package` workflow was retired.
 
@@ -271,8 +272,9 @@ Produce the installable FreeBSD package:
 | [`build-dep-pkg-portable.py`](build-dep-pkg-portable.py) | **Linux or macOS** (no FreeBSD) | builds a pure-wheel dependency from its Ports-pinned sdist with the locked Python toolchain. |
 | [`build-pfb-dns.py`](build-pfb-dns.py) | **Linux or macOS** (needs Go) | cross-compiles the pfB-DNS gateway for FreeBSD amd64 and arm64; `build-pkg-portable.py` runs it and stages both binaries (see [`../docs/build-pkg-portable.md`](../docs/build-pkg-portable.md#pfb-dns-binaries-dual-architecture-payload)). |
 
-`build-pkg-portable.py` exploits the fact that pfBlockerNG is a `NO_BUILD` port:
-it executes the port's own `do-extract`/`post-extract`/`do-install` recipe and
+`build-pkg-portable.py` exploits the fact that pfBlockerNG's ports compile almost nothing
+(`NO_BUILD`, except the nightly go recipe, whose `do-build` compiles only pfb-dns):
+it executes the port's own `do-extract`/`post-extract`/`do-build`/`do-install` recipe and
 reads its `pkg-plist` — so it tracks new files and dependency changes
 automatically, rather than hardcoding pfBlockerNG's current layout — then writes
 a real `.pkg` (zstd tar: `+COMPACT_MANIFEST` + `+MANIFEST` + payload). It handles
