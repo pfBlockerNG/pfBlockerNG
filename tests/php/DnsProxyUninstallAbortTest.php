@@ -272,6 +272,69 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		return array_map(static fn (string $write): string => str_replace('pfBlockerNG: ', '', $write), $removal['writes']);
 	}
 
+	/** @return array<string,array{mixed}> pfSense's write_config() answers for a write it did not make: FALSE (refused), -1 (config.xml not written) */
+	public static function refusedWrites(): array
+	{
+		return ['the write is refused' => [FALSE], 'config.xml could not be written' => [-1]];
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testARestoreThatConfigXmlDoesNotTakeStopsTheRemovalAndLeavesTheProxyServingTheMovedResolver(mixed $answer): void
+	{
+		// Given pfB-DNS serving with the DNSBL VIP, and a config.xml that does not take the write that puts the Resolver back
+		$removal = $this->removal('none', 'on', ['refuseWrite' => ['match' => 'Restored the DNS Resolver', 'answer' => $answer]]);
+
+		// When the removal runs: the restore is tried first, and refused
+		$writes = $this->writes($removal);
+		$this->assertContains('Restored the DNS Resolver settings the DNS proxy had moved', $writes, 'before: the restore was attempted: ' . json_encode($writes));
+
+		// Then the removal stops with pkg's abort status, as for any Resolver that cannot be put back
+		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'the package hook exits with the one status that makes pkg abandon the removal: ' . json_encode($removal['notices']));
+		$this->assertFalse($removal['returned'], 'and never returns into the rest of the removal');
+
+		// ... config.xml still holds the moved Resolver and its snapshot, and nothing the proxy needs was torn down
+		$this->assertTrue($removal['snapshot'], 'the Resolver snapshot is still stored');
+		$this->assertSame('lo0', $removal['interface'], 'and the Resolver is still moved');
+		$this->assertContains('pfblockerngdns', $removal['sections'], 'the section holding the snapshot is not wiped');
+		$this->assertContains('pfblockerngipsettings', $removal['sections'], 'nor any other package section');
+		$this->assertTrue($removal['pending'], 'the pending-changes marker is still there');
+		$this->assertTrue($removal['manifest'], 'so is the DNSBL manifest the proxy loads its blocklists from');
+		$this->assertTrue($removal['rawFeed'], 'and the raw feed');
+		$this->assertTrue($removal['rcScript'], 'the proxy\'s rc script is kept');
+		$this->assertFalse($removal['noModule'], 'and it hosts the DNSBL module, as the last apply wrote it');
+
+		// ... the proxy answers, through the registration the abort put back
+		$this->assertContains('pfb_dns_proxy', $removal['running'], 'the proxy that answers the moved Resolver\'s clients is running');
+		$services = $removal['services'];
+		sort($services);
+		$this->assertSame(['pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
+		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
+
+		// ... and the operator is told why the Resolver was not put back, and that the removal stopped
+		$text = implode("\n", $removal['notices']);
+		$this->assertStringContainsString('could not be written', $text, 'the DNS proxy notice names the refused write');
+		$this->assertNotSame([], array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped')
+			&& str_contains($notice, 'remove the package again')), 'the removal notice says what to do: ' . json_encode($removal['notices']));
+	}
+
+	public function testARemovalThatStoppedOnARefusedRestoreFinishesOnceConfigXmlTakesTheWrite(): void
+	{
+		// Given a removal that stopped because config.xml did not take the restore's write
+		$aborted = $this->removal('none', 'on', ['refuseWrite' => ['match' => 'Restored the DNS Resolver', 'answer' => FALSE]]);
+		$this->assertSame(self::PKG_ABORT, $aborted['exit'], 'before: the removal stopped');
+		$this->assertTrue($aborted['snapshot'], 'before: the snapshot is stored, so a retry has something to restore from');
+
+		// When the operator removes the package again and config.xml takes the write
+		$retry = $this->removal('none', 'on', ['state' => $aborted['state']]);
+
+		// Then the removal goes through and the Resolver is back on the user's interfaces
+		$this->assertSame(0, $retry['exit'], 'the retry removes the package: ' . json_encode($retry['notices']));
+		$this->assertFalse($retry['snapshot']);
+		$this->assertSame('lan,opt1', $retry['interface']);
+		$this->assertSame(self::THEIRS, $retry['services']);
+		$this->assertSame([], $retry['notices']);
+	}
+
 	/**
 	 * The Resolver can be moved AGAIN inside the disable pass: the pass reads the DNSBL logging policy, which no apply has migrated
 	 * yet, and the upgrade's pfb_global() re-reads enable_cb, turning the uninstall's disable off for the rest of the pass, so

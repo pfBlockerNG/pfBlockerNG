@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/ConfigXmlDiskTrait.php';
+
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -19,6 +21,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class DnsProxyResolverMoveTest extends TestCase
 {
+	use ConfigXmlDiskTrait;
+
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const KEYS  = ['active_interface', 'enablessl', 'custom_options'];
 	private const MARKER = '# pfBlockerNG DNS proxy';
@@ -75,7 +79,9 @@ final class DnsProxyResolverMoveTest extends TestCase
 		} else {
 			unset($GLOBALS['config']);
 		}
-		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_file_notices']);
+		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_write_config_hook'],
+			$GLOBALS['pfb_test_write_config_result'], $GLOBALS['pfb_test_config_read_hook'], $GLOBALS['pfb_test_config_read_calls'],
+			$GLOBALS['pfb_test_config_read_lock_held'], $GLOBALS['pfb_test_lock_held']);
 		rmdir_recursive($this->tmp);
 	}
 
@@ -1283,5 +1289,97 @@ final class DnsProxyResolverMoveTest extends TestCase
 		config_set_path(self::SAVED, '');
 		$this->assertNull(pfb_dns_proxy_saved(), 'empty marker');
 		$this->assertSame('', $this->errorLog(), 'no snapshot is the normal state, not an error');
+	}
+
+	// -----------------------------------------------------------------------
+	// W -- config.xml does not take the write: nothing is reported as moved, restored or kept
+	// -----------------------------------------------------------------------
+
+	private function noticeTexts(): string
+	{
+		return implode("\n", array_column($GLOBALS['pfb_test_file_notices'] ?? [], 'notice'));
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testMoveOffWhoseWriteIsRefusedKeepsTheSnapshotAndTheMovedResolverAndTellsTheOperator(mixed $answer): void
+	{
+		// Given a moved Resolver, and a config.xml that then refuses every write
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE), 'before: the Resolver is moved');
+		$this->configXmlOnDisk($answer);
+		$snapshot = $this->savedRaw();
+		$moved = config_get_path('unbound');
+
+		// When the Resolver is put back
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then it is not reported as put back: the snapshot and the moved Resolver are what config.xml holds, here and on disk,
+		// so nothing that reads this process's copy (a package removal, the wizard's reset) takes the Resolver for restored
+		$this->assertFalse($changed);
+		$this->assertSame($snapshot, $this->savedRaw(), 'the snapshot is kept');
+		$this->assertTrue(pfb_dns_proxy_owns_resolver(), 'pfB-DNS still owns the Resolver');
+		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')), 'the Resolver is still the moved one');
+		$this->assertSame($snapshot, $this->onDisk(self::SAVED), 'config.xml keeps the snapshot');
+		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'and the moved Resolver');
+		$this->assertFalse(!empty($GLOBALS['pfb_test_lock_held']), 'the config lock is released');
+
+		// And the operator is told why the Resolver was not put back (the proxy's restart may add notices of its own)
+		$notices = array_values(array_filter($GLOBALS['pfb_test_file_notices'], static fn (array $n): bool => str_contains($n['notice'], 'not put back')));
+		$this->assertCount(1, $notices, $this->noticeTexts());
+		$this->assertStringContainsString('could not be written', $notices[0]['notice']);
+		$this->assertSame('/services_unbound.php', $notices[0]['url']);
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testMoveOnWhoseWriteIsRefusedIsNotReportedAndLeavesTheResolverAsStored(mixed $answer): void
+	{
+		// Given a Resolver on its own interfaces, and a config.xml that refuses every write
+		$before = $this->seedResolver();
+		$this->configXmlOnDisk($answer);
+
+		// When the proxy is turned on
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then the move is not reported (the apply would regenerate unbound.conf and start a proxy for a Resolver config.xml
+		// does not hold moved): this process holds the stored Resolver, with no snapshot and no block of ours
+		$this->assertFalse($changed);
+		$this->assertSame(self::sorted($before), self::sorted(config_get_path('unbound')));
+		$this->assertSame('', $this->savedRaw());
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertFalse(pfb_dns_proxy_owns_resolver());
+		$this->assertSame(self::sorted($before), self::sorted($this->onDisk('unbound')), 'config.xml holds the Resolver as it was');
+
+		// And the operator is told the Resolver was not moved
+		$notices = $GLOBALS['pfb_test_file_notices'];
+		$this->assertCount(1, $notices, $this->noticeTexts());
+		$this->assertStringContainsString('not moved', $notices[0]['notice']);
+		$this->assertStringContainsString('could not be written', $notices[0]['notice']);
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testAnUnsafeLineWhoseKeepWriteIsRefusedIsNotReportedForRollbackAndChangesNothing(mixed $answer): void
+	{
+		// Given a moved Resolver, an admin who then added an unsafe line, and a config.xml that refuses every write
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE), 'before: the Resolver is moved');
+		$edited = base64_encode(implode("\n", $this->customLines()) . "\nserver:\nport: 5300\n");
+		config_set_path('unbound/custom_options', $edited);
+		$this->configXmlOnDisk($answer);
+		$snapshot = $this->savedRaw();
+
+		// When the proxy is applied again
+		$unsafe = NULL;
+		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
+
+		// Then no rollback is asked for (it would restore from a snapshot that does not hold the admin's line, and drop it)
+		$this->assertNull($unsafe);
+		$this->assertFalse($changed, 'the snapshot was not rewritten');
+		$this->assertSame($snapshot, $this->savedRaw());
+		$this->assertSame($snapshot, $this->onDisk(self::SAVED));
+		$this->assertSame($edited, config_get_path('unbound/custom_options'), 'the admin\'s text is as saved');
+		$notices = $GLOBALS['pfb_test_file_notices'];
+		$this->assertCount(1, $notices, $this->noticeTexts());
+		$this->assertStringContainsString('not re-applied', $notices[0]['notice']);
+		$this->assertStringContainsString('could not be written', $notices[0]['notice']);
 	}
 }

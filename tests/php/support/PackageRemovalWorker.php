@@ -29,7 +29,9 @@ declare(strict_types=1);
  * uninstall's disable back off and the pass moves the Resolver again. `lockAfterMove`: another save holds the config lock from
  * the moment the Resolver was moved again until the recovery announces itself. `marker` (with `interface`): a Resolver pfB-DNS
  * never moved (no block of ours, on `interface`, loopback by default) beside this stored pfb_dns_saved, which is no snapshot
- * unless empty: nothing to restore from, and no evidence that anything was moved.
+ * unless empty: nothing to restore from, and no evidence that anything was moved. `refuseWrite` ({match, answer}): pfSense answers
+ * `answer` (FALSE: refused, -1: not written) for each write_config() whose description contains `match`, and config.xml on disk
+ * is left as it was; every other write goes through.
  */
 
 $workerArgv = $argv;
@@ -308,6 +310,12 @@ $GLOBALS['worker_survivor'] = $scenario['failure'] === 'survivor';
 $GLOBALS['worker_scenario'] = $scenario;
 $GLOBALS['pfb_test_rcfile_dir'] = rtrim(RCFILEPREFIX, '/');
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $desc): void {
+	$refuse = $GLOBALS['worker_scenario']['refuseWrite'] ?? NULL;
+	if ($refuse !== NULL && str_contains($desc, (string) $refuse['match'])) {
+		$GLOBALS['pfb_test_write_config_result'] = $refuse['answer'];
+		return;
+	}
+	unset($GLOBALS['pfb_test_write_config_result']);
 	worker_persist();
 	// lockAfterMove: another save takes the config lock just after the Resolver was moved again
 	if (!empty($GLOBALS['worker_scenario']['lockAfterMove']) && str_contains($desc, 'Moved the DNS Resolver')) {
