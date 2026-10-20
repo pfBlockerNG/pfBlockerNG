@@ -144,4 +144,71 @@ EOF
     The stderr should include 'interpreter is not executable'
     cleanup
   End
+
+  install_wrapper() {
+    sed "s|%%PYTHON_SUFFIX%%|${suffix}|g" "${wrapper}" > "${work}/installed.sh"
+    chmod +x "${work}/installed.sh"
+    wrapper="${work}/installed.sh"
+    pkg="${work}/pkg"
+    cat > "${pkg}" <<EOF
+#!/bin/sh
+touch "${work}/pkg-called"
+exit 1
+EOF
+    chmod +x "${pkg}"
+  }
+
+  It 'resolves the build-recorded Python without a visible package database'
+    setup
+    suffix=311
+    install_wrapper
+    When run env PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" "${wrapper}" --print-interpreter
+    The status should be success
+    The output should equal "${bindir}/python3.11"
+    The stderr should equal ''
+    The path "${work}/pkg-called" should not be exist
+    cleanup
+  End
+
+  It 'executes the build-recorded interpreter and preserves arguments'
+    setup
+    suffix=311
+    install_wrapper
+    When run env PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" "${wrapper}" 'a b' '$(touch should-not-run)' '*.txt'
+    The status should be success
+    The contents of file "${marker}" should equal "$(printf '<a b>\n<$(touch should-not-run)>\n<*.txt>\n')"
+    The path "${work}/pkg-called" should not be exist
+    cleanup
+  End
+
+  It 'keeps the dependency test seam authoritative after substitution'
+    setup
+    suffix=312
+    install_wrapper
+    deps=python311
+    When call run_print
+    The status should be success
+    The output should equal "${bindir}/python3.11"
+    cleanup
+  End
+
+  It 'fails closed for an invalid recorded dependency instead of querying pkg'
+    setup
+    suffix=broken
+    install_wrapper
+    When run env PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" "${wrapper}" --print-interpreter
+    The status should equal 127
+    The stderr should include 'expected exactly one pyNN/pythonNN dependency'
+    The path "${work}/pkg-called" should not be exist
+    cleanup
+  End
+
+  It 'distinguishes an unavailable interpreter from a validator rejection'
+    setup
+    deps=python312
+    When call run_args
+    The status should equal 127
+    The stderr should include 'interpreter is not executable'
+    cleanup
+  End
 End

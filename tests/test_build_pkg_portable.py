@@ -709,6 +709,62 @@ def test_end_to_end_classic_build(tmp_path: Path) -> None:
     assert info == "<version>1.0_2</version>\n"
 
 
+@pytest.mark.parametrize("py_flavor", ["py311", "py312"])
+def test_staged_python_matches_manifest_without_package_database(tmp_path: Path, py_flavor: str) -> None:
+    ports, portdir = _make_classic_port(tmp_path)
+    wrapper = Path(__file__).resolve().parents[1] / "src/usr/local/pkg/pfblockerng/pfb_python.sh"
+    shutil.copyfile(wrapper, portdir / "files/pfb_python.sh")
+    makefile = portdir / "Makefile"
+    makefile.write_text(
+        makefile.read_text()
+        + "USES=\tpython\n"
+        + "post-install:\n"
+        + "\t${INSTALL_SCRIPT} ${FILESDIR}/pfb_python.sh ${STAGEDIR}${PREFIX}/bin\n"
+        + '\t${REINPLACE_CMD} -e "s|%%PYTHON_SUFFIX%%|${PYTHON_SUFFIX}|g" ${STAGEDIR}${PREFIX}/bin/pfb_python.sh\n'
+    )
+    plist = portdir / "pkg-plist"
+    plist.write_text(plist.read_text() + "bin/pfb_python.sh\n")
+    rc = bpp.main(
+        [
+            "--ports",
+            str(ports),
+            "--port-dir",
+            str(portdir),
+            "--abi",
+            "FreeBSD:15:amd64",
+            "--py-flavor",
+            py_flavor,
+            "--compression",
+            "xz",
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc == 0
+    manifest, _, package = _read_pkg(tmp_path / "out/testpkg-1.0_2.pkg")
+    python_dep = next(name for name in manifest["deps"] if name.startswith("python"))
+    suffix = python_dep.removeprefix("python")
+    expected_name = f"python{suffix[0]}.{suffix[1:]}"
+    body = _extract(package, "/usr/local/bin/pfb_python.sh").decode()
+    assert "%%PYTHON_SUFFIX%%" not in body, body
+    staged = tmp_path / "pfb_python.sh"
+    staged.write_text(body)
+    staged.chmod(0o555)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    interpreter = fake_bin / expected_name
+    interpreter.write_text("#!/bin/sh\nexit 0\n")
+    interpreter.chmod(0o755)
+    result = subprocess.run(
+        [str(staged), "--print-interpreter"],
+        env={**os.environ, "PFB_PYTHON_DIR": str(fake_bin), "PFB_PKG_BIN": str(tmp_path / "no-pkg")},
+        text=True,
+        capture_output=True,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, f"{interpreter}\n", ""), result
+    assert manifest["files"]["/usr/local/bin/pfb_python.sh"]["perm"] == "0555"
+
+
 def _make_no_arch_port(tmp_path: Path) -> tuple[Path, Path]:
     """The same minimal classic port as _make_classic_port, with NO_ARCH=yes set —
     simulates the FreeBSD-ports fork's staged NO_ARCH Makefile change (issue #1806;

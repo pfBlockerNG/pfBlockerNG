@@ -170,7 +170,7 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 | --- | --- | --- |
 | `--abi ABI` | `FreeBSD:15:amd64` | The package ABI (`FreeBSD:<major>:<arch>`), from the target version's entry in the ci-metadata version matrix (`supported-versions.json`). Sets the manifest `abi`. |
 | `--arch TRIPLET` | `freebsd:15:x86:64` | The manifest `arch` triplet. Default: derived from `--abi` (`amd64` → `x86:64`, etc.). |
-| `--py-flavor FLAVOR` | `py311` | The Python flavor used in dependency names (`py311-sqlite3`, …) and the `python<XY>` dep. |
+| `--py-flavor FLAVOR` | `py311` | The Python flavor used in dependency names (`py311-sqlite3`, …), the `python<XY>` dep, and the recipe's `PYTHON_SUFFIX` substitution in `pfb_python.sh`. |
 | `--php VERSION` | `8.3` | The PHP version for the `USES=php` dependency (`php83`, `php83-intl`). Asked **only** when the port uses PHP. |
 | `--freebsd-version N` | `1500068` | Native mode only: the build host's `__FreeBSD_version`, written to the manifest `annotations` block. Optional; the block is omitted if unset. |
 

@@ -1457,6 +1457,7 @@ def seed_vars(portdir: Path, workdir: Path, py_flavor: str) -> dict[str, str]:
         "PORTEPOCH": "0",
         "PYTHON_PKGNAMEPREFIX": py_prefix,
         "PY_FLAVOR": py_flavor,
+        "PYTHON_SUFFIX": py_flavor[2:] if py_flavor.startswith("py") else py_flavor,
         "PYTHON_CMD": "python3",
     }
 
