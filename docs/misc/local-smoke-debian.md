@@ -252,7 +252,8 @@ for every node it touches; it restores the branch build on both nodes before and
 
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
-Portable Linux builder reproduces `make package` for this `NO_BUILD` port. For CE 2.8
+Portable Linux builder reproduces `make package` for these ports (`NO_BUILD`, except the
+nightly go recipe, whose `do-build` compiles only pfb-dns). For CE 2.8
 (values from CE 2.8 entry in ci-metadata matrix):
 
 ```sh

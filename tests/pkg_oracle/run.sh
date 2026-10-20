@@ -25,8 +25,9 @@ rev=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)
 git -C "$repo" diff --quiet HEAD 2>/dev/null || rev="$rev+worktree"
 
 # stage_gateway REPO DEST RECORD: pfb-dns, the binary pfb_dns.sh execs, built from REPO's go/pfb_dns_gateway with the pinned Go toolchain
-# (scripts/go_toolchain.py). The flags mirror scripts/build-pfb-dns.py (CGO off, -mod=readonly, -trimpath, -buildvcs=false, stripped,
-# GOTOOLCHAIN=local). Its target is this oracle's host, linux/amd64: build-pfb-dns.py only makes FreeBSD payloads and checks for a
+# (scripts/go_toolchain.py). The flags mirror scripts/build-pfb-dns.py (CGO off, -trimpath, -buildvcs=false, stripped, GOTOOLCHAIN=local)
+# except -mod: this builds REPO in place (-mod=readonly, go.sum verifies), where build-pfb-dns.py builds a `go mod vendor` copy (-mod=vendor).
+# Its target is this oracle's host, linux/amd64: build-pfb-dns.py only makes FreeBSD payloads and checks for a
 # FreeBSD ELF, so this is NOT a FreeBSD-native binary (see README).
 stage_gateway() {
 	pinned=$(sed -n 's/^GO_VERSION = "\(go[^"]*\)"$/\1/p' "$1/scripts/go_toolchain.py")
