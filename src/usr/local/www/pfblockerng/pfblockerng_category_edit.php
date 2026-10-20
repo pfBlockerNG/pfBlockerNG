@@ -408,7 +408,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 					'Match_Both' => 'Match Both', 'Alias_Deny' => 'Alias Deny', 'Alias_Permit' => 'Alias Permit',
 					'Alias_Match' => 'Alias Match', 'Alias_Native' => 'Alias Native' ];
 } else {
-	$options_action		= [	'Disabled' => 'Disabled', 'unbound' => 'Unbound' ];
+	$options_action		= [	'Disabled' => 'Disabled', 'unbound' => 'Block' ];
 }
 
 $options_cron			= [	'Never' => 'Never', '01hour' => 'Every hour', '02hours' => 'Every 2 hours', '03hours' => 'Every 3 hours',
@@ -1512,7 +1512,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			</div>";
 }
 else {
-	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Unbound</strong> to enable 'Domain Name' blocking for this Alias.";
+	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Block</strong> to enable 'Domain Name' blocking for this Alias.";
 }
 
 $form->add($section);
