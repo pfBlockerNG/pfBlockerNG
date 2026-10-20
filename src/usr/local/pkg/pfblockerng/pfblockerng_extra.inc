@@ -878,6 +878,9 @@ const PFB_SECTIONS = [
 	// sibling still passes a section write through byte-identical.
 	'global' => 'installedpackages/pfblockerngglobal',
 	'sync'   => 'installedpackages/pfblockerngsync/config/0',
+	// issue #3515: pfB-DNS, the experimental DNS proxy tab. Its own section, so the DNSBL page's section save cannot touch
+	// the Resolver snapshot kept beside the toggle; never synced (not one of pfblockerng_sync_sections()).
+	'dns'    => 'installedpackages/pfblockerngdns/config/0',
 ];
 
 // issue #1921: dedicated map key standing for "key genuinely absent" inside a
@@ -2375,6 +2378,81 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'sync'          => 'local',
 			'no_grandfather' => 'migration issue3452 runs before the registry pass; absent with no sync section = fresh/never-saved = policy',
+		],
+
+		// -------------------------------------------------------------------
+		// pfB-DNS section (pfblockerngdns/config/0, issue #3515)
+		// -------------------------------------------------------------------
+
+		// EXPERIMENTAL DNS proxy on the Resolver's client-facing interfaces, with or without DNSBL. Default off.
+		'dns/pfb_dns' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads Off = pre-feature behaviour (no proxy, Resolver untouched)',
+		],
+
+		// The Resolver's pre-move active_interface/enablessl/custom_options (base64 JSON, written by
+		// pfb_dns_proxy_resolver(), read via pfb_dns_proxy_saved()); '' = not moved.
+		'dns/pfb_dns_saved' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
+		],
+
+		// issue #3513: DoH / DoQ served by pfB-DNS's Go binary (pfb-dns). Default off; the interface lists
+		// (comma-joined names) and the trusted front ends (space-joined IPs/CIDRs) are per-node values.
+		'dns/pfb_dns_doh' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoH listener)',
+		],
+		'dns/pfb_dns_doh_port' => [
+			'default'       => '4443',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads the 4443 default, which only matters once DoH is turned on',
+		],
+		'dns/pfb_dns_doh_interface' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoH is turned on',
+		],
+		'dns/pfb_dns_doh_trusted' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = no trusted front end (PROXY protocol and X-Forwarded-For ignored)',
+		],
+		'dns/pfb_dns_doq' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoQ listener)',
+		],
+		'dns/pfb_dns_doq_port' => [
+			'default'       => '853',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads the 853 default, which only matters once DoQ is turned on',
+		],
+		'dns/pfb_dns_doq_interface' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = the proxy\'s own addresses, which only matters once DoQ is turned on',
 		],
 	];
 
@@ -6704,6 +6782,14 @@ function pfblockerng_tick(
 ): void
 {
 	global $pfb;
+
+	// issue #3515: a DNS Resolver disabled under pfB-DNS must not wait for the next apply; a pass that is running does it itself
+	if (!pfb_update_pass_running($ps_lines)) {
+		pfb_dns_proxy_stand_down();
+	}
+
+	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
+	pfb_dns_proxy_certificate_sync();
 
 	$now   = time();
 	$seed  = pfb_tick_seed();

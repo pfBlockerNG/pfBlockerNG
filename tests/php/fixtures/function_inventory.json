@@ -1706,6 +1706,544 @@
             }
         ]
     },
+    "pfb_dns_config_lock": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": []
+    },
+    "pfb_dns_config_refresh": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_config_write_failed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "written",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_acl_networks": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_await_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_block_present": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_certificate_export": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dns_proxy_certificate_push": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "pem",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "socket",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "3.0"
+            }
+        ]
+    },
+    "pfb_dns_proxy_certificate_pushed_path": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_dns_proxy_certificate_refresh": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "wanted",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_certificate_sync": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
+    "pfb_dns_proxy_confirm_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_deinstall": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_directive_text": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_edns_line": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "admin_code",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_ensure_running": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "proxyDir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/pkg/pfblockerng/dns_proxy'"
+            }
+        ]
+    },
+    "pfb_dns_proxy_hosts_module": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_interface_addresses": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "interfaces",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_listen": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_listen_port_conflict": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": []
+    },
+    "pfb_dns_proxy_listener_directive": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "code",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_listener_port": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "port",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_listeners_stored": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_notify": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "id",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "url",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_owns_resolver": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_pem_field": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "field",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_port": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_dns_proxy_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_recovery_required": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_refuse": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "why",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_resolver": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "unsafe_line",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dns_proxy_resolver_locked": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "unsafe_line",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dns_proxy_resolver_unchanged": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "why",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_restart": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_roll_back": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "what",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "next",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dns_proxy_rollback_notice": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_running": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_saved": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": []
+    },
+    "pfb_dns_proxy_service": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "proxyDir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/pkg/pfblockerng/dns_proxy'"
+            }
+        ]
+    },
+    "pfb_dns_proxy_stand_down": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_tls_flags": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "plain",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "warnings",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_tls_wanted": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_tokens": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "list",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_trusted_entry": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_turn_off": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "why",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_unmoved_effect": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "fronted",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_redirect_rule": {
         "returnsRef": false,
         "returnType": "array",
@@ -1732,6 +2270,21 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dns_reply_log_active": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_status": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_dns_wanted": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_dnsbl_abp_extract_ip": {
         "returnsRef": false,
@@ -1765,6 +2318,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dnsbl_active": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_dnsbl_alias_count_norm_skip": {
         "returnsRef": false,
@@ -2331,6 +2889,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dnsbl_ini_inputs": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
     },
     "pfb_dnsbl_ipv4_count_decision": {
         "returnsRef": false,
@@ -9911,6 +10474,29 @@
             }
         ]
     },
+    "pfb_package_registration_restore": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "xml_file",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_package_removal_recover": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_package_removal_stopped": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_page_anchor_layout": {
         "returnsRef": false,
         "returnType": "array",
@@ -14719,6 +15305,11 @@
             }
         ]
     },
+    "pfb_unbound_py_host_running": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_unbound_py_manifest_raw_paths": {
         "returnsRef": false,
         "returnType": "array",
@@ -14769,6 +15360,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_unbound_py_module_wired": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_unbound_py_normalize_absolute_path": {
         "returnsRef": false,
@@ -15043,6 +15639,13 @@
                 "variadic": false,
                 "type": null,
                 "default": null
+            },
+            {
+                "name": "dns_wanted",
+                "byRef": false,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },
@@ -15632,6 +16235,33 @@
                 "variadic": false,
                 "type": "?callable",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_validate_dns_proxy_listeners_post": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "valid_iface_list",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "certref",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },
@@ -16277,7 +16907,7 @@
     },
     "pfblockerng_php_pre_deinstall_command": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "bool",
         "params": []
     },
     "pfblockerng_plugin_xmlrpc_recv": {

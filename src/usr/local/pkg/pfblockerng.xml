@@ -47,6 +47,12 @@
 		<description>pfBlockerNG DNSBL service</description>
 	</service>
 	<service>
+		<name>pfb_dns_proxy</name>
+		<rcfile>pfb_dns_proxy.sh</rcfile>
+		<custom_php_service_status_command>isvalidpid('/var/run/pfb_dns_proxy.pid')</custom_php_service_status_command>
+		<description>pfBlockerNG DNS proxy (experimental)</description>
+	</service>
+	<service>
 		<name>pfb_filter</name>
 		<rcfile>pfb_filter.sh</rcfile>
 		<executable>php_pfb</executable>
@@ -88,7 +94,9 @@
 	</custom_php_install_command>
 	<custom_php_pre_deinstall_command>
 		<![CDATA[
-		pfblockerng_php_pre_deinstall_command();
+		if (!pfblockerng_php_pre_deinstall_command()) {
+			exit(PFB_PKG_REMOVAL_ABORT);
+		}
 		]]>
 	</custom_php_pre_deinstall_command>
 	<custom_php_resync_config_command>

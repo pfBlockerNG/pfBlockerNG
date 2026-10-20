@@ -74,7 +74,6 @@ $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default
 $pconfig['pfb_cache']		= PfbConfig::read('dnsbl/pfb_cache');
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
-$pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
 $pconfig['pfb_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');
 $pconfig['pfb_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');
@@ -848,6 +847,20 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
+			// issue #3515: the pfB-DNS page and the Resolver move write config.xml under this lock; this whole-section save, and
+			// write_config() with it (it writes the whole copy this request read), must not put back what they wrote since.
+			$pfb_config_lock = pfb_dns_config_lock();
+			if ($pfb_config_lock === NULL) {
+				$input_errors[] = 'DNSBL: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+			}
+		}
+
+		if (!$input_errors) {
+			// The fresh read replaced the config the validation above chose the block page in: take the section from it again.
+			// foreign key — out of ADR-29 gateway scope (dnsbl_webpage is out-of-scope; see CfgGatewayTest $out_of_scope)
+			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', $dnsbl_webpage_file);
+			$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
+
 			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
 			// Refresh $pfb['dconfig'] if it changed -- the pre-facade snapshot would
 			// otherwise clobber a NEWCFG-seeded bystander field at writeSection() below.
@@ -898,7 +911,6 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
-			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			// ADR-08: IDN mode selector. Validate the raw word, then canonicalise via the
 			// PfbIdnMode adapter to ('on' = All | 'confusable' | '' = Off).
@@ -1039,12 +1051,19 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
 			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
-			write_config('[pfBlockerNG] save DNSBL settings');
-			pfb_mark_pending_changes();	// applies on the next Update, not on save
-			header('Location: /pfblockerng/pfblockerng_dnsbl.php');
-			exit;
+			try {
+				$pfb_written = write_config('[pfBlockerNG] save DNSBL settings');
+			} finally {
+				unlock($pfb_config_lock);
+			}
+			if ($pfb_written !== FALSE && $pfb_written !== -1) {
+				pfb_mark_pending_changes();	// applies on the next Update, not on save
+				header('Location: /pfblockerng/pfblockerng_dnsbl.php');
+				exit;
+			}
+			$input_errors[] = 'DNSBL: the configuration could not be written, so these settings were not saved. Save again in a moment.';
 		}
-		else {
+		if ($input_errors) {
 			$pconfig = $_POST;	// Restore $_POST data on input errors
 		}
 	}
@@ -2621,6 +2640,7 @@ $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
 $tab_array[]	= array(gettext('DNSBL'),	TRUE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
@@ -2743,13 +2763,10 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp($tld_wildcard_text);
 
-$section->addInput(new Form_Checkbox(
-	'pfb_py_reply',
+$section->addInput(new Form_StaticText(
 	gettext('DNS Reply Logging'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_py_reply'] ?? NULL),
-	'on'
-))->setHelp('Enable the logging of all DNS Replies that were not blocked via DNSBL.');
+	'Moved to the <a href="/pfblockerng/pfblockerng_dns.php">pfB-DNS</a> tab: one setting for the DNSBL module and for pfB-DNS without DNSBL.'
+));
 
 $section->addInput(new Form_Checkbox(
 	'pfb_hsts',

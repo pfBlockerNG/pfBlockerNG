@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
+
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -222,7 +224,7 @@ final class TickEntrypointTest extends TestCase
 		} else {
 			unset($GLOBALS['g']['unbound_chroot_path']);
 		}
-		unset($GLOBALS['pfb_test_logger_calls']);
+		unset($GLOBALS['pfb_test_logger_calls'], $GLOBALS['pfb_test_file_notices']);
 		unset($GLOBALS['pfb_test_syslog_spy'], $GLOBALS['pfb_test_syslog_calls']);
 		$this->rrmdir($this->dbdir);
 	}
@@ -495,6 +497,52 @@ final class TickEntrypointTest extends TestCase
 			"After tick with pfb_interval='Disabled': expected 'log' trimmed to [l3,l4,l5], got "
 			. var_export($linesAfter, TRUE)
 			. ' -- pfb_log_mgmt() must run every tick, not only when the feed cron is enabled');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #3515 — a renewed Resolver certificate reaches the pfB-DNS gateway between applies.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Scenario:
+	 *   Given pfB-DNS fronting a Resolver that had DoT on, and the Resolver's certificate in config.xml.
+	 *   And   the gateway's certificate file holds an older certificate.
+	 *   When  pfblockerng_tick() is called, with no apply anywhere.
+	 *   Then  the file holds the Resolver's current certificate: the gateway reads it again within a second and a
+	 *         renewal needs no restart.
+	 */
+	public function testTheTickRenewsTheGatewaysCertificateFileWithNoApply(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$this->ensureLogDir();
+		$now = time();
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+
+		$saved = array_intersect_key($GLOBALS['pfb'], array_flip(['dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl']));
+		try {
+			DnsProxyCertificateFixtures::seedResolver($this->dbdir);
+			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
+				'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+				'enablessl'        => ['present' => TRUE, 'value' => ''],
+				'custom_options'   => ['present' => FALSE, 'value' => NULL],
+			])));
+			$pem = $GLOBALS['pfb']['dns_proxy_cert'];
+			mkdir(dirname($pem), 0700, TRUE);
+			file_put_contents($pem, "an older certificate\n");
+			$psLines = $this->settledSuiteWorkerPsLines();
+
+			pfblockerng_tick($psLines);
+
+			$this->assertStringContainsString(
+				trim(DnsProxyCertificateFixtures::shared()['cert']),
+				(string) file_get_contents($pem),
+				'the tick writes the Resolver\'s certificate where the gateway reads it'
+			);
+		} finally {
+			$GLOBALS['pfb'] = $saved + array_diff_key($GLOBALS['pfb'], array_flip(['dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl']));
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -1072,5 +1120,56 @@ final class TickEntrypointTest extends TestCase
 			"After a Disabled-interval tick with a FUTURE-seeded (non-pending) 'cron' entry: "
 			. 'expected \'log\' trimmed to [l3,l4,l5] (genuinely idle tick), got '
 			. var_export($linesAfter, TRUE));
+	}
+
+	/**
+	 * issue #3515: the DNS Resolver disabled while pfB-DNS fronts it leaves the proxy answering SERVFAIL for every allowed name
+	 * until something notices. An idle tick is such a something: it does not wait for the next apply.
+	 *
+	 * Scenario:
+	 *   Given pfB-DNS on with the Resolver moved (a snapshot), then the Resolver disabled; nothing else is due.
+	 *   When  pfblockerng_tick() is called twice.
+	 *   Then  the first stands pfB-DNS down (toggle off, Resolver restored and still disabled, one notice); the second does nothing.
+	 */
+	public function testAnIdleTickStandsPfbDnsDownWhenTheResolverWasDisabled(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', 'on');
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::On);
+		$original = ['dnssec' => '', 'port' => '53', 'active_interface' => 'lan,opt1', 'enablessl' => '', 'custom_options' => base64_encode("do-ip6: no\nprefetch: yes")];
+		$snapshot = [];
+		foreach (['active_interface', 'enablessl', 'custom_options'] as $key) {
+			$snapshot[$key] = ['present' => TRUE, 'value' => $original[$key]];
+		}
+		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode((string) json_encode($snapshot)));
+		$block = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\nproxy-protocol-port: 5353\n# end pfBlockerNG DNS proxy";
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode("do-ip6: no\nprefetch: yes\n{$block}")] + $original;
+		unset($GLOBALS['config']['unbound']['enablessl'], $GLOBALS['config']['unbound']['enable']);
+		$GLOBALS['pfb_test_file_notices'] = [];
+		pfb_global();
+		$this->ensureLogDir();
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the Resolver is moved');
+		$this->assertFalse(config_path_enabled('unbound'), 'before: the Resolver is disabled');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns'), 'before: pfB-DNS is on');
+
+		// Act.
+		pfblockerng_tick([]);
+
+		// Assert: stood down once, the Resolver is back as saved and still disabled.
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns'), 'pfB-DNS is turned off');
+		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
+		$this->assertFalse(config_path_enabled('unbound'), 'the Resolver stays disabled');
+		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'));
+		$this->assertSame($original['custom_options'], config_get_path('unbound/custom_options'));
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('DNS Resolver is disabled', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+
+		// And the next tick finds nothing to do.
+		pfblockerng_tick([]);
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'one notice for the one stand-down');
 	}
 }

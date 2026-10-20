@@ -774,6 +774,20 @@ unlink_if_exists('/var/db/pfblockerng/dnsbl.sqlite');
  * with RAM Disks enabled) can't make the copy fail. */
 exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
 
+// Create DNS proxy service once its runtime files are staged (it reads its module, lists and ini only at start):
+// restart it while the Resolver is moved aside for it and wait for it to become ready (a proxy that does not is rolled back,
+// with a notice), stop it otherwise
+update_status("Creating DNS proxy service...");
+if (pfb_dns_proxy_saved() !== NULL) {
+	if (!pfb_dns_proxy_restart()) {
+		update_status(" the DNS proxy did not become ready (see the notices);");
+	}
+} else {
+	pfb_dns_proxy_service();
+	stop_service('pfb_dns_proxy');
+}
+update_status(" done.\n");
+
 if ($ufound) {
 	$final = pfb_stop_start_unbound('');
 	// issue #3216: the restart mirrors its own progress (dots, "\nStarting Unbound Resolver")

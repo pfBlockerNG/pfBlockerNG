@@ -38,6 +38,7 @@ PKGS = "installedpackages"
 GEN = f"{PKGS}/pfblockerng/config/0"
 IP = f"{PKGS}/pfblockerngipsettings/config/0"
 DNSBL = f"{PKGS}/pfblockerngdnsblsettings/config/0"
+DNS = f"{PKGS}/pfblockerngdns/config/0"
 SYNC = f"{PKGS}/pfblockerngsync/config/0"
 LISTS_V4 = f"{PKGS}/pfblockernglistsv4"
 LISTS_V6 = f"{PKGS}/pfblockernglistsv6"
@@ -241,6 +242,16 @@ UNSEEDED_LOCAL_KEYS = {
     f"{DNSBL}/dnsbl_interface": "must be the interface of the node's DNSBL VIP (lo0): pfb_validate_vips() disables DNSBL otherwise",
     f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
     f"{GEN}/pfb_metrics_export": "'on' needs pfSense-pkg-node_exporter on the node (the save gate refuses it without), and no HA guest installs that package",
+    f"{DNS}/pfb_dns": "turns pfB-DNS on, which moves the node's Resolver off its port and ends the DNSBL probes the harness runs",
+    f"{DNS}/pfb_dns_saved": "the Resolver snapshot the apply writes itself when it moves the Resolver; a seeded value reads as a moved one",
+    **{
+        f"{DNS}/pfb_dns_{kind}": "turns the TLS listener on, which needs the Resolver's certificate the guests do not have"
+        for kind in ("doh", "doq")
+    },
+    **{
+        f"{DNS}/pfb_dns_{leaf}": "read only while its DoH/DoQ toggle is on, which this harness leaves off: a seeded value changes nothing"
+        for leaf in ("doh_port", "doh_interface", "doh_trusted", "doq_port", "doq_interface")
+    },
 }
 
 

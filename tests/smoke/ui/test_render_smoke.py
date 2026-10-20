@@ -159,6 +159,9 @@ PAGE_TABLE: tuple[Page, ...] = (
             "first match wins",
         ),
     ),
+    # issue #3515: the pfB-DNS tab (experimental DNS proxy). The section titles are the page's own: the tab label alone
+    # is on every page's tab bar and proves nothing.
+    Page("dns", "/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings", "pfB-DNS Status")),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
     # StaticText label ("IPv4 Alias name(s):" etc.), which renders ONLY for the active
@@ -2124,14 +2127,260 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
     )
 
 
-# issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts (DNSBL page) and
+def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3515: the pfB-DNS tab carries the enable checkbox, whose help says plainly that it is experimental,
+    what it changes in the Resolver, that it is restored, that it runs with or without DNSBL and the HA caveat; a
+    status panel names the service, the mode, the listen addresses and DoT."""
+    path = "/pfblockerng/pfblockerng_dns.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
+    assert result.ok, f"pfB-DNS render oracle failed: {result.detail}"
+    html = resp.text
+    checkboxes = [
+        name.group(1)
+        for tag in re.findall(r"<input\b[^>]*>", html)
+        if re.search(r"""\btype=["']?checkbox\b""", tag) and (name := re.search(r'\bname="([^"]+)"', tag))
+    ]
+    assert checkboxes == ["pfb_dns", "pfb_dns_doh", "pfb_dns_doq", "pfb_py_reply"], (
+        f"the page has the enable checkbox, the DoH and DoQ ones, then DNS Reply Logging; got {checkboxes}"
+    )
+    help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
+    for needle in (
+        "Experimental",
+        "with or without DNSBL",
+        "Network Interfaces becomes Localhost",
+        "the Listen Port is not changed",
+        "neither 5353 nor 5354",
+        "SSL/TLS Service is turned off",
+        "# pfBlockerNG DNS proxy",
+        "port 5354 and also listens on port 5353 for the proxy",
+        "saved and restored when this option is turned off, when pfBlockerNG is disabled, "
+        "or when the package is removed",
+        "go through the proxy",
+        "High availability",
+        "turn the DNS Resolver sync off",
+        "do not enable this option on the primary before the secondary",
+        "Do not turn it off on the primary while the secondary still has it on",
+        "Enable it on the secondary first",
+        "next Update",
+        "Network Interfaces, SSL/TLS Service or Custom options in between are replaced",
+        "turns pfB-DNS off and restores the Resolver, keeping your line",
+        "restores the saved values (the Resolver stays disabled) and turns this option off",
+        "DNS Reply Logging",
+        "This one setting applies to both DNS modes",
+        "keep this disabled where that must not be recorded",
+    ):
+        assert needle in help_html, f"pfB-DNS help is missing {needle!r}"
+    status_html = html[html.index("pfB-DNS Status") :]
+    for label in ("Service", "Mode", "Listening on", "DNS over TLS"):
+        assert label in status_html, f"pfB-DNS status is missing {label!r}"
+
+
+# Dual-marked ui_e2e (issue #810): this test MUTATES config.xml (DNSBL off, pfB-DNS and reply logging per row) as
+# setup, so it rides the per-test isolation probe; the module-level ui_render marker keeps it in the Tier-A gate.
+_PFB_DNS_TOGGLE = "installedpackages/pfblockerngdns/config/0/pfb_dns"
+_PFB_PY_REPLY = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
+
+
+@pytest.mark.ui_e2e
+@pytest.mark.parametrize(
+    ("pfb_dns", "reply", "shown"),
+    [("on", "on", True), ("", "on", False), ("on", "", False)],
+    ids=["pfb-dns-logging-replies", "no-pfb-dns-nothing-logs", "pfb-dns-logging-off"],
+)
+def test_reports_reply_controls_follow_pfb_dns_reply_logging_with_dnsbl_off(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard, pfb_dns: str, reply: str, shown: bool
+) -> None:
+    """issue #3515: with DNSBL off, Reports offers the DNS Reply suppress controls (types, records, stats) and the
+    DNS Reply Filter Limit only while pfB-DNS is on and DNS Reply Logging is on, i.e. while the proxy really fills
+    the DNS Reply log. The DNSBL stat selector and DNSBL Filter Limit stay hidden, since DNSBL itself is off."""
+    vm = smoke_vm
+    paths = (CFG_PFB_DNSBL, _PFB_DNS_TOGGLE, _PFB_PY_REPLY)
+    priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for path in paths}
+    try:
+        for path, value in zip(paths, ("", pfb_dns, reply), strict=True):
+            _set_scalar_or_absent(vm, path, value)
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        for field in (
+            'name="pfbreplytypes',
+            'name="pfbreplyrec',
+            'name="pfbdnsblreplystat',
+            'name="dnsfilterlimitentries',
+        ):
+            assert (field in resp.text) is shown, (
+                f"{field} must {'render' if shown else 'be absent'} (pfB-DNS={pfb_dns!r}, reply={reply!r})"
+            )
+        assert 'name="dnsblfilterlimitentries' not in resp.text, "the DNSBL Filter Limit stays DNSBL-only"
+        assert 'name="pfbdnsblstat' not in resp.text, "the DNSBL stat selector stays DNSBL-only"
+    finally:
+        for path, prior in priors.items():
+            _set_scalar_or_absent(vm, path, prior)
+
+
+_DNSBL_FILTER_LIMIT = "installedpackages/pfblockerngglobal/dnsblfilterlimitentries"
+_DNS_REPLY_FILTER_LIMIT = "installedpackages/pfblockerngglobal/dnsfilterlimitentries"
+_DNS_LOOKUP = "installedpackages/pfblockerngglobal/pfbextdns"
+
+
+@pytest.mark.ui_e2e
+def test_reports_dnsbl_on_keeps_both_filter_limits_and_the_reply_controls(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3515: with DNSBL on, Reports keeps every limit and reply control it showed before the reply gate:
+    the DNSBL Filter Limit and the DNS Reply Filter Limit render together with the reply-log controls."""
+    helpers.ensure_dnsbl_vip(smoke_vm)
+    original = helpers.config_get_state(smoke_vm, CFG_PFB_DNSBL)
+    _set_scalar_or_absent(smoke_vm, CFG_PFB_DNSBL, "on")
+    try:
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        for field in ('name="dnsblfilterlimitentries"', 'name="dnsfilterlimitentries"', 'name="pfbreplytypes'):
+            assert field in resp.text, f"with DNSBL on the Reports page is missing {field}"
+    finally:
+        helpers.config_restore_state(smoke_vm, CFG_PFB_DNSBL, original)
+
+
+@pytest.mark.ui_e2e
+def test_reports_dns_reply_filter_limit_saves_from_the_rendered_form_with_dnsbl_off(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3515: with DNSBL off and pfB-DNS logging replies, the DNS Reply Filter Limit is a field of the
+    Reports form, and Save stores the value that form posts. The field is looked up in the form the page
+    rendered; the stored config value is the oracle, with the seeded before-state asserted first."""
+    paths = (
+        CFG_PFB_DNSBL,
+        _PFB_DNS_TOGGLE,
+        _PFB_PY_REPLY,
+        _DNSBL_FILTER_LIMIT,
+        _DNS_REPLY_FILTER_LIMIT,
+        _DNS_LOOKUP,
+    )
+    priors = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    try:
+        _set_scalar_or_absent(smoke_vm, CFG_PFB_DNSBL, "")
+        _set_scalar_or_absent(smoke_vm, _PFB_DNS_TOGGLE, "on")
+        _set_scalar_or_absent(smoke_vm, _PFB_PY_REPLY, "on")
+        _set_scalar_or_absent(smoke_vm, _DNS_REPLY_FILTER_LIMIT, "40")
+        assert helpers.config_get_state(smoke_vm, _DNS_REPLY_FILTER_LIMIT) == (True, "40"), (
+            "before state: the seeded DNS Reply Filter Limit is not stored as 40"
+        )
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        page = webui.get(path)
+        result = evaluate_render(path, page.status_code, page.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        assert "dnsfilterlimitentries" in scrape_form_fields(page.text), (
+            "the Reports form has no DNS Reply Filter Limit field (DNSBL off, pfB-DNS on, reply logging on)"
+        )
+        webui.post(path, {"dnsfilterlimitentries": "55"})
+        assert helpers.config_get_state(smoke_vm, _DNS_REPLY_FILTER_LIMIT) == (True, "55"), (
+            "Save did not store the DNS Reply Filter Limit the form posted"
+        )
+    finally:
+        for path, prior in priors.items():
+            helpers.config_restore_state(smoke_vm, path, prior)
+
+
+_DNS_LISTENER_FIELDS = (
+    "pfb_dns_doh",
+    "pfb_dns_doh_port",
+    "pfb_dns_doh_interface",
+    "pfb_dns_doh_trusted",
+    "pfb_dns_doq",
+    "pfb_dns_doq_port",
+    "pfb_dns_doq_interface",
+)
+_DNS_LISTENER_NAMES = tuple(f'name="{field}' for field in _DNS_LISTENER_FIELDS)
+
+
+def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """issue #3515: the toggle left the DNSBL page for the pfB-DNS tab, which the DNSBL page's own tab bar links to."""
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental", 'name="pfb_py_reply"', *_DNS_LISTENER_NAMES):
+        assert gone not in resp.text, f"the DNSBL page still carries {gone!r}"
+    assert "/pfblockerng/pfblockerng_dns.php" in resp.text, "the DNSBL page's tab bar links to pfB-DNS"
+
+
+def test_pfb_dns_page_renders_the_doh_and_doq_settings_directly_after_the_enable_toggle(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3513: the seven DoH/DoQ fields follow the pfB-DNS enable checkbox, in order, before DNS Reply Logging.
+
+    Given the pfB-DNS page renders, Then DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
+    interfaces) appear in that order between the enable checkbox and DNS Reply Logging, as the right input kinds,
+    with help that says experimental, names the Resolver's certificate, that DoQ is UDP and the HAProxy options, and
+    names the binary the package ships (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
+    """
+    path = "/pfblockerng/pfblockerng_dns.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
+    assert result.ok, f"pfB-DNS DoH/DoQ render oracle failed: {result.detail}"
+    html = resp.text
+
+    start = html.index('name="pfb_dns"')
+    end = html.index('name="pfb_py_reply"')
+    positions = [html.find(f'name="{field}', start, end) for field in _DNS_LISTENER_FIELDS]
+    assert -1 not in positions, f"a field is missing between the pfB-DNS toggle and DNS Reply Logging: {positions}"
+    assert positions == sorted(positions), (
+        f"fields are out of order: {dict(zip(_DNS_LISTENER_FIELDS, positions, strict=True))}"
+    )
+
+    def tag_at(position: int) -> str:
+        return html[html.rfind("<", 0, position + 1) : html.index(">", position) + 1]
+
+    for name, kind in (
+        ("pfb_dns_doh_port", "number"),
+        ("pfb_dns_doq_port", "number"),
+        ("pfb_dns_doh_trusted", "text"),
+    ):
+        tag = tag_at(html.index(f'name="{name}"', start, end))
+        assert re.search(rf"""\btype=["']?{kind}\b""", tag), f"{name} must be a {kind} input, got {tag}"
+    for name in ("pfb_dns_doh_interface", "pfb_dns_doq_interface"):
+        tag = tag_at(html.index(f'name="{name}', start, end))
+        assert tag.startswith("<select") and "multiple" in tag, f"{name} must be a multi-select, got {tag}"
+
+    block = html[start:end]
+    for needle in (
+        "Experimental",
+        "DNS Resolver",
+        "SSL/TLS certificate",
+        "DoQ is UDP",
+        "send-proxy-v2",
+        "option forwardfor",
+    ):
+        assert needle in block, f"DoH/DoQ help is missing {needle!r}"
+    assert block.count("<code>pfb-dns</code>") == 2, "DoH and DoQ help each name the shipped binary, pfb-dns"
+    assert "pfb_dns_gateway" not in html, "the page still names the retired binary pfb_dns_gateway"
+
+
+# issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
 # ip/suppression (IP page) flipped their registry default to 'on' -- the checkbox must
 # render CHECKED with no stored config, and still render UNCHECKED for a present Off token
-# for both canonical empty and legacy ``off`` storage.
-_ISSUE1907_DNSBL_TOGGLES = (
-    ("pfb_cache", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache"),
-    ("pfb_py_reply", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"),
-    ("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),
+# for both canonical empty and legacy ``off`` storage. issue #3515: pfb_py_reply (still the
+# DNSBL-section key, read by both DNS modes) is edited on the pfB-DNS page, not the DNSBL page.
+_ISSUE1907_TOGGLE_PAGES = (
+    (
+        "/pfblockerng/pfblockerng_dnsbl.php",
+        "DNSBL Webserver Configuration",
+        (
+            ("pfb_cache", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache"),
+            ("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),
+        ),
+    ),
+    (
+        "/pfblockerng/pfblockerng_dns.php",
+        "pfB-DNS Settings",
+        (("pfb_py_reply", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"),),
+    ),
 )
 _ISSUE1907_IP_SUPPRESSION_PATH = "installedpackages/pfblockerngipsettings/config/0/suppression"
 
@@ -2157,59 +2406,64 @@ def _set_scalar_or_absent(vm: SmokeVM, path: str, value: str | None) -> None:
     )
 
 
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "pfb-dns-page"])
 def test_dnsbl_python_gated_toggles_render_checked_when_absent(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,
+    page: str,
+    marker: str,
+    toggles: tuple[tuple[str, str], ...],
 ) -> None:
     """issue #1907: pfb_cache/pfb_py_reply/pfb_hsts render CHECKED with no stored config --
     the registry default flipped to 'on', matching the page's REMOVED
     ``isset(...) ? ... : 'on'`` fallback (PfbConfig::read() now owns the default).
+    issue #3515: pfb_py_reply is checked the same way on the pfB-DNS page, where it now lives.
     """
     vm = smoke_vm
-    priors = {
-        path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES
-    }
-    for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+    priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for _name, path in toggles}
+    for _name, path in toggles:
         _set_scalar_or_absent(vm, path, None)
     try:
-        page = "/pfblockerng/pfblockerng_dnsbl.php"
         resp = webui.get(page)
-        result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-        assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+        result = evaluate_render(page, resp.status_code, resp.text, (marker,))
+        assert result.ok, f"{page} render oracle failed: {result.detail}"
         fields = scrape_form_fields(resp.text)
-        for name, _path in _ISSUE1907_DNSBL_TOGGLES:
+        for name, _path in toggles:
             assert fields.get(name) == "on", (
                 f"{name} must render CHECKED with no stored config (issue #1907 default-on), got {fields.get(name)!r}"
             )
     finally:
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+        for _name, path in toggles:
             _set_scalar_or_absent(vm, path, priors[path])
 
 
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "pfb-dns-page"])
 def test_dnsbl_python_gated_toggles_render_unchecked_when_stored_off(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,
+    page: str,
+    marker: str,
+    toggles: tuple[tuple[str, str], ...],
 ) -> None:
     """Legacy ``off`` and canonical empty Off tokens both render unchecked."""
     vm = smoke_vm
-    priors = {
-        path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES
-    }
+    priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for _name, path in toggles}
     try:
         for stored in ("off", ""):
-            for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+            for _name, path in toggles:
                 _set_scalar_or_absent(vm, path, stored)
-            page = "/pfblockerng/pfblockerng_dnsbl.php"
             resp = webui.get(page)
-            result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-            assert result.ok, f"DNSBL render oracle failed for {stored!r}: {result.detail}"
+            result = evaluate_render(page, resp.status_code, resp.text, (marker,))
+            assert result.ok, f"{page} render oracle failed for {stored!r}: {result.detail}"
             fields = scrape_form_fields(resp.text)
-            for name, _path in _ISSUE1907_DNSBL_TOGGLES:
+            for name, _path in toggles:
                 assert name not in fields, (
                     f"{name} must render UNCHECKED when stored {stored!r}, got checked with value {fields.get(name)!r}"
                 )
     finally:
-        for _name, path in _ISSUE1907_DNSBL_TOGGLES:
+        for _name, path in toggles:
             _set_scalar_or_absent(vm, path, priors[path])
 
 
@@ -3693,14 +3947,15 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     sinkhole pages remain a recorded exclusion.
     """
     covered_paths = {p.path.split("?", 1)[0] for p in PAGE_TABLE}
-    # 14 distinct main .php files are render-smoked here (pfblockerng.php is never
+    # 15 distinct main .php files are render-smoked here (pfblockerng.php is never
     # served directly -- it is the CLI dispatcher; pfblockerng_geoip.inc is the template for
     # the GeoIP pages
-    # below), plus the widget = 15 distinct paths.
+    # below), plus the widget = 16 distinct paths.
     expected_main = {
         "/pfblockerng/pfblockerng_general.php",
         "/pfblockerng/pfblockerng_ip.php",
         "/pfblockerng/pfblockerng_dnsbl.php",
+        "/pfblockerng/pfblockerng_dns.php",
         "/pfblockerng/pfblockerng_feeds.php",
         "/pfblockerng/pfblockerng_alerts.php",
         "/pfblockerng/pfblockerng_log.php",

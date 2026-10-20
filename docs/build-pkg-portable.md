@@ -22,6 +22,7 @@ contain only `src/`.
 - [The two port layouts](#the-two-port-layouts)
 - [Target facts (ABI / Python / PHP)](#target-facts-abi--python--php)
 - [Dependency resolution](#dependency-resolution)
+- [pfB-DNS binaries (dual-architecture payload)](#pfb-dns-binaries-dual-architecture-payload)
 - [Fidelity vs `make package`](#fidelity-vs-make-package)
 - [Output format](#output-format)
 - [Exit status and output streams](#exit-status-and-output-streams)
@@ -53,7 +54,10 @@ or dependencies, so it tracks changes to the port automatically:
    (`MKDIR`, `INSTALL_DATA`, `INSTALL_SCRIPT`, `MV`, `REINPLACE_CMD`/`SED` —
    `CP`/`LN`/`RM`/`INSTALL_PROGRAM` were deliberately dropped, #502, as no port
    recipe uses them) into a controlled staging directory — the
-   same effect `make` would have, minus the shell. An **unknown recipe command
+   same effect `make` would have, minus the shell. `REINPLACE_CMD` keeps the
+   `<file>.bak` backup `bsd.port.mk` defaults to unless the recipe passes
+   `-i ''`, so a stray backup is staged (or fails the plist check) exactly as
+   in `make`. An **unknown recipe command
    is a hard error** (a signal that the port changed in a way the tool must be
    taught — rather than silently producing a broken package).
 4. **Validate against `pkg-plist`.** The staged file set must equal the plist's
@@ -111,6 +115,12 @@ repository/workflow/catalogue jobs.
   module. `--compression xz` uses the standard-library `lzma` and needs neither.
 - Network access only when fetching from GitHub (no `--local-src`) or when using
   `--repo-catalogue` with a URL or `auto`.
+- **Go** (only for a source that carries `go/pfb_dns_gateway`, see
+  [pfB-DNS binaries](#pfb-dns-binaries-dual-architecture-payload)): a toolchain on
+  `PATH` at least as new as the module's `go` directive. CI installs the pinned
+  `GO_VERSION` with `actions/setup-go`; a leased smoke box gets it from
+  [`scripts/go_toolchain.py`](../scripts/go_toolchain.py) (the same pin, sha256-checked). A legacy source without the
+  module needs no Go.
 
 A clone of [`pfsense/FreeBSD-ports`](https://github.com/pfsense/FreeBSD-ports)
 (or the fork carrying the port under test) is required — passed via `--ports`.
@@ -163,7 +173,7 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 | --- | --- | --- |
 | `--abi ABI` | `FreeBSD:15:amd64` | The package ABI (`FreeBSD:<major>:<arch>`), from the target version's entry in the ci-metadata version matrix (`supported-versions.json`). Sets the manifest `abi`. |
 | `--arch TRIPLET` | `freebsd:15:x86:64` | The manifest `arch` triplet. Default: derived from `--abi` (`amd64` → `x86:64`, etc.). |
-| `--py-flavor FLAVOR` | `py311` | The Python flavor used in dependency names (`py311-sqlite3`, …) and the `python<XY>` dep. |
+| `--py-flavor FLAVOR` | `py311` | The Python flavor used in dependency names (`py311-sqlite3`, …), the `python<XY>` dep, and the recipe's `PYTHON_SUFFIX` substitution in `pfb_python.sh`. |
 | `--php VERSION` | `8.3` | The PHP version for the `USES=php` dependency (`php83`, `php83-intl`). Asked **only** when the port uses PHP. |
 | `--freebsd-version N` | `1500068` | Native mode only: the build host's `__FreeBSD_version`, written to the manifest `annotations` block. Optional; the block is omitted if unset. |
 
@@ -265,6 +275,49 @@ Note that `pkg add` checks that a dependency is **present**, not its exact
 version, so dependency versions do not affect installability — they affect
 manifest fidelity only.
 
+## pfB-DNS binaries (dual-architecture payload)
+
+pfBlockerNG stays one architecture-independent (`NO_ARCH`) package. When the acquired
+source carries the `go/pfb_dns_gateway` module **and** the port installs the DNS proxy
+payload (`usr/local/pkg/pfblockerng/dns_proxy/`), the builder cross-compiles the gateway
+for FreeBSD amd64 and arm64 and stages both binaries, uncompressed (the `.pkg` already
+compresses its payload), mode `0555`:
+
+| Staged file | Runs when `uname -p` is |
+| ----------- | ----------------------- |
+| `/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-amd64/pfb-dns` | `amd64` |
+| `/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-arm64/pfb-dns` | `aarch64` (or `arm64`) |
+
+`dns_proxy/pfb_dns.sh` picks the right one at runtime. Invoke it as
+`/bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh [pfb-dns arguments...]`; it
+`exec`s the binary, so the binary's exit status is the caller's. It never runs another
+architecture's binary. Exit status `3` means no payload is installed at all; status `1`
+means a payload is installed but unusable on this machine (unknown machine, or its binary
+is missing or not executable). Each says why on stderr. pfB-DNS has no other front end, so
+the caller must not fall back to anything: the supervisor starts the wrapper again, no ready
+marker is ever published, and the activation's readiness wait rolls pfB-DNS back.
+
+- **Source.** Project builds compile the `go/` tree of the attested commit (the same
+  `git archive` snapshot as `src/`), never the working tree. Native builds read the live
+  tree like every other file; `--gh-tagname` builds read `go/` from the downloaded tarball.
+- **Build.** [`scripts/build-pfb-dns.py`](../scripts/build-pfb-dns.py) runs
+  `go build -mod=readonly -trimpath -buildvcs=false -ldflags "-s -w"` with CGO off and
+  `GOTOOLCHAIN=local` (it never downloads a compiler), after dropping every ambient Go
+  setting but the cache and proxy locations. It checks each output's own ELF header
+  (FreeBSD OS ABI, the target CPU). Go missing or too old, a compile error, or a wrong
+  ELF aborts the build and no package is written.
+- **Never committed.** The builder reads no binary from the source: a tree that already
+  carries `dns_proxy/bin` fails the build, and the path is gitignored. A dirty or
+  untracked tree still fails project attestation.
+- **Provenance.** Each binary's sha256 is the file checksum in `+MANIFEST`; in project
+  mode the build record's `source_sha` pins the source. The same source and toolchain give
+  the same bytes (file mtime is `go.mod`'s, or the record's `source_date_epoch`).
+- **Skipped.** A legacy source without the module, or a port that installs no
+  `dns_proxy` payload (the static-plist channels), builds nothing and needs no Go.
+- **Native `make package`.** The ports `Makefile` builds nothing, so a native FreeBSD
+  `make package` has no Go step and its Go build is **not exercised**; no parity with the
+  portable output is claimed for these binaries.
+
 ## Fidelity vs `make package`
 
 The output has been diffed field-by-field against a real `make package` build
@@ -275,8 +328,8 @@ files matches exactly:
   `abi`, `arch`, `prefix`, `flatsize`, `licenselogic`, `licenses`, `categories`,
   `desc`, `annotations`;
 - every payload file: path, `sha256` checksum, and **permissions**
-  (`INSTALL_DATA` → `0644`, `INSTALL_SCRIPT`/`INSTALL_PROGRAM` → `0555` — FreeBSD
-  `BINMODE`);
+  (`INSTALL_DATA` → `0644`, `INSTALL_SCRIPT` → `0555` — FreeBSD `BINMODE`; the builder
+  has no `INSTALL_PROGRAM`, so the pfB-DNS binaries are staged by the step above);
 - `directories`; the `install` and `deinstall` scripts (byte-identical, with the
   trailing newline stripped as `pkg create` does);
 - the full dependency set: **names and origins**.

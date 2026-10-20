@@ -1,0 +1,393 @@
+"""The pfB-DNS payload of the portable package build (issue #3513, dual-architecture package).
+
+pfBlockerNG stays ONE architecture-independent (NO_ARCH) package. build-pkg-portable.py
+cross-compiles the gateway from the attested source for FreeBSD amd64 and arm64 and stages both
+ELFs, executable, beside the Python proxy; the runtime picks the one that matches the machine.
+
+Every case drives the real builder with a synthetic port and a throwaway git source repo, the real
+Go toolchain, and reads the produced `.pkg` back. Nothing stands in for the compiler or the
+package writer. Fixtures reuse the synthetic channel port of test_build_pkg_portable.py.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import io
+import re
+import shutil
+import subprocess
+import tarfile
+from pathlib import Path
+from typing import Any, NamedTuple
+
+import pfb_pkg
+import pytest
+
+from tests.elf_facts import ELFOSABI_FREEBSD, EM_AARCH64, EM_X86_64, ET_EXEC, elf_facts
+from tests.test_build_pkg_portable import (
+    _git,
+    _make_channel_port,
+    _project_args,
+    _read_pkg,
+    _record,
+    bpp,
+)
+
+ROOT = Path(__file__).resolve().parent.parent
+DNS_PROXY = "usr/local/pkg/pfblockerng/dns_proxy"
+BIN = f"/{DNS_PROXY}/bin"
+TARGETS = {"freebsd-amd64": EM_X86_64, "freebsd-arm64": EM_AARCH64}
+PKG_NAME = "pfSense-pkg-pfBlockerNG-4.0.0.pkg"
+EPOCH = 1700000000
+
+TINY_GO = {
+    "go.mod": "module example.test/pfbdns\n\ngo 1.21\n",
+    "main.go": 'package main\n\nvar marker = "COMMITTED-SOURCE"\n\nfunc main() { println(marker) }\n',
+}
+FORGED = b"\x7fELF-forged-by-the-source-tree"
+
+
+class Fixture(NamedTuple):
+    ports: Path
+    portdir: Path
+    ports_sha: str
+    source: Path
+    source_sha: str
+
+
+def commit_all(repo: Path, message: str) -> str:
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def make_fixture(
+    root: Path,
+    *,
+    go_files: dict[str, str] | None = TINY_GO,
+    ships_dns_proxy: bool = True,
+    source_files: dict[str, bytes] | None = None,
+    gitignore: str | None = None,
+) -> Fixture:
+    """A GitHub-style stable port plus its source repo.
+
+    ``ships_dns_proxy`` gives the port the nightly/edge recipe shape (COPYTREE_SHARE of the pkg tree and
+    a plist derived from the stage); without it the port is the static-plist shape that installs only
+    info.xml. ``go_files`` is the `go/pfb_dns_gateway` module the source repo carries (None: legacy source).
+    """
+    ports, portdir, ports_sha, _ = _make_channel_port(root, "stable", github=True)
+    if ships_dns_proxy:
+        (portdir / "pkg-plist").unlink()
+        makefile = portdir / "Makefile"
+        text = makefile.read_text()
+        text = text.replace("USES=\tphp python", "NO_ARCH=\tyes\nUSES=\tphp python")
+        text = text.replace(
+            "do-install:\n",
+            "do-install:\n\t(cd ${WRKSRC}/usr/local/pkg && ${COPYTREE_SHARE} . ${STAGEDIR}${PREFIX}/pkg)\n",
+        )
+        makefile.write_text(text)
+        ports_sha = commit_all(ports, "ship the pkg tree")
+    source = root / "source"
+    proxy = source / "src" / DNS_PROXY
+    proxy.mkdir(parents=True)
+    (proxy / "pfb_dns_proxy.py").write_text("print('python proxy')\n")
+    for name, text in (go_files or {}).items():
+        path = source / "go" / "pfb_dns_gateway" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    for relative, data in (source_files or {}).items():
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    if gitignore is not None:
+        (source / ".gitignore").write_text(gitignore)
+    source_sha = commit_all(source, "pfB-DNS source")
+    _git(source, "tag", "-f", "v4.0.0")
+    return Fixture(ports, portdir, ports_sha, source, source_sha)
+
+
+def without_go_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PATH that still finds git (the attestation needs it) but no Go toolchain."""
+    bindir = tmp_path / "path-without-go"
+    bindir.mkdir()
+    git = shutil.which("git")
+    assert git is not None, "git is required to run the builder's project attestation"
+    (bindir / "git").symlink_to(git)
+    monkeypatch.setenv("PATH", str(bindir))
+    assert shutil.which("go") is None
+
+
+def native_args(fx: Fixture, out: Path) -> list[str]:
+    return [
+        "--ports", str(fx.ports),
+        "--port-dir", str(fx.portdir),
+        "--channel", "stable",
+        "--abi", "FreeBSD:15:amd64",
+        "--py-flavor", "py311",
+        "--php", "8.3",
+        "--compression", "xz",
+        "--local-src", str(fx.source),
+        "--out", str(out),
+    ]  # fmt: skip
+
+
+def project_record(fx: Fixture) -> dict[str, Any]:
+    return _record("stable", fx.ports_sha, source_sha=fx.source_sha)
+
+
+def project_args(fx: Fixture, out: Path) -> list[str]:
+    return _project_args(fx.ports, fx.portdir, project_record(fx), source=fx.source, dry_run=False, out=out)
+
+
+def build(fx: Fixture, mode: str, out: Path) -> int:
+    return bpp.main(native_args(fx, out) if mode == "native" else project_args(fx, out))
+
+
+def assert_same_package_bytes(first: Path, second: Path) -> None:
+    """Compare digests: pytest's byte-string diff of two multi-megabyte archives never finishes."""
+    digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (first, second)]
+    assert digests[0] == digests[1], f"{first.name} is not reproducible: sha256 {digests[0]} != {digests[1]}"
+
+
+def member(tf: tarfile.TarFile, name: str) -> bytes:
+    extracted = tf.extractfile(name)
+    assert extracted is not None, f"{name} is not a regular file in the package"
+    return extracted.read()
+
+
+def assert_dual_arch_payload(pkg: Path) -> None:
+    """Both binaries ship at their layout path: executable, intact, and each the right ELF."""
+    full, _compact, tf = _read_pkg(pkg)
+    for target, machine in TARGETS.items():
+        path = f"{BIN}/{target}/pfb-dns"
+        assert path in full["files"], f"{path} missing; package files: {sorted(full['files'])}"
+        assert full["files"][path]["perm"] == "0555", f"{path} manifest perm {full['files'][path]['perm']}"
+        assert tf.getmember(path).mode & 0o777 == 0o555, f"{path} tar mode {oct(tf.getmember(path).mode)}"
+        data = member(tf, path)
+        assert full["files"][path]["sum"] == "1$" + hashlib.sha256(data).hexdigest()
+        assert elf_facts(data) == {
+            "osabi": ELFOSABI_FREEBSD,
+            "type": ET_EXEC,
+            "machine": machine,
+            "has_interpreter": False,
+            "has_freebsd_abi_note": True,
+        }, f"{path} is not the {target} ELF"
+
+
+def shipped_binaries(pkg: Path) -> list[str]:
+    full, _compact, _tf = _read_pkg(pkg)
+    return sorted(path for path in full["files"] if path.startswith(f"{BIN}/"))
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_package_ships_both_architectures_and_keeps_its_existing_metadata(tmp_path: Path, mode: str) -> None:
+    """
+    Scenario: a source tree with the gateway module, built by a port that ships the DNS proxy
+      When the package is built
+      Then both FreeBSD binaries are in it, executable and intact
+       And the package is still NO_ARCH with every other manifest field unchanged
+    """
+    with_go = make_fixture(tmp_path / "with-go")
+    legacy = make_fixture(tmp_path / "legacy", go_files=None)
+    assert build(legacy, mode, tmp_path / "legacy-out") == 0
+    assert build(with_go, mode, tmp_path / "go-out") == 0
+    before, after = tmp_path / "legacy-out" / PKG_NAME, tmp_path / "go-out" / PKG_NAME
+
+    assert_dual_arch_payload(after)
+    full_before, _, _ = _read_pkg(before)
+    full_after, _, tf = _read_pkg(after)
+    assert full_after["abi"] == "FreeBSD:15:*" and full_after["arch"] == "freebsd:15:*"
+    # flatsize is the installed size, so it grows with the payload; every other field must not move.
+    shared = {k: v for k, v in full_after.items() if k not in ("files", "annotations", "flatsize")}
+    assert shared == {k: v for k, v in full_before.items() if k not in ("files", "annotations", "flatsize")}
+    assert full_after["flatsize"] == sum(tf.getmember(path).size for path in full_after["files"])
+    assert set(full_after["files"]) - set(full_before["files"]) == {f"{BIN}/{t}/pfb-dns" for t in TARGETS}
+    assert set(full_before["files"]) <= set(full_after["files"])
+    proxy = f"/{DNS_PROXY}/pfb_dns_proxy.py"
+    assert full_after["files"][proxy]["perm"] == "0644"
+    assert member(tf, proxy) == b"print('python proxy')\n"
+    assert not [p for p in full_after["files"] if "/go/" in p or p.endswith(("go.mod", "main.go"))], (
+        "the Go source tree leaked into the package"
+    )
+
+
+def test_project_package_validates_against_its_record_and_pins_every_mtime(tmp_path: Path) -> None:
+    fx = make_fixture(tmp_path)
+    assert build(fx, "project", tmp_path / "out") == 0
+    pkg = tmp_path / "out" / PKG_NAME
+    assert_dual_arch_payload(pkg)
+    pfb_pkg.validate_project_pkg(pkg, project_record(fx))
+    full, _, _ = _read_pkg(pkg)
+    assert {entry["mtime"] for entry in full["files"].values()} == {EPOCH}
+
+
+def test_project_package_with_binaries_is_byte_reproducible(tmp_path: Path) -> None:
+    fx = make_fixture(tmp_path)
+    assert build(fx, "project", tmp_path / "one") == 0
+    assert build(fx, "project", tmp_path / "two") == 0
+    assert_dual_arch_payload(tmp_path / "one" / PKG_NAME)
+    assert_same_package_bytes(tmp_path / "one" / PKG_NAME, tmp_path / "two" / PKG_NAME)
+
+
+def test_real_gateway_source_cross_builds_into_the_package(tmp_path: Path) -> None:
+    """The shipped gateway itself, not a stand-in, rides the package for both architectures."""
+    fx = make_fixture(tmp_path, go_files=None)
+    shutil.copytree(ROOT / "go" / "pfb_dns_gateway", fx.source / "go" / "pfb_dns_gateway")
+    sha = commit_all(fx.source, "the real gateway module")
+    _git(fx.source, "tag", "-f", "v4.0.0")
+    real = fx._replace(source_sha=sha)
+    assert build(real, "project", tmp_path / "out") == 0
+    pkg = tmp_path / "out" / PKG_NAME
+    assert_dual_arch_payload(pkg)
+    _full, _compact, tf = _read_pkg(pkg)
+    for target in TARGETS:
+        assert tf.getmember(f"{BIN}/{target}/pfb-dns").size > 1_000_000, f"{target} binary is implausibly small"
+
+
+def test_project_build_compiles_the_attested_commit_not_the_mutated_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fx = make_fixture(tmp_path)
+    real_attest = bpp._attest_checkout
+
+    def attest_then_mutate(*args: Any, **kwargs: Any) -> None:
+        real_attest(*args, **kwargs)
+        if args[2] == "source":
+            (fx.source / "go" / "pfb_dns_gateway" / "main.go").write_text(
+                TINY_GO["main.go"].replace("COMMITTED", "TAMPERED")
+            )
+
+    monkeypatch.setattr(bpp, "_attest_checkout", attest_then_mutate)
+    assert build(fx, "project", tmp_path / "out") == 0
+    _full, _compact, tf = _read_pkg(tmp_path / "out" / PKG_NAME)
+    for target in TARGETS:
+        data = member(tf, f"{BIN}/{target}/pfb-dns")
+        assert b"COMMITTED-SOURCE" in data, f"{target} was not built from the attested commit"
+        assert b"TAMPERED-SOURCE" not in data, f"{target} compiled the post-attestation worktree"
+
+
+def test_untracked_binary_cannot_bypass_project_attestation(tmp_path: Path) -> None:
+    fx = make_fixture(tmp_path)
+    assert build(fx, "project", tmp_path / "clean") == 0
+    assert_dual_arch_payload(tmp_path / "clean" / PKG_NAME)
+
+    forged = fx.source / "src" / DNS_PROXY / "bin" / "freebsd-amd64" / "pfb-dns"
+    forged.parent.mkdir(parents=True)
+    forged.write_bytes(FORGED)
+    assert build(fx, "project", tmp_path / "dirty") == 1
+    assert not list((tmp_path / "dirty").glob("*.pkg")), "a package was written from a dirty source tree"
+
+
+def test_ignored_binary_in_the_tree_is_neither_shipped_nor_trusted(tmp_path: Path) -> None:
+    fx = make_fixture(tmp_path, gitignore="bin/\n")
+    forged = fx.source / "src" / DNS_PROXY / "bin" / "freebsd-amd64" / "pfb-dns"
+    forged.parent.mkdir(parents=True)
+    forged.write_bytes(FORGED)
+    assert _git(fx.source, "status", "--porcelain", "--untracked-files=all") == "", "the forged file is not ignored"
+
+    assert build(fx, "project", tmp_path / "out") == 0
+    assert_dual_arch_payload(tmp_path / "out" / PKG_NAME)
+    _full, _compact, tf = _read_pkg(tmp_path / "out" / PKG_NAME)
+    assert member(tf, f"{BIN}/freebsd-amd64/pfb-dns") != FORGED
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_binary_already_in_the_source_tree_fails_the_build(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], mode: str
+) -> None:
+    fx = make_fixture(tmp_path, source_files={f"src/{DNS_PROXY}/bin/freebsd-amd64/pfb-dns": FORGED})
+    assert build(fx, mode, tmp_path / "out") == 1
+    assert "dns_proxy/bin" in capfd.readouterr().err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package shipped a source-tree binary"
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_legacy_source_without_a_go_module_needs_no_go_and_ships_no_binaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    fx = make_fixture(tmp_path, go_files=None)
+    without_go_on_path(tmp_path, monkeypatch)
+    assert build(fx, mode, tmp_path / "one") == 0
+    assert build(fx, mode, tmp_path / "two") == 0
+    assert shipped_binaries(tmp_path / "one" / PKG_NAME) == []
+    assert_same_package_bytes(tmp_path / "one" / PKG_NAME, tmp_path / "two" / PKG_NAME)
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_go_source_without_a_go_toolchain_fails_and_writes_no_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str
+) -> None:
+    fx = make_fixture(tmp_path)
+    without_go_on_path(tmp_path, monkeypatch)
+    assert build(fx, mode, tmp_path / "out") == 1
+    assert "pfB-DNS" in capfd.readouterr().err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a Go source tree was packaged without its binaries"
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_go_compile_error_fails_the_build_and_writes_no_package(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], mode: str
+) -> None:
+    fx = make_fixture(tmp_path, go_files={**TINY_GO, "broken.go": "package main\n\nvar _ = undefinedSymbol\n"})
+    assert build(fx, mode, tmp_path / "out") == 1
+    assert "pfB-DNS" in capfd.readouterr().err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was written after the Go build failed"
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_port_that_does_not_ship_the_dns_proxy_skips_the_go_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """A static-plist channel installs no dns_proxy payload, so Go source in the tree changes nothing for it."""
+    fx = make_fixture(tmp_path, ships_dns_proxy=False)
+    without_go_on_path(tmp_path, monkeypatch)
+    assert build(fx, mode, tmp_path / "out") == 0
+    assert shipped_binaries(tmp_path / "out" / PKG_NAME) == []
+
+
+def test_remote_tag_source_includes_the_go_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The codeload tarball carries go/ beside src/, so a tag build gets the binaries too."""
+    fx = make_fixture(tmp_path)
+    archive = subprocess.run(
+        ["git", "-C", str(fx.source), "archive", "--format=tar", "--prefix=pfsense-4.0.0/", "HEAD"],
+        capture_output=True,
+        check=True,
+    ).stdout
+
+    def fake_download(_url: str, dest: Path) -> None:
+        with tarfile.open(fileobj=io.BytesIO(archive)) as src, tarfile.open(dest, "w:gz") as out:
+            for info in src.getmembers():
+                out.addfile(info, src.extractfile(info) if info.isfile() else None)
+
+    monkeypatch.setattr(bpp, "_download", fake_download)
+    args = [a for a in native_args(fx, tmp_path / "out") if a not in ("--local-src", str(fx.source))]
+    assert bpp.main([*args, "--gh-tagname", "v4.0.0"]) == 0
+    assert_dual_arch_payload(tmp_path / "out" / PKG_NAME)
+
+
+def test_project_rejects_a_go_tree_that_is_a_symlink(tmp_path: Path) -> None:
+    """The snapshot now carries `go/` too, so a tracked link there must fail like one under src/."""
+    fx = make_fixture(tmp_path, go_files=None)
+    outside = tmp_path / "outside-module"
+    outside.mkdir()
+    for name, text in TINY_GO.items():
+        (outside / name).write_text(text)
+    (fx.source / "go").mkdir()
+    (fx.source / "go" / "pfb_dns_gateway").symlink_to(outside)
+    sha = commit_all(fx.source, "go module behind a link")
+    _git(fx.source, "tag", "-f", "v4.0.0")
+    assert build(fx._replace(source_sha=sha), "project", tmp_path / "out") == 1
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was built from a symlinked Go tree"
+
+
+def test_selector_and_builder_agree_on_the_binary_layout() -> None:
+    """The architecture directories and binary name the wrapper looks for are the ones the builder writes."""
+    spec = importlib.util.spec_from_file_location("build_pfb_dns", ROOT / "scripts" / "build-pfb-dns.py")
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    wrapper = (ROOT / "src" / DNS_PROXY / "pfb_dns.sh").read_text()
+    assert set(re.findall(r"target=(freebsd-[a-z0-9]+)", wrapper)) == set(helper.TARGETS)
+    assert f'/bin/${{target}}/{helper.BINARY}"' in wrapper
+    assert helper.BINARY == "pfb-dns" and BIN.endswith("/dns_proxy/bin")

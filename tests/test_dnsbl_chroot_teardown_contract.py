@@ -17,6 +17,8 @@ STATIC_CHROOT_FILES = (
     "pfb_py_hsts.txt",
     "pfb_python.sh",
     "dnsbl_psl",
+    "pfb_upstream_observer.py",
+    "pfb_upstream_observer_include.inc",
 )
 
 
@@ -24,7 +26,7 @@ def _php_function_body(source: str, name: str) -> str:
     """Extract one top-level function from the PHP source."""
     matches = list(
         re.finditer(
-            rf"^function {re.escape(name)}\([^\n]*\)\s*\{{",
+            rf"^function {re.escape(name)}\([^\n]*\)(?:\s*:\s*[^\n{{]+)?\s*\{{",
             source,
             re.MULTILINE,
         )
@@ -68,7 +70,7 @@ def test_each_php_consumer_has_one_scoped_teardown_call() -> None:
             branches = [
                 match
                 for match in re.finditer(
-                    r"^[ \t]*if \(\$mode == 'enabled'\) \{\n"
+                    r"^[ \t]*if \(\$mode == 'enabled' \|\| \$script !== NULL\) \{\n"
                     r"(?P<enabled>.*?)[ \t]*\} else \{\n"
                     r"(?P<disabled>.*?)\n[ \t]*\}",
                     body,
@@ -92,3 +94,21 @@ def test_shell_teardown_derives_shipped_files_including_psl_authority() -> None:
     assert "dnsbl_psl" in shipped
     assert 'rm -f "${pfbchroot}/pfb_py_tld.txt"' not in body
     assert all(file_name not in body for file_name in shipped)
+
+
+def test_shell_ships_the_proxy_mode_upstream_observer_with_the_other_chroot_files() -> None:
+    shipped = _shipped_files(SHELL.read_text())
+
+    assert "pfb_upstream_observer.py" in shipped
+    assert (PKG_DIR / "dns_proxy" / "pfb_upstream_observer.py").is_file(), "the observer is shipped from dns_proxy/"
+
+
+def test_shell_ships_the_observer_boot_hook_pfsense_requires_beside_the_observer() -> None:
+    shipped = _shipped_files(SHELL.read_text())
+
+    # pfSense's services_unbound_configure() require_once's /var/unbound/<python_script>_include.inc: the one place
+    # that starts pfB-DNS in boot, before rc.start_packages.
+    assert "pfb_upstream_observer_include.inc" in shipped
+    assert (PKG_DIR / "dns_proxy" / "pfb_upstream_observer_include.inc").is_file(), (
+        "the hook is shipped from dns_proxy/"
+    )

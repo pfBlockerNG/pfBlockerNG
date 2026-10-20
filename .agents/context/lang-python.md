@@ -7,7 +7,9 @@ Scope: writing or changing Python. Load when: any touched `*.py` file.
 - `pfb_unbound.py` runs in Unbound's Python loader — **stdlib only, no external deps**.
 - **No direct Python interpreter invocation ON the appliance.** No `python`/`python3` symlink
   exist. Appliance consumers call `/usr/local/pkg/pfblockerng/pfb_python.sh` — only resolver
-  allowed to build exact versioned path from installed package dependency.
+  allowed to build the exact versioned path from the package's direct Python dependency.
+  Ports substitute `PYTHON_SUFFIX` at build time; unsubstituted dev overlays query pkg.
+  Resolution failures exit 127; executed Python programs retain their own exit codes.
   `pfb_python_interpreter()` delegates to it for compatibility + test probes. Else drive box
   via PHP (`php`/`pfSsh.php`/`h.php_eval`) or POSIX sh.
   Enforced by `scripts/check_appliance_python.py` (pre-commit + CI). Bare `python3` in

@@ -158,6 +158,9 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_psl_include_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private',
 			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
+			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
+			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
+			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
 			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
@@ -195,6 +198,9 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
+			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
+			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
+			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -437,6 +443,98 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_cache_flush'),
 			'pfb_cache_flush absent -> Off (default)');
+	}
+
+	/** issue #3515 (pfB-DNS): the enable toggle has a section of its own and reads Off while absent. */
+	public function testReadReturnsOffDefaultForPfbDnsAbsentKey(): void
+	{
+		$path = 'installedpackages/pfblockerngdns/config/0/pfb_dns';
+		$this->assertNull(config_get_path($path));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns'),
+			'pfb_dns absent -> Off (default)');
+		$this->assertSame('installedpackages/pfblockerngdns/config/0', PFB_SECTIONS['dns'], 'the pfB-DNS section path');
+	}
+
+	/** @return array<string,array{string}> */
+	public static function dnsProxyListenerToggleKeys(): array
+	{
+		return ['DoH' => ['dns/pfb_dns_doh'], 'DoQ' => ['dns/pfb_dns_doq']];
+	}
+
+	/** issue #3513: DoH/DoQ are opt-in; an absent key must leave them off. */
+	#[DataProvider('dnsProxyListenerToggleKeys')]
+	public function testDnsProxyListenerTogglesAreOffWhenAbsent(string $key): void
+	{
+		$this->assertNull(config_get_path('installedpackages/pfblockerngdns/config/0/' . substr($key, 4)));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read($key), "{$key} absent -> Off (default)");
+	}
+
+	/** @return array<string,array{string,string,string}> key, registered default, a non-default stored value */
+	public static function dnsProxyListenerStringKeys(): array
+	{
+		return [
+			'DoH port'       => ['dns/pfb_dns_doh_port', '4443', '8443'],
+			'DoH interfaces' => ['dns/pfb_dns_doh_interface', '', 'lan,opt1'],
+			'DoH trusted'    => ['dns/pfb_dns_doh_trusted', '', '192.0.2.10 2001:db8::/32'],
+			'DoQ port'       => ['dns/pfb_dns_doq_port', '853', '8853'],
+			'DoQ interfaces' => ['dns/pfb_dns_doq_interface', '', 'lan'],
+		];
+	}
+
+	/** issue #3513: the plain-string DoH/DoQ settings read their registered default when absent and store verbatim. */
+	#[DataProvider('dnsProxyListenerStringKeys')]
+	public function testDnsProxyListenerStringSettingsDefaultWhenAbsentAndRoundTripVerbatim(string $key, string $default, string $value): void
+	{
+		$path = 'installedpackages/pfblockerngdns/config/0/' . substr($key, 4);
+		$this->assertNull(config_get_path($path), 'precondition: absent');
+		$this->assertSame($default, PfbConfig::read($key), "{$key} absent -> registered default");
+
+		PfbConfig::write($key, $value);
+		$this->assertSame($value, config_get_path($path), "write stores {$key} verbatim");
+		$this->assertSame($value, PfbConfig::read($key), "write(read(v)) == v for {$key}");
+	}
+
+	/**
+	 * The unreleased DNSBL-page registration is gone, not aliased: its keys are no registered field any more, so
+	 * nothing can read or write the retired storage through the gateway.
+	 */
+	public function testTheRetiredDnsblProxyKeysAreNoLongerRegistered(): void
+	{
+		$registry = pfb_cfg_registry();
+		foreach (['dnsbl/pfb_dns_proxy', 'dnsbl/pfb_dns_proxy_saved'] as $retired) {
+			$this->assertArrayNotHasKey($retired, $registry, "{$retired} left the registry");
+		}
+		foreach (['dns/pfb_dns', 'dns/pfb_dns_saved'] as $key) {
+			$this->assertArrayHasKey($key, $registry, "{$key} is registered");
+			$this->assertSame('local', $registry[$key]['sync'], "{$key} never leaves the node");
+		}
+	}
+
+	/** issue #3513: the DoH/DoQ settings moved from the DNSBL section to the pfB-DNS one; the old keys are gone, not aliased. */
+	public function testTheDohAndDoqSettingsAreRegisteredInThePfbDnsSectionAndNotInTheDnsblOne(): void
+	{
+		$registry = pfb_cfg_registry();
+		foreach (['doh', 'doh_port', 'doh_interface', 'doh_trusted', 'doq', 'doq_port', 'doq_interface'] as $leaf) {
+			$this->assertArrayNotHasKey("dnsbl/pfb_dns_proxy_{$leaf}", $registry, "dnsbl/pfb_dns_proxy_{$leaf} left the registry");
+			$this->assertArrayHasKey("dns/pfb_dns_{$leaf}", $registry, "dns/pfb_dns_{$leaf} is registered");
+			$this->assertSame('local', $registry["dns/pfb_dns_{$leaf}"]['sync'], "dns/pfb_dns_{$leaf} never leaves the node");
+		}
+	}
+
+	/**
+	 * pfb_dns_saved (issue #3515): the plain-string marker holding the Resolver's pre-move
+	 * values. Absent reads as '' (= "nothing saved"); a system-context write round-trips verbatim.
+	 */
+	public function testPfbDnsSavedMarkerDefaultsToEmptyAndRoundTripsVerbatim(): void
+	{
+		$path = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
+		$this->assertNull(config_get_path($path));
+		$this->assertSame('', PfbConfig::read('dns/pfb_dns_saved'), 'absent -> default ""');
+
+		$marker = base64_encode('{"port":{"present":true,"value":"53"}}');
+		PfbConfig::writeSystem('dns/pfb_dns_saved', $marker);
+		$this->assertSame($marker, config_get_path($path), 'stored verbatim');
+		$this->assertSame($marker, PfbConfig::read('dns/pfb_dns_saved'));
 	}
 
 	/**
@@ -1510,6 +1608,17 @@ final class CfgGatewayTest extends TestCase
 			'top1m_token', // ADR-59 P5
 			'pfb_cache',
 			'pfb_cache_flush',
+			// issue #3515: pfB-DNS enable toggle and the Resolver snapshot it keeps (pfblockerngdns section)
+			'pfb_dns',
+			'pfb_dns_saved',
+			// issue #3513: DoH/DoQ listener settings of the DNS proxy
+			'pfb_dns_doh',
+			'pfb_dns_doh_port',
+			'pfb_dns_doh_interface',
+			'pfb_dns_doh_trusted',
+			'pfb_dns_doq',
+			'pfb_dns_doq_port',
+			'pfb_dns_doq_interface',
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',

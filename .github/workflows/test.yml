@@ -102,6 +102,8 @@ jobs:
     # own -- without this budget a stuck lock burns GitHub's 360-minute default rather
     # than failing here. Observed median 3.5 min, worst 3.9.
     timeout-minutes: 20
+    env:
+      GO_VERSION: "1.27.0"
 
     strategy:
       fail-fast: false
@@ -151,6 +153,14 @@ jobs:
         # silently test the same one twice and report two green legs for one version.
         run: uv sync --locked --group dev --python "${{ matrix.python-version }}"
 
+      - name: Set up the pinned Go toolchain
+        # tests/test_build_pfb_dns.py and tests/test_build_pkg_portable_pfb_dns.py run the real
+        # FreeBSD cross-build (GOTOOLCHAIN=local): this is the compiler they run.
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml. --junitxml feeds
         # the skip-allowlist gate below (issue #2359) -- additive only, never
@@ -180,6 +190,18 @@ jobs:
         # canonical `uv run pytest` step above is the authority + gate. Keeping the
         # step at exit 0 avoids a spurious error annotation on a green job.
         run: uv run pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing || echo "branch-coverage run is informational; non-zero exit ignored (canonical 'Run tests' step gates)"
+
+      - name: Root-only integration (control-socket push needs uid 0)
+        # The gateway takes a push only from uid 0 (ctl.go ctlUID), so the runner's account skips the test. This step runs
+        # it as root; the euid guard runs in the same process before pytest is imported and fails, never skips, when not root.
+        run: |
+          sudo -n env PATH="$PATH" "$PWD/.venv/bin/python" -c '
+          import os, sys
+          if os.geteuid() != 0:
+              sys.exit(f"root-only integration: euid {os.geteuid()}, not 0")
+          import pytest
+          sys.exit(pytest.main(["-o", "addopts=", "tests/dns_proxy/test_gateway_e2e.py::test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing"]))
+          '
 
   test-typing:
     name: Test type checking (mypy)
@@ -454,6 +476,54 @@ jobs:
           # never hands actionlint an unexpanded literal pattern.
           find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0 \
             | xargs -0 "$AL" -color
+
+  go-quality:
+    name: Go quality (gofmt, vet, race + Docker oracle, FreeBSD builds)
+    runs-on: ubuntu-latest
+    # The Docker Unbound oracle builds its image on a cold runner (up to 15 min) before the race suite runs.
+    timeout-minutes: 30
+    env:
+      GO_VERSION: "1.27.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Probe Docker (the oracle must fail closed)
+        # The oracle tests fail on an unreachable daemon too; this step names that cause first.
+        run: docker version --format '{{.Server.Version}}'
+
+      - name: Set up the pinned Go toolchain
+        # Same pin as the pytest job and the package builds; test_ci_tool_pins.py keeps them equal.
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Go gate (gofmt, vet, race incl. Docker oracle, FreeBSD builds)
+        # Same chain as scripts/agent/run-gates.sh's go/** line. The canary leads this run: block and must fail
+        # both fixtures first (testing.md red canary). `gofmt -l` exits 0 even when it lists files, so the gate
+        # tests its output; no pipe, because a pipe hides go test's exit status.
+        run: |
+          # Privilege-drop and ownership checks must execute, not skip on the runner's unprivileged account.
+          go_gate() (
+            cd "$1" && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && sudo -n "$(command -v go)" test -race -count=1 -v ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .
+          )
+          canary="$(mktemp -d)"
+          mkdir "$canary/unformatted" "$canary/failing"
+          printf 'module canary\n\ngo 1.27.0\n' > "$canary/unformatted/go.mod"
+          printf 'package main\n\nfunc  main() {}\n' > "$canary/unformatted/main.go"
+          printf 'module canary\n\ngo 1.27.0\n' > "$canary/failing/go.mod"
+          printf 'package main\n\nfunc main() {}\n' > "$canary/failing/main.go"
+          printf 'package main\n\nimport "testing"\n\nfunc TestCanary(t *testing.T) { t.Fatal("intentional red canary") }\n' > "$canary/failing/canary_test.go"
+          go_gate "$canary/unformatted" && unformatted_status=0 || unformatted_status=$?
+          go_gate "$canary/failing" && failing_status=0 || failing_status=$?
+          rm -rf "$canary"
+          [ "$unformatted_status" -ne 0 ] || { echo "red canary failed: an unformatted module passed the Go gate (gofmt -l lists it with exit 0; the gate must reject it)"; exit 1; }
+          [ "$failing_status" -ne 0 ] || { echo "red canary failed: a module with a failing test passed the Go gate (go test must fail the gate)"; exit 1; }
+          go_gate go/pfb_dns_gateway
 
   shell-tests:
     name: shellspec (POSIX sh)
@@ -1276,7 +1346,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration, graph-freshness]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, go-quality, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration, graph-freshness]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -1303,6 +1373,10 @@ jobs:
           fi
           if [ "${{ needs.actionlint.result }}" != "success" ]; then
             echo "actionlint (workflow files) failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.go-quality.result }}" != "success" ]; then
+            echo "Go quality gate (gofmt, vet, race + Docker oracle, FreeBSD builds) failed or was cancelled."
             exit 1
           fi
           if [ "${{ needs.shell-tests.result }}" != "success" ]; then

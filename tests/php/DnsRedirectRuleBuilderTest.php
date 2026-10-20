@@ -6,7 +6,7 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-/** ADR-36/#3400: pin each assigned-interface and fallback IPv6 redirect target. */
+/** ADR-36/#3400: pin the redirect target of each family on assigned and fallback interfaces. */
 #[CoversFunction('pfb_dns_redirect_rule')]
 final class DnsRedirectRuleBuilderTest extends TestCase
 {
@@ -81,6 +81,18 @@ final class DnsRedirectRuleBuilderTest extends TestCase
 			'enc0' => ['enc0'], 'openvpn' => ['openvpn'], 'l2tp' => ['l2tp'],
 			'wireguard' => ['wireguard'], 'wlan0' => ['wlan0'], 'lan2' => ['lan2'], 'opt1x' => ['opt1x'],
 		];
+	}
+
+	#[DataProvider('assignedInterfaces')]
+	public function testIpv4TargetOnAssignedInterfaceIsLoopback(string $iface): void
+	{
+		$this->assertSame('127.0.0.1', pfb_dns_redirect_rule($iface, 'inet', '')['target']);
+	}
+
+	#[DataProvider('fallbackInterfaces')]
+	public function testIpv4TargetOnOtherInterfaceStaysLoopback(string $iface): void
+	{
+		$this->assertSame('127.0.0.1', pfb_dns_redirect_rule($iface, 'inet', '')['target']);
 	}
 
 	public function testUsableExceptionAliasBecomesNegatedSourceForBothFamilies(): void

@@ -162,7 +162,8 @@ function step3_submitphpaction() {
 }
 
 function step4_submitphpaction() {
-	global $pfb, $input_errors;
+	global $pfb, $input_errors, $stepid;
+	// wizard.php increments $stepid after this action: a refusal sets 3, so the Finalize step (4) is re-rendered.
 
 	pfb_wizard_skip_check();
 
@@ -170,10 +171,36 @@ function step4_submitphpaction() {
 	$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
 	if (json_last_error() !== JSON_ERROR_NONE || !is_array($feed_info_raw)) {
 		$input_errors[] = 'pfBlockerNG: Feeds database missing. Cannot continue - Reinstall package.';
+		$stepid = 3;
 		return;
 	}
 
 	$pfb_general_schedule = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
+
+	// issue #3515: the Resolver snapshot lives in the package config swept below; put the Resolver back first.
+	// The return value is FALSE both for "nothing to restore" and for an abandoned restore: a snapshot or our block that
+	// survived the call says the Resolver is still moved, and the sweep would delete what the next attempt needs. A stored
+	// marker that is no snapshot (recovery required, no ownership) is kept the same way: it is the only record of what the
+	// Resolver was, and the sweep would erase it. All of it is read from config.xml under the lock: this request's copy can
+	// predate a takeover, and a config.xml that cannot be read to check counts as still moved.
+	pfb_dns_proxy_resolver(FALSE);
+	$checked = pfb_dns_config_refresh();
+	if (!$checked || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
+		if (pfb_dns_proxy_owns_resolver() || !pfb_dns_proxy_recovery_required()) {
+			$input_errors[] = 'DNS proxy: the DNS Resolver could not be put back, so pfBlockerNG was not reset. Follow the DNS proxy notice, then run the wizard again.';
+		} elseif (!$checked) {
+			// The marker comes from a copy that config.xml was not read to check: it is not known to be invalid
+			$input_errors[] = 'DNS proxy: config.xml was locked by another save or could not be read, so pfBlockerNG\'s saved copy of the DNS Resolver\'s ' .
+			    'previous settings (pfb_dns_saved) could not be confirmed and pfBlockerNG was not reset. Run the wizard again once no other ' .
+			    'configuration save is in progress.';
+		} else {
+			$input_errors[] = 'DNS proxy: pfBlockerNG\'s saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so what the Resolver was before ' .
+			    'cannot be confirmed and pfBlockerNG was not reset. Check the Resolver in Services > DNS Resolver (restore a known-good configuration ' .
+			    'backup if needed), empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then run the wizard again.';
+		}
+		$stepid = 3;
+		return;
+	}
 
 	// Remove any pfBlockerNG settings and file/folder contents
 	pfb_remove_config_settings();

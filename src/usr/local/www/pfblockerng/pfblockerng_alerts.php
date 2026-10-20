@@ -635,7 +635,7 @@ if (isset($_POST) && !empty($_POST)) {
 		$pfb['aglobal']['pfbdnsblreplystat']	= implode(',', (array)$_POST['pfbdnsblreplystat'])	?: '';
 
 		foreach ($aglobal_array as $type => $value) {
-			if (ctype_digit($_POST[$type]) && $_POST[$type] <= 5000) {
+			if (ctype_digit($_POST[$type] ?? '') && $_POST[$type] <= 5000) {
 				$pfb['aglobal'][$type] = $_POST[$type];
 			} else {
 				$pfb['aglobal'][$type] = $value;
@@ -3455,6 +3455,7 @@ $tab_array   = array();
 $tab_array[] = array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[] = array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
 $tab_array[] = array(gettext('DNSBL'),		FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[] = array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
 $tab_array[] = array(gettext('Update'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[] = array(gettext('Reports'),	TRUE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[] = array(gettext('Feeds'),		FALSE,	'/pfblockerng/pfblockerng_feeds.php');
@@ -3615,7 +3616,9 @@ if ($pfb['dnsbl'] === PfbToggle::On) {
 		['min' => 0, 'max' => 2000]
 	))->setHelp('DNSBL Filter Limit Entries')
 	  ->setAttribute('title', 'Enter number of \'DNSBL Filter Limit Entries\' to view. Set to \'0\' to disable');
+}
 
+if (pfb_dns_reply_log_active()) {
 	$group->add(new Form_Input(
 		'dnsfilterlimitentries',
 		'DNS Reply Filter Limit',
@@ -3665,7 +3668,7 @@ foreach ($uni_defaults as $u_type => $u_cfg) {
 }
 $section->add($group);
 
-if ($pfb['dnsbl'] === PfbToggle::On) {
+if (pfb_dns_reply_log_active()) {
 	$group = new Form_Group('DNS Reply Log Options');
 	$group->add(new Form_Select(
 		'pfbreplytypes',
@@ -3775,7 +3778,9 @@ if ($pfb['dnsbl'] === PfbToggle::On) {
 	))->setHelp("Select the <strong>DNSBL Stat</strong> table(s) to hide")
 	  ->setAttribute('style', 'width: auto; overflow: hidden;')
 	  ->setAttribute('size', 14);
+}
 
+if (pfb_dns_reply_log_active()) {
 	$group->add(new Form_Select(
 		'pfbdnsblreplystat',
 		'Disabled DNS Reply Stats',

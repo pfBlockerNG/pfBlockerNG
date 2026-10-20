@@ -3824,10 +3824,12 @@ def reboot_vm(
     timeout: float = DEFAULT_BOOT_TIMEOUT,
     require_pkg_metadata: bool = False,
 ) -> None:
-    """Reboot, observe a changed ``kern.boottime``, then await full readiness.
+    """Reboot, observe the guest go offline, then a new ``kern.boottime``, then await full readiness.
 
-    The boottime poll is the reboot event; ``timeout`` supplies independent salvage caps for
-    that event and the subsequent readiness gate. No duration is asserted.
+    Offline, a changed ``kern.boottime`` and readiness are the events, in that order; ``timeout`` supplies independent
+    salvage caps for the reboot (offline, then the new boot) and for the readiness gate. No duration is asserted, and
+    an expired cap says which event was missing: the guest never went down, it went down and did not come back with a
+    new boot, or it came back and was not ready.
 
     ``require_pkg_metadata`` defaults False: the metadata sentinel only guards a
     pkg operation through the refresh's ABI-flip window (#2242/#2458), and no
@@ -3855,28 +3857,49 @@ def reboot_vm(
             "without the before-side of the proof"
         )
 
-    # Issue the reboot; it drops our SSH connection, so a non-zero/dropped result is EXPECTED.
-    vm.ssh("/sbin/reboot", timeout=30.0)
+    # Issue the reboot; it drops (or hangs) our SSH connection, so a non-zero/dropped/hung result is EXPECTED. Whether
+    # the guest really went down is the next loop's question, not this call's.
+    try:
+        vm.ssh("/sbin/reboot", timeout=30.0)
+    except subprocess.TimeoutExpired:
+        pass
 
-    # Observe the reboot event. SSH failures while the guest is down are expected; only a
-    # non-empty token different from the pre-reboot value completes this gate.
+    # Observe the reboot events in order. A boot-identity read that fails at the transport (ssh's own exit 255, a
+    # dropped or hung connection) is the guest going offline; a non-empty token different from the pre-reboot one
+    # completes this gate only AFTER that, so a guest that never went down is not taken for a rebooted one.
     deadline = time.monotonic() + timeout
+    went_offline = False
+    new_token = ""
+    after_token = ""
     last_boottime = "<not observed>"
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if went_offline:
+                missing = "the guest went offline but did not come back with a new kern.boottime"
+            elif new_token:
+                missing = f"kern.boottime changed to {new_token!r} but the guest was never observed offline"
+            else:
+                missing = "the guest never went offline: it kept answering with its old kern.boottime"
             raise RuntimeError(
-                "stuck/environment: reboot_vm kern.boottime did not change before salvage cap "
-                f"({timeout:.0f}s); before={before_token!r} last={last_boottime!r}"
+                f"stuck/environment: reboot_vm: {missing} before the salvage cap ({timeout:.0f}s); "
+                f"before={before_token!r} last={last_boottime!r}"
             )
         try:
             read = vm.ssh(_BOOTTIME_SYSCTL, timeout=min(15.0, max(1.0, remaining)))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            went_offline = True
+            last_boottime = f"{type(exc).__name__}: {exc}"
+        else:
             token = read.stdout.strip()
             last_boottime = f"rc={read.returncode} stdout={read.stdout!r} stderr={read.stderr!r}"
-            if read.returncode == 0 and token and token != before_token:
-                break
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            last_boottime = f"{type(exc).__name__}: {exc}"
+            if read.returncode == 255:  # ssh's own status for a connection that failed: the guest is not answering
+                went_offline = True
+            elif read.returncode == 0 and token and token != before_token:
+                if went_offline:
+                    after_token = token
+                    break
+                new_token = token
         time.sleep(min(2.0, remaining))
 
     # Full readiness via the SAME shell gate the initial boot uses. wait_ready.sh's positional
@@ -3899,10 +3922,14 @@ def reboot_vm(
     try:
         result = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=wait_budget + 30)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"reboot_vm: wait_ready.sh did not return within {wait_budget + 30}s") from exc
+        raise RuntimeError(
+            f"stuck/environment: reboot_vm: the guest is back with a new boot but wait_ready.sh did not return "
+            f"within {wait_budget + 30}s"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(
-            f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
+            f"stuck/environment: reboot_vm: the guest is back with a new boot (kern.boottime {before_token!r} -> "
+            f"{after_token!r}) but is not ready: wait_ready exit {result.returncode}; stderr={result.stderr!r}"
         )
     wait_boot_complete(vm, require_pkg_metadata=require_pkg_metadata)
     flag = vm.ssh("/bin/test", "-f", PFB_CRON_DISABLE_PATH)
@@ -4174,21 +4201,32 @@ def assert_unbound_adds_only_python_config(vm: SmokeVM, *, timeout: float = 30.0
 
 
 @timed_step("wait_unbound_ready")
-def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 60, delay: float = 2.0) -> None:
+def wait_unbound_ready(vm: SmokeVM, *, timeout: float = 120.0, delay: float = 2.0) -> None:
     """Poll ``unbound-control status`` until ready (mirrors install-pkg.sh).
 
-    Budget is wider than the shell twin's (120s vs. install-pkg.sh's 60s, issue
-    #845): a restart-class reload (unbound restart + DNSBL structure rebuild
-    before the control socket answers) can legitimately exceed 60s under CI load.
+    The deadline is wider than the shell twin's (120s vs. install-pkg.sh's 60s, issue #845): a restart-class
+    reload (unbound restart + DNSBL structure rebuild before the control socket answers) can legitimately exceed
+    60s under CI load. It is a salvage cap on real time, so a status probe that hangs spends it too; ``delay`` is
+    only the poll interval, and expiry raises ``stuck/environment``.
     """
     cmd = "/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status"
-    rc, out, err = None, None, None
-    for _ in range(attempts):
-        result = vm.ssh(cmd, timeout=15.0)
-        if result.returncode == 0:
-            return
-        rc, out, err = result.returncode, result.stdout, result.stderr
-        time.sleep(delay)
+    deadline = time.monotonic() + timeout
+    last = "<not polled>"
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            result = vm.ssh(cmd, timeout=min(15.0, remaining))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last = f"{type(exc).__name__}: {exc}"
+        else:
+            if result.returncode == 0:
+                return
+            last = f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(delay, remaining))
     # issue #845: never raise a bare message — print expected vs. actual (the last
     # poll) plus the process list, so "never started" reads differently from "slow".
     # The probe is best-effort: on an unresponsive box it can itself time out, and
@@ -4199,10 +4237,9 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 60, delay: float = 2.0) -
     except Exception as exc:
         procs_diag = f"<process-list probe failed: {exc!r}>"
     raise RuntimeError(
-        f"Unbound did not become ready after reload: expected rc=0 from "
-        f"`unbound-control status` within {attempts} attempts x {delay}s; "
-        f"last poll rc={rc} stdout={out!r} stderr={err!r}; "
-        f"unbound processes: {procs_diag}"
+        f"stuck/environment: Unbound did not become ready after reload: expected rc=0 from "
+        f"`unbound-control status` within {timeout:.0f}s (polled every {delay}s); "
+        f"last poll {last}; unbound processes: {procs_diag}"
     )
 
 
@@ -4309,7 +4346,7 @@ def wait_boot_complete(
             break
         time.sleep(min(delay, remaining))
     raise RuntimeError(
-        f"pfSense boot did not settle after {timeout:.0f}s: "
+        f"stuck/environment: pfSense boot did not settle after {timeout:.0f}s: "
         + (
             f"the package-metadata sentinel /var/run/pfSense_version.rc was not observed "
             f"before the deadline (last probe: {last_metadata}) "

@@ -401,7 +401,7 @@ dnsbl_cache() {
 	pathtar="${pathtar:-/usr/bin/tar}"
 
 	# The shipped (static) DNSBL Python files + their launcher -- the ONE definition of the set.
-	PFB_PY_SHIPPED='dnsbl_psl pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt pfb_python.sh'
+	PFB_PY_SHIPPED='dnsbl_psl pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt pfb_python.sh pfb_upstream_observer.py pfb_upstream_observer_include.inc'
 
 	dnsbl_cache_stage() {
 		mkdir -p "${pfbchroot}"
@@ -410,10 +410,13 @@ dnsbl_cache() {
 		for _d in lib dev var/log/pfblockerng usr/local/share/GeoIP; do
 			mkdir -p "${pfbchroot}/${_d}"
 		done
-		# Copy the shipped files from /usr/local into the chroot (current code).
+		# Copy the shipped files from /usr/local into the chroot (current code). A file that is not in the package
+		# directory itself is the DNS proxy's (dns_proxy/, e.g. pfb_upstream_observer.py): it lands flat in the chroot.
 		for _f in ${PFB_PY_SHIPPED}; do
-			if [ -f "${pfbpkgdir}/${_f}" ]; then
-				cp -f "${pfbpkgdir}/${_f}" "${pfbchroot}/${_f}"
+			_src="${pfbpkgdir}/${_f}"
+			[ -f "${_src}" ] || _src="${pfbpkgdir}/dns_proxy/${_f}"
+			if [ -f "${_src}" ]; then
+				cp -f "${_src}" "${pfbchroot}/${_f}"
 				chown -f unbound:unbound "${pfbchroot}/${_f}"
 			fi
 		done

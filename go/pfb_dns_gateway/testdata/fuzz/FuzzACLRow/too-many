@@ -1,0 +1,2 @@
+go test fuzz v1
+string("access-control: 192.0.2.0/24 allow extra")

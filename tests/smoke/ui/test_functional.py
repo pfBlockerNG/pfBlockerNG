@@ -29,9 +29,14 @@ the output filter per render -- it must be re-extracted, never cached).
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import json
+import re
+import shlex
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -256,6 +261,23 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
+    # issue #3515: pfB-DNS, the experimental DNS proxy (own tab and section, default '' = off).
+    ToggleFlow(
+        name="pfb_dns",
+        page="/pfblockerng/pfblockerng_dns.php",
+        field="pfb_dns",
+        config_path="installedpackages/pfblockerngdns/config/0/pfb_dns",
+        # Adapter-backed unchecked saves use the canonical empty Off token.
+    ),
+    # issue #3515: DNS Reply Logging is edited on pfB-DNS but stored in the DNSBL section (default on).
+    ToggleFlow(
+        name="pfb_py_reply",
+        page="/pfblockerng/pfblockerng_dns.php",
+        field="pfb_py_reply",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply",
+        # Registry default 'on': an absent key means the feature is ON.
+        absent="on",
+    ),
     ToggleFlow(
         name="dnsbl_py_nolog",
         page="/pfblockerng/pfblockerng_dnsbl.php",
@@ -474,6 +496,46 @@ def test_software_page_toggle_post_roundtrip(
             absent="on",
         ),
     )
+
+
+def test_reply_logging_off_survives_unrelated_dnsbl_save(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """DNS Reply Logging stored Off on pfB-DNS survives an unrelated DNSBL save and a reload.
+
+    issue #3515: ``dnsbl/pfb_py_reply`` is stored in the DNSBL section but edited on the
+    pfB-DNS page, and the DNSBL form no longer posts it. An absent key reads as On (the
+    registry default), so a DNSBL save that rebuilt the section without the key would revive
+    logging. The oracle is the raw stored token (presence included) and the checkbox a fresh
+    GET of pfB-DNS renders; the original state is restored in ``finally``.
+    """
+    reply = next(flow for flow in FLOWS if flow.name == "pfb_py_reply")
+    unrelated = next(flow for flow in FLOWS if flow.name == "dnsbl_tld_wildcard")
+    reply_original = helpers.config_get_state(smoke_vm, reply.config_path)
+    unrelated_original = helpers.config_get_state(smoke_vm, unrelated.config_path)
+    try:
+        # UI save 1: Off on the pfB-DNS page (_set_and_confirm asserts the stored value).
+        _set_and_confirm(webui, smoke_vm, reply, reply.off)
+        # UI save 2: an unrelated DNSBL field, flipped away from its stored value.
+        unrelated_now = helpers.config_get(smoke_vm, unrelated.config_path)
+        unrelated_target = unrelated.off if unrelated_now == unrelated.on else unrelated.on
+        _set_and_confirm(webui, smoke_vm, unrelated, unrelated_target)
+        # Raw presence and token: a dropped key reads as On, so only (True, '') proves Off persisted.
+        assert helpers.config_get_state(smoke_vm, reply.config_path) == (True, reply.off), (
+            "the unrelated DNSBL save changed the stored DNS Reply Logging preference"
+        )
+        # Reload: the stored Off must render an unchecked box on a pfB-DNS page that really rendered.
+        page = webui.get(reply.page)
+        assert not looks_like_login_page(page.text), "pfB-DNS GET returned the login form (session lost)"
+        assert "pfB-DNS Settings" in page.text, "pfB-DNS page did not render its settings section"
+        assert reply.field not in scrape_form_fields(page.text), (
+            "pfB-DNS renders DNS Reply Logging checked after the stored Off"
+        )
+    finally:
+        helpers.config_restore_state(smoke_vm, reply.config_path, reply_original)
+        helpers.config_restore_state(smoke_vm, unrelated.config_path, unrelated_original)
 
 
 # --------------------------------------------------------------------------- #
@@ -1769,6 +1831,96 @@ def test_dnsbl_py_cache_max_unlimited_and_reject_unchanged(
         webui.post(DNSBL_PAGE, {"pfb_py_cache_max": restore}, timeout=SAVE_TIMEOUT)
 
 
+DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+DNS_PROXY_CFG = "installedpackages/pfblockerngdns/config/0/"
+DNS_PROXY_LISTENER_KEYS = (
+    "pfb_dns_doh",
+    "pfb_dns_doh_port",
+    "pfb_dns_doh_interface",
+    "pfb_dns_doh_trusted",
+    "pfb_dns_doq",
+    "pfb_dns_doq_port",
+    "pfb_dns_doq_interface",
+)
+RESOLVER_CERT_CFG = "unbound/sslcertref"
+
+
+def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #3513: pfB-DNS's DoH/DoQ settings persist canonically; invalid input aborts the whole save.
+
+    Given DoH and DoQ are stored Off with the default ports and the Resolver has a certificate
+      (before-state, seeded directly so it does not depend on the save path under test).
+    When a valid DoH/DoQ configuration is saved, Then all seven values persist (the trusted list
+      space-joined) -- none was stored before the POST.
+    When one value is invalid (a port outside 1-65535, an unknown interface, a trusted entry that is
+      not an IP or CIDR), Then the page shows that input error and config.xml is unchanged.
+    When the Resolver has no certificate, Then DoH/DoQ cannot be saved On: the page names the
+      certificate and config.xml is unchanged.
+    """
+    vm = smoke_vm
+    originals = {key: helpers.config_get_state(vm, DNS_PROXY_CFG + key) for key in DNS_PROXY_LISTENER_KEYS}
+    original_cert = helpers.config_get_state(vm, RESOLVER_CERT_CFG)
+    seeded = {
+        "pfb_dns_doh": "",
+        "pfb_dns_doh_port": "4443",
+        "pfb_dns_doh_interface": "",
+        "pfb_dns_doh_trusted": "",
+        "pfb_dns_doq": "",
+        "pfb_dns_doq_port": "853",
+        "pfb_dns_doq_interface": "",
+    }
+    valid = {
+        "pfb_dns_doh": "on",
+        "pfb_dns_doh_port": "8443",
+        "pfb_dns_doh_interface": "lan",
+        "pfb_dns_doh_trusted": "192.0.2.10, 2001:db8::/32",
+        "pfb_dns_doq": "on",
+        "pfb_dns_doq_port": "8853",
+        "pfb_dns_doq_interface": "lan",
+    }
+    expected = {**valid, "pfb_dns_doh_trusted": "192.0.2.10 2001:db8::/32"}
+
+    def stored() -> dict[str, str]:
+        return {key: helpers.config_get(vm, DNS_PROXY_CFG + key) for key in DNS_PROXY_LISTENER_KEYS}
+
+    try:
+        helpers.config_set(vm, RESOLVER_CERT_CFG, "smoke-resolver-cert")
+        for key, value in seeded.items():
+            helpers.config_set(vm, DNS_PROXY_CFG + key, value)
+        assert stored() == seeded, "seed did not take: DoH/DoQ must start Off with the default ports"
+
+        accepted = webui.post(DNS_PAGE, valid, timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(accepted.text), "the Save lost its authenticated session"
+        assert stored() == expected, "a valid DoH/DoQ configuration must persist, canonically"
+
+        for override, error in (
+            ({"pfb_dns_doh_port": "65536"}, "DoH Port must be a whole number from 1 to 65535."),
+            ({"pfb_dns_doq_port": "0"}, "DoQ Port must be a whole number from 1 to 65535."),
+            ({"pfb_dns_doh_interface": "opt99"}, "DoH: Invalid interface selection: opt99"),
+            (
+                {"pfb_dns_doh_trusted": "1.2.3.4;rm -rf /"},
+                "DoH: Trusted front ends must be IP addresses or CIDR prefixes",
+            ),
+        ):
+            rejected = webui.post(DNS_PAGE, override, timeout=SAVE_TIMEOUT)
+            assert error in rejected.text, f"{override}: the page must show {error!r}"
+            assert stored() == expected, f"{override}: a rejected Save must leave config.xml unchanged"
+
+        helpers.config_set(vm, RESOLVER_CERT_CFG, "")
+        no_cert = webui.post(DNS_PAGE, {}, timeout=SAVE_TIMEOUT)
+        assert "SSL/TLS certificate; select one under Services" in no_cert.text, (
+            "DoH/DoQ on with no Resolver certificate must show the certificate input error"
+        )
+        assert stored() == expected, "a rejected Save must leave config.xml unchanged"
+    finally:
+        for key, state in originals.items():
+            helpers.config_restore_state(vm, DNS_PROXY_CFG + key, state)
+        helpers.config_restore_state(vm, RESOLVER_CERT_CFG, original_cert)
+
+
 def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
@@ -2485,3 +2637,212 @@ def test_force_mode_parse_keeps_sidecars(
         vm.ssh("/bin/rm", "-f", sidecar_etag)
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
+
+
+# --------------------------------------------------------------------------- #
+# Setup wizard Finish refused (issue #3515): a stored Resolver marker that is no snapshot, a missing feeds
+# catalog, or a valid snapshot whose Resolver restore the config lock blocks. Finish refuses before the sweep,
+# so the marker, the package config and the masterfile stay as stored, and the Finalize step (index 4, the
+# <id>5</id> step) renders with its Finish and Skip controls.
+# --------------------------------------------------------------------------- #
+
+WIZARD_FINISH_PATH = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=4"
+PFB_INC_PATH = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+PFB_FEEDS_JSON = "/usr/local/www/pfblockerng/pfblockerng_feeds.json"
+PFB_DNS_SAVED_CFG = "installedpackages/pfblockerngdns/config/0/pfb_dns_saved"
+PFB_MASTERFILE = "/var/db/pfblockerng/masterfile"
+WIZARD_CONFIG_BACKUP = "/root/pfb_wizard_finish_config.xml"
+WIZARD_MASTERFILE_BACKUP = "/root/pfb_wizard_finish_masterfile.bak"
+WIZARD_FEEDS_BACKUP = "/root/pfb_wizard_finish_feeds.json.bak"
+WIZARD_LOCK_DIR = "/tmp/pfb3517_wizard_lock"
+RECOVERY_REFUSAL = "so what the Resolver was before cannot be confirmed and pfBlockerNG was not reset"
+OWNED_REFUSAL = "the DNS Resolver could not be put back"
+FEEDS_REFUSAL = "Feeds database missing"
+REFUSALS = (RECOVERY_REFUSAL, OWNED_REFUSAL, FEEDS_REFUSAL)
+_RESOLVER_SNAPSHOT = json.dumps(
+    {
+        "active_interface": {"present": True, "value": "lan"},
+        "enablessl": {"present": False, "value": None},
+        "custom_options": {"present": True, "value": ""},
+    }
+).encode()
+_VALID_SNAPSHOT = base64.b64encode(_RESOLVER_SNAPSHOT).decode("ascii")
+_PROBE_LOCK_PHP = (
+    'require_once("globals.inc"); require_once("util.inc"); '
+    '$x = try_lock("pfb_dns_config", 1); echo is_resource($x) ? "ACQUIRED" : "NULL";'
+)
+
+
+def _truncated_snapshot() -> str:
+    """A real snapshot's base64 cut short: strict base64 still decodes the cut string, but its JSON does not parse."""
+    return _VALID_SNAPSHOT[: len(_VALID_SNAPSHOT) // 2]
+
+
+@dataclass(frozen=True)
+class _FinishCase:
+    """A refused Finish: the stored marker, the guard branch it takes ('10' owned, '01' raw-only recovery), the
+    refusal it must render, and the hold the box keeps for it ('feeds', 'lock', or '' for none)."""
+
+    marker: str
+    guard: str
+    refusal: str
+    holds: str = ""
+
+
+FINISH_CASES = {
+    # Markers that are no snapshot and have no block in Custom Options: the raw-only recovery branch.
+    "zero": _FinishCase("0", "01", RECOVERY_REFUSAL),
+    "truncated-snapshot": _FinishCase(_truncated_snapshot(), "01", RECOVERY_REFUSAL),
+    "non-json": _FinishCase(base64.b64encode(b"not a Resolver snapshot").decode("ascii"), "01", RECOVERY_REFUSAL),
+    # A valid snapshot: the feeds catalog is checked before any Resolver work, so the marker is never touched.
+    "feeds-missing": _FinishCase(_VALID_SNAPSHOT, "10", FEEDS_REFUSAL, holds="feeds"),
+    # A valid snapshot whose Resolver restore the held config lock blocks: owned, so the refusal names the Resolver.
+    "resolver-locked": _FinishCase(_VALID_SNAPSHOT, "10", OWNED_REFUSAL, holds="lock"),
+}
+
+
+def _guest_ok(vm: helpers.SmokeVM, *argv: str) -> None:
+    result = vm.ssh(*argv, timeout=60.0)
+    if result.returncode != 0:
+        raise RuntimeError(f"guest command {argv!r} failed: rc={result.returncode} stderr={result.stderr!r}")
+
+
+def _guard_branch(vm: helpers.SmokeVM) -> str:
+    """The Finish guard's view of the stored marker: owns the Resolver, then recovery required ('10', '01', ...)."""
+    pre = f"require_once({helpers._php_str(PFB_INC_PATH)});\nglobal $pfb; pfb_global();"
+    expr = "(pfb_dns_proxy_owns_resolver() ? '1' : '0') . (pfb_dns_proxy_recovery_required() ? '1' : '0')"
+    return helpers._php_read_scalar(vm, pre, expr, timeout=120.0)
+
+
+@contextlib.contextmanager
+def _feeds_catalog_removed(vm: helpers.SmokeVM) -> Iterator[None]:
+    """Move the packaged feeds catalog aside for the body; put it back from a backup and verify it after."""
+    _guest_ok(vm, "/bin/cp", "-p", PFB_FEEDS_JSON, WIZARD_FEEDS_BACKUP)
+    try:
+        _guest_ok(vm, "/bin/rm", "-f", PFB_FEEDS_JSON)
+        yield
+    finally:
+        _guest_ok(vm, "/bin/cp", "-p", WIZARD_FEEDS_BACKUP, PFB_FEEDS_JSON)
+        _guest_ok(vm, "/usr/bin/cmp", "-s", WIZARD_FEEDS_BACKUP, PFB_FEEDS_JSON)
+
+
+@contextlib.contextmanager
+def _config_lock_held(vm: helpers.SmokeVM) -> Iterator[None]:
+    """Hold pfSense's pfb_dns_config lock in another process for the body, as a concurrent save does.
+
+    The holder is the aborted-removal case's holder (test_smoke_dns_proxy.py): it touches the ready file once it holds
+    the lock, then waits for the go file under a bound and unlocks. The body runs only once the holder is observed
+    either holding the lock (ready file) or ending before it did (failed file, written by its shutdown function).
+    The finally releases the holder and kills it if it is still running.
+    """
+    ready, go = f"{WIZARD_LOCK_DIR}/ready", f"{WIZARD_LOCK_DIR}/go"
+    failed = f"{WIZARD_LOCK_DIR}/failed"
+    _guest_ok(vm, "/bin/rm", "-rf", WIZARD_LOCK_DIR)
+    _guest_ok(vm, "/bin/mkdir", "-p", WIZARD_LOCK_DIR)
+    holder = (
+        # Whatever ends the holder before it holds the lock (a refused lock, a fatal error) leaves the failed file
+        "/* pfb_ui_wizard_lock_holder */ "
+        f'register_shutdown_function(function () {{ if (!file_exists("{ready}")) {{ touch("{failed}"); }} }}); '
+        'require_once("globals.inc"); require_once("util.inc"); '
+        '$k = lock("pfb_dns_config", LOCK_EX); if (!is_resource($k)) { exit(1); } '
+        f'touch("{ready}"); $i = 0; while (!file_exists("{go}") && $i++ < 1800) {{ usleep(100000); }} unlock($k);'
+    )
+    vm.ssh(f"nohup {helpers.PHP_BIN} -r '{holder}' >/dev/null 2>&1 &")
+    try:
+        helpers.wait_until(
+            lambda: helpers.hook_marker_exists(vm, ready) or helpers.hook_marker_exists(vm, failed),
+            timeout=60.0,
+            interval=1.0,
+        )
+        assert helpers.hook_marker_exists(vm, ready), (
+            "the config-lock holder did not take pfb_dns_config: expected the ready marker, the holder ended first "
+            f"(failed marker present: {helpers.hook_marker_exists(vm, failed)}); holder: {holder}"
+        )
+        probe = vm.ssh(f"{helpers.PHP_BIN} -r '{_PROBE_LOCK_PHP}'").stdout.strip()
+        assert probe == "NULL", f"a fresh process got pfb_dns_config while the holder has it: {probe!r}"
+        yield
+    finally:
+        vm.ssh(f"touch {go}")
+        vm.ssh("/usr/bin/pkill", "-9", "-f", "pfb_ui_wizard_lock_hold[e]r")
+        vm.ssh("/bin/rm", "-rf", WIZARD_LOCK_DIR)
+
+
+def _assert_finalize_page(text: str, case: _FinishCase) -> None:
+    """A refused Finish renders the Finalize step, not a step past the last one: its progress, title and controls."""
+    progress = re.findall(r"Step \d+ of \d+", text)
+    assert case.refusal in text, f"the refusal {case.refusal!r} is not on the refused page; progress {progress}"
+    for other in REFUSALS:
+        assert other == case.refusal or other not in text, f"a different refusal {other!r} is on the refused page"
+    assert "Step 4 of 4" in text, f"Finish was refused, but the page is not the Finalize step; progress {progress}"
+    assert re.search(r"<h2[^>]*>\s*pfBlockerNG Finalize\s*<", text), (
+        f"the refused page has no Finalize title; progress {progress}"
+    )
+    for header in ("Project-Id-Version", "PACKAGE VERSION"):
+        assert header not in text, f"the refused page shows gettext's PO header {header!r} as its title"
+    for control in ("finish", "skip"):
+        assert re.search(rf'<button\b[^>]*\bname="{control}"', text), (
+            f"the refused Finalize page has no usable {control!r} button"
+        )
+
+
+@pytest.mark.parametrize("name", list(FINISH_CASES))
+def test_a_refused_wizard_finish_keeps_the_data_and_renders_the_finalize_step(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    name: str,
+) -> None:
+    """A Finish refused for one reason keeps the stored data and renders the Finalize step with usable controls.
+
+    Given a stored Resolver marker, the package config and the masterfile, and a box that refuses Finish for one reason
+      (a marker that is no snapshot, a missing feeds catalog, or a valid snapshot whose restore the config lock blocks),
+    When Finish is posted through the wizard form,
+    Then the page is the Finalize step ("Step 4 of 4", its title, its Finish and Skip buttons, no PO header) and names
+      that refusal only, and the marker, the package config, config.xml and the masterfile are exactly as stored.
+    """
+    case = FINISH_CASES[name]
+    vm = smoke_vm
+    token = uuid.uuid4().hex
+    payload = f"uitest-3517-{token}"
+    sentinel_cfg = "installedpackages/pfblockerngwizardsentinel/config/0/uitest"
+    had_masterfile = vm.ssh("/bin/test", "-f", PFB_MASTERFILE).returncode == 0
+    _guest_ok(vm, "/bin/cp", "/conf/config.xml", WIZARD_CONFIG_BACKUP)
+    if had_masterfile:
+        _guest_ok(vm, "/bin/cp", "-p", PFB_MASTERFILE, WIZARD_MASTERFILE_BACKUP)
+    try:
+        assert vm.ssh("/bin/test", "-s", PFB_FEEDS_JSON).returncode == 0, "precondition: packaged feeds JSON is missing"
+        _guest_ok(vm, f"printf '%s' {shlex.quote(payload)} > {shlex.quote(PFB_MASTERFILE)}")
+        helpers.config_set(vm, sentinel_cfg, token)
+        helpers.config_set(vm, PFB_DNS_SAVED_CFG, case.marker)
+        marker_before = helpers.config_get_state(vm, PFB_DNS_SAVED_CFG)
+        assert marker_before == (True, case.marker), f"precondition: marker not stored verbatim: {marker_before!r}"
+        branch = _guard_branch(vm)
+        assert branch == case.guard, f"precondition: guard branch is {branch!r}, expected {case.guard!r}"
+        digest_before = helpers.pfb_config_digest(vm)
+
+        with contextlib.ExitStack() as held:
+            if case.holds == "feeds":
+                held.enter_context(_feeds_catalog_removed(vm))
+            elif case.holds == "lock":
+                held.enter_context(_config_lock_held(vm))
+            resp = webui.post(WIZARD_FINISH_PATH, {}, submit=("finish", "Finish"), timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(resp.text), "Finish POST returned the login form (session lost)"
+
+        # The data first: a reset that wipes these fails here, for the reason that matters.
+        marker_after = helpers.config_get_state(vm, PFB_DNS_SAVED_CFG)
+        assert marker_after == (True, case.marker), f"Finish changed or swept the stored marker: {marker_after!r}"
+        sentinel_after = helpers.config_get_state(vm, sentinel_cfg)
+        assert sentinel_after == (True, token), f"Finish swept the pfBlockerNG config section: {sentinel_after!r}"
+        assert helpers.pfb_config_digest(vm) == digest_before, "config.xml changed across the refused Finish"
+        masterfile = vm.ssh("/bin/cat", PFB_MASTERFILE)
+        assert masterfile.returncode == 0 and masterfile.stdout == payload, (
+            f"Finish swept or changed the masterfile: rc={masterfile.returncode} stdout={masterfile.stdout!r}"
+        )
+        _assert_finalize_page(resp.text, case)
+    finally:
+        try:
+            helpers.restore_pfb_config_baseline(vm, snapshot_path=WIZARD_CONFIG_BACKUP)
+        finally:
+            if had_masterfile:
+                _guest_ok(vm, "/bin/cp", "-p", WIZARD_MASTERFILE_BACKUP, PFB_MASTERFILE)
+            else:
+                _guest_ok(vm, "/bin/rm", "-f", PFB_MASTERFILE)

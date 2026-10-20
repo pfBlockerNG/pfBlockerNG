@@ -208,10 +208,23 @@ if (!function_exists('system_get_uniqueid')) {
 if (!function_exists('write_rcfile')) {
 	// pfb_filter_service()/pfb_dnsbl_service() call this at load time. Capture the rc
 	// array (keyed by its 'file') so a test can assert the generated start/stop bodies
-	// (e.g. the #662 daemon-fd-detach); behaviourally still a no-op on disk.
+	// (e.g. the #662 daemon-fd-detach), and count the writes per file. On disk it is a no-op unless a test
+	// sets $GLOBALS['pfb_test_rcfile_dir']: then the file is written there, wrapped as pfSense's
+	// service-utils.inc write_rcfile() wraps it (a test can then run it and a rewrite-on-change check can
+	// compare against it).
 	function write_rcfile($rc) {
 		if (isset($rc['file'])) {
 			$GLOBALS['pfb_test_rcfiles'][$rc['file']] = $rc;
+			$GLOBALS['pfb_test_rcfile_writes'][$rc['file']] = ($GLOBALS['pfb_test_rcfile_writes'][$rc['file']] ?? 0) + 1;
+			$dir = $GLOBALS['pfb_test_rcfile_dir'] ?? NULL;
+			if (is_string($dir) && !empty($rc['start'])) {
+				$restart = $rc['restart'] ?? "\trc_stop\n\trc_start\n";
+				file_put_contents("{$dir}/{$rc['file']}",
+					"#!/bin/sh\n# This file was automatically generated\n# by the pfSense service handler.\n\n"
+					. "rc_start() {\n\t{$rc['start']}\n}\n\nrc_stop() {\n\t{$rc['stop']}\n}\n\nrc_restart() {\n{$restart}\n}\n\n"
+					. "case \$1 in\n\tstart)\n\t\trc_start\n\t\t;;\n\tstop)\n\t\trc_stop\n\t\t;;\n\trestart)\n\t\trc_restart\n\t\t;;\nesac\n\n");
+				chmod("{$dir}/{$rc['file']}", 0755);
+			}
 		}
 		return true;
 	}
@@ -268,6 +281,40 @@ if (!function_exists('unlink_if_exists')) {
 			$result = @unlink($fn);
 		}
 		return $result;
+	}
+}
+
+if (!function_exists('lookup_ca')) {
+	// pfSense certs.inc lookup_ca() and lookup_cert(), verbatim apart from the sandbox config reader (master 9363ac5b and
+	// RELENG_2_7_2): the first <ca> / <cert> entry whose refid matches, with its config index; item NULL when none does.
+	function lookup_ca($refid) {
+		$ca_item = ['idx' => null, 'item' => null];
+		foreach (config_get_path('ca', []) as $idx => $ca) {
+			if (!is_array($ca) || empty($ca)) {
+				continue;
+			}
+			if ($ca['refid'] == $refid) {
+				$ca_item = ['idx' => $idx, 'item' => $ca];
+				break;
+			}
+		}
+
+		return $ca_item;
+	}
+
+	function lookup_cert($refid) {
+		$cert_item = ['idx' => null, 'item' => null];
+		foreach (config_get_path('cert', []) as $idx => $cert) {
+			if (!is_array($cert) || empty($cert)) {
+				continue;
+			}
+			if ($cert['refid'] == $refid) {
+				$cert_item = ['idx' => $idx, 'item' => $cert];
+				break;
+			}
+		}
+
+		return $cert_item;
 	}
 }
 
@@ -489,10 +536,59 @@ if (!function_exists('config_read_file')) {
 	// this is a deliberate no-op: pfb_global() calls it to pick up any in-flight
 	// changes, but in tests the caller already seeded $GLOBALS['config'] before
 	// calling pfb_global(). Records each call's arguments (so tests can assert
-	// whether, and how, a path reloaded config); returns [] per the stub's type.
-	function config_read_file(bool $use_backup = false, bool $use_cache = true): array {
+	// whether, and how, a path reloaded config; returns TRUE like pfSense's bool, or FALSE (the parse failed) while
+	// $GLOBALS['pfb_test_config_read_fails'] is set, or for the next $GLOBALS['pfb_test_config_read_fails_for'] FRESH reads
+	// (a file another process is mid-write on: it parses again after that, and a failed read runs no hook). Also records
+	// whether the named config lock was held at that instant ($GLOBALS['pfb_test_config_read_lock_held']) and runs an optional
+	// $GLOBALS['pfb_test_config_read_hook'] callable, which stands in for the file on disk: a test uses it to
+	// replace the in-memory config with what another process wrote since this one read it.
+	function config_read_file(bool $use_backup = false, bool $use_cache = true): bool {
 		$GLOBALS['pfb_test_config_read_calls'][] = [$use_backup, $use_cache];
-		return [];
+		$GLOBALS['pfb_test_config_read_lock_held'][] = !empty($GLOBALS['pfb_test_lock_held']);
+		if (!$use_cache && ($GLOBALS['pfb_test_config_read_fails_for'] ?? 0) > 0) {
+			$GLOBALS['pfb_test_config_read_fails_for']--;
+			return FALSE;
+		}
+		if (is_callable($GLOBALS['pfb_test_config_read_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_config_read_hook']();
+		}
+		return empty($GLOBALS['pfb_test_config_read_fails']);
+	}
+}
+
+if (!function_exists('try_lock')) {
+	// pfSense util.inc: a named flock() polled once a second for up to $timeout seconds; the handle on success,
+	// NULL when the lock stayed taken. Locks are per open handle, so a process that already holds the name waits
+	// on itself: a second acquire while $GLOBALS['pfb_test_lock_held'] is set fails like the timeout it would
+	// be. Every attempt is recorded in $GLOBALS['pfb_test_lock_events'] as ['try_lock', name, timeout];
+	// $GLOBALS['pfb_test_try_lock_fail'] makes another process hold the name for good, and
+	// $GLOBALS['pfb_test_try_lock_busy_for'] (seconds) makes it hold the name that much longer: an attempt waits its whole
+	// $timeout and gets NULL while the holder has longer to go, and otherwise waits the rest out and takes the lock.
+	function try_lock($lock, $timeout = 5) {
+		$GLOBALS['pfb_test_lock_events'][] = ['try_lock', $lock, $timeout];
+		$busy = (int) ($GLOBALS['pfb_test_try_lock_busy_for'] ?? 0);
+		if ($busy > $timeout) {
+			$GLOBALS['pfb_test_try_lock_busy_for'] = $busy - $timeout;
+			return NULL;
+		}
+		$GLOBALS['pfb_test_try_lock_busy_for'] = 0;
+		if (!empty($GLOBALS['pfb_test_try_lock_fail']) || !empty($GLOBALS['pfb_test_lock_held'])) {
+			return NULL;
+		}
+		$GLOBALS['pfb_test_lock_held'] = TRUE;
+		return fopen('php://memory', 'r');
+	}
+}
+
+if (!function_exists('unlock')) {
+	// pfSense util.inc: release the handle try_lock() returned (anything else is ignored, as upstream).
+	function unlock($cfglckkey = 0) {
+		if (!is_resource($cfglckkey)) {
+			return;
+		}
+		$GLOBALS['pfb_test_lock_events'][] = ['unlock'];
+		$GLOBALS['pfb_test_lock_held'] = FALSE;
+		fclose($cfglckkey);
 	}
 }
 
@@ -504,7 +600,46 @@ if (!function_exists('write_config')) {
 			$GLOBALS['pfb_test_write_config_hook']($desc);
 		}
 		$GLOBALS['pfb_test_write_config_calls'][] = $desc;
-		return true;
+		// pfb_test_write_config_result: -1 or FALSE fails the save the way pfSense's write_config() does.
+		return $GLOBALS['pfb_test_write_config_result'] ?? true;
+	}
+}
+
+if (!function_exists('parse_xml_config_pkg')) {
+	// pfSense xmlparse.inc: a package's XML as an array, [] when it cannot be read. Only what the package reads back is
+	// modelled: the repeated `menu` and `service` elements as lists of their children's text, as listtags_pkg() makes them
+	// (the pinned core parser is run against the shipped file by the real-pkg oracle, tests/pkg_oracle).
+	function parse_xml_config_pkg($cffile, $rootobj, $isstring = "false") {
+		$xml = @simplexml_load_file((string) $cffile);
+		if ($xml === FALSE || $xml->getName() !== $rootobj) {
+			return [];
+		}
+		$cfg = [];
+		foreach (['menu', 'service'] as $list) {
+			foreach ($xml->{$list} as $node) {
+				$entry = [];
+				foreach ($node->children() as $child) {
+					$entry[$child->getName()] = trim((string) $child, "\t\n\r");
+				}
+				$cfg[$list][] = $entry;
+			}
+		}
+		return $cfg;
+	}
+}
+
+if (!function_exists('services_unbound_configure')) {
+	// pfSense services.inc: stop, regenerate unbound.conf from config.xml, start. The real one needs a
+	// live Resolver; record each call's $restart_dhcp argument (so tests can assert whether, how often and
+	// with what argument a path regenerated it) and the `unbound` section as config.xml held it at call
+	// time (what the real function would render into unbound.conf), and report success.
+	function services_unbound_configure($restart_dhcp = true, $interface = '') {
+		$GLOBALS['pfb_test_unbound_configure_calls'][] = $restart_dhcp;
+		$GLOBALS['pfb_test_unbound_configure_resolver'][] = config_get_path('unbound');
+		if (isset($GLOBALS['pfb_test_unbound_configure_hook'])) {
+			$GLOBALS['pfb_test_unbound_configure_hook']();
+		}
+		return 0;
 	}
 }
 
@@ -664,6 +799,38 @@ if (!function_exists('get_interfaces_with_gateway')) {
 	// (a plain list of names, default []); absent the key → empty list.
 	function get_interfaces_with_gateway() {
 		return $GLOBALS['pfb_test_interfaces_with_gateway'] ?? [];
+	}
+}
+
+if (!function_exists('interface_has_gateway')) {
+	// pfSense interfaces.inc: TRUE for an interface that reaches the Internet through a gateway (a WAN-type
+	// one), FALSE for a LAN-type one. Reads the same $GLOBALS['pfb_test_interfaces_with_gateway'] list as
+	// get_interfaces_with_gateway() above.
+	function interface_has_gateway($friendly) {
+		return in_array($friendly, $GLOBALS['pfb_test_interfaces_with_gateway'] ?? [], TRUE);
+	}
+}
+
+if (!function_exists('get_staticroutes')) {
+	// pfSense util.inc: the static routes of config.xml (staticroutes/route) that are subnets, without the
+	// disabled ones when $returnenabledroutesonly (alias expansion is not modelled).
+	function get_staticroutes($returnsubnetsonly = false, $returnhostnames = false, $returnenabledroutesonly = false) {
+		$routes = [];
+		foreach (config_get_path('staticroutes/route', []) as $route) {
+			if (($returnenabledroutesonly && isset($route['disabled'])) || !is_subnet($route['network'] ?? '')) {
+				continue;
+			}
+			$routes[] = $route;
+		}
+		return $returnsubnetsonly ? array_column($routes, 'network') : $routes;
+	}
+}
+
+if (!function_exists('lookup_gateway_interface_by_name')) {
+	// pfSense gwlb.inc: the friendly interface a gateway name sits on, FALSE for an unknown gateway. Tests seed
+	// $GLOBALS['pfb_test_gateway_interfaces'] (map of gateway name => friendly interface name, default []).
+	function lookup_gateway_interface_by_name($name) {
+		return $GLOBALS['pfb_test_gateway_interfaces'][$name] ?? false;
 	}
 }
 
@@ -886,16 +1053,54 @@ if (!function_exists('is_service_running')) {
 }
 
 if (!function_exists('restart_service')) {
-	// pfSense services.inc: restart a named rc.d service. No-op off-appliance.
+	// pfSense services.inc: restart a named rc.d service. Off-appliance nothing runs: the call is recorded
+	// in $GLOBALS['pfb_test_service_calls'] and handed to an optional $GLOBALS['pfb_test_service_hook'] callable
+	// ($fn, $service) so a test can snapshot state at call time (ordering assertions).
 	function restart_service($service) {
+		$GLOBALS['pfb_test_service_calls'][] = ['restart_service', $service];
+		if (is_callable($GLOBALS['pfb_test_service_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_service_hook']('restart_service', $service);
+		}
+		return TRUE;
+	}
+}
+
+if (!function_exists('start_service')) {
+	// pfSense services.inc: start a named rc.d service. Recorded like restart_service() above.
+	function start_service($name, $after_sync = false) {
+		$GLOBALS['pfb_test_service_calls'][] = ['start_service', $name];
+		if (is_callable($GLOBALS['pfb_test_service_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_service_hook']('start_service', $name);
+		}
 		return TRUE;
 	}
 }
 
 if (!function_exists('stop_service')) {
-	// pfSense services.inc: stop a named rc.d service. No-op off-appliance.
+	// pfSense services.inc: stop a named rc.d service. Recorded like restart_service() above.
 	function stop_service($service) {
+		$GLOBALS['pfb_test_service_calls'][] = ['stop_service', $service];
+		if (is_callable($GLOBALS['pfb_test_service_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_service_hook']('stop_service', $service);
+		}
 		return TRUE;
+	}
+}
+
+if (!function_exists('get_interface_info')) {
+	// pfSense pfsense-utils.inc: per-interface status array, or NULL for a name that is not a configured
+	// interface (an IP entry, 'lo0'). Tests seed $GLOBALS['pfb_test_interface_info'] (name => ['status' =>
+	// 'up'|'down'|'no carrier', 'enable' => bool]); an absent key reads as NULL, as upstream.
+	function get_interface_info($ifdescr) {
+		return $GLOBALS['pfb_test_interface_info'][$ifdescr] ?? NULL;
+	}
+}
+
+if (!function_exists('get_configured_ip_addresses')) {
+	// pfSense util.inc: map of friendly interface / VIP id => runtime IPv4 address (NULL when unconfigured).
+	// Tests seed $GLOBALS['pfb_test_configured_ip_addresses']; default [].
+	function get_configured_ip_addresses() {
+		return $GLOBALS['pfb_test_configured_ip_addresses'] ?? [];
 	}
 }
 
@@ -1113,6 +1318,62 @@ if (!function_exists('get_real_interface')) {
 	}
 }
 
+if (!function_exists('get_interface_mtu')) {
+	// pfSense interfaces.inc: the MTU of a REAL interface, or an empty value when unknown. Tests seed
+	// $GLOBALS['pfb_test_interface_mtu'] (map of real-name => MTU); absent key: a 1500-byte interface, loopback 16384.
+	function get_interface_mtu($interface) {
+		return $GLOBALS['pfb_test_interface_mtu'][$interface] ?? ($interface === 'lo0' ? '16384' : '1500');
+	}
+}
+
+if (!function_exists('get_configured_interface_list')) {
+	// pfSense util.inc: name => name of every enabled, assigned interface. Tests seed $GLOBALS['pfb_test_interfaces']
+	// (the map get_configured_interface_with_descr() reads); absent: the one interface every box has, `lan`.
+	function get_configured_interface_list($with_disabled = false) {
+		$names = array_keys($GLOBALS['pfb_test_interfaces'] ?? ['lan' => 'LAN']);
+		return array_combine($names, $names);
+	}
+}
+
+if (!function_exists('is_numericint')) {
+	// pfSense util.inc: TRUE for an integer or a string of digits.
+	function is_numericint($arg) {
+		return is_int($arg) || (is_string($arg) && ctype_digit($arg));
+	}
+}
+
+if (!function_exists('unbound_auto_ednsbufsize')) {
+	// pfSense unbound.inc, CE 2.8.0 (ed6c2eb8) and master (9363ac5b): the automatic edns-buffer-size, the smallest MTU of
+	// the given interface names (all configured ones when the list is empty or holds `all`) minus the IPv4 and UDP
+	// headers, floored at 1232 when an interface that set a new minimum has IPv6, else 512. With no argument it reads the
+	// live active_interface, as pfSense does.
+	function unbound_auto_ednsbufsize($active_interfaces = null) {
+		if (!is_array($active_interfaces)) {
+			$active_interfaces = array_filter(explode(',', (string) config_get_path('unbound/active_interface')));
+		}
+		if (empty($active_interfaces) || in_array('all', $active_interfaces)) {
+			$active_interfaces = get_configured_interface_list();
+		}
+		$active_ipv6_interface = false;
+		$interface_mtu_minimum = null;
+		foreach ($active_interfaces as $interface) {
+			$interface_mtu = get_interface_mtu(get_real_interface($interface));
+			if (empty($interface_mtu) || !is_numericint($interface_mtu)) {
+				continue;
+			}
+			if ((!isset($interface_mtu_minimum)) || ($interface_mtu < $interface_mtu_minimum)) {
+				$interface_mtu_minimum = $interface_mtu;
+				if (!$active_ipv6_interface && get_interface_ipv6($interface)) {
+					$active_ipv6_interface = true;
+				}
+			}
+		}
+		$buffer_size = isset($interface_mtu_minimum) ? ($interface_mtu_minimum - 68) : 0;
+		$buffer_size_minimum = $active_ipv6_interface ? 1232 : 512;
+		return max($buffer_size, $buffer_size_minimum);
+	}
+}
+
 if (!function_exists('ip2long32')) {
 	// pfSense util.inc: like ip2long() but returns an UNSIGNED 32-bit integer
 	// (avoids sign issues on 64-bit PHP where ip2long returns a signed int for
@@ -1169,10 +1430,11 @@ if (!function_exists('find_interface_subnetv6')) {
 
 if (!function_exists('isvalidpid')) {
 	// pfSense util.inc: TRUE when the pidfile names a live process. Test double: liveness is
-	// controlled per pidfile via $GLOBALS['pfb_test_valid_pids'] (map of pidfile => bool,
-	// default []); an absent key reads as not running.
+	// controlled per pidfile via $GLOBALS['pfb_test_valid_pids'] (map of pidfile => bool or a
+	// callable(): bool for a per-call sequence, default []); an absent key reads as not running.
 	function isvalidpid($pidfile) {
-		return !empty($GLOBALS['pfb_test_valid_pids'][$pidfile]);
+		$v = $GLOBALS['pfb_test_valid_pids'][$pidfile] ?? FALSE;
+		return is_callable($v) ? (bool) $v() : !empty($v);
 	}
 }
 
@@ -1687,5 +1949,23 @@ if (!function_exists('pfSense_get_pf_rules')) {
 if (!function_exists('is_pkg_installed')) {
 	function is_pkg_installed(string $n): bool {
 		return in_array($n, $GLOBALS['pfb_test_installed_pkgs'] ?? [], TRUE);
+	}
+}
+
+if (!function_exists('get_notices')) {
+	// pfSense notices.inc: the queue as file_notice() filed it, keyed by time; the doubled file_notice() keeps its rows in
+	// $GLOBALS['pfb_test_file_notices'], escaped as the real queue stores them.
+	function get_notices($category = 'all') {
+		$rows = [];
+		foreach ($GLOBALS['pfb_test_file_notices'] ?? [] as $key => $notice) {
+			$rows[$key] = [
+				'id'       => htmlentities((string) $notice['id']),
+				'notice'   => htmlentities((string) $notice['notice']),
+				'url'      => htmlentities((string) $notice['url']),
+				'category' => htmlentities((string) $notice['category']),
+				'priority' => htmlentities((string) $notice['priority']),
+			];
+		}
+		return $rows ?: false;
 	}
 }

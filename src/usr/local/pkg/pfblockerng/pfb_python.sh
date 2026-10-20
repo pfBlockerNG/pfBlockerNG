@@ -1,11 +1,12 @@
 #!/bin/sh
 # Resolve and execute pfBlockerNG's package-provided Python interpreter.
 #
-# Normal mode queries /usr/local/sbin/pkg for the installed
-# current pfSense-pkg-pfBlockerNG channel package (plus legacy -devel), then
-# reads its direct dependencies. The only
-# accepted direct dependency names are pyNN/pythonNN (NN is at least two
-# digits); module dependencies and ambiguous versions fail closed.
+# Packages record their direct Python dependency at build time: pkg query cannot
+# see a newly installed package inside pkg 2.x's post-install hook (#3517).
+# An unsubstituted development overlay still queries the installed package.
+# Only pyNN/pythonNN (NN at least two digits) are accepted; module dependencies
+# and ambiguous versions fail closed. Resolution failures exit 127, not the
+# Python regex validator's rejection status 1.
 #
 # --print-interpreter prints the resolved path for the PHP compatibility seam.
 # With PFB_PYTHON_DEPENDENCIES set (newline-separated direct dependencies),
@@ -21,7 +22,7 @@ diag() {
 
 fail() {
 	diag "$1"
-	exit 1
+	exit 127
 }
 
 trim() {
@@ -42,10 +43,13 @@ if [ "$print_mode" -eq 1 ] && [ "$#" -gt 0 ]; then
 fi
 
 python_dir=${PFB_PYTHON_DIR:-/usr/local/bin}
+python_suffix='%%PYTHON_SUFFIX%%'
 dependencies_set=0
 if [ "${PFB_PYTHON_DEPENDENCIES+x}" = x ]; then
 	dependencies_set=1
 	dependencies=${PFB_PYTHON_DEPENDENCIES}
+elif [ "${python_suffix#%}" = "${python_suffix}" ]; then
+	dependencies=python${python_suffix}
 else
 	pkg_bin=${PFB_PKG_BIN:-/usr/local/sbin/pkg}
 	pkg_names=$(

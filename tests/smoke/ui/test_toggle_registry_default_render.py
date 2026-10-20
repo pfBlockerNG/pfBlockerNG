@@ -353,6 +353,27 @@ def test_swept_dnsbl_toggle_renders_on_when_stored_and_off_when_absent(
     )
 
 
+_SWEPT_DNS_TOGGLES = {
+    name: f"installedpackages/pfblockerngdns/config/0/{name}" for name in ("pfb_dns", "pfb_dns_doh", "pfb_dns_doq")
+}
+
+
+@pytest.mark.ui_e2e
+@pytest.mark.parametrize("name", sorted(_SWEPT_DNS_TOGGLES))
+def test_swept_pfb_dns_toggle_renders_on_when_stored_and_off_when_absent(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None], name: str
+) -> None:
+    """issue #3515, #3513: the pfB-DNS checkboxes (the pfblockerngdns section) render checked only for stored ``on``."""
+    path = _SWEPT_DNS_TOGGLES[name]
+    node_state(path, "on")
+    html = _render(smoke_vm, webui, "/pfblockerng/pfblockerng_dns.php", "pfB-DNS Settings")
+    assert _checkbox_is_checked(html, name), f"control: a stored 'on' {name} must render checked"
+
+    node_state(path, None)
+    html = _render(smoke_vm, webui, "/pfblockerng/pfblockerng_dns.php", "pfB-DNS Settings")
+    assert not _checkbox_is_checked(html, name), f"an absent {name} must render UNCHECKED (registry default Off)"
+
+
 @pytest.mark.ui_e2e
 def test_swept_pfb_dnsbl_lenient_off_spellings_render_unchecked(
     smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]

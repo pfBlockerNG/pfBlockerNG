@@ -365,6 +365,8 @@ jobs:
     # feed-pass lock, and a flock(2) acquire has no timeout of its own, so this budget
     # is the only bound on a stuck lock. Observed worst sampled leg 17.8 min.
     timeout-minutes: 45
+    env:
+      GO_VERSION: "1.27.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -666,6 +668,14 @@ jobs:
         # --locked resolves against the committed uv.lock, so a transitive package
         # cannot move this suite with no diff.
         run: uv sync --locked --group smoke
+
+      - name: Set up the pinned Go toolchain
+        # The repo-flow nightly .pkg below carries the cross-compiled pfB-DNS payload.
+        if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
 
       # ADR-18: the `repo` flow's nightly cases (test_nightly_install.py) need a
       # builder-produced -nightly .pkg (the deep rename can't be cheaply forged).

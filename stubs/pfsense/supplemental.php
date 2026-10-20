@@ -19,11 +19,20 @@
 
 // @codingStandardsIgnoreFile
 
-/** Read and parse the pfSense configuration (config.lib.inc; pfSense CE 2.8+). */
-function config_read_file(bool $use_backup = false, bool $use_cache = true): array {}
+/** Read and parse the pfSense configuration (config.lib.inc; pfSense CE 2.8+): TRUE when it parsed. */
+function config_read_file(bool $use_backup = false, bool $use_cache = true): bool {}
 
 /** Return true if the current logged-in user may access $page, per their privilege match list (priv.inc). */
 function isAllowedPage($page) {}
+
+/** The friendly interface name a gateway sits on, FALSE for an unknown gateway name (gwlb.inc; stable CE 2.8.0..master). */
+function lookup_gateway_interface_by_name($name) {}
+
+/** The <ca> entry whose refid matches, as ['idx' => config index, 'item' => the entry], item NULL when none does (certs.inc; read in pfSense master 9363ac5b). */
+function lookup_ca($refid) {}
+
+/** The <cert> entry whose refid matches, as ['idx' => config index, 'item' => the entry], item NULL when none does (certs.inc; read in pfSense master 9363ac5b). */
+function lookup_cert($refid) {}
 
 /**
  * HA/XMLRPC config-sync client (etc/inc/xmlrpc_client.inc; stable CE 2.8.0..master,

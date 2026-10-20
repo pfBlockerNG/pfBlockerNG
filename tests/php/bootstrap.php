@@ -123,6 +123,28 @@ if (!defined('PFB_UNBOUND_CONTROL_BIN')) {
 $GLOBALS['pfb']['chroot_cmd'] = $pfb_test_chroot_cmd;
 unset($pfb_test_chroot_cmd);
 
+// 4f. Seams for the experimental DNS proxy (issue #3515): its rc script path, so a unit test never reads or
+//     unlinks the appliance's, and the readiness wait for a proxy at 0 s. A start double makes the proxy ready
+//     synchronously, so the first probe decides and a proxy that never serves costs no wait; the tick-driven
+//     budget is proven on the virtual clock instead (DnsProxyReadinessTest).
+$pfb_test_rc_dir = "{$pfb_test_tmp}/rc.d";
+if (!mkdir($pfb_test_rc_dir, 0777, TRUE)) {
+	throw new RuntimeException("PHPUnit sandbox directory creation failed: {$pfb_test_rc_dir}");
+}
+if (!defined('PFB_DNS_PROXY_RCFILE')) {
+	define('PFB_DNS_PROXY_RCFILE', "{$pfb_test_rc_dir}/pfb_dns_proxy.sh");
+}
+if (!defined('PFB_DNS_PROXY_START_WAIT')) {
+	define('PFB_DNS_PROXY_START_WAIT', 0);
+}
+unset($pfb_test_rc_dir);
+
+// 4g. The installed package XML pfblockerng.inc re-registers the package's menu and services from after an aborted removal
+//     (issue #3515): the shipped file, so a unit test never reads the appliance's.
+if (!defined('PFB_PACKAGE_XML')) {
+	define('PFB_PACKAGE_XML', dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng.xml');
+}
+
 // 2 + load. Define the production functions by including the real source.
 // pfblockerng.inc is legacy code that emits some load-time E_DEPRECATED/E_WARNING
 // notices (e.g. an optional-before-required parameter, a switch `continue`) that
@@ -132,6 +154,10 @@ $pfb_prev_er = error_reporting();
 error_reporting($pfb_prev_er & ~E_DEPRECATED & ~E_WARNING);
 require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 error_reporting($pfb_prev_er);
+// 4g. The DNS proxy's readiness is read from its child pidfile and its listener-ready marker (issue #3515). Both live in $pfb,
+//     like the other runtime paths, so a unit test reads its own files, never /var/run or /var/unbound.
+$GLOBALS['pfb']['dns_proxy_pidfile'] = "{$pfb_test_tmp}/pfb_dns_proxy.pid";
+$GLOBALS['pfb']['dns_proxy_ready'] = "{$pfb_test_tmp}/pfb_dns_ready";
 $pfb_test_timeout_out = [];
 $pfb_test_timeout_rc = 0;
 exec('command -v timeout 2>/dev/null', $pfb_test_timeout_out, $pfb_test_timeout_rc);

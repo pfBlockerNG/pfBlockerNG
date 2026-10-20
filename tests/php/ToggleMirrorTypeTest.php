@@ -39,6 +39,8 @@ final class ToggleMirrorTypeTest extends TestCase
 		'dnsbl_vip_auto',
 		'dnsbl_nonat',
 		'dnsbl_hsts',
+		// issue #3515: experimental DNS-proxy toggle, sourced through PfbConfig::read().
+		'pfb_dns',
 		// issue #1907 (#1921 S3): moved from ToggleSectionMirrorTypeTest -- now sourced
 		// through PfbConfig::read() (registered, default 'on'), not a raw section reach.
 		'dnsbl_res_cache',

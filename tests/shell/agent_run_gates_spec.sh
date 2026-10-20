@@ -1049,6 +1049,8 @@ CHECK
   # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
   shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
   reentry_gate='uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+  # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
 
   It 'plans ShellSpec for a committed deletion of a config only ShellSpec reads'
     seed .agents/model-tiers.conf
@@ -1152,6 +1154,16 @@ CHECK
     The output should not include 'unsafe filename'
     The output should not include 'a;b'
   End
+
+  It 'plans the Go gate for a committed deletion of a go/ file'
+    seed go/pfb_dns_gateway/acl.go
+    gitc rm -q go/pfb_dns_gateway/acl.go; gitc commit -qm gone
+    When run sh "$script" --worktree "$repo" --diff "$seed_sha" --plan
+    The status should equal 0
+    The line 3 of output should equal "$go_gate"
+    The line 4 of output should equal "$shellspec_gate"
+    The lines of output should equal 4
+  End
 End
 
 # issue #1865: the GENERIC-gate TOOL-MISSING/SKIP path (as opposed to the Composer
@@ -1183,5 +1195,195 @@ Describe 'run-gates.sh run_gate() TOOL-MISSING path for a GENERIC gate'
     The status should equal 0
     The output should equal 'GATE SKIP: nonexistent_tool_xyz123 --version (TOOL-MISSING: nonexistent_tool_xyz123)'
     The variable overall should equal 0
+  End
+End
+
+# issue #3513: a diff touching go/** runs the Go gate -- gofmt, vet, tests and both FreeBSD
+# cross-builds -- ahead of ShellSpec, selected by path like every other bucket.
+Describe 'run-gates.sh Go gate selection'
+  # shellcheck disable=SC2034 # consumed by the Included script's source-only guard
+  AGENT_SOURCE_ONLY=1
+  Include scripts/agent/run-gates.sh
+
+  # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+  go_gate='cd go/pfb_dns_gateway && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .'
+  # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+  shellspec_gate='shellspec --shell $(command -v dash || command -v sh)'
+
+  Describe 'a path under go/'
+    Parameters
+      'go/pfb_dns_gateway/acl.go'
+      'go/pfb_dns_gateway/go.mod'
+      'go/pfb_dns_gateway/cmd/pfb_doq_probe/main.go'
+      'go/README.txt'
+    End
+
+    It "selects the Go gate for '$1', then ShellSpec"
+      Data "$1"
+      When call gates_for
+      The line 1 of output should equal "$go_gate"
+      The line 2 of output should equal "$shellspec_gate"
+      The lines of output should equal 2
+    End
+  End
+
+  It 'emits the Go gate exactly once for several go/ files'
+    Data
+      #|go/pfb_dns_gateway/acl.go
+      #|go/pfb_dns_gateway/acl_test.go
+      #|go/pfb_dns_gateway/go.mod
+    End
+    When call gates_for
+    The output should equal "$go_gate
+$shellspec_gate"
+  End
+
+  It 'places the Go gate after the Python gates and before ShellSpec in a mixed diff'
+    Data
+      #|tests/test_x.py
+      #|go/pfb_dns_gateway/acl.go
+    End
+    When call gates_for
+    The line 4 of output should equal 'uv run --locked mypy tests/'
+    The line 5 of output should equal "$go_gate"
+    The line 6 of output should equal "$shellspec_gate"
+    The lines of output should equal 6
+  End
+
+  Describe 'a path outside go/'
+    Parameters
+      'tests/test_x.py'
+      'scripts/agent/x.sh'
+      'src/go/x.go'
+      'ago/x.go'
+      'docs/go/x.md'
+      'tests/go/fixture.txt'
+      'legacy/go/x.go'
+    End
+
+    It "leaves the Go gate unselected for '$1'"
+      Data "$1"
+      When call gates_for
+      The output should not include 'go vet'
+      The output should not include 'gofmt'
+    End
+  End
+End
+
+# issue #3513: the Go gate resolves `go` from PATH, then /usr/local/go/bin, and a missing
+# toolchain FAILS the gate -- never a SKIP, not even under --allow-missing. The stubs log
+# each call so the whole && chain is observable without a real toolchain.
+Describe 'run-gates.sh Go gate toolchain resolution'
+  # shellcheck disable=SC2034 # consumed by the Included script's source-only guard
+  AGENT_SOURCE_ONLY=1
+  Include scripts/agent/run-gates.sh
+
+  # The behaviour rows run the line gates_for() really emits; the selection rows above pin its bytes.
+
+  setup() {
+    workdir=$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gogate.XXXXXX")
+    worktree=$workdir
+    mkdir -p "$workdir/go/pfb_dns_gateway" "$workdir/reports" "$workdir/path_bin" "$workdir/fallback_bin" "$workdir/bare_bin"
+    skip_report_dir=$workdir/reports
+    gate_timeout=60 allow_missing=0 overall=0
+    calls=$workdir/calls
+    # Just enough tools for run_gate itself; deliberately no go, whatever the host has.
+    for tool in sh timeout rm cat; do ln -s "$(command -v "$tool")" "$workdir/bare_bin/$tool"; done
+    bare_path=$workdir/bare_bin
+    go_fallback=$workdir/fallback_bin
+    go_gate=$(printf 'go/pfb_dns_gateway/acl.go\n' | gates_for | sed -n 1p)
+  }
+  cleanup() { rm -rf "$workdir"; }
+  Before 'setup'
+  After 'cleanup'
+
+  # stub_toolchain DIR LABEL [GOFMT_OUTPUT] [FAIL_SUBCOMMAND]
+  stub_toolchain() {
+    printf '#!/bin/sh\nprintf "gofmt[%s] %%s\\n" "$*" >> "%s"\nprintf "%%s" "%s"\n' "$2" "$calls" "${3-}" > "$1/gofmt"
+    printf '#!/bin/sh\nprintf "go[%s] %%s|%%s|%%s|%%s\\n" "$*" "${CGO_ENABLED-}" "${GOOS-}" "${GOARCH-}" >> "%s"\n[ "$1" != "%s" ]\n' "$2" "$calls" "${4-none}" > "$1/go"
+    chmod +x "$1/gofmt" "$1/go"
+  }
+  # Run the gate with PATH narrowed in a subshell; report the verdict variable the runner sets.
+  run_go_gate() {
+    (
+      PATH=$1
+      run_gate "$go_gate"
+      printf 'overall=%s\n' "$overall"
+    )
+  }
+
+  It 'fails (never skips) the gate when go is on neither PATH nor the fallback directory'
+    When call run_go_gate "$bare_path"
+    The stderr should include 'GATE RUN:'
+    The output should include 'TOOL-MISSING: go'
+    The output should include "GATE FAIL: $go_gate"
+    The output should not include 'GATE SKIP'
+    The output should include 'overall=1'
+  End
+
+  It 'still fails under --allow-missing when the toolchain is missing'
+    allow_missing=1
+    When call run_go_gate "$bare_path"
+    The stderr should include 'GATE RUN:'
+    The output should include "GATE FAIL: $go_gate"
+    The output should include 'TOOL-MISSING: go'
+    The output should not include 'GATE SKIP'
+    The output should include 'overall=1'
+  End
+
+  It 'resolves go from the fallback directory and runs the whole chain in order'
+    stub_toolchain "$go_fallback" fallback
+    When call run_go_gate "$bare_path"
+    The stderr should include 'GATE RUN:'
+    The output should include "GATE PASS: $go_gate"
+    The output should include 'overall=0'
+    The contents of file "$calls" should equal 'gofmt[fallback] -l .
+go[fallback] vet ./...|||
+go[fallback] test -race -count=1 ./...|||
+go[fallback] build -o /dev/null .|0|freebsd|amd64
+go[fallback] build -o /dev/null .|0|freebsd|arm64'
+  End
+
+  It 'prefers go on PATH over the fallback directory'
+    stub_toolchain "$workdir/path_bin" path
+    stub_toolchain "$go_fallback" fallback
+    When call run_go_gate "$bare_path:$workdir/path_bin"
+    The stderr should include 'GATE RUN:'
+    The output should include "GATE PASS: $go_gate"
+    The contents of file "$calls" should include 'go[path] vet'
+    The contents of file "$calls" should not include 'fallback'
+  End
+
+  It 'fails when gofmt lists a file, before vet runs'
+    stub_toolchain "$go_fallback" fallback acl.go
+    When call run_go_gate "$bare_path"
+    The stderr should include 'GATE RUN:'
+    The output should include "GATE FAIL: $go_gate"
+    The output should include 'overall=1'
+    The contents of file "$calls" should equal 'gofmt[fallback] -l .'
+  End
+
+  # issue #3513: `test -z "$(gofmt -l .)"` passes on empty stdout, so a missing or failing gofmt
+  # would read as "formatted"; the gate has to test gofmt's own exit status.
+  It 'fails (never passes vacuously) when go resolves but gofmt is absent'
+    stub_toolchain "$go_fallback" fallback
+    rm "$go_fallback/gofmt"
+    When call run_go_gate "$bare_path"
+    The stderr should include 'GATE RUN:'
+    The output should include "GATE FAIL: $go_gate"
+    The output should not include 'GATE PASS'
+    The output should include 'overall=1'
+    Assert [ ! -e "$calls" ]
+  End
+
+  It 'fails when go test fails, before the FreeBSD builds run'
+    stub_toolchain "$go_fallback" fallback '' test
+    When call run_go_gate "$bare_path"
+    The stderr should include 'GATE RUN:'
+    The output should include "GATE FAIL: $go_gate"
+    The output should include 'overall=1'
+    The contents of file "$calls" should equal 'gofmt[fallback] -l .
+go[fallback] vet ./...|||
+go[fallback] test -race -count=1 ./...|||'
   End
 End

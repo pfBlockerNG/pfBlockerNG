@@ -9,6 +9,8 @@
 # two answering the same question. A MISSING tool is a gate FAILURE, not a skip -- a
 # skipped gate reads greener than a failed one; --allow-missing downgrades that
 # deliberately for an incomplete workstation.
+# The Go gate (go/**) needs `go` on PATH or in /usr/local/go/bin and FAILS without it even
+# under --allow-missing: a gate that could skip would let go/** ship unbuilt.
 #
 # Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing] [--gate-timeout SECONDS]
 #   --worktree       repo checkout to run in (default: cwd's repo root)
@@ -40,6 +42,7 @@
 
 worktree='' base='origin/devel' plan=0 allow_missing=0 gate_timeout=1800
 overall=0 active_gate=''
+go_fallback=/usr/local/go/bin # appended to PATH by gate_command() for the Go gate
 
 # Composer refuses to load plugins as root/superuser and aborts before the gate can
 # run (issue #3143); the gate runner itself may be invoked by root.
@@ -139,6 +142,12 @@ gates_for() {
 			esac
 		done
 	fi
+	# issue #3513: go/** holds the Go gateway module; gate_command() resolves the toolchain.
+	# shortcut: deleting the whole module fails the `cd`; upgrade when a diff may do that.
+	# gofmt's own status is tested (a missing gofmt prints nothing); -race needs cgo and a C compiler.
+	if printf '%s\n' "$suite_files" | LC_ALL=C grep -q '^go/'; then
+		out="${out}cd go/pfb_dns_gateway && gofmt_out=\$(gofmt -l .) && test -z \"\$gofmt_out\" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .${nl}"
+	fi
 	# issue #3425: ShellSpec's repository-wide guards scan more than *.sh (truncate_survival:
 	# every file under src/ scripts/ tests/; parity_guard: workflow YAML; agent_config_parity:
 	# agent configs), so select it for every path CI's shell-tests job runs for (all but
@@ -178,6 +187,10 @@ gate_command() {
 		;;
 	'shellspec --shell $(command -v dash || command -v sh)')
 		printf '%s' 'shellspec --shell $(command -v dash || command -v sh) -o junit --reportdir "$PFB_SKIP_REPORT_DIR/shellspec" || exit $?; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/shellspec/results_junit.xml"'
+		;;
+	'cd go/pfb_dns_gateway && '*)
+		# issue #3513: go from PATH, else $go_fallback; neither FAILS the gate, even under --allow-missing.
+		printf '%s' 'PATH="$PATH:'"$go_fallback"'"; command -v go >/dev/null 2>&1 || { echo "TOOL-MISSING: go (not on PATH, not in '"$go_fallback"')"; exit 1; }; '"$1"
 		;;
 	*) printf '%s' "$1" ;;
 	esac

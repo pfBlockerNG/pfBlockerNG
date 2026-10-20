@@ -1137,15 +1137,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['dnsbl_ip']	= pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL);	// Enable/Disable IP blocking from DNSBL lists
 	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
 	$pfb['dnsbl_top1m_cnt']	= $pfb['dnsblconfig']['top1m_count']	?: '1000';		// TOP1M whitelist domain setting
-	// DNSBL Python decision-cache cap (LRU); 0 = unlimited. 0 is meaningful so avoid the
-	// ?: idiom (0 is falsy), and reject non-numeric input -- else the intval() at the ini
-	// emit would coerce a malformed value to 0 = silently unlimited. Clamp to the WebUI range.
-	$pfb_dcm_raw = (string) ($pfb['dnsblconfig']['pfb_py_cache_max'] ?? '');
-	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
 	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['top1m_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
-	$pfb['dnsbl_tld_wildcard']	= $pfb['dnsblconfig']['tld_wildcard'];				// Enable TLD Function
-	$pfb['dnsbl_control']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control']	?: '');			// Python Control integration
-	$pfb['dnsbl_control_legacy']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control_legacy']	?? '');	// PFBL-03: deprecated legacy DNS-TXT control transport
+	pfb_dnsbl_ini_inputs();	// the module's ini inputs, derived by the same loader the removal's recovery uses
 
 	// Validate pfB Script variable
 	$pfb['dnsbl_top1m_inc'] = pfb_filter($pfb['dnsbl_top1m_inc'], PFB_FILTER_CSV, 'Validate pfB Script variable');
@@ -3162,6 +3155,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$mode = 'disabled';
 	}
 
+	// issue #3515: whether pfB-DNS is wanted is decided here, from the same runtime view as $mode (a removal pass has just
+	// turned pfBlockerNG off in it), and handed to pfb_unbound_python(), which re-reads config.xml and would see it back on.
+	$pfb_dns_wanted = pfb_dns_wanted();
+
 	// [ ADR-13 ] Provision (or remove) the auto-created DNSBL sinkhole VIP(s) BEFORE the
 	// DNSBL config consumers below. pfb_unbound_python() bakes the sinkhole IP
 	// ($pfb['dnsbl_vip4']/[vip6]) into the module ini, so the marked VIP must already exist
@@ -3172,7 +3169,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	pfb_manage_dnsbl_vip($mode);
 
 	// Modify Unbound python configuration and mount lib/bin folders, as required
-	$pfbpython = pfb_unbound_python($mode);
+	$pfbpython = pfb_unbound_python($mode, $pfb_dns_wanted);
 
 	// Modify Unbound.conf file, as required
 	$pfbupdate = pfb_unbound_dnsbl($mode);
@@ -3476,6 +3473,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		    config_path_enabled('system', 'use_mfs_tmpvar')) {
 			pfb_dnsbl_cache('save');
 		}
+	}
+
+	// issue #3515: pfB-DNS serves with DNSBL on or off ($mode only says whether DNSBL is): bring up a proxy that died since
+	// the last pass, and restart one whose rc script changed. A reload above has already restarted a proxy that hosts the module.
+	// A proxy that does not become ready has failed its activation: it is rolled back (pfB-DNS turned off, the Resolver and the
+	// DNSBL module as before, with a notice), and the pass goes on with the Resolver as that left it; nothing here enables it again.
+	if (!pfb_dns_proxy_ensure_running()) {
+		pfb_logger("\npfB-DNS: the DNS proxy did not become ready; see the notices", 2);
 	}
 
 
