@@ -599,4 +599,45 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertSame(self::THEIRS, $retry['services']);
 		$this->assertSame([], $retry['notices']);
 	}
+
+	/**
+	 * Another apply moved the Resolver after this removal's process read config.xml: the process's copy says nothing is moved,
+	 * config.xml holds the move and its snapshot. The removal decides from config.xml read under the lock, so the Resolver is put
+	 * back before the proxy, its rc script or anything else is removed.
+	 */
+	#[DataProvider('keepSettings')]
+	public function testRemovalFromACopyThatPredatesTheTakeoverPutsBackTheResolverConfigXmlHoldsBeforeRemovingAnything(string $keep): void
+	{
+		$removal = $this->removal('none', $keep, ['stale' => TRUE]);
+
+		$writes = $this->writes($removal);
+		$this->assertContains('Restored the DNS Resolver settings the DNS proxy had moved', $writes, 'the restore the stale copy hid was made: ' . json_encode($writes));
+		$this->assertSame(0, $removal['exit'], 'the removal goes ahead once the Resolver is back: ' . json_encode($removal['notices']));
+		$this->assertTrue($removal['returned']);
+		$this->assertFalse($removal['snapshot'], 'nothing is left moved');
+		$this->assertSame('lan,opt1', $removal['interface'], 'the Resolver is back on the user\'s interfaces');
+		$this->assertFalse($removal['rcScript'], 'and only then is the proxy\'s rc script removed');
+		$this->assertSame([], $removal['notices'], 'no notice: nothing went wrong');
+	}
+
+	public function testRemovalFromACopyThatPredatesTheTakeoverStopsWhenConfigXmlCannotBeLockedToCheck(): void
+	{
+		// Given the same copy and a config.xml whose lock stays taken: nothing says whether the Resolver is still moved
+		$removal = $this->removal('lock', 'off', ['stale' => TRUE, 'permanent' => TRUE]);
+
+		// Then the removal stops with pkg's abort status before anything is torn down, and does not say the Resolver is back
+		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'the package hook exits with the one status that makes pkg abandon the removal');
+		$this->assertFalse($removal['returned'], 'and never returns into the rest of the removal');
+		$this->assertTrue($removal['snapshot'], 'the snapshot config.xml holds is kept');
+		$this->assertSame('lo0', $removal['interface'], 'the Resolver is untouched: still moved');
+		$this->assertContains('pfblockerngipsettings', $removal['sections'], 'the package config is not wiped, Keep Settings off or not');
+		$this->assertTrue($removal['pending'], 'the pending-changes marker, the first thing the teardown clears, is still there');
+		$this->assertTrue($removal['dbCanary'], 'the package data directory is kept');
+		$this->assertTrue($removal['manifest'], 'so is the DNSBL manifest the proxy loads its blocklists from');
+		$this->assertTrue($removal['rcScript'], 'and the proxy\'s rc script');
+		$text = implode("\n", $removal['notices']);
+		$this->assertStringContainsString('removal was stopped', $text, 'the operator is told the removal stopped');
+		$this->assertStringContainsString('could not be checked', $text, 'and why: whether the Resolver is moved could not be checked');
+		$this->assertStringNotContainsString('itself was put back', $text, 'and is never told the Resolver is back');
+	}
 }

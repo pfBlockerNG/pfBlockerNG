@@ -4875,6 +4875,8 @@ const PFB_PKG_REMOVAL_ABORT = 3;
  * Package removal: put the Resolver back whatever the disable pass did, stop the proxy, remove the rc script and the key it served with.
  * pfb_dns_proxy_resolver() stops the proxy itself, under its lock, when there is a Resolver to put back: stopping it first
  * would leave a Resolver that cannot be restored (lock taken, proxy survived) with nothing serving its port.
+ * What the removal goes on to destroy is decided from config.xml read under the lock (pfb_dns_config_refresh()), never from a copy
+ * that may predate a takeover.
  *
  * @return bool FALSE iff the restore left the snapshot (config locked or unreadable, proxy outlived its stop): the
  *         Resolver is still moved, so the proxy and its rc script are kept and the removal must not go on; or iff recovery is
@@ -4890,7 +4892,7 @@ function pfb_dns_proxy_deinstall(): bool {
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
 	}
-	if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || !empty($pfb['python_removal_failed'])) {
+	if (!pfb_dns_config_refresh() || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || !empty($pfb['python_removal_failed'])) {
 		return FALSE;
 	}
 	stop_service('pfb_dns_proxy');
@@ -5048,6 +5050,8 @@ function pfb_package_removal_recover(): array {
  * the package installed.
  */
 function pfb_package_removal_stopped(): bool {
+	global $pfb;
+
 	pfb_stdout_close_line();
 	// pfSense's own half of the removal has already stopped the proxy and deleted what registers it: put that back
 	$failed = pfb_package_removal_recover();
@@ -5073,12 +5077,18 @@ function pfb_package_removal_stopped(): bool {
 			    'proxy runs: start it with ' . PFB_DNS_PROXY_RCFILE . ' start. Then, once no other configuration save is in progress ' .
 			    'and the DNS proxy can be stopped, remove the package again.';
 		}
-	} else {
+	} elseif (!empty($pfb['python_removal_failed'])) {
 		// The Resolver is back: Unbound still names the script the teardown would delete, and no proxy has a snapshot to serve
 		$text = 'pfBlockerNG removal was stopped: config.xml could not be written, so the DNS Resolver still loads pfBlockerNG\'s Unbound python ' .
 		    'script, which the removal would delete. The DNS Resolver itself was put back. pfBlockerNG\'s files and settings were left in place' .
 		    ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed)) .
 		    '. Once config.xml can be written, remove the package again.';
+	} else {
+		// Neither moved nor in need of repair as far as this copy shows, and the removal still stopped: config.xml could not be read under its lock to check
+		$text = 'pfBlockerNG removal was stopped: config.xml was locked by another save or could not be read, so whether the DNS Resolver is ' .
+		    'still moved to the DNS proxy could not be checked (see the DNS proxy notice above). pfBlockerNG\'s files and settings were left in place' .
+		    ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed)) .
+		    '. Once no other configuration save is in progress, remove the package again.';
 	}
 	pfb_logger("\n{$text}", 2);
 	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
@@ -13922,6 +13932,23 @@ function pfb_dns_config_lock() {
 }
 
 /**
+ * Read config.xml afresh under the config lock and let go. The ownership checks (pfb_dns_proxy_owns_resolver(),
+ * pfb_dns_proxy_recovery_required()) answer from this process's copy, which can predate a takeover another apply made: a
+ * caller about to destroy what a moved Resolver depends on (the proxy, its rc script, the snapshot) asks this first.
+ *
+ * @return bool TRUE iff this process's copy is config.xml as of the lock; FALSE when the lock stayed taken or the read failed
+ *         (the copy is untouched and says nothing about the Resolver: the caller treats it as still moved)
+ */
+function pfb_dns_config_refresh(): bool {
+	$lock = pfb_dns_config_lock();
+	if ($lock === NULL) {
+		return FALSE;
+	}
+	unlock($lock);
+	return TRUE;
+}
+
+/**
  * Did config.xml fail to take the write the caller just made (under pfb_dns_config_lock() for the Resolver and the toggle)?
  * pfSense's write_config() answers FALSE when a rule forbids the write and -1 when config.xml could not be written. Either way
  * what this process changed in its copy of config.xml is not what the file holds, so the copy is read again from the file:
@@ -14010,7 +14037,8 @@ function pfb_dns_proxy_stand_down(): bool {
  * (kept as it is: only an empty marker means never moved, loopback or not). A refused move stores no snapshot, so
  * DNSBL keeps its module in Unbound (pfb_unbound_python(), pfb_unbound_dnsbl()).
  *
- * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, and only then stops the
+ * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, whatever this process's copy
+ * says (that copy can predate a takeover another apply made, and a restore that trusted it would leave the Resolver moved), and only then stops the
  * DNS proxy service (so Unbound's regeneration finds the port free): a lock that stays taken, or a failed read, returns
  * with the proxy still serving the Resolver that stayed moved. The stop waits up to 7 s with the lock held (the rc
  * script's budget: TERM at 0 s, KILL at 5 s, give up at 7 s), so the hold is that plus the fresh read and the write, and
@@ -14019,7 +14047,7 @@ function pfb_dns_proxy_stand_down(): bool {
  * not take the write (pfb_dns_config_write_failed()); the proxy is restarted once the lock
  * is released (that restart, a second stop and a start, takes up to 14 s and stays outside the lock), so the moved
  * Resolver keeps being served. Otherwise it restores each key exactly and clears the snapshot. No snapshot and no
- * block of ours = nothing to do (no lock, no stop, no reload); a Resolver carrying our block with no snapshot is
+ * block of ours on the fresh read = nothing to do (no stop, no write, no reload); a Resolver carrying our block with no snapshot is
  * reported to the operator (file_notice): it cannot be put back automatically. Idempotent.
  *
  * Everything that reads or writes the Resolver keys and the snapshot runs under pfb_dns_config_lock(), on a
@@ -14040,10 +14068,6 @@ function pfb_dns_proxy_stand_down(): bool {
  * @return bool TRUE iff config.xml changed (write_config was called once and config.xml took it).
  */
 function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
-	if (!$on && !pfb_dns_proxy_owns_resolver()) {
-		return FALSE;
-	}
-
 	$lock = pfb_dns_config_lock();
 	if ($lock === NULL) {
 		pfb_dns_proxy_resolver_unchanged($on, 'config.xml was locked by another save');

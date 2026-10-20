@@ -1711,6 +1711,11 @@
         "returnType": null,
         "params": []
     },
+    "pfb_dns_config_refresh": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_dns_config_write_failed": {
         "returnsRef": false,
         "returnType": "bool",

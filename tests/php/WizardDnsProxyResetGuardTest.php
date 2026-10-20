@@ -25,8 +25,8 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		'asn_cache', 'dbdir', 'denydir', 'dnsbl_cache', 'dnsbl_info', 'dnsbl_resolver', 'dnsbl_supptxt', 'dnsdir',
 		'dnsorigdir', 'etdir', 'ip_cache', 'matchdir', 'nativedir', 'origdir', 'permitdir', 'snapdir', 'supptxt', 'supptxt_v6',
 	];
-	private const GLOBALS = ['pfb', 'config', 'input_errors', 'stepid', 'pfb_test_file_notices', 'pfb_test_write_config_hook',
-		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_lock_held'];
+	private const GLOBALS = ['pfb', 'config', 'input_errors', 'stepid', 'pfb_test_file_notices', 'pfb_test_write_config_hook', 'pfb_test_write_config_calls',
+		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_lock_held', 'pfb_test_try_lock_fail'];
 	/** What the doubled write_config() throws: the reset that got past every guard and the sweep stops here, before it restarts services and exits the process. */
 	private const RESET_WRITE = 'pfBlockerNG: Default Wizard configuration saved';
 
@@ -195,5 +195,83 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		$this->assertCount(1, $errors, 'the reset names the DNS proxy as the cause: ' . json_encode($GLOBALS['input_errors']));
 		$this->assertSame($before, $GLOBALS['config'], 'nothing was swept, rebuilt or restored in this process\'s copy');
 		$this->assertSame($before, $this->disk, 'and config.xml holds the moved Resolver and the snapshot');
+	}
+
+	/**
+	 * pfB-DNS moved the Resolver after this request read config.xml: the copy shows the user's Resolver and no snapshot, config.xml
+	 * holds the move, our block and the snapshot.
+	 */
+	private function seedStaleCopyOfAMovedResolver(): void
+	{
+		$snapshot = [
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl'        => ['present' => FALSE, 'value' => NULL],
+			'custom_options'   => ['present' => FALSE, 'value' => NULL],
+		];
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode(self::BLOCK)];
+		config_set_path(self::SAVED, base64_encode((string) json_encode($snapshot)));
+		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
+		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
+			$GLOBALS['pfb'][$file] = "{$this->dir}/{$file}";
+		}
+		file_put_contents("{$this->dir}/feeds.json", (string) json_encode([
+			'ipv4'  => ['PRI1' => ['description' => 'Primary', 'feeds' => []]],
+			'dnsbl' => ['ADs_Basic' => ['description' => 'Ads', 'feeds' => []]],
+		]));
+		$this->configXmlOnDisk();
+		// the reset that got past the guard still stops at its own write, never at a process exit
+		$disk = $GLOBALS['pfb_test_write_config_hook'];
+		$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use ($disk): void {
+			if ($description === self::RESET_WRITE) {
+				throw new \RuntimeException(self::RESET_WRITE);
+			}
+			$disk($description);
+		};
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lan'];
+		config_set_path(self::SAVED, '');
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: this request\'s copy shows nothing moved');
+		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'before: config.xml holds the moved Resolver');
+	}
+
+	public function testAResetFromACopyThatPredatesTheTakeoverPutsTheResolverBackFirstAndThenResets(): void
+	{
+		// Given the stale copy, and a config.xml whose lock is free
+		$this->seedStaleCopyOfAMovedResolver();
+
+		// When the wizard resets, up to the write of its default configuration
+		try {
+			step4_submitphpaction();
+			$this->fail('the reset must reach its configuration write once the Resolver is back');
+		} catch (\RuntimeException $stop) {
+			$this->assertSame(self::RESET_WRITE, $stop->getMessage());
+		}
+
+		// Then the Resolver config.xml held was put back before the sweep, and the guard did not refuse
+		$this->assertContains('pfBlockerNG: Restored the DNS Resolver settings the DNS proxy had moved', $GLOBALS['pfb_test_write_config_calls'] ?? [],
+			'the restore the stale copy hid was made');
+		$refusals = array_filter($GLOBALS['input_errors'], static fn ($e): bool => is_string($e) && str_contains($e, 'was not reset'));
+		$this->assertSame([], array_values($refusals));
+	}
+
+	public function testAResetFromACopyThatPredatesTheTakeoverIsRefusedWhenConfigXmlCannotBeLockedToCheck(): void
+	{
+		// Given the stale copy, and a config.xml whose lock stays taken: nothing says whether the Resolver is still moved
+		$this->seedStaleCopyOfAMovedResolver();
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$before = $GLOBALS['config'];
+
+		// When the wizard resets
+		try {
+			step4_submitphpaction();
+		} catch (\Throwable $e) {
+			$this->fail('the reset ran past the Resolver guard on a copy it could not check: ' . $e->getMessage());
+		}
+
+		// Then the reset is refused with the DNS proxy as the cause, nothing was swept, and config.xml still holds the moved Resolver
+		$errors = array_filter($GLOBALS['input_errors'], static fn ($e): bool => is_string($e) && str_contains($e, 'could not be put back'));
+		$this->assertCount(1, $errors, 'the reset names the DNS proxy as the cause: ' . json_encode($GLOBALS['input_errors']));
+		$this->assertSame($before, $GLOBALS['config'], 'nothing was swept or rebuilt in this process\'s copy');
+		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'and config.xml holds the moved Resolver');
+		$this->assertNotSame('', $this->onDisk(self::SAVED), 'with its snapshot');
 	}
 }

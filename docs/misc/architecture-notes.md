@@ -507,10 +507,10 @@ the lock for the move or restore and, for a restore, stops the proxy only once i
 afresh, so a lock that stays taken or a failed read leaves the proxy serving the Resolver that stayed moved. The stop
 runs under the lock and waits at most 7 s, so the hold is at most about 8 s (the stop plus the read and the write), inside
 the 10 s `try_lock()` of a settings save queued behind it; the restart after an abandoned restore (a stop, up to 7 s,
-then the start) runs after the lock is released. A call with no snapshot and no block of ours takes no lock and stops
-nothing. A lock that stays taken fails the save with an input error, and abandons the
+then the start) runs after the lock is released. A restore takes the lock and reads config.xml afresh whatever this process's copy
+says (it can predate a takeover another apply made), and stops nothing when that read shows no snapshot and no block of ours. A lock that stays taken fails the save with an input error, and abandons the
 move or restore with a `file_notice` (snapshot kept, retried by the next apply). So does a write that config.xml does not take (pfSense's `write_config()` answers FALSE when it refuses one and -1 when it did not write): `pfb_dns_config_write_failed()` reads the process's copy of config.xml again from the file, so nothing that reads it (the ownership predicates, the wizard, the removal) takes the move, the restore, the kept Custom Options line or the toggle's Off for made. The wizard's reset stops, with an input
-error and the package config unswept, whenever a snapshot survived `pfb_dns_proxy_resolver(FALSE)` (its return value
+error and the package config unswept, whenever a snapshot survived `pfb_dns_proxy_resolver(FALSE)`, or `pfb_dns_config_refresh()` (config.xml read afresh under the lock, once more after the restore) could not read config.xml to check: the package removal stops on the same two conditions, with pkg's abort status (the restore's return value
 is FALSE for "nothing to restore" too). A refused Finish stays on the Finalize step (Step 4 of 4), with its Finish and Skip buttons. The DNSBL page's save replaces its whole section and writes the whole config.xml copy
 its request read, so it takes the same lock before reading its section, applies the posted fields to the section read under
 it and holds the lock through `write_config()`: a DNS Reply Logging Off saved on the pfB-DNS page, or a Resolver move, that

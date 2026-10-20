@@ -33,7 +33,8 @@ declare(strict_types=1);
  * `answer` (FALSE: refused, -1: not written) for each write_config() whose description contains `match`, and config.xml on disk
  * is left as it was; every other write goes through. `observer`: Unbound runs the proxy's upstream observer, as an apply leaves it
  * while pfB-DNS fronts the Resolver (its python keys are stored, and unbound.conf in the state directory loads the observer);
- * without it the seed carries none.
+ * without it the seed carries none. `stale`: this process's copy of config.xml predates the takeover (the user's Resolver, no snapshot)
+ * while config.xml on disk holds the moved Resolver and its snapshot, as when another apply moved it after this process started.
  */
 
 $workerArgv = $argv;
@@ -463,6 +464,10 @@ if (!empty($scenario['iniGone'])) {
 
 // The removal's core prelude has run when the hook starts
 worker_core_prelude();
+if (!empty($scenario['stale'])) {
+	$GLOBALS['config']['unbound'] = ['port' => '53', 'sslcertref' => 'cert1', 'active_interface' => 'lan,opt1', 'custom_options' => base64_encode('do-ip6: no')];
+	config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', '');
+}
 
 switch ($scenario['failure']) {
 	case 'lock':

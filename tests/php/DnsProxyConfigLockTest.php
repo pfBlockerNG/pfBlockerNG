@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/ConfigXmlDiskTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -21,20 +23,26 @@ use PHPUnit\Framework\TestCase;
  *     proxy is stopped (up to 7 s) only once the lock is held and config.xml was read afresh, so the Resolver that
  *     stayed moved keeps being served;
  *   - a restore abandoned because the proxy outlived its stop restarts it, after the lock is released, so the
- *     moved Resolver is served again; a call with nothing to do takes no lock.
+ *     moved Resolver is served again;
+ *   - a restore reads config.xml afresh under the lock BEFORE it decides there is nothing to put back: this process's copy can
+ *     predate a takeover another apply just made, and a restore that trusts it leaves the Resolver moved with the proxy it needs
+ *     about to be removed; the copy that read left behind is what the caller's ownership checks then see.
  *
  * The lock and the config re-read are the pfsense_doubles.php doubles: try_lock() records every attempt and models
  * a lock that is not reentrant, config_read_file() runs a hook standing in for what another process wrote.
  */
 #[CoversFunction('pfb_dns_proxy_resolver')]
 #[CoversFunction('pfb_dns_config_lock')]
+#[CoversFunction('pfb_dns_config_refresh')]
 final class DnsProxyConfigLockTest extends TestCase
 {
+	use ConfigXmlDiskTrait;
+
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const LOCK = 'pfb_dns_config';
 	private const DOUBLE_GLOBALS = ['pfb_test_lock_events', 'pfb_test_lock_held', 'pfb_test_try_lock_fail', 'pfb_test_config_read_hook',
-		'pfb_test_config_read_fails', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_write_config_hook', 'pfb_test_write_config_calls',
-		'pfb_test_file_notices', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_valid_pids', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes'];
+		'pfb_test_config_read_fails', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_write_config_hook', 'pfb_test_write_config_result',
+		'pfb_test_write_config_calls', 'pfb_test_file_notices', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_valid_pids', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes'];
 
 	private string $tmp;
 	private bool $hadPfb = FALSE;
@@ -296,7 +304,7 @@ final class DnsProxyConfigLockTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// L3 -- released on every way out; no lock when there is nothing to do
+	// L3 -- released on every way out; a restore with nothing to put back takes the lock too, to learn that
 	// -----------------------------------------------------------------------
 
 	/** @return array<string,array{string}> */
@@ -360,19 +368,51 @@ final class DnsProxyConfigLockTest extends TestCase
 		$this->assertFalse($this->lockHeld());
 	}
 
-	public function testARestoreWithNothingToRestoreTakesNoLockAndReloadsNothing(): void
+	public function testARestoreOverAnUntouchedResolverStillTakesTheLockAndReadsFreshButStopsAndWritesNothing(): void
 	{
-		// Given an untouched Resolver: every apply with the toggle off asks for the restore
+		// Given a Resolver that looks untouched in this process's copy and in config.xml alike: every apply with the toggle off asks for the restore
 		$this->seedResolver();
+		$this->configXmlOnDisk();
 
 		// When it is asked for
 		$changed = pfb_dns_proxy_resolver(FALSE);
 
-		// Then it is a plain no-op: no lock, no config reload, no write
+		// Then the lock was taken for the decision, config.xml was read afresh under it, and nothing was stopped or written
 		$this->assertFalse($changed);
-		$this->assertSame([], $this->lockEvents());
-		$this->assertSame([], $GLOBALS['pfb_test_config_read_calls'] ?? []);
+		$this->assertSame(['try_lock', 'unlock'], array_column($this->lockEvents(), 0), 'one bounded attempt, then its release');
+		$this->assertSame([TRUE], $GLOBALS['pfb_test_config_read_lock_held'] ?? [], 'config.xml is read afresh once, under the lock');
 		$this->assertSame(0, $this->writes());
+		$this->assertSame([], $GLOBALS['pfb_test_service_calls'] ?? [], 'the proxy was not stopped: there is nothing to put back');
+		$this->assertFalse($this->lockHeld());
+	}
+
+	public function testARestoreFromACopyThatPredatesTheTakeoverPutsBackTheResolverTheFreshReadFinds(): void
+	{
+		// Given another apply moved the Resolver (config.xml holds the move and its snapshot) and this process still holds the
+		// copy it read before: the user's Resolver, no snapshot
+		$this->moveThenResetDoubles();
+		$this->configXmlOnDisk();
+		$GLOBALS['config'] = [];
+		$this->seedResolver();
+		unset($GLOBALS['pfb_test_service_calls']);
+		$seen = [];
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
+			$seen[] = "{$fn}:{$service}:" . ($this->lockHeld() ? 'held' : 'free');
+		};
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: this process\'s copy shows nothing moved');
+		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'before: config.xml holds the moved Resolver');
+		$this->assertNotSame('', $this->onDisk(self::SAVED), 'before: and its snapshot');
+
+		// When the proxy is turned off
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the restore ran from the fresh read: the proxy was stopped under the lock and config.xml has the user's Resolver back
+		$this->assertTrue($changed, 'the restore the stale copy hid was made');
+		$this->assertSame(['stop_service:pfb_dns_proxy:held'], $seen);
+		$this->assertSame('lan,opt1', $this->onDisk('unbound/active_interface'), 'config.xml has the user\'s interfaces again');
+		$this->assertSame('', $this->onDisk(self::SAVED), 'and the snapshot is cleared');
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertFalse($this->lockHeld());
 	}
 
 	// -----------------------------------------------------------------------
@@ -411,6 +451,49 @@ final class DnsProxyConfigLockTest extends TestCase
 		// Then the caller gets NULL, as for a lock that stayed taken, and the lock it did take was released
 		$this->assertNull($key);
 		$this->assertSame(['try_lock', 'unlock'], array_column($this->lockEvents(), 0), 'one bounded attempt, then its release');
+		$this->assertFalse($this->lockHeld());
+	}
+
+	public function testTheRefreshReadsConfigXmlAfreshUnderTheLockAndLetsGoSoTheCopyShowsWhatAnotherApplyMoved(): void
+	{
+		// Given this process holds a copy that predates a takeover config.xml holds
+		$this->moveThenResetDoubles();
+		$this->configXmlOnDisk();
+		$GLOBALS['config'] = [];
+		$this->seedResolver();
+		$this->assertFalse(pfb_dns_proxy_owns_resolver(), 'before: the copy says the Resolver is not ours');
+
+		// When the copy is refreshed
+		$fresh = pfb_dns_config_refresh();
+
+		// Then it is config.xml as of the lock, the lock is released, and the Resolver is ours
+		$this->assertTrue($fresh);
+		$this->assertSame([TRUE], $GLOBALS['pfb_test_config_read_lock_held'], 'config.xml is read afresh once, under the lock');
+		$this->assertSame(['try_lock', 'unlock'], array_column($this->lockEvents(), 0));
+		$this->assertFalse($this->lockHeld());
+		$this->assertTrue(pfb_dns_proxy_owns_resolver(), 'after: the copy shows the move');
+	}
+
+	/** @return array<string,array{string}> the global that makes the fresh read impossible */
+	public static function noFreshRead(): array
+	{
+		return ['the lock stays taken' => ['pfb_test_try_lock_fail'], 'config.xml cannot be parsed' => ['pfb_test_config_read_fails']];
+	}
+
+	#[DataProvider('noFreshRead')]
+	public function testTheRefreshSaysSoWhenThereIsNoFreshReadAndLeavesTheCopyAlone(string $double): void
+	{
+		// Given a copy that holds a Resolver the user has, and no way to read config.xml afresh
+		$this->seedResolver();
+		$before = $GLOBALS['config'];
+		$GLOBALS[$double] = TRUE;
+
+		// When the copy is refreshed
+		$fresh = pfb_dns_config_refresh();
+
+		// Then the caller is told the copy says nothing about config.xml, and nothing is held
+		$this->assertFalse($fresh);
+		$this->assertSame($before, $GLOBALS['config']);
 		$this->assertFalse($this->lockHeld());
 	}
 

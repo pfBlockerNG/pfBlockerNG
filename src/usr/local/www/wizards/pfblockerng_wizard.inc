@@ -181,10 +181,11 @@ function step4_submitphpaction() {
 	// The return value is FALSE both for "nothing to restore" and for an abandoned restore: a snapshot or our block that
 	// survived the call says the Resolver is still moved, and the sweep would delete what the next attempt needs. A stored
 	// marker that is no snapshot (recovery required, no ownership) is kept the same way: it is the only record of what the
-	// Resolver was, and the sweep would erase it.
+	// Resolver was, and the sweep would erase it. All of it is read from config.xml under the lock: this request's copy can
+	// predate a takeover, and a config.xml that cannot be read to check counts as still moved.
 	pfb_dns_proxy_resolver(FALSE);
-	if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
-		$input_errors[] = pfb_dns_proxy_owns_resolver()
+	if (!pfb_dns_config_refresh() || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
+		$input_errors[] = (pfb_dns_proxy_owns_resolver() || !pfb_dns_proxy_recovery_required())
 		    ? 'DNS proxy: the DNS Resolver could not be put back, so pfBlockerNG was not reset. Follow the DNS proxy notice, then run the wizard again.'
 		    : 'DNS proxy: pfBlockerNG\'s saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so what the Resolver was before ' .
 		      'cannot be confirmed and pfBlockerNG was not reset. Check the Resolver in Services > DNS Resolver (restore a known-good configuration ' .
