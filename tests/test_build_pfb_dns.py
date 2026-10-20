@@ -25,7 +25,8 @@ from typing import Any
 
 import pytest
 
-from tests.elf_facts import ELFOSABI_FREEBSD, EM_AARCH64, EM_X86_64, ET_EXEC, elf_facts, freebsd_abi_note
+from tests.elf_facts import ELFOSABI_FREEBSD, EM_AARCH64, EM_X86_64, ET_EXEC, elf_facts, freebsd_abi_note, section_names
+from tests.gitenv import scrubbed_git_env
 from tests.go_wrapper import write_go_wrapper
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -250,6 +251,7 @@ def test_an_output_that_is_not_the_targets_freebsd_elf_is_rejected_and_removed(
     fake_go = tmp_path / "go"
     fake_go.write_text(
         '#!/bin/sh\nif [ "$1" = env ]; then echo go1.99.0; exit 0; fi\n'
+        'if [ "$1" = mod ]; then exit 0; fi\n'
         'if [ "$1" = version ]; then exec "$REAL_GO" "$@"; fi\n'
         'while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
         'cp "$OFFERED_ELF" "$out"\n'
@@ -500,6 +502,8 @@ FORGED_BINARIES = [
     ("truncated", None, "program header"),
     ("program-headers-outside-file", None, "program header"),
     ("program-header-entry-size", None, "program header"),
+    ("truncated-note", None, "no FreeBSD ABI tag"),
+    ("abi-note-wrong-size", None, "no FreeBSD ABI tag"),
 ]
 
 
@@ -629,3 +633,111 @@ def test_vendored_mode_compiles_the_vendor_tree_without_the_module_cache_or_netw
     assert result.returncode == 0, f"the vendor tree was not what Go compiled:\n{result.stderr}"
     for target in TARGETS:
         assert b"FROM-THE-VENDOR-TREE" in (tmp_path / "out" / target / "pfb-dns").read_bytes()
+
+
+@pytest.mark.parametrize("mode", ["builder", "vendored"])
+def test_an_out_dir_inside_the_module_is_refused_and_writes_nothing(tmp_path: Path, mode: str) -> None:
+    # Given a caller whose directory is the module itself and whose --out-dir is relative to it
+    root = write_tiny_module(tmp_path / "src-tree")
+    module = root / "go" / "pfb_dns_gateway"
+
+    # When the gateway is built (in place or from a copy)
+    result = run_helper(root, "out", extra=["--vendored"] if mode == "vendored" else [], cwd=module)
+
+    # Then the build says so, instead of copying the module into itself or building into its own tree
+    assert result.returncode == 1, f"an --out-dir inside the module was accepted ({mode}):\n{result.stderr}"
+    assert "inside the module" in result.stderr, result.stderr
+    assert "Traceback" not in result.stderr, result.stderr
+    assert sorted(p.name for p in module.iterdir()) == ["go.mod", "main.go"], "the module tree was written to"
+
+
+def test_a_relative_go_is_resolved_from_the_callers_directory(tmp_path: Path) -> None:
+    # Given a Go reached by a path relative to the caller, which is not the module's directory
+    root = write_tiny_module(tmp_path / "src-tree")
+    link = tmp_path / "relgo" / "go"
+    link.parent.mkdir()
+    link.symlink_to(str(shutil.which("go")))
+
+    # When the gateway is built with that --go
+    result = run_helper(root, tmp_path / "out", go="relgo/go", cwd=tmp_path)
+
+    # Then it is the Go that runs, in the module's directory as well
+    assert result.returncode == 0, f"a relative --go that exists was not run:\n{result.stderr}"
+    assert_freebsd_elf(tmp_path / "out")
+
+
+def test_a_vendored_modules_txt_for_a_tree_without_a_vendor_directory_is_refused_cleanly(tmp_path: Path) -> None:
+    root = write_tiny_module(tmp_path / "src-tree")
+    given = tmp_path / "modules.txt"
+    given.write_text("# example.test/dep v1.0.0\n")
+
+    result = run_helper(root, tmp_path / "out", extra=["--vendored", "--modules-txt", str(given)])
+
+    assert result.returncode == 1, f"a modules.txt was installed into a tree without vendor/:\n{result.stderr}"
+    assert "modules.txt" in result.stderr and "Traceback" not in result.stderr, result.stderr
+    assert written_files(tmp_path / "out") == []
+    assert not (root / "go" / "pfb_dns_gateway" / "vendor").exists(), "a vendor/ directory was created"
+
+
+def test_the_go_environment_pins_workspace_toolchain_and_config_off_whatever_the_caller_exports(tmp_path: Path) -> None:
+    # Given a caller whose environment points Go at a workspace, a newer toolchain, a config file and another target
+    root = write_tiny_module(tmp_path / "src-tree")
+    builds = tmp_path / "builds.jsonl"
+    go = write_go_wrapper(tmp_path / "wrapper" / "go", record=builds)
+    hostile = dict(
+        os.environ,
+        GOWORK="/nonexistent/go.work",
+        GOTOOLCHAIN="go1.99.0",
+        GOENV="/nonexistent/env",
+        GO111MODULE="off",
+        CGO_ENABLED="1",
+        GOOS="linux",
+    )
+
+    # When the gateway is built through a Go that records the environment of every build
+    result = run_helper(root, tmp_path / "out", go=str(go), env=hostile)
+
+    # Then every build ran with the builder's own pins
+    assert result.returncode == 0, result.stderr
+    seen = [json.loads(line) for line in builds.read_text().splitlines()]
+    assert len(seen) == len(TARGETS), seen
+    pins = {
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOENV": "off",
+        "GO111MODULE": "on",
+        "CGO_ENABLED": "0",
+        "GOOS": "freebsd",
+    }
+    for build in seen:
+        assert {key: build[key] for key in pins} == pins, build
+
+
+def test_a_vendored_build_inside_a_git_checkout_stamps_no_version_control_state(tmp_path: Path) -> None:
+    # Given the same module twice: once in a plain directory, once in a committed git checkout
+    plain = write_tiny_module(tmp_path / "plain")
+    tracked = write_tiny_module(tmp_path / "tracked")
+    git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.org", "-c", "commit.gpgsign=false"]
+    env = scrubbed_git_env(drop_git_vars=True)
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "tracked"]):
+        subprocess.run([*git, *args], cwd=tracked, env=env, check=True, capture_output=True)
+
+    # When each is built in place
+    sums = {}
+    for name, root in (("plain", plain), ("tracked", tracked)):
+        result = run_helper(root, tmp_path / f"out-{name}", extra=["--vendored"])
+        assert result.returncode == 0, result.stderr
+        sums[name] = json.loads(result.stdout)["targets"]["freebsd-amd64"]["sha256"]
+
+    # Then the bytes do not depend on the checkout around the module
+    assert sums["tracked"] == sums["plain"], "the binary carries version-control state of the checkout it was built in"
+
+
+def test_the_binaries_are_stripped(real_build: tuple[Path, dict[str, Any]]) -> None:
+    # The ports recipe installs with an empty STRIP=, so the helper's own -ldflags is what strips them.
+    out_dir, _record = real_build
+    for target in TARGETS:
+        names = section_names((out_dir / target / "pfb-dns").read_bytes())
+        assert ".text" in names, f"{target}: the section headers were not read: {names}"
+        assert ".symtab" not in names, f"{target} ships a symbol table: {names}"
+        assert [n for n in names if n.startswith(".debug")] == [], f"{target} ships debug sections: {names}"

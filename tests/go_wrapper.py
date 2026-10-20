@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from tests.elf_facts import NT_FREEBSD_ABI_TAG, PT_DYNAMIC, PT_INTERP, PT_PHDR, abi_note_offsets, freebsd_notes
+from tests.elf_facts import NT_FREEBSD_ABI_TAG, PT_DYNAMIC, PT_INTERP, PT_NOTE, PT_PHDR, abi_note_offsets, freebsd_notes
 
 ROOT = Path(__file__).resolve().parent.parent
 ET_DYN = 3
@@ -30,6 +30,8 @@ E_PHENTSIZE_OFFSET = 54
 SHORT_PHENTSIZE = 32
 # A vendor string that is not FreeBSD's, as long as "FreeBSD\0" so the note keeps its layout.
 FOREIGN_NOTE_NAME = b"NetBSD\x00\x00"
+# The environment of each `go build`, as the builder pinned it, for the tests that read it back.
+RECORDED_ENV = ("GOARCH", "GOAMD64", "GOARM64", "GOWORK", "GOTOOLCHAIN", "GOENV", "GOOS", "CGO_ENABLED", "GO111MODULE")
 
 
 def _patched(data: bytes, offset: int, fmt: str, value: int) -> bytes:
@@ -59,6 +61,24 @@ def _forge_abi_note(data: bytes, value: int | None) -> bytes:
     return _patched(data, _located_abi_note(data)[1], "<I", value)
 
 
+def _forge_abi_note_wrong_size(data: bytes, _value: int | None) -> bytes:
+    """The ABI-tag note claims an 8-byte descriptor, which is not what the FreeBSD tag is."""
+    return _patched(data, _located_abi_note(data)[0] + 4, "<I", 8)
+
+
+def _forge_truncated_note(data: bytes, _value: int | None) -> bytes:
+    """The note segment ends 4 bytes into the ABI-tag note's descriptor (header and name present, value cut)."""
+    note = _located_abi_note(data)[0]
+    (e_phoff,) = struct.unpack_from("<Q", data, E_PHOFF_OFFSET)
+    e_phentsize, e_phnum = struct.unpack_from("<HH", data, E_PHENTSIZE_OFFSET)
+    for index in range(e_phnum):
+        header = e_phoff + index * e_phentsize
+        p_offset, _va, _pa, p_filesz = struct.unpack_from("<QQQQ", data, header + 8)
+        if struct.unpack_from("<I", data, header)[0] == PT_NOTE and p_offset <= note < p_offset + p_filesz:
+            return _patched(data, header + 32, "<Q", note - p_offset + 20)
+    raise AssertionError("no PT_NOTE segment holds the ABI-tag note")
+
+
 def _forge_no_abi_note(data: bytes, _value: int | None) -> bytes:
     return _patched(data, _located_abi_note(data)[0] + 8, "<I", UNKNOWN_NOTE_TYPE)
 
@@ -82,6 +102,8 @@ FORGERIES: dict[str, Callable[[bytes, int | None], bytes]] = {
     "abi-note": _forge_abi_note,
     "second-abi-note": _forge_second_abi_note,
     "no-abi-note": _forge_no_abi_note,
+    "abi-note-wrong-size": _forge_abi_note_wrong_size,
+    "truncated-note": _forge_truncated_note,
     "foreign-note-name": _forge_foreign_note_name,
     "interpreter": lambda data, _value: _retype_segment(data, PT_PHDR, PT_INTERP),
     "dynamic-section": lambda data, _value: _retype_segment(data, PT_PHDR, PT_DYNAMIC),
@@ -96,7 +118,7 @@ def run(config: dict[str, Any], real_go: str, argv: list[str]) -> int:
     """The wrapper's body: forward ``argv`` to ``real_go``, then apply the configured lie."""
     if config["record"] and argv[:1] == ["build"]:
         with open(config["record"], "a", encoding="utf-8") as record:
-            record.write(json.dumps({k: os.environ.get(k) for k in ("GOARCH", "GOAMD64", "GOARM64")}) + "\n")
+            record.write(json.dumps({k: os.environ.get(k) for k in RECORDED_ENV}) + "\n")
     result = subprocess.run([real_go, *argv], capture_output=True, text=True, check=False)
     sys.stderr.write(result.stderr)
     stdout = result.stdout

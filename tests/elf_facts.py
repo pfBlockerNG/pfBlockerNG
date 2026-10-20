@@ -66,6 +66,19 @@ def freebsd_abi_note(data: bytes) -> int | None:
     return None if located is None else struct.unpack_from("<I", data, located[1])[0]
 
 
+def section_names(data: bytes) -> list[str]:
+    """The name of every section of an ELF64 little-endian file (a stripped binary has no `.symtab` or `.debug_*`)."""
+    (e_shoff,) = struct.unpack_from("<Q", data, 40)
+    e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", data, 58)
+    headers = [struct.unpack_from("<IIQQQQ", data, e_shoff + i * e_shentsize) for i in range(e_shnum)]
+    strings = headers[e_shstrndx][4]  # sh_offset of the section-name string table
+    names = []
+    for sh_name, *_rest in headers:
+        end = data.index(b"\x00", strings + sh_name)
+        names.append(data[strings + sh_name : end].decode("ascii"))
+    return names
+
+
 def elf_facts(data: bytes) -> dict[str, object]:
     """Parse the ELF64 little-endian header of ``data``; raise ``ValueError`` for anything else."""
     if data[:4] != b"\x7fELF":

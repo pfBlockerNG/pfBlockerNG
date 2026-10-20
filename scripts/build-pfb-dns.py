@@ -24,8 +24,9 @@
 #
 # stdout: one JSON object, {"go": "go1.x.y", "freebsd_major": N, "modules_txt_sha256": "<hex>" or
 # null when the module vendors nothing, "targets": {"freebsd-amd64": {"goarch", "path", "sha256",
-# "size", "freebsd_abi_note"}, ...}}. Everything else goes to stderr. Exit 1, with every file this
-# run wrote removed, when Go is missing or older than go.mod requires, a compile fails, or an output
+# "size", "freebsd_abi_note"}, ...}}. Everything else goes to stderr. Exit 1, with every output it
+# wrote removed (a modules.txt installed into a --vendored tree stays: it is that tree's state), when
+# Go is missing or older than go.mod requires, a compile fails, or an output
 # fails a check: ELF64 little-endian, OS/ABI FreeBSD, ET_EXEC, the architecture's e_machine; static
 # (no PT_INTERP, no PT_DYNAMIC); a FreeBSD ABI-tag note whose __FreeBSD_version // 100000 is at
 # most N; and `go version -m` showing GOOS=freebsd, GOARCH, CGO_ENABLED=0 and GOAMD64=v1 or
@@ -102,11 +103,12 @@ def _run_go(go: str, args: list[str], module: Path, goarch: str, what: str) -> s
 
 
 def _require_go(go: str, module: Path) -> str:
-    if shutil.which(go) is None:
+    found = shutil.which(go)
+    if found is None:
         directive = re.search(r"^go (\S+)$", (module / "go.mod").read_text(encoding="utf-8"), re.MULTILINE)
         needed = f" >= {directive.group(1)}" if directive else ""
         raise BuildError(f"Go toolchain not found: {go!r} is not an executable (pfB-DNS needs Go{needed})")
-    return go
+    return os.path.abspath(found)  # Go runs in the module's directory: a path relative to the caller would not resolve
 
 
 def _abi_tags(notes: bytes) -> list[int]:
@@ -188,9 +190,7 @@ def _vendor_copy(go: str, module: Path, scratch: Path) -> Path:
     """A copy of ``module`` without its own vendor/, vendored by Go from go.mod and go.sum."""
     copy = scratch / MODULE.name
     shutil.copytree(module, copy, ignore=lambda src, names: ["vendor"] if src == os.fspath(module) else [])
-    # A go.mod without a `require` has nothing to vendor: `go mod vendor` would only say so.
-    if re.search(r"^\s*require\b", (copy / "go.mod").read_text(encoding="utf-8"), re.MULTILINE):
-        _run_go(go, ["mod", "vendor"], copy, "amd64", "go mod vendor")
+    _run_go(go, ["mod", "vendor"], copy, "amd64", "go mod vendor")  # a module with no require: "no dependencies"
     return copy
 
 
@@ -225,6 +225,8 @@ def build_pfb_dns(
     go = _require_go(go, module)
     wanted = _read_modules_txt(modules_txt)
     out_dir = out_dir.resolve()  # Go runs inside the module: a relative path would land in the source tree
+    if out_dir.is_relative_to(module.resolve()):
+        raise BuildError(f"--out-dir {out_dir} is inside the module being built")
     stamp = int((module / "go.mod").stat().st_mtime)
     targets: dict[str, dict[str, object]] = {}
     out_dir.mkdir(parents=True, exist_ok=True)
