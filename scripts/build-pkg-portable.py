@@ -521,15 +521,17 @@ class Recipe:
     # actually needs it.
 
     def _cmd_reinplace_cmd(self, args: list[str]) -> None:
-        self._sed_inplace(args)
+        # bsd.port.mk: REINPLACE_ARGS?= -i.bak — only a recipe's own -i '' drops the backup.
+        self._sed_inplace(args, ".bak")
 
     def _cmd_sed(self, args: list[str]) -> None:
-        self._sed_inplace(args)
+        self._sed_inplace(args, "")
 
-    def _sed_inplace(self, args: list[str]) -> None:
-        # REINPLACE_CMD == `sed -i ''`. Parse: -i [suffix], -e EXPR (repeatable) or
+    def _sed_inplace(self, args: list[str], backup: str) -> None:
+        # REINPLACE_CMD == `sed -i.bak`. Parse: -i [suffix], -e EXPR (repeatable) or
         # a bare leading EXPR, then file(s). Only the `s` command is implemented —
-        # which is all the pfSense pkg ports use (placeholder substitution).
+        # which is all the pfSense pkg ports use (placeholder substitution). A later
+        # -i overrides an earlier one, so -i '' selects no backup.
         exprs: list[str] = []
         files: list[str] = []
         i = 0
@@ -538,11 +540,14 @@ class Recipe:
             a = args[i]
             if a == "-i":
                 # FreeBSD sed: -i takes a (possibly empty) backup suffix argument.
-                if i + 1 < len(args) and (args[i + 1] == "" or not args[i + 1].startswith("-")) and not seen_expr:
-                    # Treat next as the (empty) suffix only when it looks like one.
-                    if args[i + 1] == "":
-                        i += 2
-                        continue
+                if i + 1 < len(args) and (args[i + 1] == "" or args[i + 1].startswith(".")) and not seen_expr:
+                    backup = args[i + 1]
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if a.startswith("-i"):
+                backup = a[2:]
                 i += 1
                 continue
             if a == "-e":
@@ -561,14 +566,16 @@ class Recipe:
             files.append(a)
             i += 1
         for f in files:
-            self._apply_sed(Path(f), exprs)
+            self._apply_sed(Path(f), exprs, backup)
 
-    def _apply_sed(self, path: Path, exprs: list[str]) -> None:
+    def _apply_sed(self, path: Path, exprs: list[str], backup: str) -> None:
         if not path.exists():
             raise BuildError(f"sed target missing: {path}")
         text = path.read_text()
         for expr in exprs:
             text = self._sed_s(text, expr)
+        if backup:
+            shutil.copy2(path, path.with_name(path.name + backup))
         # Restore the mtime the staged copy inherited from the source tree: the rewrite
         # is a deterministic function of that source plus the port variables, so letting
         # it stamp the build clock would make otherwise identical builds differ.

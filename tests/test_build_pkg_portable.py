@@ -311,6 +311,42 @@ def test_recipe_install_modes_mv_sed(tmp_path: Path) -> None:
     assert (stage / "usr/local/etc/tpl.xml").read_text() == "v=9.9\n"  # reinplace applied to staged file
 
 
+@pytest.mark.parametrize(
+    "flags,backup",
+    [
+        ("-e", ".bak"),  # REINPLACE_ARGS?= -i.bak in bsd.port.mk
+        ("-i '' -e", None),
+        ("-i .orig -e", ".orig"),
+        ("-i.orig -e", ".orig"),
+    ],
+)
+def test_recipe_reinplace_cmd_keeps_the_backup_real_make_keeps(tmp_path: Path, flags: str, backup: str | None) -> None:
+    # A bare ${REINPLACE_CMD} -e leaves <file>.bak beside the file; a recipe that stages a
+    # directory afterwards would ship it, so the emulation must produce it too.
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "tpl.sh").write_text("v=%%TOKEN%%\n")
+    text = f"WRK=\t{work}\ndo-install:\n\t${{REINPLACE_CMD}} {flags} 's|%%TOKEN%%|1|' ${{WRK}}/tpl.sh\n"
+    bpp.Recipe(make_mk(tmp_path, text)).run("do-install")
+
+    assert (work / "tpl.sh").read_text() == "v=1\n"
+    assert sorted(p.name for p in work.iterdir()) == sorted(["tpl.sh"] + ([f"tpl.sh{backup}"] if backup else []))
+    if backup:
+        assert (work / f"tpl.sh{backup}").read_text() == "v=%%TOKEN%%\n"
+
+
+def test_recipe_plain_sed_in_place_leaves_no_backup(tmp_path: Path) -> None:
+    # ${SED} has no REINPLACE_ARGS default: only the explicit -i '' form edits in place.
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "tpl.sh").write_text("v=%%TOKEN%%\n")
+    text = f"WRK=\t{work}\ndo-install:\n\t${{SED}} -i '' 's|%%TOKEN%%|1|' ${{WRK}}/tpl.sh\n"
+    bpp.Recipe(make_mk(tmp_path, text)).run("do-install")
+
+    assert [p.name for p in work.iterdir()] == ["tpl.sh"]
+    assert (work / "tpl.sh").read_text() == "v=1\n"
+
+
 def test_recipe_copytree_share_then_script_glob_preserves_payload_and_modes(tmp_path: Path) -> None:
     src = tmp_path / "src"
     (src / "usr/local/pkg/app").mkdir(parents=True)
@@ -720,7 +756,8 @@ def test_staged_python_matches_manifest_without_package_database(tmp_path: Path,
         + "USES=\tpython\n"
         + "post-install:\n"
         + "\t${INSTALL_SCRIPT} ${FILESDIR}/pfb_python.sh ${STAGEDIR}${PREFIX}/bin\n"
-        + '\t${REINPLACE_CMD} -e "s|%%PYTHON_SUFFIX%%|${PYTHON_SUFFIX}|g" ${STAGEDIR}${PREFIX}/bin/pfb_python.sh\n'
+        + "\t${REINPLACE_CMD} -i '' -e 's|%%PYTHON_SUFFIX%%|${PYTHON_SUFFIX}|g' "
+        + "${STAGEDIR}${PREFIX}/bin/pfb_python.sh\n"
     )
     plist = portdir / "pkg-plist"
     plist.write_text(plist.read_text() + "bin/pfb_python.sh\n")
@@ -763,6 +800,7 @@ def test_staged_python_matches_manifest_without_package_database(tmp_path: Path,
     )
     assert (result.returncode, result.stdout, result.stderr) == (0, f"{interpreter}\n", ""), result
     assert manifest["files"]["/usr/local/bin/pfb_python.sh"]["perm"] == "0555"
+    assert [path for path in manifest["files"] if path.endswith(".bak")] == []
 
 
 def _make_no_arch_port(tmp_path: Path) -> tuple[Path, Path]:

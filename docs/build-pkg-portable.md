@@ -54,7 +54,10 @@ or dependencies, so it tracks changes to the port automatically:
    (`MKDIR`, `INSTALL_DATA`, `INSTALL_SCRIPT`, `MV`, `REINPLACE_CMD`/`SED` —
    `CP`/`LN`/`RM`/`INSTALL_PROGRAM` were deliberately dropped, #502, as no port
    recipe uses them) into a controlled staging directory — the
-   same effect `make` would have, minus the shell. An **unknown recipe command
+   same effect `make` would have, minus the shell. `REINPLACE_CMD` keeps the
+   `<file>.bak` backup `bsd.port.mk` defaults to unless the recipe passes
+   `-i ''`, so a stray backup is staged (or fails the plist check) exactly as
+   in `make`. An **unknown recipe command
    is a hard error** (a signal that the port changed in a way the tool must be
    taught — rather than silently producing a broken package).
 4. **Validate against `pkg-plist`.** The staged file set must equal the plist's
