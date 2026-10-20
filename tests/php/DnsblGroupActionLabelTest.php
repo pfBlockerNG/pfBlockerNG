@@ -13,6 +13,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
  */
 final class DnsblGroupActionLabelTest extends TestCase
 {
+	private const CATEGORY_EDIT = 'src/usr/local/www/pfblockerng/pfblockerng_category_edit.php';
+
 	private static function optionsFromPage(string $relative, string $pattern): array
 	{
 		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/' . $relative);
@@ -32,7 +34,7 @@ final class DnsblGroupActionLabelTest extends TestCase
 				"/\\\$list_array\\s*=\\s*array\\([^;]*'unbound'[^;]*\\);/",
 			],
 			'category edit' => [
-				'src/usr/local/www/pfblockerng/pfblockerng_category_edit.php',
+				self::CATEGORY_EDIT,
 				"/\\\$options_action\\s*=\\s*\\[[^;]*'unbound'[^;]*\\];/",
 			],
 		];
@@ -46,5 +48,18 @@ final class DnsblGroupActionLabelTest extends TestCase
 		$this->assertSame('Block', $options['unbound'] ?? NULL, 'the stored unbound value must be labelled Block');
 		$this->assertSame('Disabled', $options['Disabled'] ?? NULL, 'Disabled must stay on the dropdown');
 		$this->assertNotContains('Unbound', $options, 'no option may still be labelled Unbound');
+	}
+
+	public function testAliasActionHelpNamesTheBlockOption(): void
+	{
+		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/' . self::CATEGORY_EDIT);
+		if (preg_match("/\\\$action_txt = (\"[^\"\\n]*to enable 'Domain Name' blocking for this Alias\\.\");/", $source, $match) !== 1) {
+			self::fail('alias action help text not found in category edit page');
+		}
+		$help = '';
+		eval('$help = ' . $match[1] . ';');
+
+		$this->assertStringContainsString('Select <strong>Block</strong>', $help, 'help must name the Block option');
+		$this->assertStringNotContainsString('Unbound', $help, 'help must not name the retired Unbound label');
 	}
 }

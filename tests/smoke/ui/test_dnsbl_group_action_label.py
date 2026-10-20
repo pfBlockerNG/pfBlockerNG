@@ -1,8 +1,8 @@
-"""The DNSBL Category list page labels the stored 'unbound' group action as Block.
+"""The DNSBL group Action option for the stored 'unbound' value is labelled Block.
 
 The stored key stays 'unbound' so existing groups keep resolving; only the rendered
-option text changed. Rendered from the live box, so a regression in the page's option
-array or its wiring fails here and not only in the hermetic PHP test.
+option text changed. Rendered from the live box, so a regression in either page's
+option array or its wiring fails here and not only in the hermetic PHP test.
 """
 
 from __future__ import annotations
@@ -22,30 +22,48 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.ui_render
 
-_ACTION_SELECT_RE = re.compile(
+EDIT_PAGE_URL = "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl"
+_LIST_ACTION_SELECT_RE = re.compile(
     r'<select\b[^>]*\bname=["\']action-0["\'][^>]*>(.*?)</select>', re.IGNORECASE | re.DOTALL
+)
+_EDIT_ACTION_SELECT_RE = re.compile(
+    r'<select\b[^>]*\bname=["\']action["\'][^>]*>(.*?)</select>', re.IGNORECASE | re.DOTALL
 )
 _OPTION_RE = re.compile(r'<option\b[^>]*\bvalue=["\']([^"\']*)["\'][^>]*>(.*?)</option>', re.IGNORECASE | re.DOTALL)
 
 
-def test_dnsbl_group_action_option_is_labelled_block(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """The DNSBL group Action dropdown shows the stored 'unbound' value as Block,
-    and no option on the page still reads Unbound."""
+def _assert_block_option(body: str, select_re: re.Pattern[str], where: str) -> None:
+    select = select_re.search(body)
+    assert select is not None, f"DNSBL group Action select not rendered on {where}"
+    options = {value: label.strip() for value, label in _OPTION_RE.findall(select.group(1))}
+    assert options.get("unbound") == "Block", f"{where}: stored unbound value must read Block, got {options!r}"
+    assert options.get("Disabled") == "Disabled", f"{where}: Disabled option missing, got {options!r}"
+    assert "Unbound" not in options.values(), f"{where}: an option still reads Unbound: {options!r}"
+
+
+def test_dnsbl_group_action_list_option_is_labelled_block(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """The DNSBL category list page shows the stored 'unbound' action as Block."""
     vm = smoke_vm
     snap = _snapshot_node(vm, DNSBL_GROUPS)
     try:
         _seed_two_dnsbl_rows(vm)
         page = webui.get(_page_url("dnsbl"))
         assert page.status_code == 200, f"DNSBL category page HTTP {page.status_code}"
-        body = page.text
-        assert not looks_like_login_page(body), "webConfigurator session not authenticated"
+        assert not looks_like_login_page(page.text), "webConfigurator session not authenticated"
+        _assert_block_option(page.text, _LIST_ACTION_SELECT_RE, "category list")
+    finally:
+        _restore_node(vm, DNSBL_GROUPS, snap)
 
-        select = _ACTION_SELECT_RE.search(body)
-        assert select is not None, "DNSBL group Action select (action-0) not rendered"
-        options = {value: label.strip() for value, label in _OPTION_RE.findall(select.group(1))}
 
-        assert options.get("unbound") == "Block", f"stored unbound value must read Block, got {options!r}"
-        assert options.get("Disabled") == "Disabled", f"Disabled option missing, got {options!r}"
-        assert "Unbound" not in options.values(), f"an option still reads Unbound: {options!r}"
+def test_dnsbl_group_action_edit_option_is_labelled_block(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """The DNSBL category edit page offers the stored 'unbound' action as Block."""
+    vm = smoke_vm
+    snap = _snapshot_node(vm, DNSBL_GROUPS)
+    try:
+        _seed_two_dnsbl_rows(vm)
+        page = webui.get(EDIT_PAGE_URL)
+        assert page.status_code == 200, f"DNSBL category edit page HTTP {page.status_code}"
+        assert not looks_like_login_page(page.text), "webConfigurator session not authenticated"
+        _assert_block_option(page.text, _EDIT_ACTION_SELECT_RE, "category edit")
     finally:
         _restore_node(vm, DNSBL_GROUPS, snap)
