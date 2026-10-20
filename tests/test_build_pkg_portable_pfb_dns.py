@@ -578,6 +578,7 @@ NET = ("golang.org/x/net", "v0.56.0")
 PSEUDO = ("example.test/dep", "v0.0.0-20260101000000-0123456789ab")
 PSEUDO_AFTER_A_TAG = ("example.test/dep", "v1.2.4-0.20260101000000-0123456789ab")
 PSEUDO_AFTER_A_PRERELEASE = ("example.test/dep", "v1.2.3-pre.0.20260101000000-0123456789ab")
+PSEUDO_LONG_REVISION = ("example.test/dep", "v0.0.0-20260101000000-0123456789abcdef")
 REPLACED = "# github.com/quic-go/quic-go v0.64.0 => example.test/fork v1.0.0\n## explicit; go 1.21\n"
 UNVENDORED = "o:p:v0.64.0:g/vendor/github.com/quic-go/quic-go"
 THREE_FIELDS = "o:p:v0.64.0"
@@ -600,10 +601,16 @@ PARITY_FAILURES = [
         modules_txt_for(PSEUDO_AFTER_A_PRERELEASE),
         "pseudo",
     ),
+    (
+        "pseudo-version-with-a-long-revision",
+        gh_tuples_for(PSEUDO_LONG_REVISION),
+        modules_txt_for(PSEUDO_LONG_REVISION),
+        "pseudo",
+    ),
     ("tuple-outside-the-vendor-tree", (UNVENDORED,), modules_txt_for(QUIC), "vendor"),
     ("tuple-with-three-fields", (THREE_FIELDS,), modules_txt_for(QUIC), "account:project:tag"),
     ("tuple-with-an-unbalanced-quote", (UNBALANCED_QUOTE,), modules_txt_for(QUIC), "GH_TUPLE"),
-    ("tuple-at-the-bare-vendor-dir", (BARE_VENDOR_DIR,), modules_txt_for(QUIC), "GH_TUPLE"),
+    ("tuple-at-the-bare-vendor-dir", (BARE_VENDOR_DIR, *gh_tuples_for(QUIC)), modules_txt_for(QUIC), "GH_TUPLE only"),
     ("modules-txt-that-is-not-utf-8", gh_tuples_for(QUIC), b"# \xff\xfe v1\n", "modules.txt"),
 ]
 
@@ -658,6 +665,11 @@ UNRECOGNISED_DO_BUILD = {
         "--source-root . --out-dir ${WRKDIR}/pfb-dns", "--out-dir ${WRKDIR}/pfb-dns --source-root ."
     ),
     "command-after-the-closing-paren": DO_BUILD.rstrip("\n") + " ; ${RM} -rf ${WRKDIR}\n",
+    "out-dir-with-a-semicolon": DO_BUILD.replace("${WRKDIR}/pfb-dns", "${WRKDIR}/pfb-dns;${RM}${WRKDIR}"),
+    "out-dir-with-a-space": DO_BUILD.replace("${WRKDIR}/pfb-dns", "${WRKDIR}/pfb dns"),
+    "modules-txt-with-a-semicolon": go_do_build(modules_txt=True).replace(
+        "${FILESDIR}/modules.txt", "${FILESDIR}/modules.txt;${RM}${WRKDIR}"
+    ),
 }
 
 
@@ -750,16 +762,18 @@ def test_a_do_build_without_modules_txt_over_a_source_that_vendors_modules_fails
     assert not list((tmp_path / "out").glob("*.pkg")), "a package was built from a recipe that has no vendor tree"
 
 
-def test_a_modules_txt_the_port_does_not_ship_fails_with_a_message(
-    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+def test_a_modules_txt_the_port_does_not_ship_fails_with_a_message_before_go_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    # Given a do-build that names ${FILESDIR}/modules.txt, which the port does not have
+    # Given a do-build that names ${FILESDIR}/modules.txt, which the port does not have, and no Go on PATH
     fx = make_fixture(tmp_path, recipe="go", do_build=go_do_build(modules_txt=True))
+    without_go_on_path(tmp_path, monkeypatch)
 
     assert build(fx, "native", tmp_path / "out") == 1
 
     err = capfd.readouterr().err
-    assert "modules.txt" in err, err
+    assert "cannot read the recipe's modules.txt" in err, err
+    assert "Go toolchain not found" not in err, "Go was started although the recipe's modules.txt is missing"
     assert not list((tmp_path / "out").glob("*.pkg")), "a package was built without the port's modules.txt"
 
 

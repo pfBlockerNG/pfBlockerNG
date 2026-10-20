@@ -2,11 +2,12 @@
 # build-pkg-portable.py — build a pfSense-installable FreeBSD .pkg for the
 # pfBlockerNG port WITHOUT a FreeBSD host or the ports framework.
 #
-# pfBlockerNG is a NO_BUILD port: nothing in the port is compiled. "Building" the package is
+# pfBlockerNG's ports compile almost nothing: the channel ports are NO_BUILD, except the go recipe
+# (nightly), whose do-build compiles only pfb-dns. "Building" the package is
 # just (a) laying the production files out at their install paths, (b) doing the
-# port's textual substitutions, and (c) emitting a libpkg-format archive with the
-# right manifest. This tool replicates exactly that, portably (Linux + macOS),
-# by *executing the port's own do-extract/post-extract/do-install recipe* and
+# port's textual substitutions, (c) building pfb-dns where the recipe says so, and (d) emitting a
+# libpkg-format archive with the right manifest. This tool replicates exactly that, portably
+# (Linux + macOS), by *executing the port's own do-extract/post-extract/do-build/do-install recipe* and
 # consuming either its static pkg-plist or its staged dynamic plist — never a
 # hardcoded, pfBlockerNG-specific file list. So when the port gains files or
 # changes dependencies, this tool keeps up with the real `make package` inputs.
@@ -1112,15 +1113,16 @@ def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, wor
 
 
 # The one `do-build` line of the go recipe (FreeBSD-ports), flag for flag: the helper that runs is the
-# builder's trusted copy, so only --out-dir and --modules-txt are read from it.
+# builder's trusted copy, so only --out-dir and --modules-txt are read from it, and only as make
+# variables and path characters (a `;`, `&&` or space would be a second command or argument in `make`).
 _DO_BUILD_LINE = re.compile(
     r"\(cd \$\{WRKSRC:H\} && \$\{SETENVI\} \$\{WRK_ENV\} \$\{GO_ENV\} \$\{PYTHON_CMD\} scripts/build-pfb-dns\.py "
-    r"--source-root \. --out-dir (?P<out>\S+) --go \$\{GO_CMD\} --vendored "
-    r"(?:--modules-txt (?P<modules>\S+) )?--freebsd-major \$\{OSREL:R\}\)"
+    r"--source-root \. --out-dir (?P<out>[\w${}:./-]+) --go \$\{GO_CMD\} --vendored "
+    r"(?:--modules-txt (?P<modules>[\w${}:./-]+) )?--freebsd-major \$\{OSREL:R\}\)"
 )
 _VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
-# Go's three pseudo-version forms: vX.0.0-<ts>-<sha>, vX.Y.Z-0.<ts>-<sha>, vX.Y.Z-pre.0.<ts>-<sha>.
-_PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]{12}(?:\+.*)?$")
+# Go's three pseudo-version forms: vX.0.0-<ts>-<rev>, vX.Y.Z-0.<ts>-<rev>, vX.Y.Z-pre.0.<ts>-<rev> (any rev).
+_PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
 
 
 def _parse_do_build(mk: Makefile) -> tuple[Path, Path | None]:
