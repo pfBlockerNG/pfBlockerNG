@@ -408,7 +408,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 					'Match_Both' => 'Match Both', 'Alias_Deny' => 'Alias Deny', 'Alias_Permit' => 'Alias Permit',
 					'Alias_Match' => 'Alias Match', 'Alias_Native' => 'Alias Native' ];
 } else {
-	$options_action		= [	'Disabled' => 'Disabled', 'unbound' => 'Unbound' ];
+	$options_action		= [	'Disabled' => 'Disabled', 'unbound' => 'Block' ];
 }
 
 $options_cron			= [	'Never' => 'Never', '01hour' => 'Every hour', '02hours' => 'Every 2 hours', '03hours' => 'Every 3 hours',
