@@ -564,6 +564,7 @@ NET = ("golang.org/x/net", "v0.56.0")
 PSEUDO = ("example.test/dep", "v0.0.0-20260101000000-0123456789ab")
 REPLACED = "# github.com/quic-go/quic-go v0.64.0 => example.test/fork v1.0.0\n## explicit; go 1.21\n"
 UNVENDORED = "o:p:v0.64.0:g/vendor/github.com/quic-go/quic-go"
+THREE_FIELDS = "o:p:v0.64.0"
 
 # (id, the port's GH_TUPLE, the port's modules.txt (None: the recipe names none), what the error must say)
 PARITY_FAILURES = [
@@ -575,6 +576,7 @@ PARITY_FAILURES = [
     ("replace-directive", gh_tuples_for(QUIC), REPLACED + "github.com/quic-go/quic-go\n", "=>"),
     ("pseudo-version", gh_tuples_for(PSEUDO), modules_txt_for(PSEUDO), "pseudo-version"),
     ("tuple-outside-the-vendor-tree", (UNVENDORED,), modules_txt_for(QUIC), "vendor"),
+    ("tuple-with-three-fields", (THREE_FIELDS,), modules_txt_for(QUIC), "account:project:tag"),
 ]
 
 
@@ -624,6 +626,7 @@ UNRECOGNISED_DO_BUILD = {
     "other-major": DO_BUILD.replace("${OSREL:R}", "99"),
     "out-dir-outside-wrkdir": DO_BUILD.replace("${WRKDIR}/pfb-dns", "${STAGEDIR}/pfb-dns"),
     "second-command": DO_BUILD + "\t${ECHO_MSG} done\n",
+    "command-after-the-closing-paren": DO_BUILD.rstrip("\n") + " ; ${RM} -rf ${WRKDIR}\n",
 }
 
 

@@ -334,9 +334,21 @@ marker is ever published, and the activation's readiness wait rolls pfB-DNS back
 - **Parity with `make package`.** The port compiles with the Go of its own `USES=go`
   (the fork's `lang/go126`), the builder with the toolchain pinned in
   [`scripts/go_toolchain.py`](../scripts/go_toolchain.py). Byte parity between the two is
-  **not required and not claimed**; what both share is the source, the build flags, the
-  vendored modules (`files/modules.txt`) and the ELF and ABI checks above. A real FreeBSD
-  `make package` of the recipe has not been run.
+  **not required**; what both share is the source, the build flags, the vendored modules
+  (`files/modules.txt`) and the ELF and ABI checks above.
+- **Measured against a real `make package`.** One manual run, not a gate: FreeBSD
+  15.0-RELEASE-p14, `make package stage-qa` of the nightly recipe (FreeBSD-ports
+  `c4c922fdec57`, source `fb840986e`), passed.
+  - The run set `GH_TAGNAME` in the Makefile (a command-line value replaces the
+    `GH_TUPLE` tags), `NO_DEPENDS=yes` and `DEFAULT_VERSIONS=php=8.3`.
+  - `stage-qa` is clean only because of `NO_ARCH_IGNORE=pfb-dns`: with it emptied, both
+    binaries are flagged.
+  - With the same Go (1.26.9) the binaries are byte-identical to the ones this script
+    builds on Linux. Against the builder's pinned toolchain they differ only by Go version.
+  - Of the 96 paths the real package and the builder's package share, 93 are
+    byte-identical. The other three are `info.xml` (the version string) and the two Go
+    binaries (Go version). Real `make` also ships three license files the builder does not
+    (issue #3530).
 
 ## Ports recipe for pfB-DNS
 

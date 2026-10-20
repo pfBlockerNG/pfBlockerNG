@@ -493,11 +493,13 @@ def build_with_a_lying_go(
 FORGED_BINARIES = [
     ("abi-note", 1600000, "ABI tag 1600000"),
     ("no-abi-note", None, "no FreeBSD ABI tag"),
+    ("foreign-note-name", None, "no FreeBSD ABI tag"),
     ("interpreter", None, "PT_INTERP"),
     ("dynamic-section", None, "PT_DYNAMIC"),
     ("shared-object", None, "ET_EXEC"),
     ("truncated", None, "program header"),
     ("program-headers-outside-file", None, "program header"),
+    ("program-header-entry-size", None, "program header"),
 ]
 
 
@@ -531,6 +533,32 @@ def test_the_abi_tag_may_not_name_a_freebsd_newer_than_the_target_major(
         assert result.returncode == 1, f"ABI tag {note} was accepted for FreeBSD {major}"
         assert f"ABI tag {note}" in result.stderr and f"FreeBSD {major}" in result.stderr, result.stderr
         assert written_files(out) == []
+
+
+@pytest.mark.parametrize(
+    ("second", "major", "accepted"), [(1600000, 15, False), (1600000, 16, True), (1100000, 15, True)]
+)
+def test_the_newest_of_several_abi_tags_decides(tmp_path: Path, second: int, major: int, accepted: bool) -> None:
+    # Given Go's own ABI tag and a second one, forged beside it, that is newer or older than it
+    root = write_tiny_module(tmp_path / "src-tree")
+    clean = run_helper(root, tmp_path / "clean")
+    assert clean.returncode == 0, clean.stderr
+    own = json.loads(clean.stdout)["targets"]["freebsd-amd64"]["freebsd_abi_note"]
+    go = write_go_wrapper(tmp_path / "wrapper" / "go", forgery="second-abi-note", value=second)
+
+    # When the module is built for the FreeBSD major
+    result = run_helper(root, tmp_path / "out", go=str(go), major=major)
+
+    # Then the newest tag is the one held against the major and recorded
+    newest = max(own, second)
+    if accepted:
+        assert result.returncode == 0, f"ABI tags {own} and {second} were refused for FreeBSD {major}:\n{result.stderr}"
+        targets = json.loads(result.stdout)["targets"]
+        assert {t: v["freebsd_abi_note"] for t, v in targets.items()} == dict.fromkeys(TARGETS, newest)
+    else:
+        assert result.returncode == 1, f"ABI tags {own} and {second} were accepted for FreeBSD {major}"
+        assert f"ABI tag {newest}" in result.stderr and f"FreeBSD {major}" in result.stderr, result.stderr
+        assert written_files(tmp_path / "out") == []
 
 
 # (text in `go version -m` output, what it is made to say, the setting the error must name, the target

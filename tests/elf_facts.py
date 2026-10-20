@@ -9,6 +9,7 @@ was meant to produce them.
 from __future__ import annotations
 
 import struct
+from collections.abc import Iterator
 
 ELFOSABI_FREEBSD = 9
 ET_EXEC = 2
@@ -31,8 +32,8 @@ def segment_types(data: bytes) -> list[int]:
     return [struct.unpack_from("<I", data, e_phoff + i * e_phentsize)[0] for i in range(e_phnum)]
 
 
-def abi_note_offsets(data: bytes) -> tuple[int, int] | None:
-    """File offsets of the first FreeBSD ABI-tag note's header and its 4-byte ``__FreeBSD_version``."""
+def freebsd_notes(data: bytes) -> Iterator[tuple[int, int, int, int]]:
+    """Every note named FreeBSD, as (file offset of its header, type, file offset of its desc, desc size)."""
     (e_phoff,) = struct.unpack_from("<Q", data, 32)
     e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
     for index in range(e_phnum):
@@ -46,9 +47,16 @@ def abi_note_offsets(data: bytes) -> tuple[int, int] | None:
             namesz, descsz, note_type = struct.unpack_from("<III", data, position)
             name = data[position + 12 : position + 12 + namesz]
             desc = position + 12 + (namesz + 3) // 4 * 4
-            if name == FREEBSD_ABI_NOTE and note_type == NT_FREEBSD_ABI_TAG and descsz == 4:
-                return position, desc
+            if name == FREEBSD_ABI_NOTE:
+                yield position, note_type, desc, descsz
             position = desc + (descsz + 3) // 4 * 4
+
+
+def abi_note_offsets(data: bytes) -> tuple[int, int] | None:
+    """File offsets of the first FreeBSD ABI-tag note's header and its 4-byte ``__FreeBSD_version``."""
+    for position, note_type, desc, descsz in freebsd_notes(data):
+        if note_type == NT_FREEBSD_ABI_TAG and descsz == 4:
+            return position, desc
     return None
 
 

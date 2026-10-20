@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from tests.elf_facts import PT_DYNAMIC, PT_INTERP, PT_PHDR, abi_note_offsets
+from tests.elf_facts import NT_FREEBSD_ABI_TAG, PT_DYNAMIC, PT_INTERP, PT_PHDR, abi_note_offsets, freebsd_notes
 
 ROOT = Path(__file__).resolve().parent.parent
 ET_DYN = 3
@@ -26,6 +26,10 @@ E_TYPE_OFFSET = 16
 E_PHOFF_OFFSET = 32
 # A note type no loader knows: the FreeBSD ABI tag is then missing from the file.
 UNKNOWN_NOTE_TYPE = 0x7F
+E_PHENTSIZE_OFFSET = 54
+SHORT_PHENTSIZE = 32
+# A vendor string that is not FreeBSD's, as long as "FreeBSD\0" so the note keeps its layout.
+FOREIGN_NOTE_NAME = b"NetBSD\x00\x00"
 
 
 def _patched(data: bytes, offset: int, fmt: str, value: int) -> bytes:
@@ -59,14 +63,31 @@ def _forge_no_abi_note(data: bytes, _value: int | None) -> bytes:
     return _patched(data, _located_abi_note(data)[0] + 8, "<I", UNKNOWN_NOTE_TYPE)
 
 
+def _forge_foreign_note_name(data: bytes, _value: int | None) -> bytes:
+    name = _located_abi_note(data)[0] + 12
+    return data[:name] + FOREIGN_NOTE_NAME + data[name + len(FOREIGN_NOTE_NAME) :]
+
+
+def _forge_second_abi_note(data: bytes, value: int | None) -> bytes:
+    """Turn Go's FreeBSD NOINIT note into a second ABI-tag note carrying ``value`` (the first is left as it is)."""
+    assert value is not None
+    for position, note_type, desc, descsz in freebsd_notes(data):
+        if note_type != NT_FREEBSD_ABI_TAG and descsz == 4:
+            return _patched(_patched(data, position + 8, "<I", NT_FREEBSD_ABI_TAG), desc, "<I", value)
+    raise AssertionError("the binary has no other FreeBSD note to turn into a second ABI tag")
+
+
 # name -> forge(binary bytes, value); each leaves everything else in the file as Go wrote it.
 FORGERIES: dict[str, Callable[[bytes, int | None], bytes]] = {
     "abi-note": _forge_abi_note,
+    "second-abi-note": _forge_second_abi_note,
     "no-abi-note": _forge_no_abi_note,
+    "foreign-note-name": _forge_foreign_note_name,
     "interpreter": lambda data, _value: _retype_segment(data, PT_PHDR, PT_INTERP),
     "dynamic-section": lambda data, _value: _retype_segment(data, PT_PHDR, PT_DYNAMIC),
     "shared-object": lambda data, _value: _patched(data, E_TYPE_OFFSET, "<H", ET_DYN),
     "truncated": lambda data, _value: data[:120],
+    "program-header-entry-size": lambda data, _value: _patched(data, E_PHENTSIZE_OFFSET, "<H", SHORT_PHENTSIZE),
     "program-headers-outside-file": lambda data, _value: _patched(data, E_PHOFF_OFFSET, "<Q", len(data)),
 }
 
