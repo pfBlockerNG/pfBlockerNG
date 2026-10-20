@@ -4884,7 +4884,9 @@ const PFB_PKG_REMOVAL_ABORT = 3;
  *         Resolver are kept for a manual repair, since what the Resolver was before cannot be confirmed; or iff the disable pass
  *         could not remove Unbound's python settings ($pfb['python_removal_failed']): the Resolver is already back, and the
  *         scripts those settings name are kept (the pass's own staging follows config.xml, pfb_unbound_dnsbl()) until the
- *         teardown that follows this call, which the abort skips
+ *         teardown that follows this call, which the abort skips; or iff config.xml could not be read under its lock to check any of
+ *         this ($pfb['removal_check_failed'], which pfb_package_removal_stopped() reads: the Resolver is then neither said to be back
+ *         nor its saved copy invalid)
  */
 function pfb_dns_proxy_deinstall(): bool {
 	global $pfb;
@@ -4892,7 +4894,9 @@ function pfb_dns_proxy_deinstall(): bool {
 	if (pfb_dns_proxy_resolver(FALSE)) {
 		services_unbound_configure(FALSE);
 	}
-	if (!pfb_dns_config_refresh() || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || !empty($pfb['python_removal_failed'])) {
+	$checked = pfb_dns_config_refresh();
+	$pfb['removal_check_failed'] = !$checked;
+	if (!$checked || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || !empty($pfb['python_removal_failed'])) {
 		return FALSE;
 	}
 	stop_service('pfb_dns_proxy');
@@ -5045,8 +5049,9 @@ function pfb_package_removal_recover(): array {
 }
 
 /**
- * The removal stops: the Resolver is still moved to the DNS proxy, or config.xml did not take the removal of Unbound's python
- * settings ($pfb['python_removal_failed']). Put back what pfSense took, then say so. FALSE is the hook's answer, which keeps
+ * The removal stops: the Resolver is still moved to the DNS proxy, config.xml did not take the removal of Unbound's python
+ * settings ($pfb['python_removal_failed']), or config.xml could not be read under its lock to check ($pfb['removal_check_failed']:
+ * said first, because nothing else is known then). Put back what pfSense took, then say so. FALSE is the hook's answer, which keeps
  * the package installed.
  */
 function pfb_package_removal_stopped(): bool {
@@ -5055,8 +5060,15 @@ function pfb_package_removal_stopped(): bool {
 	pfb_stdout_close_line();
 	// pfSense's own half of the removal has already stopped the proxy and deleted what registers it: put that back
 	$failed = pfb_package_removal_recover();
-	if (pfb_dns_proxy_recovery_required()) {
-		$tail = ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed));
+	$tail = ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed));
+	if (!empty($pfb['removal_check_failed']) && pfb_dns_proxy_saved() === NULL) {
+		// The check never ran (pfb_dns_proxy_deinstall()): this process's copy says nothing about the Resolver or its saved copy, so
+		// neither "put back" nor "invalid" is said, whatever else stopped the removal
+		$text = 'pfBlockerNG removal was stopped: config.xml was locked by another save or could not be read, so the state of the DNS Resolver ' .
+		    'could not be checked and pfBlockerNG\'s saved copy of its previous settings (pfb_dns_saved) could not be confirmed (see the DNS ' .
+		    "proxy notice above). pfBlockerNG's files and settings were left in place{$tail}. Once no other configuration save is in progress, " .
+		    'remove the package again.';
+	} elseif (pfb_dns_proxy_recovery_required()) {
 		$text = pfb_dns_proxy_block_present()
 		    ? 'pfBlockerNG removal was stopped: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings and pfBlockerNG has no ' .
 		      'valid saved copy of its previous settings: manual recovery required (see the DNS proxy notice above). pfBlockerNG\'s files ' .
@@ -5077,18 +5089,11 @@ function pfb_package_removal_stopped(): bool {
 			    'proxy runs: start it with ' . PFB_DNS_PROXY_RCFILE . ' start. Then, once no other configuration save is in progress ' .
 			    'and the DNS proxy can be stopped, remove the package again.';
 		}
-	} elseif (!empty($pfb['python_removal_failed'])) {
-		// The Resolver is back: Unbound still names the script the teardown would delete, and no proxy has a snapshot to serve
+	} else {
+		// The check ran and the Resolver is back: Unbound still names the script the teardown would delete, and no proxy has a snapshot to serve
 		$text = 'pfBlockerNG removal was stopped: config.xml could not be written, so the DNS Resolver still loads pfBlockerNG\'s Unbound python ' .
 		    'script, which the removal would delete. The DNS Resolver itself was put back. pfBlockerNG\'s files and settings were left in place' .
-		    ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed)) .
-		    '. Once config.xml can be written, remove the package again.';
-	} else {
-		// Neither moved nor in need of repair as far as this copy shows, and the removal still stopped: config.xml could not be read under its lock to check
-		$text = 'pfBlockerNG removal was stopped: config.xml was locked by another save or could not be read, so whether the DNS Resolver is ' .
-		    'still moved to the DNS proxy could not be checked (see the DNS proxy notice above). pfBlockerNG\'s files and settings were left in place' .
-		    ($failed === [] ? ', and its service entries were registered again' : ', but the recovery did not complete: ' . implode('; ', $failed)) .
-		    '. Once no other configuration save is in progress, remove the package again.';
+		    "{$tail}. Once config.xml can be written, remove the package again.";
 	}
 	pfb_logger("\n{$text}", 2);
 	file_notice('pfBlockerNG DNS Proxy', $text, 'pfBlockerNG', '/services_unbound.php', 2);
@@ -14052,7 +14057,8 @@ function pfb_dns_proxy_stand_down(): bool {
  *
  * Everything that reads or writes the Resolver keys and the snapshot runs under pfb_dns_config_lock(), on a
  * config.xml read afresh under it, through write_config(). A lock that stays taken abandons the call: nothing is
- * written or stopped, the snapshot is kept, and a notice says the next apply retries. A write that config.xml does not take
+ * written or stopped, the snapshot is kept, and a notice says the next apply retries (a restore says the Resolver's state could
+ * not be checked: only the lock was refused, never the Resolver seen). A write that config.xml does not take
  * is no change: this process's copy is read again from the file, FALSE is returned, and the same notice is raised.
  *
  * ON with the Resolver already moved reports a conflicting Listen Port through $unsafe_line without changing the snapshot.
@@ -14070,7 +14076,13 @@ function pfb_dns_proxy_stand_down(): bool {
 function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 	$lock = pfb_dns_config_lock();
 	if ($lock === NULL) {
-		pfb_dns_proxy_resolver_unchanged($on, 'config.xml was locked by another save');
+		if ($on) {
+			pfb_dns_proxy_resolver_unchanged(TRUE, 'config.xml was locked by another save');
+		} else {
+			// No fresh read: nothing says whether a Resolver is still moved, so the Resolver is not reported left or put back
+			pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', 'DNS proxy: the state of the DNS Resolver could not be checked because config.xml was locked by another ' .
+			    'save or could not be read; the next apply retries.', '/services_unbound.php');
+		}
 		return FALSE;
 	}
 	try {

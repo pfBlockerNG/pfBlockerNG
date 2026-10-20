@@ -184,12 +184,20 @@ function step4_submitphpaction() {
 	// Resolver was, and the sweep would erase it. All of it is read from config.xml under the lock: this request's copy can
 	// predate a takeover, and a config.xml that cannot be read to check counts as still moved.
 	pfb_dns_proxy_resolver(FALSE);
-	if (!pfb_dns_config_refresh() || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
-		$input_errors[] = (pfb_dns_proxy_owns_resolver() || !pfb_dns_proxy_recovery_required())
-		    ? 'DNS proxy: the DNS Resolver could not be put back, so pfBlockerNG was not reset. Follow the DNS proxy notice, then run the wizard again.'
-		    : 'DNS proxy: pfBlockerNG\'s saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so what the Resolver was before ' .
-		      'cannot be confirmed and pfBlockerNG was not reset. Check the Resolver in Services > DNS Resolver (restore a known-good configuration ' .
-		      'backup if needed), empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then run the wizard again.';
+	$checked = pfb_dns_config_refresh();
+	if (!$checked || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
+		if (pfb_dns_proxy_owns_resolver() || !pfb_dns_proxy_recovery_required()) {
+			$input_errors[] = 'DNS proxy: the DNS Resolver could not be put back, so pfBlockerNG was not reset. Follow the DNS proxy notice, then run the wizard again.';
+		} elseif (!$checked) {
+			// The marker comes from a copy that config.xml was not read to check: it is not known to be invalid
+			$input_errors[] = 'DNS proxy: config.xml was locked by another save or could not be read, so pfBlockerNG\'s saved copy of the DNS Resolver\'s ' .
+			    'previous settings (pfb_dns_saved) could not be confirmed and pfBlockerNG was not reset. Run the wizard again once no other ' .
+			    'configuration save is in progress.';
+		} else {
+			$input_errors[] = 'DNS proxy: pfBlockerNG\'s saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so what the Resolver was before ' .
+			    'cannot be confirmed and pfBlockerNG was not reset. Check the Resolver in Services > DNS Resolver (restore a known-good configuration ' .
+			    'backup if needed), empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check, then run the wizard again.';
+		}
 		$stepid = 3;
 		return;
 	}
