@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -24,8 +25,10 @@ from typing import Any, NamedTuple
 import pfb_pkg
 import pytest
 
-from tests.elf_facts import ELFOSABI_FREEBSD, EM_AARCH64, EM_X86_64, ET_EXEC, elf_facts
+from tests.elf_facts import ELFOSABI_FREEBSD, EM_AARCH64, EM_X86_64, ET_EXEC, elf_facts, freebsd_abi_note
+from tests.go_wrapper import write_go_wrapper
 from tests.test_build_pkg_portable import (
+    _LIVE_BUILD_ROWS,
     _git,
     _make_channel_port,
     _project_args,
@@ -69,14 +72,16 @@ def make_fixture(
     ships_dns_proxy: bool = True,
     source_files: dict[str, bytes] | None = None,
     gitignore: str | None = None,
+    php_version: str = "8.3",
 ) -> Fixture:
     """A GitHub-style stable port plus its source repo.
 
     ``ships_dns_proxy`` gives the port the nightly/edge recipe shape (COPYTREE_SHARE of the pkg tree and
     a plist derived from the stage); without it the port is the static-plist shape that installs only
     info.xml. ``go_files`` is the `go/pfb_dns_gateway` module the source repo carries (None: legacy source).
+    ``php_version`` is the PHP the target's dependency ports are for (a matrix row's).
     """
-    ports, portdir, ports_sha, _ = _make_channel_port(root, "stable", github=True)
+    ports, portdir, ports_sha, _ = _make_channel_port(root, "stable", github=True, php_version=php_version)
     if ships_dns_proxy:
         (portdir / "pkg-plist").unlink()
         makefile = portdir / "Makefile"
@@ -391,3 +396,67 @@ def test_selector_and_builder_agree_on_the_binary_layout() -> None:
     assert set(re.findall(r"target=(freebsd-[a-z0-9]+)", wrapper)) == set(helper.TARGETS)
     assert f'/bin/${{target}}/{helper.BINARY}"' in wrapper
     assert helper.BINARY == "pfb-dns" and BIN.endswith("/dns_proxy/bin")
+
+
+def forged_go_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **lie: Any) -> None:
+    """Put a `go` first on PATH that is the real toolchain plus one lie about what it built."""
+    write_go_wrapper(tmp_path / "forged-go" / "go", **lie)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'forged-go'}{os.pathsep}{os.environ['PATH']}")
+
+
+def matrix_row(major: int) -> dict[str, object]:
+    return dict(next(r for r in _LIVE_BUILD_ROWS if r["freebsd_major"] == str(major) and r["variant"] == "CE"))
+
+
+def leg_make_fixture(root: Path, major: int) -> Fixture:
+    return make_fixture(root, php_version=str(matrix_row(major)["php_version"]))
+
+
+def leg_args(fx: Fixture, mode: str, out: Path, major: int) -> list[str]:
+    """Builder arguments for the matrix leg that targets FreeBSD ``major`` (the abi / record row it names)."""
+    row = matrix_row(major)
+    if mode == "native":
+        args = native_args(fx, out)
+    else:
+        record = _record("stable", fx.ports_sha, source_sha=fx.source_sha, row=row)
+        args = _project_args(fx.ports, fx.portdir, record, source=fx.source, dry_run=False, out=out)
+        args[args.index("--arch") + 1] = f"freebsd:{major}:*"
+    args[args.index("--abi") + 1] = f"FreeBSD:{major}:amd64"
+    args[args.index("--php") + 1] = str(row["php_version"])
+    return args
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_a_binary_linked_for_a_newer_freebsd_than_the_leg_fails_and_writes_no_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str
+) -> None:
+    # Given a toolchain whose binaries carry the ABI tag of FreeBSD 16
+    fx = leg_make_fixture(tmp_path, 15)
+    forged_go_on_path(tmp_path, monkeypatch, forgery="abi-note", value=1600000)
+
+    # When the FreeBSD 15 leg builds the package
+    assert bpp.main(leg_args(fx, mode, tmp_path / "out", 15)) == 1
+
+    # Then the build names the mismatch and ships nothing
+    err = capfd.readouterr().err
+    assert "ABI tag 1600000" in err and "FreeBSD 15" in err, err
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was written with a binary too new for its leg"
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+def test_the_same_binaries_ship_on_the_leg_whose_freebsd_is_new_enough(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    # Given the same toolchain, which the FreeBSD 15 leg refuses
+    fx = leg_make_fixture(tmp_path, 16)
+    forged_go_on_path(tmp_path, monkeypatch, forgery="abi-note", value=1600000)
+
+    # When the FreeBSD 16 leg builds the package
+    assert bpp.main(leg_args(fx, mode, tmp_path / "out", 16)) == 0
+
+    # Then both binaries ship, and the manifest targets FreeBSD 16
+    pkg = tmp_path / "out" / PKG_NAME
+    assert_dual_arch_payload(pkg)
+    full, _compact, tf = _read_pkg(pkg)
+    assert full["abi"] == "FreeBSD:16:*"
+    assert {freebsd_abi_note(member(tf, f"{BIN}/{target}/pfb-dns")) for target in TARGETS} == {1600000}

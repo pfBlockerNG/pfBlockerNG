@@ -300,12 +300,21 @@ marker is ever published, and the activation's readiness wait rolls pfB-DNS back
 - **Source.** Project builds compile the `go/` tree of the attested commit (the same
   `git archive` snapshot as `src/`), never the working tree. Native builds read the live
   tree like every other file; `--gh-tagname` builds read `go/` from the downloaded tarball.
-- **Build.** [`scripts/build-pfb-dns.py`](../scripts/build-pfb-dns.py) runs
-  `go build -mod=readonly -trimpath -buildvcs=false -ldflags "-s -w"` with CGO off and
-  `GOTOOLCHAIN=local` (it never downloads a compiler), after dropping every ambient Go
-  setting but the cache and proxy locations. It checks each output's own ELF header
-  (FreeBSD OS ABI, the target CPU). Go missing or too old, a compile error, or a wrong
-  ELF aborts the build and no package is written.
+- **Build.** [`scripts/build-pfb-dns.py`](../scripts/build-pfb-dns.py) copies the module
+  without any `vendor/`, vendors it with `go mod vendor` (go.sum verifies every
+  dependency), and runs `go build -mod=vendor -trimpath -buildvcs=false -ldflags "-s -w"`
+  with CGO off, `GOAMD64=v1`, `GOARM64=v8.0` and `GOTOOLCHAIN=local` (it never downloads
+  a compiler), after dropping every ambient Go setting but the cache and proxy locations.
+- **Target FreeBSD.** Every leg passes its FreeBSD major as `--freebsd-major`: the `--abi`
+  major, or the build record's matrix row in a project build. Each binary is checked
+  against it before it is kept: ELF64 little-endian, OS ABI FreeBSD, `ET_EXEC`, the target
+  CPU; static (no `PT_INTERP`, no `PT_DYNAMIC`); a FreeBSD ABI-tag note whose
+  `__FreeBSD_version` names a major no newer than the leg's; and `go version -m` showing
+  `GOOS=freebsd`, the `GOARCH`, `CGO_ENABLED=0` and `GOAMD64=v1` or `GOARM64=v8.0`. Go
+  missing or too old, a compile error, or any failed check aborts the build: no package is
+  written and no binary is left behind. Go stamps FreeBSD 12.3 and links no FreeBSD
+  library, so one set of bytes serves every leg from 12 up; the check refuses a toolchain
+  that ever stamps newer.
 - **Never committed.** The builder reads no binary from the source: a tree that already
   carries `dns_proxy/bin` fails the build, and the path is gitignored. A dirty or
   untracked tree still fails project attestation.

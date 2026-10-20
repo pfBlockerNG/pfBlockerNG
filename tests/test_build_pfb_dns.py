@@ -1,10 +1,11 @@
 """Tests for scripts/build-pfb-dns.py (issue #3513, dual-architecture package).
 
 The helper cross-compiles the pfB-DNS gateway for FreeBSD amd64 and arm64 from a source tree's
-`go/pfb_dns_gateway` module. Every case here drives the REAL Go toolchain and reads the produced
-files' own ELF headers; nothing stands in for the compiler. A tiny throwaway module keeps the
-failure-mode cases quick, and one module-scoped build of this checkout's real gateway proves the
-actual product cross-compiles for both targets.
+`go/pfb_dns_gateway` module for the FreeBSD major the caller targets. Every case here drives the REAL
+Go toolchain (the ones that lie about a result wrap it, tests/go_wrapper.py) and reads the produced
+files' own ELF headers, program headers and ABI tag; nothing stands in for the compiler. A tiny
+throwaway module keeps the failure-mode cases quick, and one module-scoped build of this checkout's
+real gateway proves the actual product cross-compiles for both targets.
 
 The helper is a hyphen-named CLI script, so it is run as a subprocess, the way the package builder
 and CI run it.
@@ -24,12 +25,14 @@ from typing import Any
 
 import pytest
 
-from tests.elf_facts import ELFOSABI_FREEBSD, EM_AARCH64, EM_X86_64, ET_EXEC, elf_facts
+from tests.elf_facts import ELFOSABI_FREEBSD, EM_AARCH64, EM_X86_64, ET_EXEC, elf_facts, freebsd_abi_note
+from tests.go_wrapper import write_go_wrapper
 
 ROOT = Path(__file__).resolve().parent.parent
 HELPER = ROOT / "scripts" / "build-pfb-dns.py"
 TARGETS = {"freebsd-amd64": EM_X86_64, "freebsd-arm64": EM_AARCH64}
 MAIN_GO = "package main\n\nfunc main() {}\n"
+TARGET_MAJOR = 15
 
 # Outer salvage watchdog only (a cold module download plus two cross-compiles is the slow case):
 # subprocess.run kills and reaps the child on expiry. It is never an assertion about duration.
@@ -44,8 +47,11 @@ def run_helper(
     env: dict[str, str] | None = None,
     extra: list[str] | None = None,
     cwd: Path | None = None,
+    major: int | None = TARGET_MAJOR,
 ) -> subprocess.CompletedProcess[str]:
     argv = [sys.executable, str(HELPER), "--source-root", str(source_root), "--out-dir", str(out_dir)]
+    if major is not None:
+        argv += ["--freebsd-major", str(major)]
     if go is not None:
         argv += ["--go", go]
     argv += extra or []
@@ -236,19 +242,22 @@ def test_an_output_that_is_not_the_targets_freebsd_elf_is_rejected_and_removed(
     """The ELF check is the last line against a toolchain that built something else than asked.
 
     A stand-in `go` writes a fixed file for every target: a Linux binary (wrong OS ABI), or the amd64
-    FreeBSD binary (right OS, wrong CPU once it is offered for arm64).
+    FreeBSD binary (right OS, wrong CPU once it is offered for arm64). It leaves `go version -m` to the
+    real toolchain, which reads the file it is handed.
     """
     real_out, _record = real_build
     offered = Path("/bin/true").resolve() if wrong == "linux-elf" else real_out / "freebsd-amd64" / "pfb-dns"
     fake_go = tmp_path / "go"
     fake_go.write_text(
         '#!/bin/sh\nif [ "$1" = env ]; then echo go1.99.0; exit 0; fi\n'
+        'if [ "$1" = version ]; then exec "$REAL_GO" "$@"; fi\n'
         'while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
         'cp "$OFFERED_ELF" "$out"\n'
     )
     fake_go.chmod(0o755)
     root = write_tiny_module(tmp_path / "src-tree")
-    result = run_helper(root, tmp_path / "out", go=str(fake_go), env=dict(os.environ, OFFERED_ELF=str(offered)))
+    env = dict(os.environ, OFFERED_ELF=str(offered), REAL_GO=str(shutil.which("go")))
+    result = run_helper(root, tmp_path / "out", go=str(fake_go), env=env)
     assert result.returncode != 0, "a file that is not the target's FreeBSD ELF was accepted"
     assert "is not a FreeBSD ELF" in result.stderr, result.stderr
     assert list((tmp_path / "out").rglob("pfb-dns")) == [], "a rejected build left binaries behind"
@@ -420,3 +429,175 @@ def test_a_relative_out_dir_writes_nothing_into_the_source_tree(tmp_path: Path, 
         assert_freebsd_elf(tmp_path / "out")
     else:
         assert written_files(tmp_path / "out") == []
+
+
+def test_the_target_freebsd_major_is_required(tmp_path: Path) -> None:
+    root = write_tiny_module(tmp_path / "src-tree")
+
+    result = run_helper(root, tmp_path / "out", major=None)
+
+    assert result.returncode == 2, f"a build without a target FreeBSD major ran:\n{result.stderr}"
+    assert "--freebsd-major" in result.stderr
+    assert written_files(tmp_path / "out") == []
+
+
+@pytest.mark.parametrize("major", ["abc", "0", "-3", "15.2", ""])
+def test_a_target_freebsd_major_that_is_not_a_positive_integer_is_refused(tmp_path: Path, major: str) -> None:
+    root = write_tiny_module(tmp_path / "src-tree")
+
+    result = run_helper(root, tmp_path / "out", major=None, extra=["--freebsd-major", major])
+
+    assert result.returncode == 2, f"--freebsd-major {major!r} was accepted:\n{result.stderr}"
+    assert "--freebsd-major" in result.stderr
+    assert written_files(tmp_path / "out") == []
+
+
+def test_the_record_names_the_target_freebsd_and_the_abi_tag_each_binary_carries(
+    real_build: tuple[Path, dict[str, Any]],
+) -> None:
+    out_dir, record = real_build
+    assert record["freebsd_major"] == TARGET_MAJOR
+    for target in TARGETS:
+        carried = freebsd_abi_note((out_dir / target / "pfb-dns").read_bytes())
+        assert carried is not None, f"{target} carries no FreeBSD ABI tag"
+        assert record["targets"][target]["freebsd_abi_note"] == carried
+        assert carried // 100000 <= TARGET_MAJOR, f"{target} needs FreeBSD {carried // 100000}"
+
+
+def test_the_real_gateway_builds_the_same_bytes_for_the_next_freebsd_major(
+    real_build: tuple[Path, dict[str, Any]], tmp_path: Path
+) -> None:
+    _out_dir, first = real_build
+
+    result = run_helper(ROOT, tmp_path / "out", major=TARGET_MAJOR + 1)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(result.stdout)
+    assert record["freebsd_major"] == TARGET_MAJOR + 1
+    for target in TARGETS:
+        assert record["targets"][target]["sha256"] == first["targets"][target]["sha256"], (
+            f"{target} differs between FreeBSD majors"
+        )
+
+
+def build_with_a_lying_go(
+    tmp_path: Path, *, major: int = TARGET_MAJOR, **lie: Any
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    root = write_tiny_module(tmp_path / "src-tree")
+    go = write_go_wrapper(tmp_path / "wrapper" / "go", **lie)
+    return run_helper(root, tmp_path / "out", go=str(go), major=major), tmp_path / "out"
+
+
+# (forgery, value, what the error must say): each binary is the right architecture's FreeBSD ELF
+# except for the one thing forged.
+FORGED_BINARIES = [
+    ("abi-note", 1600000, "ABI tag 1600000"),
+    ("no-abi-note", None, "no FreeBSD ABI tag"),
+    ("interpreter", None, "PT_INTERP"),
+    ("dynamic-section", None, "PT_DYNAMIC"),
+    ("shared-object", None, "ET_EXEC"),
+    ("truncated", None, "program header"),
+    ("program-headers-outside-file", None, "program header"),
+]
+
+
+@pytest.mark.parametrize(("forgery", "value", "says"), FORGED_BINARIES, ids=[row[0] for row in FORGED_BINARIES])
+def test_a_binary_that_is_not_a_static_executable_for_the_target_freebsd_is_rejected_and_removed(
+    tmp_path: Path, forgery: str, value: int | None, says: str
+) -> None:
+    result, out = build_with_a_lying_go(tmp_path, forgery=forgery, value=value)
+
+    assert result.returncode == 1, f"a {forgery} binary was accepted:\n{result.stderr}"
+    assert says in result.stderr, f"the error does not say {says!r}:\n{result.stderr}"
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.stdout.strip() == ""
+    assert written_files(out) == [], "a rejected binary left files behind"
+
+
+@pytest.mark.parametrize(
+    ("note", "major", "accepted"),
+    [(1599999, 15, True), (1600000, 16, True), (1500000, 14, False), (1300000, 12, False)],
+)
+def test_the_abi_tag_may_not_name_a_freebsd_newer_than_the_target_major(
+    tmp_path: Path, note: int, major: int, accepted: bool
+) -> None:
+    result, out = build_with_a_lying_go(tmp_path, major=major, forgery="abi-note", value=note)
+
+    if accepted:
+        assert result.returncode == 0, f"ABI tag {note} was refused for FreeBSD {major}:\n{result.stderr}"
+        record = json.loads(result.stdout)
+        assert {t: v["freebsd_abi_note"] for t, v in record["targets"].items()} == dict.fromkeys(TARGETS, note)
+    else:
+        assert result.returncode == 1, f"ABI tag {note} was accepted for FreeBSD {major}"
+        assert f"ABI tag {note}" in result.stderr and f"FreeBSD {major}" in result.stderr, result.stderr
+        assert written_files(out) == []
+
+
+# (text in `go version -m` output, what it is made to say, the setting the error must name, the target
+# that carries it)
+SETTING_LIES = [
+    ("CGO_ENABLED=0", "CGO_ENABLED=1", "CGO_ENABLED", "freebsd-amd64"),
+    ("GOOS=freebsd", "GOOS=linux", "GOOS", "freebsd-amd64"),
+    ("GOARCH=amd64", "GOARCH=386", "GOARCH", "freebsd-amd64"),
+    ("GOAMD64=v1", "GOAMD64=v3", "GOAMD64", "freebsd-amd64"),
+    ("GOAMD64=v1", "", "GOAMD64", "freebsd-amd64"),
+    ("GOARM64=v8.0", "GOARM64=v8.5", "GOARM64", "freebsd-arm64"),
+]
+
+
+@pytest.mark.parametrize(("truth", "lie", "setting", "target"), SETTING_LIES)
+def test_a_binary_whose_build_settings_are_not_the_pinned_ones_is_rejected_and_removed(
+    tmp_path: Path, truth: str, lie: str, setting: str, target: str
+) -> None:
+    result, out = build_with_a_lying_go(tmp_path, replace=(truth, lie))
+
+    assert result.returncode == 1, f"build settings {lie!r} were accepted:\n{result.stderr}"
+    assert setting in result.stderr and target in result.stderr, result.stderr
+    assert written_files(out) == [], "a rejected build left binaries behind, even those of the other architecture"
+
+
+def test_the_go_environment_pins_the_microarchitecture_levels_whatever_the_caller_exports(tmp_path: Path) -> None:
+    # Given a caller whose environment asks for newer CPU levels than the package may assume
+    root = write_tiny_module(tmp_path / "src-tree")
+    clean = run_helper(root, tmp_path / "clean")
+    assert clean.returncode == 0, clean.stderr
+    builds = tmp_path / "builds.jsonl"
+    go = write_go_wrapper(tmp_path / "wrapper" / "go", record=builds)
+
+    # When the gateway is built through a Go that records the environment of every build
+    result = run_helper(root, tmp_path / "hostile", go=str(go), env=dict(os.environ, GOAMD64="v3", GOARM64="v8.5"))
+
+    # Then each architecture is built at its baseline level, and the bytes are the clean environment's
+    assert result.returncode == 0, result.stderr
+    seen = {build["GOARCH"]: build for build in map(json.loads, builds.read_text().splitlines())}
+    assert seen["amd64"]["GOAMD64"] == "v1", seen
+    assert seen["arm64"]["GOARM64"] == "v8.0", seen
+    for target in TARGETS:
+        assert (
+            json.loads(result.stdout)["targets"][target]["sha256"]
+            == json.loads(clean.stdout)["targets"][target]["sha256"]
+        ), f"{target} was built differently under GOAMD64=v3 GOARM64=v8.5"
+
+
+def test_vendored_mode_compiles_the_vendor_tree_without_the_module_cache_or_network(tmp_path: Path) -> None:
+    # Given a module whose only dependency exists nowhere but in its vendor tree, as in a port's offline build
+    root = write_tiny_module(tmp_path / "src-tree")
+    module = root / "go" / "pfb_dns_gateway"
+    module.joinpath("go.mod").write_text("module example.test/tiny\n\ngo 1.21\n\nrequire example.test/dep v1.0.0\n")
+    module.joinpath("main.go").write_text(
+        'package main\n\nimport "example.test/dep"\n\nfunc main() { println(dep.Marker) }\n'
+    )
+    dep = module / "vendor" / "example.test" / "dep"
+    dep.mkdir(parents=True)
+    dep.joinpath("dep.go").write_text('package dep\n\nconst Marker = "FROM-THE-VENDOR-TREE"\n')
+    module.joinpath("vendor", "modules.txt").write_text(
+        "# example.test/dep v1.0.0\n## explicit; go 1.21\nexample.test/dep\n"
+    )
+
+    # When it is built in place with module downloads switched off
+    result = run_helper(root, tmp_path / "out", extra=["--vendored"], env=dict(os.environ, GOPROXY="off"))
+
+    # Then both binaries carry the vendored code
+    assert result.returncode == 0, f"the vendor tree was not what Go compiled:\n{result.stderr}"
+    for target in TARGETS:
+        assert b"FROM-THE-VENDOR-TREE" in (tmp_path / "out" / target / "pfb-dns").read_bytes()

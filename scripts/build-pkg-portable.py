@@ -1063,12 +1063,13 @@ _PFB_DNS_HELPER = Path(__file__).resolve().with_name("build-pfb-dns.py")
 _DNS_PROXY_DIR = "pkg/pfblockerng/dns_proxy"
 
 
-def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, workdir: Path) -> None:
+def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, workdir: Path, freebsd_major: str) -> None:
     """Cross-build pfB-DNS from the acquired source and stage both binaries under ``dns_proxy``/bin.
 
     The package stays NO_ARCH: every architecture's binary ships and the runtime picks one. The
     binaries are built here, never read from the source, so a tree that already carries a bin/ fails.
     A port that installs no dns_proxy payload, or a legacy source without the Go module, gets none.
+    The leg's ``freebsd_major`` goes to the helper, which refuses a binary linked for a newer FreeBSD.
     """
     bin_dir = dns_proxy / "bin"
     if bin_dir.exists():
@@ -1078,7 +1079,13 @@ def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, wor
         )
     if source_tree is None or not dns_proxy.is_dir():
         return
-    argv = [sys.executable, str(_PFB_DNS_HELPER), "--source-root", str(source_tree), "--out-dir", str(workdir)]
+    argv = [
+        sys.executable,
+        str(_PFB_DNS_HELPER),
+        "--source-root", str(source_tree),
+        "--out-dir", str(workdir),
+        "--freebsd-major", freebsd_major,
+    ]  # fmt: skip
     result = subprocess.run(argv, stdout=subprocess.PIPE, text=True, check=False)  # stderr streams through
     if result.returncode != 0:
         raise BuildError("pfB-DNS cross-build failed")
@@ -1919,6 +1926,7 @@ def run_build(args: argparse.Namespace) -> Build:
         Path(seed["STAGEDIR"]) / prefix.lstrip("/") / _DNS_PROXY_DIR,
         getattr(args, "_source_tree", None),
         workdir / "pfb-dns",
+        str(project_record["matrix_row"]["freebsd_major"]) if project_record else abi.split(":")[1],
     )
 
     if project_record:
