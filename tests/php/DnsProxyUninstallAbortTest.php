@@ -57,7 +57,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 
 	/**
 	 * @param array<string,mixed> $scenario extra worker scenario keys: stored, permanent, unmigratedPolicy, lockAfterMove, marker and interface (a Resolver pfB-DNS never moved beside that stored marker), state (a directory a second run continues from), observer (Unbound runs the proxy's observer), refuseWrite (a write_config() that pfSense refuses: match and answer)
-	 * @return array{returned:bool,snapshot:bool,marker:string,interface:?string,pythonScript:?string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,rawFeed:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,writes:list<string>,exit:int,state:string}
+	 * @return array{returned:bool,snapshot:bool,marker:string,interface:?string,pythonScript:?string,unboundConf:string,sections:list<string>,services:list<string>,menus:list<string>,foreign:bool,pending:bool,dbCanary:bool,logCanary:bool,rawFeed:bool,manifest:bool,rcScript:bool,rcSameAsBaseline:bool,noModule:bool,iniSameAsBaseline:bool,ini:string,running:list<string>,events:list<string>,lockHeld:bool,notices:list<string>,writes:list<string>,exit:int,state:string}
 	 */
 	private function removal(string $failure, string $keep, array $scenario = []): array
 	{
@@ -393,6 +393,36 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertSame('lan,opt1', $retry['interface']);
 		$this->assertSame(self::THEIRS, $retry['services']);
 		$this->assertSame([], $retry['notices']);
+	}
+
+	/**
+	 * The disable pass patches Unbound's own conf in the same pass (pfb_unbound_dnsbl()), and the staged scripts that conf loads follow
+	 * the script it is given: with config.xml still naming the observer, a pass that patched it out would have the files torn down
+	 * before the removal stops, and the next Unbound start would load a script that is gone.
+	 */
+	#[DataProvider('refusedWrites')]
+	public function testARemovalStoppedOnARefusedPythonSettingsRemovalLeavesUnboundLoadingTheScriptConfigXmlStillNames(mixed $answer): void
+	{
+		// Given Unbound's conf loading the observer, and a config.xml that refuses the write that removes the python settings
+		$removal = $this->removal('none', 'off', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing DNSBL Unbound python integration settings', 'answer' => $answer]]);
+		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal stopped');
+		$this->assertSame('pfb_upstream_observer', $removal['pythonScript'], 'before: config.xml still names the observer');
+
+		// Then unbound.conf still loads it too: the script, its staging and the settings that name it stay consistent
+		$this->assertStringContainsString('python-script: pfb_upstream_observer.py', $removal['unboundConf'], 'unbound.conf still loads the observer: ' . $removal['unboundConf']);
+		$this->assertStringContainsString('module-config: "python', $removal['unboundConf']);
+	}
+
+	public function testARemovalThatFinishesPatchesTheObserverOutOfUnboundConf(): void
+	{
+		// Given Unbound's conf loading the observer, and a config.xml that takes every write
+		// When the package is removed
+		$removal = $this->removal('none', 'off', ['observer' => TRUE]);
+
+		// Then the removal goes through, the settings and unbound.conf both drop the observer (so the check above can fail)
+		$this->assertSame(0, $removal['exit'], 'the removal finishes: ' . json_encode($removal['notices']));
+		$this->assertSame('', $removal['pythonScript'], 'config.xml no longer names the observer');
+		$this->assertStringNotContainsString('pfb_upstream_observer.py', $removal['unboundConf'], 'and unbound.conf no longer loads it: ' . $removal['unboundConf']);
 	}
 
 	/**

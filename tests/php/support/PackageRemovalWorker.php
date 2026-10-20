@@ -32,7 +32,8 @@ declare(strict_types=1);
  * unless empty: nothing to restore from, and no evidence that anything was moved. `refuseWrite` ({match, answer}): pfSense answers
  * `answer` (FALSE: refused, -1: not written) for each write_config() whose description contains `match`, and config.xml on disk
  * is left as it was; every other write goes through. `observer`: Unbound runs the proxy's upstream observer, as an apply leaves it
- * while pfB-DNS fronts the Resolver (its python keys are stored); without it the seed carries none.
+ * while pfB-DNS fronts the Resolver (its python keys are stored, and unbound.conf in the state directory loads the observer);
+ * without it the seed carries none.
  */
 
 $workerArgv = $argv;
@@ -269,6 +270,7 @@ register_shutdown_function(static function () use ($resultFile, &$paths, &$retur
 		'marker'    => (string) ($disk['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] ?? ''),
 		'interface' => $disk['unbound']['active_interface'] ?? NULL,
 		'pythonScript' => $disk['unbound']['python_script'] ?? NULL,
+		'unboundConf' => (string) @file_get_contents("{$state}/unbound/unbound.conf"),
 		'sections'  => array_keys($disk['installedpackages'] ?? []),
 		'services'  => array_values(array_map(static fn (array $s): string => (string) ($s['name'] ?? ''), $services)),
 		'menus'     => array_values(array_map(static fn (array $m): string => ($m['section'] ?? '') . ':' . ($m['name'] ?? ''), $menus)),
@@ -416,6 +418,15 @@ $pfb['schedule_state_dir'] = $state;
 $pfb['unbound_py_conf'] = "{$state}/pfb_unbound.ini";
 $pfb['unbound_py_sources'] = "{$state}/pfb_py_sources.json";
 $pfb['unbound_py_rawdir'] = "{$state}/pfb_py_raw";
+if (!empty($scenario['observer'])) {
+	// Unbound's own conf, which the disable pass patches (pfb_unbound_dnsbl()): in the state directory, never the appliance's /var/unbound
+	$pfb['dnsbldir'] = "{$state}/unbound";
+	@mkdir($pfb['dnsbldir'], 0777, TRUE);
+	if (!is_file("{$pfb['dnsbldir']}/unbound.conf")) {
+		file_put_contents("{$pfb['dnsbldir']}/unbound.conf",
+			"server:\n\tinterface: 127.0.0.1\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_upstream_observer.py\n");
+	}
+}
 $paths = ['pending' => "{$tmp}/pending", 'db' => "{$pfb['dbdir']}/canary.txt", 'log' => "{$pfb['logdir']}/canary.txt",
 	'raw' => "{$pfb['unbound_py_rawdir']}/canary.txt"];
 $pfb['pending_marker'] = $paths['pending'];

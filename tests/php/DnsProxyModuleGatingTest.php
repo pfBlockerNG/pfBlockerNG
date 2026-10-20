@@ -1382,4 +1382,62 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// ... and the log says the settings were not removed, not that they were
 		$this->assertStringContainsString('could not be written', $this->pfbLogs());
 	}
+
+	// -----------------------------------------------------------------------
+	// A removal of Unbound's python settings that config.xml refused: unbound.conf and the staged scripts follow config.xml
+	// -----------------------------------------------------------------------
+
+	/** The Resolver back on its own interfaces, with the python settings config.xml still stores for $script (the removal's write was refused). */
+	private function seedStoredPython(string $script): void
+	{
+		$GLOBALS['config']['unbound'] = self::originalResolver() + ['python' => '', 'python_order' => 'pre_validator', 'python_script' => $script];
+		$this->setProxy(FALSE);
+	}
+
+	/** @return array<string,array{string,string,string}> stored script, the unbound.conf that loads it, and the line that names it there */
+	public static function storedScripts(): array
+	{
+		return [
+			'the proxy\'s observer' => ['pfb_upstream_observer', self::CONF_WITH_OBSERVER, 'python-script: pfb_upstream_observer.py'],
+			'the DNSBL module'      => ['pfb_unbound', self::CONF_WITH_MODULE, 'python-script: pfb_unbound.py'],
+		];
+	}
+
+	#[DataProvider('storedScripts')]
+	public function testARemovalPassKeepsInUnboundConfTheScriptConfigXmlStillNamesWhenItCouldNotRemoveIt(string $script, string $conf, string $line): void
+	{
+		// Given Unbound loading a script and the Resolver back on its own interfaces; the removal pass runs with no DNSBL mode
+		$this->seedStoredPython($script);
+		$this->writeUnboundConf($conf);
+
+		// Before: when config.xml took the removal of the python settings, the pass takes the script out of unbound.conf
+		$GLOBALS['pfb']['python_removal_failed'] = FALSE;
+		$this->assertTrue(pfb_unbound_dnsbl(''), 'before: the script is patched out');
+		$this->assertStringNotContainsString($line, $this->patchedConf(), 'before: the patch removes it');
+
+		// When config.xml refused that removal: it still names the script, so unbound.conf and the staged scripts must too
+		$this->writeUnboundConf($conf);
+		$GLOBALS['pfb']['python_removal_failed'] = TRUE;
+		$changed = pfb_unbound_dnsbl('');
+
+		// Then nothing is patched out of unbound.conf (the staged files follow the script Unbound is given: no teardown)
+		$this->assertFalse($changed, 'unbound.conf is left as it is');
+		$this->assertSame('', $this->patchedConf(), 'no patched copy is written');
+		$this->assertStringContainsString($line, (string) file_get_contents("{$this->tmp}/unbound.conf"), 'it still loads the script');
+	}
+
+	public function testAFailedRemovalDoesNotKeepAScriptThatIsNotOurs(): void
+	{
+		// Given a stored python script of another package, our observer lines in unbound.conf, and the failed-removal flag set
+		$this->seedStoredPython('someone_elses_script');
+		$this->writeUnboundConf(self::CONF_WITH_OBSERVER);
+		$GLOBALS['pfb']['python_removal_failed'] = TRUE;
+
+		// When the pass patches unbound.conf
+		$changed = pfb_unbound_dnsbl('');
+
+		// Then only what config.xml names is kept: our observer is patched out as for any removal
+		$this->assertTrue($changed);
+		$this->assertStringNotContainsString('pfb_upstream_observer.py', $this->patchedConf());
+	}
 }
