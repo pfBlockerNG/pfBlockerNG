@@ -2030,13 +2030,18 @@ def _decider_exits_at_every_start(vm: SmokeVM) -> Iterator[None]:
     """The shipped decider replaced by one that exits at once, so every start of the gateway fails before READY (the
     issue's `decider failed before READY: EOF`); the shipped file is put back, mode and owner kept, however the test
     ends."""
-    swapped = _sh(vm, f"cp -p {DECIDER} {DECIDER_ASIDE} && printf '%s' {shlex.quote(FAILING_DECIDER)} > {DECIDER}")
-    assert swapped.returncode == 0, f"replacing {DECIDER} failed: {swapped.stderr!r}"
     try:
+        # An aside an interrupted case left holds the shipped decider: keep it, never copy the failing one over it
+        swapped = _sh(
+            vm,
+            f"[ -e {DECIDER_ASIDE} ] || cp -p {DECIDER} {DECIDER_ASIDE}; "
+            f"[ -e {DECIDER_ASIDE} ] && printf '%s' {shlex.quote(FAILING_DECIDER)} > {DECIDER}",
+        )
+        assert swapped.returncode == 0, f"replacing {DECIDER} failed: {swapped.stderr!r}"
         yield
     finally:
         _force_stop_proxy(vm)
-        back = _sh(vm, f"cp -p {DECIDER_ASIDE} {DECIDER} && rm -f {DECIDER_ASIDE}")
+        back = _sh(vm, f"[ ! -e {DECIDER_ASIDE} ] || {{ cp -p {DECIDER_ASIDE} {DECIDER} && rm -f {DECIDER_ASIDE}; }}")
         assert back.returncode == 0, f"putting the shipped {DECIDER} back failed: {back.stderr!r}"
 
 
@@ -2076,7 +2081,7 @@ def _between_starts(vm: SmokeVM) -> tuple[int, str]:
     `ps -axww -o pid,ppid,command`, the child pidfile's size and the supervisor pidfile show at that moment."""
     script = (
         f"deadline=$(( $(date +%s) + {BETWEEN_STARTS_CAP} ))\n"
-        "while :; do\n"
+        "while true; do\n"
         f"  d=$(cat {DAEMON_PID_FILE} 2>/dev/null); c=$(cat {PROXY_PID_FILE} 2>/dev/null)\n"
         '  if [ -n "$d" ] && kill -0 "$d" 2>/dev/null && { [ -z "$c" ] || ! kill -0 "$c" 2>/dev/null; }; then\n'
         f'    echo "SUPERVISOR=$d CHILD=[$c] CHILD_PIDFILE_BYTES=$(wc -c < {PROXY_PID_FILE} 2>/dev/null)"\n'
