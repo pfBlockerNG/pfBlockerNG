@@ -22,8 +22,8 @@ What it proves, in file order:
 * service: the daemon supervises ``pfb-dns``, the binary ``pfb_dns.sh`` chose for ``uname -p`` (the wrapper exec'd, so
   the pidfile's pid is the gateway's), which published that pid in ``/var/unbound/pfb_dns_ready``; its child is
   ``pfb_dns_proxy.py --decision-fd 3``, both as ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and
-  ``ready upstream 127.0.0.1:5353``; the gateway owns every client-facing socket (DoH and DoQ on loopback too, for a
-  local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
+  ``ready upstream 127.0.0.1:5353 pid N``, N the gateway's; the gateway owns every client-facing socket (DoH and DoQ on
+  loopback too, for a local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
 * Unbound runs the upstream observer, an upstream EDE block is logged with the real client, and the firewall's own
   lookup of a listed name gets the VIP, logged as 127.0.0.1;
 * from the LAN client (192.168.1.10), over UDP, TCP, DoT, DoH (POST and GET) and DoQ: a listed name gets the VIP and a
@@ -773,7 +773,7 @@ def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decid
       the child (the pidfile's pid) is the pfb-dns `pfb_dns.sh` chose for this machine, as `unbound`; its only child is
       the decider
       `pfb_dns_proxy.py --decision-fd 3`, also `unbound`; no process runs the Python listener; dns_proxy.log has a
-      `listening` line per transport and `ready upstream 127.0.0.1:5353` after them.
+      `listening` line per transport and `ready upstream 127.0.0.1:5353 pid <gateway>` after them.
     """
     state = gateway_on
     assert state.service == "running", f"service pfb_dns_proxy: {state.service}"
@@ -798,8 +798,9 @@ def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decid
     assert not listeners, f"a Python listener runs next to the gateway: {listeners}"
 
     log = _proxy_log(gw.vm, 400).splitlines()
-    readies = [i for i, line in enumerate(log) if line.endswith(f"ready upstream 127.0.0.1:{UPSTREAM_PORT}")]
-    assert readies, f"no `ready upstream 127.0.0.1:{UPSTREAM_PORT}` line in dns_proxy.log:\n" + "\n".join(log)
+    ready_line = f"ready upstream 127.0.0.1:{UPSTREAM_PORT} pid {state.proxy_pid}"
+    readies = [i for i, line in enumerate(log) if line.endswith(ready_line)]
+    assert readies, f"no `{ready_line}` line in dns_proxy.log:\n" + "\n".join(log)
     ready = readies[-1]
     start = max((i for i, line in enumerate(log[:ready]) if "ready upstream" in line), default=-1) + 1
     found = (re.search(r"listening (udp\+tcp|dot|doh|doq) (\S+)$", line) for line in log[start:ready])

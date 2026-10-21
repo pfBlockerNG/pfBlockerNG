@@ -41,7 +41,7 @@ final class PfbDnsStatusTest extends TestCase
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
 	private const DOH = ['listening doh 192.0.2.1:443', 'listening doh 127.0.0.1:443', 'listening doh [::1]:443'];
 	private const DOQ = ['listening doq 192.0.2.1:8853', 'listening doq 127.0.0.1:8853', 'listening doq [::1]:8853'];
-	private const READY = 'ready upstream 127.0.0.1:5353';
+	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
 	private const NO_TRANSPORT = ['plain' => '-', 'dot' => '-', 'doh' => '-', 'doq' => '-'];
 
 	private const GLOBALS = [
@@ -405,6 +405,70 @@ final class PfbDnsStatusTest extends TestCase
 			'doh'   => 'Configured (not confirmed by the log): 192.0.2.1:443, 127.0.0.1:443, [::1]:443',
 			'doq'   => 'Configured (not confirmed by the log): 192.0.2.1:8853, 127.0.0.1:8853, [::1]:8853',
 		], $this->transports());
+	}
+
+	/** @return array<string,array{string,list<string>,bool}> */
+	public static function logsWithoutCurrentPidReadiness(): array
+	{
+		return [
+			'old PID, zero current bytes' => ['ready upstream 127.0.0.1:5353 pid 4241', [], FALSE],
+			'old PID, partial current listeners' => ['ready upstream 127.0.0.1:5353 pid 4241',
+				['listening udp+tcp 198.51.100.1:53', 'listening dot 198.51.100.1:853'], FALSE],
+			'legacy record without PID' => ['ready upstream 127.0.0.1:5353', [], FALSE],
+			'PID suffix must match exactly' => ['ready upstream 127.0.0.1:5353 pid 42420', [], FALSE],
+			'malformed PID suffix' => ['ready upstream 127.0.0.1:5353 pid 4242x', [], FALSE],
+			'never search backward for a matching PID' => ['ready upstream 127.0.0.1:5353 pid 4241', [], TRUE],
+		];
+	}
+
+	/** @param list<string> $partial */
+	#[DataProvider('logsWithoutCurrentPidReadiness')]
+	public function testPreviousStartBindingsStayUnconfirmedUntilTheCurrentPidLogsReadiness(string $ready, array $partial, bool $olderMatch): void
+	{
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$GLOBALS['pfb_test_interface_ip']['lan'] = '198.51.100.1';
+		pfb_dns_proxy_service();
+		$older = $olderMatch ? [...self::PLAIN, ...self::DOT, ...self::DOH, ...self::DOQ, self::READY] : [];
+		$this->log($older, self::PLAIN, self::DOT, self::DOH, self::DOQ, $ready, $partial);
+
+		$this->assertSame('Running', pfb_dns_status()['service'], 'the current child already published its PID marker');
+		$this->assertSame([
+			'plain' => 'Configured (not confirmed by the log): 198.51.100.1:53, 127.0.0.1:53, [::1]:53',
+			'dot'   => 'Configured (not confirmed by the log): 198.51.100.1:853, 127.0.0.1:853, [::1]:853',
+			'doh'   => 'Configured (not confirmed by the log): 198.51.100.1:443, 127.0.0.1:443, [::1]:443',
+			'doq'   => 'Configured (not confirmed by the log): 198.51.100.1:8853, 127.0.0.1:8853, [::1]:8853',
+		], $this->transports(), 'neither the old bindings nor partial new output confirms the current start');
+		$this->assertNull(pfb_dns_proxy_listeners(NULL, '4242'));
+	}
+
+	public function testSupervisorRespawnOnTheSameAddressesNeedsItsOwnPidReadinessRecord(): void
+	{
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
+		$bound = [
+			'plain' => '192.0.2.1:53, 127.0.0.1:53, [::1]:53',
+			'dot'   => '192.0.2.1:853, 127.0.0.1:853, [::1]:853',
+			'doh'   => '192.0.2.1:443, 127.0.0.1:443, [::1]:443',
+			'doq'   => '192.0.2.1:8853, 127.0.0.1:8853, [::1]:8853',
+		];
+		$this->assertSame($bound, $this->transports(), 'before: the complete record belongs to PID 4242');
+
+		// daemon -r changes the child PID without re-running the rc script or changing its addresses
+		$this->seedProxy('4243', "4243\n");
+		$unknown = array_map(static fn (string $row): string => 'Configured (not confirmed by the log): ' . $row, $bound);
+		$this->assertSame($unknown, $this->transports(), 'new ready marker, zero new log bytes');
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY, self::PLAIN, self::DOT);
+		$this->assertSame($unknown, $this->transports(), 'same-address partial startup is still not its complete readiness record');
+
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY,
+			self::PLAIN, self::DOT, self::DOH, self::DOQ, 'ready upstream 127.0.0.1:5353 pid 4243');
+		$this->assertSame($bound, $this->transports(), 'only the new PID record confirms its same-address listeners');
+		$this->assertSame([
+			'udp+tcp' => array_fill_keys(['192.0.2.1:53', '127.0.0.1:53', '[::1]:53'], TRUE),
+			'dot' => array_fill_keys(['192.0.2.1:853', '127.0.0.1:853', '[::1]:853'], TRUE),
+			'doh' => array_fill_keys(['192.0.2.1:443', '127.0.0.1:443', '[::1]:443'], TRUE),
+			'doq' => array_fill_keys(['192.0.2.1:8853', '127.0.0.1:8853', '[::1]:8853'], TRUE),
+		], pfb_dns_proxy_listeners(NULL, '4243')['listening']);
 	}
 
 	public function testATransportThatIsOnButHasNoListenerInTheCommandSaysSo(): void

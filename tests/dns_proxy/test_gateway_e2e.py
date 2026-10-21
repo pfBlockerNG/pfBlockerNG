@@ -298,7 +298,9 @@ def _tcp(server: tuple[str, int], name: str, source: str) -> bytes:
 def test_readiness_lines_name_the_bound_address_and_the_upstream(gateway: Running, unbound: RunningUnbound) -> None:
     assert gateway.server[0] == "127.0.0.1"
     assert gateway.server[1] > 0
-    assert gateway.process.wait_for("ready upstream ") == f"ready upstream 127.0.0.1:{unbound.port}"
+    assert gateway.process.wait_for("ready upstream ") == (
+        f"ready upstream 127.0.0.1:{unbound.port} pid {gateway.process.proc.pid}"
+    )
 
 
 # E1

@@ -45,7 +45,7 @@ func stopGateway(t *testing.T, gw *gatewayProcess) {
 }
 
 // Once the gateway logs readiness the file exists: it holds the gateway's own pid (not the decider's), is mode 0600,
-// is not handed to the decider, and the listener it names answers queries.
+// is not handed to the decider, the readiness line names the same pid, and the listener it names answers queries.
 func TestReadyFilePublishesTheGatewayPidOnceItServes(t *testing.T) {
 	dir := t.TempDir()
 	ready, pidfile, argvFile := filepath.Join(dir, "ready"), filepath.Join(dir, "decider.pid"), filepath.Join(dir, "argv")
@@ -53,7 +53,7 @@ func TestReadyFilePublishesTheGatewayPidOnceItServes(t *testing.T) {
 	t.Setenv("PFB_FAKE_ARGVFILE", argvFile)
 	gw := startGatewayProcess(t, readyFileFlags(ready), decider("serve"))
 	serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
-	gw.waitLine("ready upstream ")
+	line := gw.waitLine("ready upstream ")
 
 	info, err := os.Stat(ready)
 	if err != nil {
@@ -64,6 +64,9 @@ func TestReadyFilePublishesTheGatewayPidOnceItServes(t *testing.T) {
 	}
 	if pid := readReadyPid(t, ready); pid != gw.cmd.Process.Pid {
 		t.Fatalf("ready file names pid %d, want the gateway's %d", pid, gw.cmd.Process.Pid)
+	}
+	if want := "ready upstream 127.0.0.1:5353 pid " + strconv.Itoa(gw.cmd.Process.Pid); line != want {
+		t.Fatalf("readiness line %q, want %q: the gateway names its own pid there, as the ready file does", line, want)
 	}
 	if dec := readPid(t, pidfile); dec == readReadyPid(t, ready) {
 		t.Fatalf("ready file names the decider's pid %d", dec)

@@ -556,7 +556,7 @@ func TestStartupReportsEachListenerThenTheUpstreamOnlyAfterReady(t *testing.T) {
 			port = int(listenAddr(t, l).Port())
 		}
 	}
-	want := []string{"listening udp+tcp 127.0.0.1:" + strconv.Itoa(port), "ready upstream 127.0.0.1:5454"}
+	want := []string{"listening udp+tcp 127.0.0.1:" + strconv.Itoa(port), "ready upstream 127.0.0.1:5454 pid " + strconv.Itoa(os.Getpid())}
 	if port == 0 || fmt.Sprint(lines[len(lines)-2:]) != fmt.Sprint(want) {
 		t.Fatalf("log lines:\n got  %q\n want the tail %q", lines, want)
 	}
