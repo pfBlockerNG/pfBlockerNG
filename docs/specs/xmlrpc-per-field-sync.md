@@ -147,7 +147,8 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 - Rule: **local** is an interface, VIP, listener port, gateway, filesystem or script reference,
   credential, runtime or one-shot marker, log, display, or per-node performance tuning value.
   **Policy** is what is blocked, permitted, logged, or transformed, and the shape of generated
-  objects.
+  objects. Exception: the auto-created DNSBL VIP's address (`pfb_dnsvip_auto4/6`, #3540) is policy so
+  both nodes sinkhole to one address; its VIP ids stay local.
 - Settings sections (`gen`, `ip`, `dnsbl`) use an allowlist: a key syncs if and only if its
   registry entry says `policy`. Unregistered keys there (`dnsbl_webpage`, the retired markers
   `dnsbl_mode`, `pfb_py_block`, `pfb_control_legacy_seeded`, and the `hooks` subtree) never sync.
@@ -605,7 +606,8 @@ never elapsed time.
 
 1. **Automatic transport.** A policy change on A, such as a DNSBL whitelist entry or an IP deny
    action, makes B's stored policy equal A's. B's interfaces, VIPs, ports, gateways, scripts,
-   credentials, alert preferences, and hooks remain byte-identical.
+   credentials, alert preferences, and hooks remain byte-identical, except that B's auto-created
+   DNSBL VIP follows A's synced address (#3540).
 2. **Manual transport.** The automatic transport row passes with "Sync to host(s) defined below".
 3. **Apply within one receive.** With no apply window, B enforces the change after the receive,
    proven by B's record of a receive-triggered apply and an on-box probe, without any cron tick.

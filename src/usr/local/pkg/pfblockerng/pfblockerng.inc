@@ -3238,7 +3238,6 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 // no VIP + $pfb['dnsbl_vip_conflict'] finding); any other node publishes the address it uses.
 function pfb_manage_dnsbl_vip(string $mode): void {
 	global $pfb;
-	$pfb['dnsbl_vip_conflict'] = [];
 
 	// Only the two lifecycle modes drive VIP management; anything else is a no-op.
 	if ($mode !== 'enabled' && $mode !== 'disabled') {
@@ -3310,6 +3309,11 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 		$stale  = $fam['managed'] && $idx !== null && $synced !== '' && ($vips_config[$idx]['subnet'] ?? '') !== $synced;
 
 		if (!$fam['managed'] || $stale) {
+			// issue #3540: a node that no longer manages the family publishes no address, whatever the guard deletes.
+			if (!$receiver && ($dnsblconfig[$fam['addrkey']] ?? '') !== '') {
+				unset($dnsblconfig[$fam['addrkey']]);
+				$changed = TRUE;
+			}
 			// DELETE (marker + IP-match only). The address must match what the stored
 			// config currently resolves to, so we never delete a marked VIP that is no
 			// longer the one our config points at, and never an unmarked VIP.
@@ -3317,18 +3321,20 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 				? (string) (get_configured_vip_ipv4($dnsblconfig[$fam['idkey']] ?? '') ?? '')
 				: (string) (get_configured_vip_ipv6($dnsblconfig[$fam['idkey']] ?? '') ?? '');
 
-			if ($match_ip === '') {
-				continue;
-			}
-
 			// Double-guard: marker match AND subnet must equal the stored resolved IP.
 			// Use pfb_find_managed_obj with the guard to locate the row, then
 			// pfb_remove_managed_obj with the same guard to strip it from config.
 			$guard     = static function(array $row) use ($match_ip): bool {
 				return ($row['subnet'] ?? '') === $match_ip;
 			};
-			$found_row = pfb_find_managed_obj('virtualip/vip', $fam['marker'], $guard);
+			$found_row = $match_ip === '' ? FALSE : pfb_find_managed_obj('virtualip/vip', $fam['marker'], $guard);
 			if ($found_row === FALSE) {
+				if ($stale) {
+					// issue #3540: the guard keeps a marked VIP away from the synced address -> reported, not replaced.
+					$conflicts[] = $fam['label'];
+					pfb_logger("\nDNSBL auto-VIP: {$fam['marker']} at [ " . substr(htmlspecialchars((string) ($vips_config[$idx]['subnet'] ?? '')), 0, 100) .
+						" ] is not the stored VIP; not moved to the synced address", 1);
+				}
 				continue;
 			}
 
@@ -3341,9 +3347,6 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 
 			if (!empty($dnsblconfig[$fam['idkey']])) {
 				unset($dnsblconfig[$fam['idkey']]);
-			}
-			if (!$receiver) {
-				unset($dnsblconfig[$fam['addrkey']]);
 			}
 			$changed = TRUE;
 			if (!$fam['managed']) {

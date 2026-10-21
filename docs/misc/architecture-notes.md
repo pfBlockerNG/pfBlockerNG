@@ -1041,9 +1041,12 @@ sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
   never force-disabling DNSBL.
 - **HA/CARP.** The chosen address syncs as policy `pfb_dnsvip_auto4/6`; the ids, `pfb_dnsvip_auto` and the
   interface stay local. A receiver (a node holding an accepted policy digest, #3453) creates its own IP-Alias
-  VIP at the synced address and moves a marked VIP found elsewhere; when the address is not free it creates
-  none, logs it and records the Sync finding. With no synced address it picks its own. Any other node (never
-  received policy, or its Sync page saved since) picks as before and publishes its address. No CARP-type VIPs.
+  VIP at the synced address and moves a marked VIP found elsewhere. When the address is not free it removes that
+  VIP and creates none; when the delete guard keeps it, it stays. Either way the receiver logs the cause and
+  records the Sync finding. With no synced address it picks its own. Any other node (never received policy, or
+  its Sync page saved since) picks as before, publishes its address and clears it once it stops managing that
+  family. VIP demand inputs are policy, so a primary without demand leaves its receiver without the VIP too.
+  No CARP-type VIPs.
 
 See [`legacy/ADRs/ADR_13_Auto_DNSBL_VIP/`](../../legacy/ADRs/ADR_13_Auto_DNSBL_VIP/).
 
