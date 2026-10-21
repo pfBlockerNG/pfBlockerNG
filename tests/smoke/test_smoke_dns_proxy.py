@@ -1675,6 +1675,49 @@ def test_the_start_lock_is_free_while_the_proxy_runs(rig: Rig, proxy_on: State) 
     )
 
 
+def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: State) -> None:
+    """A package upgrade with pfB-DNS on leaves it on and serving (issue #3562).
+
+    pfSense's delete_package_xml() stops and deregisters the package's services, and install_package_xml() runs the
+    install command before it registers them again; start_service() acts only on a registered service, so the
+    installer's restart of the proxy has to reach the service all the same, or the readiness wait times out and
+    pfB-DNS is rolled back off.
+
+    Given the toggle on and the proxy serving,
+    When the branch package is installed over itself with `pkg add -f`, which replaces it as an upgrade does,
+    Then the toggle is still on, the Resolver still moved, the proxy running, and a listed name still gets the VIP.
+    """
+    vm = rig.vm
+    pkg = os.environ["SMOKE_PKG"]
+    remote = f"/tmp/pfb3562-{os.path.basename(pkg)}"
+    h._write_cron_disable_flag(vm)
+    with open(pkg, "rb") as fh:
+        sent = subprocess.run(
+            vm.ssh_argv(f"cat > {shlex.quote(remote)}"), stdin=fh, capture_output=True, timeout=300.0, check=False
+        )
+    assert sent.returncode == 0, f"copying {pkg} failed: rc={sent.returncode} {sent.stderr[-300:]!r}"
+    abi = os.environ.get("SMOKE_ABI", "")
+    add = f"pkg -o ABI={shlex.quote(abi)} add" if abi else "pkg add"
+    try:
+        added = vm.ssh(f"env ASSUME_ALWAYS_YES=yes {add} -f {shlex.quote(remote)}", timeout=600.0)
+    finally:
+        h._write_cron_disable_flag(vm)
+        vm.ssh("rm", "-f", remote)
+    output = added.stdout + added.stderr
+    assert added.returncode == 0, f"pkg add -f failed: rc={added.returncode}\n{output[-1500:]}"
+    h.wait_unbound_ready(vm)
+
+    diagnostics = f"pkg add output:\n{output[-3000:]}\n{_diagnostics(vm)}"
+    toggle = _xml_text(_config_xml(vm), "installedpackages/pfblockerngdns/config/pfb_dns") or ""
+    assert toggle == "on", f"the upgrade turned pfB-DNS off: {toggle!r}\n{diagnostics}"
+    after = _capture(vm)
+    assert _is_on(after), (
+        f"the proxy is not serving the moved Resolver after the upgrade: {after.service}\n{diagnostics}"
+    )
+    blocked, raw = _query(rig.client, rig.names.blocked)
+    assert h.is_vip(blocked), f"after the upgrade the listed name is not blocked: {blocked}\n{raw}\n{diagnostics}"
+
+
 def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
     """RACE_ROUNDS times: stop the proxy, run two `start`s at once, count what is left running.
 
