@@ -43,7 +43,8 @@ set -eu
 # P: the last devel commit before the per-field sync series. In P the sender still keys
 # off `syncinterfaces` and `syncscope` does not exist yet.
 _PIN=af7d608dd1123d0f4db40d1ff171bed1d8ea74b4
-# Ports recipe at P's cut date: newer recipes build pfb-dns, which P predates (#3541).
+# pfBlockerNG/FreeBSD-ports pfblockerng/use-github at P's date: newer recipes build pfb-dns,
+# which P predates (#3541).
 _PORTS_PIN=c2bce0b5c8ed41c6d13356021aca45a9fab1655f
 _ref="$_PIN"
 
