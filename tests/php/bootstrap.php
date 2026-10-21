@@ -137,6 +137,11 @@ if (!defined('PFB_DNS_PROXY_RCFILE')) {
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', 0);
 }
+// The startup check's wait for the log line of a start it was asked to judge (issue #3538), 0 s for the same reason: a test that
+// needs the poll loads the check onto a virtual clock with its own budget (DnsProxyStartupCheckCurrentStartTest).
+if (!defined('PFB_DNS_PROXY_LOG_WAIT')) {
+	define('PFB_DNS_PROXY_LOG_WAIT', 0);
+}
 unset($pfb_test_rc_dir);
 
 // 4g. The installed package XML pfblockerng.inc re-registers the package's menu and services from after an aborted removal

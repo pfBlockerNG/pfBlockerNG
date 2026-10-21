@@ -1810,7 +1810,15 @@
     "pfb_dns_proxy_confirm_ready": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "since",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_dns_proxy_deinstall": {
         "returnsRef": false,
@@ -1937,6 +1945,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dns_proxy_log_size": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": []
     },
     "pfb_dns_proxy_notify": {
         "returnsRef": false,
@@ -2216,6 +2229,13 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "?bool",
+                "default": "NULL"
+            },
+            {
+                "name": "since",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
                 "default": "NULL"
             }
         ]

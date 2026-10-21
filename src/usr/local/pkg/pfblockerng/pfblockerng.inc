@@ -3589,6 +3589,12 @@ if (!defined('PFB_DNS_PROXY_RCFILE')) {
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
+// Seconds pfb_dns_proxy_startup_check() waits for the `ready upstream` line of a start it was told the log's size from before: the
+// gateway publishes its ready marker before it logs that line and daemon(8) relays the log asynchronously.
+// Overridable before load, like the budget above.
+if (!defined('PFB_DNS_PROXY_LOG_WAIT')) {
+	define('PFB_DNS_PROXY_LOG_WAIT', 3);
+}
 // Seconds pfb_dns_proxy_certificate_push() waits for each of its steps (connect, send, reply): below the 5 s the gateway gives a
 // connection on its control socket, above what a gateway that is serving needs.
 if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
@@ -4801,8 +4807,9 @@ EOF;
  */
 function pfb_dns_proxy_restart(): bool {
 	pfb_dns_proxy_service();
+	$since = pfb_dns_proxy_log_size();
 	restart_service('pfb_dns_proxy');
-	return pfb_dns_proxy_confirm_ready();
+	return pfb_dns_proxy_confirm_ready($since);
 }
 
 /**
@@ -4850,14 +4857,16 @@ function pfb_dns_proxy_await_ready(): bool {
  * activation: the check says so first, with the gateway's last error (the rollback consumes the snapshot the check goes by), then
  * the activation is rolled back (pfb_dns_proxy_roll_back()).
  *
+ * @param int|null $since the gateway log's size from before the start (pfb_dns_proxy_log_size()), so that the check judges that start's
+ *        own lines; NULL = nothing was started: the log's latest start is judged
  * @return bool TRUE iff the proxy is ready; FALSE after a failed activation, whatever the rollback achieved
  */
-function pfb_dns_proxy_confirm_ready(): bool {
+function pfb_dns_proxy_confirm_ready(?int $since = NULL): bool {
 	if (pfb_dns_proxy_await_ready()) {
-		pfb_dns_proxy_startup_check(TRUE);
+		pfb_dns_proxy_startup_check(TRUE, $since);
 		return TRUE;
 	}
-	pfb_dns_proxy_startup_check(FALSE);
+	pfb_dns_proxy_startup_check(FALSE, $since);
 	pfb_logger("\nNot completed: the DNS proxy did not become ready within " . PFB_DNS_PROXY_START_WAIT . ' s', 2);
 	pfb_dns_proxy_roll_back();
 	return FALSE;
@@ -4882,6 +4891,17 @@ function pfb_dns_proxy_notify(string $id, string $text, string $url): void {
 }
 
 /**
+ * The gateway log's size now, in bytes (0 without a log): what a caller reads just before it starts or restarts the proxy, so that
+ * pfb_dns_proxy_startup_check() judges only the lines that start writes ($since).
+ */
+function pfb_dns_proxy_log_size(): int {
+	global $pfb;
+
+	clearstatcache(TRUE, $pfb['dns_proxy_log']);
+	return (int) @filesize($pfb['dns_proxy_log']);
+}
+
+/**
  * After a pfB-DNS start (an apply, the boot start) and on the cron tick while the proxy is meant to serve: raise ONE notice, id
  * `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id when there is none. The
  * notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or replaced here. The
@@ -4889,18 +4909,26 @@ function pfb_dns_proxy_notify(string $id, string $text, string $url): void {
  *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one;
  *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the
  *      CURRENT start did not report as `listening <kind> <host:port>`, with the reason the gateway logged for that address
- *      (`cannot listen on <host:port>: <reason>`), else that it did not report it. The current start is what the log's last
- *      64 KiB holds after the second-to-last `ready upstream` line and up to the last one. A log with no such line (rotated,
- *      truncated) cannot be judged: it gives no problem and closes nothing;
+ *      (`cannot listen on <host:port>: <reason>`), else that it did not report it. The current start is what the log holds after
+ *      the second-to-last `ready upstream` line and up to the last one, of the bytes written since $since (the size from before the
+ *      start) or, with no $since, of the last 64 KiB. The gateway publishes its ready marker BEFORE it logs those lines and daemon(8)
+ *      relays them asynchronously, so with a $since and no `ready upstream` line after it yet the log is polled (bounded,
+ *      PFB_DNS_PROXY_LOG_WAIT), and an older start is never judged in its place. A start whose line does not come, and a log with no such
+ *      line (rotated, truncated), cannot be judged: it gives no problem and closes nothing;
  *   3. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
  *      the code the service uses (pfb_dns_proxy_plain_listen(), pfb_dns_proxy_tls_flags()).
  * A notice is closed only when the start was judged and nothing was found; file_notice() files a row for every changed text and
  * close_notice() removes one row per call, so every row of the id is closed, by its key.
  *
- * @param bool|null $ready whether the proxy became ready; NULL = wait for it with pfb_dns_proxy_await_ready(), the only wait here.
- *        With no snapshot stored (nothing is meant to serve) and no failure reported, nothing is checked, closed or waited for
+ * @param bool|null $ready whether the proxy became ready; NULL = wait for it with pfb_dns_proxy_await_ready(), the only wait here
+ *        besides that log poll. With no snapshot stored (nothing is meant to serve) and no failure reported, nothing is checked, closed or
+ *        waited for
+ * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
+ *        it; NULL = no start was made (the cron tick, an apply that restarted nothing): the log's latest start is judged. A log now
+ *        shorter than $since was rotated: it is judged from its start. Not used when the proxy is not ready: the last gateway error is
+ *        looked for in the whole tail, since a start that failed may have logged nothing new
  */
-function pfb_dns_proxy_startup_check(?bool $ready = NULL): void {
+function pfb_dns_proxy_startup_check(?bool $ready = NULL, ?int $since = NULL): void {
 	global $pfb;
 
 	$saved = pfb_dns_proxy_saved();
@@ -4910,23 +4938,27 @@ function pfb_dns_proxy_startup_check(?bool $ready = NULL): void {
 	$ready ??= pfb_dns_proxy_await_ready();
 	$id = 'pfBlockerNG DNS Proxy startup';
 
-	// The log's last 64 KiB as lines, the line the cut falls in dropped; none when it is missing or unreadable
-	$lines = [];
-	$handle = @fopen($pfb['dns_proxy_log'], 'rb');
-	if ($handle !== FALSE) {
-		$cut = (int) @filesize($pfb['dns_proxy_log']) > 65536 && fseek($handle, -65536, SEEK_END) === 0;
-		$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
-		if ($cut) {
-			array_shift($lines);
+	// The log's lines from $from (NULL, or past the log's end, which a rotation leaves: from its start) on, within its last 64 KiB; none
+	// when it is missing or unreadable. The read starts one byte early: a cut at a line start leaves an empty first element, a cut inside
+	// a line its partial remainder, and the first element is dropped either way
+	$tail = static function (?int $from) use ($pfb): array {
+		$handle = @fopen($pfb['dns_proxy_log'], 'rb');
+		if ($handle === FALSE) {
+			return [];
 		}
+		$size = pfb_dns_proxy_log_size();
+		$at = max(($from === NULL || $from > $size) ? 0 : $from, $size - 65536);
+		$cut = $at > 0 && fseek($handle, $at - 1) === 0;
+		$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
 		fclose($handle);
-	}
+		return $cut ? array_slice($lines, 1) : $lines;
+	};
 
 	$problems = [];
 	$judged = FALSE;
 	if (!$ready) {
 		$error = '';
-		foreach ($lines as $line) {
+		foreach ($tail(NULL) as $line) {
 			if (str_starts_with($line, 'pfb_dns_gateway:')) {
 				$error = $line;
 			}
@@ -4934,7 +4966,16 @@ function pfb_dns_proxy_startup_check(?bool $ready = NULL): void {
 		$problems[] = 'pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s' .
 		    (($error === '') ? '' : " (last gateway error: {$error})");
 	} else {
-		$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
+		// A start just made ($since): the gateway logs its `ready upstream` line after it publishes its ready marker, so wait for it
+		$deadline = hrtime(TRUE) + PFB_DNS_PROXY_LOG_WAIT * 1000000000;
+		while (TRUE) {
+			$lines = $tail($since);
+			$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
+			if ($ends !== [] || $since === NULL || hrtime(TRUE) >= $deadline) {
+				break;
+			}
+			usleep(100000);
+		}
 		$judged = ($ends !== []);
 		if ($judged) {
 			// host:port the way the gateway prints it (Go's netip): IPv6 compressed and bracketed. Only IP characters reach inet_pton()
@@ -5102,16 +5143,19 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	$before = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 	pfb_dns_proxy_service($proxyDir);
 	$acted = TRUE;
+	$since = NULL;
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);
+		$since = pfb_dns_proxy_log_size();
 		start_service('pfb_dns_proxy');
 	} elseif ($before !== @file_get_contents(PFB_DNS_PROXY_RCFILE)) {
 		pfb_logger("\nRestarting the DNS proxy: its listen addresses or DoH/DoQ settings changed", 1);
+		$since = pfb_dns_proxy_log_size();
 		restart_service('pfb_dns_proxy');
 	} else {
 		$acted = FALSE;
 	}
-	$ready = pfb_dns_proxy_confirm_ready();
+	$ready = pfb_dns_proxy_confirm_ready($since);
 	if ($acted && $ready) {
 		pfb_logger(' completed: the DNS proxy is ready', 1);
 	}
@@ -5410,12 +5454,14 @@ if (isset($argv[1])) {
 			exit(pfb_dns_proxy_certificate_refresh(TRUE) ? 0 : 1);
 	}
 
-	// The boot start's check (pfb_upstream_observer_include.inc backgrounds it, bounded by timeout(1)): the certificate that could not be
-	// exported or pushed gets its notice, then the start is checked and its problems become the one startup notice
+	// The boot start's check (pfb_upstream_observer_include.inc backgrounds it beside the start, bounded by timeout(1)): the log's size is
+	// taken first, since the gateway needs seconds to become ready and logs nothing before; the certificate that could not be exported or
+	// pushed gets its notice, then the start is checked and its problems become the one startup notice
 	elseif ($argv[1] == 'dns_check') {
+			$since = pfb_dns_proxy_log_size();
 			pfb_global();
 			pfb_dns_proxy_certificate_sync();
-			pfb_dns_proxy_startup_check();
+			pfb_dns_proxy_startup_check(NULL, $since);
 			exit(0);
 	}
 }

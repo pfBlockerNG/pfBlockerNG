@@ -698,10 +698,10 @@ final class DnsProxyStartupCheckTest extends TestCase
 	#[DataProvider('readyWhileNothingIsMeantToServe')]
 	public function testWithNoSnapshotAndNoFailureNothingIsFiledOrClosed(?bool $ready): void
 	{
-		// Given no snapshot, a standing notice and a log that would be a problem
+		// Given no snapshot, a standing notice and a healthy log: only the early return keeps the notice (a check that went on would close it)
 		$this->fileOther(self::ID, 'pfB-DNS started with problems: old.');
 		$before = $this->standing();
-		$this->log('pfb_dns_gateway: stale');
+		$this->log($this->healthyStart());
 
 		pfb_dns_proxy_startup_check($ready);
 
@@ -833,7 +833,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$source = (string) file_get_contents(self::INC);
 
 		$this->assertMatchesRegularExpression(
-			"~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*pfb_global\\(\\);\\s*pfb_dns_proxy_certificate_sync\\(\\);\\s*pfb_dns_proxy_startup_check\\(\\);\\s*exit\\(0\\);\\s*\\}~",
+			"~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*(?:\\\$since = [^\\n]*\\n\\s*)?pfb_global\\(\\);\\s*pfb_dns_proxy_certificate_sync\\(\\);\\s*pfb_dns_proxy_startup_check\\([^)]*\\);\\s*exit\\(0\\);\\s*\\}~",
 			$source
 		);
 	}
