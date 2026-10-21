@@ -715,15 +715,13 @@ jobs:
       # from the last devel commit BEFORE the per-field sync series on one node
       # (SMOKE_PREV_PKG). scripts/build-prev-pkg.sh owns that pinned commit and fetches it by
       # SHA (this checkout is shallow); it builds for the channel the branch .pkg above was
-      # built for, off the SAME ports ref the branch build used, like the nightly step above.
+      # built for, with its ports recipe pinned alongside that commit.
       # Only the `smoke` marker collects the HA rows. A failed build fails this step, so the
       # job stops before pytest instead of failing the rows one by one.
       - name: Build the previous-devel .pkg (HA mixed-version smoke)
         if: ${{ (inputs.pytest_marker || 'smoke') == 'smoke' }}
         env:
           BRANCH_PKG:   ${{ steps.paths.outputs.pkg }}
-          PORTS_REPO:   ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
-          PORTS_REF:    ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
           PHP_VERSION:  ${{ inputs.php_version }}
           PY_FLAVOR:    ${{ inputs.py_flavor }}
           ABI:          ${{ inputs.abi }}
@@ -733,9 +731,6 @@ jobs:
           export PFB_RUN_ROOT="$RUNNER_TEMP/pfb-runs"
           PKG="$(sh scripts/build-prev-pkg.sh \
             --like "$BRANCH_PKG" \
-            --ports-repo "$PORTS_REPO" \
-            --ports-ref  "$PORTS_REF" \
-            --ports-dir  "$RUNNER_TEMP/prev-pkg-ports" \
             --abi        "$ABI" \
             --php        "$PHP_VERSION" \
             --py-flavor  "$PY_FLAVOR")"

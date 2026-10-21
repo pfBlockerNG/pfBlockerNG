@@ -3,8 +3,8 @@
 #
 # The two-node HA smoke rows for legacy sync (issue #3455: the upgrade row and the
 # new-sender / old-receiver row) install a package built from the last devel commit BEFORE
-# the per-field XMLRPC sync series landed. That commit is pinned in this file, once;
-# smoke-on-box.sh and smoke-single.yml call the script and never carry the SHA.
+# the per-field XMLRPC sync series landed. That commit and its ports recipe are pinned in
+# this file, once; smoke-on-box.sh and smoke-single.yml call the script and carry neither pin.
 #
 # USAGE:
 #   build-prev-pkg.sh --print-ref
@@ -15,9 +15,11 @@
 #                pfSense-pkg-pfBlockerNG[-<channel>]-<version>.pkg, gives --channel and, for
 #                nightly (which requires one), --pkgversion. Without it build-leg.sh's own
 #                default channel applies.
-#   Anything else goes to build-leg.sh (--ports-dir, --ports-repo, --abi, --php, ...). This
-#   script appends its own --local-src and --out-dir, which win because build-leg.sh takes
-#   the last flag. Native builds ignore --variant, so a Plus leg gets the same package.
+#   Anything else goes to build-leg.sh (--abi, --php, ...). This script owns --ports-repo,
+#   --ports-ref and --ports-dir (the pinned ports recipe, checked out under the work dir) and
+#   appends them with --local-src and --out-dir. build-leg.sh takes the last flag, so a
+#   caller's ports args are overridden. Native builds ignore --variant, so a Plus leg gets
+#   the same package.
 #
 # Prints the resolved absolute .pkg path (and NOTHING else) on stdout. All other output,
 # including the identity line `build-prev-pkg: ref=<P> pkg=<file> version=<v>`, goes to
@@ -27,11 +29,12 @@
 # ENV:
 #   PFB_GIT_REMOTE     remote P is fetched from when this checkout lacks it (default
 #                      origin; local-smoke.sh forwards the remote the box fetched the ref from).
-#   TMPDIR             scratch root; the work dir is recreated on every run (one writer).
+#   TMPDIR             scratch root (one writer): tree/ and out/ are recreated on each run,
+#                      ports/ (the pinned ports checkout) is reused.
 #
 # Test-only (env), never set on a box or in CI:
 #   PFB_PREV_PKG_WORK  replaces the work dir (default ${TMPDIR:-/tmp}/pfb-prev-pkg).
-# The pin itself has no override: the specs rewrite the `_PIN=` line of a fixture copy.
+# The pins have no override: the specs rewrite the `_PIN=` line of a fixture copy.
 #
 # POSIX sh; shellcheck clean; all expansions quoted.
 
@@ -40,6 +43,8 @@ set -eu
 # P: the last devel commit before the per-field sync series. In P the sender still keys
 # off `syncinterfaces` and `syncscope` does not exist yet.
 _PIN=af7d608dd1123d0f4db40d1ff171bed1d8ea74b4
+# Ports recipe at P's cut date: newer recipes build pfb-dns, which P predates (#3541).
+_PORTS_PIN=c2bce0b5c8ed41c6d13356021aca45a9fab1655f
 _ref="$_PIN"
 
 die() {
@@ -112,7 +117,9 @@ tar -xf "${_work}/tree.tar" -C "$_tree" || die "extract failed: tar -x of ${_ref
 rm -f "${_work}/tree.tar"
 
 # ── Stage 3: the same builder every other build site uses ───────────────────── #
-set -- "$@" --local-src "$_tree" --out-dir "$_out"
+# Own checkout under the work dir: the caller's ports tree must never be re-pinned to P's recipe.
+set -- "$@" --ports-repo pfBlockerNG/FreeBSD-ports --ports-ref "$_PORTS_PIN" \
+    --ports-dir "${_work}/ports" --local-src "$_tree" --out-dir "$_out"
 _built="$(sh "${SCRIPT_DIR}/build-leg.sh" "$@")" || die "build failed: build-leg.sh exited non-zero for ${_ref}"
 # build-leg.sh prints the path alone, but take the last line in case a stage leaks one.
 _pkg="$(printf '%s\n' "$_built" | tail -n 1)"

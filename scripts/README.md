@@ -446,7 +446,7 @@ identically locally and in CI.
 | [`run-smoke.sh`](run-smoke.sh) | Canonical pytest argv emitter for the smoke suite (same script CI and local use). |
 | [`build-leg.sh`](build-leg.sh) | Build a `.pkg` for a specific leg (ABI, channel, version). |
 | [`go_toolchain.py`](go_toolchain.py) | The pinned Go compiler for a runner that has none: downloads it, checks the sha256 before extracting, prints shell exports for it, and removes only a directory it made (issue #3513). Called from `smoke-on-box.sh` and the smoke module. |
-| [`build-prev-pkg.sh`](build-prev-pkg.sh) | Build the previous-devel `.pkg` (`SMOKE_PREV_PKG`) for the HA mixed-version smoke rows from the one pinned pre-per-field-sync commit (issue #3455). Called from `smoke-on-box.sh` and `smoke-single.yml`; `--print-ref` prints the pin. |
+| [`build-prev-pkg.sh`](build-prev-pkg.sh) | Build the previous-devel `.pkg` (`SMOKE_PREV_PKG`) for the HA mixed-version smoke rows from the one pinned pre-per-field-sync commit (issue #3455). Its FreeBSD-ports recipe is pinned beside that commit (issue #3541), so callers pass no ports args. Called from `smoke-on-box.sh` and `smoke-single.yml`; `--print-ref` prints the source pin. |
 | [`nightly-pkgversion.sh`](nightly-pkgversion.sh) | `YYYYMMDDHHMMSS.<7-sha>` for `--channel nightly`. Called from `nightly.yml`, `smoke-single.yml`, and `smoke-on-box.sh` (from the just-checked-out HEAD). `local-smoke.sh` forwards an explicit override only — it does not derive from the orchestrator clone, which can diverge from `--git-remote` (issue #2754). |
 | [`sparse-clone-ports.sh`](sparse-clone-ports.sh) | Blobless sparse clone of FreeBSD-ports to the needed port dirs only. |
 

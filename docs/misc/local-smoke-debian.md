@@ -238,10 +238,10 @@ marker. It is built from the last devel commit before the per-field XMLRPC sync 
 sender still keys off `syncinterfaces`. That commit is pinned in one place, `scripts/build-prev-pkg.sh`;
 `sh scripts/build-prev-pkg.sh --print-ref` prints it. It is fetched by SHA when a shallow checkout or a box
 clone lacks it.
-The same builder, channel (read from the branch package's name), runtime tuple and ports tree build it, so
-only the source differs, and the log carries `build-prev-pkg: ref=<commit> pkg=<file> version=<v>`. A failed
-build stops the run before pytest. Fixture `prev_pkg` fails, never skips, when a leg has `SMOKE_PKG` but no
-`SMOKE_PREV_PKG`.
+The same builder, channel (read from the branch package's name) and runtime tuple build it. Its ports
+recipe is pinned with the source commit, so only the source differs, and the log carries
+`build-prev-pkg: ref=<commit> pkg=<file> version=<v>`. A failed build stops the run before pytest. Fixture
+`prev_pkg` fails, never skips, when a leg has `SMOKE_PKG` but no `SMOKE_PREV_PKG`.
 
 Both builds are the same package name and version, so `pkg add` of the other one is a no-op ("the most
 recent version ... is already installed") and `helpers.deploy` never switches a node. `tests/smoke/test_ha_policy_versions.py`

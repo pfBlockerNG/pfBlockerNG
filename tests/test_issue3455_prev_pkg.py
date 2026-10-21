@@ -160,9 +160,7 @@ def test_the_previous_package_is_built_like_the_branch_package() -> None:
     step = _prev_build_step()
     env = step["env"]
 
-    # Same ports tree as the branch build (build-pkg-linux's inputs), same runtime tuple, same channel (--like).
-    assert "inputs.ports_repo" in env["PORTS_REPO"]
-    assert "inputs.ports_ref" in env["PORTS_REF"]
+    # Same runtime tuple and channel (--like) as the branch build; the script pins the ports recipe.
     assert env["BRANCH_PKG"] == "${{ steps.paths.outputs.pkg }}"
     assert env["ABI"] == "${{ inputs.abi }}"
     assert env["PHP_VERSION"] == "${{ inputs.php_version }}"
@@ -200,11 +198,9 @@ def _run_step(tmp_path: Path, builder_exit: int) -> tuple[subprocess.CompletedPr
         **{
             name: f"value-of-{name}"
             for name in (step.get("env") or {})
-            if name not in {"BRANCH_PKG", "PORTS_REPO", "PORTS_REF", "ABI", "PHP_VERSION", "PY_FLAVOR"}
+            if name not in {"BRANCH_PKG", "ABI", "PHP_VERSION", "PY_FLAVOR"}
         },
         "BRANCH_PKG": "/branch dir/pfSense-pkg-pfBlockerNG-edge-4.0.0.a1.pkg",
-        "PORTS_REPO": "pfBlockerNG/FreeBSD-ports",
-        "PORTS_REF": "pfblockerng/use-github",
         "ABI": "FreeBSD:15:amd64",
         "PHP_VERSION": "8.3",
         "PY_FLAVOR": "py311",
@@ -222,8 +218,6 @@ def test_the_step_exports_the_built_package_path_for_the_pytest_step(tmp_path: P
     assert github_env.read_text(encoding="utf-8") == f"SMOKE_PREV_PKG={tmp_path / 'out dir' / 'prev.pkg'}\n"
     argv = (tmp_path / "argv").read_text(encoding="utf-8")
     assert "--like /branch dir/pfSense-pkg-pfBlockerNG-edge-4.0.0.a1.pkg" in argv
-    assert "--ports-repo pfBlockerNG/FreeBSD-ports" in argv
-    assert "--ports-ref pfblockerng/use-github" in argv
     assert "--abi FreeBSD:15:amd64 --php 8.3 --py-flavor py311" in argv
     # Without the export build-leg.sh falls back to /var/tmp/pfb-runs; like the nightly step, use RUNNER_TEMP.
     assert (tmp_path / "run-root").read_text(encoding="utf-8") == f"{tmp_path / 'runner temp'}/pfb-runs\n"

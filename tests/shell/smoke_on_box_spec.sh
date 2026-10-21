@@ -650,9 +650,8 @@ STUBEOF
     The stdout should include 'smoke_pkg=/tmp/fake-branch.pkg'
     The stdout should include "smoke_prev_pkg=${WORK}/prev dir/prev.pkg"
     # The previous package follows the branch package's channel and this leg's
-    # runtime tuple and ports tree, so only the source commit differs.
+    # runtime tuple; the ports recipe is pinned with the source commit.
     The contents of file "$PREV_PKG_ARGV_LOG" should include '--like /tmp/fake-branch.pkg'
-    The contents of file "$PREV_PKG_ARGV_LOG" should include "--ports-dir ${PFB_ONBOX_PORTS_DIR}"
     The contents of file "$PREV_PKG_ARGV_LOG" should include '--abi FreeBSD:15:amd64'
     The contents of file "$PREV_PKG_ARGV_LOG" should include '--php 8.3'
     The contents of file "$PREV_PKG_ARGV_LOG" should include '--py-flavor py311'

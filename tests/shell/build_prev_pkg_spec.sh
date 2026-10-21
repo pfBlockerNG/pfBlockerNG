@@ -146,15 +146,54 @@ STUBEOF
   End
 
   It 'hands build-leg the caller args, then its own --local-src and --out-dir last'
-    When call run_prev --ports-dir "/ports dir" --abi FreeBSD:16:amd64 --local-src /elsewhere
+    When call run_prev --abi FreeBSD:16:amd64 --local-src /elsewhere
     The status should be success
     The output should be present
     The stderr should be present
-    Assert argv_has_pair --ports-dir "/ports dir" "$BUILD_LEG_ARGV_LOG"
     Assert argv_has_pair --abi FreeBSD:16:amd64 "$BUILD_LEG_ARGV_LOG"
     # build-leg's later flag wins, so the caller's --local-src can never win.
     Assert last_arg_is --local-src "${PFB_PREV_PKG_WORK}/tree" "$BUILD_LEG_ARGV_LOG"
     Assert last_arg_is --out-dir "${PFB_PREV_PKG_WORK}/out" "$BUILD_LEG_ARGV_LOG"
+  End
+
+  # The ports recipe is pinned beside the source, so the script names it and never the caller.
+  ports_pin() { sed -n 's/^_PORTS_PIN=//p' "$SCRIPT"; }
+  # An empty pin would match a missing --ports-ref, so the pin must be a commit id first.
+  is_sha() { case "$1" in '' | *[!0-9a-f]*) return 1 ;; esac; [ "${#1}" -eq 40 ]; }
+
+  It 'pins the ports recipe and its checkout dir last, overriding the caller ports args'
+    _pin="$(ports_pin)"
+    When call run_prev --ports-ref --evil --ports-repo /caller/ports --ports-dir /caller/dir --abi FreeBSD:15:amd64
+    The status should be success
+    The output should be present
+    The stderr should be present
+    Assert is_sha "$_pin"
+    Assert last_arg_is --ports-ref "$_pin" "$BUILD_LEG_ARGV_LOG"
+    Assert last_arg_is --ports-repo pfBlockerNG/FreeBSD-ports "$BUILD_LEG_ARGV_LOG"
+    Assert last_arg_is --ports-dir "${PFB_PREV_PKG_WORK}/ports" "$BUILD_LEG_ARGV_LOG"
+  End
+
+  It 'pins the ports recipe and its checkout dir when the caller passes no ports args'
+    _pin="$(ports_pin)"
+    When call run_prev --abi FreeBSD:15:amd64
+    The status should be success
+    The output should be present
+    The stderr should be present
+    Assert is_sha "$_pin"
+    Assert last_arg_is --ports-ref "$_pin" "$BUILD_LEG_ARGV_LOG"
+    Assert last_arg_is --ports-repo pfBlockerNG/FreeBSD-ports "$BUILD_LEG_ARGV_LOG"
+    Assert last_arg_is --ports-dir "${PFB_PREV_PKG_WORK}/ports" "$BUILD_LEG_ARGV_LOG"
+  End
+
+  keep_ports() { mkdir -p "${PFB_PREV_PKG_WORK}/ports"; true > "${PFB_PREV_PKG_WORK}/ports/marker"; }
+
+  It 'keeps the ports checkout across a rebuild, so the next run reuses it'
+    BeforeCall 'keep_ports'
+    When call run_prev
+    The status should be success
+    The output should be present
+    The stderr should be present
+    The path "${PFB_PREV_PKG_WORK}/ports/marker" should be exist
   End
 
   It 'takes the last stdout line of build-leg when it prints more than the path'

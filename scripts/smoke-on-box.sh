@@ -392,13 +392,12 @@ printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2
 # The HA mixed-version rows install it on node B (SMOKE_PREV_PKG). It is built for every
 # leg: a native build ignores the variant, and peer_vm skips the Plus legs that cannot use
 # it, so there is no CE test here to get wrong. It follows the branch package's channel,
-# this leg's runtime tuple and the ports tree just prepared; only the source commit
+# this leg's runtime tuple. Its ports recipe is pinned with P, so only the source commit
 # differs. A failed build stops the run before pytest starts, so a package the rows need
 # never surfaces as a fixture failure an hour in.
 printf 'smoke-on-box: building the previous-devel .pkg...\n' >&2
 SMOKE_PREV_PKG="$(sh scripts/build-prev-pkg.sh \
     --like       "$SMOKE_PKG" \
-    --ports-dir  "$PORTS_DIR" \
     --abi        "$_ABI" \
     --php        "$_php_ver" \
     --py-flavor  "$_py_flavor")" \
