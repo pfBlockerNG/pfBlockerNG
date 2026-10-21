@@ -215,7 +215,7 @@ final class PfbDnsPageWiringTest extends TestCase
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
 
 		$this->assertStringContainsString("cert_build_list('cert', 'IPsec')", $page, 'the Resolver\'s certificate list: same call, same refids and descriptions');
-		$this->assertStringContainsString("['all' => gettext('All'), 'lo0' => gettext('Localhost')] + get_configured_interface_with_descr()", $page, 'all four lists offer All and Localhost');
+		$this->assertStringContainsString('$options_dns_interface = pfb_dns_proxy_interface_options();', $page, 'all four lists offer the one interface set the validation accepts (issue #3557)');
 		$this->assertMatchesRegularExpression(
 			'/pfb_validate_dns_proxy_listeners_post\(\s*\$_POST,\s*array_map\(\'strval\', array_keys\(\$options_dns_interface\)\),\s*array_map\(\'strval\', array_keys\(\$options_dns_cert\)\)\s*\)/',
 			$page,

@@ -1,4 +1,4 @@
-"""Tier-B browser regression (issues #3517, #3538): the pfB-DNS page's accessible names, legible warnings and saves.
+"""Tier-B browser regression (#3517, #3538, #3557): the pfB-DNS page's accessible names, legible warnings and saves.
 
 Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 (``pfblockerng_dns.php``) and measures the live DOM, not the markup:
@@ -7,8 +7,9 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
   "... Interface(s)" label, and stay operable through that name;
 * each "Experimental." disclosure keeps WCAG 2.1 SC 1.4.3 text contrast (4.5:1) against the
   backdrop it paints on;
-* saving with a DNS interface list empty shows the input error and leaves config.xml alone, and saving
-  Localhost with DoT on and a certificate persists them.
+* saving with a DNS interface list empty shows the input error and leaves config.xml alone, saving
+  Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
+  tokens render selected and survive a save that leaves the lists alone.
 
 Scope is the controls and disclosures on this page only: no whole-page axe claim, since the
 header breadcrumb and other shared framework markup are outside it. Measured in the box's
@@ -189,3 +190,70 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
     finally:
         for path, state in originals.items():
             helpers.config_restore_state(smoke_vm, path, state)
+
+
+# issue #3557: an IP-alias VIP only this test configures (config only: the page offers what config.xml lists) and a
+# stored interface token that names no interface on the box.
+_VIP_UNIQID = "pfb3557vip"
+_VIP_ADDR = "198.51.100.57"
+_GONE = "opt99"
+
+
+def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save_keeps_them(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """issue #3557: with every interface list stored as Localhost, a virtual IP and an interface that is gone, each list
+    renders all three selected (the VIP under its address, the gone one labelled not currently available) and a Save
+    that leaves the lists alone stores all three again."""
+    page = browser_page
+    vip = f"_vip{_VIP_UNIQID}"
+    stored = f"lo0,{vip},{_GONE}"
+    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    entry = {"mode": "ipalias", "interface": "lo0", "type": "single", "subnet": _VIP_ADDR, "subnet_bits": "32"}
+    lists = [f"{DNS_CFG}pfb_dns{kind}_interface" for kind in ("", "_dot", "_doh", "_doq")]
+    setup = (
+        "$vips = config_get_path('virtualip/vip', array());\n"
+        f"$vips[] = {helpers._php_kv_array(entry | {'descr': 'pfB-DNS issue 3557', 'uniqid': _VIP_UNIQID})};\n"
+        "config_set_path('virtualip/vip', $vips);\n"
+        + "".join(f"config_set_path({helpers._php_str(path)}, {helpers._php_str(stored)});\n" for path in lists)
+        + "".join(
+            f"config_set_path({helpers._php_str(f'{DNS_CFG}pfb_dns_{kind}')}, '');\n" for kind in ("dot", "doh", "doq")
+        )
+        + "write_config('pfBlockerNG smoke: issue 3557 stored listener tokens');\n"
+        "echo 'OK';"
+    )
+    try:
+        result = helpers.php_eval(smoke_vm, setup)
+        assert result.returncode == 0 and "OK" in result.stdout, f"setup failed: {result.stdout!r} {result.stderr!r}"
+        _open(page, webui, DNS_PAGE)
+        for label in INTERFACE_LABELS:
+            listbox = page.get_by_role("listbox", name=label, exact=True)
+            selected = listbox.evaluate(_SELECTED_VALUES_JS)
+            assert selected == ["lo0", vip, _GONE], (
+                f"{label!r} renders {selected}, expected every stored token selected"
+            )
+            vip_text = listbox.locator(f'option[value="{vip}"]').inner_text()
+            assert _VIP_ADDR in vip_text, f"{label!r}: the VIP option reads {vip_text!r}, expected its address"
+            gone_text = listbox.locator(f'option[value="{_GONE}"]').inner_text()
+            assert gone_text == f"{_GONE} (not currently available)", f"{label!r}: the gone option reads {gone_text!r}"
+
+        _save(page)
+
+        assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
+        for path in lists:
+            assert helpers.config_get(smoke_vm, path) == stored, f"{path}: the unchanged save dropped a token"
+    finally:
+        for path, state in originals.items():
+            helpers.config_restore_state(smoke_vm, path, state)
+        cleanup = helpers.php_eval(
+            smoke_vm,
+            "$keep = array();\n"
+            "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+            f"  if (($v['uniqid'] ?? '') !== {helpers._php_str(_VIP_UNIQID)}) {{ $keep[] = $v; }}\n"
+            "}\n"
+            "config_set_path('virtualip/vip', $keep);\n"
+            "write_config('pfBlockerNG smoke: issue 3557 VIP removed');\n"
+            "echo 'OK';",
+        )
+        assert cleanup.returncode == 0 and "OK" in cleanup.stdout, f"VIP cleanup failed: {cleanup.stdout!r}"

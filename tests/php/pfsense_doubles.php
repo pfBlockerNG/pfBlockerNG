@@ -1140,6 +1140,19 @@ if (!function_exists('get_configured_vip_list')) {
 	}
 }
 
+if (!function_exists('get_possible_listen_ips')) {
+	// pfSense interfaces.inc: the DNS Resolver's Network Interfaces, token => label: the configured interfaces, each
+	// virtual IP as _vip<uniqid> => address, then lo0. Off-appliance: no link-local entries and no " (descr)" suffix.
+	function get_possible_listen_ips($include_ipv6_link_local = false) {
+		$interfaces = get_configured_interface_with_descr();
+		foreach (get_configured_vip_list() as $vip => $address) {
+			$interfaces[$vip] = $address;
+		}
+		$interfaces['lo0'] = 'Localhost';
+		return $interfaces;
+	}
+}
+
 if (!function_exists('get_specialnet')) {
 	// pfSense interfaces.inc: returns an associative array of special network names/
 	// addresses (VIPs, loopback, etc.) indexed by their IP/address. Used by pfb_get_vips()
