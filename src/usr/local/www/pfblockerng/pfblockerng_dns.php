@@ -48,19 +48,19 @@ $pconfig['pfb_dns'] = PfbConfig::read('dns/pfb_dns');
 // the proxy's --reply-log while DNSBL is off. Its control is here because this page is reachable in either mode.
 $pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
 // issues #3513, #3538: pfB-DNS's listener and certificate settings. A setting not seeded yet shows the value the seed will write;
-// interface lists are comma-joined in storage, a list in the form
-$pconfig['pfb_dns_interface']		= pfb_csv_list(pfb_dns_proxy_setting('pfb_dns_interface'));
+// an interface list is split into the tokens the proxy reads from it (issue #3557: spaces too, as a hand edit may leave)
+$pconfig['pfb_dns_interface']		= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface'));
 $pconfig['pfb_dns_sslcertref']		= pfb_dns_proxy_setting('pfb_dns_sslcertref');
 $pconfig['pfb_dns_dot']			= pfb_dns_proxy_setting('pfb_dns_dot');
 $pconfig['pfb_dns_dot_port']		= pfb_dns_proxy_setting('pfb_dns_dot_port');
-$pconfig['pfb_dns_dot_interface']	= pfb_csv_list(pfb_dns_proxy_setting('pfb_dns_dot_interface'));
+$pconfig['pfb_dns_dot_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_dot_interface'));
 $pconfig['pfb_dns_doh']			= PfbConfig::read('dns/pfb_dns_doh');
 $pconfig['pfb_dns_doh_port']		= PfbConfig::read('dns/pfb_dns_doh_port');
-$pconfig['pfb_dns_doh_interface']	= pfb_csv_list(pfb_dns_proxy_setting('pfb_dns_doh_interface'));
+$pconfig['pfb_dns_doh_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doh_interface'));
 $pconfig['pfb_dns_doh_trusted']		= PfbConfig::read('dns/pfb_dns_doh_trusted');
 $pconfig['pfb_dns_doq']			= PfbConfig::read('dns/pfb_dns_doq');
 $pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns/pfb_dns_doq_port');
-$pconfig['pfb_dns_doq_interface']	= pfb_csv_list(pfb_dns_proxy_setting('pfb_dns_doq_interface'));
+$pconfig['pfb_dns_doq_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doq_interface'));
 // The Resolver's Network Interfaces (virtual IPs included) plus every stored token no longer offered (issue #3557)
 $options_dns_interface = pfb_dns_proxy_interface_options();
 // The certificates the Resolver offers: the same call, so the same list and descriptions
