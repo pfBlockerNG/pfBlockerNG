@@ -146,3 +146,6 @@ smoke:tests.smoke.test_ha_policy_authority::test_sync_page_save_flips_the_role[p
 smoke:tests.smoke.test_ha_policy_authority::test_unreachable_peer_is_reported_truthfully[automatic]  # HA pair is CE-only; Plus legs are out of scope (#3455)
 smoke:tests.smoke.test_ha_policy_authority::test_unreachable_peer_is_reported_truthfully[manual]  # HA pair is CE-only; Plus legs are out of scope (#3455)
 
+# smoke -- the HA Auto VIP module rides the same CE-only pair (issue #3540).
+smoke:tests.smoke.test_ha_auto_vip::test_secondary_creates_its_vip_at_the_address_the_primary_chose  # HA pair is CE-only; Plus legs are out of scope (#3540)
+smoke:tests.smoke.test_ha_auto_vip::test_secondary_with_the_address_in_use_creates_no_vip_and_reports_it  # HA pair is CE-only; Plus legs are out of scope (#3540)

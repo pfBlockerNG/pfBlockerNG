@@ -3325,6 +3325,25 @@ def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: P
         assert retired not in body, f"wizard DNSBL step still advertises the retired {retired} pool"
 
 
+def test_wizard_dnsbl_step_describes_ha_auto_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """Issue #3540: the wizard DNSBL step says a Policy-scope secondary follows the primary's Auto VIP address.
+
+    Given: the DNSBL step of the setup wizard (stepid=3)
+    When:  it is fetched through an authenticated session
+    Then:  it renders cleanly, carries the HA sentence about the address the primary chose, and no longer
+           claims auto-created VIPs are not HA/CARP aware
+
+    Red when: the step still tells an operator on a CARP/HA cluster to configure the VIP manually.
+    `php_error_log_guard` enrolls this GET in the module-level no-growth sweep.
+    """
+    resp = webui.get(_WIZARD_DNSBL_STEP)
+    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL Component Configuration",))
+    assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
+    body = resp.text
+    assert "address the primary chose" in body, "wizard DNSBL step is missing the HA Auto VIP sentence"
+    assert "not HA/CARP aware" not in body, "wizard DNSBL step still says auto-created VIPs are not HA/CARP aware"
+
+
 def test_general_wizard_disable_get_is_state_free(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
