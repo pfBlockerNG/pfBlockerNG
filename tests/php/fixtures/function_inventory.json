@@ -16277,10 +16277,10 @@
                 "default": null
             },
             {
-                "name": "certref",
+                "name": "valid_cert_refs",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
+                "type": "array",
                 "default": null
             }
         ]

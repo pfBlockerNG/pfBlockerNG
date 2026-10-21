@@ -39,10 +39,18 @@ final class PfbDnsPageWiringTest extends TestCase
 		'www/pfblockerng/pfblockerng_update.php' => 1,
 	];
 
-	/** The DoH/DoQ settings in the order the page shows them (issue #3513). */
+	/** The listener settings in the order the page shows them (issues #3513, #3538). */
 	private const LISTENER_FIELDS = [
+		'pfb_dns_interface', 'pfb_dns_sslcertref',
+		'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_interface',
 		'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_interface', 'pfb_dns_doh_trusted',
 		'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_interface',
+	];
+
+	/** The ones pfB-DNS seeds once from the Resolver: the page shows the pending seed value through pfb_dns_proxy_setting() (issue #3538). */
+	private const SEEDED_FIELDS = [
+		'pfb_dns_interface', 'pfb_dns_sslcertref', 'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_interface',
+		'pfb_dns_doh_interface', 'pfb_dns_doq_interface',
 	];
 
 	private static function src(string $relative): string
@@ -150,30 +158,81 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertSame(1, substr_count($page, 'unlock($pfb_config_lock);'), 'released after write_config()');
 	}
 
-	public function testThePageCarriesTheSevenDohAndDoqSettingsBelowTheEnableToggleReadAndSavedThroughTheDnsSection(): void
+	public function testThePageCarriesTheTwelveListenerSettingsBelowTheEnableToggleReadAndSavedThroughTheDnsSection(): void
 	{
 		// Given the pfB-DNS page
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
 
-		// Then its enable toggle comes first and the seven settings follow it in order, each read from the dns section
+		// Then its enable toggle comes first and the twelve settings follow it in order, each read from the dns section
 		$after = (int) strpos($page, "'pfb_dns',");
 		$this->assertGreaterThan(0, $after, 'the enable checkbox');
 		foreach (self::LISTENER_FIELDS as $field) {
 			$at = strpos($page, "'{$field}',", $after);
 			$this->assertNotFalse($at, "the page has the {$field} control below the previous one");
 			$after = $at;
-			$this->assertStringContainsString("PfbConfig::read('dns/{$field}')", $page, "{$field} is read through the gateway from the dns section");
+			$read = in_array($field, self::SEEDED_FIELDS, true) ? "pfb_dns_proxy_setting('{$field}')" : "PfbConfig::read('dns/{$field}')";
+			$this->assertStringContainsString($read, $page, "{$field} is read through the gateway from the dns section");
 		}
 
 		// And the save is validated, canonicalised and written to the same section, under the lock the snapshot needs
-		$this->assertStringContainsString('pfb_validate_dns_proxy_listeners_post(', $page, 'the seven fields are validated');
+		$this->assertStringContainsString('pfb_validate_dns_proxy_listeners_post(', $page, 'the twelve fields are validated');
 		$this->assertStringContainsString('pfb_dns_proxy_listeners_stored(', $page, 'and stored canonically');
 		$this->assertStringContainsString("PfbConfig::write('dns/' . ", $page, 'into the dns section');
 		$this->assertLessThan(
 			(int) strpos($page, 'pfb_dns_proxy_listeners_stored('),
-			(int) strpos($page, 'pfb_dns_config_lock()'),
-			'the lock is held before anything is stored'
+			(int) strpos($page, 'pfb_dns_config_lock()', (int) strpos($page, 'pfb_validate_dns_proxy_listeners_post(')),
+			'the save takes the lock before anything is stored'
 		);
+	}
+
+	public function testThePageSeedsItsListenerSettingsUnderTheLockOnLoadBeforeItReadsAny(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		$from = 0;
+		foreach ([
+			'pfb_global();',
+			'pfb_dns_proxy_seed_values() !== []',
+			'pfb_dns_config_lock()',
+			'pfb_dns_proxy_seed()',
+			"write_config('[pfBlockerNG] pfB-DNS took its listener settings from the DNS Resolver')",
+			'unlock(',
+			'$pconfig = array();',
+		] as $step) {
+			$at = strpos($page, $step, $from);
+			$this->assertNotFalse($at, "the load sequence has {$step} after the previous step");
+			$from = $at + strlen($step);
+		}
+		$this->assertMatchesRegularExpression(
+			'/\bfinally\s*\{\s*unlock\(/',
+			substr($page, 0, (int) strpos($page, '$pconfig = array();')),
+			'the seed lock is released in a finally'
+		);
+	}
+
+	public function testThePageValidatesAgainstTheInterfacesAndCertificatesItOffers(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		$this->assertStringContainsString("cert_build_list('cert', 'IPsec')", $page, 'the Resolver\'s certificate list: same call, same refids and descriptions');
+		$this->assertStringContainsString("['all' => gettext('All'), 'lo0' => gettext('Localhost')] + get_configured_interface_with_descr()", $page, 'all four lists offer All and Localhost');
+		$this->assertMatchesRegularExpression(
+			'/pfb_validate_dns_proxy_listeners_post\(\s*\$_POST,\s*array_map\(\'strval\', array_keys\(\$options_dns_interface\)\),\s*array_map\(\'strval\', array_keys\(\$options_dns_cert\)\)\s*\)/',
+			$page,
+			'the validation gets the keys of the two option lists the form offers'
+		);
+	}
+
+	public function testTheHelpSendsTheOperatorToTheCertificateSelectorAndNamesTheSeedAndTheMinimum(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		foreach (["Requires the DNS Resolver\\'s SSL/TLS certificate", 'None selected: the Resolver', "the proxy serves DNS over TLS with the Resolver\\'s certificate instead"] as $gone) {
+			$this->assertStringNotContainsString($gone, $page, "stale help: {$gone}");
+		}
+		foreach (['Requires the SSL/TLS Certificate selected above.', 'At least one entry is required.', 'pfB-DNS serves DNS over TLS from its own DoT settings below', 'are taken from the DNS Resolver once'] as $present) {
+			$this->assertStringContainsString($present, $page, "help: {$present}");
+		}
 	}
 
 	public function testTheDnsblPageCarriesNoneOfTheSevenSettingsAndNoCodeThatSavesThem(): void

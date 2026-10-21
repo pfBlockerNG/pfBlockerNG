@@ -1250,6 +1250,20 @@ if (!function_exists('get_configured_interface_with_descr')) {
 	}
 }
 
+if (!function_exists('cert_build_list')) {
+	// pfSense certs.inc: refid => descr of the certificates the selector offers. Off-appliance: every
+	// $GLOBALS['config']['cert'] entry with a private key (the key/digest compatibility test is not mirrored).
+	function cert_build_list($type = 'cert', $consumer = '', $selectsource = false, $addnone = false) {
+		$list = [];
+		foreach ((array) config_get_path($type, []) as $cert) {
+			if (!empty($cert['prv'])) {
+				$list[$cert['refid']] = $cert['descr'];
+			}
+		}
+		return $list;
+	}
+}
+
 if (!function_exists('ipsec_enabled')) {
 	// pfSense ipsec.inc: TRUE iff an IPsec phase1 entry is configured. pfb_build_if_list()
 	// calls it to decide whether to add the synthetic 'enc0' interface; no IPsec config

@@ -772,8 +772,9 @@ group appears only while its toggle is on, its stored port is a whole number 1-6
 one warning), and the trusted entries (IPs or CIDRs without zero-padded prefixes, a bare
 address passed as a host prefix) are validated again when the script is generated, so a hand-edited `config.xml` cannot
 reach the shell or hand the gateway a value it rejects. The pfB-DNS page's save validates with `pfb_validate_dns_proxy_listeners_post()`
-(ports 1-65535, configured interfaces,
-IP/CIDR entries, and the DNS Resolver's `unbound/sslcertref` while DoH or DoQ is on). Stop recognises the gateway child
+(ports 1-65535, a non-empty list of offered entries (`all`, `lo0`, configured interfaces) for each of the DNS, DoT, DoH and DoQ
+interface lists, IP/CIDR entries, and an offered SSL/TLS Certificate (`cert_build_list('cert', 'IPsec')`, the Resolver's own
+list), required while DoT, DoH or DoQ is on). Stop recognises the gateway child
 by `pfb_dns_proxy` in its command line, or by the installed path of the binary the wrapper exec'd
 (`/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-*/pfb-dns`), with the same 0/5/7 s bounds, and never signals a pid
 whose command line is neither. Pinned by

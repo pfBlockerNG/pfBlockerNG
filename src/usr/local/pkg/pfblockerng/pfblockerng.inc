@@ -4172,28 +4172,42 @@ function pfb_dns_proxy_trusted_entry(string $entry): bool {
 }
 
 /**
- * Save-time input errors of the DNS proxy's DoH/DoQ settings on the pfB-DNS page. Every posted value was already
- * sanitized at ingestion. A port is a whole number 1-65535, an interface one of $valid_iface_list, a trusted entry
- * an IP or CIDR prefix; DoH/DoQ need the DNS Resolver's certificate ($certref, its unbound/sslcertref).
+ * Save-time input errors of pfB-DNS's listener settings on its page. Every posted value was already sanitized at
+ * ingestion. A port is a whole number 1-65535, each of the four interface lists (DNS, DoT, DoH, DoQ) an array of at
+ * least one entry of $valid_iface_list, a trusted entry an IP or CIDR prefix, the certificate one of $valid_cert_refs
+ * (the refids the page's selector offers) and required once DoT, DoH or DoQ is on.
  *
  * @param array<string,mixed> $post
  * @param list<string> $valid_iface_list
+ * @param list<string> $valid_cert_refs
  * @return list<string>
  */
-function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_list, string $certref): array {
+function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_list, array $valid_cert_refs): array {
 	$errors = [];
-	foreach (['doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
+	foreach (['dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
 		if (pfb_dns_proxy_listener_port($post["pfb_dns_{$kind}_port"] ?? '') === NULL) {
 			$errors[] = "{$label} Port must be a whole number from 1 to 65535.";
 		}
-		foreach ((array) ($post["pfb_dns_{$kind}_interface"] ?? []) as $interface) {
+	}
+
+	foreach (['pfb_dns_interface' => 'DNS', 'pfb_dns_dot_interface' => 'DoT', 'pfb_dns_doh_interface' => 'DoH', 'pfb_dns_doq_interface' => 'DoQ'] as $field => $label) {
+		$interfaces = $post[$field] ?? NULL;
+		if (!is_array($interfaces) || $interfaces === []) {
+			$errors[] = "{$label}: select at least one interface.";
+			continue;
+		}
+		foreach ($interfaces as $interface) {
 			if (!is_string($interface) || !in_array($interface, $valid_iface_list, TRUE)) {
 				$errors[] = "{$label}: Invalid interface selection: " . htmlspecialchars(is_string($interface) ? $interface : '', ENT_QUOTES);
 			}
 		}
-		if (($post["pfb_dns_{$kind}"] ?? '') === 'on' && $certref === '') {
-			$errors[] = "{$label} is enabled, but DoH/DoQ use the DNS Resolver's SSL/TLS certificate; select one under Services > DNS Resolver.";
-		}
+	}
+
+	$certref = $post['pfb_dns_sslcertref'] ?? '';
+	if ($certref !== '' && !(is_string($certref) && in_array($certref, $valid_cert_refs, TRUE))) {
+		$errors[] = 'SSL/TLS Certificate: the selected certificate does not exist.';
+	} elseif ($certref === '' && (($post['pfb_dns_dot'] ?? '') === 'on' || ($post['pfb_dns_doh'] ?? '') === 'on' || ($post['pfb_dns_doq'] ?? '') === 'on')) {
+		$errors[] = 'DoT, DoH and DoQ need a certificate: select one in SSL/TLS Certificate.';
 	}
 
 	$trusted = $post['pfb_dns_doh_trusted'] ?? '';
@@ -4206,23 +4220,25 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 }
 
 /**
- * The canonical stored value of each of the seven settings from a validated POST: a toggle is on only for 'on', a
- * port loses its leading zeros, interface and trusted lists are deduplicated.
+ * The canonical stored value of each of the twelve settings from a validated POST: a toggle is on only for 'on', a
+ * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated.
  *
  * @param array<string,mixed> $post
  * @return array<string,string> config key => stored string
  */
 function pfb_dns_proxy_listeners_stored(array $post): array {
-	$stored = [];
-	foreach (['doh', 'doq'] as $kind) {
-		$interfaces = array_unique(array_filter((array) ($post["pfb_dns_{$kind}_interface"] ?? []), 'is_string'));
+	$list = static fn (string $key): string => implode(',', array_unique(array_filter((array) ($post[$key] ?? []), 'is_string')));
+	$stored = ['pfb_dns_interface' => $list('pfb_dns_interface')];
+	foreach (['dot', 'doh', 'doq'] as $kind) {
 		$stored["pfb_dns_{$kind}"] = pfb_filter($post["pfb_dns_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
 		$stored["pfb_dns_{$kind}_port"] = pfb_dns_proxy_listener_port($post["pfb_dns_{$kind}_port"] ?? '') ?? PfbConfig::read("dns/pfb_dns_{$kind}_port");
-		$stored["pfb_dns_{$kind}_interface"] = implode(',', $interfaces);
+		$stored["pfb_dns_{$kind}_interface"] = $list("pfb_dns_{$kind}_interface");
 		if ($kind === 'doh') {
 			$stored['pfb_dns_doh_trusted'] = implode(' ', pfb_dns_proxy_tokens((string) ($post['pfb_dns_doh_trusted'] ?? '')));
 		}
 	}
+	$certref = $post['pfb_dns_sslcertref'] ?? '';
+	$stored['pfb_dns_sslcertref'] = is_string($certref) ? $certref : '';
 	return $stored;
 }
 

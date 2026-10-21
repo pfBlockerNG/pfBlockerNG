@@ -7,12 +7,14 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3513 -- the DNSBL page's DoH/DoQ listener settings of the DNS proxy.
+ * issues #3513 and #3538 -- pfB-DNS's listener settings on its own page: the plain DNS, DoT, DoH and DoQ interface
+ * lists, the three transports' ports and toggles, the DoH trusted front ends and the SSL/TLS Certificate they share.
  *
  * Functions under test:
- *   - pfb_validate_dns_proxy_listeners_post(): the save-time input errors for the seven fields. A port is a
- *     whole number 1-65535, an interface is one the page offers, every trusted front end is an IP or CIDR
- *     (never a link-local zone, never shell text), and DoH/DoQ need the DNS Resolver's SSL/TLS certificate.
+ *   - pfb_validate_dns_proxy_listeners_post(): the save-time input errors. Every interface list is an array with at
+ *     least one entry the page offers, a port is a whole number 1-65535, the certificate is one the selector offers
+ *     (and is required once DoT, DoH or DoQ is on), every trusted front end is an IP or CIDR (never a link-local
+ *     zone, never shell text).
  *   - pfb_dns_proxy_listeners_stored(): the canonical stored strings the page persists once validation passed.
  *   - pfb_dns_proxy_tokens(): the one splitter for a space/comma separated list.
  *
@@ -25,24 +27,34 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyListenerSettingsTest extends TestCase
 {
 	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dns.php';
-	private const IFACES = ['lan', 'opt1'];
-	private const PORT_FIELDS = ['DoH port' => ['pfb_dns_doh_port'], 'DoQ port' => ['pfb_dns_doq_port']];
-	private const INTERFACE_FIELDS = ['DoH' => ['pfb_dns_doh_interface'], 'DoQ' => ['pfb_dns_doq_interface']];
+	private const IFACES = ['all', 'lo0', 'lan', 'opt1'];
+	private const CERTS = ['cert5f3a'];
+	private const PORT_FIELDS = [
+		'DoT port' => ['pfb_dns_dot_port', 'DoT'], 'DoH port' => ['pfb_dns_doh_port', 'DoH'], 'DoQ port' => ['pfb_dns_doq_port', 'DoQ'],
+	];
+	private const INTERFACE_FIELDS = [
+		'DNS' => ['pfb_dns_interface'], 'DoT' => ['pfb_dns_dot_interface'], 'DoH' => ['pfb_dns_doh_interface'], 'DoQ' => ['pfb_dns_doq_interface'],
+	];
+	private const NEEDS_CERT = 'DoT, DoH and DoQ need a certificate: select one in SSL/TLS Certificate.';
+	private const NO_SUCH_CERT = 'SSL/TLS Certificate: the selected certificate does not exist.';
 
-	/** @param array<string,mixed> $over fields replacing the defaults the page posts on a fresh install */
+	/** @param array<string,mixed> $over fields replacing the defaults the page posts: every list holds one entry, every transport is off */
 	private function post(array $over = []): array
 	{
 		return $over + [
-			'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '4443', 'pfb_dns_doh_interface' => [],
+			'pfb_dns_interface' => ['lan'],
+			'pfb_dns_dot' => '', 'pfb_dns_dot_port' => '853', 'pfb_dns_dot_interface' => ['lan'],
+			'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '4443', 'pfb_dns_doh_interface' => ['lan'],
 			'pfb_dns_doh_trusted' => '',
-			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_doq_interface' => [],
+			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_doq_interface' => ['lan'],
+			'pfb_dns_sslcertref' => '',
 		];
 	}
 
 	/** @return list<string> */
-	private function errors(array $over = [], string $certref = 'cert5f3a'): array
+	private function errors(array $over = []): array
 	{
-		return pfb_validate_dns_proxy_listeners_post($this->post($over), self::IFACES, $certref);
+		return pfb_validate_dns_proxy_listeners_post($this->post($over), self::IFACES, self::CERTS);
 	}
 
 	// -----------------------------------------------------------------------
@@ -60,6 +72,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'negative'         => ['-1'],
 			'service name'     => ['domain'],
 			'padded'           => [' 443'],
+			'padded DoT port'  => [' 853'],
 			'overflowing int'  => ['99999999999999999999'],
 			'excessive zero padding' => ['000443'],
 			'fullwidth digits' => ['４４４３'],
@@ -67,30 +80,38 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	}
 
 	#[DataProvider('badPorts')]
-	public function testAPortOutsideOneToSixtyFiveThousandIsAnInputErrorForBothFields(string $port): void
+	public function testAPortOutsideOneToSixtyFiveThousandIsAnInputErrorForEveryPortField(string $port): void
 	{
-		foreach (array_keys(self::PORT_FIELDS) as $label) {
-			$field = self::PORT_FIELDS[$label][0];
+		foreach (self::PORT_FIELDS as $label => [$field, $name]) {
 			$this->assertSame([], $this->errors(), 'before: the defaults post no error');
 
 			$errors = $this->errors([$field => $port]);
 
-			$this->assertCount(1, $errors, "{$label} {$port}: " . json_encode($errors));
-			$this->assertStringContainsString(str_starts_with($field, 'pfb_dns_doh') ? 'DoH' : 'DoQ', $errors[0]);
-			$this->assertStringContainsString('Port', $errors[0]);
+			$this->assertSame(["{$name} Port must be a whole number from 1 to 65535."], $errors, "{$label} {$port}: " . json_encode($errors));
 		}
 	}
 
 	/** @return array<string,array{string}> */
 	public static function goodPorts(): array
 	{
-		return ['default DoH' => ['4443'], 'lowest' => ['1'], 'highest' => ['65535'], 'zero padded' => ['00443']];
+		return [
+			'default DoH' => ['4443'], 'lowest' => ['1'], 'highest' => ['65535'], 'zero padded' => ['00443'],
+			'zero padded to one digit' => ['08'],
+		];
 	}
 
 	#[DataProvider('goodPorts')]
 	public function testAPortInRangeIsAccepted(string $port): void
 	{
-		$this->assertSame([], $this->errors(['pfb_dns_doh_port' => $port, 'pfb_dns_doq_port' => $port]));
+		$this->assertSame([], $this->errors(['pfb_dns_dot_port' => $port, 'pfb_dns_doh_port' => $port, 'pfb_dns_doq_port' => $port]));
+	}
+
+	public function testAnAbsentPortIsAnInputError(): void
+	{
+		$post = $this->post();
+		unset($post['pfb_dns_dot_port']);
+
+		$this->assertSame(['DoT Port must be a whole number from 1 to 65535.'], pfb_validate_dns_proxy_listeners_post($post, self::IFACES, self::CERTS));
 	}
 
 	// -----------------------------------------------------------------------
@@ -102,6 +123,9 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	{
 		return [
 			'not configured'          => [['opt99'], 'opt99'],
+			'not offered'             => [['wan2'], 'wan2'],
+			'path traversal'          => [['../x'], '../x'],
+			'shell metacharacter'     => [['lo0;rm'], 'lo0;rm'],
 			'wrong case'              => [['LAN'], 'LAN'],
 			'one bad among good ones' => [['lan', 'opt99'], 'opt99'],
 			'markup'                  => [['<b>lan</b>'], '&lt;b&gt;lan&lt;/b&gt;'],
@@ -109,7 +133,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	}
 
 	#[DataProvider('badInterfaces')]
-	public function testAnInterfaceThePageDoesNotOfferIsAnInputError(array $posted, string $named): void
+	public function testAnInterfaceThePageDoesNotOfferIsAnInputErrorForEveryList(array $posted, string $named): void
 	{
 		foreach (self::INTERFACE_FIELDS as $label => [$field]) {
 			$this->assertSame([], $this->errors([$field => ['lan']]), 'before: a configured interface is accepted');
@@ -117,6 +141,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			$errors = $this->errors([$field => $posted]);
 
 			$this->assertCount(1, $errors, "{$label}: " . json_encode($errors));
+			$this->assertStringStartsWith("{$label}: Invalid interface selection: ", $errors[0]);
 			$this->assertStringContainsString($named, $errors[0], 'the error names the offending value, escaped');
 		}
 	}
@@ -128,10 +153,37 @@ final class DnsProxyListenerSettingsTest extends TestCase
 		$this->assertCount(1, $errors, json_encode($errors));
 	}
 
-	public function testConfiguredInterfacesAndAnEmptySelectionAreAccepted(): void
+	public function testAllLocalhostAndConfiguredInterfacesAreAcceptedInEveryList(): void
 	{
-		$this->assertSame([], $this->errors(['pfb_dns_doh_interface' => ['lan', 'opt1', 'lan']]), 'duplicates are not an error');
-		$this->assertSame([], $this->errors(['pfb_dns_doh_interface' => []]), 'none = the proxy\'s own addresses');
+		foreach (self::INTERFACE_FIELDS as $label => [$field]) {
+			$this->assertSame([], $this->errors([$field => ['all', 'lo0', 'lan', 'opt1', 'lan']]), "{$label}: all, Localhost and the interfaces are offered; duplicates are not an error");
+		}
+	}
+
+	/** @return array<string,array{mixed}> */
+	public static function emptyOrScalarLists(): array
+	{
+		return ['empty array' => [[]], 'empty string' => [''], 'a scalar' => ['lan']];
+	}
+
+	#[DataProvider('emptyOrScalarLists')]
+	public function testAnInterfaceListThatIsNotANonEmptyArrayIsOneInputErrorForEveryList(mixed $posted): void
+	{
+		foreach (self::INTERFACE_FIELDS as $label => [$field]) {
+			$this->assertSame([], $this->errors(), 'before: the defaults post no error');
+
+			$this->assertSame(["{$label}: select at least one interface."], $this->errors([$field => $posted]), $label);
+		}
+	}
+
+	public function testAnAbsentInterfaceListIsTheSameInputError(): void
+	{
+		foreach (self::INTERFACE_FIELDS as $label => [$field]) {
+			$post = $this->post();
+			unset($post[$field]);
+
+			$this->assertSame(["{$label}: select at least one interface."], pfb_validate_dns_proxy_listeners_post($post, self::IFACES, self::CERTS), $label);
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -230,52 +282,96 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// V4 -- the Resolver's certificate
+	// V4 -- the SSL/TLS Certificate
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{string,string}> */
+	/** @return array<string,array{string}> */
 	public static function tlsToggles(): array
 	{
-		return ['DoH' => ['pfb_dns_doh', 'DoH'], 'DoQ' => ['pfb_dns_doq', 'DoQ']];
+		return ['DoT' => ['pfb_dns_dot'], 'DoH' => ['pfb_dns_doh'], 'DoQ' => ['pfb_dns_doq']];
 	}
 
 	#[DataProvider('tlsToggles')]
-	public function testDohOrDoqOnWithoutAResolverCertificateIsAnInputError(string $toggle, string $label): void
+	public function testDotDohOrDoqOnWithoutACertificateIsOneInputError(string $toggle): void
 	{
-		$this->assertSame([], $this->errors([$toggle => 'on'], 'cert5f3a'), 'before: with a certificate it is accepted');
+		$this->assertSame([], $this->errors([$toggle => 'on', 'pfb_dns_sslcertref' => 'cert5f3a']), 'before: with a certificate it is accepted');
 
-		$errors = $this->errors([$toggle => 'on'], '');
-
-		$this->assertCount(1, $errors, json_encode($errors));
-		$this->assertStringContainsString($label, $errors[0]);
-		$this->assertStringContainsString('DNS Resolver', $errors[0]);
-		$this->assertStringContainsString('SSL/TLS', $errors[0]);
+		$this->assertSame([self::NEEDS_CERT], $this->errors([$toggle => 'on', 'pfb_dns_sslcertref' => '']));
 	}
 
-	public function testBothOnWithoutACertificateReportsEach(): void
+	public function testAllThreeOnWithoutACertificateReportOneErrorNotOnePerTransport(): void
 	{
-		$this->assertCount(2, $this->errors(['pfb_dns_doh' => 'on', 'pfb_dns_doq' => 'on'], ''));
+		$this->assertSame([self::NEEDS_CERT], $this->errors(['pfb_dns_dot' => 'on', 'pfb_dns_doh' => 'on', 'pfb_dns_doq' => 'on']));
 	}
 
-	public function testBothOffNeedNoCertificate(): void
+	public function testAllOffNeedNoCertificateAndAnOfferedOneIsAccepted(): void
 	{
-		$this->assertSame([], $this->errors([], ''));
+		$this->assertSame([], $this->errors(['pfb_dns_sslcertref' => '']));
+		$this->assertSame([], $this->errors(['pfb_dns_sslcertref' => 'cert5f3a']));
+	}
+
+	/** @return array<string,array{mixed}> */
+	public static function badCerts(): array
+	{
+		return [
+			'not offered'           => ['cert9999'],
+			'wrong case'            => ['CERT5F3A'],
+			'quotes and shell text' => ["x' ; rm -rf /"],
+			'an array'              => [['cert5f3a']],
+		];
+	}
+
+	#[DataProvider('badCerts')]
+	public function testACertificateTheSelectorDoesNotOfferIsOneInputErrorThatDoesNotEchoIt(mixed $posted): void
+	{
+		foreach ([[], ['pfb_dns_dot' => 'on']] as $toggles) {
+			$errors = $this->errors($toggles + ['pfb_dns_sslcertref' => $posted]);
+
+			$this->assertSame([self::NO_SUCH_CERT], $errors, json_encode($errors));
+		}
+	}
+
+	public function testOnlyACertificateWithAPrivateKeyIsOfferedAndSoAccepted(): void
+	{
+		// Given the certificates pfSense's selector would build the list from: one with a private key, one (a CA) without
+		$saved = $GLOBALS['config'] ?? NULL;
+		$GLOBALS['config']['cert'] = [
+			['refid' => 'srv1', 'descr' => 'Server', 'prv' => 'KEY'],
+			['refid' => 'ca1', 'descr' => 'CA only', 'prv' => ''],
+		];
+		try {
+			// When the page validates against the refids of cert_build_list('cert', 'IPsec')
+			$offered = array_map('strval', array_keys(cert_build_list('cert', 'IPsec')));
+			$post = fn (string $ref): array => $this->post(['pfb_dns_dot' => 'on', 'pfb_dns_sslcertref' => $ref]);
+
+			// Then the keyed one is accepted and the keyless one is not
+			$this->assertSame(['srv1'], $offered);
+			$this->assertSame([], pfb_validate_dns_proxy_listeners_post($post('srv1'), self::IFACES, $offered));
+			$this->assertSame([self::NO_SUCH_CERT], pfb_validate_dns_proxy_listeners_post($post('ca1'), self::IFACES, $offered));
+		} finally {
+			$GLOBALS['config'] = $saved;
+		}
 	}
 
 	// -----------------------------------------------------------------------
 	// What the page stores
 	// -----------------------------------------------------------------------
 
-	public function testAFreshPostStoresTheRegisteredDefaults(): void
+	public function testAFreshPostStoresTheDefaultPortsAndTheOfferedLists(): void
 	{
 		$this->assertSame([
+			'pfb_dns_interface'     => 'lan',
+			'pfb_dns_dot'           => '',
+			'pfb_dns_dot_port'      => '853',
+			'pfb_dns_dot_interface' => 'lan',
 			'pfb_dns_doh'           => '',
 			'pfb_dns_doh_port'      => '4443',
-			'pfb_dns_doh_interface' => '',
+			'pfb_dns_doh_interface' => 'lan',
 			'pfb_dns_doh_trusted'   => '',
 			'pfb_dns_doq'           => '',
 			'pfb_dns_doq_port'      => '853',
-			'pfb_dns_doq_interface' => '',
+			'pfb_dns_doq_interface' => 'lan',
+			'pfb_dns_sslcertref'    => '',
 		], pfb_dns_proxy_listeners_stored($this->post()));
 	}
 
@@ -284,23 +380,33 @@ final class DnsProxyListenerSettingsTest extends TestCase
 		// An unchecked checkbox and an empty multi-select are simply absent from a browser POST.
 		$stored = pfb_dns_proxy_listeners_stored([]);
 
-		$this->assertSame('', $stored['pfb_dns_doh']);
-		$this->assertSame('', $stored['pfb_dns_doq']);
-		$this->assertSame('', $stored['pfb_dns_doh_interface']);
+		foreach (['pfb_dns_dot', 'pfb_dns_doh', 'pfb_dns_doq', 'pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface', 'pfb_dns_sslcertref'] as $key) {
+			$this->assertSame('', $stored[$key], $key);
+		}
+		$this->assertSame('853', $stored['pfb_dns_dot_port']);
 	}
 
 	public function testStoredValuesAreCanonical(): void
 	{
 		$stored = pfb_dns_proxy_listeners_stored($this->post([
+			'pfb_dns_interface'     => ['lo0', 'lan', 'lo0'],
+			'pfb_dns_dot'           => 'on',
+			'pfb_dns_dot_port'      => '08',
+			'pfb_dns_dot_interface' => ['all'],
 			'pfb_dns_doh'           => 'on',
 			'pfb_dns_doh_port'      => '00443',
 			'pfb_dns_doh_interface' => ['lan', 'lan', 'opt1'],
 			'pfb_dns_doh_trusted'   => '192.0.2.10, 2001:db8::/32 ,,10.0.0.0/8 192.0.2.10',
 			'pfb_dns_doq'           => 'yes',
 			'pfb_dns_doq_interface' => 'lan',
+			'pfb_dns_sslcertref'    => 'cert5f3a',
 		]));
 
 		$this->assertSame([
+			'pfb_dns_interface'     => 'lo0,lan',
+			'pfb_dns_dot'           => 'on',
+			'pfb_dns_dot_port'      => '8',
+			'pfb_dns_dot_interface' => 'all',
 			'pfb_dns_doh'           => 'on',
 			'pfb_dns_doh_port'      => '443',
 			'pfb_dns_doh_interface' => 'lan,opt1',
@@ -308,7 +414,16 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_doq'           => '',
 			'pfb_dns_doq_port'      => '853',
 			'pfb_dns_doq_interface' => 'lan',
+			'pfb_dns_sslcertref'    => 'cert5f3a',
 		], $stored, 'port without leading zeros; interfaces and trusted deduplicated; a toggle is on only for "on"');
+	}
+
+	public function testAnUnusableDotPortKeepsTheStoredValueAndACertrefThatIsNotTextStoresEmpty(): void
+	{
+		$stored = pfb_dns_proxy_listeners_stored($this->post(['pfb_dns_dot_port' => '0', 'pfb_dns_sslcertref' => ['cert5f3a']]));
+
+		$this->assertSame('853', $stored['pfb_dns_dot_port'], 'the registered default when nothing is stored');
+		$this->assertSame('', $stored['pfb_dns_sslcertref']);
 	}
 
 	public function testTokensSplitOnSpacesCommasAndTabsAndDropEmptiesAndRepeats(): void
@@ -326,13 +441,13 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	{
 		$page = (string) file_get_contents(self::PAGE);
 
-		$sanitize = strpos($page, "'pfb_dns_doh_port', 'pfb_dns_doq_port', 'pfb_dns_doh_trusted'");
+		$sanitize = strpos($page, "'pfb_dns_dot_port', 'pfb_dns_doh_port', 'pfb_dns_doq_port', 'pfb_dns_doh_trusted'");
 		$validate = strpos($page, 'pfb_validate_dns_proxy_listeners_post(');
 		$gate     = strpos($page, 'if (!$input_errors) {');
 		$store    = strpos($page, 'pfb_dns_proxy_listeners_stored(');
 
 		$this->assertNotFalse($sanitize, 'the single-line text fields join the ingestion prologue');
-		$this->assertNotFalse($validate, 'the page validates the seven fields');
+		$this->assertNotFalse($validate, 'the page validates the twelve fields');
 		$this->assertNotFalse($gate);
 		$this->assertNotFalse($store, 'the page persists the canonical values');
 		$this->assertLessThan($validate, $sanitize, 'sanitize before validate');
