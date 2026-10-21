@@ -3599,6 +3599,8 @@ if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
 // in the Unbound chroot directory, where the proxy already writes as `unbound` (its module files).
 $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
+// The gateway's log (daemon(8) -o), which pfb_dns_proxy_startup_check() reads to see which listeners the current start bound.
+$pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
 // The Resolver's certificate chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
 // It is root's alone, in a directory root alone can enter and outside the Unbound chroot: the gateway reads it once, at start, while it is
 // still root, and a renewal reaches the running gateway as a push on its control socket (pfb_dns_proxy_certificate_push()), because the
@@ -4087,6 +4089,23 @@ function pfb_dns_proxy_skipped_warnings(string $label, array $skipped): array {
 		};
 	}
 	return $warnings;
+}
+
+/**
+ * The addresses plain DNS is served on besides loopback, and the warning for each setting that left one out: an interface that adds
+ * no address (pfb_dns_proxy_skipped_warnings()) or a stored list that names none. pfb_dns_proxy_service() builds the command line
+ * from it and pfb_dns_proxy_startup_check() asks it again, so both say the same thing.
+ *
+ * @param list<string> $warnings gets the "DNS proxy: ..." lines
+ * @return list<string>
+ */
+function pfb_dns_proxy_plain_listen(array &$warnings): array {
+	$listen = pfb_dns_proxy_listen($skipped);
+	array_push($warnings, ...pfb_dns_proxy_skipped_warnings('plain DNS', $skipped));
+	if (pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface')) === []) {
+		$warnings[] = 'DNS proxy: the stored plain DNS interface list names no interface; plain DNS is served on loopback only';
+	}
+	return $listen;
 }
 
 /** The distinct, non-empty words of a space/comma separated settings list, in order. */
@@ -4580,14 +4599,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 		return;
 	}
 	$warnings = [];
-	$listen = [];
-	if ($saved !== NULL) {
-		$listen = pfb_dns_proxy_listen($skipped);
-		$warnings = pfb_dns_proxy_skipped_warnings('plain DNS', $skipped);
-		if (pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface')) === []) {
-			$warnings[] = 'DNS proxy: the stored plain DNS interface list names no interface; plain DNS is not served';
-		}
-	}
+	$listen = ($saved === NULL) ? [] : pfb_dns_proxy_plain_listen($warnings);
 	$addresses = '';
 	foreach (array_merge($listen, PFB_DNS_PROXY_LOOPBACK) as $address) {
 		$addresses .= ' --listen ' . escapeshellarg($address);
@@ -4833,15 +4845,19 @@ function pfb_dns_proxy_await_ready(): bool {
 }
 
 /**
- * After a start or restart the proxy was asked for: wait for it to become ready, outside any lock. One that does not within
- * the budget has failed its activation, and the activation is rolled back (pfb_dns_proxy_roll_back()).
+ * After a start or restart the proxy was asked for: wait for it to become ready, outside any lock, then check what the start left
+ * (pfb_dns_proxy_startup_check(): one notice for every problem). One that does not become ready within the budget has failed its
+ * activation: the check says so first, with the gateway's last error (the rollback consumes the snapshot the check goes by), then
+ * the activation is rolled back (pfb_dns_proxy_roll_back()).
  *
  * @return bool TRUE iff the proxy is ready; FALSE after a failed activation, whatever the rollback achieved
  */
 function pfb_dns_proxy_confirm_ready(): bool {
 	if (pfb_dns_proxy_await_ready()) {
+		pfb_dns_proxy_startup_check(TRUE);
 		return TRUE;
 	}
+	pfb_dns_proxy_startup_check(FALSE);
 	pfb_logger("\nNot completed: the DNS proxy did not become ready within " . PFB_DNS_PROXY_START_WAIT . ' s', 2);
 	pfb_dns_proxy_roll_back();
 	return FALSE;
@@ -4862,6 +4878,119 @@ function pfb_dns_proxy_notify(string $id, string $text, string $url): void {
 	}
 	if ($standing !== htmlentities($text)) {
 		file_notice($id, $text, 'pfBlockerNG', $url, 2);
+	}
+}
+
+/**
+ * After a pfB-DNS start (an apply, the boot start) and on the cron tick while the proxy is meant to serve: raise ONE notice, id
+ * `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id when there is none. The
+ * notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or replaced here. The
+ * problems, in this order, each one sentence that says what is not served and why:
+ *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one;
+ *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the
+ *      CURRENT start did not report as `listening <kind> <host:port>`, with the reason the gateway logged for that address
+ *      (`cannot listen on <host:port>: <reason>`), else that it did not report it. The current start is what the log's last
+ *      64 KiB holds after the second-to-last `ready upstream` line and up to the last one. A log with no such line (rotated,
+ *      truncated) cannot be judged: it gives no problem and closes nothing;
+ *   3. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
+ *      the code the service uses (pfb_dns_proxy_plain_listen(), pfb_dns_proxy_tls_flags()).
+ * A notice is closed only when the start was judged and nothing was found; file_notice() files a row for every changed text and
+ * close_notice() removes one row per call, so every row of the id is closed, by its key.
+ *
+ * @param bool|null $ready whether the proxy became ready; NULL = wait for it with pfb_dns_proxy_await_ready(), the only wait here.
+ *        With no snapshot stored (nothing is meant to serve) and no failure reported, nothing is checked, closed or waited for
+ */
+function pfb_dns_proxy_startup_check(?bool $ready = NULL): void {
+	global $pfb;
+
+	$saved = pfb_dns_proxy_saved();
+	if ($saved === NULL && $ready !== FALSE) {
+		return;
+	}
+	$ready ??= pfb_dns_proxy_await_ready();
+	$id = 'pfBlockerNG DNS Proxy startup';
+
+	// The log's last 64 KiB as lines, the line the cut falls in dropped; none when it is missing or unreadable
+	$lines = [];
+	$handle = @fopen($pfb['dns_proxy_log'], 'rb');
+	if ($handle !== FALSE) {
+		$cut = (int) @filesize($pfb['dns_proxy_log']) > 65536 && fseek($handle, -65536, SEEK_END) === 0;
+		$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
+		if ($cut) {
+			array_shift($lines);
+		}
+		fclose($handle);
+	}
+
+	$problems = [];
+	$judged = FALSE;
+	if (!$ready) {
+		$error = '';
+		foreach ($lines as $line) {
+			if (str_starts_with($line, 'pfb_dns_gateway:')) {
+				$error = $line;
+			}
+		}
+		$problems[] = 'pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s' .
+		    (($error === '') ? '' : " (last gateway error: {$error})");
+	} else {
+		$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
+		$judged = ($ends !== []);
+		if ($judged) {
+			// host:port the way the gateway prints it (Go's netip): IPv6 compressed and bracketed. Only IP characters reach inet_pton()
+			$where = static function (string $host, string $port): string {
+				$packed = @inet_pton($host);
+				$host = ($packed === FALSE) ? $host : (string) inet_ntop($packed);
+				return (str_contains($host, ':') ? "[{$host}]" : $host) . ":{$port}";
+			};
+			$served = [];
+			$refused = [];
+			$last = (int) end($ends);
+			$from = (count($ends) > 1) ? $ends[count($ends) - 2] + 1 : 0;
+			foreach (array_slice($lines, $from, $last - $from) as $line) {
+				if (preg_match('/^listening (udp\+tcp|dot|doh|doq) \[?([0-9A-Fa-f:.]+)\]?:([0-9]+)$/', $line, $found) === 1) {
+					$served["{$found[1]} " . $where($found[2], $found[3])] = TRUE;
+				} elseif (preg_match('/^cannot listen on \[?([0-9A-Fa-f:.]+)\]?:([0-9]+): (.*)$/', $line, $found) === 1) {
+					$refused[$where($found[1], $found[2])] = $found[3];
+				}
+			}
+			// What the rc script's command asks the gateway to bind: --listen/--port for plain DNS, --<kind>-listen/--<kind>-port for DoT, DoH, DoQ
+			$rc = (string) @file_get_contents(PFB_DNS_PROXY_RCFILE);
+			$command = (preg_match('~^[ \t]*/usr/sbin/daemon .*$~m', $rc, $daemon) === 1) ? $daemon[0] : '';
+			foreach (['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
+				$flag = ($kind === 'udp+tcp') ? '' : "{$kind}-";
+				if (preg_match("/ --{$flag}port '?([0-9]+)'?(?= |\$)/", $command, $port) !== 1) {
+					continue;
+				}
+				preg_match_all("/ --{$flag}listen '([0-9A-Fa-f:.]+)'/", $command, $addresses);
+				foreach ($addresses[1] as $address) {
+					$at = $where($address, $port[1]);
+					if (!isset($served["{$kind} {$at}"])) {
+						$problems[] = "{$label} is not served on {$at}: " . ($refused[$at] ?? 'the gateway did not report it listening');
+					}
+				}
+			}
+		}
+	}
+	if ($saved !== NULL) {
+		$warnings = [];
+		pfb_dns_proxy_plain_listen($warnings);
+		pfb_dns_proxy_tls_flags($warnings);
+		foreach ($warnings as $warning) {
+			$problems[] = (string) preg_replace('/^DNS proxy: /', '', $warning, 1);
+		}
+	}
+
+	if ($problems !== []) {
+		pfb_dns_proxy_notify($id, 'pfB-DNS started with problems: ' .
+		    implode(' ', array_map(static fn (string $problem): string => rtrim($problem, '.') . '.', $problems)) .
+		    ' Correct the settings on the pfB-DNS page or the cause named, then run an Update.', '/pfblockerng/pfblockerng_dns.php');
+	} elseif ($judged) {
+		foreach (get_notices() ?: [] as $key => $row) {
+			if (($row['id'] ?? NULL) === htmlentities($id)) {
+				close_notice($key);
+			}
+		}
 	}
 }
 
@@ -5279,6 +5408,15 @@ if (isset($argv[1])) {
 	// The Resolver's certificate for the gateway's DoT, DoH and DoQ, written where the rc script's start finds it missing
 	elseif ($argv[1] == 'dns_cert') {
 			exit(pfb_dns_proxy_certificate_refresh(TRUE) ? 0 : 1);
+	}
+
+	// The boot start's check (pfb_upstream_observer_include.inc backgrounds it, bounded by timeout(1)): the certificate that could not be
+	// exported or pushed gets its notice, then the start is checked and its problems become the one startup notice
+	elseif ($argv[1] == 'dns_check') {
+			pfb_global();
+			pfb_dns_proxy_certificate_sync();
+			pfb_dns_proxy_startup_check();
+			exit(0);
 	}
 }
 

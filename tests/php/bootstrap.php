@@ -158,6 +158,8 @@ error_reporting($pfb_prev_er);
 //     like the other runtime paths, so a unit test reads its own files, never /var/run or /var/unbound.
 $GLOBALS['pfb']['dns_proxy_pidfile'] = "{$pfb_test_tmp}/pfb_dns_proxy.pid";
 $GLOBALS['pfb']['dns_proxy_ready'] = "{$pfb_test_tmp}/pfb_dns_ready";
+// The gateway's log, where the startup check reads which listeners it bound (issue #3538): a sandbox file, never /var/log.
+$GLOBALS['pfb']['dns_proxy_log'] = "{$pfb_test_tmp}/dns_proxy.log";
 $pfb_test_timeout_out = [];
 $pfb_test_timeout_rc = 0;
 exec('command -v timeout 2>/dev/null', $pfb_test_timeout_out, $pfb_test_timeout_rc);

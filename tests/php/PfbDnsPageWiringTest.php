@@ -269,7 +269,9 @@ final class PfbDnsPageWiringTest extends TestCase
 	public function testNoShippedSourceStillNamesTheRetiredGatewayBinary(): void
 	{
 		// The package ships pfb-dns (bin/<target>/pfb-dns, run through pfb_dns.sh); the single pfb_dns_gateway binary
-		// never shipped, so no page, include, script or doc string in the package may still send an operator to it
+		// never shipped, so no page, include, script or doc string in the package may still send an operator to it. The one use
+		// that stays is the prefix the gateway puts on its fatal errors in dns_proxy.log (`pfb_dns_gateway: <error>`), which the
+		// pfB-DNS startup check (issue #3538) matches to quote the last one: the name followed by a colon is that prefix.
 		$root = dirname(__DIR__, 2) . '/src';
 		$found = [];
 		$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
@@ -277,7 +279,7 @@ final class PfbDnsPageWiringTest extends TestCase
 			if (!$file->isFile() || !preg_match('/\.(php|inc|xml|sh|py)$/', $file->getFilename())) {
 				continue;
 			}
-			if (str_contains((string) file_get_contents($file->getPathname()), 'pfb_dns_gateway')) {
+			if (preg_match('/pfb_dns_gateway(?!:)/', (string) file_get_contents($file->getPathname())) === 1) {
 				$found[] = substr($file->getPathname(), strlen($root) + 1);
 			}
 		}

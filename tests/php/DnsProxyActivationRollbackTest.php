@@ -59,7 +59,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls', 'pfb_test_service_hook',
 		'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_write_config_calls', 'pfb_test_unbound_configure_calls',
 		'pfb_test_unbound_configure_resolver', 'pfb_test_file_notices', 'pfb_test_try_lock_fail', 'pfb_test_lock_held',
-		'pfb_test_lock_events', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_write_config_hook',
+		'pfb_test_lock_events', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_write_config_hook',
 		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held',
 	];
 
@@ -111,8 +111,11 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		DnsProxyCertificateFixtures::seedResolver($this->tmp);
 		$GLOBALS['pfb_test_lock_held'] = FALSE;
 		unset($GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles']);
-		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
-		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
+		// The Resolver the proxy took over listened on lan and opt1: both are configured, up and addressed, so a healthy start has
+		// no warning for the startup check to report
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
+		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE], 'opt1' => ['status' => 'up', 'enable' => TRUE]];
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => '', 'opt1' => ''];
 		$this->proxyCalls = [];
 		$this->lockHeldWhileWaiting = [];
 		$this->behaviour = 'lives';
@@ -316,7 +319,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame(['start_service', 'stop_service'], $this->proxyCalls);
 
 		// ... and the operator is told what happened and what is running now
-		$notices = $this->notices();
+		$this->assertSame(['pfBlockerNG DNS Proxy startup', 'pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), 'the startup check names the failure, then the rollback notice says what was done');
+		$notices = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('did not become ready', $notices[0]['notice']);
 		$this->assertStringContainsString('turned off', $notices[0]['notice']);
@@ -347,7 +351,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringNotContainsString('python-script', $conf, 'Unbound starts from a file with no python script at all');
 		$this->assertStringContainsString('module-config: "validator iterator"', $conf);
 		$this->assertSame(['start_service', 'stop_service'], $this->proxyCalls);
-		$notices = $this->notices();
+		$this->assertSame(['pfBlockerNG DNS Proxy startup', 'pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), 'the startup check names the failure, then the rollback notice says what was done');
+		$notices = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
 		$this->assertStringNotContainsString('DNSBL', $notices[0]['notice'], 'DNSBL is off: no module to put back');

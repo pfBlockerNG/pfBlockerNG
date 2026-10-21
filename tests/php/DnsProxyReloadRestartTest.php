@@ -33,6 +33,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls',
 		'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_swap_wait_s',
 		'pfb_test_unbound_py_sentinel_published', 'pfb_test_try_lock_fail', 'pfb_test_file_notices',
+		'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces',
 	];
 
 	private string $dir;
@@ -77,6 +78,10 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$GLOBALS['pfb_test_service_calls'] = [];
 		unset($GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles'], $GLOBALS['pfb_test_service_hook'], $GLOBALS['pfb_test_try_lock_fail']);
 		$GLOBALS['pfb_test_file_notices'] = [];
+		// The Resolver the proxy took over listened on lan: configured, up and addressed, so a healthy start has no warning to report
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
+		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
 		$this->clearProxyFiles();
 	}
 

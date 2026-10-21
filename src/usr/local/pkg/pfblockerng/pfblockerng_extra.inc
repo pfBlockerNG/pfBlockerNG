@@ -6821,12 +6821,19 @@ function pfblockerng_tick(
 	global $pfb;
 
 	// issue #3515: a DNS Resolver disabled under pfB-DNS must not wait for the next apply; a pass that is running does it itself
-	if (!pfb_update_pass_running($ps_lines)) {
+	// issue #3538: so does the check of a pfB-DNS start (a listener the gateway did not bind, a start that never became ready), which the
+	// tick reports as a notice while pfB-DNS is meant to serve, and closes once a start is healthy
+	$pass_running = pfb_update_pass_running($ps_lines);
+	if (!$pass_running) {
 		pfb_dns_proxy_stand_down();
 	}
 
 	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
 	pfb_dns_proxy_certificate_sync();
+
+	if (!$pass_running && pfb_dns_proxy_saved() !== NULL) {
+		pfb_dns_proxy_startup_check();
+	}
 
 	$now   = time();
 	$seed  = pfb_tick_seed();

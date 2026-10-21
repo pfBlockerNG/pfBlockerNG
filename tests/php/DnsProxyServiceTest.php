@@ -2015,7 +2015,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->generate();
 
 		$this->assertSame(["'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'));
-		$this->assertStringContainsString('DNS proxy: the stored plain DNS interface list names no interface; plain DNS is not served', $this->errorLog());
+		$this->assertStringContainsString('DNS proxy: the stored plain DNS interface list names no interface; plain DNS is served on loopback only', $this->errorLog());
 	}
 
 	public function testAStoredDohListThatNamesNoInterfaceLeavesDohOutAndWarns(): void

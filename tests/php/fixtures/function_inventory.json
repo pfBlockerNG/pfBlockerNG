@@ -1997,6 +1997,19 @@
             }
         ]
     },
+    "pfb_dns_proxy_plain_listen": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "warnings",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_port": {
         "returnsRef": false,
         "returnType": "string",
@@ -2193,6 +2206,19 @@
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_dns_proxy_startup_check": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "ready",
+                "byRef": false,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_dns_proxy_tls_flags": {
         "returnsRef": false,

@@ -661,6 +661,24 @@ it never claims success. The reload, the apply and the installer each read the r
 (the marker itself); live by `tests/smoke/test_smoke_dns_proxy.py` (the marker, the lock, racing starts, and a rollback with
 every client port held).
 
+**Startup check (issue #3538).** "Ready" says the gateway serves; it does not say it serves every address the rc script names (an
+address that cannot be bound is logged and skipped, plain.go and tlsbind.go). After every start, `pfb_dns_proxy_confirm_ready()` runs
+`pfb_dns_proxy_startup_check()`: ready, with `TRUE`; not ready, with `FALSE` and BEFORE the rollback, which consumes the snapshot. The
+cron tick runs it too while a snapshot is stored and no update pass runs (it waits for readiness with the same bounded
+`pfb_dns_proxy_await_ready()`, and no other wait), and the boot hook backgrounds `php -f pfblockerng.inc dns_check` under
+`timeout(1)` (certificate sync, then the check), because boot has no apply to confirm the start. One notice, id
+`pfBlockerNG DNS Proxy startup`, names every problem, each as a sentence, in this order: the proxy never became ready (with the last
+`pfb_dns_gateway:` line of `dns_proxy.log`); a `--listen`, `--dot-listen`, `--doh-listen` or `--doq-listen` address of the rc
+script's command that the CURRENT start did not log as `listening <kind> <host:port>` (the part of the log's last 64 KiB between
+the second-to-last and the last `ready upstream` line), with the `cannot listen on <host:port>: <reason>` the gateway logged for it;
+and every warning building the command line gives now (`pfb_dns_proxy_plain_listen()` and `pfb_dns_proxy_tls_flags()`, the code
+the service uses). Addresses are compared as the gateway prints them (IPv6 compressed and bracketed). A log with no
+`ready upstream` line cannot be judged: the check files nothing from it and closes nothing. A start with no problem closes the
+notice, every row of the id: pfSense's `close_notice()` removes ONE row per call and `file_notice()` files a row for every changed
+text, so rows are closed by key. The notices `pfBlockerNG DNS Proxy` and `pfBlockerNG DNS Proxy certificate` are never touched.
+The gateway publishes the ready marker a moment before it logs its `listening` lines (`main.go`), so a check that reads the log in
+that moment sees the previous start; the next tick corrects it. Pinned by `DnsProxyStartupCheckTest` and `DnsProxyBootTest`.
+
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,
 which is reachable in either mode; the DNSBL tab no longer has it, and its save never assigns the key, so what the pfB-DNS

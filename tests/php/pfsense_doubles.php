@@ -1983,3 +1983,29 @@ if (!function_exists('get_notices')) {
 		return $rows ?: false;
 	}
 }
+
+if (!function_exists('close_notice')) {
+	// pfSense notices.inc close_notice(): removes ONE row per call, as the real one does: the row keyed $id (a timestamp), then
+	// the oldest row whose stored (encoded) id is $id, each at most once; 'all' empties the queue. A caller that means every
+	// row of an id closes them by key, one call each.
+	function close_notice($id) {
+		if ($id === 'all') {
+			$GLOBALS['pfb_test_file_notices'] = [];
+			return;
+		}
+		$rows = $GLOBALS['pfb_test_file_notices'] ?? [];
+		foreach (array_keys($rows) as $key) {
+			if ($id == $key) {
+				unset($rows[$key]);
+				break;
+			}
+		}
+		foreach ($rows as $key => $row) {
+			if ($id == htmlentities((string) $row['id'])) {
+				unset($rows[$key]);
+				break;
+			}
+		}
+		$GLOBALS['pfb_test_file_notices'] = $rows;
+	}
+}

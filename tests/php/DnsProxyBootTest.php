@@ -110,7 +110,11 @@ final class DnsProxyBootTest extends TestCase
 	{
 		$result = $this->runHook([], 0755);
 
-		$this->assertSame(["{$this->dir}/pfb_dns_proxy.sh start"], $result['calls'], 'one backgrounded start, never a blocking one');
+		$this->assertSame(
+			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check'],
+			$result['calls'],
+			'one backgrounded start, never a blocking one, then the bounded background check that reports a start that fails'
+		);
 		$this->assertSame([], $result['leaked'], 'it is included inside pfSense\'s function: no variable of its own may survive');
 	}
 
