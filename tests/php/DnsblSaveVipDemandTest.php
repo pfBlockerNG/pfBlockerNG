@@ -87,7 +87,7 @@ final class DnsblSaveVipDemandTest extends TestCase
 		], $over);
 	}
 
-	/** Run the page's VIP-validation region for $post; returns [$input_errors, $_POST afterwards]. */
+	/** Run the page's VIP-validation region for $post; returns [$input_errors, $_POST afterwards, the posted policy]. */
 	private function validate(array $post, array $stored = []): array
 	{
 		$_POST = $post;
@@ -95,7 +95,7 @@ final class DnsblSaveVipDemandTest extends TestCase
 			pfb_test_page_region(self::PAGE, '// Validate DNSBL VIP address', "// Validate Adv. firewall rule 'Protocol' setting"),
 			['pfb' => ['dconfig' => $stored], 'input_errors' => [], 'local_tld' => 'local', 'default_tlds' => ['arpa', 'local', 'com']]
 		);
-		return [$scope['input_errors'], $_POST];
+		return [$scope['input_errors'], $_POST, $scope['pfb_posted_policy']];
 	}
 
 	private function seedGroups(string ...$loggings): void
@@ -249,6 +249,21 @@ final class DnsblSaveVipDemandTest extends TestCase
 		$this->assertSame('', $stored['tld_wildcard_blacklist']);
 		$this->assertSame('arpa,local,com', $stored['tld_allow_gtld'], 'an empty gTLD selection stores the default TLDs');
 		$this->assertSame('', $stored['tld_allow_cctld']);
+	}
+
+	public function testPolicyFromPostAcceptsAStringValuedBucket(): void
+	{
+		$stored = self::stored(['tld_allow_cctld' => 'uk', 'tld_allow_gtld' => 'com']);
+
+		$this->assertSame('uk', $stored['tld_allow_cctld']);
+		$this->assertSame('arpa,local,com', $stored['tld_allow_gtld']);
+	}
+
+	public function testThePageMapsTheGtldSelectionWithItsOwnLocalTld(): void
+	{
+		[, , $policy] = $this->validate(self::post(['tld_allow_gtld' => ['io']]));
+
+		$this->assertSame('arpa,local,io', $policy['tld_allow_gtld']);
 	}
 
 	public function testPolicyFromPostCanonicalisesIdnThroughTheStoredEnum(): void
