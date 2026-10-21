@@ -1823,7 +1823,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		// Then the tick neither waits for the proxy nor files or changes anything
 		// the certificate sync looks at readiness once on every tick (a single probe, no wait); a start-budget wait would poll again
-		$this->assertLessThanOrEqual(1, $probes, 'the start-budget wait was never entered');
+		$this->assertSame(1, $probes, 'the certificate sync looks at readiness once per tick; a start-budget wait would poll again');
 		$this->assertSame([], $this->notices());
 		$this->assertSame([], $this->proxyCalls);
 		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is still requested');

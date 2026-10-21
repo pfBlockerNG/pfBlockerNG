@@ -47,6 +47,7 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 			'logdir' => $this->dir,
 			'log'    => "{$this->dir}/pfb.log",
 			'errlog' => "{$this->dir}/pfb.err",
+			'php'    => PHP_BINARY,
 		];
 		foreach (self::SWEPT as $key) {
 			$GLOBALS['pfb'][$key] = "{$this->dir}/{$key}";
