@@ -52,8 +52,11 @@ from .test_smoke_dns_proxy import (
     State,
     _apply,
     _capture,
+    _diagnostics,
+    _occupy,
     _php_ok,
     _query,
+    _release,
     _service_status,
     _set_proxy_toggle,
     _toggle_on,
@@ -319,6 +322,83 @@ def test_an_explicit_size_and_an_admin_directive_keep_winning_while_moved(rig: R
             f"an admin directive leaves the clause without a line: {_clause(_custom_options(vm))!r}"
         )
         assert _advertised_size(rig, stub_dns) == 4096
+
+
+# --------------------------------------------------------------------------- #
+# An upstream bind failure during activation
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.usefixtures("_clear_dns_proxy_notices")
+def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
+    """Given working native Resolver DNS and both upstream transports held before enabling pfB-DNS,
+    When the real toggle and apply cannot start Unbound, Then activation rolls back and native DNS still works
+    while the holders remain on 5353.
+    """
+    vm = rig.vm
+    held = {("tcp4", "127.0.0.1:5353"), ("udp4", "127.0.0.1:5353")}
+    with _unmoved_afterwards(rig):
+        _set_proxy_toggle(vm, False)
+        _apply(vm)
+        before = _capture(vm)
+        assert not _toggle_on_in_config(vm) and not _snapshot_present(vm), (
+            f"before: pfB-DNS must be off with no saved move: {before}"
+        )
+        assert before.service == "stopped" and not before.ps, (
+            f"before: the proxy must be stopped: {before.service} {before.ps}"
+        )
+        assert before.unbound_dns(), f"before: native Unbound has no DNS listeners: {before.listeners}"
+        for tcp in (False, True):
+            blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
+            assert h.is_vip(blocked), f"before: native Resolver must block the listed name (tcp={tcp}): {raw}"
+            allowed, raw = _query(rig.client, h.unique_domain("upstream-before"), tcp=tcp)
+            assert h.resolves_to(allowed, STUB_DNS_A), f"before: native Resolver must resolve (tcp={tcp}): {raw}"
+        prior_notices = len(_notices(vm))
+
+        try:
+            _occupy(vm, ["127.0.0.1"], "5353")
+            _set_proxy_toggle(vm, True)
+            try:
+                # Inspect rollback ourselves: waiting for Unbound here would mask the gateway-only RED.
+                h.reload(vm, "updatednsbl", wait_unbound=False)
+            finally:
+                print(f"[3560] failed upstream activation:\n{_diagnostics(vm)}", flush=True)
+                print(
+                    vm.ssh(f"tail -n 80 {h.PFB_LOGDIR}/error.log /var/log/resolver.log 2>&1").stdout,
+                    flush=True,
+                )
+
+            after = _capture(vm)
+            assert not _toggle_on_in_config(vm), f"failed upstream activation must turn pfB-DNS off: {after}"
+            assert not _snapshot_present(vm), f"rollback must consume the Resolver snapshot: {after.marker!r}"
+            assert after.service == "stopped" and not after.ps, (
+                f"rollback must stop the proxy: {after.service} {after.ps}"
+            )
+            assert after.proxy_pid is None and after.daemon_pid is None, (
+                f"rollback must remove proxy pidfiles: proxy={after.proxy_pid} supervisor={after.daemon_pid}"
+            )
+            assert after.resolver == before.resolver, (
+                f"rollback must restore all original Resolver keys:\nafter={after.resolver}\nbefore={before.resolver}"
+            )
+            new = _notices(vm)[prior_notices:]
+            assert len(new) == 1 and "was turned off" in new[0] and "restored to its previous settings" in new[0], (
+                f"one failure notice must report the rollback: {new}"
+            )
+            assert held <= {(s.proto, s.local) for s in after.listeners if s.command == "nc"}, (
+                f"both upstream holders must remain during recovery: {after.listeners}"
+            )
+            assert after.unbound_dns() == before.unbound_dns(), (
+                f"native Resolver listeners must be restored: {after.unbound_dns()} != {before.unbound_dns()}"
+            )
+            for tcp in (False, True):
+                blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
+                assert h.is_vip(blocked), f"rollback must restore native DNSBL with 5353 held (tcp={tcp}): {raw}"
+                allowed, raw = _query(rig.client, h.unique_domain("upstream-restored"), tcp=tcp)
+                assert h.resolves_to(allowed, STUB_DNS_A), (
+                    f"rollback must restore allowed DNS with 5353 held (tcp={tcp}): {raw}"
+                )
+        finally:
+            _release(vm)
 
 
 # --------------------------------------------------------------------------- #

@@ -60,10 +60,12 @@ final class DnsProxyApplyStartTest extends TestCase
 		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		$this->clearProxyFiles();
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
 				$GLOBALS[$name] = $value;

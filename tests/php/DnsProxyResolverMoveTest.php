@@ -48,6 +48,8 @@ final class DnsProxyResolverMoveTest extends TestCase
 	private bool $hadConfig = FALSE;
 	private array $originalPfb = [];
 	private array $originalConfig = [];
+	private array $originalInterfaceIp = [];
+	private bool $hadInterfaceIp = FALSE;
 
 	protected function setUp(): void
 	{
@@ -55,6 +57,9 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->hadConfig = array_key_exists('config', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 		$this->originalConfig = $GLOBALS['config'] ?? [];
+		$this->hadInterfaceIp = array_key_exists('pfb_test_interface_ip', $GLOBALS);
+		$this->originalInterfaceIp = $GLOBALS['pfb_test_interface_ip'] ?? [];
+		$GLOBALS['pfb_test_interface_ip'] = ['lo0' => '127.0.0.1'];
 		$this->tmp = sys_get_temp_dir() . '/pfb_dns_proxy_move_' . uniqid('', TRUE);
 		mkdir($this->tmp, 0777, TRUE);
 		$GLOBALS['pfb'] = array_merge($this->originalPfb, [
@@ -69,6 +74,11 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		if ($this->hadInterfaceIp) {
+			$GLOBALS['pfb_test_interface_ip'] = $this->originalInterfaceIp;
+		} else {
+			unset($GLOBALS['pfb_test_interface_ip']);
+		}
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
@@ -190,6 +200,19 @@ final class DnsProxyResolverMoveTest extends TestCase
 			$cases["{$key} absent"] = [$key, NULL];
 		}
 		return $cases;
+	}
+
+	public function testAnIpv6OnlyHostDoesNotAskUnboundToBindTheMissingIpv4Loopback(): void
+	{
+		$this->seedResolver(['custom_options' => '']);
+		$GLOBALS['pfb_test_interface_ip']['lo0'] = NULL;
+		$this->assertSame('', $this->savedRaw(), 'before: native Resolver with no saved move');
+
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+
+		$this->assertContains('interface: ::1@5353', $this->customLines(), 'the backend is reachable on IPv6 loopback');
+		$this->assertNotContains('interface: 127.0.0.1@5353', $this->customLines(), 'Unbound must not bind an address absent from lo0');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the original Resolver remains available for rollback');
 	}
 
 	// -----------------------------------------------------------------------

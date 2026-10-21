@@ -12,6 +12,70 @@ require_once __DIR__ . '/support/PfbFlockClockFixture.php';
  */
 trait DnsProxyReadySeedTrait
 {
+	/** @var array<string,string|false> */
+	private array $upstreamFiles = [];
+	private array $upstreamPidState = [];
+	private array $upstreamRcDirState = [];
+
+	private function unboundPidfile(): string
+	{
+		return $GLOBALS['g']['varrun_path'] . '/unbound.pid';
+	}
+
+	private function setUpUpstreamFixture(): void
+	{
+		$this->upstreamRcDirState = [
+			array_key_exists('pfb_test_rcfile_dir', $GLOBALS),
+			$GLOBALS['pfb_test_rcfile_dir'] ?? NULL,
+		];
+		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
+		foreach ([$this->unboundPidfile(), $GLOBALS['pfb_test_sockstat_output'], $GLOBALS['pfb_test_sockstat_status'], PFB_DNS_PROXY_RCFILE] as $file) {
+			$this->upstreamFiles[$file] = is_file($file) ? file_get_contents($file) : FALSE;
+		}
+		$this->upstreamPidState = [
+			array_key_exists($this->unboundPidfile(), $GLOBALS['pfb_test_valid_pids'] ?? []),
+			$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] ?? NULL,
+		];
+		$this->seedUnbound();
+	}
+
+	private function tearDownUpstreamFixture(): void
+	{
+		foreach ($this->upstreamFiles as $file => $contents) {
+			if ($contents === FALSE) {
+				@unlink($file);
+			} else {
+				file_put_contents($file, $contents);
+			}
+		}
+		[$existed, $value] = $this->upstreamPidState;
+		if ($existed) {
+			$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = $value;
+		} else {
+			unset($GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()]);
+		}
+		$this->upstreamFiles = [];
+		[$existed, $value] = $this->upstreamRcDirState;
+		if ($existed) {
+			$GLOBALS['pfb_test_rcfile_dir'] = $value;
+		} else {
+			unset($GLOBALS['pfb_test_rcfile_dir']);
+		}
+	}
+
+	/** Backend health is independent of the gateway's marker: failed-backend tests never get it from proxyServes(). */
+	private function seedUnbound(string $endpoint = '127.0.0.1:5353', string $pid = '5151', bool $alive = TRUE): void
+	{
+		file_put_contents($this->unboundPidfile(), "{$pid}\n");
+		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = $alive;
+		$family = str_starts_with($endpoint, '[') ? '6' : '4';
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'],
+			"USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n"
+			. "unbound unbound {$pid} 3 tcp{$family} {$endpoint} *:*\n"
+			. "unbound unbound {$pid} 4 udp{$family} {$endpoint} *:*\n");
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "0\n");
+	}
+
 	private function proxyPidfile(): string
 	{
 		return (string) $GLOBALS['pfb']['dns_proxy_pidfile'];

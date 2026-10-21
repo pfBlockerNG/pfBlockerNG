@@ -89,6 +89,34 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(['launch'], $this->events());
 	}
 
+	/** @return array<string,array{?string,bool,string,string}> */
+	public static function upstreamFamilies(): array
+	{
+		return [
+			'IPv4 only' => ['127.0.0.1', FALSE, '', '127.0.0.1:5353'],
+			'IPv6 only' => [NULL, TRUE, '', '[::1]:5353'],
+			'dual stack prefers IPv4' => ['127.0.0.1', TRUE, '', '127.0.0.1:5353'],
+			'IPv6 disabled in Unbound' => ['127.0.0.1', TRUE, 'do-ip6: no', '127.0.0.1:5353'],
+		];
+	}
+
+	#[DataProvider('upstreamFamilies')]
+	public function testTheExecutedGatewayUsesAnAvailableLoopbackFamily(?string $v4, bool $v6, string $custom, string $expected): void
+	{
+		$this->moveResolver(FALSE, 'lan', $v4 === NULL ? [] : ['lan' => '192.0.2.1'], $v6 ? ['lan' => '2001:db8::1'] : []);
+		$GLOBALS['pfb_test_interface_ip']['lo0'] = $v4;
+		config_set_path('unbound/custom_options', base64_encode($custom));
+		$this->generate();
+		$this->arrange();
+
+		[$status, $output] = $this->rc('start');
+
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$argv = $this->daemonArgv();
+		$this->assertSame($expected, $argv[(int) array_search('--upstream', $argv, TRUE) + 1],
+			'the executed generated command, not a re-derived address, owns the backend endpoint');
+	}
+
 	public function testTheProxyAlsoServesLoopbackSoTheFirewallsOwnLookupsAreFilteredWhateverTheSavedInterfaces(): void
 	{
 		// Given a Resolver saved on one IPv4-only interface: loopback is not among its addresses, and Unbound has

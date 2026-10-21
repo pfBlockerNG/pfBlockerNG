@@ -83,10 +83,12 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
 		$this->clearProxyFiles();
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
 				$GLOBALS[$name] = $value;

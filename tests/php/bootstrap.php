@@ -51,6 +51,7 @@ $GLOBALS['g'] = [
 	'vardb_path'  => "{$pfb_test_tmp}/db",
 	'varlog_path' => "{$pfb_test_tmp}/log",
 	'tmp_path'    => "{$pfb_test_tmp}/tmp",
+	'varrun_path' => "{$pfb_test_tmp}/tmp",
 	'pfblockerng_install' => false,
 ];
 $GLOBALS['pfb'] = [];
@@ -143,6 +144,22 @@ if (!defined('PFB_DNS_PROXY_LOG_WAIT')) {
 	define('PFB_DNS_PROXY_LOG_WAIT', 0);
 }
 unset($pfb_test_rc_dir);
+
+// sockstat remains a real bounded executable; each test controls only its platform stdout and exit status.
+$GLOBALS['pfb_test_sockstat_output'] = "{$pfb_test_tmp}/sockstat.out";
+$GLOBALS['pfb_test_sockstat_status'] = "{$pfb_test_tmp}/sockstat.status";
+file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+file_put_contents($GLOBALS['pfb_test_sockstat_status'], "0\n");
+$pfb_test_sockstat = "{$pfb_test_tmp}/sockstat";
+file_put_contents($pfb_test_sockstat, "#!/bin/sh\n"
+	. 'cat ' . escapeshellarg($GLOBALS['pfb_test_sockstat_output']) . "\n"
+	. 'read -r status < ' . escapeshellarg($GLOBALS['pfb_test_sockstat_status']) . "\n"
+	. "exit \"\$status\"\n");
+chmod($pfb_test_sockstat, 0755);
+if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
+	define('PFB_DNS_PROXY_SOCKSTAT', $pfb_test_sockstat);
+}
+unset($pfb_test_sockstat);
 
 // 4g. The installed package XML pfblockerng.inc re-registers the package's menu and services from after an aborted removal
 //     (issue #3515): the shipped file, so a unit test never reads the appliance's.

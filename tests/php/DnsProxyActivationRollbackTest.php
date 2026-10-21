@@ -197,10 +197,12 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// find the start succeed, or the reload's own recovery puts the pre-rollback unbound.conf back
 		$this->originalStartDouble = (string) file_get_contents($this->startDouble());
 		file_put_contents($this->startDouble(), "#!/bin/sh\nprintf '%s\\n' 'unit-test double: Unbound started' | tee -a \"\$1\"\nexit 0\n");
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
@@ -402,6 +404,34 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$notices = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
+	}
+
+	public function testAReadyGatewayRollsBackWhenTheMovedUnboundStartCommandFails(): void
+	{
+		$this->activate(TRUE);
+		$this->assertSame('on', $this->toggleStored(), 'before: activation requested and Resolver moved');
+		$this->assertNotNull(pfb_dns_proxy_saved());
+		$this->behaviour = 'serves';
+		file_put_contents($this->startDouble(), "#!/bin/sh\n"
+			. "printf '%s\\n' 'unit-test double: Unbound start attempted' | tee -a \"\$1\"\n"
+			. 'if [ ! -e ' . escapeshellarg("{$this->tmp}/failed-start") . " ]; then\n"
+			. '  touch ' . escapeshellarg("{$this->tmp}/failed-start") . "\n  exit 1\nfi\nexit 0\n");
+		unlink($this->unboundPidfile());
+		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+		$start = pfb_stop_start_unbound('');
+		$this->assertSame(1, $start['retval'], 'the real bounded Unbound start command failed after the Resolver move');
+		$this->assertTrue($start['start_completed'], 'the start exited nonzero, rather than failing to launch');
+
+		$ok = pfb_dns_proxy_ensure_running();
+
+		$this->assertFalse($ok, 'a gateway that published its marker cannot activate over a failed Unbound start');
+		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertResolverIsTheOriginal('failed upstream activation rolled back');
+		$this->assertSame(['start_service', 'rc stop'], $this->proxyCalls);
+		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'), 'DNSBL is back in the original Resolver');
+		$this->assertStringContainsString('DNS Resolver was restored', implode("\n", array_column($this->notices(), 'notice')));
+		$this->assertStringContainsString('did not become ready', $this->pfbLog());
 	}
 
 	public function testWithDnsblOffTheRollbackGivesTheResolverBackWithoutAnyPythonModule(): void

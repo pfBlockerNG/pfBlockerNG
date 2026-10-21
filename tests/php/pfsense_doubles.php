@@ -862,11 +862,10 @@ if (!function_exists('lookup_gateway_interface_by_name')) {
 
 if (!function_exists('get_interface_ip')) {
 	// pfSense interfaces.inc: returns the runtime IPv4 address for a friendly interface
-	// name, or null when unconfigured. Tests seed $GLOBALS['pfb_test_interface_ip']
-	// (map of name => ipv4 string, default []); absent key → null (no address).
+	// name, or null when unconfigured. lo0 defaults to native IPv4; an explicit null models an IPv6-only host.
 	function get_interface_ip($interface = 'wan', $gateways_status = false) {
 		$map = $GLOBALS['pfb_test_interface_ip'] ?? [];
-		return $map[$interface] ?? null;
+		return array_key_exists($interface, $map) ? $map[$interface] : ($interface === 'lo0' ? '127.0.0.1' : null);
 	}
 }
 

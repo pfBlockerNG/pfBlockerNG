@@ -79,10 +79,12 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$GLOBALS['pfb_test_process_running'] = ['unbound' => FALSE];
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		$GLOBALS['pfb_test_file_notices'] = [];
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {

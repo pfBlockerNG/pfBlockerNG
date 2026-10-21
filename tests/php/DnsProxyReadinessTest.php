@@ -34,18 +34,36 @@ final class DnsProxyReadinessTest extends TestCase
 	private const BUDGET_S = 1;
 
 	private array $savedValidPids = [];
+	private array $savedGlobals = [];
 
 	protected function setUp(): void
 	{
+		foreach (['pfb', 'config', 'pfb_test_interface_ip', 'pfb_test_rcfile_dir', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles'] as $name) {
+			$this->savedGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
+		}
+		$GLOBALS['config'] = [];
+		$GLOBALS['pfb_test_interface_ip'] = ['lo0' => '127.0.0.1'];
+		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
 		$this->savedValidPids = $GLOBALS['pfb_test_valid_pids'] ?? [];
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		$this->clearProxyFiles();
+		$this->setUpUpstreamFixture();
+		pfb_dns_proxy_service();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		$GLOBALS['pfb_test_valid_pids'] = $this->savedValidPids;
+		foreach ($this->savedGlobals as $name => [$existed, $value]) {
+			if ($existed) {
+				$GLOBALS[$name] = $value;
+			} else {
+				unset($GLOBALS[$name]);
+			}
+		}
+		$this->savedGlobals = [];
 	}
 
 	public function testTheMarkerNamingTheLiveChildIsReady(): void
@@ -150,6 +168,166 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->seedProxy('4242', '4242');
 
 		$this->assertSame(TRUE, pfb_dns_proxy_ready(), 'a decimal pid is a decimal pid, with or without its newline');
+	}
+
+	/** @return array<string,array{string,string,bool}> */
+	public static function upstreamRows(): array
+	{
+		$tcp = "unbound unbound 5151 3 tcp4 127.0.0.1:5353 *:*\n";
+		$udp = "unbound unbound 5151 4 udp4 127.0.0.1:5353 *:*\n";
+		$v6tcp = "unbound unbound 5151 3 tcp6 ::1:5353 *:*\n";
+		$v6udp = "unbound unbound 5151 4 udp6 [::1]:5353 *:*\n";
+		return [
+			'IPv4 TCP and UDP' => ['127.0.0.1:5353', $tcp . $udp, TRUE],
+			'actual command port' => ['127.0.0.1:5355', str_replace(':5353', ':5355', $tcp . $udp), TRUE],
+			'only TCP' => ['127.0.0.1:5353', $tcp, FALSE],
+			'only UDP' => ['127.0.0.1:5353', $udp, FALSE],
+			'no listener' => ['127.0.0.1:5353', '', FALSE],
+			'foreign command' => ['127.0.0.1:5353', str_replace('unbound unbound', 'root nc', $tcp . $udp), FALSE],
+			'lookalike command' => ['127.0.0.1:5353', str_replace('unbound unbound', 'unbound unbound-lookalike', $tcp . $udp), FALSE],
+			'foreign PID' => ['127.0.0.1:5353', str_replace('5151', '6161', $tcp . $udp), FALSE],
+			'foreign holder with Unbound elsewhere' => ['127.0.0.1:5353',
+				str_replace('unbound unbound 5151', 'root nc 6161', $tcp . $udp) . str_replace(':5353', ':5354', $tcp . $udp), FALSE],
+			'wrong port' => ['127.0.0.1:5353', str_replace(':5353', ':5354', $tcp . $udp), FALSE],
+			'wrong address' => ['127.0.0.1:5353', str_replace('127.0.0.1', '127.0.0.2', $tcp . $udp), FALSE],
+			'wrong family' => ['127.0.0.1:5353', $v6tcp . $v6udp, FALSE],
+			'IPv6 legacy and bracketed' => ['[::1]:5353', $v6tcp . $v6udp, TRUE],
+			'IPv6 long spelling' => ['[::1]:5353', str_replace(['::1:5353', '[::1]:5353'], ['0:0:0:0:0:0:0:1:5353', '[0:0:0:0:0:0:0:1]:5353'], $v6tcp . $v6udp), TRUE],
+			'whitespace and header' => ['127.0.0.1:5353', "USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n"
+				. str_replace(' ', "\t  ", $tcp . $udp), TRUE],
+			'truncated UDP' => ['127.0.0.1:5353', $tcp . "unbound unbound 5151 4 udp4\n", FALSE],
+			'wrong transport' => ['127.0.0.1:5353', $tcp . str_replace('udp4', 'sctp4', $udp), FALSE],
+			'header only' => ['127.0.0.1:5353', "USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n", FALSE],
+		];
+	}
+
+	private function commandUpstream(?string $upstream): void
+	{
+		$rc = (string) file_get_contents(PFB_DNS_PROXY_RCFILE);
+		$replacement = $upstream === NULL ? '' : " --upstream {$upstream}";
+		file_put_contents(PFB_DNS_PROXY_RCFILE, preg_replace('/ --upstream \S+/', $replacement, $rc));
+	}
+
+	#[DataProvider('upstreamRows')]
+	public function testReadinessRequiresBothTransportsOwnedByTheLiveUnboundPid(string $endpoint, string $rows, bool $expected): void
+	{
+		$this->proxyServes();
+		$this->commandUpstream($endpoint);
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], $rows);
+
+		$this->assertSame($expected, pfb_dns_proxy_ready(), "upstream={$endpoint}; sockstat:\n{$rows}");
+	}
+
+	public function testADeadUnboundCannotBeMadeReadyByTheGatewayMarkerOrItsOldSockets(): void
+	{
+		$this->proxyServes();
+		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
+
+		$this->assertFalse(pfb_dns_proxy_ready(), 'the gateway is serving but its Unbound backend has exited');
+	}
+
+	/** @return array<string,array{?string}> */
+	public static function unusableUnboundPids(): array
+	{
+		return ['missing' => [NULL], 'empty' => [''], 'zero' => ["0\n"], 'leading zero' => ["05151\n"],
+			'trailing text' => ["5151 unbound\n"], 'wrong PID' => ["6161\n"]];
+	}
+
+	#[DataProvider('unusableUnboundPids')]
+	public function testUnboundNeedsItsOwnMatchingDecimalPidfile(?string $pid): void
+	{
+		$this->proxyServes();
+		if ($pid === NULL) {
+			unlink($this->unboundPidfile());
+		} else {
+			file_put_contents($this->unboundPidfile(), $pid);
+		}
+
+		$this->assertFalse(pfb_dns_proxy_ready(), 'unusable Unbound pidfile: ' . var_export($pid, TRUE));
+	}
+
+	public function testAnUnavailableSockstatExecutableFailsClosed(): void
+	{
+		$this->proxyServes();
+		chmod(PFB_DNS_PROXY_SOCKSTAT, 0644);
+		try {
+			$this->assertFalse(pfb_dns_proxy_ready(), 'the listener inventory command cannot be executed');
+		} finally {
+			chmod(PFB_DNS_PROXY_SOCKSTAT, 0755);
+		}
+	}
+
+	/** @return array<string,array{?string}> */
+	public static function malformedUpstreams(): array
+	{
+		return [
+			'missing flag' => [NULL], 'empty value' => [''], 'malformed IP' => ['127.0.0.999:5353'],
+			'zero port' => ['127.0.0.1:0'], 'oversized port' => ['127.0.0.1:65536'],
+			'port text' => ['127.0.0.1:5353;false'], 'missing port' => ['127.0.0.1'],
+			'broken IPv6 brackets' => ['[::1:5353'],
+		];
+	}
+
+	#[DataProvider('malformedUpstreams')]
+	public function testAnUnusableUpstreamCommandFailsClosed(?string $endpoint): void
+	{
+		$this->proxyServes();
+		$this->commandUpstream($endpoint);
+
+		$this->assertFalse(pfb_dns_proxy_ready(), 'unusable --upstream: ' . var_export($endpoint, TRUE));
+	}
+
+	public function testMissingOrEmptyRcCommandFailsClosed(): void
+	{
+		$this->proxyServes();
+		foreach (['', "#!/bin/sh\n# no daemon command\n"] as $rc) {
+			file_put_contents(PFB_DNS_PROXY_RCFILE, $rc);
+			$this->assertFalse(pfb_dns_proxy_ready(), 'no daemon command in rc: ' . var_export($rc, TRUE));
+		}
+		unlink(PFB_DNS_PROXY_RCFILE);
+		$this->assertFalse(pfb_dns_proxy_ready(), 'missing rc command');
+	}
+
+	public function testSockstatFailureFailsClosedEvenIfItsStdoutNamesHealthySockets(): void
+	{
+		$this->proxyServes();
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+
+		$this->assertFalse(pfb_dns_proxy_ready(), 'sockstat exited nonzero with otherwise healthy stdout');
+	}
+
+	public function testReadinessUsesTheActualRcEndpointRatherThanCurrentInterfaceAvailability(): void
+	{
+		$this->proxyServes();
+		$GLOBALS['pfb_test_interface_ip']['lo0'] = NULL;
+		$this->assertTrue(pfb_dns_proxy_ready(), 'the generated rc still targets healthy IPv4');
+		$this->commandUpstream('[::1]:5353');
+		$this->assertFalse(pfb_dns_proxy_ready(), 'the actual rc now targets absent IPv6, not healthy IPv4');
+	}
+
+	public function testTheAwaitReturnsOnTheTickTheBackendStartsServing(): void
+	{
+		$this->proxyServes();
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+		[$clock, $await] = $this->clockedAwait();
+		$clock->setOnSleep(function () use ($clock): void {
+			if (count($clock->sleeps) === 3) {
+				$this->seedUnbound();
+			}
+		});
+
+		$this->assertTrue($await(), 'Unbound publishes its listeners on tick three');
+		$this->assertSame([100000, 100000, 100000], $clock->sleeps, 'gateway readiness alone must not finish the wait');
+	}
+
+	public function testTheAwaitSpendsItsFullControlledBudgetWhenTheBackendNeverServes(): void
+	{
+		$this->proxyServes();
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+		[$clock, $await] = $this->clockedAwait();
+
+		$this->assertFalse($await(), 'a live gateway is not success without the backend');
+		$this->assertSame(self::fullBudget(), $clock->sleeps, 'the backend gets the existing full startup budget');
 	}
 
 	/** @return array{PfbFlockClockFixture,string} the virtual clock the wait sleeps on, and the wait's name in the namespace it was loaded into */

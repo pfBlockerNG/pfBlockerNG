@@ -83,10 +83,12 @@ final class PfbDnsStatusTest extends TestCase
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
 		@unlink(PFB_DNS_PROXY_RCFILE);
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
