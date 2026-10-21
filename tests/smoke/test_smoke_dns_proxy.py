@@ -60,6 +60,10 @@ What it proves, in file order:
 * a failed activation: pfB-DNS requested, the Resolver already moved, every address the proxy would serve held by nc(1)
   on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS is turned off, the Resolver
   and Unbound are back exactly as before the toggle, and the client's listed name still gets the VIP from Unbound.
+* a decision service that exits before READY at every start (issue #3561): the supervisor waiting out its restart
+  delay still names pfb_dns_proxy and the rc stop ends it; started by the Resolver's start hook, with the package's
+  service entry registered or absent (an install's window, where pfSense's stop_service() does nothing), the real
+  apply's rollback leaves no supervisor, the Resolver as before the toggle and the snapshot marker empty.
 
 The pfB-DNS tab (enable checkbox, help that says it is experimental, status panel) is covered by the Tier A render
 test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
@@ -2006,6 +2010,166 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         assert h.is_vip(dot), f"blocked name over Unbound's own DoT again: {dot}\n{raw}"
     finally:
         _release(vm)
+        _force_stop_proxy(vm)
+        _set_proxy_toggle(vm, False)
+
+
+# --------------------------------------------------------------------------- #
+# A decision service that exits before READY at every start (issue #3561)
+# --------------------------------------------------------------------------- #
+
+DECIDER = "/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py"  # the gateway's decider, run by pfb_python.sh
+DECIDER_ASIDE = "/var/tmp/pfb3561_decider.py"  # the shipped decider while the failing one stands in for it
+SERVICES_ASIDE = "/var/tmp/pfb3561_services.json"  # installedpackages/service while the proxy's entry is taken out
+FAILING_DECIDER = 'raise SystemExit("pfBlockerNG smoke #3561: the decision service exits before READY")\n'
+BETWEEN_STARTS_CAP = 60  # s: a supervisor restarting every 5 s waits between two starts well within this
+
+
+@contextlib.contextmanager
+def _decider_exits_at_every_start(vm: SmokeVM) -> Iterator[None]:
+    """The shipped decider replaced by one that exits at once, so every start of the gateway fails before READY (the
+    issue's `decider failed before READY: EOF`); the shipped file is put back, mode and owner kept, however the test
+    ends."""
+    swapped = _sh(vm, f"cp -p {DECIDER} {DECIDER_ASIDE} && printf '%s' {shlex.quote(FAILING_DECIDER)} > {DECIDER}")
+    assert swapped.returncode == 0, f"replacing {DECIDER} failed: {swapped.stderr!r}"
+    try:
+        yield
+    finally:
+        _force_stop_proxy(vm)
+        back = _sh(vm, f"cp -p {DECIDER_ASIDE} {DECIDER} && rm -f {DECIDER_ASIDE}")
+        assert back.returncode == 0, f"putting the shipped {DECIDER} back failed: {back.stderr!r}"
+
+
+@contextlib.contextmanager
+def _proxy_service_entry(vm: SmokeVM, *, registered: bool) -> Iterator[None]:
+    """The package's pfb_dns_proxy service entry as it is, or taken out of installedpackages/service the way an install
+    or upgrade has it until pfSense's services block registers it (after the package's install and resync commands);
+    pfSense's start_service()/stop_service() act only on a registered service. The entries are put back afterwards."""
+    if registered:
+        yield
+        return
+    _php_ok(
+        vm,
+        "$all = config_get_path('installedpackages/service', array());\n"
+        f"file_put_contents({h._php_str(SERVICES_ASIDE)}, json_encode($all));\n"
+        "config_set_path('installedpackages/service', array_values(array_filter($all,\n"
+        f"  static fn ($s) => (is_array($s) ? ($s['name'] ?? '') : '') !== {h._php_str(SERVICE)})));\n"
+        "write_config('pfBlockerNG smoke: the DNS proxy service entry taken out, as during an install');",
+        "taking the service entry out",
+    )
+    try:
+        assert SERVICE not in _registered_services(vm), "the service entry is still registered"
+        yield
+    finally:
+        aside = h._php_str(SERVICES_ASIDE)
+        _php_ok(
+            vm,
+            f"config_set_path('installedpackages/service', json_decode(file_get_contents({aside}), true));\n"
+            "write_config('pfBlockerNG smoke: the DNS proxy service entry registered again');\n"
+            f"unlink({aside});",
+            "registering the service entry again",
+        )
+
+
+def _between_starts(vm: SmokeVM) -> tuple[int, str]:
+    """Wait (bounded) until the supervisor is alive while no child runs, its restart delay, and return its pid with what
+    `ps -axww -o pid,ppid,command`, the child pidfile's size and the supervisor pidfile show at that moment."""
+    script = (
+        f"deadline=$(( $(date +%s) + {BETWEEN_STARTS_CAP} ))\n"
+        "while :; do\n"
+        f"  d=$(cat {DAEMON_PID_FILE} 2>/dev/null); c=$(cat {PROXY_PID_FILE} 2>/dev/null)\n"
+        '  if [ -n "$d" ] && kill -0 "$d" 2>/dev/null && { [ -z "$c" ] || ! kill -0 "$c" 2>/dev/null; }; then\n'
+        f'    echo "SUPERVISOR=$d CHILD=[$c] CHILD_PIDFILE_BYTES=$(wc -c < {PROXY_PID_FILE} 2>/dev/null)"\n'
+        "    ps -axww -o pid,ppid,command; exit 0\n"
+        "  fi\n"
+        '  if [ "$(date +%s)" -ge "$deadline" ]; then\n'
+        '    echo "no restart delay seen"; ps -axww -o pid,ppid,command; exit 1\n'
+        "  fi\n"
+        "  sleep 0.2\n"
+        "done\n"
+    )
+    seen = _sh(vm, script, timeout=BETWEEN_STARTS_CAP + 30.0)
+    found = re.search(r"^SUPERVISOR=(\d+) ", seen.stdout, re.MULTILINE)
+    assert seen.returncode == 0 and found, (
+        f"the supervisor never waited between two starts:\n{seen.stdout}\n{_diagnostics(vm)}"
+    )
+    _say(f"between two failed starts:\n{seen.stdout}")
+    return int(found.group(1)), seen.stdout
+
+
+def _alive(vm: SmokeVM, pid: int) -> bool:
+    return vm.ssh(f"kill -0 {pid}").returncode == 0
+
+
+@pytest.mark.timeout(600)
+def test_a_supervisor_waiting_between_failed_starts_still_names_the_proxy_and_the_rc_stop_ends_it(
+    rig: Rig, proxy_on: State
+) -> None:
+    """daemon(8) -r keeps the title it set at its last start through the restart delay; the rc stop must match it.
+
+    Given pfB-DNS on and a decision service that exits before READY at every start,
+    When the rc script starts the proxy and its supervisor waits out the restart delay (no child running),
+    Then the supervisor's command line still names pfb_dns_proxy, the pattern the rc stop signals by,
+      And `pfb_dns_proxy.sh stop` exits 0 with the supervisor gone and both pidfiles removed.
+    """
+    vm = rig.vm
+    _force_stop_proxy(vm)
+    with _decider_exits_at_every_start(vm):
+        start = vm.ssh(PROXY_RC, "start")
+        assert start.returncode == 0, f"{PROXY_RC} start: rc={start.returncode} {start.stdout!r} {start.stderr!r}"
+        supervisor, seen = _between_starts(vm)
+        line = next((row for row in seen.splitlines() if row.split()[:1] == [str(supervisor)]), "")
+        assert "pfb_dns_proxy" in line, (
+            f"the waiting supervisor's command line does not name the proxy: {line!r}\n{seen}"
+        )
+
+        stop = vm.ssh(PROXY_RC, "stop")
+
+        assert stop.returncode == 0, f"{PROXY_RC} stop: rc={stop.returncode} {stop.stdout!r} {stop.stderr!r}"
+        assert not _alive(vm, supervisor), f"the supervisor {supervisor} outlived the rc stop:\n{_diagnostics(vm)}"
+        assert _pid_file(vm, DAEMON_PID_FILE) is None and _pid_file(vm, PROXY_PID_FILE) is None, "a pidfile is left"
+
+
+@pytest.mark.timeout(1500)
+@pytest.mark.parametrize("registered", [True, False], ids=["service-registered", "service-entry-absent"])
+def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_left(
+    rig: Rig, proxy_on: State, registered: bool
+) -> None:
+    """A failed activation ends with the supervisor gone and the Resolver restored, registered service entry or not.
+
+    Given pfB-DNS on, a decision service that exits before READY at every start, the package's service entry
+      registered or taken out (an install's window: pfSense's stop_service() then does nothing), and the proxy started
+      by the Resolver's start hook (services_unbound_configure(), as the install's resync restarts Unbound),
+    When the real apply runs (pfb_trigger scope=dnsbl) and the proxy never becomes ready,
+    Then pfB-DNS is turned off, no supervisor or gateway runs and no pidfile is left (nothing keeps respawning), every
+      Resolver key equals its pre-toggle value and the snapshot marker is empty.
+    """
+    vm, before = rig.vm, rig.before
+    _force_stop_proxy(vm)
+    try:
+        with _decider_exits_at_every_start(vm), _proxy_service_entry(vm, registered=registered):
+            _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the start hook)")
+            h.wait_unbound_ready(vm)
+            supervisor, _ = _between_starts(vm)
+
+            _apply(vm)
+
+            after = _capture(vm)
+            diagnostics = _diagnostics(vm)
+            toggle = _xml_text(_config_xml(vm), "installedpackages/pfblockerngdns/config/pfb_dns") or ""
+            assert toggle == "", f"pfB-DNS was not turned off: {toggle!r}\n{diagnostics}"
+            assert not _alive(vm, supervisor), (
+                f"the hook's supervisor {supervisor} survived the rollback:\n{diagnostics}"
+            )
+            assert after.ps == [] and after.daemon_pid is None and after.proxy_pid is None, (
+                f"a proxy is left after the rollback: {after.ps} {after.daemon_pid} {after.proxy_pid}\n{diagnostics}"
+            )
+            assert after.resolver == before.resolver, (
+                f"Resolver keys after the rollback:\n{after.resolver}\nbefore the toggle:\n{before.resolver}\n"
+                f"{diagnostics}"
+            )
+            assert after.marker == "", f"pfb_dns_saved is not cleared: {after.marker!r}\n{diagnostics}"
+    finally:
         _force_stop_proxy(vm)
         _set_proxy_toggle(vm, False)
 
