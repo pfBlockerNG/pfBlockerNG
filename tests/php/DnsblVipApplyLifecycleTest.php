@@ -383,6 +383,26 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame([], $this->lifecycleWrites());
 	}
 
+	public function testALaterConvergedPassReleasesTheHoldOfAPublishedGenerationWithoutTheVip(): void
+	{
+		// GIVEN pass 1: a full pass publishes the generation without VIP answers while the resolver is not up, so it holds
+		$this->arrangeFullPass(FALSE, TRUE);
+		$this->runPass();
+		$this->assertServedStateIntact();
+		$this->assertSame([], $this->events('stop_service'), 'before-state: pass 1 held the web server');
+
+		// WHEN pass 2 publishes nothing (a save pass) and the resolver has converged on that generation
+		$GLOBALS['pfb']['save'] = TRUE;
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		$this->runPass();
+
+		// THEN the live generation answers with no VIP, so the hold is released and the web server torn down
+		$this->assertCount(1, $this->events('stop_service'), 'stop_service(pfb_dnsbl) calls');
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf']);
+		$this->assertSame([self::USER_NAT], config_get_path('nat/rule'));
+		$this->assertSame([], array_column(config_get_path('virtualip/vip', []), 'descr'));
+	}
+
 	public function testDemandKeepsServingThroughThePass(): void
 	{
 		// GIVEN the serving web server and a group that still answers with the VIP

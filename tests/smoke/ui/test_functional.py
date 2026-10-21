@@ -2886,3 +2886,39 @@ def test_a_refused_wizard_finish_keeps_the_data_and_renders_the_finalize_step(
                 _guest_ok(vm, "/bin/cp", "-p", WIZARD_MASTERFILE_BACKUP, PFB_MASTERFILE)
             else:
                 _guest_ok(vm, "/bin/rm", "-f", PFB_MASTERFILE)
+
+
+WIZARD_DNSBL_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=3"
+
+
+def test_wizard_dnsbl_step_needs_no_vip_or_ports(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """issue #3539: the wizard's setup blocks with Null Blocking, so its DNSBL step needs no VIP and no ports.
+
+    A manual-mode DNSBL step with neither a VIP nor ports moves on to the Finalize step; a port that is given
+    must still be valid, so an invalid one keeps the step.
+    """
+    vm = smoke_vm
+    _guest_ok(vm, "/bin/cp", "/conf/config.xml", WIZARD_CONFIG_BACKUP)
+    fields = {
+        "pfb_dnsvip_auto": "",
+        "pfb_dnsvip4": "none",
+        "pfb_dnsvip6": "none",
+        "pfb_dnsport": "",
+        "pfb_dnsport_ssl": "",
+    }
+    try:
+        resp = webui.post(WIZARD_DNSBL_STEP, fields, submit=("next", "Next"), timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(resp.text), "DNSBL step POST returned the login form (session lost)"
+        assert re.search(r"<h2[^>]*>\s*pfBlockerNG Finalize\s*<", resp.text), (
+            "without a VIP or ports the DNSBL step must move on to Finalize; "
+            f"no VIP error shown={'no VIP configured' in resp.text}"
+        )
+
+        resp = webui.post(
+            WIZARD_DNSBL_STEP, {**fields, "pfb_dnsport": "abc"}, submit=("next", "Next"), timeout=SAVE_TIMEOUT
+        )
+        assert "DNSBL Ports: A valid port must be defined." in resp.text, (
+            "an invalid given port must keep the DNSBL step"
+        )
+    finally:
+        helpers.restore_pfb_config_baseline(vm, snapshot_path=WIZARD_CONFIG_BACKUP)

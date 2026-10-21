@@ -6,22 +6,19 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3539 -- the setup wizard asks for a DNSBL VIP (and ports) only when the default DNSBL setup
- * it is about to write answers a block with the VIP. The candidate is exactly what step 4 writes: the
- * DNSBL settings section (pfb_wizard_dnsbl_section) plus its ADs_Basic group built from the feed
- * catalog (pfb_wizard_group_rows), judged by the same predicate the apply uses.
+ * Issue #3539 -- the setup wizard writes a fresh DNSBL setup: the settings section (pfb_wizard_dnsbl_section)
+ * carries the fresh-install policy (Default on Null Blocking), and its ADs_Basic group follows it, so no
+ * block answers with the deprecated VIP. Step 3 therefore asks for no VIP and no ports; a port that is
+ * given must still be valid.
  *
  * step3_submitphpaction() is loaded verbatim by tests/php/bootstrap.php and driven directly;
- * WizardVipAutoTest keeps the Auto-VIP gate, this file the demand gate.
+ * WizardVipAutoTest keeps the Auto-VIP gate.
  */
 #[CoversFunction('step3_submitphpaction')]
 #[CoversFunction('pfb_wizard_group_rows')]
 #[CoversFunction('pfb_wizard_dnsbl_section')]
-#[CoversFunction('pfb_wizard_vip_demand')]
 final class WizardVipDemandTest extends TestCase
 {
-	private const NO_VIP_ERROR = 'DNSBL: no VIP configured';
-
 	private string $feedsPath = '';
 	private mixed $savedFeeds = NULL;
 	private bool $hadFeeds    = FALSE;
@@ -112,7 +109,6 @@ final class WizardVipDemandTest extends TestCase
 
 	public function testAdsBasicBuilderKeepsTheGroupTheWizardWritesOnDefault(): void
 	{
-		$this->assertTrue(function_exists('pfb_wizard_dnsbl_group'), 'step 3 and step 4 need one ADs_Basic builder');
 		$info = self::catalog([self::usableFeed()])['dnsbl']['ADs_Basic'];
 		$this->assertSame([
 			'aliasname' => 'ADs_Basic', 'description' => 'ADs Basic',
@@ -122,7 +118,7 @@ final class WizardVipDemandTest extends TestCase
 		$this->assertArrayNotHasKey('row', pfb_wizard_dnsbl_group([]), 'an empty catalog entry has no row');
 	}
 
-	public function testSectionCarriesTheManualVipPortsAndTheDnsblSwitch(): void
+	public function testSectionCarriesTheManualVipPortsTheDnsblSwitchAndTheFreshPolicy(): void
 	{
 		$this->assertSame([
 			'pfb_dnsvip_auto' => '',
@@ -131,6 +127,8 @@ final class WizardVipDemandTest extends TestCase
 			'pfb_dnsport'     => '8081',
 			'pfb_dnsport_ssl' => '8443',
 			'pfb_dnsbl'       => 'on',
+			'global_log_mode' => 'default',
+			'global_log'      => 'disabled_log',
 		], pfb_wizard_dnsbl_section(FALSE, '_vip4', '_vip6', '8081', '8443'));
 	}
 
@@ -144,143 +142,47 @@ final class WizardVipDemandTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// The candidate's demand
-	// -----------------------------------------------------------------------
-
-	public function testDefaultSetupWithAUsableFeedDemandsTheVip(): void
-	{
-		$section = pfb_wizard_dnsbl_section(FALSE, '', '', '8081', '8443');
-
-		$this->assertTrue(pfb_wizard_vip_demand($section, self::catalog([self::usableFeed()])));
-	}
-
-	public function testSetupWithoutAnyInstallableFeedHasNoDemand(): void
-	{
-		$section = pfb_wizard_dnsbl_section(FALSE, '', '', '8081', '8443');
-		$feeds   = [
-			['url' => 'https://example.com/r', 'header' => 'R', 'register' => 'yes'],
-			['url' => 'https://example.com/x', 'header' => 'X', 'status' => 'discontinued'],
-		];
-
-		$this->assertFalse(pfb_wizard_vip_demand($section, self::catalog($feeds)));
-		$this->assertFalse(pfb_wizard_vip_demand($section, []), 'a catalog without the ADs_Basic group');
-	}
-
-	public function testSectionPolicyDecidesTheDemand(): void
-	{
-		$catalog = self::catalog([self::usableFeed()]);
-		$base    = pfb_wizard_dnsbl_section(FALSE, '', '', '8081', '8443');
-
-		$this->assertTrue(pfb_wizard_vip_demand($base, $catalog), 'before-state: the unset policy resolves Default to the legacy VIP mechanism');
-		$this->assertFalse(
-			pfb_wizard_vip_demand($base + ['global_log_mode' => 'default', 'global_log' => 'disabled_log'], $catalog),
-			'a Default policy on Null Blocking answers with 0.0.0.0'
-		);
-	}
-
-	/**
-	 * The candidate group is built from the wizard's real step-4 group: whatever step 4 writes for
-	 * action/logging, the demand must agree with the predicate applied to that group.
-	 */
-	public function testDemandAgreesWithTheGroupStep4Writes(): void
-	{
-		$catalog = self::catalog([self::usableFeed()]);
-		$source  = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/wizards/pfblockerng_wizard.inc');
-		$after   = (int) strpos($source, '// Selected Alias/Groups to add to default installation');
-		$start   = (int) strpos($source, "\t\t\tif (strpos(\$key, 'dnsbl') !== FALSE)", $after);
-		$end     = (int) strpos($source, "\n\t\t\t\$new_config[\$key]['config'][] = \$add;", $start);
-		$this->assertTrue($after > 0 && $start > $after && $end > $start, 'test bootstrap: step 4 group region found');
-
-		$add                  = ['aliasname' => 'ADs_Basic', 'row' => pfb_wizard_group_rows($catalog['dnsbl']['ADs_Basic'])];
-		$info                 = $catalog['dnsbl']['ADs_Basic'];
-		$key                  = 'pfblockerngdnsbl';
-		$pfb_general_schedule = ['pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0'];
-		eval(substr($source, $start, $end - $start));
-
-		$verdicts = [];
-		foreach ([
-			'no policy keys'            => [],
-			'Default on Null Blocking'  => ['global_log_mode' => 'default', 'global_log' => 'disabled_log'],
-			'Default on VIP'            => ['global_log_mode' => 'default', 'global_log' => 'enabled'],
-			'Override on NODATA'        => ['global_log_mode' => 'override', 'global_log' => 'nodata'],
-		] as $name => $policy) {
-			$section = pfb_wizard_dnsbl_section(FALSE, '', '', '8081', '8443') + $policy;
-			$this->assertSame(
-				pfb_dnsbl_vip_demand($section, [$add], []),
-				pfb_wizard_vip_demand($section, $catalog),
-				"the wizard's demand must equal the predicate on the group step 4 writes ({$name})"
-			);
-			$verdicts[] = pfb_wizard_vip_demand($section, $catalog);
-		}
-		$this->assertContains(TRUE, $verdicts, 'vacuity guard: some policy demands the VIP');
-		$this->assertContains(FALSE, $verdicts, 'vacuity guard: some policy does not');
-	}
-
-	// -----------------------------------------------------------------------
 	// step 3
 	// -----------------------------------------------------------------------
 
-	public function testStepAsksForAVipWhenTheDefaultSetupDemandsOne(): void
+	public function testStepAsksForNoVipOrPortsForTheDefaultSetup(): void
 	{
 		$this->installCatalog(self::catalog([self::usableFeed()]));
 
-		$this->submit();
+		$this->submit(['pfb_dnsport' => '', 'pfb_dnsport_ssl' => '']);
 
-		$this->assertSame([self::NO_VIP_ERROR], $this->errors());
+		$this->assertSame([], $this->errors(), 'a usable feed on Null Blocking needs neither a VIP nor ports');
 	}
 
-	public function testStepAcceptsNoVipWhenNoBlockAnswersWithIt(): void
+	public function testStepStillClearsTheNoneSentinel(): void
 	{
-		$this->installCatalog(self::catalog([['url' => 'https://example.com/r', 'header' => 'R', 'register' => 'yes']]));
-
-		$this->submit();
-
-		$this->assertSame([], $this->errors());
-	}
-
-	public function testStepAcceptsNoVipWhenTheCatalogCannotBeRead(): void
-	{
-		$GLOBALS['pfb']['feeds'] = $this->feedsPath;	// the file does not exist
-
-		$this->submit();
-
-		$this->assertSame([], $this->errors(), 'step 4 reports the missing catalog; step 3 has nothing to judge');
-	}
-
-	public function testStepStillClearsTheNoneSentinelWhenNoVipIsRequired(): void
-	{
-		$this->installCatalog(self::catalog([]));
-
 		$this->submit();
 
 		$this->assertSame('', $_POST['pfb_dnsvip4']);
 		$this->assertSame('', $_POST['pfb_dnsvip6']);
 	}
 
-	public function testAutoVipNeedsNoVipEvenWithDemand(): void
+	public function testAGivenPortMustStillBeValid(): void
 	{
-		$this->installCatalog(self::catalog([self::usableFeed()]));
-
-		$this->submit(['pfb_dnsvip_auto' => 'on']);
-
-		$this->assertSame([], $this->errors());
-	}
-
-	public function testPortsAreCheckedWhenTheDefaultSetupDemandsTheWebserver(): void
-	{
-		$this->installCatalog(self::catalog([self::usableFeed()]));
-
-		$this->submit(['pfb_dnsvip_auto' => 'on', 'pfb_dnsport' => 'abc']);
+		$this->submit(['pfb_dnsport_ssl' => 'abc']);
 
 		$this->assertSame(['DNSBL Ports: A valid port must be defined.'], $this->errors());
 	}
 
-	public function testPortsAreNotCheckedWhenNoBlockAnswersWithTheVip(): void
+	// -----------------------------------------------------------------------
+	// The setup step 4 writes
+	// -----------------------------------------------------------------------
+
+	public function testTheSetupStep4WritesHasNoVipDemand(): void
 	{
-		$this->installCatalog(self::catalog([]));
+		$catalog = self::catalog([self::usableFeed()]);
+		$section = pfb_wizard_dnsbl_section(FALSE, '', '', '8081', '8443');
+		$group   = pfb_wizard_dnsbl_group($catalog['dnsbl']['ADs_Basic']);
 
-		$this->submit(['pfb_dnsport' => 'abc']);
-
-		$this->assertSame([], $this->errors());
+		$this->assertFalse(pfb_dnsbl_vip_demand($section, [$group], []), "the wizard's group follows the fresh Null Blocking policy");
+		$this->assertTrue(
+			pfb_dnsbl_vip_demand(array_replace($section, ['global_log' => 'enabled']), [$group], []),
+			'vacuity guard: the same group on the VIP mechanism demands the VIP'
+		);
 	}
 }
