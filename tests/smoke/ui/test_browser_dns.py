@@ -39,6 +39,24 @@ pytestmark = pytest.mark.ui_browser
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 DNS_CFG = "installedpackages/pfblockerngdns/config/0/"
+# Everything the page's Save writes: the pfB-DNS toggle, the listener settings and the certificate (the Reply Logging
+# preference lives in the DNSBL section).
+DNS_SAVED_KEYS = (
+    "pfb_dns",
+    "pfb_dns_interface",
+    "pfb_dns_sslcertref",
+    "pfb_dns_dot",
+    "pfb_dns_dot_port",
+    "pfb_dns_dot_interface",
+    "pfb_dns_doh",
+    "pfb_dns_doh_port",
+    "pfb_dns_doh_interface",
+    "pfb_dns_doh_trusted",
+    "pfb_dns_doq",
+    "pfb_dns_doq_port",
+    "pfb_dns_doq_interface",
+)
+REPLY_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
 INTERFACE_LABELS = ("DNS Interface(s)", "DoT Interface(s)", "DoH Interface(s)", "DoQ Interface(s)")
 # The enable checkbox's, the DoT's, the DoH's and the DoQ's "Experimental." disclosure.
 EXPERIMENTAL_DISCLOSURES = 4
@@ -142,22 +160,32 @@ def test_saving_with_no_dns_interface_selected_shows_the_input_error_and_leaves_
 def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
     browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
 ) -> None:
-    """issue #3538: Localhost for plain DNS and DoT, DoT on, a certificate: the save persists all of it."""
+    """issue #3538: Localhost for plain DNS and DoT, DoT on, a certificate: the save persists all of it.
+
+    The save rewrites every setting of the page and the first load seeds the unset ones, so each one is read before the
+    page is opened and put back, presence included, afterwards.
+    """
     page = browser_page
-    _open(page, webui, DNS_PAGE)
-    cert = page.locator('select[name="pfb_dns_sslcertref"]')
-    assert cert.count() == 1, "the box offers no certificate with a private key: nothing to select"
-    cert_ref = cert.locator("option").first.get_attribute("value")
-    assert cert_ref, "the first certificate option has no refid"
-    cert.select_option(cert_ref)
-    page.get_by_role("listbox", name="DNS Interface(s)", exact=True).select_option("lo0")
-    page.get_by_role("listbox", name="DoT Interface(s)", exact=True).select_option("lo0")
-    page.locator('input[name="pfb_dns_dot"]').check()
+    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    try:
+        _open(page, webui, DNS_PAGE)
+        cert = page.locator('select[name="pfb_dns_sslcertref"]')
+        assert cert.count() == 1, "the box offers no certificate with a private key: nothing to select"
+        cert_ref = cert.locator("option").first.get_attribute("value")
+        assert cert_ref, "the first certificate option has no refid"
+        cert.select_option(cert_ref)
+        page.get_by_role("listbox", name="DNS Interface(s)", exact=True).select_option("lo0")
+        page.get_by_role("listbox", name="DoT Interface(s)", exact=True).select_option("lo0")
+        page.locator('input[name="pfb_dns_dot"]').check()
 
-    _save(page)
+        _save(page)
 
-    assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
-    assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_dot") == "on"
-    assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_interface") == "lo0"
-    assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_dot_interface") == "lo0"
-    assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_sslcertref") == cert_ref
+        assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
+        assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_dot") == "on"
+        assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_interface") == "lo0"
+        assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_dot_interface") == "lo0"
+        assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_sslcertref") == cert_ref
+    finally:
+        for path, state in originals.items():
+            helpers.config_restore_state(smoke_vm, path, state)

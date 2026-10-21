@@ -204,6 +204,7 @@ final class DnsProxyAclTest extends TestCase
 		$this->seedResolver('lan');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh_interface', 'opt1');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh', 'on');
 
 		$this->moveOn();
 
@@ -238,6 +239,9 @@ final class DnsProxyAclTest extends TestCase
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface', 'opt1');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh_interface', 'opt2');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doq_interface', 'opt3');
+		foreach (['pfb_dns_dot', 'pfb_dns_doh', 'pfb_dns_doq'] as $toggle) {
+			config_set_path("installedpackages/pfblockerngdns/config/0/{$toggle}", 'on');
+		}
 
 		$this->moveOn();
 
@@ -250,6 +254,58 @@ final class DnsProxyAclTest extends TestCase
 			],
 			$this->grants(),
 			'the union of the four listeners\' interface lists: dropping any one of them loses its subnet'
+		);
+	}
+
+	/** @return array<string,array{string,string}> each transport's toggle key with each list its interface key can hold */
+	public static function transportLists(): array
+	{
+		$rows = [];
+		foreach (['DoT' => 'pfb_dns_dot', 'DoH' => 'pfb_dns_doh', 'DoQ' => 'pfb_dns_doq'] as $name => $toggle) {
+			foreach (['opt1', 'all'] as $list) {
+				$rows["{$name} list {$list}"] = [$toggle, $list];
+			}
+		}
+		return $rows;
+	}
+
+	/** Plain DNS on lan, one transport's list on $list (a LAN-type opt1 with an IPv6 subnet and no gateway), and the transport's toggle as stored. */
+	private function seedPlainLanAndTransportList(string $toggle, string $list, string $stored): void
+	{
+		$this->seedBox(['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1'], ['lan' => '64', 'opt1' => '64']);
+		$this->seedResolver('lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+		config_set_path("installedpackages/pfblockerngdns/config/0/{$toggle}", $stored);
+		config_set_path("installedpackages/pfblockerngdns/config/0/{$toggle}_interface", $list);
+	}
+
+	#[DataProvider('transportLists')]
+	public function testTheInterfacesOfATransportThatIsOffAreNotGranted(string $toggle, string $list): void
+	{
+		// Given plain DNS on lan and a list on a transport that is off (a seeded `all` is the case a stored list can hold)
+		$this->seedPlainLanAndTransportList($toggle, $list, '');
+
+		$this->moveOn();
+
+		$this->assertSame(
+			['access-control: 2001:db8:1::/64 allow'],
+			$this->grants(),
+			"a {$toggle} list of {$list} is no listener while {$toggle} is off: only plain DNS's lan is granted"
+		);
+	}
+
+	#[DataProvider('transportLists')]
+	public function testTheInterfacesOfATransportThatIsOnAreGranted(string $toggle, string $list): void
+	{
+		// Given the same lists, the transport on
+		$this->seedPlainLanAndTransportList($toggle, $list, 'on');
+
+		$this->moveOn();
+
+		$this->assertSame(
+			['access-control: 2001:db8:1::/64 allow', 'access-control: 2001:db8:2::/64 allow'],
+			$this->grants(),
+			"the {$toggle} list of {$list} is a listener while {$toggle} is on"
 		);
 	}
 

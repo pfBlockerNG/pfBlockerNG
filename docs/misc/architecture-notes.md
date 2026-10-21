@@ -413,7 +413,7 @@ one for every `interface:` line without its own port, so Unbound's `127.0.0.1`/`
 plain and unused), has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
 stream (`proxy-protocol-port: 5353`) and grants the IPv6 networks pfSense would no longer grant:
 `unbound_acls_config()` derives its IPv6 `access-control` rows from `active_interface` (the IPv4 rows come from
-the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for pfB-DNS's interface lists (plain DNS, DoT, DoH and DoQ together)
+the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for pfB-DNS's interface lists of the transports that are on (plain DNS always; DoT, DoH and DoQ each only while its toggle is on)
 (non-link-local subnet of each interface without a gateway, plus the enabled static routes through such an
 interface; nothing when "disable auto-added access control" is on). Every later apply recomputes the clause and
 replaces a stale one in place (a changed delegated prefix); lines the admin put around it are kept. Everything

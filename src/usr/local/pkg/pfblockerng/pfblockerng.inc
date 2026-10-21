@@ -14140,7 +14140,8 @@ function pfb_dns_status(): array {
 
 /**
  * The networks pfSense's unbound_acls_config() would grant through `access-control` from the Resolver's
- * active_interface, derived from pfB-DNS's interface lists (plain DNS, DoT, DoH, DoQ: the interfaces its clients arrive on): the
+ * active_interface, derived from the interfaces pfB-DNS serves a listener on, where its clients arrive: its plain DNS list, and the DoT,
+ * DoH and DoQ lists of the transports that are on (a list of a transport that is off is no listener, whatever it holds): the
  * non-link-local IPv6 subnet of each interface that has no gateway (a LAN-type one; an Internet-facing interface is never
  * granted), plus the enabled static routes that leave through such an interface. pfSense derives these from active_interface, so
  * with the Resolver on loopback they vanish from unbound.conf (the IPv4 grants come from the NAT networks and stay) and the
@@ -14154,9 +14155,11 @@ function pfb_dns_proxy_acl_networks(): array {
 		return [];
 	}
 
-	$interfaces = [];
-	foreach (['pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface'] as $key) {
-		array_push($interfaces, ...pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting($key)));
+	$interfaces = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface'));
+	foreach (['pfb_dns_dot', 'pfb_dns_doh', 'pfb_dns_doq'] as $transport) {
+		if (pfb_dns_proxy_setting($transport) === PfbToggle::On) {
+			array_push($interfaces, ...pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("{$transport}_interface")));
+		}
 	}
 	$interfaces = array_unique($interfaces);
 	if (in_array('all', $interfaces, TRUE)) {
