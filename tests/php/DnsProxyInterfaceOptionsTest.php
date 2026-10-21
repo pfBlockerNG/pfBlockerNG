@@ -14,8 +14,8 @@ use PHPUnit\Framework\TestCase;
  *
  * Page-level round trip: the page's own load statements (from `$pconfig = array();` to the option lists) run against a
  * seeded config, a browser POST is derived from what they render (a multi-select submits each selected value that is an
- * option, in option order), and that POST goes through the validation and the canonical store the page's save calls
- * with the keys of the same option list (the call shape is pinned by PfbDnsPageWiringTest).
+ * option, in option order), and that POST goes through listener validation and canonical storage with the keys of the
+ * rendered option list. The live browser test also exercises the actual form submission and saved configuration.
  */
 #[CoversFunction('pfb_dns_proxy_interface_options')]
 #[CoversFunction('pfb_validate_dns_proxy_listeners_post')]
