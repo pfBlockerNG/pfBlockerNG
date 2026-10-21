@@ -667,4 +667,26 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertStringContainsString('Sync terminated during boot process.', $this->passLog());
 		$this->assertSame(['manual VIP' => '172.16.53.53'], array_column(config_get_path('virtualip/vip', []), 'subnet', 'descr'));
 	}
+
+	public function testNoDemandHoldDoesNotReuseAConflictFromAnEarlierVipManagementPass(): void
+	{
+		$this->arrange(['save' => FALSE, 'served' => TRUE, 'demand' => TRUE, 'up' => FALSE]);
+		file_put_contents("{$this->dir}/pfb_sync_receive.json", json_encode(['accepted_digest' => 'd']));
+		PfbConfig::write('dnsbl/pfb_dnsvip_auto4', '192.168.53.53');
+		PfbConfig::write('dnsbl/pfb_dnsvip4', '_vip_gone_missing');
+		pfb_global();
+		pfb_manage_dnsbl_vip('enabled');
+		$conflict = 'DNSBL auto-VIP: the synced IPv4 address is not free on this node';
+		$this->assertContains($conflict, pfb_sync_effective_findings(pfb_sync_effective_facts()));
+
+		// No group needs the address now, but the previous generation still holds the live VIP.
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		$this->publishTo(TRUE);
+		$this->runPass();
+
+		$this->assertFileExists($GLOBALS['pfb']['dnsbl_conf'], 'the unconverged generation must keep the hold');
+		$this->assertSame([], $this->events('stop_service'));
+		$this->assertNotContains($conflict, pfb_sync_effective_findings(pfb_sync_effective_facts()));
+		$this->assertSame([], pfb_sync_effective_facts()['vip_conflict']);
+	}
 }

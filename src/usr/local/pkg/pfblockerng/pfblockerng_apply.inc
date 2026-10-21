@@ -851,6 +851,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// shortcut: second resolution, a receive whose record opens in the pass's first second has it settled here, while its surviving pending mark re-applies it next pass.
 	$pfb_pass_started = time();
 	pfb_global();
+	// A no-demand generation hold skips VIP management; it must not report a conflict from an earlier pass.
+	$pfb['dnsbl_vip_conflict'] = array();
 
 	// Preserve the internal bool contract: an unattended trigger=cron force=false
 	// deferral is benign and retains TRUE with its durable retry state intact.
