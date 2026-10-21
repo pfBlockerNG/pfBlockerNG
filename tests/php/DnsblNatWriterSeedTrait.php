@@ -5,12 +5,14 @@ declare(strict_types=1);
 /**
  * The minimum a manual-mode, valid-VIP DNSBL needs for pfb_create_dnsbl() to reach the NAT
  * generation off-appliance (mirrors DnsblVipDisableNoticeTest scenario C), shared by the suites
- * that drive the DNSBL NAT writer.
+ * that drive the DNSBL NAT writer. issue #3539: the web server, NAT and certificate exist only
+ * while a block answers with the VIP, so the seed carries one group that does ($demand) or one
+ * that answers Null Blocking.
  */
 trait DnsblNatWriterSeedTrait
 {
 	/** @param list<array<string,mixed>> $natRows the nat/rule section the apply starts from */
-	private function seedDnsblNatWriter(string $dir, array $natRows): void
+	private function seedDnsblNatWriter(string $dir, array $natRows, bool $demand = TRUE): void
 	{
 		global $pfb;
 
@@ -45,6 +47,12 @@ trait DnsblNatWriterSeedTrait
 		config_set_path('virtualip/vip', [['uniqid' => '_test_valid', 'subnet' => '203.0.113.10']]);
 
 		config_set_path('nat/rule', $natRows);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
+			'aliasname' => 'T1',
+			'action'    => 'unbound',
+			'logging'   => $demand ? 'enabled' : 'disabled_log',
+			'row'       => [['url' => 'https://example.com/list.txt', 'state' => 'Enabled', 'header' => 'T1_a', 'format' => 'auto']],
+		]]);
 	}
 
 	private function applyDnsblEnabled(): void

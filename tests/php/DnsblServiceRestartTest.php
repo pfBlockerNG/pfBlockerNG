@@ -373,6 +373,32 @@ final class DnsblServiceRestartTest extends TestCase
 		$this->assertSame(['lighttpd_pfb'], $this->liveProcesses());
 	}
 
+	/** @return array<string,array{string}> */
+	public static function launchVerbProvider(): array
+	{
+		return ['start' => ['start'], 'restart' => ['restart']];
+	}
+
+	/**
+	 * issue #3539 — the apply removes the conf whenever the web server must not run, so every start path
+	 * (Status > Services, start_service(), a package restart) is gated by it: no conf, no launch.
+	 */
+	#[DataProvider('launchVerbProvider')]
+	public function testWithoutTheConfNoPathLaunchesTheWebServer(string $verb): void
+	{
+		// Given a previous web server still alive that exits one tick after TERM, and no conf (the apply removed it)
+		$this->arrange(['lighttpd_pfb'], '1');
+		unlink("{$this->dir}/var/pfb_dnsbl_lighty.conf");
+
+		// When the service is started / restarted
+		[$status, $output] = $this->rc($verb);
+
+		// Then the old process was stopped and nothing was launched in its place
+		$this->assertSame(0, $status, "rc {$verb} failed: {$output}");
+		$this->assertSame(['term', 'sleep'], $this->events(), "rc {$verb} command events");
+		$this->assertSame([], $this->liveProcesses());
+	}
+
 	public function testLauncherStdFdsAreDetachedToDevNull(): void
 	{
 		// Given a launcher probe, first run bare under the harness pipes (control)

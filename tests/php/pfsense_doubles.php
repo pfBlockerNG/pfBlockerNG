@@ -701,6 +701,15 @@ if (!function_exists('get_configured_vip_interface')) {
 			return null;
 		}
 
+		// A VIP the test put in virtualip/vip (the id pfb_manage_dnsbl_vip() stores is '_vip<uniqid>'): its interface, as upstream reads it.
+		if (is_string($vipif) && str_starts_with($vipif, '_vip')) {
+			foreach (config_get_path('virtualip/vip', []) as $vip) {
+				if (($vip['uniqid'] ?? '') === substr($vipif, 4)) {
+					return $vip['interface'] ?? null;
+				}
+			}
+		}
+
 		throw new LogicException(__FUNCTION__ . '() double not implemented for VIP id: ' . (string) $vipif);
 	}
 }

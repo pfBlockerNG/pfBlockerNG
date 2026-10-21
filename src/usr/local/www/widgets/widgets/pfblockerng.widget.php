@@ -116,11 +116,6 @@ if ($_POST) {
 			$pfb['wglobal']['widget-dnsblquery']	= $_POST['pfb_dnsblquery'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-dnsblquery', $pfb['wglobal']['widget-dnsblquery']);
-
-			// Restart pfb_dnsbl service on Query frequency changes
-			if ($_POST['pfb_dnsblquery'] != $pfb['dnsblquery']) {
-				restart_service('pfb_dnsbl');
-			}
 		}
 		if (is_numeric($_POST['pfb_maxfails'] ?? '') && $_POST['pfb_maxfails'] < 100) {
 			$pfb['wglobal']['widget-maxfails']	= $_POST['pfb_maxfails'];

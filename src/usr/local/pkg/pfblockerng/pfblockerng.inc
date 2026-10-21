@@ -3220,7 +3220,7 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 }
 
 // [ADR-13] VIP lifecycle manager: creates the marked DNSBL sinkhole VIP(s) on enable (auto
-// on), removes ONLY the marked + IP-matched VIP(s) on disable/unmanaged. ADDITIVE: with
+// on) while a block answers with the VIP (issue #3539), removes ONLY the marked + IP-matched VIP(s) otherwise/unmanaged. ADDITIVE: with
 // pfb_dnsvip_auto never turned on, no marked VIP is found -> no write_config -> byte-identical
 // runtime. Delete guard: removed iff descr == PFB_AUTO_VIP_DESCR_V4/_V6 AND subnet == the
 // address resolved from stored pfb_dnsvip4/6 (pfb_find_marked_vip) — a manual or
@@ -3236,6 +3236,8 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	}
 
 	$auto      = ($pfb['dnsbl_vip_auto'] ?? PfbToggle::Off) === PfbToggle::On;
+	// issue #3539: create/ensure only while a block answers with the VIP; otherwise the guarded delete below runs.
+	$serve     = $mode === 'enabled' && !empty($pfb['dnsbl_vip_demand']);
 	$interface = $pfb['dnsbl_iface'] ?? 'lo0';
 
 	// PFBL-01: $interface is a singular required parameter -- validate it as a \w-only
@@ -3267,14 +3269,14 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 			'family'   => AF_INET,
 			'bits'     => 32,
 			'idkey'    => 'pfb_dnsvip4',
-			'managed'  => ($mode === 'enabled' && $auto),	// v4 always managed on create
+			'managed'  => ($serve && $auto),	// v4 always managed on create
 		],
 		[
 			'marker'   => PFB_AUTO_VIP_DESCR_V6,
 			'family'   => AF_INET6,
 			'bits'     => 128,
 			'idkey'    => 'pfb_dnsvip6',
-			'managed'  => ($mode === 'enabled' && $auto && $want_v6),
+			'managed'  => ($serve && $auto && $want_v6),
 		],
 	];
 
@@ -3379,7 +3381,7 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	write_config('pfBlockerNG: saving DNSBL auto-VIP changes');
 
 	// Apply any created/ensured marked VIP live (config-first, then configure).
-	if ($mode === 'enabled' && $auto) {
+	if ($serve && $auto) {
 		foreach ($families as $fam) {
 			if (!$fam['managed']) {
 				continue;
@@ -3670,8 +3672,11 @@ function pfb_global() {
 	$pfb['dnsbl']		= PfbConfig::read('dnsbl/pfb_dnsbl');							// Enabled state of DNSBL
 	$pfb['dnsbl_vip_auto']	= PfbConfig::read('dnsbl/pfb_dnsvip_auto');						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
 	$pfb['dnsbl_nonat']	= PfbConfig::read('dnsbl/pfb_dnsbl_nonat');						// [ #381 ] Opt out of automatic DNSBL NAT rule generation (default off)
-	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
-	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
+	// issue #3539: the guarded VIP delete unsets both stored ids; the registry default ('') covers it.
+	$pfb_dnsvip4		= PfbConfig::read('dnsbl/pfb_dnsvip4');
+	$pfb_dnsvip6		= PfbConfig::read('dnsbl/pfb_dnsvip6');
+	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb_dnsvip4) ?? '';
+	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb_dnsvip6) ?? '';
 	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl/dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
 	// issue #3288: the DNSBL global policy read-only -- pfb_global() never
 	// writes, so an unmigrated/legacy box (config restore or HA sync bypassing
@@ -3693,7 +3698,7 @@ function pfb_global() {
 		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
 		// owns provisioning and will (re)create a valid VIP during this same update pass.
 		// Disabling DNSBL here in auto mode would prevent the bootstrap from ever running.
-		$vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'], $pfb['dnsblconfig']['pfb_dnsvip4'], $pfb['dnsblconfig']['pfb_dnsvip6']);
+		$vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'], $pfb_dnsvip4, $pfb_dnsvip6);
 		if (!$vips_valid_result[0]) {
 			if ($pfb['dnsbl_vip_auto'] === PfbToggle::On) {
 				// [ ADR-13 / issue #487 ] Auto-create OWNS the DNSBL sinkhole VIP:
@@ -11348,7 +11353,8 @@ function pfb_dnsbl_nat_enabled(string $iface, PfbToggle $nonat): bool {
 	return $iface !== 'lo0' && $nonat !== PfbToggle::On;
 }
 
-// Create DNSBL VIP and NAT rules, lighttpd conf and services
+// Create the DNSBL VIP and NAT rules, lighttpd conf and certificate, and (re)start the web server -- or, while no block answers
+// with the VIP (issue #3539), remove them all and stop it
 function pfb_create_dnsbl($mode) {
 	global $pfb;
 	pfb_global();
@@ -11363,10 +11369,14 @@ function pfb_create_dnsbl($mode) {
 	$new_nat = $pfb_ex_nat = $dnsbl_ex_nat = array();
 	$pfbupdate = FALSE;
 
-	if ((!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] === PfbToggle::On) && $mode == 'enabled') || $mode == 'disabled') {
+	// issue #3539: the web server, its NAT and certificate exist only while a block answers with the VIP; any other mode or
+	// no demand strips all of them, with or without ports or a VIP.
+	$serve = $mode == 'enabled' && !empty($pfb['dnsbl_vip_demand']);
+
+	if (!$serve || (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] === PfbToggle::On))) {
 
 		// DNSBL NAT rules generation
-		if ($mode == 'enabled') {
+		if ($serve) {
 			// Collect existing pfSense NAT rules for comparison.
 			foreach (config_get_path('nat/rule', []) as $ex_nat) {
 				// Bucket only the exact DNSBL NAT descr for rebuild — a user rule whose descr merely
@@ -11411,30 +11421,37 @@ function pfb_create_dnsbl($mode) {
 				$new_nat = array_merge($pfb_ex_nat, $dnsbl_ex_nat);
 			}
 		} else {
-			// DISABLE: strip the exact pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
+			// Strip the exact pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
 			// rules and returns TRUE iff anything was removed.
 			$dnsbl_ex_nat = pfb_managed_obj_rows('nat/rule', PFB_MANAGED_NAT_DESCR);
 			pfb_sync_copied_check('dnsbl_nat', $dnsbl_ex_nat, [], $pfb['dbdir']);
 			if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_DESCR)) {
 				$pfbupdate = TRUE;
 			}
+
+			// The conf is the rc script's start marker and the certificate belongs to the web server: with both
+			// gone no start path launches it.
+			unlink_if_exists($pfb['dnsbl_conf']);
+			unlink_if_exists($pfb['dnsbl_cert']);
 		}
 
-		// Compare previous Lighttpd conf
-		$pfb_lighty_conf = pfb_create_lighttpd();
-		$pfb_lighty_conf_ex = @file_get_contents($pfb['dnsbl_conf']);
-		if ($pfb_lighty_conf !== $pfb_lighty_conf_ex) {
-			$pfbupdate = TRUE;
-			@file_put_contents($pfb['dnsbl_conf'], $pfb_lighty_conf, LOCK_EX);
-			$log = "\nSaving new DNSBL web server configuration to port [ {$pfb['dnsbl_port']} and {$pfb['dnsbl_port_ssl']} ]";
-			pfb_logger("{$log}", 1);
+		if ($serve) {
+			// Compare previous Lighttpd conf
+			$pfb_lighty_conf = pfb_create_lighttpd();
+			$pfb_lighty_conf_ex = @file_get_contents($pfb['dnsbl_conf']);
+			if ($pfb_lighty_conf !== $pfb_lighty_conf_ex) {
+				$pfbupdate = TRUE;
+				@file_put_contents($pfb['dnsbl_conf'], $pfb_lighty_conf, LOCK_EX);
+				$log = "\nSaving new DNSBL web server configuration to port [ {$pfb['dnsbl_port']} and {$pfb['dnsbl_port_ssl']} ]";
+				pfb_logger("{$log}", 1);
+			}
 		}
 
 		// Update config.xml, if changes required.
-		// On enable: write the full new NAT set. On disable: pfb_remove_managed_obj wrote the
-		// config change; just persist via write_config.
+		// On serve: write the full new NAT set. Otherwise pfb_remove_managed_obj already changed the
+		// config; just persist via write_config.
 		if ($pfbupdate) {
-			if ($mode == 'enabled') {
+			if ($serve) {
 				config_set_path('nat/rule', $new_nat);
 			}
 			write_config('pfBlockerNG: saving DNSBL changes');
@@ -11442,7 +11459,7 @@ function pfb_create_dnsbl($mode) {
 	}
 
 	// Save settings, restart services as required
-	if ($mode == 'enabled') {
+	if ($serve) {
 
 		// Create DNSBL SSL certificate
 		if (!file_exists("{$pfb['dnsbl_cert']}")) {
@@ -16009,12 +16026,6 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	else {
 		// Unbound is down -> there is nothing to swap into; always (re)start.
 		pfb_reload_unbound($mode, FALSE, $pfbpython);
-	}
-
-	if ($pfbpython) {
-		$log = "\nRestarting DNSBL Service (DNSBL python)";
-		pfb_logger("{$log}", 1);
-		restart_service('pfb_dnsbl');
 	}
 
 	// issue #1263: per-file sum, not cat|grep -c ^ -- differs from the old count
