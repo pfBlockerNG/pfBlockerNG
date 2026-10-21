@@ -222,21 +222,6 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 	}
 
-	public function testTheStatusPanelShowsTheServiceTheModeAndOneEscapedRowPerTransport(): void
-	{
-		// issue #3548: four transport rows replace "Listening on" and the lone "DNS over TLS" row, each value escaped
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
-		$panel = substr($page, (int) strpos($page, "new Form_Section('pfB-DNS Status')"));
-
-		preg_match_all("/new Form_StaticText\\('([^']+)', htmlspecialchars\\(\\\$status\\['([a-z]+)'\\]\\)\\)/", $panel, $rows, PREG_SET_ORDER);
-		$this->assertSame(
-			[['Service', 'service'], ['Mode', 'mode'], ['Plain DNS', 'plain'], ['DNS over TLS', 'dot'], ['DNS over HTTPS', 'doh'], ['DNS over QUIC', 'doq']],
-			array_map(static fn (array $row): array => [$row[1], $row[2]], $rows)
-		);
-		$this->assertSame(6, substr_count($panel, 'new Form_StaticText('), 'no other row, and none unescaped');
-		$this->assertStringNotContainsString("'Listening on'", $page);
-	}
-
 	public function testTheDnsblPageCarriesNoneOfTheSevenSettingsAndNoCodeThatSavesThem(): void
 	{
 		// Given the DNSBL page, from which the settings moved

@@ -2132,7 +2132,7 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
 ) -> None:
     """issue #3515: the pfB-DNS tab carries the enable checkbox, whose help says plainly that it is experimental,
     what it changes in the Resolver, that it is restored, that it runs with or without DNSBL and the HA caveat; a
-    status panel names the service, the mode and, per transport (issue #3548), where it listens."""
+    status panel names the service and the mode and, once the Resolver is moved, a table per transport (issue #3555)."""
     path = "/pfblockerng/pfblockerng_dns.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
@@ -2175,10 +2175,16 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         "keep this disabled where that must not be recorded",
     ):
         assert needle in help_html, f"pfB-DNS help is missing {needle!r}"
-    status_html = html[html.index("pfB-DNS Status") :]
-    for label in ("Service", "Mode", "Plain DNS", "DNS over TLS", "DNS over HTTPS", "DNS over QUIC"):
-        assert label in status_html, f"pfB-DNS status is missing {label!r}"
-    assert "Listening on" not in status_html, "the per-transport rows replace 'Listening on'"
+    status_html = html[html.index('id="pfb-dns-status"') :]
+    service = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]+)</td></tr>', status_html)
+    mode = re.search(r'<tr id="pfb-dns-status-mode"><th>Mode</th><td>([^<]+)</td></tr>', status_html)
+    assert service and mode, "the pfB-DNS status panel has no Service and Mode rows"
+    assert service.group(1) == "Not in use", (
+        f"a default box has not moved the Resolver; the Service row says {service.group(1)!r}"
+    )
+    assert status_html.split("</table>", 1)[1].startswith("</div></div>"), (
+        "a box with nothing moved claims no transport: nothing may follow the Service and Mode rows"
+    )
 
 
 # Dual-marked ui_e2e (issue #810): this test MUTATES config.xml (DNSBL off, pfB-DNS and reply logging per row) as

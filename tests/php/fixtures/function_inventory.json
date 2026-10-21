@@ -1734,6 +1734,11 @@
         "returnType": "array",
         "params": []
     },
+    "pfb_dns_proxy_address_interfaces": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dns_proxy_await_ready": {
         "returnsRef": false,
         "returnType": "bool",
@@ -2409,6 +2414,32 @@
         "returnsRef": false,
         "returnType": "array",
         "params": []
+    },
+    "pfb_dns_status_panel": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "status",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_status_rows": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "entries",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
     },
     "pfb_dns_wanted": {
         "returnsRef": false,

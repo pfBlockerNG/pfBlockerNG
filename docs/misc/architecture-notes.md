@@ -698,18 +698,29 @@ searched the same way, only in the bytes after `$since`, so an error of an older
 this start logged none); with no `$since` it is searched in the whole tail. Pinned by `DnsProxyStartupCheckTest`,
 `DnsProxyStartupCheckCurrentStartTest` and `DnsProxyBootTest`.
 
-**Status panel transports (issue #3548).** The pfB-DNS tab's status (`pfb_dns_status()`) has one row per transport: plain DNS,
+**Status panel transports (issues #3548, #3555).** The pfB-DNS tab's status (`pfb_dns_status()`) has an entry per transport: plain DNS,
 DoT, DoH and DoQ. It reads the same two helpers as the startup check: `pfb_dns_proxy_listeners()` (the complete start's
 `listening` and `cannot listen on` lines, with no `$since`) and `pfb_dns_proxy_command_listeners()` (the rc script's addresses).
 The status reader also supplies the readiness-marker PID: the latest complete `ready upstream` record must end in a space
 followed by `pid <pid>`, or bindings remain unconfirmed. It never searches backward for an earlier matching PID. This covers the interval
 between publishing the PID marker and daemon(8) relaying the log, including automatic child respawn and same-address restarts;
 the startup check's default parsing and notices remain unchanged.
-A row is `Off` when its toggle is off and the running service has no listeners for it. With the proxy Running it lists what
-the matching start bound, then each command address it did not bind as not listening, with the logged reason. A saved toggle,
-interface or port change cannot replace that evidence before an Update applies it. Not running, or with no matching PID-ready
-record in the log (including untagged records from an older gateway), it lists the command's addresses labelled as configured.
-Pinned by `PfbDnsStatusTest`.
+A transport is `off` when its toggle is off and the running service has no listeners for it, `no_listener` when it is on and the
+command gives it none, or a list of rows. With the proxy Running the rows are what the matching start bound (`listening`), then each
+command address it did not bind (`not_listening`, with the logged reason). A saved toggle, interface or port change cannot replace
+that evidence before an Update applies it. Not running (`configured_not_bound`), or with no matching PID-ready record in the log,
+including untagged records from an older gateway (`configured_unconfirmed`), the rows are the command's addresses.
+
+**Status panel tables (issue #3555).** `pfb_dns_status_panel()` renders that status as the panel under the form (the sync panels'
+pattern), one table per transport with Interface | Address | State columns; `pfb_dns_status_rows()` groups a transport's addresses
+into rows, one per interface and outcome (state and reason), ordered Localhost, then the interfaces in pfSense's order, then each
+address that maps to no interface on a row of its own, labelled with the address. The label of an address is
+`pfb_dns_proxy_address_interfaces()`: loopback is `Localhost`, else the description of the interface that `get_interface_ip()` or
+`get_interface_ipv6()` ties it to (the first interface in pfSense's order when two carry it). A state is an icon (`fa-check-circle`,
+`fa-times-circle`, `fa-exclamation-circle`) with its meaning as hover title and as `sr-only` text, so no colour or shape stands
+alone; a refusal also shows its reason. An off transport is an empty table; the recovery-required and not-in-use states show no
+transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the `ui_render` test of the pfB-DNS page,
+`test_smoke_dns_gateway.py` (a gateway serving every transport) and the `ui_browser` test in `test_browser_dns.py`.
 
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,

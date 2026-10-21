@@ -24,6 +24,8 @@ What it proves, in file order:
   ``pfb_dns_proxy.py --decision-fd 3``, both as ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and
   ``ready upstream 127.0.0.1:5353 pid N``, N the gateway's; the gateway owns every client-facing socket (DoH and DoQ on
   loopback too, for a local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
+* the pfB-DNS tab's status panel is one table per transport with a Localhost row (127.0.0.1 and [::1] at the transport's
+  port) and a LAN row (the LAN address), each reading ``Listening`` for a screen reader (issue #3555);
 * Unbound runs the upstream observer, an upstream EDE block is logged with the real client, and the firewall's own
   lookup of a listed name gets the VIP, logged as 127.0.0.1;
 * from the LAN client (192.168.1.10), over UDP, TCP, DoT, DoH (POST and GET) and DoQ: a listed name gets the VIP and a
@@ -56,6 +58,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,6 +111,8 @@ from .test_smoke_dns_proxy import (
     _wait_dnsbl_row,
     _wait_unbound_logged,
 )
+from .ui.credgate import admin_password_decision
+from .ui.webui import WebUI
 
 pytestmark = [pytest.mark.smoke, pytest.mark.timeout(180)]
 
@@ -873,6 +878,73 @@ def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw
     assert any(local == f"127.0.0.1:{UPSTREAM_PORT}" for _, local in unbound), f"Unbound sockets: {sorted(unbound)}"
     stray = {(p, a) for p, a in unbound if not re.fullmatch(r"(127\.0\.0\.1|::1):(5353|5354)", a)}
     assert not stray, f"Unbound listens beyond loopback 5353 and 5354: {sorted(stray)}"
+
+
+STATUS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+
+
+@pytest.fixture
+def gui(gw: Gateway) -> WebUI:
+    """A logged-in webConfigurator session against the gateway's box (the credentials the UI tier uses)."""
+    action, password = admin_password_decision(os.environ)
+    if action == "fail":
+        pytest.fail(password)
+    https = (h.config_get(gw.vm, "system/webgui/protocol").strip().lower() or "http") == "https"
+    client = WebUI(
+        host=gw.vm.host,
+        port=gw.vm.web_port,
+        username=os.environ.get("SMOKE_ADMIN_USER") or "admin",
+        password=password,
+        scheme="https" if https else "http",
+        verify=not https,
+    )
+    client.login()
+    return client
+
+
+def _status_rows(page: str, transport: str) -> list[tuple[str, list[str], str]]:
+    """The rows of one transport's table in the pfB-DNS tab's status panel, as (interface, one address per line, what a
+    screen reader says for the state)."""
+    block = re.search(rf'<div id="pfb-dns-status-{transport}">.*?</div>', page, re.DOTALL)
+    assert block, f"the pfB-DNS status panel has no {transport} block"
+    rows = []
+    for tr in ET.fromstring(block.group(0)).findall("./table/tbody/tr"):
+        interface, address, state = tr.findall("td")
+        lines = [address.text or "", *(br.tail or "" for br in address.findall("br"))]
+        said = state.find("span[@class='sr-only']")
+        rows.append((interface.text or "", lines, (said.text if said is not None else "") or ""))
+    return rows
+
+
+def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localhost_row_and_a_lan_row(
+    gateway_on: State, gui: WebUI
+) -> None:
+    """issue #3555: the status panel is one table per transport, a row per interface.
+
+    Given the gateway serves plain DNS and DoT, DoH and DoQ (the toggles this module turns on, none off),
+    Then each table has a Localhost row that is exactly 127.0.0.1 and [::1] at the transport's port and a LAN row that
+      holds the LAN address at it, both reading `Listening` for a screen reader.
+    """
+    ports = {"plain": 53, "dot": DOT_PORT, "doh": DOH_PORT, "doq": DOQ_PORT}
+    page = ""
+
+    def listed() -> bool:
+        nonlocal page
+        page = gui.get(STATUS_PAGE).text
+        return any(state == "Listening" for _, _, state in _status_rows(page, "plain"))
+
+    h.wait_until(listed, timeout=60.0, interval=2.0)
+    for transport, port in ports.items():
+        rows = _status_rows(page, transport)
+        _say(f"status panel, {transport}: {rows}")
+        loopback = [row for row in rows if row[0] == "Localhost"]
+        assert loopback == [("Localhost", [f"127.0.0.1:{port}", f"[::1]:{port}"], "Listening")], (
+            f"{transport}: the Localhost row is {loopback}; all rows: {rows}"
+        )
+        lan = [row for row in rows if row[0] == "LAN" and f"{PFSENSE_LAN_IP}:{port}" in row[1]]
+        assert lan and all(state == "Listening" for _, _, state in lan), (
+            f"{transport}: no LAN row listening on {PFSENSE_LAN_IP}:{port}; all rows: {rows}"
+        )
 
 
 # --------------------------------------------------------------------------- #

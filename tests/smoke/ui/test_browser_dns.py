@@ -1,4 +1,4 @@
-"""Tier-B browser regression (#3517, #3538, #3557): the pfB-DNS page's accessible names, legible warnings and saves.
+"""Tier-B browser regression (#3517, #3538, #3555, #3557): the pfB-DNS page's names, warnings, saves and status tables.
 
 Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 (``pfblockerng_dns.php``) and measures the live DOM, not the markup:
@@ -9,7 +9,9 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
   backdrop it paints on;
 * saving with a DNS interface list empty shows the input error and leaves config.xml alone, saving
   Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
-  tokens render selected and survive a save that leaves the lists alone.
+  tokens render selected and survive a save that leaves the lists alone;
+* the status panel is a heading and a table of Interface | Address | State rows per transport, each state an icon with a
+  hover title and a screen-reader text, and an off transport's table is empty.
 
 Scope is the controls and disclosures on this page only: no whole-page axe claim, since the
 header breadcrumb and other shared framework markup are outside it. Measured in the box's
@@ -19,6 +21,7 @@ artifacts in ``screenshot_dir``, not asserted baselines.
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import TYPE_CHECKING
 
@@ -257,3 +260,93 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
             "echo 'OK';",
         )
         assert cleanup.returncode == 0 and "OK" in cleanup.stdout, f"VIP cleanup failed: {cleanup.stdout!r}"
+
+
+# The Resolver as pfB-DNS leaves it after a move, as a stored snapshot (the marker that makes the box "moved").
+_MOVED_SNAPSHOT = base64.b64encode(
+    json.dumps(
+        {
+            "active_interface": {"present": True, "value": "lan"},
+            "enablessl": {"present": False, "value": None},
+            "custom_options": {"present": True, "value": ""},
+        }
+    ).encode()
+).decode("ascii")
+PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+STATUS_TRANSPORTS = {"plain": "Plain DNS", "dot": "DNS over TLS", "doh": "DNS over HTTPS", "doq": "DNS over QUIC"}
+
+
+def _write_rc_script(vm: helpers.SmokeVM, settings: dict[str, str] | None = None) -> None:
+    """Store ``settings`` in the pfB-DNS section, if any, and have the package write its service script from what is
+    stored, as an apply does: the status panel reads the addresses to list from that script."""
+    section = helpers._php_str(DNS_CFG.rstrip("/"))
+    stores = "".join(
+        f"$d[{helpers._php_str(key)}] = {helpers._php_str(value)};\n" for key, value in (settings or {}).items()
+    )
+    store = (
+        f"$d = config_get_path({section}, array());\n{stores}config_set_path({section}, $d);\n"
+        "write_config('pfBlockerNG smoke: pfB-DNS settings for the #3555 status panel');\n"
+        if settings
+        else ""
+    )
+    php = f"require_once({helpers._php_str(PFB_INC)});\nglobal $pfb;\n{store}pfb_global();\npfb_dns_proxy_service();"
+    result = helpers.php_eval(vm, f"{php}\necho 'OK';")
+    assert result.returncode == 0 and "OK" in result.stdout, (
+        f"writing the pfB-DNS service script failed: rc={result.returncode} {result.stdout!r} {result.stderr!r}"
+    )
+
+
+def test_status_panel_is_a_table_per_transport_with_a_titled_icon_for_each_state(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM, screenshot_dir: Path
+) -> None:
+    """issue #3555: on a box whose Resolver is moved and whose proxy is stopped, with plain DNS on and DoT, DoH and DoQ
+    off, the status panel has the four transport headings in order, each over a table headed Interface, Address, State;
+    plain DNS lists a Localhost row whose state is a visible icon titled "Configured, not bound" with the same words for
+    a screen reader, and the three off transports have a table with no row.
+
+    Settings and the service script are put back afterwards, presence included.
+    """
+    page = browser_page
+    settings = {
+        "pfb_dns": "on",
+        "pfb_dns_saved": _MOVED_SNAPSHOT,
+        "pfb_dns_interface": "lan",
+        "pfb_dns_dot": "",
+        "pfb_dns_doh": "",
+        "pfb_dns_doq": "",
+    }
+    originals = {key: helpers.config_get_state(smoke_vm, f"{DNS_CFG}{key}") for key in settings}
+    try:
+        _write_rc_script(smoke_vm, settings)
+        _open(page, webui, DNS_PAGE)
+
+        panel = page.locator("#pfb-dns-status")
+        assert panel.count() == 1, "the page has no pfB-DNS status panel"
+        assert panel.locator("#pfb-dns-status-service td").inner_text() == "Stopped"
+        assert panel.locator("h3").all_inner_texts() == list(STATUS_TRANSPORTS.values())
+        for key in STATUS_TRANSPORTS:
+            columns = panel.locator(f"#pfb-dns-status-{key} thead th").all_inner_texts()
+            assert columns == ["Interface", "Address", "State"], f"{key}: the table's columns are {columns}"
+
+        rows = panel.locator("#pfb-dns-status-plain tbody tr")
+        assert rows.count() >= 2, "plain DNS lists Localhost and the LAN address at least"
+        loopback = rows.nth(0).locator("td")
+        assert loopback.nth(0).inner_text() == "Localhost", "loopback comes first"
+        hosts = [line.rsplit(":", 1)[0] for line in loopback.nth(1).inner_text().split("\n")]
+        assert hosts == ["127.0.0.1", "[::1]"], f"Localhost lists {hosts}, one address per line"
+        icon = loopback.nth(2).locator("i.fa-exclamation-circle")
+        assert icon.count() == 1, "a stopped proxy's configured address shows the warning icon"
+        assert icon.get_attribute("title") == "Configured, not bound"
+        assert icon.is_visible(), "the icon takes room on the page"
+        assert loopback.nth(2).locator(".sr-only").text_content() == "Configured, not bound"
+
+        for key in ("dot", "doh", "doq"):
+            assert panel.locator(f"#pfb-dns-status-{key} tbody").count() == 1, (
+                f"{key}: an off transport keeps its table"
+            )
+            assert panel.locator(f"#pfb-dns-status-{key} tbody tr").count() == 0, f"{key} is off: its table is empty"
+        _shot(page, screenshot_dir, "dns_status_tables")
+    finally:
+        for key, state in originals.items():
+            helpers.config_restore_state(smoke_vm, f"{DNS_CFG}{key}", state)
+        _write_rc_script(smoke_vm)

@@ -4132,6 +4132,31 @@ function pfb_dns_proxy_listen(?array &$skipped = NULL): array {
 }
 
 /**
+ * The label of each address pfB-DNS can serve, for the status panel's Interface column: 127.0.0.1 and ::1 are `Localhost`; every other
+ * address is the pfSense description of the interface that carries it (get_interface_ip(), get_interface_ipv6()). In display order:
+ * Localhost, then the interfaces as get_configured_interface_with_descr() lists them. An address two interfaces carry belongs to the
+ * first; an address that is none (an interface with nothing assigned, a non-address) is left out. IPv6 keys are spelled as the gateway
+ * prints them (pfb_dns_proxy_host_port()), so that a lookup by a logged address finds them.
+ *
+ * @return array<string,string> address (no port, no brackets) => label
+ */
+function pfb_dns_proxy_address_interfaces(): array {
+	$labels = [];
+	foreach (PFB_DNS_PROXY_LOOPBACK as $address) {
+		$labels[$address] = 'Localhost';
+	}
+	foreach ((array) get_configured_interface_with_descr() as $interface => $description) {
+		foreach ([get_interface_ip($interface), get_interface_ipv6($interface)] as $address) {
+			$packed = is_string($address) ? @inet_pton($address) : FALSE;
+			if ($packed !== FALSE) {
+				$labels[(string) inet_ntop($packed)] ??= (string) $description;
+			}
+		}
+	}
+	return $labels;
+}
+
+/**
  * One "DNS proxy: ..." line per entry pfb_dns_proxy_interface_addresses() reported. The name is the stored text, verbatim: the
  * line reaches the log and a notice (pfb_dns_proxy_notify(), whose file_notice() stores the text encoded itself), so
  * encoding it here would encode it twice.
@@ -14218,15 +14243,18 @@ function pfb_dns_proxy_port(): string {
 }
 
 /**
- * What the pfB-DNS tab's status panel shows, as text: the service, the mode, and a row per transport (plain DNS, DoT, DoH, DoQ). The box is
- * moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that is on while nothing is moved is never running: it is said
- * not to be active, with the reason (pfBlockerNG or the Resolver disabled, or the Resolver not moved yet or refused), and claims no transport (`-`).
- * A running proxy lists what its current start bound (pfb_dns_proxy_listeners(), matched to its readiness-marker PID), then each address the
- * rc script's command names (pfb_dns_proxy_command_listeners()) that it did not bind, as not listening with the logged reason. A saved toggle
- * change cannot hide those listeners before Update applies it. A transport with its toggle off and no active listeners is `Off`; a proxy that
- * is not running, or whose latest complete log record does not match its PID, lists the command's addresses labelled as configured.
+ * What the pfB-DNS tab's status panel (pfb_dns_status_panel()) shows: the service, the mode as text, and for each transport (plain DNS,
+ * DoT, DoH, DoQ) its state. The box is moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that
+ * is on while nothing is moved is never running: it is said not to be active, with the reason (pfBlockerNG or the Resolver disabled,
+ * or the Resolver not moved yet or refused), and claims no transport (`transports` is NULL).
+ * A transport is `off` (its toggle is off and it has no active listener), `no_listener` (on, but the rc script's command gives it none)
+ * or `rows` (pfb_dns_status_rows()). A running proxy lists what its current start bound (pfb_dns_proxy_listeners(), matched to its
+ * readiness-marker PID) as `listening`, then each address the rc script's command names (pfb_dns_proxy_command_listeners()) that it did
+ * not bind as `not_listening` with the logged reason. A saved toggle change cannot hide those listeners before Update applies it. A
+ * proxy that is not running lists the command's addresses as `configured_not_bound`; one whose latest complete log record does not
+ * match its PID, as `configured_unconfirmed`.
  *
- * @return array{service:string,mode:string,plain:string,dot:string,doh:string,doq:string}
+ * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>}
  */
 function pfb_dns_status(): array {
 	global $pfb;
@@ -14236,14 +14264,11 @@ function pfb_dns_status(): array {
 	$service = pfb_dns_proxy_ready() ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
 		return [
-			'service' => $service,
-			'mode'    => pfb_dns_proxy_block_present()
+			'service'    => $service,
+			'mode'       => pfb_dns_proxy_block_present()
 			    ? 'Recovery required: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings, but pfBlockerNG has no valid saved copy of its previous settings to put back. Correct the Resolver in Services > DNS Resolver (see the notices).'
 			    : 'Recovery required: the saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so whether pfBlockerNG moved the Resolver cannot be confirmed, and nothing was put back; manual repair is required in Services > DNS Resolver (see the notices).',
-			'plain'   => '-',
-			'dot'     => '-',
-			'doh'     => '-',
-			'doq'     => '-',
+			'transports' => NULL,
 		];
 	}
 	if ($saved === NULL) {
@@ -14258,12 +14283,9 @@ function pfb_dns_status(): array {
 			    'It serves clients itself, with DNSBL if that is on';
 		}
 		return [
-			'service' => 'Not in use',
-			'mode'    => $mode,
-			'plain'   => '-',
-			'dot'     => '-',
-			'doh'     => '-',
-			'doq'     => '-',
+			'service'    => 'Not in use',
+			'mode'       => $mode,
+			'transports' => NULL,
 		];
 	}
 
@@ -14281,27 +14303,96 @@ function pfb_dns_status(): array {
 	$listeners = ($service === 'Running')
 	    ? pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"))
 	    : NULL;
-	$label = ($service === 'Running') ? 'Configured (not confirmed by the log): ' : 'Configured (not bound): ';
-	$status = ['service' => $service, 'mode' => $mode];
+	$unlogged = ($service === 'Running') ? 'configured_unconfirmed' : 'configured_not_bound';
+	$entry = static fn (string $at, string $state, string $reason = ''): array => ['address' => $at, 'state' => $state, 'reason' => $reason];
+	$transports = [];
 	foreach (['plain' => 'udp+tcp', 'dot' => 'dot', 'doh' => 'doh', 'doq' => 'doq'] as $row => $kind) {
 		$addresses = $configured[$kind] ?? [];
 		$bound = array_keys($listeners['listening'][$kind] ?? []);
 		$active = $service === 'Running' && ($addresses !== [] || $bound !== []);
 		if ($kind !== 'udp+tcp' && !$active && pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
-			$status[$row] = 'Off';
+			$transports[$row] = ['state' => 'off'];
 		} elseif ($addresses === [] && $bound === []) {
-			$status[$row] = 'On, but the service has no listener for it: see the notices, or run an Update';
+			$transports[$row] = ['state' => 'no_listener', 'notice' => 'On, but the service has no listener for it: see the notices, or run an Update'];
 		} elseif ($listeners === NULL) {
-			$status[$row] = $label . implode(', ', $addresses);
+			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows(array_map(static fn (string $at): array => $entry($at, $unlogged), $addresses))];
 		} else {
-			$missing = array_map(
-			    static fn (string $at): string => "{$at}: not listening (" . ($listeners['refused'][$at] ?? 'the gateway did not report it') . ')',
-			    array_diff($addresses, $bound)
-			);
-			$status[$row] = implode(', ', [...$bound, ...$missing]);
+			$entries = [
+				...array_map(static fn (string $at): array => $entry($at, 'listening'), $bound),
+				...array_map(
+				    static fn (string $at): array => $entry($at, 'not_listening', $listeners['refused'][$at] ?? 'the gateway did not report it'),
+				    array_diff($addresses, $bound)
+				),
+			];
+			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows($entries)];
 		}
 	}
-	return $status;
+	return ['service' => $service, 'mode' => $mode, 'transports' => $transports];
+}
+
+/**
+ * One transport's addresses grouped into the rows of its status table: a row per interface and outcome (state and reason), so the
+ * addresses of one interface that fared differently are separate rows. Rows are ordered Localhost, then the interfaces in
+ * pfSense's order (pfb_dns_proxy_address_interfaces()), then each address that maps to no interface on a row of its own, labelled
+ * with the address; an interface with no address has no row. Within a row the addresses keep the order given.
+ *
+ * @param list<array{address:string,state:string,reason:string}> $entries address as host:port, IPv6 bracketed (pfb_dns_proxy_host_port()),
+ *        state `listening`, `not_listening`, `configured_not_bound` or `configured_unconfirmed`, reason '' unless `not_listening`
+ * @return list<array{interface:string,addresses:list<string>,state:string,reason:string}>
+ */
+function pfb_dns_status_rows(array $entries): array {
+	$labels = pfb_dns_proxy_address_interfaces();
+	$rank = array_flip(array_values(array_unique($labels)));
+	$rows = [];
+	foreach ($entries as $entry) {
+		$host = trim(substr($entry['address'], 0, (int) strrpos($entry['address'], ':')), '[]');
+		$label = $labels[$host] ?? $host;
+		$key = implode("\0", [$label, $entry['state'], $entry['reason']]);
+		$rows[$key] ??= ['interface' => $label, 'addresses' => [], 'state' => $entry['state'], 'reason' => $entry['reason']];
+		$rows[$key]['addresses'][] = $entry['address'];
+	}
+	// uasort is stable (PHP 8): rows of one interface, and of no interface, stay in the order their first address came
+	uasort($rows, static fn (array $a, array $b): int => ($rank[$a['interface']] ?? PHP_INT_MAX) <=> ($rank[$b['interface']] ?? PHP_INT_MAX));
+	return array_values($rows);
+}
+
+/**
+ * The pfB-DNS tab's status panel for a pfb_dns_status() result: the service and the mode, then per transport its heading and a table of
+ * Interface | Address | State rows (empty when the transport is off) or, when it is on with no listener, the notice; none of them when
+ * the status claims no transport. A state is an icon that carries its meaning in its hover title and, for screen readers, as text, so
+ * colour or shape never says it alone; a refusal also shows its reason. Every value is escaped here, once.
+ *
+ * @param array{service:string,mode:string,transports:?array<string,array<string,mixed>>} $status
+ */
+function pfb_dns_status_panel(array $status): string {
+	$html = '<div class="panel panel-default" id="pfb-dns-status"><div class="panel-heading"><h2 class="panel-title">pfB-DNS Status</h2></div><div class="panel-body">'
+	    . '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>' . htmlspecialchars($status['service']) . '</td></tr>'
+	    . '<tr id="pfb-dns-status-mode"><th>Mode</th><td>' . htmlspecialchars($status['mode']) . '</td></tr></table>';
+	foreach (['plain' => 'Plain DNS', 'dot' => 'DNS over TLS', 'doh' => 'DNS over HTTPS', 'doq' => 'DNS over QUIC'] as $key => $title) {
+		$transport = $status['transports'][$key] ?? NULL;
+		if ($transport === NULL) {
+			continue;
+		}
+		$html .= "<div id=\"pfb-dns-status-{$key}\"><h3 class=\"h4\">{$title}</h3>";
+		if ($transport['state'] === 'no_listener') {
+			$html .= '<p>' . htmlspecialchars($transport['notice']) . '</p></div>';
+			continue;
+		}
+		$rows = '';
+		foreach ($transport['rows'] ?? [] as $row) {
+			[$icon, $meaning] = match ($row['state']) {
+				'listening'              => ['fa-check-circle text-success', 'Listening'],
+				'not_listening'          => ['fa-times-circle text-danger', 'Not listening'],
+				'configured_not_bound'   => ['fa-exclamation-circle text-warning', 'Configured, not bound'],
+				'configured_unconfirmed' => ['fa-exclamation-circle text-warning', 'Configured, not confirmed by the log'],
+			};
+			$rows .= '<tr><td>' . htmlspecialchars($row['interface']) . '</td><td>' . implode('<br />', array_map('htmlspecialchars', $row['addresses'])) . '</td><td>'
+			    . "<i class=\"fa-solid {$icon}\" title=\"{$meaning}\" aria-hidden=\"true\"></i><span class=\"sr-only\">{$meaning}</span>"
+			    . ($row['reason'] === '' ? '' : ' ' . htmlspecialchars($row['reason'])) . '</td></tr>';
+		}
+		$html .= '<table class="table table-condensed"><thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead><tbody>' . $rows . '</tbody></table></div>';
+	}
+	return $html . '</div></div>';
 }
 
 /**
