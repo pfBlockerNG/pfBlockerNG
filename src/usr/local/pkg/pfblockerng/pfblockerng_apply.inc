@@ -3149,6 +3149,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 
+	// issue #3539: record whether the generation just published answers with the VIP, so a later converged pass can tell
+	// that the live generation no longer needs the held web server even when it publishes nothing itself.
+	if ($pfb_dnsbl_published) {
+		@file_put_contents("{$pfb['dnsbldir']}/pfb_py_vip", empty($pfb['dnsbl_vip_demand']) ? '0' : '1');
+	}
+
 	#################################
 	#	UNBOUND INTEGRATION	#
 	#################################
@@ -3501,9 +3507,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		pfb_logger("\npfB-DNS: the DNS proxy did not become ready; see the notices", 2);
 	}
 
-	// issue #3539: the conf means "the last published generation may still answer with the VIP". Only a pass that published a
-	// new manifest, and whose resolver has converged, releases the hold; any other pass keeps it and the next one decides again.
-	if ($pfb_dnsbl_vip_hold && $pfb_dnsbl_published && pfb_dnsbl_converged()) {
+	// issue #3539: the conf means "the last published generation may still answer with the VIP". The hold is released once the
+	// last published generation answers with no VIP (pfb_py_vip, written when it was published) and the resolver has converged
+	// on it -- by this pass or a later one; a failed or never-recorded publication keeps it, and the next pass decides again.
+	if ($pfb_dnsbl_vip_hold && @file_get_contents("{$pfb['dnsbldir']}/pfb_py_vip") === '0' && pfb_dnsbl_converged()) {
 		pfb_create_dnsbl($mode);
 		$pfb_dnsbl_vip_hold = FALSE;
 	}

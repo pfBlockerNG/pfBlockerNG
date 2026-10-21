@@ -137,13 +137,16 @@ function pfb_wizard_group_rows(array $info): array {
 	return $rows;
 }
 
-// issue #3539: the DNSBL settings section the wizard writes (slice order is config order).
+// issue #3539: the DNSBL settings section the wizard writes (slice order is config order). The wizard sets up a fresh
+// install, so it stores the fresh-install policy; its ADs_Basic group follows it and never answers with the VIP.
 function pfb_wizard_dnsbl_section(bool $auto, $vip4, $vip6, $port, $port_ssl): array {
+	$registry = pfb_cfg_registry();
 	return pfb_wizard_dnsvip_settings($auto, $vip4, $vip6)
-		+ array('pfb_dnsport' => $port, 'pfb_dnsport_ssl' => $port_ssl, 'pfb_dnsbl' => 'on');
+		+ array('pfb_dnsport' => $port, 'pfb_dnsport_ssl' => $port_ssl, 'pfb_dnsbl' => 'on',
+			'global_log_mode' => $registry['dnsbl/global_log_mode']['default'], 'global_log' => $registry['dnsbl/global_log']['default']);
 }
 
-// The ADs_Basic group shared by step 3's demand check and step 4's write.
+// The ADs_Basic group step 4 writes.
 function pfb_wizard_dnsbl_group(array $info): array {
 	$group = array('aliasname' => 'ADs_Basic', 'description' => $info['description'] ?? '');
 	$rows = pfb_wizard_group_rows($info);
@@ -153,13 +156,8 @@ function pfb_wizard_dnsbl_group(array $info): array {
 	return $group + array('action' => 'unbound', 'cron' => 'EveryDay', 'logging' => 'default', 'order' => 'default');
 }
 
-// TRUE when the default DNSBL setup the wizard writes answers a block with the VIP.
-function pfb_wizard_vip_demand(array $dnsbl_section, array $feed_info_raw): bool {
-	return pfb_dnsbl_vip_demand($dnsbl_section, array(pfb_wizard_dnsbl_group($feed_info_raw['dnsbl']['ADs_Basic'] ?? array())), array());
-}
-
 function step3_submitphpaction() {
-	global $pfb, $stepid, $input_errors;
+	global $stepid, $input_errors;
 
 	pfb_wizard_skip_check();
 
@@ -170,7 +168,7 @@ function step3_submitphpaction() {
 		}
 	}
 
-	// Validate DNSBL VIP address (manual mode only — skip when Auto VIP is enabled)
+	// The manual VIP selects' sentinel is never stored as a VIP id (manual mode only; Auto VIP disables them).
 	$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
 	if (!$pfb_auto) {
 		if ($_POST['pfb_dnsvip4'] == 'none') {
@@ -181,26 +179,12 @@ function step3_submitphpaction() {
 		}
 	}
 
-	// issue #3539: the VIP and the webserver ports matter only while the default DNSBL setup answers a block with the VIP.
-	$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
-	$dnsbl_section = pfb_wizard_dnsbl_section(
-		$pfb_auto,
-		$_POST['pfb_dnsvip4'] ?? '',
-		$_POST['pfb_dnsvip6'] ?? '',
-		$_POST['pfb_dnsport'] ?? '',
-		$_POST['pfb_dnsport_ssl'] ?? ''
-	);
-	if (pfb_wizard_vip_demand($dnsbl_section, is_array($feed_info_raw) ? $feed_info_raw : array())) {
-		if (!$pfb_auto) {
-			list($vips_valid, $error) = pfb_validate_vips('lo0', $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6']);
-			if (!$vips_valid) {
-				$input_errors[] = "DNSBL: {$error}";
-			}
-		}
-
-		// Validate DNSBL Port selections
-		if (!is_port($_POST['pfb_dnsport']) || !is_port($_POST['pfb_dnsport_ssl'])) {
+	// issue #3539: the setup the wizard writes answers no block with the VIP, so it needs no VIP and no ports; a port given
+	// must still be valid.
+	foreach (array($_POST['pfb_dnsport'] ?? '', $_POST['pfb_dnsport_ssl'] ?? '') as $pfb_port) {
+		if ($pfb_port !== '' && !is_port($pfb_port)) {
 			$input_errors[] = 'DNSBL Ports: A valid port must be defined.';
+			break;
 		}
 	}
 
