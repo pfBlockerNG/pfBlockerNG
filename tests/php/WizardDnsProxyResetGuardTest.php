@@ -26,7 +26,8 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		'dnsorigdir', 'etdir', 'ip_cache', 'matchdir', 'nativedir', 'origdir', 'permitdir', 'snapdir', 'supptxt', 'supptxt_v6',
 	];
 	private const GLOBALS = ['pfb', 'config', 'input_errors', 'stepid', 'pfb_test_file_notices', 'pfb_test_write_config_hook', 'pfb_test_write_config_calls',
-		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_lock_held', 'pfb_test_try_lock_fail'];
+		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_lock_held', 'pfb_test_try_lock_fail',
+		'pfb_test_lock_events'];
 	/** What the doubled write_config() throws: the reset that got past every guard and the sweep stops here, before it restarts services and exits the process. */
 	private const RESET_WRITE = 'pfBlockerNG: Default Wizard configuration saved';
 
@@ -273,5 +274,87 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		$this->assertSame($before, $GLOBALS['config'], 'nothing was swept or rebuilt in this process\'s copy');
 		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'and config.xml holds the moved Resolver');
 		$this->assertNotSame('', $this->onDisk(self::SAVED), 'with its snapshot');
+	}
+
+	/**
+	 * Another save enabling pfB-DNS, as a lock holder does it: it takes the DNS config lock, and only with it moves the Resolver
+	 * and stores the snapshot in config.xml (another process: this request's copy is not touched).
+	 *
+	 * @return bool TRUE iff it got the lock and wrote; FALSE when the lock was taken, so it waits for the holder
+	 */
+	private function anotherSaveEnablesPfbDns(): bool
+	{
+		$lock = try_lock(PFB_DNS_CONFIG_LOCK, PFB_DNS_CONFIG_LOCK_WAIT);
+		if (!is_resource($lock)) {
+			return FALSE;
+		}
+		$this->disk['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode(self::BLOCK)];
+		$this->disk['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] = base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl'        => ['present' => FALSE, 'value' => NULL],
+			'custom_options'   => ['present' => FALSE, 'value' => NULL],
+		]));
+		unlock($lock);
+		return TRUE;
+	}
+
+	public function testAPfbDnsEnableAnotherSaveMakesDuringTheResetSurvivesTheResetsWrite(): void
+	{
+		// Given a Resolver pfB-DNS never moved, in this request's copy and in config.xml
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lan'];
+		config_set_path(self::SAVED, '');
+		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
+			$GLOBALS['pfb'][$file] = "{$this->dir}/{$file}";
+		}
+		file_put_contents("{$this->dir}/feeds.json", (string) json_encode([
+			'ipv4'  => ['PRI1' => ['description' => 'Primary', 'feeds' => []]],
+			'dnsbl' => ['ADs_Basic' => ['description' => 'Ads', 'feeds' => []]],
+		]));
+		$this->configXmlOnDisk();
+		// and another save enabling pfB-DNS that arrives after the reset put the Resolver back: it gets in at the last instant
+		// before the reset's write if the lock lets it, and otherwise waits for the lock and enables once the reset let go
+		$enabled = FALSE;
+		$disk = $GLOBALS['pfb_test_write_config_hook'];
+		$GLOBALS['pfb_test_write_config_hook'] = function (string $description) use ($disk, &$enabled): void {
+			if ($description === self::RESET_WRITE) {
+				$enabled = $this->anotherSaveEnablesPfbDns();
+				$disk($description);
+				throw new \RuntimeException(self::RESET_WRITE);
+			}
+			$disk($description);
+		};
+		$this->assertSame('', $this->onDisk(self::SAVED), 'before: config.xml holds no snapshot');
+
+		// When the wizard resets, up to and including the write of its default configuration
+		try {
+			step4_submitphpaction();
+			$this->fail('the reset must reach its configuration write');
+		} catch (\RuntimeException $stop) {
+			$this->assertSame(self::RESET_WRITE, $stop->getMessage());
+		}
+		if (!$enabled) {
+			$this->assertTrue($this->anotherSaveEnablesPfbDns(), 'the save that waited gets the lock once the reset has written');
+		}
+
+		// Then config.xml holds both: the reset's default configuration, and the moved Resolver with its snapshot
+		$this->assertSame('on', $this->onDisk('installedpackages/pfblockerng/config/0/enable_cb'), 'the reset was written');
+		$this->assertSame('ADs_Basic', $this->onDisk('installedpackages/pfblockerngdnsbl/config/0/aliasname'), 'with its default DNSBL group');
+		$this->assertNotSame('', (string) $this->onDisk(self::SAVED, ''), 'the snapshot the other save stored survives the reset');
+		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'and so does the Resolver it moved');
+	}
+
+	public function testARefusedResetLetsGoOfTheConfigLock(): void
+	{
+		// Given a stored marker that is no snapshot (the reset is refused after config.xml was read under the lock)
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode('do-ip6: no')];
+		config_set_path(self::SAVED, '0');
+
+		// When the wizard resets
+		step4_submitphpaction();
+
+		// Then it is refused, and the lock is free for the next save
+		$this->assertCount(1, $GLOBALS['input_errors'], json_encode($GLOBALS['input_errors']));
+		$this->assertStringContainsString('is invalid', (string) $GLOBALS['input_errors'][0]);
+		$this->assertEmpty($GLOBALS['pfb_test_lock_held'] ?? FALSE, 'the refused reset still holds the DNS config lock');
 	}
 }

@@ -216,10 +216,13 @@ function step4_submitphpaction() {
 	// survived the call says the Resolver is still moved, and the sweep would delete what the next attempt needs. A stored
 	// marker that is no snapshot (recovery required, no ownership) is kept the same way: it is the only record of what the
 	// Resolver was, and the sweep would erase it. All of it is read from config.xml under the lock: this request's copy can
-	// predate a takeover, and a config.xml that cannot be read to check counts as still moved.
+	// predate a takeover, and a config.xml that cannot be read to check counts as still moved. issue #3558: the lock is kept
+	// through the reset's write, so a pfB-DNS enable another save makes meanwhile waits for it instead of being overwritten.
 	pfb_dns_proxy_resolver(FALSE);
-	$checked = pfb_dns_config_refresh();
+	$lock = pfb_dns_config_lock();
+	$checked = ($lock !== NULL);
 	if (!$checked || pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
+		unlock($lock);
 		if (pfb_dns_proxy_owns_resolver() || !pfb_dns_proxy_recovery_required()) {
 			$input_errors[] = 'DNS proxy: the DNS Resolver could not be put back, so pfBlockerNG was not reset. Follow the DNS proxy notice, then run the wizard again.';
 		} elseif (!$checked) {
@@ -236,9 +239,8 @@ function step4_submitphpaction() {
 		return;
 	}
 
-	// Remove any pfBlockerNG settings and file/folder contents
+	// Remove any pfBlockerNG settings (file/folder contents go once the lock is released)
 	pfb_remove_config_settings();
-	pfb_clear_contents();
 
 	// Add default pfBlockerNG configuration
 	// foreign structure: bulk wizard init reads the whole installedpackages blob for re-write; not routed per-key
@@ -350,7 +352,12 @@ ZXRnYXRlLmNvbQ0K
 	// foreign section: pfblockerng_wizard is a wizard temp section, not in registry
 	config_del_path('pfblockerng_wizard');
 
-	write_config('pfBlockerNG: Default Wizard configuration saved');
+	try {
+		write_config('pfBlockerNG: Default Wizard configuration saved');
+	} finally {
+		unlock($lock);
+	}
+	pfb_clear_contents();
 	pfb_global();
 
 	// Restart Unbound - Code from services_unbound.php 'apply'

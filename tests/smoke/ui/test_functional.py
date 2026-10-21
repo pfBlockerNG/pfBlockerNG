@@ -2888,6 +2888,60 @@ def test_a_refused_wizard_finish_keeps_the_data_and_renders_the_finalize_step(
                 _guest_ok(vm, "/bin/rm", "-f", PFB_MASTERFILE)
 
 
+WIZARD_DB_BACKUP = "/root/pfb_wizard_finish_db.tgz"
+
+
+def test_a_wizard_finish_with_no_concurrent_save_writes_the_reset_and_sweeps_the_files(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #3558: Finish writes its reset under the pfB-DNS config lock and sweeps the package files once it let go.
+
+    Given a Resolver pfB-DNS never moved (pfb_dns_saved empty), a pfBlockerNG config section and a masterfile,
+    When Finish is posted through the wizard form and no other save runs,
+    Then Finish hands over to the update page, the old section is gone, the wizard's defaults are in config.xml, the
+      masterfile is swept, and pfb_dns_saved is still empty.
+    """
+    vm = smoke_vm
+    token = uuid.uuid4().hex
+    sentinel_cfg = "installedpackages/pfblockerngwizardsentinel/config/0/uitest"
+    _guest_ok(vm, "/bin/cp", "/conf/config.xml", WIZARD_CONFIG_BACKUP)
+    _guest_ok(vm, "/usr/bin/tar", "-czf", WIZARD_DB_BACKUP, "-C", "/var/db", "pfblockerng")
+    try:
+        assert vm.ssh("/bin/test", "-s", PFB_FEEDS_JSON).returncode == 0, "precondition: packaged feeds JSON is missing"
+        _guest_ok(vm, f"printf '%s' {shlex.quote(token)} > {shlex.quote(PFB_MASTERFILE)}")
+        helpers.config_set(vm, sentinel_cfg, token)
+        helpers.config_set(vm, PFB_DNS_SAVED_CFG, "")
+        assert _guard_branch(vm) == "00", "precondition: the Finish guard sees a Resolver pfB-DNS never moved"
+
+        resp = webui.post(
+            WIZARD_FINISH_PATH, {}, submit=("finish", "Finish"), timeout=SAVE_TIMEOUT, allow_redirects=False
+        )
+        assert not looks_like_login_page(resp.text), "Finish POST returned the login form (session lost)"
+
+        location = resp.headers.get("Location", "")
+        assert resp.status_code in (302, 303) and "pfblockerng_update.php?wizard=reload" in location, (
+            f"Finish did not hand over to the update page: status {resp.status_code}, Location {location!r}, "
+            f"refusals on the page: {[r for r in REFUSALS if r in resp.text]}"
+        )
+        sentinel_after = helpers.config_get_state(vm, sentinel_cfg)
+        assert sentinel_after == (False, ""), f"Finish kept the old pfBlockerNG section: {sentinel_after!r}"
+        enable = helpers.config_get_state(vm, "installedpackages/pfblockerng/config/0/enable_cb")
+        assert enable == (True, "on"), f"the wizard's defaults are not in config.xml: enable_cb {enable!r}"
+        group = helpers.config_get_state(vm, "installedpackages/pfblockerngdnsbl/config/0/aliasname")
+        assert group == (True, "ADs_Basic"), f"the wizard's default DNSBL group is not in config.xml: {group!r}"
+        assert vm.ssh("/bin/test", "-e", PFB_MASTERFILE).returncode != 0, "Finish left the masterfile behind"
+        saved = helpers.config_get_state(vm, PFB_DNS_SAVED_CFG)
+        assert saved[1] == "", f"Finish stored a Resolver snapshot no save made: {saved!r}"
+    finally:
+        try:
+            helpers.restore_pfb_config_baseline(vm, snapshot_path=WIZARD_CONFIG_BACKUP)
+        finally:
+            _guest_ok(vm, "/bin/rm", "-rf", "/var/db/pfblockerng")
+            _guest_ok(vm, "/usr/bin/tar", "-xzf", WIZARD_DB_BACKUP, "-C", "/var/db")
+            _guest_ok(vm, "/bin/rm", "-f", WIZARD_DB_BACKUP)
+
+
 WIZARD_DNSBL_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=3"
 
 
