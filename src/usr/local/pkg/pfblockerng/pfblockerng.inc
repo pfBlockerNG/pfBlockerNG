@@ -3605,7 +3605,7 @@ if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
 // in the Unbound chroot directory, where the proxy already writes as `unbound` (its module files).
 $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
-// The gateway's log (daemon(8) -o), which pfb_dns_proxy_startup_check() reads to see which listeners the current start bound.
+// The gateway's log (daemon(8) -o), which pfb_dns_proxy_listeners() reads for the startup check and the status panel: which listeners the current start bound.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
 // The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
 // It is root's alone, in a directory root alone can enter and outside the Unbound chroot: the gateway reads it once, at start, while it is

@@ -108,17 +108,10 @@ final class PfbDnsStatusTest extends TestCase
 		$this->seedProxy('4242', "4242\n", $up);
 	}
 
-	/** Store these pfB-DNS settings; the interface is stored too (the sign of a seeded box), so the saved Resolver supplies nothing. */
-	private function ownSettings(array $values): void
-	{
-		foreach ($values + ['pfb_dns_interface' => 'lan', 'pfb_dns_sslcertref' => 'cert1'] as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
-		}
-	}
-
 	/**
-	 * A moved box with pfB-DNS on and these settings of its own (plain DNS on lan), and the rc script the generator writes for
-	 * them: every transport that is on listens on lan (192.0.2.1) and loopback. $up: the proxy serves, else it is stopped.
+	 * A moved box with pfB-DNS on and these settings of its own (plain DNS on lan; the interface stored is the sign of a seeded box, so
+	 * the saved Resolver supplies nothing), and the rc script the generator writes for them: every transport that is on listens on lan
+	 * (192.0.2.1) and loopback. $up: the proxy serves, else it is stopped.
 	 *
 	 * @param array<string,string> $settings
 	 */
@@ -127,7 +120,9 @@ final class PfbDnsStatusTest extends TestCase
 		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
 		$this->moved(FALSE, $up);
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::shared())];
-		$this->ownSettings($settings);
+		foreach ($settings + ['pfb_dns_interface' => 'lan', 'pfb_dns_sslcertref' => 'cert1'] as $key => $value) {
+			config_set_path(self::SETTINGS . $key, $value);
+		}
 		pfb_dns_proxy_service();
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE, 'the generator wrote the rc script the status reads');
 	}
@@ -265,21 +260,31 @@ final class PfbDnsStatusTest extends TestCase
 		], $this->transports());
 	}
 
+	public function testAGatewayReasonIsReturnedVerbatimForThePageToEscape(): void
+	{
+		// Given a reason carrying markup and the rows' own separator
+		$this->box(self::DOT_ON);
+		$this->log(self::PLAIN, 'cannot listen on 192.0.2.1:853: <b>bind</b> & "x", y', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+
+		// Then the status carries it as the gateway wrote it; only the page escapes (htmlspecialchars, PfbDnsPageWiringTest)
+		$this->assertSame('127.0.0.1:853, [::1]:853, 192.0.2.1:853: not listening (<b>bind</b> & "x", y)', $this->transports()['dot']);
+	}
+
 	public function testAStoppedProxyShowsTheConfiguredAddressesOfEachTransportThatIsOnNotTheLogsOldListeners(): void
 	{
-		// Given a stopped proxy with DoT on and DoH off, and a log from when it last ran in which DoT on lan had failed
-		$this->box(self::DOT_ON, FALSE);
-		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', self::READY);
+		// Given a stopped proxy with DoT, DoH and DoQ on, and a log from when it last ran in which DoT on lan had failed
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON, FALSE);
+		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', self::DOH, self::DOQ, self::READY);
 
 		$status = pfb_dns_status();
 
-		// Then every transport that is on names the command's addresses and port, labelled as configured, never as bound
+		// Then every transport names the command's addresses and port, labelled as configured, never as bound
 		$this->assertSame('Stopped', $status['service']);
 		$this->assertSame([
 			'plain' => 'Configured (not bound): 192.0.2.1:53, 127.0.0.1:53, [::1]:53',
 			'dot'   => 'Configured (not bound): 192.0.2.1:853, 127.0.0.1:853, [::1]:853',
-			'doh'   => 'Off',
-			'doq'   => 'Off',
+			'doh'   => 'Configured (not bound): 192.0.2.1:443, 127.0.0.1:443, [::1]:443',
+			'doq'   => 'Configured (not bound): 192.0.2.1:8853, 127.0.0.1:8853, [::1]:8853',
 		], $this->transports());
 	}
 
@@ -295,28 +300,34 @@ final class PfbDnsStatusTest extends TestCase
 	#[DataProvider('unpublishedMarkers')]
 	public function testALiveProxyThatIsNotReadyIsStartingAndShowsItsConfiguredAddresses(?string $marker): void
 	{
-		$this->box(self::DOT_ON);
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
 		$this->seedProxy('4242', $marker);
-		$this->log(self::PLAIN, self::DOT, self::READY);
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
 
 		$status = pfb_dns_status();
 
+		// Then a start not ready yet bound nothing that counts
 		$this->assertSame('Starting', $status['service']);
-		$this->assertSame('Configured (not bound): 192.0.2.1:853, 127.0.0.1:853, [::1]:853', $status['dot'], 'a start not ready yet bound nothing that counts');
+		$this->assertSame([
+			'plain' => 'Configured (not bound): 192.0.2.1:53, 127.0.0.1:53, [::1]:53',
+			'dot'   => 'Configured (not bound): 192.0.2.1:853, 127.0.0.1:853, [::1]:853',
+			'doh'   => 'Configured (not bound): 192.0.2.1:443, 127.0.0.1:443, [::1]:443',
+			'doq'   => 'Configured (not bound): 192.0.2.1:8853, 127.0.0.1:8853, [::1]:8853',
+		], $this->transports());
 	}
 
 	public function testARunningProxyWhoseLogHoldsNoStartShowsItsConfiguredAddressesAsNotConfirmed(): void
 	{
 		// Given a running proxy whose log was rotated: listening lines, but no `ready upstream` line
-		$this->box(self::DOT_ON);
-		$this->log(self::PLAIN, self::DOT);
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ);
 
 		// Then nothing is claimed bound: the configured addresses, said not to be confirmed by the log
 		$this->assertSame([
 			'plain' => 'Configured (not confirmed by the log): 192.0.2.1:53, 127.0.0.1:53, [::1]:53',
 			'dot'   => 'Configured (not confirmed by the log): 192.0.2.1:853, 127.0.0.1:853, [::1]:853',
-			'doh'   => 'Off',
-			'doq'   => 'Off',
+			'doh'   => 'Configured (not confirmed by the log): 192.0.2.1:443, 127.0.0.1:443, [::1]:443',
+			'doq'   => 'Configured (not confirmed by the log): 192.0.2.1:8853, 127.0.0.1:8853, [::1]:8853',
 		], $this->transports());
 	}
 
