@@ -3219,8 +3219,9 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 	return null;
 }
 
-// [ADR-13] VIP lifecycle manager: creates the marked DNSBL sinkhole VIP(s) on enable (auto
-// on) while a block answers with the VIP (issue #3539), removes ONLY the marked + IP-matched VIP(s) otherwise/unmanaged. ADDITIVE: with
+// [ADR-13] VIP lifecycle manager: creates the marked DNSBL sinkhole VIP(s) while auto-create is
+// on and a block answers with the VIP (issue #3539); otherwise removes ONLY the marked +
+// IP-matched VIP(s). ADDITIVE: with
 // pfb_dnsvip_auto never turned on, no marked VIP is found -> no write_config -> byte-identical
 // runtime. Delete guard: removed iff descr == PFB_AUTO_VIP_DESCR_V4/_V6 AND subnet == the
 // address resolved from stored pfb_dnsvip4/6 (pfb_find_marked_vip) — a manual or
