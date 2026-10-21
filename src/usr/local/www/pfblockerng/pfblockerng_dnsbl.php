@@ -187,30 +187,18 @@ $options_dnsbl_dot_block_action	= [ 'block' => 'Block', 'reject' => 'Reject' ];
 
 $options_global_log_txt = 'The shared DNSBL Logging/Blocking mechanism, applied to every DNSBL Group per the Global Application Mode below.'
 			. '<div class="infoblock">'
-			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
-			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
-			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
-			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
-			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
-			. '&#8226 <strong>NODATA (logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with logging. The DNSBL block page is bypassed.<br />'
-			. '&#8226 <strong>NODATA (no logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with no logging. The DNSBL block page is bypassed.<br />'
+			. pfb_dnsbl_mechanism_help()
 			. 'Blocked domains will be reported to the Alert/Block Table.<br /><br />'
 			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.'
 			. '</div>';
 
-$options_global_log	= [	'enabled'	=> 'DNSBL WebServer/VIP',
-				'disabled_log'	=> 'Null Blocking (logging)',
-				'disabled'	=> 'Null Blocking (no logging)',
-				'nxdomain_log'	=> 'NXDOMAIN (logging)',
-				'nxdomain'	=> 'NXDOMAIN (no logging)',
-				'nodata_log'	=> 'NODATA (logging)',
-				'nodata'	=> 'NODATA (no logging)'];
+$options_global_log	= pfb_dnsbl_mechanism_labels();
 
 $options_global_log_mode_txt = 'Controls how the mechanism above applies to every DNSBL Group.'
 			. '<div class="infoblock">'
 			. '&#8226 <strong>Default</strong>, each Group\'s own Logging/Blocking Mode applies; a Group set to \'Default\' inherits this mechanism live -- a later change here applies to it immediately, without editing the Group.<br />'
 			. '&#8226 <strong>Override</strong>, every Group uses this mechanism, without erasing each group\'s saved choice -- return to Default to restore it.<br /><br />'
-			. 'New installs default to Default policy with Null Blocking (logging); an upgraded install with no prior override is grandfathered to Default policy with DNSBL WebServer/VIP, and an upgraded install with an active override is grandfathered to Override policy with the same enforced mechanism.'
+			. 'New installs default to Default policy with Null Blocking (logging); an upgraded install with no prior override is grandfathered to Default policy with ' . pfb_dnsbl_mechanism_labels()['enabled'] . ', and an upgraded install with an active override is grandfathered to Override policy with the same enforced mechanism.'
 			. '</div>';
 
 $options_global_log_mode	= [	'default'	=> 'Default',
@@ -772,9 +760,11 @@ if ($_POST) {
 		// control is not submitted), so the manual VIP validation (existence / interface /
 		// overlap) does NOT apply — the package picks a conflict-free address and
 		// provisions the v6 VIP itself when the resolver listens on IPv6. In manual mode
-		// (box off) the validator runs exactly as before; a missing IPv6 VIP is NOT a save
+		// (box off) the validator runs, but only while a block answers with the VIP (issue #3539); a missing IPv6 VIP is NOT a save
 		// error (ADR-13 §7 pivot — it is a non-blocking runtime warning from pfb_global).
 		$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
+		// issue #3539: the saved configuration needs a VIP only while a block answers with it.
+		$pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST);
 		if (!$pfb_auto) {
 			// issue #1723: already sanitized by the ingestion prologue above.
 			if (($_POST['pfb_dnsvip4'] ?? '') == 'none') {
@@ -783,9 +773,11 @@ if ($_POST) {
 			if (($_POST['pfb_dnsvip6'] ?? '') == 'none') {
 				$_POST['pfb_dnsvip6'] = '';
 			}
-			list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'] ?? '', $_POST['pfb_dnsvip6'] ?? '');
-			if (!$vips_valid) {
-				$input_errors[] = "DNSBL: {$error}";
+			if (pfb_dnsbl_candidate_vip_demand($pfb['dconfig'], $pfb_posted_policy)) {
+				list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'] ?? '', $_POST['pfb_dnsvip6'] ?? '');
+				if (!$vips_valid) {
+					$input_errors[] = "DNSBL: {$error}";
+				}
 			}
 		}
 
@@ -876,7 +868,7 @@ if ($_POST) {
 			);
 
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['tld_wildcard']		= pfb_filter($_POST['tld_wildcard'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig'] = array_replace($pfb['dconfig'], $pfb_posted_policy);
 			$psl_include_private = pfb_filter($_POST['pfb_psl_include_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$psl_allow_private = pfb_filter($_POST['pfb_psl_allow_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			// issue #2371: feed-at-suffix policy selects. PFB_FILTER_WORD only checks shape
@@ -904,29 +896,21 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsport_ssl']	= $_POST['pfb_dnsport_ssl']						?: '8443';
 			$pfb['dconfig']['pfb_dnsbl_rule']	= pfb_filter($_POST['pfb_dnsbl_rule'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
-			$pfb['dconfig']['global_log']		= $_POST['global_log'];
-			$pfb['dconfig']['global_log_mode']	= $_POST['global_log_mode'];
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
-			// ADR-08: IDN mode selector. Validate the raw word, then canonicalise via the
-			// PfbIdnMode adapter to ('on' = All | 'confusable' | '' = Off).
-			$pfb_idn_mode = pfb_filter($_POST['pfb_idn'], PFB_FILTER_WORD, 'dnsbl');
-			$pfb['dconfig']['pfb_idn']		= pfb_cfg_idn_mode_write($pfb_idn_mode);
 			// issue #1887: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
-			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_dnsbl_lenient']	= pfb_filter($_POST['pfb_dnsbl_lenient'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_noaaaa']		= pfb_filter($_POST['pfb_noaaaa'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_gp']		= pfb_filter($_POST['pfb_gp'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 
-			$pfb['dconfig']['tld_allow']		= pfb_filter($_POST['tld_allow'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['tld_allow_sort']	= pfb_filter($_POST['tld_allow_sort'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_py_nolog']		= pfb_filter($_POST['pfb_py_nolog'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
@@ -968,12 +952,10 @@ if ($_POST) {
 			$pfb['dconfig']['top1m_enable']		= pfb_filter($_POST['top1m_enable'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1723: already sanitized by the ingestion prologue above -- plain encode.
-			$pfb['dconfig']['pfb_regex_list']	= base64_encode($_POST['pfb_regex_list'] ?? '');
 			$pfb['dconfig']['pfb_noaaaa_list']	= base64_encode($_POST['pfb_noaaaa_list'] ?? '');
 			$pfb['dconfig']['pfb_gp_bypass_list']	= base64_encode($_POST['pfb_gp_bypass_list'] ?? '');
 			$pfb['dconfig']['whitelist']		= base64_encode($_POST['whitelist'] ?? '');
 			$pfb['dconfig']['tld_wildcard_exclusion']		= base64_encode($_POST['tld_wildcard_exclusion'] ?? '');
-			$pfb['dconfig']['tld_wildcard_blacklist']		= base64_encode($_POST['tld_wildcard_blacklist'] ?? '');
 
 			// A provider/auth identity change invalidates only the download detector
 			// baseline. Keep the active source and derived whitelist available until
@@ -2661,7 +2643,7 @@ if (isset($_REQUEST['savemsg'])) {
 	print_info_box($savemsg);
 }
 
-$pfb_stale_vip_warning = pfb_dnsbl_stale_vip_warning(PfbConfig::read('dnsbl/pfb_dnsvip_auto'), PfbConfig::read('dnsbl/pfb_dnsvip4'), PfbConfig::read('dnsbl/pfb_dnsvip6'));
+$pfb_stale_vip_warning = pfb_dnsbl_stale_vip_warning(PfbConfig::read('dnsbl/pfb_dnsvip_auto'), PfbConfig::read('dnsbl/pfb_dnsvip4'), PfbConfig::read('dnsbl/pfb_dnsvip6'), !empty($pfb['dnsbl_vip_demand']));
 if ($pfb_stale_vip_warning !== '') {
 	print_info_box($pfb_stale_vip_warning, 'warning');
 }
@@ -2695,7 +2677,7 @@ $dnsbl_text = '<div class="infoblock">'
 		. '<span class="text-danger">Note: </span>'
 		. 'DNSBL requires the DNS Resolver (Unbound) to be used as the DNS service.<br />'
 		. 'How a blocked name is answered depends on the <strong>Global Logging/Blocking Mode</strong> and on each DNSBL Group\'s own Logging/Blocking setting:<br />'
-		. '&#8226 <strong>DNSBL WebServer/VIP</strong> - the request is redirected to the DNSBL Virtual IP, where a Lighttpd instance records the hit and returns a \'1x1\' GIF. For a root domain the customizable Blocked Webpage is shown instead.<br />'
+		. '&#8226 <strong>' . pfb_dnsbl_mechanism_labels()['enabled'] . '</strong> - the request is redirected to the DNSBL Virtual IP, where a Lighttpd instance records the hit and returns a \'1x1\' GIF. For a root domain the customizable Blocked Webpage is shown instead. This response is deprecated: prefer Null Blocking.<br />'
 		. '&#8226 <strong>Null Blocking</strong> - the name is answered with \'0.0.0.0\'. No Virtual IP, no web server and no block page are involved.<br />'
 		. '&#8226 <strong>NXDOMAIN</strong> - the name is answered NXDOMAIN and the block page is bypassed.<br />'
 		. '&#8226 <strong>NODATA</strong> - the name is answered NOERROR with an empty answer (SOA in authority) and the block page is bypassed.<br /><br />'
@@ -2916,6 +2898,12 @@ $section->addInput(new Form_Checkbox(
 $form->add($section);
 
 $section = new Form_Section('DNSBL Webserver Configuration');
+$section->addInput(new Form_StaticText(
+	'Deprecated',
+	'<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning">The DNSBL WebServer/VIP response is deprecated: prefer Null Blocking. '
+	. 'The web server, its NAT rules and the VIP run only while a DNSBL Group, the Blacklist category or a built-in block answers with it.</span>'
+));
+
 $section->addInput(new Form_Select(
 	'dnsbl_interface',
 	gettext('Web Server Interface'),
@@ -2983,7 +2971,8 @@ $group->add(new Form_Select(
 // SENTENCE boundary (never mid-sentence), then one concise line covering both
 // modes. "VIP"/"Virtual IP" used consistently (no "IP-Alias VIP" jargon); the
 // address/lifecycle detail belongs in the docs.
-$pfb_vip_help = 'Select the DNSBL VIP address — rejected DNS requests are forwarded here. '
+$pfb_vip_help = 'Deprecated: a VIP is only needed while a DNSBL block answers with the WebServer/VIP mechanism. '
+	. 'Select the DNSBL VIP address — rejected DNS requests are forwarded here. '
 	. 'It should be in an isolated range not already used on the network.<br />'
 	. 'Enable <strong>Create VIPs automatically</strong> to have pfBlockerNG manage it, or select one '
 	. 'manually — create it first at '

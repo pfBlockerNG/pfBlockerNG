@@ -80,7 +80,7 @@ final class DnsblStaleVipTest extends TestCase
 
 	public function testWarningNamesMissingIpv4Only(): void
 	{
-		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '');
+		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '', TRUE);
 		$this->assertStringContainsString('_vip_gone_a', $html);
 		$this->assertStringContainsString('re-select the DNSBL Virtual IP', $html);
 		$this->assertStringContainsString('IPv4 VIP', $html);
@@ -89,14 +89,14 @@ final class DnsblStaleVipTest extends TestCase
 
 	public function testWarningNamesMissingIpv6Only(): void
 	{
-		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '', '_vip_gone_b');
+		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '', '_vip_gone_b', TRUE);
 		$this->assertStringContainsString('IPv6 VIP (_vip_gone_b)', $html);
 		$this->assertStringNotContainsString('IPv4 VIP', $html);
 	}
 
 	public function testWarningNamesBothWithIpv4First(): void
 	{
-		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '_vip_gone_b');
+		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '_vip_gone_b', TRUE);
 		$this->assertStringContainsString('IPv4 VIP (_vip_gone_a)', $html);
 		$this->assertStringContainsString('IPv6 VIP (_vip_gone_b)', $html);
 		$this->assertLessThan(strpos($html, 'IPv6 VIP'), strpos($html, 'IPv4 VIP'));
@@ -104,24 +104,105 @@ final class DnsblStaleVipTest extends TestCase
 
 	public function testWarningIsEmptyInAutoMode(): void
 	{
-		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::On, '_vip_gone_a', '_vip_gone_b'));
+		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::On, '_vip_gone_a', '_vip_gone_b', TRUE));
 	}
 
 	public function testWarningIsEmptyWhenNothingIsMissing(): void
 	{
-		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_test_4', ''));
-		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '', ''));
-		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, null, null));
+		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_test_4', '', TRUE));
+		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '', '', TRUE));
+		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, null, null, TRUE));
 	}
 
 	public function testWarningEscapesHostileVipId(): void
 	{
-		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_"><script>x</script>', '');
+		$html = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_"><script>x</script>', '', TRUE);
 		$this->assertStringContainsString('&lt;script&gt;', $html);
 		$this->assertStringNotContainsString('<script>', $html);
 
-		$html6 = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '', '_vip_gone_"><script>x</script>');
+		$html6 = pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '', '_vip_gone_"><script>x</script>', TRUE);
 		$this->assertStringContainsString('&lt;script&gt;', $html6);
 		$this->assertStringNotContainsString('<script>', $html6);
+	}
+
+	// --- issue #3539: a VIP nobody answers with is not worth a warning ---
+
+	public function testWarningIsEmptyWithoutVipDemand(): void
+	{
+		// Before-state: the same missing VIP warns while a block still answers with it.
+		$this->assertNotSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '_vip_gone_b', TRUE));
+
+		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '_vip_gone_b', FALSE));
+	}
+
+	// --- the DNSBL page's own call (extracted from the shipped page) ---
+
+	/** Run the page's warning statement for the stored VIP ids; any PHP diagnostic is collected, not thrown. */
+	private function pageWarning(array $dnsbl_section, bool $demand, array &$diagnostics = []): string
+	{
+		require_once __DIR__ . '/PageStatementLoader.php';
+		$had_config = array_key_exists('config', $GLOBALS);
+		$saved = $GLOBALS['config'] ?? null;
+		$GLOBALS['config'] = [];
+		if ($dnsbl_section !== []) {
+			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $dnsbl_section);
+		}
+		set_error_handler(static function (int $no, string $message) use (&$diagnostics): bool {
+			$diagnostics[] = $message;
+			return true;
+		});
+		try {
+			$scope = pfb_test_page_eval(
+				pfb_test_page_statement('src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php', '/\$pfb_stale_vip_warning\s*=/'),
+				['pfb' => ['dnsbl_vip_demand' => $demand]]
+			);
+		} finally {
+			restore_error_handler();
+			if ($had_config) {
+				$GLOBALS['config'] = $saved;
+			} else {
+				unset($GLOBALS['config']);
+			}
+		}
+		return $scope['pfb_stale_vip_warning'];
+	}
+
+	public function testPageWarnsOnlyWhileTheStoredConfigurationDemandsAVip(): void
+	{
+		$stored = ['pfb_dnsvip4' => '_vip_gone_a'];
+
+		$this->assertStringContainsString('_vip_gone_a', $this->pageWarning($stored, TRUE));
+		$this->assertSame('', $this->pageWarning($stored, FALSE));
+	}
+
+	public function testPageToleratesStoredVipIdsThatAreAbsent(): void
+	{
+		// An automatic teardown with no demand unsets both ids; the page must read that as "no VIP", quietly.
+		$diagnostics = [];
+
+		$this->assertSame('', $this->pageWarning(['pfb_dnsbl' => 'on'], TRUE, $diagnostics));
+		$this->assertSame([], $diagnostics);
+	}
+
+	public function testPagePrefillReadsAbsentVipIdsAsTheNoneSentinelQuietly(): void
+	{
+		require_once __DIR__ . '/PageStatementLoader.php';
+		$diagnostics = [];
+		set_error_handler(static function (int $no, string $message) use (&$diagnostics): bool {
+			$diagnostics[] = $message;
+			return true;
+		});
+		try {
+			foreach (['pfb_dnsvip4', 'pfb_dnsvip6'] as $key) {
+				$scope = pfb_test_page_eval(
+					pfb_test_page_statement('src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php', "/\\\$pconfig\\['{$key}'\\]\\s*=/"),
+					['pconfig' => []]
+				);
+				$this->assertSame('none', $scope['pconfig'][$key], "an absent {$key} renders as the widget's empty option");
+			}
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame([], $diagnostics);
 	}
 }

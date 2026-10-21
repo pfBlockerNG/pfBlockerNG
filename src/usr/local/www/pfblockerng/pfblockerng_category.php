@@ -541,14 +541,7 @@ if (isset($savemsg)) {
 
 						$log_error = '';
 						if ($gtype == 'dnsbl') {
-							$log_options = ['default'	=> 'Default',
-									'enabled'	=> 'DNSBL WebServer/VIP',
-									'disabled_log'	=> 'Null Blocking (logging)',
-									'disabled'	=> 'Null Blocking (no logging)',
-									'nxdomain_log'	=> 'NXDOMAIN (logging)',
-									'nxdomain'	=> 'NXDOMAIN (no logging)',
-									'nodata_log'	=> 'NODATA (logging)',
-									'nodata'	=> 'NODATA (no logging)'];
+							$log_options = ['default' => 'Default'] + pfb_dnsbl_mechanism_labels();
 
 							// issue #3288: annotate the EFFECTIVE mechanism's label only --
 							// the SELECTED (and therefore submitted) $logtype above is never

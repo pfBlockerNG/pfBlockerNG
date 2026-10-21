@@ -39,21 +39,41 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_wizard_dnsvip_settings')]
 final class WizardVipAutoTest extends TestCase
 {
+	private string $feedsPath = '';
+	private mixed $savedFeeds = null;
+	private bool $hadFeeds = false;
+
 	/**
 	 * Reset the shared globals step3_submitphpaction() reads/writes via
-	 * `global $stepid, $input_errors;` so each case starts clean (input_errors is
+	 * `global $pfb, $stepid, $input_errors;` so each case starts clean (input_errors is
 	 * accumulated, not replaced, by the controller — a leaked entry would give a
-	 * false pass/fail).
+	 * false pass/fail). Issue #3539: the VIP is validated only while the wizard's default
+	 * DNSBL setup answers a block with it, so the fixture installs a catalog with one
+	 * installable ADs_Basic feed (WizardVipDemandTest owns the demand gate itself).
 	 */
 	protected function setUp(): void
 	{
 		$GLOBALS['input_errors'] = [];
 		$GLOBALS['stepid'] = 2;
 		$_POST = [];
+
+		$this->hadFeeds = array_key_exists('feeds', $GLOBALS['pfb'] ?? []);
+		$this->savedFeeds = $GLOBALS['pfb']['feeds'] ?? null;
+		$this->feedsPath = sys_get_temp_dir() . '/pfb_wizard_auto_feeds_' . getmypid() . '_' . uniqid() . '.json';
+		file_put_contents($this->feedsPath, json_encode(['dnsbl' => ['ADs_Basic' => ['description' => 'ADs Basic', 'feeds' => [
+			['url' => 'https://example.com/hosts', 'header' => 'Example_ADs'],
+		]]]]));
+		$GLOBALS['pfb']['feeds'] = $this->feedsPath;
 	}
 
 	protected function tearDown(): void
 	{
+		@unlink($this->feedsPath);
+		if ($this->hadFeeds) {
+			$GLOBALS['pfb']['feeds'] = $this->savedFeeds;
+		} else {
+			unset($GLOBALS['pfb']['feeds']);
+		}
 		$_POST = [];
 		$GLOBALS['input_errors'] = [];
 	}

@@ -116,7 +116,7 @@ $pconfig['blacklist_enable']		= $pfb['bconfig']['blacklist_enable']				?: 'Disab
 $pconfig['blacklist_lang']		= $pfb['bconfig']['blacklist_lang']				?: 'EN';
 $pconfig['blacklist_selected']		= pfb_csv_list($pfb['bconfig']['blacklist_selected'] ?? NULL);
 $pconfig['blacklist_freq']		= $pfb['bconfig']['blacklist_freq']				?: 'Never';
-$pconfig['blacklist_logging']		= $pfb['bconfig']['blacklist_logging']				?: 'enabled';
+$pconfig['blacklist_logging']		= pfb_dnsbl_group_logging(pfb_dnsbl_blacklist_logging($pfb['bconfig']));
 
 if (isset($blacklist_types)) {
 	foreach ($blacklist_types as $type => $setting) {
@@ -143,7 +143,7 @@ $options_blacklist_enable	= ['Disable' => 'Disable', 'Enable' => 'Enable'];
 $options_blacklist_lang		= ['EN' => 'English', 'DE' => 'German', 'FR' => 'French', 'IT' => 'Italian',
 					'NL' => 'Dutch', 'PT' => 'Portuguese', 'ES' => 'Spanish', 'RU' => 'Russian'];
 $options_blacklist_freq		= ['Never' => 'Never', 'EveryDay' => 'Once a day (Random hour)', 'Weekly' => 'Weekly (Sunday)'];
-$options_blacklist_logging	= ['enabled' => 'Enabled', 'disabled' => 'Disabled'];
+$options_blacklist_logging	= ['default' => 'Default'] + pfb_dnsbl_mechanism_labels();
 
 // Unconditional (not just inside the $_POST branch below): $input_errors is read
 // at print_input_errors() on every GET page load too (issue #1496).
@@ -182,7 +182,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 		$select_options = array (	'blacklist_enable'	=> 'Disable',
 						'blacklist_lang'	=> 'EN',
 						'blacklist_freq'	=> 'Never',
-						'blacklist_logging'	=> 'enabled',
+						'blacklist_logging'	=> 'default',
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
@@ -404,9 +404,9 @@ $section->addInput(new Form_Select(
 	'Logging',
 	$pconfig['blacklist_logging'],
 	$options_blacklist_logging
-))->setHelp("Default: <strong>Enabled</strong><br />
-	When 'Enabled', Domains are sinkholed to the DNSBL VIP and logged via the DNSBL Web Server.<br />
-	When 'Disabled', '0.0.0.0' will be used instead of the DNSBL VIP.<br />
+))->setHelp("Default: <strong>Default</strong><br />
+	<strong>Default</strong> follows the Global Logging/Blocking Mechanism (DNSBL tab); an explicit choice applies to the Blacklist category only.<br />
+	The DNSBL WebServer/VIP response is deprecated: prefer Null Blocking.<br />
 	A DNSBL reload is required for changes to take effect: run 'Run Now' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.")
   ->setAttribute('style', 'width: auto');
 

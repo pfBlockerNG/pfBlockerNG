@@ -129,6 +129,7 @@ $_POST['pfb_dnsport_ssl'] = '8443';
 $_POST['pfb_idn'] = 'off';
 $_POST['pfb_py_cache_max'] = '10000';
 $_POST['top1m_count'] = '1000';
+$pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST);	// the page's validation computes it once; the save reuses it
 
 $disk = $GLOBALS['config'];
 if ($scenario === 'interleave') {

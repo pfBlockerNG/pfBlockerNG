@@ -165,7 +165,7 @@
 				<dd>Utilizing the DNS Resolver, ADverts and the worst known malicious domains will be blocked.</dd>
 			</dl>
 			<ul>
-				<li>A VIP on the Localhost interface can be configured manually at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, or pfBlockerNG can create one automatically in the DNSBL step.</li>
+				<li>A VIP on the Localhost interface can be configured manually at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, or pfBlockerNG can create one automatically in the DNSBL step. The DNSBL WebServer/VIP response is deprecated: the VIP is only needed while a DNSBL block answers with it.</li>
 			</ul>
 		</div>
 		</div>
@@ -257,7 +257,7 @@
 <step>
 	<id>4</id>
 	<title>pfBlockerNG DNSBL Component Configuration</title>
-	<description><![CDATA[On this screen the pfBlockerNG DNSBL Category parameters will be set.<br />Enable <strong>Create VIPs automatically</strong> below to have pfBlockerNG manage the DNSBL sinkhole Virtual IP, or configure a VIP on the Localhost interface manually first at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.]]></description>
+	<description><![CDATA[On this screen the pfBlockerNG DNSBL Category parameters will be set.<br />The DNSBL WebServer/VIP response is deprecated: the Virtual IP below is only needed while a DNSBL block answers with it.<br />Enable <strong>Create VIPs automatically</strong> below to have pfBlockerNG manage the DNSBL sinkhole Virtual IP, or configure a VIP on the Localhost interface manually first at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.]]></description>
 	<fields>
 		<field>
 			<name>DNSBL Webserver Configuration</name>

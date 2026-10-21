@@ -74,4 +74,25 @@ final class WizardVipCopyTest extends TestCase
 			}
 		}
 	}
+
+	/**
+	 * Issue #3539: the two wizard passages that offer a DNSBL VIP -- the Components step's VIP
+	 * bullet and the DNSBL step's description -- say the WebServer/VIP response is deprecated.
+	 */
+	public function testWizardVipPassagesAnnounceTheDeprecation(): void
+	{
+		$xml = simplexml_load_file(self::WIZARD);
+		$this->assertNotFalse($xml, 'the wizard XML must parse');
+
+		$descriptions = [];
+		foreach ($xml->step as $step) {
+			$descriptions[(string) $step->id] = (string) $step->description;
+		}
+
+		foreach (['2' => 'Components step VIP bullet', '4' => 'DNSBL step description'] as $id => $where) {
+			$this->assertArrayHasKey($id, $descriptions, "wizard step {$id} not found");
+			$this->assertStringContainsString('VIP', $descriptions[$id], "fixture: {$where} still names the VIP");
+			$this->assertStringContainsString('deprecated', strtolower($descriptions[$id]), "{$where} must announce the WebServer/VIP deprecation");
+		}
+	}
 }

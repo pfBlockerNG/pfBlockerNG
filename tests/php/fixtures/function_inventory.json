@@ -2582,6 +2582,26 @@
             }
         ]
     },
+    "pfb_dnsbl_candidate_vip_demand": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "stored_section",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "posted_policy",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_cidr": {
         "returnsRef": false,
         "returnType": "string|false|null",
@@ -3181,6 +3201,16 @@
             }
         ]
     },
+    "pfb_dnsbl_mechanism_help": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_dnsbl_mechanism_labels": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dnsbl_mechanism_normalize": {
         "returnsRef": false,
         "returnType": "string",
@@ -3315,6 +3345,19 @@
             },
             {
                 "name": "groups",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_policy_from_post": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "post",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
@@ -3979,6 +4022,13 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "?string",
+                "default": null
+            },
+            {
+                "name": "demand",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
                 "default": null
             }
         ]

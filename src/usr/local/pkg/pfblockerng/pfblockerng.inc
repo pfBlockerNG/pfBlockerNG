@@ -3022,9 +3022,10 @@ function pfb_dnsbl_vip_missing(?string $vip): bool {
 }
 
 // HTML warning for the DNSBL page: a stored manual-mode VIP id that no longer exists stops DNSBL from
-// running. Auto mode repoints the id itself, so it never warns. '' = nothing to show.
-function pfb_dnsbl_stale_vip_warning(PfbToggle $auto, ?string $vip4, ?string $vip6): string {
-	if ($auto === PfbToggle::On) {
+// running. Auto mode repoints the id itself, and without VIP demand (issue #3539) nothing answers with the
+// VIP, so neither warns. '' = nothing to show.
+function pfb_dnsbl_stale_vip_warning(PfbToggle $auto, ?string $vip4, ?string $vip6, bool $demand): string {
+	if ($auto === PfbToggle::On || !$demand) {
 		return '';
 	}
 
@@ -17612,6 +17613,39 @@ function pfb_dnsbl_mechanism_flag(string $mechanism): string {
 	};
 }
 
+/** issue #3539: the one mechanism label map every page renders, in PFB_DNSBL_CONCRETE_MECHANISMS order; the VIP response is deprecated. */
+function pfb_dnsbl_mechanism_labels(): array {
+	return array(
+		'enabled'	=> 'DNSBL WebServer/VIP (deprecated)',
+		'disabled_log'	=> 'Null Blocking (logging)',
+		'disabled'	=> 'Null Blocking (no logging)',
+		'nxdomain_log'	=> 'NXDOMAIN (logging)',
+		'nxdomain'	=> 'NXDOMAIN (no logging)',
+		'nodata_log'	=> 'NODATA (logging)',
+		'nodata'	=> 'NODATA (no logging)',
+	);
+}
+
+/** issue #3539: the one mechanism help (a bullet per mechanism label, each ending in <br />) shared by the DNSBL page and the group editor. */
+function pfb_dnsbl_mechanism_help(): string {
+	$notes = array(
+		'enabled'	=> 'Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer. '
+				. 'Deprecated: prefer Null Blocking; the web server and VIP run only while a list, the Blacklist category or a built-in block uses it.',
+		'disabled_log'	=> 'Utilize \'0.0.0.0\' with logging.',
+		'disabled'	=> 'Utilize \'0.0.0.0\' with no logging.',
+		'nxdomain_log'	=> 'Reply NXDOMAIN with logging. The DNSBL block page is bypassed.',
+		'nxdomain'	=> 'Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.',
+		'nodata_log'	=> 'Reply NOERROR with an empty answer (SOA in authority) with logging. The DNSBL block page is bypassed.',
+		'nodata'	=> 'Reply NOERROR with an empty answer (SOA in authority) with no logging. The DNSBL block page is bypassed.',
+	);
+
+	$help = '';
+	foreach (pfb_dnsbl_mechanism_labels() as $token => $label) {
+		$help .= "&#8226 <strong>{$label}</strong>, {$notes[$token]}<br />";
+	}
+	return $help;
+}
+
 /** Existing groups count as domain configuration even without a settings section. */
 function pfb_dnsbl_policy_is_fresh_install(array $dconfig, array $groups): bool {
 	return empty(pfb_gconfig_operator_view($dconfig)) && empty($groups);
@@ -17689,6 +17723,35 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
 		|| pfb_cfg_idn_mode_read($field('pfb_idn')) !== PfbIdnMode::Off
 		|| pfb_cfg_toggle_read($field('tld_allow')) === PfbToggle::On
 		|| (!empty($field('tld_wildcard')) && !empty($field('tld_wildcard_blacklist')))
+	);
+}
+
+/**
+ * issue #3539: the DNSBL policy fields of a settings POST in their STORED form -- the one mapping the save
+ * persists with and its VIP-demand check judges. global_log/global_log_mode are already select-validated.
+ */
+function pfb_dnsbl_policy_from_post(array $post): array {
+	$on_off = static fn(string $key): string => pfb_filter($post[$key] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+	return array(
+		'global_log'		=> $post['global_log'] ?? '',
+		'global_log_mode'	=> $post['global_log_mode'] ?? '',
+		'pfb_regex'		=> $on_off('pfb_regex'),
+		'pfb_regex_list'	=> base64_encode($post['pfb_regex_list'] ?? ''),
+		'pfb_idn'		=> pfb_cfg_idn_mode_write(pfb_filter($post['pfb_idn'] ?? '', PFB_FILTER_WORD, 'dnsbl')),
+		'tld_allow'		=> $on_off('tld_allow'),
+		'tld_wildcard'		=> $on_off('tld_wildcard'),
+		'tld_wildcard_blacklist'	=> base64_encode($post['tld_wildcard_blacklist'] ?? ''),
+	);
+}
+
+/** issue #3539: VIP demand of the configuration a DNSBL settings save would write: the stored section overlaid with the posted policy. */
+function pfb_dnsbl_candidate_vip_demand(array $stored_section, array $posted_policy): bool {
+	$groups   = config_get_path('installedpackages/pfblockerngdnsbl/config', array());
+	$blconfig = config_get_path('installedpackages/pfblockerngblacklist', array());
+	return pfb_dnsbl_vip_demand(
+		array_replace($stored_section, $posted_policy),
+		is_array($groups) ? $groups : array(),
+		is_array($blconfig) ? $blconfig : array()
 	);
 }
 

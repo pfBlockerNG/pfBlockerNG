@@ -124,8 +124,38 @@ function step2_submitphpaction() {
 	config_set_path('pfblockerng_wizard/step2/outbound_interface', implode(',', (array)$_POST['outbound_interface']));
 }
 
+// issue #3539: the DNSBL rows the wizard installs for one catalog group -- feeds that need
+// registration and discontinued feeds are left out.
+function pfb_wizard_group_rows(array $info): array {
+	$rows = array();
+	foreach (($info['feeds'] ?? array()) as $row) {
+		if (isset($row['register']) || (isset($row['status']) && $row['status'] == 'discontinued')) {
+			continue;
+		}
+		$rows[] = array('format' => 'auto', 'state' => 'Enabled', 'url' => $row['url'], 'header' => $row['header']);
+	}
+	return $rows;
+}
+
+// issue #3539: the DNSBL settings section the wizard writes (slice order is config order).
+function pfb_wizard_dnsbl_section(bool $auto, $vip4, $vip6, $port, $port_ssl): array {
+	return pfb_wizard_dnsvip_settings($auto, $vip4, $vip6)
+		+ array('pfb_dnsport' => $port, 'pfb_dnsport_ssl' => $port_ssl, 'pfb_dnsbl' => 'on');
+}
+
+// issue #3539: TRUE when the default DNSBL setup the wizard writes answers a block with the VIP: its section
+// plus the one ADs_Basic group on Default (mirrors the group step 4 creates; pinned by WizardVipDemandTest).
+function pfb_wizard_vip_demand(array $dnsbl_section, array $feed_info_raw): bool {
+	$group = array(
+		'action'	=> 'unbound',
+		'logging'	=> 'default',
+		'row'		=> pfb_wizard_group_rows($feed_info_raw['dnsbl']['ADs_Basic'] ?? array())
+	);
+	return pfb_dnsbl_vip_demand($dnsbl_section, array($group), array());
+}
+
 function step3_submitphpaction() {
-	global $stepid, $input_errors;
+	global $pfb, $stepid, $input_errors;
 
 	pfb_wizard_skip_check();
 
@@ -145,15 +175,29 @@ function step3_submitphpaction() {
 		if ($_POST['pfb_dnsvip6'] == 'none') {
 			$_POST['pfb_dnsvip6'] = '';
 		}
-		list($vips_valid, $error) = pfb_validate_vips('lo0', $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6']);
-		if (!$vips_valid) {
-			$input_errors[] = "DNSBL: {$error}";
-		}
 	}
 
-	// Validate DNSBL Port selections
-	if (!is_port($_POST['pfb_dnsport']) || !is_port($_POST['pfb_dnsport_ssl'])) {
-		$input_errors[] = 'DNSBL Ports: A valid port must be defined.';
+	// issue #3539: the VIP and the webserver ports matter only while the default DNSBL setup answers a block with the VIP.
+	$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
+	$dnsbl_section = pfb_wizard_dnsbl_section(
+		$pfb_auto,
+		$_POST['pfb_dnsvip4'] ?? '',
+		$_POST['pfb_dnsvip6'] ?? '',
+		$_POST['pfb_dnsport'] ?? '',
+		$_POST['pfb_dnsport_ssl'] ?? ''
+	);
+	if (pfb_wizard_vip_demand($dnsbl_section, is_array($feed_info_raw) ? $feed_info_raw : array())) {
+		if (!$pfb_auto) {
+			list($vips_valid, $error) = pfb_validate_vips('lo0', $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6']);
+			if (!$vips_valid) {
+				$input_errors[] = "DNSBL: {$error}";
+			}
+		}
+
+		// Validate DNSBL Port selections
+		if (!is_port($_POST['pfb_dnsport']) || !is_port($_POST['pfb_dnsport_ssl'])) {
+			$input_errors[] = 'DNSBL Ports: A valid port must be defined.';
+		}
 	}
 
 	if ($input_errors) {
@@ -229,21 +273,16 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['suppression_cidr_v6']	= '32';
 
 	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
-	$pfb_auto_wiz = (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')) === PfbToggle::On);
-	$dnsvip_settings = pfb_wizard_dnsvip_settings(
-		$pfb_auto_wiz,
+	$dnsbl_section = pfb_wizard_dnsbl_section(
+		(pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')) === PfbToggle::On),
 		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4'),
-		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6')
+		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6'),
+		config_get_path('pfblockerng_wizard/step3/pfb_dnsport'),
+		config_get_path('pfblockerng_wizard/step3/pfb_dnsport_ssl')
 	);
-	foreach ($dnsvip_settings as $pfb_dnsvip_key => $pfb_dnsvip_val) {
-		$new_config['pfblockerngdnsblsettings']['config'][0][$pfb_dnsvip_key] = $pfb_dnsvip_val;
+	foreach ($dnsbl_section as $pfb_dnsbl_key => $pfb_dnsbl_val) {
+		$new_config['pfblockerngdnsblsettings']['config'][0][$pfb_dnsbl_key] = $pfb_dnsbl_val;
 	}
-	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
-	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport');
-	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
-	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport_ssl']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport_ssl');
-
-	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsbl']		= 'on';
 
 	// Default DNSBL Whitelist
 	// foreign section: pfblockerng_wizard/step3/suppression is a wizard temp key, not in registry
@@ -298,20 +337,9 @@ ZXRnYXRlLmNvbQ0K
 			$add['aliasname']	= $alias;
 			$add['description']	= $info['description'];
 
-			foreach($info['feeds'] as $row) {
-
-				// Remove Feeds that require Registration and Discontinued Feeds
-				if (isset($row['register']) || (isset($row['status']) && $row['status'] == 'discontinued')) {
-					continue;
-				}
-
-				if (!is_array($add['row'])) {
-					$add['row'] = array();
-				}
-				$add['row'][] = array(	'format'	=> 'auto',
-							'state'		=> 'Enabled',
-							'url'		=> $row['url'],
-							'header'	=> $row['header']);
+			$rows = pfb_wizard_group_rows($info);
+			if (!empty($rows)) {
+				$add['row'] = $rows;
 			}
 
 			if (strpos($key, 'dnsbl') !== FALSE) {

@@ -143,6 +143,7 @@ final class PfbWidgetOracleTest extends TestCase
 			'dnsbl_vip4'     => '198.51.100.1',
 			'dnsbl_port'     => '8080',
 			'dnsbl_port_ssl' => '8443',
+			'dnsbl_vip_demand' => TRUE,	// issue #3539: a block answers with the VIP
 			'config'         => [],
 		];
 	}
@@ -349,6 +350,31 @@ final class PfbWidgetOracleTest extends TestCase
 
 		$this->assertSame(self::ICON_GREEN, $status);
 		$this->assertSame('DNSBL is Active on vip: 198.51.100.1 ports: 8080 & 8443', $msg);
+	}
+
+	public function testDnsblLiveWithoutVipDemandStatesNeitherVipNorPorts(): void
+	{
+		// Before-state: the same live DNSBL names its VIP and ports while a block answers with it.
+		$pfb = $this->liveDnsblPfb();
+		[, , , $with_demand] = pfb_widget_oracle_status($pfb);
+		$this->assertSame('DNSBL is Active on vip: 198.51.100.1 ports: 8080 & 8443', $with_demand);
+
+		$pfb['dnsbl_vip_demand'] = FALSE;
+		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
+
+		$this->assertSame(self::ICON_GREEN, $status, 'DNSBL is just as active');
+		$this->assertSame('DNSBL is Active.', $msg);
+		$this->assertStringNotContainsString('vip:', $msg);
+	}
+
+	public function testDnsblLiveTreatsAnAbsentDemandFactAsNoDemand(): void
+	{
+		$pfb = $this->liveDnsblPfb();
+		unset($pfb['dnsbl_vip_demand']);
+
+		[, , , $msg] = pfb_widget_oracle_status($pfb);
+
+		$this->assertSame('DNSBL is Active.', $msg);
 	}
 
 	public function testDnsblLiveWithOpenPhpEntryIsYellow(): void

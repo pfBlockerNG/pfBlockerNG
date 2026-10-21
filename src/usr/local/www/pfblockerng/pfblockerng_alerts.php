@@ -241,25 +241,8 @@ if (!$alert_summary) {
 							$pfb['dnsbl_policy_legacy']
 						);
 
-						// Mirror the pfblockerng.inc logging_type mapping (issue #31 adds
-						// NXDOMAIN '3'/'4', issue #3243 adds NODATA '5'/'6'); anything else
-						// (including the silent-null 'disabled' token) falls through to
-						// null-no-log '2'.
-						if ($d_log == 'disabled_log') {
-							$d_type = '0';
-						} elseif ($d_log == 'enabled') {
-							$d_type = '1';
-						} elseif ($d_log == 'nxdomain_log') {
-							$d_type = '3';
-						} elseif ($d_log == 'nxdomain') {
-							$d_type = '4';
-						} elseif ($d_log == 'nodata_log') {
-							$d_type = '5';
-						} elseif ($d_log == 'nodata') {
-							$d_type = '6';
-						} else {
-							$d_type = '2';
-						}
+						// issue #3291: the one mechanism -> DNSBL logging flag mapping shared with the manifest.
+						$d_type = pfb_dnsbl_mechanism_flag($d_log);
 						$clists[$type][$lname]['log'] = $d_type;
 					} else {
 						$lname = "pfB_{$data['aliasname']}_v{$vtype}";
@@ -1818,7 +1801,7 @@ if ($alert_summary) {
 			if ($alert_view != 'dnsbl_stat') {
 				$unknown_msg = 'Unknown';
 			} else {
-				$unknown_msg = 'DNSBL Webserver/VIP';
+				$unknown_msg = pfb_dnsbl_mechanism_labels()['enabled'];
 			}
 
 			$agent_cmd = '';
@@ -5039,7 +5022,7 @@ foreach ($stats as $stat_type => $stype):
 							}
 
 							if ($stat_type == 'dnsblagent' && $data == 'Unknown') {
-								$data = 'DNSBL Webserver/VIP';
+								$data = pfb_dnsbl_mechanism_labels()['enabled'];
 								$data_disp = $data;	// literal, trusted
 							}
 

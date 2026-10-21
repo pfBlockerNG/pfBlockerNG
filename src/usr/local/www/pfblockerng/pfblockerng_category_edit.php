@@ -440,14 +440,7 @@ $options_agateway_in		= $options_agateway_out		= pfb_get_gateways();
 
 $options_order			= [ 'default' => 'Default', 'primary' => 'Primary' ];
 
-$options_logging	= [	'default'	=> 'Default',
-				'enabled'	=> 'DNSBL WebServer/VIP',
-				'disabled_log'	=> 'Null Blocking (logging)',
-				'disabled'	=> 'Null Blocking (no logging)',
-				'nxdomain_log'	=> 'NXDOMAIN (logging)',
-				'nxdomain'	=> 'NXDOMAIN (no logging)',
-				'nodata_log'	=> 'NODATA (logging)',
-				'nodata'	=> 'NODATA (no logging)' ];
+$options_logging	= ['default' => 'Default'] + pfb_dnsbl_mechanism_labels();
 
 // Per-row action for DNSBL feeds: Deny (block, default) or Permit (allow list — overrides block feeds).
 $options_row_action	= [ 'Deny' => 'Deny', 'Permit' => 'Permit' ];
@@ -1702,13 +1695,8 @@ if ($gtype == 'dnsbl') {
 	$log_text = '<strong>Default</strong> inherits the Global Logging/Blocking Mode (DNSBL tab) live -- a later '
 			. 'change to the global mechanism applies to this Group immediately, without editing it again. Every '
 			. 'brand-new DNSBL Group starts on Default; an existing Group keeps its currently configured setting.<br />'
-			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
-			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
-			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
-			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
-			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
-			. '&#8226 <strong>NODATA (logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with logging. The DNSBL block page is bypassed.<br />'
-			. '&#8226 <strong>NODATA (no logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with no logging. The DNSBL block page is bypassed.<br /><br />'
+			. pfb_dnsbl_mechanism_help()
+			. '<br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br />'
 			. 'The DNSBL tab\'s Global Application Mode, when set to <strong>Override</strong>, forces every Group onto the Global Logging/Blocking Mechanism WITHOUT erasing this saved choice -- return it to Default to restore this setting\'s effect.<br />'
 			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update';
