@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -33,6 +34,10 @@ use PHPUnit\Framework\TestCase;
  *   when it is already a configured VIP (the user resolves the conflict manually)
  *
  * Scenario D (unknown family): non-IP family → null
+ *
+ * Scenario F (issue #3540): a given address is honoured only when it is one of the fixed candidates
+ *   and passes the same free checks; any other string returns null, so a synced value from a peer
+ *   can never become a VIP address
  */
 #[CoversFunction('pfb_pick_free_dnsbl_vip')]
 final class DnsblPickFreeVipTest extends TestCase
@@ -156,5 +161,98 @@ final class DnsblPickFreeVipTest extends TestCase
 	{
 		$this->assertNull(pfb_pick_free_dnsbl_vip(0, 'lan'));
 		$this->assertNull(pfb_pick_free_dnsbl_vip(AF_UNIX, 'lan'));
+	}
+
+	// ---------- Scenario F — issue #3540: a caller-given address ----------
+
+	public function testV4_GivenCandidateIsFree_ReturnsThatCandidateNotTheFirst(): void
+	{
+		// Given: every candidate is free, so a plain pick would return the first one.
+		$this->assertSame('172.16.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'),
+			'Pre-condition: without a given address the picker returns the first candidate');
+
+		// When: a free candidate other than the first is given.
+		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.53');
+
+		// Then: that candidate, not the first one.
+		$this->assertSame('192.168.53.53', $result,
+			'A free given candidate must be returned as is. Got: ' . var_export($result, TRUE));
+	}
+
+	public function testV4_GivenCandidateIsAnExistingVip_ReturnsNull(): void
+	{
+		// Given: the given candidate is free, so it is returned.
+		$this->assertSame('192.168.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.53'),
+			'Pre-condition: a free given candidate is returned');
+
+		// When: an existing VIP takes that address.
+		$GLOBALS['pfb_test_vip_list'] = ['_vipuser1' => '192.168.53.53'];
+		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.53');
+
+		// Then: no fallback to another candidate; the caller must treat it as a conflict.
+		$this->assertNull($result,
+			'A given candidate taken by a VIP must return NULL, not another candidate. Got: ' . var_export($result, TRUE));
+	}
+
+	public function testV4_GivenCandidateOverlapsAConfiguredSubnet_ReturnsNull(): void
+	{
+		// Given: the given candidate is free, so it is returned.
+		$this->assertSame('192.168.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.53'),
+			'Pre-condition: a free given candidate is returned');
+
+		// When: a configured subnet covers that address.
+		$GLOBALS['pfb_test_configured_subnets'] = ['192.168.0.0/16'];
+		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '192.168.53.53');
+
+		// Then: no fallback to another candidate.
+		$this->assertNull($result,
+			'A given candidate inside a configured subnet must return NULL. Got: ' . var_export($result, TRUE));
+	}
+
+	public function testV6_GivenCandidateIsFree_ReturnsIt(): void
+	{
+		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan', 'fd00:53:53:53:53:53:53:53');
+
+		$this->assertSame('fd00:53:53:53:53:53:53:53', $result,
+			'The free v6 candidate given must be returned. Got: ' . var_export($result, TRUE));
+	}
+
+	public function testV6_GivenCandidateIsAnExistingVip_ReturnsNull(): void
+	{
+		// Given: the v6 candidate is taken by an existing VIP.
+		$GLOBALS['pfb_test_vip_list'] = ['_vip6user' => 'fd00:53:53:53:53:53:53:53'];
+
+		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan', 'fd00:53:53:53:53:53:53:53');
+
+		$this->assertNull($result,
+			'A given v6 candidate taken by a VIP must return NULL. Got: ' . var_export($result, TRUE));
+	}
+
+	/** @return array<string,array{0:int,1:string}> */
+	public static function nonCandidateAddresses(): array
+	{
+		return [
+			'v4: routable address'              => [AF_INET, '203.0.113.5'],
+			'v4: candidate with a prefix'       => [AF_INET, '172.16.53.53/12'],
+			'v4: leading space'                 => [AF_INET, ' 172.16.53.53'],
+			'v4: trailing newline'              => [AF_INET, "172.16.53.53\n"],
+			'v4: zero-padded octets'            => [AF_INET, '172.016.053.053'],
+			'v4: the v6 candidate'              => [AF_INET, 'fd00:53:53:53:53:53:53:53'],
+			'v4: empty string'                  => [AF_INET, ''],
+			'v6: upper-case candidate'          => [AF_INET6, 'FD00:53:53:53:53:53:53:53'],
+			'v6: a v4 candidate'                => [AF_INET6, '172.16.53.53'],
+			'v6: compressed form of the ULA'    => [AF_INET6, 'fd00:53::53'],
+		];
+	}
+
+	#[DataProvider('nonCandidateAddresses')]
+	public function testGivenNonCandidateAddress_ReturnsNull(int $family, string $address): void
+	{
+		// Given: every candidate is free (setUp seeds no VIP or subnet), so only the address itself can decide.
+		$result = pfb_pick_free_dnsbl_vip($family, 'lan', $address);
+
+		$this->assertNull($result,
+			'A given address that is not a fixed candidate of its family must return NULL. Given: '
+			. var_export($address, TRUE) . ', got: ' . var_export($result, TRUE));
 	}
 }

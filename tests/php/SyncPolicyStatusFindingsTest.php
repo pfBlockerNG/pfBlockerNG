@@ -13,6 +13,9 @@ use PHPUnit\Framework\TestCase;
  * is listed in {dbdir}/pfb_sync_findings.json and raised as ONE notice, never again for an unchanged
  * list. Findings are fixed value-free strings: no credential, VIP address or interface ever reaches
  * the file, the notice or the log.
+ *
+ * Issue #3540 adds the auto-VIP conflict: a policy receiver whose synced VIP address is not free on this
+ * node creates no VIP, and the family (never the address) is listed.
  */
 #[CoversFunction('pfb_sync_effective_findings')]
 #[CoversFunction('pfb_sync_effective_facts')]
@@ -24,6 +27,8 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 {
 	private const NOTICE_PREFIX = 'Policy that cannot take effect on this node: ';
 	private const VIP_FINDING   = 'DNSBL disabled: the DNSBL VIP failed validation';
+	private const VIP_CONFLICT_V4 = 'DNSBL auto-VIP: the synced IPv4 address is not free on this node';
+	private const VIP_CONFLICT_V6 = 'DNSBL auto-VIP: the synced IPv6 address is not free on this node';
 
 	private string $dir = '';
 	private mixed $originalPfb = NULL;
@@ -51,7 +56,7 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		$GLOBALS['pfb']['maxmind_key']    = '';
 		$GLOBALS['pfb']['maxmind_account'] = '';
 		$GLOBALS['pfb']['asn_token']      = '';
-		unset($GLOBALS['pfb']['dnsbl_vip_disabled'], $GLOBALS['pfb']['reserved_header_skips']);
+		unset($GLOBALS['pfb']['dnsbl_vip_disabled'], $GLOBALS['pfb']['reserved_header_skips'], $GLOBALS['pfb']['dnsbl_vip_conflict']);
 	}
 
 	protected function tearDown(): void
@@ -120,6 +125,7 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 	{
 		return [
 			'vip'            => [['vip_disabled' => TRUE], [self::VIP_FINDING]],
+			'vip conflict'   => [['vip_conflict' => ['IPv4']], [self::VIP_CONFLICT_V4]],
 			'maxmind key'    => [['maxmind_missing' => ['license key']], ['MaxMind: license key missing']],
 			'maxmind acct'   => [['maxmind_missing' => ['account ID']], ['MaxMind: account ID missing']],
 			'asn'            => [['asn_token_missing' => TRUE], ['ASN: IPinfo token missing']],
@@ -158,6 +164,14 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 			'MaxMind: license key missing',
 			'TOP1M: provider token missing',
 		], $findings);
+	}
+
+	public function testBothFamiliesInVipConflictYieldBothFindingsSorted(): void
+	{
+		$this->assertSame(
+			[self::VIP_CONFLICT_V4, self::VIP_CONFLICT_V6],
+			pfb_sync_effective_findings(['vip_conflict' => ['IPv6', 'IPv4']])
+		);
 	}
 
 	// ---- 2. no value ever leaks --------------------------------------------------------
@@ -208,6 +222,25 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		foreach ($sentinels as $name => $sentinel) {
 			$this->assertStringNotContainsString($sentinel, $surface, "{$name} must never reach findings, state, notice or log");
 		}
+	}
+
+	public function testSyncedVipAddressNeverReachesFindingsStateNoticeOrLog(): void
+	{
+		// GIVEN a node whose synced auto-VIP address is a sentinel and whose last VIP pass hit a conflict
+		$sentinel = 'LEAK_SENTINEL_SYNCED_VIP_ADDR';
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto4', $sentinel);
+		$GLOBALS['pfb']['dnsbl_vip_conflict'] = ['IPv4'];
+		$this->assertStringContainsString($sentinel, json_encode($GLOBALS['config']), 'fixture really holds the sentinel');
+
+		// WHEN the findings are gathered and recorded
+		$findings = pfb_sync_effective_findings($this->gather());
+		$this->assertSame([self::VIP_CONFLICT_V4], $findings, 'the conflict finding really fires next to the sentinel');
+		$this->assertTrue(pfb_sync_findings_record($findings, $this->dir));
+
+		// THEN the finding names the family only: the address reaches neither state, notice nor log
+		$surface = json_encode($findings) . $this->stateBytes() . implode("\n", $this->noticeTexts()) . json_encode($GLOBALS['pfb_test_logger_calls']);
+		$this->assertNotSame('', $this->stateBytes());
+		$this->assertStringNotContainsString($sentinel, $surface, 'the synced VIP address must never reach findings, state, notice or log');
 	}
 
 	// ---- 3. Blacklist username/password -------------------------------------------------
@@ -520,5 +553,17 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'repeat: no second notice');
 		$this->assertTrue(pfb_sync_findings_record([], $this->dir));
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'cleared: no notice');
+	}
+
+	// ---- 9. auto-VIP conflict (issue #3540) -----------------------------------------------
+
+	public function testFactsCarryTheFamiliesWhoseSyncedVipAddressWasNotFree(): void
+	{
+		$facts = $this->gather();
+		$this->assertArrayHasKey('vip_conflict', $facts, 'the facts must carry the VIP conflict');
+		$this->assertSame([], $facts['vip_conflict'], 'before-state: no conflict recorded by the last VIP pass');
+
+		$GLOBALS['pfb']['dnsbl_vip_conflict'] = [3 => 'IPv4', 7 => 'IPv6'];
+		$this->assertSame(['IPv4', 'IPv6'], $this->gather()['vip_conflict'] ?? NULL, 'the recorded families, as a list');
 	}
 }

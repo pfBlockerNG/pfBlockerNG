@@ -713,6 +713,32 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame($token, PfbConfig::read('dnsbl/top1m_token'), 'top1m_token read() must return the stored token verbatim');
 	}
 
+	/** @return array<string,array{0:string,1:string,2:string}> */
+	public static function autoVipAddressKeys(): array
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		return [
+			'v4' => ['dnsbl/pfb_dnsvip_auto4', "{$section}/pfb_dnsvip_auto4", '192.168.53.53'],
+			'v6' => ['dnsbl/pfb_dnsvip_auto6', "{$section}/pfb_dnsvip_auto6", 'fd00:53:53:53:53:53:53:53'],
+		];
+	}
+
+	/**
+	 * issue #3540: the synced address of the auto-created DNSBL VIP is a plain string; absent = no
+	 * synced address = the prior behaviour, so it reads as '' and any stored address round-trips.
+	 */
+	#[DataProvider('autoVipAddressKeys')]
+	public function testAutoVipAddressDefaultsToEmptyAndRoundTrips(string $key, string $path, string $address): void
+	{
+		$this->assertNull(config_get_path($path), 'before-state: the key is absent');
+		$this->assertSame('', PfbConfig::read($key), "{$key} absent -> default ''");
+
+		PfbConfig::write($key, $address);
+
+		$this->assertSame($address, config_get_path($path), "{$key} write() must store the address verbatim");
+		$this->assertSame($address, PfbConfig::read($key), "{$key} read() must return the stored address verbatim");
+	}
+
 	public function testReadReturnsRegisteredDefaultForDnsblInterfaceAbsentKey(): void
 	{
 		// dnsbl_interface default is 'lo0'.
@@ -1605,6 +1631,9 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl_interface',
 			'pfb_dnsvip4',
 			'pfb_dnsvip6',
+			// issue #3540: the address of this node's auto-created sinkhole VIP, synced as policy
+			'pfb_dnsvip_auto4',
+			'pfb_dnsvip_auto6',
 			'pfb_dnsport',
 			'pfb_dnsport_ssl',
 			'top1m_enable',
