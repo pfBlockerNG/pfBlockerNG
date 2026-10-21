@@ -2438,6 +2438,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "labels",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
             }
         ]
     },

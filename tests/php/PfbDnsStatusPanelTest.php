@@ -114,7 +114,7 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$this->assertSame(4, (int) $panel->evaluate("count(//tr[@id='pfb-dns-status-mode']/following::h3)"), 'the service and the mode come before the four transports');
 	}
 
-	public function testAnOffTransportIsAnEmptyTableWithItsHeadingAndColumnsAndNoStateText(): void
+	public function testAnOffTransportIsATableOfItsHeaderOnlyWithNoBodyAndNoStateText(): void
 	{
 		$panel = $this->panel(self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off']));
 		$dot = self::block('dot');
@@ -125,8 +125,9 @@ final class PfbDnsStatusPanelTest extends TestCase
 			$columns[] = $column->textContent;
 		}
 		$this->assertSame(['Interface', 'Address', 'State'], $columns);
-		$this->assertSame(1, $panel->query("{$dot}//tbody")->length, 'the table has its body');
-		$this->assertSame(0, $panel->query("{$dot}//tbody/tr")->length, 'and no row');
+		// pfSense's pfSenseHelpers.js fills every empty <tbody> with a blank row, so an off table must have no <tbody> at all
+		$this->assertSame(0, $panel->query("{$dot}//tbody")->length, 'no body for the page script to fill');
+		$this->assertSame(0, $panel->query("{$dot}//tr[not(parent::thead)]")->length, 'and no row');
 		$this->assertSame(0, $panel->query("{$dot}//i")->length, 'no icon');
 		$this->assertSame('DNS over TLSInterfaceAddressState', $panel->evaluate("string({$dot})"), 'and no state text');
 		$this->assertGreaterThan(0, $panel->query(self::block('plain') . '//tbody/tr')->length, 'a transport that is on keeps its rows beside the off ones');

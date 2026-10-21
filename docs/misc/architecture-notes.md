@@ -714,11 +714,11 @@ including untagged records from an older gateway (`configured_unconfirmed`), the
 **Status panel tables (issue #3555).** `pfb_dns_status_panel()` renders that status as the panel under the form (the sync panels'
 pattern), one table per transport with Interface | Address | State columns; `pfb_dns_status_rows()` groups a transport's addresses
 into rows, one per interface and outcome (state and reason), ordered Localhost, then the interfaces in pfSense's order, then each
-address that maps to no interface on a row of its own, labelled with the address. The label of an address is
-`pfb_dns_proxy_address_interfaces()`: loopback is `Localhost`, else the description of the interface that `get_interface_ip()` or
+address that maps to no interface on a row of its own, labelled with the address. The label of an address comes from
+`pfb_dns_proxy_address_interfaces()`, which `pfb_dns_status()` asks once per page and hands to the grouping: loopback is `Localhost`, else the description of the interface that `get_interface_ip()` or
 `get_interface_ipv6()` ties it to (the first interface in pfSense's order when two carry it). A state is an icon (`fa-check-circle`,
 `fa-times-circle`, `fa-exclamation-circle`) with its meaning as hover title and as `sr-only` text, so no colour or shape stands
-alone; a refusal also shows its reason. An off transport is an empty table; the recovery-required and not-in-use states show no
+alone; a refusal also shows its reason. An off transport is its header alone, with no `<tbody>` (pfSense's `pfSenseHelpers.js` fills every empty one with a blank row); the recovery-required and not-in-use states show no
 transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the `ui_render` test of the pfB-DNS page,
 `test_smoke_dns_gateway.py` (a gateway serving every transport) and the `ui_browser` test in `test_browser_dns.py`.
 

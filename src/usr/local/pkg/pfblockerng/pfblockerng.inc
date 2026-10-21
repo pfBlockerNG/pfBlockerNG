@@ -14304,6 +14304,7 @@ function pfb_dns_status(): array {
 	    ? pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"))
 	    : NULL;
 	$unlogged = ($service === 'Running') ? 'configured_unconfirmed' : 'configured_not_bound';
+	$labels = pfb_dns_proxy_address_interfaces();
 	$entry = static fn (string $at, string $state, string $reason = ''): array => ['address' => $at, 'state' => $state, 'reason' => $reason];
 	$transports = [];
 	foreach (['plain' => 'udp+tcp', 'dot' => 'dot', 'doh' => 'doh', 'doq' => 'doq'] as $row => $kind) {
@@ -14315,7 +14316,7 @@ function pfb_dns_status(): array {
 		} elseif ($addresses === [] && $bound === []) {
 			$transports[$row] = ['state' => 'no_listener', 'notice' => 'On, but the service has no listener for it: see the notices, or run an Update'];
 		} elseif ($listeners === NULL) {
-			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows(array_map(static fn (string $at): array => $entry($at, $unlogged), $addresses))];
+			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows(array_map(static fn (string $at): array => $entry($at, $unlogged), $addresses), $labels)];
 		} else {
 			$entries = [
 				...array_map(static fn (string $at): array => $entry($at, 'listening'), $bound),
@@ -14324,7 +14325,7 @@ function pfb_dns_status(): array {
 				    array_diff($addresses, $bound)
 				),
 			];
-			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows($entries)];
+			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows($entries, $labels)];
 		}
 	}
 	return ['service' => $service, 'mode' => $mode, 'transports' => $transports];
@@ -14333,15 +14334,15 @@ function pfb_dns_status(): array {
 /**
  * One transport's addresses grouped into the rows of its status table: a row per interface and outcome (state and reason), so the
  * addresses of one interface that fared differently are separate rows. Rows are ordered Localhost, then the interfaces in
- * pfSense's order (pfb_dns_proxy_address_interfaces()), then each address that maps to no interface on a row of its own, labelled
+ * pfSense's order (the order of $labels), then each address that maps to no interface on a row of its own, labelled
  * with the address; an interface with no address has no row. Within a row the addresses keep the order given.
  *
  * @param list<array{address:string,state:string,reason:string}> $entries address as host:port, IPv6 bracketed (pfb_dns_proxy_host_port()),
  *        state `listening`, `not_listening`, `configured_not_bound` or `configured_unconfirmed`, reason '' unless `not_listening`
+ * @param array<string,string> $labels pfb_dns_proxy_address_interfaces(), asked once per page by the caller
  * @return list<array{interface:string,addresses:list<string>,state:string,reason:string}>
  */
-function pfb_dns_status_rows(array $entries): array {
-	$labels = pfb_dns_proxy_address_interfaces();
+function pfb_dns_status_rows(array $entries, array $labels): array {
 	$rank = array_flip(array_values(array_unique($labels)));
 	$rows = [];
 	foreach ($entries as $entry) {
@@ -14358,7 +14359,7 @@ function pfb_dns_status_rows(array $entries): array {
 
 /**
  * The pfB-DNS tab's status panel for a pfb_dns_status() result: the service and the mode, then per transport its heading and a table of
- * Interface | Address | State rows (empty when the transport is off) or, when it is on with no listener, the notice; none of them when
+ * Interface | Address | State rows (header only when the transport is off) or, when it is on with no listener, the notice; none of them when
  * the status claims no transport. A state is an icon that carries its meaning in its hover title and, for screen readers, as text, so
  * colour or shape never says it alone; a refusal also shows its reason. Every value is escaped here, once.
  *
@@ -14390,7 +14391,9 @@ function pfb_dns_status_panel(array $status): string {
 			    . "<i class=\"fa-solid {$icon}\" title=\"{$meaning}\" aria-hidden=\"true\"></i><span class=\"sr-only\">{$meaning}</span>"
 			    . ($row['reason'] === '' ? '' : ' ' . htmlspecialchars($row['reason'])) . '</td></tr>';
 		}
-		$html .= '<table class="table table-condensed"><thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead><tbody>' . $rows . '</tbody></table></div>';
+		// No <tbody> without a row: pfSenseHelpers.js fills every empty one with a blank row
+		$html .= '<table class="table table-condensed"><thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead>'
+		    . ($rows === '' ? '' : "<tbody>{$rows}</tbody>") . '</table></div>';
 	}
 	return $html . '</div></div>';
 }

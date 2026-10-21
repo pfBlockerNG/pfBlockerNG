@@ -811,7 +811,7 @@ final class PfbDnsStatusTest extends TestCase
 			self::entry('[2001:db8:ffff::9]:853'),
 			self::entry('198.51.100.1:853'),
 			self::entry('127.0.0.1:853'),
-		]);
+		], pfb_dns_proxy_address_interfaces());
 
 		// Then Localhost is first, then lan and the guest interface (wan has no address, so no row), then each address of no interface
 		// on a row of its own, labelled with the bare address and still bracketed in the address column when it is IPv6
@@ -834,7 +834,7 @@ final class PfbDnsStatusTest extends TestCase
 			self::entry('[::1]:853', 'not_listening', 'address already in use'),
 			self::entry('192.0.2.1:853', 'not_listening', 'address already in use'),
 			self::entry('[2001:db8::1]:853', 'not_listening', 'address already in use'),
-		]);
+		], pfb_dns_proxy_address_interfaces());
 
 		// Then the outcomes of loopback are two rows and the same refusal on lan is one
 		$this->assertSame([
@@ -850,15 +850,15 @@ final class PfbDnsStatusTest extends TestCase
 		], pfb_dns_status_rows([
 			self::entry('192.0.2.1:853', 'not_listening', 'address already in use'),
 			self::entry('[2001:db8::1]:853', 'not_listening', 'permission denied'),
-		]));
+		], pfb_dns_proxy_address_interfaces()));
 	}
 
 	public function testAnAddressOfNoInterfaceIsNeverDropped(): void
 	{
 		$this->interfaces([]);
 
-		$this->assertSame([self::row('2001:db8::7', ['[2001:db8::7]:853'], 'listening')], pfb_dns_status_rows([self::entry('[2001:db8::7]:853')]));
-		$this->assertSame([], pfb_dns_status_rows([]), 'no address, no row');
+		$this->assertSame([self::row('2001:db8::7', ['[2001:db8::7]:853'], 'listening')], pfb_dns_status_rows([self::entry('[2001:db8::7]:853')], pfb_dns_proxy_address_interfaces()));
+		$this->assertSame([], pfb_dns_status_rows([], pfb_dns_proxy_address_interfaces()), 'no address, no row');
 	}
 
 	public function testAnInterfaceWhoseAddressesDifferInOutcomeGetsOneRowPerOutcome(): void

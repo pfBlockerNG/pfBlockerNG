@@ -302,7 +302,7 @@ def test_status_panel_is_a_table_per_transport_with_a_titled_icon_for_each_state
     """issue #3555: on a box whose Resolver is moved and whose proxy is stopped, with plain DNS on and DoT, DoH and DoQ
     off, the status panel has the four transport headings in order, each over a table headed Interface, Address, State;
     plain DNS lists a Localhost row whose state is a visible icon titled "Configured, not bound" with the same words for
-    a screen reader, and the three off transports have a table with no row that holds text or an icon.
+    a screen reader, and each of the three off transports is its header alone: no body and no row in the live DOM.
 
     Settings and the service script are put back afterwards, presence included.
     """
@@ -340,16 +340,15 @@ def test_status_panel_is_a_table_per_transport_with_a_titled_icon_for_each_state
         assert icon.is_visible(), "the icon takes room on the page"
         assert loopback.nth(2).locator(".sr-only").text_content() == "Configured, not bound"
 
-        # pfSense's pfSenseHelpers.js puts one blank `<tr><td></td></tr>` into any empty tbody, so the live DOM of a
-        # table with no data has that one row; the markup the server sends has none (PfbDnsStatusPanelTest).
         for key in ("dot", "doh", "doq"):
             block = panel.locator(f"#pfb-dns-status-{key}")
-            assert block.locator("tbody").count() == 1, f"{key}: an off transport keeps its table"
-            texts = [text for text in block.locator("tbody td").all_inner_texts() if text.strip()]
-            if texts or block.locator("tbody i").count():
+            assert block.locator("table").count() == 1, f"{key}: an off transport keeps its table"
+            bodies, rows_shown = block.locator("tbody").count(), block.locator("tbody tr").count()
+            if bodies or rows_shown:
                 stored = helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_{key}")
                 pytest.fail(
-                    f"{key} is off ({stored!r} stored): its table must hold no row, it has: {block.inner_html()}"
+                    f"{key} is off ({stored!r} stored): its table must be a header alone, it has {bodies} tbody and "
+                    f"{rows_shown} rows: {block.inner_html()}"
                 )
         _shot(page, screenshot_dir, "dns_status_tables")
     finally:
