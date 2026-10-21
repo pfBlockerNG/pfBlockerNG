@@ -1012,8 +1012,9 @@ restarts the Resolver iff that marker drifts from the shipped files' fingerprint
 ## DNSBL sinkhole VIP (ADR-13)
 
 A DNSBL "VIP" block sinks the queried name to a **sinkhole Virtual IP** that the DNSBL web server
-(lighttpd) listens on. The VIP must exist before DNSBL can be enabled; `pfb_validate_vips()`
-force-disables DNSBL if it is missing or invalid.
+(lighttpd) listens on. The WebServer/VIP response is deprecated but still works. The VIP must exist
+only while there is VIP demand (see *VIP demand* below); `pfb_validate_vips()` force-disables DNSBL
+only when that demand exists and the VIP is missing or invalid.
 A stored VIP id that no longer exists in Firewall > Virtual IPs (for example after the VIP is deleted and re-created) fails validation with `IPv4/IPv6 VIP <id> no longer exists in Firewall > Virtual IPs`, and the DNSBL page warns in manual mode until the VIP is re-selected (#3456).
 
 **Create VIPs automatically** (`pfb_dnsvip_auto`, default off): when set, pfBlockerNG owns the
@@ -1042,6 +1043,19 @@ sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
   creates/removes its own node-local `lo0` IP-Alias VIP on its own enable/disable pass.
 
 See [`legacy/ADRs/ADR_13_Auto_DNSBL_VIP/`](../../legacy/ADRs/ADR_13_Auto_DNSBL_VIP/).
+
+### VIP demand (issue #3539)
+
+The VIP, lighttpd, its NAT redirect and certificate, and the managed (auto) VIP run only while there is **VIP demand**: an effective DNSBL block that answers with the VIP response. This refines the Lifecycle bullet above, which applies only with demand.
+
+- **Predicate.** `pfb_dnsbl_vip_demand()` is TRUE when a DNSBL group that would deny (not Disabled or Permit, with a blocking row or custom entries), the Blacklist category (enabled, with selected lists), or an enabled built-in block (regex, IDN, TLD Allow, TLD Blacklist, while the global mechanism is the VIP) resolves to the VIP response. Permit-only, disabled or empty groups never create demand, and HSTS mode never removes it. Stored as `$pfb['dnsbl_vip_demand']`.
+- **Validation.** The VIP checks (force-disable, notice, IPv6 warning) run only with demand. Without it DNSBL stays On and `dnsbl_vip_disabled` is FALSE.
+- **Without demand.** `pfb_create_dnsbl()` strips the DNSBL NAT rules, removes the lighttpd conf and the certificate, and stops `pfb_dnsbl`. `pfb_manage_dnsbl_vip()` runs only its guarded delete path, so only an auto VIP carrying its marker and address is removed. A manual VIP is never touched.
+- **Start gate.** The lighttpd conf is the marker apply writes. `pfb_dnsbl_service()` starts lighttpd only when it exists, so every start path (Status > Services, boot, install, restart) is gated.
+- **Generation hand-off.** While DNSBL is enabled, there is no demand, and the conf still exists, the last published generation may still answer with the VIP, so apply keeps the VIP, NAT and lighttpd serving. Only a pass that published a new DNSBL manifest and then sees `pfb_dnsbl_converged()` tears them down, after the reload. A save pass, a failed publish, an unconfirmed swap, a boot or an install keeps holding until the next publishing pass.
+- **Ports.** Port checks, the VIP floating rules and the `pfB_DNSBL_Ports` alias apply only with demand.
+- **Junk tokens.** An unknown mechanism token falls back to `disabled_log` (Null Blocking, logging), never to the VIP.
+- **Blacklist.** `blacklist_logging` is projected through the shared resolver. Absent means `default` (follow the global mechanism). `''` or explicit `enabled` means the VIP. Junk means `disabled_log`.
 
 ## IP dedup + reputation: batch recompute (issue #1084)
 

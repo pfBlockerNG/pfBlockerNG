@@ -401,7 +401,7 @@ Two controls sit in the main **DNSBL** section of the DNSBL tab, just below
 
 **Global Logging/Blocking Mechanism** — how a blocked name is answered:
 
-- **DNSBL WebServer/VIP** — send the client to the sinkhole IP (block page)
+- **DNSBL WebServer/VIP (deprecated)** — send the client to the sinkhole IP (block page). Still works while a block uses it; see Auto VIP below
 - **Null Blocking (logging)** / **(no logging)** — answer `0.0.0.0`
 - **NXDOMAIN (logging)** / **(no logging)** — answer “this name does not
   exist” (no block page)
@@ -414,6 +414,8 @@ Two controls sit in the main **DNSBL** section of the DNSBL tab, just below
   group set to *Default* follows the global mechanism above
 - **Override** — every group uses the global mechanism. The groups’ own
   choices are kept and come back when you return to Default
+
+The **Blacklist** category has its own **Default** choice on the **Blacklist** tab. Default follows the global mechanism, as a DNSBL group does.
 
 New installs start on Default with Null Blocking (logging). An upgraded box
 keeps what it had: no previous override means Default with DNSBL
@@ -473,10 +475,14 @@ prefixes).
 - [ ] Note whether it is on or off after your upgrade
 - [ ] Leave it as-is unless a feed is clearly dropping lines it should keep
 
-### Auto VIP
+### Auto VIP (deprecated)
 
 pfBlockerNG can create the sinkhole Virtual IP for you
-(**Create VIPs automatically**).
+(**Create VIPs automatically**). The VIP, the DNSBL web server (lighttpd), its NAT
+rules and its certificate exist only while something answers with the VIP response:
+a DNSBL group, the Blacklist category, or an enabled built-in block (regex, IDN, TLD
+Allow or TLD Blacklist) while the global mechanism is WebServer/VIP. Without that,
+the VIP is not required or checked, and the ports are not required.
 
 **Auto NAT** (on the same Webserver block) can be ticked to *stop* automatic
 NAT rules if you manage those yourself. It only applies when the web server
@@ -487,10 +493,11 @@ is **not** on Localhost.
 DNSBL web server for hits instead (null-blocked events still log). Easy to
 misread.
 
-- [ ] DNSBL Webserver Configuration → **Create VIPs automatically**
+- [ ] Only if something uses the VIP response: DNSBL Webserver Configuration → **Create VIPs automatically**
 - [ ] Save, confirm **Firewall → Virtual IPs** shows the managed VIP
 - [ ] If the checkbox is greyed out, every auto candidate is already in
       use — pick a VIP by hand instead
+- [ ] Check with Null Blocking everywhere (global mechanism, every group and the Blacklist category): save and run a DNSBL update. No managed VIP should remain and the DNSBL web server should be stopped (**Status → Services**)
 - [ ] Read the Event Logging help before ticking it; leave it as you found
       it unless you are testing that path
 
@@ -881,7 +888,7 @@ Do this after the v4 install, and again after **Run Now**.
 
 - [ ] Dashboard: the pfBlockerNG widget loads
 - [ ] Dashboard: no red/error notices from pfBlockerNG (failed downloads,
-      Python/Unbound errors, missing VIP, and so on). Note anything new
+      Python/Unbound errors, a missing VIP while something uses the VIP response, and so on). Note anything new
       since the 3.3 jump
 - [ ] **Status → System Logs → System** — scan recent lines for
       pfBlockerNG / Unbound / PHP errors
