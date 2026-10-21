@@ -71,6 +71,9 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 			}
 		}
 		$this->savedGlobals = [];
+		if (in_array(WizardSweepProbeStream::SCHEME, stream_get_wrappers(), TRUE)) {
+			stream_wrapper_unregister(WizardSweepProbeStream::SCHEME);
+		}
 		rmdir_recursive($this->dir);
 	}
 
@@ -412,26 +415,60 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 
 	public function testTheResetDeletesThePackageFilesOnlyAfterItsWriteLetGoOfTheLock(): void
 	{
-		// Given a Resolver pfB-DNS never moved and a masterfile; the reset's write records what it saw
+		// Given a Resolver pfB-DNS never moved, and the package's database directory behind a probe that records, for each file
+		// the reset deletes there, whether the DNS config lock was held, and stops the reset at its first deletion
 		$this->seedNeverMovedResolverOnDisk();
-		$masterfile = "{$GLOBALS['pfb']['dbdir']}/masterfile";
+		stream_wrapper_register(WizardSweepProbeStream::SCHEME, WizardSweepProbeStream::class);
+		WizardSweepProbeStream::$unlinks = [];
+		$GLOBALS['pfb']['dbdir'] = WizardSweepProbeStream::SCHEME . '://db';
 		$atWrite = NULL;
-		$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use ($masterfile, &$atWrite): void {
+		$disk = $GLOBALS['pfb_test_write_config_hook'];
+		$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use ($disk, &$atWrite): void {
 			if ($description === self::RESET_WRITE) {
-				$atWrite = ['lock held' => !empty($GLOBALS['pfb_test_lock_held']), 'masterfile' => file_exists($masterfile)];
-				throw new \RuntimeException(self::RESET_WRITE);
+				$atWrite = ['lock held' => !empty($GLOBALS['pfb_test_lock_held']), 'files deleted' => count(WizardSweepProbeStream::$unlinks)];
 			}
+			$disk($description);
 		};
 
-		// When the wizard resets, up to and including the write of its default configuration
+		// When the wizard resets, through its write and up to the first file it deletes
 		try {
 			step4_submitphpaction();
-			$this->fail('the reset must reach its configuration write');
+			$this->fail('the reset must reach its file sweep');
 		} catch (\RuntimeException $stop) {
-			$this->assertSame(self::RESET_WRITE, $stop->getMessage());
+			$this->assertSame(WizardSweepProbeStream::STOP, $stop->getMessage());
 		}
 
-		// Then the write ran under the lock with the package files still there: deleting them is no part of the locked work
-		$this->assertSame(['lock held' => TRUE, 'masterfile' => TRUE], $atWrite);
+		// Then the write ran under the lock before any file was deleted, and the first deletion came once the lock was free
+		$this->assertSame(['lock held' => TRUE, 'files deleted' => 0], $atWrite);
+		$this->assertSame([[WizardSweepProbeStream::SCHEME . '://db/masterfile', FALSE]], WizardSweepProbeStream::$unlinks,
+			'the first file deleted, and whether the DNS config lock was held then');
+	}
+}
+
+/**
+ * A directory whose files the reset deletes: every unlink() is recorded with whether the DNS config lock was held at that instant,
+ * and the first one stops the reset (what follows the sweep restarts services and exits the process). Nothing exists in it.
+ */
+final class WizardSweepProbeStream
+{
+	public const SCHEME = 'pfbwizsweep';
+	public const STOP = 'the reset reached its file sweep';
+
+	/** @var resource|null set by PHP for every stream wrapper */
+	public $context;
+
+	/** @var list<array{string,bool}> each path unlinked, with whether the DNS config lock was held */
+	public static array $unlinks = [];
+
+	public function unlink(string $path): bool
+	{
+		self::$unlinks[] = [$path, !empty($GLOBALS['pfb_test_lock_held'])];
+		throw new \RuntimeException(self::STOP);
+	}
+
+	/** @return array<int|string,int>|false */
+	public function url_stat(string $path, int $flags): array|false
+	{
+		return FALSE;
 	}
 }
