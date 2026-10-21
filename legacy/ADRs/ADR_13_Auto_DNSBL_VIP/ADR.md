@@ -226,3 +226,50 @@ RFC 5737 / CGNAT sinkholes (#487) — non-RFC1918, awkward as a routed sinkhole 
 `tests/php/DnsblPickFreeVipTest.php` (first-free, skip-to-second, skip-to-tertiary,
 all-conflict → `null`, v6 free + v6-taken → `null`). The live-VM matrix
 (`test_smoke_matrix.py`) now expects `172.16.53.53` as the elected auto address.
+
+---
+
+## Post-merge amendments (2026-10-21)
+
+### HA address policy (#3540, PR #3571)
+
+Implemented on `devel` at `cb76fa784`. This supersedes the §2 **HA / CARP sync** row
+and the corresponding §7 HA checklist description: the auto-create flag, interface
+and `_vip{uniqid}` references remain node-local. The selected IPv4 and IPv6
+addresses are policy fields, `pfb_dnsvip_auto4` and `pfb_dnsvip_auto6`.
+
+A receiver holding an accepted policy digest creates its own IP-Alias VIP at the
+sender's address instead of independently choosing a different candidate. A
+conflicting received address has no alternative-address fallback. An existing
+marked VIP is moved only when the original marker-and-address deletion guard
+permits it; otherwise it is retained and reported. Refusals are logged and shown
+as address-family findings on the Sync page. These facts are apply-scoped, not
+carried over from an earlier apply.
+
+A standalone node keeps the existing candidate selection. A receiver of an older
+sender without these fields retains that selection behavior too. Saving the local
+Sync configuration clears the accepted-receiver role. This does not create
+CARP-type VIPs, configure VHIDs or synchronize node-local VIP identifiers.
+
+The live HA tests in `tests/smoke/test_ha_auto_vip.py` verify matching live aliases
+and DNS answers on both nodes, and conflict reporting without an alternative VIP.
+Both address families and older-peer behavior have PHPUnit coverage; live
+mixed-version HA was not exercised. The pre-existing existing-VIP collision
+limitation remains tracked in #3565.
+
+### Deprecated, demand-driven sinkhole (#3539, PR #3552)
+
+Implemented on `devel` at `ca4032868`. The WebServer/VIP response and its VIP
+settings are deprecated but remain available. This supersedes the unconditional
+enable-state lifecycle and manual-VIP-validation statements in §2.
+
+The managed VIP, lighttpd, its certificate and its NAT rules are required only
+while an effective DNSBL block uses the VIP response. Without demand, an
+unmanaged manual VIP is neither modified nor required for DNSBL to operate.
+Managed VIP deletion retains the original marker-and-address guard.
+
+When demand ends, the serving resources remain until the published generation
+without VIP answers has converged. The generation's `pfb_py_vip` record permits
+release on a later apply too. Thus policy changes do not remove the sinkhole from
+a still-active generation. The wizard writes the fresh Null Blocking policy;
+grandfathered VIP configurations retain their effective response.
