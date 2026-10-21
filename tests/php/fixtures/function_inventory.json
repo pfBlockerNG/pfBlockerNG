@@ -2432,8 +2432,8 @@
                 "name": "ready",
                 "byRef": false,
                 "variadic": false,
-                "type": "?bool",
-                "default": "NULL"
+                "type": "bool",
+                "default": null
             },
             {
                 "name": "since",

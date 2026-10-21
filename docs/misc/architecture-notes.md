@@ -556,7 +556,7 @@ An address added since the last reload gets a listener at the next apply:
 `pfb_dns_proxy_ensure_running()` regenerates the script and restarts a live proxy when the script changed. The
 script starts only while the moved-Resolver snapshot is set (so a disabled package never starts a proxy against a
 restored Resolver), never over a survivor; the toggle and DNSBL are not consulted, because an abandoned restore leaves
-the Resolver moved with them off and the proxy must keep serving it. The script bakes in the stored marker and compares it at start (a changed marker means the script is stale: nothing starts until the next apply regenerates it), and a stored marker that is no valid snapshot makes `start` log one error and exit 1, never start a proxy on loopback alone. It always listens on loopback as well, so a
+the Resolver moved with them off and the proxy must keep serving it. The script bakes in the stored marker: the one it was written for starts at once; another one (a restored configuration leaves it) starts only once PHP's `dns_saved` verb finds it a valid snapshot, else `start` logs one error and exits 1, never starting a proxy on loopback alone. It always listens on loopback as well, so a
 interface list on Localhost only, or on an interface with no address, still gets a proxy. Stop sends TERM to the supervisor and child named by the pidfiles (only while their command line is the
 proxy's) and KILL after 5 s; it removes the pidfiles once both are gone, and gives up after 7 s with status 1,
 keeping the pidfiles, because a process that survived KILL is still alive.
@@ -660,7 +660,9 @@ check before `daemon(8)` has written a pidfile and both launch. A start that can
 Every caller that starts or restarts the proxy waits for readiness (`pfb_dns_proxy_await_ready()`: 30 s, the Unbound
 startup budget `PFB_UNBOUND_START_WAIT`, no setting of its own, never under a lock): `pfb_dns_proxy_restart()` (the reload's
 restart path and the installer) and `pfb_dns_proxy_ensure_running()` (the apply; it also checks a proxy that is alive with an
-unchanged script, so a crash-looping listener is noticed). A proxy that is not ready within the budget has FAILED its
+unchanged script, so a crash-looping listener is noticed). The boot check (`dns_check`, which the boot hook backgrounds) confirms a
+stored snapshot's start through the same `pfb_dns_proxy_confirm_ready()`, and so does the cron tick, but only while a gateway pidfile
+is live: with none live the tick waits for nothing and rolls nothing back. A proxy that is not ready within the budget has FAILED its
 activation, and `pfb_dns_proxy_roll_back()` runs: under the config lock the requested toggle goes Off (so the next apply
 cannot enable it again, and there is no retry or suppression state of its own), then `pfb_unbound_python($mode, FALSE)` stops
 the proxy and gives the Resolver exactly its saved settings back and, iff DNSBL is on, puts the DNSBL module back into
@@ -679,10 +681,11 @@ every client port held, and a decider that exits at every start, with the packag
 
 **Startup check (issue #3538).** "Ready" says the gateway serves; it does not say it serves every address the rc script names (an
 address that cannot be bound is logged and skipped, plain.go and tlsbind.go). After every start, `pfb_dns_proxy_confirm_ready()` runs
-`pfb_dns_proxy_startup_check()`: ready, with `TRUE`; not ready, with `FALSE` and BEFORE the rollback, which consumes the snapshot. The
-cron tick runs it too while a snapshot is stored and no update pass runs (it waits for readiness with the same bounded
-`pfb_dns_proxy_await_ready()`, and no other wait), and the boot hook backgrounds `php -f pfblockerng.inc dns_check` under
-`timeout(1)` (certificate sync, then the check), because boot has no apply to confirm the start. One notice, id
+`pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool` and waits for nothing itself: ready, with `TRUE`; not ready,
+with `FALSE` and BEFORE the rollback, which consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
+stored, no update pass runs and a gateway pidfile is live (with none live it waits for nothing). The boot hook backgrounds
+`php -f pfblockerng.inc dns_check` under `timeout(1)` (certificate sync, then, while a snapshot is stored, the same confirmation),
+because boot has no apply to confirm the start. One notice, id
 `pfBlockerNG DNS Proxy startup`, names every problem, each as a sentence, in this order: the proxy never became ready (with the last
 `pfb_dns_gateway:` line of `dns_proxy.log`); a `--listen`, `--dot-listen`, `--doh-listen` or `--doq-listen` address of the rc
 script's command that the CURRENT start did not log as `listening <kind> <host:port>` (the part of the log between the second-to-last
@@ -775,7 +778,7 @@ pfSense master and confirmed on the live box by the reboot smoke), before it sta
 Resolver restart. pfB-DNS therefore keeps the python keys naming the observer in every mode, and ships
 `dns_proxy/pfb_upstream_observer_include.inc` (in `PFB_PY_SHIPPED`, staged flat into `/var/unbound`), which runs
 `pfb_dns_proxy.sh start` in the background unless a pidfile (the proxy's or its supervisor's) is live, and backgrounds beside it a
-bounded `timeout(1)` run of `pfblockerng.inc dns_check <size>` (the startup check above, told the log's size from before the start: the hook itself still waits for nothing), with core
+bounded `timeout(1)` run (300 s) of `pfblockerng.inc dns_check <size>` (the confirmation and the startup check above, told the log's size from before the start: a start that never becomes ready is rolled back there; the hook itself still waits for nothing), with core
 functions only (the non-verbose boot path loads none of pfBlockerNG; the rc script itself refuses without a snapshot). The
 same hook keeps the proxy up after any Resolver restart from the GUI. On a RAM-disk `/var` the restore earlyshellcmd
 (`pfb_dnsbl_cache('conf')`) is registered while DNSBL or pfB-DNS is on, so the hook is staged before rc.bootup. Pinned by

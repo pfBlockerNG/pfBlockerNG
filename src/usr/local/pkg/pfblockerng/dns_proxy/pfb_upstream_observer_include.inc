@@ -33,12 +33,12 @@
  * (a Resolver restart from the GUI must not bounce it). The rc script refuses to start without a moved-Resolver snapshot.
  *
  * The rc script serializes its starts (lockf), so this background start and an apply's start_service() cannot both launch a
- * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart): the package's own apply
- * confirms the proxy with its listener-ready marker and rolls pfB-DNS back when it does not come up. That marker says the
- * front end can answer queries; it is no proof that recursion works, which needs the Unbound this hook runs before. A second
- * background command, bounded by timeout(1) (60 s: the 30 s readiness budget plus the check) and dead with its task, runs the check
- * that turns a start that fails into the pfB-DNS startup notice, told the gateway log's size from before the start; the hook still
- * waits for nothing.
+ * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command,
+ * bounded by timeout(1) (300 s: the 30 s readiness budget, then a rollback that may wait for the config lock and restart Unbound)
+ * and dead with its task, confirms the start as an apply does, told the gateway log's size from before the start: a start with
+ * problems gets the pfB-DNS startup notice, and one that does not become ready is rolled back (pfb_dns_proxy_confirm_ready()).
+ * The ready marker says the front end can answer queries; it is no proof that recursion works, which needs the Unbound this hook
+ * runs before.
  *
  * Core functions only: on the non-verbose boot path none of pfBlockerNG's own includes are loaded. This file runs inside
  * pfSense's function, so it must leave no variable behind.
@@ -49,6 +49,6 @@ if (is_executable($pfb_dns_rc) && !isvalidpid('/var/run/pfb_dns_proxy.pid') && !
 	// after the start was backgrounded, it could already include them
 	$pfb_dns_since = (int) @filesize(defined('PFB_DNS_PROXY_LOG') ? PFB_DNS_PROXY_LOG : '/var/log/pfblockerng/dns_proxy.log');
 	mwexec_bg($pfb_dns_rc . ' start');
-	mwexec_bg('/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
+	mwexec_bg('/usr/bin/timeout -s TERM -k 5 300 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
 }
 unset($pfb_dns_rc, $pfb_dns_since);

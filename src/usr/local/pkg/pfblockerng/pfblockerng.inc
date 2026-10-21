@@ -4832,11 +4832,12 @@ function pfb_dns_proxy_certificate_sync(): void {
  * forwards to dns_reply.log (--reply-log); with it off nothing is logged. A running proxy reads its flags only at start,
  * so a changed preference changes this script, which restarts the proxy (pfb_dns_proxy_ensure_running()).
  *
- * Start: only while the moved-Resolver snapshot is set and is still the one this script was written for (the stored
- * marker is baked in and compared; not the toggle or DNSBL: an abandoned restore leaves the Resolver moved with them
- * off, and the proxy keeps serving it); with no valid snapshot it exits 1 instead of starting a proxy that could not bind,
- * and logs one error when the stored marker is no snapshot or our block stands with none (a manual repair); never over a
- * survivor; every address shell-quoted. Loopback is always among
+ * Start: only while the moved-Resolver snapshot is set (the stored marker is read at start: the one this script was written for,
+ * baked in, starts at once; another one, which a restored configuration leaves, starts only once PHP finds it a valid snapshot,
+ * the dns_saved verb, and logs one error and exits 1 when it is not; not the toggle or DNSBL: an abandoned restore leaves the
+ * Resolver moved with them off, and the proxy keeps serving it); with no valid snapshot it exits 1 instead of starting a proxy
+ * that could not bind, and logs one error when the stored marker is no snapshot or our block stands with none (a manual repair);
+ * never over a survivor; every address shell-quoted. Loopback is always among
  * the addresses, so an interface list on Localhost only, or on an interface with no address, still gets a proxy. It
  * runs pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and runs the Python decider as its decision service,
  * through pfb_dns.sh (which execs this machine's binary), with --ready-file $pfb['dns_proxy_ready'] ahead of the
@@ -4973,10 +4974,17 @@ EOF;
 EOF;
 		}
 	} else {
-		// The addresses below come from the dns/pfb_dns_* settings; only the marker guard is bound to the snapshot: a marker that has changed since (restored, moved again) is for the next apply to regenerate
+		// The addresses below come from the dns/pfb_dns_* settings, not from the snapshot (issue #3556): a marker stored since this script
+		// was written (a restored configuration) is served too once PHP finds it a valid snapshot; the one it was written for is known valid
 		$marker = escapeshellarg((string) PfbConfig::read('dns/pfb_dns_saved'));
 		$rc['start'] .= <<<EOF
-	[ "\${savedcheck}" = {$marker} ] || exit 0
+	if [ "\${savedcheck}" != {$marker} ]; then
+		[ -n "\${savedcheck}" ] || exit 0
+		if ! /usr/bin/timeout -s TERM -k 5 30 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_saved >/dev/null 2>&1; then
+			/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: pfb_dns_saved changed since this script was written and is not a valid Resolver snapshot - not started"
+			exit 1
+		fi
+	fi
 
 	# Already serving: both pidfiles name our live processes (the stop's own checks), so a second start keeps them
 	ours=0
@@ -5227,7 +5235,8 @@ function pfb_dns_proxy_await_ready(): bool {
 }
 
 /**
- * After a start or restart the proxy was asked for: wait for it to become ready, outside any lock, then check what the start left
+ * After a start or restart the proxy was asked for, and on the boot check and the cron tick (issue #3556): wait for it to become ready,
+ * outside any lock, then check what the start left
  * (pfb_dns_proxy_startup_check(): one notice for every problem). One that does not become ready within the budget has failed its
  * activation: the check says so first, with the gateway's last error (the rollback consumes the snapshot the check goes by), then
  * the activation is rolled back (pfb_dns_proxy_roll_back()).
@@ -5361,10 +5370,10 @@ function pfb_dns_proxy_command_listeners(): array {
 }
 
 /**
- * After a pfB-DNS start (an apply, the boot start) and on the cron tick while the proxy is meant to serve: raise ONE notice, id
- * `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id when there is none. The
- * notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or replaced here. The
- * problems, in this order, each one sentence that says what is not served and why:
+ * After a pfB-DNS start (an apply, the boot start) and on the cron tick, from pfb_dns_proxy_confirm_ready(), while the proxy is meant
+ * to serve: raise ONE notice, id `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id
+ * when there is none. The notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or
+ * replaced here. The problems, in this order, each one sentence that says what is not served and why:
  *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one (this start's own, with a $since);
  *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the
  *      CURRENT start did not report as `listening <kind> <host:port>`, with the reason the gateway logged for that address
@@ -5379,20 +5388,18 @@ function pfb_dns_proxy_command_listeners(): array {
  * A notice is closed only when the start was judged and nothing was found; file_notice() files a row for every changed text and
  * close_notice() removes one row per call, so every row of the id is closed, by its key.
  *
- * @param bool|null $ready whether the proxy became ready; NULL = wait for it with pfb_dns_proxy_await_ready(), the only wait here
- *        besides that log poll. With no snapshot stored (nothing is meant to serve) and no failure reported, nothing is checked, closed or
- *        waited for
+ * @param bool $ready whether the proxy became ready (the caller waited for it). With no snapshot stored (nothing is meant to serve)
+ *        and the proxy ready, nothing is checked, closed or waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
  *        it; NULL = no start was made (the cron tick, an apply that restarted nothing): the log's latest start is judged. A log now
  *        shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway error is looked for
  *        the same way, only in the bytes after $since (none quoted when this start logged none); with NULL, in the whole tail
  */
-function pfb_dns_proxy_startup_check(?bool $ready = NULL, ?int $since = NULL): void {
+function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 	$saved = pfb_dns_proxy_saved();
-	if ($saved === NULL && $ready !== FALSE) {
+	if ($saved === NULL && $ready) {
 		return;
 	}
-	$ready ??= pfb_dns_proxy_await_ready();
 	$id = 'pfBlockerNG DNS Proxy startup';
 
 	$problems = [];
@@ -6004,15 +6011,23 @@ if (isset($argv[1])) {
 			exit(pfb_dns_proxy_certificate_refresh(TRUE) ? 0 : 1);
 	}
 
+	// Whether pfb_dns_saved holds a valid Resolver snapshot (exit 0): what the rc script's start asks for a marker it was not written for
+	elseif ($argv[1] == 'dns_saved') {
+			exit((pfb_dns_proxy_saved() === NULL) ? 1 : 0);
+	}
+
 	// The boot start's check (pfb_upstream_observer_include.inc backgrounds it beside the start, bounded by timeout(1)): it judges the
 	// log from the size the hook took BEFORE the start (argv[2], digits only; none: the size now), since the gateway needs seconds to
-	// become ready and logs nothing before. The certificate that could not be exported or pushed gets its notice, then the start is
-	// checked and its problems become the one startup notice
+	// become ready and logs nothing before. The certificate that could not be exported or pushed gets its notice; then, while a snapshot
+	// is stored, the start is confirmed as an apply confirms its own (issue #3556): its problems become the one startup notice, and a
+	// proxy that does not become ready is rolled back
 	elseif ($argv[1] == 'dns_check') {
 			$since = (isset($argv[2]) && ctype_digit($argv[2])) ? (int) $argv[2] : pfb_dns_proxy_log_size();
 			pfb_global();
 			pfb_dns_proxy_certificate_sync();
-			pfb_dns_proxy_startup_check(NULL, $since);
+			if (pfb_dns_proxy_saved() !== NULL) {
+				pfb_dns_proxy_confirm_ready($since);
+			}
 			exit(0);
 	}
 }

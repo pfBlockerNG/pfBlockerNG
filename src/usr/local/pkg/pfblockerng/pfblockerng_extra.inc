@@ -6866,8 +6866,10 @@ function pfblockerng_tick(
 	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
 	pfb_dns_proxy_certificate_sync();
 
-	if (!$pass_running && pfb_dns_proxy_saved() !== NULL) {
-		pfb_dns_proxy_startup_check();
+	// issue #3556: a proxy that does not become ready within the budget is rolled back as a failed apply is; with no gateway process alive
+	// nothing is waited for or rolled back: a stopped service, or a restart between its stop and its launch, is no failed start
+	if (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
+		pfb_dns_proxy_confirm_ready();
 	}
 
 	$now   = time();
