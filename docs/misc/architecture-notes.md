@@ -411,7 +411,7 @@ firewall's own lookups are DNSBL-filtered, and Unbound's own sockets move off it
 `# pfBlockerNG DNS proxy` and `# end pfBlockerNG DNS proxy`, sets `port: 5354` (a later `port:` overrides the earlier
 one for every `interface:` line without its own port, so Unbound's `127.0.0.1`/`::1` listeners land on loopback 5354,
 plain and unused), has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
-stream (`proxy-protocol-port: 5353`) and grants the IPv6 networks pfSense would no longer grant:
+stream (`proxy-protocol-port: 5353`; the IPv4 line is omitted when native `lo0` has no `127.0.0.1`) and grants the IPv6 networks pfSense would no longer grant:
 `unbound_acls_config()` derives its IPv6 `access-control` rows from `active_interface` (the IPv4 rows come from
 the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for pfB-DNS's interface lists of the transports that are on (plain DNS always; DoT, DoH and DoQ each only while its toggle is on)
 (non-link-local subnet of each interface without a gateway, plus the enabled static routes through such an
@@ -540,6 +540,7 @@ script has one launch line:
 [--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
 /var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
 --module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53;
+`--upstream` uses `127.0.0.1:5353` when pfSense reports that IPv4 address on `lo0`, otherwise `[::1]:5353`;
 `--no-module` iff DNSBL is off, so the decider boots no `pfb_unbound.py` and every query is forwarded;
 `--observer` iff DNSBL is on and the Resolver forwards, so the decider creates the observer's report socket). The gateway
 starts the decider as its child and hands the three mode flags on to it. `--listen` takes the addresses of `dns/pfb_dns_interface` (`pfb_dns_proxy_listen()`, below); Localhost adds none of its own, and loopback is always added. `--dot-listen` is repeatable and takes the addresses of `dns/pfb_dns_dot_interface` (`pfb_dns_proxy_tls_flags()`) plus loopback; the DoT group is there iff `dns/pfb_dns_dot` is On, with `--dot-port` from `dns/pfb_dns_dot_port`.
@@ -638,19 +639,20 @@ record its port. Recovery reports that the proxy did not become ready, and DNS c
 After resolving the lock or stop failure, turn pfB-DNS off and apply to restore the ordinary Resolver on its currently
 selected port, or correct the Listen Port and apply. Retry removal after DNS is restored; no fallback port is guessed.
 
-**Readiness and rollback.** A proxy is READY, not merely alive, when its listener can handle queries (`pfb_dns_proxy_ready()`).
-The rc script passes `--ready-file /var/unbound/pfb_dns_ready` (`$pfb['dns_proxy_ready']`) to the gateway; the gateway writes its own PID
-there (atomically, mode 0600, as `unbound`, in the chroot directory the module already writes to) only after its sockets
-are bound, its privileges dropped and its decider has sent READY (the module booted, the reply log or observer socket made), and removes it
-at shutdown only while it still names itself. The complete startup log record is `ready upstream <host>:<port> pid <pid>`,
-with that same gateway PID; the marker remains PID-only. PHP calls the proxy ready iff the child pidfile
-(`$pfb['dns_proxy_pidfile']`) names a live process AND the marker holds that same decimal PID: a live process that never
-published one (a listener that cannot bind, which the supervisor restarts every 5 s), a marker an earlier incarnation left,
-a live supervisor alone and a marker with no live child are all NOT ready. `pfb_dns_proxy_running()` stays the pidfile-only
-LIVENESS predicate (is the module host up? the zero-downtime swap and the ledger ask that); the status panel shows Running only
-when ready and Starting while the child is alive but not ready; the two are
-different questions. Ready means the front end can answer, not that recursion works: the boot query probe in
-`tests/smoke/test_smoke_dns_proxy.py` (which runs after Unbound is up) remains the proof of an actual answer. The rc script
+**Readiness and rollback.** A proxy is READY, not merely alive, only when the gateway and its configured Unbound upstream serve
+(`pfb_dns_proxy_ready()`, issue #3560). The rc script passes `--ready-file /var/unbound/pfb_dns_ready`
+(`$pfb['dns_proxy_ready']`) to the gateway, which writes its own PID atomically after binding its sockets, dropping privileges
+and receiving its decider's READY. The marker is PID-only; the complete startup log ends in `ready upstream <host>:<port> pid <pid>`.
+`pfb_dns_proxy_gateway_ready()` requires a live child pidfile and the same positive decimal PID in that marker.
+`pfb_dns_proxy_upstream_ready()` additionally requires a live Unbound pidfile and native `sockstat -46lw` TCP and UDP
+listeners owned by that Unbound PID on the **actual rc command's `--upstream` endpoint**. A foreign port holder, or Unbound
+running elsewhere, cannot satisfy it. Only the selected endpoint is required: dual-stack and `do-ip6: no` hosts using IPv4
+need no IPv6 upstream, and a host without `127.0.0.1` uses IPv6. Port 5354 is not the gateway's upstream.
+The socket inventory uses the bounded control-command seam with a one-second budget plus its kill grace; the outer wait
+keeps its startup deadline, with at most that final probe's bound beyond it. `pfb_dns_proxy_running()` remains pidfile-only
+liveness for the zero-downtime swap and apply ledger. The status shows Starting until the full predicate holds, but retains
+the current gateway's PID-confirmed front-end bindings independently. Listener ownership does not prove successful recursion;
+the boot query probe and native rollback smoke prove actual DNS answers. The rc script
 removes a previous marker only before a fresh launch (a healthy repeated `start` keeps the serving proxy's), its stop removes
 the marker only when it names a process that stop signalled, and `start` runs under
 `lockf -k -t 10 /var/run/pfb_dns_proxy.lock` (the script runs itself once more inside the lock, guarded by an environment
@@ -677,12 +679,14 @@ service entry for the package (an install runs this before pfSense registers it,
 The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
 `DnsProxyActivationRollbackTest`, the marker and lock rows of `DnsProxyServiceTest` and `go/pfb_dns_gateway/readyfile_test.go`
 (the marker itself); live by `tests/smoke/test_smoke_dns_proxy.py` (the marker, the lock, racing starts, a rollback with
-every client port held, and a decider that exits at every start, with the package's service entry registered or absent).
+every client port held, and a decider that exits at every start, with the package's service entry registered or absent)
+and `tests/smoke/test_smoke_pfb_dns_resolver_state.py` (TCP and UDP 127.0.0.1:5353 held before enabling:
+the real Unbound bind fails, activation rolls back with a notice, and native Resolver DNS works while the holders remain).
 
 **Single-flight recovery and stale ownership (issue #3572).** A rollback of one box never overlaps another: `pfb_dns_proxy_roll_back()` runs entirely under the operation lock `pfb_dns_proxy_rollback` (a close-on-exec file, `pfb_flock_bounded()`, `PFB_DNS_PROXY_START_WAIT`, 30 s), taken before the DNS config lock, so the order is operation lock, then config lock, and no config lock is held across a full Unbound restart or readiness wait. A rollback that cannot take it changes nothing and files one notice that the operation lock could not be acquired; a recovery may still be running. A recovery never acts on a copy of the stored marker that predates another write: the caller passes the raw marker it saw (`pfb_dns_proxy_confirm_ready()` reads it before its readiness wait; `pfb_dns_proxy_roll_back()` reads it before its operation-lock wait; a NULL argument reads it at entry and is never a bypass). Under the config lock, `pfb_dns_proxy_turn_off()` compares the fresh marker with that value and writes the Off only while they match and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs recovery. A different or consumed marker, or an unowned box, makes it return NULL: nothing is written, stopped, restarted or announced, because another save or recovery already resolved the state. The failed start is diagnosed (`pfb_dns_proxy_startup_check()`) only after that guard has won and before the restore consumes the snapshot. `pfb_dns_proxy_stand_down()` uses the same tri-state: NULL is a quiet FALSE, FALSE the existing error, TRUE the existing restore. A recovery that fails part way keeps the snapshot and the moved Resolver, and the next apply's ordinary restore retries from the stored marker. Pinned by `DnsProxyActivationRollbackTest` (the stale-ownership, operation-lock and race rows) and `DnsProxyStartupCheckTest`; the owner and the contender race as two real processes (`tests/php/support/DnsProxyRecoveryWorker.php`) over real `flock()` locks.
 The operation lock serializes calls to `pfb_dns_proxy_roll_back()`, including failed starts and unsafe-setting recovery. It does not serialize or coalesce other DNS proxy starts, restarts or GUI service calls.
 
-**Startup check (issue #3538).** "Ready" says the gateway serves; it does not say it serves every address the rc script names (an
+**Startup check (issue #3538).** "Ready" requires the gateway and its Unbound upstream; it does not say every client address the rc script names is served (an
 address that cannot be bound is logged and skipped, plain.go and tlsbind.go). After every start, `pfb_dns_proxy_confirm_ready()` runs
 `pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool` and its only wait is the bounded log poll: ready, with `TRUE`; not ready,
 with `FALSE`: the rollback diagnoses it once its guard has won and before the restore consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
@@ -719,11 +723,12 @@ The status reader also supplies the readiness-marker PID: the latest complete `r
 followed by `pid <pid>`, or bindings remain unconfirmed. It never searches backward for an earlier matching PID. This covers the interval
 between publishing the PID marker and daemon(8) relaying the log, including automatic child respawn and same-address restarts;
 the startup check's default parsing and notices remain unchanged.
-A transport is `off` when its toggle is off and the running service has no listeners for it, `no_listener` when it is on and the
-command gives it none, or a list of rows. With the proxy Running the rows are what the matching start bound (`listening`), then each
-command address it did not bind (`not_listening`, with the logged reason). A saved toggle, interface or port change cannot replace
-that evidence before an Update applies it. Not running (`configured_not_bound`), or with no matching PID-ready record in the log,
-including untagged records from an older gateway (`configured_unconfirmed`), the rows are the command's addresses.
+A transport is `off` when its toggle is off and the gateway has no listeners for it, `no_listener` when it is on and the
+command gives it none, or a list of rows. Once the gateway itself is ready, rows name what the matching start bound (`listening`),
+then each command address it did not bind (`not_listening`, with the logged reason). These front-end rows remain visible when an
+unavailable upstream leaves the service Starting. A saved toggle, interface or port change cannot replace that evidence before
+an Update applies it. Without a ready gateway (`configured_not_bound`), or with no matching PID-ready log record, including
+untagged records from an older gateway (`configured_unconfirmed`), the rows are the command's addresses.
 
 **Status panel tables (issue #3555).** `pfb_dns_status_panel()` renders that status as the panel under the form (the sync panels'
 pattern), one table per transport with Interface | Address | State columns; `pfb_dns_status_rows()` groups a transport's addresses
@@ -734,7 +739,8 @@ address that maps to no interface on a row of its own, labelled with the address
 `fa-times-circle`, `fa-exclamation-circle`) with its meaning as hover title and as `sr-only` text, so no colour or shape stands
 alone; a refusal also shows its reason. An off transport is its header alone, with no `<tbody>` (pfSense's `pfSenseHelpers.js` fills every empty one with a blank row); the recovery-required and not-in-use states show no
 transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the `ui_render` test of the pfB-DNS page,
-`test_smoke_dns_gateway.py` (a gateway serving every transport) and the `ui_browser` test in `test_browser_dns.py`.
+`test_smoke_dns_gateway.py` (native all-transport tables, also with Unbound stopped while gateway bindings remain) and the
+`ui_browser` test in `test_browser_dns.py`.
 
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,
