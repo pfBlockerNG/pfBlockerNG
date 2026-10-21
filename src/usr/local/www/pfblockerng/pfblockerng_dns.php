@@ -350,8 +350,10 @@ $status = pfb_dns_status();
 $section = new Form_Section('pfB-DNS Status');
 $section->addInput(new Form_StaticText('Service', htmlspecialchars($status['service'])));
 $section->addInput(new Form_StaticText('Mode', htmlspecialchars($status['mode'])));
-$section->addInput(new Form_StaticText('Listening on', htmlspecialchars($status['listen'])));
+$section->addInput(new Form_StaticText('Plain DNS', htmlspecialchars($status['plain'])));
 $section->addInput(new Form_StaticText('DNS over TLS', htmlspecialchars($status['dot'])));
+$section->addInput(new Form_StaticText('DNS over HTTPS', htmlspecialchars($status['doh'])));
+$section->addInput(new Form_StaticText('DNS over QUIC', htmlspecialchars($status['doq'])));
 $form->add($section);
 
 print ($form);

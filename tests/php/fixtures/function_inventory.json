@@ -1807,6 +1807,11 @@
         "returnType": "void",
         "params": []
     },
+    "pfb_dns_proxy_command_listeners": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dns_proxy_confirm_ready": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1861,6 +1866,26 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'/usr/local/pkg/pfblockerng/dns_proxy'"
+            }
+        ]
+    },
+    "pfb_dns_proxy_host_port": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "host",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "port",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },
@@ -1933,6 +1958,19 @@
             }
         ]
     },
+    "pfb_dns_proxy_listeners": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "since",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_dns_proxy_listeners_stored": {
         "returnsRef": false,
         "returnType": "array",
@@ -1943,6 +1981,19 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_log_lines": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "from",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
             }
         ]
     },

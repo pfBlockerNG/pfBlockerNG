@@ -4902,6 +4902,85 @@ function pfb_dns_proxy_log_size(): int {
 }
 
 /**
+ * The gateway log's lines from byte $from on (NULL, or past the log's end, which a rotation leaves: from its start), within its last
+ * 64 KiB, right-trimmed; none when it is missing or unreadable. The read starts one byte early: a cut at a line start leaves an empty
+ * first element, a cut inside a line its partial remainder, and the first element is dropped either way.
+ *
+ * @return list<string>
+ */
+function pfb_dns_proxy_log_lines(?int $from = NULL): array {
+	global $pfb;
+
+	$handle = @fopen($pfb['dns_proxy_log'], 'rb');
+	if ($handle === FALSE) {
+		return [];
+	}
+	$size = pfb_dns_proxy_log_size();
+	$at = max(($from === NULL || $from > $size) ? 0 : $from, $size - 65536);
+	$cut = $at > 0 && fseek($handle, $at - 1) === 0;
+	$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
+	fclose($handle);
+	return $cut ? array_slice($lines, 1) : $lines;
+}
+
+/** host:port the way the gateway prints it (Go's netip): IPv6 compressed and bracketed. Only IP characters reach inet_pton(). */
+function pfb_dns_proxy_host_port(string $host, string $port): string {
+	$packed = @inet_pton($host);
+	$host = ($packed === FALSE) ? $host : (string) inet_ntop($packed);
+	return (str_contains($host, ':') ? "[{$host}]" : $host) . ":{$port}";
+}
+
+/**
+ * What the gateway's current start reported, from its log lines from $since on (pfb_dns_proxy_log_lines()): the lines after the
+ * second-to-last `ready upstream` line and up to the last one. pfb_dns_proxy_startup_check() and pfb_dns_status() both read it, so
+ * the notice and the status panel judge the same start.
+ *
+ * @return array{listening: array<string, array<string, true>>, refused: array<string, string>}|null NULL when the lines hold no
+ *         `ready upstream` line (rotated, truncated, or a start that has not logged it yet). `listening`: kind (udp+tcp, dot, doh,
+ *         doq) => each host:port of a `listening <kind> <host:port>` line, in log order; `refused`: host:port => the reason of its
+ *         `cannot listen on <host:port>: <reason>` line. Every host:port as pfb_dns_proxy_host_port() spells it
+ */
+function pfb_dns_proxy_listeners(?int $since = NULL): ?array {
+	$lines = pfb_dns_proxy_log_lines($since);
+	$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
+	if ($ends === []) {
+		return NULL;
+	}
+	$listeners = ['listening' => [], 'refused' => []];
+	$last = (int) end($ends);
+	$from = (count($ends) > 1) ? $ends[count($ends) - 2] + 1 : 0;
+	foreach (array_slice($lines, $from, $last - $from) as $line) {
+		if (preg_match('/^listening (udp\+tcp|dot|doh|doq) \[?([0-9A-Fa-f:.]+)\]?:([0-9]+)$/', $line, $found) === 1) {
+			$listeners['listening'][$found[1]][pfb_dns_proxy_host_port($found[2], $found[3])] = TRUE;
+		} elseif (preg_match('/^cannot listen on \[?([0-9A-Fa-f:.]+)\]?:([0-9]+): (.*)$/', $line, $found) === 1) {
+			$listeners['refused'][pfb_dns_proxy_host_port($found[1], $found[2])] = $found[3];
+		}
+	}
+	return $listeners;
+}
+
+/**
+ * What the rc script's command asks the gateway to bind: --listen/--port for plain DNS, --<kind>-listen/--<kind>-port for DoT, DoH, DoQ.
+ *
+ * @return array<string, list<string>> kind (udp+tcp, dot, doh, doq, in that order; one the command gives no port is left out) =>
+ *         host:port of each of its addresses, in the command's order, as pfb_dns_proxy_host_port() spells it
+ */
+function pfb_dns_proxy_command_listeners(): array {
+	$rc = (string) @file_get_contents(PFB_DNS_PROXY_RCFILE);
+	$command = (preg_match('~^[ \t]*/usr/sbin/daemon .*$~m', $rc, $daemon) === 1) ? $daemon[0] : '';
+	$listeners = [];
+	foreach (['udp+tcp', 'dot', 'doh', 'doq'] as $kind) {
+		$flag = ($kind === 'udp+tcp') ? '' : "{$kind}-";
+		if (preg_match("/ --{$flag}port '?([0-9]+)'?(?= |\$)/", $command, $port) !== 1) {
+			continue;
+		}
+		preg_match_all("/ --{$flag}listen '([0-9A-Fa-f:.]+)'/", $command, $addresses);
+		$listeners[$kind] = array_map(static fn (string $address): string => pfb_dns_proxy_host_port($address, $port[1]), $addresses[1]);
+	}
+	return $listeners;
+}
+
+/**
  * After a pfB-DNS start (an apply, the boot start) and on the cron tick while the proxy is meant to serve: raise ONE notice, id
  * `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id when there is none. The
  * notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or replaced here. The
@@ -4929,8 +5008,6 @@ function pfb_dns_proxy_log_size(): int {
  *        the same way, only in the bytes after $since (none quoted when this start logged none); with NULL, in the whole tail
  */
 function pfb_dns_proxy_startup_check(?bool $ready = NULL, ?int $since = NULL): void {
-	global $pfb;
-
 	$saved = pfb_dns_proxy_saved();
 	if ($saved === NULL && $ready !== FALSE) {
 		return;
@@ -4938,27 +5015,11 @@ function pfb_dns_proxy_startup_check(?bool $ready = NULL, ?int $since = NULL): v
 	$ready ??= pfb_dns_proxy_await_ready();
 	$id = 'pfBlockerNG DNS Proxy startup';
 
-	// The log's lines from $from (NULL, or past the log's end, which a rotation leaves: from its start) on, within its last 64 KiB; none
-	// when it is missing or unreadable. The read starts one byte early: a cut at a line start leaves an empty first element, a cut inside
-	// a line its partial remainder, and the first element is dropped either way
-	$tail = static function (?int $from) use ($pfb): array {
-		$handle = @fopen($pfb['dns_proxy_log'], 'rb');
-		if ($handle === FALSE) {
-			return [];
-		}
-		$size = pfb_dns_proxy_log_size();
-		$at = max(($from === NULL || $from > $size) ? 0 : $from, $size - 65536);
-		$cut = $at > 0 && fseek($handle, $at - 1) === 0;
-		$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
-		fclose($handle);
-		return $cut ? array_slice($lines, 1) : $lines;
-	};
-
 	$problems = [];
 	$judged = FALSE;
 	if (!$ready) {
 		$error = '';
-		foreach ($tail($since) as $line) {
+		foreach (pfb_dns_proxy_log_lines($since) as $line) {
 			if (str_starts_with($line, 'pfb_dns_gateway:')) {
 				$error = $line;
 			}
@@ -4969,45 +5030,19 @@ function pfb_dns_proxy_startup_check(?bool $ready = NULL, ?int $since = NULL): v
 		// A start just made ($since): the gateway logs its `ready upstream` line after it publishes its ready marker, so wait for it
 		$deadline = hrtime(TRUE) + PFB_DNS_PROXY_LOG_WAIT * 1000000000;
 		while (TRUE) {
-			$lines = $tail($since);
-			$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
-			if ($ends !== [] || $since === NULL || hrtime(TRUE) >= $deadline) {
+			$listeners = pfb_dns_proxy_listeners($since);
+			if ($listeners !== NULL || $since === NULL || hrtime(TRUE) >= $deadline) {
 				break;
 			}
 			usleep(100000);
 		}
-		$judged = ($ends !== []);
-		if ($judged) {
-			// host:port the way the gateway prints it (Go's netip): IPv6 compressed and bracketed. Only IP characters reach inet_pton()
-			$where = static function (string $host, string $port): string {
-				$packed = @inet_pton($host);
-				$host = ($packed === FALSE) ? $host : (string) inet_ntop($packed);
-				return (str_contains($host, ':') ? "[{$host}]" : $host) . ":{$port}";
-			};
-			$served = [];
-			$refused = [];
-			$last = (int) end($ends);
-			$from = (count($ends) > 1) ? $ends[count($ends) - 2] + 1 : 0;
-			foreach (array_slice($lines, $from, $last - $from) as $line) {
-				if (preg_match('/^listening (udp\+tcp|dot|doh|doq) \[?([0-9A-Fa-f:.]+)\]?:([0-9]+)$/', $line, $found) === 1) {
-					$served["{$found[1]} " . $where($found[2], $found[3])] = TRUE;
-				} elseif (preg_match('/^cannot listen on \[?([0-9A-Fa-f:.]+)\]?:([0-9]+): (.*)$/', $line, $found) === 1) {
-					$refused[$where($found[1], $found[2])] = $found[3];
-				}
-			}
-			// What the rc script's command asks the gateway to bind: --listen/--port for plain DNS, --<kind>-listen/--<kind>-port for DoT, DoH, DoQ
-			$rc = (string) @file_get_contents(PFB_DNS_PROXY_RCFILE);
-			$command = (preg_match('~^[ \t]*/usr/sbin/daemon .*$~m', $rc, $daemon) === 1) ? $daemon[0] : '';
-			foreach (['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
-				$flag = ($kind === 'udp+tcp') ? '' : "{$kind}-";
-				if (preg_match("/ --{$flag}port '?([0-9]+)'?(?= |\$)/", $command, $port) !== 1) {
-					continue;
-				}
-				preg_match_all("/ --{$flag}listen '([0-9A-Fa-f:.]+)'/", $command, $addresses);
-				foreach ($addresses[1] as $address) {
-					$at = $where($address, $port[1]);
-					if (!isset($served["{$kind} {$at}"])) {
-						$problems[] = "{$label} is not served on {$at}: " . ($refused[$at] ?? 'the gateway did not report it listening');
+		$judged = ($listeners !== NULL);
+		if ($listeners !== NULL) {
+			$labels = ['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'];
+			foreach (pfb_dns_proxy_command_listeners() as $kind => $addresses) {
+				foreach ($addresses as $at) {
+					if (!isset($listeners['listening'][$kind][$at])) {
+						$problems[] = "{$labels[$kind]} is not served on {$at}: " . ($listeners['refused'][$at] ?? 'the gateway did not report it listening');
 					}
 				}
 			}
@@ -14073,11 +14108,14 @@ function pfb_dns_proxy_port(): string {
 }
 
 /**
- * What the pfB-DNS tab's status panel shows, as text: the service, the mode, the listen addresses and DoT. The box is
+ * What the pfB-DNS tab's status panel shows, as text: the service, the mode, and a row per transport (plain DNS, DoT, DoH, DoQ). The box is
  * moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that is on while nothing is moved is never running: it is said
- * not to be active, with the reason (pfBlockerNG or the Resolver disabled, or the Resolver not moved yet or refused).
+ * not to be active, with the reason (pfBlockerNG or the Resolver disabled, or the Resolver not moved yet or refused), and claims no transport (`-`).
+ * A transport row is `Off` when its toggle is off. Otherwise a running proxy lists what its current start bound (pfb_dns_proxy_listeners()), then each
+ * address the rc script's command names (pfb_dns_proxy_command_listeners()) that it did not bind, as not listening with the logged reason; a proxy that
+ * is not running, or whose log holds no start, lists the command's addresses labelled as configured.
  *
- * @return array{service:string,mode:string,listen:string,dot:string}
+ * @return array{service:string,mode:string,plain:string,dot:string,doh:string,doq:string}
  */
 function pfb_dns_status(): array {
 	global $pfb;
@@ -14091,8 +14129,10 @@ function pfb_dns_status(): array {
 			'mode'    => pfb_dns_proxy_block_present()
 			    ? 'Recovery required: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings, but pfBlockerNG has no valid saved copy of its previous settings to put back. Correct the Resolver in Services > DNS Resolver (see the notices).'
 			    : 'Recovery required: the saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so whether pfBlockerNG moved the Resolver cannot be confirmed, and nothing was put back; manual repair is required in Services > DNS Resolver (see the notices).',
-			'listen'  => '-',
+			'plain'   => '-',
 			'dot'     => '-',
+			'doh'     => '-',
+			'doq'     => '-',
 		];
 	}
 	if ($saved === NULL) {
@@ -14109,15 +14149,11 @@ function pfb_dns_status(): array {
 		return [
 			'service' => 'Not in use',
 			'mode'    => $mode,
-			'listen'  => '-',
+			'plain'   => '-',
 			'dot'     => '-',
+			'doh'     => '-',
+			'doq'     => '-',
 		];
-	}
-
-	$port = pfb_dns_proxy_port();
-	$listen = [];
-	foreach (array_merge(pfb_dns_proxy_listen(), PFB_DNS_PROXY_LOOPBACK) as $address) {
-		$listen[] = (strpos($address, ':') === FALSE ? $address : "[{$address}]") . ":{$port}";
 	}
 
 	if (($pfb['enable'] ?? NULL) !== PfbToggle::On) {
@@ -14130,12 +14166,28 @@ function pfb_dns_status(): array {
 		$mode = 'On, without DNSBL: the proxy forwards every query';
 	}
 
-	return [
-		'service' => $service,
-		'mode'    => $mode,
-		'listen'  => implode(', ', $listen),
-		'dot'     => (pfb_dns_proxy_setting('pfb_dns_dot') === PfbToggle::On) ? 'On, port ' . pfb_dns_proxy_setting('pfb_dns_dot_port') : 'Off',
-	];
+	$configured = pfb_dns_proxy_command_listeners();
+	$listeners = ($service === 'Running') ? pfb_dns_proxy_listeners() : NULL;
+	$label = ($service === 'Running') ? 'Configured (not confirmed by the log): ' : 'Configured (not bound): ';
+	$status = ['service' => $service, 'mode' => $mode];
+	foreach (['plain' => 'udp+tcp', 'dot' => 'dot', 'doh' => 'doh', 'doq' => 'doq'] as $row => $kind) {
+		$addresses = $configured[$kind] ?? [];
+		if ($kind !== 'udp+tcp' && pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
+			$status[$row] = 'Off';
+		} elseif ($addresses === []) {
+			$status[$row] = 'On, but the service has no listener for it: see the notices, or run an Update';
+		} elseif ($listeners === NULL) {
+			$status[$row] = $label . implode(', ', $addresses);
+		} else {
+			$bound = array_keys($listeners['listening'][$kind] ?? []);
+			$missing = array_map(
+			    static fn (string $at): string => "{$at}: not listening (" . ($listeners['refused'][$at] ?? 'the gateway did not report it') . ')',
+			    array_diff($addresses, $bound)
+			);
+			$status[$row] = implode(', ', [...$bound, ...$missing]);
+		}
+	}
+	return $status;
 }
 
 /**
