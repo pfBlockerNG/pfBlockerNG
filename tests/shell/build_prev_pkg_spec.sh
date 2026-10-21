@@ -306,6 +306,14 @@ side"
     The path "$BUILD_LEG_ARGV_LOG" should not be exist
   End
 
+  It 'refuses a -- among the build-leg args, which would hide its own pins, and never builds'
+    When call run_prev --abi FreeBSD:16:amd64 -- --ports-ref pfblockerng/use-github
+    The status should be failure
+    The output should equal ''
+    The stderr should include "build-prev-pkg: '--'"
+    The path "$BUILD_LEG_ARGV_LOG" should not be exist
+  End
+
   It 'reads a remote that looks like an option as a remote, never as a git option'
     # An operator-supplied PFB_GIT_REMOTE of "--upload-pack=<cmd>" must not run <cmd>.
     shallow_checkout

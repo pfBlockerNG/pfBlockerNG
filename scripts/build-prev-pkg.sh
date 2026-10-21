@@ -18,8 +18,8 @@
 #   Anything else goes to build-leg.sh (--abi, --php, ...). This script owns --ports-repo,
 #   --ports-ref and --ports-dir (the pinned ports recipe, checked out under the work dir) and
 #   appends them with --local-src and --out-dir. build-leg.sh takes the last flag, so a
-#   caller's ports args are overridden. Native builds ignore --variant, so a Plus leg gets
-#   the same package.
+#   caller's ports args are overridden. A `--` is refused, since build-leg.sh would stop
+#   parsing there. Native builds ignore --variant, so a Plus leg gets the same package.
 #
 # Prints the resolved absolute .pkg path (and NOTHING else) on stdout. All other output,
 # including the identity line `build-prev-pkg: ref=<P> pkg=<file> version=<v>`, goes to
@@ -67,6 +67,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         *) break ;;
     esac
+done
+# build-leg.sh stops parsing at `--`, which would drop the pins appended below.
+for _arg in "$@"; do
+    [ "$_arg" != '--' ] || die "'--' is not accepted: build-leg.sh would ignore the pinned source and ports flags after it"
 done
 
 SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
