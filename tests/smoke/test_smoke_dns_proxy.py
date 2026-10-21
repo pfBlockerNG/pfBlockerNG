@@ -2313,6 +2313,196 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         _set_proxy_toggle(vm, False)
 
 
+@pytest.mark.timeout(1200)
+def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, proxy_on: State) -> None:
+    """Given a moved Resolver but no gateway, the real boot check restores DNS and files both failure notices."""
+    vm, before = rig.vm, rig.before
+    notice_ids = ("pfBlockerNG DNS Proxy startup", "pfBlockerNG DNS Proxy")
+    clear_notices = (
+        "require_once('notices.inc');\n"
+        "foreach ((get_notices() ?: []) as $key => $row) {\n"
+        f"  if (in_array($row['id'] ?? '', array({', '.join(h._php_str(i) for i in notice_ids)}), TRUE)) {{\n"
+        "    close_notice($key);\n"
+        "  }\n"
+        "}\n"
+    )
+    read_notices = (
+        "require_once('notices.inc');\n"
+        "echo '<<<NOTICES>>>' . json_encode(array_values(get_notices() ?: [])) . '<<<END>>>';"
+    )
+    try:
+        assert _is_on(proxy_on) and proxy_on.marker, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
+        saved = json.loads(base64.b64decode(proxy_on.marker, validate=True))
+        assert set(saved) == set(MOVED_KEYS), f"unexpected saved Resolver keys: {saved}"
+        valid = _php_ok(
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+            "echo '<<<SAVED>>>' . json_encode(pfb_dns_proxy_saved()) . '<<<END>>>';",
+            "validate original Resolver snapshot",
+        )
+        found = re.search(r"<<<SAVED>>>(.*?)<<<END>>>", valid, re.DOTALL)
+        assert found is not None, f"no validated Resolver snapshot in {valid!r}"
+        assert json.loads(found.group(1)) == saved, f"the shipped validator rejected the original snapshot: {valid}"
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"blocked name before stopping pfB-DNS: {blocked}\n{raw}"
+        allowed, raw = _query(rig.client, h.unique_domain("bootcheck-before"))
+        assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name before stopping pfB-DNS: {allowed}\n{raw}"
+        notices = _php_ok(vm, clear_notices + read_notices, "clear startup and rollback notices")
+        found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", notices, re.DOTALL)
+        assert found is not None, f"no notices in {notices!r}"
+        rows = json.loads(found.group(1))
+        assert not any(row["id"] in notice_ids for row in rows), f"stale failure notices remain: {rows}"
+
+        stopped = _sh(vm, f"{PROXY_RC} stop")
+        assert stopped.returncode == 0, f"rc stop failed: {stopped.stdout!r} {stopped.stderr!r}"
+        state = _capture(vm)
+        assert state.marker == proxy_on.marker, f"rc stop changed the saved Resolver: {state.marker!r}"
+        assert state.resolver == proxy_on.resolver, f"rc stop changed the moved Resolver: {state.resolver}"
+        assert state.resolver["active_interface"] == "lo0", f"Resolver is not moved: {state.resolver}"
+        assert state.proxy_pid is None and state.daemon_pid is None, (state.proxy_pid, state.daemon_pid)
+        assert state.service == "stopped" and state.ps == [], f"rc stop left a proxy: {state.service} {state.ps}"
+        size = _sh(vm, f"wc -c < {PROXY_LOG}")
+        offset = size.stdout.strip()
+        assert size.returncode == 0 and offset.isdigit(), f"cannot read log size: {size.stdout!r} {size.stderr!r}"
+
+        checked = _sh(
+            vm,
+            f"/usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check {offset}",
+            timeout=420,
+        )
+        assert checked.returncode == 0, f"dns_check failed: {checked.stdout!r} {checked.stderr!r}"
+
+        h.wait_unbound_ready(vm)
+        after = _capture(vm)
+        assert h.config_get(vm, CFG_PROXY) == "", f"pfB-DNS was not turned off:\n{_diagnostics(vm)}"
+        assert after.resolver == before.resolver, (
+            f"Resolver after boot-check rollback:\n{after.resolver}\nbefore:\n{before.resolver}"
+        )
+        assert after.marker == "", f"boot check did not consume the saved Resolver: {after.marker!r}"
+        assert after.proxy_pid is None and after.daemon_pid is None, (after.proxy_pid, after.daemon_pid)
+        assert after.service == "stopped" and after.ps == [], f"proxy left running: {after.service} {after.ps}"
+        assert MODULE_LINE.search(after.conf) and SCRIPT_LINE.search(after.conf), f"module not back:\n{after.conf}"
+        assert after.unbound_dns() == before.unbound_dns(), (
+            f"Unbound sockets {sorted(after.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
+        )
+        notices = _php_ok(vm, read_notices, "read boot-check failure notices")
+        found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", notices, re.DOTALL)
+        assert found is not None, f"no notices in {notices!r}"
+        rows = json.loads(found.group(1))
+        for notice_id, phrase in zip(notice_ids, ("did not become ready", "DNS Resolver was restored"), strict=True):
+            assert any(row["id"] == notice_id and phrase in row["notice"] for row in rows), (
+                f"missing {notice_id!r} notice containing {phrase!r}: {rows}"
+            )
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"first blocked query after boot-check rollback: {blocked}\n{raw}"
+        allowed, raw = _query(rig.client, h.unique_domain("bootcheck-restored"))
+        assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name after boot-check rollback: {allowed}\n{raw}"
+    finally:
+        try:
+            _force_stop_proxy(vm)
+            _set_proxy_toggle(vm, False)
+            _apply(vm)
+        finally:
+            _php_ok(vm, clear_notices, "clear this test's startup and rollback notices")
+
+
+@pytest.mark.timeout(900)
+def test_restored_valid_marker_starts_the_existing_rc_script_and_serves_dns(rig: Rig, proxy_on: State) -> None:
+    """Given an rc script staged for snapshot A, a different valid snapshot B still starts it and serves LAN DNS."""
+    vm = rig.vm
+    marker_a = proxy_on.marker
+    try:
+        assert _is_on(proxy_on) and marker_a, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
+        saved_a = json.loads(base64.b64decode(marker_a, validate=True))
+        assert set(saved_a) == set(MOVED_KEYS), f"unexpected saved Resolver keys: {saved_a}"
+        valid = _php_ok(
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+            "echo '<<<SAVED>>>' . json_encode(pfb_dns_proxy_saved()) . '<<<END>>>';",
+            "validate original Resolver snapshot",
+        )
+        found = re.search(r"<<<SAVED>>>(.*?)<<<END>>>", valid, re.DOTALL)
+        assert found is not None, f"no validated Resolver snapshot in {valid!r}"
+        assert json.loads(found.group(1)) == saved_a, f"the shipped validator rejected snapshot A: {valid}"
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"blocked name before replacing the saved Resolver: {blocked}\n{raw}"
+        allowed, raw = _query(rig.client, h.unique_domain("marker-before"))
+        assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name before replacing the saved Resolver: {allowed}\n{raw}"
+        original_rc = vm.ssh("cat", PROXY_RC)
+        assert original_rc.returncode == 0, f"reading the staged rc script failed: {original_rc.stderr!r}"
+
+        stopped = _sh(vm, f"{PROXY_RC} stop")
+        assert stopped.returncode == 0, f"rc stop failed: {stopped.stdout!r} {stopped.stderr!r}"
+        state = _capture(vm)
+        assert state.proxy_pid is None and state.daemon_pid is None, (state.proxy_pid, state.daemon_pid)
+        assert state.service == "stopped" and state.ps == [], f"rc stop left a proxy: {state.service} {state.ps}"
+        assert state.marker == marker_a and state.resolver == proxy_on.resolver, (
+            f"rc stop changed Resolver state: {state}"
+        )
+        saved_b = json.loads(base64.b64decode(marker_a, validate=True))
+        custom = saved_b["custom_options"]
+        options = base64.b64decode(custom["value"], validate=True) if custom["present"] else b""
+        saved_b["custom_options"] = {
+            "present": True,
+            "value": base64.b64encode(options + b"\n# smoke: restored Resolver snapshot B\n").decode(),
+        }
+        assert saved_b != saved_a, f"replacement snapshot is not semantically different: {saved_b}"
+        marker_b = base64.b64encode(json.dumps(saved_b).encode()).decode()
+        _php_ok(
+            vm,
+            f"config_set_path({h._php_str(CFG_MARKER)}, {h._php_str(marker_b)});\n"
+            "write_config('pfBlockerNG smoke: restore a different valid Resolver snapshot');",
+            "store replacement Resolver snapshot",
+        )
+        stored = h.config_get(vm, CFG_MARKER)
+        assert stored == marker_b and stored != marker_a, f"replacement marker did not persist: {stored!r}"
+        valid = _php_ok(
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+            "echo '<<<SAVED>>>' . json_encode(pfb_dns_proxy_saved()) . '<<<END>>>';",
+            "validate replacement Resolver snapshot",
+        )
+        found = re.search(r"<<<SAVED>>>(.*?)<<<END>>>", valid, re.DOTALL)
+        assert found is not None, f"no validated replacement snapshot in {valid!r}"
+        assert json.loads(found.group(1)) == saved_b, f"the shipped validator rejected snapshot B: {valid}"
+        staged_rc = vm.ssh("cat", PROXY_RC)
+        assert staged_rc.returncode == 0, f"reading rc before start failed: {staged_rc.stderr!r}"
+        assert staged_rc.stdout == original_rc.stdout, "replacing the saved Resolver rewrote the staged rc script"
+
+        started = _sh(vm, f"{PROXY_RC} start")
+        assert started.returncode == 0, f"rc start failed: {started.stdout!r} {started.stderr!r}"
+        _wait_proxy_serves(rig)
+
+        after = _capture(vm)
+        assert _is_on(after) and after.proxy_pid is not None and after.daemon_pid is not None, (
+            f"the existing rc script did not start a live gateway and supervisor: {after}"
+        )
+        assert after.marker == marker_b, f"rc start changed snapshot B: {after.marker!r}"
+        assert after.resolver == proxy_on.resolver, f"rc start changed the moved Resolver: {after.resolver}"
+        running_rc = vm.ssh("cat", PROXY_RC)
+        assert running_rc.returncode == 0, f"reading rc after start failed: {running_rc.stderr!r}"
+        assert running_rc.stdout == original_rc.stdout, "rc start rewrote the staged rc script"
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"blocked name with restored snapshot B: {blocked}\n{raw}"
+        allowed, raw = _query(rig.client, h.unique_domain("marker-restored"))
+        assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name with restored snapshot B: {allowed}\n{raw}"
+    finally:
+        _force_stop_proxy(vm)
+        _php_ok(
+            vm,
+            f"config_set_path({h._php_str(CFG_MARKER)}, {h._php_str(marker_a)});\n"
+            "write_config('pfBlockerNG smoke: restore original Resolver snapshot');",
+            "restore original Resolver snapshot",
+        )
+        _set_proxy_toggle(vm, False)
+        _apply(vm)
+        restored = _capture(vm)
+        assert restored.resolver == rig.before.resolver, (
+            f"Resolver after restoring snapshot A:\n{restored.resolver}\nbefore:\n{rig.before.resolver}"
+        )
+        assert restored.marker == "", f"cleanup did not consume snapshot A: {restored.marker!r}"
+
+
 # --------------------------------------------------------------------------- #
 # A decision service that exits before READY at every start (issue #3561)
 # --------------------------------------------------------------------------- #
