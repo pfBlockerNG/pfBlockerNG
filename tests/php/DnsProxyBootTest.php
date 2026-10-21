@@ -171,6 +171,7 @@ final class DnsProxyBootTest extends TestCase
 		$this->assertStringContainsString("'" . PFB_DNS_PROXY_PIDFILE . "'", $source);
 		$this->assertStringContainsString("'" . PFB_DNS_PROXY_DAEMON_PIDFILE . "'", $source);
 		$this->assertStringContainsString("'/usr/local/etc/rc.d/pfb_dns_proxy.sh'", $source, 'the appliance default of PFB_DNS_PROXY_RCFILE');
+		$this->assertStringContainsString("'" . PFB_DNS_PROXY_LOG . "'", $source, 'the log the boot check measures before the start');
 	}
 
 	// -----------------------------------------------------------------------
