@@ -340,6 +340,7 @@ $pfb['unbound_py_module_applied']= '/var/unbound/pfb_py_module.applied';	// issu
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted admitted feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
+$pfb['unbound_py_vip']	= '/var/unbound/pfb_py_vip';		// issue #3539: '1' or '0' -- whether the published manifest's generation answers with the VIP
 $pfb['unbound_py_top1m']= '/var/unbound/pfb_py_top1m.txt';	// issue #1542: fixed TOP1M sidecar consumed by pfb_unbound.py
 $pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// #1357: basename for immutable per-feed raw generations
 
@@ -13019,7 +13020,7 @@ function pfb_unbound_py_teardown_raw_set(): bool {
 		// issue #2607: every Python-emitted artifact describes the generation this manifest
 		// defines and is rewritten only for a build that produced a snapshot, so each one
 		// left behind is read back as live by the update log, the RAM gate or the alias count.
-		foreach (array('unbound_py_count', 'unbound_py_regex_count', 'unbound_py_reject_stats') as $emitted) {
+		foreach (array('unbound_py_count', 'unbound_py_regex_count', 'unbound_py_reject_stats', 'unbound_py_vip') as $emitted) {
 			if (!empty($pfb[$emitted])) {
 				unlink_if_exists($pfb[$emitted]);
 			}

@@ -138,11 +138,13 @@ function pfb_wizard_group_rows(array $info): array {
 }
 
 // issue #3539: the DNSBL settings section the wizard writes (slice order is config order). The wizard sets up a fresh
-// install, so it stores the fresh-install policy; its ADs_Basic group follows it and never answers with the VIP.
+// install, so it stores the fresh-install policy; its ADs_Basic group follows it and never answers with the VIP. A blank
+// port stores its default, as a DNSBL page save does, so a later VIP mechanism finds usable ports.
 function pfb_wizard_dnsbl_section(bool $auto, $vip4, $vip6, $port, $port_ssl): array {
 	$registry = pfb_cfg_registry();
 	return pfb_wizard_dnsvip_settings($auto, $vip4, $vip6)
-		+ array('pfb_dnsport' => $port, 'pfb_dnsport_ssl' => $port_ssl, 'pfb_dnsbl' => 'on',
+		+ array('pfb_dnsport' => $port ?: $registry['dnsbl/pfb_dnsport']['default'],
+			'pfb_dnsport_ssl' => $port_ssl ?: $registry['dnsbl/pfb_dnsport_ssl']['default'], 'pfb_dnsbl' => 'on',
 			'global_log_mode' => $registry['dnsbl/global_log_mode']['default'], 'global_log' => $registry['dnsbl/global_log']['default']);
 }
 
