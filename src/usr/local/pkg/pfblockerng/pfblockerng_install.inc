@@ -781,10 +781,15 @@ exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&
 // restart it while the Resolver is moved aside for it and wait for it to become ready (a proxy that does not is rolled back,
 // with a notice), stop it otherwise. An upgrade runs this before install_package_xml() registers the services its removal deleted,
 // and start_service()/stop_service() act only on a registered one (issue #3562). The registration is written at once: a rollback
-// reads config.xml afresh, and its stop must reach the service too.
+// reads config.xml afresh, and its stop must reach the service too. A write that fails still leaves this process's copy registered,
+// so the restart goes ahead (stopping instead would leave the moved Resolver unserved); it is only reported.
 update_status("Creating DNS proxy service...");
 if (pfb_package_services_register(parse_xml_config_pkg(PFB_PACKAGE_XML, 'packagegui')['service'] ?? [])) {
-	write_config('pfBlockerNG: registered the package services before the DNS proxy restart', FALSE, TRUE);
+	$pfb_written = write_config('pfBlockerNG: registered the package services before the DNS proxy restart', FALSE, TRUE);
+	if ($pfb_written === FALSE || $pfb_written === -1) {
+		pfb_logger("\nDNS proxy: the package services could not be written to config.xml; a rollback of the DNS proxy could not stop it", 2);
+	}
+	unset($pfb_written);
 }
 if (pfb_dns_proxy_saved() !== NULL) {
 	if (!pfb_dns_proxy_restart()) {

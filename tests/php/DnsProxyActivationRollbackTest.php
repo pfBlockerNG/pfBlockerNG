@@ -471,6 +471,25 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertResolverIsTheOriginal('rolled back');
 	}
 
+	#[DataProvider('refusedWrites')]
+	public function testAnUpgradeInstallWhoseRegistrationIsNotWrittenStillRestartsTheProxyAndSaysSo(mixed $answer): void
+	{
+		// Given the same upgrade, a proxy that serves once started, and config.xml refusing the registration's write
+		$this->activate(TRUE);
+		$this->behaviour = 'serves';
+		$this->upgradeInstallState();
+		$this->configXmlOnDisk($answer, 'registered the package services');
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the restart still reaches the service this process registered (stopping instead would leave the moved Resolver
+		// unserved), and the log says the registration is not in config.xml, so a rollback could not stop the proxy
+		$this->assertSame(['restart_service'], $this->proxyCalls);
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertStringContainsString('the package services could not be written to config.xml', $this->pfbLog());
+	}
+
 	public function testAnUpgradeInstallWithTheResolverNotMovedStopsTheProxyService(): void
 	{
 		// Given no Resolver snapshot (pfB-DNS off), in the state an upgrade runs the install command in
