@@ -1046,7 +1046,8 @@ sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
   records the Sync finding. With no synced address it picks its own. Any other node (never received policy, or
   its Sync page saved since) picks as before, publishes its address and clears it once it stops managing that
   family. VIP demand inputs are policy, so a primary without demand leaves its receiver without the VIP too.
-  No CARP-type VIPs.
+  No CARP-type VIPs. Conflict facts are scoped to the current apply pass: a no-demand generation hold keeps
+  serving resources without replaying an earlier provisioning refusal.
 
 See [`legacy/ADRs/ADR_13_Auto_DNSBL_VIP/`](../../legacy/ADRs/ADR_13_Auto_DNSBL_VIP/).
 
