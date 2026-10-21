@@ -124,6 +124,8 @@ def _write_plain_boundary_manifest(tmp_path: Any, *, top1m_enabled: bool) -> tup
             "tld_wildcard_blacklist": src_config.get("tld_wildcard_blacklist", []),
             "tld_wildcard_exclusion": src_config.get("tld_wildcard_exclusion", []),
             "user_whitelist": src_config.get("user_whitelist", []),
+            # issue #3539: the golden contract pins VIP for TLD-blacklist zones; the built-in default is Null Blocking.
+            "builtin_log_flag": "1",
             "top1m_enabled": top1m_enabled,
         },
         "feeds": feeds,

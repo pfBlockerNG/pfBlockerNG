@@ -72,6 +72,8 @@ def _build_config(config: dict[str, Any]) -> dict[str, Any]:
         "tld_wildcard_blacklist": config.get("tld_wildcard_blacklist", []),
         "tld_wildcard_exclusion": config.get("tld_wildcard_exclusion", []),
         "user_whitelist": config.get("user_whitelist", []),
+        # issue #3539: the golden contract pins VIP for TLD-blacklist zones; the built-in default is Null Blocking.
+        "builtin_log_flag": "1",
     }
 
 

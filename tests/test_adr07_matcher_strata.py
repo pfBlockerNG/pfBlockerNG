@@ -405,7 +405,8 @@ class TestWinningEntryAttribution:
         # The exact issue scenario: name in a band-1 feed block (log='2' -> NULL) AND a
         # band-5 user regex (log='1' -> VIP). The regex wins (5 > 1): VIP, attributed to
         # DNSBL_Regex -- NOT sinkholed NULL and blamed on the feed.
-        cfg = _cfg(dataDB=True, regexDB=True, important_rules=True)
+        # issue #3539: the built-in default is Null Blocking; this scenario needs the VIP shape, so ask for it.
+        cfg = _cfg(dataDB=True, regexDB=True, important_rules=True, builtin_log_flag="1")
         containers = _containers(
             dataDB={"evil.com": {"log": "2", "index": 7, "important": False, "band": PRIO_FEED_BLOCK}},
             regexDB={"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_USER_BLOCK}},

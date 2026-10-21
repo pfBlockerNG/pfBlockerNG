@@ -124,7 +124,10 @@ class TestOracleATldAllowFastPath:
         # field, not just is_found, so a rename that quietly alters ANY of
         # them (feed/group string, b_type/p_type default, b_eval, null
         # shaping) is caught.
-        cfg = _tld_allow_cfg(**{TLD_ALLOW_ENABLE_KEY: True, TLD_ALLOW_LIST_KEY: ["com", "net"]})
+        # issue #3539: the built-in default is Null Blocking; this snapshot pins the VIP shape, so ask for it.
+        cfg = _tld_allow_cfg(
+            **{TLD_ALLOW_ENABLE_KEY: True, TLD_ALLOW_LIST_KEY: ["com", "net"], "builtin_log_flag": "1"}
+        )
         dec = evaluate_domain("uuid-a3f0.org", "uuid-a3f0.org", "org", False, cfg, _containers())
         assert dec.is_found is True
         assert dec.feed == "TLD_Allow"
@@ -132,13 +135,26 @@ class TestOracleATldAllowFastPath:
         assert dec.b_type == "Python"
         assert dec.p_type == "Python"
         # the post-discovery "if is_found:" default fills b_eval with the
-        # query name and sets log_type "1" (VIP-blocked shape) for every
-        # stratum that doesn't override it -- TLD-Allow doesn't.
+        # query name and sets log_type from builtin_log_flag ("1" here: the
+        # VIP-blocked shape) for every stratum that doesn't override it --
+        # TLD-Allow doesn't.
         assert dec.b_eval == "uuid-a3f0.org"
         assert dec.log_type == "1"
         assert dec.null_blocking is False
         assert dec.in_hsts is False
         assert dec.in_whitelist is False
+        assert dec.nxdomain is False
+
+    def test_a3_without_a_builtin_log_flag_the_block_is_null_blocking(self) -> None:
+        # issue #3539: an absent builtin_log_flag is the fail-safe Null Blocking (logged), never the VIP answer.
+        cfg = _tld_allow_cfg(**{TLD_ALLOW_ENABLE_KEY: True, TLD_ALLOW_LIST_KEY: ["com", "net"]})
+        assert "builtin_log_flag" not in cfg
+        dec = evaluate_domain("uuid-a3f0.org", "uuid-a3f0.org", "org", False, cfg, _containers())
+        assert dec.is_found is True
+        assert dec.feed == "TLD_Allow"
+        assert dec.group == "DNSBL_TLD_Allow"
+        assert dec.log_type == "0"
+        assert dec.null_blocking is True
         assert dec.nxdomain is False
 
     def test_a4_enabled_empty_list_is_a_noop(self) -> None:

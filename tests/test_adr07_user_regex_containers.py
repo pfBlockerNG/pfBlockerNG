@@ -471,6 +471,8 @@ class TestRegexListRowsRaiseNumericPrecedenceLikeCustomListRows:
 
     @pytest.mark.parametrize("site", ["init", "swap"])
     def test_a_regex_list_row_decides_the_verdict(self, tmp_path: Path, monkeypatch: Any, site: str) -> None:
+        # issue #3539: the manifest carries no builtin_log_flag, so the row answers with the Null Blocking default
+        # (log 0), still a different shape from the feed's flag 3 (NXDOMAIN).
         decision = self._decision(tmp_path, monkeypatch, [r"^x\.example$#mine"], site)
         assert (
             decision.is_found,
@@ -479,4 +481,5 @@ class TestRegexListRowsRaiseNumericPrecedenceLikeCustomListRows:
             decision.group,
             decision.log_type,
             decision.nxdomain,
-        ) == (True, False, "mine", "DNSBL_Regex", "1", False)
+            decision.null_blocking,
+        ) == (True, False, "mine", "DNSBL_Regex", "0", False, True)

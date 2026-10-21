@@ -581,4 +581,50 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertTrue($GLOBALS['pfb']['dnsbl_vip_demand'], 'the normalized feed header is consumable');
 		$this->assertFileExists($GLOBALS['pfb']['dnsbl_conf']);
 	}
+
+	public function testAReservedDnsblipRowIsLoadedToTheVipAndKeepsTheVipServing(): void
+	{
+		// GIVEN a full update pass whose only feed row carries the reserved DNSBLIP header: the resolver still loads that row
+		// and logs it to the VIP, so the row must demand the VIP and a live web server exactly as any other header does
+		$this->arrange(['save' => FALSE, 'demand' => TRUE]);
+		$this->publishTo(TRUE);
+		$feed = "{$this->dir}/dnsblip-feed.txt";
+		file_put_contents($feed, "reservedprobe3539.example.com\n");
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/0/url', $feed);
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/0/header', 'DNSBLIP');
+
+		// WHEN the apply pass runs
+		$this->runPass();
+
+		// THEN the manifest carries the DNSBLIP row as a feed that logs to the VIP
+		$feeds   = json_decode((string) @file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE)['feeds'] ?? [];
+		$dnsblip = array_values(array_filter($feeds, static fn (array $f): bool => ($f['feed'] ?? '') === 'DNSBLIP'));
+		$this->assertCount(1, $dnsblip, 'the manifest carries the DNSBLIP feed');
+		$this->assertSame('1', $dnsblip[0]['log_flag'] ?? NULL, 'the DNSBLIP feed logs to the VIP');
+		// AND the row demands the VIP, so the marked auto-VIP, both port forwards and a live conf and certificate are in place
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_vip_demand'], 'the DNSBLIP row does not demand the VIP');
+		$this->assertSame([PFB_AUTO_VIP_DESCR_V4], array_column(config_get_path('virtualip/vip', []), 'descr'));
+		$this->assertSame(['80', '443'], array_map(static fn (array $row): string => $row['destination']['port'], $this->dnsblNat()));
+		$this->assertFileExists($GLOBALS['pfb']['dnsbl_conf']);
+		$this->assertFileExists($GLOBALS['pfb']['dnsbl_cert']);
+	}
+
+	public function testBootTeardownRemovesTheMarkedAutoVipAndKeepsAManualVipAtTheSameAddress(): void
+	{
+		// GIVEN the boot/install resync with the package off (nothing may serve), the served state an older version left behind,
+		// and a manual VIP at the auto-VIP's address, listed first so a delete that ignores the marker would take it
+		$this->arrange(['install' => TRUE, 'enable' => FALSE, 'demand' => TRUE, 'served' => TRUE]);
+		config_set_path('virtualip/vip', array_merge([[
+			'mode' => 'ipalias', 'interface' => 'opt1', 'type' => 'single', 'subnet' => '172.16.53.53', 'subnet_bits' => '32',
+			'descr' => 'manual VIP', 'uniqid' => 'manual4',
+		]], config_get_path('virtualip/vip', [])));
+		$this->assertSame(['manual VIP', PFB_AUTO_VIP_DESCR_V4], array_column(config_get_path('virtualip/vip', []), 'descr'), 'before-state');
+
+		// WHEN the resync runs
+		$this->runPass();
+
+		// THEN the pass took the boot branch, and only the marked auto-VIP is removed: the manual VIP stays at its address
+		$this->assertStringContainsString('Sync terminated during boot process.', $this->passLog());
+		$this->assertSame(['manual VIP' => '172.16.53.53'], array_column(config_get_path('virtualip/vip', []), 'subnet', 'descr'));
+	}
 }

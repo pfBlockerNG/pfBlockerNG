@@ -27,6 +27,18 @@ def test_boot_with_package_off_tears_down_leftover_served_vip_state(
         demand._write_state(vm, feed=feed, logging="enabled", auto_vip=True, settings={"dnsbl_interface": "lan"})
         demand._force_update(vm)
         h.apply_filter_sync(vm)
+        started = vm.ssh("/bin/sh", demand._DNSBL_RC, "start", timeout=60.0)
+        assert started.returncode == 0, f"before: cannot establish running DNSBL service: {started}"
+        # lighttpd forks before binding; distinguish that readiness gap from an invalid fixture configuration.
+        status = demand._wait_http(vm, f"127.0.0.1:{h.DNSBL_PORT}")
+        if not demand._answers_http(status):
+            check = vm.ssh("/usr/local/sbin/lighttpd_pfb", "-tt", "-f", demand._LIGHTY_CONF, timeout=30.0)
+            sockets = vm.ssh("/usr/bin/sockstat", "-l", timeout=30.0)
+            pytest.fail(
+                f"before: DNSBL backend HTTP unavailable ({status!r}); "
+                f"rc start={started.stdout} {started.stderr}; "
+                f"config check={check.returncode}: {check.stdout} {check.stderr}; sockets={sockets.stdout}"
+            )
         vip = h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4)
         web = demand._lighty_state(vm)
         assert vip and demand._vip_alias_devices(vm, vip), f"before: managed VIP not live: {vip!r}"

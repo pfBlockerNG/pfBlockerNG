@@ -17699,7 +17699,7 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
 		foreach ($rows as $row) {
 			if (is_array($row) && !empty($row['url']) && ($row['state'] ?? '') !== 'Disabled' && ($row['action'] ?? '') !== 'Permit') {
 				$header = pfb_normalize_row_header(is_string($row['header'] ?? NULL) ? $row['header'] : '');
-				if ($header['header'] !== '' && $header['header'] !== '0' && $header['reserved_error'] === '') {
+				if ($header['header'] !== '' && $header['header'] !== '0') {
 					$blocks = TRUE;
 					break;
 				}
