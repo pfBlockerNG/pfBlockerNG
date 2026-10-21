@@ -203,18 +203,19 @@ def test_blacklist_logging_select_toggles_both_ways(
 ) -> None:
     """``blacklist_logging`` stores 'enabled' and 'disabled' -- both save-path arms.
 
-    Options map ``{enabled, disabled}`` (node default 'enabled'). A valid key is
-    stored verbatim (line 221 ``?:''`` keeps a truthy key). True transition: assert
-    the original, flip to the OTHER value (assert), flip back (assert), restore.
+    Options include ``enabled`` and ``disabled``. A valid key is stored verbatim.
+    True transition: assert the original, flip to the OTHER value (assert), flip
+    back (assert), restore the exact original.
     """
     vm = smoke_vm
+    existed = _config_path_exists(vm, CFG_LOGGING)
     original = helpers.config_get(vm, CFG_LOGGING)
-    # The read default is 'enabled'; treat an unset ('') original as 'enabled'.
-    baseline = original or "enabled"
+    assert original in ("", "default", "enabled", "disabled"), f"unexpected blacklist_logging baseline {original!r}"
+    # Flip between the two stored tokens this test owns; any other original (absent,
+    # 'default') starts from 'enabled'. The exact original is restored in `finally`.
+    baseline = original if original in ("enabled", "disabled") else "enabled"
     other = "disabled" if baseline == "enabled" else "enabled"
     try:
-        # BEFORE: a known value of the two-option set.
-        assert baseline in ("enabled", "disabled"), f"unexpected blacklist_logging baseline {original!r}"
         # Flip to the other value.
         _direct_post(webui, _save_payload(blacklist_logging=other))
         assert helpers.config_get(vm, CFG_LOGGING) == other, f"blacklist_logging did not flip to {other!r}"
@@ -222,39 +223,36 @@ def test_blacklist_logging_select_toggles_both_ways(
         _direct_post(webui, _save_payload(blacklist_logging=baseline))
         assert helpers.config_get(vm, CFG_LOGGING) == baseline, f"blacklist_logging did not return to {baseline!r}"
     finally:
-        _direct_post(webui, _save_payload(blacklist_logging=baseline))
+        _restore_scalar(vm, CFG_LOGGING, original, existed)
 
 
 def test_blacklist_logging_select_coerces_bogus_to_default(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """A bogus ``blacklist_logging`` value coerces to the default 'enabled' (save succeeds).
+    """A bogus ``blacklist_logging`` value is coerced to a valid token, never stored raw.
 
-    Select-validator (lines 187-194): a value that is not a key of
-    ``$options_blacklist_logging`` is replaced with the field default '' -> the
-    trailing ``?:''`` at line 221 leaves it '' as stored... but the validator's
-    default for this field is 'enabled' (``$select_options['blacklist_logging'] =>
-    'enabled'``), so a bogus value becomes 'enabled' and is written. SOFT coerce,
-    NOT an abort: config holds 'enabled' (the default), not the bogus token.
+    Select-validator: a value that is not a key of ``$options_blacklist_logging`` is
+    replaced with the field default. Issue #3539 makes that default 'default' (new
+    configs inherit the global mechanism). SOFT coerce, NOT an abort: config holds
+    a valid token, not the bogus one.
 
-    Transition: drive a valid 'disabled' (assert), THEN a bogus value (assert it
-    coerced to 'enabled') -- so the green proves the bogus POST was coerced, not
-    that the box already held 'enabled'.
+    Transition: drive a valid 'disabled' (assert), THEN a bogus value (assert it left
+    'disabled' and is a valid token) -- so the green proves the bogus POST was coerced.
     """
     vm = smoke_vm
+    existed = _config_path_exists(vm, CFG_LOGGING)
     original = helpers.config_get(vm, CFG_LOGGING)
-    baseline = original or "enabled"
     try:
-        # VALID 'disabled' first so the coercion target ('enabled') is a real change.
+        # VALID 'disabled' first so the coercion target is a real change.
         _direct_post(webui, _save_payload(blacklist_logging="disabled"))
         assert helpers.config_get(vm, CFG_LOGGING) == "disabled", "valid 'disabled' did not persist"
-        # BOGUS -> coerced to the default 'enabled' (save still succeeds).
+        # BOGUS -> coerced to the field default (save still succeeds).
         _direct_post(webui, _save_payload(blacklist_logging="bogus_value"))
         got = helpers.config_get(vm, CFG_LOGGING)
-        assert got == "enabled", f"bogus blacklist_logging should coerce to default 'enabled', got {got!r}"
+        assert got == "default", f"bogus blacklist_logging should coerce to the field default 'default', got {got!r}"
     finally:
-        _direct_post(webui, _save_payload(blacklist_logging=baseline))
+        _restore_scalar(vm, CFG_LOGGING, original, existed)
 
 
 # --------------------------------------------------------------------------- #
