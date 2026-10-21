@@ -137,7 +137,7 @@ $_POST['tld_wildcard'] = 'on';
 $_POST['tld_wildcard_blacklist'] = 'zip';
 $_POST['pfb_py_cache_max'] = '10000';
 $_POST['top1m_count'] = '1000';
-$pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST);	// the page's validation computes it once; the save reuses it
+$pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST, $local_tld, $default_tlds);	// the page's validation computes it once; the save reuses it
 
 $disk = $GLOBALS['config'];
 if ($scenario === 'interleave') {

@@ -361,8 +361,12 @@ final class DnsblVipDemandTest extends TestCase
 			'idn off token'             => [['pfb_idn' => 'off'], FALSE],
 			'idn empty'                 => [['pfb_idn' => ''], FALSE],
 			'idn absent'                => [[], FALSE],
-			'tld allow on'              => [['tld_allow' => 'on'], TRUE],
-			'tld allow off'             => [['tld_allow' => ''], FALSE],
+			'tld allow on, gtld'        => [['tld_allow' => 'on', 'tld_allow_gtld' => 'com'], TRUE],
+			'tld allow on, cctld'       => [['tld_allow' => 'on', 'tld_allow_cctld' => 'uk'], TRUE],
+			'tld allow on, itld'        => [['tld_allow' => 'on', 'tld_allow_itld' => 'xn--p1ai'], TRUE],
+			'tld allow on, bgtld'       => [['tld_allow' => 'on', 'tld_allow_bgtld' => 'app'], TRUE],
+			'tld allow on, no buckets'  => [['tld_allow' => 'on'], FALSE],
+			'tld allow off, bucket'     => [['tld_allow' => '', 'tld_allow_gtld' => 'com'], FALSE],
 			'tld wildcard, blacklist'   => [['tld_wildcard' => 'on', 'tld_wildcard_blacklist' => 'Y29tCg=='], TRUE],
 			'tld wildcard, empty list'  => [['tld_wildcard' => 'on', 'tld_wildcard_blacklist' => ''], FALSE],
 			'tld wildcard off, list'    => [['tld_wildcard' => '', 'tld_wildcard_blacklist' => 'Y29tCg=='], FALSE],
@@ -393,12 +397,12 @@ final class DnsblVipDemandTest extends TestCase
 
 	public function testBuiltinDemandFollowsOverrideGlobalEnabled(): void
 	{
-		$this->assertTrue(pfb_dnsbl_vip_demand(self::policy('override', 'enabled', ['tld_allow' => 'on']), [], []));
+		$this->assertTrue(pfb_dnsbl_vip_demand(self::policy('override', 'enabled', ['tld_allow' => 'on', 'tld_allow_gtld' => 'com']), [], []));
 	}
 
 	public function testHstsNeverChangesTheResult(): void
 	{
-		$this->assertTrue(pfb_dnsbl_vip_demand(self::policy('default', 'enabled', ['pfb_hsts' => 'on', 'tld_allow' => 'on']), [], []), 'HSTS on does not remove demand');
+		$this->assertTrue(pfb_dnsbl_vip_demand(self::policy('default', 'enabled', ['pfb_hsts' => 'on', 'tld_allow' => 'on', 'tld_allow_gtld' => 'com']), [], []), 'HSTS on does not remove demand');
 		$this->assertFalse(pfb_dnsbl_vip_demand(self::policy('default', 'enabled', ['pfb_hsts' => 'on']), [], []), 'HSTS on does not create demand');
 	}
 }

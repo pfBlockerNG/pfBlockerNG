@@ -60,6 +60,12 @@ final class DnsblSaveVipDemandTest extends TestCase
 		];
 	}
 
+	/** The page's save mapping for a box whose local TLD is 'local'. */
+	private static function stored(array $post): array
+	{
+		return pfb_dnsbl_policy_from_post($post, 'local', ['arpa', 'local', 'com']);
+	}
+
 	/** A manual-mode settings POST with no VIP selected, on the no-demand policy (Default / Null Blocking). */
 	private static function post(array $over = []): array
 	{
@@ -68,6 +74,8 @@ final class DnsblSaveVipDemandTest extends TestCase
 			'dnsbl_interface'        => 'lo0',
 			'pfb_dnsvip4'            => 'none',
 			'pfb_dnsvip6'            => 'none',
+			'pfb_dnsport'            => '8081',
+			'pfb_dnsport_ssl'        => '8443',
 			'global_log'             => 'disabled_log',
 			'global_log_mode'        => 'default',
 			'pfb_regex'              => '',
@@ -85,7 +93,7 @@ final class DnsblSaveVipDemandTest extends TestCase
 		$_POST = $post;
 		$scope = pfb_test_page_eval(
 			pfb_test_page_region(self::PAGE, '// Validate DNSBL VIP address', "// Validate Adv. firewall rule 'Protocol' setting"),
-			['pfb' => ['dconfig' => $stored], 'input_errors' => []]
+			['pfb' => ['dconfig' => $stored], 'input_errors' => [], 'local_tld' => 'local', 'default_tlds' => ['arpa', 'local', 'com']]
 		);
 		return [$scope['input_errors'], $_POST];
 	}
@@ -163,13 +171,43 @@ final class DnsblSaveVipDemandTest extends TestCase
 		$this->assertSame('', $post['pfb_dnsvip6']);
 	}
 
+	public function testEmptyPortsAreAcceptedWithoutDemand(): void
+	{
+		[$errors] = $this->validate(self::post(['pfb_dnsport' => '', 'pfb_dnsport_ssl' => '']));
+
+		$this->assertSame([], $errors);
+	}
+
+	public function testEmptyPortsAreRejectedWithDemand(): void
+	{
+		$this->seedGroups('default');
+
+		[$errors] = $this->validate(self::post(['global_log' => 'enabled', 'pfb_dnsvip_auto' => 'on', 'pfb_dnsport' => '', 'pfb_dnsport_ssl' => '']));
+
+		$this->assertSame(['DNSBL Port is invalid!', 'DNSBL SSL Port is invalid!'], $errors);
+	}
+
+	public function testAnInvalidPortIsRejectedWithoutDemand(): void
+	{
+		[$errors] = $this->validate(self::post(['pfb_dnsport' => 'abc', 'pfb_dnsport_ssl' => '70000']));
+
+		$this->assertSame(['DNSBL Port is invalid!', 'DNSBL SSL Port is invalid!'], $errors);
+	}
+
+	public function testPostedTldAllowWithNoSelectionDemandsAVipThroughTheDefaultGtldBucket(): void
+	{
+		[$errors] = $this->validate(self::post(['global_log' => 'enabled', 'tld_allow' => 'on']));
+
+		$this->assertSame([self::NO_VIP_ERROR], $errors, 'the save writes the default gTLD bucket, so TLD Allow answers with the VIP');
+	}
+
 	// -----------------------------------------------------------------------
 	// The shared POST -> stored mapping and the candidate predicate
 	// -----------------------------------------------------------------------
 
-	public function testPolicyFromPostMapsTheEightFieldsToTheirStoredForm(): void
+	public function testPolicyFromPostMapsThePolicyFieldsToTheirStoredForm(): void
 	{
-		$stored = pfb_dnsbl_policy_from_post([
+		$stored = self::stored([
 			'global_log'             => 'nxdomain',
 			'global_log_mode'        => 'override',
 			'pfb_regex'              => 'on',
@@ -178,6 +216,9 @@ final class DnsblSaveVipDemandTest extends TestCase
 			'tld_allow'              => 'on',
 			'tld_wildcard'           => 'on',
 			'tld_wildcard_blacklist' => "zip\nmov",
+			'tld_allow_gtld'         => ['io'],
+			'tld_allow_cctld'        => ['uk', 'de'],
+			'tld_allow_bgtld'        => ['app'],
 		]);
 
 		$this->assertSame([
@@ -189,12 +230,16 @@ final class DnsblSaveVipDemandTest extends TestCase
 			'tld_allow'              => 'on',
 			'tld_wildcard'           => 'on',
 			'tld_wildcard_blacklist' => base64_encode("zip\nmov"),
+			'tld_allow_gtld'         => 'arpa,local,io',
+			'tld_allow_cctld'        => 'uk,de',
+			'tld_allow_itld'         => '',
+			'tld_allow_bgtld'        => 'app',
 		], $stored);
 	}
 
 	public function testPolicyFromPostStoresAnUncheckedFormAsEmptyTokens(): void
 	{
-		$stored = pfb_dnsbl_policy_from_post(['global_log' => 'disabled_log', 'global_log_mode' => 'default']);
+		$stored = self::stored(['global_log' => 'disabled_log', 'global_log_mode' => 'default']);
 
 		$this->assertSame('', $stored['pfb_regex']);
 		$this->assertSame('', $stored['pfb_regex_list']);
@@ -202,17 +247,19 @@ final class DnsblSaveVipDemandTest extends TestCase
 		$this->assertSame('', $stored['tld_allow']);
 		$this->assertSame('', $stored['tld_wildcard']);
 		$this->assertSame('', $stored['tld_wildcard_blacklist']);
+		$this->assertSame('arpa,local,com', $stored['tld_allow_gtld'], 'an empty gTLD selection stores the default TLDs');
+		$this->assertSame('', $stored['tld_allow_cctld']);
 	}
 
 	public function testPolicyFromPostCanonicalisesIdnThroughTheStoredEnum(): void
 	{
-		$this->assertSame('on', pfb_dnsbl_policy_from_post(['pfb_idn' => 'on'])['pfb_idn'], 'All is stored as on');
-		$this->assertSame('', pfb_dnsbl_policy_from_post(['pfb_idn' => 'off'])['pfb_idn'], 'Off is stored as empty');
+		$this->assertSame('on', self::stored(['pfb_idn' => 'on'])['pfb_idn'], 'All is stored as on');
+		$this->assertSame('', self::stored(['pfb_idn' => 'off'])['pfb_idn'], 'Off is stored as empty');
 	}
 
 	public function testPolicyFromPostDropsAnUnknownToggleValue(): void
 	{
-		$this->assertSame('', pfb_dnsbl_policy_from_post(['pfb_regex' => 'banana'])['pfb_regex']);
+		$this->assertSame('', self::stored(['pfb_regex' => 'banana'])['pfb_regex']);
 	}
 
 	public function testPolicyFromPostStoresArrayValuedTextAreasAsEmptyWithoutWarning(): void
@@ -223,7 +270,7 @@ final class DnsblSaveVipDemandTest extends TestCase
 			return TRUE;
 		});
 		try {
-			$stored = pfb_dnsbl_policy_from_post(['pfb_regex_list' => ['a.*'], 'tld_wildcard_blacklist' => ['zip']]);
+			$stored = self::stored(['pfb_regex_list' => ['a.*'], 'tld_wildcard_blacklist' => ['zip']]);
 		} finally {
 			restore_error_handler();
 		}
@@ -236,7 +283,8 @@ final class DnsblSaveVipDemandTest extends TestCase
 	public function testPageMapsThosePolicyFieldsOnlyThroughTheSharedFunction(): void
 	{
 		$source = pfb_test_page_source(self::PAGE);
-		foreach (['global_log', 'global_log_mode', 'pfb_regex', 'pfb_regex_list', 'pfb_idn', 'tld_allow', 'tld_wildcard', 'tld_wildcard_blacklist'] as $key) {
+		foreach (['global_log', 'global_log_mode', 'pfb_regex', 'pfb_regex_list', 'pfb_idn', 'tld_allow', 'tld_wildcard', 'tld_wildcard_blacklist',
+			'tld_allow_gtld', 'tld_allow_cctld', 'tld_allow_itld', 'tld_allow_bgtld'] as $key) {
 			$this->assertSame(
 				0,
 				preg_match("/\\\$pfb\\['dconfig'\\]\\['{$key}'\\]\\s*=[^=]/", $source),
@@ -248,7 +296,7 @@ final class DnsblSaveVipDemandTest extends TestCase
 
 	public function testCandidateDemandReadsTheStoredGroupsAndBlacklist(): void
 	{
-		$posted = pfb_dnsbl_policy_from_post(['global_log' => 'enabled', 'global_log_mode' => 'default']);
+		$posted = self::stored(['global_log' => 'enabled', 'global_log_mode' => 'default']);
 		$this->assertFalse(pfb_dnsbl_candidate_vip_demand([], $posted), 'before-state: nothing uses the VIP mechanism');
 
 		config_set_path('installedpackages/pfblockerngblacklist', [

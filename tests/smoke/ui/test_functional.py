@@ -1800,6 +1800,37 @@ def test_dnsbl_port_is_port_valid_and_reject_unchanged(
         webui.post(DNSBL_PAGE, {field: restore}, timeout=SAVE_TIMEOUT)
 
 
+def test_dnsbl_ports_are_optional_only_without_vip_demand(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """issue #3539: empty web server ports save without VIP demand and are rejected with it.
+
+    The posted Regex List is a built-in block, so it answers with the global mechanism:
+    under Override WebServer/VIP it demands the web server and an empty port aborts the
+    whole save; under Override Null Blocking nothing answers with the VIP, so the same
+    empty port is accepted and the save stores the 8081 default.
+    """
+    vm = smoke_vm
+    settings = "installedpackages/pfblockerngdnsblsettings/config/0"
+    cfg = f"{settings}/pfb_dnsport"
+    keys = ("global_log_mode", "global_log", "pfb_regex", "pfb_regex_list")
+    saved = {path: helpers.config_get_state(vm, path) for path in [cfg, *(f"{settings}/{key}" for key in keys)]}
+    regex = {"global_log_mode": "override", "pfb_regex": "on", "pfb_regex_list": "pfb3539inert", "pfb_dnsport": ""}
+    try:
+        assert _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_dnsport": "8082"}, cfg) == "8082"
+
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {**regex, "global_log": "enabled"}, cfg)
+        assert got == "8082", f"with VIP demand an empty port must abort the save, got {got!r}"
+
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {**regex, "global_log": "disabled_log"}, cfg)
+        assert got == "8081", f"without VIP demand an empty port must save as the 8081 default, got {got!r}"
+    finally:
+        for path, state in saved.items():
+            helpers.config_restore_state(vm, path, state)
+
+
 def test_dnsbl_py_cache_max_unlimited_and_reject_unchanged(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
