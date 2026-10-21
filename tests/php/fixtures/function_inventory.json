@@ -3362,6 +3362,20 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "local_tld",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "default_tlds",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
             }
         ]
     },

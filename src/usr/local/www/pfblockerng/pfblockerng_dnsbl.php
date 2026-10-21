@@ -646,12 +646,6 @@ if ($_POST) {
 			}
 		}
 
-		if (!is_port($_POST['pfb_dnsport'])) {
-			$input_errors[] = 'DNSBL Port is invalid!';
-		}
-		if (!is_port($_POST['pfb_dnsport_ssl'])) {
-			$input_errors[] = 'DNSBL SSL Port is invalid!';
-		}
 		if (isset($_POST['pfb_py_cache_max']) && $_POST['pfb_py_cache_max'] !== '' &&
 			(!ctype_digit((string) $_POST['pfb_py_cache_max']) || (int) $_POST['pfb_py_cache_max'] > 5000000)) {
 			$input_errors[] = 'DNSBL Decision cache max entries must be a whole number between 0 and 5000000.';
@@ -764,7 +758,8 @@ if ($_POST) {
 		// error (ADR-13 §7 pivot — it is a non-blocking runtime warning from pfb_global).
 		$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
 		// issue #3539: the saved configuration needs a VIP only while a block answers with it.
-		$pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST);
+		$pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST, $local_tld, $default_tlds);
+		$pfb_vip_demand = pfb_dnsbl_candidate_vip_demand($pfb['dconfig'], $pfb_posted_policy);
 		if (!$pfb_auto) {
 			// issue #1723: already sanitized by the ingestion prologue above.
 			if (($_POST['pfb_dnsvip4'] ?? '') == 'none') {
@@ -773,11 +768,18 @@ if ($_POST) {
 			if (($_POST['pfb_dnsvip6'] ?? '') == 'none') {
 				$_POST['pfb_dnsvip6'] = '';
 			}
-			if (pfb_dnsbl_candidate_vip_demand($pfb['dconfig'], $pfb_posted_policy)) {
+			if ($pfb_vip_demand) {
 				list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'] ?? '', $_POST['pfb_dnsvip6'] ?? '');
 				if (!$vips_valid) {
 					$input_errors[] = "DNSBL: {$error}";
 				}
+			}
+		}
+
+		// The web server ports are required only while a block answers with the VIP; a value given must still be valid.
+		foreach (array('pfb_dnsport' => 'DNSBL Port', 'pfb_dnsport_ssl' => 'DNSBL SSL Port') as $port_key => $port_label) {
+			if (($pfb_vip_demand || ($_POST[$port_key] ?? '') !== '') && !is_port($_POST[$port_key] ?? '')) {
+				$input_errors[] = "{$port_label} is invalid!";
 			}
 		}
 
@@ -913,18 +915,6 @@ if ($_POST) {
 
 			$pfb['dconfig']['tld_allow_sort']	= pfb_filter($_POST['tld_allow_sort'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_py_nolog']		= pfb_filter($_POST['pfb_py_nolog'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-
-			// Python TLD Allow (Add default TLD Allows + ARPA + pfSense TLD
-			if (!empty($_POST['tld_allow_gtld'])) {
-				$pfb['dconfig']['tld_allow_gtld']	= "arpa,{$local_tld}," . implode(',', (array)$_POST['tld_allow_gtld']); 
-			} else {
-				$pfb['dconfig']['tld_allow_gtld']	= implode(',', $default_tlds);
-			}
-
-			// Python TLD Allow
-			$pfb['dconfig']['tld_allow_cctld']	= implode(',', (array)$_POST['tld_allow_cctld']);
-			$pfb['dconfig']['tld_allow_itld']	= implode(',', (array)$_POST['tld_allow_itld']);
-			$pfb['dconfig']['tld_allow_bgtld']	= implode(',', (array)$_POST['tld_allow_bgtld']);
 
 			$pfb['dconfig']['action']		= $_POST['action']							?: 'Disabled';
 			$pfb['dconfig']['aliaslog']		= $_POST['aliaslog']							?: 'enabled';

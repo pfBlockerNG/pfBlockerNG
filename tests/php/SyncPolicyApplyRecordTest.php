@@ -390,6 +390,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_missing');
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/tld_allow', 'on');	// issue #3539: a built-in answers with the VIP, so it is validated
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_gtld', 'com');	// TLD Allow is on only with a selection
 	}
 
 	/** @return list<string> */

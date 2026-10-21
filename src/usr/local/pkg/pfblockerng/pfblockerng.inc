@@ -17728,7 +17728,9 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
 	return $uses_vip('default') && (
 		(pfb_cfg_toggle_read($field('pfb_regex')) === PfbToggle::On && !empty($field('pfb_regex_list')))
 		|| pfb_cfg_idn_mode_read($field('pfb_idn')) !== PfbIdnMode::Off
-		|| pfb_cfg_toggle_read($field('tld_allow')) === PfbToggle::On
+		// Like the INI writer: TLD Allow is on only with a selection in one of its buckets.
+		|| (pfb_cfg_toggle_read($field('tld_allow')) === PfbToggle::On
+		    && array_filter(array_map($field, ['tld_allow_gtld', 'tld_allow_cctld', 'tld_allow_itld', 'tld_allow_bgtld'])))
 		|| (!empty($field('tld_wildcard')) && !empty(pfb_text_area_decode($field('tld_wildcard_blacklist'), TRUE, FALSE, TRUE)))
 	);
 }
@@ -17736,10 +17738,12 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
 /**
  * issue #3539: the DNSBL policy fields of a settings POST in their STORED form -- the one mapping the save
  * persists with and its VIP-demand check judges. global_log/global_log_mode are already select-validated.
+ * An empty gTLD selection stores $default_tlds; a selection is prefixed with ARPA and the local TLD.
  */
-function pfb_dnsbl_policy_from_post(array $post): array {
+function pfb_dnsbl_policy_from_post(array $post, string $local_tld, array $default_tlds): array {
 	$on_off = static fn(string $key): string => pfb_filter($post[$key] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 	$text   = static fn(string $key): string => is_string($post[$key] ?? NULL) ? $post[$key] : '';	// an array-valued field is no text
+	$csv    = static fn(string $key): string => implode(',', (array) ($post[$key] ?? array()));
 	return array(
 		'global_log'		=> $post['global_log'] ?? '',
 		'global_log_mode'	=> $post['global_log_mode'] ?? '',
@@ -17749,6 +17753,10 @@ function pfb_dnsbl_policy_from_post(array $post): array {
 		'tld_allow'		=> $on_off('tld_allow'),
 		'tld_wildcard'		=> $on_off('tld_wildcard'),
 		'tld_wildcard_blacklist'	=> base64_encode($text('tld_wildcard_blacklist')),
+		'tld_allow_gtld'	=> empty($post['tld_allow_gtld']) ? implode(',', $default_tlds) : "arpa,{$local_tld}," . $csv('tld_allow_gtld'),
+		'tld_allow_cctld'	=> $csv('tld_allow_cctld'),
+		'tld_allow_itld'	=> $csv('tld_allow_itld'),
+		'tld_allow_bgtld'	=> $csv('tld_allow_bgtld'),
 	);
 }
 

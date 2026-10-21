@@ -189,6 +189,7 @@ final class ToggleMirrorTypeTest extends TestCase
 		);
 		// issue #3539: the VIP is only validated while a block answers with it; TLD Allow is such a block.
 		PfbConfig::write('dnsbl/tld_allow', PfbToggle::On);
+		PfbConfig::write('dnsbl/tld_allow_gtld', 'com');
 
 		pfb_global();
 
