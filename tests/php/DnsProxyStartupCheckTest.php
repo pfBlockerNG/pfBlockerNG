@@ -688,14 +688,14 @@ final class DnsProxyStartupCheckTest extends TestCase
 	// Row 11 -- nothing is meant to serve
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{?bool}> */
+	/** @return array<string,array{bool}> */
 	public static function readyWhileNothingIsMeantToServe(): array
 	{
-		return ['ready' => [TRUE], 'not told' => [NULL]];
+		return ['ready' => [TRUE]];
 	}
 
 	#[DataProvider('readyWhileNothingIsMeantToServe')]
-	public function testWithNoSnapshotAndNoFailureNothingIsFiledOrClosed(?bool $ready): void
+	public function testWithNoSnapshotAndNoFailureNothingIsFiledOrClosed(bool $ready): void
 	{
 		// Given no snapshot, a standing notice and a healthy log: only the early return keeps the notice (a check that went on would close it)
 		$this->fileOther(self::ID, 'pfB-DNS started with problems: old.');
@@ -719,37 +719,37 @@ final class DnsProxyStartupCheckTest extends TestCase
 	{
 		[$clock, $check] = $this->clockedCheck();
 
-		$check();
+		$check(TRUE);
 
 		$this->assertSame([], $clock->sleeps, 'no snapshot: the bounded wait is not even started');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 
-	public function testAnUnknownReadinessIsAwaitedOnTheBoundedWaitAndNothingElse(): void
+	public function testANotReadyStartIsReportedAtOnceWithoutAnyWaitInTheCheck(): void
 	{
-		// Given a moved box whose proxy never becomes ready
+		// Given a moved box whose proxy never became ready (the caller waited for it, and gave up)
 		$this->box();
 		[$clock, $check] = $this->clockedCheck();
 
-		// When the check is not told whether the proxy is ready
-		$check();
+		// When the check is told the proxy is not ready
+		$check(FALSE);
 
-		// Then it spent exactly the production wait (ten 100 ms ticks of 1 s), no other, and said so
-		$this->assertSame(array_fill(0, 10, 100000), $clock->sleeps);
+		// Then it spent no wait of its own, and reports the one problem
+		$this->assertSame([], $clock->sleeps, 'the readiness wait belongs to the caller, never to the check');
 		$this->assertSame(
 			[$this->problemText('pfB-DNS is not serving: the DNS proxy did not become ready within 1 s.')],
 			$this->startupTexts()
 		);
 	}
 
-	public function testAnUnknownReadinessThatTurnsReadyIsJudgedOnTheLog(): void
+	public function testAReadyStartIsJudgedOnTheLogWithoutAnyTick(): void
 	{
 		$this->box(self::DOT_ON);
 		$this->proxyServes();
 		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
 		[$clock, $check] = $this->clockedCheck();
 
-		$check();
+		$check(TRUE);
 
 		$this->assertSame([], $clock->sleeps, 'already ready: no tick');
 		$this->assertSame(

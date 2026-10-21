@@ -121,7 +121,8 @@ final class DnsProxyServiceTest extends TestCase
 		$this->generate();
 		$text = $this->rcText();
 
-		$this->assertDoesNotMatchRegularExpression('~\bpython|/bin/php|\bphp\b~i', $text,
+		// The one interpreter line the script names is the dns_saved check (PHP answers, launches no proxy): the proxy's own launch names none
+		$this->assertDoesNotMatchRegularExpression('~\bpython|/bin/php|\bphp\b~i', (string) preg_replace('~^.*pfblockerng\.inc dns_saved.*$~m', '', $text),
 			'the proxy is launched through pfb_python.sh only: no interpreter path may appear in the script');
 		$this->assertStringContainsString("--listen '192.0.2.1' --listen '2001:db8::1' --listen '127.0.0.1' --listen '::1'", $text, 'every listen value is shell-quoted');
 		$this->assertStringContainsString('</dev/null >/dev/null 2>&1', $text, 'stdio is detached (#662)');

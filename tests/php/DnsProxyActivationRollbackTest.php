@@ -1795,7 +1795,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		if ($alive === 'child') {
 			$this->proxyLivesButNeverServes();
 		} else {
-			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+			// alive until the rollback stops the proxy: a stopped supervisor no longer holds its pidfile, which the stop double does not model
+			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = fn (): bool => !in_array('stop_service', $this->proxyCalls, TRUE);
 		}
 		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is stored');
@@ -1821,7 +1822,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->tick();
 
 		// Then the tick neither waits for the proxy nor files or changes anything
-		$this->assertSame(0, $probes, 'the start-budget wait was never entered');
+		// the certificate sync looks at readiness once on every tick (a single probe, no wait); a start-budget wait would poll again
+		$this->assertLessThanOrEqual(1, $probes, 'the start-budget wait was never entered');
 		$this->assertSame([], $this->notices());
 		$this->assertSame([], $this->proxyCalls);
 		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is still requested');
