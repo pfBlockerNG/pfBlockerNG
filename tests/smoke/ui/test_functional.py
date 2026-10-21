@@ -2930,7 +2930,9 @@ def test_a_wizard_finish_with_no_concurrent_save_writes_the_reset_and_sweeps_the
         assert enable == (True, "on"), f"the wizard's defaults are not in config.xml: enable_cb {enable!r}"
         group = helpers.config_get_state(vm, "installedpackages/pfblockerngdnsbl/config/0/aliasname")
         assert group == (True, "ADs_Basic"), f"the wizard's default DNSBL group is not in config.xml: {group!r}"
-        assert vm.ssh("/bin/test", "-e", PFB_MASTERFILE).returncode != 0, "Finish left the masterfile behind"
+        # pfblockerng.sh touches an empty masterfile when it finds none, so the oracle is the content, not the path
+        masterfile = vm.ssh("/bin/cat", PFB_MASTERFILE)
+        assert token not in masterfile.stdout, f"Finish left the masterfile's content behind: {masterfile.stdout!r}"
         saved = helpers.config_get_state(vm, PFB_DNS_SAVED_CFG)
         assert saved[1] == "", f"Finish stored a Resolver snapshot no save made: {saved!r}"
     finally:
