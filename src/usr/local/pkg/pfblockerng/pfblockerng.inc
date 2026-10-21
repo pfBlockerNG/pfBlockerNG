@@ -4984,7 +4984,7 @@ EOF;
 	if [ "\${savedcheck}" != {$marker} ]; then
 		[ -n "\${savedcheck}" ] || exit 0
 		if ! /usr/bin/timeout -s TERM -k 5 30 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_saved >/dev/null 2>&1; then
-			/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: pfb_dns_saved changed since this script was written and is not a valid Resolver snapshot - not started"
+			/usr/bin/logger -p daemon.err -t pfb_dns_proxy "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy: pfb_dns_saved changed since this script was written and could not be confirmed as a valid Resolver snapshot - not started"
 			exit 1
 		fi
 	fi
