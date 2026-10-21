@@ -399,22 +399,27 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame(['restart_service', 'stop_service'], $this->proxyCalls);
 	}
 
-	public function testAnUpgradeInstallRestartsTheProxyThatPfSenseUnregisteredBeforeTheInstallCommand(): void
+	/**
+	 * The state a package upgrade runs the install command in (issue #3562): delete_package_xml() deleted the package's service
+	 * registrations and wrote config.xml, install_package_xml() adds them back only after the command, and pfSense's
+	 * start_service() and stop_service() act only on a registered service. config.xml is a file from here on, so a fresh read
+	 * (the rollback's, under the DNS config lock) sees only what was written.
+	 */
+	private function upgradeInstallState(): void
 	{
-		// Given a moved Resolver and a proxy that serves once started, in the state a package upgrade runs the install command in
-		// (issue #3562): delete_package_xml() deleted the package's service registrations, install_package_xml() adds them back only
-		// after the command, and pfSense's start_service() and stop_service() act only on a registered service
-		$this->activate(TRUE);
-		$this->behaviour = 'serves';
 		$GLOBALS['config']['installedpackages']['service'] = [['name' => 'squid', 'rcfile' => 'squid.sh']];
+		$this->configXmlOnDisk();
 		$proxy = $GLOBALS['pfb_test_service_hook'];
 		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use ($proxy): void {
 			if (in_array($service, array_column(config_get_path('installedpackages/service', []), 'name'), TRUE)) {
 				$proxy($fn, $service);
 			}
 		};
+	}
 
-		// When the installer's DNS proxy block runs, as shipped
+	/** The installer's DNS proxy block, cut out of the shipped file between its anchors and run as shipped. */
+	private function runInstallProxyBlock(): void
+	{
 		$install = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
 		$from = strpos($install, '// Create DNS proxy service once its runtime files are staged');
 		$to = strpos($install, 'if ($ufound) {', (int) $from);
@@ -424,6 +429,17 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			global $pfb;
 			eval($code);
 		})(substr($install, $from, $to - $from));
+	}
+
+	public function testAnUpgradeInstallRestartsTheProxyThatPfSenseUnregisteredBeforeTheInstallCommand(): void
+	{
+		// Given a moved Resolver and a proxy that serves once started, in the state an upgrade runs the install command in
+		$this->activate(TRUE);
+		$this->behaviour = 'serves';
+		$this->upgradeInstallState();
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
 
 		// Then the proxy was restarted and serves: pfB-DNS stays on, the Resolver stays moved, nothing is rolled back
 		$this->assertSame(['restart_service'], $this->proxyCalls, 'the restart reached a registered service');
@@ -431,7 +447,40 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is not turned off');
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'the Resolver stays moved');
 		$this->assertSame([], $this->notices());
-		$this->assertContains('pfb_dns_proxy', array_column(config_get_path('installedpackages/service', []), 'name'));
+		$this->assertContains('pfb_dns_proxy', array_column($this->onDisk('installedpackages/service', []), 'name'),
+			'the registration is in config.xml, so a fresh read keeps it');
+	}
+
+	public function testAnUpgradeInstallWhoseProxyNeverServesStopsItAndGivesTheResolverBack(): void
+	{
+		// Given the same upgrade, and a proxy that lives and never publishes its marker
+		$this->activate(TRUE);
+		$this->upgradeInstallState();
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the rollback, which reads config.xml afresh, still reaches the service: the proxy is stopped and the Resolver
+		// has its saved settings back
+		$this->assertSame(['restart_service', 'stop_service'], $this->proxyCalls, 'the restart and the rollback\'s stop both reached the service');
+		$this->assertSame('', $this->toggleStored());
+		$this->assertResolverIsTheOriginal('rolled back');
+	}
+
+	public function testAnUpgradeInstallWithTheResolverNotMovedStopsTheProxyService(): void
+	{
+		// Given no Resolver snapshot (pfB-DNS off), in the state an upgrade runs the install command in
+		$this->activate(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		config_set_path(self::SAVED, '');
+		$this->upgradeInstallState();
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the proxy's rc script is written and its service stopped, nothing started
+		$this->assertSame(['stop_service'], $this->proxyCalls);
+		$this->assertArrayHasKey('pfb_dns_proxy.sh', $GLOBALS['pfb_test_rcfile_writes'] ?? [], 'the rc script is written');
 	}
 
 	public function testNothingIsWaitedOnUnderTheConfigLock(): void

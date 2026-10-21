@@ -5253,15 +5253,17 @@ function pfb_dns_proxy_deinstall(): bool {
 }
 
 /**
- * Append the services the package XML lists to this process's copy of config.xml, unless one of the same name is registered:
- * install_package_xml()'s "services" block, so other packages' entries and any of ours already there are untouched and none is
- * added twice. The caller persists it. The installer needs it too (issue #3562): an upgrade runs the install command after
- * delete_package_xml() deleted the registrations and before install_package_xml() adds them back.
+ * Repeat install_package_xml()'s "services" block on this process's copy of config.xml: append each service the package XML
+ * lists unless one of the same name is registered, so other packages' entries and any of ours already there are untouched and
+ * none is added twice. The caller persists it. The installer needs it too (issue #3562): an upgrade runs the install command
+ * after delete_package_xml() deleted the registrations and before install_package_xml() adds them back.
  *
  * @param array $listed the package XML's service entries
+ * @return bool TRUE iff a service was added
  */
-function pfb_package_services_register(array $listed): void {
+function pfb_package_services_register(array $listed): bool {
 	$services = config_get_path('installedpackages/service', []);
+	$added = FALSE;
 	foreach ($listed as $service) {
 		if (empty($service)) {
 			continue;
@@ -5275,8 +5277,12 @@ function pfb_package_services_register(array $listed): void {
 			}
 		}
 		$services[] = $service;
+		$added = TRUE;
 	}
-	config_set_path('installedpackages/service', $services);
+	if ($added) {
+		config_set_path('installedpackages/service', $services);
+	}
+	return $added;
 }
 
 /**

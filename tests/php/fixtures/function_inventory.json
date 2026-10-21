@@ -10727,7 +10727,7 @@
     },
     "pfb_package_services_register": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": [
             {
                 "name": "listed",

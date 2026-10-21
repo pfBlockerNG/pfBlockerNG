@@ -780,9 +780,12 @@ exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&
 // Create DNS proxy service once its runtime files are staged (it reads its module, lists and ini only at start):
 // restart it while the Resolver is moved aside for it and wait for it to become ready (a proxy that does not is rolled back,
 // with a notice), stop it otherwise. An upgrade runs this before install_package_xml() registers the services its removal deleted,
-// and start_service()/stop_service() act only on a registered one (issue #3562); install_package_xml() writes them with its config.
+// and start_service()/stop_service() act only on a registered one (issue #3562). The registration is written at once: a rollback
+// reads config.xml afresh, and its stop must reach the service too.
 update_status("Creating DNS proxy service...");
-pfb_package_services_register(parse_xml_config_pkg(PFB_PACKAGE_XML, 'packagegui')['service'] ?? []);
+if (pfb_package_services_register(parse_xml_config_pkg(PFB_PACKAGE_XML, 'packagegui')['service'] ?? [])) {
+	write_config('pfBlockerNG: registered the package services before the DNS proxy restart', FALSE, TRUE);
+}
 if (pfb_dns_proxy_saved() !== NULL) {
 	if (!pfb_dns_proxy_restart()) {
 		update_status(" the DNS proxy did not become ready (see the notices);");
