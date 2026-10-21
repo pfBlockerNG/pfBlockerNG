@@ -357,4 +357,81 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		$this->assertStringContainsString('is invalid', (string) $GLOBALS['input_errors'][0]);
 		$this->assertEmpty($GLOBALS['pfb_test_lock_held'] ?? FALSE, 'the refused reset still holds the DNS config lock');
 	}
+
+	/** A Resolver pfB-DNS never moved, in this request's copy and in config.xml, a masterfile, and the two default feed groups. */
+	private function seedNeverMovedResolverOnDisk(): void
+	{
+		$GLOBALS['config']['unbound'] = ['active_interface' => 'lan'];
+		config_set_path(self::SAVED, '');
+		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
+			$GLOBALS['pfb'][$file] = "{$this->dir}/{$file}";
+		}
+		mkdir($GLOBALS['pfb']['dbdir']);
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/masterfile", 'x');
+		file_put_contents("{$this->dir}/feeds.json", (string) json_encode([
+			'ipv4'  => ['PRI1' => ['description' => 'Primary', 'feeds' => []]],
+			'dnsbl' => ['ADs_Basic' => ['description' => 'Ads', 'feeds' => []]],
+		]));
+		$this->configXmlOnDisk();
+	}
+
+	public function testAPfbDnsEnableThatLandsBeforeTheResetTakesTheLockRefusesTheReset(): void
+	{
+		// Given a Resolver pfB-DNS never moved, and another save that enabled pfB-DNS after the restore read config.xml and
+		// before the reset took the lock: config.xml holds the move by the reset's own read, the first to see it
+		$this->seedNeverMovedResolverOnDisk();
+		$freshReads = 0;
+		$disk = $GLOBALS['pfb_test_config_read_hook'];
+		$GLOBALS['pfb_test_config_read_hook'] = function () use ($disk, &$freshReads): void {
+			if (end($GLOBALS['pfb_test_config_read_calls']) === [FALSE, FALSE] && ++$freshReads === 2) {
+				$this->disk['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode(self::BLOCK)];
+				$this->disk['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] = base64_encode((string) json_encode([
+					'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+					'enablessl'        => ['present' => FALSE, 'value' => NULL],
+					'custom_options'   => ['present' => FALSE, 'value' => NULL],
+				]));
+			}
+			$disk();
+		};
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: this request\'s copy shows nothing moved');
+
+		// When the wizard resets
+		try {
+			step4_submitphpaction();
+		} catch (\Throwable $e) {
+			$this->fail('the reset ran past the Resolver guard on a Resolver the other save moved: ' . $e->getMessage());
+		}
+
+		// Then the reset is refused with the DNS proxy as the cause, nothing was written, and config.xml keeps the move
+		$errors = array_filter($GLOBALS['input_errors'], static fn ($e): bool => is_string($e) && str_contains($e, 'could not be put back'));
+		$this->assertCount(1, $errors, 'the reset names the DNS proxy as the cause: ' . json_encode($GLOBALS['input_errors']));
+		$this->assertNotContains(self::RESET_WRITE, $GLOBALS['pfb_test_write_config_calls'] ?? [], 'the reset wrote nothing');
+		$this->assertNotSame('', (string) $this->onDisk(self::SAVED, ''), 'the snapshot the other save stored is kept');
+		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'and so is the Resolver it moved');
+	}
+
+	public function testTheResetDeletesThePackageFilesOnlyAfterItsWriteLetGoOfTheLock(): void
+	{
+		// Given a Resolver pfB-DNS never moved and a masterfile; the reset's write records what it saw
+		$this->seedNeverMovedResolverOnDisk();
+		$masterfile = "{$GLOBALS['pfb']['dbdir']}/masterfile";
+		$atWrite = NULL;
+		$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use ($masterfile, &$atWrite): void {
+			if ($description === self::RESET_WRITE) {
+				$atWrite = ['lock held' => !empty($GLOBALS['pfb_test_lock_held']), 'masterfile' => file_exists($masterfile)];
+				throw new \RuntimeException(self::RESET_WRITE);
+			}
+		};
+
+		// When the wizard resets, up to and including the write of its default configuration
+		try {
+			step4_submitphpaction();
+			$this->fail('the reset must reach its configuration write');
+		} catch (\RuntimeException $stop) {
+			$this->assertSame(self::RESET_WRITE, $stop->getMessage());
+		}
+
+		// Then the write ran under the lock with the package files still there: deleting them is no part of the locked work
+		$this->assertSame(['lock held' => TRUE, 'masterfile' => TRUE], $atWrite);
+	}
 }

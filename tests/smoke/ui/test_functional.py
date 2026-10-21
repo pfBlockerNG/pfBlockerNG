@@ -2741,8 +2741,8 @@ FINISH_CASES = {
 }
 
 
-def _guest_ok(vm: helpers.SmokeVM, *argv: str) -> None:
-    result = vm.ssh(*argv, timeout=60.0)
+def _guest_ok(vm: helpers.SmokeVM, *argv: str, timeout: float = 60.0) -> None:
+    result = vm.ssh(*argv, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"guest command {argv!r} failed: rc={result.returncode} stderr={result.stderr!r}")
 
@@ -2888,7 +2888,7 @@ def test_a_refused_wizard_finish_keeps_the_data_and_renders_the_finalize_step(
                 _guest_ok(vm, "/bin/rm", "-f", PFB_MASTERFILE)
 
 
-WIZARD_DB_BACKUP = "/root/pfb_wizard_finish_db.tgz"
+WIZARD_DB_BACKUP = "/root/pfb_wizard_finish_db.tar"
 
 
 def test_a_wizard_finish_with_no_concurrent_save_writes_the_reset_and_sweeps_the_files(
@@ -2906,7 +2906,7 @@ def test_a_wizard_finish_with_no_concurrent_save_writes_the_reset_and_sweeps_the
     token = uuid.uuid4().hex
     sentinel_cfg = "installedpackages/pfblockerngwizardsentinel/config/0/uitest"
     _guest_ok(vm, "/bin/cp", "/conf/config.xml", WIZARD_CONFIG_BACKUP)
-    _guest_ok(vm, "/usr/bin/tar", "-czf", WIZARD_DB_BACKUP, "-C", "/var/db", "pfblockerng")
+    _guest_ok(vm, "/usr/bin/tar", "-cf", WIZARD_DB_BACKUP, "-C", "/var/db", "pfblockerng", timeout=SAVE_TIMEOUT)
     try:
         assert vm.ssh("/bin/test", "-s", PFB_FEEDS_JSON).returncode == 0, "precondition: packaged feeds JSON is missing"
         _guest_ok(vm, f"printf '%s' {shlex.quote(token)} > {shlex.quote(PFB_MASTERFILE)}")
@@ -2938,7 +2938,7 @@ def test_a_wizard_finish_with_no_concurrent_save_writes_the_reset_and_sweeps_the
             helpers.restore_pfb_config_baseline(vm, snapshot_path=WIZARD_CONFIG_BACKUP)
         finally:
             _guest_ok(vm, "/bin/rm", "-rf", "/var/db/pfblockerng")
-            _guest_ok(vm, "/usr/bin/tar", "-xzf", WIZARD_DB_BACKUP, "-C", "/var/db")
+            _guest_ok(vm, "/usr/bin/tar", "-xf", WIZARD_DB_BACKUP, "-C", "/var/db", timeout=SAVE_TIMEOUT)
             _guest_ok(vm, "/bin/rm", "-f", WIZARD_DB_BACKUP)
 
 
