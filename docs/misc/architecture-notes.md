@@ -681,7 +681,7 @@ every client port held, and a decider that exits at every start, with the packag
 
 **Startup check (issue #3538).** "Ready" says the gateway serves; it does not say it serves every address the rc script names (an
 address that cannot be bound is logged and skipped, plain.go and tlsbind.go). After every start, `pfb_dns_proxy_confirm_ready()` runs
-`pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool` and waits for nothing itself: ready, with `TRUE`; not ready,
+`pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool` and its only wait is the bounded log poll: ready, with `TRUE`; not ready,
 with `FALSE` and BEFORE the rollback, which consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
 stored, no update pass runs and a gateway pidfile is live (with none live it waits for nothing). The boot hook backgrounds
 `php -f pfblockerng.inc dns_check` under `timeout(1)` (certificate sync, then, while a snapshot is stored, the same confirmation),
@@ -707,7 +707,7 @@ a log with no `ready upstream` line is: nothing filed, nothing closed. With no `
 the latest segment of the log's last 64 KiB is judged at once. The last `pfb_dns_gateway:` line of a start that never became ready is
 searched the same way, only in the bytes after `$since`, so an error of an older start is never quoted for this one (none is quoted when
 this start logged none); with no `$since` it is searched in the whole tail. Pinned by `DnsProxyStartupCheckTest`,
-`DnsProxyStartupCheckCurrentStartTest` and `DnsProxyBootTest`.
+`DnsProxyStartupCheckCurrentStartTest`, `DnsProxyBootTest` and `DnsProxyActivationRollbackTest`.
 
 **Status panel transports (issues #3548, #3555).** The pfB-DNS tab's status (`pfb_dns_status()`) has an entry per transport: plain DNS,
 DoT, DoH and DoQ. It reads the same two helpers as the startup check: `pfb_dns_proxy_listeners()` (the complete start's
@@ -778,11 +778,11 @@ pfSense master and confirmed on the live box by the reboot smoke), before it sta
 Resolver restart. pfB-DNS therefore keeps the python keys naming the observer in every mode, and ships
 `dns_proxy/pfb_upstream_observer_include.inc` (in `PFB_PY_SHIPPED`, staged flat into `/var/unbound`), which runs
 `pfb_dns_proxy.sh start` in the background unless a pidfile (the proxy's or its supervisor's) is live, and backgrounds beside it a
-bounded `timeout(1)` run (300 s) of `pfblockerng.inc dns_check <size>` (the confirmation and the startup check above, told the log's size from before the start: a start that never becomes ready is rolled back there; the hook itself still waits for nothing), with core
+bounded `timeout(1)` run (360 s) of `pfblockerng.inc dns_check <size>` (the confirmation and the startup check above, told the log's size from before the start: a start that never becomes ready is rolled back there; the hook itself still waits for nothing), with core
 functions only (the non-verbose boot path loads none of pfBlockerNG; the rc script itself refuses without a snapshot). The
 same hook keeps the proxy up after any Resolver restart from the GUI. On a RAM-disk `/var` the restore earlyshellcmd
 (`pfb_dnsbl_cache('conf')`) is registered while DNSBL or pfB-DNS is on, so the hook is staged before rc.bootup. Pinned by
-`DnsProxyBootTest`, `tests/test_dnsbl_chroot_teardown_contract.py` and the reboot test in `tests/smoke/test_smoke_dns_proxy.py`:
+`DnsProxyBootTest`, `DnsProxyActivationRollbackTest`, `tests/test_dnsbl_chroot_teardown_contract.py` and the reboot test in `tests/smoke/test_smoke_dns_proxy.py`:
 a probe it plants in `/etc/rc.custom_boot_early` queries 127.0.0.1:53 from early boot, the first correct answers must come
 before `rc.start_packages` begins, and the proxy must keep its pids and keep answering through the package stage. It
 prints the daemon launch, the listening socket, Unbound's process start, the first correct answers and Unbound's sync as
