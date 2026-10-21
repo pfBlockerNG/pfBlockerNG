@@ -632,7 +632,8 @@ selected port, or correct the Listen Port and apply. Retry removal after DNS is 
 The rc script passes `--ready-file /var/unbound/pfb_dns_ready` (`$pfb['dns_proxy_ready']`) to the gateway; the gateway writes its own PID
 there (atomically, mode 0600, as `unbound`, in the chroot directory the module already writes to) only after its sockets
 are bound, its privileges dropped and its decider has sent READY (the module booted, the reply log or observer socket made), and removes it
-at shutdown only while it still names itself. PHP calls the proxy ready iff the child pidfile
+at shutdown only while it still names itself. The complete startup log record is `ready upstream <host>:<port> pid <pid>`,
+with that same gateway PID; the marker remains PID-only. PHP calls the proxy ready iff the child pidfile
 (`$pfb['dns_proxy_pidfile']`) names a live process AND the marker holds that same decimal PID: a live process that never
 published one (a listener that cannot bind, which the supervisor restarts every 5 s), a marker an earlier incarnation left,
 a live supervisor alone and a marker with no live child are all NOT ready. `pfb_dns_proxy_running()` stays the pidfile-only
@@ -693,12 +694,16 @@ this start logged none); with no `$since` it is searched in the whole tail. Pinn
 `DnsProxyStartupCheckCurrentStartTest` and `DnsProxyBootTest`.
 
 **Status panel transports (issue #3548).** The pfB-DNS tab's status (`pfb_dns_status()`) has one row per transport: plain DNS,
-DoT, DoH and DoQ. It reads the same two helpers as the startup check: `pfb_dns_proxy_listeners()` (the current start's
-`listening` and `cannot listen on` lines, with no `$since`) and `pfb_dns_proxy_command_listeners()` (the rc script's addresses),
-so the panel and the notice never judge different starts. A row is `Off` when its toggle is off and the running service has no
-listeners for it. With the proxy Running it lists what the start bound, then each command address it did not bind as not listening,
-with the logged reason. A saved toggle, interface or port change cannot replace that evidence before an Update applies it.
-Not running, or with no `ready upstream` line in the log, it lists the command's addresses labelled as configured.
+DoT, DoH and DoQ. It reads the same two helpers as the startup check: `pfb_dns_proxy_listeners()` (the complete start's
+`listening` and `cannot listen on` lines, with no `$since`) and `pfb_dns_proxy_command_listeners()` (the rc script's addresses).
+The status reader also supplies the readiness-marker PID: the latest complete `ready upstream` record must end in a space
+followed by `pid <pid>`, or bindings remain unconfirmed. It never searches backward for an earlier matching PID. This covers the interval
+between publishing the PID marker and daemon(8) relaying the log, including automatic child respawn and same-address restarts;
+the startup check's default parsing and notices remain unchanged.
+A row is `Off` when its toggle is off and the running service has no listeners for it. With the proxy Running it lists what
+the matching start bound, then each command address it did not bind as not listening, with the logged reason. A saved toggle,
+interface or port change cannot replace that evidence before an Update applies it. Not running, or with no matching PID-ready
+record in the log (including untagged records from an older gateway), it lists the command's addresses labelled as configured.
 Pinned by `PfbDnsStatusTest`.
 
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror

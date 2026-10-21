@@ -10,10 +10,11 @@
 //
 //	listening udp+tcp <host>:<port>     one per bound --listen address
 //	listening dot|doh|doq <host>:<port> one per bound TLS listener
-//	ready upstream <host>:<port>
+//	ready upstream <host>:<port> pid <pid>
 //
 // --ready-file PATH: the gateway writes its own pid there, mode 0600, once it serves, and removes the file at stop
 // while the file still names it.
+// The ready upstream line logs the same pid the ready file holds.
 package main
 
 import (
@@ -373,7 +374,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		logf("listening udp+tcp %s", l.addr())
 	}
 	secure.report(logf)
-	logf("ready upstream %s", cfg.upstream)
+	logf("ready upstream %s pid %d", cfg.upstream, os.Getpid())
 	go s.watch()
 	return s, nil
 }

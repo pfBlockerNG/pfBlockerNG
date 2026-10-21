@@ -4931,23 +4931,28 @@ function pfb_dns_proxy_host_port(string $host, string $port): string {
 }
 
 /**
- * What the gateway's current start reported, from its log lines from $since on (pfb_dns_proxy_log_lines()): the lines after the
- * second-to-last `ready upstream` line and up to the last one. pfb_dns_proxy_startup_check() and pfb_dns_status() both read it, so
- * the notice and the status panel judge the same start.
+ * What the gateway's latest complete start reported, from its log lines from $since on (pfb_dns_proxy_log_lines()): the lines after
+ * the second-to-last `ready upstream` line and up to the last one. Both the startup check and status panel use this parser.
+ *
+ * @param string|null $pid the status panel's readiness-marker PID: the latest complete record must end in ` pid <pid>`, else
+ *        NULL is returned until that child's log arrives. NULL keeps the startup check's PID-agnostic parsing, including legacy logs
  *
  * @return array{listening: array<string, array<string, true>>, refused: array<string, string>}|null NULL when the lines hold no
  *         `ready upstream` line (rotated, truncated, or a start that has not logged it yet). `listening`: kind (udp+tcp, dot, doh,
  *         doq) => each host:port of a `listening <kind> <host:port>` line, in log order; `refused`: host:port => the reason of its
  *         `cannot listen on <host:port>: <reason>` line. Every host:port as pfb_dns_proxy_host_port() spells it
  */
-function pfb_dns_proxy_listeners(?int $since = NULL): ?array {
+function pfb_dns_proxy_listeners(?int $since = NULL, ?string $pid = NULL): ?array {
 	$lines = pfb_dns_proxy_log_lines($since);
 	$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
 	if ($ends === []) {
 		return NULL;
 	}
-	$listeners = ['listening' => [], 'refused' => []];
 	$last = (int) end($ends);
+	if ($pid !== NULL && (!ctype_digit($pid) || $pid[0] === '0' || !str_ends_with($lines[$last], " pid {$pid}"))) {
+		return NULL;
+	}
+	$listeners = ['listening' => [], 'refused' => []];
 	$from = (count($ends) > 1) ? $ends[count($ends) - 2] + 1 : 0;
 	foreach (array_slice($lines, $from, $last - $from) as $line) {
 		if (preg_match('/^listening (udp\+tcp|dot|doh|doq) \[?([0-9A-Fa-f:.]+)\]?:([0-9]+)$/', $line, $found) === 1) {
@@ -14111,10 +14116,10 @@ function pfb_dns_proxy_port(): string {
  * What the pfB-DNS tab's status panel shows, as text: the service, the mode, and a row per transport (plain DNS, DoT, DoH, DoQ). The box is
  * moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that is on while nothing is moved is never running: it is said
  * not to be active, with the reason (pfBlockerNG or the Resolver disabled, or the Resolver not moved yet or refused), and claims no transport (`-`).
- * A running proxy lists what its current start bound (pfb_dns_proxy_listeners()), then each address the rc script's command names
- * (pfb_dns_proxy_command_listeners()) that it did not bind, as not listening with the logged reason. A saved toggle change cannot hide
- * those listeners before Update applies it. A transport with its toggle off and no active listeners is `Off`; a proxy that is not running,
- * or whose log holds no start, lists the command's addresses labelled as configured.
+ * A running proxy lists what its current start bound (pfb_dns_proxy_listeners(), matched to its readiness-marker PID), then each address the
+ * rc script's command names (pfb_dns_proxy_command_listeners()) that it did not bind, as not listening with the logged reason. A saved toggle
+ * change cannot hide those listeners before Update applies it. A transport with its toggle off and no active listeners is `Off`; a proxy that
+ * is not running, or whose latest complete log record does not match its PID, lists the command's addresses labelled as configured.
  *
  * @return array{service:string,mode:string,plain:string,dot:string,doh:string,doq:string}
  */
@@ -14168,7 +14173,9 @@ function pfb_dns_status(): array {
 	}
 
 	$configured = pfb_dns_proxy_command_listeners();
-	$listeners = ($service === 'Running') ? pfb_dns_proxy_listeners() : NULL;
+	$listeners = ($service === 'Running')
+	    ? pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"))
+	    : NULL;
 	$label = ($service === 'Running') ? 'Configured (not confirmed by the log): ' : 'Configured (not bound): ';
 	$status = ['service' => $service, 'mode' => $mode];
 	foreach (['plain' => 'udp+tcp', 'dot' => 'dot', 'doh' => 'doh', 'doq' => 'doq'] as $row => $kind) {
