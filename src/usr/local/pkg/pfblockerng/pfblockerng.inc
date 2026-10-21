@@ -3116,10 +3116,14 @@ function pfb_dnsbl_vip_candidates(int $family): array {
 // (inc:746/:753). Pure: enumerates state, creates/changes nothing. $interface is
 // accepted for parity with the create path and future per-interface scoping; the
 // conflict checks here are interface-independent (a VIP/subnet conflict anywhere is
-// disqualifying).
-function pfb_pick_free_dnsbl_vip(int $family, string $interface): ?string {
+// disqualifying). issue #3540: a non-NULL $address narrows the list to that one
+// candidate (NULL if it is not a candidate string), so a policy receiver follows its sender.
+function pfb_pick_free_dnsbl_vip(int $family, string $interface, ?string $address = NULL): ?string {
 
 	$candidates = pfb_dnsbl_vip_candidates($family);
+	if ($address !== NULL) {
+		$candidates = in_array($address, $candidates, TRUE) ? [$address] : [];
+	}
 	if (empty($candidates)) {
 		return null;
 	}
@@ -3230,8 +3234,11 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 // address-drifted VIP is NEVER deleted. Apply order matches upstream firewall_virtual_ip.inc.
 // PFBL-01: $interface must pass pfb_filter(PFB_FILTER_WORD) before use, else the run aborts;
 // pinned by tests/php/PfbFilterContractTest.php.
+// issue #3540: a policy receiver creates the VIP only at the synced pfb_dnsvip_auto4/6 address (not free =
+// no VIP + $pfb['dnsbl_vip_conflict'] finding); any other node publishes the address it uses.
 function pfb_manage_dnsbl_vip(string $mode): void {
 	global $pfb;
+	$pfb['dnsbl_vip_conflict'] = [];
 
 	// Only the two lifecycle modes drive VIP management; anything else is a no-op.
 	if ($mode !== 'enabled' && $mode !== 'disabled') {
@@ -3252,6 +3259,9 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 		return;
 	}
 
+	// issue #3540: a node that accepted a policy payload follows its sender's synced address.
+	$receiver = pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'] !== NULL;
+
 	$dnsblcfg_path = 'installedpackages/pfblockerngdnsblsettings/config/0';
 
 	// NOTE: the enabled+auto-OFF case deliberately does NOT early-return. It falls through
@@ -3265,13 +3275,16 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	// (provisioned here; not yet made mandatory in that case).
 	$want_v6 = !empty($pfb['dnsblconfig']['pfb_dnsvip6']) || pfb_unbound_listens_v6();
 
-	// Per-family descriptor table: marker, AF, subnet_bits, the stored-id config key.
+	// Per-family descriptor table: marker, AF, subnet_bits, the stored-id config key, the
+	// synced-address config key and the family label of a conflict finding.
 	$families = [
 		[
 			'marker'   => PFB_AUTO_VIP_DESCR_V4,
 			'family'   => AF_INET,
 			'bits'     => 32,
 			'idkey'    => 'pfb_dnsvip4',
+			'addrkey'  => 'pfb_dnsvip_auto4',
+			'label'    => 'IPv4',
 			'managed'  => ($serve && $auto),	// v4 always managed on create
 		],
 		[
@@ -3279,6 +3292,8 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 			'family'   => AF_INET6,
 			'bits'     => 128,
 			'idkey'    => 'pfb_dnsvip6',
+			'addrkey'  => 'pfb_dnsvip_auto6',
+			'label'    => 'IPv6',
 			'managed'  => ($serve && $auto && $want_v6),
 		],
 	];
@@ -3286,57 +3301,15 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	$vips_config = config_get_path('virtualip/vip', []);
 	$dnsblconfig = config_get_path($dnsblcfg_path, []);
 	$changed     = FALSE;
+	$conflicts   = [];
 
 	foreach ($families as $fam) {
-		if ($fam['managed']) {
-			// CREATE / ENSURE (idempotent). Reuse an existing marked VIP if present
-			// (match on marker alone — its address is whatever we created earlier),
-			// else pick a free candidate and create one.
-			$idx = pfb_find_marked_vip($vips_config, $fam['marker'], null);
-			if ($idx !== null) {
-				$vip    = $vips_config[$idx];
-				$uniqid = $vip['uniqid'] ?? uniqid();
-				if (!isset($vip['uniqid'])) {
-					$vips_config[$idx]['uniqid'] = $uniqid;
-					$changed = TRUE;
-				}
-				// Reconcile the interface: if dnsbl_interface changed while auto stayed on, a
-				// reused VIP would otherwise keep its old interface and pfb_validate_vips()
-				// would force-disable DNSBL on the mismatch. Bring the stale alias down and
-				// repoint it (the apply block below re-adds it live on the configured interface).
-				if (($vip['interface'] ?? '') !== $interface) {
-					interface_vip_bring_down($vips_config[$idx]);
-					$vips_config[$idx]['interface'] = $interface;
-					$changed = TRUE;
-				}
-			} else {
-				$address = pfb_pick_free_dnsbl_vip($fam['family'], $interface);
-				if ($address === null) {
-					// No free candidate -> do not create; leave config as-is and log.
-					pfb_logger("\nDNSBL auto-VIP: no free {$fam['marker']} address available; not created", 1);
-					continue;
-				}
-				$uniqid = uniqid();
-				$vips_config[] = [
-					'mode'        => 'ipalias',
-					'interface'   => $interface,
-					'type'        => 'single',
-					'subnet'      => $address,
-					'subnet_bits' => (string) $fam['bits'],
-					'descr'       => $fam['marker'],
-					'uniqid'      => $uniqid,
-				];
-				$changed = TRUE;
-				pfb_logger("\nDNSBL auto-VIP: created {$fam['marker']} at {$address}/{$fam['bits']} on {$interface}", 1);
-			}
+		$synced = $receiver ? (string) ($dnsblconfig[$fam['addrkey']] ?? '') : '';
+		$idx    = pfb_find_marked_vip($vips_config, $fam['marker'], null);
+		// issue #3540: a marked VIP away from the synced address is replaced, not reused.
+		$stale  = $fam['managed'] && $idx !== null && $synced !== '' && ($vips_config[$idx]['subnet'] ?? '') !== $synced;
 
-			// Point the stored DNSBL settings id at this VIP.
-			$vip_id = "_vip{$uniqid}";
-			if (($dnsblconfig[$fam['idkey']] ?? '') !== $vip_id) {
-				$dnsblconfig[$fam['idkey']] = $vip_id;
-				$changed = TRUE;
-			}
-		} else {
+		if (!$fam['managed'] || $stale) {
 			// DELETE (marker + IP-match only). The address must match what the stored
 			// config currently resolves to, so we never delete a marked VIP that is no
 			// longer the one our config points at, and never an unmarked VIP.
@@ -3363,15 +3336,83 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 			interface_vip_bring_down($found_row);
 			pfb_logger("\nDNSBL auto-VIP: removed {$fam['marker']} at {$match_ip}", 1);
 			pfb_remove_managed_obj('virtualip/vip', $fam['marker'], $guard);
-			// Re-sync $vips_config from global config (pfb_remove_managed_obj wrote it back).
-			$vips_config = config_get_path('virtualip/vip', []);
+			// issue #3540: drop the same rows from $vips_config; a re-read would lose rows added earlier in this call.
+			$vips_config = array_values(array_filter($vips_config, static fn ($row): bool => !(pfb_managed_obj_match($row, $fam['marker']) && $guard($row))));
 
 			if (!empty($dnsblconfig[$fam['idkey']])) {
 				unset($dnsblconfig[$fam['idkey']]);
 			}
+			if (!$receiver) {
+				unset($dnsblconfig[$fam['addrkey']]);
+			}
+			$changed = TRUE;
+			if (!$fam['managed']) {
+				continue;
+			}
+			$idx = null;
+		}
+
+		// CREATE / ENSURE (idempotent). Reuse an existing marked VIP if present
+		// (match on marker alone — its address is whatever we created earlier),
+		// else pick a free candidate and create one.
+		if ($idx !== null) {
+			$vip     = $vips_config[$idx];
+			$uniqid  = $vip['uniqid'] ?? uniqid();
+			$address = (string) ($vip['subnet'] ?? '');
+			if (!isset($vip['uniqid'])) {
+				$vips_config[$idx]['uniqid'] = $uniqid;
+				$changed = TRUE;
+			}
+			// Reconcile the interface: if dnsbl_interface changed while auto stayed on, a
+			// reused VIP would otherwise keep its old interface and pfb_validate_vips()
+			// would force-disable DNSBL on the mismatch. Bring the stale alias down and
+			// repoint it (the apply block below re-adds it live on the configured interface).
+			if (($vip['interface'] ?? '') !== $interface) {
+				interface_vip_bring_down($vips_config[$idx]);
+				$vips_config[$idx]['interface'] = $interface;
+				$changed = TRUE;
+			}
+		} else {
+			$address = pfb_pick_free_dnsbl_vip($fam['family'], $interface, $synced !== '' ? $synced : NULL);
+			if ($address === null) {
+				if ($synced !== '') {
+					// issue #3540: the synced address is taken here -> no VIP; reported as a Sync finding.
+					$conflicts[] = $fam['label'];
+					pfb_logger("\nDNSBL auto-VIP: synced {$fam['marker']} address [ " . substr(htmlspecialchars($synced), 0, 100) . " ] is not free on this node; not created", 1);
+				} else {
+					// No free candidate -> do not create; leave config as-is and log.
+					pfb_logger("\nDNSBL auto-VIP: no free {$fam['marker']} address available; not created", 1);
+				}
+				continue;
+			}
+			$uniqid = uniqid();
+			$vips_config[] = [
+				'mode'        => 'ipalias',
+				'interface'   => $interface,
+				'type'        => 'single',
+				'subnet'      => $address,
+				'subnet_bits' => (string) $fam['bits'],
+				'descr'       => $fam['marker'],
+				'uniqid'      => $uniqid,
+			];
+			$changed = TRUE;
+			pfb_logger("\nDNSBL auto-VIP: created {$fam['marker']} at {$address}/{$fam['bits']} on {$interface}", 1);
+		}
+
+		// Point the stored DNSBL settings id at this VIP.
+		$vip_id = "_vip{$uniqid}";
+		if (($dnsblconfig[$fam['idkey']] ?? '') !== $vip_id) {
+			$dnsblconfig[$fam['idkey']] = $vip_id;
+			$changed = TRUE;
+		}
+		// issue #3540: publish the address in use for the policy receivers; a receiver never writes it.
+		if (!$receiver && ($dnsblconfig[$fam['addrkey']] ?? '') !== $address) {
+			$dnsblconfig[$fam['addrkey']] = $address;
 			$changed = TRUE;
 		}
 	}
+
+	$pfb['dnsbl_vip_conflict'] = $conflicts;
 
 	if (!$changed) {
 		return;
@@ -25347,7 +25388,7 @@ function pfb_blacklist_reg_providers(string $usage_glob = '/usr/local/pkg/pfbloc
  * Facts about received policy that cannot take effect on this node, read from the state the apply pass
  * just used. Names and flags only, never a credential, VIP address or interface.
  *
- * @return array{vip_disabled: bool, maxmind_missing: list<string>, asn_token_missing: bool, top1m_token_missing: bool, reserved_headers: list<string>, blacklist_missing: list<string>}
+ * @return array{vip_disabled: bool, maxmind_missing: list<string>, asn_token_missing: bool, top1m_token_missing: bool, reserved_headers: list<string>, blacklist_missing: list<string>, vip_conflict: list<string>}
  */
 function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblockerng/*_global_usage'): array {
 	global $pfb;
@@ -25410,6 +25451,7 @@ function pfb_sync_effective_facts(string $usage_glob = '/usr/local/pkg/pfblocker
 		'reserved_headers'    => array_values($pfb['reserved_header_skips'] ?? array()),
 		'blacklist_missing'   => $blacklist_missing,
 		'drift'               => pfb_sync_receive_drift($pfb['dbdir']) === TRUE,
+		'vip_conflict'        => array_values($pfb['dnsbl_vip_conflict'] ?? array()),
 	);
 }
 
@@ -25441,6 +25483,9 @@ function pfb_sync_effective_findings(array $facts): array {
 	}
 	if (!empty($facts['drift'])) {
 		$findings[] = 'Policy changed locally since the last accepted receive';
+	}
+	foreach (($facts['vip_conflict'] ?? array()) as $family) {
+		$findings[] = "DNSBL auto-VIP: the synced {$family} address is not free on this node";
 	}
 	$findings = array_values(array_unique($findings));
 	sort($findings, SORT_STRING);

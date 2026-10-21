@@ -1317,6 +1317,24 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
+		// issue #3540: address of this node's auto-created IPv4 sinkhole VIP, synced so a policy receiver provisions at it.
+		'dnsbl/pfb_dnsvip_auto4' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => '#3540 new field; absent = no synced auto-VIP address = prior behaviour',
+		],
+
+		// issue #3540: address of this node's auto-created IPv6 sinkhole VIP, synced so a policy receiver provisions at it.
+		'dnsbl/pfb_dnsvip_auto6' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'policy',
+			'no_grandfather' => '#3540 new field; absent = no synced auto-VIP address = prior behaviour',
+		],
+
 		// DNSBL lighttpd HTTP port. Default '8081' (the page/save contract since 3.2).
 		// pfb_registry_pass seeds this on a fresh install, so apply no longer hits
 		// "DNSBL Ports are not defined" on a never-saved config.

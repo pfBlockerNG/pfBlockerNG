@@ -169,6 +169,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip6',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto4',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto6',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport_ssl',
 		'installedpackages/pfblockerngdnsblsettings/config/0/top1m_enable',

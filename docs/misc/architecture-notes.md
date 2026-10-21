@@ -1039,8 +1039,11 @@ sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
   provisions the ULA candidate `fd00:53:53:53:53:53:53:53`; manual mode is recommended-but-not-required — with no v6 VIP,
   pfBlockerNG logs a non-blocking warning and keeps running on IPv4 (AAAA simply not sinkholed),
   never force-disabling DNSBL.
-- **HA/CARP.** `pfb_dnsvip_auto` and the address live in `config.xml` and replicate; each node
-  creates/removes its own node-local `lo0` IP-Alias VIP on its own enable/disable pass.
+- **HA/CARP.** The chosen address syncs as policy `pfb_dnsvip_auto4/6`; the ids, `pfb_dnsvip_auto` and the
+  interface stay local. A receiver (a node holding an accepted policy digest, #3453) creates its own IP-Alias
+  VIP at the synced address and moves a marked VIP found elsewhere; when the address is not free it creates
+  none, logs it and records the Sync finding. With no synced address it picks its own. Any other node (never
+  received policy, or its Sync page saved since) picks as before and publishes its address. No CARP-type VIPs.
 
 See [`legacy/ADRs/ADR_13_Auto_DNSBL_VIP/`](../../legacy/ADRs/ADR_13_Auto_DNSBL_VIP/).
 
