@@ -341,10 +341,14 @@ def test_status_panel_is_a_table_per_transport_with_a_titled_icon_for_each_state
         assert loopback.nth(2).locator(".sr-only").text_content() == "Configured, not bound"
 
         for key in ("dot", "doh", "doq"):
-            assert panel.locator(f"#pfb-dns-status-{key} tbody").count() == 1, (
-                f"{key}: an off transport keeps its table"
-            )
-            assert panel.locator(f"#pfb-dns-status-{key} tbody tr").count() == 0, f"{key} is off: its table is empty"
+            block = panel.locator(f"#pfb-dns-status-{key}")
+            assert block.locator("tbody").count() == 1, f"{key}: an off transport keeps its table"
+            shown = block.locator("tbody tr").count()
+            if shown:
+                stored = helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_{key}")
+                pytest.fail(
+                    f"{key} is off ({stored!r} stored): its table must be empty, it has {shown}: {block.inner_html()}"
+                )
         _shot(page, screenshot_dir, "dns_status_tables")
     finally:
         for key, state in originals.items():
