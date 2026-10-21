@@ -399,6 +399,41 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame(['restart_service', 'stop_service'], $this->proxyCalls);
 	}
 
+	public function testAnUpgradeInstallRestartsTheProxyThatPfSenseUnregisteredBeforeTheInstallCommand(): void
+	{
+		// Given a moved Resolver and a proxy that serves once started, in the state a package upgrade runs the install command in
+		// (issue #3562): delete_package_xml() deleted the package's service registrations, install_package_xml() adds them back only
+		// after the command, and pfSense's start_service() and stop_service() act only on a registered service
+		$this->activate(TRUE);
+		$this->behaviour = 'serves';
+		$GLOBALS['config']['installedpackages']['service'] = [['name' => 'squid', 'rcfile' => 'squid.sh']];
+		$proxy = $GLOBALS['pfb_test_service_hook'];
+		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use ($proxy): void {
+			if (in_array($service, array_column(config_get_path('installedpackages/service', []), 'name'), TRUE)) {
+				$proxy($fn, $service);
+			}
+		};
+
+		// When the installer's DNS proxy block runs, as shipped
+		$install = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
+		$from = strpos($install, '// Create DNS proxy service once its runtime files are staged');
+		$to = strpos($install, 'if ($ufound) {', (int) $from);
+		$this->assertIsInt($from, 'test bootstrap: the installer\'s proxy block lost its start anchor');
+		$this->assertIsInt($to, 'test bootstrap: the installer\'s proxy block lost its end anchor');
+		(static function (string $code): void {
+			global $pfb;
+			eval($code);
+		})(substr($install, $from, $to - $from));
+
+		// Then the proxy was restarted and serves: pfB-DNS stays on, the Resolver stays moved, nothing is rolled back
+		$this->assertSame(['restart_service'], $this->proxyCalls, 'the restart reached a registered service');
+		$this->assertTrue(pfb_dns_proxy_ready());
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is not turned off');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the Resolver stays moved');
+		$this->assertSame([], $this->notices());
+		$this->assertContains('pfb_dns_proxy', array_column(config_get_path('installedpackages/service', []), 'name'));
+	}
+
 	public function testNothingIsWaitedOnUnderTheConfigLock(): void
 	{
 		// Given a proxy that lives and never serves: every liveness probe while PHP waits notes whether the lock is held

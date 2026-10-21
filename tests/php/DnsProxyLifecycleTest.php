@@ -703,19 +703,14 @@ final class DnsProxyLifecycleTest extends TestCase
 
 	public function testTheInstallerSyncsTheProxyServiceRightAfterStagingItsRuntimeFiles(): void
 	{
-		// The installer is a script that runs at include time, so its wiring is pinned in the source. The proxy
-		// reads its module, lists and ini only at start: it is restarted (or stopped) only once the staging
-		// command has copied the new modules into /var/unbound. While the Resolver is moved the proxy is
-		// restarted (which regenerates its script first); otherwise the script is still written, for later
-		// starts and stops, and the proxy is stopped.
+		// The installer is a script that runs at include time, so its order is pinned in the source: the proxy reads its module,
+		// lists and ini only at start, so its block runs only once the staging command has copied the new modules into
+		// /var/unbound. What the block does is run as shipped in DnsProxyActivationRollbackTest.
 		$install = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
 		$stage = "exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');";
 		$this->assertSame(1, substr_count($install, $stage), 'test bootstrap: the installer stages the module files once');
-
-		$sync = "update_status(\"Creating DNS proxy service...\"); if (pfb_dns_proxy_saved() !== NULL) { if (!pfb_dns_proxy_restart()) { update_status(\" the DNS proxy did not become ready (see the notices);\"); } } else { pfb_dns_proxy_service(); stop_service('pfb_dns_proxy'); }";
-		$this->assertSame(1, substr_count($install, $sync), 'the installer must restart the proxy while moved and say when it did not become ready, else write its script and stop it');
-		$this->assertStringContainsString($stage . ' ' . $sync, $install, 'the proxy block follows the staging command, with nothing in between');
-		$this->assertStringNotContainsString('pfb_dns_proxy_service_sync', $install, 'the one-caller wrapper is gone');
+		$this->assertStringContainsString($stage . ' update_status("Creating DNS proxy service...");', $install,
+			'the proxy block follows the staging command, with nothing in between');
 	}
 
 	// -----------------------------------------------------------------------

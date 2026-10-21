@@ -10725,6 +10725,19 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_package_services_register": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "listed",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_page_anchor_layout": {
         "returnsRef": false,
         "returnType": "array",

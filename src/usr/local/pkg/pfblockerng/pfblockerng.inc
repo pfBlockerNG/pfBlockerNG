@@ -5253,6 +5253,33 @@ function pfb_dns_proxy_deinstall(): bool {
 }
 
 /**
+ * Append the services the package XML lists to this process's copy of config.xml, unless one of the same name is registered:
+ * install_package_xml()'s "services" block, so other packages' entries and any of ours already there are untouched and none is
+ * added twice. The caller persists it. The installer needs it too (issue #3562): an upgrade runs the install command after
+ * delete_package_xml() deleted the registrations and before install_package_xml() adds them back.
+ *
+ * @param array $listed the package XML's service entries
+ */
+function pfb_package_services_register(array $listed): void {
+	$services = config_get_path('installedpackages/service', []);
+	foreach ($listed as $service) {
+		if (empty($service)) {
+			continue;
+		}
+		foreach ($services as $aservice) {
+			if (empty($aservice)) {
+				continue;
+			}
+			if (trim((string) ($aservice['name'] ?? '')) == trim((string) ($service['name'] ?? ''))) {
+				continue 2;
+			}
+		}
+		$services[] = $service;
+	}
+	config_set_path('installedpackages/service', $services);
+}
+
+/**
  * Register the package's menu entry and services again, after a removal that aborted.
  *
  * pfSense's delete_package_xml() runs before the package's pre-deinstall hook and persists what it does (pkg-utils.inc, pfSense
@@ -5298,22 +5325,7 @@ function pfb_package_registration_restore(?string $xml_file = NULL): ?string {
 			config_set_path('installedpackages/menu', $menus);
 		}
 		if ($listed_services !== []) {
-			$services = config_get_path('installedpackages/service', []);
-			foreach ($listed_services as $service) {
-				if (empty($service)) {
-					continue;
-				}
-				foreach ($services as $aservice) {
-					if (empty($aservice)) {
-						continue;
-					}
-					if (trim((string) ($aservice['name'] ?? '')) == trim((string) ($service['name'] ?? ''))) {
-						continue 2;
-					}
-				}
-				$services[] = $service;
-			}
-			config_set_path('installedpackages/service', $services);
+			pfb_package_services_register($listed_services);
 		}
 		// As delete_package_xml() persists its own half: config only, no package hooks or sync
 		$failed = pfb_dns_config_write_failed(write_config('pfBlockerNG: registered the package menu and services again after an aborted removal', FALSE, TRUE));
