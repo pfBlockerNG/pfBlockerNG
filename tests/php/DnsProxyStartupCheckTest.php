@@ -819,7 +819,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 		$this->assertMatchesRegularExpression(
 			"~if \\(is_executable\\(\\\$pfb_dns_rc\\)[^\\n]*\\) \\{\\n(?:\\t//[^\\n]*\\n)*\\t\\\$pfb_dns_since = [^\\n]*\\n\\tmwexec_bg\\(\\\$pfb_dns_rc \\. ' start'\\);\\n" .
-			"\\tmwexec_bg\\('/usr/bin/timeout -s TERM -k 5 300 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng\\.inc dns_check ' \\. \\\$pfb_dns_since\\);\\n\\}\\nunset\\(\\\$pfb_dns_rc, \\\$pfb_dns_since\\);~",
+			"\\tmwexec_bg\\('/usr/bin/timeout -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng\\.inc dns_check ' \\. \\\$pfb_dns_since\\);\\n\\}\\nunset\\(\\\$pfb_dns_rc, \\\$pfb_dns_since\\);~",
 			$source,
 			'the bounded check is backgrounded in the branch that backgrounds the start, and nowhere else'
 		);
@@ -841,9 +841,10 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$this->assertSame(1, preg_match("~define\\('PFB_DNS_PROXY_LOG_WAIT', (\\d+)\\)~", $inc, $log));
 
 		// Then the cap covers the check and a rollback that restarts Unbound: the readiness wait (START), the log poll, three config-lock
-		// waits, Unbound's stop, kill and start, its setup and two control calls, rc stop's 7 s, and a 10 s margin
-		$needed = $unbound['START'] + (int) $log[1] + 3 * PFB_DNS_CONFIG_LOCK_WAIT + $unbound['STOP'] + $unbound['KILL'] + $unbound['START']
-			+ $unbound['START_SETUP'] + 2 * $unbound['CONTROL'] + 7 + 10;
+		// waits, rc stop's 7 s, a 10 s margin, and pfb_reload_unbound() stopping and starting Unbound twice (its config restart and its
+		// recovery) with three control calls while the resolver cache is on
+		$needed = $unbound['START'] + (int) $log[1] + 3 * PFB_DNS_CONFIG_LOCK_WAIT
+			+ 2 * ($unbound['STOP'] + $unbound['KILL'] + $unbound['START'] + $unbound['START_SETUP']) + 3 * $unbound['CONTROL'] + 7 + 10;
 		$this->assertGreaterThanOrEqual($needed, (int) $cap[1], 'timeout(1) must not kill the check while the rollback can still run');
 	}
 

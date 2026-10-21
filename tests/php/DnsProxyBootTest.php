@@ -122,7 +122,7 @@ final class DnsProxyBootTest extends TestCase
 		$result = $this->runHook([], 0755);
 
 		$this->assertSame(
-			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 300 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 0'],
+			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 0'],
 			$result['calls'],
 			'one backgrounded start, never a blocking one, then the bounded background check that reports a start that fails; no log yet: size 0, not what the start wrote'
 		);
@@ -136,7 +136,7 @@ final class DnsProxyBootTest extends TestCase
 
 		// Then the check is told 1234: judging the log from after the start would miss the lines the start writes while the check begins
 		$this->assertSame(
-			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 300 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 1234'],
+			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 1234'],
 			$result['calls']
 		);
 		$this->assertSame([], $result['leaked']);

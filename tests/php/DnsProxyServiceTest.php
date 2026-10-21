@@ -595,7 +595,7 @@ final class DnsProxyServiceTest extends TestCase
 		foreach ($this->phpAsked() as $line) {
 			$this->assertStringEndsWith('/usr/local/pkg/pfblockerng/pfblockerng.inc dns_saved', $line);
 		}
-		$this->assertStringContainsString('not a valid', (string) file_get_contents("{$this->dir}/state/logger"));
+		$this->assertStringContainsString('could not be confirmed as a valid Resolver snapshot', (string) file_get_contents("{$this->dir}/state/logger"));
 		$this->assertFileDoesNotExist("{$this->dir}/BOOM", 'the shell syntax of the stored marker was never run');
 	}
 
