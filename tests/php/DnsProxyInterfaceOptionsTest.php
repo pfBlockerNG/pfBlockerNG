@@ -168,6 +168,105 @@ final class DnsProxyInterfaceOptionsTest extends TestCase
 		}
 	}
 
+	public function testAllAndLocalhostLeadTheOptionsUnderTheirOwnLabels(): void
+	{
+		$this->seedBox('lo0', 'lan');
+		[, $options] = self::pageLoad();
+
+		$this->assertSame(['all' => 'All', 'lo0' => 'Localhost'], array_slice($options, 0, 2, TRUE), json_encode($options));
+	}
+
+	/** @return array<string,array{string}> */
+	public static function lists(): array
+	{
+		return array_combine(self::LISTS, array_map(static fn (string $list): array => [$list], self::LISTS));
+	}
+
+	/**
+	 * Scenario: a gone interface only one transport stores.
+	 * Given $list stores `lan,opt2` and the other three lists store `lan`,
+	 * When Save is clicked without changing the selection,
+	 * Then opt2 is an unavailable option, $list keeps it and the other lists stay `lan`.
+	 */
+	#[DataProvider('lists')]
+	public function testAGoneTokenStoredInOneListOnlyIsKeptInThatList(string $list): void
+	{
+		$this->seedBox('lo0', 'lan');
+		$GLOBALS['config']['installedpackages']['pfblockerngdns']['config'][0][$list] = 'lan,opt2';
+		[$pconfig, $options, $certs] = self::pageLoad();
+
+		$this->assertSame('opt2 (not currently available)', $options['opt2'] ?? NULL, json_encode($options));
+		$post = self::unchangedPost($pconfig, $options);
+		$this->assertSame([], self::validate($post, $options, $certs));
+		$saved = pfb_dns_proxy_listeners_stored($post);
+		foreach (self::LISTS as $each) {
+			$this->assertSame($each === $list ? 'lan,opt2' : 'lan', $saved[$each], $each);
+		}
+	}
+
+	/**
+	 * Scenario: the seed a taken lock left pending names a gone interface.
+	 * Given nothing is stored yet and the Resolver listens on `lan,opt2`,
+	 * When the page shows the pending seed and Save is clicked without changing the selection,
+	 * Then opt2 is an unavailable option and every list stores `lan,opt2`.
+	 */
+	public function testAPendingSeedTokenNothingOffersIsKeptAsUnavailable(): void
+	{
+		$this->seedBox('lan,opt2', '');
+		[$pconfig, $options, $certs] = self::pageLoad();
+
+		$this->assertSame('opt2 (not currently available)', $options['opt2'] ?? NULL, json_encode($options));
+		$post = self::unchangedPost($pconfig, $options);
+		$this->assertSame([], self::validate($post, $options, $certs));
+		$saved = pfb_dns_proxy_listeners_stored($post);
+		foreach (self::LISTS as $list) {
+			$this->assertSame('lan,opt2', $saved[$list], $list);
+		}
+	}
+
+	/**
+	 * Scenario: a Resolver listener on a link-local address, which the proxy never binds.
+	 * Given the Resolver offers `_lloclan` and pfB-DNS seeds `lan,_lloclan` from it,
+	 * When the page loads,
+	 * Then `_lloclan` is not offered as an address but kept as unavailable, and an unchanged save keeps it.
+	 */
+	public function testALinkLocalTokenIsNotOfferedButASeededOneIsKept(): void
+	{
+		$this->seedBox('lan,_lloclan', '');
+		[$pconfig, $options, $certs] = self::pageLoad();
+
+		$this->assertSame('_lloclan (not currently available)', $options['_lloclan'] ?? NULL, json_encode($options));
+		$post = self::unchangedPost($pconfig, $options);
+		$this->assertSame([], self::validate($post, $options, $certs));
+		$this->assertSame('lan,_lloclan', pfb_dns_proxy_listeners_stored($post)['pfb_dns_interface']);
+	}
+
+	/** @return array<string,array{string}> a stored list hand-edited with spaces */
+	public static function handEditedLists(): array
+	{
+		return ['comma and space' => ['lan, ' . self::VIP . ', opt2'], 'spaces only' => ['lan ' . self::VIP . ' opt2']];
+	}
+
+	/**
+	 * Scenario: a hand-edited stored list, split the way the proxy splits it (spaces or commas).
+	 * Given each list stores `lan`, the VIP and `opt2` separated by spaces,
+	 * When Save is clicked without changing the selection,
+	 * Then every token renders selected and the save stores all three, comma-joined.
+	 */
+	#[DataProvider('handEditedLists')]
+	public function testAHandEditedListKeepsEveryTokenTheProxyReadsFromIt(string $stored): void
+	{
+		$this->seedBox('lo0', $stored);
+		[$pconfig, $options, $certs] = self::pageLoad();
+
+		$post = self::unchangedPost($pconfig, $options);
+		$this->assertSame([], self::validate($post, $options, $certs), json_encode($post));
+		$saved = pfb_dns_proxy_listeners_stored($post);
+		foreach (self::LISTS as $list) {
+			$this->assertSame('lan,' . self::VIP . ',opt2', $saved[$list], $list);
+		}
+	}
+
 	/** @return array<string,array{string}> a token the page neither offers nor stores */
 	public static function strangers(): array
 	{

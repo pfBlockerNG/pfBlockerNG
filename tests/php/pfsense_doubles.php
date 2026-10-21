@@ -1141,10 +1141,14 @@ if (!function_exists('get_configured_vip_list')) {
 }
 
 if (!function_exists('get_possible_listen_ips')) {
-	// pfSense interfaces.inc: the DNS Resolver's Network Interfaces, token => label: the configured interfaces, each
-	// virtual IP as _vip<uniqid> => address, then lo0. Off-appliance: no link-local entries and no " (descr)" suffix.
+	// pfSense interfaces.inc: the DNS Resolver's Network Interfaces, token => label: the configured interfaces (each with a
+	// _lloc<if> link-local entry when asked), each virtual IP as _vip<uniqid> => address, then lo0. Off-appliance: every
+	// interface counts as having a link-local address, and a VIP gets no " (descr)" suffix.
 	function get_possible_listen_ips($include_ipv6_link_local = false) {
 		$interfaces = get_configured_interface_with_descr();
+		foreach ($include_ipv6_link_local ? $interfaces : [] as $iface => $descr) {
+			$interfaces["_lloc{$iface}"] = "{$descr} IPv6 Link-Local";
+		}
 		foreach (get_configured_vip_list() as $vip => $address) {
 			$interfaces[$vip] = $address;
 		}
