@@ -1683,8 +1683,9 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
     installer's restart of the proxy has to reach the service all the same, or the readiness wait times out and
     pfB-DNS is rolled back off.
 
-    Given the toggle on and the proxy serving,
-    When the branch package is installed over itself with `pkg add -f`, which replaces it as an upgrade does,
+    Given the toggle on and the proxy serving, and the installed package recorded as an older version,
+    When the branch package is added over it, which pkg(8) runs as an upgrade (a same-version `pkg add -f` is a
+    reinstall that skips pfSense's removal step, and with it the deregistration),
     Then the toggle is still on, the Resolver still moved, the proxy running, and a listed name still gets the VIP.
     """
     vm = rig.vm
@@ -1696,15 +1697,20 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
             vm.ssh_argv(f"cat > {shlex.quote(remote)}"), stdin=fh, capture_output=True, timeout=300.0, check=False
         )
     assert sent.returncode == 0, f"copying {pkg} failed: rc={sent.returncode} {sent.stderr[-300:]!r}"
+    older = vm.ssh(f"pkg shell \"UPDATE packages SET version = '0.0.0' WHERE name = '{PKG_NAME}'\"")
+    assert older.returncode == 0, f"recording {PKG_NAME} as 0.0.0 failed: {older.stdout!r} {older.stderr!r}"
     abi = os.environ.get("SMOKE_ABI", "")
     add = f"pkg -o ABI={shlex.quote(abi)} add" if abi else "pkg add"
     try:
-        added = vm.ssh(f"env ASSUME_ALWAYS_YES=yes {add} -f {shlex.quote(remote)}", timeout=600.0)
+        added = vm.ssh(f"env ASSUME_ALWAYS_YES=yes {add} {shlex.quote(remote)}", timeout=600.0)
     finally:
         h._write_cron_disable_flag(vm)
         vm.ssh("rm", "-f", remote)
     output = added.stdout + added.stderr
-    assert added.returncode == 0, f"pkg add -f failed: rc={added.returncode}\n{output[-1500:]}"
+    assert added.returncode == 0, f"pkg add failed: rc={added.returncode}\n{output[-1500:]}"
+    assert re.search(r"Removing \S+ components", output), (
+        f"before: pkg ran no removal step, so no upgrade:\n{output[-3000:]}"
+    )
     h.wait_unbound_ready(vm)
 
     diagnostics = f"pkg add output:\n{output[-3000:]}\n{_diagnostics(vm)}"
