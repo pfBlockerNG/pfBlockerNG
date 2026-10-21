@@ -600,6 +600,8 @@ if (!function_exists('write_config')) {
 			$GLOBALS['pfb_test_write_config_hook']($desc);
 		}
 		$GLOBALS['pfb_test_write_config_calls'][] = $desc;
+		// The modes too: with $write_config_only FALSE pfSense also backs up, syncs CARP peers and runs the package plugins.
+		$GLOBALS['pfb_test_write_config_args'][] = [$desc, $backup, $write_config_only];
 		// pfb_test_write_config_result: -1 or FALSE fails the save the way pfSense's write_config() does.
 		return $GLOBALS['pfb_test_write_config_result'] ?? true;
 	}

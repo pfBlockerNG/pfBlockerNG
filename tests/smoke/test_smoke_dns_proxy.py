@@ -88,12 +88,25 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
 from . import helpers as h
 from .conftest import CLIENT_LAN_IP, PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _StubDnsServer
-from .test_repo_install import PKG_NAME, pkg_installed_version
+from .test_repo_install import (
+    NETGATE_REPO_NAME,
+    OURS_REPO_NAME,
+    PKG_NAME,
+    REPO_CONF,
+    UPGRADE_REPO_DIR,
+    build_guest_repo,
+    pkg_installed_version,
+    read_compact_version,
+    repo_priority,
+    reversion_pkg,
+    write_repo_conf,
+)
 
 pytestmark = [pytest.mark.smoke, pytest.mark.timeout(180)]
 
@@ -1675,53 +1688,53 @@ def test_the_start_lock_is_free_while_the_proxy_runs(rig: Rig, proxy_on: State) 
     )
 
 
-def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: State) -> None:
+@pytest.mark.timeout(600)  # a pkg upgrade with its install hooks, then the branch build put back
+def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: State, tmp_path: Path) -> None:
     """A package upgrade with pfB-DNS on leaves it on and serving (issue #3562).
 
     pfSense's delete_package_xml() stops and deregisters the package's services, and install_package_xml() runs the
     install command before it registers them again; start_service() acts only on a registered service, so the
     installer's restart of the proxy has to reach the service all the same, or the readiness wait times out and
-    pfB-DNS is rolled back off.
+    pfB-DNS is rolled back off. Only a real version move runs pfSense's removal step: `pkg add -f` of the installed
+    version is an in-place overwrite that skips it.
 
-    Given the toggle on and the proxy serving, and the installed package recorded as an older version,
-    When the branch package is added over it, which pkg(8) runs as an upgrade (a same-version `pkg add -f` is a
-    reinstall that skips pfSense's removal step, and with it the deregistration),
+    Given the toggle on and the proxy serving,
+    When the branch package, re-versioned higher, comes in by `pkg upgrade` from a file:// repo,
     Then the toggle is still on, the Resolver still moved, the proxy running, and a listed name still gets the VIP.
     """
     vm = rig.vm
-    pkg = os.environ["SMOKE_PKG"]
-    remote = f"/tmp/pfb3562-{os.path.basename(pkg)}"
+    pkg = Path(os.environ["SMOKE_PKG"])
+    higher = reversion_pkg(pkg, f"{read_compact_version(pkg)}_9", tmp_path)
     h._write_cron_disable_flag(vm)
-    with open(pkg, "rb") as fh:
-        sent = subprocess.run(
-            vm.ssh_argv(f"cat > {shlex.quote(remote)}"), stdin=fh, capture_output=True, timeout=300.0, check=False
-        )
-    assert sent.returncode == 0, f"copying {pkg} failed: rc={sent.returncode} {sent.stderr[-300:]!r}"
-    older = vm.ssh(f"pkg shell \"UPDATE packages SET version = '0.0.0' WHERE name = '{PKG_NAME}'\"")
-    assert older.returncode == 0, f"recording {PKG_NAME} as 0.0.0 failed: {older.stdout!r} {older.stderr!r}"
-    abi = os.environ.get("SMOKE_ABI", "")
-    add = f"pkg -o ABI={shlex.quote(abi)} add" if abi else "pkg add"
     try:
-        added = vm.ssh(f"env ASSUME_ALWAYS_YES=yes {add} {shlex.quote(remote)}", timeout=600.0)
-    finally:
-        h._write_cron_disable_flag(vm)
-        vm.ssh("rm", "-f", remote)
-    output = added.stdout + added.stderr
-    assert added.returncode == 0, f"pkg add failed: rc={added.returncode}\n{output[-1500:]}"
-    assert re.search(r"Removing \S+ components", output), (
-        f"before: pkg ran no removal step, so no upgrade:\n{output[-3000:]}"
-    )
-    h.wait_unbound_ready(vm)
+        try:
+            build_guest_repo(vm, UPGRADE_REPO_DIR, [higher])
+            write_repo_conf(vm, UPGRADE_REPO_DIR, ours_priority=repo_priority(vm, NETGATE_REPO_NAME) + 100)
+            updated = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f", "-r", OURS_REPO_NAME, timeout=240.0)
+            assert updated.returncode == 0, f"pkg update failed: {updated.stdout[-1500:]}{updated.stderr[-1500:]}"
+            upgraded = vm.ssh(
+                "env", "ASSUME_ALWAYS_YES=yes", "pkg", "upgrade", "-y", "-r", OURS_REPO_NAME, PKG_NAME, timeout=600.0
+            )
+        finally:
+            h._write_cron_disable_flag(vm)
+            vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, REPO_CONF, timeout=60.0)
+        output = upgraded.stdout + upgraded.stderr
+        assert upgraded.returncode == 0, f"pkg upgrade failed: rc={upgraded.returncode}\n{output[-3000:]}"
+        assert re.search(r"Removing \S+ components", output), f"before: pkg ran no removal step:\n{output[-3000:]}"
+        h.wait_unbound_ready(vm)
 
-    diagnostics = f"pkg add output:\n{output[-3000:]}\n{_diagnostics(vm)}"
-    toggle = _xml_text(_config_xml(vm), "installedpackages/pfblockerngdns/config/pfb_dns") or ""
-    assert toggle == "on", f"the upgrade turned pfB-DNS off: {toggle!r}\n{diagnostics}"
-    after = _capture(vm)
-    assert _is_on(after), (
-        f"the proxy is not serving the moved Resolver after the upgrade: {after.service}\n{diagnostics}"
-    )
-    blocked, raw = _query(rig.client, rig.names.blocked)
-    assert h.is_vip(blocked), f"after the upgrade the listed name is not blocked: {blocked}\n{raw}\n{diagnostics}"
+        diagnostics = f"pkg upgrade output:\n{output[-3000:]}\n{_diagnostics(vm)}"
+        toggle = _xml_text(_config_xml(vm), "installedpackages/pfblockerngdns/config/pfb_dns") or ""
+        assert toggle == "on", f"the upgrade turned pfB-DNS off: {toggle!r}\n{diagnostics}"
+        after = _capture(vm)
+        assert _is_on(after), (
+            f"the proxy is not serving the moved Resolver after the upgrade: {after.service}\n{diagnostics}"
+        )
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"after the upgrade the listed name is not blocked: {blocked}\n{raw}\n{diagnostics}"
+    finally:
+        # the branch build again, at its own version, for the tests after this one
+        h.deploy(vm)
 
 
 def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:

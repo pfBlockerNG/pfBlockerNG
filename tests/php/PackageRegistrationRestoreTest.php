@@ -23,6 +23,7 @@ use PHPUnit\Framework\TestCase;
  *     releases the lock and says why (NULL is the only success).
  */
 #[CoversFunction('pfb_package_registration_restore')]
+#[CoversFunction('pfb_package_services_register')]
 final class PackageRegistrationRestoreTest extends TestCase
 {
 	private const LOCK = 'pfb_dns_config';
@@ -270,5 +271,18 @@ final class PackageRegistrationRestoreTest extends TestCase
 		}
 		$this->assertSame([], $this->written);
 		$this->assertSame([], $GLOBALS['pfb_test_lock_events'] ?? [], 'and no lock is taken for nothing');
+	}
+
+	public function testRegisteringServicesSaysWhetherItAddedOneSoTheInstallerWritesOnlyThen(): void
+	{
+		$listed = [['name' => 'pfb_dns_proxy', 'rcfile' => 'pfb_dns_proxy.sh'], ['name' => 'squid', 'rcfile' => 'other.sh']];
+
+		$this->assertTrue(pfb_package_services_register($listed), 'the missing one is added');
+		$this->assertSame(['squid', 'pfb_dns_proxy'], $this->serviceNames());
+		$this->assertSame(self::SQUID, config_get_path('installedpackages/service/0'), 'the registered one keeps its own fields');
+
+		$this->assertFalse(pfb_package_services_register($listed), 'all registered: nothing added');
+		$this->assertFalse(pfb_package_services_register([]), 'nothing listed: nothing added');
+		$this->assertSame(['squid', 'pfb_dns_proxy'], $this->serviceNames());
 	}
 }

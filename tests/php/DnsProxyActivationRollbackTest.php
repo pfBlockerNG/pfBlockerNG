@@ -61,6 +61,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		'pfb_test_unbound_configure_resolver', 'pfb_test_file_notices', 'pfb_test_try_lock_fail', 'pfb_test_lock_held',
 		'pfb_test_lock_events', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_write_config_hook',
 		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held',
+		'pfb_test_write_config_args',
 	];
 
 	private string $tmp;
@@ -409,6 +410,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	{
 		$GLOBALS['config']['installedpackages']['service'] = [['name' => 'squid', 'rcfile' => 'squid.sh']];
 		$this->configXmlOnDisk();
+		unset($GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_write_config_args']);
 		$proxy = $GLOBALS['pfb_test_service_hook'];
 		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use ($proxy): void {
 			if (in_array($service, array_column(config_get_path('installedpackages/service', []), 'name'), TRUE)) {
@@ -449,6 +451,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame([], $this->notices());
 		$this->assertContains('pfb_dns_proxy', array_column($this->onDisk('installedpackages/service', []), 'name'),
 			'the registration is in config.xml, so a fresh read keeps it');
+		$this->assertSame([['pfBlockerNG: registered the package services before the DNS proxy restart', FALSE, TRUE]],
+			$GLOBALS['pfb_test_write_config_args'], 'one write, of config.xml only: no backup, CARP sync or package plugins');
 	}
 
 	public function testAnUpgradeInstallWhoseProxyNeverServesStopsItAndGivesTheResolverBack(): void
