@@ -4253,6 +4253,23 @@ function pfb_dns_proxy_trusted_entry(string $entry): bool {
 }
 
 /**
+ * The options of pfB-DNS's four interface lists, token => label, which its page offers and validates against: All,
+ * Localhost and what the DNS Resolver's Network Interfaces offer (interfaces, virtual IPs as _vip<uniqid>; no link-local
+ * entries, the proxy never binds one), then each stored token none of them is, labelled so, so a save keeps it (issue #3557).
+ *
+ * @return array<string,string>
+ */
+function pfb_dns_proxy_interface_options(): array {
+	$options = ['all' => gettext('All'), 'lo0' => gettext('Localhost')] + get_possible_listen_ips();
+	foreach (['pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface'] as $key) {
+		foreach (pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting($key)) as $token) {
+			$options[$token] ??= "{$token} (not currently available)";
+		}
+	}
+	return $options;
+}
+
+/**
  * Save-time input errors of pfB-DNS's listener settings on its page. Every posted value was already sanitized at
  * ingestion. A port is a whole number 1-65535, each of the four interface lists (DNS, DoT, DoH, DoQ) an array of at
  * least one entry of $valid_iface_list, a trusted entry an IP or CIDR prefix, the certificate one of $valid_cert_refs

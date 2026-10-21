@@ -61,8 +61,8 @@ $pconfig['pfb_dns_doh_trusted']		= PfbConfig::read('dns/pfb_dns_doh_trusted');
 $pconfig['pfb_dns_doq']			= PfbConfig::read('dns/pfb_dns_doq');
 $pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns/pfb_dns_doq_port');
 $pconfig['pfb_dns_doq_interface']	= pfb_csv_list(pfb_dns_proxy_setting('pfb_dns_doq_interface'));
-// All and Localhost, then every configured interface (the WAN too: a front end may sit there)
-$options_dns_interface = ['all' => gettext('All'), 'lo0' => gettext('Localhost')] + get_configured_interface_with_descr();
+// The Resolver's Network Interfaces (virtual IPs included) plus every stored token no longer offered (issue #3557)
+$options_dns_interface = pfb_dns_proxy_interface_options();
 // The certificates the Resolver offers: the same call, so the same list and descriptions
 $options_dns_cert = cert_build_list('cert', 'IPsec');
 

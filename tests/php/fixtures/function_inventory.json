@@ -1914,6 +1914,11 @@
             }
         ]
     },
+    "pfb_dns_proxy_interface_options": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dns_proxy_listen": {
         "returnsRef": false,
         "returnType": "array",
