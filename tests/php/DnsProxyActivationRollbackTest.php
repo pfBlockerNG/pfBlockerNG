@@ -61,6 +61,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		'pfb_test_unbound_configure_resolver', 'pfb_test_file_notices', 'pfb_test_try_lock_fail', 'pfb_test_lock_held',
 		'pfb_test_lock_events', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_write_config_hook',
 		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held',
+		'pfb_test_write_config_args',
 	];
 
 	private string $tmp;
@@ -397,6 +398,112 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame('', $this->toggleStored());
 		$this->assertResolverIsTheOriginal('rolled back');
 		$this->assertSame(['restart_service', 'stop_service'], $this->proxyCalls);
+	}
+
+	/**
+	 * The state a package upgrade runs the install command in (issue #3562): delete_package_xml() deleted the package's service
+	 * registrations and wrote config.xml, install_package_xml() adds them back only after the command, and pfSense's
+	 * start_service() and stop_service() act only on a registered service. config.xml is a file from here on, so a fresh read
+	 * (the rollback's, under the DNS config lock) sees only what was written.
+	 */
+	private function upgradeInstallState(): void
+	{
+		$GLOBALS['config']['installedpackages']['service'] = [['name' => 'squid', 'rcfile' => 'squid.sh']];
+		$this->configXmlOnDisk();
+		unset($GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_write_config_args']);
+		$proxy = $GLOBALS['pfb_test_service_hook'];
+		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use ($proxy): void {
+			if (in_array($service, array_column(config_get_path('installedpackages/service', []), 'name'), TRUE)) {
+				$proxy($fn, $service);
+			}
+		};
+	}
+
+	/** The installer's DNS proxy block, cut out of the shipped file between its anchors and run as shipped. */
+	private function runInstallProxyBlock(): void
+	{
+		$install = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
+		$from = strpos($install, '// Create DNS proxy service once its runtime files are staged');
+		$to = strpos($install, 'if ($ufound) {', (int) $from);
+		$this->assertIsInt($from, 'test bootstrap: the installer\'s proxy block lost its start anchor');
+		$this->assertIsInt($to, 'test bootstrap: the installer\'s proxy block lost its end anchor');
+		(static function (string $code): void {
+			global $pfb;
+			eval($code);
+		})(substr($install, $from, $to - $from));
+	}
+
+	public function testAnUpgradeInstallRestartsTheProxyThatPfSenseUnregisteredBeforeTheInstallCommand(): void
+	{
+		// Given a moved Resolver and a proxy that serves once started, in the state an upgrade runs the install command in
+		$this->activate(TRUE);
+		$this->behaviour = 'serves';
+		$this->upgradeInstallState();
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the proxy was restarted and serves: pfB-DNS stays on, the Resolver stays moved, nothing is rolled back
+		$this->assertSame(['restart_service'], $this->proxyCalls, 'the restart reached a registered service');
+		$this->assertTrue(pfb_dns_proxy_ready());
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is not turned off');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the Resolver stays moved');
+		$this->assertSame([], $this->notices());
+		$this->assertContains('pfb_dns_proxy', array_column($this->onDisk('installedpackages/service', []), 'name'),
+			'the registration is in config.xml, so a fresh read keeps it');
+		$this->assertSame([['pfBlockerNG: registered the package services before the DNS proxy restart', FALSE, TRUE]],
+			$GLOBALS['pfb_test_write_config_args'], 'one write, of config.xml only: no backup, CARP sync or package plugins');
+	}
+
+	public function testAnUpgradeInstallWhoseProxyNeverServesStopsItAndGivesTheResolverBack(): void
+	{
+		// Given the same upgrade, and a proxy that lives and never publishes its marker
+		$this->activate(TRUE);
+		$this->upgradeInstallState();
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the rollback, which reads config.xml afresh, still reaches the service: the proxy is stopped and the Resolver
+		// has its saved settings back
+		$this->assertSame(['restart_service', 'stop_service'], $this->proxyCalls, 'the restart and the rollback\'s stop both reached the service');
+		$this->assertSame('', $this->toggleStored());
+		$this->assertResolverIsTheOriginal('rolled back');
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testAnUpgradeInstallWhoseRegistrationIsNotWrittenStillRestartsTheProxyAndSaysSo(mixed $answer): void
+	{
+		// Given the same upgrade, a proxy that serves once started, and config.xml refusing the registration's write
+		$this->activate(TRUE);
+		$this->behaviour = 'serves';
+		$this->upgradeInstallState();
+		$this->configXmlOnDisk($answer, 'registered the package services');
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the restart still reaches the service this process registered (stopping instead would leave the moved Resolver
+		// unserved), and the log says the registration is not in config.xml, so a rollback could not stop the proxy
+		$this->assertSame(['restart_service'], $this->proxyCalls);
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertStringContainsString('the package services could not be written to config.xml', $this->pfbLog());
+	}
+
+	public function testAnUpgradeInstallWithTheResolverNotMovedStopsTheProxyService(): void
+	{
+		// Given no Resolver snapshot (pfB-DNS off), in the state an upgrade runs the install command in
+		$this->activate(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		config_set_path(self::SAVED, '');
+		$this->upgradeInstallState();
+
+		// When the installer's DNS proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the proxy's rc script is written and its service stopped, nothing started
+		$this->assertSame(['stop_service'], $this->proxyCalls);
+		$this->assertArrayHasKey('pfb_dns_proxy.sh', $GLOBALS['pfb_test_rcfile_writes'] ?? [], 'the rc script is written');
 	}
 
 	public function testNothingIsWaitedOnUnderTheConfigLock(): void
