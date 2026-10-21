@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  * DNSBL decisions); a toggle that is on while nothing is moved is said not to be active, with the reason (pfBlockerNG or the
  * Resolver disabled, or the Resolver not moved), never to run.
  *
- * A transport row is `Off` when its toggle is off. Otherwise, with the proxy running, it lists what the gateway's current start
+ * A transport row is `Off` when its toggle is off and there are no active listeners. Otherwise, with the proxy running, it lists what the gateway's current start
  * reported `listening <kind>` in its log, then every address the rc script's command names that the start did not bind, as not
  * listening with the `cannot listen on` reason when the log has one; with the proxy not running it lists the command's
  * addresses, labelled configured and not bound. The startup check reads the same parsed start, so the panel and the notice never
@@ -215,11 +215,11 @@ final class PfbDnsStatusTest extends TestCase
 		], $status);
 	}
 
-	public function testATransportThatIsOffIsOffWhateverTheLogSays(): void
+	public function testATransportWithNoActiveListenersAndItsToggleOffIsOff(): void
 	{
-		// Given DoT on, DoH and DoQ off, and a log that still shows an older gateway bound DoH
+		// Given DoT on, DoH and DoQ off, and a current start that serves only plain DNS and DoT
 		$this->box(self::DOT_ON + ['pfb_dns_doh' => '', 'pfb_dns_doq' => '']);
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::READY);
+		$this->log(self::PLAIN, self::DOT, self::READY);
 
 		// Then DoT lists its listeners and the two that are off say Off
 		$this->assertSame([
@@ -228,6 +228,80 @@ final class PfbDnsStatusTest extends TestCase
 			'doh'   => 'Off',
 			'doq'   => 'Off',
 		], $this->transports());
+	}
+
+	/** @return array<string,array{string,string}> */
+	public static function encryptedTransports(): array
+	{
+		return ['DoT' => ['dot', '853'], 'DoH' => ['doh', '443'], 'DoQ' => ['doq', '8853']];
+	}
+
+	#[DataProvider('encryptedTransports')]
+	public function testSavingATransportToggleDoesNotChangeWhatTheRunningStartServes(string $kind, string $port): void
+	{
+		$this->box();
+		$this->log(self::PLAIN, self::READY);
+		$this->assertSame('Off', $this->transports()[$kind], 'before: no active transport');
+
+		foreach (["pfb_dns_{$kind}" => 'on', "pfb_dns_{$kind}_interface" => 'lan', "pfb_dns_{$kind}_port" => $port] as $key => $value) {
+			config_set_path(self::SETTINGS . $key, $value);
+		}
+		$this->assertSame('On, but the service has no listener for it: see the notices, or run an Update', $this->transports()[$kind], 'enable saved but not applied');
+
+		pfb_dns_proxy_service();
+		$this->log(self::PLAIN, "listening {$kind} 192.0.2.1:{$port}", "listening {$kind} 127.0.0.1:{$port}", "listening {$kind} [::1]:{$port}", self::READY);
+		$active = "192.0.2.1:{$port}, 127.0.0.1:{$port}, [::1]:{$port}";
+		$this->assertSame($active, $this->transports()[$kind], 'enable applied: every listener bound');
+
+		config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
+		$this->assertSame($active, $this->transports()[$kind], 'disable saved: gateway still serves its existing listeners');
+
+		$this->log(self::PLAIN, "listening {$kind} 127.0.0.1:{$port}");
+		$this->assertSame("Configured (not confirmed by the log): {$active}", $this->transports()[$kind], 'missing readiness lines cannot prove a pending disable has stopped the configured service');
+
+		$this->log(self::PLAIN, "cannot listen on 192.0.2.1:{$port}: bind failed", "listening {$kind} 127.0.0.1:{$port}", "listening {$kind} [::1]:{$port}", self::READY);
+		$this->assertSame("127.0.0.1:{$port}, [::1]:{$port}, 192.0.2.1:{$port}: not listening (bind failed)", $this->transports()[$kind], 'pending disable must not hide a failed listener either');
+
+		pfb_dns_proxy_service();
+		$this->log(self::PLAIN, self::READY);
+		$this->assertSame('Off', $this->transports()[$kind], 'disable applied: no listeners remain');
+	}
+
+	#[DataProvider('encryptedTransports')]
+	public function testTheCurrentStartStillShowsItsBoundListenersWhenTheServiceScriptIsMissing(string $kind, string $port): void
+	{
+		$this->box(["pfb_dns_{$kind}" => 'on', "pfb_dns_{$kind}_interface" => 'lan', "pfb_dns_{$kind}_port" => $port]);
+		$this->log(self::PLAIN, "listening {$kind} 127.0.0.1:{$port}", self::READY);
+		unlink(PFB_DNS_PROXY_RCFILE);
+
+		$this->assertSame("127.0.0.1:{$port}", $this->transports()[$kind], 'a missing command cannot erase a listener confirmed by the running start');
+	}
+
+	/** @return array<string,array{string,string,string}> */
+	public static function allTransports(): array
+	{
+		return ['Plain DNS' => ['plain', 'udp+tcp', '53'], 'DoT' => ['dot', 'dot', '853'], 'DoH' => ['doh', 'doh', '443'], 'DoQ' => ['doq', 'doq', '8853']];
+	}
+
+	#[DataProvider('allTransports')]
+	public function testPendingAddressAndPortChangesDoNotReplaceTheRunningStart(string $row, string $kind, string $port): void
+	{
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
+		$active = "192.0.2.1:{$port}, 127.0.0.1:{$port}, [::1]:{$port}";
+		$this->assertSame($active, $this->transports()[$row], 'before: old listeners are active');
+
+		$GLOBALS['pfb_test_interface_ip']['opt1'] = '198.51.100.1';
+		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'up', 'enable' => TRUE];
+		$GLOBALS['pfb_test_interfaces']['opt1'] = '';
+		$key = ($row === 'plain') ? 'pfb_dns_interface' : "pfb_dns_{$row}_interface";
+		config_set_path(self::SETTINGS . $key, 'opt1');
+		config_set_path(($row === 'plain') ? 'unbound/port' : self::SETTINGS . "pfb_dns_{$row}_port", '5553');
+		$this->assertSame($active, $this->transports()[$row], 'save alone does not change the active addresses or port');
+
+		pfb_dns_proxy_service();
+		$this->log("listening {$kind} 198.51.100.1:5553", "listening {$kind} 127.0.0.1:5553", "listening {$kind} [::1]:5553", self::READY);
+		$this->assertSame('198.51.100.1:5553, 127.0.0.1:5553, [::1]:5553', $this->transports()[$row], 'after apply: the new start, not the pending settings, confirms the listeners');
 	}
 
 	public function testDotIsPfbDnsOwnToggleAndPortWhateverTheResolversTlsPort(): void

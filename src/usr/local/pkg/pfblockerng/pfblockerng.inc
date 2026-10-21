@@ -14111,9 +14111,10 @@ function pfb_dns_proxy_port(): string {
  * What the pfB-DNS tab's status panel shows, as text: the service, the mode, and a row per transport (plain DNS, DoT, DoH, DoQ). The box is
  * moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that is on while nothing is moved is never running: it is said
  * not to be active, with the reason (pfBlockerNG or the Resolver disabled, or the Resolver not moved yet or refused), and claims no transport (`-`).
- * A transport row is `Off` when its toggle is off. Otherwise a running proxy lists what its current start bound (pfb_dns_proxy_listeners()), then each
- * address the rc script's command names (pfb_dns_proxy_command_listeners()) that it did not bind, as not listening with the logged reason; a proxy that
- * is not running, or whose log holds no start, lists the command's addresses labelled as configured.
+ * A running proxy lists what its current start bound (pfb_dns_proxy_listeners()), then each address the rc script's command names
+ * (pfb_dns_proxy_command_listeners()) that it did not bind, as not listening with the logged reason. A saved toggle change cannot hide
+ * those listeners before Update applies it. A transport with its toggle off and no active listeners is `Off`; a proxy that is not running,
+ * or whose log holds no start, lists the command's addresses labelled as configured.
  *
  * @return array{service:string,mode:string,plain:string,dot:string,doh:string,doq:string}
  */
@@ -14172,14 +14173,15 @@ function pfb_dns_status(): array {
 	$status = ['service' => $service, 'mode' => $mode];
 	foreach (['plain' => 'udp+tcp', 'dot' => 'dot', 'doh' => 'doh', 'doq' => 'doq'] as $row => $kind) {
 		$addresses = $configured[$kind] ?? [];
-		if ($kind !== 'udp+tcp' && pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
+		$bound = array_keys($listeners['listening'][$kind] ?? []);
+		$active = $service === 'Running' && ($addresses !== [] || $bound !== []);
+		if ($kind !== 'udp+tcp' && !$active && pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
 			$status[$row] = 'Off';
-		} elseif ($addresses === []) {
+		} elseif ($addresses === [] && $bound === []) {
 			$status[$row] = 'On, but the service has no listener for it: see the notices, or run an Update';
 		} elseif ($listeners === NULL) {
 			$status[$row] = $label . implode(', ', $addresses);
 		} else {
-			$bound = array_keys($listeners['listening'][$kind] ?? []);
 			$missing = array_map(
 			    static fn (string $at): string => "{$at}: not listening (" . ($listeners['refused'][$at] ?? 'the gateway did not report it') . ')',
 			    array_diff($addresses, $bound)

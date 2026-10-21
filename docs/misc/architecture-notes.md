@@ -695,9 +695,11 @@ this start logged none); with no `$since` it is searched in the whole tail. Pinn
 **Status panel transports (issue #3548).** The pfB-DNS tab's status (`pfb_dns_status()`) has one row per transport: plain DNS,
 DoT, DoH and DoQ. It reads the same two helpers as the startup check: `pfb_dns_proxy_listeners()` (the current start's
 `listening` and `cannot listen on` lines, with no `$since`) and `pfb_dns_proxy_command_listeners()` (the rc script's addresses),
-so the panel and the notice never judge different starts. A row is `Off` when its toggle is off. With the proxy Running it lists
-what the start bound, then each command address it did not bind as not listening, with the logged reason. Not running, or with
-no `ready upstream` line in the log, it lists the command's addresses labelled as configured. Pinned by `PfbDnsStatusTest`.
+so the panel and the notice never judge different starts. A row is `Off` when its toggle is off and the running service has no
+listeners for it. With the proxy Running it lists what the start bound, then each command address it did not bind as not listening,
+with the logged reason. A saved toggle, interface or port change cannot replace that evidence before an Update applies it.
+Not running, or with no `ready upstream` line in the log, it lists the command's addresses labelled as configured.
+Pinned by `PfbDnsStatusTest`.
 
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,
