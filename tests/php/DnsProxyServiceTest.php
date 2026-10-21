@@ -38,6 +38,8 @@ final class DnsProxyServiceTest extends TestCase
 {
 	use DnsProxyRcSandboxTrait;
 
+	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+
 	protected function setUp(): void
 	{
 		$this->sandboxUp();
@@ -528,19 +530,113 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertStringContainsString('not a valid', (string) file_get_contents("{$this->dir}/state/logger"));
 	}
 
-	public function testAMarkerThatChangedSinceTheScriptWasWrittenLaunchesNothing(): void
+	/** A snapshot other than moveResolver()'s: the same Resolver, its listen interfaces lan,opt1. */
+	private static function restoredSnapshot(): string
 	{
-		// Given a script written for one snapshot, and a different one stored now (restored and moved again since)
+		return base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan,opt1'],
+			'enablessl'        => ['present' => FALSE, 'value' => NULL],
+			'custom_options'   => ['present' => FALSE, 'value' => NULL],
+		]));
+	}
+
+	public function testAMarkerThatChangedSinceTheScriptWasWrittenStartsTheProxyWhenItIsAValidSnapshot(): void
+	{
+		// Given a script written for one snapshot, and a different valid snapshot stored now (a restored configuration)
 		$this->moveResolver();
 		$this->generate();
-		$this->arrange(['GATE_SAVED' => base64_encode('{"another":"snapshot"}')]);
+		$restored = self::restoredSnapshot();
+		$this->assertNotSame((string) config_get_path(self::SAVED), $restored, 'before: the stored snapshot is not the one the script was written for');
+		$this->arrange(['GATE_SAVED' => $restored, 'SAVED_VALID' => '1']);
 
 		// When it is started
 		[$status, $output] = $this->rc('start');
 
-		// Then the stale script does nothing: the next apply regenerates it for the stored snapshot
+		// Then PHP confirms the stored snapshot and the proxy starts for it
 		$this->assertSame(0, $status, "rc start failed: {$output}");
-		$this->assertSame([], $this->events(TRUE));
+		$this->assertSame(['validate', 'launch'], $this->events());
+		$asked = $this->phpAsked();
+		$this->assertCount(1, $asked, 'PHP is asked once');
+		$this->assertStringEndsWith('/usr/local/pkg/pfblockerng/pfblockerng.inc dns_saved', $asked[0]);
+	}
+
+	/**
+	 * A changed marker PHP does not confirm as a snapshot, or cannot confirm in time. The {dir} placeholder is the sandbox.
+	 *
+	 * @return array<string,array{string,array<string,string>,list<string>,int}> the marker, the gates, the events, the lines PHP was asked
+	 */
+	public static function unconfirmedMarkers(): array
+	{
+		return [
+			'a snapshot of another Resolver' => [base64_encode('{"another":"snapshot"}'), [], ['validate', 'log'], 1],
+			'shell metacharacters are never run' => ["x'\$(touch {dir}/BOOM)\"", [], ['validate', 'log'], 1],
+			'PHP does not answer within its limit' => [self::restoredSnapshot(), ['TIMEOUT_FIRES' => '1', 'SAVED_VALID' => '1'], ['log'], 0],
+		];
+	}
+
+	/** @param array<string,string> $gates @param list<string> $events */
+	#[DataProvider('unconfirmedMarkers')]
+	public function testAMarkerThatChangedSinceTheScriptWasWrittenAndIsNotConfirmedLaunchesNothingAndFailsLoudly(string $marker, array $gates, array $events, int $asked): void
+	{
+		// Given a script written for one snapshot, and a different value stored now that PHP does not confirm as a snapshot
+		$this->moveResolver();
+		$this->generate();
+		$marker = str_replace('{dir}', $this->dir, $marker);
+		$this->arrange(['GATE_SAVED' => $marker] + $gates);
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then it logs one error and exits 1, launching and signalling nothing, and runs nothing the marker names
+		$this->assertSame(1, $status, "rc start must fail: {$output}");
+		$this->assertSame($events, $this->events(TRUE));
+		$this->assertCount($asked, $this->phpAsked(), 'PHP is asked only when it can answer');
+		foreach ($this->phpAsked() as $line) {
+			$this->assertStringEndsWith('/usr/local/pkg/pfblockerng/pfblockerng.inc dns_saved', $line);
+		}
+		$this->assertStringContainsString('not a valid', (string) file_get_contents("{$this->dir}/state/logger"));
+		$this->assertFileDoesNotExist("{$this->dir}/BOOM", 'the shell syntax of the stored marker was never run');
+	}
+
+	public function testTheMarkerTheScriptWasWrittenForStartsWithoutAskingPhp(): void
+	{
+		// Given a script written for the snapshot that is stored
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange();
+
+		// When it is started
+		[$status, $output] = $this->rc('start');
+
+		// Then the proxy starts at once, and PHP is never asked about the marker the script was written for
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame([], $this->phpAsked());
+		$this->assertSame(['launch'], $this->events());
+	}
+
+	/** @return array<string,array{string,int}> the stored marker, and the exit status of the dns_saved verb for it */
+	public static function storedSnapshots(): array
+	{
+		return [
+			'a valid snapshot' => [self::restoredSnapshot(), 0],
+			'nothing stored' => ['', 1],
+			'not base64' => ['not-a-snapshot', 1],
+			'base64 of another shape' => [base64_encode('{"another":"snapshot"}'), 1],
+		];
+	}
+
+	#[DataProvider('storedSnapshots')]
+	public function testTheDnsSavedArmExitsZeroOnlyForAValidSnapshot(string $marker, int $expected): void
+	{
+		// Given a stored marker, and the dns_saved verb's exit statement as the CLI runs it
+		config_set_path(self::SAVED, $marker);
+		$this->assertSame(1, preg_match("~\\belseif \\(\\\$argv\\[1\\] == 'dns_saved'\\) \\{\\s*exit\\((.*)\\);\\s*\\}~", (string) file_get_contents(self::INC), $arm), 'the dns_saved arm');
+
+		// When the verb's status is evaluated
+		$status = eval('return ' . $arm[1] . ';');
+
+		// Then the status is 0 only for a snapshot PHP can restore from
+		$this->assertSame($expected, $status);
 	}
 
 	public function testLauncherStdFdsAreDetachedToDevNull(): void
@@ -805,19 +901,30 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame(['3001', '3002'], $this->livePids());
 	}
 
-	public function testAStaleMarkerLeavesEvenAServingProxyAlone(): void
+	/** @return array<string,array{string,int,list<string>}> PHP's verdict on the stored marker, the start's exit status, the events */
+	public static function changedMarkerVerdicts(): array
 	{
-		// Given a serving proxy, and a script written for a snapshot that has since changed
+		return [
+			'a valid snapshot' => ['1', 0, ['validate']],
+			'not a valid snapshot' => ['', 1, ['validate', 'log']],
+		];
+	}
+
+	/** @param list<string> $events */
+	#[DataProvider('changedMarkerVerdicts')]
+	public function testAChangedMarkerNeverStopsAServingProxy(string $valid, int $expected, array $events): void
+	{
+		// Given a serving proxy, and a script written for a snapshot while a different value is stored
 		$this->moveResolver();
 		$this->generate();
-		$this->arrange(['GATE_SAVED' => base64_encode('{"another":"snapshot"}')], '2', '1', TRUE);
+		$this->arrange(['GATE_SAVED' => base64_encode('{"another":"snapshot"}'), 'SAVED_VALID' => $valid], '2', '1', TRUE);
 
 		// When it is started
 		[$status, $output] = $this->rc('start');
 
-		// Then the stale script does nothing at all, the health check included: the next apply regenerates it
-		$this->assertSame(0, $status, "rc start failed: {$output}");
-		$this->assertSame([], $this->events(TRUE));
+		// Then the proxy keeps serving: nothing is signalled or launched, whatever PHP says about the stored value
+		$this->assertSame($expected, $status, "rc start: {$output}");
+		$this->assertSame($events, $this->events(TRUE));
 		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
 

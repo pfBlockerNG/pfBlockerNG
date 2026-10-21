@@ -157,12 +157,23 @@ trait DnsProxyRcSandboxTrait
 			exec "$@"
 			;;
 		php)
-			# What the start runs when the certificate file is missing: pfblockerng.inc's dns_cert verb, which writes the file
-			{ [ "$1" = -f ] && [ "$3" = dns_cert ]; } || { ev bad-php; exit 2; }
-			ev export
-			echo "$*" >> "$S/php.args"
-			[ -z "$EXPORT_FAIL" ] || exit 1
-			echo exported > "$PEM_FILE"
+			# What the start runs through pfblockerng.inc: dns_cert when the certificate file is missing (writes the file), dns_saved for
+			# a stored marker the script was not written for (answers whether it is a valid Resolver snapshot)
+			[ "$1" = -f ] || { ev bad-php; exit 2; }
+			case "$3" in
+			dns_cert)
+				ev export
+				echo "$*" >> "$S/php.args"
+				[ -z "$EXPORT_FAIL" ] || exit 1
+				echo exported > "$PEM_FILE"
+				;;
+			dns_saved)
+				ev validate
+				echo "$*" >> "$S/php.args"
+				[ -n "$SAVED_VALID" ] || exit 1
+				;;
+			*) ev bad-php; exit 2 ;;
+			esac
 			;;
 		uname)
 			# pfb_dns.sh asks which machine it runs on; the scenario answers
@@ -292,7 +303,7 @@ trait DnsProxyRcSandboxTrait
 		$gates += ['GATE_DNSBL' => 'on', 'GATE_PROXY' => 'on', 'GATE_SAVED' => (string) config_get_path(self::SAVED, '')];
 		$state = "{$this->dir}/state";
 		$vars = $gates + ['TERM_AFTER' => $termAfter, 'KILL_AFTER' => $killAfter, 'READY_FILE' => $this->readyFile(), 'LOCKF_BUSY' => '', 'MACHINE' => $machine,
-			'PEM_FILE' => $this->certFile(), 'EXPORT_FAIL' => '', 'TIMEOUT_FIRES' => ''];
+			'PEM_FILE' => $this->certFile(), 'EXPORT_FAIL' => '', 'TIMEOUT_FIRES' => '', 'SAVED_VALID' => ''];
 		file_put_contents("{$state}/scenario", implode('', array_map(
 			static fn (string $k, string $v): string => "{$k}=" . escapeshellarg($v) . "\n",
 			array_keys($vars),
@@ -464,6 +475,12 @@ trait DnsProxyRcSandboxTrait
 	private function daemonArgv(): array
 	{
 		return file("{$this->dir}/state/daemon.argv", FILE_IGNORE_NEW_LINES) ?: [];
+	}
+
+	/** @return list<string> what PHP was asked, one line per call: `-f`, the script, then the verb */
+	private function phpAsked(): array
+	{
+		return file("{$this->dir}/state/php.args", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 	}
 
 

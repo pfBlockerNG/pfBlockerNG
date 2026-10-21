@@ -48,6 +48,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_confirm_ready')]
 #[CoversFunction('pfb_dns_proxy_ensure_running')]
 #[CoversFunction('pfb_dns_proxy_restart')]
+#[CoversFunction('pfblockerng_tick')]
 final class DnsProxyActivationRollbackTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
@@ -1733,5 +1734,165 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
 		$this->assertStringContainsString('could not be written', $joined, 'the operator is told why nothing was changed');
 		$this->assertStringNotContainsString('was turned off', $joined);
+	}
+
+	// -----------------------------------------------------------------------
+	// B -- the boot check and the cron tick roll back like an apply (issue #3556)
+	// -----------------------------------------------------------------------
+
+	/** The cron tick with every scheduled job behind a seam, so only its pfB-DNS check acts; its ledger and state stay in the sandbox. */
+	private function tick(): void
+	{
+		$GLOBALS['pfb']['schedule_state_dir'] = $this->tmp;
+		$GLOBALS['pfb']['runlog'] = "{$this->tmp}/run.log";
+		$GLOBALS['pfb']['extraslog'] = "{$this->tmp}/extras.log";
+		$GLOBALS['pfb']['pending_marker'] = "{$this->tmp}/pfb_pending_changes";
+		pfblockerng_tick(
+			[], static function (): void {}, NULL, 5.0, static function (): void {}, NULL, 5.0,
+			static fn (string $_job, string $_argument = ''): bool => TRUE,
+			static function (): void {},
+			static fn (): bool => TRUE
+		);
+	}
+
+	/** The boot hook's `dns_check` arm, as the CLI runs it: its own statements, in order, up to the exit that ends that process. */
+	private function dnsCheckArm(string $size): void
+	{
+		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertSame(1, preg_match("~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{(.*?)\\bexit\\(0\\);\\s*\\}~s", $source, $arm), 'the dns_check arm');
+		(static function (array $argv) use ($arm): void {
+			eval($arm[1]);
+		})(['pfblockerng.inc', 'dns_check', $size]);
+	}
+
+	/** What a rollback leaves: pfB-DNS off, the saved Resolver back, the startup notice then the rollback notice, the proxy stopped and never started. */
+	private function assertRolledBackWithNotices(string $why): void
+	{
+		$this->assertSame('', $this->toggleStored(), "{$why}: pfB-DNS is turned off");
+		$this->assertResolverIsTheOriginal($why);
+		$this->assertSame(['pfBlockerNG DNS Proxy startup', 'pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), "{$why}: the startup notice, then the rollback notice");
+		$rollback = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
+		$this->assertCount(1, $rollback, "{$why}: one rollback notice");
+		$this->assertStringContainsString('did not become ready', $rollback[0]['notice']);
+		$this->assertStringContainsString('DNS Resolver was restored', $rollback[0]['notice']);
+		$this->assertSame(['stop_service'], $this->proxyCalls, "{$why}: the proxy is stopped and nothing is started");
+	}
+
+	/** @return array<string,array{string}> the gateway process that lives and never publishes its marker */
+	public static function aliveGateways(): array
+	{
+		return [
+			'the child lives and never publishes its marker' => ['child'],
+			'only the supervisor lives, its child between restarts' => ['supervisor'],
+		];
+	}
+
+	#[DataProvider('aliveGateways')]
+	public function testTheTickRollsBackAProxyThatIsAliveButNeverBecomesReady(string $alive): void
+	{
+		// Given pfB-DNS on with the Resolver moved, and a gateway process alive that never becomes ready
+		$this->activate(TRUE);
+		if ($alive === 'child') {
+			$this->proxyLivesButNeverServes();
+		} else {
+			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		}
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is stored');
+
+		// When the cron tick runs
+		$this->tick();
+
+		// Then the tick rolls the activation back as an apply does
+		$this->assertRolledBackWithNotices('rolled back by the tick');
+	}
+
+	public function testTheTickWaitsForNothingAndRollsNothingBackWhenNoGatewayProcessLives(): void
+	{
+		// Given pfB-DNS on with the Resolver moved, and no gateway process alive; the readiness predicate counts its probes
+		$this->activate(TRUE);
+		$probes = 0;
+		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = static function () use (&$probes): bool {
+			$probes++;
+			return FALSE;
+		};
+
+		// When the cron tick runs
+		$this->tick();
+
+		// Then the tick neither waits for the proxy nor files or changes anything
+		$this->assertSame(0, $probes, 'the start-budget wait was never entered');
+		$this->assertSame([], $this->notices());
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is still requested');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	public function testTheTickLeavesAReadyProxyAlone(): void
+	{
+		// Given pfB-DNS on with the Resolver moved, and a proxy that serves
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
+
+		// When the cron tick runs
+		$this->tick();
+
+		// Then nothing is rolled back and no rollback notice is filed
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is still on');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
+		$this->assertSame([], $this->proxyCalls, 'the proxy is neither stopped nor started');
+	}
+
+	public function testTheBootCheckRollsBackAStartThatNeverBecomesReady(): void
+	{
+		// Given pfB-DNS on with the Resolver moved, and the backgrounded start left a gateway that lives and never serves
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
+
+		// When the boot check runs
+		$this->dnsCheckArm('0');
+
+		// Then the check rolls the activation back as an apply does
+		$this->assertRolledBackWithNotices('rolled back by the boot check');
+	}
+
+	public function testTheBootCheckDoesNothingWithoutASnapshot(): void
+	{
+		// Given a box whose pfB-DNS was turned off and its Resolver restored since, so no snapshot is stored
+		$this->activate(TRUE);
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		pfb_unbound_python('enabled', FALSE);
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: nothing is stored to roll back to');
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$this->proxyCalls = [];
+
+		// When the boot check runs
+		$this->dnsCheckArm('0');
+
+		// Then nothing is written, stopped or reported
+		$this->assertSame([], $this->notices());
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	public function testTheBootCheckLeavesAReadyProxyAlone(): void
+	{
+		// Given pfB-DNS on with the Resolver moved, and a proxy that serves
+		$this->activate(TRUE);
+		$this->proxyServes();
+
+		// When the boot check runs
+		$this->dnsCheckArm('0');
+
+		// Then nothing is rolled back and no rollback notice is filed
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is still on');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
+		$this->assertSame([], $this->proxyCalls, 'the proxy is neither stopped nor started');
 	}
 }

@@ -819,7 +819,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 		$this->assertMatchesRegularExpression(
 			"~if \\(is_executable\\(\\\$pfb_dns_rc\\)[^\\n]*\\) \\{\\n(?:\\t//[^\\n]*\\n)*\\t\\\$pfb_dns_since = [^\\n]*\\n\\tmwexec_bg\\(\\\$pfb_dns_rc \\. ' start'\\);\\n" .
-			"\\tmwexec_bg\\('/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng\\.inc dns_check ' \\. \\\$pfb_dns_since\\);\\n\\}\\nunset\\(\\\$pfb_dns_rc, \\\$pfb_dns_since\\);~",
+			"\\tmwexec_bg\\('/usr/bin/timeout -s TERM -k 5 300 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng\\.inc dns_check ' \\. \\\$pfb_dns_since\\);\\n\\}\\nunset\\(\\\$pfb_dns_rc, \\\$pfb_dns_since\\);~",
 			$source,
 			'the bounded check is backgrounded in the branch that backgrounds the start, and nowhere else'
 		);
@@ -827,30 +827,37 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$this->assertDoesNotMatchRegularExpression('/\b(?:sleep|usleep|exec|shell_exec|passthru|proc_open)\(/', $source);
 	}
 
-	public function testTheBootHooksCapOutlastsTheStartWaitAndTheLogWaitWithAMargin(): void
+	public function testTheBootHooksCapOutlastsTheStartWaitAndARollbackThatRestartsUnbound(): void
 	{
 		// Given the hook's literal and the production defaults (the test bootstrap overrides the waits to 0, so they are read from the source)
 		$this->assertSame(1, preg_match('~/usr/bin/timeout -s TERM -k 5 (\d+) ~', (string) file_get_contents(self::HOOK), $cap));
 		$inc = (string) file_get_contents(self::INC);
-		$this->assertSame(1, preg_match("~define\\('PFB_UNBOUND_START_WAIT', (\\d+)\\)~", $inc, $unbound));
 		$this->assertSame(1, preg_match("~define\\('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT\\)~", $inc), 'the proxy\'s start wait is the Unbound startup budget');
+		$unbound = [];
+		foreach (['STOP', 'KILL', 'START', 'START_SETUP', 'CONTROL'] as $name) {
+			$this->assertSame(1, preg_match("~define\\('PFB_UNBOUND_{$name}_WAIT', (\\d+)\\)~", $inc, $wait), "PFB_UNBOUND_{$name}_WAIT is defined");
+			$unbound[$name] = (int) $wait[1];
+		}
 		$this->assertSame(1, preg_match("~define\\('PFB_DNS_PROXY_LOG_WAIT', (\\d+)\\)~", $inc, $log));
 
-		// Then the cap leaves 10 s beyond both waits for what else the check does (the certificate sync, filing the notice)
-		$this->assertGreaterThanOrEqual((int) $unbound[1] + (int) $log[1] + 10, (int) $cap[1], 'timeout(1) must not kill the check while it still waits');
+		// Then the cap covers the check and a rollback that restarts Unbound: the readiness wait (START), the log poll, three config-lock
+		// waits, Unbound's stop, kill and start, its setup and two control calls, rc stop's 7 s, and a 10 s margin
+		$needed = $unbound['START'] + (int) $log[1] + 3 * PFB_DNS_CONFIG_LOCK_WAIT + $unbound['STOP'] + $unbound['KILL'] + $unbound['START']
+			+ $unbound['START_SETUP'] + 2 * $unbound['CONTROL'] + 7 + 10;
+		$this->assertGreaterThanOrEqual($needed, (int) $cap[1], 'timeout(1) must not kill the check while the rollback can still run');
 	}
 
-	public function testTheDnsCheckArmSyncsTheCertificateThenChecksTheStartAndExits(): void
+	public function testTheDnsCheckArmSyncsTheCertificateThenConfirmsTheStartWhileASnapshotIsStoredAndExits(): void
 	{
 		$source = (string) file_get_contents(self::INC);
 
 		$this->assertMatchesRegularExpression(
-			"~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*(?:\\\$since = [^\\n]*\\n\\s*)?pfb_global\\(\\);\\s*pfb_dns_proxy_certificate_sync\\(\\);\\s*pfb_dns_proxy_startup_check\\([^)]*\\);\\s*exit\\(0\\);\\s*\\}~",
+			"~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*(?:\\\$since = [^\\n]*\\n\\s*)?pfb_global\\(\\);\\s*pfb_dns_proxy_certificate_sync\\(\\);\\s*if \\(pfb_dns_proxy_saved\\(\\) !== NULL\\) \\{\\s*pfb_dns_proxy_confirm_ready\\(\\\$since\\);\\s*\\}\\s*exit\\(0\\);\\s*\\}~",
 			$source
 		);
 	}
 
-	public function testTheTickChecksTheStartAfterTheCertificateWhenNoPassRunsAndTheSnapshotStands(): void
+	public function testTheTickConfirmsALiveProxyAfterTheCertificateWhenNoPassRunsAndTheSnapshotStands(): void
 	{
 		$reflection = new ReflectionFunction('pfblockerng_tick');
 		$lines = file((string) $reflection->getFileName());
@@ -861,12 +868,12 @@ final class DnsProxyStartupCheckTest extends TestCase
 			1,
 			preg_match(
 				'~\$pass_running = pfb_update_pass_running\(\$ps_lines\);\s*if \(!\$pass_running\) \{\s*pfb_dns_proxy_stand_down\(\);\s*\}\s*' .
-				'(?://[^\n]*\n\s*)?pfb_dns_proxy_certificate_sync\(\);\s*' .
-				'if \(!\$pass_running && pfb_dns_proxy_saved\(\) !== NULL\) \{\s*pfb_dns_proxy_startup_check\(\);\s*\}~',
+				'(?://[^\n]*\n\s*)?pfb_dns_proxy_certificate_sync\(\);\s*(?://[^\n]*\n\s*)*' .
+				'if \(!\$pass_running && pfb_dns_proxy_saved\(\) !== NULL && \(pfb_dns_proxy_running\(\) \|\| isvalidpid\(PFB_DNS_PROXY_DAEMON_PIDFILE\)\)\) \{\s*pfb_dns_proxy_confirm_ready\(\);\s*\}~',
 				$source
 			),
 			'one pass check at the top of the tick, reused by the stand-down and by the startup check'
 		);
-		$this->assertSame(1, substr_count(substr($source, 0, (int) strpos($source, 'pfb_dns_proxy_startup_check()')), 'pfb_update_pass_running('), 'the check adds no second call');
+		$this->assertSame(1, substr_count(substr($source, 0, (int) strpos($source, 'pfb_dns_proxy_confirm_ready()')), 'pfb_update_pass_running('), 'the check adds no second call');
 	}
 }

@@ -36,7 +36,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 	private const ARM = "~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*\\\$since = ([^\\n]*);\\s*pfb_global\\(\\);\\s*" .
-		"pfb_dns_proxy_certificate_sync\\(\\);\\s*pfb_dns_proxy_startup_check\\(NULL, \\\$since\\);\\s*exit\\(0\\);\\s*\\}~";
+		"pfb_dns_proxy_certificate_sync\\(\\);\\s*if \\(pfb_dns_proxy_saved\\(\\) !== NULL\\) \\{\\s*pfb_dns_proxy_confirm_ready\\(\\\$since\\);\\s*\\}\\s*exit\\(0\\);\\s*\\}~";
 
 	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
