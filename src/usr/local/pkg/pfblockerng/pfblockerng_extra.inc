@@ -2461,7 +2461,7 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'local',
-			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from the Resolver\'s interfaces (or its snapshot), \'all\' when it had none',
+			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from the Resolver\'s interfaces (or its snapshot), \'all\' when it had none; clearing it by hand re-seeds the DoT toggle, DoT port and certificate too',
 		],
 		'dns/pfb_dns_dot' => [
 			'default'       => '',

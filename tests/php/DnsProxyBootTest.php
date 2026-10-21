@@ -61,14 +61,20 @@ final class DnsProxyBootTest extends TestCase
 
 	/**
 	 * Run the hook as services_unbound_configure() does -- require_once inside a function, in a process where nothing
-	 * of pfBlockerNG is loaded (the non-verbose boot path) and only these two core functions exist.
+	 * of pfBlockerNG is loaded (the non-verbose boot path) and only these two core functions exist. The stubbed start
+	 * appends 100 bytes to the gateway's log, as the real one does, so that a size taken after it is told apart.
 	 *
 	 * @param list<string> $livePidfiles pidfiles isvalidpid() answers TRUE for
+	 * @param ?int $logBytes the size of the gateway's log before the start; NULL = no log file
 	 * @return array{calls: list<string>, leaked: list<string>}
 	 */
-	private function runHook(array $livePidfiles, ?int $rcMode): array
+	private function runHook(array $livePidfiles, ?int $rcMode, ?int $logBytes = NULL): array
 	{
 		$rc = "{$this->dir}/pfb_dns_proxy.sh";
+		$log = "{$this->dir}/dns_proxy.log";
+		if ($logBytes !== NULL) {
+			file_put_contents($log, str_repeat('x', $logBytes));
+		}
 		if ($rcMode !== NULL) {
 			file_put_contents($rc, "#!/bin/sh\n");
 			chmod($rc, $rcMode);
@@ -77,8 +83,13 @@ final class DnsProxyBootTest extends TestCase
 			<?php
 			$calls = [];
 			function isvalidpid($pidfile) { return in_array($pidfile, json_decode((string) getenv('LIVE'), TRUE), TRUE); }
-			function mwexec_bg($command, $clearsigmask = false) { global $calls; $calls[] = $command; }
+			function mwexec_bg($command, $clearsigmask = false) {
+				global $calls;
+				$calls[] = $command;
+				if (str_ends_with($command, ' start')) { file_put_contents(PFB_DNS_PROXY_LOG, str_repeat('y', 100), FILE_APPEND); }
+			}
 			define('PFB_DNS_PROXY_RCFILE', (string) getenv('RC'));
+			define('PFB_DNS_PROXY_LOG', (string) getenv('LOG'));
 			$leaked = (function () {
 				$before = array_keys(get_defined_vars());
 				require_once getenv('HOOK');
@@ -89,7 +100,7 @@ final class DnsProxyBootTest extends TestCase
 		$run = pfb_test_run_process(
 			[PHP_BINARY, '-d', 'display_errors=stderr', '-r', substr($driver, strlen("<?php\n"))],
 			10.0,
-			['LIVE' => json_encode($livePidfiles), 'RC' => $rc, 'HOOK' => self::HOOK]
+			['LIVE' => json_encode($livePidfiles), 'RC' => $rc, 'LOG' => $log, 'HOOK' => self::HOOK]
 		);
 		$out = $run['stdout'];
 		$err = $run['stderr'];
@@ -111,11 +122,24 @@ final class DnsProxyBootTest extends TestCase
 		$result = $this->runHook([], 0755);
 
 		$this->assertSame(
-			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check'],
+			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 0'],
 			$result['calls'],
-			'one backgrounded start, never a blocking one, then the bounded background check that reports a start that fails'
+			'one backgrounded start, never a blocking one, then the bounded background check that reports a start that fails; no log yet: size 0, not what the start wrote'
 		);
 		$this->assertSame([], $result['leaked'], 'it is included inside pfSense\'s function: no variable of its own may survive');
+	}
+
+	public function testTheBackgroundCheckGetsTheLogSizeFromBeforeTheStart(): void
+	{
+		// Given a log of 1234 bytes, to which the start appends 100 more as soon as it is called
+		$result = $this->runHook([], 0755, 1234);
+
+		// Then the check is told 1234: judging the log from after the start would miss the lines the start writes while the check begins
+		$this->assertSame(
+			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 1234'],
+			$result['calls']
+		);
+		$this->assertSame([], $result['leaked']);
 	}
 
 	/** @return array<string,array{list<string>}> */

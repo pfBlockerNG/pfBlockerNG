@@ -115,6 +115,10 @@ CERT_CLIENT = "/tmp/pfb3515_ca.pem"
 CFG_PFB_DNS = "installedpackages/pfblockerngdns/config/0"  # the pfB-DNS section: local, not synced
 CFG_PROXY = f"{CFG_PFB_DNS}/pfb_dns"
 CFG_MARKER = f"{CFG_PFB_DNS}/pfb_dns_saved"
+# pfB-DNS's own listener settings: the interface lists, whose emptiness (pfb_dns_interface first) marks them unseeded,
+# and what the first turn-on seeds from the Resolver beside them.
+LISTENER_LISTS = ("pfb_dns_interface", "pfb_dns_dot_interface", "pfb_dns_doh_interface", "pfb_dns_doq_interface")
+LISTENER_KEYS = (*LISTENER_LISTS, "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_sslcertref")
 CFG_DNSBL = f"{h.CFG_DNSBL_SETTINGS}/pfb_dnsbl"
 CFG_GROUP_POLICY = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp"
 CFG_GROUP_POLICY_LIST = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp_bypass_list"
@@ -155,6 +159,7 @@ SNAPSHOT_PATHS = (
     CFG_GROUP_POLICY,
     CFG_GROUP_POLICY_LIST,
     CFG_WHITELIST,
+    *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_KEYS),
 )
 
 
@@ -311,7 +316,9 @@ def _create_cert(vm: SmokeVM) -> str:
 
 def _configure_resolver(vm: SmokeVM, refid: str) -> None:
     """Save the Resolver page the way an operator with DoT does: port and interfaces at their defaults, DoT on,
-    queries logged, Custom Options in the `server:` form pfSense documents; then let Unbound pick it up."""
+    queries logged, Custom Options in the `server:` form pfSense documents; then let Unbound pick it up. pfB-DNS's
+    interface lists are emptied, so that its turn-on seeds its listener settings, certificate included, from this
+    Resolver."""
     _php_ok(
         vm,
         "$u = config_get_path('unbound', array());\n"
@@ -320,6 +327,11 @@ def _configure_resolver(vm: SmokeVM, refid: str) -> None:
         f"$u['sslcertref'] = {h._php_str(refid)};\n"
         f"$u['custom_options'] = {h._php_str(base64.b64encode(CUSTOM_OPTIONS.encode()).decode())};\n"
         "config_set_path('unbound', $u);\n"
+        # pfB-DNS seeds its listener settings from the Resolver at the first turn-on, while pfb_dns_interface is empty:
+        # a value an earlier rig left would keep the turn-on from taking this Resolver's certificate and interfaces
+        f"$d = config_get_path({h._php_str(CFG_PFB_DNS)}, array());\n"
+        f"foreach (array({', '.join(h._php_str(key) for key in LISTENER_LISTS)}) as $k) {{ $d[$k] = ''; }}\n"
+        f"config_set_path({h._php_str(CFG_PFB_DNS)}, $d);\n"
         "write_config('pfBlockerNG smoke: Resolver DoT and log-queries for the #3515 smoke');\n"
         "services_unbound_configure();",
         "Resolver settings",

@@ -27,11 +27,15 @@ func TestDoTListenFlagsBindTheirAddressesInOrder(t *testing.T) {
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 		"--dot-listen", "127.0.0.1", "--dot-listen", "::1", "--dot-port", "0", "--tls-pem", path,
 	}, decider("serve"))
-	first := listeningAddr(t, gw.waitLine("listening dot "), "dot")
-	second := listeningAddr(t, gw.waitLine("listening dot "), "dot")
-	gw.waitLine("ready upstream ")
-	if first.Addr() != netip.MustParseAddr("127.0.0.1") || second.Addr() != netip.MustParseAddr("::1") {
-		t.Fatalf("DoT listens on %s then %s, want 127.0.0.1 then [::1]: the order of --dot-listen", first, second)
+	gw.waitLine("ready upstream ") // the listening lines come before it: all of them are logged by now
+	var got []netip.AddrPort
+	for _, line := range strings.Split(gw.logText(), "\n") {
+		if strings.HasPrefix(line, "listening dot ") {
+			got = append(got, listeningAddr(t, line, "dot"))
+		}
+	}
+	if len(got) != 2 || got[0].Addr() != netip.MustParseAddr("127.0.0.1") || got[1].Addr() != netip.MustParseAddr("::1") {
+		t.Fatalf("DoT listens on %v, want 127.0.0.1 then [::1], one listener each: the order of --dot-listen", got)
 	}
 }
 

@@ -4687,7 +4687,7 @@ EOF;
 EOF;
 		}
 	} else {
-		// The addresses below come from this snapshot: a marker that has changed since (restored, moved again) is for the next apply to regenerate
+		// The addresses below come from the dns/pfb_dns_* settings; only the marker guard is bound to the snapshot: a marker that has changed since (restored, moved again) is for the next apply to regenerate
 		$marker = escapeshellarg((string) PfbConfig::read('dns/pfb_dns_saved'));
 		$rc['start'] .= <<<EOF
 	[ "\${savedcheck}" = {$marker} ] || exit 0
@@ -4906,7 +4906,7 @@ function pfb_dns_proxy_log_size(): int {
  * `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id when there is none. The
  * notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or replaced here. The
  * problems, in this order, each one sentence that says what is not served and why:
- *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one;
+ *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one (this start's own, with a $since);
  *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the
  *      CURRENT start did not report as `listening <kind> <host:port>`, with the reason the gateway logged for that address
  *      (`cannot listen on <host:port>: <reason>`), else that it did not report it. The current start is what the log holds after
@@ -4925,8 +4925,8 @@ function pfb_dns_proxy_log_size(): int {
  *        waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
  *        it; NULL = no start was made (the cron tick, an apply that restarted nothing): the log's latest start is judged. A log now
- *        shorter than $since was rotated: it is judged from its start. Not used when the proxy is not ready: the last gateway error is
- *        looked for in the whole tail, since a start that failed may have logged nothing new
+ *        shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway error is looked for
+ *        the same way, only in the bytes after $since (none quoted when this start logged none); with NULL, in the whole tail
  */
 function pfb_dns_proxy_startup_check(?bool $ready = NULL, ?int $since = NULL): void {
 	global $pfb;
@@ -4958,7 +4958,7 @@ function pfb_dns_proxy_startup_check(?bool $ready = NULL, ?int $since = NULL): v
 	$judged = FALSE;
 	if (!$ready) {
 		$error = '';
-		foreach ($tail(NULL) as $line) {
+		foreach ($tail($since) as $line) {
 			if (str_starts_with($line, 'pfb_dns_gateway:')) {
 				$error = $line;
 			}
@@ -5454,11 +5454,12 @@ if (isset($argv[1])) {
 			exit(pfb_dns_proxy_certificate_refresh(TRUE) ? 0 : 1);
 	}
 
-	// The boot start's check (pfb_upstream_observer_include.inc backgrounds it beside the start, bounded by timeout(1)): the log's size is
-	// taken first, since the gateway needs seconds to become ready and logs nothing before; the certificate that could not be exported or
-	// pushed gets its notice, then the start is checked and its problems become the one startup notice
+	// The boot start's check (pfb_upstream_observer_include.inc backgrounds it beside the start, bounded by timeout(1)): it judges the
+	// log from the size the hook took BEFORE the start (argv[2], digits only; none: the size now), since the gateway needs seconds to
+	// become ready and logs nothing before. The certificate that could not be exported or pushed gets its notice, then the start is
+	// checked and its problems become the one startup notice
 	elseif ($argv[1] == 'dns_check') {
-			$since = pfb_dns_proxy_log_size();
+			$since = (isset($argv[2]) && ctype_digit($argv[2])) ? (int) $argv[2] : pfb_dns_proxy_log_size();
 			pfb_global();
 			pfb_dns_proxy_certificate_sync();
 			pfb_dns_proxy_startup_check(NULL, $since);

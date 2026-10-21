@@ -141,7 +141,12 @@ LISTENER_SETTINGS = {
     "pfb_dns_doq_port": str(DOQ_PORT),
     "pfb_dns_doq_interface": "lan",
 }
-CONFIG_PATHS = (*SNAPSHOT_PATHS, *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_SETTINGS), "unbound/acls", AUTO_ROWS_OFF)
+# SNAPSHOT_PATHS already holds the interface lists, which LISTENER_SETTINGS names again
+CONFIG_PATHS = tuple(
+    dict.fromkeys(
+        (*SNAPSHOT_PATHS, *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_SETTINGS), "unbound/acls", AUTO_ROWS_OFF)
+    )
+)
 
 TRANSPORTS = ("udp", "tcp", "dot", "doh-post", "doh-get", "doq")
 _TLS = (f"+tls-ca={CERT_CLIENT}", f"+tls-hostname={CERT_NAME}")

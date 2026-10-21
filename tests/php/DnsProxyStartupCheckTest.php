@@ -39,7 +39,6 @@ final class DnsProxyStartupCheckTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-	private const EXTRA = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 	private const HOOK = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/dns_proxy/pfb_upstream_observer_include.inc';
 
 	private const HEAD = 'pfB-DNS started with problems: ';
@@ -819,13 +818,26 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$source = (string) file_get_contents(self::HOOK);
 
 		$this->assertMatchesRegularExpression(
-			"~if \\(is_executable\\(\\\$pfb_dns_rc\\)[^\\n]*\\) \\{\\n\\tmwexec_bg\\(\\\$pfb_dns_rc \\. ' start'\\);\\n" .
-			"\\tmwexec_bg\\('/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng\\.inc dns_check'\\);\\n\\}~",
+			"~if \\(is_executable\\(\\\$pfb_dns_rc\\)[^\\n]*\\) \\{\\n(?:\\t//[^\\n]*\\n)*\\t\\\$pfb_dns_since = [^\\n]*\\n\\tmwexec_bg\\(\\\$pfb_dns_rc \\. ' start'\\);\\n" .
+			"\\tmwexec_bg\\('/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng\\.inc dns_check ' \\. \\\$pfb_dns_since\\);\\n\\}\\nunset\\(\\\$pfb_dns_rc, \\\$pfb_dns_since\\);~",
 			$source,
 			'the bounded check is backgrounded in the branch that backgrounds the start, and nowhere else'
 		);
 		$this->assertSame(2, substr_count($source, 'mwexec_bg('), 'two backgrounded commands: the start and the check; the hook still waits for nothing');
 		$this->assertDoesNotMatchRegularExpression('/\b(?:sleep|usleep|exec|shell_exec|passthru|proc_open)\(/', $source);
+	}
+
+	public function testTheBootHooksCapOutlastsTheStartWaitAndTheLogWaitWithAMargin(): void
+	{
+		// Given the hook's literal and the production defaults (the test bootstrap overrides the waits to 0, so they are read from the source)
+		$this->assertSame(1, preg_match('~/usr/bin/timeout -s TERM -k 5 (\d+) ~', (string) file_get_contents(self::HOOK), $cap));
+		$inc = (string) file_get_contents(self::INC);
+		$this->assertSame(1, preg_match("~define\\('PFB_UNBOUND_START_WAIT', (\\d+)\\)~", $inc, $unbound));
+		$this->assertSame(1, preg_match("~define\\('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT\\)~", $inc), 'the proxy\'s start wait is the Unbound startup budget');
+		$this->assertSame(1, preg_match("~define\\('PFB_DNS_PROXY_LOG_WAIT', (\\d+)\\)~", $inc, $log));
+
+		// Then the cap leaves 10 s beyond both waits for what else the check does (the certificate sync, filing the notice)
+		$this->assertGreaterThanOrEqual((int) $unbound[1] + (int) $log[1] + 10, (int) $cap[1], 'timeout(1) must not kill the check while it still waits');
 	}
 
 	public function testTheDnsCheckArmSyncsTheCertificateThenChecksTheStartAndExits(): void

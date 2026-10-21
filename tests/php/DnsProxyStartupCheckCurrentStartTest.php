@@ -35,6 +35,8 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+	private const ARM = "~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*\\\$since = ([^\\n]*);\\s*pfb_global\\(\\);\\s*" .
+		"pfb_dns_proxy_certificate_sync\\(\\);\\s*pfb_dns_proxy_startup_check\\(NULL, \\\$since\\);\\s*exit\\(0\\);\\s*\\}~";
 
 	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
@@ -339,18 +341,40 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->assertSame($before, $this->standing());
 	}
 
-	public function testAStartThatNeverBecameReadyQuotesTheGatewayErrorOfTheWholeTail(): void
+	/** @return array<string,array{list<string>,list<string>,int,string}> log before $since, appended after it, how far past the log's end $since is, the quote */
+	public static function notReadyStarts(): array
 	{
-		// Given an error the gateway logged before the size was taken, and nothing after it: a start that failed may have logged nothing new
+		return [
+			'an old error and nothing from this start' => [['pfb_dns_gateway: old error'], [], 0, ''],
+			'an old error, then this start\'s own' => [['pfb_dns_gateway: old error'], ['pfb_dns_gateway: this start'], 0, ' (last gateway error: pfb_dns_gateway: this start)'],
+			'an old error, then lines of this start that are no error' => [['pfb_dns_gateway: old error'], self::PLAIN, 0, ''],
+			'a log rotated since the size was taken' => [['pfb_dns_gateway: rotated'], [], 4096, ' (last gateway error: pfb_dns_gateway: rotated)'],
+		];
+	}
+
+	/**
+	 * @param list<string> $before
+	 * @param list<string> $after
+	 */
+	#[DataProvider('notReadyStarts')]
+	public function testAStartThatNeverBecameReadyQuotesOnlyTheGatewayErrorTheCurrentStartLogged(array $before, array $after, int $past, string $quote): void
+	{
+		// Given an error logged before the size was taken, and what the start itself logged after it (a rotation: shorter than the size)
 		$this->box();
-		$this->log('pfb_dns_gateway: cannot bind');
-		$since = $this->logSize();
-		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_startup_check']);
+		$this->log($before);
+		$since = $this->logSize() + $past;
+		if ($after !== []) {
+			$this->appendLog($after);
+		}
 
-		($namespace . '\\pfb_dns_proxy_startup_check')(FALSE, $since);
+		// When the check judges that start as not ready (a wait here would be a defect: nothing is started)
+		pfb_dns_proxy_startup_check(FALSE, $since);
 
-		$this->assertSame([], $clock->sleeps, 'not ready: there is no start to wait for the lines of');
-		$this->assertStringContainsString('(last gateway error: pfb_dns_gateway: cannot bind)', $this->startupTexts()[0]);
+		// Then an error of an older start is not blamed on this one
+		$this->assertSame(
+			[$this->problemText('pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s' . $quote . '.')],
+			$this->startupTexts()
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -474,16 +498,43 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->assertSame([], $clock->sleeps);
 	}
 
-	public function testTheDnsCheckArmTakesTheLogSizeBeforeAnythingElseAndPassesItToTheCheck(): void
+	public function testTheDnsCheckArmTakesTheSizeBeforeAnythingElseAndPassesItToTheCheck(): void
 	{
-		$source = (string) file_get_contents(self::INC);
-
 		$this->assertMatchesRegularExpression(
-			"~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*\\\$since = pfb_dns_proxy_log_size\\(\\);\\s*pfb_global\\(\\);\\s*" .
-			"pfb_dns_proxy_certificate_sync\\(\\);\\s*pfb_dns_proxy_startup_check\\(NULL, \\\$since\\);\\s*exit\\(0\\);\\s*\\}~",
-			$source,
-			'the boot hook backgrounds the start and this check together: the size is taken before the check waits for anything'
+			self::ARM,
+			(string) file_get_contents(self::INC),
+			'the boot hook backgrounds the start and this check together: the size is settled before the check waits for anything'
 		);
+	}
+
+	/** @return array<string,array{list<string>,int}> the argv the arm gets (the script, `dns_check`, then the hook's argument), the size it judges from; the log holds 4 bytes */
+	public static function armArguments(): array
+	{
+		return [
+			'the size the hook took before the start' => [['pfblockerng.inc', 'dns_check', '1234'], 1234],
+			'a size of zero' => [['pfblockerng.inc', 'dns_check', '0'], 0],
+			'no argument (run by hand): the log\'s size now' => [['pfblockerng.inc', 'dns_check'], 4],
+			'a negative number' => [['pfblockerng.inc', 'dns_check', '-1'], 4],
+			'digits and a letter' => [['pfblockerng.inc', 'dns_check', '12a'], 4],
+			'an empty string' => [['pfblockerng.inc', 'dns_check', ''], 4],
+			'a float' => [['pfblockerng.inc', 'dns_check', '1e3'], 4],
+			'a number too big for an int' => [['pfblockerng.inc', 'dns_check', '999999999999999999999'], PHP_INT_MAX],
+		];
+	}
+
+	/** @param list<string> $argv */
+	#[DataProvider('armArguments')]
+	public function testTheDnsCheckArmJudgesFromTheHooksSizeWhenItIsDigitsAndFromTheLogNowOtherwise(array $argv, int $expected): void
+	{
+		// Given the arm's own size statement, evaluated as the arm runs it, and a log that holds 4 bytes
+		$this->assertSame(1, preg_match(self::ARM, (string) file_get_contents(self::INC), $arm));
+		$this->log('abc');
+
+		// When it gets this argv
+		$since = (static fn (array $argv): mixed => eval('return ' . $arm[1] . ';'))($argv);
+
+		// Then digits are the size taken before the start, and anything else (hostile or absent) falls back, with no TypeError
+		$this->assertSame($expected, $since);
 	}
 
 	public function testTheLogWaitIsOverridableLikeTheStartWaitAndAllowsThreeSeconds(): void
