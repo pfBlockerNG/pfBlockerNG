@@ -2542,6 +2542,16 @@
             }
         ]
     },
+    "pfb_dns_proxy_upstream_address": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_dns_proxy_upstream_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_dns_redirect_rule": {
         "returnsRef": false,
         "returnType": "array",

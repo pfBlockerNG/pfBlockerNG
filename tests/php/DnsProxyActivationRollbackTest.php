@@ -1872,6 +1872,36 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertRolledBackWithNotices('rolled back by the boot check');
 	}
 
+	/** @return array<string,array{string,bool}> */
+	public static function upstreamStartupChecks(): array
+	{
+		return [
+			'boot with missing Unbound' => ['boot', FALSE],
+			'tick with missing Unbound' => ['tick', FALSE],
+			'boot with foreign listeners' => ['boot', TRUE],
+			'tick with foreign listeners' => ['tick', TRUE],
+		];
+	}
+
+	#[DataProvider('upstreamStartupChecks')]
+	public function testStartupRollsBackAReadyGatewayWhoseUnboundUpstreamFailed(string $path, bool $foreign): void
+	{
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway and its Unbound upstream serve');
+		$this->seedUnbound(alive: $foreign);
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], $foreign
+			? "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\nroot nc 6161 4 udp4 127.0.0.1:5353 *:*\n" : '');
+
+		if ($path === 'boot') {
+			$this->dnsCheckArm('0');
+		} else {
+			$this->tick();
+		}
+
+		$this->assertRolledBackWithNotices("{$path} rejected the unavailable Unbound upstream");
+	}
+
 	public function testTheBootCheckDoesNothingWithoutASnapshot(): void
 	{
 		// Given a box whose pfB-DNS was turned off and its Resolver restored since, so no snapshot is stored

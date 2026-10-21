@@ -346,6 +346,12 @@ $GLOBALS['pfb_test_valid_pids'] = [
 	PFB_DNS_PROXY_DAEMON_PIDFILE => $alive,
 	$pfb['dns_proxy_pidfile']    => $alive,
 ];
+$unboundPidfile = "{$g['varrun_path']}/unbound.pid";
+file_put_contents($unboundPidfile, "5151\n");
+$GLOBALS['pfb_test_valid_pids'][$unboundPidfile] = TRUE;
+file_put_contents($GLOBALS['pfb_test_sockstat_output'],
+	"unbound unbound 5151 3 tcp4 127.0.0.1:5353 *:*\n"
+	. "unbound unbound 5151 4 udp4 127.0.0.1:5353 *:*\n");
 // The sinkhole VIP pfSense knows (every run: the retry's config.xml names it too)
 $GLOBALS['pfb_test_vip_list'] = ['_vip_test_a' => '10.10.10.1'];
 

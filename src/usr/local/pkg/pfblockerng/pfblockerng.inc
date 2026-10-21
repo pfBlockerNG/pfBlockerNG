@@ -3640,6 +3640,9 @@ const PFB_DNS_CONFIG_LOCK_WAIT = 10;
 if (!defined('PFB_DNS_PROXY_RCFILE')) {
 	define('PFB_DNS_PROXY_RCFILE', '/usr/local/etc/rc.d/pfb_dns_proxy.sh');
 }
+if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
+	define('PFB_DNS_PROXY_SOCKSTAT', '/usr/bin/sockstat');
+}
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
@@ -4879,7 +4882,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$daemonpid = PFB_DNS_PROXY_DAEMON_PIDFILE;
 	$childpid = PFB_DNS_PROXY_PIDFILE;
 	$log = PFB_DNS_PROXY_LOG;
-	$upstream = '127.0.0.1:' . PFB_DNS_PROXY_UNBOUND_PORT;
+	$upstream = escapeshellarg(pfb_dns_proxy_host_port(pfb_dns_proxy_upstream_address(), PFB_DNS_PROXY_UNBOUND_PORT));
 	$lockfile = PFB_DNS_PROXY_LOCKFILE;
 	$ready = escapeshellarg($pfb['dns_proxy_ready']);
 	$cert = escapeshellarg($pfb['dns_proxy_cert']);
@@ -5198,17 +5201,76 @@ function pfb_dns_proxy_restart(): bool {
 	return pfb_dns_proxy_confirm_ready($since);
 }
 
+/** Prefer native lo0 IPv4 when available; otherwise the gateway must reach Unbound over IPv6. */
+function pfb_dns_proxy_upstream_address(): string {
+	return get_interface_ip('lo0') === '127.0.0.1' ? '127.0.0.1' : '::1';
+}
+
+/** The actual rc upstream must have both transports owned by the live Unbound pidfile's process. */
+function pfb_dns_proxy_upstream_ready(): bool {
+	global $g;
+
+	$pidfile = "{$g['varrun_path']}/unbound.pid";
+	if (!isvalidpid($pidfile)) {
+		return FALSE;
+	}
+	$pid = (string) @file_get_contents($pidfile);
+	if (preg_match('/\A[1-9][0-9]*\n?\z/', $pid) !== 1) {
+		return FALSE;
+	}
+	$pid = rtrim($pid, "\n");
+	$rc = (string) @file_get_contents(PFB_DNS_PROXY_RCFILE);
+	if (preg_match('~^[ \t]*/usr/sbin/daemon .*$~m', $rc, $daemon) !== 1 ||
+	    preg_match("~[ \t]--upstream[ \t]+(?:'([^']*)'|\"([^\"]*)\"|([^ \t]+))(?=[ \t]|\$)~",
+	    $daemon[0], $upstream, PREG_UNMATCHED_AS_NULL) !== 1) {
+		return FALSE;
+	}
+	$argument = $upstream[1] ?? $upstream[2] ?? $upstream[3];
+	if (preg_match('/\A(\[[0-9A-Fa-f:.]+\]|[0-9.]+):([0-9]+)\z/', $argument, $endpoint) !== 1) {
+		return FALSE;
+	}
+	$host = trim($endpoint[1], '[]');
+	$packed = @inet_pton($host);
+	$port = pfb_dns_proxy_listener_port($endpoint[2]);
+	if ($packed === FALSE || $port === NULL || ($endpoint[1][0] === '[') !== (strlen($packed) === 16)) {
+		return FALSE;
+	}
+	$family = strlen($packed) === 16 ? '6' : '4';
+	$expected = pfb_dns_proxy_host_port($host, $port);
+	$lines = [];
+	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_SOCKSTAT) . ' -46lw -p ' . escapeshellarg($port),
+	    'DNS proxy upstream sockets', $lines, FALSE, 1) !== 0) {
+		return FALSE;
+	}
+	$transports = [];
+	foreach ($lines as $line) {
+		$fields = preg_split('/\s+/', trim($line)) ?: [];
+		if (count($fields) < 7 || $fields[1] !== 'unbound' || $fields[2] !== $pid ||
+		    !in_array($fields[4], ["tcp{$family}", "udp{$family}"], TRUE) ||
+		    preg_match('/\A(?:\[([0-9A-Fa-f:.]+)\]|([0-9A-Fa-f:.]+)):([0-9]+)\z/', $fields[5], $local) !== 1) {
+			continue;
+		}
+		$address = $local[1] !== '' ? $local[1] : $local[2];
+		$local_port = pfb_dns_proxy_listener_port($local[3]);
+		if (@inet_pton($address) !== FALSE && $local_port !== NULL &&
+		    pfb_dns_proxy_host_port($address, $local_port) === $expected) {
+			$transports[$fields[4]] = TRUE;
+		}
+	}
+	return isset($transports["tcp{$family}"], $transports["udp{$family}"]);
+}
+
 /**
- * Is the DNS proxy READY: its listener serves queries. That is not the same as ALIVE. The proxy writes its own PID to the
- * --ready-file marker only once its sockets are bound, its privileges dropped and its matcher initialised, so the child
- * pidfile (daemon(8) -p) must name a live process AND the marker must hold that very decimal PID. A live process that never
+ * Is the DNS proxy READY: its listener serves queries and Unbound owns both transports on its actual upstream endpoint.
+ * The proxy writes its own PID to --ready-file only once its sockets are bound, privileges dropped and matcher initialised, so the
+ * child pidfile (daemon(8) -p) must name a live process AND the marker must hold that very decimal PID. A live process that never
  * published one (a listener that cannot bind, which its supervisor restarts every few seconds), the marker an earlier
  * incarnation left, a live supervisor with no child and a marker with no live child are all NOT ready.
  *
  * pfb_dns_proxy_running() stays the pidfile-only LIVENESS predicate (is the module host up? what the zero-downtime swap and the
  * ledger ask); this one answers whether an activation worked, and the status panel shows Running only while it holds (a live
- * child that has not published its marker shows Starting). It does not prove that recursion works: the front end can handle
- * queries while the Resolver behind it is still starting, which the boot query probe covers.
+ * child that has not published its marker shows Starting). This also requires the live Unbound PID's TCP and UDP upstream
+ * sockets, not successful recursion: the boot query probe covers that.
  */
 function pfb_dns_proxy_ready(): bool {
 	global $pfb;
@@ -5219,7 +5281,8 @@ function pfb_dns_proxy_ready(): bool {
 	$child = (string) @file_get_contents($pfb['dns_proxy_pidfile']);
 	$marker = (string) @file_get_contents($pfb['dns_proxy_ready']);
 	$decimal = '/\A[1-9][0-9]*\n?\z/';
-	return preg_match($decimal, $child) === 1 && preg_match($decimal, $marker) === 1 && rtrim($child, "\n") === rtrim($marker, "\n");
+	return preg_match($decimal, $child) === 1 && preg_match($decimal, $marker) === 1 &&
+	    rtrim($child, "\n") === rtrim($marker, "\n") && pfb_dns_proxy_upstream_ready();
 }
 
 /**
@@ -15426,9 +15489,12 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		$changed = TRUE;
 	}
 
-	$lines = ['server:', PFB_DNS_PROXY_MARKER, 'port: ' . PFB_DNS_PROXY_UNBOUND_PLAIN_PORT,
-	    'interface: 127.0.0.1@' . PFB_DNS_PROXY_UNBOUND_PORT, 'interface: ::1@' . PFB_DNS_PROXY_UNBOUND_PORT,
-	    'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT];
+	$lines = ['server:', PFB_DNS_PROXY_MARKER, 'port: ' . PFB_DNS_PROXY_UNBOUND_PLAIN_PORT];
+	if (pfb_dns_proxy_upstream_address() === '127.0.0.1') {
+		$lines[] = 'interface: 127.0.0.1@' . PFB_DNS_PROXY_UNBOUND_PORT;
+	}
+	$lines[] = 'interface: ::1@' . PFB_DNS_PROXY_UNBOUND_PORT;
+	$lines[] = 'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT;
 	$size_line = pfb_dns_proxy_edns_line($code);
 	if ($size_line !== NULL) {
 		$lines[] = $size_line;

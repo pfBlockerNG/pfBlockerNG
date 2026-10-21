@@ -42,6 +42,8 @@ final class DnsProxyReadinessTest extends TestCase
 			$this->savedGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
 		}
 		$GLOBALS['config'] = [];
+		$keys = array_fill_keys(PFB_DNS_PROXY_RESOLVER_KEYS, ['present' => FALSE, 'value' => NULL]);
+		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode((string) json_encode($keys)));
 		$GLOBALS['pfb_test_interface_ip'] = ['lo0' => '127.0.0.1'];
 		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
 		$this->savedValidPids = $GLOBALS['pfb_test_valid_pids'] ?? [];
