@@ -1842,27 +1842,32 @@ DNS_PROXY_LISTENER_KEYS = (
     "pfb_dns_doq_port",
     "pfb_dns_doq_interface",
 )
-RESOLVER_CERT_CFG = "unbound/sslcertref"
+# issue #3538: the plain DNS, DoT and certificate settings the same save writes, restored with the seven above
+DNS_PROXY_OWN_KEYS = ("pfb_dns_interface", "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_dot_interface")
+CERT_CFG = DNS_PROXY_CFG + "pfb_dns_sslcertref"
 
 
 def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """issue #3513: pfB-DNS's DoH/DoQ settings persist canonically; invalid input aborts the whole save.
+    """issues #3513, #3538: pfB-DNS's DoH/DoQ settings persist canonically; invalid input aborts the whole save.
 
-    Given DoH and DoQ are stored Off with the default ports and the Resolver has a certificate
-      (before-state, seeded directly so it does not depend on the save path under test).
+    Given DoH and DoQ are stored Off with the default ports (before-state, seeded directly so it does not depend on
+      the save path under test) and the box offers a certificate (the form posts the first one it lists).
     When a valid DoH/DoQ configuration is saved, Then all seven values persist (the trusted list
-      space-joined) -- none was stored before the POST.
+      space-joined) -- none was stored before the POST -- and so does the certificate.
     When one value is invalid (a port outside 1-65535, an unknown interface, a trusted entry that is
       not an IP or CIDR), Then the page shows that input error and config.xml is unchanged.
-    When the Resolver has no certificate, Then DoH/DoQ cannot be saved On: the page names the
+    When no certificate is selected, Then DoH/DoQ cannot be saved On: the page names the
       certificate and config.xml is unchanged.
     """
     vm = smoke_vm
-    originals = {key: helpers.config_get_state(vm, DNS_PROXY_CFG + key) for key in DNS_PROXY_LISTENER_KEYS}
-    original_cert = helpers.config_get_state(vm, RESOLVER_CERT_CFG)
+    originals = {
+        key: helpers.config_get_state(vm, DNS_PROXY_CFG + key)
+        for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS)
+    }
+    original_cert = helpers.config_get_state(vm, CERT_CFG)
     seeded = {
         "pfb_dns_doh": "",
         "pfb_dns_doh_port": "4443",
@@ -1881,25 +1886,30 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
         "pfb_dns_doq_port": "8853",
         "pfb_dns_doq_interface": "lan",
     }
+    # a multi-select posts as name[]: a bare scalar is not a list and the page rejects it
+    posted = {f"{key}[]" if key.endswith("_interface") else key: value for key, value in valid.items()}
     expected = {**valid, "pfb_dns_doh_trusted": "192.0.2.10 2001:db8::/32"}
 
     def stored() -> dict[str, str]:
         return {key: helpers.config_get(vm, DNS_PROXY_CFG + key) for key in DNS_PROXY_LISTENER_KEYS}
 
     try:
-        helpers.config_set(vm, RESOLVER_CERT_CFG, "smoke-resolver-cert")
+        helpers.config_set(vm, CERT_CFG, "")
         for key, value in seeded.items():
             helpers.config_set(vm, DNS_PROXY_CFG + key, value)
         assert stored() == seeded, "seed did not take: DoH/DoQ must start Off with the default ports"
 
-        accepted = webui.post(DNS_PAGE, valid, timeout=SAVE_TIMEOUT)
+        accepted = webui.post(DNS_PAGE, posted, timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(accepted.text), "the Save lost its authenticated session"
         assert stored() == expected, "a valid DoH/DoQ configuration must persist, canonically"
+        assert helpers.config_get(vm, CERT_CFG), (
+            "the save must store the certificate the form offered (the box needs one)"
+        )
 
         for override, error in (
             ({"pfb_dns_doh_port": "65536"}, "DoH Port must be a whole number from 1 to 65535."),
             ({"pfb_dns_doq_port": "0"}, "DoQ Port must be a whole number from 1 to 65535."),
-            ({"pfb_dns_doh_interface": "opt99"}, "DoH: Invalid interface selection: opt99"),
+            ({"pfb_dns_doh_interface[]": "opt99"}, "DoH: Invalid interface selection: opt99"),
             (
                 {"pfb_dns_doh_trusted": "1.2.3.4;rm -rf /"},
                 "DoH: Trusted front ends must be IP addresses or CIDR prefixes",
@@ -1909,16 +1919,15 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
             assert error in rejected.text, f"{override}: the page must show {error!r}"
             assert stored() == expected, f"{override}: a rejected Save must leave config.xml unchanged"
 
-        helpers.config_set(vm, RESOLVER_CERT_CFG, "")
-        no_cert = webui.post(DNS_PAGE, {}, timeout=SAVE_TIMEOUT)
-        assert "SSL/TLS certificate; select one under Services" in no_cert.text, (
-            "DoH/DoQ on with no Resolver certificate must show the certificate input error"
+        no_cert = webui.post(DNS_PAGE, {"pfb_dns_sslcertref": ""}, timeout=SAVE_TIMEOUT)
+        assert "DoT, DoH and DoQ need a certificate: select one in SSL/TLS Certificate." in no_cert.text, (
+            "DoH/DoQ on with no certificate selected must show the certificate input error"
         )
         assert stored() == expected, "a rejected Save must leave config.xml unchanged"
     finally:
         for key, state in originals.items():
             helpers.config_restore_state(vm, DNS_PROXY_CFG + key, state)
-        helpers.config_restore_state(vm, RESOLVER_CERT_CFG, original_cert)
+        helpers.config_restore_state(vm, CERT_CFG, original_cert)
 
 
 def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(

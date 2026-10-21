@@ -47,7 +47,7 @@ from .test_category_edit import CFG_DNSBL, CFG_IPV4, _del_rowid, _free_rowid
 from .webui import row_containing, scrape_form_fields
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     from ..conftest import SmokeVM
     from .webui import WebUI
@@ -2143,8 +2143,8 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         for tag in re.findall(r"<input\b[^>]*>", html)
         if re.search(r"""\btype=["']?checkbox\b""", tag) and (name := re.search(r'\bname="([^"]+)"', tag))
     ]
-    assert checkboxes == ["pfb_dns", "pfb_dns_doh", "pfb_dns_doq", "pfb_py_reply"], (
-        f"the page has the enable checkbox, the DoH and DoQ ones, then DNS Reply Logging; got {checkboxes}"
+    assert checkboxes == ["pfb_dns", "pfb_dns_dot", "pfb_dns_doh", "pfb_dns_doq", "pfb_py_reply"], (
+        f"the page has the enable checkbox, the DoT, DoH and DoQ ones, then DNS Reply Logging; got {checkboxes}"
     )
     help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
     for needle in (
@@ -2154,6 +2154,8 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         "the Listen Port is not changed",
         "neither 5353 nor 5354",
         "SSL/TLS Service is turned off",
+        "pfB-DNS serves DNS over TLS from its own DoT settings below",
+        "taken from the DNS Resolver once, the first time this page loads or pfB-DNS is turned on",
         "# pfBlockerNG DNS proxy",
         "port 5354 and also listens on port 5353 for the proxy",
         "saved and restored when this option is turned off, when pfBlockerNG is disabled, "
@@ -2288,6 +2290,10 @@ def test_reports_dns_reply_filter_limit_saves_from_the_rendered_form_with_dnsbl_
 
 
 _DNS_LISTENER_FIELDS = (
+    "pfb_dns_interface",
+    "pfb_dns_dot",
+    "pfb_dns_dot_port",
+    "pfb_dns_dot_interface",
     "pfb_dns_doh",
     "pfb_dns_doh_port",
     "pfb_dns_doh_interface",
@@ -2296,7 +2302,12 @@ _DNS_LISTENER_FIELDS = (
     "pfb_dns_doq_port",
     "pfb_dns_doq_interface",
 )
-_DNS_LISTENER_NAMES = tuple(f'name="{field}' for field in _DNS_LISTENER_FIELDS)
+_DNS_INTERFACE_LISTS = ("pfb_dns_interface", "pfb_dns_dot_interface", "pfb_dns_doh_interface", "pfb_dns_doq_interface")
+# The certificate sits right after the plain DNS interface list: a select, or the Resolver's static text on a box
+# with no certificate that has a private key.
+_DNS_CERT_FIELD = "pfb_dns_sslcertref"
+_NO_CERT_TEXT = "No Certificates have been defined"
+_DNS_LISTENER_NAMES = tuple(f'name="{field}' for field in (*_DNS_LISTENER_FIELDS, _DNS_CERT_FIELD))
 
 
 def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
@@ -2310,56 +2321,163 @@ def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard:
     assert "/pfblockerng/pfblockerng_dns.php" in resp.text, "the DNSBL page's tab bar links to pfB-DNS"
 
 
-def test_pfb_dns_page_renders_the_doh_and_doq_settings_directly_after_the_enable_toggle(
+def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings_after_the_enable_toggle(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issue #3513: the seven DoH/DoQ fields follow the pfB-DNS enable checkbox, in order, before DNS Reply Logging.
+    """issues #3513, #3538: the listener settings follow the pfB-DNS enable checkbox, in order, before Reply Logging.
 
-    Given the pfB-DNS page renders, Then DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
-    interfaces) appear in that order between the enable checkbox and DNS Reply Logging, as the right input kinds,
-    with help that says experimental, names the Resolver's certificate, that DoQ is UDP and the HAProxy options, and
-    names the binary the package ships (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
+    Given the pfB-DNS page renders, Then the DNS interfaces, the SSL/TLS Certificate (or the Resolver's no-certificate
+    text), DoT (enable, port, interfaces), DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
+    interfaces) appear in that order between the enable checkbox and DNS Reply Logging, as the right input kinds. Every
+    interface list offers All and Localhost first and says one entry is required. The help says experimental, sends the
+    operator to the certificate selector, says DoQ is UDP, names the HAProxy options and the binary the package ships
+    (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
     """
     path = "/pfblockerng/pfblockerng_dns.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
-    assert result.ok, f"pfB-DNS DoH/DoQ render oracle failed: {result.detail}"
+    assert result.ok, f"pfB-DNS listener render oracle failed: {result.detail}"
     html = resp.text
 
     start = html.index('name="pfb_dns"')
     end = html.index('name="pfb_py_reply"')
-    positions = [html.find(f'name="{field}', start, end) for field in _DNS_LISTENER_FIELDS]
+    cert_at = html.find(f'name="{_DNS_CERT_FIELD}"', start, end)
+    if cert_at == -1:
+        cert_at = html.find(_NO_CERT_TEXT, start, end)
+    order = (_DNS_LISTENER_FIELDS[0], _DNS_CERT_FIELD, *_DNS_LISTENER_FIELDS[1:])
+    positions = [cert_at if field == _DNS_CERT_FIELD else html.find(f'name="{field}', start, end) for field in order]
     assert -1 not in positions, f"a field is missing between the pfB-DNS toggle and DNS Reply Logging: {positions}"
-    assert positions == sorted(positions), (
-        f"fields are out of order: {dict(zip(_DNS_LISTENER_FIELDS, positions, strict=True))}"
-    )
+    assert positions == sorted(positions), f"fields are out of order: {dict(zip(order, positions, strict=True))}"
 
     def tag_at(position: int) -> str:
         return html[html.rfind("<", 0, position + 1) : html.index(">", position) + 1]
 
     for name, kind in (
+        ("pfb_dns_dot_port", "number"),
         ("pfb_dns_doh_port", "number"),
         ("pfb_dns_doq_port", "number"),
         ("pfb_dns_doh_trusted", "text"),
     ):
         tag = tag_at(html.index(f'name="{name}"', start, end))
         assert re.search(rf"""\btype=["']?{kind}\b""", tag), f"{name} must be a {kind} input, got {tag}"
-    for name in ("pfb_dns_doh_interface", "pfb_dns_doq_interface"):
+    for name in _DNS_INTERFACE_LISTS:
         tag = tag_at(html.index(f'name="{name}', start, end))
         assert tag.startswith("<select") and "multiple" in tag, f"{name} must be a multi-select, got {tag}"
+        select = re.search(rf'<select\b[^>]*\bname="{name}\[\]"[^>]*>(.*?)</select>', html[start:end], re.DOTALL)
+        assert select, f"{name}[] select not found"
+        values = re.findall(r'<option\b[^>]*\bvalue="([^"]*)"', select.group(1))
+        assert values[:2] == ["all", "lo0"], f"{name} must offer All and Localhost first, got {values}"
+    if html.find(f'name="{_DNS_CERT_FIELD}"', start, end) != -1:
+        tag = tag_at(html.index(f'name="{_DNS_CERT_FIELD}"', start, end))
+        assert tag.startswith("<select") and "multiple" not in tag, (
+            f"the certificate must be a single select, got {tag}"
+        )
 
     block = html[start:end]
     for needle in (
         "Experimental",
-        "DNS Resolver",
-        "SSL/TLS certificate",
+        "Interfaces pfB-DNS answers plain DNS on",
+        "Serves DNS over TLS (RFC 7858)",
         "DoQ is UDP",
         "send-proxy-v2",
         "option forwardfor",
     ):
-        assert needle in block, f"DoH/DoQ help is missing {needle!r}"
+        assert needle in block, f"the listener help is missing {needle!r}"
+    assert block.count("At least one entry is required.") == len(_DNS_INTERFACE_LISTS), "every interface list says so"
+    assert block.count("Requires the SSL/TLS Certificate selected above.") == 3, "DoT, DoH and DoQ name the selector"
+    for stale in ("Requires the DNS Resolver", "None selected"):
+        assert stale not in block, f"the listener help still says {stale!r}"
     assert block.count("<code>pfb-dns</code>") == 2, "DoH and DoQ help each name the shipped binary, pfb-dns"
     assert "pfb_dns_gateway" not in html, "the page still names the retired binary pfb_dns_gateway"
+
+
+_PFB_DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+_DNS_CFG = "installedpackages/pfblockerngdns/config/0/"
+# The one-time seed's marker is an empty pfb_dns_interface; the others sit at their defaults until it runs.
+_DNS_UNSEEDED = {
+    "pfb_dns_interface": "",
+    "pfb_dns_dot": "",
+    "pfb_dns_dot_port": "853",
+    "pfb_dns_dot_interface": "",
+    "pfb_dns_doh_interface": "",
+    "pfb_dns_doq_interface": "",
+    "pfb_dns_sslcertref": "",
+}
+_DNS_SEEDED = {
+    "pfb_dns_interface": "lan",
+    "pfb_dns_dot": "on",
+    "pfb_dns_dot_port": "8853",
+    "pfb_dns_dot_interface": "lan",
+    "pfb_dns_doh_interface": "lan",
+    "pfb_dns_doq_interface": "lan",
+    "pfb_dns_sslcertref": "smoke-resolver-cert",
+}
+_RESOLVER_BEFORE = {
+    "unbound/active_interface": "lan",
+    "unbound/enablessl": "yes",
+    "unbound/tlsport": "8853",
+    "unbound/sslcertref": "smoke-resolver-cert",
+}
+_RESOLVER_AFTER = {
+    "unbound/active_interface": "opt1",
+    "unbound/tlsport": "9953",
+    "unbound/sslcertref": "another-cert",
+}
+
+
+def _read_config_paths(vm: SmokeVM, paths: list[str]) -> dict[str, str | None]:
+    """Read scalar config paths in one round trip; None = the path is absent."""
+    items = ", ".join(f"{helpers._php_str(path)} => config_get_path({helpers._php_str(path)}, NULL)" for path in paths)
+    return json.loads(helpers._php_read_scalar(vm, "", f"json_encode(array({items}))"))
+
+
+def _write_config_paths(vm: SmokeVM, values: Mapping[str, str | None]) -> None:
+    """Set (or, for None, delete) scalar config paths in one write_config()."""
+    ops = "".join(
+        f"config_del_path({helpers._php_str(path)});\n"
+        if value is None
+        else f"config_set_path({helpers._php_str(path)}, {helpers._php_str(value)});\n"
+        for path, value in values.items()
+    )
+    result = helpers.php_eval(vm, ops + "write_config('pfBlockerNG smoke #3538: set listener state');\necho 'OK';")
+    assert result.returncode == 0 and "OK" in result.stdout, (
+        f"failed to write {sorted(values)}: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+@pytest.mark.ui_e2e
+def test_pfb_dns_page_load_seeds_its_settings_from_the_resolver_once(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3538: loading the pfB-DNS page seeds its interface, DoT and certificate settings once.
+
+    Given pfB-DNS is off, its seeded settings sit at their defaults (not seeded yet) and the Resolver has an interface,
+    SSL/TLS, a TLS port and a certificate, When the page loads, Then config.xml holds those values under pfB-DNS's own
+    keys (no save needed); When the Resolver's interface, port and certificate change and the page loads again, Then
+    the stored values are unchanged.
+    """
+    vm = smoke_vm
+    unseeded = {f"{_DNS_CFG}{key}": value for key, value in _DNS_UNSEEDED.items()}
+    seeded_paths = list(unseeded)
+    touched = [*seeded_paths, *_RESOLVER_BEFORE, _PFB_DNS_TOGGLE]
+    priors = _read_config_paths(vm, touched)
+    try:
+        _write_config_paths(vm, {**unseeded, **_RESOLVER_BEFORE, _PFB_DNS_TOGGLE: ""})
+        assert _read_config_paths(vm, seeded_paths) == unseeded, "the not-seeded-yet state did not take"
+
+        resp = webui.get(_PFB_DNS_PAGE)
+        result = evaluate_render(_PFB_DNS_PAGE, resp.status_code, resp.text, ("pfB-DNS Settings",))
+        assert result.ok, f"pfB-DNS render oracle failed: {result.detail}"
+        expected = {f"{_DNS_CFG}{key}": value for key, value in _DNS_SEEDED.items()}
+        assert _read_config_paths(vm, seeded_paths) == expected, "the first page load must seed from the Resolver"
+
+        _write_config_paths(vm, dict(_RESOLVER_AFTER))
+        resp = webui.get(_PFB_DNS_PAGE)
+        result = evaluate_render(_PFB_DNS_PAGE, resp.status_code, resp.text, ("pfB-DNS Settings",))
+        assert result.ok, f"pfB-DNS render oracle failed: {result.detail}"
+        assert _read_config_paths(vm, seeded_paths) == expected, "a later Resolver change must not alter the settings"
+    finally:
+        _write_config_paths(vm, priors)
 
 
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
