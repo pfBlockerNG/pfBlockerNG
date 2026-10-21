@@ -275,6 +275,8 @@ final class PfbDnsStatusTest extends TestCase
 		unlink(PFB_DNS_PROXY_RCFILE);
 
 		$this->assertSame("127.0.0.1:{$port}", $this->transports()[$kind], 'a missing command cannot erase a listener confirmed by the running start');
+		config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
+		$this->assertSame("127.0.0.1:{$port}", $this->transports()[$kind], 'a pending disable cannot hide log-confirmed listeners when the command is missing');
 	}
 
 	/** @return array<string,array{string,string,string}> */
