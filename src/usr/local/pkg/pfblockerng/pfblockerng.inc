@@ -3298,7 +3298,7 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	];
 
 	$vips_config = config_get_path('virtualip/vip', []);
-	$dnsblconfig = config_get_path($dnsblcfg_path, []);
+	$dnsblconfig = PfbConfig::readSection($dnsblcfg_path);
 	$changed     = FALSE;
 	$conflicts   = [];
 
@@ -3424,7 +3424,7 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	// Apply order mirrors upstream firewall_virtual_ip.inc: persist config first,
 	// then bring the alias(es) up.
 	config_set_path('virtualip/vip', $vips_config);
-	config_set_path($dnsblcfg_path, $dnsblconfig);
+	PfbConfig::writeSectionSystem($dnsblcfg_path, $dnsblconfig);	// registered VIP ids and synced addresses go through the gateway
 	write_config('pfBlockerNG: saving DNSBL auto-VIP changes');
 
 	// Apply any created/ensured marked VIP live (config-first, then configure).
