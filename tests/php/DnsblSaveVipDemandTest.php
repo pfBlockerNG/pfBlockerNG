@@ -215,6 +215,24 @@ final class DnsblSaveVipDemandTest extends TestCase
 		$this->assertSame('', pfb_dnsbl_policy_from_post(['pfb_regex' => 'banana'])['pfb_regex']);
 	}
 
+	public function testPolicyFromPostStoresArrayValuedTextAreasAsEmptyWithoutWarning(): void
+	{
+		$warnings = [];
+		set_error_handler(static function (int $errno, string $message) use (&$warnings): bool {
+			$warnings[] = $message;
+			return TRUE;
+		});
+		try {
+			$stored = pfb_dnsbl_policy_from_post(['pfb_regex_list' => ['a.*'], 'tld_wildcard_blacklist' => ['zip']]);
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertSame('', $stored['pfb_regex_list'], 'an array-valued Regex List must not become base64 of "Array"');
+		$this->assertSame('', $stored['tld_wildcard_blacklist'], 'an array-valued TLD Blacklist must not become base64 of "Array"');
+		$this->assertSame([], $warnings, 'array input must not raise an Array-to-string warning');
+	}
+
 	public function testPageMapsThosePolicyFieldsOnlyThroughTheSharedFunction(): void
 	{
 		$source = pfb_test_page_source(self::PAGE);
@@ -233,7 +251,9 @@ final class DnsblSaveVipDemandTest extends TestCase
 		$posted = pfb_dnsbl_policy_from_post(['global_log' => 'enabled', 'global_log_mode' => 'default']);
 		$this->assertFalse(pfb_dnsbl_candidate_vip_demand([], $posted), 'before-state: nothing uses the VIP mechanism');
 
-		config_set_path('installedpackages/pfblockerngblacklist', ['blacklist_enable' => 'Enable', 'blacklist_selected' => 'ut1']);
+		config_set_path('installedpackages/pfblockerngblacklist', [
+			'blacklist_enable' => 'Enable', 'blacklist_selected' => 'ut1', 'item' => [['xml' => 'ut1', 'title' => 'UT1', 'selected' => 'adult']],
+		]);
 
 		$this->assertTrue(pfb_dnsbl_candidate_vip_demand([], $posted), 'the Blacklist category resolves Default to the posted VIP mechanism');
 	}

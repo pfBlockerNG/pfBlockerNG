@@ -126,7 +126,15 @@ foreach (array_unique($posted[1]) as $key) {
 $_POST['pfb_dnsbl'] = 'on';
 $_POST['pfb_dnsport'] = '8082';	// the unrelated field this save changes
 $_POST['pfb_dnsport_ssl'] = '8443';
-$_POST['pfb_idn'] = 'off';
+// The eight DNSBL policy fields, each different from the seeded section so a save that drops one shows on disk.
+$_POST['global_log'] = 'nxdomain';
+$_POST['global_log_mode'] = 'override';
+$_POST['pfb_regex'] = 'on';
+$_POST['pfb_regex_list'] = 'a.*';
+$_POST['pfb_idn'] = 'confusable';
+$_POST['tld_allow'] = 'on';
+$_POST['tld_wildcard'] = 'on';
+$_POST['tld_wildcard_blacklist'] = 'zip';
 $_POST['pfb_py_cache_max'] = '10000';
 $_POST['top1m_count'] = '1000';
 $pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST);	// the page's validation computes it once; the save reuses it

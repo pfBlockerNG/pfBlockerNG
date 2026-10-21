@@ -354,7 +354,7 @@ final class PfbWidgetOracleTest extends TestCase
 
 	public function testDnsblLiveWithoutVipDemandStatesNeitherVipNorPorts(): void
 	{
-		// Before-state: the same live DNSBL names its VIP and ports while a block answers with it.
+		// Live DNSBL names its VIP and ports only while a block answers with it.
 		$pfb = $this->liveDnsblPfb();
 		[, , , $with_demand] = pfb_widget_oracle_status($pfb);
 		$this->assertSame('DNSBL is Active on vip: 198.51.100.1 ports: 8080 & 8443', $with_demand);

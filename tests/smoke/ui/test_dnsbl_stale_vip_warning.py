@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from typing import TYPE_CHECKING
 
@@ -28,17 +29,25 @@ CFG = "installedpackages/pfblockerngdnsblsettings/config/0"
 @pytest.fixture
 def stale_vip_config(smoke_vm: SmokeVM) -> Iterator[None]:
     """Seed a manual-mode DNSBL config pointing at a VIP id that does not exist, then restore it."""
-    config = {f"{CFG}/pfb_dnsvip4": STALE_VIP, f"{CFG}/pfb_dnsvip6": "", f"{CFG}/pfb_dnsvip_auto": ""}
+    config = {
+        f"{CFG}/pfb_dnsvip4": STALE_VIP,
+        f"{CFG}/pfb_dnsvip6": "",
+        f"{CFG}/pfb_dnsvip_auto": "",
+        f"{CFG}/global_log_mode": "override",
+        f"{CFG}/global_log": "disabled_log",
+        f"{CFG}/pfb_regex": "",
+        f"{CFG}/pfb_regex_list": "",
+    }
     saved = {path: helpers.config_get_state(smoke_vm, path) for path in config}
-    for path, value in config.items():
-        helpers.config_set(smoke_vm, path, value)
-
-    yield
-
-    for path, state in saved.items():
-        helpers.config_restore_state(smoke_vm, path, state)
-        restored = helpers.config_get_state(smoke_vm, path)
-        assert restored == state, f"restore failed for {path}: expected {state!r}, found {restored!r}"
+    try:
+        for path, value in config.items():
+            helpers.config_set(smoke_vm, path, value)
+        yield
+    finally:
+        for path, state in saved.items():
+            helpers.config_restore_state(smoke_vm, path, state)
+            restored = helpers.config_get_state(smoke_vm, path)
+            assert restored == state, f"restore failed for {path}: expected {state!r}, found {restored!r}"
 
 
 def _render(smoke_vm: SmokeVM, webui: WebUI) -> str:
@@ -54,7 +63,14 @@ def _render(smoke_vm: SmokeVM, webui: WebUI) -> str:
 def test_dnsbl_page_warns_only_for_a_deleted_vip_in_manual_mode(
     smoke_vm: SmokeVM, webui: WebUI, stale_vip_config: None
 ) -> None:
-    """Manual mode warns naming a deleted VIP; auto mode and a cleared VIP do not."""
+    """A deleted manual VIP warns only with genuine demand; auto mode and a cleared VIP do not."""
+    html = _render(smoke_vm, webui)
+    assert WARNING_MARKER not in html, f"no demand: expected no {WARNING_MARKER!r}, found the marker"
+
+    helpers.config_set(smoke_vm, f"{CFG}/global_log_mode", "default")
+    helpers.config_set(smoke_vm, f"{CFG}/global_log", "enabled")
+    helpers.config_set(smoke_vm, f"{CFG}/pfb_regex", "on")
+    helpers.config_set(smoke_vm, f"{CFG}/pfb_regex_list", base64.b64encode(b"pfb3539inert\n").decode("ascii"))
     html = _render(smoke_vm, webui)
     # Tempered: the box may not run into another alert div (the pfSense info box nests alert-icon divs, so
     # match only a standalone ``alert`` class token).

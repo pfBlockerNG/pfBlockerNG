@@ -404,10 +404,9 @@ $section->addInput(new Form_Select(
 	'Logging',
 	$pconfig['blacklist_logging'],
 	$options_blacklist_logging
-))->setHelp("Default: <strong>Default</strong><br />
-	<strong>Default</strong> follows the Global Logging/Blocking Mechanism (DNSBL tab); an explicit choice applies to the Blacklist category only.<br />
-	The DNSBL WebServer/VIP response is deprecated: prefer Null Blocking.<br />
-	A DNSBL reload is required for changes to take effect: run 'Run Now' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.")
+))->setHelp('<strong>Default</strong> follows the global DNSBL blocking mechanism (DNSBL tab); an explicit choice applies to the Blacklist category only.<br />'
+	. pfb_dnsbl_mechanism_help()
+	. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.')
   ->setAttribute('style', 'width: auto');
 
 $form->add($section);

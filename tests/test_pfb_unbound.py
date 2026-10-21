@@ -5857,3 +5857,59 @@ class TestManifestAbsentBuiltinLogFlagFallsBackToNullBlocking:
         dec = evaluate_domain("x.bad", "x.bad", "bad", False, cfg, snap.containers())
         assert dec.group == "DNSBL_TLD", f"expected 'DNSBL_TLD', got {dec.group!r}"
         _assert_builtin_shape(dec, "0", False)
+
+
+class TestHandBuiltStructuresAndNumericScanDefaultToNullBlocking:
+    """issue #3539: the fail-safe flag '0' (Null Blocking, logged) holds wherever the flag is
+    simply absent -- a hand-built BuildResult/Snapshot, and the numeric re-attribution to a regex."""
+
+    def test_hand_built_build_result_carries_null_blocking(self) -> None:
+        result = pfb_unbound.BuildResult(
+            data_db={},
+            zone_db={},
+            feed_group_index_db={},
+            white_db={},
+            counts=0,
+            user_regex_db={},
+            user_allow_regex_db={},
+        )
+        assert result.builtin_log_flag == "0", f"expected '0', got {result.builtin_log_flag!r}"
+
+    def test_hand_built_snapshot_carries_null_blocking_into_the_evaluate_cfg(self) -> None:
+        snap = pfb_unbound.Snapshot(
+            data_db={},
+            zone_db={},
+            white_db={},
+            regex_db={},
+            allow_regex_db={},
+            user_regex_db={},
+            user_allow_regex_db={},
+            feed_group_index_db={},
+            hsts_db={},
+        )
+        assert snap.builtin_log_flag == "0", f"expected '0', got {snap.builtin_log_flag!r}"
+        cfg = pfb_unbound._evaluate_cfg(snap)
+        assert cfg["builtin_log_flag"] == "0", f"expected '0', got {cfg['builtin_log_flag']!r}"
+
+    def test_numeric_reattribution_to_a_higher_band_regex_without_flag_is_null_blocking(self) -> None:
+        # A lower-band data hit is discovered first; the numeric scan then finds a strictly higher-band
+        # regex on the same name and re-attributes the response to it. No builtin_log_flag key at all.
+        q = "evil.com"
+        data_db: dict = {q: {"log": "9", "index": 0, "band": 1}}  # sentinel: must be overridden
+        regex_db: dict = {
+            "important-rule": {"re": re.compile(r"evil"), "important": True, "band": PRIO_FEED_BLOCK_IMPORTANT}
+        }
+        cfg = _make_cfg(dataDB=True, regexDB=True, important_rules=True)
+        containers = _make_containers(
+            dataDB=data_db, regexDB=regex_db, feedGroupIndexDB={0: {"feed": "F", "group": "G"}}
+        )
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.feed == "important-rule", f"expected 'important-rule', got {dec.feed!r}"
+        _assert_builtin_shape(dec, "0", False)
+
+    def test_direct_build_without_flag_writes_a_null_blocking_tld_blacklist_entry(self) -> None:
+        # build() is also called with a hand-built config (the manifest reader always supplies the flag).
+        config: dict[str, object] = {"psl_rules": _psl_rules(["com"]), "tld_wildcard_blacklist": ["bad"]}
+        result = pfb_unbound.build({"feeds": []}, config, line_reader=lambda raw: [])
+        assert result.zone_db["bad"]["log"] == "0", f"expected '0', got {result.zone_db['bad']['log']!r}"
+        assert result.builtin_log_flag == "0", f"expected '0', got {result.builtin_log_flag!r}"

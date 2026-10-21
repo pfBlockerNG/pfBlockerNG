@@ -17,10 +17,9 @@ through a full pipeline failure -- this module only proves the RENDER side.
 
 Hermeticity: the IP-row and "disabled" cases are config-only (no reload,
 no network). The DNSBL live-state case needs Unbound actually running with
-``pfb_unbound.py`` wired into ``unbound.conf`` -- that requires one real
-(but feed-free, so still hermetic) ``updatednsbl`` reload, amortized into a
-single test that walks BOTH the empty-ledger and populated-ledger states
-before restoring.
+``pfb_unbound.py`` wired into ``unbound.conf``. A feed-free ``updatednsbl``
+reload establishes the no-demand ledger transitions; a second applies an
+inert built-in regex to verify the same live widget's VIP-demand state.
 
 Marker discipline (``tests/smoke/ui/conftest.py`` ``_ui_pfb_isolation``):
 Tier-A ``ui_render`` is normally read-only, but every test here that toggles
@@ -36,6 +35,7 @@ leaks state onward either.
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 from typing import TYPE_CHECKING
@@ -65,6 +65,51 @@ ICON_YELLOW = "fa-solid fa-exclamation-circle text-warning"
 ICON_RED = "fa-solid fa-times-circle text-danger"
 
 CFG_LISTSV4 = "installedpackages/pfblockernglistsv4/config"
+CFG_DNSBL = "installedpackages/pfblockerngdnsblsettings/config/0"
+
+
+@pytest.fixture
+def dnsbl_demand_config(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
+    """Make the reload feed-free and explicitly no-demand, restoring all affected sections."""
+    paths = [CFG_DNSBL, "installedpackages/pfblockerngdnsbl/config", "installedpackages/pfblockerngblacklist"]
+    php_paths = "array(" + ",".join(helpers._php_str(path) for path in paths) + ")"
+    snapshot = helpers._php_read_scalar(
+        smoke_vm,
+        f"$saved = array(); foreach ({php_paths} as $path) {{ $saved[$path] = config_get_path($path, NULL); }}",
+        "base64_encode(serialize($saved))",
+    )
+    try:
+        seed = (
+            "config_set_path('installedpackages/pfblockerngdnsbl/config', array());"
+            "config_set_path('installedpackages/pfblockerngblacklist', array('blacklist_enable' => 'Disable'));"
+        )
+        for key, value in {
+            "global_log_mode": "default",
+            "global_log": "disabled_log",
+            "pfb_regex": "",
+            "pfb_regex_list": "",
+            "pfb_idn": "",
+            "tld_allow": "",
+            "tld_wildcard": "",
+            "pfb_dnsvip_auto": "",
+            "dnsbl_interface": helpers.SMOKE_VIP_IFACE,
+            "pfb_dnsport": "8081",
+            "pfb_dnsport_ssl": "8443",
+        }.items():
+            seed += f"config_set_path({helpers._php_str(f'{CFG_DNSBL}/{key}')}, {helpers._php_str(value)});"
+        result = helpers.php_eval(smoke_vm, seed + "write_config('smoke: widget no-demand setup'); echo 'OK';")
+        assert result.returncode == 0 and "OK" in result.stdout, f"widget setup failed: {result}"
+        yield
+    finally:
+        restore = (
+            f"$saved = unserialize(base64_decode({helpers._php_str(snapshot)}));"
+            "foreach ($saved as $path => $value) {"
+            " if ($value === NULL) { config_del_path($path); } else { config_set_path($path, $value); }"
+            " if (config_get_path($path, NULL) !== $value) { throw new RuntimeException('restore failed: ' . $path); }"
+            "} write_config('smoke: restore widget demand config'); echo 'OK';"
+        )
+        result = helpers.php_eval(smoke_vm, restore)
+        assert result.returncode == 0 and "OK" in result.stdout, f"widget restore failed: {result}"
 
 
 def _write_remote_file(vm: helpers.SmokeVM, path: str, contents: str) -> None:
@@ -310,6 +355,7 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     clean_ledger: None,
+    dnsbl_demand_config: None,
     php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """DNSBL live: empty ledger -> green; a PHP entry -> yellow; a Python-only entry -> yellow.
@@ -321,7 +367,7 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
     (the before-state), a PHP-owned entry turns it yellow, closing it restores
     green, and a Python-ONLY entry (no py_error.log content at all -- the
     exact case the OLD monotonic filesize check would have missed) also turns
-    it yellow via the merged read.
+    it yellow via the merged read. An inert regex block then establishes real VIP demand.
     """
     vm = smoke_vm
     helpers.ensure_dnsbl_vip(vm)
@@ -334,7 +380,8 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
     assert _dnsblstatus_class(ICON_GREEN) in body, (
         "DNSBL row not green after a live updatednsbl reload with an empty ledger"
     )
-    assert "DNSBL is Active on vip:" in body, "DNSBL green message missing after a live reload"
+    assert _dnsblstatus_marker(ICON_GREEN, "DNSBL is Active.") in body, "no-demand DNSBL green message missing"
+    assert "DNSBL is Active on vip:" not in body, "no-demand status names a VIP or ports"
 
     # WHEN: a PHP-owned entry opens -> yellow.
     _ledger_open(vm, "dnsbl", "dnsbl", "apply", "smoke: synthetic dnsbl apply failure")
@@ -348,7 +395,8 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
 
     # AFTER: closed -> green again.
     body = _widget_body(webui)
-    assert "DNSBL is Active on vip:" in body, "DNSBL row did not return to green after the PHP entry closed"
+    assert _dnsblstatus_marker(ICON_GREEN, "DNSBL is Active.") in body, "DNSBL did not return to green after PHP close"
+    assert "DNSBL is Active on vip:" not in body, "no-demand status regained a VIP after PHP close"
 
     # WHEN: ONLY a Python-side entry is open (no py_error.log content anywhere --
     # the old filesize-only trigger would have missed this entirely).
@@ -375,7 +423,19 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
 
     # AFTER: green again once the Python-side entry is gone too.
     body = _widget_body(webui)
-    assert "DNSBL is Active on vip:" in body, "DNSBL row did not return to green after the Python-side entry cleared"
+    assert _dnsblstatus_marker(ICON_GREEN, "DNSBL is Active.") in body, (
+        "DNSBL did not return to green after Python close"
+    )
+    assert "DNSBL is Active on vip:" not in body, "no-demand status regained a VIP after Python close"
+
+    # A real built-in block now demands the VIP; the same live row must name its address and ports.
+    helpers.config_set(vm, f"{CFG_DNSBL}/global_log", "enabled")
+    helpers.config_set(vm, f"{CFG_DNSBL}/pfb_regex", "on")
+    helpers.config_set(vm, f"{CFG_DNSBL}/pfb_regex_list", base64.b64encode(b"pfb3539inert\n").decode("ascii"))
+    helpers.reload(vm, "updatednsbl")
+    body = _widget_body(webui)
+    expected = f"DNSBL is Active on vip: {helpers.DEFAULT_DNSBL_VIP4} ports: 8081 & 8443"
+    assert _dnsblstatus_marker(ICON_GREEN, expected) in body, f"demanded VIP/port status missing: {expected!r}"
 
 
 # --------------------------------------------------------------------------- #

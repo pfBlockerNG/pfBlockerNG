@@ -169,7 +169,13 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 		// The module is wired into the resolver; whether the resolver is up decides if a finished reload converged.
 		file_put_contents("{$dir}/unbound.conf", "python-script: pfb_unbound.py\n");
-		$GLOBALS['pfb_test_process_running']['unbound'] = $o['up']
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess($o['up']);
+	}
+
+	/** The resolver process double: never running, or running except while pfb_stop_start_unbound() restarts it (so a finished reload is converged). */
+	private static function resolverProcess(bool $up): mixed
+	{
+		return $up
 			? static function (): bool {
 				foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
 					if (($frame['function'] ?? '') === 'pfb_stop_start_unbound') {
@@ -237,6 +243,12 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	{
 		$this->arrange(['save' => FALSE, 'served' => TRUE, 'demand' => FALSE, 'up' => $up]);
 		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		$this->publishTo($publish);
+	}
+
+	/** Point the manifest publication at the temp tree, or (when $publish is FALSE) at a raw directory that cannot be staged. */
+	private function publishTo(bool $publish): void
+	{
 		$dir = $this->dir;
 		$GLOBALS['pfb']['unbound_py_sources']      = "{$dir}/pfb_py_sources.json";
 		$GLOBALS['pfb']['unbound_py_rawdir']       = $publish ? "{$dir}/pfb_py_raw" : "{$dir}/missing/pfb_py_raw";
@@ -299,6 +311,25 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame([], $this->events('stop_service'));
 		$this->assertSame([], $this->events('restart_service'));
 		$this->assertSame([], $this->lifecycleWrites());
+	}
+
+	public function testAPassWithoutAConfTearsTheLeftOversDownAtOnce(): void
+	{
+		// GIVEN a save pass, no web server conf (nothing can be serving), no block answering with the VIP, a resolver that is
+		// not up (no hold can be released), and a left-over DNSBL NAT rule beside the package's VIP
+		$this->arrange(['save' => TRUE, 'served' => FALSE, 'demand' => FALSE, 'up' => FALSE]);
+		config_set_path('nat/rule', [self::USER_NAT, self::dnsblNatRow()]);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf'], 'before-state: no conf');
+		$this->assertNotSame([], $this->dnsblNat(), 'before-state: the DNSBL NAT exists');
+		$this->assertNotSame([], config_get_path('virtualip/vip', []), 'before-state: the auto-VIP exists');
+
+		// WHEN the apply pass runs
+		$this->runPass();
+
+		// THEN the pass reloaded and tore the left-overs down in the same pass: with no conf there is no generation to hold for
+		$this->assertStringContainsString(self::RELOAD_DONE, $this->passLog());
+		$this->assertSame([self::USER_NAT], config_get_path('nat/rule'));
+		$this->assertSame([], array_column(config_get_path('virtualip/vip', []), 'descr'));
 	}
 
 	public function testASavePassKeepsHoldingEvenWhenTheResolverIsConverged(): void
@@ -420,11 +451,45 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->runPass();
 
 		// THEN the DNSBL port alias and the ping + permit floating rules exist exactly when demand does
+		$this->assertPortsAliasAndFloatingRules($demand, $demand ? 'demand' : 'no demand');
+	}
+
+	private function assertPortsAliasAndFloatingRules(bool $present, string $when): void
+	{
 		$aliases = array_column(config_get_path('aliases/alias', []), 'name');
 		$rules   = array_column(config_get_path('filter/rule', []), 'descr');
-		$this->assertSame($demand, in_array('pfB_DNSBL_Ports', $aliases, TRUE), 'pfB_DNSBL_Ports alias: ' . json_encode($aliases));
-		$this->assertSame($demand, in_array('pfB_DNSBL_Ping auto rule', $rules, TRUE), 'ping rule: ' . json_encode($rules));
-		$this->assertSame($demand, in_array('pfB_DNSBL_Permit auto rule', $rules, TRUE), 'permit rule: ' . json_encode($rules));
+		$this->assertSame($present, in_array('pfB_DNSBL_Ports', $aliases, TRUE), "{$when}: pfB_DNSBL_Ports alias: " . json_encode($aliases));
+		$this->assertSame($present, in_array('pfB_DNSBL_Ping auto rule', $rules, TRUE), "{$when}: ping rule: " . json_encode($rules));
+		$this->assertSame($present, in_array('pfB_DNSBL_Permit auto rule', $rules, TRUE), "{$when}: permit rule: " . json_encode($rules));
+	}
+
+	public function testPortsAliasAndFloatingRulesStayWhileTheServedGenerationIsHeldAndGoOnceItIsReleased(): void
+	{
+		// GIVEN pass 1: a serving web server and a group answering with the VIP -- the alias and both rules are written
+		$this->arrange(['save' => TRUE, 'served' => TRUE, 'demand' => TRUE, 'up' => TRUE]);
+		$this->runPass();
+		$this->assertPortsAliasAndFloatingRules(TRUE, 'before-state, pass 1 with demand');
+
+		// WHEN pass 2 finds the demand ended but the resolver is not converged: the old generation still answers with the VIP
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/logging', 'disabled_log');
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(FALSE);
+		$this->runPass();
+
+		// THEN the web server is held and so are the alias and rules that let clients reach it
+		$this->assertFileExists($GLOBALS['pfb']['dnsbl_conf'], 'pass 2 did not hold the web server');
+		$this->assertSame([], $this->events('stop_service'), 'pass 2 stopped the web server');
+		$this->assertPortsAliasAndFloatingRules(TRUE, 'pass 2, demand ended and the resolver not converged');
+
+		// WHEN pass 3 publishes the new generation and the resolver converges
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		$GLOBALS['pfb']['save'] = FALSE;
+		$this->publishTo(TRUE);
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		$this->runPass();
+
+		// THEN the hold is released: the web server is torn down and the alias and rules are gone with it
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf'], 'pass 3 did not release the hold');
+		$this->assertPortsAliasAndFloatingRules(FALSE, 'pass 3, converged publish');
 	}
 
 	// ------------------------------------------------------------------------------------------
@@ -444,19 +509,26 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 	/** @param array<string,bool> $state */
 	#[DataProvider('bootRows')]
-	public function testBootResyncServesOnlyForAnEnabledPackageWithDnsblAndTheResolverOn(array $state, bool $serves): void
+	public function testBootResyncServesOnlyForAnEnabledPackageWithDnsblAndTheResolverOnAndOtherwiseTearsDownALeftOverServedState(array $state, bool $serves): void
 	{
-		// GIVEN the boot/install resync, a group answering with the VIP, and nothing served yet
-		$this->arrange($state + ['install' => TRUE, 'demand' => TRUE]);
-		$this->assertSame([], $this->dnsblNat(), 'before-state: no DNSBL NAT');
+		// GIVEN the boot/install resync, a group answering with the VIP, and -- unless the web server may serve -- the
+		// served state an older version left behind (conf, certificate, NAT, marked auto-VIP)
+		$this->arrange($state + ['install' => TRUE, 'demand' => TRUE, 'served' => !$serves]);
+		$this->assertCount($serves ? 0 : 1, $this->dnsblNat(), 'before-state: the DNSBL NAT is left over exactly when nothing may serve');
+		$this->assertSame(!$serves, file_exists($GLOBALS['pfb']['dnsbl_conf']), 'before-state: the conf is left over exactly when nothing may serve');
 
 		// WHEN the resync runs
 		$this->runPass();
 
 		// THEN the pass took the boot/install branch
 		$this->assertStringContainsString('Sync terminated during boot process.', $this->passLog());
-		// AND the DNSBL NAT exists exactly when package, DNSBL and resolver are all on
-		$this->assertCount($serves ? 2 : 0, $this->dnsblNat());
+		// AND package, DNSBL and resolver all on serve (conf and NAT) -- anything else leaves no conf, certificate or NAT
+		$this->assertCount($serves ? 2 : 0, $this->dnsblNat(), 'DNSBL NAT');
+		$this->assertSame($serves, file_exists($GLOBALS['pfb']['dnsbl_conf']), 'web server conf');
+		$this->assertSame($serves, file_exists($GLOBALS['pfb']['dnsbl_cert']), 'web server certificate');
+		// AND the web server was stopped and the auto-VIP removed exactly when nothing may serve
+		$this->assertCount($serves ? 0 : 1, $this->events('stop_service'), 'stop_service(pfb_dnsbl) calls');
+		$this->assertSame($serves ? [PFB_AUTO_VIP_DESCR_V4] : [], array_column(config_get_path('virtualip/vip', []), 'descr'), 'auto-VIP');
 	}
 
 	public function testBootResyncLeavesAServingWebServerAloneWhileTheOnDiskGenerationMayStillAnswerWithTheVip(): void
@@ -490,5 +562,23 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		// THEN the demand rule applied: the NAT and the package's VIP are gone
 		$this->assertSame([self::USER_NAT], config_get_path('nat/rule'));
 		$this->assertSame([], array_column(config_get_path('virtualip/vip', []), 'descr'));
+	}
+
+	public function testAnUnusableHeaderDoesNotServeButANormalizableHeaderAndAliasDo(): void
+	{
+		$this->arrange(['demand' => TRUE]);
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/0/header', '!!!');
+		$this->runPass();
+		$this->assertSame('', config_get_path('installedpackages/pfblockerngdnsbl/config/0/row/0/header'), 'apply strips header punctuation');
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_demand'], 'no consumable feed row');
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf']);
+
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/aliasname', '!!!');
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/0/header', 'T1-a!');
+		$this->runPass();
+		$this->assertSame('', config_get_path('installedpackages/pfblockerngdnsbl/config/0/aliasname'), 'apply permits the empty alias suffix of DNSBL_');
+		$this->assertSame('T1a', config_get_path('installedpackages/pfblockerngdnsbl/config/0/row/0/header'));
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_vip_demand'], 'the normalized feed header is consumable');
+		$this->assertFileExists($GLOBALS['pfb']['dnsbl_conf']);
 	}
 }

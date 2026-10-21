@@ -227,4 +227,24 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_disabled']);
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
+
+	public function testABlacklistCategoryAloneDemandsTheVipThroughPfbGlobal(): void
+	{
+		// Given no DNSBL group at all, so only the Blacklist category can ask for the VIP
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		pfb_global();
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_demand'], 'before-state: nothing answers with the VIP');
+		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl'], 'before-state: DNSBL is on');
+
+		// When an enabled Blacklist category with a category selection answers with the VIP
+		config_set_path('installedpackages/pfblockerngblacklist', [
+			'blacklist_enable' => 'Enable', 'blacklist_selected' => 'ut1', 'blacklist_logging' => 'enabled',
+			'item' => [['xml' => 'ut1', 'title' => 'UT1', 'selected' => 'adult']],
+		]);
+		pfb_global();
+
+		// Then pfb_global() hands the Blacklist to the demand predicate: the VIP is demanded, and its absence force-disables DNSBL
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_vip_demand'], 'the Blacklist category alone demands the VIP');
+		$this->assertSame(PfbToggle::Off, $GLOBALS['pfb']['dnsbl'], 'demand without a VIP force-disables DNSBL');
+	}
 }

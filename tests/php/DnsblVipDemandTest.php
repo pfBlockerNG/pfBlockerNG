@@ -35,11 +35,13 @@ final class DnsblVipDemandTest extends TestCase
 		], $over);
 	}
 
+	/** An enabled Blacklist category the apply builds a list from: shalla is selected and its item carries a category selection. */
 	private static function blacklist(array $over = []): array
 	{
 		return array_replace([
 			'blacklist_enable'   => 'Enable',
 			'blacklist_selected' => 'shalla',
+			'item'               => [['xml' => 'shalla', 'title' => 'Shalla', 'selected' => 'adult,gambling']],
 		], $over);
 	}
 
@@ -113,6 +115,29 @@ final class DnsblVipDemandTest extends TestCase
 	{
 		$row = ['url' => '', 'state' => 'Enabled', 'header' => ''];
 		$this->assertFalse(pfb_dnsbl_vip_demand(self::policy('default', 'enabled'), [self::group('enabled', ['row' => [$row]])], []));
+	}
+
+	public function testFeedDemandRequiresTheHeaderTheApplyCanConsumeAfterNormalization(): void
+	{
+		$policy = self::policy('default', 'enabled');
+		foreach ([NULL, '', '!!!'] as $header) {
+			$row = ['url' => 'https://example.com/list.txt', 'state' => 'Enabled'];
+			if ($header !== NULL) {
+				$row['header'] = $header;
+			}
+			$this->assertFalse(pfb_dnsbl_vip_demand($policy, [self::group('enabled', ['row' => [$row]])], []), 'unusable header: ' . json_encode($header));
+		}
+		$group = self::group('enabled', ['aliasname' => '!!!']);
+		$group['row'][0]['header'] = 'G1-a!';
+		$this->assertTrue(pfb_dnsbl_vip_demand($policy, [$group], []), 'the apply normalizes the header to G1a and the alias to an empty suffix of DNSBL_');
+	}
+
+	public function testTldBlacklistDemandRequiresAnEntryAfterCanonicalCommentDecoding(): void
+	{
+		foreach (["# ignored\n", " \n\t\n", "example # real TLD\n"] as $text) {
+			$policy = self::policy('default', 'enabled', ['tld_wildcard' => 'on', 'tld_wildcard_blacklist' => base64_encode($text)]);
+			$this->assertSame(str_starts_with($text, 'example'), pfb_dnsbl_vip_demand($policy, [], []), 'TLD text: ' . json_encode($text));
+		}
 	}
 
 	public function testOnlyPermitRowsHaveNoDemand(): void
@@ -281,6 +306,10 @@ final class DnsblVipDemandTest extends TestCase
 		return [
 			'blacklist disabled'     => [['blacklist_enable' => 'Disable']],
 			'nothing selected'       => [['blacklist_selected' => '']],
+			'selected, no item'      => [['item' => []]],
+			'item without selection' => [['item' => [['xml' => 'shalla', 'title' => 'Shalla', 'selected' => '']]]],
+			'selection of only empty categories' => [['item' => [['xml' => 'shalla', 'title' => 'Shalla', 'selected' => ',,0']]]],
+			'item not in blacklist_selected' => [['item' => [['xml' => 'ut1', 'title' => 'UT1', 'selected' => 'adult']]]],
 		];
 	}
 
@@ -288,11 +317,31 @@ final class DnsblVipDemandTest extends TestCase
 	{
 		// The apply gates on `blacklist_enable != 'Disable'`: only an explicit 'Disable' switches the category off.
 		$policy = self::policy('default', 'disabled_log');
-		$absent = ['blacklist_selected' => 'shalla', 'blacklist_logging' => 'enabled'];
+		$absent = self::blacklist(['blacklist_logging' => 'enabled']);
+		unset($absent['blacklist_enable']);
 
 		$this->assertTrue(pfb_dnsbl_vip_demand($policy, [], $absent), 'absent blacklist_enable');
 		$this->assertTrue(pfb_dnsbl_vip_demand($policy, [], $absent + ['blacklist_enable' => '']), 'empty blacklist_enable');
 		$this->assertFalse(pfb_dnsbl_vip_demand($policy, [], $absent + ['blacklist_enable' => 'Disable']), 'explicit Disable');
+	}
+
+	public function testBlacklistSelectedCategoryWithoutAnItemRowHasNoDemand(): void
+	{
+		// The apply builds a Blacklist list only from an `item` row; a selected category alone builds none.
+		$policy = self::policy('default', 'enabled');
+		$bare   = ['blacklist_enable' => 'Enable', 'blacklist_selected' => 'shalla', 'blacklist_logging' => 'enabled'];
+
+		$this->assertFalse(pfb_dnsbl_vip_demand($policy, [], $bare), 'no item key');
+		$this->assertTrue(pfb_dnsbl_vip_demand($policy, [], self::blacklist(['blacklist_logging' => 'enabled'])), 'the same category with its item row');
+	}
+
+	public function testBlacklistItemWithAnEmptySelectionHasNoDemand(): void
+	{
+		$policy = self::policy('default', 'enabled');
+		$item   = ['xml' => 'shalla', 'title' => 'Shalla', 'selected' => ''];
+
+		$this->assertFalse(pfb_dnsbl_vip_demand($policy, [], self::blacklist(['item' => [$item], 'blacklist_logging' => 'enabled'])));
+		$this->assertTrue(pfb_dnsbl_vip_demand($policy, [], self::blacklist(['item' => [['selected' => 'adult'] + $item], 'blacklist_logging' => 'enabled'])), 'the same item with a selection');
 	}
 
 	// -----------------------------------------------------------------------

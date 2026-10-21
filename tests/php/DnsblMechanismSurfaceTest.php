@@ -153,6 +153,14 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		$this->assertStringContainsString('deprecated', strtolower($section), 'the DNSBL Webserver Configuration section must carry the notice');
 	}
 
+	public function testDnsblPageWebserverSectionCarriesItsOwnNoticeApartFromTheVipHelp(): void
+	{
+		// The section's own notice (its first input), not the VIP select's help that the section region above also covers.
+		$notice = pfb_test_page_region(self::DNSBL_PAGE, "new Form_Section('DNSBL Webserver Configuration');", '$section->addInput(new Form_Select(');
+		$this->assertStringContainsString('deprecated', strtolower($notice), 'the section notice must say the response is deprecated');
+		$this->assertStringContainsString('prefer Null Blocking', $notice, 'and name the replacement');
+	}
+
 	public function testGroupEditorLoggingSelectUsesTheSharedMapAfterDefault(): void
 	{
 		$scope = pfb_test_page_eval(pfb_test_page_statement(self::CATEGORY_EDIT_PAGE, '/\$options_logging\s*=/'), []);
@@ -207,6 +215,24 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		$region = pfb_test_page_region(self::BLACKLIST_PAGE, '// Select field options', '// Unconditional (not just');
 		$scope  = pfb_test_page_eval($region, []);
 		$this->assertSame(['default' => 'Default'] + pfb_dnsbl_mechanism_labels(), $scope['options_blacklist_logging']);
+	}
+
+	public function testBlacklistLoggingHelpEmbedsTheSharedMechanismHelpBesideItsOwnDefaultLine(): void
+	{
+		$region = pfb_test_page_region(
+			self::BLACKLIST_PAGE,
+			"\$options_blacklist_logging\n))->setHelp(",
+			")\n  ->setAttribute('style', 'width: auto');"
+		);
+		$help = pfb_test_page_eval('$help = ' . substr($region, (int) strpos($region, '->setHelp(') + strlen('->setHelp(')) . ';', [])['help'];
+
+		foreach (pfb_dnsbl_mechanism_labels() as $token => $label) {
+			$this->assertStringContainsString("<strong>{$label}</strong>", $help, "the Blacklist help has no bullet for the {$token} mechanism");
+		}
+		$this->assertEveryVipBulletIsDeprecated($help, 'Blacklist logging help');
+		$this->assertStringContainsString('Deprecated: prefer Null Blocking', $help, 'the VIP deprecation sentence');
+		$this->assertStringContainsString('Default follows the global DNSBL blocking mechanism', strip_tags($help), 'the Blacklist-only Default line');
+		$this->assertStringNotContainsString('Default: <strong>Default</strong>', $help, 'no second "Default:" header beside the mechanism help');
 	}
 
 	public function testAlertsUnknownBlockingTypeLabelsUseTheSharedLabel(): void

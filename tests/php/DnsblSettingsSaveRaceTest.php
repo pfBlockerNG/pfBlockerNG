@@ -66,6 +66,27 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 		$this->assertNotEmpty(self::at($result['disk'], self::SAVED), 'and its snapshot is kept');
 	}
 
+	public function testASaveWritesTheEightPostedPolicyFieldsToDiskInTheirStoredForm(): void
+	{
+		// Given a save that posts a value different from the seeded one for every DNSBL policy field
+		$result = $this->runScenario('interleave');
+
+		// Then each is on disk in its stored form (the page's pfb_dnsbl_policy_from_post() mapping)
+		$stored = [
+			'global_log'             => 'nxdomain',
+			'global_log_mode'        => 'override',
+			'pfb_regex'              => 'on',
+			'pfb_regex_list'         => base64_encode('a.*'),
+			'pfb_idn'                => 'confusable',
+			'tld_allow'              => 'on',
+			'tld_wildcard'           => 'on',
+			'tld_wildcard_blacklist' => base64_encode('zip'),
+		];
+		foreach ($stored as $key => $value) {
+			$this->assertSame($value, self::at($result['disk'], self::DNSBL . "/{$key}"), "the saved {$key}");
+		}
+	}
+
 	public function testTheConfigLockIsTakenBeforeTheFreshReadAndHeldThroughTheWrite(): void
 	{
 		$result = $this->runScenario('interleave');

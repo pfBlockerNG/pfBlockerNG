@@ -110,6 +110,18 @@ final class WizardVipDemandTest extends TestCase
 		$this->assertSame([], pfb_wizard_group_rows([]));
 	}
 
+	public function testAdsBasicBuilderKeepsTheGroupTheWizardWritesOnDefault(): void
+	{
+		$this->assertTrue(function_exists('pfb_wizard_dnsbl_group'), 'step 3 and step 4 need one ADs_Basic builder');
+		$info = self::catalog([self::usableFeed()])['dnsbl']['ADs_Basic'];
+		$this->assertSame([
+			'aliasname' => 'ADs_Basic', 'description' => 'ADs Basic',
+			'row' => pfb_wizard_group_rows($info),
+			'action' => 'unbound', 'cron' => 'EveryDay', 'logging' => 'default', 'order' => 'default',
+		], pfb_wizard_dnsbl_group($info));
+		$this->assertArrayNotHasKey('row', pfb_wizard_dnsbl_group([]), 'an empty catalog entry has no row');
+	}
+
 	public function testSectionCarriesTheManualVipPortsAndTheDnsblSwitch(): void
 	{
 		$this->assertSame([
@@ -180,6 +192,7 @@ final class WizardVipDemandTest extends TestCase
 		$this->assertTrue($after > 0 && $start > $after && $end > $start, 'test bootstrap: step 4 group region found');
 
 		$add                  = ['aliasname' => 'ADs_Basic', 'row' => pfb_wizard_group_rows($catalog['dnsbl']['ADs_Basic'])];
+		$info                 = $catalog['dnsbl']['ADs_Basic'];
 		$key                  = 'pfblockerngdnsbl';
 		$pfb_general_schedule = ['pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0'];
 		eval(substr($source, $start, $end - $start));

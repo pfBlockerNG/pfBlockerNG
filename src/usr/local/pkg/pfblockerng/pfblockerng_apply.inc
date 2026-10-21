@@ -1008,9 +1008,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	if (is_platform_booting() || $g['pfblockerng_install']) {
 		// Create DNSBL NAT, VIP, Lighttpd service and certs if required on reboot (pfb_create_dnsbl() applies the VIP demand rule).
 		// issue #3539: no demand but a conf on disk -> the on-disk generation may still answer with the VIP; the next publishing pass tears down.
-		if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On &&
-		    (!empty($pfb['dnsbl_vip_demand']) || !file_exists($pfb['dnsbl_conf']))) {
-			pfb_create_dnsbl('enabled');
+		if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) {
+			if (!empty($pfb['dnsbl_vip_demand']) || !file_exists($pfb['dnsbl_conf'])) {
+				pfb_create_dnsbl('enabled');
+			}
+		}
+		else {
+			// Package, DNSBL or resolver off: nothing may serve, so strip what an older version left (conf, certificate, NAT, auto-VIP).
+			pfb_create_dnsbl('disabled');
 		}
 		$log = 'Sync terminated during boot process.';
 		pfb_logger("\n{$log}\nUPDATE PROCESS ENDED\n", 1);
@@ -3500,7 +3505,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// new manifest, and whose resolver has converged, releases the hold; any other pass keeps it and the next one decides again.
 	if ($pfb_dnsbl_vip_hold && $pfb_dnsbl_published && pfb_dnsbl_converged()) {
 		pfb_create_dnsbl($mode);
+		$pfb_dnsbl_vip_hold = FALSE;
 	}
+	// issue #3539: the VIP's port alias and floating rules stay for as long as the web server serves (demand, or a generation still held).
+	$pfb_dnsbl_vip_served = !empty($pfb['dnsbl_vip_demand']) || $pfb_dnsbl_vip_hold;
 
 
 	#################################
@@ -4731,8 +4739,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Clear variables
 	$alias_ips = '';
 
-	// Define DNSBL VIP Ports alias (issue #3539: only while a block answers with the VIP)
-	if ($pfb['dnsbl_rule'] != 'Disabled' && !empty($pfb['dnsbl_vip_demand']) && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
+	// Define DNSBL VIP Ports alias (issue #3539: only while the VIP is served)
+	if ($pfb['dnsbl_rule'] != 'Disabled' && $pfb_dnsbl_vip_served && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
 	    && !empty($pfb['dnsblconfig']['dnsbl_allow_int']) && ($pfb['dnsbl'] === PfbToggle::On)) {
 
 		$new_aliases_list[] = 'pfB_DNSBL_Ports';
@@ -4857,7 +4865,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			// Build the DNSBL floating pass rules (ping + permit pair) to pass into the helper.
 			$pfb_dnsbl_float = [];
 			if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['dnsbl_rule'] != 'Disabled'
-			    && !empty($pfb['dnsbl_vip_demand'])
+			    && $pfb_dnsbl_vip_served
 			    && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
 			    && !empty($pfb['dnsblconfig']['dnsbl_allow_int'])) {
 

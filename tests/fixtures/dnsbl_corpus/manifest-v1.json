@@ -14,7 +14,7 @@
     ],
     "user_unlock": [],
     "top1m_enabled": true,
-    "builtin_log_flag": "1"
+    "builtin_log_flag": "0"
   },
   "feeds": [
     {"raw": "raw/plain_hosts.raw", "feed": "plain_hosts", "group": "grp_plain", "provenance": "feed", "log_flag": "1"},

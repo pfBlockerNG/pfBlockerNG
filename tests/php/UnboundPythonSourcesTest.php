@@ -256,6 +256,7 @@ final class UnboundPythonSourcesTest extends TestCase
 
 	public function testConfigBlockEmptyWhenUnconfigured(): void
 	{
+		unset($GLOBALS['pfb']['dnsbl_global_log']);
 		$m = pfb_unbound_python_sources($this->feeds());
 		// issue #1255: the public-suffix oracle is no longer carried in the manifest
 		// (HSTS parity -- a shipped static file + ini flag instead); the key is absent.
@@ -268,8 +269,21 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame([], $m['config']['user_whitelist']);
 		$this->assertSame([], $m['config']['user_unlock']);
 		$this->assertFalse($m['config']['top1m_enabled']);
-		// issue #3291: no configured global mechanism -> the '?? enabled' fallback -> flag '1'.
-		$this->assertSame('1', $m['config']['builtin_log_flag']);
+		// issue #3539: no configured global mechanism -> the 'disabled_log' fallback (Null Blocking, logged) -> flag '0'.
+		$this->assertSame('0', $m['config']['builtin_log_flag']);
+	}
+
+	public function testFeedWithoutALogFlagAndNoGlobalMechanismFallsBackToNullBlockingLogged(): void
+	{
+		// GIVEN a feed row carrying no log flag and no effective global mechanism
+		unset($GLOBALS['pfb']['dnsbl_global_log']);
+
+		// WHEN the manifest is written
+		$m = pfb_unbound_python_sources([['header' => 'feed1', 'group' => 'pfb_grp', 'provenance' => 'feed']]);
+
+		// THEN the feed and the built-in blocks answer Null Blocking (logged), never the deprecated VIP response
+		$this->assertSame('0', $m['feeds'][0]['log_flag']);
+		$this->assertSame('0', $m['config']['builtin_log_flag']);
 	}
 
 	// issue #3291: built-in DNSBL blocks (TLD Allow/IDN/regex) inherit the effective

@@ -129,7 +129,7 @@ final class DnsblStaleVipTest extends TestCase
 
 	public function testWarningIsEmptyWithoutVipDemand(): void
 	{
-		// Before-state: the same missing VIP warns while a block still answers with it.
+		// A missing manual VIP warns only while a block answers with it.
 		$this->assertNotSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '_vip_gone_b', TRUE));
 
 		$this->assertSame('', pfb_dnsbl_stale_vip_warning(PfbToggle::Off, '_vip_gone_a', '_vip_gone_b', FALSE));

@@ -143,15 +143,19 @@ function pfb_wizard_dnsbl_section(bool $auto, $vip4, $vip6, $port, $port_ssl): a
 		+ array('pfb_dnsport' => $port, 'pfb_dnsport_ssl' => $port_ssl, 'pfb_dnsbl' => 'on');
 }
 
-// issue #3539: TRUE when the default DNSBL setup the wizard writes answers a block with the VIP: its section
-// plus the one ADs_Basic group on Default (mirrors the group step 4 creates; pinned by WizardVipDemandTest).
+// The ADs_Basic group shared by step 3's demand check and step 4's write.
+function pfb_wizard_dnsbl_group(array $info): array {
+	$group = array('aliasname' => 'ADs_Basic', 'description' => $info['description'] ?? '');
+	$rows = pfb_wizard_group_rows($info);
+	if (!empty($rows)) {
+		$group['row'] = $rows;
+	}
+	return $group + array('action' => 'unbound', 'cron' => 'EveryDay', 'logging' => 'default', 'order' => 'default');
+}
+
+// TRUE when the default DNSBL setup the wizard writes answers a block with the VIP.
 function pfb_wizard_vip_demand(array $dnsbl_section, array $feed_info_raw): bool {
-	$group = array(
-		'action'	=> 'unbound',
-		'logging'	=> 'default',
-		'row'		=> pfb_wizard_group_rows($feed_info_raw['dnsbl']['ADs_Basic'] ?? array())
-	);
-	return pfb_dnsbl_vip_demand($dnsbl_section, array($group), array());
+	return pfb_dnsbl_vip_demand($dnsbl_section, array(pfb_wizard_dnsbl_group($feed_info_raw['dnsbl']['ADs_Basic'] ?? array())), array());
 }
 
 function step3_submitphpaction() {
@@ -333,21 +337,16 @@ ZXRnYXRlLmNvbQ0K
 	foreach ($new as $key => $data) {
 		foreach ($data as $alias => $info) {
 
-			$add			= array();
-			$add['aliasname']	= $alias;
-			$add['description']	= $info['description'];
-
-			$rows = pfb_wizard_group_rows($info);
-			if (!empty($rows)) {
-				$add['row'] = $rows;
-			}
-
 			if (strpos($key, 'dnsbl') !== FALSE) {
-				$add['action']		= 'unbound';
-				$add['cron']		= 'EveryDay';
-				$add['logging']		= 'default';
-				$add['order']		= 'default';
+				$add = pfb_wizard_dnsbl_group($info);
 			} else {
+				$add			= array();
+				$add['aliasname']	= $alias;
+				$add['description']	= $info['description'];
+				$rows = pfb_wizard_group_rows($info);
+				if (!empty($rows)) {
+					$add['row'] = $rows;
+				}
 				$add['action']		= 'Deny_Outbound';
 				$add['cron']		= '01hour';
 				$add['aliaslog']	= 'enabled';

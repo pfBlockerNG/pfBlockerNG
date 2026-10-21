@@ -3383,7 +3383,7 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	write_config('pfBlockerNG: saving DNSBL auto-VIP changes');
 
 	// Apply any created/ensured marked VIP live (config-first, then configure).
-	if ($serve && $auto) {
+	if ($mode === 'enabled' && $auto) {
 		foreach ($families as $fam) {
 			if (!$fam['managed']) {
 				continue;
@@ -11422,6 +11422,16 @@ function pfb_create_dnsbl($mode) {
 			} else {
 				$new_nat = array_merge($pfb_ex_nat, $dnsbl_ex_nat);
 			}
+
+			// Compare previous Lighttpd conf
+			$pfb_lighty_conf = pfb_create_lighttpd();
+			$pfb_lighty_conf_ex = @file_get_contents($pfb['dnsbl_conf']);
+			if ($pfb_lighty_conf !== $pfb_lighty_conf_ex) {
+				$pfbupdate = TRUE;
+				@file_put_contents($pfb['dnsbl_conf'], $pfb_lighty_conf, LOCK_EX);
+				$log = "\nSaving new DNSBL web server configuration to port [ {$pfb['dnsbl_port']} and {$pfb['dnsbl_port_ssl']} ]";
+				pfb_logger("{$log}", 1);
+			}
 		} else {
 			// Strip the exact pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
 			// rules and returns TRUE iff anything was removed.
@@ -11435,18 +11445,6 @@ function pfb_create_dnsbl($mode) {
 			// gone no start path launches it.
 			unlink_if_exists($pfb['dnsbl_conf']);
 			unlink_if_exists($pfb['dnsbl_cert']);
-		}
-
-		if ($serve) {
-			// Compare previous Lighttpd conf
-			$pfb_lighty_conf = pfb_create_lighttpd();
-			$pfb_lighty_conf_ex = @file_get_contents($pfb['dnsbl_conf']);
-			if ($pfb_lighty_conf !== $pfb_lighty_conf_ex) {
-				$pfbupdate = TRUE;
-				@file_put_contents($pfb['dnsbl_conf'], $pfb_lighty_conf, LOCK_EX);
-				$log = "\nSaving new DNSBL web server configuration to port [ {$pfb['dnsbl_port']} and {$pfb['dnsbl_port_ssl']} ]";
-				pfb_logger("{$log}", 1);
-			}
 		}
 
 		// Update config.xml, if changes required.
@@ -13515,7 +13513,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	foreach ($feeds as $feed) {
 		$header	= isset($feed['header']) ? $feed['header'] : '';
 		$group	= isset($feed['group'])  ? $feed['group']  : '';
-		$logf	= isset($feed['log'])    ? (string) $feed['log'] : '1';
+		$logf	= isset($feed['log'])    ? (string) $feed['log'] : '0';
 
 		if ($header === '') {
 			continue;
@@ -13725,8 +13723,8 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			'user_unlock'	=> array(),
 			'top1m_enabled'	=> $top1m_enabled,
 			// issue #3291: built-ins (TLD Allow/IDN/regex) have no group, so both modes
-			// resolve them to the global mechanism; no global setting keeps VIP+log ('1').
-			'builtin_log_flag'	=> pfb_dnsbl_mechanism_flag($pfb['dnsbl_global_log'] ?? 'enabled')
+			// resolve them to the global mechanism; issue #3539: no global setting is Null Blocking, logged ('0').
+			'builtin_log_flag'	=> pfb_dnsbl_mechanism_flag($pfb['dnsbl_global_log'] ?? 'disabled_log')
 		),
 		'feeds'		=> $manifest_feeds
 	);
@@ -17700,8 +17698,11 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
 		$blocks = !empty($group['custom']);
 		foreach ($rows as $row) {
 			if (is_array($row) && !empty($row['url']) && ($row['state'] ?? '') !== 'Disabled' && ($row['action'] ?? '') !== 'Permit') {
-				$blocks = TRUE;
-				break;
+				$header = pfb_normalize_row_header(is_string($row['header'] ?? NULL) ? $row['header'] : '');
+				if ($header['header'] !== '' && $header['header'] !== '0' && $header['reserved_error'] === '') {
+					$blocks = TRUE;
+					break;
+				}
 			}
 		}
 		if ($blocks && $uses_vip($group['logging'] ?? NULL)) {
@@ -17709,10 +17710,16 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
 		}
 	}
 
-	// Like the apply (`!= 'Disable'`): only an explicit 'Disable' switches the category off.
-	if (($blconfig['blacklist_enable'] ?? NULL) !== 'Disable' && !empty($blconfig['blacklist_selected'])
+	// Like the apply: not 'Disable', and a list only from an `item` row listed in blacklist_selected with a category selection.
+	if (($blconfig['blacklist_enable'] ?? NULL) !== 'Disable' && !empty($blconfig['blacklist_selected']) && is_string($blconfig['blacklist_selected'])
 	    && $uses_vip(pfb_dnsbl_blacklist_logging($blconfig))) {
-		return TRUE;
+		$listed = array_flip(explode(',', $blconfig['blacklist_selected']));
+		foreach (is_array($blconfig['item'] ?? NULL) ? $blconfig['item'] : array() as $item) {
+			if (is_array($item) && is_string($item['xml'] ?? NULL) && isset($listed[$item['xml']])
+			    && is_string($item['selected'] ?? NULL) && array_filter(explode(',', $item['selected']))) {
+				return TRUE;
+			}
+		}
 	}
 
 	// Built-ins have no group: they always resolve to the global mechanism ('default').
@@ -17722,7 +17729,7 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
 		(pfb_cfg_toggle_read($field('pfb_regex')) === PfbToggle::On && !empty($field('pfb_regex_list')))
 		|| pfb_cfg_idn_mode_read($field('pfb_idn')) !== PfbIdnMode::Off
 		|| pfb_cfg_toggle_read($field('tld_allow')) === PfbToggle::On
-		|| (!empty($field('tld_wildcard')) && !empty($field('tld_wildcard_blacklist')))
+		|| (!empty($field('tld_wildcard')) && !empty(pfb_text_area_decode($field('tld_wildcard_blacklist'), TRUE, FALSE, TRUE)))
 	);
 }
 
@@ -17732,15 +17739,16 @@ function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): b
  */
 function pfb_dnsbl_policy_from_post(array $post): array {
 	$on_off = static fn(string $key): string => pfb_filter($post[$key] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+	$text   = static fn(string $key): string => is_string($post[$key] ?? NULL) ? $post[$key] : '';	// an array-valued field is no text
 	return array(
 		'global_log'		=> $post['global_log'] ?? '',
 		'global_log_mode'	=> $post['global_log_mode'] ?? '',
 		'pfb_regex'		=> $on_off('pfb_regex'),
-		'pfb_regex_list'	=> base64_encode($post['pfb_regex_list'] ?? ''),
+		'pfb_regex_list'	=> base64_encode($text('pfb_regex_list')),
 		'pfb_idn'		=> pfb_cfg_idn_mode_write(pfb_filter($post['pfb_idn'] ?? '', PFB_FILTER_WORD, 'dnsbl')),
 		'tld_allow'		=> $on_off('tld_allow'),
 		'tld_wildcard'		=> $on_off('tld_wildcard'),
-		'tld_wildcard_blacklist'	=> base64_encode($post['tld_wildcard_blacklist'] ?? ''),
+		'tld_wildcard_blacklist'	=> base64_encode($text('tld_wildcard_blacklist')),
 	);
 }
 

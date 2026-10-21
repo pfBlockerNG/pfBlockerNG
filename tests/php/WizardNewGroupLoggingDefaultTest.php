@@ -32,6 +32,8 @@ final class WizardNewGroupLoggingDefaultTest extends TestCase
 	private function wizardGroupAdd(string $key): array
 	{
 		$add = [];
+		$alias = $key === 'pfblockerngdnsbl' ? 'ADs_Basic' : 'PRI1';
+		$info = ['description' => 'wizard fixture', 'feeds' => []];
 		$pfb_general_schedule = ['pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0'];
 		eval(self::sourceRegion(
 			'/src/usr/local/www/wizards/pfblockerng_wizard.inc',

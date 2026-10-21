@@ -52,6 +52,8 @@ final class ScheduleProducerCanonicalizationTest extends TestCase
 		$add = [
 			'row' => [['header' => 'wizard', 'url' => 'https://example.test/wizard', 'state' => 'Enabled']],
 		];
+		$alias = $key === 'pfblockerngdnsbl' ? 'ADs_Basic' : 'PRI1';
+		$info = ['description' => 'wizard fixture', 'feeds' => [['header' => 'wizard', 'url' => 'https://example.test/wizard']]];
 		$pfb_general_schedule = $general;
 		eval(self::sourceRegion(
 			'/src/usr/local/www/wizards/pfblockerng_wizard.inc',
