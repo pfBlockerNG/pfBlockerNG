@@ -236,8 +236,8 @@ def test_secondary_creates_its_vip_at_the_address_the_primary_chose(ha_pair: HaP
 
     Given: both nodes on Auto VIP, a VIP-answering DNSBL group on A only, A's LAN inside 172.16.53.0/24
     When:  A's update pass provisions its VIP and sends its policy to B
-    Then:  both hold a marked VIP at 192.168.53.53, B's stored VIP id names B's own object, and each node
-           answers the blocked name with 192.168.53.53
+    Then:  both hold a marked VIP at 192.168.53.53, live on lo0, B's stored VIP id names B's own object, and each
+           node answers the blocked name with 192.168.53.53
 
     Red when: B creates its VIP at its own first free candidate (the address never leaves A), or B's stored id is
     A's, or B answers with a different address than A.
@@ -284,6 +284,8 @@ def test_secondary_creates_its_vip_at_the_address_the_primary_chose(ha_pair: HaP
     ids = {"A": stored_vip_id(a), "B": stored_vip_id(b)}
     check(problems, ids["A"] != ids["B"], "B's pfb_dnsvip4 differing from A's", ids)
     for name, vm in (("A", a), ("B", b)):
+        live = h.vip_alias_live(vm, SECOND)
+        check(problems, live, f"{name} holding {SECOND} as a live alias on lo0", live)
         h.wait_unbound_ready(vm)
         answer = h.dns_probe(vm, domain, "A")
         check(problems, h.resolves_to(answer, SECOND), f"{name} answering {domain} with the VIP {SECOND}", answer)
