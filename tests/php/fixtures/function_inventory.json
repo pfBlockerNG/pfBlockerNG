@@ -2556,6 +2556,19 @@
         "returnType": "void",
         "params": []
     },
+    "pfb_dnsbl_blacklist_logging": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "blconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_cache": {
         "returnsRef": false,
         "returnType": null,
@@ -4143,6 +4156,33 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_vip_demand": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "dconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "groups",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "blconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
                 "default": null
             }
         ]

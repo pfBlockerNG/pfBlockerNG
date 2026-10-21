@@ -33,8 +33,13 @@ use PHPUnit\Framework\TestCase;
  *   Given a VIP id that resolves via the seeded pfb_test_vip_list on the matching
  *         interface, so pfb_validate_vips() returns valid.
  *   Then  DNSBL stays enabled and NO file_notice() fires.
+ *
+ * issue #3539 — the validation only runs while an effective DNSBL block still answers with the
+ * VIP (pfb_dnsbl_vip_demand()). setUp() seeds one such group so the three scenarios above keep
+ * exercising the validation; the demand scenarios below remove or flip it.
  */
 #[CoversFunction('pfb_global')]
+#[CoversFunction('pfb_dnsbl_vip_demand')]
 final class DnsblVipDisableNoticeTest extends TestCase
 {
 	protected function setUp(): void
@@ -73,6 +78,7 @@ final class DnsblVipDisableNoticeTest extends TestCase
 
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
 
+		config_set_path("{$dnsbl}/pfb_dnsvip4",     '');
 		config_set_path("{$dnsbl}/pfb_dnsvip6",     '');
 		config_set_path("{$dnsbl}/pfb_dnsport",     '8081');
 		config_set_path("{$dnsbl}/pfb_dnsport_ssl", '8443');
@@ -96,6 +102,18 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
 		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
 		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
+		$this->seedVipGroup('enabled');
+	}
+
+	/** One unbound group with a feed row; 'enabled' answers with the VIP (demand), 'disabled_log' does not. */
+	private function seedVipGroup(string $logging): void
+	{
+		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
+			'aliasname' => 'T1',
+			'action'    => 'unbound',
+			'logging'   => $logging,
+			'row'       => [['url' => 'https://example.com/list.txt', 'state' => 'Enabled', 'header' => 'T1_a', 'format' => 'auto']],
+		]]);
 	}
 
 	public function testManualModeInvalidVipSurfacesFileNotice(): void
@@ -154,5 +172,59 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		// Then: validation passes -- DNSBL stays enabled, no notice.
 		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl'], 'a genuinely valid VIP leaves DNSBL enabled');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'no notice when the VIP is valid');
+	}
+
+	public function testManualModeWithoutAnyVipKeepsDnsblOnWhenNothingAnswersWithTheVip(): void
+	{
+		// Given: manual mode, no VIP configured, and the only group blocks with Null Blocking.
+		$this->seedVipGroup('disabled_log');
+
+		// When
+		pfb_global();
+
+		// Then: nothing needs the VIP, so there is nothing to validate, disable or notify.
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_demand'], 'no block answers with the VIP');
+		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl'], 'DNSBL stays enabled without a VIP');
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_disabled'], 'not force-disabled');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'no notice without demand');
+	}
+
+	public function testManualModeWithStaleVipIdKeepsDnsblOnWhenNothingAnswersWithTheVip(): void
+	{
+		// Given: manual mode, a VIP id that no longer exists, and no block that answers with the VIP.
+		$this->seedVipGroup('disabled_log');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_missing');
+
+		// When
+		pfb_global();
+
+		// Then
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_demand']);
+		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl'], 'a stale VIP reference is not an error without demand');
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_disabled']);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	public function testManualModeWithoutAnyVipForceDisablesWhileDemandExistsAndRecoversWhenItGoes(): void
+	{
+		// Before: setUp's group answers with the VIP and no VIP is configured -> today's force-disable + notice.
+		pfb_global();
+
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_vip_demand'], 'the seeded group demands the VIP');
+		$this->assertSame(PfbToggle::Off, $GLOBALS['pfb']['dnsbl'], 'demand without a VIP force-disables DNSBL');
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_vip_disabled']);
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('no VIP configured', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+
+		// Flip: the SAME configuration, only the group's mechanism moves off the VIP.
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$this->seedVipGroup('disabled_log');
+		pfb_global();
+
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_demand']);
+		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl'], 'DNSBL is enabled again once nothing needs the VIP');
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_vip_disabled']);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
 }

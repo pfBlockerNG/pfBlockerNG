@@ -389,6 +389,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
 		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_missing');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/tld_allow', 'on');	// issue #3539: a built-in answers with the VIP, so it is validated
 	}
 
 	/** @return list<string> */
@@ -423,6 +424,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 
 		sync_package_pfblockerng();
 		$this->seedApplyEnvironment();
+		$this->seedInvalidVip();
 		sync_package_pfblockerng();
 
 		$findings = pfb_sync_findings_read($this->dir)['findings'];

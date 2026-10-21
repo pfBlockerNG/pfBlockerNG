@@ -436,6 +436,7 @@ final class SyncPolicyStatusFindingsTest extends TestCase
 		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
 		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
 		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/tld_allow', 'on');	// issue #3539: a built-in answers with the VIP, so it is validated
 	}
 
 	public function testVipDisabledFlagIsSetOnlyByManualModeForceDisable(): void

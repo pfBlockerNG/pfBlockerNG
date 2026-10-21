@@ -187,6 +187,8 @@ final class ToggleMirrorTypeTest extends TestCase
 			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4',
 			'_vip_test_missing'
 		);
+		// issue #3539: the VIP is only validated while a block answers with it; TLD Allow is such a block.
+		PfbConfig::write('dnsbl/tld_allow', PfbToggle::On);
 
 		pfb_global();
 

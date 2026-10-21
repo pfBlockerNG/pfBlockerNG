@@ -2055,7 +2055,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$list			= array();
 						$list['aliasname']	= "{$item['title']}";
 						$list['action']		= 'unbound';
-						$list['logging']	= $pfb['blconfig']['blacklist_logging'] ?: 'enabled';
+						$list['logging']	= pfb_dnsbl_blacklist_logging($pfb['blconfig']);
 						$list['filter_top1m']	= '';
 
 						$feedname	= strtolower($item['title']);

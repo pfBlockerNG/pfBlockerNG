@@ -3673,9 +3673,22 @@ function pfb_global() {
 	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl/dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
+	// issue #3288: the DNSBL global policy read-only -- pfb_global() never
+	// writes, so an unmigrated/legacy box (config restore or HA sync bypassing
+	// pfb_run_migrations() entirely) stays correct via pfb_dnsbl_policy_config()'s
+	// own fallback rather than trusting the raw stored fields blindly.
+	$pfb_dnsbl_groups = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
+	$pfb_dnsbl_groups = is_array($pfb_dnsbl_groups) ? $pfb_dnsbl_groups : [];
+	$pfb_dnsbl_policy = pfb_dnsbl_policy_config($pfb['dnsblconfig'], $pfb_dnsbl_groups);
+	$pfb['dnsbl_global_log']	= $pfb_dnsbl_policy['mechanism'];	// the concrete mechanism (never '' / 'default')
+	$pfb['dnsbl_global_mode']	= $pfb_dnsbl_policy['mode'];		// PfbDnsblGlobalMode: Default (live-inherit) | Override (enforce)
+	$pfb['dnsbl_policy_legacy']	= $pfb_dnsbl_policy['legacy'];		// TRUE while dnsbl/global_log_mode is genuinely absent (not fresh)
+	// issue #3539: TRUE while any effective DNSBL block answers with the DNSBL VIP/webserver.
+	$pfb['dnsbl_vip_demand']	= pfb_dnsbl_vip_demand($pfb['dnsblconfig'], $pfb_dnsbl_groups, is_array($pfb['blconfig']) ? $pfb['blconfig'] : []);
 	// Effective-policy facts (#3453): reset each pass so a past force-disable never leaks into the next.
 	$pfb['dnsbl_vip_disabled']	= FALSE;
-	if ($pfb['dnsbl'] === PfbToggle::On) {
+	// issue #3539: no block answers with the VIP -> no VIP to validate, DNSBL stays on.
+	if ($pfb['dnsbl'] === PfbToggle::On && $pfb['dnsbl_vip_demand']) {
 		// VIP validation: force-disable DNSBL on a genuinely invalid/missing/overlapping
 		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
 		// owns provisioning and will (re)create a valid VIP during this same update pass.
@@ -3715,15 +3728,6 @@ function pfb_global() {
 	$pfb['dnsbl_res_cache']	= PfbConfig::read('dnsbl/pfb_cache');							// DNSBL Option to backup/restore Resolver cache (default on, issue #1907)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: experimental DNS proxy front end, with or without DNSBL (default off)
-	// issue #3288: the DNSBL global policy read-only -- pfb_global() never
-	// writes, so an unmigrated/legacy box (config restore or HA sync bypassing
-	// pfb_run_migrations() entirely) stays correct via pfb_dnsbl_policy_config()'s
-	// own fallback rather than trusting the raw stored fields blindly.
-	$pfb_dnsbl_groups = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
-	$pfb_dnsbl_policy = pfb_dnsbl_policy_config($pfb['dnsblconfig'], is_array($pfb_dnsbl_groups) ? $pfb_dnsbl_groups : []);
-	$pfb['dnsbl_global_log']	= $pfb_dnsbl_policy['mechanism'];	// the concrete mechanism (never '' / 'default')
-	$pfb['dnsbl_global_mode']	= $pfb_dnsbl_policy['mode'];		// PfbDnsblGlobalMode: Default (live-inherit) | Override (enforce)
-	$pfb['dnsbl_policy_legacy']	= $pfb_dnsbl_policy['legacy'];		// TRUE while dnsbl/global_log_mode is genuinely absent (not fresh)
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are grandfathered to 'on' by the registry pass at
@@ -17625,6 +17629,54 @@ function pfb_dnsbl_policy_config(array $dconfig, array $groups): array {
 		'mode'      => $override_active ? PfbDnsblGlobalMode::Override : PfbDnsblGlobalMode::Default,
 		'mechanism' => $override_active ? pfb_dnsbl_mechanism_normalize($raw_mechanism) : 'enabled',
 		'legacy'    => TRUE,
+	);
+}
+
+/** The one Blacklist-category logging projection: absent joins the Default/Override policy, '' stays the legacy VIP marker; issue #3539. */
+function pfb_dnsbl_blacklist_logging(array $blconfig): mixed {
+	return $blconfig['blacklist_logging'] ?? 'default';
+}
+
+/** TRUE when any effective DNSBL block (deny group, Blacklist category, global-mechanism built-in) answers with the VIP; issue #3539. */
+function pfb_dnsbl_vip_demand(array $dconfig, array $groups, array $blconfig): bool {
+	$policy   = pfb_dnsbl_policy_config($dconfig, $groups);
+	$uses_vip = static fn(mixed $logging): bool =>
+		pfb_dnsbl_effective_logging($logging, $policy['mechanism'], $policy['mode'], $policy['legacy']) === 'enabled';
+
+	foreach ($groups as $group) {
+		if (!is_array($group) || !pfb_group_action_valid($group['action'] ?? NULL, 'dnsbl') || $group['action'] === 'Disabled') {
+			continue;
+		}
+		$rows = is_array($group['row'] ?? NULL) ? $group['row'] : array();
+		if (empty($rows[0]['url'])) {
+			$rows = array();	// the apply drops every row when the first has no url
+		}
+		$blocks = !empty($group['custom']);
+		foreach ($rows as $row) {
+			if (is_array($row) && !empty($row['url']) && ($row['state'] ?? '') !== 'Disabled' && ($row['action'] ?? '') !== 'Permit') {
+				$blocks = TRUE;
+				break;
+			}
+		}
+		if ($blocks && $uses_vip($group['logging'] ?? NULL)) {
+			return TRUE;
+		}
+	}
+
+	// Like the apply (`!= 'Disable'`): only an explicit 'Disable' switches the category off.
+	if (($blconfig['blacklist_enable'] ?? NULL) !== 'Disable' && !empty($blconfig['blacklist_selected'])
+	    && $uses_vip(pfb_dnsbl_blacklist_logging($blconfig))) {
+		return TRUE;
+	}
+
+	// Built-ins have no group: they always resolve to the global mechanism ('default').
+	$registry = pfb_cfg_registry();
+	$field    = static fn(string $key): mixed => $dconfig[$key] ?? $registry["dnsbl/{$key}"]['default'];
+	return $uses_vip('default') && (
+		(pfb_cfg_toggle_read($field('pfb_regex')) === PfbToggle::On && !empty($field('pfb_regex_list')))
+		|| pfb_cfg_idn_mode_read($field('pfb_idn')) !== PfbIdnMode::Off
+		|| pfb_cfg_toggle_read($field('tld_allow')) === PfbToggle::On
+		|| (!empty($field('tld_wildcard')) && !empty($field('tld_wildcard_blacklist')))
 	);
 }
 
