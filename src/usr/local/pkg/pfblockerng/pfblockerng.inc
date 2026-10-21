@@ -14516,7 +14516,8 @@ function pfb_dns_proxy_stand_down(): bool {
  * Everything that reads or writes the Resolver keys and the snapshot runs under pfb_dns_config_lock(), on a
  * config.xml read afresh under it, through write_config(). A lock that stays taken abandons the call: nothing is
  * written or stopped, the snapshot is kept, and a notice says the next apply retries (a restore says the Resolver's state could
- * not be checked: only the lock was refused, never the Resolver seen). A write that config.xml does not take
+ * not be checked: only the lock was refused, never the Resolver seen; and only while this process's copy or a running proxy shows
+ * pfB-DNS in use, issue #3559: a box that never enabled it gets no notice). A write that config.xml does not take
  * is no change: this process's copy is read again from the file, FALSE is returned, and the same notice is raised.
  *
  * ON with the Resolver already moved reports a conflicting Listen Port through $unsafe_line without changing the snapshot.
@@ -14536,7 +14537,7 @@ function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 	if ($lock === NULL) {
 		if ($on) {
 			pfb_dns_proxy_resolver_unchanged(TRUE, 'config.xml was locked by another save');
-		} else {
+		} elseif (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || pfb_dns_proxy_running()) {
 			// No fresh read: nothing says whether a Resolver is still moved, so the Resolver is not reported left or put back
 			pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', 'DNS proxy: the state of the DNS Resolver could not be checked because config.xml was locked by another ' .
 			    'save or could not be read; the next apply retries.', '/services_unbound.php');

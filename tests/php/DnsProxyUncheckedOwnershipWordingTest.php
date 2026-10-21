@@ -16,8 +16,9 @@ use PHPUnit\Framework\TestCase;
  * The restore and the ownership checks that follow it read config.xml afresh under the config lock. When the lock stays taken
  * (or config.xml cannot be read) this process's copy of config.xml says nothing reliable about the Resolver, so every word the
  * operator is told about it must be about the check, not about the Resolver:
- *   - with pfB-DNS off and nothing to put back as far as anyone knows, the restore's notice says the state could not be
- *     checked, not that the Resolver "was not put back";
+ *   - with pfB-DNS off and this copy showing it in use (a snapshot, our block, a stored marker or a running proxy), the restore's
+ *     notice says the state could not be checked, not that the Resolver "was not put back"; with no such sign (a box that never
+ *     enabled pfB-DNS, issue #3559) it says nothing at all;
  *   - a package removal stopped for a failed check says so, whatever else went wrong in it (Unbound's python settings that
  *     config.xml did not take): it never also says "the DNS Resolver itself was put back";
  *   - a saved copy (pfb_dns_saved) that cannot be read from this copy is "could not be confirmed", never "invalid", in the
@@ -112,6 +113,20 @@ final class DnsProxyUncheckedOwnershipWordingTest extends TestCase
 		$GLOBALS['config']['unbound']['custom_options'] = base64_encode("do-ip6: no\n" . self::BLOCK);
 	}
 
+	/** A valid snapshot: the copy says the Resolver was moved. */
+	private function seedSnapshot(): void
+	{
+		$this->seedUntouchedResolver();
+		config_set_path(self::SAVED, base64_encode((string) json_encode(array_fill_keys(PFB_DNS_PROXY_RESOLVER_KEYS, ['present' => FALSE, 'value' => NULL]))));
+	}
+
+	/** A Resolver the copy shows untouched, with the DNS proxy running: a sign of pfB-DNS from outside this (maybe stale) copy. */
+	private function seedRunningProxy(): void
+	{
+		$this->seedUntouchedResolver();
+		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE] = TRUE;
+	}
+
 	/** The removal's stop, for the Resolver as seeded: pfb_dns_proxy_deinstall() must refuse it, then the hook's notice is raised. */
 	private function stopTheRemoval(): string
 	{
@@ -133,23 +148,56 @@ final class DnsProxyUncheckedOwnershipWordingTest extends TestCase
 	// W1 -- the restore with pfB-DNS off and the lock refused
 	// -----------------------------------------------------------------------
 
-	public function testARestoreThatCannotTakeTheLockSaysTheResolversStateCouldNotBeCheckedNotThatItWasNotPutBack(): void
+	/** @return array<string,array{string}> the signs that pfB-DNS was in use, as a seeding method's name */
+	public static function inUseStates(): array
 	{
-		// Given an untouched Resolver, and another save holding the config lock
-		$this->seedUntouchedResolver();
+		return [
+			'a valid snapshot'                    => ['seedSnapshot'],
+			'our block and no snapshot'           => ['seedBlockWithoutSnapshot'],
+			'a stored marker that is no snapshot' => ['seedUnreadableMarker'],
+			'a running DNS proxy'                 => ['seedRunningProxy'],
+		];
+	}
+
+	#[DataProvider('inUseStates')]
+	public function testARestoreThatCannotTakeTheLockSaysTheResolversStateCouldNotBeCheckedNotThatItWasNotPutBack(string $seed): void
+	{
+		// Given a sign that pfB-DNS was in use, and another save holding the config lock
+		$this->$seed();
+		$this->assertTrue(pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || pfb_dns_proxy_running(),
+			'before: the copy or the running proxy shows pfB-DNS in use');
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$before = $GLOBALS['config'];
 
 		// When pfB-DNS is off and the restore is asked for
 		$changed = pfb_dns_proxy_resolver(FALSE);
 
 		// Then nothing changed, and the one notice is about the check: it names the lock and the retry, and claims no Resolver was left
 		$this->assertFalse($changed);
-		$this->assertCount(1, $this->notices());
-		$notice = $this->notices()[0];
-		$this->assertStringContainsString('could not be checked', $notice);
-		$this->assertStringContainsString('locked by another save', $notice);
-		$this->assertStringContainsString('next apply', $notice);
-		$this->assertStringNotContainsString('not put back', $notice, 'the Resolver was not shown to be moved');
+		$this->assertSame($before, $GLOBALS['config']);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame(['DNS proxy: the state of the DNS Resolver could not be checked because config.xml was locked by another ' .
+		    'save or could not be read; the next apply retries.'], $this->notices());
+	}
+
+	public function testARestoreThatCannotTakeTheLockOnABoxThatNeverUsedPfbDnsSaysNothing(): void
+	{
+		// Given a Resolver pfB-DNS never touched, no snapshot or marker, no proxy running, and another save holding the config lock
+		$this->seedUntouchedResolver();
+		$this->assertFalse(pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || pfb_dns_proxy_running(),
+			'before: nothing shows pfB-DNS in use');
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$before = $GLOBALS['config'];
+
+		// When an apply with pfB-DNS off asks for the restore
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then nothing changed, nothing was written or stopped, and no notice tells the operator about a feature they never used
+		$this->assertFalse($changed);
+		$this->assertSame($before, $GLOBALS['config']);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame([], $GLOBALS['pfb_test_service_calls']);
+		$this->assertSame([], $this->notices());
 	}
 
 	public function testAMoveThatCannotTakeTheLockKeepsItsOwnWording(): void
