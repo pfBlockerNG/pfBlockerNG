@@ -226,6 +226,33 @@ final class DnsProxyAclTest extends TestCase
 		$this->assertSame(['access-control: 2001:db8:1::/64 allow'], $this->grants());
 	}
 
+	public function testEveryListenersInterfaceIsGrantedItsOwnSubnetPlainDnsDotDohAndDoq(): void
+	{
+		// Given four LAN-type interfaces, each with its own IPv6 /64 and no gateway, one per listener: plain DNS, DoT, DoH and DoQ
+		$this->seedBox(
+			['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1', 'opt2' => '2001:db8:3::1', 'opt3' => '2001:db8:4::1'],
+			['lan' => '64', 'opt1' => '64', 'opt2' => '64', 'opt3' => '64']
+		);
+		$this->seedResolver('lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface', 'opt1');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh_interface', 'opt2');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doq_interface', 'opt3');
+
+		$this->moveOn();
+
+		$this->assertSame(
+			[
+				'access-control: 2001:db8:1::/64 allow',
+				'access-control: 2001:db8:2::/64 allow',
+				'access-control: 2001:db8:3::/64 allow',
+				'access-control: 2001:db8:4::/64 allow',
+			],
+			$this->grants(),
+			'the union of the four listeners\' interface lists: dropping any one of them loses its subnet'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// Static routes
 	// -----------------------------------------------------------------------

@@ -2052,4 +2052,18 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertStringNotContainsString($name, $this->rcText());
 		$this->assertStringContainsString("DNS proxy: plain DNS interface \"{$name}\" is not a configured interface; it is skipped", $this->errorLog());
 	}
+
+	public function testDotIsServedOnItsOwnInterfaceWhilePlainDnsStaysOnItsOwn(): void
+	{
+		// Given plain DNS on lan (192.0.2.1), and pfB-DNS's own DoT on opt1 (198.51.100.1), port 853
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1']);
+		$this->ownSettings(['pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'opt1', 'pfb_dns_dot_port' => '853', 'pfb_dns_sslcertref' => 'cert1']);
+
+		// When the script is generated
+		$this->generate();
+
+		// Then DoT listens on opt1's address and loopback only, and plain DNS on lan's address and loopback only
+		$this->assertSame(["'198.51.100.1'", "'127.0.0.1'", "'::1'"], $this->scriptValues('--dot-listen'), 'DoT: its own list, never the plain one');
+		$this->assertSame(["'192.0.2.1'", "'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'), 'plain DNS: its own list, never the DoT one');
+	}
 }

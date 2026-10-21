@@ -3555,7 +3555,7 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 // issue #3515: the experimental DNS proxy takes the Resolver's client-facing place, so the Resolver is moved onto
 // loopback through config.xml (its port and lo0 stay: pfSense keeps 127.0.0.1 in the firewall's resolv.conf) and
 // our clause moves Unbound's own sockets off the Listen Port, onto loopback 5354 (plain) and 5353 (PROXYv2: it trusts
-// the proxy's source address). The proxy serves the Listen Port on loopback and on the saved interfaces.
+// the proxy's source address). The proxy serves the Listen Port on loopback and on pfB-DNS's own interface list (dns/pfb_dns_interface).
 const PFB_DNS_PROXY_UNBOUND_PORT = '5353';
 const PFB_DNS_PROXY_UNBOUND_PLAIN_PORT = '5354';
 const PFB_DNS_PROXY_LOOPBACK = ['127.0.0.1', '::1'];
@@ -3601,7 +3601,7 @@ $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 // The gateway's log (daemon(8) -o), which pfb_dns_proxy_startup_check() reads to see which listeners the current start bound.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
-// The Resolver's certificate chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
+// The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
 // It is root's alone, in a directory root alone can enter and outside the Unbound chroot: the gateway reads it once, at start, while it is
 // still root, and a renewal reaches the running gateway as a push on its control socket (pfb_dns_proxy_certificate_push()), because the
 // gateway is no longer root by then. The socket is the gateway's --ctl-socket; the third path is the copy an earlier build left in the
@@ -5405,7 +5405,7 @@ if (isset($argv[1])) {
 			exit;
 	}
 
-	// The Resolver's certificate for the gateway's DoT, DoH and DoQ, written where the rc script's start finds it missing
+	// The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref) for the gateway's DoT, DoH and DoQ, written where the rc script's start finds it missing
 	elseif ($argv[1] == 'dns_cert') {
 			exit(pfb_dns_proxy_certificate_refresh(TRUE) ? 0 : 1);
 	}
@@ -14329,7 +14329,7 @@ function pfb_dns_proxy_stand_down(): bool {
  * It reads the admin's Custom Options the same way, but an `interface`, `port` or `include` line is reported through
  * $unsafe_line instead of refused there: the saved copy takes the admin's text as it stands (our block cut out), and the
  * caller rolls pfB-DNS back so the restore keeps the line. While the Advanced page's EDNS
- * size is automatic and nothing of the admin's sets one, the clause also carries `edns-buffer-size:` for the SAVED interfaces
+ * size is automatic and nothing of the admin's sets one, the clause also carries `edns-buffer-size:` for pfB-DNS's plain DNS interface list (dns/pfb_dns_interface)
  * (pfb_dns_proxy_edns_line()): the Resolver on lo0 would otherwise advertise the loopback MTU.
  *
  * @param string|null $unsafe_line set to the admin's own setting that conflicts after the move: the Listen Port (FALSE is returned,
