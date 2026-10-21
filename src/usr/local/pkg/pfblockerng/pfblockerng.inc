@@ -5197,6 +5197,7 @@ function pfb_dns_proxy_turn_off(string $why): bool {
 function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL): bool {
 	global $pfb;
 
+	$not_ready = $what === NULL;
 	$what ??= 'the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' seconds of its start';
 	$next ??= 'Read ' . PFB_DNS_PROXY_LOG . ' for the cause, correct it, then turn pfB-DNS on again.';
 	if (!pfb_dns_proxy_turn_off($what)) {
@@ -5220,7 +5221,10 @@ function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL): bo
 		} elseif (pfb_dns_proxy_recovery_required()) {
 			$kept = 'The DNS Resolver still carries the DNS proxy settings with no saved copy to restore from: manual recovery required.';
 		} else {
-			$kept = 'The DNS Resolver is still moved aside for the DNS proxy and its saved settings are kept; the next pfBlockerNG update retries the restore.';
+			$kept = $not_ready
+			    ? 'The DNS Resolver is still moved aside for the DNS proxy, which did not become ready, so nothing answers DNS on the Resolver\'s port until the restore succeeds; ' .
+			    'its saved settings are kept and the next pfBlockerNG update retries the restore.'
+			    : 'The DNS Resolver is still moved aside for the DNS proxy and its saved settings are kept; the next pfBlockerNG update retries the restore.';
 		}
 		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and pfB-DNS was turned off, but the DNS Resolver could not be restored" . ($unconfirmed ? '' : ' (see the notice before this one)') . '. ' .
 		    "{$kept} " .
@@ -14263,10 +14267,10 @@ function pfb_dns_status(): array {
 		];
 	}
 
-	if (($pfb['enable'] ?? NULL) !== PfbToggle::On) {
+	if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
+		$mode = 'Turning off: pfB-DNS is off, and the DNS Resolver restore is pending: see the notices';
+	} elseif (($pfb['enable'] ?? NULL) !== PfbToggle::On) {
 		$mode = 'Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices';
-	} elseif (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
-		$mode = 'Turning off: the Resolver restore is pending, see the notices';
 	} elseif (pfb_dnsbl_active()) {
 		$mode = 'On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else';
 	} else {
@@ -14716,10 +14720,12 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 			}
 			return FALSE;
 		}
-		// The stop runs here, under the lock: only a call that holds it and read config.xml afresh may stop the proxy.
-		// stop_service() reports nothing and the rc script gives up after KILL: only the pidfiles say whether the
-		// proxy still holds the Resolver's port, which Unbound would then collide on.
-		stop_service('pfb_dns_proxy');
+		// issue #3561: under the lock, from a fresh read, through the rc script itself: stop_service() does nothing while the package's
+		// service entry is absent (an install runs this before pfSense registers it), and the Resolver's start hook starts the proxy
+		// without one. Only the pidfiles say whether the proxy still holds the port Unbound would collide on.
+		if (file_exists(PFB_DNS_PROXY_RCFILE)) {
+			mwexec(PFB_DNS_PROXY_RCFILE . ' stop');
+		}
 		if (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
 			$text = 'DNS proxy: the DNS proxy is still running after it was stopped, so the DNS Resolver was not restored ' .
 			    '(Unbound would collide with the proxy on the Resolver\'s port). Stop the pfBlockerNG DNS proxy service in ' .

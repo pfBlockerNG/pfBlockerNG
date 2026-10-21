@@ -42,7 +42,8 @@ final class DnsProxyConfigLockTest extends TestCase
 	private const LOCK = 'pfb_dns_config';
 	private const DOUBLE_GLOBALS = ['pfb_test_lock_events', 'pfb_test_lock_held', 'pfb_test_try_lock_fail', 'pfb_test_config_read_hook',
 		'pfb_test_config_read_fails', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held', 'pfb_test_write_config_hook', 'pfb_test_write_config_result',
-		'pfb_test_write_config_calls', 'pfb_test_file_notices', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_valid_pids', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes'];
+		'pfb_test_write_config_calls', 'pfb_test_file_notices', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_valid_pids', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes',
+		'pfb_test_mwexec', 'pfb_test_mwexec_hook'];
 
 	private string $tmp;
 	private bool $hadPfb = FALSE;
@@ -67,6 +68,7 @@ final class DnsProxyConfigLockTest extends TestCase
 			'errlog' => "{$this->tmp}/pfb.err",
 		]);
 		$GLOBALS['config'] = [];
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
 	}
 
 	protected function tearDown(): void
@@ -84,6 +86,7 @@ final class DnsProxyConfigLockTest extends TestCase
 		} else {
 			unset($GLOBALS['config']);
 		}
+		@unlink(PFB_DNS_PROXY_RCFILE);
 		rmdir_recursive($this->tmp);
 	}
 
@@ -194,6 +197,10 @@ final class DnsProxyConfigLockTest extends TestCase
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = "{$fn}:{$service}:" . ($this->lockHeld() ? 'held' : 'free');
 		};
+		$GLOBALS['pfb_test_mwexec_hook'] = function (string $command) use (&$seen): int {
+			$seen[] = str_replace(PFB_DNS_PROXY_RCFILE, 'rc', $command) . ':' . ($this->lockHeld() ? 'held' : 'free');
+			return 0;
+		};
 		$GLOBALS['pfb_test_write_config_hook'] = function () use (&$seen): void {
 			$seen[] = 'write:' . ($this->lockHeld() ? 'held' : 'free');
 		};
@@ -203,7 +210,7 @@ final class DnsProxyConfigLockTest extends TestCase
 
 		// Then the proxy was stopped (once, and never restarted) only after the lock was held and config.xml read
 		// afresh, the restore was written under the lock, and the lock is released
-		$this->assertSame(['read:held', 'stop_service:pfb_dns_proxy:held', 'write:held'], $seen);
+		$this->assertSame(['read:held', 'rc stop:held', 'write:held'], $seen);
 		$this->assertSame([['try_lock', self::LOCK, $this->lockEvents()[0][2]], ['unlock']], $this->lockEvents());
 		$this->assertSame([TRUE], $GLOBALS['pfb_test_config_read_lock_held'], 'config.xml is read afresh once, under the lock');
 		$this->assertNull(pfb_dns_proxy_saved());
@@ -229,6 +236,10 @@ final class DnsProxyConfigLockTest extends TestCase
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = "{$fn}:{$service}:" . ($this->lockHeld() ? 'held' : 'free');
 		};
+		$GLOBALS['pfb_test_mwexec_hook'] = function (string $command) use (&$seen): int {
+			$seen[] = str_replace(PFB_DNS_PROXY_RCFILE, 'rc', $command) . ':' . ($this->lockHeld() ? 'held' : 'free');
+			return 0;
+		};
 
 		// When the proxy is turned off
 		$changed = pfb_dns_proxy_resolver(FALSE);
@@ -238,7 +249,7 @@ final class DnsProxyConfigLockTest extends TestCase
 		$this->assertFalse($changed);
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'the restore is retried by the next apply');
 		$this->assertSame(0, $this->writes());
-		$this->assertSame(['stop_service:pfb_dns_proxy:held', 'restart_service:pfb_dns_proxy:free'], $seen);
+		$this->assertSame(['rc stop:held', 'restart_service:pfb_dns_proxy:free'], $seen);
 		$this->assertFalse($this->lockHeld());
 	}
 
@@ -399,6 +410,10 @@ final class DnsProxyConfigLockTest extends TestCase
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = "{$fn}:{$service}:" . ($this->lockHeld() ? 'held' : 'free');
 		};
+		$GLOBALS['pfb_test_mwexec_hook'] = function (string $command) use (&$seen): int {
+			$seen[] = str_replace(PFB_DNS_PROXY_RCFILE, 'rc', $command) . ':' . ($this->lockHeld() ? 'held' : 'free');
+			return 0;
+		};
 		$this->assertNull(pfb_dns_proxy_saved(), 'before: this process\'s copy shows nothing moved');
 		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'before: config.xml holds the moved Resolver');
 		$this->assertNotSame('', $this->onDisk(self::SAVED), 'before: and its snapshot');
@@ -408,7 +423,7 @@ final class DnsProxyConfigLockTest extends TestCase
 
 		// Then the restore ran from the fresh read: the proxy was stopped under the lock and config.xml has the user's Resolver back
 		$this->assertTrue($changed, 'the restore the stale copy hid was made');
-		$this->assertSame(['stop_service:pfb_dns_proxy:held'], $seen);
+		$this->assertSame(['rc stop:held'], $seen);
 		$this->assertSame('lan,opt1', $this->onDisk('unbound/active_interface'), 'config.xml has the user\'s interfaces again');
 		$this->assertSame('', $this->onDisk(self::SAVED), 'and the snapshot is cleared');
 		$this->assertNull(pfb_dns_proxy_saved());

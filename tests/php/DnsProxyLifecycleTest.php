@@ -13,7 +13,8 @@ use PHPUnit\Framework\TestCase;
  *
  *   - the proxy is stopped BEFORE the Resolver is restored, so Unbound's regeneration finds port 53 free
  *     (pfb_dns_proxy_resolver(FALSE), the one place every "turn it off" path goes through), and the restore is
- *     abandoned, snapshot kept and the operator told, when the proxy outlived its stop (stop_service() reports
+ *     abandoned, snapshot kept and the operator told, when the proxy outlived its stop (the stop is the rc script's own:
+ *     stop_service() does nothing while the package has no service entry, issue #3561, and the rc script reports
  *     nothing, so the pidfiles are the only witness): the proxy is then restarted, so the moved Resolver stays
  *     served until a later apply restores it;
  *   - package removal always hands the Resolver back, stops the proxy and removes its rc script, whatever the
@@ -40,6 +41,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		'pfb', 'config', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_write_config_calls',
 		'pfb_test_unbound_configure_calls', 'pfb_test_file_notices', 'pfb_test_rcfiles', 'pfb_test_rcfile_writes',
 		'pfb_test_valid_pids', 'pfb_test_try_lock_fail', 'pfb_test_lock_held', 'pfb_test_lock_events',
+		'pfb_test_mwexec', 'pfb_test_mwexec_hook',
 	];
 
 	private string $tmp;
@@ -143,14 +145,16 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// Given a moved Resolver, and a hook that snapshots config.xml at the instant the proxy is stopped
 		$this->seedMovedResolver();
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
 		$atStop = [];
-		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use (&$atStop): void {
+		$GLOBALS['pfb_test_mwexec_hook'] = static function (string $command) use (&$atStop): int {
 			$atStop[] = [
-				'call'    => [$fn, $service],
+				'call'    => $command,
 				'unbound' => config_get_path('unbound'),
 				'marker'  => (string) config_get_path(self::SAVED, ''),
 				'writes'  => count($GLOBALS['pfb_test_write_config_calls'] ?? []),
 			];
+			return 0;
 		};
 
 		// When the Resolver is restored
@@ -159,7 +163,8 @@ final class DnsProxyLifecycleTest extends TestCase
 		// Then the proxy was stopped exactly once, while the Resolver was still moved, the marker still
 		// held the snapshot and nothing had been written: Unbound's regeneration finds port 53 free
 		$this->assertCount(1, $atStop, 'the proxy is stopped exactly once');
-		$this->assertSame(['stop_service', 'pfb_dns_proxy'], $atStop[0]['call']);
+		$this->assertSame(PFB_DNS_PROXY_RCFILE . ' stop', $atStop[0]['call']);
+		$this->assertSame([], $this->serviceCalls(), 'not stop_service(): it does nothing while the package has no service entry');
 		$this->assertSame(self::sorted(self::movedResolver()), self::sorted($atStop[0]['unbound']),
 			'the stop must precede the first restore write');
 		$this->assertNotSame('', $atStop[0]['marker'], 'the stop must precede clearing the snapshot');
@@ -169,6 +174,20 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
 		$this->assertSame('', (string) config_get_path(self::SAVED, ''));
 		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	public function testARestoreWithNoRcScriptRunsNoStopAndStillPutsTheResolverBack(): void
+	{
+		// Given a moved Resolver, no rc script to run (setUp removed it) and no proxy alive
+		$this->seedMovedResolver();
+		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'before: no rc script');
+
+		// When the Resolver is restored
+		$this->assertTrue(pfb_dns_proxy_resolver(FALSE));
+
+		// Then nothing tried to run the missing script, and the Resolver is back as the user had it
+		$this->assertNotContains(PFB_DNS_PROXY_RCFILE . ' stop', $GLOBALS['pfb_test_mwexec'] ?? []);
+		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
 	}
 
 	public function testRestoreWithNoSnapshotNeverTouchesTheProxy(): void
@@ -208,8 +227,9 @@ final class DnsProxyLifecycleTest extends TestCase
 	#[DataProvider('survivors')]
 	public function testARestoreIsAbandonedWhileTheProxyIsStillAliveAfterItsStop(string $pidfile): void
 	{
-		// Given a moved Resolver and a proxy process that survived stop_service() (the rc script gave up after KILL)
+		// Given a moved Resolver and a proxy process that survived the rc script's stop (it gave up after KILL)
 		$this->seedMovedResolver();
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
 		$GLOBALS['pfb_test_valid_pids'] = [$pidfile => TRUE];
 		$moved = $GLOBALS['config'];
 
@@ -231,7 +251,8 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertStringContainsString('DNS proxy', (string) @file_get_contents($GLOBALS['pfb']['errlog']));
 
 		// ... and the proxy that serves the moved Resolver was stopped and then restarted, so DNS stays available
-		$this->assertSame([['stop_service', 'pfb_dns_proxy'], ['restart_service', 'pfb_dns_proxy']], $this->serviceCalls());
+		$this->assertSame([PFB_DNS_PROXY_RCFILE . ' stop'], $GLOBALS['pfb_test_mwexec']);
+		$this->assertSame([['restart_service', 'pfb_dns_proxy']], $this->serviceCalls());
 	}
 
 	public function testARestoreProceedsWhenNeitherPidfileNamesALiveProcessAfterTheStop(): void
@@ -351,16 +372,21 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// Given a moved Resolver the disable pass never got to (it returned early)
 		$this->seedMovedResolver();
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
 		$atStop = [];
 		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use (&$atStop): void {
 			$atStop[] = [$fn, $service, count($GLOBALS['pfb_test_unbound_configure_calls']), config_get_path('unbound/active_interface')];
+		};
+		$GLOBALS['pfb_test_mwexec_hook'] = static function (string $command) use (&$atStop): int {
+			$atStop[] = [$command === PFB_DNS_PROXY_RCFILE . ' stop' ? 'rc stop' : $command, 'pfb_dns_proxy', count($GLOBALS['pfb_test_unbound_configure_calls']), config_get_path('unbound/active_interface')];
+			return 0;
 		};
 
 		// When the package is removed
 		$this->assertTrue(pfb_dns_proxy_deinstall(), 'the Resolver was put back: the removal goes on');
 
-		// Then the proxy was stopped before anything was restored or regenerated ...
-		$this->assertSame([['stop_service', 'pfb_dns_proxy', 0, 'lo0']], array_slice($atStop, 0, 1));
+		// Then the rc script stopped the proxy before anything was restored or regenerated, and the removal's own stop came after
+		$this->assertSame([['rc stop', 'pfb_dns_proxy', 0, 'lo0'], ['stop_service', 'pfb_dns_proxy', 1, 'lan,opt1']], $atStop);
 		// ... and the Resolver is back as the user had it, with unbound.conf regenerated once
 		$this->assertSame(self::sorted(self::originalResolver()), self::sorted(config_get_path('unbound')));
 		$this->assertSame('', (string) config_get_path(self::SAVED, ''));

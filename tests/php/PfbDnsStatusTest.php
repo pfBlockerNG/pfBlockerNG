@@ -580,7 +580,17 @@ final class PfbDnsStatusTest extends TestCase
 	{
 		$this->moved(FALSE);
 
-		$this->assertSame('Turning off: the Resolver restore is pending, see the notices', pfb_dns_status()['mode']);
+		$this->assertSame('Turning off: pfB-DNS is off, and the DNS Resolver restore is pending: see the notices', pfb_dns_status()['mode']);
+	}
+
+	public function testAMovedBoxWithPfbDnsOffNamesPfbDnsWhateverPfBlockerNgSays(): void
+	{
+		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
+		$this->moved(FALSE);
+
+		$mode = pfb_dns_status()['mode'];
+		$this->assertStringContainsString('pfB-DNS is off', $mode);
+		$this->assertStringNotContainsString('pfBlockerNG is disabled', $mode);
 	}
 
 	public function testPfBlockerNgDisabledCountsAsNoDnsbl(): void

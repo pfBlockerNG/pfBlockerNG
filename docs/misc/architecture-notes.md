@@ -436,7 +436,8 @@ snapshot), not the requested toggle. A refused move or failed config lock leaves
 with DNSBL off, Unbound gets no DNSBL module. A takeover already in place keeps only the observer in Unbound. The notice
 and pfB-DNS status panel explain when pfB-DNS is not active. The restore is abandoned (snapshot kept, `file_notice`, retried by
 the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
-`stop_service()`, because `stop_service()` reports nothing and Unbound would collide with the proxy on the Resolver's port;
+the rc script's own stop (run directly: pfSense's `stop_service()` does nothing while the package's service entry is absent, issue #3561),
+because that stop reports nothing and Unbound would collide with the proxy on the Resolver's port;
 the proxy is then restarted (once the config lock below is released), so the moved Resolver stays served until the retry.
 
 The admin's Custom options are read the way Unbound 1.26.1 reads them, established with `unbound-checkconf -o` in the
@@ -658,11 +659,14 @@ Unbound, and `pfb_unbound_dnsbl()` with `pfb_update_unbound()` regenerate `unbou
 The restore consumes the snapshot, so that reload does not restart the proxy (no recursion), and the restore's own restart of a
 proxy that outlived its stop is deliberately not confirmed. The operator gets a notice: pfB-DNS was turned off, the Resolver
 was restored, DNSBL runs in Unbound again. A rollback that cannot finish (the config lock stays taken, config.xml does not take the write that turns the toggle off, the proxy outlives its
-stop) keeps the snapshot and the moved Resolver, runs nothing destructive after the failure, and says that recovery is needed:
-it never claims success. The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
+stop) keeps the snapshot and the moved Resolver, runs nothing destructive after the failure, and says that recovery is needed
+(for a failed activation: nothing answers DNS on the Resolver's port until the restore succeeds): it never claims success. The restore's stop is
+the rc script's own, so it also ends a supervisor that keeps respawning a decider that never becomes ready while pfSense has no
+service entry for the package (an install runs this before pfSense registers it, and the Resolver's start hook starts the proxy without one).
+The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
 `DnsProxyActivationRollbackTest`, the marker and lock rows of `DnsProxyServiceTest` and `go/pfb_dns_gateway/readyfile_test.go`
-(the marker itself); live by `tests/smoke/test_smoke_dns_proxy.py` (the marker, the lock, racing starts, and a rollback with
-every client port held).
+(the marker itself); live by `tests/smoke/test_smoke_dns_proxy.py` (the marker, the lock, racing starts, a rollback with
+every client port held, and a decider that exits at every start, with the package's service entry registered or absent).
 
 **Startup check (issue #3538).** "Ready" says the gateway serves; it does not say it serves every address the rc script names (an
 address that cannot be bound is logged and skipped, plain.go and tlsbind.go). After every start, `pfb_dns_proxy_confirm_ready()` runs

@@ -1343,6 +1343,17 @@ if (!function_exists('mwexec_bg')) {
 	}
 }
 
+// --- mwexec() capture double (issue #3561) ---
+//
+// pfSense util.inc runs a command and returns its exit status. Records each command in $GLOBALS['pfb_test_mwexec'] and
+// answers with the status $GLOBALS['pfb_test_mwexec_hook'](command) returns (the hook also stands in for what the command does).
+if (!function_exists('mwexec')) {
+	function mwexec($command, $nologentry = false, $clearsigmask = false, $background = false) {
+		$GLOBALS['pfb_test_mwexec'][] = $command;
+		return is_callable($GLOBALS['pfb_test_mwexec_hook'] ?? NULL) ? (int) $GLOBALS['pfb_test_mwexec_hook']($command) : 0;
+	}
+}
+
 // --- pfb_tracker() doubles (#482) ---
 //
 // pfb_tracker() calls four pfSense interface helpers that have no off-appliance

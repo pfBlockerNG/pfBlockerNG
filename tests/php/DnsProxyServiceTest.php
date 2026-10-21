@@ -579,6 +579,27 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertFileDoesNotExist($this->pidfile('pfb_dns_proxy.pid'));
 	}
 
+	public function testStopEndsASupervisorWaitingBetweenTwoFailedStartsWithAnEmptyChildPidfile(): void
+	{
+		// Given a supervisor in its restart delay: daemon(8) keeps the title of its last child (1002, gone) and has emptied the child pidfile
+		$this->moveResolver();
+		$this->generate();
+		$this->arrange([], '2', '1', FALSE);
+		file_put_contents($this->pidfile('pfb_dns_proxy_daemon.pid'), "1001\n");
+		file_put_contents($this->pidfile('pfb_dns_proxy.pid'), '');
+		file_put_contents("{$this->dir}/state/procs", "1001|{$this->dir}/run/pfb_dns_proxy_daemon.pid|||daemon: pfb_dns_proxy[1002] (daemon)\n");
+
+		// When it is stopped
+		[$status, $output] = $this->rc('stop');
+
+		// Then the supervisor got TERM and is gone, and nothing stale is left behind
+		$this->assertSame(0, $status, "rc stop failed: {$output}");
+		$this->assertSame(['term', 'sleep', 'sleep'], $this->events());
+		$this->assertSame([], $this->livePids());
+		$this->assertFileDoesNotExist($this->pidfile('pfb_dns_proxy_daemon.pid'));
+		$this->assertFileDoesNotExist($this->pidfile('pfb_dns_proxy.pid'));
+	}
+
 	public function testAProcessIgnoringTermIsKilledAfterFiveTicksAndItsStalePidfilesAreRemoved(): void
 	{
 		// Given a proxy that ignores TERM and dies one tick after KILL
