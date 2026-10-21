@@ -7,20 +7,20 @@ The decision protocol with the Python decider is in [dns-gateway-protocol.md](dn
 
 ## Certificate
 
-DoT, DoH and DoQ serve the DNS Resolver's certificate: the certificate, the CAs after it nearest first, then its private key,
+DoT, DoH and DoQ serve the certificate selected on the pfB-DNS page (`dns/pfb_dns_sslcertref`): the certificate, the CAs after it nearest first, then its private key,
 as one PEM text. The gateway does not read `config.xml`. It has the certificate from two places, and nowhere else:
 
 1. **At start, from `--tls-pem`** (`/var/etc/pfb_dns/tls.pem` in pfBlockerNG's rc script). pfBlockerNG writes the file
    (`pfb_dns_proxy_certificate_export()`, see `architecture-notes.md`): mode 0600 in a directory of mode 0700, both root's, outside
-   the Unbound chroot, with `unbound/sslcertref`'s certificate, the chain its `caref` leads to (a missing CA or a loop ends it), and a
+   the Unbound chroot, with the `dns/pfb_dns_sslcertref` certificate, the chain its `caref` leads to (a missing CA or a loop ends it), and a
    key that is neither encrypted nor another certificate's; it replaces the file by rename, when the certificate changed, at every
    apply, at every cron tick (15 minutes) and at a start that finds no file. The gateway reads it once, as root, before the privilege
    drop, and not at all unless `--dot-listen`, `--doh-listen` or `--doq-listen` is given. It never looks at the file again: what is in
-   it after the start is none of the running gateway's business. The DoT port is `--dot-port` (the Resolver's `unbound/tlsport`
-   when it is a port, else 853). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked for a
+   it after the start is none of the running gateway's business. The DoT port is `--dot-port`, from `dns/pfb_dns_dot_port`
+   (853 by default). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked for a
    passphrase).
 2. **While it runs, as a push on the control socket** (`--ctl-socket`, `/var/run/pfb_dns/ctl.sock`), from root. The gateway is
-   `unbound` by then and cannot read a file only root can read, which is the point: the key of the Resolver's certificate is not
+   `unbound` by then and cannot read a file only root can read, which is the point: the key of the pfB-DNS certificate is not
    readable by the user of a network-facing daemon (nor by Unbound's user, which is why the file is no longer in the chroot).
 
 When a TLS transport is requested and the file is unusable or absent at start, the reason is logged once
@@ -83,8 +83,8 @@ A listener that cannot be bound is logged and skipped. Readiness lines, before `
 dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracketed (`[::1]:853`).
 
 pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
-`--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoH and
-DoQ ports are their own, so nothing collides with the plain DNS listeners there.
+`--dot-listen`, `--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoT,
+DoH and DoQ ports are their own, so nothing collides with the plain DNS listeners there.
 
 ## Fairness: what one address may hold
 
@@ -256,7 +256,7 @@ The same statements are in the 3.2 and 3.3 manuals.
 | DoQ cannot go through HAProxy. HAProxy is not "a packet-based load balancer : it will not see IP packets nor UDP datagrams"; its QUIC listeners and servers speak HTTP/3 only ("QUIC supports only h3 and hq-interop as ALPN"), and connection migration is unsupported. DoQ (`doq`, UDP 853) is reached directly, or through a layer 3/4 forwarder that keeps the client's source address: the gateway has no PROXY support on QUIC. | [Introduction, "What HAProxy is and is not"](https://docs.haproxy.org/3.4/intro.html), [`alpn`](https://docs.haproxy.org/3.4/configuration.html#5.1-alpn), [Configuration manual, HTTP/3](https://docs.haproxy.org/3.4/configuration.html) |
 | An HAProxy HTTP/3 frontend can serve DoH clients and reach this gateway over HTTP/2 or HTTP/1.1; the gateway itself serves no HTTP/3. [INFERENCE] from the QUIC frontend being an HTTP frontend; not run. | same |
 
-A gateway behind HAProxy, TLS terminated on the gateway (client sees the Resolver's certificate):
+A gateway behind HAProxy, TLS terminated on the gateway (client sees the pfB-DNS certificate):
 
 ```text
 frontend doh

@@ -226,7 +226,7 @@ Authorization = property of **write**, not call site (generalises
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
     not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only its own leaves
-    (the toggle and the seven DoH/DoQ settings), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
+    (the toggle, the twelve listener settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
     (`pfblockerng_sync_sections()`), so neither key can leave the node. New key, no grandfather.
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
     the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
