@@ -1351,3 +1351,14 @@ def test_init_starts_with_clean_slow_match_warning_bookkeeping(tmp_path: Path, m
     loads = _user_regex_loads(tmp_path, monkeypatch, [f"{KEEP_ROW}#keep"], stale_warnings=stale)
     assert seen == [set(), set()], seen
     assert loads.warned_after_init == set()
+
+
+def test_init_without_a_manifest_answers_a_user_regex_hit_as_null_blocking(tmp_path: Path, monkeypatch: Any) -> None:
+    # issue #3539: with no DNSBL manifest, init keeps the fail-safe builtin_log_flag '0'
+    # (Null Blocking, logged), so a built-in regex hit answers 0.0.0.0 instead of VIP.
+    loads = _user_regex_loads(tmp_path, monkeypatch, [f"{KEEP_ROW}#keep"], manifest=False, query="keep.example")
+    decision = loads.decision_initial
+    assert decision.is_found is True, f"expected True, got {decision.is_found!r}"
+    assert decision.feed == "keep", f"expected 'keep', got {decision.feed!r}"
+    assert decision.log_type == "0", f"expected '0', got {decision.log_type!r}"
+    assert decision.null_blocking is True, f"expected True, got {decision.null_blocking!r}"

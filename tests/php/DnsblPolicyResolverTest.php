@@ -120,27 +120,36 @@ final class DnsblPolicyResolverTest extends TestCase
 	 * Everything that is NOT one of the seven concrete tokens -- absent, '', the
 	 * retired alpha-only 'default' sentinel on THIS field (global can never itself be
 	 * Default -- issue #3288 Contract), malformed non-scalars, and junk -- fails safe
-	 * to 'enabled', the long-standing WebServer/VIP mechanism, never silently to some
-	 * OTHER concrete mechanism and never a TypeError.
+	 * to 'disabled_log' (Null Blocking, logged), never silently to the VIP 'enabled'
+	 * mechanism, another concrete token, or a TypeError (issue #3539).
 	 */
 	#[DataProvider('nonConcreteMechanismProvider')]
-	public function testMechanismNormalizeFailsSafeToEnabled($stored): void
+	public function testMechanismNormalizeFailsSafeToNullBlocking($stored): void
 	{
-		$this->assertSame('enabled', pfb_dnsbl_mechanism_normalize($stored));
+		$this->assertSame('disabled_log', pfb_dnsbl_mechanism_normalize($stored));
 	}
 
 	/** @return array<string,array{0:mixed}> baseline-safe: no enum/class references. */
 	public static function nonConcreteMechanismProvider(): array
 	{
 		return [
-			'null (absent)'                 => [null],
-			'empty string'                  => [''],
+			'null (absent)'                        => [null],
+			'empty string'                         => [''],
 			"'default' (global cannot be Default)" => ['default'],
-			'case variant Enabled'          => ['Enabled'],
-			'unrecognised junk'             => ['sinkhole'],
-			'array (malformed)'             => [['enabled']],
-			'int (malformed)'               => [1],
-			'bool (malformed)'              => [TRUE],
+			'case variant Enabled'                 => ['Enabled'],
+			'case variant ENABLED'                 => ['ENABLED'],
+			'unrecognised junk'                    => ['sinkhole'],
+			'junk on'                              => ['on'],
+			'leading-space enabled'                => [' enabled'],
+			'trailing-space token'                 => ['disabled_log '],
+			'numeric string'                       => ['1'],
+			'Null (word)'                          => ['Null'],
+			'array (malformed)'                    => [['enabled']],
+			'int 0 (malformed)'                    => [0],
+			'int 1 (malformed)'                    => [1],
+			'float (malformed)'                    => [1.5],
+			'bool TRUE (malformed)'                => [TRUE],
+			'bool FALSE (malformed)'               => [FALSE],
 		];
 	}
 
@@ -184,21 +193,29 @@ final class DnsblPolicyResolverTest extends TestCase
 		];
 	}
 
-	/** Malformed group 'logging' values never TypeError and never silently become 'default'. */
+	/** Malformed group 'logging' values never TypeError and never silently become 'default' or VIP (issue #3539). */
 	#[DataProvider('malformedGroupLoggingProvider')]
-	public function testGroupLoggingMalformedValuesFailSafeToEnabled($stored): void
+	public function testGroupLoggingMalformedValuesFailSafeToNullBlocking($stored): void
 	{
-		$this->assertSame('enabled', pfb_dnsbl_group_logging($stored));
+		$this->assertSame('disabled_log', pfb_dnsbl_group_logging($stored));
 	}
 
-	/** @return array<string,array{0:mixed}> */
+	/** @return array<string,array{0:mixed}> junk strings and non-strings: none is a concrete token, 'default', or a VIP marker. */
 	public static function malformedGroupLoggingProvider(): array
 	{
 		return [
-			'array'  => [['enabled']],
-			'int'    => [0],
-			'bool'   => [FALSE],
-			'junk string' => ['sinkhole'],
+			'array'                 => [['enabled']],
+			'int 0'                 => [0],
+			'int 1'                 => [1],
+			'float 1.5'             => [1.5],
+			'bool TRUE'             => [TRUE],
+			'bool FALSE'            => [FALSE],
+			'junk string'           => ['sinkhole'],
+			'junk on'               => ['on'],
+			'leading-space enabled' => [' enabled'],
+			'trailing-space token'  => ['disabled_log '],
+			'numeric string'        => ['1'],
+			'Null (word)'           => ['Null'],
 		];
 	}
 
@@ -291,6 +308,15 @@ final class DnsblPolicyResolverTest extends TestCase
 		$effective = pfb_dnsbl_effective_logging($stored, 'disabled_log', PfbDnsblGlobalMode::Default);
 
 		$this->assertSame('enabled', $effective);
+	}
+
+	/** A junk group under Default policy never inherits the global mechanism, even a VIP one (issue #3539). */
+	#[DataProvider('malformedGroupLoggingProvider')]
+	public function testEffectiveLoggingJunkGroupNeverInheritsTheGlobalMechanism($stored): void
+	{
+		$effective = pfb_dnsbl_effective_logging($stored, 'enabled', PfbDnsblGlobalMode::Default);
+
+		$this->assertSame('disabled_log', $effective);
 	}
 
 	/** Under Override, an unmigrated VIP-marker group is masked exactly like any other -- global wins. */
@@ -398,10 +424,10 @@ final class DnsblPolicyResolverTest extends TestCase
 		$config = pfb_dnsbl_policy_config(['pfb_dnsbl' => 'on', 'global_log' => 'sinkhole'], []);
 
 		$this->assertSame(PfbDnsblGlobalMode::Override, $config['mode']);
-		// 'sinkhole' is not one of the 7 concrete tokens, so mechanism itself still
-		// fails safe to 'enabled' -- it is the MODE derivation, not the mechanism
+		// 'sinkhole' is not one of the 7 concrete tokens, so mechanism itself fails
+		// safe to 'disabled_log' -- it is the MODE derivation, not the mechanism
 		// value, that reuses the retired scheme's !empty() truthiness.
-		$this->assertSame('enabled', $config['mechanism']);
+		$this->assertSame('disabled_log', $config['mechanism']);
 	}
 
 	public function testConfigCurrentPolicyWithoutMechanismUsesTheFreshDefault(): void
@@ -409,6 +435,16 @@ final class DnsblPolicyResolverTest extends TestCase
 		$config = pfb_dnsbl_policy_config(['global_log_mode' => 'default'], []);
 
 		$this->assertSame(PfbDnsblGlobalMode::Default, $config['mode']);
+		$this->assertSame('disabled_log', $config['mechanism']);
+		$this->assertFalse($config['legacy']);
+	}
+
+	/** issue #3539: a current policy with a junk stored mechanism fails safe to Null Blocking, never VIP. */
+	public function testConfigCurrentJunkMechanismFailsSafeToNullBlocking(): void
+	{
+		$config = pfb_dnsbl_policy_config(['global_log_mode' => 'override', 'global_log' => 'sinkhole'], []);
+
+		$this->assertSame(PfbDnsblGlobalMode::Override, $config['mode']);
 		$this->assertSame('disabled_log', $config['mechanism']);
 		$this->assertFalse($config['legacy']);
 	}
@@ -451,11 +487,11 @@ final class DnsblPolicyResolverTest extends TestCase
 		$this->assertSame('default', pfb_dnsbl_group_logging('default', TRUE));
 	}
 
-	/** Malformed values fail safe to 'enabled' regardless of the legacy flag -- junk is never a historical marker. */
+	/** Malformed values fail safe to 'disabled_log' regardless of the legacy flag -- junk is never a historical marker. */
 	#[DataProvider('malformedGroupLoggingProvider')]
-	public function testGroupLoggingLegacyDoesNotRescueMalformedValues($stored): void
+	public function testGroupLoggingLegacyDoesNotRescueMalformedValuesToNullBlocking($stored): void
 	{
-		$this->assertSame('enabled', pfb_dnsbl_group_logging($stored, TRUE));
+		$this->assertSame('disabled_log', pfb_dnsbl_group_logging($stored, TRUE));
 	}
 
 	/**
@@ -540,16 +576,18 @@ final class DnsblPolicyResolverTest extends TestCase
 		return [
 			'empty string' => [''],
 			'case variant' => ['Enabled'],
+			'upper variant' => ['ENABLED'],
 			'legacy junk'  => ['default'],
 			'whitespace'   => [' enabled'],
+			'junk'         => ['junk'],
 		];
 	}
 
-	/** Unknown/malformed tokens fail closed to '1' (VIP+log), same fail-closed shape as the other resolvers. */
+	/** Unknown/malformed tokens fail closed to '0' (Null Blocking, logged), never the VIP flag '1' (issue #3539). */
 	#[DataProvider('unknownMechanismStringProvider')]
-	public function testMechanismFlagFailsSafeToOneForUnknownTokens(string $stored): void
+	public function testMechanismFlagFailsSafeToNullBlockingForUnknownTokens(string $stored): void
 	{
-		$this->assertSame('1', pfb_dnsbl_mechanism_flag($stored));
+		$this->assertSame('0', pfb_dnsbl_mechanism_flag($stored));
 	}
 
 }

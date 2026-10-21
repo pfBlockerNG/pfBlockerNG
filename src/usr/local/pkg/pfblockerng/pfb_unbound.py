@@ -2037,7 +2037,7 @@ def init_standard(id: int, env: module_env) -> bool:
             # the loud ledger entry opened below signals the failure instead.
             dnsbl_built = False
             psl_rules = PslRules()
-            builtin_log_flag = "1"
+            builtin_log_flag = "0"
             build_result = dnsbl_build_from_manifest(pfb["pfb_py_sources"])
             if build_result is not None:
                 # Atomic assign of the freshly-built structures into the module
@@ -4164,8 +4164,8 @@ class BuildResult:
     rejects: RejectTally = field(default_factory=dict)
     psl_rules: PslRules = field(default_factory=PslRules)
     # issue #3291: the effective global DNSBL mechanism's Python logging flag for
-    # built-in blocks (TLD Allow/IDN/regex); "1" (VIP+log) preserves pre-#3291 behaviour.
-    builtin_log_flag: str = "1"
+    # built-in blocks (TLD Allow/IDN/regex); issue #3539: "0" (Null Blocking, logged) is the fail-safe.
+    builtin_log_flag: str = "0"
 
 
 # issue #1074: every built Snapshot gets a unique, monotonically-advancing generation
@@ -4242,8 +4242,8 @@ class Snapshot:
     psl_feed_private_policy: str = "honor"
     psl_feed_icann_policy: str = "honor"
     # issue #3291: the effective global DNSBL mechanism's Python logging flag for
-    # built-in blocks (TLD Allow/IDN/regex); "1" (VIP+log) preserves pre-#3291 behaviour.
-    builtin_log_flag: str = "1"
+    # built-in blocks (TLD Allow/IDN/regex); issue #3539: "0" (Null Blocking, logged) is the fail-safe.
+    builtin_log_flag: str = "0"
     # issue #1074: identity of this snapshot for decisionDB memo stamping; auto-assigned,
     # never passed by builders.
     gen: int = field(default_factory=lambda: next(_snapshot_gen))
@@ -5598,7 +5598,7 @@ def build(
     # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
     # (feed/group ``DNSBL_TLD``) carrying the global mechanism flag (issue #3332) --
     # the sole writer of this row shape since ADR-65 retired PHP's own equivalent write.
-    builtin_log_flag = str(config.get("builtin_log_flag", "1"))
+    builtin_log_flag = str(config.get("builtin_log_flag", "0"))
     for tld in sorted(blacklist_roots):  # sorted: a set would insert in hash-seed order
         if not tld:
             continue
@@ -5794,7 +5794,8 @@ def build(
                     _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_demote")
                     cls = DNSBL_CLASS_DATA
             idx = index_for(b.feed or "DNSBL", b.group or "DNSBL")
-            payload = {"log": b.log or "1", "index": idx, "important": b.important, "band": b.band}
+            # issue #3539: an unset ABP log is Null Blocking ("0"), never VIP.
+            payload = {"log": b.log or "0", "index": idx, "important": b.important, "band": b.band}
             if cls == DNSBL_CLASS_ZONE:
                 zone_db[b.key] = payload
             else:
@@ -5909,7 +5910,7 @@ def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> No
         if flag_field in config and not isinstance(config[flag_field], bool):
             raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be bool".format(flag_field))
     # issue #3291: the effective global DNSBL mechanism's Python logging flag for
-    # built-in blocks (TLD Allow/IDN/regex/TLD Blacklist); absent -> "1" (VIP behaviour).
+    # built-in blocks (TLD Allow/IDN/regex/TLD Blacklist); issue #3539: absent -> "0" (Null Blocking).
     if "builtin_log_flag" in config and (
         not isinstance(config["builtin_log_flag"], str)
         or config["builtin_log_flag"] not in ("0", "1", "2", "3", "4", "5", "6")
@@ -6135,7 +6136,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
         # ADR-06 (#51): the temporary per-alert unlock set -> band-6 whiteDB allows.
         "user_unlock": list(config.get("user_unlock", [])),
         "regex_cap": regex_cap,
-        "builtin_log_flag": config.get("builtin_log_flag", "1"),
+        "builtin_log_flag": config.get("builtin_log_flag", "0"),
     }
 
 
@@ -7095,7 +7096,7 @@ def evaluate_domain(
 
         if is_found:
             b_eval = q_name
-            log_type = cfg.get("builtin_log_flag", "1")  # issue #3291: built-ins inherit the global mechanism
+            log_type = cfg.get("builtin_log_flag", "0")  # issue #3291: built-ins inherit the global mechanism
             # ADR-08: a Confusable BLOCK reports the dual-form (xn-- [decoded] script)
             # instead of the bare A-label, so the dnsbl.log line / alerts page are
             # actionable. Only set on the homoglyph block path; the All-IDN feed and every
@@ -7134,7 +7135,7 @@ def evaluate_domain(
                 if scan_meta["kind"] == "regex":
                     feed = scan_meta["key"]
                     group = "DNSBL_Regex"
-                    log_type = cfg.get("builtin_log_flag", "1")  # issue #3291
+                    log_type = cfg.get("builtin_log_flag", "0")  # issue #3291
                     b_type = "Python"
                     b_eval = q_name
                 else:

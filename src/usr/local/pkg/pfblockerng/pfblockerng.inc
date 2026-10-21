@@ -17547,12 +17547,12 @@ function pfb_control_legacy_seed($dconfig) {
 	return $dconfig;
 }
 
-/** Normalize a concrete mechanism without admitting recursive inheritance. */
+/** Normalize a concrete mechanism without admitting recursive inheritance; issue #3539: junk fails safe to Null Blocking, never VIP. */
 function pfb_dnsbl_mechanism_normalize(mixed $stored): string {
-	return (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) ? $stored : 'enabled';
+	return (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) ? $stored : 'disabled_log';
 }
 
-/** Project legacy VIP markers without changing current explicit choices. */
+/** Project legacy VIP markers (absent, '', 'enabled' in any case) without touching explicit choices; issue #3539: junk fails safe to 'disabled_log'. */
 function pfb_dnsbl_group_logging(mixed $stored, bool $legacy = FALSE): string {
 
 	if ($stored === 'default') {
@@ -17569,7 +17569,7 @@ function pfb_dnsbl_group_logging(mixed $stored, bool $legacy = FALSE): string {
 		return $stored;
 	}
 
-	return 'enabled';
+	return 'disabled_log';
 }
 
 /** Resolve once per group/feed, before emitting Python's existing logging flags. */
@@ -17582,16 +17582,17 @@ function pfb_dnsbl_effective_logging(mixed $group_logging, string $global_loggin
 }
 
 /** issue #3291: mechanism -> Python DNSBL logging flag, shared by per-list rows and the
- * built-in manifest flag. Unknown input fails closed to '1' (VIP+log). */
+ * built-in manifest flag. Issue #3539: unknown input fails closed to '0' (Null Blocking, logged). */
 function pfb_dnsbl_mechanism_flag(string $mechanism): string {
 	return match ($mechanism) {
+		'enabled'      => '1',
 		'disabled_log' => '0',
 		'disabled'     => '2',
 		'nxdomain_log' => '3',
 		'nxdomain'     => '4',
 		'nodata_log'   => '5',
 		'nodata'       => '6',
-		default        => '1',
+		default        => '0',
 	};
 }
 

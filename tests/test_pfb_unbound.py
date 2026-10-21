@@ -5332,14 +5332,15 @@ class TestBuiltinLogFlagCoverageMatrix:
 class TestBuiltinLogFlagPreservation:
     """Guards, not red proofs (issue #3291 §4 preservation rows): each of these
     passes BEFORE and AFTER the fix -- pinned here so a future change cannot
-    silently break what builtin_log_flag threading must never touch."""
+    silently break what builtin_log_flag threading must never touch.
+    The no-key default below is the exception: issue #3539 flips it to '0'."""
 
-    def test_cfg_without_builtin_log_flag_defaults_to_one(self) -> None:
+    def test_cfg_without_builtin_log_flag_defaults_to_null_blocking(self) -> None:
         regex_db: dict = {"bad-pattern": _regex_entry(r"tracker")}
         cfg = _make_cfg(regexDB=True)  # no builtin_log_flag key at all
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("tracker.evil.com", "tracker.evil.com", "com", False, cfg, containers)
-        assert dec.log_type == "1", f"expected '1', got {dec.log_type!r}"
+        assert dec.log_type == "0", f"expected '0', got {dec.log_type!r}"
 
     def test_whitelisted_builtin_with_flag_three_still_whitelists(self) -> None:
         q = "tracker.evil.com"
@@ -5401,11 +5402,11 @@ class TestBuiltinLogFlagTransport:
         assert result is not None
         assert result.builtin_log_flag == "4", f"expected '4', got {result.builtin_log_flag!r}"
 
-    def test_manifest_absent_builtin_log_flag_defaults_to_one(self, tmp_path: Any) -> None:
+    def test_manifest_absent_builtin_log_flag_defaults_to_null_blocking(self, tmp_path: Any) -> None:
         path = _write_minimal_dnsbl_manifest(tmp_path)
         result = pfb_unbound.dnsbl_build_from_manifest(path)
         assert result is not None
-        assert result.builtin_log_flag == "1", f"expected '1', got {result.builtin_log_flag!r}"
+        assert result.builtin_log_flag == "0", f"expected '0', got {result.builtin_log_flag!r}"
 
     def test_snapshot_and_evaluate_cfg_carry_builtin_log_flag(self, tmp_path: Any) -> None:
         path = _write_minimal_dnsbl_manifest(tmp_path, builtin_log_flag="4")
@@ -5624,13 +5625,13 @@ class TestTldBlacklistLogFlag:
 
 
 class TestTldBlacklistLogFlagPreservation:
-    """Guards, not red proofs (issue #3332): each passes BEFORE and AFTER the fix."""
+    """Guards (issue #3332), except the absent-flag default, which issue #3539 flips to '0'."""
 
-    def test_manifest_without_builtin_log_flag_zone_entry_defaults_to_one(self, tmp_path: Any) -> None:
+    def test_manifest_without_builtin_log_flag_zone_entry_defaults_to_null_blocking(self, tmp_path: Any) -> None:
         path = _write_minimal_dnsbl_manifest(tmp_path, tld_wildcard_blacklist=["bad"])
         result = pfb_unbound.dnsbl_build_from_manifest(path)
         assert result is not None
-        assert result.zone_db["bad"]["log"] == "1", f"expected '1', got {result.zone_db['bad']['log']!r}"
+        assert result.zone_db["bad"]["log"] == "0", f"expected '0', got {result.zone_db['bad']['log']!r}"
 
     def test_whitelisted_blacklisted_tld_is_not_blocked(self, tmp_path: Any) -> None:
         path = _write_minimal_dnsbl_manifest(
@@ -5766,3 +5767,93 @@ class TestTldBlacklistLogFlagWire:
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         assert lines == [], f"flag {flag} expected no log line, got {lines!r}"
+
+
+class TestAbpEmptyLogFlagFallsBackToNullBlocking:
+    """issue #3539: an ABP block whose feed log_flag is '' builds payload log '0'
+    (Null Blocking, logged), never the legacy VIP '1'. log_flag is a required string,
+    so '' is the only way a feed reaches the ABP builder without a flag."""
+
+    _FEED = {"raw": "f.raw", "feed": "F", "group": "G", "log_flag": ""}
+
+    def _build(self) -> Any:
+        manifest = {"feeds": [dict(self._FEED)]}
+        config: dict[str, object] = {"psl_rules": _psl_rules(["com"])}
+        return pfb_unbound.build(manifest, config, line_reader=lambda raw: ["||evil.com^"])
+
+    def test_abp_block_with_empty_log_flag_builds_null_blocking_payload(self) -> None:
+        result = self._build()
+        entries = [db["evil.com"] for db in (result.data_db, result.zone_db) if "evil.com" in db]
+        assert len(entries) == 1, f"expected one block entry for evil.com, got {entries!r}"
+        assert entries[0]["log"] == "0", f"expected '0', got {entries[0]['log']!r}"
+
+    def test_abp_block_with_empty_log_flag_is_null_zero_answer_and_logged(self, monkeypatch: Any) -> None:
+        result = self._build()
+        monkeypatch.setitem(pfb_unbound.pfb, "python_blacklist", True)
+        monkeypatch.setitem(pfb_unbound.pfb, "python_blocking", True)
+        monkeypatch.setitem(pfb_unbound.pfb, "dataDB", True)
+        monkeypatch.setitem(pfb_unbound.pfb, "zoneDB", True)
+        monkeypatch.setattr(
+            pfb_unbound,
+            "_snapshot",
+            dataclasses.replace(
+                pfb_unbound._snapshot,
+                data_db=result.data_db,
+                zone_db=result.zone_db,
+                feed_group_index_db=result.feed_group_index_db,
+            ),
+        )
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        answers = DNSMessage.instances[-1].answer
+        assert any("0.0.0.0" in a for a in answers), f"expected a 0.0.0.0 match in {answers!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+
+class TestManifestAbsentBuiltinLogFlagFallsBackToNullBlocking:
+    """issue #3539: a manifest without builtin_log_flag makes every built-in block
+    Null Blocking ('0', logged). The flag is read from the real manifest build."""
+
+    def _manifest_flag(self, tmp_path: Any) -> str:
+        result = pfb_unbound.dnsbl_build_from_manifest(_write_minimal_dnsbl_manifest(tmp_path))
+        assert result is not None
+        return result.builtin_log_flag
+
+    def test_tld_allow_block_without_flag_is_null_blocking(self, tmp_path: Any) -> None:
+        flag = self._manifest_flag(tmp_path)
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=["com"], builtin_log_flag=flag)
+        dec = evaluate_domain("example.net", "example.net", "net", False, cfg, _make_containers())
+        assert dec.feed == "TLD_Allow", f"expected 'TLD_Allow', got {dec.feed!r}"
+        _assert_builtin_shape(dec, "0", False)
+
+    def test_idn_block_without_flag_is_null_blocking(self, tmp_path: Any) -> None:
+        flag = self._manifest_flag(tmp_path)
+        q = "xn--evil.com"
+        cfg = _make_cfg(python_idn=True, builtin_log_flag=flag)
+        dec = evaluate_domain(q, q, "com", False, cfg, _make_containers())
+        assert dec.feed == "IDN", f"expected 'IDN', got {dec.feed!r}"
+        _assert_builtin_shape(dec, "0", False)
+
+    def test_regex_block_without_flag_is_null_blocking(self, tmp_path: Any) -> None:
+        flag = self._manifest_flag(tmp_path)
+        q = "tracker.evil.com"
+        regex_db: dict = {"bad-pattern": _regex_entry(r"tracker")}
+        cfg = _make_cfg(regexDB=True, builtin_log_flag=flag)
+        dec = evaluate_domain(q, q, "com", False, cfg, _make_containers(regexDB=regex_db))
+        assert dec.feed == "bad-pattern", f"expected 'bad-pattern', got {dec.feed!r}"
+        _assert_builtin_shape(dec, "0", False)
+
+    def test_tld_blacklist_block_without_flag_is_null_blocking(self, tmp_path: Any, monkeypatch: Any) -> None:
+        path = _write_minimal_dnsbl_manifest(tmp_path, tld_wildcard_blacklist=["bad"])
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        monkeypatch.setitem(pfb_unbound.pfb, "python_blocking", True)
+        snap = _tld_blacklist_snapshot(result, hsts_on=False)
+        cfg = pfb_unbound._evaluate_cfg(snap)
+        dec = evaluate_domain("x.bad", "x.bad", "bad", False, cfg, snap.containers())
+        assert dec.group == "DNSBL_TLD", f"expected 'DNSBL_TLD', got {dec.group!r}"
+        _assert_builtin_shape(dec, "0", False)
