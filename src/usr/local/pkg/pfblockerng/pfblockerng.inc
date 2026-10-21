@@ -3619,7 +3619,10 @@ const PFB_DNS_PROXY_MARKER_END = '# end pfBlockerNG DNS proxy';
 const PFB_DNS_PROXY_RESOLVER_KEYS = ['active_interface', 'enablessl', 'custom_options'];
 // The proxy's own pid (daemon(8) -p); its supervisor (-P) writes the daemon pidfile.
 const PFB_DNS_PROXY_PIDFILE = '/var/run/pfb_dns_proxy.pid';
-const PFB_DNS_PROXY_DAEMON_PIDFILE = '/var/run/pfb_dns_proxy_daemon.pid';
+// define(), not const: pfblockerng_extra.inc's tick names it too, and PHPStan resolves a cross-file define (as for PFB_PYTHON_WRAPPER)
+if (!defined('PFB_DNS_PROXY_DAEMON_PIDFILE')) {
+	define('PFB_DNS_PROXY_DAEMON_PIDFILE', '/var/run/pfb_dns_proxy_daemon.pid');
+}
 const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
 // The lock file that serializes the rc script's starts (lockf(1), kept between starts): the boot hook's background start and an
 // apply's start_service() both run `rc start`, and both could pass its "already serving?" check before the first daemon wrote a pidfile.
