@@ -110,7 +110,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			'dbdir' => $dir, 'schedule_state_dir' => $dir, 'log' => "{$dir}/pfblockerng.log", 'errlog' => "{$dir}/error.log",
 			'runlog' => "{$dir}/run.log", 'denydir' => "{$dir}/deny", 'dnsbldir' => $dir, 'dnsbl_conf' => "{$dir}/lighty.conf",
 			'dnsbl_cert' => "{$dir}/cert.pem", 'chroot_cmd' => '/bin/echo', 'php' => PHP_BINARY, 'dnsbl_python_unmount' => FALSE,
-			'install' => FALSE, 'domain_clear' => FALSE, 'save' => $o['save'],
+			'install' => FALSE, 'domain_clear' => FALSE, 'save' => $o['save'], 'unbound_py_vip' => "{$dir}/pfb_py_vip",
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['g']['varrun_path']          = $dir;
@@ -332,10 +332,10 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame([], array_column(config_get_path('virtualip/vip', []), 'descr'));
 	}
 
-	public function testASavePassKeepsHoldingEvenWhenTheResolverIsConverged(): void
+	public function testASavePassWithoutAPublicationRecordKeepsHoldingEvenWhenTheResolverIsConverged(): void
 	{
-		// GIVEN the serving web server, no VIP demand, a resolver that is up (converged), and a save pass: the last
-		// published generation may still answer with the VIP and a save pass publishes none
+		// GIVEN the serving web server, no VIP demand, a resolver that is up (converged), a save pass, and no record of the
+		// last published generation (an upgrade from before the record): that generation may still answer with the VIP
 		$this->arrange(['save' => TRUE, 'served' => TRUE, 'demand' => FALSE, 'up' => TRUE]);
 		$this->assertServedStateIntact();
 
@@ -349,9 +349,10 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame([], $this->lifecycleWrites());
 	}
 
-	public function testAFailedPublicationKeepsHoldingEvenWhenTheResolverIsConverged(): void
+	public function testAFailedPublicationWithoutAPublicationRecordKeepsHoldingEvenWhenTheResolverIsConverged(): void
 	{
-		// GIVEN the serving web server, a full update pass whose manifest publication fails, and a resolver that is up
+		// GIVEN the serving web server, a full update pass whose manifest publication fails, no record of an earlier
+		// generation, and a resolver that is up
 		$this->arrangeFullPass(TRUE, FALSE);
 		$this->assertServedStateIntact();
 
@@ -401,6 +402,25 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf']);
 		$this->assertSame([self::USER_NAT], config_get_path('nat/rule'));
 		$this->assertSame([], array_column(config_get_path('virtualip/vip', []), 'descr'));
+	}
+
+	public function testAConvergedLaterPassKeepsHoldingWhileTheLiveGenerationAnswersWithTheVip(): void
+	{
+		// GIVEN pass 1: a full pass with a group answering with the VIP publishes that generation on a converged resolver
+		$this->arrange(['save' => FALSE, 'served' => TRUE, 'demand' => TRUE, 'up' => TRUE]);
+		$this->publishTo(TRUE);
+		$this->runPass();
+		$this->assertFileExists($GLOBALS['pfb']['unbound_py_sources'], 'before-state: pass 1 published the VIP generation');
+
+		// WHEN pass 2 is a save pass after the group became Null Blocking: it publishes nothing, so the live generation is
+		// still the one that answers with the VIP
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/logging', 'disabled_log');
+		$GLOBALS['pfb']['save'] = TRUE;
+		$this->runPass();
+
+		// THEN the web server keeps serving it
+		$this->assertSame([], $this->events('stop_service'), 'pass 2 stopped the web server the live generation still needs');
+		$this->assertFileExists($GLOBALS['pfb']['dnsbl_conf']);
 	}
 
 	public function testDemandKeepsServingThroughThePass(): void

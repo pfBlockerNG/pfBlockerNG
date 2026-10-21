@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -19,29 +20,15 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_wizard_dnsbl_section')]
 final class WizardVipDemandTest extends TestCase
 {
-	private string $feedsPath = '';
-	private mixed $savedFeeds = NULL;
-	private bool $hadFeeds    = FALSE;
-
 	protected function setUp(): void
 	{
 		$GLOBALS['input_errors'] = [];
 		$GLOBALS['stepid']       = 2;
 		$_POST                   = [];
-
-		$this->hadFeeds   = array_key_exists('feeds', $GLOBALS['pfb'] ?? []);
-		$this->savedFeeds = $GLOBALS['pfb']['feeds'] ?? NULL;
-		$this->feedsPath  = sys_get_temp_dir() . '/pfb_wizard_feeds_' . getmypid() . '_' . uniqid() . '.json';
 	}
 
 	protected function tearDown(): void
 	{
-		@unlink($this->feedsPath);
-		if ($this->hadFeeds) {
-			$GLOBALS['pfb']['feeds'] = $this->savedFeeds;
-		} else {
-			unset($GLOBALS['pfb']['feeds']);
-		}
 		$_POST                   = [];
 		$GLOBALS['input_errors'] = [];
 	}
@@ -55,12 +42,6 @@ final class WizardVipDemandTest extends TestCase
 	private static function usableFeed(): array
 	{
 		return ['url' => 'https://example.com/hosts', 'header' => 'Example_ADs'];
-	}
-
-	private function installCatalog(array $catalog): void
-	{
-		file_put_contents($this->feedsPath, json_encode($catalog));
-		$GLOBALS['pfb']['feeds'] = $this->feedsPath;
 	}
 
 	/** A step-3 POST: manual VIP mode, nothing selected, valid ports unless overridden. */
@@ -141,17 +122,23 @@ final class WizardVipDemandTest extends TestCase
 		$this->assertArrayNotHasKey('pfb_dnsvip6', $section);
 	}
 
+	public function testSectionStoresTheDefaultPortsForBlankOnes(): void
+	{
+		$section = pfb_wizard_dnsbl_section(FALSE, '', '', '', '');
+
+		$this->assertSame('8081', $section['pfb_dnsport'], 'a later VIP mechanism must find usable ports, as a page save stores');
+		$this->assertSame('8443', $section['pfb_dnsport_ssl']);
+	}
+
 	// -----------------------------------------------------------------------
 	// step 3
 	// -----------------------------------------------------------------------
 
-	public function testStepAsksForNoVipOrPortsForTheDefaultSetup(): void
+	public function testStepAsksForNoVipOrPorts(): void
 	{
-		$this->installCatalog(self::catalog([self::usableFeed()]));
-
 		$this->submit(['pfb_dnsport' => '', 'pfb_dnsport_ssl' => '']);
 
-		$this->assertSame([], $this->errors(), 'a usable feed on Null Blocking needs neither a VIP nor ports');
+		$this->assertSame([], $this->errors(), 'the Null Blocking setup needs neither a VIP nor ports');
 	}
 
 	public function testStepStillClearsTheNoneSentinel(): void
@@ -162,9 +149,21 @@ final class WizardVipDemandTest extends TestCase
 		$this->assertSame('', $_POST['pfb_dnsvip6']);
 	}
 
-	public function testAGivenPortMustStillBeValid(): void
+	/** @return array<string, array{array<string, string>}> */
+	public static function invalidPortProvider(): array
 	{
-		$this->submit(['pfb_dnsport_ssl' => 'abc']);
+		return [
+			'port'            => [['pfb_dnsport' => 'abc']],
+			'SSL port'        => [['pfb_dnsport_ssl' => '70000']],
+			'both, one error' => [['pfb_dnsport' => 'abc', 'pfb_dnsport_ssl' => '70000']],
+		];
+	}
+
+	/** @param array<string, string> $ports */
+	#[DataProvider('invalidPortProvider')]
+	public function testAGivenPortMustStillBeValid(array $ports): void
+	{
+		$this->submit($ports);
 
 		$this->assertSame(['DNSBL Ports: A valid port must be defined.'], $this->errors());
 	}

@@ -588,9 +588,13 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		mkdir($GLOBALS['pfb']['unbound_py_rawdir']);
 		mkdir("{$this->tmp}/pfb_py_raw.stage.abcdef0123456789abcdef0123456789");
 		mkdir("{$this->tmp}/pfb_py_raw.neighbor");
+		// issue #3539: the record of whether the generation answers with the VIP describes this manifest too
+		$GLOBALS['pfb']['unbound_py_vip'] = "{$this->tmp}/pfb_py_vip";
+		file_put_contents($GLOBALS['pfb']['unbound_py_vip'], '0');
 
 		$this->assertTrue(pfb_unbound_py_teardown_raw_set());
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['unbound_py_sources']);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['unbound_py_vip']);
 		$this->assertDirectoryDoesNotExist(dirname($this->manifestRaw($manifest)));
 		$this->assertDirectoryDoesNotExist($GLOBALS['pfb']['unbound_py_rawdir']);
 		$this->assertSame([], glob("{$this->tmp}/pfb_py_raw.stage.*") ?: []);
