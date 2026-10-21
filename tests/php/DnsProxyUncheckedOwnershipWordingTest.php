@@ -38,7 +38,7 @@ final class DnsProxyUncheckedOwnershipWordingTest extends TestCase
 	private const GLOBALS = [
 		'pfb', 'config', 'g', 'input_errors', 'stepid', 'pfb_test_service_calls', 'pfb_test_write_config_calls', 'pfb_test_file_notices',
 		'pfb_test_rcfiles', 'pfb_test_rcfile_writes', 'pfb_test_valid_pids', 'pfb_test_try_lock_fail', 'pfb_test_lock_held',
-		'pfb_test_lock_events',
+		'pfb_test_lock_events', 'pfb_test_config_read_fails',
 	];
 
 	private string $tmp;
@@ -144,29 +144,42 @@ final class DnsProxyUncheckedOwnershipWordingTest extends TestCase
 		return array_column($GLOBALS['pfb_test_file_notices'], 'notice');
 	}
 
+	/** Does this process's copy, or a running proxy, show pfB-DNS in use: the restore's grounds for a notice without a fresh read. */
+	private static function inUse(): bool
+	{
+		return pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || pfb_dns_proxy_running();
+	}
+
+	/** @return array<string,array{string}> why config.xml was not read afresh, as the double that refuses it */
+	public static function noFreshRead(): array
+	{
+		return ['the lock stays taken' => ['pfb_test_try_lock_fail'], 'config.xml cannot be parsed' => ['pfb_test_config_read_fails']];
+	}
+
 	// -----------------------------------------------------------------------
-	// W1 -- the restore with pfB-DNS off and the lock refused
+	// W1 -- the restore with pfB-DNS off and no fresh read (the lock refused, or config.xml unreadable)
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{string}> the signs that pfB-DNS was in use, as a seeding method's name */
+	/** @return array<string,array{string,string}> a sign that pfB-DNS was in use (a seeding method's name), and why no fresh read */
 	public static function inUseStates(): array
 	{
-		return [
-			'a valid snapshot'                    => ['seedSnapshot'],
-			'our block and no snapshot'           => ['seedBlockWithoutSnapshot'],
-			'a stored marker that is no snapshot' => ['seedUnreadableMarker'],
-			'a running DNS proxy'                 => ['seedRunningProxy'],
-		];
+		$cases = [];
+		foreach (['a valid snapshot' => 'seedSnapshot', 'our block and no snapshot' => 'seedBlockWithoutSnapshot',
+			'a stored marker that is no snapshot' => 'seedUnreadableMarker', 'a running DNS proxy' => 'seedRunningProxy'] as $state => $seed) {
+			foreach (self::noFreshRead() as $why => [$double]) {
+				$cases["{$state}, {$why}"] = [$seed, $double];
+			}
+		}
+		return $cases;
 	}
 
 	#[DataProvider('inUseStates')]
-	public function testARestoreThatCannotTakeTheLockSaysTheResolversStateCouldNotBeCheckedNotThatItWasNotPutBack(string $seed): void
+	public function testARestoreThatCannotTakeTheLockSaysTheResolversStateCouldNotBeCheckedNotThatItWasNotPutBack(string $seed, string $double): void
 	{
-		// Given a sign that pfB-DNS was in use, and another save holding the config lock
+		// Given a sign that pfB-DNS was in use, and config.xml that cannot be read afresh (another save holds the lock, or it cannot be parsed)
 		$this->$seed();
-		$this->assertTrue(pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || pfb_dns_proxy_running(),
-			'before: the copy or the running proxy shows pfB-DNS in use');
-		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$this->assertTrue(self::inUse(), 'before: the copy or the running proxy shows pfB-DNS in use');
+		$GLOBALS[$double] = TRUE;
 		$before = $GLOBALS['config'];
 
 		// When pfB-DNS is off and the restore is asked for
@@ -180,13 +193,13 @@ final class DnsProxyUncheckedOwnershipWordingTest extends TestCase
 		    'save or could not be read; the next apply retries.'], $this->notices());
 	}
 
-	public function testARestoreThatCannotTakeTheLockOnABoxThatNeverUsedPfbDnsSaysNothing(): void
+	#[DataProvider('noFreshRead')]
+	public function testARestoreThatCannotTakeTheLockOnABoxThatNeverUsedPfbDnsSaysNothing(string $double): void
 	{
-		// Given a Resolver pfB-DNS never touched, no snapshot or marker, no proxy running, and another save holding the config lock
+		// Given a Resolver pfB-DNS never touched, no snapshot or marker, no proxy running, and config.xml that cannot be read afresh
 		$this->seedUntouchedResolver();
-		$this->assertFalse(pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required() || pfb_dns_proxy_running(),
-			'before: nothing shows pfB-DNS in use');
-		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$this->assertFalse(self::inUse(), 'before: nothing shows pfB-DNS in use');
+		$GLOBALS[$double] = TRUE;
 		$before = $GLOBALS['config'];
 
 		// When an apply with pfB-DNS off asks for the restore
