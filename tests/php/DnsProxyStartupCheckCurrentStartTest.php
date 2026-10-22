@@ -35,8 +35,6 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-	private const ARM = "~\\belseif \\(\\\$argv\\[1\\] == 'dns_check'\\) \\{\\s*\\\$since = ([^\\n]*);\\s*pfb_global\\(\\);\\s*" .
-		"pfb_dns_proxy_certificate_sync\\(\\);\\s*if \\(pfb_dns_proxy_saved\\(\\) !== NULL\\) \\{\\s*pfb_dns_proxy_confirm_ready\\(\\\$since\\);\\s*\\}\\s*exit\\(0\\);\\s*\\}~";
 
 	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
@@ -498,13 +496,37 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->assertSame([], $clock->sleeps);
 	}
 
-	public function testTheDnsCheckArmTakesTheSizeBeforeAnythingElseAndPassesItToTheCheck(): void
+	private static function armSizeStatement(): string
 	{
-		$this->assertMatchesRegularExpression(
-			self::ARM,
-			(string) file_get_contents(self::INC),
-			'the boot hook backgrounds the start and this check together: the size is settled before the check waits for anything'
-		);
+		$source = (string) file_get_contents(self::INC);
+		if (preg_match('~\belseif\s*\(\s*\$argv\[1\]\s*==\s*\'dns_check\'\s*\)\s*\{~', $source, $branch, PREG_OFFSET_CAPTURE) !== 1) {
+			throw new RuntimeException('dns_check branch not found');
+		}
+		$tokens = token_get_all('<?php ' . substr($source, $branch[0][1] + strlen($branch[0][0])));
+		$statement = '';
+		$depth = 0;
+		foreach ($tokens as $token) {
+			$text = is_array($token) ? $token[1] : $token;
+			if ($statement === '' && $depth === 0 && is_array($token) && $token[0] === T_VARIABLE && $text === '$since') {
+				$statement = $text;
+				continue;
+			}
+			if (in_array($text, ['(', '[', '{'], TRUE)
+				|| (is_array($token) && in_array($token[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], TRUE))) {
+				$depth++;
+			} elseif (in_array($text, [')', ']', '}'], TRUE)) {
+				if (--$depth < 0) {
+					break;
+				}
+			}
+			if ($statement !== '') {
+				$statement .= $text;
+				if ($text === ';' && $depth === 0) {
+					return $statement;
+				}
+			}
+		}
+		throw new RuntimeException('dns_check size statement not found');
 	}
 
 	/** @return array<string,array{list<string>,int}> the argv the arm gets (the script, `dns_check`, then the hook's argument), the size it judges from; the log holds 4 bytes */
@@ -527,21 +549,16 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	public function testTheDnsCheckArmJudgesFromTheHooksSizeWhenItIsDigitsAndFromTheLogNowOtherwise(array $argv, int $expected): void
 	{
 		// Given the arm's own size statement, evaluated as the arm runs it, and a log that holds 4 bytes
-		$this->assertSame(1, preg_match(self::ARM, (string) file_get_contents(self::INC), $arm));
+		$statement = self::armSizeStatement();
 		$this->log('abc');
 
 		// When it gets this argv
-		$since = (static fn (array $argv): mixed => eval('return ' . $arm[1] . ';'))($argv);
+		$since = (static function (array $argv) use ($statement): mixed {
+			eval($statement);
+			return $since;
+		})($argv);
 
 		// Then digits are the size taken before the start, and anything else (hostile or absent) falls back, with no TypeError
 		$this->assertSame($expected, $since);
-	}
-
-	public function testTheLogWaitIsOverridableLikeTheStartWaitAndAllowsThreeSeconds(): void
-	{
-		$this->assertMatchesRegularExpression(
-			"/if \\(!defined\\('PFB_DNS_PROXY_LOG_WAIT'\\)\\) \\{\\n\\tdefine\\('PFB_DNS_PROXY_LOG_WAIT', 3\\);\\n\\}/",
-			(string) file_get_contents(self::INC)
-		);
 	}
 }

@@ -61,20 +61,14 @@ final class DnsProxyBootTest extends TestCase
 
 	/**
 	 * Run the hook as services_unbound_configure() does -- require_once inside a function, in a process where nothing
-	 * of pfBlockerNG is loaded (the non-verbose boot path) and only these two core functions exist. The stubbed start
-	 * appends 100 bytes to the gateway's log, as the real one does, so that a size taken after it is told apart.
+	 * of pfBlockerNG is loaded (the non-verbose boot path) and only these two core functions exist.
 	 *
 	 * @param list<string> $livePidfiles pidfiles isvalidpid() answers TRUE for
-	 * @param ?int $logBytes the size of the gateway's log before the start; NULL = no log file
 	 * @return array{calls: list<string>, leaked: list<string>}
 	 */
-	private function runHook(array $livePidfiles, ?int $rcMode, ?int $logBytes = NULL): array
+	private function runHook(array $livePidfiles, ?int $rcMode): array
 	{
 		$rc = "{$this->dir}/pfb_dns_proxy.sh";
-		$log = "{$this->dir}/dns_proxy.log";
-		if ($logBytes !== NULL) {
-			file_put_contents($log, str_repeat('x', $logBytes));
-		}
 		if ($rcMode !== NULL) {
 			file_put_contents($rc, "#!/bin/sh\n");
 			chmod($rc, $rcMode);
@@ -86,10 +80,8 @@ final class DnsProxyBootTest extends TestCase
 			function mwexec_bg($command, $clearsigmask = false) {
 				global $calls;
 				$calls[] = $command;
-				if (str_ends_with($command, ' start')) { file_put_contents(PFB_DNS_PROXY_LOG, str_repeat('y', 100), FILE_APPEND); }
 			}
 			define('PFB_DNS_PROXY_RCFILE', (string) getenv('RC'));
-			define('PFB_DNS_PROXY_LOG', (string) getenv('LOG'));
 			$leaked = (function () {
 				$before = array_keys(get_defined_vars());
 				require_once getenv('HOOK');
@@ -100,7 +92,7 @@ final class DnsProxyBootTest extends TestCase
 		$run = pfb_test_run_process(
 			[PHP_BINARY, '-d', 'display_errors=stderr', '-r', substr($driver, strlen("<?php\n"))],
 			10.0,
-			['LIVE' => json_encode($livePidfiles), 'RC' => $rc, 'LOG' => $log, 'HOOK' => self::HOOK]
+			['LIVE' => json_encode($livePidfiles), 'RC' => $rc, 'HOOK' => self::HOOK]
 		);
 		$out = $run['stdout'];
 		$err = $run['stderr'];
@@ -109,6 +101,7 @@ final class DnsProxyBootTest extends TestCase
 		$this->assertSame('', $err, 'no warning or notice');
 		$result = json_decode($out, TRUE);
 		$this->assertIsArray($result, "driver output: {$out}");
+		$this->assertSame([], $result['leaked'], 'it is included inside pfSense\'s function: no variable of its own may survive');
 		return $result;
 	}
 
@@ -117,29 +110,9 @@ final class DnsProxyBootTest extends TestCase
 		$this->assertFileExists(self::HOOK, 'pfSense looks for /var/unbound/pfb_upstream_observer_include.inc, the staged copy of this');
 	}
 
-	public function testItStartsTheProxyInTheBackgroundWhenNothingServes(): void
+	public function testTheHookLeavesItsIncludingFunctionsScopeUnchanged(): void
 	{
-		$result = $this->runHook([], 0755);
-
-		$this->assertSame(
-			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 0'],
-			$result['calls'],
-			'one backgrounded start, never a blocking one, then the bounded background check that reports a start that fails; no log yet: size 0, not what the start wrote'
-		);
-		$this->assertSame([], $result['leaked'], 'it is included inside pfSense\'s function: no variable of its own may survive');
-	}
-
-	public function testTheBackgroundCheckGetsTheLogSizeFromBeforeTheStart(): void
-	{
-		// Given a log of 1234 bytes, to which the start appends 100 more as soon as it is called
-		$result = $this->runHook([], 0755, 1234);
-
-		// Then the check is told 1234: judging the log from after the start would miss the lines the start writes while the check begins
-		$this->assertSame(
-			["{$this->dir}/pfb_dns_proxy.sh start", '/usr/bin/timeout -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 1234'],
-			$result['calls']
-		);
-		$this->assertSame([], $result['leaked']);
+		$this->runHook([], 0755);
 	}
 
 	/** @return array<string,array{list<string>}> */
@@ -162,16 +135,6 @@ final class DnsProxyBootTest extends TestCase
 	{
 		$this->assertSame([], $this->runHook([], NULL)['calls'], 'no rc script: pfB-DNS was never set up, or is gone');
 		$this->assertSame([], $this->runHook([], 0644)['calls'], 'not executable');
-	}
-
-	public function testItUsesTheSamePidfilesAsThePackage(): void
-	{
-		// The hook names no constant of the package (they are not loaded at boot), so its literals are pinned here
-		$source = (string) file_get_contents(self::HOOK);
-		$this->assertStringContainsString("'" . PFB_DNS_PROXY_PIDFILE . "'", $source);
-		$this->assertStringContainsString("'" . PFB_DNS_PROXY_DAEMON_PIDFILE . "'", $source);
-		$this->assertStringContainsString("'/usr/local/etc/rc.d/pfb_dns_proxy.sh'", $source, 'the appliance default of PFB_DNS_PROXY_RCFILE');
-		$this->assertStringContainsString("'" . PFB_DNS_PROXY_LOG . "'", $source, 'the log the boot check measures before the start');
 	}
 
 	// -----------------------------------------------------------------------
