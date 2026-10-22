@@ -152,6 +152,7 @@ file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
 file_put_contents($GLOBALS['pfb_test_sockstat_status'], "0\n");
 $pfb_test_sockstat = "{$pfb_test_tmp}/sockstat";
 file_put_contents($pfb_test_sockstat, "#!/bin/sh\n"
+	. '[ "$#" -eq 3 ] && [ "$1" = -46lw ] && [ "$2" = -p ] || exit 2' . "\n"
 	. 'cat ' . escapeshellarg($GLOBALS['pfb_test_sockstat_output']) . "\n"
 	. 'read -r status < ' . escapeshellarg($GLOBALS['pfb_test_sockstat_status']) . "\n"
 	. "exit \"\$status\"\n");

@@ -152,11 +152,13 @@ trait KeepRunningScenario
 	 *   decider   equal | different | absent | unreadable_member
 	 *             the record of the decider's code against the installed files (unreadable_member = one is missing)
 	 *   ctl       ?string         the control socket's path, NULL = nobody listens
+	 *   dot       bool            a DoT listener on lan (192.0.2.1:853) is configured
+	 *   gatewayLog ?list<string>  the gateway's log lines, NULL = no log is written
 	 */
 	private function krApply(array $s): void
 	{
 		// serving: the Unbound backend answers too, so a full confirmation can pass; a worker passes FALSE, and its package rows prove a deferred pass needs no confirmation
-		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE];
+		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE, 'dot' => FALSE, 'gatewayLog' => NULL];
 		// The rc script bakes the control socket's path in: it is set before the script is written
 		if ($s['ctl'] !== NULL) {
 			$GLOBALS['pfb']['dns_proxy_ctl'] = $s['ctl'];
@@ -184,6 +186,20 @@ trait KeepRunningScenario
 			if ($s['proxy'] === 'serves') {
 				$this->seedRunningGateway();
 			}
+		}
+		if ($s['gatewayLog'] !== NULL) {
+			// The gateway's own log, as its supervisor relays it: a per-scenario file, so no other test's log is read
+			$GLOBALS['pfb']['dns_proxy_log'] = "{$this->krDir}/dns_proxy.log";
+			file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", $s['gatewayLog']) . "\n");
+		}
+		if ($s['dot']) {
+			// A DoT listener on lan, configured as the pfB-DNS page configures it: the gateway's log decides whether it is reported
+			// A stored plain interface list: without one, the one-time seed (pfb_dns_proxy_seed_values()) turns DoT off
+			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot', 'on');
+			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface', 'lan');
+			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_port', '853');
+			$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
 		}
 		if ($s['rc'] === 'same') {
 			pfb_dns_proxy_service($this->krProxyDir);

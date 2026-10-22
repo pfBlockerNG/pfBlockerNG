@@ -121,6 +121,34 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->assertNull($this->krMarker());
 	}
 
+	public function testAPlainUpdateRollsBackAReadyGatewayWhoseBackendIsDead(): void
+	{
+		// Given a ready gateway whose Unbound backend is dead, with nothing changed and no package operation
+		$this->krApply(['serving' => FALSE]);
+		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway is ready');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'before: the backend is dead');
+
+		// When the apply's pass runs
+		$ready = $this->krEnsure();
+
+		// Then the full confirmation judges the upstream: the activation is rolled back and the notice says why
+		$this->assertFalse($ready);
+		$this->assertStringContainsString('did not become ready', $this->krLog());
+	}
+
+	public function testTheChangeGateStaysStrictWhileTheBackendIsDead(): void
+	{
+		// Given a ready gateway whose Unbound backend is dead, and a gateway binary that differs from the installed one
+		$this->krApply(['serving' => FALSE, 'gateway' => 'different']);
+		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway is ready');
+
+		// When the apply's pass runs
+		$this->krEnsure();
+
+		// Then the change is seen on the gateway's readiness alone: the pair is restarted
+		$this->assertContains('restart_service pfb_dns_proxy', $this->krProxyCalls());
+	}
+
 	public function testAReloadOutsideAPackageOperationRestartsTheProxyAndConsumesAPendingRestart(): void
 	{
 		// Given a restart an upgrade deferred, and a reload that restarts Resolver and proxy

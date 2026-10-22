@@ -68,10 +68,11 @@ final class DnsProxyInstallKeepRunningTest extends TestCase
 	/**
 	 * What pfSense leaves when the old package's stop kept the proxy running: the rc script copied to the kept path and unlinked
 	 * from rc.d. $keptText NULL = no copy (the old package predates the probe); '' = a copy of what the installer will write.
+	 * The installer keeps on the gateway's readiness alone, so the Unbound backend stays dead here (serving FALSE) unless a row asks for it.
 	 */
 	private function upgradeLeavesTheProxyServing(?string $keptText, array $scenario = []): void
 	{
-		$this->krApply($scenario);
+		$this->krApply($scenario + ['serving' => FALSE]);
 		$kept = $GLOBALS['pfb']['dns_proxy_rc_kept'];
 		if ($keptText !== NULL) {
 			pfb_dns_proxy_service();

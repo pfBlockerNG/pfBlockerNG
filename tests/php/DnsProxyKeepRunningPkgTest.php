@@ -158,6 +158,20 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertNull($result['marker']);
 	}
 
+	public function testADeferredPassStillFilesAListenerTheGatewayDidNotReport(): void
+	{
+		// Given a quiet box under a package upgrade, a DoT listener on lan, and a gateway log that reports no DoT listener
+		$result = $this->runUnderPkg([
+			'op' => 'ensure', 'dot' => TRUE, 'gatewayLog' => ['ready upstream 127.0.0.1:5353'],
+		]);
+
+		// Then nothing restarts and the pass returns ready, and the missing listener is still filed as a startup problem
+		$this->assertTrue($result['returned']);
+		$this->assertSame([], $result['calls']);
+		$this->assertStringContainsString('pfB-DNS started with problems', $result['log']);
+		$this->assertStringContainsString('DoT is not served on 192.0.2.1:853', $result['log']);
+	}
+
 	public function testAPendingRestartAndADifferingGatewayAndDeciderAreLeftForTheNextPass(): void
 	{
 		// Given a pending restart, a gateway binary and a decider that both differ, and a gateway that would take a decider restart
