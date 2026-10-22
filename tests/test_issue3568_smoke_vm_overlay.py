@@ -299,6 +299,27 @@ def test_a_qemu_that_ignores_sigterm_is_killed_and_its_overlay_deleted(rig: _Rig
     assert not overlay.exists(), f"SIGKILLed VM left its overlay behind: {overlay}"
 
 
+def test_a_ctrl_c_while_the_stop_waits_for_qemu_still_deletes_the_overlay(rig: _Rig) -> None:
+    """A second Ctrl-C lands while teardown waits for qemu to exit: the interrupt propagates, the overlay is gone."""
+    fixture = rig.start("smoke_vm")
+    overlay = rig.only_overlay()
+    qemu = rig.started[0]
+    real_wait = qemu.wait
+
+    def interrupted_wait(timeout: float | None = None) -> int:
+        raise KeyboardInterrupt
+
+    rig.monkeypatch.setattr(qemu, "wait", interrupted_wait)
+    assert overlay.exists(), "the overlay must exist while the VM runs, before the interrupt"
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            fixture.close()
+        assert not overlay.exists(), f"an interrupted stop left the overlay behind: {overlay}"
+    finally:
+        qemu.kill()
+        real_wait(timeout=15)
+
+
 def test_stopping_a_vm_whose_overlay_is_already_gone_is_not_an_error(rig: _Rig) -> None:
     fixture = rig.start("smoke_vm")
     rig.only_overlay().unlink()

@@ -584,16 +584,19 @@ def boot_and_probe(
 def _kill(process: subprocess.Popen[bytes], qmp_sock: str, overlay: Path) -> None:
     """Stop qemu, then delete what this boot made: its ``overlay`` disk and the private directory
     ``_qmp_sock_path`` made for its socket. Safe to repeat: both are removed missing-ok."""
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            with contextlib.suppress(Exception):
+    try:
+        if process.poll() is None:
+            process.terminate()
+            try:
                 process.wait(timeout=15)
-    overlay.unlink(missing_ok=True)
-    shutil.rmtree(os.path.dirname(qmp_sock), ignore_errors=True)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                with contextlib.suppress(Exception):
+                    process.wait(timeout=15)
+    finally:
+        # A Ctrl-C during the wait still deletes the files; unlinking one qemu holds open is safe.
+        overlay.unlink(missing_ok=True)
+        shutil.rmtree(os.path.dirname(qmp_sock), ignore_errors=True)
 
 
 def _tail(path: Path, lines: int = 40) -> str:
