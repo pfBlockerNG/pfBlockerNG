@@ -68,6 +68,8 @@ type config struct {
 	observer    bool
 	replyLog    bool
 	readyFile   string // --ready-file: the gateway's pid is published here once it serves; "" = none
+	ddr         string // --ddr: the firewall FQDN that DDR (RFC 9462) designates; "" = DDR off
+	ddrDoH443   bool   // --ddr-doh-443: the DDR DoH record carries no port, whatever port DoH is bound on; needs ddr
 	decider     []string
 
 	// Test seams; the zero value is production.
@@ -122,6 +124,8 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: the decider listens for the upstream observer's reports")
 	fs.BoolVar(&cfg.replyLog, "reply-log", false, "the decider logs each relayed reply to dns_reply.log (needs --no-module)")
 	fs.StringVar(&cfg.readyFile, "ready-file", "", "write the gateway's pid here, mode 0600, once it serves; removed at stop while it still names the gateway")
+	fs.StringVar(&cfg.ddr, "ddr", "", "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462); the firewall's FQDN the records name; empty = off")
+	fs.BoolVar(&cfg.ddrDoH443, "ddr-doh-443", false, "DDR leaves the port out of the DoH record, so clients use 443 (a reverse proxy in front of DoH); needs --ddr")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -198,6 +202,14 @@ func (c config) validate() error {
 	}
 	if c.doqPort < 0 || c.doqPort > 65535 {
 		return fmt.Errorf("--doq-port %d is outside 0..65535", c.doqPort)
+	}
+	if c.ddr == "" && c.ddrDoH443 {
+		return errors.New("--ddr-doh-443 needs --ddr")
+	}
+	if c.ddr != "" {
+		if _, err := ddrName(c.ddr); err != nil {
+			return err
+		}
 	}
 	host, port, err := net.SplitHostPort(c.upstream)
 	if p, perr := strconv.Atoi(port); err != nil || host == "" || perr != nil || p < 1 || p > 65535 {
@@ -337,6 +349,14 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 			logf("control socket: %v; the certificate cannot be renewed without a restart, nor the decider restarted alone", err)
 		}
 	}
+	var ddrAnswers *ddr
+	if cfg.ddr != "" {
+		var err error
+		if ddrAnswers, err = ddrOnListeners(cfg, secure); err != nil {
+			closeListeners()
+			return nil, err
+		}
+	}
 	trace("bind")
 
 	conn, deciderEnd, err := newSocketpair()
@@ -372,6 +392,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	trace("ready")
 
 	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
+	g.ddr = ddrAnswers
 	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
 		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}
 	for _, l := range listeners {

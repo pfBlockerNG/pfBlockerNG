@@ -40,6 +40,13 @@ What it proves, in file order:
   over UDP and TCP; the client VM too, on every transport, where its IPv6 address reaches the firewall: the smoke
   pfSense's pf carries `block drop in log inet6 all` and no LAN pass rule, so there it does not and the diagnostics
   are logged);
+* DDR (issue #3583), with ``dns/pfb_dns_ddr`` on and the gateway restarted with ``--ddr``: ``_dns.resolver.arpa. SVCB``
+  over UDP and TCP gets the DoH, DoT and DoQ records for the LAN address (alpn, ``port`` only off its default,
+  ``dohpath``, ``ipv4hint``, the firewall's FQDN as TargetName, its A record in Additional); another type or name under
+  ``resolver.arpa.`` and the SVCB query over DoT and DoH get NODATA with the 300-second SOA, apex SOA and NS are
+  answered, and Unbound's query log never names ``resolver.arpa``, so the decider saw none of it; a client the Resolver
+  ACL refuses gets REFUSED; with the toggle off the client gets what Unbound itself answers, asked on the box at
+  port 5354; with ``dns/pfb_dns_ddr_doh_443`` on the DoH record has no ``port`` and keeps its hint and path;
 * ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
@@ -85,6 +92,7 @@ from .test_smoke_dns_proxy import (
     OBSERVER_SCRIPT,
     PROXY_PID_FILE,
     PROXY_RC,
+    RESOLVER_LOG,
     SCRIPT_LINE,
     SNAPSHOT_PATHS,
     UPSTREAM_PORT,
@@ -146,10 +154,19 @@ LISTENER_SETTINGS = {
     "pfb_dns_doq_port": str(DOQ_PORT),
     "pfb_dns_doq_interface": "lan",
 }
+CFG_DDR = f"{CFG_PFB_DNS}/pfb_dns_ddr"  # issue #3583: the DDR toggle and the DoH-on-port-443 toggle
+CFG_DDR_DOH_443 = f"{CFG_PFB_DNS}/pfb_dns_ddr_doh_443"
 # SNAPSHOT_PATHS already holds the interface lists, which LISTENER_SETTINGS names again
 CONFIG_PATHS = tuple(
     dict.fromkeys(
-        (*SNAPSHOT_PATHS, *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_SETTINGS), "unbound/acls", AUTO_ROWS_OFF)
+        (
+            *SNAPSHOT_PATHS,
+            *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_SETTINGS),
+            "unbound/acls",
+            AUTO_ROWS_OFF,
+            CFG_DDR,
+            CFG_DDR_DOH_443,
+        )
     )
 )
 
@@ -1218,6 +1235,392 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
             assert logged_clients(list(names.v6.values())) == {ipaddress.ip_address(LAN_V6_CLIENT)}, "dnsbl.log: the VM"
     _wait_udp(gw, names.nomatch_poll, h.is_vip, "the VIP again")
     _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_vip, "the VIP")
+
+
+# --------------------------------------------------------------------------- #
+# DDR: the gateway answers resolver.arpa. itself (issue #3583)
+# --------------------------------------------------------------------------- #
+
+DDR_NAME = "_dns.resolver.arpa"
+DDR_SOA = ("resolver.arpa.", 300, "SOA", "localhost. nobody.invalid. 1 3600 1200 604800 300")
+UNBOUND_PLAIN_PORT = 5354  # Unbound's own loopback port for plain DNS while the gateway holds the Resolver's
+# A dig that does not know RFC 9461's `dohpath` prints that SvcParamKey by its number.
+SVCB_KEY_NAMES = {"key7": "dohpath"}
+
+
+@dataclass(frozen=True)
+class Record:
+    owner: str
+    ttl: int
+    rtype: str
+    rdata: str
+
+
+@dataclass(frozen=True)
+class Reply:
+    """What dig printed: the header's rcode and flags, the three sections, and its own output for a failure message."""
+
+    rcode: str  # UNKNOWN: no reply at all
+    flags: frozenset[str]
+    answer: tuple[Record, ...]
+    authority: tuple[Record, ...]
+    additional: tuple[Record, ...]
+    raw: str
+
+
+@dataclass(frozen=True)
+class Svcb:
+    priority: int
+    target: str
+    params: dict[str, str]  # SvcParamKey -> value, quotes removed
+
+
+def _parse_reply(output: str) -> Reply:
+    """dig's, or drill's, text for one query: `status:` or `rcode:` in the header, then the sections' record lines."""
+    rcode, flags = "UNKNOWN", frozenset[str]()
+    sections: dict[str, list[Record]] = {"ANSWER": [], "AUTHORITY": [], "ADDITIONAL": []}
+    current: list[Record] | None = None
+    for line in output.splitlines():
+        status = re.search(r"\b(?:status|rcode): ([A-Z]+)", line)
+        header = re.match(r";; (ANSWER|AUTHORITY|ADDITIONAL) SECTION:", line)
+        if status:
+            rcode = status.group(1)
+        elif line.startswith(";; flags:"):
+            flags = frozenset(line[len(";; flags:") :].split(";")[0].split())
+        elif header:
+            current = sections[header.group(1)]
+        elif not line.strip() or line.startswith(";"):
+            current = None
+        elif current is not None:
+            fields = line.split(None, 4)
+            if len(fields) == 5 and fields[1].isdigit():
+                current.append(Record(fields[0], int(fields[1]), fields[3], " ".join(fields[4].split())))
+    return Reply(
+        rcode, flags, tuple(sections["ANSWER"]), tuple(sections["AUTHORITY"]), tuple(sections["ADDITIONAL"]), output
+    )
+
+
+def _dig(client: SmokeVM, transport: str, rtype: str, name: str, *, server: str = PFSENSE_LAN_IP) -> Reply:
+    """`name` of type `rtype` over one of DIG_TRANSPORTS; no answer reads as rcode UNKNOWN with dig's complaint."""
+    options, port = DIG_TRANSPORTS[transport]
+    args = ["dig", "+tries=1", "+time=5", "+noall", "+comments", "+answer", "+authority", "+additional", *options]
+    if port:
+        args += ["-p", str(port)]
+    args += [rtype, name, f"@{server}"]
+    result = client.ssh(shlex.join(args) + " 2>&1", timeout=40.0)
+    return _parse_reply(f"{result.stdout}\n[exit {result.returncode}]")
+
+
+def _unbound_reply(vm: SmokeVM, rtype: str, name: str) -> Reply:
+    """Unbound's own answer, asked on the box at its loopback port, where the gateway is not in the way (drill)."""
+    result = vm.ssh(f"drill -p {UNBOUND_PLAIN_PORT} {shlex.quote(name)} {shlex.quote(rtype)} @127.0.0.1 2>&1")
+    return _parse_reply(f"{result.stdout}\n[exit {result.returncode}]")
+
+
+def _svcb_records(reply: Reply) -> list[Svcb]:
+    """The answer's SVCB records by priority (dig prints them in rotating order): `<priority> <target> key=value`."""
+    found = []
+    for record in reply.answer:
+        if record.rtype != "SVCB":
+            continue
+        priority, target, *rest = record.rdata.split(None, 2)
+        assert priority.isdigit(), f"dig printed {record} in a form this parser does not read:\n{reply.raw}"
+        params = {
+            SVCB_KEY_NAMES.get(key, key): quoted or bare
+            for key, quoted, bare in re.findall(r'([\w-]+)=(?:"([^"]*)"|(\S+))', rest[0] if rest else "")
+        }
+        found.append(Svcb(int(priority), target.lower(), params))
+    return sorted(found, key=lambda svcb: svcb.priority)
+
+
+def _port(port: int, default: int) -> dict[str, str]:
+    """The `port` SvcParam: only a transport off its default port has one (RFC 9460 leaves out the default)."""
+    return {} if port == default else {"port": str(port)}
+
+
+def _expected_svcb(fqdn: str, *, doh_443: bool = False) -> list[Svcb]:
+    """The records a LAN query gets: DoH, DoT and DoQ, each with the LAN hint; `doh_443` leaves the DoH port out."""
+    hint = {"ipv4hint": PFSENSE_LAN_IP}
+    doh_port = {} if doh_443 else _port(DOH_PORT, 443)
+    return [
+        Svcb(1, fqdn, {"alpn": "h2", **doh_port, "dohpath": "/dns-query{?dns}", **hint}),
+        Svcb(2, fqdn, {"alpn": "dot", **_port(DOT_PORT, 853), **hint}),
+        Svcb(3, fqdn, {"alpn": "doq", **_port(DOQ_PORT, 853), **hint}),
+    ]
+
+
+def _firewall_fqdn(vm: SmokeVM) -> str:
+    """`system/hostname` + `.` + `system/domain` + `.`: the TargetName the gateway is given, from the box's config."""
+    return f"{h.config_get(vm, 'system/hostname')}.{h.config_get(vm, 'system/domain')}.".lower()
+
+
+def _rows(section: tuple[Record, ...]) -> list[tuple[str, int, str, str]]:
+    return [(r.owner.lower(), r.ttl, r.rtype, r.rdata.lower()) for r in section]
+
+
+def _gateway_ddr_flags(vm: SmokeVM) -> tuple[bool, bool] | None:
+    """(`--ddr` and `--ddr-doh-443` are on the running gateway's command line); None: no gateway runs."""
+    pid = _pid_file(vm, PROXY_PID_FILE)
+    gateway = next((p for p in _processes(vm) if p.pid == pid), None)
+    if gateway is None:
+        return None
+    args = gateway.args.split()
+    return "--ddr" in args, "--ddr-doh-443" in args
+
+
+def _set_ddr(vm: SmokeVM, on: bool, doh_443: bool) -> None:
+    """The pfB-DNS tab's two DDR toggles as its Save stores them: 'on' or the empty Off token."""
+    _php_ok(
+        vm,
+        f"$d = config_get_path({h._php_str(CFG_PFB_DNS)}, array());\n"
+        f"$d['pfb_dns_ddr'] = {h._php_str('on' if on else '')};\n"
+        f"$d['pfb_dns_ddr_doh_443'] = {h._php_str('on' if doh_443 else '')};\n"
+        f"config_set_path({h._php_str(CFG_PFB_DNS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: pfB-DNS DDR for the #3583 gateway smoke');",
+        "DDR settings",
+    )
+
+
+def _ensure_ddr(gw: Gateway, *, on: bool, doh_443: bool = False) -> None:
+    """Have the gateway run with `--ddr` (and `--ddr-doh-443`) as asked, then serve: store and apply if it does not.
+
+    A gateway that never took the flags fails the first assertion of the test with its command line and log, not a
+    later query. The module's snapshot puts the two settings back with the rest of its config.
+    """
+    vm, want = gw.vm, (on, doh_443)
+    if _gateway_ddr_flags(vm) != want:
+        _set_ddr(vm, on, doh_443)
+        _apply(vm)
+        # Not raised here: the assertion below says what the gateway runs and logged.
+        with contextlib.suppress(RuntimeError):
+            h.wait_until(lambda: _gateway_ddr_flags(vm) == want, timeout=60.0, interval=2.0)
+    seen = _gateway_ddr_flags(vm)
+    stored = (h.config_get(vm, CFG_DDR), h.config_get(vm, CFG_DDR_DOH_443))
+    assert seen == want, (
+        f"after the apply the gateway should run with (--ddr, --ddr-doh-443) = {want}, runs with {seen}; stored "
+        f"(dns/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443) = {stored}\n{_proxy_log(vm, 30)}"
+    )
+
+    def serves() -> bool:
+        return h.is_vip(_ask(gw.client, "udp", gw.names.ready)[0])
+
+    try:
+        h.wait_until(serves, timeout=240.0, interval=3.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\n{_diagnostics(vm)}") from exc
+
+
+def _assert_nodata(reply: Reply, what: str) -> None:
+    assert reply.rcode == "NOERROR" and not reply.answer and _rows(reply.authority) == [DDR_SOA], (
+        f"{what}: expected NOERROR, no answer and the Authority SOA {DDR_SOA}; got {reply.rcode}, answer "
+        f"{_rows(reply.answer)}, authority {_rows(reply.authority)}\n{reply.raw}"
+    )
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("transport", ["udp", "tcp"])
+def test_ddr_svcb_query_over_plain_dns_gets_one_record_per_encrypted_transport_on_the_queried_address(
+    gw: Gateway, gateway_on: State, transport: str
+) -> None:
+    """Criterion 1: `_dns.resolver.arpa. SVCB` from the LAN client, over UDP and over TCP, is answered with DDR.
+
+    Given the gateway runs with `--ddr`,
+    Then NOERROR, authoritative, three SVCB records for the owner asked: DoH priority 1 (`alpn=h2`, `port` only off
+      443, `dohpath=/dns-query{?dns}`), DoT priority 2 (`alpn=dot`, `port` only off 853) and DoQ priority 3
+      (`alpn=doq`, `port` only off 853), each with TargetName the firewall's `hostname.domain.`, `ipv4hint` the LAN
+      address and TTL 300, and the Additional section holds that name's A record, the LAN address, TTL 300.
+    """
+    _ensure_ddr(gw, on=True)
+    fqdn = _firewall_fqdn(gw.vm)
+    reply = _dig(gw.client, transport, "SVCB", DDR_NAME)
+    _say(f"DDR SVCB over {transport}: {reply.rcode} {sorted(reply.flags)} {_rows(reply.answer)}")
+    assert reply.rcode == "NOERROR" and "aa" in reply.flags, (
+        f"{transport}: expected NOERROR with the aa flag, got {reply.rcode} {sorted(reply.flags)}\n{reply.raw}"
+    )
+    assert _svcb_records(reply) == _expected_svcb(fqdn), (
+        f"{transport}: SVCB records expected {_expected_svcb(fqdn)}, got {_svcb_records(reply)}\n{reply.raw}"
+    )
+    assert {(r.owner.lower(), r.ttl) for r in reply.answer} == {(f"{DDR_NAME}.", 300)}, (
+        f"{transport}: every answer should be owned by {DDR_NAME}. with TTL 300, got {_rows(reply.answer)}"
+    )
+    addresses = [row for row in _rows(reply.additional) if row[2] in ("A", "AAAA")]
+    assert addresses == [(fqdn, 300, "A", PFSENSE_LAN_IP)], (
+        f"{transport}: Additional should hold only {(fqdn, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n{reply.raw}"
+    )
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    ("transport", "rtype", "name"),
+    [
+        pytest.param("udp", "A", DDR_NAME, id="another-type-at-the-ddr-name"),
+        pytest.param("udp", "SVCB", "foo.resolver.arpa", id="another-name-under-resolver-arpa"),
+        pytest.param("dot", "SVCB", DDR_NAME, id="svcb-over-dot"),
+        pytest.param("doh-post", "SVCB", DDR_NAME, id="svcb-over-doh"),
+    ],
+)
+def test_ddr_other_queries_under_resolver_arpa_get_nodata_with_the_300_second_soa(
+    gw: Gateway, gateway_on: State, transport: str, rtype: str, name: str
+) -> None:
+    """Criterion 2: anything under `resolver.arpa.` that is not the plain-DNS DDR query is NODATA with the SOA.
+
+    Given the gateway runs with `--ddr`,
+    When the client asks another type at `_dns.resolver.arpa.`, another name under `resolver.arpa.`, or the SVCB query
+      over DoT or DoH,
+    Then NOERROR, no answer, and `resolver.arpa. 300 IN SOA localhost. nobody.invalid. 1 3600 1200 604800 300` in
+      Authority.
+    """
+    _ensure_ddr(gw, on=True)
+    reply = _dig(gw.client, transport, rtype, name)
+    _say(f"DDR {rtype} {name} over {transport}: {reply.rcode} {_rows(reply.answer)} {_rows(reply.authority)}")
+    _assert_nodata(reply, f"{rtype} {name} over {transport}")
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    ("rtype", "row"),
+    [
+        pytest.param("SOA", DDR_SOA, id="soa"),
+        pytest.param("NS", ("resolver.arpa.", 300, "NS", "localhost."), id="ns"),
+    ],
+)
+def test_ddr_apex_soa_and_ns_queries_get_the_300_second_records(
+    gw: Gateway, gateway_on: State, rtype: str, row: tuple[str, int, str, str]
+) -> None:
+    """Criterion 2: `resolver.arpa.` SOA and NS are answered with the records of Unbound's default zone, TTL 300."""
+    _ensure_ddr(gw, on=True)
+    reply = _dig(gw.client, "udp", rtype, "resolver.arpa")
+    assert reply.rcode == "NOERROR" and _rows(reply.answer) == [row], (
+        f"resolver.arpa {rtype}: expected NOERROR and the answer {[row]}, got {reply.rcode} {_rows(reply.answer)}\n"
+        f"{reply.raw}"
+    )
+
+
+def _resolver_arpa_log_lines(vm: SmokeVM) -> list[str]:
+    """Unbound's query-log lines that name resolver.arpa (the module's Custom Options turn `log-queries` on)."""
+    return vm.ssh("grep", "-F", "--", "resolver.arpa", RESOLVER_LOG).stdout.splitlines()
+
+
+@pytest.mark.timeout(900)
+def test_ddr_answers_are_never_forwarded_so_unbounds_query_log_names_none_of_them(
+    gw: Gateway, gateway_on: State
+) -> None:
+    """Criterion 2, "the decider saw none": Unbound's query log gains no line for any DDR-answered query.
+
+    Given the gateway runs with `--ddr` and every query below is answered NOERROR by the gateway itself,
+    When the client asks them all and then an allowed name that the upstream answers (so that the log has drained
+      past them, Unbound logging in the order it receives),
+    Then the log lines naming `resolver.arpa` are the ones it had before.
+    """
+    _ensure_ddr(gw, on=True)
+    vm, client = gw.vm, gw.client
+    asked = (
+        ("udp", "SVCB", DDR_NAME),
+        ("tcp", "SVCB", DDR_NAME),
+        ("dot", "SVCB", DDR_NAME),
+        ("udp", "A", DDR_NAME),
+        ("udp", "SVCB", "foo.resolver.arpa"),
+        ("udp", "SOA", "resolver.arpa"),
+        ("udp", "NS", "resolver.arpa"),
+    )
+    before = _resolver_arpa_log_lines(vm)
+    for transport, rtype, name in asked:
+        reply = _dig(client, transport, rtype, name)
+        assert reply.rcode == "NOERROR", (
+            f"premise: the gateway answers {rtype} {name} over {transport} itself, got {reply.rcode}\n{reply.raw}"
+        )
+    barrier = h.unique_domain("ddr-barrier")
+    answer, raw = _ask(client, "udp", barrier)
+    _assert_answered_by_upstream(gw, barrier, answer, raw, "the allowed name after the DDR queries")
+    gained = _resolver_arpa_log_lines(vm)[len(before) :]
+    assert not gained, f"Unbound's query log gained lines for names the gateway answers itself: {gained}"
+
+
+@pytest.mark.timeout(900)
+def test_ddr_query_from_a_client_the_resolver_acl_refuses_gets_refused(gw: Gateway, gateway_on: State) -> None:
+    """Criterion 4: the ACL comes before DDR, so a refused client gets REFUSED, not the SVCB records.
+
+    Given the gateway runs with `--ddr` and the LAN client gets the three SVCB records,
+    When the Resolver's access list refuses 192.168.1.10/32 and the gateway has re-read it,
+    Then the DDR query gets REFUSED, no answer, over UDP and over TCP; and once the row is removed the VIP is back.
+    """
+    _ensure_ddr(gw, on=True)
+    before = _dig(gw.client, "udp", "SVCB", DDR_NAME)
+    assert len(_svcb_records(before)) == 3, (
+        f"premise: with no refuse row the client gets three SVCB records\n{before.raw}"
+    )
+    with _resolver_acl(gw.vm, "refuse"):
+        _wait_udp(gw, gw.names.refuse_poll, _refused, "REFUSED")
+        for transport in ("udp", "tcp"):
+            reply = _dig(gw.client, transport, "SVCB", DDR_NAME)
+            assert reply.rcode == "REFUSED" and not reply.answer, (
+                f"{transport}: the refused client should get REFUSED and no answer, got {reply.rcode} "
+                f"{_rows(reply.answer)}\n{reply.raw}"
+            )
+    _wait_udp(gw, gw.names.refuse_poll, h.is_vip, "the VIP again")
+
+
+@pytest.mark.timeout(900)
+def test_ddr_off_leaves_resolver_arpa_to_unbound_and_relays_its_answer_unchanged(
+    gw: Gateway, gateway_on: State
+) -> None:
+    """Criterion 3: with the toggle off (pfB-DNS still on) the client gets what Unbound itself answers.
+
+    Given the gateway runs with `--ddr` and answers the SVCB query itself with three records (the before-state: the
+      toggle changes the answer),
+    When the toggle is turned off and applied,
+    Then the gateway's answer to `_dns.resolver.arpa. SVCB`, whatever this Unbound version says, has the rcode, the
+      number of answer records and the Authority records (TTL aside) of Unbound's own answer, asked on the box at
+      127.0.0.1 port 5354.
+    """
+    _ensure_ddr(gw, on=True)
+    on = _dig(gw.client, "udp", "SVCB", DDR_NAME)
+    assert len(_svcb_records(on)) == 3, f"premise: with DDR on the gateway answers with three SVCB records\n{on.raw}"
+    _ensure_ddr(gw, on=False)
+    relayed = _dig(gw.client, "udp", "SVCB", DDR_NAME)
+    own = _unbound_reply(gw.vm, "TYPE64", DDR_NAME)
+    _say(f"Unbound's own answer: {own.rcode} {_rows(own.answer)} {_rows(own.authority)}")
+    _say(f"the gateway's answer, DDR off: {relayed.rcode} {_rows(relayed.answer)} {_rows(relayed.authority)}")
+    assert own.rcode != "UNKNOWN", f"no answer from Unbound on 127.0.0.1:{UNBOUND_PLAIN_PORT}\n{own.raw}"
+
+    def shape(reply: Reply) -> tuple[str, int, list[tuple[str, str, str]]]:
+        return reply.rcode, len(reply.answer), [(o, t, d) for o, _, t, d in _rows(reply.authority)]
+
+    assert shape(relayed) == shape(own), (
+        f"DDR off: the client's answer (rcode, answers, Authority) {shape(relayed)} differs from Unbound's own "
+        f"{shape(own)}\nclient:\n{relayed.raw}\nUnbound:\n{own.raw}"
+    )
+
+
+@pytest.mark.timeout(900)
+def test_ddr_doh_on_port_443_leaves_the_port_out_of_the_doh_record_and_nothing_else_changed(
+    gw: Gateway, gateway_on: State
+) -> None:
+    """Criterion 9 (revised): with `dns/pfb_dns_ddr_doh_443` on, the DoH record has no `port`, whatever DoH listens on.
+
+    Given DoH listens on 4443 and the gateway runs with `--ddr`, whose DoH record carries `port=4443`
+      (the before-state: the toggle is what removes it),
+    When `dns/pfb_dns_ddr_doh_443` is turned on and applied, so that the gateway runs with `--ddr --ddr-doh-443`,
+    Then the DoH record has no `port` but the same TargetName (the firewall's `hostname.domain.`), `ipv4hint` (the LAN
+      address) and `dohpath=/dns-query{?dns}`; DoT and DoQ are as before; Additional holds the firewall's A record.
+    """
+    _ensure_ddr(gw, on=True)
+    fqdn = _firewall_fqdn(gw.vm)
+    before = _dig(gw.client, "udp", "SVCB", DDR_NAME)
+    assert _svcb_records(before) == _expected_svcb(fqdn), (
+        f"premise: without the toggle the DoH record carries port {DOH_PORT}: expected {_expected_svcb(fqdn)}, got "
+        f"{_svcb_records(before)}\n{before.raw}"
+    )
+    _ensure_ddr(gw, on=True, doh_443=True)
+    reply = _dig(gw.client, "udp", "SVCB", DDR_NAME)
+    expected = _expected_svcb(fqdn, doh_443=True)
+    assert reply.rcode == "NOERROR" and _svcb_records(reply) == expected, (
+        f"expected NOERROR and {expected}, got {reply.rcode} {_svcb_records(reply)}\n{reply.raw}"
+    )
+    addresses = [row for row in _rows(reply.additional) if row[2] in ("A", "AAAA")]
+    assert addresses == [(fqdn, 300, "A", PFSENSE_LAN_IP)], (
+        f"Additional should hold only the firewall's {(fqdn, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n{reply.raw}"
+    )
 
 
 # --------------------------------------------------------------------------- #

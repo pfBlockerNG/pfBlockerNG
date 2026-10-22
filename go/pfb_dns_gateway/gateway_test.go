@@ -28,12 +28,13 @@ const (
 )
 
 type rigConfig struct {
-	acl      string
-	timeout  time.Duration // the gateway's wait for Unbound; default: the watchdog
-	grace    time.Duration // added to 2 x timeout for the whole query; default: the gateway's
-	tcpIdle  time.Duration // default: the gateway's
-	upstream []upstreamOption
-	perAddr  int // lifts the per-address shares of the UDP, DoH/DoQ query, TCP and DoH/DoQ connection budgets to this; 0 = the gateway's own (a test of a global cap sets noAddrCap)
+	acl         string
+	timeout     time.Duration // the gateway's wait for Unbound; default: the watchdog
+	grace       time.Duration // added to 2 x timeout for the whole query; default: the gateway's
+	tcpIdle     time.Duration // default: the gateway's
+	upstream    []upstreamOption
+	perAddr     int              // lifts the per-address shares of the UDP, DoH/DoQ query, TCP and DoH/DoQ connection budgets to this; 0 = the gateway's own (a test of a global cap sets noAddrCap)
+	beforeServe func(g *gateway) // runs on the gateway before its plain listener serves: set what serving goroutines read
 }
 
 // noAddrCap leaves a test of a global cap to the global cap: no single address reaches its own share first.
@@ -93,6 +94,9 @@ func newRig(t *testing.T, cfg rigConfig) *rig {
 	l, err := bindPlain("127.0.0.1", 0)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.beforeServe != nil {
+		cfg.beforeServe(g)
 	}
 	g.serve(l)
 	t.Cleanup(func() { g.stop(); dec.Close(); _ = other.Close() })

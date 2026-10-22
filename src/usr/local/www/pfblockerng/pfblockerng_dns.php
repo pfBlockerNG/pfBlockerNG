@@ -61,6 +61,9 @@ $pconfig['pfb_dns_doh_trusted']		= PfbConfig::read('dns/pfb_dns_doh_trusted');
 $pconfig['pfb_dns_doq']			= PfbConfig::read('dns/pfb_dns_doq');
 $pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns/pfb_dns_doq_port');
 $pconfig['pfb_dns_doq_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doq_interface'));
+// issue #3583: DDR (RFC 9462) answers, and the option that leaves the port out of the DoH record they carry
+$pconfig['pfb_dns_ddr']			= PfbConfig::read('dns/pfb_dns_ddr');
+$pconfig['pfb_dns_ddr_doh_443']		= PfbConfig::read('dns/pfb_dns_ddr_doh_443');
 // The Resolver's Network Interfaces (virtual IPs included) plus every stored token no longer offered (issue #3557)
 $options_dns_interface = pfb_dns_proxy_interface_options();
 // The certificates the Resolver offers: the same call, so the same list and descriptions
@@ -118,8 +121,11 @@ if ($_POST) {
 
 		$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
 		$pconfig['pfb_py_reply'] = $_POST['pfb_py_reply'] ?? '';
-		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_sslcertref') as $pfb_dns_field) {
+		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_sslcertref') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
+		}
+		if (pfb_dns_proxy_ddr_doh_443_locked()) {
+			$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns/pfb_dns_ddr_doh_443');	// a disabled control posts nothing: the form shows the stored value, as the save keeps it
 		}
 		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
@@ -153,6 +159,9 @@ pfb_software_add_tab($tab_array);
 $tab_array[]	= array(gettext('Wizard'),	FALSE,	'/wizard.php?xml=pfblockerng_wizard.xml');
 display_top_tabs($tab_array, TRUE);
 pfb_print_pending_changes_box();
+foreach (pfb_dns_proxy_ddr_warnings() as $pfb_ddr_warning) {
+	print_info_box($pfb_ddr_warning, 'warning', FALSE);
+}
 
 $form = new Form('Save pfB-DNS settings');
 
@@ -324,6 +333,39 @@ $section->addInput(new Form_Select(
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DoQ Interface(s)'))
   ->setHelp('Interface(s) DoQ listens on, besides loopback (127.0.0.1 and ::1). At least one entry is required.');
+$form->add($section);
+
+$section = new Form_Section('Discovery of Designated Resolvers (DDR)');
+$section->addInput(new Form_Checkbox(
+	'pfb_dns_ddr',
+	gettext('DDR'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setAttribute('aria-label', gettext('DDR'))
+  ->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
+		. 'Answers Discovery of Designated Resolvers (RFC 9462) queries for <code>resolver.arpa</code> from pfB-DNS, so that clients that support DDR can find and switch to the encrypted transports enabled above (DoT, DoH, DoQ). '
+		. 'Clients verify the certificate against the address they queried, as an IP address SAN. '
+		. 'Disabled: the DNS Resolver answers these names, as before.'
+		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+
+// DoH already listens on 443, so there is no port to leave out
+$pfb_ddr_doh_443 = (new Form_Checkbox(
+	'pfb_dns_ddr_doh_443',
+	gettext('DoH on port 443'),
+	'Advertise DoH on port 443',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr_doh_443'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setAttribute('aria-label', gettext('DoH on port 443'));
+if (pfb_dns_proxy_ddr_doh_443_locked()) {
+	$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');
+}
+$section->addInput($pfb_ddr_doh_443)->setHelp('Some clients might not accept a port for the DoH server provided over DDR. '
+		. 'This option removes the port, so clients reach DoH on port 443. '
+		. 'If DoH is not already listening on port 443, it will no longer be reachable. '
+		. 'It is intended for users who, for example, serve multiple sites over HTTPS through a reverse proxy, '
+		. 'and who are responsible for configuring that reverse proxy correctly.'
+		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
 $form->add($section);
 
 $section = new Form_Section('DNS Reply Logging');

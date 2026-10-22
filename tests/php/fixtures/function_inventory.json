@@ -1762,6 +1762,19 @@
             }
         ]
     },
+    "pfb_dns_proxy_certificate_ip_sans": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_certificate_push": {
         "returnsRef": false,
         "returnType": "?string",
@@ -1863,6 +1876,21 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dns_proxy_ddr_doh_443_locked": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_dns_proxy_ddr_flags": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_dns_proxy_ddr_warnings": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
     },
     "pfb_dns_proxy_decider_changed": {
         "returnsRef": false,
@@ -2185,6 +2213,19 @@
         "returnsRef": false,
         "returnType": "string",
         "params": []
+    },
+    "pfb_dns_proxy_public_address": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "address",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_dns_proxy_ready": {
         "returnsRef": false,

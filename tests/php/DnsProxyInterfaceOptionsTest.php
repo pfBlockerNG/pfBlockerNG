@@ -100,6 +100,7 @@ final class DnsProxyInterfaceOptionsTest extends TestCase
 		$post = [
 			'pfb_dns_dot' => '', 'pfb_dns_dot_port' => '853', 'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '4443',
 			'pfb_dns_doh_trusted' => '', 'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_sslcertref' => '',
+			'pfb_dns_ddr' => '', 'pfb_dns_ddr_doh_443' => '',
 		];
 		foreach (self::LISTS as $list) {
 			$post[$list] = array_values(array_filter(

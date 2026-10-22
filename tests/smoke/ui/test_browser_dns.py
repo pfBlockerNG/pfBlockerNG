@@ -1,4 +1,4 @@
-"""Tier-B browser regression (#3517, #3538, #3555, #3557): the pfB-DNS page's names, warnings, saves and status tables.
+"""Tier-B browser regression (#3517, #3538, #3555, #3557, #3583): the pfB-DNS page's names, saves and status tables.
 
 Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 (``pfblockerng_dns.php``) and measures the live DOM, not the markup:
@@ -10,6 +10,8 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 * saving with a DNS interface list empty shows the input error and leaves config.xml alone, saving
   Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
   tokens render selected and survive a save that leaves the lists alone;
+* the DDR section sits after DoQ and before DNS Reply Logging, its two checkboxes resolve by their visible labels
+  ``DDR`` and ``DoH on port 443``, the second is disabled while the DoH port is 443, and saving both on persists them;
 * the status panel is a heading and a table of Interface | Address | State rows per transport, each state an icon with a
   hover title and a screen-reader text, and an off transport's table is empty.
 
@@ -43,8 +45,8 @@ pytestmark = pytest.mark.ui_browser
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 DNS_CFG = "installedpackages/pfblockerngdns/config/0/"
-# Everything the page's Save writes: the pfB-DNS toggle, the listener settings and the certificate (the Reply Logging
-# preference lives in the DNSBL section).
+# Everything the page's Save writes: the pfB-DNS toggle, the listener settings, the two DDR toggles and the certificate
+# (the Reply Logging preference lives in the DNSBL section).
 DNS_SAVED_KEYS = (
     "pfb_dns",
     "pfb_dns_interface",
@@ -59,11 +61,13 @@ DNS_SAVED_KEYS = (
     "pfb_dns_doq",
     "pfb_dns_doq_port",
     "pfb_dns_doq_interface",
+    "pfb_dns_ddr",
+    "pfb_dns_ddr_doh_443",
 )
 REPLY_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
 INTERFACE_LABELS = ("DNS Interface(s)", "DoT Interface(s)", "DoH Interface(s)", "DoQ Interface(s)")
-# The enable checkbox's, the DoT's, the DoH's and the DoQ's "Experimental." disclosure.
-EXPERIMENTAL_DISCLOSURES = 4
+# The enable checkbox's, the DoT's, the DoH's, the DoQ's and the DDR's "Experimental." disclosure.
+EXPERIMENTAL_DISCLOSURES = 5
 WCAG_AA_TEXT_CONTRAST = 4.5
 
 # The painted backdrop: the nearest ancestor with a non-transparent background, else the white canvas.
@@ -190,6 +194,103 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
         assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_interface") == "lo0"
         assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_dot_interface") == "lo0"
         assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_sslcertref") == cert_ref
+    finally:
+        for path, state in originals.items():
+            helpers.config_restore_state(smoke_vm, path, state)
+
+
+# issue #3583: the DDR section's panel title as the page renders it, the visible label and name of each of its two
+# checkboxes, and the DoH port the tests set (a stored 443 disables the second checkbox).
+DDR_SECTION = "Discovery of Designated Resolvers (DDR)"
+DDR_TOGGLES = (("DDR", "pfb_dns_ddr"), ("DoH on port 443", "pfb_dns_ddr_doh_443"))
+DOH_PORT_CFG = f"{DNS_CFG}pfb_dns_doh_port"
+
+
+def test_ddr_section_follows_the_doq_section_and_precedes_dns_reply_logging(browser_page: Page, webui: WebUI) -> None:
+    """issue #3583: in the live DOM the DDR panel title sits after DoQ's and before DNS Reply Logging's."""
+    page = browser_page
+    _open(page, webui, DNS_PAGE)
+    titles = [title.strip() for title in page.locator(".panel-title").all_inner_texts()]
+    wanted = ("DNS over QUIC (DoQ)", DDR_SECTION, "DNS Reply Logging")
+    found = [next((i for i, title in enumerate(titles) if title.startswith(want)), -1) for want in wanted]
+    assert -1 not in found and found == sorted(found), (
+        f"expected the panel titles {wanted} in this order, got positions {found} among {titles}"
+    )
+
+
+def test_ddr_checkboxes_resolve_by_their_visible_labels_inside_the_ddr_section(
+    browser_page: Page, webui: WebUI
+) -> None:
+    """issue #3583: `DDR` and `DoH on port 443` each name one checkbox, both in the DDR section's panel."""
+    page = browser_page
+    _open(page, webui, DNS_PAGE)
+    section = page.locator(".panel").filter(has=page.locator(".panel-title", has_text=DDR_SECTION)).last
+    assert section.count() == 1, f"no panel on {DNS_PAGE} has the title {DDR_SECTION!r}"
+    for label, name in DDR_TOGGLES:
+        control = section.get_by_label(label, exact=True)
+        found = control.count()
+        assert found == 1, f"expected exactly one control labelled {label!r} in the DDR section, got {found}"
+        assert control.get_attribute("type") == "checkbox" and control.get_attribute("name") == name, (
+            f"{label!r}: expected the checkbox named {name!r}, got {control.evaluate('el => el.outerHTML')}"
+        )
+
+
+def test_doh_on_port_443_checkbox_is_disabled_only_while_the_stored_doh_port_is_443(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM, screenshot_dir: Path
+) -> None:
+    """issue #3583: DoH already on port 443 leaves the toggle nothing to change, so its checkbox is disabled.
+
+    Given the stored DoH port is 4443, Then `DoH on port 443` is enabled; When the stored DoH port is 443 and the page
+    loads again, Then it is disabled. One screenshot per state is an artifact, not an asserted baseline.
+    """
+    page = browser_page
+    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    try:
+        for port, disabled in (("4443", False), ("443", True)):
+            helpers.config_set(smoke_vm, DOH_PORT_CFG, port)
+            _open(page, webui, DNS_PAGE)
+            toggle = page.locator('input[name="pfb_dns_ddr_doh_443"]')
+            assert toggle.count() == 1, f"expected one pfb_dns_ddr_doh_443 checkbox, got {toggle.count()}"
+            _shot(page, screenshot_dir, f"pfb_dns_ddr_doh_443_doh_port_{port}")
+            assert toggle.is_disabled() is disabled, (
+                f"stored DoH port {port}: expected the checkbox {'disabled' if disabled else 'enabled'}, got "
+                f"{toggle.evaluate('el => el.outerHTML')}"
+            )
+    finally:
+        for path, state in originals.items():
+            helpers.config_restore_state(smoke_vm, path, state)
+
+
+def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """issue #3583: checking both DDR checkboxes and saving stores `dns/pfb_dns_ddr` and `dns/pfb_dns_ddr_doh_443` on.
+
+    Given both stored empty and the DoH port 4443 (before-state, seeded directly), the save rewrites every setting of
+    the page and the first load seeds the unset ones, so each one is read before the page is opened and put back.
+    """
+    page = browser_page
+    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    toggle_paths = [f"{DNS_CFG}{name}" for _label, name in DDR_TOGGLES]
+    try:
+        for path in toggle_paths:
+            helpers.config_set(smoke_vm, path, "")
+        helpers.config_set(smoke_vm, DOH_PORT_CFG, "4443")
+        before = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
+        assert before == ("", ""), f"seed did not take: both DDR toggles must start Off, got {before}"
+        _open(page, webui, DNS_PAGE)
+        for _label, name in DDR_TOGGLES:
+            page.locator(f'input[name="{name}"]').check()
+
+        _save(page)
+
+        assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
+        stored = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
+        assert stored == ("on", "on"), (
+            f"stored (dns/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443): expected on and on, got {stored}"
+        )
     finally:
         for path, state in originals.items():
             helpers.config_restore_state(smoke_vm, path, state)

@@ -192,7 +192,7 @@ func (g *gateway) serveUDP(conn *net.UDPConn) {
 		}
 		wire := bytes.Clone(buf[:n])
 		src, dst := proxyEndpoints(from, local)
-		switch disp, reply := g.screen(src.Addr(), wire); disp {
+		switch disp, reply := g.screen(src.Addr(), dst.Addr(), true, wire); disp {
 		case replyNow:
 			_, _ = conn.WriteToUDPAddrPort(reply, from)
 		case toDecider:
@@ -363,6 +363,10 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		stream = tc
 	}
 	src, dst := proxyEndpoints(peer, conn.LocalAddr().(*net.TCPAddr).AddrPort())
+	var local netip.Addr // the address a plain TCP query reached; a DoT one has none
+	if tlsConf == nil {
+		local = dst.Addr()
+	}
 	header, err := proxyHeader(src, dst, true)
 	if err != nil {
 		return
@@ -409,7 +413,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 			}
 			return
 		}
-		switch disp, reply := g.screen(src.Addr(), wire); disp {
+		switch disp, reply := g.screen(src.Addr(), local, false, wire); disp {
 		case hangUp:
 			return
 		case replyNow:

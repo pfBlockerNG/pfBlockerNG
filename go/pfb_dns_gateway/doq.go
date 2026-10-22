@@ -178,7 +178,7 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local ne
 		return
 	}
 	src, dst := proxyEndpoints(peer, local)
-	disp, reply := g.screen(src.Addr(), wire)
+	disp, reply := g.screen(src.Addr(), netip.Addr{}, false, wire)
 	switch disp {
 	case discard:
 		reset(s, doqProtocolError)

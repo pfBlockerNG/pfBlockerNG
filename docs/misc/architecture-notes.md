@@ -501,7 +501,7 @@ Only an admin who deletes the block text unmoves the Resolver, and the next appl
 Custom Options (the probe that first showed the block dropped and Unbound unable to bind) is not that path; the page's save is
 exercised live by `test_the_resolver_pages_own_save_keeps_pfblockerngs_block_and_the_resolver_moved`.
 
-The pfB-DNS page's save writes its own leaves: the toggle and the twelve listener settings in the section that holds the snapshot marker, and the DNS Reply Logging preference in the DNSBL section. The Resolver move
+The pfB-DNS page's save writes its own leaves: the toggle, the twelve listener settings and the two DDR toggles in the section that holds the snapshot marker, and the DNS Reply Logging preference in the DNSBL section. The Resolver move
 rewrites that section and the unbound keys, each from the copy of config.xml its own process read at start (`write_config()`
 writes that whole copy back). Both therefore hold one named lock, `pfb_dns_config_lock()` (pfSense `try_lock()`,
 bounded at 10 s), from a fresh `config_read_file()` under it through `write_config()`: `pfb_dns_proxy_resolver()` takes
@@ -536,7 +536,7 @@ none of this applies and the predicates read Unbound as before.
 script has one launch line:
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log /bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1
---port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [--dot-listen T ... --dot-port D] [the DoH/DoQ flags below]
+--port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [--dot-listen T ... --dot-port D] [the DoH/DoQ flags below] [--ddr FQDN [--ddr-doh-443]]
 [--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
 /var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
 --module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53;
@@ -847,6 +847,8 @@ by `pfb_dns_proxy` in its command line, or by the installed path of the binary t
 (`/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-*/pfb-dns`), with the same 0/5/7 s bounds, and never signals a pid
 whose command line is neither. Pinned by
 `DnsProxyServiceTest`, `DnsProxyGatewayOnlyTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
+
+**DDR flags (issue #3583).** The pfB-DNS page's DDR section has two toggles, `dns/pfb_dns_ddr` and `dns/pfb_dns_ddr_doh_443`, both sync `local` and saved by the same save as the listener settings (`pfb_dns_proxy_listeners_stored()`; a toggle is on only for a posted `on`). `pfb_dns_proxy_service()` adds, right after the TLS flags and only while the snapshot is stored (pfB-DNS on) and `dns/pfb_dns_ddr` is On, `--ddr FQDN` (`system/hostname` + `.` + `system/domain`, quoted: `pfb_dns_proxy_ddr_flags()`) and, with `dns/pfb_dns_ddr_doh_443` On too, `--ddr-doh-443`, which leaves the port out of the DDR DoH record. The second toggle alone adds nothing, as the gateway rejects `--ddr-doh-443` without `--ddr`. A changed toggle changes the script, so a live proxy restarts on the next apply like for any other flag. The page disables the `dns/pfb_dns_ddr_doh_443` checkbox while the stored DoH port is 443 (there is no port to leave out); a disabled control is not posted, so the save keeps the stored value of that toggle while the STORED DoH port is 443 (`pfb_dns_proxy_ddr_doh_443_locked()`, the same condition the page disables it under) and takes the posted one at any other stored port. Pinned by `DnsProxyDdrSettingsTest`, `DnsProxyServiceTest` (the flags across both toggles and pfB-DNS on or off) and `PfbDnsPageWiringTest`.
 
 In forwarding mode Unbound runs
 `pfb_upstream_observer.py` (`pfb_unbound_python()` and `pfb_unbound_dnsbl()` key on the saved snapshot, never on the

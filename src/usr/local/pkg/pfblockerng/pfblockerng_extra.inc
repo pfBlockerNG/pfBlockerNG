@@ -2473,6 +2473,23 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from dns/pfb_dns_interface, only matters once DoQ is turned on',
 		],
 
+		// issue #3583: DDR (RFC 9462) answers for resolver.arpa. from pfB-DNS's gateway, and the option that leaves the port out of
+		// the DoH record they carry. Per-node values; both are applied by the next Update.
+		'dns/pfb_dns_ddr' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (the gateway does not touch resolver.arpa. names, the DNS Resolver answers them)',
+		],
+		'dns/pfb_dns_ddr_doh_443' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (the DDR DoH record names the port DoH listens on)',
+		],
+
 		// issue #3538: pfB-DNS's own listener settings; pfb_dns_proxy_seed() fills each one that is not seeded yet.
 		'dns/pfb_dns_interface' => [
 			'default'       => '',

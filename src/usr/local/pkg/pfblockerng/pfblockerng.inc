@@ -4361,8 +4361,17 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 }
 
 /**
- * The canonical stored value of each of the twelve settings from a validated POST: a toggle is on only for 'on', a
- * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated.
+ * Does the pfB-DNS page disable its "DoH on port 443" checkbox: does DoH already listen on 443 (the STORED DoH port, as the
+ * gateway reads it), so that there is no port to leave out? The save keeps the stored toggle while this holds (issue #3583).
+ */
+function pfb_dns_proxy_ddr_doh_443_locked(): bool {
+	return pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443';
+}
+
+/**
+ * The canonical stored value of each of the fourteen settings from a validated POST: a toggle is on only for 'on', a
+ * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated, and the
+ * DoH on port 443 toggle keeps its stored value while the page disables it.
  *
  * @param array<string,mixed> $post
  * @return array<string,string> config key => stored string
@@ -4380,6 +4389,11 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 	}
 	$certref = $post['pfb_dns_sslcertref'] ?? '';
 	$stored['pfb_dns_sslcertref'] = is_string($certref) ? $certref : '';
+	$stored['pfb_dns_ddr'] = pfb_filter($post['pfb_dns_ddr'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
+	// issue #3583: a control the page disables posts nothing, so its stored value stays
+	$stored['pfb_dns_ddr_doh_443'] = pfb_dns_proxy_ddr_doh_443_locked()
+	    ? PfbConfig::read('dns/pfb_dns_ddr_doh_443')->toStored()
+	    : (pfb_filter($post['pfb_dns_ddr_doh_443'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '');
 	return $stored;
 }
 
@@ -4422,6 +4436,124 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 		}
 	}
 	return $flags;
+}
+
+/**
+ * The gateway's --ddr arguments while DDR is on (dns/pfb_dns_ddr, issue #3583): the firewall's FQDN, and --ddr-doh-443 when
+ * dns/pfb_dns_ddr_doh_443 is on too. That option alone adds nothing: the gateway rejects it without --ddr.
+ */
+function pfb_dns_proxy_ddr_flags(): string {
+	if (PfbConfig::read('dns/pfb_dns_ddr') !== PfbToggle::On) {
+		return '';
+	}
+	return ' --ddr ' . escapeshellarg(config_get_path('system/hostname', 'pfSense') . '.' . config_get_path('system/domain', 'localdomain')) .
+	    ((PfbConfig::read('dns/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '');
+}
+
+// Ranges pfB-DNS never warns about (issue #3583): the private and local ones a public CA cannot certify (RFC 9462 section 4.3), and the
+// reserved, documentation, benchmarking and deprecated site-local (fec0::/10, RFC 3879 section 4) ones, where a missing SAN is not
+// actionable either.
+const PFB_DNS_PROXY_NON_PUBLIC = [
+	'0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.0.2.0/24', '192.168.0.0/16',
+	'198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'fec0::/10', '2001:db8::/32',
+];
+
+/**
+ * Is this a public address: a valid one outside every range of PFB_DNS_PROXY_NON_PUBLIC? An IPv4-mapped IPv6 address
+ * (::ffff:a.b.c.d) is classified by its IPv4 address. Compares the packed bytes (pfb_ip_in_cidr()), so spelling does not matter.
+ */
+function pfb_dns_proxy_public_address(string $address): bool {
+	if (@inet_pton($address) === FALSE) {
+		return FALSE;
+	}
+	$address = pfb_ipv4_from_mapped($address) ?? $address;
+	foreach (PFB_DNS_PROXY_NON_PUBLIC as $range) {
+		if (pfb_ip_in_cidr($address, $range)) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+/**
+ * The iPAddress SANs of a config.xml <cert> entry, as packed addresses (inet_pton bytes => TRUE) so that two spellings of one address
+ * match. A DNS SAN is not an address; a certificate that cannot be decoded or parsed has none.
+ *
+ * @param array<string,mixed> $entry
+ * @return array<string,true>
+ */
+function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
+	try {
+		$parsed = @openssl_x509_parse(pfb_dns_proxy_pem_field($entry, 'cert', 'crt'));
+	} catch (RuntimeException $e) {
+		return [];
+	}
+	while (openssl_error_string() !== FALSE) {
+		continue; // the parse leaves its reason in OpenSSL's error queue, which is the next caller's
+	}
+	// shortcut: openssl_x509_parse() gives the SANs as one text, so a crafted DNS or URI SAN containing ", IP Address:x" reads as an IP SAN
+	// and can silence the advisory for its own certificate; an entry with a NUL byte is skipped (inet_pton() throws on one). Upgrade if
+	// pfSense exposes the SANs structured.
+	$sans = [];
+	foreach (explode(', ', is_array($parsed) ? (string) ($parsed['extensions']['subjectAltName'] ?? '') : '') as $san) {
+		if (str_starts_with($san, 'IP Address:') && !str_contains($san, "\0") && ($packed = @inet_pton(substr($san, 11))) !== FALSE) {
+			$sans[$packed] = TRUE;
+		}
+	}
+	return $sans;
+}
+
+/**
+ * The pfB-DNS page's DDR certificate warnings (issue #3583), from the stored settings: with DDR on and a certificate selected, one text per
+ * public address that DoT, DoH or DoQ listens on and that is not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462
+ * section 4.2) checks the address it queried against that SAN, so it will not use those transports there. The DoH listener is left out
+ * while dns/pfb_dns_ddr_doh_443 is on and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose certificate
+ * is not visible here (on 443 they reach this listener, so it is checked). Never blocks a save.
+ *
+ * @return list<string> HTML, each text starting "DDR: " and naming the address and the transports it serves
+ */
+function pfb_dns_proxy_ddr_warnings(): array {
+	if (pfb_dns_proxy_setting('pfb_dns_ddr') !== PfbToggle::On) {
+		return [];
+	}
+	$ref = trim((string) pfb_dns_proxy_setting('pfb_dns_sslcertref'));
+	$certificate = ($ref === '') ? NULL : (lookup_cert($ref)['item'] ?? NULL);
+	if (!is_array($certificate)) {
+		return [];
+	}
+
+	// A transport listens when pfb_dns_proxy_tls_flags() gives it flags: toggle on, usable port, an interface list with an address.
+	$served = [];
+	foreach (['dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
+		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On ||
+		    ($kind === 'doh' && pfb_dns_proxy_setting('pfb_dns_ddr_doh_443') === PfbToggle::On && !pfb_dns_proxy_ddr_doh_443_locked()) ||
+		    pfb_dns_proxy_listener_port(pfb_dns_proxy_setting("pfb_dns_{$kind}_port")) === NULL) {
+			continue;
+		}
+		$interfaces = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
+		foreach (pfb_dns_proxy_interface_addresses($interfaces) as $address) {
+			if (pfb_dns_proxy_public_address($address)) {
+				$packed = (string) inet_pton($address);
+				$served[$packed] ??= ['address' => $address, 'labels' => []];
+				$served[$packed]['labels'][$label] = $label;
+			}
+		}
+	}
+
+	$sans = ($served === []) ? [] : pfb_dns_proxy_certificate_ip_sans($certificate);
+	$warnings = [];
+	foreach ($served as $packed => $listener) {
+		if (!isset($sans[$packed])) {
+			$names = array_keys($listener['labels']);
+			$last = array_pop($names);
+			$warnings[] = sprintf(
+				'DDR: %s on %s will not be used by clients that verify DDR, because the selected SSL/TLS Certificate has no IP address (iPAddress) SAN for it.',
+				($names === []) ? $last : implode(', ', $names) . " and {$last}",
+				htmlspecialchars($listener['address'])
+			);
+		}
+	}
+	return $warnings;
 }
 
 /**
@@ -4728,6 +4860,8 @@ function pfb_dns_proxy_certificate_sync(): void {
  * transport is wanted. A start that finds the file missing, which is /var after a boot with RAM disks, has PHP write it first, and
  * forgets what was pushed to the proxy it replaces. DoT, DoH and DoQ each listen on their own interface list's addresses and on loopback
  * (--dot-listen, --doh-listen, --doq-listen) at their own port (pfb_dns_proxy_tls_flags()).
+ * DDR (RFC 9462): with dns/pfb_dns_ddr On the line also carries, after the TLS flags, --ddr FQDN (system/hostname.system/domain) and, with
+ * dns/pfb_dns_ddr_doh_443 On too, --ddr-doh-443 (pfb_dns_proxy_ddr_flags()); a changed setting changes the script and restarts the proxy.
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
@@ -4764,6 +4898,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted());
 	pfb_dns_proxy_certificate_refresh($tls);
 	$tlsFlags = ($saved === NULL) ? '' : pfb_dns_proxy_tls_flags($warnings);
+	$ddrFlags = ($saved === NULL) ? '' : pfb_dns_proxy_ddr_flags();
 	$replylog = (($pfb['dnsbl_py_reply'] ?? NULL) === PfbToggle::On) ? ' --reply-log' : '';
 	$module = !pfb_dnsbl_active() ? " --no-module{$replylog}" : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
 
@@ -4772,7 +4907,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
 	$wrapper = escapeshellarg("{$proxyDir}/pfb_dns.sh");
 	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" .
-	    " --tls-pem {$cert} --ctl-socket {$ctl}{$tlsFlags}" . $module .
+	    " --tls-pem {$cert} --ctl-socket {$ctl}{$tlsFlags}{$ddrFlags}" . $module .
 	    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready .
 	    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	// The command lines of the processes this script keeps and signals: the supervisor and the decider behind the gateway
@@ -5475,7 +5610,7 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
 
 /**
  * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
- * reload, and restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ
+ * reload, and restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ/DDR
  * settings, so a new address or a changed setting is not served until the proxy restarts. Whatever it did, the proxy must
  * then be READY: one that is alive but never published its marker (restarted by its supervisor every few seconds) fails
  * the activation and is rolled back, which a pidfile alone would never notice.
@@ -5515,10 +5650,10 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		$rc_changed = $before !== @file_get_contents(PFB_DNS_PROXY_RCFILE);
 		if ($deferred) {
 			if ($rc_changed) {
-				pfb_dns_proxy_defer_restart('its listen addresses or DoH/DoQ settings changed');
+				pfb_dns_proxy_defer_restart('its listen addresses or DoH/DoQ/DDR settings changed');
 			}
 		} elseif ($rc_changed) {
-			$why = 'its listen addresses or DoH/DoQ settings changed';
+			$why = 'its listen addresses or DoH/DoQ/DDR settings changed';
 		} elseif (file_exists($pfb['dns_proxy_restart_pending'])) {
 			$why = 'a restart was deferred to this update';
 		} elseif (pfb_dns_proxy_ready()) {

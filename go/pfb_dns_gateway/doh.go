@@ -172,7 +172,7 @@ func (g *gateway) serveDoHRequest(w http.ResponseWriter, r *http.Request, truste
 	}
 	info := r.Context().Value(connInfoKey{}).(connInfo)
 	src, dst := proxyEndpoints(requestClient(r, info, trusted), info.local)
-	disp, reply := g.screen(src.Addr(), wire)
+	disp, reply := g.screen(src.Addr(), netip.Addr{}, false, wire)
 	switch disp {
 	case discard:
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)

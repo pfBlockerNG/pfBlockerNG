@@ -460,7 +460,7 @@ final class CfgGatewayTest extends TestCase
 	/** @return array<string,array{string}> */
 	public static function dnsProxyListenerToggleKeys(): array
 	{
-		return ['DoT' => ['dns/pfb_dns_dot'], 'DoH' => ['dns/pfb_dns_doh'], 'DoQ' => ['dns/pfb_dns_doq']];
+		return ['DoT' => ['dns/pfb_dns_dot'], 'DoH' => ['dns/pfb_dns_doh'], 'DoQ' => ['dns/pfb_dns_doq'], 'DDR' => ['dns/pfb_dns_ddr'], 'DDR DoH on 443' => ['dns/pfb_dns_ddr_doh_443']];
 	}
 
 	/** issue #3513: DoH/DoQ are opt-in; an absent key must leave them off. */
@@ -498,6 +498,44 @@ final class CfgGatewayTest extends TestCase
 		PfbConfig::write($key, $value);
 		$this->assertSame($value, config_get_path($path), "write stores {$key} verbatim");
 		$this->assertSame($value, PfbConfig::read($key), "write(read(v)) == v for {$key}");
+	}
+
+	/** @return array<string,array{string}> */
+	public static function ddrKeys(): array
+	{
+		return ['DDR' => ['dns/pfb_dns_ddr'], 'DDR DoH on port 443' => ['dns/pfb_dns_ddr_doh_443']];
+	}
+
+	/** issue #3583: the DDR toggles are per-node PfbToggles, default Off, with no grandfather. */
+	#[DataProvider('ddrKeys')]
+	public function testTheDdrTogglesAreRegisteredLocalWithToggleAdaptersNoGrandfatherAndAnEmptyDefault(string $key): void
+	{
+		$entry = pfb_cfg_registry()[$key] ?? NULL;
+		$this->assertIsArray($entry, "{$key} must be registered");
+		$this->assertSame('', $entry['default']);
+		$this->assertSame('local', $entry['sync'], "{$key} never leaves the node");
+		$this->assertSame('pfb_cfg_toggle_read', $entry['read_adapter']);
+		$this->assertSame('pfb_cfg_toggle_write', $entry['write_adapter']);
+		$this->assertArrayNotHasKey('grandfather', $entry);
+		$this->assertNotSame('', $entry['no_grandfather'] ?? '', 'the entry records why no grandfather is needed');
+	}
+
+	/** issue #3583: the DDR toggles are opt-in; On stores 'on', Off stores the empty token. */
+	#[DataProvider('ddrKeys')]
+	public function testTheDdrTogglesDefaultOffAndRoundTrip(string $key): void
+	{
+		$path = 'installedpackages/pfblockerngdns/config/0/' . substr($key, 4);
+
+		$this->assertNull(config_get_path($path), 'before: the key must be absent');
+		$this->assertSame(PfbToggle::Off, PfbConfig::read($key), 'absent -> Off');
+
+		PfbConfig::write($key, PfbToggle::On);
+		$this->assertSame('on', config_get_path($path));
+		$this->assertSame(PfbToggle::On, PfbConfig::read($key));
+
+		PfbConfig::write($key, PfbToggle::Off);
+		$this->assertSame('', config_get_path($path));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read($key));
 	}
 
 	/**
@@ -1654,6 +1692,9 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dns_doq',
 			'pfb_dns_doq_port',
 			'pfb_dns_doq_interface',
+			// issue #3583: pfB-DNS's DDR toggle and its DoH on port 443 toggle
+			'pfb_dns_ddr',
+			'pfb_dns_ddr_doh_443',
 			// issue #3538: pfB-DNS's own listener settings (DoT, the listener interface, the certificate)
 			'pfb_dns_interface',
 			'pfb_dns_dot',
