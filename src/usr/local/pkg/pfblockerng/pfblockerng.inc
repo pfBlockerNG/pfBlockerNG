@@ -4451,10 +4451,11 @@ function pfb_dns_proxy_ddr_flags(): string {
 }
 
 // Ranges pfB-DNS never warns about (issue #3583): the private and local ones a public CA cannot certify (RFC 9462 section 4.3), and the
-// reserved, documentation and benchmarking ones, where a missing SAN is not actionable either.
+// reserved, documentation, benchmarking and deprecated site-local (fec0::/10, RFC 3879 section 4) ones, where a missing SAN is not
+// actionable either.
 const PFB_DNS_PROXY_NON_PUBLIC = [
 	'0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.0.2.0/24', '192.168.0.0/16',
-	'198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '::/128', '::1/128', 'fc00::/7', 'fe80::/10', '2001:db8::/32',
+	'198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'fec0::/10', '2001:db8::/32',
 ];
 
 /**

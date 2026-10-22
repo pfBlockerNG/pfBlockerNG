@@ -141,6 +141,7 @@ final class DnsProxyDdrWarningTest extends TestCase
 				[], ['192.168.1.1', 'fd12:3456::1', '172.31.255.254', '100.127.255.254'], [],
 			],
 			'reserved, documentation and benchmarking addresses' => [$reserved, [], ['0.0.0.1', '::', '192.0.2.1', '2001:db8::1', '198.18.0.1'], []],
+			'deprecated site-local address (fec0::/10)' => [['lan' => ['fec0::1']], [], ['fec0::1'], []],
 			'a public address beside non-public ones is the only one named' => [
 				['lan' => ['192.168.1.1', 'fd12:3456::1'], 'wan' => ['8.8.8.8']], [], ['192.168.1.1', 'fd12:3456::1', '8.8.8.8'], ['8.8.8.8'],
 			],
@@ -362,7 +363,9 @@ final class DnsProxyDdrWarningTest extends TestCase
 			'::/128' => ['::', '0:0:0:0:0:0:0:0', NULL, '::2'],
 			'::1/128' => ['::1', '0:0:0:0:0:0:0:1', NULL, '::2'],
 			'fc00::/7' => ['fc00::', 'fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe00::'],
-			'fe80::/10' => ['fe80::', 'febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fec0::1'],
+			'fe80::/10' => ['fe80::', 'febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff', NULL],
+			// deprecated site-local (RFC 3879 section 4): adjoins fe80::/10, so no address just below is public
+			'fec0::/10' => ['fec0::', 'feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', NULL, 'ff00::'],
 			'2001:db8::/32' => ['2001:db8::', '2001:db8:ffff:ffff:ffff:ffff:ffff:ffff', '2001:db7:ffff::', '2001:db9::'],
 		] as $range => [$first, $last, $below, $above]) {
 			$rows["{$range} first"] = [$first, FALSE];
@@ -370,7 +373,9 @@ final class DnsProxyDdrWarningTest extends TestCase
 			if ($below !== NULL) {
 				$rows["just below {$range}"] = [$below, TRUE];
 			}
-			$rows["just above {$range}"] = [$above, TRUE];
+			if ($above !== NULL) {
+				$rows["just above {$range}"] = [$above, TRUE];
+			}
 		}
 		foreach (['8.8.8.8', '1.1.1.1', '2606:4700::1', '2001:4860:4860::8888', 'fbff:ffff::'] as $address) {
 			$rows["public {$address}"] = [$address, TRUE];

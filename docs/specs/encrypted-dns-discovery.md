@@ -279,7 +279,8 @@ is classified public and is not an `iPAddress` SAN of the selected certificate (
 needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses, not strings.
 
 - Never warned (not public): 127.0.0.0/8, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10,
-  169.254.0.0/16, fe80::/10, fc00::/7, plus the reserved ranges 0.0.0.0/8, ::/128, the documentation ranges
+  169.254.0.0/16, fe80::/10, fc00::/7, plus the reserved ranges 0.0.0.0/8, ::/128, the deprecated site-local range
+  fec0::/10 ([RFC 3879 §4](https://www.rfc-editor.org/rfc/rfc3879#section-4)), the documentation ranges
   192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 and 2001:db8::/32, and the benchmarking range 198.18.0.0/15. An
   IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is classified by its embedded IPv4 address. Every other address is public.
   RFC 9462 §4.3 names the private ranges (RFC 1918, ULA, link-local) as the ones a public CA cannot certify; the rest
@@ -345,7 +346,7 @@ These apply to the follow-up work; this specification is met when it is on `deve
    | Public listener address, certificate has the matching `iPAddress` SAN | No warning |
    | Same address written differently (`2606:4700::1` listener, SAN `2606:4700:0:0:0:0:0:1`) | No warning: SANs are compared as parsed addresses, not strings |
    | Only loopback, private, CGNAT, link-local or ULA listener addresses | No warning |
-   | Reserved or documentation address (`0.0.0.1`, `::`, `192.0.2.1`, `2001:db8::1`, `198.18.0.1`) | No warning |
+   | Reserved or documentation address (`0.0.0.1`, `::`, `192.0.2.1`, `2001:db8::1`, `198.18.0.1`, `fec0::1`) | No warning |
    | `::ffff:10.0.0.1` (classified by the embedded IPv4) | No warning |
    | `::ffff:8.8.8.8` with no matching SAN | Warning |
    | `dns/pfb_dns_ddr_doh_443` on, the DoH listener serves a public address missing from the certificate | No warning for the DoH listener; DoT and DoQ listeners are still checked |
