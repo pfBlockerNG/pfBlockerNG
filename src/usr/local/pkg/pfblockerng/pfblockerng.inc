@@ -5525,12 +5525,19 @@ function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL): ?b
  * @return bool TRUE iff the DNS Resolver is restored and Unbound was restarted with its previous integration
  */
 function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL, ?string $expected_saved = NULL, ?int $since = NULL): bool {
-	global $pfb;
+	global $g, $pfb;
 
 	// The marker as it stands before this rollback waits for anything: a snapshot another recovery consumed or replaced meanwhile is not ours
 	$expected_saved ??= (string) PfbConfig::read('dns/pfb_dns_saved');
-	$operation = try_lock('pfb_dns_proxy_rollback', PFB_DNS_PROXY_START_WAIT);
-	if (!is_resource($operation)) {
+	// The operation lock is this rollback's own file in the shared state directory, opened close-on-exec: a process this rollback execs
+	// (the Unbound start command, and whatever it leaves running) does not inherit the descriptor, so it cannot keep the lock taken after
+	// the rollback ends. Close-on-exec only: a fork's copy lives until its exec or exit. The wait is pfb_flock_bounded()'s: a non-blocking
+	// probe, then a bounded wait of PFB_DNS_PROXY_START_WAIT seconds. A file that cannot be opened, and a wait that expires, are attempts that did nothing.
+	$operation = @fopen("{$g['tmp_path']}/pfb_dns_proxy_rollback.lock", 'ce');
+	if ($operation === FALSE || !pfb_flock_bounded($operation, LOCK_EX, PFB_DNS_PROXY_START_WAIT)) {
+		if ($operation !== FALSE) {
+			fclose($operation);
+		}
 		pfb_dns_proxy_rollback_notice('pfB-DNS: the DNS proxy recovery lock could not be acquired within ' .
 		    PFB_DNS_PROXY_START_WAIT . ' seconds; another recovery may still be running. This rollback attempt changed no settings or services. ' .
 		    'Check the recovery notices and DNS service state, then run an Update if recovery is still needed.');
