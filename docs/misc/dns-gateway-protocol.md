@@ -8,7 +8,9 @@ of them is a bug. Issues #3513, #3517.
 The gateway owns every client-facing and Unbound-facing socket. The decider owns the DNSBL decision: for each client
 query it either answers itself (block answer, FORMERR, SafeSearch rewrite) or asks the gateway to put a wire on the
 way to Unbound and hand the reply back, so reply handling (CNAME validation, reply logging, the SafeSearch chase)
-stays in the decider: the gateway never unpacks a DNS message.
+stays in the decider. The gateway never unpacks a DNS message, except with `--ddr`: it then parses the question of each
+query and answers the ones at or under `resolver.arpa.` itself, before the decider (see the `## DDR` section of
+[dns-gateway-transports.md](dns-gateway-transports.md)); every other query goes to the decider as above.
 
 ## Transport
 

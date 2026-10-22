@@ -431,6 +431,10 @@ var ddrOtherNames = []struct {
 	{"the apex in capitals", "RESOLVER.ARPA.", dnsmessage.TypeA, ddrNODATA},
 	{"the apex SOA", "resolver.arpa.", dnsmessage.TypeSOA, ddrWant{answers: []string{ddrSOA}}},
 	{"the apex NS", "resolver.arpa.", dnsmessage.TypeNS, ddrWant{answers: []string{ddrNS}}},
+	{"SOA below the apex", "foo.resolver.arpa.", dnsmessage.TypeSOA, ddrNODATA},
+	{"NS below the apex", "foo.resolver.arpa.", dnsmessage.TypeNS, ddrNODATA},
+	{"SOA at _dns.resolver.arpa.", ddrAsk, dnsmessage.TypeSOA, ddrNODATA},
+	{"NS at _dns.resolver.arpa.", ddrAsk, dnsmessage.TypeNS, ddrNODATA},
 }
 
 func TestDDROtherNamesAndTypesGetNODATAWithTheSOAAndTheApexItsSOAAndNS(t *testing.T) {
@@ -453,6 +457,48 @@ func TestDDRMatchesTheZoneCaseInsensitivelyAndEchoesTheNameAsReceived(t *testing
 	requireDDR(t, query, reply, ddrWant{svcb: []ddrSVCB{ddrDoTRec(ddrFQDN, 0, ddrL4)}, additional: []string{ddrAddrRR(ddrFQDN, ddrL4)}})
 	if !bytes.Contains(reply, []byte("\x04_DNS\x08Resolver\x04ARPA\x00")) {
 		t.Fatalf("the question must keep the case the client sent (0x20 mixed case): %x", reply)
+	}
+}
+
+// The apex SOA and NS answers are owned by the name as asked (as the SVCB answer is); the SOA of a negative answer is always
+// owned by the zone name in lower case.
+func TestDDRApexSOAAndNSAnswersEchoTheCaseOfTheQuestion(t *testing.T) {
+	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
+	local := netip.MustParseAddr(ddrL4)
+	for _, c := range []struct {
+		typ  dnsmessage.Type
+		want ddrWant
+	}{
+		{dnsmessage.TypeSOA, ddrWant{answers: []string{"Resolver.ARPA." + strings.TrimPrefix(ddrSOA, "resolver.arpa.")}}},
+		{dnsmessage.TypeNS, ddrWant{answers: []string{"Resolver.ARPA." + strings.TrimPrefix(ddrNS, "resolver.arpa.")}}},
+		{dnsmessage.TypeA, ddrNODATA},
+	} {
+		query := ddrQuery(t, 0x0DD9, "Resolver.ARPA.", c.typ, 0)
+		requireDDR(t, query, d.answer(query, local, true), c.want)
+	}
+}
+
+// Only class IN is designated: any other class gets NODATA and the SOA, for the designation name and the apex alike.
+func TestDDRNonINClassGetsNODATAWithTheSOA(t *testing.T) {
+	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
+	local := netip.MustParseAddr(ddrL4)
+	for _, class := range []dnsmessage.Class{dnsmessage.ClassCHAOS, dnsmessage.ClassANY} {
+		for _, q := range []struct {
+			name string
+			typ  dnsmessage.Type
+		}{{ddrAsk, dnsmessage.TypeSVCB}, {"resolver.arpa.", dnsmessage.TypeSOA}, {"resolver.arpa.", dnsmessage.TypeNS}} {
+			t.Run(fmt.Sprintf("%v %s %v", class, q.name, q.typ), func(t *testing.T) {
+				msg := dnsmessage.Message{
+					Header:    dnsmessage.Header{ID: 0x0DDA, RecursionDesired: true},
+					Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(q.name), Type: q.typ, Class: class}},
+				}
+				query, err := msg.Pack()
+				if err != nil {
+					t.Fatal(err)
+				}
+				requireDDR(t, query, d.answer(query, local, true), ddrNODATA)
+			})
+		}
 	}
 }
 
@@ -568,6 +614,38 @@ func TestDDRUDPReplyOverTheLimitIsTruncatedAndAStreamReplyIsNot(t *testing.T) {
 	}
 }
 
+// screen passes udp=true for the plain UDP socket: without EDNS a reply over 512 bytes is truncated there, and whole over TCP.
+func TestDDRPlainUDPReplyOverTheLimitIsTruncatedAndTCPGetsTheFullAnswer(t *testing.T) {
+	target := ddrLongName(49, 49, 49, 49, 3) // 203 characters: three records of about 250 bytes
+	r := newDDRRigFor(t, target, false)
+	query := ddrQuery(t, 0x0DDB, ddrAsk, dnsmessage.TypeSVCB, 0)
+	fqdn := target + "."
+
+	reply := r.roundTrip(transport{"udp", false}, clientAllowed, query)
+	if len(reply) > 512 {
+		t.Fatalf("a UDP reply of %d bytes is over 512", len(reply))
+	}
+	m := parseReply(t, reply)
+	if !m.Truncated || !m.Response || !m.Authoritative || m.ID != 0x0DDB || len(m.Answers)+len(m.Authorities)+len(m.Additionals) != 0 {
+		t.Fatalf("a UDP reply over the limit is the header with TC set and no record: %+v", m)
+	}
+
+	want := ddrWant{
+		svcb: []ddrSVCB{
+			ddrDoHRec(fqdn, r.doh.Port(), "127.0.0.1", ddrDoHPath),
+			ddrDoTRec(fqdn, r.dot.Port(), "127.0.0.1"),
+			ddrDoQRec(fqdn, r.doq.Port(), "127.0.0.1"),
+		},
+		additional: []string{ddrAddrRR(fqdn, "127.0.0.1")},
+	}
+	full := r.roundTrip(transport{"tcp", true}, clientAllowed, query)
+	if len(full) <= 512 {
+		t.Fatalf("fixture: the full reply is %d bytes, not over 512: the case proves nothing", len(full))
+	}
+	requireDDR(t, query, full, want)
+	r.requireDeciderSawOnlyTheBarrier()
+}
+
 // --- wire that is not ours ---
 
 func ddrWires(t *testing.T) map[string][]byte {
@@ -660,6 +738,11 @@ type ddrRig struct {
 // goroutine that reads it starts (production does the same: start() sets g.ddr before serving).
 func newDDRRig(t *testing.T, doh443 bool) *ddrRig {
 	t.Helper()
+	return newDDRRigFor(t, ddrTarget, doh443)
+}
+
+func newDDRRigFor(t *testing.T, target string, doh443 bool) *ddrRig {
+	t.Helper()
 	m := newTLSMaterial(t)
 	dotLn, err := bindTCP("127.0.0.1", 0)
 	if err != nil {
@@ -675,7 +758,7 @@ func newDDRRig(t *testing.T, doh443 bool) *ddrRig {
 	}
 	d := &ddrRig{m: m,
 		dot: dotLn.Addr().(*net.TCPAddr).AddrPort(), doh: dohLn.Addr().(*net.TCPAddr).AddrPort(), doq: doqConn.LocalAddr().(*net.UDPAddr).AddrPort()}
-	ddrAnswers, err := newDDR(ddrTarget, doh443, m.certs, []netip.AddrPort{d.dot}, []netip.AddrPort{d.doh}, []netip.AddrPort{d.doq})
+	ddrAnswers, err := newDDR(target, doh443, m.certs, []netip.AddrPort{d.dot}, []netip.AddrPort{d.doh}, []netip.AddrPort{d.doq})
 	if err != nil {
 		t.Fatal(err)
 	}
