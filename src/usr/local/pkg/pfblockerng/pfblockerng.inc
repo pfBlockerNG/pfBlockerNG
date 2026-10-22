@@ -3643,6 +3643,9 @@ if (!defined('PFB_DNS_PROXY_RCFILE')) {
 if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
 	define('PFB_DNS_PROXY_SOCKSTAT', '/usr/bin/sockstat');
 }
+if (!defined('PFB_DNS_PROXY_PS')) {
+	define('PFB_DNS_PROXY_PS', '/bin/ps');
+}
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
@@ -5206,9 +5209,15 @@ function pfb_dns_proxy_upstream_address(): string {
 	return get_interface_ip('lo0') === '127.0.0.1' ? '127.0.0.1' : '::1';
 }
 
-/** The actual rc upstream must have both transports owned by the live Unbound pidfile's process. */
+/**
+ * The upstream the RUNNING gateway forwards to must have both transports owned by the live Unbound pidfile's process. The endpoint
+ * is the one in the command line the gateway was started with, read from the process table (PFB_DNS_PROXY_PS) for the PID the ready
+ * marker names; the rc script is not consulted, because an unapplied update, a package upgrade or an orphaned Resolver leaves it out of
+ * step with the process. Anything that cannot be established (no such process, another binary, no single --upstream, an unusable
+ * endpoint) fails closed.
+ */
 function pfb_dns_proxy_upstream_ready(): bool {
-	global $g;
+	global $g, $pfb;
 
 	$pidfile = "{$g['varrun_path']}/unbound.pid";
 	if (!isvalidpid($pidfile)) {
@@ -5219,10 +5228,19 @@ function pfb_dns_proxy_upstream_ready(): bool {
 		return FALSE;
 	}
 	$pid = rtrim($pid, "\n");
-	$rc = (string) @file_get_contents(PFB_DNS_PROXY_RCFILE);
-	if (preg_match('~^[ \t]*/usr/sbin/daemon .*$~m', $rc, $daemon) !== 1 ||
-	    preg_match("~[ \t]--upstream[ \t]+(?:'([^']*)'|\"([^\"]*)\"|([^ \t]+))(?=[ \t]|\$)~",
-	    $daemon[0], $upstream, PREG_UNMATCHED_AS_NULL) !== 1) {
+	$gateway = (string) @file_get_contents($pfb['dns_proxy_ready']);
+	if (preg_match('/\A[1-9][0-9]*\n?\z/', $gateway) !== 1) {
+		return FALSE;
+	}
+	$lines = [];
+	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_PS) . ' -ww -o args= -p ' . escapeshellarg(rtrim($gateway, "\n")),
+	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
+		return FALSE;
+	}
+	$command = trim(implode("\n", $lines));
+	if (preg_match('~\A' . preg_quote(PFB_DNS_PROXY_DIR, '~') . '/bin/freebsd-(?:amd64|arm64)/pfb-dns(?=[ \t]|\z)~', $command) !== 1 ||
+	    substr_count($command, '--upstream') !== 1 ||
+	    preg_match("~[ \t]--upstream[ \t]+(?:'([^']*)'|\"([^\"]*)\"|([^ \t]+))(?=[ \t]|\$)~", $command, $upstream, PREG_UNMATCHED_AS_NULL) !== 1) {
 		return FALSE;
 	}
 	$argument = $upstream[1] ?? $upstream[2] ?? $upstream[3];
@@ -5819,6 +5837,12 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 			restart_service('pfb_dns_proxy');
 			unlink_if_exists($pfb['dns_proxy_restart_pending']);
 		}
+	}
+	// A deferred pass that acted on nothing keeps a gateway that is ready as it is: the package operation does not judge its
+	// upstream; the tick and the boot check do, with their rollback (issue #3560 D-a).
+	if ($deferred && !$acted && pfb_dns_proxy_ready()) {
+		pfb_dns_proxy_startup_check(TRUE, $since);
+		return TRUE;
 	}
 	$ready = pfb_dns_proxy_confirm_ready($since);
 	if ($acted && $ready) {
