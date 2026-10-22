@@ -25,7 +25,7 @@ function installJQueryStub() {
 	var state = {};
 	function stub(sel) {
 		if (!state[sel]) {
-			state[sel] = { class: null, title: null };
+			state[sel] = { class: null, title: null, closest: null, cellTitle: null };
 		}
 		var record = state[sel];
 		var chain = {
@@ -40,6 +40,19 @@ function installJQueryStub() {
 					record.title = val;
 				}
 				return chain;
+			},
+			// The element .closest() would reach, recorded with the title written onto it
+			closest: function(ancestor) {
+				record.closest = ancestor;
+				var cell = {
+					attr: function(name, val) {
+						if (name === 'title') {
+							record.cellTitle = val;
+						}
+						return cell;
+					},
+				};
+				return cell;
 			},
 		};
 		return chain;
@@ -242,7 +255,7 @@ test('pfBlockerNG_fetch_new_widget_callback: PFBSTATUS payload preserves the PFB
 			'PFBSTATUS fa-solid fa-check-circle text-success',
 			'the PFBSTATUS anchor class must survive the AJAX class update',
 		);
-		assert.equal(state['.PFBSTATUS'].title, 'pfBlockerNG is Active.');
+		assertCellTitle(state['.PFBSTATUS'], 'pfBlockerNG is Active.');
 	} finally {
 		uninstallJQueryStub();
 	}
@@ -258,17 +271,26 @@ test('pfBlockerNG_fetch_new_widget_callback: DNSBLSTATUS payload preserves the D
 			'DNSBLSTATUS fa-solid fa-exclamation-circle text-warning',
 			'the DNSBLSTATUS anchor class must survive the AJAX class update',
 		);
-		assert.equal(state['.DNSBLSTATUS'].title, 'DNSBL is Inactive.');
+		assertCellTitle(state['.DNSBLSTATUS'], 'DNSBL is Inactive.');
 	} finally {
 		uninstallJQueryStub();
 	}
 });
 
+// The renderer puts each status's hover title on its <td>, around the icon and the label; a poll must
+// rewrite that same title (Codex review on #3589), never a second one on the icon that the cell's
+// stale title would contradict everywhere but over the icon itself.
+function assertCellTitle(record, title) {
+	assert.equal(record.closest, 'td', 'the title is written onto the icon\'s cell');
+	assert.equal(record.cellTitle, title);
+	assert.equal(record.title, null, 'and not onto the icon, where it would shadow the cell\'s');
+}
+
 // Scenario: the pfB-DNS status row (issue #3588) polls like the IP and DNSBL rows.
 //
 // Given the widget renders one icon per pfB-DNS cell anchored "PFBDNSSTATUS_<cell>",
 // When the AJAX payload carries only the icon classes and the title for a cell,
-// Then the anchor class is re-applied and the title set, as for PFBSTATUS (issue #714);
+// Then the anchor class is re-applied and the cell's title set, as for PFBSTATUS (issue #714);
 // and a status anchor outside the known set is ignored, so a payload never picks the selector.
 
 test('pfBlockerNG_fetch_new_widget_callback: PFBDNSSTATUS payload preserves the cell anchor class and sets the title', () => {
@@ -281,7 +303,7 @@ test('pfBlockerNG_fetch_new_widget_callback: PFBDNSSTATUS payload preserves the 
 			'PFBDNSSTATUS_dot fa-solid fa-exclamation-circle text-warning',
 			'the PFBDNSSTATUS_dot anchor class must survive the AJAX class update',
 		);
-		assert.equal(state['.PFBDNSSTATUS_dot'].title, 'DoT: 1 of 2 listener rows are not listening');
+		assertCellTitle(state['.PFBDNSSTATUS_dot'], 'DoT: 1 of 2 listener rows are not listening');
 	} finally {
 		uninstallJQueryStub();
 	}

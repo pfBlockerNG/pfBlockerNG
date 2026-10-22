@@ -89,7 +89,8 @@ function pfBlockerNG_fetch_new_widget_callback(callback_data) {
 					// payload carries only the icon class, and overwriting the whole class
 					// attribute would drop the anchor so the NEXT poll's selector matches
 					// nothing (issue #714). The regex keeps payload text out of the selector.
-					$('.' + row_split[0]).attr('class', row_split[0] + ' ' + row_split[1]).prop('title', row_split[2]);
+					// The title lives on the icon's cell, where the widget renders it.
+					$('.' + row_split[0]).attr('class', row_split[0] + ' ' + row_split[1]).closest('td').attr('title', row_split[2]);
 				}
 			}
 			else if (row_cnt > 4) {
