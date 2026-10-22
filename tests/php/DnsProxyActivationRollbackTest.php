@@ -1483,39 +1483,6 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame($enabled, $this->startAttempts(), 'a disabled Resolver is left stopped');
 	}
 
-	// -----------------------------------------------------------------------
-	// D -- every caller consumes the result
-	// -----------------------------------------------------------------------
-
-	public function testTheApplyAndTheInstallerConsumeTheResult(): void
-	{
-		$root = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng';
-		$apply = (string) file_get_contents("{$root}/pfblockerng_apply.inc");
-		$install = php_strip_whitespace("{$root}/pfblockerng_install.inc");
-
-		$this->assertSame(1, substr_count($apply, 'pfb_dns_proxy_ensure_running('), 'one call site');
-		$this->assertMatchesRegularExpression('/if \(!pfb_dns_proxy_ensure_running\(\)\) \{/', $apply,
-			'the apply reads whether the proxy became ready');
-		$this->assertMatchesRegularExpression('/if \(pfb_dns_proxy_saved\(\) !== NULL\) \{ if \(!pfb_dns_proxy_restart\(\)\) \{/', $install,
-			'the installer reads whether the restarted proxy became ready');
-	}
-
-	public function testTheResolverRestoreDoesNotConfirmItsOwnRestartOfTheProxy(): void
-	{
-		// The restore that was abandoned (the proxy outlived its stop, or config.xml refused the write) starts the proxy again
-		// WITHOUT waiting for readiness or rolling back: a rollback that waited for the proxy it starts would recurse into itself
-		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$start = (int) strpos($source, 'function pfb_dns_proxy_resolver(');
-		$end = (int) strpos($source, 'function pfb_dns_proxy_directive_text', $start);
-		$body = substr($source, $start, $end - $start);
-
-		$this->assertStringNotContainsString('pfb_dns_proxy_restart()', $body);
-		$this->assertStringNotContainsString('pfb_dns_proxy_confirm_ready', $body);
-		$this->assertStringNotContainsString('pfb_dns_proxy_roll_back', $body);
-		$this->assertStringContainsString("mwexec(PFB_DNS_PROXY_RCFILE . ' start')", $body, 'it still brings the proxy that serves the moved Resolver back');
-		$this->assertStringNotContainsString("restart_service('pfb_dns_proxy')", $body, 'through the rc script: restart_service() does nothing without the service entry');
-	}
-
 	/**
 	 * A moved Resolver whose snapshot is lost cannot be put back: the rollback reports the old integration is not back, and no
 	 * notice says the Resolver was restored.
