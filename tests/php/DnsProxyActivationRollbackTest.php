@@ -585,10 +585,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		$this->assertNotEmpty($this->lockHeldWhileWaiting, 'before: PHP did probe the proxy while waiting');
 		$this->assertSame([], array_keys(array_filter($this->lockHeldWhileWaiting)), 'the lock was free at every probe of the wait');
-		$locks = array_values(array_filter($GLOBALS['pfb_test_lock_events'], static fn (array $e): bool => $e[0] === 'try_lock'));
-		$unlocks = array_values(array_filter($GLOBALS['pfb_test_lock_events'], static fn (array $e): bool => $e[0] === 'unlock'));
-		$this->assertCount(count($locks), $unlocks, 'every lock taken by the rollback was released');
 		$this->assertFalse((bool) $GLOBALS['pfb_test_lock_held'], 'and none is still held');
+		$this->assertSame([], $GLOBALS['pfb_test_lock_holders'], 'and no other lock is held');
+		$this->assertTrue($this->freshlyLockable($this->operationLockPath()), 'and the rollback gave the operation lock, the kernel\'s, back');
 	}
 
 	public function testTheSameApplyDoesNotEnableOrStartItAgainAfterTheRollback(): void
@@ -2013,16 +2012,26 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	public function testAnOperationLockHeldElsewhereStopsTheRecoveryBeforeAnyWriteStopOrRestore(): void
 	{
-		// Given a moved Resolver and a proxy that never serves, while another recovery holds the operation lock
+		// Given a moved Resolver and a proxy that never serves, while another recovery holds the operation lock: the kernel's, on the file every recovery of this box opens
 		$this->activate(TRUE);
 		$this->proxyLivesButNeverServes();
 		$this->configXmlOnDisk();
+		$lockFile = $this->operationLockPath();
+		$other = fopen($lockFile, 'c');
+		$this->assertTrue(flock($other, LOCK_EX | LOCK_NB), 'before: the other recovery takes the operation lock');
+		// The shared double's named failure only bridges a rollback that still takes this lock through try_lock(); the file is held for real either way
 		$GLOBALS['pfb_test_try_lock_fail_names'] = ['pfb_dns_proxy_rollback' => TRUE];
+		$this->assertFalse($this->freshlyLockable($lockFile, $timedOut), 'before: the operation lock file is held for real');
+		$this->assertTrue($timedOut, 'before: by its holder, not by a flock() error');
 		$snapshot = (string) config_get_path(self::SAVED, '');
 		$moved = config_get_path('unbound');
 
 		// When this recovery is asked to roll back
-		$ok = pfb_dns_proxy_roll_back();
+		try {
+			$ok = pfb_dns_proxy_roll_back();
+		} finally {
+			fclose($other);
+		}
 
 		// Then it says so and does nothing: no write, no stop, no restore, no success claim
 		$this->assertFalse($ok);
@@ -2305,9 +2314,102 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	/**
+	 * A recovery that dies while the Unbound its rollback started keeps running (issue #3556). The rollback holds the operation lock
+	 * across the Unbound restart, and the restart is the production launcher's: a PHP -r supervisor started with proc_open, which
+	 * runs the start command through passthru(). The command here leaves a daemon behind that outlives the supervisor and the
+	 * recovery, as Unbound does. Whatever the lock's descriptor lets that daemon inherit, it keeps the lock taken after its owner
+	 * is gone, and every later recovery of this box finds it held. The recovery is a real process, held at the notice that reports
+	 * its rollback finished and killed there; the daemon is a real process of its own, on its own control socket.
+	 */
+	public function testTheOperationLockDiesWithItsOwnerWhileTheUnboundItStartedStillRuns(): void
+	{
+		// Given a rollback that has finished its restore, its owner held with the operation lock still taken, and the Unbound it started alive
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$dir = sys_get_temp_dir() . '/pfb_dns_race_' . bin2hex(random_bytes(6));
+		mkdir($dir, 0700, TRUE);
+		$this->writeRaceState($dir);
+		$nonce = bin2hex(random_bytes(8));
+		$lockFile = "{$dir}/pfb_dns_proxy_rollback.lock";
+		$server = stream_socket_server("unix://{$dir}/leaf.sock", $errno, $error);
+		$this->assertNotFalse($server, "test bootstrap: could not listen for the daemon: {$error}");
+		$owner = NULL;
+		$ownerReaped = FALSE;
+		$control = NULL;
+		$daemonPid = 0;
+		try {
+			$owner = $this->startWorker($dir, 'fd', 0, $nonce);
+			$ownerBuffer = '';
+			$paused = $this->readLine($owner, $ownerBuffer, ['PAUSED ', 'DONE '], 20.0);
+			$this->assertTrue(str_starts_with((string) $paused, 'PAUSED '), 'the owner never reached the notice that reports its rollback finished: ' . var_export($paused, TRUE) . ' ' . (string) stream_get_contents($owner[1][2]));
+			$this->assertOwnerHeld(['paused' => $paused, 'stderr' => (string) stream_get_contents($owner[1][2])], '', '', 'at the notice that reports its rollback finished');
+			$starts = array_values(array_filter(explode("\n", (string) file_get_contents("{$dir}/events.log")), static fn (string $event): bool => str_ends_with($event, ' unbound_start')));
+			$this->assertSame(['fd unbound_start'], $starts, 'before: the rollback restarted Unbound through the production launcher');
+			$ownerPid = (int) proc_get_status($owner[0])['pid'];
+			$this->assertTrue($this->ownedBy($ownerPid, 'fd', $dir, $nonce), "before: pid {$ownerPid} is this run's owner, not a recycled pid");
+
+			// The daemon the start command left behind is up, escaped from the start's process group, and answers
+			$control = stream_socket_accept($server, 15.0);
+			$this->assertNotFalse($control, 'before: the Unbound start left no daemon on the control socket: ' . (string) stream_get_contents($owner[1][2]));
+			stream_set_blocking($control, FALSE);
+			$daemonBuffer = '';
+			$ready = $this->readStreamLine($control, $daemonBuffer, ['READY '], 15.0);
+			$this->assertNotNull($ready, 'before: the daemon never reported ready');
+			[, $readyNonce, $daemonPid, , , $daemonSession, $holds] = explode(' ', $ready, 7);
+			$daemonPid = (int) $daemonPid;
+			$this->assertSame($nonce, $readyNonce, 'before: the daemon is this run\'s');
+			$this->assertSame($daemonPid, (int) $daemonSession, 'before: the daemon leads its own session, out of the start\'s process group');
+			$this->assertTrue($this->ownedBy($daemonPid, 'leaf', $dir, $nonce), "before: pid {$daemonPid} is this run's daemon, not a recycled pid");
+			$pong = "PONG {$nonce} {$daemonPid}";
+			$this->assertSame($pong, $this->askDaemon($control, $daemonBuffer, $nonce), 'before: the daemon answers');
+
+			// Then, while the owner lives, the operation lock is taken: a fresh attempt finds it held, not failing
+			$this->assertFalse($this->freshlyLockable($lockFile, $timedOut), 'before: the owner holds the operation lock');
+			$this->assertTrue($timedOut, 'before: the lock is held by its owner, not a flock() error');
+
+			// When the owner is killed and reaped while the daemon lives
+			proc_terminate($owner[0], 9);
+			$ended = pfb_test_finish_process($owner, 5.0);
+			$ownerReaped = TRUE;
+			$this->assertSame(9, $ended['termsig'], 'the owner ended by SIGKILL');
+			$this->assertNull($this->processArgs($ownerPid), "the owner's pid {$ownerPid} is gone");
+
+			// Then the daemon is still running, and the lock is free to a fresh attempt
+			$aliveBefore = $this->askDaemon($control, $daemonBuffer, $nonce);
+			$free = $this->freshlyLockable($lockFile, $timedOut);
+			$aliveAfter = $this->askDaemon($control, $daemonBuffer, $nonce);
+			$this->assertSame($pong, $aliveBefore, 'the daemon outlived its owner');
+			$this->assertSame($pong, $aliveAfter, 'and was still alive after the attempt');
+			$this->assertTrue($free, sprintf(
+				'the operation lock stayed taken after its owner died: run %s, owner pid %d killed by signal %d and reaped, daemon pid %d (session %d, lock files it holds open: %s) alive before and after the fresh attempt, which %s',
+				$nonce, $ownerPid, $ended['termsig'], $daemonPid, (int) $daemonSession, trim($holds), $timedOut ? 'found the lock held' : 'failed'
+			));
+		} finally {
+			if (is_resource($control)) {
+				@fwrite($control, "EXIT {$nonce}\n");
+				fclose($control);
+			}
+			fclose($server);
+			if ($owner !== NULL && !$ownerReaped) {
+				fclose($owner[1][0]);
+				try {
+					pfb_test_finish_process($owner, 5.0);
+				} catch (RuntimeException) {
+					// reported by the owner's own pipes above; the process is terminated and reaped
+				}
+			}
+			if ($daemonPid > 0) {
+				$this->awaitGone($daemonPid, $dir, $nonce);
+			}
+			rmdir_recursive($dir);
+		}
+	}
+
+	/**
 	 * Two recoveries of this box, each a real process (support/DnsProxyRecoveryWorker.php), so the locks are the kernel's:
 	 * the owner runs the recovery and is held after its $pause-th DNS config unlock; then the contender, which holds the copy
-	 * of config.xml it read before the owner ran, confirms the proxy while the owner is held; then the owner is released.
+	 * of config.xml it read before the owner ran, confirms the proxy while the owner is held and waits for its operation lock; then
+	 * the owner is released and finishes, and only then is the contender resumed.
 	 * Every worker is reaped before this returns. Nothing waits on the clock: each step is a line a worker writes, read
 	 * within a deadline that is never read as a verdict.
 	 *
@@ -2333,12 +2435,16 @@ final class DnsProxyActivationRollbackTest extends TestCase
 				$contender = $this->startWorker($dir, 'contender', 0);
 				$workers[] = $contender;
 				$contenderBuffer = '';
-				$race['first'] = $this->readLine($contender, $contenderBuffer, ['BLOCKED ', 'DONE '], 15.0);
+				$race['first'] = $this->readLine($contender, $contenderBuffer, ['WAITING ', 'DONE '], 15.0);
 				if (str_starts_with((string) $race['first'], 'DONE ')) {
 					$race['contenderDone'] = $race['first'];
 				}
 				fwrite($owner[1][0], "RELEASE\n");
 				$race['ownerDone'] = $this->readLine($owner, $ownerBuffer, ['DONE '], 20.0);
+				if (str_starts_with((string) $race['first'], 'WAITING ')) {
+					// The owner is done and has given the operation lock back: the contender's retry finds it free
+					fwrite($contender[1][0], "RESUME\n");
+				}
 				$race['contenderDone'] ??= $this->readLine($contender, $contenderBuffer, ['DONE '], 20.0);
 			}
 		} finally {
@@ -2369,15 +2475,26 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			'g' => $GLOBALS['g'],
 			'doubles' => array_intersect_key($GLOBALS, array_flip(['pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_process_running'])),
 		]));
-		file_put_contents("{$dir}/unbound-start", "#!/bin/sh\nprintf '%s unbound_start\\n' \"\$1\" >> \"\$2\"\nexit 0\n");
+		// The Unbound restart records itself and succeeds. The fd role passes the daemon's command line (php, worker, state directory,
+		// nonce) and the start leaves that daemon behind, as Unbound daemonizes: the substitution returns on the EOF of the daemon's
+		// stdout, which it closes once it has left the process group and reported to the parent, so the launcher's group kill after
+		// the start can never find it still in that group.
+		file_put_contents("{$dir}/unbound-start", <<<'SH'
+			#!/bin/sh
+			printf '%s unbound_start\n' "$1" >> "$2"
+			if [ -n "$3" ]; then
+				up=$("$3" "$4" leaf "$5" 0 - "$6" </dev/null 2>/dev/null &)
+			fi
+			exit 0
+			SH . "\n");
 		chmod("{$dir}/unbound-start", 0755);
 		file_put_contents("{$dir}/events.log", '');
 	}
 
 	/** @return array{0: resource, 1: array<int, resource>, 2: string} a worker: its stdin takes RELEASE, its output is read without blocking */
-	private function startWorker(string $dir, string $role, int $pause): array
+	private function startWorker(string $dir, string $role, int $pause, string $nonce = ''): array
 	{
-		$command = [PHP_BINARY, __DIR__ . '/support/DnsProxyRecoveryWorker.php', $role, $dir, (string) $pause, PFB_DNS_PROXY_RCFILE];
+		$command = array_merge([PHP_BINARY, __DIR__ . '/support/DnsProxyRecoveryWorker.php', $role, $dir, (string) $pause, PFB_DNS_PROXY_RCFILE], $nonce === '' ? [] : [$nonce]);
 		$process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
 		if (!is_resource($process)) {
 			throw new RuntimeException("test bootstrap: could not start the {$role} worker");
@@ -2395,8 +2512,13 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	 */
 	private function readLine(array $worker, string &$buffer, array $prefixes, float $seconds): ?string
 	{
+		return $this->readStreamLine($worker[1][1], $buffer, $prefixes, $seconds);
+	}
+
+	/** @param resource $out a non-blocking stream: what readLine() reads, over a worker's stdout or the daemon's control socket */
+	private function readStreamLine($out, string &$buffer, array $prefixes, float $seconds): ?string
+	{
 		$deadline = microtime(TRUE) + $seconds;
-		$out = $worker[1][1];
 		while (TRUE) {
 			while (($newline = strpos($buffer, "\n")) !== FALSE) {
 				$line = substr($buffer, 0, $newline);
@@ -2454,9 +2576,10 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		// The contender waited for the owner's operation lock rather than finishing while the owner was held
 		$this->assertNotNull($race['first'], "the contender neither waited nor finished: {$race['stderr']}; {$log}");
-		$this->assertTrue(
-			str_starts_with((string) $race['first'], 'BLOCKED '),
-			"the contender finished while the owner was held (first: {$race['first']}); {$log}"
+		$this->assertSame(
+			'WAITING pfb_dns_proxy_rollback',
+			$race['first'],
+			"the contender did not wait for the owner's operation lock while the owner was held; {$log}"
 		);
 
 		// Both completed, the contender only after the owner's restart, and quietly: not ready, nothing to say
@@ -2474,5 +2597,75 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame('', (string) $this->onDisk(self::SAVED, 'stored'), 'the snapshot is consumed on config.xml');
 		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'stored'), 'pfB-DNS is off on config.xml');
 		$this->assertSame('lan,opt1', (string) $this->onDisk('unbound/active_interface'), 'the Resolver is the admin\'s again');
+	}
+
+	/** The operation lock's file, which every recovery of this box opens: $g['tmp_path'] is the one directory they share. */
+	private function operationLockPath(): string
+	{
+		return $GLOBALS['g']['tmp_path'] . '/pfb_dns_proxy_rollback.lock';
+	}
+
+	/**
+	 * A fresh zero-budget attempt on the kernel's lock behind $path, through its own open file description: whether it took the
+	 * lock (it gives it back at once). $timedOut tells the lock being held from a flock() error.
+	 */
+	private function freshlyLockable(string $path, ?bool &$timedOut = NULL): bool
+	{
+		$stream = fopen($path, 'ce');
+		$this->assertIsResource($stream, "the operation lock file opens: {$path}");
+		try {
+			return pfb_flock_bounded($stream, LOCK_EX, 0.0, $timedOut);
+		} finally {
+			fclose($stream);
+		}
+	}
+
+	/** The command line of a live process, NULL when there is none (gone, reaped, or a zombie). */
+	private function processArgs(int $pid): ?string
+	{
+		if (is_dir('/proc/self')) {
+			$args = (string) @file_get_contents("/proc/{$pid}/cmdline");
+		} else {
+			exec('ps -ww -o args= -p ' . $pid . ' 2>/dev/null', $rows);
+			$args = implode(' ', $rows);
+		}
+		$args = trim(str_replace("\0", ' ', $args));
+
+		return $args === '' ? NULL : $args;
+	}
+
+	/** Whether $pid is this run's own process of $role: its command line names the worker, the role, the state directory and the nonce. */
+	private function ownedBy(int $pid, string $role, string $dir, string $nonce): bool
+	{
+		$args = $this->processArgs($pid);
+
+		return $args !== NULL && str_contains($args, "DnsProxyRecoveryWorker.php {$role} {$dir} ") && str_ends_with($args, " {$nonce}");
+	}
+
+	/**
+	 * The daemon's answer to a PING within the deadline: "PONG <nonce> <pid>", or NULL.
+	 *
+	 * @param resource $control
+	 */
+	private function askDaemon($control, string &$buffer, string $nonce): ?string
+	{
+		fwrite($control, "PING {$nonce}\n");
+
+		return $this->readStreamLine($control, $buffer, ['PONG '], 10.0);
+	}
+
+	/** The daemon was told to EXIT and its control socket is closed: wait for it to be gone, and kill it only while it is still this run's own. */
+	private function awaitGone(int $pid, string $dir, string $nonce): void
+	{
+		for ($killed = FALSE, $deadline = hrtime(TRUE) + 5_000_000_000; $this->ownedBy($pid, 'leaf', $dir, $nonce); usleep(10_000)) {
+			if (hrtime(TRUE) >= $deadline) {
+				if ($killed) {
+					break;
+				}
+				posix_kill($pid, 9);
+				$killed = TRUE;
+				$deadline = hrtime(TRUE) + 2_000_000_000;
+			}
+		}
 	}
 }
