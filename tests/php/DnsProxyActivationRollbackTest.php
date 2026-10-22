@@ -2454,6 +2454,30 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	/**
+	 * A stale confirmation whose readiness wait timed out finds the gateway READY and its Unbound backend dead. The proxy does not serve,
+	 * so the activation is rolled back: the recheck that spares a proxy a newer start made ready judges the serving proxy, not the gateway
+	 * alone (issue #3560).
+	 */
+	public function testAStaleConfirmationRollsBackAReadyGatewayWhoseBackendIsDead(): void
+	{
+		// Given a moved Resolver, a gateway that publishes its marker, and an Unbound backend that is dead
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->seedUnbound('127.0.0.1:5353', '5151', FALSE);
+		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway is ready');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'before: the backend is dead');
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
+
+		// When the confirmation's readiness wait times out and its rollback runs
+		$ready = pfb_dns_proxy_confirm_ready();
+
+		// Then the activation is rolled back: pfB-DNS is off and the Resolver is the original
+		$this->assertFalse($ready);
+		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertResolverIsTheOriginal('rolled back by the stale confirmation');
+	}
+
+	/**
 	 * A recovery that dies while the Unbound its rollback started keeps running (issue #3556). The rollback holds the operation lock
 	 * across the Unbound restart, and the restart is the production launcher's: a PHP -r supervisor started with proc_open, which
 	 * runs the start command through passthru(). The command here leaves a daemon behind that outlives the supervisor and the
