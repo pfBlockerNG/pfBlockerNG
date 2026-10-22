@@ -2315,7 +2315,13 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
 
 @pytest.mark.timeout(1200)
 def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, proxy_on: State) -> None:
-    """Given a moved Resolver but no gateway, the real boot check restores DNS and files both failure notices."""
+    """Given a moved Resolver whose gateway fails every start, the boot start hook's own check restores DNS and files
+    both failure notices.
+
+    services_unbound_configure() is what rc.bootup runs: it requires the staged start hook, which backgrounds the rc
+    start and the bounded `dns_check` beside it. Scheduled ticks are off on a smoke box and nothing here applies, so
+    only that check can roll pfB-DNS back.
+    """
     vm, before = rig.vm, rig.before
     notice_ids = ("pfBlockerNG DNS Proxy startup", "pfBlockerNG DNS Proxy")
     clear_notices = (
@@ -2361,20 +2367,32 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
         assert state.resolver["active_interface"] == "lo0", f"Resolver is not moved: {state.resolver}"
         assert state.proxy_pid is None and state.daemon_pid is None, (state.proxy_pid, state.daemon_pid)
         assert state.service == "stopped" and state.ps == [], f"rc stop left a proxy: {state.service} {state.ps}"
-        size = _sh(vm, f"wc -c < {PROXY_LOG}")
-        offset = size.stdout.strip()
-        assert size.returncode == 0 and offset.isdigit(), f"cannot read log size: {size.stdout!r} {size.stderr!r}"
 
-        checked = _sh(
-            vm,
-            f"/usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check {offset}",
-            timeout=420,
-        )
-        assert checked.returncode == 0, f"dns_check failed: {checked.stdout!r} {checked.stderr!r}"
+        def rolled_back() -> bool:
+            return h.config_get(vm, CFG_PROXY) == "" and _capture(vm).marker == ""
 
-        h.wait_unbound_ready(vm)
-        after = _capture(vm)
-        assert h.config_get(vm, CFG_PROXY) == "", f"pfB-DNS was not turned off:\n{_diagnostics(vm)}"
+        with _decider_exits_at_every_start(vm):
+            _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the boot start hook)")
+            try:
+                h.wait_until(rolled_back, timeout=420.0, interval=5.0)
+            except RuntimeError as exc:
+                raise AssertionError(
+                    f"{exc}\nthe boot start hook did not roll pfB-DNS back: toggle {h.config_get(vm, CFG_PROXY)!r}, "
+                    f"snapshot kept {bool(_capture(vm).marker)}\n{_diagnostics(vm)}"
+                ) from exc
+            # The check files its notices after the Unbound restart that ends its rollback: let it finish (360 s cap)
+            h.wait_until(
+                lambda: _sh(vm, "pgrep -f 'pfblockerng.inc dns_check' >/dev/null").returncode != 0,
+                timeout=420.0,
+                interval=5.0,
+            )
+            h.wait_unbound_ready(vm)
+            # Read before the decider is put back: putting it back force-stops any proxy a failed rollback left
+            after = _capture(vm)
+            toggle = h.config_get(vm, CFG_PROXY)
+            diagnostics = _diagnostics(vm)
+
+        assert toggle == "", f"pfB-DNS did not stay off:\n{diagnostics}"
         assert after.resolver == before.resolver, (
             f"Resolver after boot-check rollback:\n{after.resolver}\nbefore:\n{before.resolver}"
         )
