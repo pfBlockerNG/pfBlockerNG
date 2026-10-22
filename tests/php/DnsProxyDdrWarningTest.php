@@ -219,6 +219,17 @@ final class DnsProxyDdrWarningTest extends TestCase
 		$this->assertSame([self::warning('8.8.8.8', 'DoT and DoQ')], pfb_dns_proxy_ddr_warnings(), 'DoT, DoH and DoQ, the option on');
 	}
 
+	public function testDohOn443StillWarnsWhileTheOptionIsOnButDohAlreadyListensOn443(): void
+	{
+		// Given DoH alone on a public address that the certificate lacks, the 443 option on and DoH on 8443: no warning
+		$this->box(['wan' => ['8.8.8.8']], [], ['pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_ddr_doh_443' => 'on']);
+		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'before: DoH on 8443, its clients go to the reverse proxy');
+
+		// When DoH itself listens on 443, the option sends clients to pfB-DNS's own certificate: the check runs again
+		$this->store(['pfb_dns_doh_port' => '443']);
+		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings(), 'DoH on 443, the option still stored on');
+	}
+
 	public function testOneAddressServedByTwoOrThreeTransportsIsOneWarningNamingThem(): void
 	{
 		// Given DoT and DoQ on the same public address

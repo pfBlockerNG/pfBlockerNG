@@ -192,7 +192,7 @@ radvd 2.20 (S1, S1s), P1 has `radvd-2.20`, and radvd's `DNR` block exists only o
 | 3 | DNR in Router Advertisements | Not applicable now | No released radvd supports DNR; pfSense ships radvd 2.20 and generates `radvd.conf` with no custom field (Q7). Revisit only if pfSense ships a DNR-capable radvd and exposes it. |
 | 4 | DDR toggle on the pfB-DNS page | Toggle | The gateway can answer per queried address and the answer disappears with pfB-DNS (Q3). It can help only verified-discovery clients (Apple; Windows with DDR on) that query a public listener address (candidate 7); for private addresses no current client uses it (Q2). Whether Apple and Windows accept DoH on a port other than 443 is [UNVERIFIED]. An optional "Advertise DoH on port 443" toggle omits the DoH `port` for clients that reject one, for DoH behind a reverse proxy on 443. |
 | 5 | Opportunistic DoT | Documentation | Works with no pfB-DNS change: Android's default "Automatic" mode upgrades to DoT if the network's DNS server supports it ([Android, 2018](https://android-developers.googleblog.com/2018/04/dns-over-tls-support-in-android-p.html)), connects to port 853 of each DHCP- or RA-provided server ([DnsTlsServer.h:39](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/DnsTlsServer.h#39), [PrivateDnsCommon.h:22](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/PrivateDnsCommon.h#22)) and verifies no certificate when no hostname is set ([DnsTlsSocket.cpp:238-251](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/DnsTlsSocket.cpp#238)). Verified from source, not on a device [UNVERIFIED on a device]. |
-| 6 | Certificate guidance and warning | Documentation and page warning for public addresses | Verified DDR needs a trusted chain and the queried address as an `iPAddress` SAN (RFC 9462 §4.2); DNR needs the ADN as a name in the certificate (RFC 9463 §3.3). The page warns, only with the DDR toggle on and only for public listener addresses missing from the certificate's `iPAddress` SANs, and not for the DoH listener when "Advertise DoH on port 443" is on (clients then reach the reverse proxy's certificate). Loopback, private, CGNAT, link-local, ULA and reserved addresses never warn (RFC 9462 §4.3 names the private ones; the rest are not globally routable). It says nothing about CA trust, and nothing about DNR ADNs, which pfB-DNS cannot see in the user's Kea JSON. See "Certificate warning". |
+| 6 | Certificate guidance and warning | Documentation and page warning for public addresses | Verified DDR needs a trusted chain and the queried address as an `iPAddress` SAN (RFC 9462 §4.2); DNR needs the ADN as a name in the certificate (RFC 9463 §3.3). The page warns, only with the DDR toggle on and only for public listener addresses missing from the certificate's `iPAddress` SANs, and not for the DoH listener when "Advertise DoH on port 443" is on and DoH does not listen on 443 itself (clients then reach the reverse proxy's certificate). Loopback, private, CGNAT, link-local, ULA and reserved addresses never warn (RFC 9462 §4.3 names the private ones; the rest are not globally routable). It says nothing about CA trust, and nothing about DNR ADNs, which pfB-DNS cannot see in the user's Kea JSON. See "Certificate warning". |
 | 7 | Public resolver address | Documentation | The only route to verified DDR that Apple accepts (Q2). An IP certificate from Let's Encrypt needs ACME package 1.3.2 (CE 2.8.1 baseline, Plus 26.07; Q1). With a reverse proxy such as HAProxy on 443, the certificate it serves must carry the queried resolver address as an `iPAddress` SAN ("DoH on port 443"). Costs and failure cases stay as listed in #3554. |
 
 ### DDR answer (candidate 4)
@@ -285,8 +285,9 @@ needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses, not
   IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is classified by its embedded IPv4 address. Every other address is public.
   RFC 9462 §4.3 names the private ranges (RFC 1918, ULA, link-local) as the ones a public CA cannot certify; the rest
   are reserved or not globally routable, so a missing SAN there is not actionable either.
-- With `dns/pfb_dns_ddr_doh_443` on, the DoH listener is excluded: its clients reach the reverse proxy's certificate,
-  which pfB-DNS cannot see. DoT and DoQ listeners are still checked.
+- With `dns/pfb_dns_ddr_doh_443` on and the DoH port not 443, the DoH listener is excluded: its clients reach the
+  reverse proxy's certificate, which pfB-DNS cannot see. With the DoH port 443 the option changes nothing and clients
+  reach the pfB-DNS certificate, so DoH is checked. DoT and DoQ listeners are always checked.
 - No certificate selected: no warning. Saving already requires one when DoT, DoH or DoQ is on.
 - No warning about CA trust or DNR ADNs. The owner asked for this scope (2026-10-22). Acceptance criterion 8.
 
@@ -349,7 +350,8 @@ These apply to the follow-up work; this specification is met when it is on `deve
    | Reserved or documentation address (`0.0.0.1`, `::`, `192.0.2.1`, `2001:db8::1`, `198.18.0.1`, `fec0::1`) | No warning |
    | `::ffff:10.0.0.1` (classified by the embedded IPv4) | No warning |
    | `::ffff:8.8.8.8` with no matching SAN | Warning |
-   | `dns/pfb_dns_ddr_doh_443` on, the DoH listener serves a public address missing from the certificate | No warning for the DoH listener; DoT and DoQ listeners are still checked |
+   | `dns/pfb_dns_ddr_doh_443` on and the DoH port not 443, the DoH listener serves a public address missing from the certificate | No warning for the DoH listener; DoT and DoQ listeners are still checked |
+   | `dns/pfb_dns_ddr_doh_443` on and the DoH port 443, the DoH listener serves a public address missing from the certificate | Warning: clients reach the pfB-DNS certificate |
    | No certificate selected | No warning (saving already requires one for DoT, DoH and DoQ) |
    | DDR toggle off | No warning |
 

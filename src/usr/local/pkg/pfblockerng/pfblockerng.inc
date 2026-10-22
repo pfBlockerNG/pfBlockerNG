@@ -4507,7 +4507,8 @@ function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
  * The pfB-DNS page's DDR certificate warnings (issue #3583), from the stored settings: with DDR on and a certificate selected, one text per
  * public address that DoT, DoH or DoQ listens on and that is not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462
  * section 4.2) checks the address it queried against that SAN, so it will not use those transports there. The DoH listener is left out
- * while dns/pfb_dns_ddr_doh_443 is on: its clients reach a reverse proxy, whose certificate is not visible here. Never blocks a save.
+ * while dns/pfb_dns_ddr_doh_443 is on and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose certificate
+ * is not visible here (on 443 they reach this listener, so it is checked). Never blocks a save.
  *
  * @return list<string> HTML, each text starting "DDR: " and naming the address and the transports it serves
  */
@@ -4525,7 +4526,7 @@ function pfb_dns_proxy_ddr_warnings(): array {
 	$served = [];
 	foreach (['dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
 		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On ||
-		    ($kind === 'doh' && pfb_dns_proxy_setting('pfb_dns_ddr_doh_443') === PfbToggle::On) ||
+		    ($kind === 'doh' && pfb_dns_proxy_setting('pfb_dns_ddr_doh_443') === PfbToggle::On && !pfb_dns_proxy_ddr_doh_443_locked()) ||
 		    pfb_dns_proxy_listener_port(pfb_dns_proxy_setting("pfb_dns_{$kind}_port")) === NULL) {
 			continue;
 		}
