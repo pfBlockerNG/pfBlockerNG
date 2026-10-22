@@ -257,6 +257,10 @@ UNSEEDED_LOCAL_KEYS = {
         f"{DNS}/pfb_dns_{leaf}": "read only while its DoH/DoQ toggle is on, which this harness leaves off: a seeded value changes nothing"
         for leaf in ("doh_port", "doh_interface", "doh_trusted", "doq_port", "doq_interface")
     },
+    **{
+        f"{DNS}/pfb_dns_{leaf}": "read only while pfB-DNS is on, which this harness leaves off: a seeded value changes nothing"
+        for leaf in ("ddr", "ddr_doh_443")
+    },
 }
 
 
