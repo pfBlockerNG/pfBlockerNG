@@ -5545,9 +5545,9 @@ function pfb_dns_proxy_rollback_notice(string $text): void {
  * Turn the requested pfB-DNS toggle Off, written to config.xml under the DNS config lock from a fresh read: the next apply then
  * never enables it again, and retries a restore that did not finish. The write happens only while the stored marker is still
  * $expected_saved and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs recovery: a state another save
- * or recovery already resolved is left alone. For a proxy that did not become ready ($not_ready), a proxy that is ready by the time
+ * or recovery already resolved is left alone. For a proxy that did not become ready ($not_ready), a proxy that serves by the time
  * the lock is won while pfB-DNS is still requested On is left alone too: another apply restarted it on the same snapshot, which
- * takes no operation lock.
+ * takes no operation lock. A gateway that is READY with a dead Unbound backend does not serve, so it is still a failed activation.
  *
  * @param string|null $expected_saved the raw marker the caller saw; NULL = the marker read now, before the lock is waited for
  * @param bool $not_ready the caller rolls back a proxy that did not become ready (not an unsafe setting, which stands whether it serves)
@@ -5571,8 +5571,8 @@ function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL, boo
 		if (!pfb_dns_proxy_owns_resolver() && !pfb_dns_proxy_recovery_required()) {
 			return NULL;
 		}
-		// A newer start on the same snapshot made it ready meanwhile; with Off already stored, a ready proxy is a recovery's own restart
-		if ($not_ready && PfbConfig::read('dns/pfb_dns') === PfbToggle::On && pfb_dns_proxy_ready()) {
+		// A newer start on the same snapshot made it serve meanwhile; with Off already stored, a serving proxy is a recovery's own restart
+		if ($not_ready && PfbConfig::read('dns/pfb_dns') === PfbToggle::On && pfb_dns_proxy_serving_ready()) {
 			return NULL;
 		}
 		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);

@@ -93,6 +93,22 @@ function race_proxy_valid(): void
 {
 	$GLOBALS['pfb_test_valid_pids'][$GLOBALS['pfb']['dns_proxy_pidfile']] = TRUE;
 	$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE] = TRUE;
+	race_backend_serves();
+}
+
+/**
+ * The Unbound backend the gateway forwards to answers in this process: its pidfile names a live process and the process owns the
+ * upstream's sockets, and the gateway's command line names that upstream. A process has no other process's sockstat or ps table.
+ */
+function race_backend_serves(): void
+{
+	$pidfile = $GLOBALS['g']['varrun_path'] . '/unbound.pid';
+	file_put_contents($pidfile, "5151\n");
+	$GLOBALS['pfb_test_valid_pids'][$pidfile] = TRUE;
+	file_put_contents($GLOBALS['pfb_test_sockstat_output'],
+		"unbound unbound 5151 3 tcp4 127.0.0.1:5353 *:*\nunbound unbound 5151 4 udp4 127.0.0.1:5353 *:*\n");
+	file_put_contents($GLOBALS['pfb_test_ps_output'], '4242 ' . PFB_DNS_PROXY_DIR
+		. "/bin/freebsd-amd64/pfb-dns --listen 127.0.0.1 --port 53 --upstream 127.0.0.1:5353\n");
 }
 
 /** The proxy comes up alive and never publishes its marker: the state the activation leaves a proxy that never serves in. */
