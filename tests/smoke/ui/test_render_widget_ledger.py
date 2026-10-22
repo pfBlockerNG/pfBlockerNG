@@ -559,12 +559,18 @@ def test_pfb_dns_row_shows_only_while_pfb_dns_is_on(
     """The pfB-DNS status row sits above the IP row while pfB-DNS is on, and is absent (page and poll) while off.
 
     Off first, so the on assertions prove the toggle CAUSED the row. On with the Resolver not moved: the
-    service icon is yellow ("Not in use"), and the poll carries the same five anchors in the same order.
+    service icon is yellow ("Not in use"), plain DNS (always on with pfB-DNS) yellow, DoT, DoH and DoQ (their toggles
+    off) red, and the poll carries the same five anchors in the same order.
     """
     vm = smoke_vm
     helpers.set_package_enabled(vm, True)
-    original = helpers.config_get_state(vm, CFG_PFB_DNS)
+    # A stored interface makes the stored transport toggles authoritative (else the Resolver's settings seed them)
+    settings = {"pfb_dns_interface": "lan", "pfb_dns_dot": "", "pfb_dns_doh": "", "pfb_dns_doq": ""}
+    dns_cfg = CFG_PFB_DNS.rsplit("/", 1)[0]
+    originals = {key: helpers.config_get_state(vm, f"{dns_cfg}/{key}") for key in [*settings, "pfb_dns"]}
     try:
+        for key, value in settings.items():
+            helpers.config_set(vm, f"{dns_cfg}/{key}", value)
         helpers.config_set(vm, CFG_PFB_DNS, "")
         assert "PFBDNSSTATUS_" not in _widget_body(webui), "the page shows a pfB-DNS row while pfB-DNS is off"
         assert "PFBDNSSTATUS_" not in _widget_header_payload(webui), (
@@ -582,7 +588,8 @@ def test_pfb_dns_row_shows_only_while_pfb_dns_is_on(
         assert row.count("<td") == 6, f"the pfB-DNS row has {row.count('<td')} cells, expected 5 icons and a link"
         assert first < body.index("PFBSTATUS"), "the pfB-DNS row is not above the IP row"
 
-        assert icons[0][1] == ICON_YELLOW, f"the service icon is {icons[0][1]!r}, expected yellow while not in use"
+        expected = [ICON_YELLOW, ICON_YELLOW, ICON_RED, ICON_RED, ICON_RED]
+        assert [icon for _, icon in icons] == expected, f"service, DNS, DoT, DoH, DoQ icons are {icons}"
         title = re.search(r'title="([^"]*)"><i class="PFBDNSSTATUS_service ', body)
         assert title is not None and title.group(1).startswith("Not in use: "), f"the service title is {title}"
 
@@ -592,4 +599,5 @@ def test_pfb_dns_row_shows_only_while_pfb_dns_is_on(
         assert lines[0].split("||")[1] == ICON_YELLOW
         assert lines[0].split("||")[2].startswith("Not in use: ")
     finally:
-        helpers.config_restore_state(vm, CFG_PFB_DNS, original)
+        for key, state in originals.items():
+            helpers.config_restore_state(vm, f"{dns_cfg}/{key}", state)

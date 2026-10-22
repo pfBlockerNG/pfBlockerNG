@@ -132,6 +132,19 @@ final class PfbDnsWidgetStatusTest extends TestCase
 		$this->assertSame('Not in use: On, but not active: pfBlockerNG is disabled', $cells['PFBDNSSTATUS_service']['title']);
 	}
 
+	public function testPfBlockerNgDisabledMakesEveryCellRedEvenWhileTheProxyStillListensForThePendingRestore(): void
+	{
+		// Given pfBlockerNG is disabled while the moved Resolver's restore is pending, and the proxy still answers on every transport
+		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
+		$listening = self::rows('listening');
+		$status = self::running(['plain' => $listening, 'dot' => $listening, 'doh' => $listening, 'doq' => $listening]);
+
+		// Then nothing is green: pfBlockerNG is off, so is every cell
+		foreach (self::cells($status) as $anchor => $cell) {
+			$this->assertSame(self::RED, $cell['icon'], $anchor);
+		}
+	}
+
 	/** @return array<string,array{array<string,string>,array<string,string>}> toggles that are on, and the expected colours of the transports */
 	public static function notActiveToggles(): array
 	{
@@ -166,10 +179,10 @@ final class PfbDnsWidgetStatusTest extends TestCase
 			'off' => [['state' => 'off'], self::RED, 'DoT is off'],
 			'no listener' => [['state' => 'no_listener', 'notice' => self::NOTICE], self::YELLOW, 'DoT: ' . self::NOTICE],
 			'every row listening' => [self::rows('listening', 'listening'), self::GREEN, 'DoT is listening on LAN'],
-			'one row not listening' => [self::rows('listening', 'not_listening'), self::YELLOW, 'DoT: 1 of 2 listener rows are not listening; see the pfB-DNS tab'],
-			'every row not listening' => [self::rows('not_listening'), self::YELLOW, 'DoT: 1 of 1 listener rows are not listening; see the pfB-DNS tab'],
-			'configured but not confirmed' => [self::rows('configured_unconfirmed'), self::YELLOW, 'DoT: 1 of 1 listener rows are not listening; see the pfB-DNS tab'],
-			'configured but not bound' => [self::rows('configured_not_bound'), self::YELLOW, 'DoT: 1 of 1 listener rows are not listening; see the pfB-DNS tab'],
+			'one row not listening' => [self::rows('listening', 'not_listening'), self::YELLOW, 'DoT: 1 of 2 listener rows are not confirmed listening; see the pfB-DNS tab'],
+			'every row not listening' => [self::rows('not_listening'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the pfB-DNS tab'],
+			'configured but not confirmed' => [self::rows('configured_unconfirmed'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the pfB-DNS tab'],
+			'configured but not bound' => [self::rows('configured_not_bound'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the pfB-DNS tab'],
 		];
 	}
 
