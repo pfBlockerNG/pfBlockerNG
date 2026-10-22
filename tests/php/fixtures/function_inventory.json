@@ -2804,6 +2804,26 @@
         "returnType": "void",
         "params": []
     },
+    "pfb_dnsbl_auto_vip_address": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "interface",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_blacklist_logging": {
         "returnsRef": false,
         "returnType": "mixed",
