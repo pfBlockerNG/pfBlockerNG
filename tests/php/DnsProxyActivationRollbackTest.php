@@ -2477,14 +2477,15 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// nonce) and the start leaves that daemon behind, as Unbound daemonizes: the substitution returns on the EOF of the daemon's
 		// stdout, which it closes once it has left the process group and reported to the parent, so the launcher's group kill after
 		// the start can never find it still in that group.
-		file_put_contents("{$dir}/unbound-start", <<<'SH'
+		$start = <<<'SH'
 			#!/bin/sh
 			printf '%s unbound_start\n' "$1" >> "$2"
 			if [ -n "$3" ]; then
 				up=$("$3" "$4" leaf "$5" 0 - "$6" </dev/null 2>/dev/null &)
 			fi
 			exit 0
-			SH . "\n");
+			SH;
+		file_put_contents("{$dir}/unbound-start", $start . "\n");
 		chmod("{$dir}/unbound-start", 0755);
 		file_put_contents("{$dir}/events.log", '');
 	}
