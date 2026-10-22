@@ -336,6 +336,83 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame($only, $this->transports()[$kind], 'a pending disable cannot hide log-confirmed listeners when the command is missing');
 	}
 
+	public function testAFailedUpstreamDoesNotEraseTheGatewaysConfirmedFrontendListeners(): void
+	{
+		// Given every transport on, and a healthy start: the gateway's log confirms its listeners and Unbound serves both transports
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
+		$served = [
+			'plain' => self::served('53'),
+			'dot'   => self::served('853'),
+			'doh'   => self::served('443'),
+			'doq'   => self::served('8853'),
+		];
+		$this->assertSame('Running', pfb_dns_status()['service'], 'before: the gateway and Unbound serve');
+		$this->assertSame($served, $this->transports(), 'before: every transport lists its listeners');
+
+		// When Unbound's PID is no longer alive, while the gateway child is still the one its log and ready marker name
+		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
+		$status = pfb_dns_status();
+
+		// Then the gateway is live with the PID and marker it had, the proxy is not ready, and the status is Starting
+		$this->assertTrue(pfb_dns_proxy_running(), 'the gateway child still lives');
+		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyPidfile()), 'the child pidfile is kept');
+		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyMarker()), 'the ready marker is kept');
+		$this->assertFalse(pfb_dns_proxy_ready(), 'the backend is dead: the proxy is not ready');
+		$this->assertSame('Starting', $status['service']);
+
+		// And the rendered panel says Starting, and each of the same rows says Listening, through its icon and its screen-reader text
+		$document = new DOMDocument();
+		$previous = libxml_use_internal_errors(TRUE);
+		$loaded = $document->loadXML('<root>' . pfb_dns_status_panel(pfb_dns_status()) . '</root>');
+		libxml_clear_errors();
+		libxml_use_internal_errors($previous);
+		$this->assertTrue($loaded, 'the panel is well-formed markup');
+		$xpath = new DOMXPath($document);
+		$this->assertSame('Starting', $xpath->evaluate("string(//tr[@id='pfb-dns-status-service']/td)"));
+		foreach (['plain', 'dot', 'doh', 'doq'] as $transport) {
+			$rows = "//div[@id='pfb-dns-status-{$transport}']//tbody/tr";
+			$this->assertSame(2, (int) $xpath->evaluate("count({$rows})"), "{$transport}: the Localhost and LAN rows");
+			foreach ([1 => 'Localhost', 2 => 'LAN'] as $index => $interface) {
+				$cell = "{$rows}[{$index}]/td[3]";
+				$this->assertSame($interface, $xpath->evaluate("string({$rows}[{$index}]/td[1])"), "{$transport}: row {$index} is labelled");
+				$this->assertSame('Listening', $xpath->evaluate("string({$cell}/span[@class='sr-only'])"), "{$transport} {$interface}: what a screen reader hears");
+				$this->assertSame('Listening', $xpath->evaluate("string({$cell}/i/@title)"), "{$transport} {$interface}: the icon's hover title");
+			}
+		}
+
+		// When the encrypted toggles are saved off but not applied: the live gateway still holds the listeners its log confirmed
+		foreach (['dot', 'doh', 'doq'] as $kind) {
+			config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
+		}
+
+		// Then every transport keeps its listeners
+		$this->assertSame($served, $this->transports(), 'a pending disable hides no listener the live gateway still has');
+	}
+
+	public function testAFailedUpstreamKeepsUnloggedFrontendBindingsUnconfirmed(): void
+	{
+		// Given every transport on, a live gateway with its ready marker, a log with no complete `ready upstream` line, and Unbound dead
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ);
+		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
+
+		// When the status is read
+		$status = pfb_dns_status();
+
+		// Then the gateway is live with its marker and not ready, and every transport's addresses are configured but unconfirmed, not unbound
+		$this->assertTrue(pfb_dns_proxy_running(), 'the gateway child still lives');
+		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyMarker()), 'the ready marker names it');
+		$this->assertFalse(pfb_dns_proxy_ready(), 'the backend is dead: the proxy is not ready');
+		$this->assertSame('Starting', $status['service']);
+		$this->assertSame([
+			'plain' => self::served('53', 'configured_unconfirmed'),
+			'dot'   => self::served('853', 'configured_unconfirmed'),
+			'doh'   => self::served('443', 'configured_unconfirmed'),
+			'doq'   => self::served('8853', 'configured_unconfirmed'),
+		], $this->transports());
+	}
+
 	/** @return array<string,array{string,string,string}> */
 	public static function allTransports(): array
 	{
@@ -684,6 +761,7 @@ final class PfbDnsStatusTest extends TestCase
 	public function testAnOrphanedResolverIsRecoveryRequiredAndTheServiceIsWhatTheProxyDoes(PfbToggle $toggle, bool $serving, string $service): void
 	{
 		// Given our block is in the Resolver and its snapshot is gone
+		$this->box([], $serving);
 		$GLOBALS['config']['unbound'] = [
 			'active_interface' => 'lo0',
 			'custom_options'   => base64_encode("server:\n# pfBlockerNG DNS proxy\nport: 5354\n# end pfBlockerNG DNS proxy"),

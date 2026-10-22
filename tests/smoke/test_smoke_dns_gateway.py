@@ -26,6 +26,8 @@ What it proves, in file order:
   loopback too, for a local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
 * the pfB-DNS tab's status panel is one table per transport with a Localhost row (127.0.0.1 and [::1] at the transport's
   port) and a LAN row (the LAN address), each reading ``Listening`` for a screen reader (issue #3555);
+* when Unbound stops under the live gateway (issue #3560), the status panel reads ``Starting`` and every table keeps its
+  ``Listening`` rows; the Resolver is restored afterwards and an allowed name resolves again;
 * Unbound runs the upstream observer, an upstream EDE block is logged with the real client, and the firewall's own
   lookup of a listed name gets the VIP, logged as 127.0.0.1;
 * from the LAN client (192.168.1.10), over UDP, TCP, DoT, DoH (POST and GET) and DoQ: a listed name gets the VIP and a
@@ -962,6 +964,100 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
         assert lan and all(state == "Listening" for _, _, state in lan), (
             f"{transport}: no LAN row listening on {PFSENSE_LAN_IP}:{port}; all rows: {rows}"
         )
+
+
+@pytest.mark.timeout(900)
+def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    """issue #3560: Unbound stopping under a live gateway reads Starting; the gateway's rows stay Listening.
+
+    Given the gateway serves every transport: its pid is the ready file's, it owns the LAN front sockets, the proxy is
+      ready, and the status panel reads Running with all four tables Listening,
+    When `unbound-control stop` ends the Unbound behind it while the gateway keeps its pid, ready file and sockets,
+    Then the panel reads Starting and each table keeps the same rows as before, each reading `Listening`.
+    Finally Unbound is running again and allowed names resolve over UDP and TCP.
+    """
+    vm, client = gw.vm, gw.client
+    assert vm.ssh("test", "-f", h.PFB_CRON_DISABLE_PATH).returncode == 0, f"{h.PFB_CRON_DISABLE_PATH} is missing"
+    tables = ("plain", "dot", "doh", "doq")
+    proxy, unbound = gateway_on.proxy_pid, gateway_on.unbound_pid
+    assert proxy, f"no gateway pidfile: {gateway_on}"
+    front = {
+        ("udp4", f"{PFSENSE_LAN_IP}:53"),
+        ("tcp4", f"{PFSENSE_LAN_IP}:53"),
+        ("tcp4", f"{PFSENSE_LAN_IP}:{DOT_PORT}"),
+        ("tcp4", f"{PFSENSE_LAN_IP}:{DOH_PORT}"),
+        ("udp4", f"{PFSENSE_LAN_IP}:{DOQ_PORT}"),
+    }
+    assert front <= gateway_on.proxy_sockets(), (
+        f"the gateway {proxy} does not own the LAN front sockets; it owns {sorted(gateway_on.proxy_sockets())}"
+    )
+
+    def proxy_ready() -> bool:
+        pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+        return h._php_read_scalar(vm, pre, "pfb_dns_proxy_ready() ? '1' : '0'") == "1"
+
+    def service_of(page: str) -> str | None:
+        found = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]*)</td>', page)
+        return found.group(1) if found else None
+
+    assert vm.ssh("cat", READY_FILE).stdout.strip() == str(proxy), (
+        f"{READY_FILE} does not hold the gateway's pid {proxy}"
+    )
+    assert proxy_ready(), "pfb_dns_proxy_ready() is false while the gateway and Unbound both run"
+    healthy: dict[str, list[tuple[str, list[str], str]]] = {}
+
+    def panel_ready() -> bool:
+        page = gui.get(STATUS_PAGE).text
+        if service_of(page) != "Running":
+            return False
+        healthy.update({t: _status_rows(page, t) for t in tables})
+        return all(rows and {said for _, _, said in rows} == {"Listening"} for rows in healthy.values())
+
+    h.wait_until(panel_ready, timeout=60.0, interval=2.0)
+    _say(f"status panel with the gateway serving: {healthy}")
+    for t, rows in healthy.items():
+        assert rows and {said for _, _, said in rows} == {"Listening"}, f"healthy {t}: {rows}"
+
+    try:
+        stop = vm.ssh("/usr/local/sbin/unbound-control", "-c", h.UNBOUND_CONF, "stop", timeout=30)
+        assert stop.returncode == 0, f"unbound-control stop: rc={stop.returncode} {stop.stdout!r} {stop.stderr!r}"
+
+        def backend_down() -> bool:
+            listeners = _listeners(vm)
+            live = {p.pid for p in _processes(vm)}
+            return (
+                unbound not in live
+                and not any(s.command == "unbound" for s in listeners)
+                and proxy in live
+                and _pid_file(vm, PROXY_PID_FILE) == proxy
+                and vm.ssh("cat", READY_FILE).stdout.strip() == str(proxy)
+                and {(s.proto, s.local) for s in listeners if s.pid == proxy} == gateway_on.proxy_sockets()
+                and not proxy_ready()
+            )
+
+        h.wait_until(backend_down, timeout=60.0, interval=2.0)
+        down_page = gui.get(STATUS_PAGE).text
+        assert service_of(down_page) == "Starting", f"backend down: the service reads {service_of(down_page)!r}"
+        down = {t: _status_rows(down_page, t) for t in tables}
+        _say(f"status panel with Unbound stopped: {down}")
+        assert down == healthy, (
+            "the gateway's front sockets remain bound with Unbound stopped, and the rows differ\n"
+            f"healthy: {healthy}\ndown: {down}"
+        )
+    finally:
+        _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (restore)")
+        h.wait_unbound_ready(vm)
+        allowed = {t: h.unique_domain(f"restored-{t}") for t in ("udp", "tcp")}
+        last: dict[str, tuple[h.DnsAnswer, str]] = {}
+
+        def upstream_answers() -> bool:
+            last.update({t: _ask(client, t, name) for t, name in allowed.items()})
+            _say(f"allowed names after the restore: {[(t, a.rcode, a.records) for t, (a, _) in last.items()]}")
+            return all(h.resolves_to(answer, STUB_DNS_A) for answer, _ in last.values())
+
+        h.wait_until(upstream_answers, timeout=120.0, interval=3.0)
 
 
 # --------------------------------------------------------------------------- #
