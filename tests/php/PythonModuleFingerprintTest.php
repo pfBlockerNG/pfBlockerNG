@@ -184,6 +184,30 @@ final class PythonModuleFingerprintTest extends TestCase
 		$this->assertTrue(pfb_unbound_python('enabled'));
 	}
 
+	public function testProxyHostedModuleDriftIsTheDecidersRecordsToJudgeNotTheResolversRestartSignal(): void
+	{
+		// Given pfB-DNS fronts the Resolver (a snapshot), so the proxy hosts the module and Unbound only runs the observer; the
+		// shipped pair differs from the applied record (no record), which pfb_py_module.applied is for Unbound's module only
+		$this->shipFiles();
+		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', 'on');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', 'on');
+		$GLOBALS['config']['unbound'] = ['enable' => 'on', 'port' => '53', 'active_interface' => 'lan'];
+		$keys = ['active_interface' => ['present' => TRUE, 'value' => 'lan'], 'enablessl' => ['present' => FALSE, 'value' => NULL], 'custom_options' => ['present' => FALSE, 'value' => NULL]];
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode($keys)));
+		$this->assertFileDoesNotExist($this->markerPath(), 'before: the module has no applied record');
+		$this->assertTrue(pfb_unbound_python('enabled', TRUE), 'before: the first call writes the ini and the observer settings');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the proxy still owns the Resolver');
+		@unlink($GLOBALS['pfb']['log']);
+
+		// When the pass runs again with nothing else to apply
+		$signal = pfb_unbound_python('enabled', TRUE);
+
+		// Then the module's drift does not ask for a Resolver restart, which would also restart the proxy (the decider's own
+		// record decides that, per side)
+		$this->assertFalse($signal);
+		$this->assertStringNotContainsString('Resolver restart required', (string) @file_get_contents($GLOBALS['pfb']['log']));
+	}
+
 	public function testUnreadableShippedFileSuppressesSignal(): void
 	{
 		// fingerprint FALSE = nothing to compare -> NO signal (second call FALSE),

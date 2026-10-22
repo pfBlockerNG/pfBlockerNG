@@ -74,6 +74,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->clearProxyFiles();
 		$this->savedGlobals = [];
 		@unlink(PFB_DNS_PROXY_RCFILE);
+		@unlink($GLOBALS['pfb']['dns_proxy_gateway_applied']);
 		rmdir_recursive($this->dir);
 	}
 
@@ -100,6 +101,8 @@ final class DnsProxyApplyStartTest extends TestCase
 		mkdir("{$gateway}/bin/freebsd-amd64", 0777, TRUE);
 		file_put_contents("{$gateway}/bin/freebsd-amd64/pfb-dns", "#!/bin/sh\n");
 		chmod("{$gateway}/bin/freebsd-amd64/pfb-dns", 0555);
+		// The running gateway records the sha256 of the binary it runs (issue #3566): unchanged, so no update restarts it
+		file_put_contents($GLOBALS['pfb']['dns_proxy_gateway_applied'], hash_file('sha256', "{$gateway}/bin/freebsd-amd64/pfb-dns") . "\n");
 		$this->setProxyMode('192.0.2.1', 'lan,opt1');
 		$up = ['status' => 'up', 'enable' => TRUE];
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];

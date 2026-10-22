@@ -301,7 +301,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 	/** The certificate refresh on a virtual clock, against the gateway listen() started last: its name in that namespace. */
 	private function refreshOnVirtualClock(array $script = self::OK_AT_ONCE): string
 	{
-		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_certificate_refresh', 'pfb_dns_proxy_certificate_push'], $script);
+		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_certificate_refresh', 'pfb_dns_proxy_certificate_push', 'pfb_dns_proxy_ctl_exchange'], $script);
 
 		return $namespace . '\\pfb_dns_proxy_certificate_refresh';
 	}
@@ -316,7 +316,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 	private function pushOnVirtualClock(array $script, float $timeout): array
 	{
 		$this->listen();
-		[$namespace, $clock] = $this->onVirtualClock(['pfb_dns_proxy_certificate_push'], $script);
+		[$namespace, $clock] = $this->onVirtualClock(['pfb_dns_proxy_certificate_push', 'pfb_dns_proxy_ctl_exchange'], $script);
 
 		return [($namespace . '\\pfb_dns_proxy_certificate_push')('certificate and key', $this->socket, $timeout), $clock->now()];
 	}
@@ -404,7 +404,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 		$pem = str_repeat("0123456789abcdef\n", 3600); // 61 200 bytes
 		$record = $this->listen();
 
-		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_certificate_push'], self::OK_AT_ONCE);
+		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_certificate_push', 'pfb_dns_proxy_ctl_exchange'], self::OK_AT_ONCE);
 		$why = ($namespace . '\\pfb_dns_proxy_certificate_push')($pem, $this->socket);
 		$this->finish();
 

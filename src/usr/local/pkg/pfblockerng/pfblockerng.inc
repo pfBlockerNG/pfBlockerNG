@@ -3649,6 +3649,10 @@ if (!defined('PFB_DNS_PROXY_LOG_WAIT')) {
 if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
 	define('PFB_DNS_PROXY_CTL_TIMEOUT', 3.0);
 }
+// Seconds pfb_dns_proxy_decider_restart() waits for the reply: the gateway waits up to 30 s for the new decider's READY, then kills.
+if (!defined('PFB_DNS_PROXY_DECIDER_RESTART_WAIT')) {
+	define('PFB_DNS_PROXY_DECIDER_RESTART_WAIT', 40.0);
+}
 // Readiness is read from the daemon's child pidfile and from the marker the proxy publishes with --ready-file (its own PID,
 // written once it serves). Kept in $pfb like the other runtime paths, so a unit test reads its own files; the marker lives
 // in the Unbound chroot directory, where the proxy already writes as `unbound` (its module files).
@@ -3656,6 +3660,8 @@ $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 // The copy a stop that leaves the proxy running across a package upgrade makes of the rc script it runs from: pfSense unlinks the script right after.
 $pfb['dns_proxy_rc_kept'] = '/var/run/pfb_dns_proxy_rc.kept';
+// What the next update must restart once because a package operation could not (a pass under pkg defers it): one line, the reason.
+$pfb['dns_proxy_restart_pending'] = '/var/run/pfb_dns_proxy_restart_pending';
 // The gateway's log (daemon(8) -o), which pfb_dns_proxy_listeners() reads for the startup check and the status panel: which listeners the current start bound.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
 // The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
@@ -3676,6 +3682,14 @@ if (!defined('PFB_PACKAGE_XML')) {
 // daemon(8) child's pid is the gateway's own. pfB-DNS has no other front end: a package with no pfb-dns this machine can run
 // cannot start it (see pfb_dns_proxy_service()).
 const PFB_DNS_PROXY_DIR = '/usr/local/pkg/pfblockerng/dns_proxy';
+// The sha256 the gateway records of its own binary when it publishes the ready marker, and the decider's record of its code (the md5
+// digests of its files, $pfb['dns_proxy_decider_src'], concatenated): the next update compares them with what the package installed.
+$pfb['dns_proxy_gateway_applied'] = $pfb['dns_proxy_ready'] . '.sha256';
+$pfb['dns_proxy_decider_applied'] = '/var/unbound/pfb_dns_decider.applied';
+$pfb['dns_proxy_decider_src'] = [
+	PFB_DNS_PROXY_DIR . '/pfb_dns_proxy.py', PFB_DNS_PROXY_DIR . '/decision_service.py', PFB_DNS_PROXY_DIR . '/dns_reply_log.py',
+	PFB_DNS_PROXY_DIR . '/dnswire.py', PFB_DNS_PROXY_DIR . '/unbound_shim.py', '/var/unbound/pfb_unbound.py', '/var/unbound/pfb_dnsbl_regex_rules.py',
+];
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -4532,27 +4546,18 @@ function pfb_dns_proxy_certificate_pushed_path(): string {
 }
 
 /**
- * Give the running gateway a renewed certificate on its control socket (--ctl-socket; the gateway's ctl.go). It is no longer
- * root, cannot read the root-only certificate file, and replaces what it serves for the handshakes that follow, with no restart
- * and no failed handshake. The wire is one frame, the length of $pem as 4 bytes big-endian and then $pem (the chain, then the key),
- * and the gateway answers one line, `ok` or `error: <reason>`; it takes it only from root (SO_PEERCRED / LOCAL_PEERCRED), which
- * this is. The connection is made in this process, so that no other process is started and no external wait is involved; every step
- * (connect, send, reply) is bounded by $timeout, so that a gateway that does not answer costs a bounded wait, not a hang.
+ * One request on the gateway's control socket (--ctl-socket; the gateway's ctl.go): connect, send $frame, read the one reply line.
+ * Every step (connect, send, reply) is bounded by $timeout, so that a gateway that does not answer costs a bounded wait, not a hang;
+ * the connection is made in this process, so that no other process is started and no external wait is involved.
  *
- * @param string $pem the certificate chain and private key, as pfb_dns_proxy_certificate_export() writes them
- * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
- * @param float $timeout seconds each step may take
- * @return string|null NULL once the gateway serves it; else why not
+ * @param string $what what the frame carries, as the failure messages name it ("the certificate")
+ * @return array{0: string|null, 1: string|null} [the reply with its newline trimmed, NULL] or [NULL, why the exchange failed]
  */
-function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?string {
-	global $pfb;
-
-	$socket ??= $pfb['dns_proxy_ctl'];
+function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeout, string $what): array {
 	$conn = @stream_socket_client("unix://{$socket}", $errno, $errstr, $timeout);
 	if ($conn === FALSE) {
-		return "cannot connect to {$socket}: {$errstr}";
+		return [NULL, "cannot connect to {$socket}: {$errstr}"];
 	}
-	$frame = pack('N', strlen($pem)) . $pem;
 	$deadline = hrtime(TRUE) + (int) ($timeout * 1000000000);
 	stream_set_blocking($conn, FALSE);
 	for ($sent = 0; $sent < strlen($frame); ) {
@@ -4561,12 +4566,12 @@ function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, flo
 		$write = [$conn];
 		if ($left <= 0 || stream_select($read, $write, $except, (int) $left, (int) (fmod($left, 1.0) * 1000000)) !== 1) {
 			fclose($conn);
-			return "{$socket} did not take the certificate within {$timeout} s";
+			return [NULL, "{$socket} did not take {$what} within {$timeout} s"];
 		}
 		$wrote = @fwrite($conn, substr($frame, $sent));
 		if ($wrote === FALSE) {
 			fclose($conn);
-			return "cannot send the certificate to {$socket}";
+			return [NULL, "cannot send {$what} to {$socket}"];
 		}
 		$sent += $wrote;
 	}
@@ -4578,21 +4583,60 @@ function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, flo
 		$write = $except = NULL;
 		if ($left <= 0 || stream_select($read, $write, $except, (int) $left, (int) (fmod($left, 1.0) * 1000000)) !== 1) {
 			fclose($conn);
-			return "no reply from {$socket} within {$timeout} s";
+			return [NULL, "no reply from {$socket} within {$timeout} s"];
 		}
 		$chunk = @fread($conn, 511 - strlen($reply));
 		if ($chunk === FALSE || $chunk === '') {
 			fclose($conn);
-			return "{$socket} closed the connection with no reply";
+			return [NULL, "{$socket} closed the connection with no reply"];
 		}
 		$reply .= $chunk;
 	}
 	fclose($conn);
 	if (!str_ends_with($reply, "\n")) {
-		return "{$socket} sent no complete reply";
+		return [NULL, "{$socket} sent no complete reply"];
 	}
-	$reply = trim($reply);
+	return [trim($reply), NULL];
+}
+
+/**
+ * Give the running gateway a renewed certificate on its control socket. It is no longer root, cannot read the root-only certificate
+ * file, and replaces what it serves for the handshakes that follow, with no restart and no failed handshake. The wire is one frame,
+ * the length of $pem as 4 bytes big-endian and then $pem (the chain, then the key), and the gateway answers one line, `ok` or
+ * `error: <reason>`; it takes it only from root (SO_PEERCRED / LOCAL_PEERCRED), which this is (see pfb_dns_proxy_ctl_exchange()).
+ *
+ * @param string $pem the certificate chain and private key, as pfb_dns_proxy_certificate_export() writes them
+ * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
+ * @param float $timeout seconds each step may take
+ * @return string|null NULL once the gateway serves it; else why not
+ */
+function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?string {
+	global $pfb;
+
+	[$reply, $why] = pfb_dns_proxy_ctl_exchange(pack('N', strlen($pem)) . $pem, $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the certificate');
+	if ($why !== NULL) {
+		return $why;
+	}
 	return ($reply === 'ok') ? NULL : "the gateway did not take the certificate: {$reply}";
+}
+
+/**
+ * Have the running gateway start a new decider and switch to it, with no restart of the gateway (ctl.go): the request is four 0xFF
+ * bytes, a length no certificate has, and the reply one line, `ok` once the new decider is READY and active, else `error: <reason>`
+ * with the old decider still serving. An older gateway answers it as a bad certificate length, which is an error here too.
+ *
+ * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
+ * @param float $timeout seconds each step may take: the reply waits for the new decider's READY
+ * @return string|null NULL once the gateway runs the new decider; else why not
+ */
+function pfb_dns_proxy_decider_restart(?string $socket = NULL, float $timeout = PFB_DNS_PROXY_DECIDER_RESTART_WAIT): ?string {
+	global $pfb;
+
+	[$reply, $why] = pfb_dns_proxy_ctl_exchange("\xFF\xFF\xFF\xFF", $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the decider restart');
+	if ($why !== NULL) {
+		return $why;
+	}
+	return ($reply === 'ok') ? NULL : "the gateway did not restart the decider: {$reply}";
 }
 
 /**
@@ -4975,18 +5019,34 @@ EOF;
 	write_rcfile($rc);
 }
 
+/** Is a package operation (install, upgrade, reinstall) running this process: pfB-DNS is then kept serving, and what needs a restart waits for the next update. */
+function pfb_dns_proxy_restart_deferred(): bool {
+	return !pfb_pkg_op_tears_down(pfb_pkg_operation());
+}
+
+/** Record that the proxy needs one whole-pair restart a package operation could not make: the next pass outside one performs it and removes this. */
+function pfb_dns_proxy_defer_restart(string $why): void {
+	global $pfb;
+
+	@file_put_contents($pfb['dns_proxy_restart_pending'], "{$why}\n");
+	pfb_logger("\nThe DNS proxy restart is deferred to the next update: {$why}", 1);
+}
+
 /**
  * Regenerate the proxy's rc script, restart it and wait for it to become READY: the module host re-reads lists and ini only
  * at init. A proxy that is not ready within the startup budget fails the activation, which is rolled back
  * (pfb_dns_proxy_confirm_ready()). The restore that was abandoned (pfb_dns_proxy_resolver()) starts the proxy again WITHOUT this: a
- * rollback that waited for the proxy it starts again would roll back again.
+ * rollback that waited for the proxy it starts again would roll back again. The restart also satisfies a deferred one.
  *
  * @return bool TRUE iff the proxy is ready
  */
 function pfb_dns_proxy_restart(): bool {
+	global $pfb;
+
 	pfb_dns_proxy_service();
 	$since = pfb_dns_proxy_log_size();
 	restart_service('pfb_dns_proxy');
+	unlink_if_exists($pfb['dns_proxy_restart_pending']);
 	return pfb_dns_proxy_confirm_ready($since);
 }
 
@@ -5345,16 +5405,54 @@ function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL): bo
 }
 
 /**
- * The apply's branch with nothing to reload restarts nothing: bring up a proxy that died since the last reload, and
- * restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ
+ * Did the package install another gateway binary than the one the running gateway records (it writes the sha256 of its own binary
+ * beside its ready marker)? The record matching ANY installed bin/<target>/pfb-dns is no change (the running one can only be this
+ * machine's, which the arch mapping of pfb_dns.sh picks); no record, an unreadable one or a mismatch is. No readable installed
+ * binary is no signal: nothing could be compared, and a restart would start the same one.
+ */
+function pfb_dns_proxy_gateway_changed(string $proxyDir): bool {
+	global $pfb;
+
+	$installed = [];
+	foreach (glob("{$proxyDir}/bin/*/pfb-dns") ?: [] as $binary) {
+		$digest = @hash_file('sha256', $binary);
+		if ($digest !== FALSE) {
+			$installed[] = $digest;
+		}
+	}
+	return $installed !== [] && !in_array(trim((string) @file_get_contents($pfb['dns_proxy_gateway_applied'])), $installed, TRUE);
+}
+
+/**
+ * Did the package install other decider code than the running decider records (it writes the md5 digests of its files beside the
+ * module's, before READY)? No record or another one is a change; files that cannot be read are no signal.
+ */
+function pfb_dns_proxy_decider_changed(): bool {
+	global $pfb;
+
+	$installed = pfb_unbound_py_module_fingerprint($pfb['dns_proxy_decider_src']);
+	return $installed !== FALSE && trim((string) @file_get_contents($pfb['dns_proxy_decider_applied'])) !== $installed;
+}
+
+/**
+ * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
+ * reload, and restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ
  * settings, so a new address or a changed setting is not served until the proxy restarts. Whatever it did, the proxy must
  * then be READY: one that is alive but never published its marker (restarted by its supervisor every few seconds) fails
  * the activation and is rolled back, which a pidfile alone would never notice.
+ *
+ * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
+ * pending restart (pfb_dns_proxy_defer_restart()), and nothing else is looked at. The next pass outside one restarts the whole pair
+ * once for a pending restart or a changed gateway binary (pfb_dns_proxy_gateway_changed()), and only the decider, on the gateway's
+ * control socket, for changed decider code (pfb_dns_proxy_decider_changed()); a decider restart the gateway does not take is
+ * logged and becomes the whole-pair restart. Neither change is looked for while the proxy is not READY: it has no record to judge.
  *
  * @param string $proxyDir the package's dns_proxy directory, as for pfb_dns_proxy_service()
  * @return bool TRUE iff nothing is moved or the proxy is ready; FALSE after a failed activation (rolled back or not)
  */
 function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): bool {
+	global $pfb;
+
 	if (!pfb_dns_proxy_owns_resolver()) {
 		return TRUE;
 	}
@@ -5364,18 +5462,49 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	}
 	$before = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 	pfb_dns_proxy_service($proxyDir);
-	$acted = TRUE;
-	$since = NULL;
+	$deferred = pfb_dns_proxy_restart_deferred();
+	$why = NULL;		// why the running proxy restarts as a whole pair
+	$decider = FALSE;	// only its decider has to
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);
 		$since = pfb_dns_proxy_log_size();
 		start_service('pfb_dns_proxy');
-	} elseif ($before !== @file_get_contents(PFB_DNS_PROXY_RCFILE)) {
-		pfb_logger("\nRestarting the DNS proxy: its listen addresses or DoH/DoQ settings changed", 1);
-		$since = pfb_dns_proxy_log_size();
-		restart_service('pfb_dns_proxy');
+		unlink_if_exists($pfb['dns_proxy_restart_pending']);
+		$acted = TRUE;
 	} else {
-		$acted = FALSE;
+		$rc_changed = $before !== @file_get_contents(PFB_DNS_PROXY_RCFILE);
+		if ($deferred) {
+			if ($rc_changed) {
+				pfb_dns_proxy_defer_restart('its listen addresses or DoH/DoQ settings changed');
+			}
+		} elseif ($rc_changed) {
+			$why = 'its listen addresses or DoH/DoQ settings changed';
+		} elseif (file_exists($pfb['dns_proxy_restart_pending'])) {
+			$why = 'a restart was deferred to this update';
+		} elseif (pfb_dns_proxy_ready()) {
+			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
+				$why = 'the package installed another gateway';
+			} else {
+				$decider = pfb_dns_proxy_decider_changed();
+			}
+		}
+		$since = NULL;
+		$acted = ($why !== NULL || $decider);
+		if ($decider) {
+			pfb_logger("\nRestarting the DNS proxy's decider: the package installed other decider code", 1);
+			$failed = pfb_dns_proxy_decider_restart();
+			if ($failed !== NULL) {
+				pfb_logger("\nNot completed: the DNS proxy's decider did not restart: {$failed}", 2);
+				$why = 'its decider could not be restarted alone';
+			}
+		} elseif ($why !== NULL) {
+			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
+		}
+		if ($why !== NULL) {
+			$since = pfb_dns_proxy_log_size();
+			restart_service('pfb_dns_proxy');
+			unlink_if_exists($pfb['dns_proxy_restart_pending']);
+		}
 	}
 	$ready = pfb_dns_proxy_confirm_ready($since);
 	if ($acted && $ready) {
@@ -15196,9 +15325,10 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 		// issue #3125: a package upgrade re-stages the shipped python modules; signal a
 		// restart when the applied fingerprint (written by the module at init) differs --
-		// absent/stale/junk marker = drift, unreadable shipped file = no signal.
+		// absent/stale/junk marker = drift, unreadable shipped file = no signal. Only while Unbound hosts the module:
+		// the proxy's decider record (pfb_dns_proxy_decider_changed()) judges its code, so one restart is not asked twice.
 		$pfb_py_module_fp = pfb_unbound_py_module_fingerprint($pfb['unbound_py_module_src']);
-		if ($pfb_py_module_fp !== FALSE &&
+		if ($module && $pfb_py_module_fp !== FALSE &&
 			trim((string) @file_get_contents($pfb['unbound_py_module_applied'])) !== $pfb_py_module_fp) {
 			$pfbpython = TRUE;
 			pfb_logger("\nDNSBL Unbound python module changed -- Resolver restart required", 1);
@@ -16140,10 +16270,15 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	// restart_service() returns before the new proxy serves, which the ledger below depends on: wait for it to be READY,
 	// and a proxy that is not rolls the activation back (the Resolver, the module and Unbound as before), which the
 	// reload that rollback runs does not repeat: the restore consumed the snapshot this condition reads.
+	// Under a package operation a running proxy keeps serving and the restart is deferred to the next update (issue #3566); a dead one is started.
 	if ($mode == 'enabled' && pfb_dns_proxy_saved() !== NULL) {
-		pfb_logger("\nRestarting the DNS proxy", 1);
-		if (pfb_dns_proxy_restart()) {
-			pfb_logger(' completed: the DNS proxy is ready', 1);
+		if (pfb_dns_proxy_restart_deferred() && pfb_dns_proxy_running()) {
+			pfb_dns_proxy_defer_restart('the DNSBL module host must reload its lists');
+		} else {
+			pfb_logger("\nRestarting the DNS proxy", 1);
+			if (pfb_dns_proxy_restart()) {
+				pfb_logger(' completed: the DNS proxy is ready', 1);
+			}
 		}
 	}
 
