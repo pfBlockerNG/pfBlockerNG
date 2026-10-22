@@ -14528,8 +14528,8 @@ function pfb_dns_proxy_stand_down(): bool {
  * script's budget: TERM at 0 s, KILL at 5 s, give up at 7 s), so the hold is that plus the fresh read and the write, and
  * a settings save queued behind it (PFB_DNS_CONFIG_LOCK_WAIT, 10 s) still gets the lock. A proxy that outlived its
  * stop abandons the restore (snapshot kept, notice raised) for the next apply to retry, and so does a config.xml that does
- * not take the write (pfb_dns_config_write_failed()); the proxy is restarted once the lock
- * is released (that restart, a second stop and a start, takes up to 14 s and stays outside the lock), so the moved
+ * not take the write (pfb_dns_config_write_failed()); the proxy is started again through its rc script once the lock
+ * is released (that start takes up to 17 s, 10 s on the start lock plus 7 s to stop a survivor, and stays outside the lock), so the moved
  * Resolver keeps being served. Otherwise it restores each key exactly and clears the snapshot. No snapshot and no
  * block of ours on the fresh read = nothing to do (no stop, no write, no reload); a Resolver carrying our block with no snapshot is
  * reported to the operator (file_notice): it cannot be put back automatically. Idempotent.
@@ -14571,12 +14571,14 @@ function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 		unlock($lock);
 	}
 
-	// A restore keeps the snapshot when the proxy outlived its stop or config.xml did not take the write: the Resolver is still
-	// moved, so the proxy is restarted to serve it (the rc script starts on the snapshot alone). Not under the lock: a restart
-	// can take 14 s. The restart waits for nothing and rolls nothing back: this restore may itself be a rollback.
+	// A restore that kept the snapshot left the Resolver moved: the rc script starts the proxy, because restart_service() does nothing
+	// without the service entry. Outside the lock (up to 17 s: 10 s start lock, 7 s to stop a survivor); it waits for nothing and rolls
+	// nothing back, as this restore may itself be a rollback.
 	if (!$on && pfb_dns_proxy_saved() !== NULL) {
 		pfb_dns_proxy_service();
-		restart_service('pfb_dns_proxy');
+		if (file_exists(PFB_DNS_PROXY_RCFILE)) {
+			mwexec(PFB_DNS_PROXY_RCFILE . ' start');
+		}
 	}
 	return $changed;
 }

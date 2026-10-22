@@ -438,7 +438,8 @@ and pfB-DNS status panel explain when pfB-DNS is not active. The restore is aban
 the next apply, module kept out of Unbound meanwhile) when either proxy pidfile still names a live process after
 the rc script's own stop (run directly: pfSense's `stop_service()` does nothing while the package's service entry is absent, issue #3561),
 because that stop reports nothing and Unbound would collide with the proxy on the Resolver's port;
-the proxy is then restarted (once the config lock below is released), so the moved Resolver stays served until the retry.
+the proxy is then started again through its rc script (once the config lock below is released; `restart_service()` has the same blind spot as `stop_service()`), so the moved Resolver stays served until the retry.
+A `config.xml` that refuses the restore's write abandons it the same way, with the proxy the restore stopped started again.
 
 The admin's Custom options are read the way Unbound 1.26.1 reads them, established with `unbound-checkconf -o` in the
 `pfb-dns-frontend-unbound:trixie` image rather than from the grammar: a `#` starts a comment only outside quotes and only after
