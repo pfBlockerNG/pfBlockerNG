@@ -5531,10 +5531,9 @@ function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL, ?st
 	$expected_saved ??= (string) PfbConfig::read('dns/pfb_dns_saved');
 	$operation = try_lock('pfb_dns_proxy_rollback', PFB_DNS_PROXY_START_WAIT);
 	if (!is_resource($operation)) {
-		// Nothing of this attempt was written, stopped or restarted; the running rollback reports what it leaves
-		pfb_dns_proxy_rollback_notice('pfB-DNS: another recovery of the DNS proxy is still running (it did not finish within ' .
-		    PFB_DNS_PROXY_START_WAIT . ' seconds), so this attempt did nothing. The running recovery reports its own outcome; ' .
-		    'if pfB-DNS is still on, the next pfBlockerNG update retries.');
+		pfb_dns_proxy_rollback_notice('pfB-DNS: the DNS proxy recovery lock could not be acquired within ' .
+		    PFB_DNS_PROXY_START_WAIT . ' seconds; another recovery may still be running. This rollback attempt changed no settings or services. ' .
+		    'Check the recovery notices and DNS service state, then run an Update if recovery is still needed.');
 		return FALSE;
 	}
 	try {
