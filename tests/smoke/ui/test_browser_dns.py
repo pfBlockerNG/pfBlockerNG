@@ -377,7 +377,9 @@ _MOVED_SNAPSHOT = base64.b64encode(
 PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 STATUS_TRANSPORTS = {"plain": "Plain DNS", "dot": "DNS over TLS", "doh": "DNS over HTTPS", "doq": "DNS over QUIC"}
 PHONE: ViewportSize = {"width": 390, "height": 844}
-# A row wider than a phone: the longest IPv6 listener and a refusal reason, put into the live table by the test.
+# A row wider than a phone: a long interface description, the longest IPv6 listener and a refusal reason, put into the
+# live table by the test, so the State cell (and its screen-reader text) starts beyond the screen's right edge.
+WIDE_INTERFACE = "OPT12_GUEST_VLAN_4094_UPLINK_DESCRIPTION"
 WIDE_ADDRESS = "[2001:db8:ffff:ffff:ffff:ffff:ffff:ffff]:853"
 WIDE_REASON = "listen tcp [2001:db8:ffff:ffff:ffff:ffff:ffff:ffff]:853: bind: address already in use"
 
@@ -475,8 +477,12 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
 
         page.set_viewport_size(PHONE)
         cells = rows.nth(0).locator("td")
+        cells.nth(0).evaluate("(el, text) => { el.textContent = text; }", WIDE_INTERFACE)
         cells.nth(1).evaluate("(el, text) => { el.textContent = text; }", WIDE_ADDRESS)
         cells.nth(2).evaluate("(el, text) => el.append(' ' + text)", WIDE_REASON)
+        # the precondition that makes the overflow check bite: the screen-reader text is laid out past the screen
+        said_at = cells.nth(2).locator(".sr-only").evaluate("el => el.getBoundingClientRect().left")
+        assert said_at > PHONE["width"], f"the wide row must put the State cell past the screen, it starts at {said_at}"
         scroller = panel.locator("#pfb-dns-status-plain .table-responsive")
         hidden = scroller.evaluate("el => el.scrollWidth - el.clientWidth")
         overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
