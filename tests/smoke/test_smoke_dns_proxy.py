@@ -1738,14 +1738,35 @@ class Pids:
 
 
 def _pids(vm: SmokeVM) -> Pids:
-    """The pidfiles name the gateway and its supervisor; the decider is the gateway's child running pfb_dns_proxy.py."""
+    """The pidfiles name the gateway and its supervisor; the decider is its one child running pfb_dns_proxy.py.
+
+    A replaced decider drains for a while beside the new one: two children are no decider yet, never a guess.
+    """
     gateway = _pid_file(vm, PROXY_PID_FILE)
-    decider = None
+    children: list[int] = []
     for line in vm.ssh("ps -axww -o pid,ppid,args").stdout.splitlines()[1:]:
         fields = line.split(None, 2)
         if len(fields) == 3 and gateway is not None and fields[1] == str(gateway) and "pfb_dns_proxy.py" in fields[2]:
-            decider = int(fields[0])
-    return Pids(gateway, _pid_file(vm, DAEMON_PID_FILE), decider)
+            children.append(int(fields[0]))
+    return Pids(gateway, _pid_file(vm, DAEMON_PID_FILE), children[0] if len(children) == 1 else None)
+
+
+def _settled_pids(vm: SmokeVM) -> Pids:
+    """The pids once a gateway, a supervisor and exactly one decider are there (a drained decider has left)."""
+    seen: list[Pids] = []
+
+    def settled() -> bool:
+        seen.append(_pids(vm))
+        return seen[-1].complete()
+
+    try:
+        h.wait_until(settled, timeout=60.0, interval=2.0)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"{exc}\nexpected a gateway, a supervisor and exactly one decider within 60 s, last read: {seen[-1]}\n"
+            f"{_diagnostics(vm)}"
+        ) from exc
+    return seen[-1]
 
 
 def _cat(vm: SmokeVM, path: str) -> str | None:
@@ -1823,7 +1844,7 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
     pkg = Path(os.environ["SMOKE_PKG"])
     higher = reversion_pkg(pkg, f"{read_compact_version(pkg)}_9", tmp_path)
     h._write_cron_disable_flag(vm)
-    before = _pids(vm)
+    before = _settled_pids(vm)
     assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
     probe = _Probe(vm, rig.names.blocked)
     try:
@@ -1853,13 +1874,13 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
         )
         blocked, raw = _query(rig.client, rig.names.blocked)
         assert h.is_vip(blocked), f"after the upgrade the listed name is not blocked: {blocked}\n{raw}\n{diagnostics}"
-        during = _pids(vm)
+        during = _settled_pids(vm)
         assert during == before, (
             f"the upgrade restarted pfB-DNS: (gateway, supervisor, decider) {before} -> {during}\n{diagnostics}"
         )
         _assert_probe_answered(probe.stop(), "the package upgrade")
         h.reload(vm, "update")  # the next update
-        later = _pids(vm)
+        later = _settled_pids(vm)
         assert later == before, (
             f"the update after the upgrade restarted pfB-DNS: (gateway, supervisor, decider) {before} -> {later}\n"
             f"{_diagnostics(vm)}"
@@ -1891,7 +1912,7 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
     """
     vm = rig.vm
     target = f"{DECIDER_DIR}/dnswire.py"
-    before = _pids(vm)
+    before = _settled_pids(vm)
     assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
     record_before = _cat(vm, DECIDER_APPLIED)
     assert record_before is not None, f"{DECIDER_APPLIED} is absent before the change: the decider wrote no record"
@@ -1904,7 +1925,7 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
         probe.start()
         h.reload(vm, "update")
         rows = probe.stop()
-        after = _pids(vm)
+        after = _settled_pids(vm)
         diagnostics = _diagnostics(vm)
         assert (after.gateway, after.supervisor) == (before.gateway, before.supervisor), (
             f"a decider code change restarted the gateway or its supervisor: (gateway, supervisor) "
@@ -1942,7 +1963,7 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
     Then no pid changed: the pair was restarted once.
     """
     vm = rig.vm
-    before = _pids(vm)
+    before = _settled_pids(vm)
     assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
     command = vm.ssh(f"ps -o args= -p {before.gateway}").stdout.split()
     binary = command[0] if command else ""
@@ -1956,7 +1977,7 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
         edited = _sh(vm, f"cp -p {binary} {binary}.new && printf 'x' >> {binary}.new && mv {binary}.new {binary}")
         assert edited.returncode == 0, f"editing {binary}: rc={edited.returncode} {edited.stdout}{edited.stderr}"
         h.reload(vm, "update")
-        after = _pids(vm)
+        after = _settled_pids(vm)
         diagnostics = _diagnostics(vm)
         assert after.complete(), (
             f"after the update pass: expected a gateway, a supervisor and a decider: {after}\n{diagnostics}"
@@ -1980,7 +2001,7 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
         blocked, raw = _query(rig.client, rig.names.blocked)
         assert h.is_vip(blocked), f"after the restart {rig.names.blocked} is not blocked: {blocked}\n{raw}"
         h.reload(vm, "update")
-        again = _pids(vm)
+        again = _settled_pids(vm)
         assert again == after, f"a second update pass restarted the pair again: {after} -> {again}\n{_diagnostics(vm)}"
     finally:
         restored = _sh(
