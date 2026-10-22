@@ -14571,12 +14571,14 @@ function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 		unlock($lock);
 	}
 
-	// A restore that kept the snapshot left the Resolver moved: the rc script just regenerated starts the proxy, because restart_service()
-	// does nothing without the service entry. Outside the lock (up to 17 s: 10 s start lock, 7 s to stop a survivor); it waits for nothing
-	// and rolls nothing back, as this restore may itself be a rollback.
+	// A restore that kept the snapshot left the Resolver moved: the regenerated rc script starts the proxy (restart_service() does nothing
+	// without the service entry), unless a Listen Port conflict left it unwritten. Outside the lock (up to 17 s: 10 s start lock, 7 s to
+	// stop a survivor); it waits for nothing and rolls nothing back, as this restore may itself be a rollback.
 	if (!$on && pfb_dns_proxy_saved() !== NULL) {
 		pfb_dns_proxy_service();
-		mwexec(PFB_DNS_PROXY_RCFILE . ' start');
+		if (file_exists(PFB_DNS_PROXY_RCFILE)) {
+			mwexec(PFB_DNS_PROXY_RCFILE . ' start');
+		}
 	}
 	return $changed;
 }
