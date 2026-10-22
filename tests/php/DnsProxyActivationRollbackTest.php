@@ -788,8 +788,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$snapshot = (string) config_get_path(self::SAVED, '');
 		$moved = self::sorted(config_get_path('unbound'));
 		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'before: no rc script');
-		$this->assertSame($healthy, pfb_dns_proxy_gateway_ready(), 'before: only the healthy row has a ready gateway');
-		$this->assertFalse(pfb_dns_proxy_ready(), 'before: the missing rc script prevents confirming the actual upstream');
+		$this->assertSame($healthy, pfb_dns_proxy_ready(), 'before: only the healthy row has a ready gateway');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'before: the missing rc script prevents confirming the actual upstream');
 
 		// When the restore is asked for
 		$changed = pfb_dns_proxy_resolver(FALSE);
@@ -1898,6 +1898,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->seedUnbound(alive: $foreign);
 		file_put_contents($GLOBALS['pfb_test_sockstat_output'], $foreign
 			? "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\nroot nc 6161 4 udp4 127.0.0.1:5353 *:*\n" : '');
+		// The gateway already holds the certificate it serves, so nothing is pushed to it (the fixture an earlier apply leaves)
+		$this->assertNull(pfb_dns_proxy_certificate_export(), 'before: the certificate the gateway holds is exported');
+		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
 
 		if ($path === 'boot') {
 			$this->dnsCheckArm('0');

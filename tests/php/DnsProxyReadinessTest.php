@@ -217,15 +217,15 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->commandUpstream($endpoint);
 		file_put_contents($GLOBALS['pfb_test_sockstat_output'], $rows);
 
-		$this->assertSame($expected, pfb_dns_proxy_ready(), "upstream={$endpoint}; sockstat:\n{$rows}");
+		$this->assertSame($expected, pfb_dns_proxy_serving_ready(), "upstream={$endpoint}; sockstat:\n{$rows}");
 	}
 
-	public function testADeadUnboundCannotBeMadeReadyByTheGatewayMarkerOrItsOldSockets(): void
+	public function testADeadUnboundCannotBeServedByTheGatewayMarkerOrItsOldSockets(): void
 	{
 		$this->proxyServes();
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
 
-		$this->assertFalse(pfb_dns_proxy_ready(), 'the gateway is serving but its Unbound backend has exited');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the gateway is up but its Unbound backend has exited, so it does not serve');
 	}
 
 	public function testTheGatewayIsReadyWhileItsUnboundBackendIsDead(): void
@@ -254,7 +254,7 @@ final class DnsProxyReadinessTest extends TestCase
 			file_put_contents($this->unboundPidfile(), $pid);
 		}
 
-		$this->assertFalse(pfb_dns_proxy_ready(), 'unusable Unbound pidfile: ' . var_export($pid, TRUE));
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'unusable Unbound pidfile: ' . var_export($pid, TRUE));
 	}
 
 	public function testAnUnavailableSockstatExecutableFailsClosed(): void
@@ -262,7 +262,7 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->proxyServes();
 		chmod(PFB_DNS_PROXY_SOCKSTAT, 0644);
 		try {
-			$this->assertFalse(pfb_dns_proxy_ready(), 'the listener inventory command cannot be executed');
+			$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the listener inventory command cannot be executed');
 		} finally {
 			chmod(PFB_DNS_PROXY_SOCKSTAT, 0755);
 		}
@@ -285,7 +285,7 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->proxyServes();
 		$this->commandUpstream($endpoint);
 
-		$this->assertFalse(pfb_dns_proxy_ready(), 'unusable --upstream: ' . var_export($endpoint, TRUE));
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'unusable --upstream: ' . var_export($endpoint, TRUE));
 	}
 
 	public function testMissingOrEmptyRcCommandFailsClosed(): void
@@ -293,10 +293,10 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->proxyServes();
 		foreach (['', "#!/bin/sh\n# no daemon command\n"] as $rc) {
 			file_put_contents(PFB_DNS_PROXY_RCFILE, $rc);
-			$this->assertFalse(pfb_dns_proxy_ready(), 'no daemon command in rc: ' . var_export($rc, TRUE));
+			$this->assertFalse(pfb_dns_proxy_serving_ready(), 'no daemon command in rc: ' . var_export($rc, TRUE));
 		}
 		unlink(PFB_DNS_PROXY_RCFILE);
-		$this->assertFalse(pfb_dns_proxy_ready(), 'missing rc command');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'missing rc command');
 	}
 
 	public function testSockstatFailureFailsClosedEvenIfItsStdoutNamesHealthySockets(): void
@@ -304,16 +304,16 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->proxyServes();
 		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
 
-		$this->assertFalse(pfb_dns_proxy_ready(), 'sockstat exited nonzero with otherwise healthy stdout');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'sockstat exited nonzero with otherwise healthy stdout');
 	}
 
 	public function testReadinessUsesTheActualRcEndpointRatherThanCurrentInterfaceAvailability(): void
 	{
 		$this->proxyServes();
 		$GLOBALS['pfb_test_interface_ip']['lo0'] = NULL;
-		$this->assertTrue(pfb_dns_proxy_ready(), 'the generated rc still targets healthy IPv4');
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the generated rc still targets healthy IPv4');
 		$this->commandUpstream('[::1]:5353');
-		$this->assertFalse(pfb_dns_proxy_ready(), 'the actual rc now targets absent IPv6, not healthy IPv4');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the actual rc now targets absent IPv6, not healthy IPv4');
 	}
 
 	public function testTheAwaitReturnsOnTheTickTheBackendStartsServing(): void

@@ -358,7 +358,7 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertTrue(pfb_dns_proxy_running(), 'the gateway child still lives');
 		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyPidfile()), 'the child pidfile is kept');
 		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyMarker()), 'the ready marker is kept');
-		$this->assertFalse(pfb_dns_proxy_ready(), 'the backend is dead: the proxy is not ready');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the backend is dead: the proxy is not serving');
 		$this->assertSame('Starting', $status['service']);
 
 		// And the rendered panel says Starting, and each of the same rows says Listening, through its icon and its screen-reader text
@@ -403,7 +403,7 @@ final class PfbDnsStatusTest extends TestCase
 		// Then the gateway is live with its marker and not ready, and every transport's addresses are configured but unconfirmed, not unbound
 		$this->assertTrue(pfb_dns_proxy_running(), 'the gateway child still lives');
 		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyMarker()), 'the ready marker names it');
-		$this->assertFalse(pfb_dns_proxy_ready(), 'the backend is dead: the proxy is not ready');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the backend is dead: the proxy is not serving');
 		$this->assertSame('Starting', $status['service']);
 		$this->assertSame([
 			'plain' => self::served('53', 'configured_unconfirmed'),

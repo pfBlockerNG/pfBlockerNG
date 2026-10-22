@@ -996,7 +996,7 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
 
     def proxy_ready() -> bool:
         pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
-        return h._php_read_scalar(vm, pre, "pfb_dns_proxy_ready() ? '1' : '0'") == "1"
+        return h._php_read_scalar(vm, pre, "pfb_dns_proxy_serving_ready() ? '1' : '0'") == "1"
 
     def service_of(page: str) -> str | None:
         found = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]*)</td>', page)
@@ -1005,7 +1005,7 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
     assert vm.ssh("cat", READY_FILE).stdout.strip() == str(proxy), (
         f"{READY_FILE} does not hold the gateway's pid {proxy}"
     )
-    assert proxy_ready(), "pfb_dns_proxy_ready() is false while the gateway and Unbound both run"
+    assert proxy_ready(), "pfb_dns_proxy_serving_ready() is false while the gateway and Unbound both run"
     healthy: dict[str, list[tuple[str, list[str], str]]] = {}
 
     def panel_ready() -> bool:
