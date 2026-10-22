@@ -18,17 +18,24 @@ use PHPUnit\Framework\TestCase;
  *   - the decider's record of its code (C2) is compared with the installed files: a different or absent record is a decider-only
  *     restart on the control socket (four 0xFF bytes), answered `ok`; any other answer, or no socket, is a whole-pair restart;
  *     files that cannot be read are no signal;
+ *   - the decider-only restart runs only when hw.usermem holds a second decider (twice its RSS plus 64 MiB), and the update's log
+ *     names the RSS and hw.usermem it measured (issue #3580); a shortfall, or a decider, its RSS or hw.usermem that cannot be read,
+ *     is a whole-pair restart whose log line says why;
  *   - a proxy that is not ready is never asked for either restart, and a due whole-pair restart never also sends the decider's.
  *
  * Every row starts from the quiet box (nothing differs: nothing restarts) and changes one thing.
  */
 #[CoversFunction('pfb_dns_proxy_ensure_running')]
+#[CoversFunction('pfb_dns_proxy_decider_restart_fits_ram')]
 #[CoversFunction('pfb_dns_proxy_decider_restart')]
 #[CoversFunction('pfb_dns_proxy_restart')]
 #[CoversFunction('pfb_reload_unbound')]
 final class DnsProxyKeepRunningTest extends TestCase
 {
 	use KeepRunningScenario;
+
+	/** The decider's RSS in the default process table (krPsDecider()), KiB. */
+	private const DECIDER_RSS_KIB = 240580;
 
 	private array $savedGlobals = [];
 	/** @var list<array{resource,array<int,resource>}> */
@@ -277,6 +284,101 @@ final class DnsProxyKeepRunningTest extends TestCase
 		// Then the whole pair restarted
 		$this->assertTrue($ready);
 		$this->assertSame($this->pair(), $this->krProxyCalls());
+	}
+
+	/** The least hw.usermem that lets the decider's restart run alongside the running one: a second copy of it and 64 MiB over. */
+	private static function fits(): int
+	{
+		return 2 * self::DECIDER_RSS_KIB * 1024 + 64 * 1024 * 1024;
+	}
+
+	public function testADeciderRestartThatFitsInMemoryRunsAloneAndLogsWhatItMeasured(): void
+	{
+		// Given a changed decider, a gateway that takes the restart, and hw.usermem exactly at what a second decider needs
+		$fits = self::fits();
+		$this->krApply(['decider' => 'different']);
+		$GLOBALS['pfb_test_sysctl']['hw.usermem'] = (string) $fits;
+		$record = $this->listen("ok\n");
+
+		// When the pass runs
+		$ready = $this->krEnsure();
+		$this->finish();
+
+		// Then the decider restarted alone, and the log names the decider, its RSS and hw.usermem
+		$this->assertTrue($ready);
+		$this->assertSame("\xFF\xFF\xFF\xFF", (string) @file_get_contents($record));
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertStringContainsString(
+			"Restarting the DNS proxy's decider: the package installed other decider code (decider pid 4243 uses " . self::DECIDER_RSS_KIB . " KiB, hw.usermem is {$fits} bytes)",
+			$this->krLog()
+		);
+	}
+
+	public function testADeciderRestartShortOfMemoryRestartsTheWholePairAndLogsWhatItMeasured(): void
+	{
+		// Given a changed decider, a gateway that would take the restart, and hw.usermem one byte short of a second decider
+		$short = self::fits() - 1;
+		$this->krApply(['decider' => 'different']);
+		$GLOBALS['pfb_test_sysctl']['hw.usermem'] = (string) $short;
+		$record = $this->listen("ok\n");
+
+		// When the pass runs
+		$ready = $this->krEnsure();
+		$this->finish();
+
+		// Then the whole pair restarted, no decider restart was sent, and the log names what was measured
+		$this->assertTrue($ready);
+		$this->assertSame($this->pair(), $this->krProxyCalls());
+		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
+		$this->assertStringContainsString(
+			'Restarting the DNS proxy: a second decider is not known to fit in memory (decider pid 4243 uses ' . self::DECIDER_RSS_KIB . " KiB, hw.usermem is {$short} bytes)",
+			$this->krLog()
+		);
+	}
+
+	public static function unmeasurableDeciders(): array
+	{
+		$noUsermem = 'hw.usermem could not be read';
+		$noDecider = 'no single decider runs under the gateway';
+		$noRss = 'the RSS of decider pid 4243 could not be read';
+		$head = [self::krPsSupervisor(), self::krPsGateway()];
+		return [
+			'hw.usermem unreadable' => ['', 'default', $noUsermem],
+			'hw.usermem zero' => ['0', 'default', $noUsermem],
+			'hw.usermem not a number' => ['16G', 'default', $noUsermem],
+			'ps fails' => [NULL, NULL, $noDecider],
+			'only the gateway, whose own args name pfb_dns_proxy.py' => [NULL, self::krPsTable($head), $noDecider],
+			'two deciders under the gateway (a drain in progress)' => [NULL, self::krPsTable([...$head, self::krPsDecider(), self::krPsDecider('4250', '4242', '239000')]), $noDecider],
+			"a decider under a pid that only starts with the gateway's" => [NULL, self::krPsTable([...$head, self::krPsDecider('4243', '42420')]), $noDecider],
+			'a gateway child that is not the decider' => [NULL, self::krPsTable([...$head, self::krPsRow('4243', '4242', '900', '/bin/sh -c /usr/local/sbin/something')]), $noDecider],
+			'decider RSS zero' => [NULL, self::krPsTable([...$head, self::krPsDecider('4243', '4242', '0')]), $noRss],
+			'decider RSS not a number' => [NULL, self::krPsTable([...$head, self::krPsDecider('4243', '4242', '-')]), $noRss],
+		];
+	}
+
+	#[DataProvider('unmeasurableDeciders')]
+	public function testADeciderRestartThatCannotBeMeasuredRestartsTheWholePair(?string $usermem, ?string $table, string $reason): void
+	{
+		// Given a changed decider, a gateway that would take the restart, and a measurement that cannot be made ($usermem NULL
+		// keeps the box's 16 GiB; $table NULL makes ps fail, 'default' keeps the box's process table)
+		$this->krApply(['decider' => 'different']);
+		if ($usermem !== NULL) {
+			$GLOBALS['pfb_test_sysctl']['hw.usermem'] = $usermem;
+		}
+		if ($table !== 'default') {
+			$this->krPs($table);
+		}
+		$record = $this->listen("ok\n");
+
+		// When the pass runs
+		$ready = $this->krEnsure();
+		$this->finish();
+
+		// Then the whole pair restarted, no decider restart was sent, and the log says why the second decider was not known to fit
+		$this->assertTrue($ready);
+		$this->assertSame($this->pair(), $this->krProxyCalls());
+		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
+		$this->assertStringContainsString("Restarting the DNS proxy: a second decider is not known to fit in memory ({$reason})", $this->krLog());
 	}
 
 	public function testDeciderFilesThatCannotBeReadAreNoSignal(): void

@@ -1703,6 +1703,7 @@ DECIDER_DIR = "/usr/local/pkg/pfblockerng/dns_proxy"
 DECIDER_APPLIED = "/var/unbound/pfb_dns_decider.applied"  # the decider's code record
 GATEWAY_APPLIED = f"{READY_FILE}.sha256"  # the gateway's binary record
 RESTART_PENDING = "/var/run/pfb_dns_proxy_restart_pending"
+DECIDER_RESTART_LOGGED = "Restarting the DNS proxy's decider: the package installed other decider code"
 SAVE_DIR = "/var/tmp/pfb3566_saved"  # the installed file a test edits, as it was
 UPGRADE_PROBE_DIR = "/var/tmp/pfb3566_probe"
 UPGRADE_PROBE_LOG = f"{UPGRADE_PROBE_DIR}/log"
@@ -1908,7 +1909,8 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
     When a comment is appended to the installed dnswire.py and an update pass runs, an on-box probe asking for a listed
       name every 0.2 s the whole time,
     Then the gateway and its supervisor keep their pids, the decider has a new one, every probe got the VIP, the
-      listed name is still blocked, and the decider's code record changed.
+      listed name is still blocked, the decider's code record changed, and the update's log names the running decider's
+      pid and RSS and hw.usermem, the memory check it passed (issue #3580).
     """
     vm = rig.vm
     target = f"{DECIDER_DIR}/dnswire.py"
@@ -1922,6 +1924,11 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
     try:
         edited = _sh(vm, f"printf '\\n# pfb3566 smoke: a decider code change\\n' >> {target}")
         assert edited.returncode == 0, f"editing {target}: rc={edited.returncode} {edited.stdout}{edited.stderr}"
+        logged = _sh(vm, f"wc -c < {h.PFB_LOG}")
+        assert logged.returncode == 0 and logged.stdout.strip().isdigit(), (
+            f"reading the size of {h.PFB_LOG}: rc={logged.returncode} {logged.stdout!r}{logged.stderr!r}"
+        )
+        size = int(logged.stdout)
         probe.start()
         h.reload(vm, "update")
         rows = probe.stop()
@@ -1941,6 +1948,27 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
         assert record_after is not None and record_after != record_before, (
             f"{DECIDER_APPLIED} did not change: before {record_before!r}, after {record_after!r}"
         )
+        added = _sh(vm, f"tail -c +{size + 1} {h.PFB_LOG} | grep -F {shlex.quote(DECIDER_RESTART_LOGGED)}")
+        lines = added.stdout.splitlines()
+        assert added.returncode == 0 and len(lines) == 1, (
+            f"expected one {DECIDER_RESTART_LOGGED!r} line added to {h.PFB_LOG} by the update, got {len(lines)} "
+            f"(grep rc={added.returncode}): {lines}\n{diagnostics}"
+        )
+        checked = re.search(r"\(decider pid (\d+) uses (\d+) KiB, hw\.usermem is (\d+) bytes\)", lines[0])
+        assert checked is not None, (
+            f"the decider restart's log line names no pid, RSS and hw.usermem: expected '(decider pid N uses R KiB, "
+            f"hw.usermem is U bytes)', got {lines[0]!r}\n{diagnostics}"
+        )
+        pid, rss, usermem = (int(group) for group in checked.groups())
+        assert pid == before.decider, (
+            f"the memory check measured another process than the running decider: expected pid {before.decider}, "
+            f"got {pid}: {lines[0]!r}\n{diagnostics}"
+        )
+        assert rss > 0 and usermem > 0, (
+            f"the memory check read no RSS or hw.usermem: expected both > 0, got RSS {rss} KiB and hw.usermem "
+            f"{usermem} bytes: {lines[0]!r}\n{diagnostics}"
+        )
+        _say(f"the decider restart's memory check read: {lines[0]}")
     finally:
         try:
             probe.stop()

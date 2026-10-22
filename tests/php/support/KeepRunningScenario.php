@@ -9,6 +9,7 @@ require_once dirname(__DIR__) . '/DnsProxyReadySeedTrait.php';
  * proxy that serves, its rc script, the gateway binary the package installs and the gateway's record of the binary it runs, the
  * decider's files and its record, a pending-restart marker or none. krApply() makes one such state, quiet by default (nothing
  * differs, so nothing restarts) and changed only by what a scenario names; the service calls pfSense would get are recorded.
+ * The box also has a process table that the `ps` double answers (krPs()): the supervisor, the gateway and the decider, with their RSS.
  *
  * Used by the in-process tests and by support/KeepRunningWorker.php, which runs the same state under a pkg(8) ancestor.
  */
@@ -27,6 +28,7 @@ trait KeepRunningScenario
 		$this->krProxyDir = "{$dir}/dns_proxy";
 		mkdir("{$dir}/dnsdir", 0777, TRUE);
 		mkdir("{$dir}/decider", 0777, TRUE);
+		$this->krPsDouble();
 		$decider = [];
 		foreach (['pfb_dns_proxy.py', 'decision_service.py', 'dns_reply_log.py', 'dnswire.py', 'unbound_shim.py', 'pfb_unbound.py', 'pfb_dnsbl_regex_rules.py'] as $name) {
 			$decider[] = "{$dir}/decider/{$name}";
@@ -39,7 +41,7 @@ trait KeepRunningScenario
 			'chroot_cmd' => '/bin/echo', 'dnsbl_python_unmount' => FALSE, 'dnsbl_res_cache' => PfbToggle::On,
 			'dnsbl_cache_flush' => PfbToggle::Off, 'enable' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'save' => TRUE,
 			'keep' => PfbToggle::On, 'install' => FALSE, 'errlog' => "{$dir}/error.log", 'log' => "{$dir}/pfblockerng.log",
-			'php' => PHP_BINARY,
+			'php' => PHP_BINARY, 'ps' => "{$dir}/ps",
 			'dns_proxy_restart_pending' => "{$dir}/restart.pending", 'dns_proxy_gateway_applied' => "{$dir}/gateway.sha256",
 			'dns_proxy_decider_applied' => "{$dir}/decider.applied", 'dns_proxy_decider_src' => $decider,
 			'dns_proxy_ctl' => "{$dir}/ctl.sock", 'dns_proxy_rc_kept' => "{$dir}/rc.kept",
@@ -50,13 +52,14 @@ trait KeepRunningScenario
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		$GLOBALS['pfb_test_service_calls'] = [];
 		$GLOBALS['pfb_test_file_notices'] = [];
-		unset($GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles'], $GLOBALS['pfb_test_try_lock_fail']);
+		unset($GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles'], $GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_sysctl']);
 		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
 		// The Resolver the proxy took over listened on lan: configured, up and addressed, so a healthy start has no warning to report
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
 		$this->krCalls = [];
+		$this->krPs(self::krPsTable([self::krPsSupervisor(), self::krPsGateway(), self::krPsDecider()]));
 		$this->clearProxyFiles();
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service): void {
@@ -76,8 +79,56 @@ trait KeepRunningScenario
 			'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls', 'pfb_test_service_hook',
 			'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_rcfile_dir', 'pfb_test_try_lock_fail', 'pfb_test_file_notices',
 			'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_swap_wait_s',
-			'pfb_test_unbound_py_sentinel_published',
+			'pfb_test_unbound_py_sentinel_published', 'pfb_test_sysctl',
 		];
+	}
+
+	/** The `ps` the code under test runs ($pfb['ps']): it answers only its one argument list, from ps.out, and fails when there is none. */
+	private function krPsDouble(): void
+	{
+		$out = escapeshellarg("{$this->krDir}/ps.out");
+		file_put_contents("{$this->krDir}/ps", "#!/bin/sh\n[ \"\$*\" = '-axww -o pid= -o ppid= -o rss= -o args=' ] || exit 2\n[ -f {$out} ] || exit 1\ncat {$out}\n");
+		chmod("{$this->krDir}/ps", 0755);
+	}
+
+	/** The box's process table, as the `ps` double prints it; NULL = ps fails. */
+	private function krPs(?string $table): void
+	{
+		if ($table === NULL) {
+			@unlink("{$this->krDir}/ps.out");
+		} else {
+			file_put_contents("{$this->krDir}/ps.out", $table);
+		}
+	}
+
+	/** One line of `ps -o pid= -o ppid= -o rss= -o args=`: the numbers right-aligned, a space between the columns. */
+	private static function krPsRow(string $pid, string $ppid, string $rss, string $args): string
+	{
+		return sprintf('%5s %5s %6s %s', $pid, $ppid, $rss, $args);
+	}
+
+	/** @param list<string> $rows */
+	private static function krPsTable(array $rows): string
+	{
+		return implode("\n", $rows) . "\n";
+	}
+
+	/** The daemon(8) supervisor of the gateway. */
+	private static function krPsSupervisor(): string
+	{
+		return self::krPsRow('1001', '1', '1500', 'daemon: pfb_dns_proxy[4242] (daemon)');
+	}
+
+	/** The gateway, pid 4242 as proxyServes() writes it; its own args name pfb_dns_proxy.py, the script it launches. */
+	private static function krPsGateway(): string
+	{
+		return self::krPsRow('4242', '1001', '22412', '/usr/local/pkg/pfblockerng/dns_proxy/bin/freebsd-amd64/pfb-dns --listen 127.0.0.1 --port 53 -- /usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --decision-fd 3 --module-dir /var/unbound --user unbound');
+	}
+
+	/** A decider: by default pid 4243 under the gateway, 240580 KiB resident. */
+	private static function krPsDecider(string $pid = '4243', string $ppid = '4242', string $rss = '240580'): string
+	{
+		return self::krPsRow($pid, $ppid, $rss, 'python3.11 -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --decision-fd 3 --module-dir /var/unbound --user unbound');
 	}
 
 	/**
