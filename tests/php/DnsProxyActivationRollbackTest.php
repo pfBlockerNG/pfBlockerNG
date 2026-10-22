@@ -586,6 +586,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertNotEmpty($this->lockHeldWhileWaiting, 'before: PHP did probe the proxy while waiting');
 		$this->assertSame([], array_keys(array_filter($this->lockHeldWhileWaiting)), 'the lock was free at every probe of the wait');
 		$this->assertFalse((bool) $GLOBALS['pfb_test_lock_held'], 'and none is still held');
+		$this->assertSame([], $GLOBALS['pfb_test_lock_holders'], 'and no other lock is held');
 		$this->assertTrue($this->freshlyLockable($this->operationLockPath()), 'and the rollback gave the operation lock, the kernel\'s, back');
 	}
 
