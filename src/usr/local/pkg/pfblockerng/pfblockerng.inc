@@ -5239,23 +5239,22 @@ function pfb_dns_proxy_await_ready(): bool {
 
 /**
  * After a start or restart the proxy was asked for, and on the boot check and the cron tick (issue #3556): wait for it to become ready,
- * outside any lock, then check what the start left
- * (pfb_dns_proxy_startup_check(): one notice for every problem). One that does not become ready within the budget has failed its
- * activation: the check says so first, with the gateway's last error (the rollback consumes the snapshot the check goes by), then
- * the activation is rolled back (pfb_dns_proxy_roll_back()).
+ * outside any lock, then check what the start left (pfb_dns_proxy_startup_check(): one notice for every problem). One that does not
+ * become ready within the budget has failed its activation: the activation is rolled back (pfb_dns_proxy_roll_back()), which diagnoses
+ * the start once it has won its guard, and then restores.
  *
  * @param int|null $since the gateway log's size from before the start (pfb_dns_proxy_log_size()), so that the check judges that start's
  *        own lines; NULL = nothing was started: the log's latest start is judged
  * @return bool TRUE iff the proxy is ready; FALSE after a failed activation, whatever the rollback achieved
  */
 function pfb_dns_proxy_confirm_ready(?int $since = NULL): bool {
+	// The stored snapshot before the wait: the rollback acts only while it is still that one
+	$expected_saved = (string) PfbConfig::read('dns/pfb_dns_saved');
 	if (pfb_dns_proxy_await_ready()) {
 		pfb_dns_proxy_startup_check(TRUE, $since);
 		return TRUE;
 	}
-	pfb_dns_proxy_startup_check(FALSE, $since);
-	pfb_logger("\nNot completed: the DNS proxy did not become ready within " . PFB_DNS_PROXY_START_WAIT . ' s', 2);
-	pfb_dns_proxy_roll_back();
+	pfb_dns_proxy_roll_back(NULL, NULL, $expected_saved, $since);
 	return FALSE;
 }
 
@@ -5467,18 +5466,31 @@ function pfb_dns_proxy_rollback_notice(string $text): void {
 
 /**
  * Turn the requested pfB-DNS toggle Off, written to config.xml under the DNS config lock from a fresh read: the next apply then
- * never enables it again, and retries a restore that did not finish.
+ * never enables it again, and retries a restore that did not finish. The write happens only while the stored marker is still
+ * $expected_saved and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs recovery: a state another save
+ * or recovery already resolved is left alone.
  *
- * @return bool TRUE iff the toggle was written; FALSE when the lock stayed taken, the read failed, or config.xml did not take the
- *         write (nothing was written, and this process holds the stored toggle again: pfb_dns_config_write_failed())
+ * @param string|null $expected_saved the raw marker the caller saw; NULL = the marker read now, before the lock is waited for
+ * @return bool|null TRUE iff the toggle was written; FALSE when the lock stayed taken, the read failed, or config.xml did not take the
+ *         write (nothing was written, and this process holds the stored toggle again: pfb_dns_config_write_failed()); NULL when the
+ *         stored state is no longer this one's to change (nothing was written)
  */
-function pfb_dns_proxy_turn_off(string $why): bool {
+function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL): ?bool {
+	// The marker is read before the lock is waited for: NULL takes this read, never a bypass of the guard
+	$expected_saved ??= (string) PfbConfig::read('dns/pfb_dns_saved');
 	// One retry: a save that held config.xml through a whole wait is usually done by the second
 	$lock = pfb_dns_config_lock() ?? pfb_dns_config_lock();
 	if ($lock === NULL) {
 		return FALSE;
 	}
 	try {
+		// Fresh under the lock, before any write
+		if ((string) PfbConfig::read('dns/pfb_dns_saved') !== $expected_saved) {
+			return NULL;
+		}
+		if (!pfb_dns_proxy_owns_resolver() && !pfb_dns_proxy_recovery_required()) {
+			return NULL;
+		}
 		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
 		return !pfb_dns_config_write_failed(write_config("pfBlockerNG: pfB-DNS turned off: {$why}"));
 	} finally {
@@ -5488,67 +5500,97 @@ function pfb_dns_proxy_turn_off(string $why): bool {
 
 /**
  * The proxy took the Resolver's place and did not become ready, or an unsafe Custom Options line or Listen Port was set after the move ($what
- * says which): give the Resolver, and with DNSBL on the DNSBL module, back to
- * Unbound. Under the DNS config lock the requested pfB-DNS toggle goes Off first, so a rollback that fails half way is retried
- * by the next apply's restore and that apply never enables pfB-DNS again; the lock is released before anything waits. Then
- * the proxy is stopped and the Resolver gets its saved settings back, keeping a Listen Port the admin set since the move (pfb_unbound_python($mode, FALSE), which also puts
- * the DNSBL module back into Unbound iff DNSBL is on), and unbound.conf is regenerated and Unbound restarted the way the apply
- * would (pfb_unbound_dnsbl(), pfb_update_unbound()). The restore consumes the snapshot, so the Unbound reload that follows
- * finds no proxy to restart: there is no loop.
+ * says which): give the Resolver, and with DNSBL on the DNSBL module, back to Unbound. Rollbacks are single-flight: one runs entirely under
+ * the operation lock pfb_dns_proxy_rollback, taken for PFB_DNS_PROXY_START_WAIT seconds at most, and an attempt that cannot take it changes
+ * nothing. Under the DNS config lock the requested pfB-DNS toggle goes Off first, so a rollback that fails half way is retried by the next
+ * apply's restore and that apply never enables pfB-DNS again; the config lock is released before anything waits. The Off write happens only
+ * while the stored snapshot is still $expected_saved and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs
+ * recovery: a state another save or recovery already resolved is left alone, with no notice. For a proxy that did not become ready, the
+ * start is diagnosed (pfb_dns_proxy_startup_check()) once the guard has won and before the snapshot is consumed. Then the proxy is stopped
+ * and the Resolver gets its saved settings back, keeping a Listen Port the admin set since the move (pfb_unbound_python($mode, FALSE), which
+ * also puts the DNSBL module back into Unbound iff DNSBL is on), and unbound.conf is regenerated and Unbound restarted the way the apply
+ * would (pfb_unbound_dnsbl(), pfb_update_unbound()). The restore consumes the snapshot, so the Unbound reload that follows finds no proxy
+ * to restart: there is no loop.
  *
  * When the config lock stays taken, config.xml does not take the write that turns the toggle off, or the proxy outlives its stop,
  * the snapshot, the moved Resolver and Unbound are left as they are (the restore keeps them, and nothing destructive runs
  * after it), and the operator is told that recovery is needed: a rollback that did not finish never says it did. There is no
- * retry state of its own: with the toggle Off the next
- * apply's ordinary restore tries again.
+ * retry state of its own: with the toggle Off the next apply's ordinary restore tries again.
  *
  * @param string|null $what why pfB-DNS is rolled back, as a clause that follows "pfB-DNS: "; NULL = the proxy did not become ready
- * @param string|null $next the operator's last sentence after a rollback that worked; NULL = read the proxy log, then turn pfB-DNS on
+ * @param string|null $next the operator's last sentence after a rollback that worked; NULL = read the proxy log, then turn pfB-DNS on again
+ * @param string|null $expected_saved the raw marker the caller saw; NULL = the marker read now, before the operation lock is waited for
+ * @param int|null $since the gateway log's size from before the start whose failure this is (pfb_dns_proxy_log_size()), judged once the
+ *        guard has won; NULL = the log's latest start is judged
  * @return bool TRUE iff the DNS Resolver is restored and Unbound was restarted with its previous integration
  */
-function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL): bool {
+function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL, ?string $expected_saved = NULL, ?int $since = NULL): bool {
 	global $pfb;
 
-	$not_ready = $what === NULL;
-	$what ??= 'the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' seconds of its start';
-	$next ??= 'Read ' . PFB_DNS_PROXY_LOG . ' for the cause, correct it, then turn pfB-DNS on again.';
-	if (!pfb_dns_proxy_turn_off($what)) {
-		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and config.xml was locked by another save or could not be written, so pfB-DNS could not be turned off and " .
-		    'the DNS Resolver could not be restored. Nothing was changed and its saved settings are kept; the next pfBlockerNG update retries. ' .
-		    'If DNS stays down, stop the pfBlockerNG DNS proxy service in Status > Services and turn pfB-DNS off.');
+	// The marker as it stands before this rollback waits for anything: a snapshot another recovery consumed or replaced meanwhile is not ours
+	$expected_saved ??= (string) PfbConfig::read('dns/pfb_dns_saved');
+	$operation = try_lock('pfb_dns_proxy_rollback', PFB_DNS_PROXY_START_WAIT);
+	if (!is_resource($operation)) {
+		// Nothing of this attempt was written, stopped or restarted; the running rollback reports what it leaves
+		pfb_dns_proxy_rollback_notice('pfB-DNS: another recovery of the DNS proxy is still running (it did not finish within ' .
+		    PFB_DNS_PROXY_START_WAIT . ' seconds), so this attempt did nothing. The running recovery reports its own outcome; ' .
+		    'if pfB-DNS is still on, the next pfBlockerNG update retries.');
 		return FALSE;
 	}
-
-	pfb_global();
-	$mode = ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) ? 'enabled' : 'disabled';
-	// The Unbound reload below reads state only an apply pass sets; a rollback from the installer or a Reports page has none
-	$pfb += ['reuse_dnsbl' => '', 'save' => FALSE, 'install' => FALSE];
-	pfb_unbound_python($mode, FALSE);
-	if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
-		// No ownership with recovery required: only a stored marker that is no snapshot. No restore was tried, so there is no
-		// earlier notice to point at, and nothing says whether the Resolver was moved.
-		$unconfirmed = !pfb_dns_proxy_owns_resolver();
-		if ($unconfirmed) {
-			$kept = 'pfB-DNS\'s saved copy of the DNS Resolver\'s previous settings is invalid, so what they were cannot be confirmed and nothing was put back: manual repair required.';
-		} elseif (pfb_dns_proxy_recovery_required()) {
-			$kept = 'The DNS Resolver still carries the DNS proxy settings with no saved copy to restore from: manual recovery required.';
-		} else {
-			$kept = $not_ready
-			    ? 'The DNS Resolver is still moved aside for the DNS proxy, which did not become ready, so nothing answers DNS on the Resolver\'s port until the restore succeeds; ' .
-			    'its saved settings are kept and the next pfBlockerNG update retries the restore.'
-			    : 'The DNS Resolver is still moved aside for the DNS proxy and its saved settings are kept; the next pfBlockerNG update retries the restore.';
+	try {
+		$not_ready = $what === NULL;
+		$what ??= 'the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' seconds of its start';
+		$next ??= 'Read ' . PFB_DNS_PROXY_LOG . ' for the cause, correct it, then turn pfB-DNS on again.';
+		$off = pfb_dns_proxy_turn_off($what, $expected_saved);
+		if ($off === NULL) {
+			// Resolved by a save or recovery that ran first: this one restores nothing and says nothing
+			return FALSE;
 		}
-		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and pfB-DNS was turned off, but the DNS Resolver could not be restored" . ($unconfirmed ? '' : ' (see the notice before this one)') . '. ' .
-		    "{$kept} " .
-		    'If that fails too, stop the pfBlockerNG DNS proxy service in Status > Services, then correct Network Interfaces, SSL/TLS Service and ' .
-		    'Custom Options in Services > DNS Resolver by hand.');
-		return FALSE;
-	}
+		if (!$off) {
+			pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and config.xml was locked by another save or could not be written, so pfB-DNS could not be turned off and " .
+			    'the DNS Resolver could not be restored. Nothing was changed and its saved settings are kept; the next pfBlockerNG update retries. ' .
+			    'If DNS stays down, stop the pfBlockerNG DNS proxy service in Status > Services and turn pfB-DNS off.');
+			return FALSE;
+		}
+		if ($not_ready) {
+			// Diagnosed once the guard has won, and before the restore consumes the snapshot that the check's last-error lookup goes by
+			pfb_dns_proxy_startup_check(FALSE, $since);
+			pfb_logger("\nNot completed: the DNS proxy did not become ready within " . PFB_DNS_PROXY_START_WAIT . ' s', 2);
+		}
 
-	pfb_update_unbound($mode, pfb_unbound_dnsbl($mode), TRUE);
-	pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, so pfB-DNS was turned off and the DNS Resolver was restored to its previous settings" .
-	    ($mode == 'enabled' ? '; DNSBL runs in the DNS Resolver again, as before' : '') . ". {$next}");
-	return TRUE;
+		pfb_global();
+		$mode = ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) ? 'enabled' : 'disabled';
+		// The Unbound reload below reads state only an apply pass sets; a rollback from the installer or a Reports page has none
+		$pfb += ['reuse_dnsbl' => '', 'save' => FALSE, 'install' => FALSE];
+		pfb_unbound_python($mode, FALSE);
+		if (pfb_dns_proxy_owns_resolver() || pfb_dns_proxy_recovery_required()) {
+			// No ownership with recovery required: only a stored marker that is no snapshot. No restore was tried, so there is no
+			// earlier notice to point at, and nothing says whether the Resolver was moved.
+			$unconfirmed = !pfb_dns_proxy_owns_resolver();
+			if ($unconfirmed) {
+				$kept = 'pfB-DNS\'s saved copy of the DNS Resolver\'s previous settings is invalid, so what they were cannot be confirmed and nothing was put back: manual repair required.';
+			} elseif (pfb_dns_proxy_recovery_required()) {
+				$kept = 'The DNS Resolver still carries the DNS proxy settings with no saved copy to restore from: manual recovery required.';
+			} else {
+				$kept = $not_ready
+				    ? 'The DNS Resolver is still moved aside for the DNS proxy, which did not become ready, so nothing answers DNS on the Resolver\'s port until the restore succeeds; ' .
+				    'its saved settings are kept and the next pfBlockerNG update retries the restore.'
+				    : 'The DNS Resolver is still moved aside for the DNS proxy and its saved settings are kept; the next pfBlockerNG update retries the restore.';
+			}
+			pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, and pfB-DNS was turned off, but the DNS Resolver could not be restored" . ($unconfirmed ? '' : ' (see the notice before this one)') . '. ' .
+			    "{$kept} " .
+			    'If that fails too, stop the pfBlockerNG DNS proxy service in Status > Services, then correct Network Interfaces, SSL/TLS Service and ' .
+			    'Custom Options in Services > DNS Resolver by hand.');
+			return FALSE;
+		}
+
+		pfb_update_unbound($mode, pfb_unbound_dnsbl($mode), TRUE);
+		pfb_dns_proxy_rollback_notice("pfB-DNS: {$what}, so pfB-DNS was turned off and the DNS Resolver was restored to its previous settings" .
+		    ($mode == 'enabled' ? '; DNSBL runs in the DNS Resolver again, as before' : '') . ". {$next}");
+		return TRUE;
+	} finally {
+		unlock($operation);
+	}
 }
 
 /**
@@ -14974,8 +15016,8 @@ function pfb_dns_proxy_resolver_unchanged(bool $on, string $why): void {
  * restore that did not finish, and nothing enables it again), then the proxy is stopped and the saved settings are restored (the
  * Resolver stays disabled) like any restore, and the operator is told once. Every apply and every tick calls it.
  *
- * @return bool TRUE iff it stood pfB-DNS down; FALSE when there was nothing to do, or the lock stayed taken or config.xml did not
- *         take the write that turns the toggle off (nothing was changed)
+ * @return bool TRUE iff it stood pfB-DNS down; FALSE when there was nothing to do, the lock stayed taken or config.xml did not take the
+ *         write that turns the toggle off (nothing was changed), or an apply or tick had already stood it down
  */
 function pfb_dns_proxy_stand_down(): bool {
 	if (PfbConfig::read('dns/pfb_dns') !== PfbToggle::On || PfbConfig::read('gen/enable_cb') !== PfbToggle::On ||
@@ -14984,12 +15026,16 @@ function pfb_dns_proxy_stand_down(): bool {
 	}
 
 	$what = 'the DNS Resolver is disabled in Services > DNS Resolver, so the DNS proxy has nothing to front';
-	if (!pfb_dns_proxy_turn_off($what)) {
+	$off = pfb_dns_proxy_turn_off($what);
+	if ($off === NULL) {
+		// Already stood down by an apply or tick that ran first: nothing is left to restore and nothing to say
+		return FALSE;
+	}
+	if (!$off) {
 		pfb_logger("\npfB-DNS: {$what}, but pfB-DNS could not be turned off (config.xml was locked by another save or could not be written); the next apply or tick retries", 2);
 		return FALSE;
 	}
 
-	// A concurrent apply or tick that stood down first leaves nothing here to restore and nothing to say.
 	$restored = pfb_dns_proxy_resolver(FALSE);
 	if ($restored || pfb_dns_proxy_owns_resolver()) {
 		pfb_dns_proxy_rollback_notice(pfb_dns_proxy_owns_resolver()

@@ -2337,6 +2337,20 @@
                 "variadic": false,
                 "type": "?string",
                 "default": "NULL"
+            },
+            {
+                "name": "expected_saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "since",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
             }
         ]
     },
@@ -2490,7 +2504,7 @@
     },
     "pfb_dns_proxy_turn_off": {
         "returnsRef": false,
-        "returnType": "bool",
+        "returnType": "?bool",
         "params": [
             {
                 "name": "why",
@@ -2498,6 +2512,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "expected_saved",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },
