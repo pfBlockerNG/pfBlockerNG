@@ -4873,8 +4873,8 @@ EOF;
 /**
  * Regenerate the proxy's rc script, restart it and wait for it to become READY: the module host re-reads lists and ini only
  * at init. A proxy that is not ready within the startup budget fails the activation, which is rolled back
- * (pfb_dns_proxy_confirm_ready()). The restore that was abandoned (pfb_dns_proxy_resolver()) restarts the proxy WITHOUT this: a
- * rollback that waited for the proxy it restarts would roll back again.
+ * (pfb_dns_proxy_confirm_ready()). The restore that was abandoned (pfb_dns_proxy_resolver()) starts the proxy again WITHOUT this: a
+ * rollback that waited for the proxy it starts again would roll back again.
  *
  * @return bool TRUE iff the proxy is ready
  */
@@ -14571,14 +14571,12 @@ function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 		unlock($lock);
 	}
 
-	// A restore that kept the snapshot left the Resolver moved: the rc script starts the proxy, because restart_service() does nothing
-	// without the service entry. Outside the lock (up to 17 s: 10 s start lock, 7 s to stop a survivor); it waits for nothing and rolls
-	// nothing back, as this restore may itself be a rollback.
+	// A restore that kept the snapshot left the Resolver moved: the rc script just regenerated starts the proxy, because restart_service()
+	// does nothing without the service entry. Outside the lock (up to 17 s: 10 s start lock, 7 s to stop a survivor); it waits for nothing
+	// and rolls nothing back, as this restore may itself be a rollback.
 	if (!$on && pfb_dns_proxy_saved() !== NULL) {
 		pfb_dns_proxy_service();
-		if (file_exists(PFB_DNS_PROXY_RCFILE)) {
-			mwexec(PFB_DNS_PROXY_RCFILE . ' start');
-		}
+		mwexec(PFB_DNS_PROXY_RCFILE . ' start');
 	}
 	return $changed;
 }
