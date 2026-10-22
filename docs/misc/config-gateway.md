@@ -258,7 +258,8 @@ Authorization = property of **write**, not call site (generalises
     `resolver.arpa.`). The second one leaves the port out of the DDR DoH record and does nothing while DDR is Off. Both
     are written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`) and read through `PfbConfig::read()` by
     `pfb_dns_proxy_ddr_flags()` for the gateway's `--ddr` and `--ddr-doh-443`. The page disables the second checkbox while
-    the stored DoH port is `443`: a disabled control posts nothing, so a save then stores it Off.
+    the STORED DoH port is `443` (`pfb_dns_proxy_ddr_doh_443_locked()`, no port to leave out); a disabled control posts
+    nothing, so the save keeps the stored value of that toggle then, and takes the posted one at any other stored port.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

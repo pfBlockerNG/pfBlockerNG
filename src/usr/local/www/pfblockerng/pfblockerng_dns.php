@@ -354,7 +354,7 @@ $pfb_ddr_doh_443 = (new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr_doh_443'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setAttribute('aria-label', gettext('DoH on port 443'));
-if (pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443') {
+if (pfb_dns_proxy_ddr_doh_443_locked()) {
 	$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');
 }
 $section->addInput($pfb_ddr_doh_443)->setHelp('Some clients might not accept a port for the DoH server provided over DDR. '

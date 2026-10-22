@@ -231,20 +231,21 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 	}
 
-	/** Is the 443 checkbox disabled exactly once, and only under the stored DoH port being 443? */
+	/** Is the 443 checkbox disabled exactly once, and only under the helper that says the stored DoH port is 443? */
 	private static function disabledOnlyForDohPort443(string $page): bool
 	{
-		$guarded = preg_match_all('/if \(pfb_dns_proxy_listener_port\(PfbConfig::read\(\'dns\/pfb_dns_doh_port\'\)\) === \'443\'\) \{\s*\$pfb_ddr_doh_443->setAttribute\(\'disabled\', \'disabled\'\);\s*\}/', $page);
+		$guarded = preg_match_all('/if \(pfb_dns_proxy_ddr_doh_443_locked\(\)\) \{\s*\$pfb_ddr_doh_443->setAttribute\(\'disabled\', \'disabled\'\);\s*\}/', $page);
 		return $guarded === 1 && substr_count($page, "\$pfb_ddr_doh_443->setAttribute('disabled'") === 1;
 	}
 
-	public function testTheDisabledCheckSeesAnUnguardedAGuardedByAnotherPortAndADoubleDisable(): void
+	public function testTheDisabledCheckSeesAnUnguardedANegatedAnInlineAndADoubleDisable(): void
 	{
-		$guard = "if (pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443') {\n\t\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n}\n";
+		$guard = "if (pfb_dns_proxy_ddr_doh_443_locked()) {\n\t\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n}\n";
 
 		$this->assertTrue(self::disabledOnlyForDohPort443($guard), 'the guarded disable');
 		$this->assertFalse(self::disabledOnlyForDohPort443("\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'unguarded');
-		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace("'443'", "'4443'", $guard)), 'guarded by another port');
+		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace('if (pfb_dns_proxy_ddr_doh_443_locked())', 'if (!pfb_dns_proxy_ddr_doh_443_locked())', $guard)), 'negated guard');
+		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace('pfb_dns_proxy_ddr_doh_443_locked()', "pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443'", $guard)), 'an inline condition the save does not share');
 		$this->assertFalse(self::disabledOnlyForDohPort443($guard . "\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'disabled a second time');
 		$this->assertFalse(self::disabledOnlyForDohPort443(''), 'never disabled');
 	}
@@ -308,6 +309,99 @@ final class PfbDnsPageWiringTest extends TestCase
 
 		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr', 'DDR'), "the pfb_dns_ddr checkbox has aria-label gettext('DDR')");
 		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr_doh_443', 'DoH on port 443'), "the pfb_dns_ddr_doh_443 checkbox has aria-label gettext('DoH on port 443')");
+	}
+
+	/**
+	 * The top-level arguments of the one `new Form_Checkbox('<field>', ...)` call, or NULL when the page has none or several.
+	 *
+	 * @return list<string>|NULL
+	 */
+	private static function checkboxArguments(string $page, string $field): ?array
+	{
+		if (preg_match_all('/new Form_Checkbox\(\s*\'' . preg_quote($field, '/') . '\',/', $page, $found, PREG_OFFSET_CAPTURE) !== 1) {
+			return NULL;
+		}
+		$args = [''];
+		$depth = 0;
+		$length = strlen($page);
+		for ($i = $found[0][0][1] + strlen('new Form_Checkbox('); $i < $length; $i++) {
+			$char = $page[$i];
+			if ($char === "'") {
+				$end = $i + 1;
+				while ($end < $length && $page[$end] !== "'") {
+					$end += ($page[$end] === '\\') ? 2 : 1;
+				}
+				$args[count($args) - 1] .= substr($page, $i, $end - $i + 1);
+				$i = $end;
+			} elseif (($char === ')' || $char === ']') && $depth === 0) {
+				return array_map('trim', $args);
+			} elseif ($char === ',' && $depth === 0) {
+				$args[] = '';
+			} else {
+				$depth += ($char === '(' || $char === '[') ? 1 : (($char === ')' || $char === ']') ? -1 : 0);
+				$args[count($args) - 1] .= $char;
+			}
+		}
+		return NULL;
+	}
+
+	/** @return list<string> what is wrong with this field's checkbox: it is checked from its OWN field and carries the value 'on' */
+	private static function checkboxProblems(string $page, string $field): array
+	{
+		$args = self::checkboxArguments($page, $field);
+		if ($args === NULL) {
+			return ["not exactly one new Form_Checkbox('{$field}', ...) call"];
+		}
+		if (count($args) !== 5) {
+			return ['expected 5 arguments (name, label, text, checked, value), found ' . count($args)];
+		}
+		$problems = [];
+		$checked = (string) preg_replace('/\s+/', ' ', $args[3]);
+		$expected = "pfb_cfg_toggle_read(\$pconfig['{$field}'] ?? NULL) === PfbToggle::On";
+		if ($checked !== $expected) {
+			$problems[] = "checked is `{$checked}`, expected `{$expected}`";
+		}
+		if ($args[4] !== "'on'") {
+			$problems[] = "value is `{$args[4]}`, expected `'on'`";
+		}
+		return $problems;
+	}
+
+	private static function checkboxFixture(string $field, string $checked, string $value, string $label = "gettext('X')"): string
+	{
+		return "\$s->addInput(new Form_Checkbox(\n\t'{$field}',\n\t{$label},\n\t'Enable',\n\t{$checked},\n\t{$value}\n))->setHelp('on');\n";
+	}
+
+	public function testTheCheckboxCheckSeesAWrongFieldAWrongValueAnAlwaysOffAndAMissingOrDoubledOrWidenedCall(): void
+	{
+		$own = "pfb_cfg_toggle_read(\$pconfig['pfb_dns_ddr'] ?? NULL) === PfbToggle::On";
+		$good = self::checkboxFixture('pfb_dns_ddr', $own, "'on'");
+
+		$this->assertSame([], self::checkboxProblems($good, 'pfb_dns_ddr'), 'a checkbox of its own field and the value on');
+		$this->assertSame([], self::checkboxProblems(self::checkboxFixture('pfb_dns_ddr', $own, "'on'", "gettext('It\\'s a, (label)')"), 'pfb_dns_ddr'), 'commas, parentheses and an escaped quote in an argument');
+		$this->assertNotSame([], self::checkboxProblems(self::checkboxFixture('pfb_dns_ddr', str_replace('pfb_dns_ddr', 'pfb_dns_ddr_doh_443', $own), "'on'"), 'pfb_dns_ddr'), 'checked from the other field');
+		$this->assertNotSame([], self::checkboxProblems(self::checkboxFixture('pfb_dns_ddr', $own, "'yes'"), 'pfb_dns_ddr'), "the value yes");
+		$this->assertNotSame([], self::checkboxProblems(self::checkboxFixture('pfb_dns_ddr', 'FALSE', "'on'"), 'pfb_dns_ddr'), 'checked always FALSE');
+		$this->assertNotSame([], self::checkboxProblems(self::checkboxFixture('pfb_dns_ddr', str_replace('On', 'Off', $own), "'on'"), 'pfb_dns_ddr'), 'checked when Off');
+		$this->assertNotSame([], self::checkboxProblems(self::checkboxFixture('pfb_dns_ddr', str_replace(' ?? NULL', '', $own), "'on'"), 'pfb_dns_ddr'), 'checked from a bare index');
+		$this->assertNotSame([], self::checkboxProblems("\$x = 1;\n", 'pfb_dns_ddr'), 'no checkbox of that name');
+		$this->assertNotSame([], self::checkboxProblems($good . $good, 'pfb_dns_ddr'), 'two checkboxes of that name');
+		$this->assertNotSame([], self::checkboxProblems(str_replace("\n))", ",\n\t'extra'\n))", $good), 'pfb_dns_ddr'), 'a sixth argument');
+
+		// The 'on' of a neighbouring checkbox must not stand in for this one's value
+		$other = self::checkboxFixture('pfb_dns_ddr_doh_443', str_replace('pfb_dns_ddr', 'pfb_dns_ddr_doh_443', $own), "'on'");
+		$yes = self::checkboxFixture('pfb_dns_ddr', $own, "'yes'");
+		$this->assertNotSame([], self::checkboxProblems($yes . $other, 'pfb_dns_ddr'), 'the neighbour has the on');
+		$this->assertSame([], self::checkboxProblems($yes . $other, 'pfb_dns_ddr_doh_443'), 'and is itself right');
+	}
+
+	public function testEachDdrCheckboxIsCheckedFromItsOwnFieldAndCarriesTheValueOn(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		foreach (self::DDR_FIELDS as $field) {
+			$this->assertSame([], self::checkboxProblems($page, $field), $field);
+		}
 	}
 
 	public function testThePageSeedsItsListenerSettingsUnderTheLockOnLoadBeforeItReadsAny(): void

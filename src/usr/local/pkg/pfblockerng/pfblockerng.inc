@@ -4361,8 +4361,17 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 }
 
 /**
+ * Does the pfB-DNS page disable its "DoH on port 443" checkbox: does DoH already listen on 443 (the STORED DoH port, as the
+ * gateway reads it), so that there is no port to leave out? The save keeps the stored toggle while this holds (issue #3583).
+ */
+function pfb_dns_proxy_ddr_doh_443_locked(): bool {
+	return pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443';
+}
+
+/**
  * The canonical stored value of each of the fourteen settings from a validated POST: a toggle is on only for 'on', a
- * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated.
+ * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated, and the
+ * DoH on port 443 toggle keeps its stored value while the page disables it.
  *
  * @param array<string,mixed> $post
  * @return array<string,string> config key => stored string
@@ -4380,9 +4389,11 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 	}
 	$certref = $post['pfb_dns_sslcertref'] ?? '';
 	$stored['pfb_dns_sslcertref'] = is_string($certref) ? $certref : '';
-	foreach (['ddr', 'ddr_doh_443'] as $kind) {
-		$stored["pfb_dns_{$kind}"] = pfb_filter($post["pfb_dns_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
-	}
+	$stored['pfb_dns_ddr'] = pfb_filter($post['pfb_dns_ddr'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
+	// issue #3583: a control the page disables posts nothing, so its stored value stays
+	$stored['pfb_dns_ddr_doh_443'] = pfb_dns_proxy_ddr_doh_443_locked()
+	    ? PfbConfig::read('dns/pfb_dns_ddr_doh_443')->toStored()
+	    : (pfb_filter($post['pfb_dns_ddr_doh_443'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '');
 	return $stored;
 }
 
