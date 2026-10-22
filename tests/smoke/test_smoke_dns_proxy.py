@@ -2230,8 +2230,7 @@ def test_a_refused_restore_starts_the_proxy_again_with_the_service_entry_absent(
       the LAN address, and the client's listed name getting the VIP.
 
     Fault limit: no refusal is seen by one process only, except through that process's own $g['cf_conf_path'] (pfSense
-    CE 2.8.1, pfsense/pfsense@209b8baa8, src/etc/inc/config.lib.inc). A path nothing can be created under is fatal
-    (:957 fwrite() on the false handle of backup/backup.cache: the first version of this case, php_eval rc=255); a
+    CE 2.8.1, pfsense/pfsense@209b8baa8, src/etc/inc/config.lib.inc). A path nothing can be created under is fatal; a
     scratch directory with a writable backup/ and a directory as config.xml is not: backup_config() (:936-961) warns
     and returns, config_write_file() (:1244-1265) fails at safe_write_file()'s rename (:516), write_config() answers
     -1 (:607-610), and /cf, the real config.xml and the files' modes are untouched. Its FALSE answers are a read-only

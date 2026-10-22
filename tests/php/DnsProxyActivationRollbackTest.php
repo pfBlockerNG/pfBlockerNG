@@ -759,6 +759,38 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertTrue(pfb_dns_proxy_ready(), 'the proxy serves the moved Resolver');
 	}
 
+	#[DataProvider('recoveryWithNoRcScript')]
+	public function testTheRecoveryRunsNoRcScriptThatAListenPortConflictLeftUnwritten(bool $healthy, int $writes): void
+	{
+		// Given a moved Resolver whose Listen Port the admin set to the proxy's own port after the move (the generator then writes no
+		// script), no service entry, no rc script on disk, and a config.xml that refuses the restore's write
+		$this->activate(TRUE);
+		$this->registered = FALSE;
+		config_set_path('unbound/port', '5353');
+		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
+		unlink(PFB_DNS_PROXY_RCFILE);
+		if ($healthy) {
+			$this->proxyServes();
+			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		}
+		$this->configXmlOnDisk(FALSE, 'Restored the DNS Resolver');
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = self::sorted(config_get_path('unbound'));
+		$this->assertSame('5353', $this->onDisk('unbound/port'), 'before: config.xml holds the conflicting Listen Port');
+		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'before: no rc script');
+
+		// When the restore is asked for
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the restore changed nothing, no script was written, and nothing was run against the script that is not there
+		$this->assertFalse($changed);
+		$this->assertCount($writes, $GLOBALS['pfb_test_write_config_calls'], 'the path the row stands for ran');
+		$this->assertSame($snapshot, $this->onDisk(self::SAVED), 'config.xml keeps the snapshot');
+		$this->assertSame($moved, self::sorted($this->onDisk('unbound')), 'and the moved Resolver');
+		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'the generator wrote no script');
+		$this->assertSame([], $this->proxyCalls, 'no stop and no start was run against a missing script');
+	}
+
 	public function testAReadinessRollbackWhoseProxySurvivesItsStopSaysNothingAnswersDnsUntilTheRestoreSucceeds(): void
 	{
 		// Given a proxy that never serves and survives its stop too
