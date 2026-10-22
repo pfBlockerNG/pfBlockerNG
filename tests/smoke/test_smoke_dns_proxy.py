@@ -68,6 +68,9 @@ What it proves, in file order:
   whose write_config() answers -1, pfb_dns_proxy_resolver(FALSE) stops the proxy, abandons the restore (the snapshot and
   the moved Resolver stay in config.xml) and starts the proxy again through its rc script: a new child publishes the
   ready marker, pfb-dns alone holds port 53 on the LAN address and the client's listed name gets the VIP.
+* issue #3566, staying up across updates: a package upgrade and the update pass after it restart neither the
+  gateway, its supervisor nor its decider and no query for a listed name goes unanswered; a changed decider module
+  restarts the decider alone; a changed gateway binary restarts the pair once.
 
 The pfB-DNS tab (enable checkbox, help that says it is experimental, status panel) is covered by the Tier A render
 test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
@@ -1696,7 +1699,108 @@ def test_the_start_lock_is_free_while_the_proxy_runs(rig: Rig, proxy_on: State) 
     )
 
 
-@pytest.mark.timeout(600)  # a pkg upgrade with its install hooks, then the branch build put back
+DECIDER_DIR = "/usr/local/pkg/pfblockerng/dns_proxy"
+DECIDER_APPLIED = "/var/unbound/pfb_dns_decider.applied"  # the decider's code record
+GATEWAY_APPLIED = f"{READY_FILE}.sha256"  # the gateway's binary record
+RESTART_PENDING = "/var/run/pfb_dns_proxy_restart_pending"
+SAVE_DIR = "/var/tmp/pfb3566_saved"  # the installed file a test edits, as it was
+UPGRADE_PROBE_DIR = "/var/tmp/pfb3566_probe"
+UPGRADE_PROBE_LOG = f"{UPGRADE_PROBE_DIR}/log"
+UPGRADE_PROBE_PROCESS = "pfb3566_probe[.]sh"  # for pkill -f; the brackets keep it off its own command
+UPGRADE_PROBE_SPAN = 800  # s: the probe ends itself by then whatever happens
+UPGRADE_PROBE_MIN_ROWS = 5
+
+# One row per answer: "<epoch> <RCODE>:<addresses>", NONE:- when nothing answered in 3 s.
+UPGRADE_PROBE_SCRIPT = r"""#!/bin/sh
+while [ "$(/bin/date +%s)" -lt "$PROBE_END" ]; do
+	a=$(/usr/bin/timeout 3 /usr/local/bin/drill "$PROBE_NAME" A @127.0.0.1 2>/dev/null | /usr/bin/awk '
+		/rcode:/ { sub(/.*rcode: */, ""); sub(/,.*/, ""); rc = $0 }
+		/^;; ANSWER SECTION/ { ans = 1; next }
+		ans && (NF == 0 || /^;;/) { ans = 0 }
+		ans && $4 == "A" { a = a (a == "" ? "" : ",") $5 }
+		END { print (rc == "" ? "NONE" : rc) ":" (a == "" ? "-" : a) }')
+	printf '%s %s\n' "$(/bin/date +%s)" "$a" >>"$PROBE_LOG"
+	/bin/sleep 0.2
+done
+"""
+
+
+@dataclass(frozen=True)
+class Pids:
+    """The three processes of a serving pfB-DNS: the supervisor, the gateway it keeps up, the gateway's decider."""
+
+    gateway: int | None
+    supervisor: int | None
+    decider: int | None
+
+    def complete(self) -> bool:
+        return None not in (self.gateway, self.supervisor, self.decider)
+
+
+def _pids(vm: SmokeVM) -> Pids:
+    """The pidfiles name the gateway and its supervisor; the decider is the gateway's child running pfb_dns_proxy.py."""
+    gateway = _pid_file(vm, PROXY_PID_FILE)
+    decider = None
+    for line in vm.ssh("ps -axww -o pid,ppid,args").stdout.splitlines()[1:]:
+        fields = line.split(None, 2)
+        if len(fields) == 3 and gateway is not None and fields[1] == str(gateway) and "pfb_dns_proxy.py" in fields[2]:
+            decider = int(fields[0])
+    return Pids(gateway, _pid_file(vm, DAEMON_PID_FILE), decider)
+
+
+def _cat(vm: SmokeVM, path: str) -> str | None:
+    result = vm.ssh("cat", path)
+    return result.stdout if result.returncode == 0 else None
+
+
+class _Probe:
+    """An on-box loop (daemon(8)) asking the proxy at 127.0.0.1 for a name every 0.2 s; `stop` returns its log."""
+
+    def __init__(self, vm: SmokeVM, name: str) -> None:
+        self.vm = vm
+        self.name = name
+        self.rows: list[str] | None = None
+
+    def start(self) -> None:
+        script = (
+            "set -e\n"
+            "for tool in /usr/local/bin/drill /usr/bin/timeout /usr/sbin/daemon; do\n"
+            '    [ -x "$tool" ] || { echo "missing $tool"; exit 1; }\n'
+            "done\n"
+            f"rm -rf {UPGRADE_PROBE_DIR}\n"
+            f"mkdir -p {UPGRADE_PROBE_DIR}\n"
+            f"cat > {UPGRADE_PROBE_DIR}/pfb3566_probe.sh <<'PROBE_EOF'\n" + UPGRADE_PROBE_SCRIPT + "PROBE_EOF\n"
+            f"true > {UPGRADE_PROBE_LOG}\n"
+            f"end=$(($(/bin/date +%s) + {UPGRADE_PROBE_SPAN}))\n"
+            f"/usr/sbin/daemon -f /usr/bin/env PROBE_NAME={shlex.quote(self.name)} PROBE_END=$end "
+            f"PROBE_LOG={UPGRADE_PROBE_LOG} /bin/sh {UPGRADE_PROBE_DIR}/pfb3566_probe.sh\n"
+        )
+        started = _sh(self.vm, script)
+        assert started.returncode == 0, f"starting the probe: rc={started.returncode} {started.stdout}{started.stderr}"
+        h.wait_until(lambda: bool((_cat(self.vm, UPGRADE_PROBE_LOG) or "").strip()), timeout=30.0, interval=1.0)
+
+    def stop(self) -> list[str]:
+        """Kill the loop, read its log, delete its files; repeated calls return the first read."""
+        if self.rows is None:
+            _sh(self.vm, f"pkill -KILL -f '{UPGRADE_PROBE_PROCESS}'; true")
+            self.rows = (_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()
+            _sh(self.vm, f"rm -rf {UPGRADE_PROBE_DIR}")
+        return self.rows
+
+
+def _assert_probe_answered(rows: list[str], what: str) -> None:
+    """Every probe row got the VIP, and there were enough rows for that to mean something."""
+    misses = [row for row in rows if not _answered(row.partition(" ")[2], h.DEFAULT_DNSBL_VIP4)]
+    assert len(rows) >= UPGRADE_PROBE_MIN_ROWS, (
+        f"{what}: the probe logged {len(rows)} rows, expected at least {UPGRADE_PROBE_MIN_ROWS}"
+    )
+    assert not misses, (
+        f"{what}: {len(misses)} of {len(rows)} probes did not get NOERROR:{h.DEFAULT_DNSBL_VIP4} "
+        f"(row = epoch answer):\n" + "\n".join(misses[:20])
+    )
+
+
+@pytest.mark.timeout(900)  # a pkg upgrade with its install hooks, an update pass, then the branch build put back
 def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: State, tmp_path: Path) -> None:
     """A package upgrade with pfB-DNS on leaves it on and serving (issue #3562).
 
@@ -1706,15 +1810,24 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
     pfB-DNS is rolled back off. Only a real version move runs pfSense's removal step: `pkg add -f` of the installed
     version is an in-place overwrite that skips it.
 
-    Given the toggle on and the proxy serving,
+    Given the toggle on and the proxy serving, its gateway, supervisor and decider pids, and an on-box probe asking for
+      a listed name every 0.2 s,
     When the branch package, re-versioned higher, comes in by `pkg upgrade` from a file:// repo,
-    Then the toggle is still on, the Resolver still moved, the proxy running, and a listed name still gets the VIP.
+    Then the toggle is still on, the Resolver still moved, the proxy running, a listed name still gets the VIP, the
+      three pids are the ones from before, and every probe got the VIP (the upgrade restarted nothing, dropped nothing);
+    When the next update pass runs,
+    Then the three pids are still the same (the re-versioned package changed neither the binary nor the decider's code,
+      and nothing was deferred) and no restart is pending.
     """
     vm = rig.vm
     pkg = Path(os.environ["SMOKE_PKG"])
     higher = reversion_pkg(pkg, f"{read_compact_version(pkg)}_9", tmp_path)
     h._write_cron_disable_flag(vm)
+    before = _pids(vm)
+    assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
+    probe = _Probe(vm, rig.names.blocked)
     try:
+        probe.start()
         try:
             build_guest_repo(vm, UPGRADE_REPO_DIR, [higher])
             write_repo_conf(vm, UPGRADE_REPO_DIR, ours_priority=repo_priority(vm, NETGATE_REPO_NAME) + 100)
@@ -1740,9 +1853,131 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
         )
         blocked, raw = _query(rig.client, rig.names.blocked)
         assert h.is_vip(blocked), f"after the upgrade the listed name is not blocked: {blocked}\n{raw}\n{diagnostics}"
+        during = _pids(vm)
+        assert during == before, (
+            f"the upgrade restarted pfB-DNS: (gateway, supervisor, decider) {before} -> {during}\n{diagnostics}"
+        )
+        _assert_probe_answered(probe.stop(), "the package upgrade")
+        h.reload(vm, "update")  # the next update
+        later = _pids(vm)
+        assert later == before, (
+            f"the update after the upgrade restarted pfB-DNS: (gateway, supervisor, decider) {before} -> {later}\n"
+            f"{_diagnostics(vm)}"
+        )
+        assert not _restart_pending(vm), f"{RESTART_PENDING} exists after the next update: nothing was to be deferred"
     finally:
-        # the branch build again, at its own version, for the tests after this one
-        h.deploy(vm)
+        try:
+            probe.stop()
+        finally:
+            # the branch build again, at its own version, for the tests after this one
+            h.deploy(vm)
+
+
+def _restart_pending(vm: SmokeVM) -> bool:
+    result = vm.ssh(f"test -e {RESTART_PENDING}")
+    assert result.returncode in (0, 1), f"cannot test {RESTART_PENDING}: rc={result.returncode} {result.stderr!r}"
+    return result.returncode == 0
+
+
+@pytest.mark.timeout(900)  # an update pass to restart the decider, and another to put it back
+def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: State) -> None:
+    """A changed decider module restarts the decider and nothing else, with no query lost (issue #3566).
+
+    Given pfB-DNS on and serving, its three pids and the decider's code record,
+    When a comment is appended to the installed dnswire.py and an update pass runs, an on-box probe asking for a listed
+      name every 0.2 s the whole time,
+    Then the gateway and its supervisor keep their pids, the decider has a new one, every probe got the VIP, the
+      listed name is still blocked, and the decider's code record changed.
+    """
+    vm = rig.vm
+    target = f"{DECIDER_DIR}/dnswire.py"
+    before = _pids(vm)
+    assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
+    record_before = _cat(vm, DECIDER_APPLIED)
+    saved = _sh(vm, f"mkdir -p {SAVE_DIR} && cp -p {target} {SAVE_DIR}/dnswire.py")
+    assert saved.returncode == 0, f"saving {target}: rc={saved.returncode} {saved.stdout}{saved.stderr}"
+    probe = _Probe(vm, rig.names.blocked)
+    try:
+        edited = _sh(vm, f"printf '\\n# pfb3566 smoke: a decider code change\\n' >> {target}")
+        assert edited.returncode == 0, f"editing {target}: rc={edited.returncode} {edited.stdout}{edited.stderr}"
+        probe.start()
+        h.reload(vm, "update")
+        rows = probe.stop()
+        after = _pids(vm)
+        diagnostics = _diagnostics(vm)
+        assert (after.gateway, after.supervisor) == (before.gateway, before.supervisor), (
+            f"a decider code change restarted the gateway or its supervisor: (gateway, supervisor) "
+            f"{(before.gateway, before.supervisor)} -> {(after.gateway, after.supervisor)}\n{diagnostics}"
+        )
+        assert after.decider is not None and after.decider != before.decider, (
+            f"a decider code change left the decider running: pid {before.decider} -> {after.decider}\n{diagnostics}"
+        )
+        _assert_probe_answered(rows, "the decider's restart")
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"after the decider restart {rig.names.blocked} is not blocked: {blocked}\n{raw}"
+        record_after = _cat(vm, DECIDER_APPLIED)
+        assert record_after is not None and record_after != record_before, (
+            f"{DECIDER_APPLIED} did not change: before {record_before!r}, after {record_after!r}"
+        )
+    finally:
+        try:
+            probe.stop()
+        finally:
+            restored = _sh(vm, f"cp -p {SAVE_DIR}/dnswire.py {target} && cmp {SAVE_DIR}/dnswire.py {target}")
+            assert restored.returncode == 0, f"restoring {target}: rc={restored.returncode} {restored.stdout}"
+            _sh(vm, f"rm -rf {SAVE_DIR}")
+            h.reload(vm, "update")  # the decider on the restored code again
+
+
+@pytest.mark.timeout(1200)  # three update passes: the change, the check that it was once, the put-back
+def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: State) -> None:
+    """A changed gateway binary restarts the gateway and its decider once, and the next pass leaves them (issue #3566).
+
+    Given pfB-DNS on and serving, its three pids,
+    When trailing bytes are appended to the installed pfb-dns (a file the kernel still runs) and an update pass runs,
+    Then the gateway has a new pid, its binary record holds the installed binary's sha256, the proxy serves and the
+      listed name is blocked;
+    When a second update pass runs,
+    Then no pid changed: the pair was restarted once.
+    """
+    vm = rig.vm
+    before = _pids(vm)
+    assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
+    command = vm.ssh(f"ps -o args= -p {before.gateway}").stdout.split()
+    binary = command[0] if command else ""
+    assert binary.startswith(f"{PAYLOAD_DIR}/") and binary.endswith("/pfb-dns"), (
+        f"the gateway (pid {before.gateway}) does not run a binary of {PAYLOAD_DIR}: {command}"
+    )
+    saved = _sh(vm, f"mkdir -p {SAVE_DIR} && cp -p {binary} {SAVE_DIR}/pfb-dns")
+    assert saved.returncode == 0, f"saving {binary}: rc={saved.returncode} {saved.stdout}{saved.stderr}"
+    try:
+        # a rename, not a write: the kernel refuses to open a running executable for writing
+        edited = _sh(vm, f"cp -p {binary} {binary}.new && printf 'x' >> {binary}.new && mv {binary}.new {binary}")
+        assert edited.returncode == 0, f"editing {binary}: rc={edited.returncode} {edited.stdout}{edited.stderr}"
+        h.reload(vm, "update")
+        after = _pids(vm)
+        diagnostics = _diagnostics(vm)
+        assert after.gateway is not None and after.gateway != before.gateway, (
+            f"a gateway binary change left the gateway running: pid {before.gateway} -> {after.gateway}\n{diagnostics}"
+        )
+        installed = _sh(vm, f"sha256 -q {binary}").stdout.strip()
+        record = _cat(vm, GATEWAY_APPLIED)
+        assert record is not None and record.strip() == installed, (
+            f"{GATEWAY_APPLIED} expected the installed binary's sha256 {installed!r}, got {record!r}\n{diagnostics}"
+        )
+        assert _is_on(_capture(vm)), f"the proxy is not serving after its restart\n{diagnostics}"
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"after the restart {rig.names.blocked} is not blocked: {blocked}\n{raw}"
+        h.reload(vm, "update")
+        again = _pids(vm)
+        assert again == after, f"a second update pass restarted the pair again: {after} -> {again}\n{_diagnostics(vm)}"
+    finally:
+        restored = _sh(
+            vm, f"cp -p {SAVE_DIR}/pfb-dns {binary}.new && mv {binary}.new {binary} && cmp {SAVE_DIR}/pfb-dns {binary}"
+        )
+        assert restored.returncode == 0, f"restoring {binary}: rc={restored.returncode} {restored.stdout}"
+        _sh(vm, f"rm -rf {SAVE_DIR}")
+        h.reload(vm, "update")  # the gateway on the restored binary again
 
 
 def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
