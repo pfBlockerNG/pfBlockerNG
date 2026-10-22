@@ -14809,6 +14809,7 @@ function pfb_dns_status(): array {
 	global $pfb;
 
 	$saved = pfb_dns_proxy_saved();
+	$ready = pfb_dns_proxy_ready();
 	// Running requires the gateway and its Unbound upstream; the front-end evidence below depends only on the gateway's own readiness.
 	$service = pfb_dns_proxy_serving_ready() ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
@@ -14849,17 +14850,17 @@ function pfb_dns_status(): array {
 	}
 
 	$configured = pfb_dns_proxy_command_listeners();
-	$listeners = pfb_dns_proxy_ready()
+	$listeners = $ready
 	    ? pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"))
 	    : NULL;
-	$unlogged = pfb_dns_proxy_ready() ? 'configured_unconfirmed' : 'configured_not_bound';
+	$unlogged = $ready ? 'configured_unconfirmed' : 'configured_not_bound';
 	$labels = pfb_dns_proxy_address_interfaces();
 	$entry = static fn (string $at, string $state, string $reason = ''): array => ['address' => $at, 'state' => $state, 'reason' => $reason];
 	$transports = [];
 	foreach (['plain' => 'udp+tcp', 'dot' => 'dot', 'doh' => 'doh', 'doq' => 'doq'] as $row => $kind) {
 		$addresses = $configured[$kind] ?? [];
 		$bound = array_keys($listeners['listening'][$kind] ?? []);
-		$active = pfb_dns_proxy_ready() && ($addresses !== [] || $bound !== []);
+		$active = $ready && ($addresses !== [] || $bound !== []);
 		if ($kind !== 'udp+tcp' && !$active && pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
 			$transports[$row] = ['state' => 'off'];
 		} elseif ($addresses === [] && $bound === []) {
