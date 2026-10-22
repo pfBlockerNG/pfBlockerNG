@@ -247,6 +247,8 @@ channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-edge` (the line the
 
 - **Using pfBlockerNG:**
   [official user documentation](https://pfblockerng.com/).
+- **pfB-DNS encrypted DNS discovery:**
+  [Kea DNR, Android DoT, certificates, and public-address DDR](docs/user/pfb-dns/encrypted-dns-discovery.md).
 - **Installing project builds:**
   [package repository](https://pkg.pfblockerng.com).
 - **Developing, testing, and releasing this package:**
