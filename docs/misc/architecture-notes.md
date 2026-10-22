@@ -739,8 +739,10 @@ unavailable upstream leaves the service Starting. A saved toggle, interface or p
 an Update applies it. Without a ready gateway (`configured_not_bound`), or with no matching PID-ready log record, including
 untagged records from an older gateway (`configured_unconfirmed`), the rows are the command's addresses.
 
-**Status panel tables (issue #3555).** `pfb_dns_status_panel()` renders that status as the panel under the form (the sync panels'
-pattern), one table per transport with Interface | Address | State columns; `pfb_dns_status_rows()` groups a transport's addresses
+**Status panel tables (issues #3555, #3586).** `pfb_dns_status_panel()` renders that status under the form as sections like the
+page's own (the markup of an open `COLLAPSIBLE` `Form_Section`, toggled from its title): `pfB-DNS Status` with the service and the
+mode, then one `<transport> Listeners` section per transport holding an Interface | Address | State table in a `table-responsive`
+container, so on a phone a wide table scrolls inside its section instead of widening the page; `pfb_dns_status_rows()` groups a transport's addresses
 into rows, one per interface and outcome (state and reason), ordered Localhost, then the interfaces in pfSense's order, then each
 address that maps to no interface on a row of its own, labelled with the address. The label of an address comes from
 `pfb_dns_proxy_address_interfaces()`, which `pfb_dns_status()` asks once per page and hands to the grouping: loopback is `Localhost`, else the description of the interface that `get_interface_ip()` or

@@ -14908,25 +14908,28 @@ function pfb_dns_status_rows(array $entries, array $labels): array {
 }
 
 /**
- * The pfB-DNS tab's status panel for a pfb_dns_status() result: the service and the mode, then per transport its heading and a table of
- * Interface | Address | State rows (header only when the transport is off) or, when it is on with no listener, the notice; none of them when
- * the status claims no transport. A state is an icon that carries its meaning in its hover title and, for screen readers, as text, so
- * colour or shape never says it alone; a refusal also shows its reason. Every value is escaped here, once.
+ * The pfB-DNS tab's status panel for a pfb_dns_status() result: a section for the service and the mode, then a section per transport
+ * holding a table of Interface | Address | State rows (header only when the transport is off) or, when it is on with no listener, the
+ * notice; no transport section when the status claims no transport. Each section is the markup of an open COLLAPSIBLE Form_Section,
+ * and a transport's table sits in a table-responsive container, so on a phone it scrolls inside its section instead of widening the
+ * page. A state is an icon that carries its meaning in its hover title and, for screen readers, as text, so colour or shape never says
+ * it alone; a refusal also shows its reason. Every value is escaped here, once.
  *
  * @param array{service:string,mode:string,transports:?array<string,array<string,mixed>>} $status
  */
 function pfb_dns_status_panel(array $status): string {
-	$html = '<div class="panel panel-default" id="pfb-dns-status"><div class="panel-heading"><h2 class="panel-title">pfB-DNS Status</h2></div><div class="panel-body">'
-	    . '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>' . htmlspecialchars($status['service']) . '</td></tr>'
-	    . '<tr id="pfb-dns-status-mode"><th>Mode</th><td>' . htmlspecialchars($status['mode']) . '</td></tr></table>';
+	$section = static fn (string $id, string $title, string $body): string => "<div class=\"panel panel-default\" id=\"{$id}\"><div class=\"panel-heading\">"
+	    . "<h2 class=\"panel-title\">{$title}<span class=\"widget-heading-icon\"><a data-toggle=\"collapse\" href=\"#{$id}_panel-body\"><i class=\"fa-solid fa-plus-circle\"></i></a></span></h2>"
+	    . "</div><div id=\"{$id}_panel-body\" class=\"panel-body collapse in\">{$body}</div></div>";
+	$html = $section('pfb-dns-status-overview', 'pfB-DNS Status', '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>'
+	    . htmlspecialchars($status['service']) . '</td></tr><tr id="pfb-dns-status-mode"><th>Mode</th><td>' . htmlspecialchars($status['mode']) . '</td></tr></table>');
 	foreach (['plain' => 'Plain DNS', 'dot' => 'DNS over TLS', 'doh' => 'DNS over HTTPS', 'doq' => 'DNS over QUIC'] as $key => $title) {
 		$transport = $status['transports'][$key] ?? NULL;
 		if ($transport === NULL) {
 			continue;
 		}
-		$html .= "<div id=\"pfb-dns-status-{$key}\"><h3 class=\"h4\">{$title}</h3>";
 		if ($transport['state'] === 'no_listener') {
-			$html .= '<p>' . htmlspecialchars($transport['notice']) . '</p></div>';
+			$html .= $section("pfb-dns-status-{$key}", "{$title} Listeners", '<p>' . htmlspecialchars($transport['notice']) . '</p>');
 			continue;
 		}
 		$rows = '';
@@ -14942,10 +14945,10 @@ function pfb_dns_status_panel(array $status): string {
 			    . ($row['reason'] === '' ? '' : ' ' . htmlspecialchars($row['reason'])) . '</td></tr>';
 		}
 		// No <tbody> without a row: pfSenseHelpers.js fills every empty one with a blank row
-		$html .= '<table class="table table-condensed"><thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead>'
-		    . ($rows === '' ? '' : "<tbody>{$rows}</tbody>") . '</table></div>';
+		$html .= $section("pfb-dns-status-{$key}", "{$title} Listeners", '<div class="table-responsive"><table class="table table-striped table-hover table-condensed">'
+		    . '<thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead>' . ($rows === '' ? '' : "<tbody>{$rows}</tbody>") . '</table></div>');
 	}
-	return $html . '</div></div>';
+	return "<div id=\"pfb-dns-status\">{$html}</div>";
 }
 
 /**

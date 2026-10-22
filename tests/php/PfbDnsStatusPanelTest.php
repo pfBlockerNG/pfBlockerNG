@@ -7,11 +7,15 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3555 -- the pfB-DNS tab's status panel renders what pfb_dns_status() returns: the service and the mode, then one heading per
- * transport (Plain DNS, DNS over TLS, DNS over HTTPS, DNS over QUIC) with a table of Interface | Address | State rows, an empty table
- * when the transport is off, or one line of notice when it is on and has no listener. The state is an icon that says what it means to a
- * screen reader and in its hover title, so colour or shape never carries it alone; a refusal also shows its reason. Every dynamic value
- * is escaped exactly once. The panel is read back as markup (DOM), never as source text.
+ * issue #3555 -- the pfB-DNS tab's status panel renders what pfb_dns_status() returns: the service and the mode, then one section per
+ * transport (Plain DNS, DNS over TLS, DNS over HTTPS, DNS over QUIC listeners) with a table of Interface | Address | State rows, an empty
+ * table when the transport is off, or one line of notice when it is on and has no listener. The state is an icon that says what it means
+ * to a screen reader and in its hover title, so colour or shape never carries it alone; a refusal also shows its reason. Every dynamic
+ * value is escaped exactly once. The panel is read back as markup (DOM), never as source text.
+ *
+ * issue #3586 -- each of those blocks is a section like the page's own: a collapsible pfSense panel, open, whose title carries the
+ * collapse toggle, and a transport's table sits in a table-responsive container so a wide table scrolls inside its section rather
+ * than widening the page on a phone.
  */
 #[CoversFunction('pfb_dns_status_panel')]
 final class PfbDnsStatusPanelTest extends TestCase
@@ -70,10 +74,16 @@ final class PfbDnsStatusPanelTest extends TestCase
 		return new DOMXPath($document);
 	}
 
-	/** The transport's own block of the panel, as an XPath prefix. */
+	/** The transport's own section of the panel, as an XPath prefix. */
 	private static function block(string $transport): string
 	{
-		return "//div[@id='pfb-dns-status']//div[@id='pfb-dns-status-{$transport}']";
+		return "//div[@id='pfb-dns-status']/div[@id='pfb-dns-status-{$transport}']";
+	}
+
+	/** The title of a section, without the collapse toggle (which has no text). */
+	private static function title(string $section): string
+	{
+		return "string(//div[@id='pfb-dns-status']/div[@id='{$section}']/div[@class='panel-heading']/h2[@class='panel-title'])";
 	}
 
 	/** @return array<string,array{string,string}> the service and mode of a status that claims no transport */
@@ -90,28 +100,70 @@ final class PfbDnsStatusPanelTest extends TestCase
 	{
 		$panel = $this->panel(self::statusOf(NULL, $service, $mode));
 
-		$this->assertSame('pfB-DNS Status', $panel->evaluate("string(//div[@id='pfb-dns-status']/div[@class='panel-heading']/h2[@class='panel-title'])"));
+		$this->assertSame('pfB-DNS Status', $panel->evaluate(self::title('pfb-dns-status-overview')));
 		$this->assertSame('Service', $panel->evaluate("string(//tr[@id='pfb-dns-status-service']/th)"));
 		$this->assertSame($service, $panel->evaluate("string(//tr[@id='pfb-dns-status-service']/td)"));
 		$this->assertSame('Mode', $panel->evaluate("string(//tr[@id='pfb-dns-status-mode']/th)"));
 		$this->assertSame($mode, $panel->evaluate("string(//tr[@id='pfb-dns-status-mode']/td)"));
-		$this->assertSame(0, $panel->query('//h3')->length, 'no transport heading');
+		$this->assertSame(1, $panel->query("//div[@id='pfb-dns-status']/div[contains(@class, 'panel')]")->length, 'no transport section');
 		$this->assertSame(0, $panel->query('//thead')->length, 'no transport table');
 	}
 
-	public function testTheFourTransportsFollowTheServiceAndTheModeInOrderEachUnderItsOwnHeading(): void
+	public function testTheFourTransportsFollowTheServiceAndTheModeInOrderEachAsItsOwnSection(): void
 	{
 		$panel = $this->panel(self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off']));
 
-		$headings = [];
+		$titles = [];
 		$ids = [];
-		foreach ($panel->query("//div[@id='pfb-dns-status']//h3") as $heading) {
-			$headings[] = $heading->textContent;
-			$ids[] = $heading->parentNode instanceof DOMElement ? $heading->parentNode->getAttribute('id') : '';
+		foreach ($panel->query("//div[@id='pfb-dns-status']/div") as $section) {
+			$ids[] = $section->getAttribute('id');
+			$titles[] = $panel->evaluate('string(div[@class=\'panel-heading\']/h2)', $section);
 		}
-		$this->assertSame(['Plain DNS', 'DNS over TLS', 'DNS over HTTPS', 'DNS over QUIC'], $headings);
-		$this->assertSame(['pfb-dns-status-plain', 'pfb-dns-status-dot', 'pfb-dns-status-doh', 'pfb-dns-status-doq'], $ids);
-		$this->assertSame(4, (int) $panel->evaluate("count(//tr[@id='pfb-dns-status-mode']/following::h3)"), 'the service and the mode come before the four transports');
+		$this->assertSame(['pfB-DNS Status', 'Plain DNS Listeners', 'DNS over TLS Listeners', 'DNS over HTTPS Listeners', 'DNS over QUIC Listeners'], $titles);
+		$this->assertSame(['pfb-dns-status-overview', 'pfb-dns-status-plain', 'pfb-dns-status-dot', 'pfb-dns-status-doh', 'pfb-dns-status-doq'], $ids);
+		$this->assertSame(1, $panel->query("//div[@id='pfb-dns-status-overview']//tr[@id='pfb-dns-status-mode']")->length, 'the service and the mode are the first section');
+	}
+
+	/** @return array<string,array{array<string,mixed>,list<string>}> a status and the ids of the sections it shows */
+	public static function sectionsShown(): array
+	{
+		return [
+			'no transport' => [self::statusOf(NULL, 'Not in use'), ['pfb-dns-status-overview']],
+			'rows, off and no listener' => [
+				self::withTransports(['state' => 'no_listener', 'notice' => self::NOTICE], ['state' => 'off'], self::rows(self::row('LAN', ['192.0.2.1:853']))),
+				['pfb-dns-status-overview', 'pfb-dns-status-plain', 'pfb-dns-status-dot', 'pfb-dns-status-doh', 'pfb-dns-status-doq'],
+			],
+		];
+	}
+
+	/** @param list<string> $ids */
+	#[DataProvider('sectionsShown')]
+	public function testEverySectionIsAnOpenCollapsiblePfSensePanelToggledFromItsTitle(array $status, array $ids): void
+	{
+		$panel = $this->panel($status);
+
+		foreach ($ids as $id) {
+			$section = "//div[@id='pfb-dns-status']/div[@id='{$id}']";
+			$this->assertSame('panel panel-default', $panel->evaluate("string({$section}/@class)"), "{$id} is a pfSense panel");
+			$toggle = "{$section}/div[@class='panel-heading']/h2[@class='panel-title']/span[@class='widget-heading-icon']/a[@data-toggle='collapse']";
+			$this->assertSame("#{$id}_panel-body", $panel->evaluate("string({$toggle}/@href)"), "{$id}'s title toggles its body");
+			$this->assertSame(1, $panel->query("{$toggle}/i[@class='fa-solid fa-plus-circle']")->length, "{$id}'s toggle has pfSense's icon");
+			$this->assertSame(1, $panel->query("{$section}/div[@id='{$id}_panel-body'][@class='panel-body collapse in']")->length, "{$id}'s body is collapsible and open");
+		}
+	}
+
+	public function testATransportTableIsAPfSenseTableThatScrollsInsideItsSection(): void
+	{
+		$panel = $this->panel(self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off']));
+
+		foreach (['plain', 'dot'] as $transport) {
+			$this->assertSame(
+				1,
+				$panel->query(self::block($transport) . "/div[@class='panel-body collapse in']/div[@class='table-responsive']/table[@class='table table-striped table-hover table-condensed']")->length,
+				"{$transport}'s table, with rows or without, is inside a table-responsive container"
+			);
+			$this->assertSame(1, $panel->query(self::block($transport) . '//table')->length);
+		}
 	}
 
 	public function testAnOffTransportIsATableOfItsHeaderOnlyWithNoBodyAndNoStateText(): void
@@ -119,7 +171,7 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$panel = $this->panel(self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off']));
 		$dot = self::block('dot');
 
-		$this->assertSame('DNS over TLS', $panel->evaluate("string({$dot}/h3)"));
+		$this->assertSame('DNS over TLS Listeners', $panel->evaluate(self::title('pfb-dns-status-dot')));
 		$columns = [];
 		foreach ($panel->query("{$dot}//thead//th") as $column) {
 			$columns[] = $column->textContent;
@@ -128,8 +180,8 @@ final class PfbDnsStatusPanelTest extends TestCase
 		// pfSense's pfSenseHelpers.js fills every empty <tbody> with a blank row, so an off table must have no <tbody> at all
 		$this->assertSame(0, $panel->query("{$dot}//tbody")->length, 'no body for the page script to fill');
 		$this->assertSame(0, $panel->query("{$dot}//tr[not(parent::thead)]")->length, 'and no row');
-		$this->assertSame(0, $panel->query("{$dot}//i")->length, 'no icon');
-		$this->assertSame('DNS over TLSInterfaceAddressState', $panel->evaluate("string({$dot})"), 'and no state text');
+		$this->assertSame(0, $panel->query("{$dot}//table//i")->length, 'no state icon');
+		$this->assertSame('DNS over TLS ListenersInterfaceAddressState', $panel->evaluate("string({$dot})"), 'and no state text');
 		$this->assertGreaterThan(0, $panel->query(self::block('plain') . '//tbody/tr')->length, 'a transport that is on keeps its rows beside the off ones');
 	}
 
@@ -138,8 +190,8 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$panel = $this->panel(self::withTransports(['state' => 'no_listener', 'notice' => self::NOTICE], ['state' => 'off'], ['state' => 'off']));
 		$dot = self::block('dot');
 
-		$this->assertSame('DNS over TLS', $panel->evaluate("string({$dot}/h3)"));
-		$this->assertSame(self::NOTICE, $panel->evaluate("string({$dot}/p)"));
+		$this->assertSame('DNS over TLS Listeners', $panel->evaluate(self::title('pfb-dns-status-dot')));
+		$this->assertSame(self::NOTICE, $panel->evaluate("string({$dot}//p)"));
 		$this->assertSame(0, $panel->query("{$dot}//table")->length, 'a fault is one line, not a table');
 	}
 
@@ -227,6 +279,6 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$this->assertSame("{$hostile}if", $panel->evaluate("string({$row}/td[1])"));
 		$this->assertSame("{$hostile}addr", $panel->evaluate("string({$row}/td[2])"));
 		$this->assertSame("Not listening {$hostile}why", $panel->evaluate("string({$row}/td[3])"));
-		$this->assertSame("{$hostile}notice", $panel->evaluate('string(' . self::block('dot') . '/p)'));
+		$this->assertSame("{$hostile}notice", $panel->evaluate('string(' . self::block('dot') . '//p)'));
 	}
 }

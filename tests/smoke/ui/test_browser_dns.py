@@ -12,8 +12,9 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
   tokens render selected and survive a save that leaves the lists alone;
 * the DDR section sits after DoQ and before DNS Reply Logging, its two checkboxes resolve by their visible labels
   ``DDR`` and ``DoH on port 443``, the second is disabled while the DoH port is 443, and saving both on persists them;
-* the status panel is a heading and a table of Interface | Address | State rows per transport, each state an icon with a
-  hover title and a screen-reader text, and an off transport's table is empty.
+* the status panel is a collapsible section per transport holding a table of Interface | Address | State rows, each
+  state an icon with a hover title and a screen-reader text, and an off transport's table is empty; on a phone the
+  tables scroll inside their sections.
 
 Scope is the controls and disclosures on this page only: no whole-page axe claim, since the
 header breadcrumb and other shared framework markup are outside it. Measured in the box's
@@ -37,7 +38,7 @@ pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tie
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from playwright.sync_api import Page
+    from playwright.sync_api import Page, ViewportSize
 
     from .webui import WebUI
 
@@ -375,6 +376,8 @@ _MOVED_SNAPSHOT = base64.b64encode(
 ).decode("ascii")
 PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 STATUS_TRANSPORTS = {"plain": "Plain DNS", "dot": "DNS over TLS", "doh": "DNS over HTTPS", "doq": "DNS over QUIC"}
+# Below Bootstrap 3's 768px breakpoint, where .table-responsive turns into a horizontal scroller.
+PHONE: ViewportSize = {"width": 390, "height": 844}
 
 
 def _write_rc_script(vm: helpers.SmokeVM, settings: dict[str, str] | None = None) -> None:
@@ -397,13 +400,16 @@ def _write_rc_script(vm: helpers.SmokeVM, settings: dict[str, str] | None = None
     )
 
 
-def test_status_panel_is_a_table_per_transport_with_a_titled_icon_for_each_state(
+def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_state(
     browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM, screenshot_dir: Path
 ) -> None:
     """issue #3555: on a box whose Resolver is moved and whose proxy is stopped, with plain DNS on and DoT, DoH and DoQ
-    off, the status panel has the four transport headings in order, each over a table headed Interface, Address, State;
+    off, the status panel has the four transport sections in order, each a table headed Interface, Address, State;
     plain DNS lists a Localhost row whose state is a visible icon titled "Configured, not bound" with the same words for
     a screen reader, and each of the three off transports is its header alone: no body and no row in the live DOM.
+
+    issue #3586: each section collapses and reopens from the toggle in its title, as the page's own sections do, and
+    on a phone a transport table scrolls inside its section while the page itself is no wider than the screen.
 
     Settings and the service script are put back afterwards, presence included.
     """
@@ -424,7 +430,10 @@ def test_status_panel_is_a_table_per_transport_with_a_titled_icon_for_each_state
         panel = page.locator("#pfb-dns-status")
         assert panel.count() == 1, "the page has no pfB-DNS status panel"
         assert panel.locator("#pfb-dns-status-service td").inner_text() == "Stopped"
-        assert panel.locator("h3").all_inner_texts() == list(STATUS_TRANSPORTS.values())
+        titles = [
+            panel.locator(f"#pfb-dns-status-{key} .panel-title").inner_text().strip() for key in STATUS_TRANSPORTS
+        ]
+        assert titles == [f"{title} Listeners" for title in STATUS_TRANSPORTS.values()]
         for key in STATUS_TRANSPORTS:
             columns = panel.locator(f"#pfb-dns-status-{key} thead th").all_inner_texts()
             assert columns == ["Interface", "Address", "State"], f"{key}: the table's columns are {columns}"
@@ -451,7 +460,23 @@ def test_status_panel_is_a_table_per_transport_with_a_titled_icon_for_each_state
                     f"{key} is off ({stored!r} stored): its table must be a header alone, it has {bodies} tbody and "
                     f"{rows_shown} rows: {block.inner_html()}"
                 )
+
         _shot(page, screenshot_dir, "dns_status_tables")
+        # issue #3586: the title's toggle collapses and reopens its section, its icon following (pfSenseHelpers.js)
+        body = panel.locator("#pfb-dns-status-plain_panel-body")
+        toggle = panel.locator('#pfb-dns-status-plain .panel-title a[data-toggle="collapse"]')
+        assert "fa-minus-circle" in (toggle.locator("i").get_attribute("class") or ""), "an open one offers to close"
+        toggle.click()
+        body.wait_for(state="hidden", timeout=JS_TIMEOUT_MS)
+        toggle.click()
+        body.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
+
+        page.set_viewport_size(PHONE)
+        scroller = panel.locator("#pfb-dns-status-plain .table-responsive")
+        assert scroller.evaluate("el => getComputedStyle(el).overflowX") == "auto", "a wide table scrolls in place"
+        overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        _shot(page, screenshot_dir, "dns_status_tables_phone")
+        assert overflow <= 0, f"on a phone the page is {overflow}px wider than the screen"
     finally:
         for key, state in originals.items():
             helpers.config_restore_state(smoke_vm, f"{DNS_CFG}{key}", state)

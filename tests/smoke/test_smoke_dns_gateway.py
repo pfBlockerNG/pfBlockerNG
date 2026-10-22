@@ -924,10 +924,11 @@ def gui(gw: Gateway) -> WebUI:
 def _status_rows(page: str, transport: str) -> list[tuple[str, list[str], str]]:
     """The rows of one transport's table in the pfB-DNS tab's status panel, as (interface, one address per line, what a
     screen reader says for the state)."""
-    block = re.search(rf'<div id="pfb-dns-status-{transport}">.*?</div>', page, re.DOTALL)
-    assert block, f"the pfB-DNS status panel has no {transport} block"
+    # the table inside this section, never one of the next section (a transport on with no listener has none)
+    table = re.search(rf'id="pfb-dns-status-{transport}">(?:(?!class="panel ).)*?(<table .*?</table>)', page, re.DOTALL)
+    assert table, f"the pfB-DNS status panel has no {transport} table"
     rows = []
-    for tr in ET.fromstring(block.group(0)).findall("./table/tbody/tr"):
+    for tr in ET.fromstring(table.group(1)).findall("./tbody/tr"):
         interface, address, state = tr.findall("td")
         lines = [address.text or "", *(br.tail or "" for br in address.findall("br"))]
         said = state.find("span[@class='sr-only']")

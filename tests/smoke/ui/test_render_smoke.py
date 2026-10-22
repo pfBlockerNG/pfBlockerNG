@@ -2193,7 +2193,8 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
     assert service.group(1) == "Not in use", (
         f"a default box has not moved the Resolver; the Service row says {service.group(1)!r}"
     )
-    assert status_html.split("</table>", 1)[1].startswith("</div></div>"), (
+    # the overview table closes its section's body, the section and the status panel: no transport section follows
+    assert status_html.split("</table>", 1)[1].startswith("</div></div></div>"), (
         "a box with nothing moved claims no transport: nothing may follow the Service and Mode rows"
     )
 
