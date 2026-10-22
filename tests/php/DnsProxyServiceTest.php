@@ -123,7 +123,7 @@ final class DnsProxyServiceTest extends TestCase
 			'the proxy is launched through pfb_python.sh only: no interpreter path may appear in the script');
 		$this->assertStringContainsString("--listen '192.0.2.1' --listen '2001:db8::1' --listen '127.0.0.1' --listen '::1'", $text, 'every listen value is shell-quoted');
 		$this->assertStringContainsString('</dev/null >/dev/null 2>&1', $text, 'stdio is detached (#662)');
-		$this->assertStringContainsString("rc_stop || return 1\n", $text, 'never launch over a survivor');
+		$this->assertStringContainsString("rc_stop internal || return 1\n", $text, 'never launch over a survivor');
 	}
 
 	public function testGeneratedScriptIsValidPosixShell(): void
@@ -1314,7 +1314,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertStringContainsString("--listen '192.0.2.1' --listen '2001:db8::1'", $text);
 		$this->assertStringContainsString(escapeshellarg("{$gateway}/pfb_dns.sh"), $text, 'the wrapper path is quoted too');
 		$this->assertStringContainsString('</dev/null >/dev/null 2>&1', $text, 'stdio is detached (#662)');
-		$this->assertStringContainsString("rc_stop || return 1\n", $text, 'never launch over a survivor');
+		$this->assertStringContainsString("rc_stop internal || return 1\n", $text, 'never launch over a survivor');
 		$proc = proc_open([$this->shell, '-n', "{$this->dir}/rc/" . self::RC], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes);
 		$this->assertIsResource($proc);
 		$output = (string) stream_get_contents($pipes[1]);

@@ -3654,6 +3654,8 @@ if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
 // in the Unbound chroot directory, where the proxy already writes as `unbound` (its module files).
 $pfb['dns_proxy_pidfile'] = PFB_DNS_PROXY_PIDFILE;
 $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
+// The copy a stop that leaves the proxy running across a package upgrade makes of the rc script it runs from: pfSense unlinks the script right after.
+$pfb['dns_proxy_rc_kept'] = '/var/run/pfb_dns_proxy_rc.kept';
 // The gateway's log (daemon(8) -o), which pfb_dns_proxy_listeners() reads for the startup check and the status panel: which listeners the current start bound.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
 // The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
@@ -4667,7 +4669,11 @@ function pfb_dns_proxy_certificate_sync(): void {
  * every 5 s: no ready marker is ever published, so the activation's readiness wait fails and rolls pfB-DNS back
  * (pfb_dns_proxy_confirm_ready()).
  * Stop: TERM at 0 s, KILL at 5 s, give up at 7 s; a pid is signalled only while its command line is the proxy's or the
- * installed pfb-dns's.
+ * installed pfb-dns's. The stop pfSense's dispatch makes (no argument) leaves the proxy running, and copies this script to
+ * $pfb['dns_proxy_rc_kept'], when an ancestor is rc.packages ... DEINSTALL and the nearest pkg/pkg-static ancestor's operation
+ * (classified as pfb_pkg_operation() does) is an install, upgrade or reinstall: the next update applies the new version. No pkg
+ * ancestor, a delete or an unreadable process table stop it. The script's own stops (start, restart) pass an argument and always
+ * stop. Known limit: the first upgrade to a version with this probe still runs the old script, so it takes effect from the next.
  *
  * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the certificate and key selected on the pfB-DNS page
  * are written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the root-only file the gateway's --tls-pem
@@ -4695,6 +4701,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$cert = escapeshellarg($pfb['dns_proxy_cert']);
 	$ctl = escapeshellarg($pfb['dns_proxy_ctl']);
 	$pushed = escapeshellarg(pfb_dns_proxy_certificate_pushed_path());
+	$kept = escapeshellarg($pfb['dns_proxy_rc_kept']);
 
 	$saved = pfb_dns_proxy_saved();
 	// A Listen Port set after the move on a proxy port while the snapshot still stands (the rollback has not run): keep the rc
@@ -4808,7 +4815,7 @@ EOF;
 	[ "\${ours}" -eq 2 ] && exit 0
 
 	# Ensure all processes are stopped; never launch over a survivor
-	rc_stop || return 1
+	rc_stop internal || return 1
 
 	# The marker an earlier proxy left (a killed proxy cannot remove its own) must never pass for this one's: only a fresh
 	# start removes it, after the stop and before the launch; the proxy writes its own once it serves. The record of the certificate
@@ -4825,6 +4832,79 @@ EOF;
 EOF;
 	}
 	$rc['stop']	= <<<EOF
+
+	# pfSense stops package services while pkg upgrades or reinstalls this package (an ancestor is `rc.packages ... DEINSTALL`
+	# and the nearest pkg's operation is not a delete): the proxy keeps running and the next update applies the new version.
+	# Only pfSense's own call has no argument; start and restart pass one. The walk is bounded and splits argv words without globbing.
+	if [ "\$#" -eq 0 ]; then
+		keep="\$(
+			set -f
+			pid="\$\$"
+			deinstall=''
+			op=''
+			hops=0
+			while [ "\${hops}" -lt 64 ]; do
+				line="\$(/bin/ps -ww -o ppid= -o args= -p "\${pid}" 2>/dev/null)" || break
+				set -- \${line}
+				[ "\$#" -ge 2 ] || break
+				ppid="\$1"
+				shift
+				seen=''
+				for word in "\$@"; do
+					if [ "\${seen}" = 1 ] && [ "\${word}" = DEINSTALL ]; then deinstall=1; fi
+					[ "\${word}" != /etc/rc.packages ] || seen=1
+				done
+				if [ -z "\${op}" ]; then
+					case "\${1##*/}" in
+						pkg|pkg-static)
+							shift
+							while [ "\$#" -gt 0 ]; do
+								case "\$1" in
+									-*=*) shift ;;
+									-[ojcrCR]|--option|--jail|--chroot|--rootdir|--config|--repo-conf-dir) shift; [ "\$#" -eq 0 ] || shift ;;
+									-*) shift ;;
+									*) break ;;
+								esac
+							done
+							if [ "\$#" -gt 0 ]; then
+								sub="\$1"
+								shift
+								case "\${sub}" in
+									[Dd][Ee][Ll][Ee][Tt][Ee]|[Rr][Ee][Mm][Oo][Vv][Ee]|[Aa][Uu][Tt][Oo][Rr][Ee][Mm][Oo][Vv][Ee]) op=delete ;;
+									[Uu][Pp][Gg][Rr][Aa][Dd][Ee]) op=upgrade ;;
+									[Ii][Nn][Ss][Tt][Aa][Ll][Ll])
+										op=install
+										for flag in "\$@"; do
+											case "\${flag}" in
+												--force) op=reinstall ;;
+												-[!-]*) case "\${flag}" in *f*) op=reinstall ;; esac ;;
+											esac
+										done
+										;;
+								esac
+							fi
+							;;
+					esac
+				fi
+				case "\${ppid}" in
+					''|*[!0-9]*) break ;;
+				esac
+				{ [ "\${ppid}" -gt 1 ] && [ "\${ppid}" != "\${pid}" ]; } || break
+				pid="\${ppid}"
+				hops="\$((hops + 1))"
+			done
+			if [ "\${deinstall}" = 1 ]; then
+				case "\${op}" in
+					install|upgrade|reinstall) echo keep ;;
+				esac
+			fi
+		)"
+		if [ "\${keep}" = keep ]; then
+			/bin/cp "\$0" {$kept} 2>/dev/null || true
+			/usr/bin/logger -p daemon.info -t pfb_dns_proxy "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNS proxy left running across the package upgrade; the next update applies the new version"
+			return 0
+		fi
+	fi
 
 	# Terminate the DNS proxy and its supervisor and wait for both to exit: TERM at 0 s, KILL at 5 s, give up at 7 s.
 	# A pid is signalled only while its command line is the proxy's: a stale pidfile may name a reused pid.
@@ -4882,7 +4962,7 @@ EOF;
 EOF;
 
 	// A survivor must fail the restart: the start's healthy check would otherwise report success over it
-	$rc['restart'] = "\trc_stop || return 1\n\trc_start\n";
+	$rc['restart'] = "\trc_stop internal || return 1\n\trc_start\n";
 
 	// write_rcfile() wraps start/stop as rc_start() { ... } / rc_stop() { ... }: a warning is logged only for a changed script.
 	$disk = @file_get_contents(PFB_DNS_PROXY_RCFILE);

@@ -91,6 +91,20 @@ trait DnsProxyRcSandboxTrait
 			reap
 			;;
 		ps)
+			# The ancestry probe of a top-level stop: -ww -o ppid= -o args= -p PID, answered from the `ancestry` table
+			# (pid|ppid|args; SELF is the script's own pid: the first pid ever asked about). Every query is recorded.
+			if [ "$#" -eq 7 ] && [ "$1" = -ww ] && [ "$2" = -o ] && [ "$3" = 'ppid=' ] && [ "$4" = -o ] && [ "$5" = 'args=' ] && [ "$6" = -p ]; then
+				echo "$7" >> "$S/ancestry.queries"
+				[ ! -e "$S/ps.fail" ] || exit 1
+				[ -s "$S/ancestry.self" ] || echo "$7" > "$S/ancestry.self"
+				read -r self < "$S/ancestry.self"
+				key="$7"
+				[ "$key" != "$self" ] || key=SELF
+				while IFS='|' read -r pid ppid args; do
+					if [ "$pid" = "$key" ]; then printf '%5s %s\n' "$ppid" "$args"; exit 0; fi
+				done < "$S/ancestry"
+				exit 1
+			fi
 			[ "$1" = -ww ] && [ "$2" = -o ] && [ "$3" = 'args=' ] && [ "$4" = -p ] && [ "$#" -eq 5 ] || { ev bad-ps; exit 2; }
 			while IFS='|' read -r pid pidfile due how args; do
 				if [ "$pid" = "$5" ]; then printf '%s\n' "$args"; exit 0; fi
@@ -204,6 +218,9 @@ trait DnsProxyRcSandboxTrait
 		$rm = trim((string) shell_exec('command -v rm'));
 		$this->assertNotSame('', $rm, 'no rm on this host');
 		$this->assertTrue(symlink($rm, "{$this->dir}/bin/rm"));
+		$cp = trim((string) shell_exec('command -v cp'));
+		$this->assertNotSame('', $cp, 'no cp on this host');
+		$this->assertTrue(symlink($cp, "{$this->dir}/bin/cp"));
 		$dash = trim((string) shell_exec('command -v dash 2>/dev/null'));
 		$this->shell = $dash !== '' ? $dash : '/bin/sh';
 
@@ -282,9 +299,10 @@ trait DnsProxyRcSandboxTrait
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls', 'timeout.args', 'php.args'] as $file) {
+		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls', 'timeout.args', 'php.args', 'ancestry', 'ancestry.self', 'ancestry.queries'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
+		@unlink("{$state}/ps.fail");
 		if ($running) {
 			file_put_contents("{$this->dir}/run/pfb_dns_proxy_daemon.pid", "1001\n");
 			file_put_contents("{$this->dir}/run/pfb_dns_proxy.pid", "1002\n");
@@ -293,6 +311,33 @@ trait DnsProxyRcSandboxTrait
 				. "1002|{$this->dir}/run/pfb_dns_proxy.pid|||python3.11 -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py\n");
 		}
 		file_put_contents("{$this->dir}/run.sh", $this->sandboxPaths($this->rcText()));
+	}
+
+	/**
+	 * What the sandbox's ps says about the stop script's ancestry, nearest first: $argvs[0] is the script itself, each next entry
+	 * its parent; the last one's parent is $lastPpid (init by default; an unknown pid makes ps fail there). Call after arrange().
+	 * $psFails makes every ancestry query fail.
+	 *
+	 * @param list<string> $argvs
+	 */
+	private function ancestry(array $argvs, bool $psFails = FALSE, string $lastPpid = '1'): void
+	{
+		$rows = '';
+		foreach ($argvs as $i => $args) {
+			$pid = $i === 0 ? 'SELF' : (string) (500 + $i);
+			$ppid = $i === count($argvs) - 1 ? $lastPpid : (string) (501 + $i);
+			$rows .= "{$pid}|{$ppid}|{$args}\n";
+		}
+		file_put_contents("{$this->dir}/state/ancestry", $rows);
+		if ($psFails) {
+			file_put_contents("{$this->dir}/state/ps.fail", '');
+		}
+	}
+
+	/** @return int how many ancestry queries the sandbox's ps answered */
+	private function ancestryQueries(): int
+	{
+		return count(file("{$this->dir}/state/ancestry.queries", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
 	}
 
 	/** Where the gateway's certificate file is (the production path is $pfb['dns_proxy_cert']; the generated script names this one). */
@@ -319,6 +364,12 @@ trait DnsProxyRcSandboxTrait
 		return "{$this->dir}/run/pfb_dns_ready";
 	}
 
+	/** Where the sandboxed script keeps the copy of itself when a stop leaves the proxy running (the production path is $pfb['dns_proxy_rc_kept']). */
+	private function keptFile(): string
+	{
+		return "{$this->dir}/run/pfb_dns_proxy_rc.kept";
+	}
+
 	/** Point every absolute path in the generated script at the sandbox; fail closed on any other. A slash after a glob `*` is part of a case pattern, not a path. */
 	private function sandboxPaths(string $script): string
 	{
@@ -329,7 +380,7 @@ trait DnsProxyRcSandboxTrait
 				if ($path === $GLOBALS['pfb']['dns_proxy_ready']) {
 					return $this->readyFile();
 				}
-				if (in_array($path, ['/dev/null', '/bin/sh', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
+				if (in_array($path, ['/dev/null', '/bin/sh', '/etc/rc.packages', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
 				    str_starts_with($path, "{$this->dir}/dns_proxy/") || in_array($path, [$this->certFile(), $this->pushedFile(), $this->ctlSocket()], TRUE) ||
 				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {
 					return $path;
