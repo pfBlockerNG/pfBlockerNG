@@ -238,7 +238,7 @@ class SmokeVM:
     # 192.168.89.2:<port> via the WAN SLIRP alias). Set once the stub_dns fixture is
     # up; None otherwise. Unbound is pointed here so it never recurses into dark egress.
     upstream_dns_port: int | None = None
-    # qemu PID + overlay are bookkeeping for teardown.
+    # qemu PID + boot-log path, kept for teardown and diagnostics.
     vm_pid: int | None = None
     log_path: str | None = None
 
@@ -540,7 +540,7 @@ def boot_and_probe(
             text=True,
             check=False,
         )
-    except Exception:
+    except BaseException:  # incl. Ctrl-C / SIGTERM-as-KeyboardInterrupt: qemu must not outlive the wait
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
         _kill(process, qmp_sock, overlay)
         log_file.close()
@@ -571,7 +571,7 @@ def boot_and_probe(
         # NEVER REMOVE: install the scheduler off-switch before pfBlockerNG can be installed.
         helpers._write_cron_disable_flag(vm)
         _log_guest_identity(vm)
-    except Exception:
+    except BaseException:
         # Route a boot-complete failure (its loud timeout, or an SSH/php_eval error) through the
         # SAME cleanup as a wait_ready failure: capture diagnostics, kill qemu, close the log --
         # otherwise a never-completing boot leaks the VM and produces no screendump/log tail.
@@ -802,14 +802,15 @@ def smoke_vm(
         boot_timeout=DEFAULT_BOOT_TIMEOUT,
         extra_env=_ha_sync_env(request.session.items),
     )
-    # BBcan177: run the VM at the strict PHP error level Netgate uses on its betas,
-    # so smoke + UI tests surface every latent notice / warning / deprecated. One-time,
-    # session-wide (every VM test inherits it); raises loudly if the level doesn't take.
-    from . import helpers
-
-    helpers.enable_strict_php_error_reporting(handle.vm)
-    request.session.stash[SMOKE_VM_KEY] = handle.vm
     try:
+        # BBcan177: run the VM at the strict PHP error level Netgate uses on its betas,
+        # so smoke + UI tests surface every latent notice / warning / deprecated. One-time,
+        # session-wide (every VM test inherits it); raises loudly if the level doesn't take.
+        # Inside the try: a raise here must still reach the finally that stops qemu.
+        from . import helpers
+
+        helpers.enable_strict_php_error_reporting(handle.vm)
+        request.session.stash[SMOKE_VM_KEY] = handle.vm
         yield handle.vm
     finally:
         request.session.stash[SMOKE_VM_KEY] = None
@@ -1012,7 +1013,7 @@ def client_vm(
             text=True,
             check=False,
         )
-    except Exception:
+    except BaseException:  # incl. Ctrl-C / SIGTERM-as-KeyboardInterrupt: qemu must not outlive the wait
         _capture_boot_failure("civm", qmp_sock, log_path, process)
         _kill(process, qmp_sock, overlay)
         log_file.close()
@@ -1028,17 +1029,16 @@ def client_vm(
             f"wait_ready stderr:\n{result.stderr}\n--- client boot log tail ---\n{tail}"
         )
 
-    print(result.stdout.strip())
-
-    vm = SmokeVM(
-        ssh_key_path=ssh_key_path,
-        host=DEFAULT_HOST,
-        ssh_port=DEFAULT_CLIENT_SSH_PORT,
-        vm_pid=process.pid,
-        log_path=str(log_path),
-    )
-
     try:
+        # Inside the try: a raise here must still reach the finally that stops qemu.
+        print(result.stdout.strip())
+        vm = SmokeVM(
+            ssh_key_path=ssh_key_path,
+            host=DEFAULT_HOST,
+            ssh_port=DEFAULT_CLIENT_SSH_PORT,
+            vm_pid=process.pid,
+            log_path=str(log_path),
+        )
         yield vm
     finally:
         _kill(process, qmp_sock, overlay)

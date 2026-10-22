@@ -19,7 +19,7 @@ import subprocess
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
@@ -70,6 +70,7 @@ class _Rig:
         self.fifo = root / "up.fifo"
         self.qemu_mode = "stay"  # stay | ignore-term | exit
         self.failure: str | None = None
+        self.existed_at_failure: list[bool] | None = None  # was each overlay on disk when the failure fired?
         self.started: list[subprocess.Popen[bytes]] = []
         self._build(monkeypatch)
 
@@ -116,6 +117,12 @@ class _Rig:
         def boot_complete(vm: object) -> None:
             if rig.failure == "boot_complete_raises":
                 raise RuntimeError("simulated boot-complete failure")
+            if rig.failure == "boot_complete_interrupt":
+                rig.inject(KeyboardInterrupt())
+
+        def strict_php(vm: object) -> None:
+            if rig.failure == "strict_php_raises":
+                rig.inject(RuntimeError("simulated post-boot setup failure"))
 
         monkeypatch.setattr(smoke_conftest.subprocess, "Popen", RecordingPopen)
         monkeypatch.setattr(smoke_conftest.subprocess, "run", self._wait_ready)
@@ -125,7 +132,7 @@ class _Rig:
         monkeypatch.setattr(smoke_conftest, "own_variant", lambda: SimpleNamespace(variant="CE"))
         monkeypatch.setattr(live_helpers, "wait_boot_complete", boot_complete)
         monkeypatch.setattr(live_helpers, "_write_cron_disable_flag", lambda vm: None)
-        monkeypatch.setattr(live_helpers, "enable_strict_php_error_reporting", lambda vm: None)
+        monkeypatch.setattr(live_helpers, "enable_strict_php_error_reporting", strict_php)
         # client_vm's own prerequisites: KVM and the binaries on PATH.
         real_exists = pathlib.Path.exists
         monkeypatch.setattr(
@@ -143,9 +150,16 @@ class _Rig:
         assert ready, "the stand-in qemu never started"
         if self.failure == "wait_ready_raises":
             raise OSError("simulated wait_ready crash")
+        if self.failure == "wait_ready_interrupt":
+            self.inject(KeyboardInterrupt())
         if self.failure in ("wait_ready_exit", "qemu_exit"):
             return subprocess.CompletedProcess(argv, 1, "", "never ready")
         return subprocess.CompletedProcess(argv, 0, "boot-to-ready: 1 second\n", "")
+
+    def inject(self, exc: BaseException) -> NoReturn:
+        """Raise ``exc`` from inside the fixture under test, first noting which overlays existed."""
+        self.existed_at_failure = [path.exists() for path in self.created()]
+        raise exc
 
     def start(self, name: str) -> Generator[Any, None, None]:
         """Run the real fixture ``name`` to its yield (raises if the boot fails) and return its generator."""
@@ -238,6 +252,55 @@ def test_a_failed_boot_deletes_its_overlay(rig: _Rig, name: str, failure: str) -
 
     overlay = rig.only_overlay()
     assert not overlay.exists(), f"{name} failed to boot ({failure}) and left its overlay behind: {overlay}"
+
+
+def test_a_smoke_vm_whose_post_boot_setup_fails_is_stopped_and_its_overlay_deleted(rig: _Rig) -> None:
+    rig.failure = "strict_php_raises"
+
+    with pytest.raises(RuntimeError, match="simulated post-boot setup failure"):
+        rig.start("smoke_vm")
+
+    overlay = rig.only_overlay()
+    assert rig.existed_at_failure == [True], "the overlay must exist while the VM runs, before the failure"
+    assert rig.started[0].poll() is not None, "a failed session fixture left qemu running"
+    assert not overlay.exists(), f"smoke_vm failed after its boot and left its overlay behind: {overlay}"
+
+
+def test_a_client_vm_that_fails_after_its_boot_is_stopped_and_its_overlay_deleted(rig: _Rig) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> NoReturn:
+        rig.inject(RuntimeError("simulated post-boot failure"))
+
+    rig.monkeypatch.setattr(smoke_conftest, "SmokeVM", refuse)
+
+    with pytest.raises(RuntimeError, match="simulated post-boot failure"):
+        rig.start("client_vm")
+
+    overlay = rig.only_overlay()
+    assert rig.existed_at_failure == [True], "the overlay must exist while the VM runs, before the failure"
+    assert rig.started[0].poll() is not None, "a failed session fixture left qemu running"
+    assert not overlay.exists(), f"client_vm failed after its boot and left its overlay behind: {overlay}"
+
+
+@pytest.mark.parametrize(
+    ("name", "failure"),
+    [
+        ("smoke_vm", "wait_ready_interrupt"),
+        ("smoke_vm", "boot_complete_interrupt"),
+        ("peer_vm", "wait_ready_interrupt"),
+        ("peer_vm", "boot_complete_interrupt"),
+        ("client_vm", "wait_ready_interrupt"),
+    ],
+)
+def test_a_ctrl_c_during_the_boot_wait_stops_the_vm_and_deletes_its_overlay(rig: _Rig, name: str, failure: str) -> None:
+    rig.failure = failure
+
+    with pytest.raises(KeyboardInterrupt):
+        rig.start(name)
+
+    overlay = rig.only_overlay()
+    assert rig.existed_at_failure == [True], "the overlay must exist while the VM boots, before the interrupt"
+    assert rig.started[0].poll() is not None, f"{name} was interrupted and left qemu running"
+    assert not overlay.exists(), f"{name} was interrupted ({failure}) and left its overlay behind: {overlay}"
 
 
 def test_a_qemu_that_ignores_sigterm_is_killed_and_its_overlay_deleted(rig: _Rig) -> None:
