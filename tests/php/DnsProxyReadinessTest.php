@@ -228,6 +228,15 @@ final class DnsProxyReadinessTest extends TestCase
 		$this->assertFalse(pfb_dns_proxy_ready(), 'the gateway is serving but its Unbound backend has exited');
 	}
 
+	public function testTheGatewayIsReadyWhileItsUnboundBackendIsDead(): void
+	{
+		$this->proxyServes();
+		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
+
+		$this->assertTrue(pfb_dns_proxy_ready(), 'readiness is the gateway alone: its child pidfile and ready marker, as #3566 keeps it');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'serving also needs the Unbound backend');
+	}
+
 	/** @return array<string,array{?string}> */
 	public static function unusableUnboundPids(): array
 	{
