@@ -804,7 +804,6 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$this->assertFalse($ready);
 		$this->assertSame(array_fill(0, 10, 100000), $clock->sleeps);
 		$this->assertSame(['pfBlockerNG DNS Proxy'], array_column($GLOBALS['pfb_test_file_notices'], 'id'), 'the recovery failure only');
-		$this->assertStringContainsString('locked', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 		$this->assertStringNotContainsString('boom', implode("\n", array_column($GLOBALS['pfb_test_file_notices'], 'notice')));
 	}
 

@@ -5552,7 +5552,7 @@ function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL, ?st
 			return FALSE;
 		}
 		if ($not_ready) {
-			// Diagnosed once the guard has won, and before the restore consumes the snapshot that the check's last-error lookup goes by
+			// Diagnosed once the guard has won, and before the restore consumes the snapshot: the check's listener warnings need it, while its gateway last-error lookup reads the log only
 			pfb_dns_proxy_startup_check(FALSE, $since);
 			pfb_logger("\nNot completed: the DNS proxy did not become ready within " . PFB_DNS_PROXY_START_WAIT . ' s', 2);
 		}

@@ -2205,7 +2205,87 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		}
 	}
 
-	public function testTheOwnerAndTheContenderEachDoOneRestorationAndTheContenderWaitsForTheOwner(): void
+	public function testAStandDownWithANewerSnapshotLeavesTheNewActivationUntouched(): void
+	{
+		// Given pfB-DNS serving, a Resolver this process sees as disabled, and config.xml holding a newer valid snapshot B with the
+		// Resolver enabled again: this process's copy predates that activation
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->disableTheResolver();
+		$this->assertFalse(config_path_enabled('unbound'), 'before: this process sees the Resolver disabled');
+		$this->configXmlOnDisk();
+		$b = $this->snapshotB();
+		$this->diskWrites(self::SAVED, $b);
+		$this->diskWrites('unbound/enable', '');
+		$this->assertNotSame($b, (string) config_get_path(self::SAVED, ''), 'before: this process holds snapshot A, config.xml holds B');
+		$this->assertTrue(pfb_dns_proxy_running(), 'before: the proxy is serving');
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$this->proxyCalls = [];
+
+		// When the stand-down runs on this process's copy
+		$stood = pfb_dns_proxy_stand_down();
+
+		// Then nothing is written, stopped or announced, and the newer activation stays as config.xml holds it
+		$this->assertFalse($stood);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'no write');
+		$this->assertSame([], $this->proxyCalls, 'no stop');
+		$this->assertSame([], $this->notices(), 'no notice');
+		$this->assertSame($b, (string) $this->onDisk(self::SAVED, ''), 'snapshot B kept');
+		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, ''), 'pfB-DNS still on');
+		$this->assertTrue(pfb_dns_proxy_running(), 'the proxy still serves');
+	}
+
+	public function testADirectRollbackAfterAnotherRecoveryDoesNothingAndReturnsFalse(): void
+	{
+		// Given a proxy that never serves: the first confirmation rolls the activation back in full, while this process's copy
+		// still holds the snapshot it read before that
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		$stale = $GLOBALS['config'];
+		$this->assertFalse(pfb_dns_proxy_confirm_ready(), 'before: the first confirmation fails and rolls back');
+		$this->assertResolverIsTheOriginal('before: the first recovery restored the Resolver');
+		$GLOBALS['config'] = $stale;
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: this process still holds the snapshot');
+		$writes = $GLOBALS['pfb_test_write_config_calls'];
+		$calls = $this->proxyCalls;
+		$notices = $this->notices();
+		$starts = $this->startAttempts();
+
+		// When a direct rollback runs on that copy
+		$restored = pfb_dns_proxy_roll_back();
+
+		// Then it does not claim a restore, and nothing else is written, stopped, started or announced
+		$this->assertFalse($restored, 'a rollback that did nothing never says it restored the Resolver');
+		$this->assertSame($writes, $GLOBALS['pfb_test_write_config_calls'], 'no further write');
+		$this->assertSame($calls, $this->proxyCalls, 'no further proxy action');
+		$this->assertSame($notices, $this->notices(), 'no further notice');
+		$this->assertSame($starts, $this->startAttempts(), 'no further Unbound start');
+		$this->assertResolverIsTheOriginal('the first recovery\'s restore stands');
+	}
+
+	public function testAFailedStartReportsSnapshotDependentListenerWarningsBeforeRestoring(): void
+	{
+		// Given a valid snapshot that names lan and opt1, a proxy that never serves, and opt1 now configured but down with no address
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		$GLOBALS['pfb_test_interface_ip']['opt1'] = '';
+		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'down', 'enable' => TRUE];
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is stored');
+
+		// When the activation confirms the start, which fails
+		$this->assertFalse(pfb_dns_proxy_confirm_ready());
+
+		// Then the startup notice names the interface whose listener only the snapshot defines, and the Resolver is restored
+		$startup = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy startup'));
+		$this->assertCount(1, $startup, 'one startup notice');
+		$this->assertStringContainsString('opt1', $startup[0]['notice'], 'the startup notice names the interface whose listener the snapshot defines');
+		$this->assertResolverIsTheOriginal('rolled back after the diagnosis');
+	}
+
+	public function testOnlyTheOwnerRestoresAndTheContenderWaitsForItsCompletion(): void
 	{
 		// Given two recoveries of this box that run concurrently, with the owner held after its Off write
 		$this->activate(TRUE);

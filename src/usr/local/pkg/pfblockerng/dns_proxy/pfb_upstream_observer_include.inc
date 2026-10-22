@@ -34,8 +34,9 @@
  *
  * The rc script serializes its starts (lockf), so this background start and an apply's start_service() cannot both launch a
  * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command,
- * bounded by timeout(1) (360 s: the 30 s readiness budget, then a rollback that may wait for the config lock and stop and start
- * Unbound twice) and dead with its task, confirms the start as an apply does, told the gateway log's size from before the start:
+ * bounded by timeout(1) (360 s: an outer salvage deadline, not a proved bound on normal completion; the components include the 30 s
+ * readiness budget, a rollback's 30 s operation-lock wait, the config-lock and proxy-stop waits it bounds and its Unbound restarts; untimed
+ * pfBlockerNG mount/umount execs and pfSense services_unbound_configure() are outside any total) and dead with its task, confirms the start as an apply does, told the gateway log's size from before the start:
  * a start with problems gets the pfB-DNS startup notice, and one that does not become ready is rolled back
  * (pfb_dns_proxy_confirm_ready()). The ready marker says the front end can answer queries; it is no proof that recursion works,
  * which needs the Unbound this hook runs before.
