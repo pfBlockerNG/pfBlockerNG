@@ -994,7 +994,7 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
         f"the gateway {proxy} does not own the LAN front sockets; it owns {sorted(gateway_on.proxy_sockets())}"
     )
 
-    def proxy_ready() -> bool:
+    def proxy_serving() -> bool:
         pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
         return h._php_read_scalar(vm, pre, "pfb_dns_proxy_serving_ready() ? '1' : '0'") == "1"
 
@@ -1005,7 +1005,7 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
     assert vm.ssh("cat", READY_FILE).stdout.strip() == str(proxy), (
         f"{READY_FILE} does not hold the gateway's pid {proxy}"
     )
-    assert proxy_ready(), "pfb_dns_proxy_serving_ready() is false while the gateway and Unbound both run"
+    assert proxy_serving(), "pfb_dns_proxy_serving_ready() is false while the gateway and Unbound both run"
     healthy: dict[str, list[tuple[str, list[str], str]]] = {}
 
     def panel_ready() -> bool:
@@ -1032,7 +1032,7 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
                 and _pid_file(vm, PROXY_PID_FILE) == proxy
                 and vm.ssh("cat", READY_FILE).stdout.strip() == str(proxy)
                 and {(s.proto, s.local) for s in listeners if s.pid == proxy} == gateway_on.proxy_sockets()
-                and not proxy_ready()
+                and not proxy_serving()
             )
 
         h.wait_until(backend_down, timeout=60.0, interval=2.0)

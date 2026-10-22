@@ -5300,7 +5300,7 @@ function pfb_dns_proxy_serving_ready(): bool {
 }
 
 /**
- * Wait (bounded, PFB_DNS_PROXY_START_WAIT: the Unbound startup budget) for the proxy to become READY: start_service() and
+ * Wait (bounded, PFB_DNS_PROXY_START_WAIT: the Unbound startup budget) for the proxy to serve (pfb_dns_proxy_serving_ready()): start_service() and
  * restart_service() return before the new proxy has bound anything. NEVER call it with the DNS config lock held.
  */
 function pfb_dns_proxy_await_ready(): bool {
@@ -5753,7 +5753,7 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
  * reload, and restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ/DDR
  * settings, so a new address or a changed setting is not served until the proxy restarts. Whatever it did, the proxy must
- * then be READY: one that is alive but never published its marker (restarted by its supervisor every few seconds) fails
+ * then serve (pfb_dns_proxy_serving_ready()): one that is alive but never published its marker (restarted every few seconds) fails
  * the activation and is rolled back, which a pidfile alone would never notice.
  *
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
@@ -5762,6 +5762,10 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * control socket, for changed decider code (pfb_dns_proxy_decider_changed()) when a second decider fits in memory beside it
  * (pfb_dns_proxy_decider_restart_fits_ram()); one that may not fit, or that the gateway does not take, is logged and becomes the
  * whole-pair restart. Neither change is looked for while the proxy is not READY: it has no record to judge.
+ *
+ * Only a deferred pass (under a package operation) that acted on nothing and finds the gateway READY skips the upstream confirmation: it
+ * files the startup problems its log shows and returns ready (issue #3560, D-a). The tick and the boot check confirm the upstream and roll
+ * back a failed one; every other pass gets the full confirmation.
  *
  * @param string $proxyDir the package's dns_proxy directory, as for pfb_dns_proxy_service()
  * @return bool TRUE iff nothing is moved or the proxy is ready; FALSE after a failed activation (rolled back or not)

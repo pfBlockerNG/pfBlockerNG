@@ -654,6 +654,9 @@ uses IPv6. Port 5354 is not the gateway's upstream.
 `pfb_dns_proxy_serving_ready()` is `pfb_dns_proxy_ready()` and `pfb_dns_proxy_upstream_ready()`: what an activation waits for and what
 the status panel's Service reads as Running. The frontend listeners, the unlogged check, the active-transport gate, the installer's
 keep, the certificate push and the apply's change gate use the gateway-level READY alone.
+
+A deferred package-operation pass (`pfb_dns_proxy_ensure_running()` under a package upgrade or reload) that acted on nothing and finds the gateway READY skips the upstream confirmation: it files the startup problems its log shows, such as a configured listener the gateway did not report, and returns ready (issue #3560, D-a). The tick and the boot check confirm the upstream and roll back a failed one. Every other pass gets the full confirmation.
+
 The socket inventory uses the bounded control-command seam with a one-second budget plus its kill grace; the outer wait
 keeps its startup deadline, with at most that final probe's bound beyond it. `pfb_dns_proxy_running()` remains pidfile-only
 liveness for the zero-downtime swap and apply ledger. The status shows Starting until the serving predicate holds, but retains
@@ -803,9 +806,9 @@ before `rc.start_packages` begins, and the proxy must keep its pids and keep ans
 prints the daemon launch, the listening socket, Unbound's process start, the first correct answers and Unbound's sync as
 separate times; a launch is not an answer.
 
-The named recovery component waits total 340 s before the upstream socket inventory. Certificate sync can run one
-inventory before the readiness wait, and a final probe can extend that wait's deadline; each adds up to 1 s plus the
-5 s kill grace, making the component-budget sum 352 s. This is not a whole-path hard bound: pfSense's core restart path
+The named recovery component waits total 340 s before the upstream socket inventory. A readiness check (`pfb_dns_proxy_serving_ready()`)
+runs two bounded probes in order: `ps` for the running gateway's command line, then `sockstat` for its owner. Each has a one-second budget
+plus the 5 s kill grace (a hung probe was measured to end 6.0 s after it starts). A check that starts before the wait's deadline can finish up to 12 s after it, making the component-budget sum 352 s. This is not a whole-path hard bound: pfSense's core restart path
 also runs untimed mount, sync and other OS commands. The existing 360 s outer deadline (TERM, then KILL after 5 s) is a
 salvage limit and can interrupt unfinished core work; it does not guarantee completion or prove 8 s of hard headroom.
 
