@@ -44,7 +44,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 
 	protected function setUp(): void
 	{
-		foreach (['pfb', 'config', 'pfb_test_file_notices', 'pfb_test_valid_pids', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles'] as $name) {
+		foreach (['pfb', 'config', 'pfb_test_file_notices', 'pfb_test_valid_pids'] as $name) {
 			$this->savedGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
 		}
 		$this->dir = sys_get_temp_dir() . '/pfb_dns_push_' . bin2hex(random_bytes(5));
@@ -57,13 +57,10 @@ final class DnsProxyCertificatePushTest extends TestCase
 		DnsProxyCertificateFixtures::seedResolver($this->dir);
 		$keys = ['active_interface' => ['present' => TRUE, 'value' => 'lan'], 'enablessl' => ['present' => TRUE, 'value' => ''], 'custom_options' => ['present' => FALSE, 'value' => NULL]];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
-		$this->setUpUpstreamFixture();
-		pfb_dns_proxy_service();
 	}
 
 	protected function tearDown(): void
 	{
-		$this->tearDownUpstreamFixture();
 		$this->finish();
 		$this->clocks = [];
 		$this->clearProxyFiles();

@@ -71,16 +71,11 @@ final class DnsProxyConfigLockTest extends TestCase
 			'errlog' => "{$this->tmp}/pfb.err",
 		]);
 		$GLOBALS['config'] = [];
-		$this->setUpUpstreamFixture();
-		$keys = array_fill_keys(PFB_DNS_PROXY_RESOLVER_KEYS, ['present' => FALSE, 'value' => NULL]);
-		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode((string) json_encode($keys)));
-		pfb_dns_proxy_service();
-		$GLOBALS['config'] = [];
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
 	}
 
 	protected function tearDown(): void
 	{
-		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		foreach (self::DOUBLE_GLOBALS as $name) {
 			unset($GLOBALS[$name]);
