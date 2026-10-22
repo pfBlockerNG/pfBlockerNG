@@ -76,11 +76,12 @@ pytest:tests.test_context_budget::test_ledger_unreadable_fires  # root bypasses 
 pytest:tests.test_context_budget::test_indirect_unreadable_helper_fails_closed  # root bypasses file permissions — denial cannot be simulated
 pytest:tests.test_issue1542_top1m_fixed_file::test_enabled_missing_directory_or_unreadable_fixed_file_fails_closed[unreadable]  # root bypasses file permissions — denial cannot be simulated
 
-# pytest -- the reverse of the root-bypass entries above: these four skip only when the invoking uid is NOT 0.
+# pytest -- privilege-switch cases skip only when the invoking uid is NOT 0.
 pytest:tests.dns_proxy.test_privilege_drop::test_the_real_decider_serves_as_the_named_user_and_its_files_belong_to_that_user[nobody]  # skipped when os.geteuid() != 0: the test starts the decider as root so that it can give root up; a root run executes it
 pytest:tests.dns_proxy.test_privilege_drop::test_the_real_decider_serves_as_the_named_user_and_its_files_belong_to_that_user[root]  # skipped when os.geteuid() != 0: the test starts the decider as root so that it can give root up; a root run executes it
 pytest:tests.dns_proxy.test_privilege_drop::test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no_module_dir[nobody]  # skipped when os.geteuid() != 0: the test starts the decider as root so that it can give root up; a root run executes it
 pytest:tests.dns_proxy.test_privilege_drop::test_the_real_decider_without_a_module_serves_as_the_named_user_and_needs_no_module_dir[root]  # skipped when os.geteuid() != 0: the test starts the decider as root so that it can give root up; a root run executes it
+pytest:tests.dns_proxy.test_decider_applied::test_the_named_user_with_a_different_effective_group_must_not_skip_its_switch  # setting a different effective GID for a non-root child requires root; a root run executes it
 
 # pytest -- the TLS control-socket push: the gateway takes a push only from uid 0 (ctl.go ctlUID); the pytest job's root step runs it.
 pytest:tests.dns_proxy.test_gateway_e2e::test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing  # skipped when os.geteuid() != 0: the control socket takes pushes from uid 0 only; the pytest job's root step runs it as root

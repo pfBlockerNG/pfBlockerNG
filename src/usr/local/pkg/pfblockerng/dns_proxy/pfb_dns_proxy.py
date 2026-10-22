@@ -56,10 +56,10 @@ a DROP, a FORWARD/REPLY exchange standing in for the Unbound round trip where th
 module. EOF on the socket exits 0; malformed framing is logged and exits 1. A REPLY is waited for twice
 UNBOUND_TIMEOUT.
 
-The code record: after the boot (after the drop with --no-module) and before READY, pfb_dns_decider.applied is written
-in --module-dir: the md5 hex digests of CODE_RECORD_FILES concatenated, so a package update can tell whether this
-process runs the code now installed. When it cannot be written (a member unreadable included) the record and its temp
-file are removed and one error line is logged, so the absence is what the next update sees.
+The code record: frontend sources are fingerprinted before import, and the seven-file fingerprint is captured before
+boot. Only after successful boot, while those files remain unchanged, is their md5 hex concatenation published as
+pfb_dns_decider.applied in --module-dir, before READY. A change during initialization or a read/write failure removes
+the record and its temp file and logs one error, so the next update cannot mistake replacement files for loaded code.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -87,18 +87,35 @@ from time import monotonic
 from types import ModuleType
 from typing import Any
 
-import decision_service
-import dns_reply_log
-import dnswire
-import unbound_shim as shim
-
-LOG_DIR = "/var/log/pfblockerng"
-# The code record's members in the order PHP fingerprints them: (directory, name); None is --module-dir.
+# Capture frontend sources before importing them: initialization may overlap a package replacing their files.
 CODE_RECORD_FILES: tuple[tuple[str | None, str], ...] = tuple(
     (os.path.dirname(os.path.abspath(__file__)), name)
     for name in ("pfb_dns_proxy.py", "decision_service.py", "dns_reply_log.py", "dnswire.py", "unbound_shim.py")
 ) + ((None, "pfb_unbound.py"), (None, "pfb_dnsbl_regex_rules.py"))
 CODE_RECORD = "pfb_dns_decider.applied"  # in --module-dir
+
+
+def code_fingerprint(module_dir: str | None = None) -> str:
+    digests = []
+    for directory, name in CODE_RECORD_FILES:
+        if directory is None and module_dir is None:
+            continue
+        with open(os.path.join(directory or module_dir or "", name), "rb") as handle:
+            digests.append(hashlib.md5(handle.read()).hexdigest())
+    return "".join(digests)
+
+
+try:
+    IMPORTED_CODE_FINGERPRINT = code_fingerprint()
+except OSError:
+    IMPORTED_CODE_FINGERPRINT = None
+
+import decision_service  # noqa: E402 -- source fingerprint must precede frontend imports
+import dns_reply_log  # noqa: E402
+import dnswire  # noqa: E402
+import unbound_shim as shim  # noqa: E402
+
+LOG_DIR = "/var/log/pfblockerng"
 RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 SILENCE_LOG_INTERVAL = 30.0  # seconds between two "no reply from Unbound" lines, whatever Unbound answers in between
@@ -177,17 +194,19 @@ def drop_privileges(account: pwd.struct_passwd) -> None:
         raise DropError(f"cannot switch to user {account.pw_name!r}: {exc}") from None
 
 
-def write_code_record(module_dir: str) -> None:
-    """Publish CODE_RECORD. Best-effort, like pfb_py_module.applied: a failure is one error line, never an exit. The
-    record and its temp file are then removed, so a stale record never vouches for this process's code."""
+def write_code_record(module_dir: str, loaded: str | None) -> None:
+    """Publish only code unchanged across boot. Read/write failures remove stale records and never stop DNS."""
     record = os.path.join(module_dir, CODE_RECORD)
     try:
-        digests = []
-        for directory, name in CODE_RECORD_FILES:
-            with open(os.path.join(directory or module_dir, name), "rb") as handle:
-                digests.append(hashlib.md5(handle.read()).hexdigest())
+        if (
+            loaded is None
+            or IMPORTED_CODE_FINGERPRINT is None
+            or not loaded.startswith(IMPORTED_CODE_FINGERPRINT)
+            or code_fingerprint(module_dir) != loaded
+        ):
+            raise OSError("code changed or could not be read during initialization")
         with open(f"{record}.tmp", "w", encoding="ascii") as handle:
-            handle.write("".join(digests))
+            handle.write(loaded)
         os.replace(f"{record}.tmp", record)
     except OSError as exc:
         shim.log_err(f"cannot write the code record {record}: {exc}")
@@ -544,8 +563,12 @@ async def serve_decisions(args: argparse.Namespace) -> None:
     if account is not None:
         drop_privileges(account)
     module_dir = os.path.abspath(args.module_dir)  # boot() makes it the working directory
+    try:
+        loaded_code = code_fingerprint(module_dir)
+    except OSError:
+        loaded_code = None
     module = None if args.no_module else boot(args.module_dir)
-    write_code_record(module_dir)
+    write_code_record(module_dir, loaded_code)
     reply_log = _open_reply_log() if args.reply_log else None
     frontend = Frontend(module, reply_log)
     try:

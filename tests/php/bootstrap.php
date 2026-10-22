@@ -167,6 +167,7 @@ $GLOBALS['pfb']['dns_proxy_ready'] = "{$pfb_test_tmp}/pfb_dns_ready";
 $GLOBALS['pfb']['dns_proxy_gateway_applied'] = "{$pfb_test_tmp}/pfb_dns_ready.sha256";
 $GLOBALS['pfb']['dns_proxy_decider_applied'] = "{$pfb_test_tmp}/pfb_dns_decider.applied";
 $GLOBALS['pfb']['dns_proxy_restart_pending'] = "{$pfb_test_tmp}/pfb_dns_proxy_restart_pending";
+$GLOBALS['pfb']['dns_proxy_rc_kept'] = "{$pfb_test_tmp}/pfb_dns_proxy_rc.kept";
 // The gateway's log, where the startup check reads which listeners it bound (issue #3538): a sandbox file, never /var/log.
 $GLOBALS['pfb']['dns_proxy_log'] = "{$pfb_test_tmp}/dns_proxy.log";
 $pfb_test_timeout_out = [];

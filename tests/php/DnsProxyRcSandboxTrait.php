@@ -380,6 +380,9 @@ trait DnsProxyRcSandboxTrait
 				if ($path === $GLOBALS['pfb']['dns_proxy_ready']) {
 					return $this->readyFile();
 				}
+				if ($path === $GLOBALS['pfb']['dns_proxy_rc_kept']) {
+					return $this->keptFile();
+				}
 				if (in_array($path, ['/dev/null', '/bin/sh', '/etc/rc.packages', '/var/unbound', '/var/unbound/unbound.conf'], TRUE) ||
 				    str_starts_with($path, "{$this->dir}/dns_proxy/") || in_array($path, [$this->certFile(), $this->pushedFile(), $this->ctlSocket()], TRUE) ||
 				    preg_match('~^/(?:\d{1,3}$|usr/local/pkg/pfblockerng/|cf/conf/)~', $path) === 1) {

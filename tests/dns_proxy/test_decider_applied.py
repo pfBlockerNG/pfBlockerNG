@@ -60,19 +60,24 @@ def layout() -> Iterator[Layout]:
 
 
 def _start(
-    layout: Layout, *flags: str, user: str | None = None, as_account: bool = True
+    layout: Layout,
+    *flags: str,
+    user: str | None = None,
+    as_account: bool = True,
+    extra_fds: tuple[int, ...] = (),
+    group: int | None = None,
 ) -> tuple[subprocess.Popen[str], socket.socket]:
     """The decider from `layout.own` on one end of a socketpair, as ACCOUNT (or as the current user)."""
     go, py = socket.socketpair()
     go.settimeout(WATCHDOG)
     identity: dict[str, object] = {}
     if as_account and os.geteuid() == 0:
-        identity = {"user": ACCOUNT.pw_uid, "group": ACCOUNT.pw_gid, "extra_groups": []}
+        identity = {"user": ACCOUNT.pw_uid, "group": ACCOUNT.pw_gid if group is None else group, "extra_groups": []}
     interpreter = _interpreter_for(ACCOUNT.pw_name) if identity else sys.executable
     child = subprocess.Popen(
         [interpreter, str(layout.own / "pfb_dns_proxy.py"), "--decision-fd", str(py.fileno())]
         + ["--module-dir", str(layout.module), *(["--user", user] if user else []), *flags],
-        pass_fds=[py.fileno()],
+        pass_fds=(py.fileno(), *extra_fds),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -131,6 +136,21 @@ def test_an_unprivileged_decider_asked_to_become_another_user_still_exits_1_with
     assert stderr == "pfb_dns_proxy: cannot switch to user 'root': [Errno 1] Operation not permitted\n"
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="setting a different effective GID for a non-root child requires root")
+def test_the_named_user_with_a_different_effective_group_must_not_skip_its_switch(layout: Layout) -> None:
+    child, go = _start(layout, "--no-module", user=ACCOUNT.pw_name, group=0)
+    try:
+        with watched("the decider with the wrong effective group to exit"):
+            _, stderr = child.communicate(timeout=WATCHDOG)
+    finally:
+        go.close()
+        if child.poll() is None:
+            child.kill()
+            child.communicate()
+    assert child.returncode == 1, f"the wrong GID was silently accepted: exit={child.returncode}, stderr={stderr!r}"
+    assert f"cannot switch to user '{ACCOUNT.pw_name}'" in stderr, stderr
+
+
 # --- C2: the code record ---------------------------------------------------------------------------
 
 
@@ -182,3 +202,41 @@ def test_a_module_that_fails_to_boot_exits_1_before_any_record_is_written(layout
             child.communicate()
     assert (child.returncode, (layout.module / RECORD).exists()) == (1, False), stderr
     assert "boom" in stderr, stderr
+
+
+@pytest.mark.parametrize("changed", ["pfb_unbound.py", "dnswire.py"])
+def test_code_replaced_during_boot_never_gets_a_record_for_code_the_decider_did_not_load(
+    layout: Layout, changed: str
+) -> None:
+    parent, barrier = socket.socketpair()
+    parent.settimeout(WATCHDOG)
+    with (layout.module / "pfb_unbound.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            "\n_init_before_barrier = init_standard\n"
+            "def init_standard(*args):\n"
+            f"    with __import__('socket').socket(fileno={barrier.fileno()}) as gate:\n"
+            "        gate.sendall(b'L')\n"
+            "        if gate.recv(1) != b'R':\n"
+            "            raise RuntimeError('boot barrier closed')\n"
+            "    return _init_before_barrier(*args)\n"
+        )
+    child, go = _start(layout, user=ACCOUNT.pw_name, extra_fds=(barrier.fileno(),))
+    barrier.close()
+    try:
+        assert parent.recv(1) == b"L", "the decider never reached its loaded-module initialization barrier"
+        path = (layout.module if changed == "pfb_unbound.py" else layout.own) / changed
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write("\n# package replaced this already-imported file during initialization\n")
+        parent.sendall(b"R")
+        got = Gateway(go, child).recv()
+        assert got == (READY, 0, b""), f"the replacement changed readiness: {got!r}"
+        record = layout.module / RECORD
+        assert not record.exists(), (
+            f"{changed} changed after import, but the old decider vouched for installed code: {record.read_text()}"
+        )
+    finally:
+        parent.close()
+        go.close()
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=WATCHDOG)

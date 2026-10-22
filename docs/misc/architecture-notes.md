@@ -887,7 +887,9 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   due. The gateway writes the SHA-256 of its own binary to `/var/unbound/pfb_dns_ready.sha256` just before it publishes the ready marker;
   `pfb_dns_proxy_gateway_changed()` compares it with every installed `bin/*/pfb-dns`, and an absent, unreadable or different record
   restarts the whole pair. The decider writes the concatenated md5 digests of its five `dns_proxy` files and the two staged module files
-  (`pfb_unbound.py`, `pfb_dnsbl_regex_rules.py` in `/var/unbound`) to `/var/unbound/pfb_dns_decider.applied` before READY;
+  (`pfb_unbound.py`, `pfb_dnsbl_regex_rules.py` in `/var/unbound`) to `/var/unbound/pfb_dns_decider.applied` before READY.
+  Frontend sources are captured before import and the module pair before boot; publication requires the sources to remain
+  unchanged through initialization. Replacement during boot invalidates the record rather than attesting to unloaded code.
   `pfb_dns_proxy_decider_changed()` fingerprints the same seven paths (`$pfb['dns_proxy_decider_src']`), and a different or absent record
   restarts the decider alone. An unreadable installed file is no signal. Unbound's own module-drift check (`$pfb['unbound_py_module_applied']`) is
   asked only while Unbound hosts the module, so code-only drift in proxy mode does not restart the pair a second time.

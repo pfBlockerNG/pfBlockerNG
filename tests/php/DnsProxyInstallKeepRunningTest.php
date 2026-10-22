@@ -81,6 +81,13 @@ final class DnsProxyInstallKeepRunningTest extends TestCase
 		$this->krCalls = [];
 	}
 
+	public function testTheBootstrapKeepsTheRcCopyInTheSameSandboxAsTheProxyPidfile(): void
+	{
+		$bootstrap = $this->savedGlobals['pfb'][1];
+		$this->assertSame(dirname($bootstrap['dns_proxy_pidfile']) . '/pfb_dns_proxy_rc.kept',
+		    $bootstrap['dns_proxy_rc_kept'], 'the installer must never unlink a real host kept-copy path');
+	}
+
 	public function testAKeptCopyEqualToTheNewRcScriptMeansNoRestartAndNothingPending(): void
 	{
 		// Given a serving proxy and a kept copy of the rc script the new package writes
