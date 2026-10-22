@@ -1142,8 +1142,8 @@ if (!function_exists('cert_create')) {
 }
 
 if (!function_exists('get_configured_vip_list')) {
-	// pfSense interfaces.inc: map of VIP id ('_vip<uniqid>') => resolved IP address for
-	// all configured VIPs. Used by pfb_get_vips() inside pfb_validate_vips().
+	// pfSense util.inc: map of VIP id ('_vip<uniqid>') => bare address (the row's subnet) for
+	// every CARP and IP-alias VIP. Used by pfb_get_vips() and pfb_pick_free_dnsbl_vip().
 	// Tests seed $GLOBALS['pfb_test_vip_list'] (map of id => addr); default empty map
 	// → pfb_get_vips() returns no VIPs, which combined with a '_vip_test_*' id causes
 	// pfb_validate_vips to return an 'invalid IPv4 VIP' error and force-disable DNSBL.
@@ -1172,20 +1172,21 @@ if (!function_exists('get_possible_listen_ips')) {
 }
 
 if (!function_exists('get_specialnet')) {
-	// pfSense interfaces.inc: returns an associative array of special network names/
+	// pfSense util.inc: returns an associative array of special network names/
 	// addresses (VIPs, loopback, etc.) indexed by their IP/address. Used by pfb_get_vips()
 	// to filter VIPs to only the ones in the SPECIALNET_VIPS set.
-	// Tests seed $GLOBALS['pfb_test_specialnet'] (addr => label); default includes all
-	// addresses from pfb_test_vip_list so pfb_get_vips() can match them.
+	// Tests seed $GLOBALS['pfb_test_specialnet'] (addr => label); default lists every
+	// address from pfb_test_vip_list with pfSense's SPECIALNET_VIPS label "<address> (<descr>)",
+	// the descr taken from the virtualip/vip row at that address ('' when none).
 	function get_specialnet($interface = '', $types = []) {
 		// If a test has explicitly seeded this, use it.
 		if (isset($GLOBALS['pfb_test_specialnet'])) {
 			return $GLOBALS['pfb_test_specialnet'];
 		}
-		// Auto-derive from pfb_test_vip_list: every configured VIP addr counts as special.
+		$descr = array_column(config_get_path('virtualip/vip', []), 'descr', 'subnet');
 		$map = [];
 		foreach ($GLOBALS['pfb_test_vip_list'] ?? [] as $addr) {
-			$map[$addr] = $addr;
+			$map[$addr] = "{$addr} (" . ($descr[$addr] ?? '') . ')';
 		}
 		return $map;
 	}

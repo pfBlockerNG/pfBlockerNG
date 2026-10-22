@@ -38,6 +38,10 @@ use PHPUnit\Framework\TestCase;
  * Scenario F (issue #3540): a given address is honoured only when it is one of the fixed candidates
  *   and passes the same free checks; any other string returns null, so a synced value from a peer
  *   can never become a VIP address
+ *
+ * Scenario G (issue #3565): VIPs are listed as pfSense lists them — get_configured_vip_list() gives
+ *   bare addresses, get_specialnet() labels them "<address> (<descr>)" — and a VIP at a candidate
+ *   address takes it, whatever case or zero padding its stored IPv6 text uses
  */
 #[CoversFunction('pfb_pick_free_dnsbl_vip')]
 final class DnsblPickFreeVipTest extends TestCase
@@ -46,6 +50,7 @@ final class DnsblPickFreeVipTest extends TestCase
 	{
 		// Start each test with an empty VIP list and no subnet seed.
 		unset($GLOBALS['pfb_test_vip_list']);
+		unset($GLOBALS['pfb_test_specialnet']);
 		unset($GLOBALS['pfb_test_configured_subnets']);
 	}
 
@@ -53,6 +58,7 @@ final class DnsblPickFreeVipTest extends TestCase
 	{
 		// Ensure no state leaks to sibling tests.
 		unset($GLOBALS['pfb_test_vip_list']);
+		unset($GLOBALS['pfb_test_specialnet']);
 		unset($GLOBALS['pfb_test_configured_subnets']);
 	}
 
@@ -254,5 +260,67 @@ final class DnsblPickFreeVipTest extends TestCase
 		$this->assertNull($result,
 			'A given address that is not a fixed candidate of its family must return NULL. Given: '
 			. var_export($address, TRUE) . ', got: ' . var_export($result, TRUE));
+	}
+
+	// ---------- Scenario G — issue #3565: VIPs in pfSense's own shapes ----------
+
+	public function testV4_FirstCandidateHeldByADescribedVip_ReturnsSecond(): void
+	{
+		// Given: before the VIP exists the first candidate is returned.
+		$this->assertSame('172.16.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'),
+			'Pre-condition: without a VIP the picker returns the first candidate');
+
+		// A described VIP holds 172.16.53.53, listed exactly as pfSense lists it.
+		$GLOBALS['pfb_test_vip_list']   = ['_vipweb' => '172.16.53.53'];
+		$GLOBALS['pfb_test_specialnet'] = ['172.16.53.53' => '172.16.53.53 (web server)'];
+
+		// When
+		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+
+		// Then: the VIP's address is taken, so the second candidate is chosen.
+		$this->assertSame('192.168.53.53', $result,
+			'A VIP at 172.16.53.53 must make the picker skip to 192.168.53.53. Got: ' . var_export($result, TRUE));
+	}
+
+	/** @return array<string,array{0:string}> */
+	public static function v6CandidateSpellings(): array
+	{
+		return [
+			'as the candidate is written' => ['fd00:53:53:53:53:53:53:53'],
+			'upper case'                  => ['FD00:53:53:53:53:53:53:53'],
+			'zero-padded groups'          => ['fd00:0053:0053:0053:0053:0053:0053:0053'],
+		];
+	}
+
+	#[DataProvider('v6CandidateSpellings')]
+	public function testV6_CandidateHeldByAVipInAnySpelling_ReturnsNull(string $stored): void
+	{
+		// Given: before the VIP exists the ULA candidate is returned.
+		$this->assertSame('fd00:53:53:53:53:53:53:53', pfb_pick_free_dnsbl_vip(AF_INET6, 'lan'),
+			'Pre-condition: without a VIP the v6 picker returns the ULA candidate');
+
+		// pfSense stores a VIP address as typed; this one is the ULA candidate.
+		$GLOBALS['pfb_test_vip_list'] = ['_vip6user' => $stored];
+
+		// When
+		$result = pfb_pick_free_dnsbl_vip(AF_INET6, 'lan');
+
+		// Then
+		$this->assertNull($result,
+			'A VIP stored as ' . var_export($stored, TRUE) . ' holds the ULA candidate. Got: ' . var_export($result, TRUE));
+	}
+
+	public function testVipsAtNeighbouringAddresses_DoNotTakeTheCandidates(): void
+	{
+		// Given: VIPs one digit away from each family's first candidate.
+		$GLOBALS['pfb_test_vip_list'] = [
+			'_vipa' => '172.16.53.5',
+			'_vipb' => '172.16.53.54',
+			'_vipc' => 'fd00:53:53:53:53:53:53:5',
+		];
+
+		// When / Then: the candidates themselves are still free.
+		$this->assertSame('172.16.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'));
+		$this->assertSame('fd00:53:53:53:53:53:53:53', pfb_pick_free_dnsbl_vip(AF_INET6, 'lan'));
 	}
 }

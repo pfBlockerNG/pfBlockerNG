@@ -784,6 +784,42 @@ final class DnsblVipLifecycleTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------------------------------
+	// issue #3565: a standalone node never creates its VIP at an address a VIP already holds
+	// ------------------------------------------------------------------------------------------
+
+	public function testStandaloneNodeCreatesItsVipAtTheNextCandidateWhenAUserVipHoldsTheFirst(): void
+	{
+		// GIVEN a node that never received policy, and the user's described VIP at the first candidate
+		$this->seedNode(TRUE, [self::userVipAt('172.16.53.53')]);
+		$this->assertSame([], $this->markedVips('v4'), 'before-state: no marked VIP');
+
+		// WHEN the VIP manager runs
+		$this->runVipManager('enabled');
+
+		// THEN the marked VIP sits at the second candidate, the user's VIP is untouched, and that address is published
+		$this->assertSame(['192.168.53.53'], array_column($this->markedVips('v4'), 'subnet'),
+			'a VIP already at 172.16.53.53 must make the picker take 192.168.53.53');
+		$this->assertContains(self::userVipAt('172.16.53.53'), config_get_path('virtualip/vip'));
+		$this->assertSame('192.168.53.53', config_get_path(self::SYNCED4));
+	}
+
+	public function testStandaloneNodeCreatesNoV6VipWhenAUserVipHoldsTheV6Candidate(): void
+	{
+		// GIVEN a node that requests a v6 VIP, and the user's described VIP at the only v6 candidate
+		$this->seedNode(TRUE, [self::userVipAt(self::V6_CANDIDATE)], '', self::V6_REQUEST_ID);
+		$this->assertSame([], $this->markedVips('v6'), 'before-state: no marked v6 VIP');
+
+		// WHEN the VIP manager runs
+		$this->runVipManager('enabled');
+
+		// THEN no v6 VIP was created and the shortage is logged, while v4 is provisioned as usual with no Sync finding
+		$this->assertSame([], $this->markedVips('v6'), 'a VIP already at the v6 candidate must leave the family without an auto-VIP');
+		$this->assertStringContainsString('no free ' . PFB_AUTO_VIP_DESCR_V6 . ' address available; not created', $this->mainLog());
+		$this->assertSame(['172.16.53.53'], array_column($this->markedVips('v4'), 'subnet'));
+		$this->assertSame([], $this->conflictFact());
+	}
+
+	// ------------------------------------------------------------------------------------------
 	// pfb_create_dnsbl(): serve under demand, tear down otherwise
 	// ------------------------------------------------------------------------------------------
 

@@ -1792,6 +1792,97 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_
         h.reset(vm)
 
 
+# A user's IP-alias VIP, with a description, at auto-create's first candidate (issue #3565).
+OCCUPIER_VIP = {
+    "mode": "ipalias",
+    "interface": h.SMOKE_VIP_IFACE,
+    "type": "single",
+    "subnet": h.AUTO_VIP_IP4,
+    "subnet_bits": "32",
+    "descr": "smoke 3565 web server",
+    "uniqid": "pfbsmoke3565",
+}
+AUTO_VIP_SECOND_IP4 = "192.168.53.53"
+
+
+def _set_occupier(vm: SmokeVM, present: bool) -> None:
+    """Drop the occupier and every marked v4 VIP from config and lo0; then add the occupier back if ``present``.
+
+    The interface_vip_* calls are guarded like ``h.set_dnsbl_vip6``'s; ifconfig then must show exactly the expected
+    candidate aliases, with a direct-alias fallback either way (issue #1013).
+    """
+    add = f"$add = {h._php_kv_array(OCCUPIER_VIP)};\n$keep[] = $add;\n" if present else ""
+    snippet = (
+        "require_once('interfaces.inc');\n"
+        "$keep = array();\n"
+        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+        f"  if (($v['uniqid'] ?? '') === {h._php_str(OCCUPIER_VIP['uniqid'])}"
+        f" || ($v['descr'] ?? '') === {h._php_str(h.AUTO_VIP_DESCR_V4)}) {{\n"
+        "    if (function_exists('interface_vip_bring_down')) { interface_vip_bring_down($v); }\n"
+        "    continue;\n"
+        "  }\n"
+        "  $keep[] = $v;\n"
+        "}\n"
+        f"{add}"
+        "config_set_path('virtualip/vip', $keep);\n"
+        "write_config('pfBlockerNG smoke: issue #3565 occupier VIP');\n"
+        + ("if (function_exists('interface_vip_configure')) { interface_vip_configure($add); }\n" if present else "")
+        + "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_set_occupier({present}): rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    for address in (h.AUTO_VIP_IP4, AUTO_VIP_SECOND_IP4):
+        if h.vip_alias_live(vm, address) and not (present and address == h.AUTO_VIP_IP4):
+            vm.ssh(f"/sbin/ifconfig {h.SMOKE_VIP_IFACE} inet {address} -alias")
+    if present and not h.vip_alias_live(vm, h.AUTO_VIP_IP4):
+        vm.ssh(f"/sbin/ifconfig {h.SMOKE_VIP_IFACE} inet {h.AUTO_VIP_IP4}/32 alias")
+    live = [a for a in (h.AUTO_VIP_IP4, AUTO_VIP_SECOND_IP4) if h.vip_alias_live(vm, a)]
+    expected = [h.AUTO_VIP_IP4] if present else []
+    assert live == expected, f"candidate aliases live on {h.SMOKE_VIP_IFACE}: expected {expected}, got {live}"
+
+
+def test_dnsbl_autovip_skips_a_candidate_held_by_a_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #3565: a user's VIP at the first candidate makes auto-create use the second one.
+
+    Given: the user's described IP-alias VIP at ``172.16.53.53/32`` on ``lo0`` (stored and live), and no auto VIP
+    When:  "Create VIPs automatically" is on and a Force Update lists a name answered with the VIP
+    Then:  the marked VIP is created at ``192.168.53.53``, is live, and ``pfb_dnsvip4`` points at it;
+           the user's VIP is untouched
+    """
+    vm = deployed_vm
+    domain = h.unique_domain("autovip3565")
+    feed_url = h.write_local_feed(vm, "smoke_autovip3565.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokeautovip3565", feed_url=feed_url, header="smokeautovip3565", mode=h.DnsblMode.VIP)
+    try:
+        _set_occupier(vm, True)
+        assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", (
+            "before-state: a marked VIP exists already" + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
+        assert h.marked_vip_subnet(vm, OCCUPIER_VIP["descr"]) == h.AUTO_VIP_IP4, (
+            "before-state: the user's VIP is not stored at the first candidate" + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
+
+        h.set_dnsvip_auto(vm, True)
+        with h.CaseContext(vm, spec, scope="update"):
+            marked = h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4)
+            assert marked == AUTO_VIP_SECOND_IP4, (
+                f"auto VIP: expected {AUTO_VIP_SECOND_IP4} (the user's VIP holds {h.AUTO_VIP_IP4}), got {marked!r}"
+                + f"\n{h.fwobj_state_snapshot(vm)}"
+            )
+            assert h.vip_alias_live(vm, AUTO_VIP_SECOND_IP4), f"auto VIP {AUTO_VIP_SECOND_IP4} not live on lo0"
+            assert h.dnsvip4_address(vm) == AUTO_VIP_SECOND_IP4, (
+                f"pfb_dnsvip4: expected it to resolve to {AUTO_VIP_SECOND_IP4}, got {h.dnsvip4_address(vm)!r}"
+            )
+            occupier = h.marked_vip_subnet(vm, OCCUPIER_VIP["descr"])
+            assert occupier == h.AUTO_VIP_IP4, f"user's VIP: expected it at {h.AUTO_VIP_IP4}, got {occupier!r}"
+    finally:
+        h.set_dnsvip_auto(vm, False)
+        _set_occupier(vm, False)
+        h.ensure_dnsbl_vip(vm)
+        h.reset(vm)
+
+
 # --------------------------------------------------------------------------- #
 # 4) FALSE-GREEN GUARD — a deliberately-wrong expectation MUST go red
 # --------------------------------------------------------------------------- #
