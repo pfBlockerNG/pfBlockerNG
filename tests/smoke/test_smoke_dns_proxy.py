@@ -1894,6 +1894,7 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
     before = _pids(vm)
     assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
     record_before = _cat(vm, DECIDER_APPLIED)
+    assert record_before is not None, f"{DECIDER_APPLIED} is absent before the change: the decider wrote no record"
     saved = _sh(vm, f"mkdir -p {SAVE_DIR} && cp -p {target} {SAVE_DIR}/dnswire.py")
     assert saved.returncode == 0, f"saving {target}: rc={saved.returncode} {saved.stdout}{saved.stderr}"
     probe = _Probe(vm, rig.names.blocked)
@@ -1957,10 +1958,20 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
         h.reload(vm, "update")
         after = _pids(vm)
         diagnostics = _diagnostics(vm)
-        assert after.gateway is not None and after.gateway != before.gateway, (
+        assert after.complete(), (
+            f"after the update pass: expected a gateway, a supervisor and a decider: {after}\n{diagnostics}"
+        )
+        assert after.gateway != before.gateway, (
             f"a gateway binary change left the gateway running: pid {before.gateway} -> {after.gateway}\n{diagnostics}"
         )
+        assert after.supervisor != before.supervisor and after.decider != before.decider, (
+            f"the pair was not restarted: (supervisor, decider) {(before.supervisor, before.decider)} -> "
+            f"{(after.supervisor, after.decider)}\n{diagnostics}"
+        )
         installed = _sh(vm, f"sha256 -q {binary}").stdout.strip()
+        assert re.fullmatch(r"[0-9a-f]{64}", installed), (
+            f"sha256 -q {binary} printed {installed!r}, expected 64 hex digits"
+        )
         record = _cat(vm, GATEWAY_APPLIED)
         assert record is not None and record.strip() == installed, (
             f"{GATEWAY_APPLIED} expected the installed binary's sha256 {installed!r}, got {record!r}\n{diagnostics}"
