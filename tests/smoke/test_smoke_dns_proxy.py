@@ -64,6 +64,10 @@ What it proves, in file order:
   delay still names pfb_dns_proxy and the rc stop ends it; started by the Resolver's start hook, with the package's
   service entry registered or absent (an install's window, where pfSense's stop_service() does nothing), the real
   apply's rollback leaves no supervisor, the Resolver as before the toggle and the snapshot marker empty.
+* a restore that config.xml refuses (issue #3561's recovery): with the package's service entry absent and a process
+  whose write_config() answers -1, pfb_dns_proxy_resolver(FALSE) stops the proxy, abandons the restore (the snapshot and
+  the moved Resolver stay in config.xml) and starts the proxy again through its rc script: a new child publishes the
+  ready marker, pfb-dns alone holds port 53 on the LAN address and the client's listed name gets the VIP.
 
 The pfB-DNS tab (enable checkbox, help that says it is experimental, status panel) is covered by the Tier A render
 test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
@@ -2177,6 +2181,93 @@ def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_l
     finally:
         _force_stop_proxy(vm)
         _set_proxy_toggle(vm, False)
+
+
+# The restore an apply or a rollback makes, in a process whose write_config() cannot write. $g['cf_conf_path'] is that
+# process's own copy of the config directory (pfSense CE 2.8.1, src/etc/inc/config.lib.inc: backup_config() 948-972,
+# config_write_file() 1254-1275, write_config() 620-625): below /dev/null, a file, nothing can be created, so
+# config_write_file() fails and write_config() answers -1, while /cf, every file and every mode stay as they are. The
+# fresh read under the config lock and the re-read after the refusal use $g['conf_path'], which this leaves alone.
+REFUSED_RESTORE_PHP = (
+    "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+    "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
+    "global $pfb;\n"
+    "pfb_global();\n"
+    "g_set('cf_conf_path', '/dev/null/pfb3561', TRUE);\n"
+    "$restored = pfb_dns_proxy_resolver(FALSE);\n"
+    "echo '<<<RESTORED>>>' . var_export($restored, TRUE) . '<<<END>>>';"
+)
+# pfb_dns_proxy_resolver_unchanged()'s line for a restore that config.xml did not take
+NOT_PUT_BACK = "the DNS Resolver was not put back because config.xml could not be written"
+RECOVERY_CAP = 90.0  # s: the restore's start returns at once, the ready marker follows the decider's boot
+
+
+def _logged(vm: SmokeVM, text: str) -> int:
+    """How often `text` stands in pfblockerng.log and error.log together (a line may be in either, or both)."""
+    return sum(h.count_log_marker(vm, path, text) for path in (h.PFB_LOG, f"{h.PFB_LOGDIR}/error.log"))
+
+
+@pytest.mark.timeout(1500)
+def test_a_refused_restore_starts_the_proxy_again_with_the_service_entry_absent(rig: Rig, proxy_on: State) -> None:
+    """A restore that config.xml refuses leaves the proxy serving the still-moved Resolver, whatever pfSense registers.
+
+    Given pfB-DNS on and serving, the package's service entry absent (an install's window: pfSense's restart_service()
+      starts nothing), and a process whose write_config() answers -1,
+    When pfb_dns_proxy_resolver(FALSE) runs in it (the restore of an apply or a rollback: it stops the proxy, then its
+      write of the restored Resolver is refused),
+    Then it answers FALSE and logs that the Resolver was not put back, config.xml still holds the snapshot and the moved
+      Resolver, and the proxy serves again: a new child whose pid is the ready marker, pfb-dns alone holding port 53 on
+      the LAN address, and the client's listed name getting the VIP.
+
+    Fault limit: pfSense has no refusal that only one process sees except this -1 (config_write_file() cannot open the
+    file). Its FALSE answers are a read-only user (a web session and a config user: ui/test_dns_readonly_save.py) and
+    reset_factory_defaults, which the fresh read under the config lock erases; pfb_dns_config_write_failed() treats
+    -1 and FALSE alike. The refusal raises a config.xml notice and PHP warnings for the paths below /dev/null.
+    """
+    vm = rig.vm
+    child = proxy_on.proxy_pid
+    assert child is not None and _marker(vm) == f"{child}\n", f"the proxy does not serve at the start: {proxy_on}"
+    refused = _logged(vm, NOT_PUT_BACK)
+    try:
+        with _proxy_service_entry(vm, registered=False):
+            result = h.php_eval(vm, REFUSED_RESTORE_PHP, timeout=300.0)
+            found = re.search(r"<<<RESTORED>>>(\w+)<<<END>>>", result.stdout)
+            assert found and result.returncode == 0, (
+                f"the restore did not finish: rc={result.returncode}\n{result.stdout}\n{result.stderr}"
+            )
+            assert found.group(1) == "false", f"pfb_dns_proxy_resolver(FALSE) answered {found.group(1)}, not FALSE"
+            assert _logged(vm, NOT_PUT_BACK) > refused, (
+                f"the logs do not say the restore was refused:\n{_diagnostics(vm)}"
+            )
+
+            def serving() -> bool:
+                pid = _pid_file(vm, PROXY_PID_FILE)
+                return pid is not None and _marker(vm) == f"{pid}\n" and _alive(vm, pid)
+
+            try:
+                h.wait_until(serving, timeout=RECOVERY_CAP, interval=3.0)
+            except RuntimeError as exc:
+                raise RuntimeError(f"{exc}\nno proxy serves after the refused restore:\n{_diagnostics(vm)}") from exc
+
+            after = _capture(vm)
+            assert after.proxy_pid is not None and after.proxy_pid != child, (
+                f"the serving proxy {after.proxy_pid} is not a new one (was {child}):\n{_diagnostics(vm)}"
+            )
+            assert after.marker == proxy_on.marker and after.resolver == proxy_on.resolver, (
+                f"config.xml changed although the write was refused:\nmarker set: {bool(after.marker)}\n"
+                f"{after.resolver}\nbefore:\n{proxy_on.resolver}"
+            )
+            assert after.resolver["active_interface"] == "lo0", f"the Resolver is not moved: {after.resolver}"
+            on53 = {s.pid for s in after.listeners if s.local.endswith(":53")}
+            assert on53 == {after.proxy_pid}, f"port 53 is held by pids {on53}, the proxy is {after.proxy_pid}"
+            lan = {s.command for s in after.listeners if s.pid == after.proxy_pid and s.local == f"{PFSENSE_LAN_IP}:53"}
+            assert lan == {"pfb-dns"}, f"{PFSENSE_LAN_IP}:53 is held by {lan}, not pfb-dns"
+            _wait_proxy_serves(rig)
+    finally:
+        # The refused restore keeps the Resolver moved and the snapshot: a real apply with the toggle off puts them back
+        _force_stop_proxy(vm)
+        _set_proxy_toggle(vm, False)
+        _apply(vm)
 
 
 # --------------------------------------------------------------------------- #

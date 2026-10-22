@@ -55,6 +55,52 @@ trait DnsProxyReadySeedTrait
 	}
 
 	/**
+	 * A proxy as a running box has it: child and supervisor pidfiles valid, the marker naming the child. Every stop the proxy is
+	 * asked for (the rc script's own, through mwexec(), and stop_service()) clears all of it, so a test that must not stop the
+	 * proxy reads that state back instead of counting calls.
+	 */
+	private function seedLiveProxyThatAStopClears(string $child = '4242'): void
+	{
+		$this->proxyServes($child);
+		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		$stop = function (): void {
+			$this->clearProxyFiles();
+			unset($GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE]);
+		};
+		$GLOBALS['pfb_test_service_hook'] = static function (string $fn, string $service) use ($stop): void {
+			if ($fn === 'stop_service' && $service === 'pfb_dns_proxy') {
+				$stop();
+			}
+		};
+		$GLOBALS['pfb_test_mwexec_hook'] = static function (string $command) use ($stop): int {
+			if ($command === PFB_DNS_PROXY_RCFILE . ' stop') {
+				$stop();
+			}
+			return 0;
+		};
+	}
+
+	/** The proxy seeded by seedLiveProxyThatAStopClears() is untouched: both pids live, the marker names the child. */
+	private function assertProxyStillServes(string $why, string $child = '4242'): void
+	{
+		$this->assertTrue(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), "{$why}: the supervisor still lives");
+		$this->assertTrue(pfb_dns_proxy_running(), "{$why}: the child still lives");
+		$this->assertSame("{$child}\n", (string) @file_get_contents($this->proxyPidfile()), "{$why}: the child pidfile is kept");
+		$this->assertSame("{$child}\n", (string) @file_get_contents($this->proxyMarker()), "{$why}: the ready marker is kept");
+		$this->assertTrue(pfb_dns_proxy_ready(), "{$why}: the proxy still serves");
+	}
+
+	/** The proxy seeded by seedLiveProxyThatAStopClears() is gone: no supervisor, no child, no pidfile, no marker. */
+	private function assertProxyWasStopped(string $why): void
+	{
+		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), "{$why}: the supervisor is gone");
+		$this->assertFalse(pfb_dns_proxy_running(), "{$why}: the child is gone");
+		$this->assertFileDoesNotExist($this->proxyPidfile(), "{$why}: the child pidfile is gone");
+		$this->assertFileDoesNotExist($this->proxyMarker(), "{$why}: the ready marker is gone");
+		$this->assertFalse(pfb_dns_proxy_ready(), "{$why}: the proxy no longer serves");
+	}
+
+	/**
 	 * pfb_reload_unbound() with the waits it reaches loaded onto a virtual clock: the proxy's readiness wait (restart, confirm,
 	 * await) and the DNSBL swap wait (wait applied, wait marker). Their polls are ticks, so no test waits on the host.
 	 *

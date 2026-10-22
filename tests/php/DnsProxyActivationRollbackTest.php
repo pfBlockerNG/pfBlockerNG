@@ -30,7 +30,9 @@ use PHPUnit\Framework\TestCase;
  *     apply (the toggle is Off, so the apply's own start finds nothing moved);
  *   - when the proxy cannot be stopped, or the config lock stays taken, the snapshot and the moved Resolver are kept as
  *     they are, nothing destructive runs, and the notice says recovery is needed: the rollback never claims success;
- *   - a proxy that does become ready is left alone: no toggle write, no stop, no notice.
+ *   - a proxy that does become ready is left alone: no toggle write, no stop, no notice;
+ *   - a restore that config.xml refuses, or that finds the proxy alive after its stop, leaves the moved Resolver served: the proxy
+ *     is started again through its rc script, whether or not pfSense has a service entry for it (issue #3561).
  *
  * The same rollback, and the same restore, serve two later failures (owner, 2026-10): an unsafe Custom Options line
  * (`interface:`, `port:` or `include:`) the admin adds after the move rolls pfB-DNS back like a failed activation, the line
@@ -67,7 +69,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	private string $tmp;
 	private array $savedGlobals = [];
-	/** @var list<string> what the proxy was asked, in order: start_service, restart_service, stop_service; "rc stop" is the rc script's own stop, "<call> (no entry)" a call pfSense ignored */
+	/** @var list<string> what the proxy was asked, in order: start_service, restart_service, stop_service; "rc stop" and "rc start" are the rc script's own, "<call> (no entry)" a call pfSense ignored */
 	private array $proxyCalls = [];
 	/** @var list<bool> whether the config lock was held at each liveness probe of the child while PHP waited for readiness */
 	private array $lockHeldWhileWaiting = [];
@@ -164,6 +166,13 @@ final class DnsProxyActivationRollbackTest extends TestCase
 				if (!$this->survivesStop) {
 					$this->clearProxyFiles();
 					unset($GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE]);
+				}
+			} elseif ($command === PFB_DNS_PROXY_RCFILE . ' start') {
+				$this->proxyCalls[] = 'rc start';
+				// A pair that still serves is kept; anything less is replaced by one that serves
+				if (!isvalidpid(PFB_DNS_PROXY_PIDFILE) || !isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
+					$this->proxyServes();
+					$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 				}
 			}
 			return 0;
@@ -625,7 +634,84 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringContainsString('could not be restored', $joined);
 		$this->assertStringContainsString('kept', $joined);
 		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'no claim that the rollback worked');
-		$this->assertSame(1, count(array_keys($this->proxyCalls, 'restart_service', TRUE)), 'the proxy that serves the moved Resolver is brought back once, not in a loop');
+		$this->assertSame(1, count(array_keys($this->proxyCalls, 'rc start', TRUE)), 'the proxy that serves the moved Resolver is brought back once, not in a loop');
+	}
+
+	/** @return array<string,array{bool,mixed}> whether pfSense has a service entry for the proxy, and write_config()'s answer to the refused write */
+	public static function entryAndRefusedWrite(): array
+	{
+		$rows = [];
+		foreach (['the service entry is registered' => TRUE, 'the service entry is absent' => FALSE] as $entry => $registered) {
+			foreach (self::refusedWrites() as $write => [$answer]) {
+				$rows["{$entry}, {$write}"] = [$registered, $answer];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('entryAndRefusedWrite')]
+	public function testARestoreThatConfigXmlRefusesLeavesTheProxyServingTheMovedResolver(bool $registered, mixed $answer): void
+	{
+		// Given a moved Resolver, the healthy proxy that serves it, and a config.xml that refuses the restore's write
+		$this->activate(TRUE);
+		$this->registered = $registered;
+		$this->behaviour = 'serves';
+		$this->proxyServes();
+		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		$this->configXmlOnDisk($answer, 'Restored the DNS Resolver');
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = self::sorted(config_get_path('unbound'));
+		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the proxy serves');
+		$this->assertSame($snapshot, $this->onDisk(self::SAVED), 'before: config.xml holds the snapshot');
+
+		// When the restore is asked for
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the restore is reported as no change, config.xml keeps the snapshot and the moved Resolver, and the proxy the
+		// restore stopped serves them again
+		$this->assertFalse($changed);
+		$this->assertSame($snapshot, $this->onDisk(self::SAVED), 'config.xml keeps the snapshot');
+		$this->assertSame($moved, self::sorted($this->onDisk('unbound')), 'and the moved Resolver');
+		$this->assertTrue(pfb_dns_proxy_ready(), 'the proxy serves the moved Resolver again');
+	}
+
+	public function testTheRecoveryDoesNotReplaceAProxyThatOutlivedItsStop(): void
+	{
+		// Given a moved Resolver, no service entry, and a healthy proxy (child 7001) that its stop does not remove
+		$this->activate(TRUE);
+		$this->registered = FALSE;
+		$this->survivesStop = TRUE;
+		$this->proxyServes('7001');
+		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = self::sorted(config_get_path('unbound'));
+
+		// When the restore is asked for
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the restore is refused (the proxy still holds the port) and the same child and supervisor serve it
+		$this->assertFalse($changed);
+		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), 'the snapshot is kept');
+		$this->assertSame($moved, self::sorted(config_get_path('unbound')), 'the Resolver stays moved');
+		$this->assertSame("7001\n", (string) file_get_contents($this->proxyPidfile()), 'the same child serves');
+		$this->assertSame("7001\n", (string) file_get_contents($this->proxyMarker()), 'with the marker it published');
+		$this->assertTrue(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'under the same supervisor');
+		$this->assertTrue(pfb_dns_proxy_ready());
+	}
+
+	public function testARestoreOnABoxThatNeverMovedTheResolverRunsNeitherAStopNorAStart(): void
+	{
+		// Given a Resolver pfB-DNS never touched: no snapshot, no block of ours, no proxy
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: no snapshot');
+		$this->assertFalse(pfb_dns_proxy_block_present(), 'before: no block of ours');
+
+		// When the restore is asked for
+		$this->assertFalse(pfb_dns_proxy_resolver(FALSE));
+
+		// Then nothing was stopped or started
+		$this->assertSame([], $this->proxyCalls, 'no rc stop, no rc start, no service call');
+		$this->assertFalse(pfb_dns_proxy_running(), 'and no proxy exists');
 	}
 
 	public function testAReadinessRollbackWhoseProxySurvivesItsStopSaysNothingAnswersDnsUntilTheRestoreSucceeds(): void
@@ -1332,8 +1418,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	public function testTheResolverRestoreDoesNotConfirmItsOwnRestartOfTheProxy(): void
 	{
-		// The restore that was abandoned (the proxy outlived its stop) restarts the proxy WITHOUT waiting for readiness or
-		// rolling back: a rollback that waited for the proxy it restarts would recurse into itself
+		// The restore that was abandoned (the proxy outlived its stop, or config.xml refused the write) starts the proxy again
+		// WITHOUT waiting for readiness or rolling back: a rollback that waited for the proxy it starts would recurse into itself
 		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
 		$start = (int) strpos($source, 'function pfb_dns_proxy_resolver(');
 		$end = (int) strpos($source, 'function pfb_dns_proxy_directive_text', $start);
@@ -1342,7 +1428,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringNotContainsString('pfb_dns_proxy_restart()', $body);
 		$this->assertStringNotContainsString('pfb_dns_proxy_confirm_ready', $body);
 		$this->assertStringNotContainsString('pfb_dns_proxy_roll_back', $body);
-		$this->assertStringContainsString("restart_service('pfb_dns_proxy')", $body, 'it still brings the proxy that serves the moved Resolver back');
+		$this->assertStringContainsString("mwexec(PFB_DNS_PROXY_RCFILE . ' start')", $body, 'it still brings the proxy that serves the moved Resolver back');
+		$this->assertStringNotContainsString("restart_service('pfb_dns_proxy')", $body, 'through the rc script: restart_service() does nothing without the service entry');
 	}
 
 	/**

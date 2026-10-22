@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 
+require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -33,6 +35,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_deinstall')]
 final class DnsProxyLifecycleTest extends TestCase
 {
+	use DnsProxyReadySeedTrait;
+
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const MARKER = '# pfBlockerNG DNS proxy';
 	private const BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
@@ -72,6 +76,7 @@ final class DnsProxyLifecycleTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		$this->clearProxyFiles();
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
@@ -137,6 +142,13 @@ final class DnsProxyLifecycleTest extends TestCase
 		return $GLOBALS['pfb_test_service_calls'];
 	}
 
+	/** The proxy's rc script on disk and the live proxy it started, which any stop clears. */
+	private function seedRunningProxy(): void
+	{
+		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+		$this->seedLiveProxyThatAStopClears();
+	}
+
 	// -----------------------------------------------------------------------
 	// S5 -- the restore stops the proxy first
 	// -----------------------------------------------------------------------
@@ -176,6 +188,20 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
 	}
 
+	public function testARestoreThatOwnsTheMovedResolverStopsTheLiveProxyItServes(): void
+	{
+		// Given a moved Resolver and the live proxy that serves it
+		$this->seedMovedResolver();
+		$this->seedRunningProxy();
+		$this->assertProxyStillServes('before');
+
+		// When the Resolver is restored
+		$this->assertTrue(pfb_dns_proxy_resolver(FALSE));
+
+		// Then the stop cleared that proxy's pids and marker: the proxies the negatives below read back are ones a stop does clear
+		$this->assertProxyWasStopped('after the restore');
+	}
+
 	public function testARestoreWithNoRcScriptRunsNoStopAndStillPutsTheResolverBack(): void
 	{
 		// Given a moved Resolver, no rc script to run (setUp removed it) and no proxy alive
@@ -194,10 +220,11 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// Given an untouched Resolver (every apply with the toggle off asks for the restore)
 		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->seedRunningProxy();
 
 		$this->assertFalse(pfb_dns_proxy_resolver(FALSE));
 
-		$this->assertSame([], $this->serviceCalls(), 'a box that never moved the Resolver must not stop anything');
+		$this->assertProxyStillServes('a box that never moved the Resolver must not stop anything');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'and is not alarmed');
 	}
 
@@ -250,9 +277,10 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertSame(2, $notice['priority']);
 		$this->assertStringContainsString('DNS proxy', (string) @file_get_contents($GLOBALS['pfb']['errlog']));
 
-		// ... and the proxy that serves the moved Resolver was stopped and then restarted, so DNS stays available
-		$this->assertSame([PFB_DNS_PROXY_RCFILE . ' stop'], $GLOBALS['pfb_test_mwexec']);
-		$this->assertSame([['restart_service', 'pfb_dns_proxy']], $this->serviceCalls());
+		// ... and the proxy that serves the moved Resolver was stopped and then started again through the rc script
+		// (stop_service() and restart_service() do nothing while the package has no service entry), so DNS stays available
+		$this->assertSame([PFB_DNS_PROXY_RCFILE . ' stop', PFB_DNS_PROXY_RCFILE . ' start'], $GLOBALS['pfb_test_mwexec']);
+		$this->assertSame([], $this->serviceCalls());
 	}
 
 	public function testARestoreProceedsWhenNeitherPidfileNamesALiveProcessAfterTheStop(): void
@@ -393,17 +421,37 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertCount(1, $GLOBALS['pfb_test_unbound_configure_calls']);
 	}
 
+	#[DataProvider('removalStates')]
+	public function testRemovalStopsTheLiveProxyOnceTheResolverIsBack(bool $moved): void
+	{
+		// Given the live proxy and the Resolver in this state
+		if ($moved) {
+			$this->seedMovedResolver();
+		} else {
+			$GLOBALS['config']['unbound'] = self::originalResolver();
+		}
+		$this->seedRunningProxy();
+		$this->assertProxyStillServes('before');
+
+		// When the package is removed
+		$this->assertTrue(pfb_dns_proxy_deinstall(), 'the Resolver is back (or was never moved): the removal goes on');
+
+		// Then the stop cleared that proxy's pids and marker: the proxies the negatives below read back are ones a stop does clear
+		$this->assertProxyWasStopped('after the removal');
+	}
+
 	public function testRemovalWhileTheConfigIsLockedNeverStopsTheProxyThatServesTheMovedResolver(): void
 	{
 		// Given a moved Resolver, and another save holding the config lock for the whole bounded wait
 		$this->seedMovedResolver();
+		$this->seedRunningProxy();
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 
 		// When the package is removed
 		$this->assertFalse(pfb_dns_proxy_deinstall(), 'the Resolver stayed moved: the removal must stop');
 
 		// Then the Resolver could not be put back, so the proxy that serves it was not stopped first
-		$this->assertSame([], $this->serviceCalls());
+		$this->assertProxyStillServes('the proxy that serves the moved Resolver is not stopped first');
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
 		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], 'nothing was restored, so nothing to regenerate');
 	}
@@ -493,6 +541,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		// Given the Resolver still carries our block and no snapshot can put it back
 		$this->seedOrphanedResolver($marker, $custom);
 		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+		$this->seedLiveProxyThatAStopClears();
 		$before = $GLOBALS['config'];
 
 		// When the package removal asks for the restore
@@ -500,7 +549,7 @@ final class DnsProxyLifecycleTest extends TestCase
 
 		// Then the removal is refused before the proxy is stopped or its rc script removed, and config.xml keeps the raw metadata
 		$this->assertFalse($removable, 'no snapshot to restore from: the removal must not go on');
-		$this->assertSame([], $this->serviceCalls(), 'the proxy is not stopped, so nothing is left unserved by a stop');
+		$this->assertProxyStillServes('the proxy is not stopped, so nothing is left unserved by a stop');
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE);
 		$this->assertSame($before, $GLOBALS['config'], 'config.xml and the stored marker are kept for a hand recovery');
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
@@ -598,6 +647,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		// Given a stored marker that is no snapshot, no block of ours, and the proxy's rc script on disk
 		$this->seedUnconfirmedResolver($marker);
 		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+		$this->seedLiveProxyThatAStopClears();
 		$before = $GLOBALS['config'];
 
 		// When the package removal asks for the restore
@@ -605,7 +655,7 @@ final class DnsProxyLifecycleTest extends TestCase
 
 		// Then the removal is refused: the marker, the Resolver and the rc script are kept for a manual repair
 		$this->assertFalse($removable, 'the saved state cannot be confirmed: the removal must not go on');
-		$this->assertSame([], $this->serviceCalls(), 'the proxy is not stopped');
+		$this->assertProxyStillServes('the proxy is not stopped');
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE);
 		$this->assertSame($before, $GLOBALS['config'], 'config.xml and the stored marker are kept verbatim');
 		$this->assertSame($marker, (string) config_get_path(self::SAVED, ''));
