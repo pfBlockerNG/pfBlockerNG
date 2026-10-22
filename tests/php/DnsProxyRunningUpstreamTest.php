@@ -205,4 +205,27 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 
 		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'pfb_dns.sh execs bin/<target>/pfb-dns for the machine it runs on');
 	}
+
+	public function testALiteralQuotedUpstreamFailsClosed(): void
+	{
+		// Given a gateway whose command line carries literal quotes around its upstream: the shell strips those quotes from the rc
+		// text before any gateway starts, so a process never has them in its argv
+		$this->proxyServes();
+		$this->processTableRow(PFB_DNS_PROXY_DIR . "/bin/freebsd-amd64/pfb-dns --upstream '127.0.0.1:5353'");
+		$this->seedUnbound('127.0.0.1:5353');
+
+		// Then nothing is confirmed: a quoted argv is not a command line the gateway was started with
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'a literal quote is not part of the endpoint the gateway forwards to');
+	}
+
+	public function testABracketedIPv4UpstreamIsJudgedByTheEndpointItNames(): void
+	{
+		// Given a gateway forwarding to a bracketed IPv4 endpoint, and Unbound owning that endpoint
+		$this->proxyServes();
+		$this->processTableRow(PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns --upstream [127.0.0.1]:5353');
+		$this->seedUnbound('127.0.0.1:5353');
+
+		// Then the proxy serves: the owner check compares the address the endpoint names, whatever brackets it was written with
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the bracketed endpoint names 127.0.0.1:5353, which Unbound owns');
+	}
 }
