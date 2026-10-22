@@ -14988,8 +14988,11 @@ function pfb_dns_widget_status(array $status): array {
 			    ? [$green, "{$label} is listening on " . implode(', ', array_unique(array_column($rows, 'interface')))]
 			    : [$yellow, "{$label}: {$faulty} of " . count($rows) . ' listener rows are not confirmed listening; see the pfB-DNS tab'];
 		}
-		// pfBlockerNG disabled is off whatever a proxy still listening for the pending Resolver restore says
-		$cells[] = ['anchor' => "PFBDNSSTATUS_{$key}", 'label' => $label, 'icon' => $enabled ? $icon : $red, 'title' => $line($title)];
+		// pfBlockerNG disabled is off whatever a proxy still listening for the pending Resolver restore says; the title says why first
+		if (!$enabled) {
+			[$icon, $title] = [$red, "pfBlockerNG is disabled; {$title}"];
+		}
+		$cells[] = ['anchor' => "PFBDNSSTATUS_{$key}", 'label' => $label, 'icon' => $icon, 'title' => $line($title)];
 	}
 	return $cells;
 }

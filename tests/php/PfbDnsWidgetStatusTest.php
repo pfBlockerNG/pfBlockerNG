@@ -139,10 +139,13 @@ final class PfbDnsWidgetStatusTest extends TestCase
 		$listening = self::rows('listening');
 		$status = self::running(['plain' => $listening, 'dot' => $listening, 'doh' => $listening, 'doq' => $listening]);
 
-		// Then nothing is green: pfBlockerNG is off, so is every cell
-		foreach (self::cells($status) as $anchor => $cell) {
+		// Then nothing is green: pfBlockerNG is off, so is every cell, and each transport's title says why before what it still does
+		$cells = self::cells($status);
+		foreach ($cells as $anchor => $cell) {
 			$this->assertSame(self::RED, $cell['icon'], $anchor);
 		}
+		$this->assertSame('pfBlockerNG is disabled; DNS is listening on LAN', $cells['PFBDNSSTATUS_plain']['title']);
+		$this->assertSame('pfBlockerNG is disabled; DoQ is listening on LAN', $cells['PFBDNSSTATUS_doq']['title']);
 	}
 
 	/** @return array<string,array{array<string,string>,array<string,string>}> toggles that are on, and the expected colours of the transports */
