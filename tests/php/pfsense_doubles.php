@@ -1149,8 +1149,14 @@ if (!function_exists('get_configured_vip_list')) {
 	// pfb_validate_vips to return an 'invalid IPv4 VIP' error and force-disable DNSBL.
 	// Tests that need DNSBL to stay enabled must seed a matching id => addr entry AND
 	// use the 'opt-double' interface (matched by the get_configured_vip_interface double).
-	function get_configured_vip_list($type = '') {
-		return $GLOBALS['pfb_test_vip_list'] ?? [];
+	// $family filters as upstream does: 'inet' keeps IPv4 addresses, 'inet6' IPv6, anything else all.
+	function get_configured_vip_list($family = 'all', $type = '') {
+		$list = $GLOBALS['pfb_test_vip_list'] ?? [];
+		return match ($family) {
+			'inet'  => array_filter($list, 'is_ipaddrv4'),
+			'inet6' => array_filter($list, 'is_ipaddrv6'),
+			default => $list,
+		};
 	}
 }
 

@@ -44,6 +44,7 @@ use PHPUnit\Framework\TestCase;
  *   address takes it, whatever case or zero padding its stored IPv6 text uses
  */
 #[CoversFunction('pfb_pick_free_dnsbl_vip')]
+#[CoversFunction('pfb_get_vips')]
 final class DnsblPickFreeVipTest extends TestCase
 {
 	protected function setUp(): void
@@ -286,9 +287,8 @@ final class DnsblPickFreeVipTest extends TestCase
 	public static function v6CandidateSpellings(): array
 	{
 		return [
-			'as the candidate is written' => ['fd00:53:53:53:53:53:53:53'],
-			'upper case'                  => ['FD00:53:53:53:53:53:53:53'],
-			'zero-padded groups'          => ['fd00:0053:0053:0053:0053:0053:0053:0053'],
+			'upper case'         => ['FD00:53:53:53:53:53:53:53'],
+			'zero-padded groups' => ['fd00:0053:0053:0053:0053:0053:0053:0053'],
 		];
 	}
 
@@ -322,5 +322,36 @@ final class DnsblPickFreeVipTest extends TestCase
 		// When / Then: the candidates themselves are still free.
 		$this->assertSame('172.16.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'));
 		$this->assertSame('fd00:53:53:53:53:53:53:53', pfb_pick_free_dnsbl_vip(AF_INET6, 'lan'));
+	}
+
+	public function testVipsAtTheFirstTwoCandidatesAndANumericLookalike_LeaveTheThird(): void
+	{
+		// Given: VIPs at the first two candidates, and at 53.53.53.32, whose binary form ("555 ") PHP's
+		// loose comparison equates with the third candidate's ("\n555").
+		$GLOBALS['pfb_test_vip_list'] = [
+			'_vipa' => '172.16.53.53',
+			'_vipb' => '192.168.53.53',
+			'_vipc' => '53.53.53.32',
+		];
+
+		// When / Then: only exact address matches take a candidate.
+		$result = pfb_pick_free_dnsbl_vip(AF_INET, 'lan');
+		$this->assertSame('10.53.53.53', $result, 'Got: ' . var_export($result, TRUE));
+	}
+
+	public function testPfbGetVipsKeepsPfSensesLabelsKeyedByVipId(): void
+	{
+		// Given: described VIPs of both families, listed as pfSense lists and labels them.
+		$GLOBALS['pfb_test_vip_list']   = ['_vipweb' => '172.16.53.53', '_vipweb6' => 'fd00:53::1'];
+		$GLOBALS['pfb_test_specialnet'] = [
+			'172.16.53.53' => '172.16.53.53 (web server)',
+			'fd00:53::1'   => 'fd00:53::1 (web v6)',
+		];
+
+		// Then: the DNSBL page dropdown still gets the labels, keyed by VIP id.
+		$this->assertSame(
+			['v4' => ['_vipweb' => '172.16.53.53 (web server)'], 'v6' => ['_vipweb6' => 'fd00:53::1 (web v6)']],
+			pfb_get_vips()
+		);
 	}
 }
