@@ -156,11 +156,14 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			if ($this->behaviour === 'serves') {
 				$this->proxyServes();
 			} elseif ($this->behaviour === 'lives') {
-				// Alive, as the supervisor keeps its child alive between restarts, and never publishing the marker; the probe
-				// notes whether the config lock is held while PHP waits
+				// Alive, as the supervisor keeps its child alive between restarts, and never publishing the marker; each probe of the
+				// readiness wait notes whether the config lock is held (the budget is 0 under test, so a wait probes once and only its
+				// caller tells it from the rollback's one-shot recheck under the lock)
 				$this->proxyLivesButNeverServes();
 				$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function (): bool {
-					$this->lockHeldWhileWaiting[] = !empty($GLOBALS['pfb_test_lock_held']);
+					if (in_array('pfb_dns_proxy_await_ready', array_column(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS), 'function'), TRUE)) {
+						$this->lockHeldWhileWaiting[] = !empty($GLOBALS['pfb_test_lock_held']);
+					}
 					return TRUE;
 				};
 			} else {

@@ -5468,14 +5468,17 @@ function pfb_dns_proxy_rollback_notice(string $text): void {
  * Turn the requested pfB-DNS toggle Off, written to config.xml under the DNS config lock from a fresh read: the next apply then
  * never enables it again, and retries a restore that did not finish. The write happens only while the stored marker is still
  * $expected_saved and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs recovery: a state another save
- * or recovery already resolved is left alone.
+ * or recovery already resolved is left alone. For a proxy that did not become ready ($not_ready), a proxy that is ready by the time
+ * the lock is won while pfB-DNS is still requested On is left alone too: another apply restarted it on the same snapshot, which
+ * takes no operation lock.
  *
  * @param string|null $expected_saved the raw marker the caller saw; NULL = the marker read now, before the lock is waited for
+ * @param bool $not_ready the caller rolls back a proxy that did not become ready (not an unsafe setting, which stands whether it serves)
  * @return bool|null TRUE iff the toggle was written; FALSE when the lock stayed taken, the read failed, or config.xml did not take the
  *         write (nothing was written, and this process holds the stored toggle again: pfb_dns_config_write_failed()); NULL when the
  *         stored state is no longer this one's to change (nothing was written)
  */
-function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL): ?bool {
+function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL, bool $not_ready = FALSE): ?bool {
 	// The marker is read before the lock is waited for: NULL takes this read, never a bypass of the guard
 	$expected_saved ??= (string) PfbConfig::read('dns/pfb_dns_saved');
 	// One retry: a save that held config.xml through a whole wait is usually done by the second
@@ -5489,6 +5492,10 @@ function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL): ?b
 			return NULL;
 		}
 		if (!pfb_dns_proxy_owns_resolver() && !pfb_dns_proxy_recovery_required()) {
+			return NULL;
+		}
+		// A newer start on the same snapshot made it ready meanwhile; with Off already stored, a ready proxy is a recovery's own restart
+		if ($not_ready && PfbConfig::read('dns/pfb_dns') === PfbToggle::On && pfb_dns_proxy_ready()) {
 			return NULL;
 		}
 		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
@@ -5505,7 +5512,8 @@ function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL): ?b
  * nothing. Under the DNS config lock the requested pfB-DNS toggle goes Off first, so a rollback that fails half way is retried by the next
  * apply's restore and that apply never enables pfB-DNS again; the config lock is released before anything waits. The Off write happens only
  * while the stored snapshot is still $expected_saved and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs
- * recovery: a state another save or recovery already resolved is left alone, with no notice. For a proxy that did not become ready, the
+ * recovery: a state another save or recovery already resolved is left alone, with no notice, and so is a proxy that did not become ready
+ * when, by the time the config lock is won with pfB-DNS still requested On, a restart on the same snapshot has made it ready. For a proxy that did not become ready, the
  * start is diagnosed (pfb_dns_proxy_startup_check()) once the guard has won and before the snapshot is consumed. Then the proxy is stopped
  * and the Resolver gets its saved settings back, keeping a Listen Port the admin set since the move (pfb_unbound_python($mode, FALSE), which
  * also puts the DNSBL module back into Unbound iff DNSBL is on), and unbound.conf is regenerated and Unbound restarted the way the apply
@@ -5545,9 +5553,9 @@ function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL, ?st
 		$not_ready = $what === NULL;
 		$what ??= 'the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' seconds of its start';
 		$next ??= 'Read ' . PFB_DNS_PROXY_LOG . ' for the cause, correct it, then turn pfB-DNS on again.';
-		$off = pfb_dns_proxy_turn_off($what, $expected_saved);
+		$off = pfb_dns_proxy_turn_off($what, $expected_saved, $not_ready);
 		if ($off === NULL) {
-			// Resolved by a save or recovery that ran first: this one restores nothing and says nothing
+			// Resolved by a save or recovery that ran first, or a proxy that became ready meanwhile: this one restores nothing and says nothing
 			return FALSE;
 		}
 		if (!$off) {
