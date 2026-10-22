@@ -58,8 +58,8 @@ UNBOUND_TIMEOUT.
 
 The code record: after the boot (after the drop with --no-module) and before READY, pfb_dns_decider.applied is written
 in --module-dir: the md5 hex digests of CODE_RECORD_FILES concatenated, so a package update can tell whether this
-process runs the code now installed. A member that cannot be read leaves no record (a stale one is removed); a record
-that cannot be written is one error line.
+process runs the code now installed. When it cannot be written (a member unreadable included) the record and its temp
+file are removed and one error line is logged, so the absence is what the next update sees.
 
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
@@ -178,24 +178,22 @@ def drop_privileges(account: pwd.struct_passwd) -> None:
 
 
 def write_code_record(module_dir: str) -> None:
-    """Publish CODE_RECORD, or remove it when a member is unreadable. Best-effort, like pfb_py_module.applied: a failure
-    is one error line, never an exit, and the next update then sees a missing record and restarts the decider."""
+    """Publish CODE_RECORD. Best-effort, like pfb_py_module.applied: a failure is one error line, never an exit. The
+    record and its temp file are then removed, so a stale record never vouches for this process's code."""
     record = os.path.join(module_dir, CODE_RECORD)
     try:
         digests = []
         for directory, name in CODE_RECORD_FILES:
-            try:
-                with open(os.path.join(directory or module_dir, name), "rb") as handle:
-                    digests.append(hashlib.md5(handle.read()).hexdigest())
-            except OSError:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(record)
-                return
+            with open(os.path.join(directory or module_dir, name), "rb") as handle:
+                digests.append(hashlib.md5(handle.read()).hexdigest())
         with open(f"{record}.tmp", "w", encoding="ascii") as handle:
             handle.write("".join(digests))
         os.replace(f"{record}.tmp", record)
     except OSError as exc:
         shim.log_err(f"cannot write the code record {record}: {exc}")
+        for stale in (record, f"{record}.tmp"):
+            with contextlib.suppress(OSError):
+                os.unlink(stale)
 
 
 # --- replies the proxy builds itself -------------------------------------------------------------

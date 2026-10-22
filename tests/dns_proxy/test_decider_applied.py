@@ -156,3 +156,29 @@ def test_a_module_dir_that_cannot_be_written_still_reaches_ready_with_one_error_
     errors = [line for line in stderr.splitlines() if line.startswith("pfb_dns_proxy error:")]
     assert (record, len(errors)) == ("", 1), stderr
     assert RECORD in errors[0], errors[0]
+
+
+def test_a_record_that_cannot_be_written_removes_the_existing_one_so_it_never_passes_for_this_code(
+    layout: Layout,
+) -> None:
+    (layout.module / RECORD).write_text("stale", encoding="utf-8")
+    (layout.module / RECORD).chmod(0o666)  # the account could rewrite it in place
+    (layout.module / f"{RECORD}.tmp").mkdir()  # the temp file cannot be created; an in-place write would succeed
+    record, stderr = _ready(layout, "--no-module", user=ACCOUNT.pw_name)
+    errors = [line for line in stderr.splitlines() if line.startswith("pfb_dns_proxy error:")]
+    assert (record, (layout.module / RECORD).exists(), len(errors)) == ("", False, 1), stderr
+
+
+def test_a_module_that_fails_to_boot_exits_1_before_any_record_is_written(layout: Layout) -> None:
+    (layout.module / "pfb_unbound.py").write_text("raise RuntimeError('boom')\n", encoding="utf-8")
+    child, go = _start(layout, user=ACCOUNT.pw_name)
+    try:
+        with watched("the decider to exit"):
+            _, stderr = child.communicate(timeout=WATCHDOG)
+    finally:
+        go.close()
+        if child.poll() is None:
+            child.kill()
+            child.communicate()
+    assert (child.returncode, (layout.module / RECORD).exists()) == (1, False), stderr
+    assert "boom" in stderr, stderr
