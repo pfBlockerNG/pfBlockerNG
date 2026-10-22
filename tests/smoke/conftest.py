@@ -238,7 +238,7 @@ class SmokeVM:
     # 192.168.89.2:<port> via the WAN SLIRP alias). Set once the stub_dns fixture is
     # up; None otherwise. Unbound is pointed here so it never recurses into dark egress.
     upstream_dns_port: int | None = None
-    # qemu PID + boot-log path, kept for teardown and diagnostics.
+    # vm_pid feeds reboot_vm's wait_ready (helpers.reboot_vm); log_path is copied into the artifact upload.
     vm_pid: int | None = None
     log_path: str | None = None
 
@@ -511,17 +511,16 @@ def boot_and_probe(
         env={**os.environ, **(extra_env or {}), "QMP_SOCK": qmp_sock},
     )
 
-    vm = SmokeVM(
-        ssh_key_path=ssh_key_path,
-        host=host,
-        ssh_port=ssh_port,
-        web_port=web_port,
-        dns_port=dns_port,
-        vm_pid=process.pid,
-        log_path=str(log_path),
-    )
-
     try:
+        vm = SmokeVM(
+            ssh_key_path=ssh_key_path,
+            host=host,
+            ssh_port=ssh_port,
+            web_port=web_port,
+            dns_port=dns_port,
+            vm_pid=process.pid,
+            log_path=str(log_path),
+        )
         # wait_ready.sh <ssh-key> [host] [port] [timeout] [vm-pid] [web-port].
         # Passing web_port selects the pfSense gate: readiness = the webConfigurator
         # answering (nginx+PHP), which comes up after sshd.
@@ -540,7 +539,7 @@ def boot_and_probe(
             text=True,
             check=False,
         )
-    except BaseException:  # incl. Ctrl-C / SIGTERM-as-KeyboardInterrupt: qemu must not outlive the wait
+    except BaseException:  # incl. Ctrl-C (KeyboardInterrupt): qemu must not outlive the wait
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
         _kill(process, qmp_sock, overlay)
         log_file.close()
@@ -571,7 +570,7 @@ def boot_and_probe(
         # NEVER REMOVE: install the scheduler off-switch before pfBlockerNG can be installed.
         helpers._write_cron_disable_flag(vm)
         _log_guest_identity(vm)
-    except BaseException:
+    except BaseException:  # incl. Ctrl-C (KeyboardInterrupt)
         # Route a boot-complete failure (its loud timeout, or an SSH/php_eval error) through the
         # SAME cleanup as a wait_ready failure: capture diagnostics, kill qemu, close the log --
         # otherwise a never-completing boot leaks the VM and produces no screendump/log tail.
@@ -1013,7 +1012,7 @@ def client_vm(
             text=True,
             check=False,
         )
-    except BaseException:  # incl. Ctrl-C / SIGTERM-as-KeyboardInterrupt: qemu must not outlive the wait
+    except BaseException:  # incl. Ctrl-C (KeyboardInterrupt): qemu must not outlive the wait
         _capture_boot_failure("civm", qmp_sock, log_path, process)
         _kill(process, qmp_sock, overlay)
         log_file.close()

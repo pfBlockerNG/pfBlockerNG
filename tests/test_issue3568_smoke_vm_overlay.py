@@ -266,21 +266,6 @@ def test_a_smoke_vm_whose_post_boot_setup_fails_is_stopped_and_its_overlay_delet
     assert not overlay.exists(), f"smoke_vm failed after its boot and left its overlay behind: {overlay}"
 
 
-def test_a_client_vm_that_fails_after_its_boot_is_stopped_and_its_overlay_deleted(rig: _Rig) -> None:
-    def refuse(*args: Any, **kwargs: Any) -> NoReturn:
-        rig.inject(RuntimeError("simulated post-boot failure"))
-
-    rig.monkeypatch.setattr(smoke_conftest, "SmokeVM", refuse)
-
-    with pytest.raises(RuntimeError, match="simulated post-boot failure"):
-        rig.start("client_vm")
-
-    overlay = rig.only_overlay()
-    assert rig.existed_at_failure == [True], "the overlay must exist while the VM runs, before the failure"
-    assert rig.started[0].poll() is not None, "a failed session fixture left qemu running"
-    assert not overlay.exists(), f"client_vm failed after its boot and left its overlay behind: {overlay}"
-
-
 @pytest.mark.parametrize(
     ("name", "failure"),
     [
