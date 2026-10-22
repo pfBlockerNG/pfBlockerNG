@@ -31,7 +31,7 @@ _QEMU = """#!/bin/sh
 echo up > "$PFB_TEST_UP_FIFO"
 case "$PFB_TEST_QEMU" in
     exit) exit 1 ;;
-    ignore-term) while :; do sleep 1; done ;;
+    ignore-term) while true; do sleep 1; done ;;
     *) exec sleep 300 ;;
 esac
 """
@@ -40,7 +40,7 @@ esac
 _QEMU_IMG = """#!/bin/sh
 for last; do :; done
 echo "$last" >> "$PFB_TEST_IMG_LOG"
-: > "$last"
+true > "$last"
 """
 
 WORK_DIR_OF = {"smoke_vm": "smoke-vm", "peer_vm": "peer-vm", "client_vm": "client-vm"}
