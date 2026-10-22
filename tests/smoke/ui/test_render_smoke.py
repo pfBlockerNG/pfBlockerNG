@@ -2502,7 +2502,9 @@ def test_pfb_dns_page_load_seeds_its_settings_from_the_resolver_once(
 # in none of the private, reserved, documentation or benchmarking ranges the warning skips.
 _DDR_TITLE = "Discovery of Designated Resolvers (DDR)"
 _DDR_WARNING_ADDRESS = "192.88.99.1"
-_VIP_ADDRESS = re.compile(rf"(?<![\d.]){re.escape(_DDR_WARNING_ADDRESS)}(?![\d.])")
+# `DDR: <transports> on <address> will not be used ...`: the address one warning is about (the transports it names
+# change with the toggles, so a text is not comparable across states).
+_DDR_WARNED_ADDRESS = re.compile(r"^DDR: .+? on (\S+) will not be used\b")
 _DDR_WARNING_VIP = "pfb3583vip"
 # Everything the warning tests set, and what the page's first load seeds beside it on a box that was never seeded.
 _DDR_WARNING_KEYS = (
@@ -2744,11 +2746,18 @@ def _ddr_on_with_a_certificate_and_a_public_vip(vm: SmokeVM, webui: WebUI) -> It
             _restore_config_paths(vm, priors)
 
 
-def _assert_ddr_warnings(webui: WebUI, when: str, *, naming_the_vip: int) -> list[str]:
+def _warned_address(text: str) -> str:
+    match = _DDR_WARNED_ADDRESS.match(text)
+    assert match, f"a DDR warning does not read 'DDR: <transports> on <address> will not be used ...': {text!r}"
+    return match.group(1)
+
+
+def _assert_ddr_warnings(webui: WebUI, when: str, *, naming_the_vip: int) -> set[str]:
     """Load the pfB-DNS page and expect `naming_the_vip` alert-warnings starting `DDR: ` that name the public VIP.
 
-    Only the VIP's warnings are counted, so another public address on the box (a pool VM's WAN or LAN) cannot fail the
-    count. They are returned, sorted, as the other `DDR: ` warnings. With `naming_the_vip` 0 the page must carry no
+    Only the VIP's warnings are counted, so another public address on the box (a pool VM's WAN, LAN or SLIRP address)
+    cannot fail the count. The addresses the other `DDR: ` warnings are about are returned: a text names the
+    transports too, so only the addresses compare across states. With `naming_the_vip` 0 the page must carry no
     `DDR: ` warning at all: a state with nothing to check (toggle off, the only listener excluded) warns for no address.
     """
     resp = webui.get(_PFB_DNS_PAGE)
@@ -2756,14 +2765,14 @@ def _assert_ddr_warnings(webui: WebUI, when: str, *, naming_the_vip: int) -> lis
     assert result.ok, f"pfB-DNS render oracle failed ({when}): {result.detail}"
     warnings = _alert_warnings(resp.text)
     ddr = [text for text in warnings if text.startswith("DDR: ")]
-    named = [text for text in ddr if _VIP_ADDRESS.search(text)]
-    others = sorted(text for text in ddr if text not in named)
+    named = [text for text in ddr if _warned_address(text) == _DDR_WARNING_ADDRESS]
+    others = {_warned_address(text) for text in ddr} - {_DDR_WARNING_ADDRESS}
     assert len(named) == naming_the_vip, (
         f"{when}: expected {naming_the_vip} alert-warning(s) starting 'DDR: ' and naming {_DDR_WARNING_ADDRESS}, "
         f"got {named}; every alert-warning: {warnings}"
     )
     assert naming_the_vip or not others, (
-        f"{when}: expected no alert-warning starting 'DDR: ' at all, got {others}; every alert-warning: {warnings}"
+        f"{when}: expected no alert-warning starting 'DDR: ' at all, got {ddr}; every alert-warning: {warnings}"
     )
     return others
 
@@ -2796,8 +2805,8 @@ def test_pfb_dns_page_leaves_the_doh_listener_unchecked_while_doh_on_port_443_is
       443 off),
     Then exactly one `DDR: ` warning names the address (the DoH listener is checked);
     When only DoH on port 443 is turned on, Then no `DDR: ` warning is left;
-    When DoT is also turned on All, Then the warning is back (DoT is still checked) and the `DDR: ` warnings for any
-    other public address of the box are the same as when DoH was the checked listener.
+    When DoT is also turned on All, Then the warning is back (DoT is still checked) and the other public addresses the
+    `DDR: ` warnings are about are the same as when DoH was the checked listener (the texts differ in the transport).
     """
     with _ddr_on_with_a_certificate_and_a_public_vip(smoke_vm, webui):
         _set_dns(smoke_vm, pfb_dns_doh="on")
@@ -2807,8 +2816,8 @@ def test_pfb_dns_page_leaves_the_doh_listener_unchecked_while_doh_on_port_443_is
         _set_dns(smoke_vm, pfb_dns_dot="on")
         again = _assert_ddr_warnings(webui, "DoH on port 443 on, DoT also on All", naming_the_vip=1)
         assert again == others, (
-            f"DoH and DoT list the same addresses (All): the warnings for the box's other public addresses must not "
-            f"change when DoT replaces DoH as the checked listener; before {others}, after {again}"
+            f"DoH and DoT list the same addresses (All): the other public addresses warned about must not change "
+            f"when DoT replaces DoH as the checked listener; before {sorted(others)}, after {sorted(again)}"
         )
 
 
