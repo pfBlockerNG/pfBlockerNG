@@ -903,7 +903,7 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   `ps -axww -o pid= -o ppid= -o rss= -o args=`. `hw.usermem` must be at least twice that RSS plus `PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM`
   (64 MiB): the swap gate's total-RAM basis and headroom. A box short of RAM, or a pid, RSS or `hw.usermem` that cannot be read, gets the
   whole-pair restart, logged with what was measured. The swap's 276 B/entry projection is not reused: a decider measured about 46.5 MiB
-  plus 1 KiB per entry (235 MiB at 189,643 entries).
+  plus 1.02 KiB per entry (235 MiB at 189,643 entries).
 
 Pinned by `DnsProxyUpgradeStopTest` (the stop's walk, run in a sandbox), `DnsProxyKeepRunningTest`, `DnsProxyKeepRunningPkgTest` and
 `DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `tests/dns_proxy/test_decider_applied.py` (the code
