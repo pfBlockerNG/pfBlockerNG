@@ -29,6 +29,7 @@ trait KeepRunningScenario
 		mkdir("{$dir}/dnsdir", 0777, TRUE);
 		mkdir("{$dir}/decider", 0777, TRUE);
 		$this->krPsDouble();
+		$GLOBALS['pfb_test_ps_output'] = "{$dir}/gateway.ps";
 		$decider = [];
 		foreach (['pfb_dns_proxy.py', 'decision_service.py', 'dns_reply_log.py', 'dnswire.py', 'unbound_shim.py', 'pfb_unbound.py', 'pfb_dnsbl_regex_rules.py'] as $name) {
 			$decider[] = "{$dir}/decider/{$name}";
@@ -81,15 +82,17 @@ trait KeepRunningScenario
 			'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_rcfile_dir', 'pfb_test_try_lock_fail', 'pfb_test_file_notices',
 			'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_swap_wait_s',
 			'pfb_test_unbound_py_sentinel_published', 'pfb_test_sysctl',
+			'pfb_test_ps_output',
 		];
 	}
 
-	/** The `ps` the code under test runs ($pfb['ps']): it answers only its one argument list, from ps.out, fails when there is none, and exits 1 after it when ps.fail exists. */
+	/** The `ps` the code under test runs ($pfb['ps']): it answers its full-table list from ps.out, fails when there is none, and exits 1 after it when ps.fail exists; the gateway's single-pid list (-ww -o args= -p PID) answers from gateway.ps, the PID command line rows the seed helpers write there, exit 1 with no output when the pid is absent; any other list exits 2. */
 	private function krPsDouble(): void
 	{
 		$out = escapeshellarg("{$this->krDir}/ps.out");
 		$fail = escapeshellarg("{$this->krDir}/ps.fail");
-		file_put_contents("{$this->krDir}/ps", "#!/bin/sh\n[ \"\$*\" = '-axww -o pid= -o ppid= -o rss= -o args=' ] || exit 2\n[ -f {$out} ] || exit 1\ncat {$out}\n[ ! -f {$fail} ]\n");
+		$gw = escapeshellarg("{$this->krDir}/gateway.ps");
+		file_put_contents("{$this->krDir}/ps", "#!/bin/sh\ncase \"\$*\" in\n'-axww -o pid= -o ppid= -o rss= -o args=') [ -f {$out} ] || exit 1; cat {$out}; [ ! -f {$fail} ] ;;\n'-ww -o args= -p '[0-9]*) [ \$# -eq 5 ] || exit 2; [ -f {$gw} ] || exit 1; awk -v p=\"\$5\" '\$1 == p { sub(/^[^ ]+ /, \"\"); print; found = 1 } END { exit(found ? 0 : 1) }' {$gw} ;;\n*) exit 2 ;;\nesac\n");
 		chmod("{$this->krDir}/ps", 0755);
 	}
 
