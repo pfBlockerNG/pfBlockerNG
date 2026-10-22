@@ -59,9 +59,9 @@ trait DnsProxyReadySeedTrait
 	 * asked for (the rc script's own, through mwexec(), and stop_service()) clears all of it, so a test that must not stop the
 	 * proxy reads that state back instead of counting calls.
 	 */
-	private function seedLiveProxyThatAStopClears(string $child = '4242'): void
+	private function seedLiveProxyThatAStopClears(): void
 	{
-		$this->proxyServes($child);
+		$this->proxyServes();
 		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 		$stop = function (): void {
 			$this->clearProxyFiles();
@@ -81,12 +81,12 @@ trait DnsProxyReadySeedTrait
 	}
 
 	/** The proxy seeded by seedLiveProxyThatAStopClears() is untouched: both pids live, the marker names the child. */
-	private function assertProxyStillServes(string $why, string $child = '4242'): void
+	private function assertProxyStillServes(string $why): void
 	{
 		$this->assertTrue(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), "{$why}: the supervisor still lives");
 		$this->assertTrue(pfb_dns_proxy_running(), "{$why}: the child still lives");
-		$this->assertSame("{$child}\n", (string) @file_get_contents($this->proxyPidfile()), "{$why}: the child pidfile is kept");
-		$this->assertSame("{$child}\n", (string) @file_get_contents($this->proxyMarker()), "{$why}: the ready marker is kept");
+		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyPidfile()), "{$why}: the child pidfile is kept");
+		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyMarker()), "{$why}: the ready marker is kept");
 		$this->assertTrue(pfb_dns_proxy_ready(), "{$why}: the proxy still serves");
 	}
 

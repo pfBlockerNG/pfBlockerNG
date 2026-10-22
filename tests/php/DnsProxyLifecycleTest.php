@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
  *     (pfb_dns_proxy_resolver(FALSE), the one place every "turn it off" path goes through), and the restore is
  *     abandoned, snapshot kept and the operator told, when the proxy outlived its stop (the stop is the rc script's own:
  *     stop_service() does nothing while the package has no service entry, issue #3561, and the rc script reports
- *     nothing, so the pidfiles are the only witness): the proxy is then restarted, so the moved Resolver stays
+ *     nothing, so the pidfiles are the only witness): the proxy is then started again, so the moved Resolver stays
  *     served until a later apply restores it;
  *   - package removal always hands the Resolver back, stops the proxy and removes its rc script, whatever the
  *     disable pass returned (pfb_dns_proxy_deinstall(), called right after the pass), but never stops the proxy
@@ -540,8 +540,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// Given the Resolver still carries our block and no snapshot can put it back
 		$this->seedOrphanedResolver($marker, $custom);
-		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
-		$this->seedLiveProxyThatAStopClears();
+		$this->seedRunningProxy();
 		$before = $GLOBALS['config'];
 
 		// When the package removal asks for the restore
@@ -646,8 +645,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// Given a stored marker that is no snapshot, no block of ours, and the proxy's rc script on disk
 		$this->seedUnconfirmedResolver($marker);
-		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
-		$this->seedLiveProxyThatAStopClears();
+		$this->seedRunningProxy();
 		$before = $GLOBALS['config'];
 
 		// When the package removal asks for the restore

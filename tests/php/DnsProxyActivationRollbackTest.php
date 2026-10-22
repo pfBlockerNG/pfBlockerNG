@@ -63,13 +63,13 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		'pfb_test_unbound_configure_resolver', 'pfb_test_file_notices', 'pfb_test_try_lock_fail', 'pfb_test_lock_held',
 		'pfb_test_lock_events', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_write_config_hook',
 		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held',
-		'pfb_test_write_config_args',
+		'pfb_test_write_config_args', 'pfb_test_rcfile_dir',
 		'pfb_test_mwexec', 'pfb_test_mwexec_hook',
 	];
 
 	private string $tmp;
 	private array $savedGlobals = [];
-	/** @var list<string> what the proxy was asked, in order: start_service, restart_service, stop_service; "rc stop" and "rc start" are the rc script's own, "<call> (no entry)" a call pfSense ignored */
+	/** @var list<string> what the proxy was asked, in order: start_service, restart_service, stop_service; "rc stop" and "rc start" are the rc script's own, "<call> (no entry)" a call pfSense ignored, "<rc call> (no script)" one that found no script to run */
 	private array $proxyCalls = [];
 	/** @var list<bool> whether the config lock was held at each liveness probe of the child while PHP waited for readiness */
 	private array $lockHeldWhileWaiting = [];
@@ -161,6 +161,11 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			}
 		};
 		$GLOBALS['pfb_test_mwexec_hook'] = function (string $command): int {
+			if (in_array($command, [PFB_DNS_PROXY_RCFILE . ' stop', PFB_DNS_PROXY_RCFILE . ' start'], TRUE) && !file_exists(PFB_DNS_PROXY_RCFILE)) {
+				// The shell finds no script: nothing runs, and mwexec() answers with the shell's "command not found"
+				$this->proxyCalls[] = str_replace(PFB_DNS_PROXY_RCFILE, 'rc', $command) . ' (no script)';
+				return 127;
+			}
 			if ($command === PFB_DNS_PROXY_RCFILE . ' stop') {
 				$this->proxyCalls[] = 'rc stop';
 				if (!$this->survivesStop) {
@@ -712,6 +717,46 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Then nothing was stopped or started
 		$this->assertSame([], $this->proxyCalls, 'no rc stop, no rc start, no service call');
 		$this->assertFalse(pfb_dns_proxy_running(), 'and no proxy exists');
+	}
+
+	/** @return array<string,array{bool,int}> whether a healthy proxy runs, and how many writes the restore makes before it ends */
+	public static function recoveryWithNoRcScript(): array
+	{
+		return [
+			'a healthy proxy that cannot be stopped without the script: abandoned before any write' => [TRUE, 0],
+			'no proxy running: the restore reaches its write and config.xml refuses it' => [FALSE, 1],
+		];
+	}
+
+	#[DataProvider('recoveryWithNoRcScript')]
+	public function testTheRecoveryWritesTheRcScriptItStartsTheProxyWith(bool $healthy, int $writes): void
+	{
+		// Given a moved Resolver, no service entry, no rc script on disk (a /var that came up empty), and a config.xml that refuses the restore's write
+		$this->activate(TRUE);
+		$this->registered = FALSE;
+		$GLOBALS['pfb_test_rcfile_dir'] = dirname(PFB_DNS_PROXY_RCFILE);
+		unlink(PFB_DNS_PROXY_RCFILE);
+		if ($healthy) {
+			$this->proxyServes();
+			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		}
+		$this->configXmlOnDisk(FALSE, 'Restored the DNS Resolver');
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = self::sorted(config_get_path('unbound'));
+		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'before: no rc script');
+		$this->assertSame($healthy, pfb_dns_proxy_ready(), 'before: the proxy serves only in the healthy row');
+
+		// When the restore is asked for
+		$changed = pfb_dns_proxy_resolver(FALSE);
+
+		// Then the restore changed nothing, and the script the start runs was written first, so the proxy serves the moved Resolver
+		$this->assertFalse($changed);
+		$this->assertCount($writes, $GLOBALS['pfb_test_write_config_calls'], 'the path the row stands for ran');
+		$this->assertSame($snapshot, $this->onDisk(self::SAVED), 'config.xml keeps the snapshot');
+		$this->assertSame($moved, self::sorted($this->onDisk('unbound')), 'and the moved Resolver');
+		$this->assertFileExists(PFB_DNS_PROXY_RCFILE, 'the recovery regenerated the rc script');
+		$this->assertNotContains('rc start (no script)', $this->proxyCalls, 'so its start found the script');
+		$this->assertTrue(pfb_dns_proxy_ready(), 'the proxy serves the moved Resolver');
 	}
 
 	public function testAReadinessRollbackWhoseProxySurvivesItsStopSaysNothingAnswersDnsUntilTheRestoreSucceeds(): void

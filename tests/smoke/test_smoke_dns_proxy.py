@@ -2183,17 +2183,16 @@ def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_l
         _set_proxy_toggle(vm, False)
 
 
-# The restore an apply or a rollback makes, in a process whose write_config() cannot write. $g['cf_conf_path'] is that
-# process's own copy of the config directory (pfSense CE 2.8.1, src/etc/inc/config.lib.inc: backup_config() 948-972,
-# config_write_file() 1254-1275, write_config() 620-625): below /dev/null, a file, nothing can be created, so
-# config_write_file() fails and write_config() answers -1, while /cf, every file and every mode stay as they are. The
-# fresh read under the config lock and the re-read after the refusal use $g['conf_path'], which this leaves alone.
+# $g['cf_conf_path'] is per process (pfsense/pfsense@209b8baa8 config.lib.inc): a scratch dir with a writable backup/
+# and a directory as config.xml lets backup_config() finish (:936-961) while safe_write_file()'s rename fails (:516), so
+# write_config() answers -1 (:607-610); the reads use conf_path (:1287), which stays.
+REFUSE_DIR = "/tmp/pfb3561_cf"
 REFUSED_RESTORE_PHP = (
     "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
     "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
     "global $pfb;\n"
     "pfb_global();\n"
-    "g_set('cf_conf_path', '/dev/null/pfb3561', TRUE);\n"
+    f"g_set('cf_conf_path', {h._php_str(REFUSE_DIR)}, TRUE);\n"
     "$restored = pfb_dns_proxy_resolver(FALSE);\n"
     "echo '<<<RESTORED>>>' . var_export($restored, TRUE) . '<<<END>>>';"
 )
@@ -2205,6 +2204,17 @@ RECOVERY_CAP = 90.0  # s: the restore's start returns at once, the ready marker 
 def _logged(vm: SmokeVM, text: str) -> int:
     """How often `text` stands in pfblockerng.log and error.log together (a line may be in either, or both)."""
     return sum(h.count_log_marker(vm, path, text) for path in (h.PFB_LOG, f"{h.PFB_LOGDIR}/error.log"))
+
+
+@contextlib.contextmanager
+def _config_dir_that_refuses_config_xml(vm: SmokeVM) -> Iterator[None]:
+    """A scratch config directory: backup/ takes writes, config.xml is a directory nothing can be renamed onto."""
+    try:
+        made = _sh(vm, f"rm -rf {REFUSE_DIR} && mkdir -p {REFUSE_DIR}/backup {REFUSE_DIR}/config.xml")
+        assert made.returncode == 0, f"creating {REFUSE_DIR} failed: {made.stdout!r} {made.stderr!r}"
+        yield
+    finally:
+        _sh(vm, f"rm -rf {REFUSE_DIR}")
 
 
 @pytest.mark.timeout(1500)
@@ -2219,17 +2229,22 @@ def test_a_refused_restore_starts_the_proxy_again_with_the_service_entry_absent(
       Resolver, and the proxy serves again: a new child whose pid is the ready marker, pfb-dns alone holding port 53 on
       the LAN address, and the client's listed name getting the VIP.
 
-    Fault limit: pfSense has no refusal that only one process sees except this -1 (config_write_file() cannot open the
-    file). Its FALSE answers are a read-only user (a web session and a config user: ui/test_dns_readonly_save.py) and
-    reset_factory_defaults, which the fresh read under the config lock erases; pfb_dns_config_write_failed() treats
-    -1 and FALSE alike. The refusal raises a config.xml notice and PHP warnings for the paths below /dev/null.
+    Fault limit: no refusal is seen by one process only, except through that process's own $g['cf_conf_path'] (pfSense
+    CE 2.8.1, pfsense/pfsense@209b8baa8, src/etc/inc/config.lib.inc). A path nothing can be created under is fatal
+    (:957 fwrite() on the false handle of backup/backup.cache: the first version of this case, php_eval rc=255); a
+    scratch directory with a writable backup/ and a directory as config.xml is not: backup_config() (:936-961) warns
+    and returns, config_write_file() (:1244-1265) fails at safe_write_file()'s rename (:516), write_config() answers
+    -1 (:607-610), and /cf, the real config.xml and the files' modes are untouched. Its FALSE answers are a read-only
+    user (a web session: ui/test_dns_readonly_save.py) and reset_factory_defaults, which the fresh read under the config
+    lock erases; pfb_dns_config_write_failed() treats -1 and FALSE alike. The refusal raises a config.xml notice
+    and PHP warnings (filesize(), copy() of the directory) that stay on the box.
     """
     vm = rig.vm
     child = proxy_on.proxy_pid
     assert child is not None and _marker(vm) == f"{child}\n", f"the proxy does not serve at the start: {proxy_on}"
     refused = _logged(vm, NOT_PUT_BACK)
     try:
-        with _proxy_service_entry(vm, registered=False):
+        with _config_dir_that_refuses_config_xml(vm), _proxy_service_entry(vm, registered=False):
             result = h.php_eval(vm, REFUSED_RESTORE_PHP, timeout=300.0)
             found = re.search(r"<<<RESTORED>>>(\w+)<<<END>>>", result.stdout)
             assert found and result.returncode == 0, (
