@@ -3,7 +3,7 @@
 #
 # Pins the assembled QEMU -netdev argv for slirp (QEMU user-net) mode, both roles.
 # slirp is the only supported backend (ADR-50 bridge mode was evaluated and rejected).
-# Also pins that the cleanup() EXIT trap preserves the triggering exit status.
+# Also pins that the caller owns the overlay: boot_vm.sh requires its path and creates nothing without it.
 #
 # Hermetic: stubs qemu-system-x86_64 (records its argv) + qemu-img (touches the
 # overlay) via SMOKE_QEMU_BIN / SMOKE_QEMU_IMG_BIN — no real VM boots.
@@ -127,6 +127,62 @@ QIEOF
       The status should be success
       The stderr should include 'boot_vm:'
       The contents of file "$ARGV_FILE" should not include 'tap,id=net0'
+    End
+  End
+
+  # ---- the caller owns the overlay (issue #3568) -----------------------------
+  # boot_vm.sh execs qemu, so nothing it creates can be deleted by the script itself.
+
+  Describe 'overlay argument'
+    # Boot with the given arguments and a private TMPDIR, then list what the boot left in TMPDIR.
+    boot_listing_tmpdir() {
+      mkdir -p "${WORK}/tmp"
+      env TMPDIR="${WORK}/tmp" sh "$SCRIPT" "$@"
+      _rc=$?
+      ls -A "${WORK}/tmp"
+      return "$_rc"
+    }
+
+    It 'refuses a pfsense boot without an overlay path and creates nothing'
+      When call boot_listing_tmpdir "$BASE"
+      The status should equal 2
+      The stderr should include 'Usage:'
+      The output should equal ''
+      The path "$IMG_ARGV_FILE" should not be exist
+      The path "$ARGV_FILE" should not be exist
+    End
+
+    It 'refuses a client boot without an overlay path and creates nothing'
+      When call boot_listing_tmpdir --role client "$BASE"
+      The status should equal 2
+      The stderr should include 'Usage:'
+      The output should equal ''
+      The path "$IMG_ARGV_FILE" should not be exist
+      The path "$ARGV_FILE" should not be exist
+    End
+
+    It 'creates the overlay the caller named and boots qemu on it, not in TMPDIR'
+      When call boot_listing_tmpdir "$BASE" "$OVERLAY"
+      The status should be success
+      The stderr should include 'boot_vm:'
+      The output should equal ''
+      The contents of file "$IMG_ARGV_FILE" should include "$OVERLAY"
+      The contents of file "$ARGV_FILE" should include "file=${OVERLAY},"
+    End
+
+    It 'exits non-zero when the base image is missing'
+      When run sh "$SCRIPT" "${WORK}/missing.qcow2" "$OVERLAY"
+      The status should equal 1
+      The stderr should include 'base image not found'
+      The path "$ARGV_FILE" should not be exist
+    End
+
+    It 'exits with qemu-img status when the overlay cannot be created, without booting'
+      printf '#!/bin/sh\nexit 7\n' > "${BIN}/qemu-img-fails"
+      chmod +x "${BIN}/qemu-img-fails"
+      When run env SMOKE_QEMU_IMG_BIN="${BIN}/qemu-img-fails" sh "$SCRIPT" "$BASE" "$OVERLAY"
+      The status should equal 7
+      The path "$ARGV_FILE" should not be exist
     End
   End
 

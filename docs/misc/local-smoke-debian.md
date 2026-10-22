@@ -308,7 +308,8 @@ command line at all (see `pfSsh.php` gotcha below).
   shell dies when shell returns. Fully detach with `setsid` + stdin from `/dev/null`:
   `QMP_SOCK=/tmp/x.sock setsid sh tests/smoke/boot_vm.sh --role pfsense IMG OVERLAY > log 2>&1 </dev/null &`.
   Setting `QMP_SOCK` also switches `boot_vm.sh` to `-serial stdio` (clean for redirection)
-  instead of `-serial mon:stdio`.
+  instead of `-serial mon:stdio`. `OVERLAY` is required and yours to delete once qemu exits:
+  `boot_vm.sh` execs qemu, so it cannot clean up after it; keep it in a per-run dir you remove.
 - **`pfSsh.php` contract.** Pipe PHP on **stdin**, and last two lines fed to it
   MUST be line `exec` then `exit`, or it hangs and is Killed. When wrapping in shell
   heredoc, QUOTE inner delimiter (`<<'PHP'`) so shell does not expand PHP

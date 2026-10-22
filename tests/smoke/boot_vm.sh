@@ -31,11 +31,12 @@
 #                     lease hands it 192.168.1.10.
 #
 # Usage:
-#   tests/smoke/boot_vm.sh [--role pfsense|client] <base-image.qcow2> [overlay.qcow2]
+#   tests/smoke/boot_vm.sh [--role pfsense|client] <base-image.qcow2> <overlay.qcow2>
 #
-# Boots headless with KVM acceleration. The base qcow2 is NEVER mutated: an
-# ephemeral copy-on-write overlay is created over it and the guest writes only to
-# the overlay (removed on a clean exit; pass an explicit overlay path to keep it).
+# Boots headless with KVM acceleration. The base qcow2 is NEVER mutated: qemu-img creates a
+# copy-on-write overlay at <overlay.qcow2> (REQUIRED) and the guest writes only to it. The script
+# execs qemu, so nothing here survives to clean up: the CALLER owns the overlay and MUST delete it
+# once qemu has stopped (tests/smoke/conftest.py `_kill` does).
 #
 # Identity (per-image; ADR-24). pfSense:
 #   - SMOKE_VM_MAC — the NIC MAC(s), NEWLINE-SEPARATED, one MAC per NIC in order
@@ -130,7 +131,7 @@ SYNC_PEER_PORT="${SMOKE_SYNC_PEER_PORT:-}"
 ROLE=pfsense
 
 usage() {
-    echo "Usage: $0 [--role pfsense|client] <base-image.qcow2> [overlay.qcow2]" >&2
+    echo "Usage: $0 [--role pfsense|client] <base-image.qcow2> <overlay.qcow2>" >&2
     exit 2
 }
 
@@ -160,9 +161,9 @@ if [ "$ROLE" = pfsense ] && { [ -n "$SYNC_PORT" ] || [ -n "$SYNC_PEER_PORT" ]; }
     esac
 fi
 
-[ "$#" -ge 1 ] || usage
+[ "$#" -ge 2 ] || usage
 BASE_IMG="$1"
-OVERLAY="${2:-}"
+OVERLAY="$2"
 
 if [ ! -f "$BASE_IMG" ]; then
     echo "boot_vm: base image not found: $BASE_IMG" >&2
@@ -170,9 +171,9 @@ if [ ! -f "$BASE_IMG" ]; then
 fi
 
 # Make the base path absolute. qemu-img stores the backing-file path in the
-# overlay and resolves a RELATIVE one against the OVERLAY's directory (here
-# /tmp), not the cwd — so a relative base would be looked up as /tmp/<base>
-# and fail. An absolute backing path is location-independent.
+# overlay and resolves a RELATIVE one against the OVERLAY's directory, not the
+# cwd — so a relative base would be looked up there and fail. An absolute
+# backing path is location-independent.
 case "$BASE_IMG" in
     /*) ;;
     *) BASE_IMG="$(CDPATH='' cd "$(dirname "$BASE_IMG")" && pwd)/$(basename "$BASE_IMG")" ;;
@@ -195,30 +196,8 @@ if [ -z "$QEMU_IMG" ] || [ ! -x "$QEMU_IMG" ]; then
     exit 1
 fi
 
-# Create the ephemeral copy-on-write overlay over the read-only base.
-CLEANUP_OVERLAY=0
-if [ -z "$OVERLAY" ]; then
-    OVERLAY="$(mktemp -t pfb-smoke-overlay.XXXXXX.qcow2)"
-    CLEANUP_OVERLAY=1
-fi
-
-cleanup() {
-    # Preserve the triggering exit status: without capturing $? first, the trap's
-    # last command (the rm / the if) would reset it to 0 and MASK every error-path
-    # exit (base-not-found, qemu-not-found) as success — a caller could not tell a
-    # failed boot from a good one. The happy path execs qemu and never runs this
-    # trap. trap - EXIT avoids re-entry from the explicit exit.
-    _rc=$?
-    if [ "$CLEANUP_OVERLAY" -eq 1 ] && [ -n "$OVERLAY" ]; then
-        rm -f "$OVERLAY"
-    fi
-    trap - EXIT
-    exit "$_rc"
-}
-trap cleanup EXIT INT TERM
-
-# -b base -F qcow2: the overlay backs onto the read-only base; the base is
-# never written. (Equivalent to -snapshot, but explicit + inspectable.)
+# Create the copy-on-write overlay at the caller's path. -b base -F qcow2: it backs onto the
+# read-only base; the base is never written. (Equivalent to -snapshot, but explicit + inspectable.)
 "$QEMU_IMG" create -q -f qcow2 -b "$BASE_IMG" -F qcow2 "$OVERLAY" >/dev/null
 
 echo "boot_vm: role=$ROLE booting $BASE_IMG via overlay $OVERLAY" >&2

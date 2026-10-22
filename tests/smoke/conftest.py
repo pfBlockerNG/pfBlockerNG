@@ -17,8 +17,8 @@ What this module provides:
   boots it headless
   under QEMU/KVM, waits until it is actually usable, yields a small connection
   object, and tears the VM down on session teardown. It REUSES the existing
-  POSIX-sh helpers (``boot_vm.sh`` makes the read-only-base copy-on-write
-  overlay and boots it; ``wait_ready.sh`` polls SSH/WebUI readiness with bounded
+  POSIX-sh helpers (``boot_vm.sh`` creates the read-only-base copy-on-write overlay at the
+  path the fixture names, and boots it; ``wait_ready.sh`` polls SSH/WebUI readiness with bounded
   backoff and a hard timeout) over ``subprocess`` — it does NOT reimplement
   QEMU or SSH in Python.
 
@@ -357,6 +357,7 @@ class BootHandle:
     vm: SmokeVM
     log_file: BinaryIO = field(repr=False)
     qmp_sock: str
+    overlay: Path
 
 
 def _abi_os_major(abi: str) -> str:
@@ -480,8 +481,9 @@ def boot_and_probe(
     """Boot ``base_image`` and block until the guest is usable.
 
     REUSES the shell helpers over subprocess:
-      * ``boot_vm.sh`` creates the ephemeral copy-on-write overlay (the base is
-        read-only and never mutated — run-level immutability) and execs qemu;
+      * ``boot_vm.sh`` creates the copy-on-write overlay at ``<log_path dir>/<diag_name>-overlay.qcow2``
+        (the base is read-only and never mutated — run-level immutability) and execs qemu, so it cannot
+        delete the overlay: ``_kill`` does, on every stop path;
       * ``wait_ready.sh`` polls WebUI readiness (the pfSense gate; nginx+PHP up
         implies sshd is too) on an 8s-grace -> 1s -> 5s cadence with a hard
         timeout (NO fixed sleep), and bails immediately if the qemu PID dies
@@ -499,10 +501,11 @@ def boot_and_probe(
     # (the only diagnostic window when SSH/web never come up). boot_vm.sh keeps
     # the serial console on stdio (-> log_file) alongside QMP.
     qmp_sock = _qmp_sock_path(diag_name)
+    overlay = log_path.parent / f"{diag_name}-overlay.qcow2"
     # boot_vm.sh backgrounds nothing itself (it execs qemu); we background it
     # via Popen and pass its PID to wait_ready.sh so a dead boot is caught fast.
     process: subprocess.Popen[bytes] = subprocess.Popen(
-        ["sh", str(BOOT_VM_SH), str(base_image)],
+        ["sh", str(BOOT_VM_SH), str(base_image), str(overlay)],
         stdout=log_file,
         stderr=subprocess.STDOUT,
         env={**os.environ, **(extra_env or {}), "QMP_SOCK": qmp_sock},
@@ -539,13 +542,13 @@ def boot_and_probe(
         )
     except Exception:
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
-        _kill(process, qmp_sock)
+        _kill(process, qmp_sock, overlay)
         log_file.close()
         raise
 
     if result.returncode != 0:
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
-        _kill(process, qmp_sock)
+        _kill(process, qmp_sock, overlay)
         log_file.close()
         tail = _tail(log_path)
         raise RuntimeError(
@@ -573,14 +576,15 @@ def boot_and_probe(
         # SAME cleanup as a wait_ready failure: capture diagnostics, kill qemu, close the log --
         # otherwise a never-completing boot leaks the VM and produces no screendump/log tail.
         _capture_boot_failure(diag_name, qmp_sock, log_path, process)
-        _kill(process, qmp_sock)
+        _kill(process, qmp_sock, overlay)
         log_file.close()
         raise
-    return BootHandle(process=process, vm=vm, log_file=log_file, qmp_sock=qmp_sock)
+    return BootHandle(process=process, vm=vm, log_file=log_file, qmp_sock=qmp_sock, overlay=overlay)
 
 
-def _kill(process: subprocess.Popen[bytes], qmp_sock: str) -> None:
-    """Stop qemu, then remove the private directory ``_qmp_sock_path`` made for its socket."""
+def _kill(process: subprocess.Popen[bytes], qmp_sock: str, overlay: Path) -> None:
+    """Stop qemu, then delete what this boot made: its ``overlay`` disk and the private directory
+    ``_qmp_sock_path`` made for its socket. Safe to repeat: both are removed missing-ok."""
     if process.poll() is None:
         process.terminate()
         try:
@@ -589,6 +593,7 @@ def _kill(process: subprocess.Popen[bytes], qmp_sock: str) -> None:
             process.kill()
             with contextlib.suppress(Exception):
                 process.wait(timeout=15)
+    overlay.unlink(missing_ok=True)
     shutil.rmtree(os.path.dirname(qmp_sock), ignore_errors=True)
 
 
@@ -808,12 +813,10 @@ def smoke_vm(
         yield handle.vm
     finally:
         request.session.stash[SMOKE_VM_KEY] = None
-        _kill(handle.process, handle.qmp_sock)
+        _kill(handle.process, handle.qmp_sock, handle.overlay)
         with contextlib.suppress(Exception):
             handle.log_file.close()
-        # The overlay is mktemp'd inside boot_vm.sh and removed on its clean
-        # exit (trap on EXIT/INT/TERM); terminating qemu fires it. The pulled
-        # image + logs live under tmp_path_factory, which pytest reaps.
+        # _kill deleted the overlay; the pulled image + logs live under tmp_path_factory, which pytest reaps.
 
 
 @pytest.fixture(scope="module")
@@ -851,7 +854,7 @@ def peer_vm(
     try:
         yield handle.vm
     finally:
-        _kill(handle.process, handle.qmp_sock)
+        _kill(handle.process, handle.qmp_sock, handle.overlay)
         with contextlib.suppress(Exception):
             handle.log_file.close()
 
@@ -982,10 +985,11 @@ def client_vm(
     log_path = work / "client-vm.log"
     log_file = log_path.open("wb")
     qmp_sock = _qmp_sock_path("civm")
+    overlay = work / "civm-overlay.qcow2"
 
     # pfSense (LISTENER) is already up (smoke_vm dependency); boot civm (CONNECTOR).
     process: subprocess.Popen[bytes] = subprocess.Popen(
-        ["sh", str(BOOT_VM_SH), "--role", "client", str(client_image)],
+        ["sh", str(BOOT_VM_SH), "--role", "client", str(client_image), str(overlay)],
         stdout=log_file,
         stderr=subprocess.STDOUT,
         env={**os.environ, "QMP_SOCK": qmp_sock},
@@ -1010,13 +1014,13 @@ def client_vm(
         )
     except Exception:
         _capture_boot_failure("civm", qmp_sock, log_path, process)
-        _kill(process, qmp_sock)
+        _kill(process, qmp_sock, overlay)
         log_file.close()
         raise
 
     if result.returncode != 0:
         _capture_boot_failure("civm", qmp_sock, log_path, process)
-        _kill(process, qmp_sock)
+        _kill(process, qmp_sock, overlay)
         log_file.close()
         tail = _tail(log_path)
         raise RuntimeError(
@@ -1037,7 +1041,7 @@ def client_vm(
     try:
         yield vm
     finally:
-        _kill(process, qmp_sock)
+        _kill(process, qmp_sock, overlay)
         with contextlib.suppress(Exception):
             log_file.close()
 

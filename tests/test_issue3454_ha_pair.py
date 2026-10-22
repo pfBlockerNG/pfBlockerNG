@@ -638,16 +638,20 @@ def test_peer_vm_on_a_ce_leg_boots_node_b_on_its_own_ports_and_the_mirrored_sync
 ) -> None:
     _leg(monkeypatch, "2.8", "pkg.pkg")
     booted: dict[str, Any] = {}
-    handle = SimpleNamespace(vm=object(), process="process", qmp_sock="qmp.sock", log_file=io.StringIO())
+    handle = SimpleNamespace(
+        vm=object(), process="process", qmp_sock="qmp.sock", overlay="overlay.qcow2", log_file=io.StringIO()
+    )
 
     def fake_boot(*args: Any, **kwargs: Any) -> Any:
         booted.update(kwargs)
         return handle
 
-    killed: list[tuple[Any, Any]] = []
+    killed: list[tuple[Any, Any, Any]] = []
     monkeypatch.setattr(smoke_conftest, "_pfsense_image", lambda work: (Path("base.qcow2"), "key"))
     monkeypatch.setattr(smoke_conftest, "boot_and_probe", fake_boot)
-    monkeypatch.setattr(smoke_conftest, "_kill", lambda process, qmp_sock: killed.append((process, qmp_sock)))
+    monkeypatch.setattr(
+        smoke_conftest, "_kill", lambda process, qmp_sock, overlay: killed.append((process, qmp_sock, overlay))
+    )
 
     fixture = _start_peer_vm(tmp_path_factory)
     node_b = next(fixture)
@@ -660,7 +664,7 @@ def test_peer_vm_on_a_ce_leg_boots_node_b_on_its_own_ports_and_the_mirrored_sync
         "SMOKE_SYNC_PEER_PORT": str(smoke_conftest.DEFAULT_SYNC_PORT),
     }, f"node B's sync link is not the mirror of node A's: {booted['extra_env']}"
     fixture.close()
-    assert killed == [("process", "qmp.sock")], "node B's qemu was not reaped at teardown"
+    assert killed == [("process", "qmp.sock", "overlay.qcow2")], "node B's qemu was not reaped at teardown"
 
 
 _LIFECYCLE_CONFTEST = """
@@ -705,11 +709,15 @@ def test_node_b_is_shut_down_when_the_ha_module_ends_not_at_session_end(
     kill_log = tmp_path / "kills"
     kill_log.write_text("")
     monkeypatch.setenv("PFB_TEST_KILL_LOG", str(kill_log))
-    handle = SimpleNamespace(vm=object(), process="process", qmp_sock="qmp.sock", log_file=io.StringIO())
+    handle = SimpleNamespace(
+        vm=object(), process="process", qmp_sock="qmp.sock", overlay="overlay.qcow2", log_file=io.StringIO()
+    )
     monkeypatch.setattr(smoke_conftest, "_pfsense_image", lambda work: (Path("base.qcow2"), "key"))
     monkeypatch.setattr(smoke_conftest, "boot_and_probe", lambda *args, **kwargs: handle)
     monkeypatch.setattr(
-        smoke_conftest, "_kill", lambda process, qmp_sock: kill_log.write_text(kill_log.read_text() + f"{process}\n")
+        smoke_conftest,
+        "_kill",
+        lambda process, qmp_sock, overlay: kill_log.write_text(kill_log.read_text() + f"{process}\n"),
     )
     pytester.makeconftest(_LIFECYCLE_CONFTEST)
     pytester.makepyfile(**_LIFECYCLE_TESTS)

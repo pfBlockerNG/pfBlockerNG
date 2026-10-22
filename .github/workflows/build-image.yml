@@ -416,7 +416,8 @@ jobs:
           echo "round-tripping image: $BASE_IMG"
 
           QMP_SOCK="${RUNNER_TEMP:-/tmp}/pfb-qmp-verify.sock"
-          QMP_SOCK="$QMP_SOCK" tests/smoke/boot_vm.sh "$BASE_IMG" > vm-verify.log 2>&1 &
+          OVERLAY="${RUNNER_TEMP:-/tmp}/pfb-verify-overlay.qcow2"
+          QMP_SOCK="$QMP_SOCK" tests/smoke/boot_vm.sh "$BASE_IMG" "$OVERLAY" > vm-verify.log 2>&1 &
           VM_PID=$!
 
           if BOOT_OUT="$(tests/smoke/wait_ready.sh smoke_key 127.0.0.1 2222 "$BOOT_TIMEOUT" "$VM_PID" 8080)"; then
@@ -445,7 +446,7 @@ jobs:
           fi
           kill "$VM_PID" 2>/dev/null || true
           wait "$VM_PID" 2>/dev/null || true
-          rm -f "$QMP_SOCK"
+          rm -f "$QMP_SOCK" "$OVERLAY"
           exit "$RC"
 
       - name: Upload diagnostics

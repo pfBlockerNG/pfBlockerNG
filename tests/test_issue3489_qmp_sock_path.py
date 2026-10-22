@@ -114,6 +114,6 @@ def test_stopping_a_booted_vm_removes_its_qmp_directory(monkeypatch: pytest.Monk
     handle.log_file.close()
     assert len(list((tmp_path / "runner-temp").iterdir())) == 1, "the running VM owns one QMP directory"
 
-    smoke_conftest._kill(handle.process, handle.qmp_sock)
+    smoke_conftest._kill(handle.process, handle.qmp_sock, handle.overlay)
 
     assert list((tmp_path / "runner-temp").iterdir()) == [], "stopping the VM must remove its QMP directory"
