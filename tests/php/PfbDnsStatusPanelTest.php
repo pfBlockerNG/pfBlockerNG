@@ -149,6 +149,9 @@ final class PfbDnsStatusPanelTest extends TestCase
 			$toggle = "{$section}/div[@class='panel-heading']/h2[@class='panel-title']/span[@class='widget-heading-icon']/a[@data-toggle='collapse']";
 			$this->assertSame("#{$id}_panel-body", $panel->evaluate("string({$toggle}/@href)"), "{$id}'s title toggles its body");
 			$this->assertSame(1, $panel->query("{$toggle}/i[@class='fa-solid fa-plus-circle']")->length, "{$id}'s toggle has pfSense's icon");
+			// The icon is the link's only content, so the link names the section it toggles for a screen reader
+			$title = trim((string) $panel->evaluate("string({$section}/div[@class='panel-heading']/h2)"));
+			$this->assertSame("Toggle {$title}", $panel->evaluate("string({$toggle}/@aria-label)"), "{$id}'s toggle has an accessible name");
 			$this->assertSame(1, $panel->query("{$section}/div[@id='{$id}_panel-body'][@class='panel-body collapse in']")->length, "{$id}'s body is collapsible and open");
 		}
 	}

@@ -14919,7 +14919,7 @@ function pfb_dns_status_rows(array $entries, array $labels): array {
  */
 function pfb_dns_status_panel(array $status): string {
 	$section = static fn (string $id, string $title, string $body): string => "<div class=\"panel panel-default\" id=\"{$id}\"><div class=\"panel-heading\">"
-	    . "<h2 class=\"panel-title\">{$title}<span class=\"widget-heading-icon\"><a data-toggle=\"collapse\" href=\"#{$id}_panel-body\"><i class=\"fa-solid fa-plus-circle\"></i></a></span></h2>"
+	    . "<h2 class=\"panel-title\">{$title}<span class=\"widget-heading-icon\"><a data-toggle=\"collapse\" href=\"#{$id}_panel-body\" aria-label=\"Toggle {$title}\"><i class=\"fa-solid fa-plus-circle\"></i></a></span></h2>"
 	    . "</div><div id=\"{$id}_panel-body\" class=\"panel-body collapse in\">{$body}</div></div>";
 	$html = $section('pfb-dns-status-overview', 'pfB-DNS Status', '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>'
 	    . htmlspecialchars($status['service']) . '</td></tr><tr id="pfb-dns-status-mode"><th>Mode</th><td>' . htmlspecialchars($status['mode']) . '</td></tr></table>');
