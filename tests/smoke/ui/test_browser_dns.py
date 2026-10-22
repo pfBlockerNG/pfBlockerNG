@@ -376,8 +376,10 @@ _MOVED_SNAPSHOT = base64.b64encode(
 ).decode("ascii")
 PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 STATUS_TRANSPORTS = {"plain": "Plain DNS", "dot": "DNS over TLS", "doh": "DNS over HTTPS", "doq": "DNS over QUIC"}
-# Below Bootstrap 3's 768px breakpoint, where .table-responsive turns into a horizontal scroller.
 PHONE: ViewportSize = {"width": 390, "height": 844}
+# A row wider than a phone: the longest IPv6 listener and a refusal reason, put into the live table by the test.
+WIDE_ADDRESS = "[2001:db8:ffff:ffff:ffff:ffff:ffff:ffff]:853"
+WIDE_REASON = "listen tcp [2001:db8:ffff:ffff:ffff:ffff:ffff:ffff]:853: bind: address already in use"
 
 
 def _write_rc_script(vm: helpers.SmokeVM, settings: dict[str, str] | None = None) -> None:
@@ -408,8 +410,8 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
     plain DNS lists a Localhost row whose state is a visible icon titled "Configured, not bound" with the same words for
     a screen reader, and each of the three off transports is its header alone: no body and no row in the live DOM.
 
-    issue #3586: each section collapses and reopens from the toggle in its title, as the page's own sections do, and
-    on a phone a transport table scrolls inside its section while the page itself is no wider than the screen.
+    issue #3586: each section collapses and reopens from the toggle in its title, like pfSense's collapsible panels,
+    and on a phone a row wider than the screen scrolls inside its section while the page stays as wide as the screen.
 
     Settings and the service script are put back afterwards, presence included.
     """
@@ -472,10 +474,14 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
         body.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
 
         page.set_viewport_size(PHONE)
+        cells = rows.nth(0).locator("td")
+        cells.nth(1).evaluate("(el, text) => { el.textContent = text; }", WIDE_ADDRESS)
+        cells.nth(2).evaluate("(el, text) => el.append(' ' + text)", WIDE_REASON)
         scroller = panel.locator("#pfb-dns-status-plain .table-responsive")
-        assert scroller.evaluate("el => getComputedStyle(el).overflowX") == "auto", "a wide table scrolls in place"
+        hidden = scroller.evaluate("el => el.scrollWidth - el.clientWidth")
         overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
         _shot(page, screenshot_dir, "dns_status_tables_phone")
+        assert hidden > 0, "the wide row is wider than the phone, so its table must scroll"
         assert overflow <= 0, f"on a phone the page is {overflow}px wider than the screen"
     finally:
         for key, state in originals.items():

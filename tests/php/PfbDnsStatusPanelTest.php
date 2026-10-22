@@ -122,6 +122,7 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$this->assertSame(['pfB-DNS Status', 'Plain DNS Listeners', 'DNS over TLS Listeners', 'DNS over HTTPS Listeners', 'DNS over QUIC Listeners'], $titles);
 		$this->assertSame(['pfb-dns-status-overview', 'pfb-dns-status-plain', 'pfb-dns-status-dot', 'pfb-dns-status-doh', 'pfb-dns-status-doq'], $ids);
 		$this->assertSame(1, $panel->query("//div[@id='pfb-dns-status-overview']//tr[@id='pfb-dns-status-mode']")->length, 'the service and the mode are the first section');
+		$this->assertSame('', $panel->evaluate("string(//div[@id='pfb-dns-status']/@class)"), 'the sections sit in a bare container, never a panel nesting panels');
 	}
 
 	/** @return array<string,array{array<string,mixed>,list<string>}> a status and the ids of the sections it shows */
@@ -154,13 +155,16 @@ final class PfbDnsStatusPanelTest extends TestCase
 
 	public function testATransportTableIsAPfSenseTableThatScrollsInsideItsSection(): void
 	{
-		$panel = $this->panel(self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off']));
+		$panel = $this->panel(self::withTransports(self::rows(self::row('LAN', ['192.0.2.1:853'])), ['state' => 'off'], self::rows(self::row('LAN', ['192.0.2.1:853']))));
 
-		foreach (['plain', 'dot'] as $transport) {
+		foreach (['plain', 'dot', 'doh', 'doq'] as $transport) {
+			// position: relative makes the scroller the containing block of the sr-only state text (position: absolute), which
+			// would otherwise escape the scroller and widen the page on a phone
 			$this->assertSame(
 				1,
-				$panel->query(self::block($transport) . "/div[@class='panel-body collapse in']/div[@class='table-responsive']/table[@class='table table-striped table-hover table-condensed']")->length,
-				"{$transport}'s table, with rows or without, is inside a table-responsive container"
+				$panel->query(self::block($transport) . "/div[@class='panel-body collapse in']/div[@class='table-responsive'][@style='position: relative;']"
+				    . "/table[@class='table table-striped table-hover table-condensed']")->length,
+				"{$transport}'s table, with rows or without, is inside a positioned table-responsive container"
 			);
 			$this->assertSame(1, $panel->query(self::block($transport) . '//table')->length);
 		}
