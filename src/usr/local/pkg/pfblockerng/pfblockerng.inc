@@ -4361,7 +4361,7 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 }
 
 /**
- * The canonical stored value of each of the twelve settings from a validated POST: a toggle is on only for 'on', a
+ * The canonical stored value of each of the fourteen settings from a validated POST: a toggle is on only for 'on', a
  * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated.
  *
  * @param array<string,mixed> $post
@@ -4380,6 +4380,9 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 	}
 	$certref = $post['pfb_dns_sslcertref'] ?? '';
 	$stored['pfb_dns_sslcertref'] = is_string($certref) ? $certref : '';
+	foreach (['ddr', 'ddr_doh_443'] as $kind) {
+		$stored["pfb_dns_{$kind}"] = pfb_filter($post["pfb_dns_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
+	}
 	return $stored;
 }
 
@@ -4422,6 +4425,18 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 		}
 	}
 	return $flags;
+}
+
+/**
+ * The gateway's --ddr arguments while DDR is on (dns/pfb_dns_ddr, issue #3583): the firewall's FQDN, and --ddr-doh-443 when
+ * dns/pfb_dns_ddr_doh_443 is on too. That option alone adds nothing: the gateway rejects it without --ddr.
+ */
+function pfb_dns_proxy_ddr_flags(): string {
+	if (PfbConfig::read('dns/pfb_dns_ddr') !== PfbToggle::On) {
+		return '';
+	}
+	return ' --ddr ' . escapeshellarg(config_get_path('system/hostname', 'pfSense') . '.' . config_get_path('system/domain', 'localdomain')) .
+	    ((PfbConfig::read('dns/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '');
 }
 
 /**
@@ -4728,6 +4743,8 @@ function pfb_dns_proxy_certificate_sync(): void {
  * transport is wanted. A start that finds the file missing, which is /var after a boot with RAM disks, has PHP write it first, and
  * forgets what was pushed to the proxy it replaces. DoT, DoH and DoQ each listen on their own interface list's addresses and on loopback
  * (--dot-listen, --doh-listen, --doq-listen) at their own port (pfb_dns_proxy_tls_flags()).
+ * DDR (RFC 9462): with dns/pfb_dns_ddr On the line also carries, after the TLS flags, --ddr FQDN (system/hostname.system/domain) and, with
+ * dns/pfb_dns_ddr_doh_443 On too, --ddr-doh-443 (pfb_dns_proxy_ddr_flags()); a changed setting changes the script and restarts the proxy.
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
@@ -4764,6 +4781,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted());
 	pfb_dns_proxy_certificate_refresh($tls);
 	$tlsFlags = ($saved === NULL) ? '' : pfb_dns_proxy_tls_flags($warnings);
+	$ddrFlags = ($saved === NULL) ? '' : pfb_dns_proxy_ddr_flags();
 	$replylog = (($pfb['dnsbl_py_reply'] ?? NULL) === PfbToggle::On) ? ' --reply-log' : '';
 	$module = !pfb_dnsbl_active() ? " --no-module{$replylog}" : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
 
@@ -4772,7 +4790,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
 	$wrapper = escapeshellarg("{$proxyDir}/pfb_dns.sh");
 	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" .
-	    " --tls-pem {$cert} --ctl-socket {$ctl}{$tlsFlags}" . $module .
+	    " --tls-pem {$cert} --ctl-socket {$ctl}{$tlsFlags}{$ddrFlags}" . $module .
 	    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready .
 	    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
 	// The command lines of the processes this script keeps and signals: the supervisor and the decider behind the gateway

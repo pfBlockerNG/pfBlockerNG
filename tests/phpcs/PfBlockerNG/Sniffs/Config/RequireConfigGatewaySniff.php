@@ -294,6 +294,9 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_dot_port',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_sslcertref',
+		// issue #3583: pfB-DNS's DDR toggle and its DoH on port 443 toggle
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_ddr',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_ddr_doh_443',
 		// issue #3450: IP-page scalars registered as plain strings
 		'installedpackages/pfblockerngipsettings/config/0/ip_placeholder',
 		'installedpackages/pfblockerngipsettings/config/0/maxmind_locale',

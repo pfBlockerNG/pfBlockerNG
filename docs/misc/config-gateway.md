@@ -226,7 +226,7 @@ Authorization = property of **write**, not call site (generalises
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
     not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only its own leaves
-    (the toggle, the twelve listener settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
+    (the toggle, the twelve listener settings, the two DDR settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
     (`pfblockerng_sync_sections()`), so neither key can leave the node. New key, no grandfather.
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
     the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
@@ -252,7 +252,13 @@ Authorization = property of **write**, not call site (generalises
     moved it, from its snapshot, on every apply that turns the proxy on. The seed is keyed on
     `dns/pfb_dns_interface` being `''`, not on absence: the installer's registry pass materialises every absent key's
     default, so absence cannot mark "never seeded". The pfB-DNS page seeds on load (under the same lock) and shows a
-    setting through `pfb_dns_proxy_setting()`, so a seed the lock refused still shows; its save writes all twelve.
+    setting through `pfb_dns_proxy_setting()`, so a seed the lock refused still shows; its save writes all twelve and the two DDR keys below.
+  - **`dns/pfb_dns_ddr` / `dns/pfb_dns_ddr_doh_443` → `PfbToggle`** (issue #3583, pfB-DNS's DDR answers, RFC 9462): default
+    Off, sync `local`. New keys, no grandfather: absent reads Off = pre-feature behaviour (the gateway does not touch
+    `resolver.arpa.`). The second one leaves the port out of the DDR DoH record and does nothing while DDR is Off. Both
+    are written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`) and read through `PfbConfig::read()` by
+    `pfb_dns_proxy_ddr_flags()` for the gateway's `--ddr` and `--ddr-doh-443`. The page disables the second checkbox while
+    the stored DoH port is `443`: a disabled control posts nothing, so a save then stores it Off.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

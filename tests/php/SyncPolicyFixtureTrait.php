@@ -78,6 +78,8 @@ trait SyncPolicyFixtureTrait
 			'dns/pfb_dns_dot_port',
 			'dns/pfb_dns_dot_interface',
 			'dns/pfb_dns_sslcertref',
+			'dns/pfb_dns_ddr',
+			'dns/pfb_dns_ddr_doh_443',
 			'dnsbl/pfb_py_reply',
 			'dnsbl/pfb_py_nolog',
 			'dnsbl/pfb_control',

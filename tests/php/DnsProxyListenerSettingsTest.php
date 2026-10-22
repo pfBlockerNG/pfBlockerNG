@@ -48,6 +48,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_doh_trusted' => '',
 			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_doq_interface' => ['lan'],
 			'pfb_dns_sslcertref' => '',
+			'pfb_dns_ddr' => '', 'pfb_dns_ddr_doh_443' => '',
 		];
 	}
 
@@ -372,6 +373,8 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_doq_port'      => '853',
 			'pfb_dns_doq_interface' => 'lan',
 			'pfb_dns_sslcertref'    => '',
+			'pfb_dns_ddr'           => '',
+			'pfb_dns_ddr_doh_443'   => '',
 		], pfb_dns_proxy_listeners_stored($this->post()));
 	}
 
@@ -415,6 +418,8 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_doq_port'      => '853',
 			'pfb_dns_doq_interface' => 'lan',
 			'pfb_dns_sslcertref'    => 'cert5f3a',
+			'pfb_dns_ddr'           => '',
+			'pfb_dns_ddr_doh_443'   => '',
 		], $stored, 'port without leading zeros; interfaces and trusted deduplicated; a toggle is on only for "on"');
 	}
 
@@ -447,7 +452,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 		$store    = strpos($page, 'pfb_dns_proxy_listeners_stored(');
 
 		$this->assertNotFalse($sanitize, 'the single-line text fields join the ingestion prologue');
-		$this->assertNotFalse($validate, 'the page validates the twelve fields');
+		$this->assertNotFalse($validate, 'the page validates the posted fields');
 		$this->assertNotFalse($gate);
 		$this->assertNotFalse($store, 'the page persists the canonical values');
 		$this->assertLessThan($validate, $sanitize, 'sanitize before validate');

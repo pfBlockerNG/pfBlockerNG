@@ -182,7 +182,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 | `global` | every key except `feed_*`: `alertrefresh`, every `widget-*` |
 | `pfblockerngblacklist` | `item/*/username`, `item/*/password` (the `item` list is matched by its `xml` leaf) |
 | `sync` | `syncscope` (the section is never sent) |
-| `dns` | `pfb_dns`, `pfb_dns_saved`, `pfb_dns_interface`, `pfb_dns_dot`, `pfb_dns_dot_port`, `pfb_dns_dot_interface`, `pfb_dns_sslcertref`, `pfb_dns_doh`, `pfb_dns_doh_port`, `pfb_dns_doh_interface`, `pfb_dns_doh_trusted`, `pfb_dns_doq`, `pfb_dns_doq_port`, `pfb_dns_doq_interface` (issues #3515, #3513 and #3538, pfB-DNS; the section is not one of the 19 and is never sent) |
+| `dns` | `pfb_dns`, `pfb_dns_saved`, `pfb_dns_interface`, `pfb_dns_dot`, `pfb_dns_dot_port`, `pfb_dns_dot_interface`, `pfb_dns_sslcertref`, `pfb_dns_doh`, `pfb_dns_doh_port`, `pfb_dns_doh_interface`, `pfb_dns_doh_trusted`, `pfb_dns_doq`, `pfb_dns_doq_port`, `pfb_dns_doq_interface`, `pfb_dns_ddr`, `pfb_dns_ddr_doh_443` (issues #3515, #3513, #3538 and #3583, pfB-DNS; the section is not one of the 19 and is never sent) |
 
 - Credentials are local. The MaxMind account and key (`maxmind_account`, `maxmind_key`), the IPinfo
   ASN token (`asn_token`), the Cloudflare TOP1M token (`top1m_token`), and the Blacklist provider
@@ -195,7 +195,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   `dnsbl_dot_block` sync, while their interface lists stay local. Their exception lists
   (`dnsbl_redir_exclude`, `dnsbl_dot_block_exclude`) and `killstates` are enforcement behaviour and
   therefore policy.
-- pfB-DNS is per node. `pfb_dns` (the toggle), `pfb_dns_saved` (the Resolver snapshot) and the twelve listener settings are local and live in their own
+- pfB-DNS is per node. `pfb_dns` (the toggle), `pfb_dns_saved` (the Resolver snapshot), the twelve listener settings and the two DDR settings are local and live in their own
   `dns` section, which is none of the synced sections and is never sent. pfSense's own DNS Resolver sync does copy the
   moved `unbound` section to a secondary, so a secondary needs pfB-DNS on before the primary syncs a moved Resolver
   (architecture-notes "pfB-DNS: the experimental DNS proxy", known limits).

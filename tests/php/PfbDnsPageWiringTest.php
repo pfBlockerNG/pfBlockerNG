@@ -47,6 +47,9 @@ final class PfbDnsPageWiringTest extends TestCase
 		'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_interface',
 	];
 
+	/** The DDR controls in the order the page shows them, after the DoQ section (issue #3583). */
+	private const DDR_FIELDS = ['pfb_dns_ddr', 'pfb_dns_ddr_doh_443'];
+
 	/** The ones pfB-DNS seeds once from the Resolver: the page shows the pending seed value through pfb_dns_proxy_setting() (issue #3538). */
 	private const SEEDED_FIELDS = [
 		'pfb_dns_interface', 'pfb_dns_sslcertref', 'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_interface',
@@ -183,6 +186,75 @@ final class PfbDnsPageWiringTest extends TestCase
 			(int) strpos($page, 'pfb_dns_config_lock()', (int) strpos($page, 'pfb_validate_dns_proxy_listeners_post(')),
 			'the save takes the lock before anything is stored'
 		);
+	}
+
+	public function testThePageCarriesTheDdrSectionBetweenDoqAndReplyLoggingReadFromTheDnsSection(): void
+	{
+		// Given the pfB-DNS page
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$doq = strpos($page, "new Form_Section('DNS over QUIC (DoQ)')");
+		$ddr = strpos($page, "new Form_Section('Discovery of Designated Resolvers (DDR)')");
+		$log = strpos($page, "new Form_Section('DNS Reply Logging')");
+
+		// Then the DDR section sits after DoQ and before DNS Reply Logging, with the DDR toggle first and the 443 toggle second
+		$this->assertNotFalse($doq, 'the DoQ section');
+		$this->assertNotFalse($ddr, 'the DDR section');
+		$this->assertNotFalse($log, 'the DNS Reply Logging section');
+		$this->assertLessThan($ddr, $doq, 'DDR comes after DoQ');
+		$this->assertLessThan($log, $ddr, 'DDR comes before DNS Reply Logging');
+		$section = substr($page, (int) $ddr, (int) $log - (int) $ddr);
+		$after = 0;
+		foreach (self::DDR_FIELDS as $field) {
+			$at = strpos($section, "'{$field}',", $after);
+			$this->assertNotFalse($at, "the DDR section has the {$field} control below the previous one");
+			$after = $at;
+			$this->assertStringContainsString("PfbConfig::read('dns/{$field}')", $page, "{$field} is read through the gateway from the dns section");
+		}
+
+		// And the controls carry the labels and help the operator sees
+		foreach (["gettext('DDR')", "gettext('DoH on port 443')", "'Advertise DoH on port 443'", "'on'", '<strong>Experimental.</strong>', 'IP address SAN',
+			'reverse proxy', 'no longer be reachable', 'next Update', 'Default: <strong>Disabled</strong>'] as $needle) {
+			$this->assertStringContainsString($needle, $section, "the DDR section shows {$needle}");
+		}
+	}
+
+	public function testAFailedSaveBringsBackTheSubmittedDdrFields(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		// The page restores each scalar field the form posted from $_POST when the save fails
+		$found = preg_match('/foreach \(array\(([^)]*)\) as \$pfb_dns_field\) \{\s*\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';/', $page, $restore);
+
+		$this->assertSame(1, $found, 'the page restores its scalar fields on an input error');
+		foreach (self::DDR_FIELDS as $field) {
+			$this->assertStringContainsString("'{$field}'", $restore[1] ?? '', "{$field} is restored on an input error");
+		}
+	}
+
+	/** Is the 443 checkbox disabled exactly once, and only under the stored DoH port being 443? */
+	private static function disabledOnlyForDohPort443(string $page): bool
+	{
+		$guarded = preg_match_all('/if \(pfb_dns_proxy_listener_port\(PfbConfig::read\(\'dns\/pfb_dns_doh_port\'\)\) === \'443\'\) \{\s*\$pfb_ddr_doh_443->setAttribute\(\'disabled\', \'disabled\'\);\s*\}/', $page);
+		return $guarded === 1 && substr_count($page, "\$pfb_ddr_doh_443->setAttribute('disabled'") === 1;
+	}
+
+	public function testTheDisabledCheckSeesAnUnguardedAGuardedByAnotherPortAndADoubleDisable(): void
+	{
+		$guard = "if (pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443') {\n\t\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n}\n";
+
+		$this->assertTrue(self::disabledOnlyForDohPort443($guard), 'the guarded disable');
+		$this->assertFalse(self::disabledOnlyForDohPort443("\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'unguarded');
+		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace("'443'", "'4443'", $guard)), 'guarded by another port');
+		$this->assertFalse(self::disabledOnlyForDohPort443($guard . "\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'disabled a second time');
+		$this->assertFalse(self::disabledOnlyForDohPort443(''), 'never disabled');
+	}
+
+	public function testThePageDisablesTheDohOn443ToggleOnlyWhileTheStoredDohPortIs443(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		$this->assertTrue(self::disabledOnlyForDohPort443($page), 'the 443 checkbox is disabled under the stored DoH port 443 and under nothing else');
+		$this->assertStringContainsString("\$section->addInput(\$pfb_ddr_doh_443)", $page, 'and the disabled-or-not checkbox is the one added to the section');
 	}
 
 	public function testThePageSeedsItsListenerSettingsUnderTheLockOnLoadBeforeItReadsAny(): void
