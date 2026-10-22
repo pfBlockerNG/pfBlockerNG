@@ -2132,7 +2132,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Then there is nothing to turn off: NULL, and nothing is written
 		$this->assertNull($turned);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
-		$this->assertSame('', (string) config_get_path(self::TOGGLE, 'on'));
+		$this->assertSame('', $this->onDisk(self::TOGGLE, 'missing'));
 	}
 
 	public function testATurnOffThatIsPersistedIsTrueAndTheToggleIsOffOnDisk(): void
