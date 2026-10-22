@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -316,6 +317,11 @@ func TestDDRRecordsFollowTheListenersOfTheQueriedAddress(t *testing.T) {
 			want: withAdd(ddrDoTRec(ddrFQDN, 0, ddrL4))},
 		{name: "a zone on the listener address does not matter", dot: ddrAt("fe80::1%eth0", 853), local: "fe80::1",
 			want: ddrWant{svcb: []ddrSVCB{ddrDoTRec(ddrFQDN, 0, "fe80::1")}, additional: []string{ddrAddrRR(ddrFQDN, "fe80::1")}}},
+		// a datagram socket bound to a wildcard reports the wildcard as its local address, not the address the client queried
+		{name: "an unspecified IPv4 queried address gets NODATA from wildcard listeners", dot: ddrAt("0.0.0.0", 853), doh: ddrAt("0.0.0.0", 4443), doq: ddrAt("0.0.0.0", 853), local: "0.0.0.0",
+			want: ddrNODATA},
+		{name: "an unspecified IPv6 queried address gets NODATA from wildcard listeners", dot: ddrAt("::", 853), doh: ddrAt("::", 4443), doq: ddrAt("::", 853), local: "::",
+			want: ddrNODATA},
 		{name: "no transport listens on the queried address", dot: elsewhere(853), doh: elsewhere(4443), doq: elsewhere(853), local: ddrL4,
 			want: ddrNODATA},
 		{name: "a DoT, DoH or DoQ query has no queried address and gets NODATA", dot: onL(853), doh: onL(4443), doq: onL(853), local: "",
@@ -650,16 +656,34 @@ type ddrRig struct {
 	dot, doh, doq netip.AddrPort
 }
 
+// newDDRRig binds the TLS sockets first, so the ddr is built from their addresses and set on the gateway before any
+// goroutine that reads it starts (production does the same: start() sets g.ddr before serving).
 func newDDRRig(t *testing.T, doh443 bool) *ddrRig {
 	t.Helper()
-	r := newRig(t, rigConfig{acl: aclMixed})
-	r.autoAnswer(echoAnswer)
 	m := newTLSMaterial(t)
-	d := &ddrRig{rig: r, m: m, dot: r.serveDoT(m), doh: r.serveDoH(m), doq: r.serveDoQ(m)}
-	var err error
-	if r.g.ddr, err = newDDR(ddrTarget, doh443, m.certs, []netip.AddrPort{d.dot}, []netip.AddrPort{d.doh}, []netip.AddrPort{d.doq}); err != nil {
+	dotLn, err := bindTCP("127.0.0.1", 0)
+	if err != nil {
 		t.Fatal(err)
 	}
+	dohLn, err := bindTCP("127.0.0.1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doqConn, err := bindUDP("127.0.0.1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &ddrRig{m: m,
+		dot: dotLn.Addr().(*net.TCPAddr).AddrPort(), doh: dohLn.Addr().(*net.TCPAddr).AddrPort(), doq: doqConn.LocalAddr().(*net.UDPAddr).AddrPort()}
+	ddrAnswers, err := newDDR(ddrTarget, doh443, m.certs, []netip.AddrPort{d.dot}, []netip.AddrPort{d.doh}, []netip.AddrPort{d.doq})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.rig = newRig(t, rigConfig{acl: aclMixed, beforeServe: func(g *gateway) { g.ddr = ddrAnswers }})
+	d.rig.autoAnswer(echoAnswer)
+	d.g.serveDoT(dotLn, m.certs.dot())
+	d.g.serveDoH(dohLn, m.certs.doh(), parseTrusted(nil, d.logs.logf))
+	d.g.serveDoQ(doqConn, m.certs.doq())
 	return d
 }
 
@@ -895,6 +919,55 @@ func TestDDRStartAnswersFromTheBoundListenersIncludingPortsPickedByTheKernel(t *
 		},
 		additional: []string{ddrAddrRR(ddrFQDN, "127.0.0.1")},
 	})
+}
+
+// A plain socket bound to a wildcard address: over UDP its local address is the wildcard, so no address was queried that
+// can be named (NODATA, and never a hint of 0.0.0.0); over TCP the connection's own address is the one the client
+// queried, so a listener on that address designates and a wildcard listener, which is not matched to it, does not.
+func TestDDRPlainWildcardSocketDesignatesOnlyOverTCPAndOnlyAnExplicitListener(t *testing.T) {
+	cases := []struct {
+		name      string
+		tlsListen string
+		wantTCP   func(dot netip.AddrPort) ddrWant
+	}{
+		{"wildcard DoT, DoH and DoQ", "0.0.0.0", func(netip.AddrPort) ddrWant { return ddrNODATA }},
+		{"DoT on 127.0.0.1", "127.0.0.1", func(dot netip.AddrPort) ddrWant {
+			return ddrWant{svcb: []ddrSVCB{ddrDoTRec(ddrFQDN, dot.Port(), "127.0.0.1")}, additional: []string{ddrAddrRR(ddrFQDN, "127.0.0.1")}}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, logs := lifecycleConfig(t, "serve")
+			path, _ := goodPEM(t)
+			cfg.listen, cfg.tlsPEM, cfg.ddr = []string{"0.0.0.0"}, path, ddrTarget
+			cfg.dotListen, cfg.dotPort = []string{c.tlsListen}, freePort(t)
+			if c.tlsListen == "0.0.0.0" {
+				cfg.dohListen, cfg.dohPort = cfg.dotListen, 0
+				cfg.doqListen, cfg.doqPort = cfg.dotListen, 0
+			}
+			srv, err := start(cfg, logs.logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer srv.shutdown()
+			bound := listenAddr(t, ddrLogLine(t, logs.text(), "listening udp+tcp "))
+			if !bound.Addr().IsUnspecified() {
+				t.Fatalf("fixture: the plain socket is on %s, want a wildcard", bound)
+			}
+			to := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), bound.Port())
+			query := ddrQuery(t, 0x0DDD, ddrAsk, dnsmessage.TypeSVCB, 0)
+
+			requireDDR(t, query, udpQuery(t, to, query), ddrNODATA)
+
+			conn, err := net.DialTimeout("tcp4", to.String(), watchdog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			tcpSend(t, conn, query)
+			requireDDR(t, query, tcpReply(t, conn), c.wantTCP(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(cfg.dotPort))))
+		})
+	}
 }
 
 func TestDDRStartWithoutTLSListenersAnswersNODATA(t *testing.T) {

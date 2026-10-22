@@ -320,8 +320,11 @@ and nothing is written to the reply log. Names match case-insensitively (ASCII) 
 - Over UDP a reply over 512 bytes (the client's OPT size, clamped to 512 to 1232, when it sent one) is replaced by
   header, question and OPT with TC set; a reply to a query with an OPT carries an OPT advertising 1232.
 
-A listener bound to a wildcard address is not matched to L. Without `--ddr`, or with pfB-DNS off, the gateway does not touch
-`resolver.arpa.` and the client gets Unbound's own answer unchanged.
+L is the address a client queried, which only an explicit listener address gives. A DoT, DoH or DoQ listener bound to a
+wildcard address is never matched to L. A plain socket bound to a wildcard address gives L over TCP (the connection's own
+address) but not over UDP (the socket's address is the wildcard), so over UDP that query gets no data, and no record ever
+carries `0.0.0.0` or `::` as a hint. Without `--ddr`, or with pfB-DNS off, the gateway does not touch `resolver.arpa.` and
+the client gets Unbound's own answer unchanged.
 
 ## RFCs read for this step
 

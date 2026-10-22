@@ -205,13 +205,17 @@ func soaRecord(owner dnsmessage.Name) dnsmessage.Resource {
 }
 
 // designate is the SVCB answer for owner on the plain address local, and the address record for the firewall's name that
-// goes with it. Both are empty while no certificate is loaded (every handshake would fail) and when no transport listens
-// on local.
+// goes with it. Both are empty while no certificate is loaded (every handshake would fail), when no transport listens
+// on local, and when local names no address a client queried: the zero Addr, or the wildcard that a datagram socket bound
+// to one reports as its own address.
 func (d *ddr) designate(owner dnsmessage.Name, local netip.Addr) (answers, extra []dnsmessage.Resource) {
 	if d.certs == nil || d.certs.cert.Load() == nil {
 		return nil, nil
 	}
 	local = local.Unmap().WithZone("")
+	if !local.IsValid() || local.IsUnspecified() {
+		return nil, nil
+	}
 	if port, ok := ddrListening(d.doh, local); ok {
 		if d.doh443 {
 			port = ddrDoHPort
