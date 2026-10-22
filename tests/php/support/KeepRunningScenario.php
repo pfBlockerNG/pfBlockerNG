@@ -83,21 +83,27 @@ trait KeepRunningScenario
 		];
 	}
 
-	/** The `ps` the code under test runs ($pfb['ps']): it answers only its one argument list, from ps.out, and fails when there is none. */
+	/** The `ps` the code under test runs ($pfb['ps']): it answers only its one argument list, from ps.out, fails when there is none, and exits 1 after it when ps.fail exists. */
 	private function krPsDouble(): void
 	{
 		$out = escapeshellarg("{$this->krDir}/ps.out");
-		file_put_contents("{$this->krDir}/ps", "#!/bin/sh\n[ \"\$*\" = '-axww -o pid= -o ppid= -o rss= -o args=' ] || exit 2\n[ -f {$out} ] || exit 1\ncat {$out}\n");
+		$fail = escapeshellarg("{$this->krDir}/ps.fail");
+		file_put_contents("{$this->krDir}/ps", "#!/bin/sh\n[ \"\$*\" = '-axww -o pid= -o ppid= -o rss= -o args=' ] || exit 2\n[ -f {$out} ] || exit 1\ncat {$out}\n[ ! -f {$fail} ]\n");
 		chmod("{$this->krDir}/ps", 0755);
 	}
 
-	/** The box's process table, as the `ps` double prints it; NULL = ps fails. */
-	private function krPs(?string $table): void
+	/** The box's process table, as the `ps` double prints it; NULL = ps fails with no output; $fails = it prints the table, then exits 1. */
+	private function krPs(?string $table, bool $fails = FALSE): void
 	{
 		if ($table === NULL) {
 			@unlink("{$this->krDir}/ps.out");
 		} else {
 			file_put_contents("{$this->krDir}/ps.out", $table);
+		}
+		if ($fails) {
+			touch("{$this->krDir}/ps.fail");
+		} else {
+			@unlink("{$this->krDir}/ps.fail");
 		}
 	}
 

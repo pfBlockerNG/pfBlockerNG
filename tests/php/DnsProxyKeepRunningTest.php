@@ -347,26 +347,28 @@ final class DnsProxyKeepRunningTest extends TestCase
 			'hw.usermem zero' => ['0', 'default', $noUsermem],
 			'hw.usermem not a number' => ['16G', 'default', $noUsermem],
 			'ps fails' => [NULL, NULL, $noDecider],
+			'ps fails after printing the whole table' => [NULL, self::krPsTable([...$head, self::krPsDecider()]), $noDecider, TRUE],
 			'only the gateway, whose own args name pfb_dns_proxy.py' => [NULL, self::krPsTable($head), $noDecider],
 			'two deciders under the gateway (a drain in progress)' => [NULL, self::krPsTable([...$head, self::krPsDecider(), self::krPsDecider('4250', '4242', '239000')]), $noDecider],
 			"a decider under a pid that only starts with the gateway's" => [NULL, self::krPsTable([...$head, self::krPsDecider('4243', '42420')]), $noDecider],
 			'a gateway child that is not the decider' => [NULL, self::krPsTable([...$head, self::krPsRow('4243', '4242', '900', '/bin/sh -c /usr/local/sbin/something')]), $noDecider],
 			'decider RSS zero' => [NULL, self::krPsTable([...$head, self::krPsDecider('4243', '4242', '0')]), $noRss],
 			'decider RSS not a number' => [NULL, self::krPsTable([...$head, self::krPsDecider('4243', '4242', '-')]), $noRss],
+			'decider RSS with trailing garbage' => [NULL, self::krPsTable([...$head, self::krPsDecider('4243', '4242', '240580K')]), $noRss],
 		];
 	}
 
 	#[DataProvider('unmeasurableDeciders')]
-	public function testADeciderRestartThatCannotBeMeasuredRestartsTheWholePair(?string $usermem, ?string $table, string $reason): void
+	public function testADeciderRestartThatCannotBeMeasuredRestartsTheWholePair(?string $usermem, ?string $table, string $reason, bool $psFails = FALSE): void
 	{
 		// Given a changed decider, a gateway that would take the restart, and a measurement that cannot be made ($usermem NULL
-		// keeps the box's 16 GiB; $table NULL makes ps fail, 'default' keeps the box's process table)
+		// keeps the box's 16 GiB; $table NULL makes ps fail, 'default' keeps the box's process table; $psFails makes ps exit 1 after it)
 		$this->krApply(['decider' => 'different']);
 		if ($usermem !== NULL) {
 			$GLOBALS['pfb_test_sysctl']['hw.usermem'] = $usermem;
 		}
 		if ($table !== 'default') {
-			$this->krPs($table);
+			$this->krPs($table, $psFails);
 		}
 		$record = $this->listen("ok\n");
 
