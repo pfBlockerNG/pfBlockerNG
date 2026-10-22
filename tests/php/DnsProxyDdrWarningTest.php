@@ -131,6 +131,9 @@ final class DnsProxyDdrWarningTest extends TestCase
 			'IPv6 listener compressed, SAN written out in full' => [['wan' => ['2606:4700::1']], ['IP:2606:4700:0:0:0:0:0:1'], ['2606:4700::1'], []],
 			'IPv6 listener written out in full, SAN compressed' => [['wan' => ['2606:4700:0:0:0:0:0:1']], ['IP:2606:4700::1'], ['2606:4700:0:0:0:0:0:1'], []],
 			'a DNS SAN equal to the address is not an iPAddress SAN' => [['wan' => ['8.8.8.8']], ['DNS:8.8.8.8'], ['8.8.8.8'], ['8.8.8.8']],
+			'SANs of other kinds around two matching iPAddress SANs' => [
+				['wan' => ['8.8.8.8', '2606:4700::1']], ['DNS:fw.example.lan', 'IP:8.8.8.8', 'email:a@b.example', 'IP:2606:4700::1'], ['8.8.8.8', '2606:4700::1'], [],
+			],
 			'two public addresses, none in the certificate' => [['wan' => ['8.8.8.8', '2606:4700::1']], [], ['8.8.8.8', '2606:4700::1'], ['8.8.8.8', '2606:4700::1']],
 			'two public addresses, one in the certificate' => [['wan' => ['8.8.8.8', '2606:4700::1']], ['IP:8.8.8.8'], ['8.8.8.8', '2606:4700::1'], ['2606:4700::1']],
 			'loopback, private, CGNAT, link-local and ULA addresses' => [
@@ -306,11 +309,15 @@ final class DnsProxyDdrWarningTest extends TestCase
 		$this->box(['wan' => ['8.8.8.8']], ['IP:8.8.8.8']);
 		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'the readable certificate covers it');
 
-		// When the stored certificate is unreadable
+		// When the stored certificate is unreadable, with OpenSSL's error queue empty before
+		while (openssl_error_string() !== FALSE) {
+			continue;
+		}
 		$GLOBALS['config']['cert'][0]['crt'] = $crt;
 
-		// Then the address is warned about, without an exception
+		// Then the address is warned about, without an exception, and the failed parse leaves nothing in the queue for the next caller
 		$this->assertSame([self::warning('8.8.8.8', 'DoT')], pfb_dns_proxy_ddr_warnings());
+		$this->assertFalse(openssl_error_string(), 'OpenSSL error queue left empty');
 	}
 
 	// -----------------------------------------------------------------------

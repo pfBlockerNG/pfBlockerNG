@@ -4498,6 +4498,8 @@ function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
 	while (openssl_error_string() !== FALSE) {
 		continue; // the parse leaves its reason in OpenSSL's error queue, which is the next caller's
 	}
+	// shortcut: openssl_x509_parse() gives the SANs as one text, so a DNS or URI SAN containing ", IP Address:x" reads as an IP SAN. That can
+	// only silence an advisory about that certificate itself; upgrade if pfSense exposes the SANs structured.
 	$sans = [];
 	foreach (explode(', ', is_array($parsed) ? (string) ($parsed['extensions']['subjectAltName'] ?? '') : '') as $san) {
 		if (str_starts_with($san, 'IP Address:') && ($packed = @inet_pton(substr($san, 11))) !== FALSE) {
