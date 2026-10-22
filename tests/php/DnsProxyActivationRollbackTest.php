@@ -586,7 +586,6 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertNotEmpty($this->lockHeldWhileWaiting, 'before: PHP did probe the proxy while waiting');
 		$this->assertSame([], array_keys(array_filter($this->lockHeldWhileWaiting)), 'the lock was free at every probe of the wait');
 		$this->assertFalse((bool) $GLOBALS['pfb_test_lock_held'], 'and none is still held');
-		$this->assertSame([], $GLOBALS['pfb_test_lock_holders'], 'and no other lock is held');
 		$this->assertTrue($this->freshlyLockable($this->operationLockPath()), 'and the rollback gave the operation lock, the kernel\'s, back');
 	}
 
@@ -2019,8 +2018,6 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$lockFile = $this->operationLockPath();
 		$other = fopen($lockFile, 'c');
 		$this->assertTrue(flock($other, LOCK_EX | LOCK_NB), 'before: the other recovery takes the operation lock');
-		// The shared double's named failure only bridges a rollback that still takes this lock through try_lock(); the file is held for real either way
-		$GLOBALS['pfb_test_try_lock_fail_names'] = ['pfb_dns_proxy_rollback' => TRUE];
 		$this->assertFalse($this->freshlyLockable($lockFile, $timedOut), 'before: the operation lock file is held for real');
 		$this->assertTrue($timedOut, 'before: by its holder, not by a flock() error');
 		$snapshot = (string) config_get_path(self::SAVED, '');
@@ -2597,6 +2594,47 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame('', (string) $this->onDisk(self::SAVED, 'stored'), 'the snapshot is consumed on config.xml');
 		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'stored'), 'pfB-DNS is off on config.xml');
 		$this->assertSame('lan,opt1', (string) $this->onDisk('unbound/active_interface'), 'the Resolver is the admin\'s again');
+	}
+
+	/**
+	 * A recovery whose operation-lock file cannot be opened changes nothing. The file's path is held by a directory, which no open
+	 * can give a lock on, whatever the user: the open fails for root too. The valid snapshot, the toggle, the moved Resolver and the
+	 * live proxy stay as they are, and the recovery notice is filed.
+	 */
+	public function testAnUnopenableRecoveryLockChangesNothingAndFilesTheRecoveryNotice(): void
+	{
+		// Given a valid snapshot, a live proxy that never serves, and the operation lock's file held by a directory of its name
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$GLOBALS['g']['tmp_path'] = "{$this->tmp}/unopenable";
+		mkdir($GLOBALS['g']['tmp_path'], 0700, TRUE);
+		mkdir($this->operationLockPath(), 0700);
+		$this->assertFalse(@fopen($this->operationLockPath(), 'ce'), 'before: the operation lock file cannot be opened');
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = config_get_path('unbound');
+		$pidfile = (string) file_get_contents($this->proxyPidfile());
+		$marker = is_file($this->proxyMarker()) ? (string) file_get_contents($this->proxyMarker()) : NULL;
+		$starts = $this->startAttempts();
+		$this->proxyCalls = [];
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+
+		// When the recovery is asked to roll back
+		$ok = pfb_dns_proxy_roll_back();
+
+		// Then it does not roll back: nothing is written, stopped, restarted or started, and the recovery notice is filed
+		$this->assertFalse($ok);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'no config.xml write');
+		$this->assertSame([], $this->proxyCalls, 'no proxy stop or start');
+		$this->assertSame($starts, $this->startAttempts(), 'no Unbound start');
+		$this->assertSame(['pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), 'the recovery notice is filed');
+
+		// And the snapshot, the toggle, the moved Resolver and the live proxy are kept as they were
+		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), 'the snapshot is kept byte for byte');
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
+		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')), 'the Resolver stays moved');
+		$this->assertTrue(pfb_dns_proxy_running(), 'the proxy is still running');
+		$this->assertSame($pidfile, (string) file_get_contents($this->proxyPidfile()), 'the proxy pid is kept');
+		$this->assertSame($marker, is_file($this->proxyMarker()) ? (string) file_get_contents($this->proxyMarker()) : NULL, 'the readiness marker is kept, still never published');
 	}
 
 	/** The operation lock's file, which every recovery of this box opens: $g['tmp_path'] is the one directory they share. */

@@ -598,10 +598,11 @@ if (!function_exists('unlock')) {
 		}
 		$GLOBALS['pfb_test_lock_events'][] = ['unlock'];
 		$name = array_search($cfglckkey, $GLOBALS['pfb_test_lock_holders'] ?? [], TRUE);
-		if ($name === FALSE) {
-			$GLOBALS['pfb_test_lock_held'] = FALSE;
-		} else {
+		if ($name !== FALSE) {
 			unset($GLOBALS['pfb_test_lock_holders'][$name]);
+		} elseif ((stream_get_meta_data($cfglckkey)['uri'] ?? '') === 'php://memory') {
+			// The DNS config lock: try_lock() hands it out unmapped, so releasing it clears the observation; any other handle leaves it
+			$GLOBALS['pfb_test_lock_held'] = FALSE;
 		}
 		fclose($cfglckkey);
 	}
