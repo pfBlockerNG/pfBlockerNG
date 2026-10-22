@@ -861,6 +861,39 @@ answers the decider must read whole) over UDP and, when Unbound truncated the re
 Pinned by `tests/dns_proxy/test_decision_transport.py`, `test_safesearch.py` (decider) and `test_gateway_chase.py` (a real
 Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
 
+**Package upgrades and per-side restarts (issue #3566).** A package upgrade does not interrupt DNS, and an update restarts only the half that changed.
+
+- **The early stop.** pfSense stops each registered service in `delete_package_xml()` before the new files are installed (see the
+  removal notes above) and unlinks its rc script. The top-level `stop` of `pfb_dns_proxy.sh` (the dispatch's call, with no argument; its own
+  `start` and `restart` pass one and always stop) walks its process ancestry. When an ancestor is `rc.packages ... DEINSTALL` and the
+  nearest `pkg`/`pkg-static` ancestor's operation is an install, upgrade or reinstall (classified as `pfb_pkg_operation()` does), it leaves
+  the pair running, logs it, and copies itself to `/var/run/pfb_dns_proxy_rc.kept`, because the script is gone once the stop returns.
+  No `pkg` ancestor, a delete or an unreadable process table stops it as before. Known limit: the first upgrade **to** a version
+  with this probe still runs the old script's stop, so the pair restarts once; the probe takes effect from the next upgrade.
+- **Deferral.** Under a package operation (`pfb_dns_proxy_restart_deferred()`) a live proxy is never restarted. `pfb_reload_unbound()`'s tail,
+  `pfb_dns_proxy_ensure_running()` (when the rc script changed) and the installer (when the rc script it wrote differs from the kept
+  copy, which it then removes; a missing copy counts as different, and a proxy that is not READY is restarted as before) write
+  `/var/run/pfb_dns_proxy_restart_pending` (the reason, one line) through `pfb_dns_proxy_defer_restart()` instead. The next pass outside a
+  package operation restarts the whole pair once and removes the marker; a dead proxy is always started, and starting it removes the marker too.
+- **Change detection on the next update.** `pfb_dns_proxy_ensure_running()` looks only while the proxy is READY and nothing above is
+  due. The gateway writes the SHA-256 of its own binary to `/var/unbound/pfb_dns_ready.sha256` just before it publishes the ready marker;
+  `pfb_dns_proxy_gateway_changed()` compares it with every installed `bin/*/pfb-dns`, and an absent, unreadable or different record
+  restarts the whole pair. The decider writes the concatenated md5 digests of its five `dns_proxy` files and the two staged module files
+  (`pfb_unbound.py`, `pfb_dnsbl_regex_rules.py` in `/var/unbound`) to `/var/unbound/pfb_dns_decider.applied` before READY;
+  `pfb_dns_proxy_decider_changed()` fingerprints the same seven paths (`$pfb['dns_proxy_decider_src']`), and a different or absent record
+  restarts the decider alone. An unreadable installed file is no signal. Unbound's own module-drift check (`pfb_unbound_py_module_applied`) is
+  asked only while Unbound hosts the module, so code-only drift in proxy mode does not restart the pair a second time.
+- **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
+  in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first
+  one's argv on a new socketpair and waits up to 30 s for its READY, then makes it the active one, replies `ok`, lets the old one's
+  in-flight queries finish (bounded, see `docs/misc/external-process-waits.md`) and closes it. Any error, including an older gateway, which reads the frame as a bad certificate length, leaves the old decider
+  active and becomes the whole-pair restart. The respawned decider runs as `unbound` already, so `drop_privileges()` skips its user
+  switch. Residual: during the swap two deciders hold the DNSBL database at once, and nothing gates that on available RAM.
+
+Pinned by `DnsProxyUpgradeStopTest` (the stop's walk, run in a sandbox), `DnsProxyKeepRunningTest`, `DnsProxyKeepRunningPkgTest` and
+`DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `tests/dns_proxy/test_decider_applied.py` (the code
+record), the gateway's Go tests (the binary record and the control-socket restart) and `tests/smoke/test_smoke_dns_proxy.py` (live).
+
 ### ADR-08 — IDN homoglyph protection
 
 DNSBL settings carry an **IDN Blocking** mode — Off | All-IDN | Confusable (replaces the old
