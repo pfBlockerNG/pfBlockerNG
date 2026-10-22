@@ -1781,7 +1781,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertCount(1, $rollback, "{$why}: one rollback notice");
 		$this->assertStringContainsString('did not become ready', $rollback[0]['notice']);
 		$this->assertStringContainsString('DNS Resolver was restored', $rollback[0]['notice']);
-		$this->assertSame(['stop_service'], $this->proxyCalls, "{$why}: the proxy is stopped and nothing is started");
+		// And the proxy is down, with no supervisor left to restart it: the state the stop leaves, not the call that made it
+		$this->assertFalse(pfb_dns_proxy_running(), "{$why}: the proxy is not running");
+		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), "{$why}: no supervisor is left");
 	}
 
 	/** @return array<string,array{string}> the gateway process that lives and never publishes its marker */
@@ -1800,9 +1802,11 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->activate(TRUE);
 		if ($alive === 'child') {
 			$this->proxyLivesButNeverServes();
+			$this->assertTrue(pfb_dns_proxy_running(), 'before: the child is alive');
 		} else {
-			// alive until the rollback stops the proxy: a stopped supervisor no longer holds its pidfile, which the stop double does not model
-			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = fn (): bool => !in_array('stop_service', $this->proxyCalls, TRUE);
+			// alive until the rollback's rc stop, which unsets it: the stop double models the supervisor's exit there
+			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+			$this->assertTrue(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'before: the supervisor is alive');
 		}
 		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is stored');
@@ -1859,6 +1863,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Given pfB-DNS on with the Resolver moved, and the backgrounded start left a gateway that lives and never serves
 		$this->activate(TRUE);
 		$this->proxyLivesButNeverServes();
+		$this->assertTrue(pfb_dns_proxy_running(), 'before: the start left a live child');
 		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
 
 		// When the boot check runs
@@ -2059,8 +2064,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), 'the snapshot is kept');
 		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')), 'the Resolver stays moved');
 		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is not turned off by a recovery that did not run');
+		$this->assertSame(['pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), 'the refusal is filed under the recovery notice id');
 		$texts = implode("\n", array_column($this->notices(), 'notice'));
-		$this->assertStringContainsString('in progress', $texts, 'the notice says another recovery is in progress');
 		$this->assertStringNotContainsString('was restored', $texts);
 		$this->assertStringNotContainsString('turned off', $texts);
 	}

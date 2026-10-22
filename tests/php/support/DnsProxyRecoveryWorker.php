@@ -17,8 +17,10 @@ declare(strict_types=1);
  * `PAUSED <n> <json>` when the owner stops after its n-th DNS config unlock, reporting the toggle and snapshot config.xml
  * holds (it then waits for a line on stdin), and `DONE <json>` when the recovery returns.
  *
- * The locks are real: try_lock() takes flock(LOCK_EX | LOCK_NB) on a file per name, tried first and then polled until its
- * timeout (a timeout of 0 gives up at once). The production code is the shipped .inc over the shared doubles.
+ * The locks are the kernel's: try_lock() makes one non-blocking flock(LOCK_EX | LOCK_NB) attempt. A timeout of 0 returns NULL
+ * at once when the name is held. A positive budget announces BLOCKED and then blocks in flock(LOCK_EX) until the holder
+ * releases; the parent's hard deadline reaps a worker that never gets it. There is no poll loop. This fixture tests mutual
+ * exclusion only: a timeout's NULL is covered by the shared double and the native source, not here.
  */
 
 $race = ['role' => (string) $argv[1], 'dir' => (string) $argv[2], 'pause' => (int) $argv[3], 'unlocks' => 0, 'names' => []];
@@ -91,29 +93,31 @@ function race_proxy_down(): void
 	unset($GLOBALS['pfb_test_valid_pids'][$GLOBALS['pfb']['dns_proxy_pidfile']], $GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE]);
 }
 
-/** pfSense's try_lock(), on the kernel's flock(2) per name: the handle on success, NULL when the name stays held for $timeout. */
+/**
+ * pfSense's try_lock() on the kernel's flock(2), one file per name. Mutual exclusion only: a timeout of 0 returns NULL at once
+ * when the name is held; a positive budget announces BLOCKED and blocks until the holder releases.
+ */
 function try_lock($lock, $timeout = 5)
 {
 	$handle = fopen($GLOBALS['race']['dir'] . "/{$lock}.lock", 'c');
-	$deadline = microtime(TRUE) + $timeout;
-	$announced = FALSE;
-	while (TRUE) {
-		if (flock($handle, LOCK_EX | LOCK_NB)) {
-			$GLOBALS['race']['names'][(int) $handle] = $lock;
-			race_event("lock {$lock}");
-			return $handle;
-		}
-		if (!$announced) {
-			$announced = TRUE;
-			race_event("blocked {$lock}");
-			race_say("BLOCKED {$lock}");
-		}
-		if (microtime(TRUE) >= $deadline) {
-			fclose($handle);
-			return NULL;
-		}
-		usleep(20000);
+	if (flock($handle, LOCK_EX | LOCK_NB)) {
+		return race_locked($handle, $lock);
 	}
+	if ($timeout <= 0) {
+		fclose($handle);
+		return NULL;
+	}
+	race_event("blocked {$lock}");
+	race_say("BLOCKED {$lock}");
+	flock($handle, LOCK_EX);
+	return race_locked($handle, $lock);
+}
+
+function race_locked($handle, string $lock)
+{
+	$GLOBALS['race']['names'][(int) $handle] = $lock;
+	race_event("lock {$lock}");
+	return $handle;
 }
 
 /** pfSense's unlock(): releases the handle, and holds the owner after its configured DNS config unlock until it is released. */
