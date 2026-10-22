@@ -295,6 +295,34 @@ Not verified by a run: the interplay with a live HAProxy. The PROXY-before-TLS o
 the specification text above, and the gateway's side of it (PROXY header, then TLS, then HTTP, per request) is
 exercised with hand-built headers in `doh_test.go`.
 
+## DDR
+
+Discovery of Designated Resolvers ([RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html), issue #3583), off unless asked for.
+
+| Flag | Meaning |
+|---|---|
+| `--ddr NAME` | DDR on. `NAME` is the firewall's FQDN, with or without a trailing dot; every record names it. Empty or absent: off. |
+| `--ddr-doh-443` | The DoH record carries no `port` parameter, whatever port DoH listens on, so clients reach DoH on 443 (a reverse proxy in front). Needs `--ddr`: alone it is a usage error. |
+
+With `--ddr`, after the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and before the decider, the
+gateway answers every query for a name at or under `resolver.arpa.` itself, on every transport; the decider never sees it
+and nothing is written to the reply log. Names match case-insensitively (ASCII) and the question is echoed as received.
+
+- `_dns.resolver.arpa. SVCB` over plain UDP or TCP, received on address L: one ServiceMode record (TTL 300) per transport
+  listening on L, while a certificate is loaded: DoH priority 1 (`alpn=h2`, `dohpath=/dns-query{?dns}`), DoT priority 2
+  (`alpn=dot`), DoQ priority 3 (`alpn=doq`). `port` only when the listener's port is not 443 (DoH) or 853 (DoT, DoQ), and
+  never on the DoH record with `--ddr-doh-443`. Each record has `TargetName` = `NAME` and an `ipv4hint` or `ipv6hint` = L;
+  the Additional section has the A or AAAA record for `NAME` = L.
+- `resolver.arpa.` SOA and NS: `resolver.arpa. 300 IN SOA localhost. nobody.invalid. 1 3600 1200 604800 300` and
+  `resolver.arpa. 300 IN NS localhost.`.
+- Everything else at or under the zone, the SVCB query over DoT, DoH or DoQ, and a plain query on an address no
+  qualifying transport listens on: NOERROR, no data, that SOA in Authority.
+- Over UDP a reply over 512 bytes (the client's OPT size, clamped to 512 to 1232, when it sent one) is replaced by
+  header, question and OPT with TC set; a reply to a query with an OPT carries an OPT advertising 1232.
+
+A listener bound to a wildcard address is not matched to L. Without `--ddr`, or with pfB-DNS off, the gateway does not touch
+`resolver.arpa.` and the client gets Unbound's own answer unchanged.
+
 ## RFCs read for this step
 
 - [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html) sections 4.1, 4.2, 5.1.

@@ -135,3 +135,55 @@ func TestConfigRejectsModeFlagsThatContradictEachOther(t *testing.T) {
 		})
 	}
 }
+
+// issue #3583: --ddr NAME turns DDR on; --ddr-doh-443 leaves the port out of the DoH record and needs --ddr. PHP is the
+// primary trust boundary; these are the gateway's own checks, so a bad flag is a usage error and never a broken record.
+func TestConfigDDRFlagsAreParsedAndOffByDefault(t *testing.T) {
+	cases := map[string]struct {
+		flags  []string
+		ddr    string
+		doh443 bool
+	}{
+		"off by default":                     {nil, "", false},
+		"name without a trailing dot":        {[]string{"--ddr", "fw.example.lan"}, "fw.example.lan", false},
+		"name with a trailing dot":           {[]string{"--ddr", "fw.example.lan."}, "fw.example.lan.", false},
+		"name and --ddr-doh-443":             {[]string{"--ddr", "fw.example.lan", "--ddr-doh-443"}, "fw.example.lan", true},
+		"--ddr-doh-443 before the name":      {[]string{"--ddr-doh-443", "--ddr", "fw.example.lan"}, "fw.example.lan", true},
+		"the longest name (253 characters)":  {[]string{"--ddr", strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61)}, strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61), false},
+		"an empty name is off, not an error": {[]string{"--ddr", ""}, "", false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := parse(t, append(slices.Clone(c.flags), "--", "decider")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ddr != c.ddr || cfg.ddrDoH443 != c.doh443 {
+				t.Fatalf("got ddr=%q doh443=%v, want ddr=%q doh443=%v", cfg.ddr, cfg.ddrDoH443, c.ddr, c.doh443)
+			}
+		})
+	}
+}
+
+func TestConfigRejectsBadDDRUsage(t *testing.T) {
+	cases := map[string]struct {
+		flags []string
+		want  string // the flag the error names
+	}{
+		"--ddr-doh-443 without --ddr":       {[]string{"--ddr-doh-443"}, "--ddr-doh-443"},
+		"--ddr-doh-443 with an empty --ddr": {[]string{"--ddr", "", "--ddr-doh-443"}, "--ddr-doh-443"},
+		"name with an empty label":          {[]string{"--ddr", "fw..lan"}, `--ddr "`},
+		"name with a leading dot":           {[]string{"--ddr", ".fw.lan"}, `--ddr "`},
+		"name with two trailing dots":       {[]string{"--ddr", "fw.lan.."}, `--ddr "`},
+		"the root as the name":              {[]string{"--ddr", "."}, `--ddr "`},
+		"name with a label over 63 bytes":   {[]string{"--ddr", strings.Repeat("a", 64) + ".lan"}, `--ddr "`},
+		"name over 253 characters":          {[]string{"--ddr", strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan"}, `--ddr "`},
+	}
+	for label, c := range cases {
+		t.Run(label, func(t *testing.T) {
+			if cfg, err := parse(t, append(slices.Clone(c.flags), "--", "decider")...); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got cfg=%+v err=%v, want an error mentioning %q", cfg, err, c.want)
+			}
+		})
+	}
+}

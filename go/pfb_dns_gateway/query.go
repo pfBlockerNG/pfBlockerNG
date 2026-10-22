@@ -121,6 +121,8 @@ type gateway struct {
 	doqListenerClosed                                          func() // test seam: DoQ's closer calls it once ln.Close() has returned, before it waits for the accept loop
 	deciderRead                                                func() // test seam: resolve calls it between reading the active decider and asking it
 
+	ddr *ddr // issue #3583: answers resolver.arpa. itself, after the ACL and before the decider; nil = off
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup // every serving goroutine; stop() waits for them
@@ -195,8 +197,9 @@ const (
 )
 
 // screen applies what never needs the decider: no header or a response (never answered, so no reflection
-// loops), then the Resolver ACL.
-func (g *gateway) screen(client netip.Addr, wire []byte) (disposition, []byte) {
+// loops), then the Resolver ACL, then DDR when it is on (issue #3583). local is the address a plain query arrived on
+// (the zero Addr over DoT, DoH and DoQ) and udp says it came as a datagram.
+func (g *gateway) screen(client, local netip.Addr, udp bool, wire []byte) (disposition, []byte) {
 	if len(wire) < 12 || wire[2]&0x80 != 0 {
 		return discard, nil
 	}
@@ -205,6 +208,11 @@ func (g *gateway) screen(client netip.Addr, wire []byte) (disposition, []byte) {
 		return hangUp, nil
 	case ACLRefuse:
 		return replyNow, buildRefused(wire)
+	}
+	if g.ddr != nil {
+		if reply := g.ddr.answer(wire, local, udp); reply != nil {
+			return replyNow, reply
+		}
 	}
 	return toDecider, nil
 }

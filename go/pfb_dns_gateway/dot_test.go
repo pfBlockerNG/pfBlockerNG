@@ -92,6 +92,25 @@ func TestDoTRefusesTLS11(t *testing.T) {
 	_ = c.Close()
 }
 
+// issue #3583: a client may offer ALPN "dot" (Apple's resolvers do). The DoT TLS configuration lists no protocols, so none
+// is negotiated and the handshake completes; a configuration that named only others would end it with no_application_protocol.
+func TestDoTHandshakeSucceedsWhenTheClientOffersALPNDot(t *testing.T) {
+	m := newTLSMaterial(t)
+	r := newRig(t, rigConfig{acl: aclMixed})
+	r.autoAnswer(func(q decidedQuery) []byte { return append(echoAnswer(q), "block"...) })
+	addr := r.serveDoT(m)
+	c, err := tls.Dial("tcp4", addr.String(), m.clientConfig("dot"))
+	if err != nil {
+		t.Fatalf("a DoT client offering ALPN dot must complete the handshake: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	tcpSend(t, c, buildQuery(t, 0x1111, "blocked.example.", true))
+	got := tcpReply(t, c)
+	if want := append(echoAnswer(r.nextQuery()), "block"...); !bytes.Equal(got, want) {
+		t.Fatalf("reply over the ALPN dot connection: got %x, want the decider's answer %x", got, want)
+	}
+}
+
 // T5: the shared 128-connection cap is checked at accept, before any handshake byte; DoT and plain TCP count together.
 func TestDoTConnectionsOverTheCapAreClosedBeforeTheHandshake(t *testing.T) {
 	m := newTLSMaterial(t)
