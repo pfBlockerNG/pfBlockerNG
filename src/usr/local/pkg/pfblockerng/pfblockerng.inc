@@ -5220,40 +5220,33 @@ function pfb_dns_proxy_upstream_ready(): bool {
 	if (!isvalidpid($pidfile)) {
 		return FALSE;
 	}
-	$pid = (string) @file_get_contents($pidfile);
-	if (preg_match('/\A[1-9][0-9]*\n?\z/', $pid) !== 1) {
-		return FALSE;
-	}
-	$pid = rtrim($pid, "\n");
-	$gateway = (string) @file_get_contents($pfb['dns_proxy_ready']);
-	if (preg_match('/\A[1-9][0-9]*\n?\z/', $gateway) !== 1) {
-		return FALSE;
-	}
+	$pid = rtrim((string) @file_get_contents($pidfile), "\n");
+	$gateway = rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n");
 	$lines = [];
-	if (pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg(rtrim($gateway, "\n")),
+	if (pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg($gateway) . ' 2>/dev/null',
 	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
 		return FALSE;
 	}
 	$command = trim(implode("\n", $lines));
 	if (preg_match('~\A' . preg_quote(PFB_DNS_PROXY_DIR, '~') . '/bin/freebsd-(?:amd64|arm64)/pfb-dns(?=[ \t]|\z)~', $command) !== 1 ||
 	    substr_count($command, '--upstream') !== 1 ||
-	    preg_match("~[ \t]--upstream[ \t]+(?:'([^']*)'|\"([^\"]*)\"|([^ \t]+))(?=[ \t]|\$)~", $command, $upstream, PREG_UNMATCHED_AS_NULL) !== 1) {
+	    preg_match('~[ \t]--upstream[ \t]+([^ \t]+)(?=[ \t]|\z)~', $command, $upstream) !== 1) {
 		return FALSE;
 	}
-	$argument = $upstream[1] ?? $upstream[2] ?? $upstream[3];
+	$argument = $upstream[1];
 	if (preg_match('/\A(\[[0-9A-Fa-f:.]+\]|[0-9.]+):([0-9]+)\z/', $argument, $endpoint) !== 1) {
 		return FALSE;
 	}
 	$host = trim($endpoint[1], '[]');
 	$packed = @inet_pton($host);
 	$port = pfb_dns_proxy_listener_port($endpoint[2]);
-	if ($packed === FALSE || $port === NULL || ($endpoint[1][0] === '[') !== (strlen($packed) === 16)) {
+	if ($packed === FALSE || $port === NULL) {
 		return FALSE;
 	}
 	$family = strlen($packed) === 16 ? '6' : '4';
 	$expected = pfb_dns_proxy_host_port($host, $port);
 	$lines = [];
-	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_SOCKSTAT) . ' -46lw -p ' . escapeshellarg($port),
+	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_SOCKSTAT) . ' -46lw -p ' . escapeshellarg($port) . ' 2>/dev/null',
 	    'DNS proxy upstream sockets', $lines, FALSE, 1) !== 0) {
 		return FALSE;
 	}
@@ -5838,7 +5831,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	// A deferred pass that acted on nothing keeps a gateway that is ready as it is: the package operation does not judge its
 	// upstream; the tick and the boot check do, with their rollback (issue #3560 D-a).
 	if ($deferred && !$acted && pfb_dns_proxy_ready()) {
-		pfb_dns_proxy_startup_check(TRUE, $since);
+		pfb_dns_proxy_startup_check(TRUE);
 		return TRUE;
 	}
 	$ready = pfb_dns_proxy_confirm_ready($since);
