@@ -3624,6 +3624,8 @@ const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
 // The lock file that serializes the rc script's starts (lockf(1), kept between starts): the boot hook's background start and an
 // apply's start_service() both run `rc start`, and both could pass its "already serving?" check before the first daemon wrote a pidfile.
 const PFB_DNS_PROXY_LOCKFILE = '/var/run/pfb_dns_proxy.lock';
+// pfb_dns_proxy_decider_restart_fits_ram()'s headroom beside two deciders: the 64 MiB pfb_unbound_py_swap_fits_ram() leaves.
+const PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM = 64 * 1024 * 1024;
 // issue #3515: the DNSBL page's section save and pfb_dns_proxy_resolver() both read-modify-write config.xml; the one
 // lock (pfSense try_lock(), seconds to give up after) they hold from a fresh read through write_config(). A restore
 // stops the proxy (up to 7 s) under it, so the wait must stay above that plus the restore's own read and write.
@@ -5435,6 +5437,43 @@ function pfb_dns_proxy_decider_changed(): bool {
 }
 
 /**
+ * Does a second decider fit beside the running one while the gateway restarts it alone (issue #3580)? The new one loads the whole
+ * DNSBL database before the old one leaves, so hw.usermem must hold twice the running decider's RSS plus
+ * PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM, on pfb_unbound_py_swap_fits_ram()'s total-RAM basis. The decider is the gateway's one
+ * child whose command line names pfb_dns_proxy.py (the gateway's own names it too); none, two (a drain), or an RSS or hw.usermem
+ * that cannot be read is no fit. $pfb['ps'] is the off-appliance injection point.
+ *
+ * @return array{0: bool, 1: string} whether it fits; then the decider's pid and RSS and hw.usermem as read, or what could not be read
+ */
+function pfb_dns_proxy_decider_restart_fits_ram(): array {
+	global $pfb;
+
+	$usermem = (string) get_single_sysctl('hw.usermem');
+	if (!ctype_digit($usermem) || (int) $usermem === 0) {
+		return [FALSE, 'hw.usermem could not be read'];
+	}
+	$gateway = trim((string) @file_get_contents($pfb['dns_proxy_pidfile']));
+	$out = [];
+	$rc = 1;
+	exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -axww -o pid= -o ppid= -o rss= -o args= 2>/dev/null', $out, $rc);
+	$deciders = [];
+	foreach (($rc === 0) ? $out : [] as $line) {
+		$fields = preg_split('/\s+/', trim($line), 4);
+		if (count($fields) === 4 && $fields[1] === $gateway && str_contains($fields[3], 'pfb_dns_proxy.py')) {
+			$deciders[] = $fields;
+		}
+	}
+	if (count($deciders) !== 1) {
+		return [FALSE, 'no single decider runs under the gateway'];
+	}
+	[$pid, , $rss] = $deciders[0];
+	if (!ctype_digit($rss) || (int) $rss === 0) {
+		return [FALSE, "the RSS of decider pid {$pid} could not be read"];
+	}
+	return [(int) $usermem >= 2 * (int) $rss * 1024 + PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM, "decider pid {$pid} uses {$rss} KiB, hw.usermem is {$usermem} bytes"];
+}
+
+/**
  * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
  * reload, and restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ
  * settings, so a new address or a changed setting is not served until the proxy restarts. Whatever it did, the proxy must
@@ -5444,8 +5483,9 @@ function pfb_dns_proxy_decider_changed(): bool {
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
  * pending restart (pfb_dns_proxy_defer_restart()), and nothing else is looked at. The next pass outside one restarts the whole pair
  * once for a pending restart or a changed gateway binary (pfb_dns_proxy_gateway_changed()), and only the decider, on the gateway's
- * control socket, for changed decider code (pfb_dns_proxy_decider_changed()); a decider restart the gateway does not take is
- * logged and becomes the whole-pair restart. Neither change is looked for while the proxy is not READY: it has no record to judge.
+ * control socket, for changed decider code (pfb_dns_proxy_decider_changed()) when a second decider fits in memory beside it
+ * (pfb_dns_proxy_decider_restart_fits_ram()); one that may not fit, or that the gateway does not take, is logged and becomes the
+ * whole-pair restart. Neither change is looked for while the proxy is not READY: it has no record to judge.
  *
  * @param string $proxyDir the package's dns_proxy directory, as for pfb_dns_proxy_service()
  * @return bool TRUE iff nothing is moved or the proxy is ready; FALSE after a failed activation (rolled back or not)
@@ -5491,11 +5531,17 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		$since = NULL;
 		$acted = ($why !== NULL || $decider);
 		if ($decider) {
-			pfb_logger("\nRestarting the DNS proxy's decider: the package installed other decider code", 1);
-			$failed = pfb_dns_proxy_decider_restart();
-			if ($failed !== NULL) {
-				pfb_logger("\nNot completed: the DNS proxy's decider did not restart: {$failed}", 2);
-				$why = 'its decider could not be restarted alone';
+			[$fits, $measured] = pfb_dns_proxy_decider_restart_fits_ram();
+			if (!$fits) {
+				$why = "a second decider is not known to fit in memory ({$measured})";
+				pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
+			} else {
+				pfb_logger("\nRestarting the DNS proxy's decider: the package installed other decider code ({$measured})", 1);
+				$failed = pfb_dns_proxy_decider_restart();
+				if ($failed !== NULL) {
+					pfb_logger("\nNot completed: the DNS proxy's decider did not restart: {$failed}", 2);
+					$why = 'its decider could not be restarted alone';
+				}
 			}
 		} elseif ($why !== NULL) {
 			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);

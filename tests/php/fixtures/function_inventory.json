@@ -1889,6 +1889,11 @@
             }
         ]
     },
+    "pfb_dns_proxy_decider_restart_fits_ram": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dns_proxy_defer_restart": {
         "returnsRef": false,
         "returnType": "void",

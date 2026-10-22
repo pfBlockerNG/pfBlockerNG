@@ -898,7 +898,12 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   one's argv on a new socketpair and waits up to 30 s for its READY, then makes it the active one, replies `ok`, lets the old one's
   in-flight queries finish (bounded, see `docs/misc/external-process-waits.md`) and closes it. Any error, including an older gateway, which reads the frame as a bad certificate length, leaves the old decider
   active and becomes the whole-pair restart. The respawned decider runs as `unbound` already, so `drop_privileges()` skips its user
-  switch. Residual: during the swap two deciders hold the DNSBL database at once, and nothing gates that on available RAM.
+  switch. Both deciders hold the DNSBL database until the old one leaves, so `pfb_dns_proxy_decider_restart_fits_ram()` checks memory
+  first (issue #3580). The decider is the gateway's one child whose command line names `pfb_dns_proxy.py`, read with its RSS from one
+  `ps -axww -o pid= -o ppid= -o rss= -o args=`. `hw.usermem` must be at least twice that RSS plus `PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM`
+  (64 MiB): the swap gate's total-RAM basis and headroom. A box short of RAM, or a pid, RSS or `hw.usermem` that cannot be read, gets the
+  whole-pair restart, logged with what was measured. The swap's 276 B/entry projection is not reused: a decider measured about 46.5 MiB
+  plus 1 KiB per entry (235 MiB at 189,643 entries).
 
 Pinned by `DnsProxyUpgradeStopTest` (the stop's walk, run in a sandbox), `DnsProxyKeepRunningTest`, `DnsProxyKeepRunningPkgTest` and
 `DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `tests/dns_proxy/test_decider_applied.py` (the code
