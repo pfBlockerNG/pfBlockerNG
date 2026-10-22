@@ -2312,6 +2312,69 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	/**
+	 * A confirmation whose readiness wait timed out, then waits for config.xml while another apply holds it and restarts the proxy to
+	 * READY on the same snapshot: an ordinary restart keeps pfb_dns_saved and takes no operation lock, so only readiness tells the two
+	 * starts apart. The confirmation is a real process, held at the config lock; the other apply is this process, through the real
+	 * restart path.
+	 */
+	public function testAConfirmationThatTimedOutLeavesAProxyAnotherApplyMadeReadyWhileItWaitedForConfigXml(): void
+	{
+		// Given a moved Resolver, a proxy that lives but never published its marker, and config.xml held by another apply
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = config_get_path('unbound');
+		$dir = sys_get_temp_dir() . '/pfb_dns_race_' . bin2hex(random_bytes(6));
+		mkdir($dir, 0700, TRUE);
+		$this->writeRaceState($dir);
+		$held = fopen("{$dir}/pfb_dns_config.lock", 'c');
+		$this->assertTrue(flock($held, LOCK_EX | LOCK_NB), 'before: the other apply holds config.xml');
+		$worker = NULL;
+		$first = NULL;
+		$done = NULL;
+		$stderr = '';
+		try {
+			// When this confirmation's readiness wait times out and its rollback reaches the config lock
+			$worker = $this->startWorker($dir, 'contender', 0);
+			$buffer = '';
+			$first = $this->readLine($worker, $buffer, ['WAITING ', 'DONE '], 15.0);
+			if ($first === 'WAITING pfb_dns_config') {
+				// And the other apply meanwhile restarts the proxy, which becomes ready, then gives config.xml back
+				$this->behaviour = 'serves';
+				$this->assertTrue(pfb_dns_proxy_restart(), 'before: the other apply restarted the proxy to READY');
+				flock($held, LOCK_UN);
+				fwrite($worker[1][0], "RESUME\n");
+				$done = $this->readLine($worker, $buffer, ['DONE '], 20.0);
+			}
+		} finally {
+			fclose($held);
+			if ($worker !== NULL) {
+				fclose($worker[1][0]);
+				try {
+					$stderr = pfb_test_finish_process($worker, 5.0)['stderr'];
+				} catch (RuntimeException $stuck) {
+					$stderr = $stuck->getMessage();
+				}
+			}
+			$events = array_values(array_filter(explode("\n", (string) @file_get_contents("{$dir}/events.log")), 'strlen'));
+			$disk = json_decode((string) @file_get_contents("{$dir}/disk.json"), TRUE) ?? [];
+			rmdir_recursive($dir);
+		}
+		$log = 'events: ' . implode(' | ', $events);
+		$this->assertSame('WAITING pfb_dns_config', $first, "the confirmation did not wait for config.xml after its readiness wait: {$stderr}; {$log}");
+		$this->assertNotNull($done, "the confirmation did not complete after config.xml was given back: {$stderr}; {$log}");
+
+		// Then it turned nothing off, stopped nothing and restored nothing: the restarted proxy keeps serving the moved Resolver
+		$effects = array_values(array_filter($events, static fn (string $event): bool => preg_match('/^contender (write|svc|rc_stop|unbound_start)\b/', $event) === 1));
+		$this->assertSame([], $effects, "the stale confirmation acted on a proxy that is ready; {$log}");
+		$pfbDns = $disk['installedpackages']['pfblockerngdns']['config'][0] ?? [];
+		$this->assertSame('on', (string) ($pfbDns['pfb_dns'] ?? ''), 'pfB-DNS stays on');
+		$this->assertSame($snapshot, (string) ($pfbDns['pfb_dns_saved'] ?? ''), 'the snapshot is kept');
+		$this->assertSame(self::sorted($moved), self::sorted($disk['unbound'] ?? []), 'the Resolver stays moved');
+		$this->assertTrue(pfb_dns_proxy_ready(), 'the proxy the other apply restarted still serves');
+	}
+
+	/**
 	 * A recovery that dies while the Unbound its rollback started keeps running (issue #3556). The rollback holds the operation lock
 	 * across the Unbound restart, and the restart is the production launcher's: a PHP -r supervisor started with proc_open, which
 	 * runs the start command through passthru(). The command here leaves a daemon behind that outlives the supervisor and the
