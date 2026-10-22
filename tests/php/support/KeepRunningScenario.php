@@ -68,6 +68,7 @@ trait KeepRunningScenario
 			if ($fn !== 'stop_service') {
 				$this->proxyServes();
 				$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+				$this->seedRunningGateway();
 			}
 		};
 	}
@@ -151,7 +152,8 @@ trait KeepRunningScenario
 	 */
 	private function krApply(array $s): void
 	{
-		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL];
+		// serving: the Unbound backend answers too, so a full confirmation can pass; a worker passes FALSE, and its package rows prove a deferred pass needs no confirmation
+		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE];
 		// The rc script bakes the control socket's path in: it is set before the script is written
 		if ($s['ctl'] !== NULL) {
 			$GLOBALS['pfb']['dns_proxy_ctl'] = $s['ctl'];
@@ -166,8 +168,19 @@ trait KeepRunningScenario
 		if ($s['proxy'] === 'serves') {
 			$this->proxyServes();
 			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		} elseif ($s['proxy'] === 'lives') {
+			// Alive, and never publishing its marker: a listener that failed to start
+			$this->proxyLivesButNeverServes();
+			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 		} else {
 			$this->clearProxyFiles();
+		}
+		if ($s['serving']) {
+			// The Unbound backend answers, and a gateway that serves forwards to it: a full confirmation needs both
+			$this->seedUnbound();
+			if ($s['proxy'] === 'serves') {
+				$this->seedRunningGateway();
+			}
 		}
 		if ($s['rc'] === 'same') {
 			pfb_dns_proxy_service($this->krProxyDir);

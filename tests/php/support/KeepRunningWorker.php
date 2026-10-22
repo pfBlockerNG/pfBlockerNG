@@ -22,6 +22,8 @@ final class KeepRunningWorker
 	public function run(array $scenario, string $resultFile): void
 	{
 		$this->krSeed(sys_get_temp_dir() . '/pfb_keep_running_worker_' . getmypid() . '_' . bin2hex(random_bytes(4)));
+		// The package rows keep the Unbound backend dead: a deferred pass must need no confirmation to stand
+		$scenario += ['serving' => FALSE];
 		$this->krApply($scenario);
 		$operation = pfb_pkg_operation();
 		$returned = NULL;

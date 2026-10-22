@@ -119,13 +119,33 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 
 	public function testADeadProxyIsStillStartedAndNothingStaysPending(): void
 	{
-		// Given a proxy that is down, with a restart already pending
-		$result = $this->runUnderPkg(['op' => 'ensure', 'proxy' => 'dead', 'marker' => 'the package changed its rc script']);
+		// Given a proxy that is down, with a restart already pending, and an Unbound backend that answers
+		$result = $this->runUnderPkg(['op' => 'ensure', 'proxy' => 'dead', 'marker' => 'the package changed its rc script', 'serving' => TRUE]);
 
 		// Then it is started, and the start satisfies the pending restart
 		$this->assertTrue($result['returned']);
 		$this->assertSame(['start_service pfb_dns_proxy'], $result['calls']);
 		$this->assertNull($result['marker']);
+	}
+
+	public function testADeadProxyStartedUnderAPackageOperationIsRolledBackWhenItsBackendIsDead(): void
+	{
+		// Given a proxy that is down with a restart pending, and no Unbound answering behind the gateway it starts
+		$result = $this->runUnderPkg(['op' => 'ensure', 'proxy' => 'dead', 'marker' => 'the package changed its rc script']);
+
+		// Then the start is judged in full: the gateway serves, but its upstream does not, so the start is rolled back
+		$this->assertFalse($result['returned']);
+		$this->assertStringContainsString('did not become ready', $result['log']);
+	}
+
+	public function testADeferredPassWhoseGatewayIsNotReadyGetsTheFullConfirmation(): void
+	{
+		// Given a live gateway that never publishes its marker, and an rc script the package changed
+		$result = $this->runUnderPkg(['op' => 'ensure', 'proxy' => 'lives', 'rc' => 'stale']);
+
+		// Then the pass is not taken as quiet: the full confirmation runs and, the gateway never ready, rolls the start back
+		$this->assertFalse($result['returned']);
+		$this->assertStringContainsString('did not become ready', $result['log']);
 	}
 
 	public function testAReloadStartsADeadProxyEvenUnderAPackageOperation(): void
