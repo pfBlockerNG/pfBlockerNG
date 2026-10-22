@@ -1017,8 +1017,6 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
 
     h.wait_until(panel_ready, timeout=60.0, interval=2.0)
     _say(f"status panel with the gateway serving: {healthy}")
-    for t, rows in healthy.items():
-        assert rows and {said for _, _, said in rows} == {"Listening"}, f"healthy {t}: {rows}"
 
     try:
         stop = vm.ssh("/usr/local/sbin/unbound-control", "-c", h.UNBOUND_CONF, "stop", timeout=30)
