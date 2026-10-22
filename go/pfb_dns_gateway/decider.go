@@ -397,7 +397,7 @@ func (d *Decider) Decide(ctx context.Context, client netip.Addr, datagram bool, 
 			reply := fwd(ctx, request)
 			c.answered()
 			if err := d.send(frameReply, id, reply); err != nil {
-				return nil, err
+				return c.delivered(err)
 			}
 		case answer := <-c.final:
 			return answer, nil
@@ -405,7 +405,18 @@ func (d *Decider) Decide(ctx context.Context, client netip.Addr, datagram bool, 
 			d.abandon(id, c)
 			return nil, ctx.Err()
 		case <-d.done:
-			return nil, d.Err()
+			return c.delivered(d.Err())
 		}
+	}
+}
+
+// delivered is the answer the decider already gave, else err: a session that ends after the final frame (a retired decider
+// is closed as its last answer lands) does not take the answer with it.
+func (c *call) delivered(err error) ([]byte, error) {
+	select {
+	case answer := <-c.final:
+		return answer, nil
+	default:
+		return nil, err
 	}
 }

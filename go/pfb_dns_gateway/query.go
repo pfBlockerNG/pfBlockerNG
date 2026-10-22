@@ -119,6 +119,7 @@ type gateway struct {
 	udpPerAddr, muxPerAddr, tcpPerAddr, dohPerAddr, doqPerAddr int    // per-address shares of the budgets below; a test lifts one to look at the global cap alone
 	doqAccepted                                                func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
 	doqListenerClosed                                          func() // test seam: DoQ's closer calls it once ln.Close() has returned, before it waits for the accept loop
+	deciderRead                                                func() // test seam: resolve calls it between reading the active decider and asking it
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -214,7 +215,11 @@ func (g *gateway) screen(client netip.Addr, wire []byte) (disposition, []byte) {
 func (g *gateway) resolve(ctx context.Context, client netip.Addr, datagram bool, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(ctx, 2*g.timeout+g.grace)
 	defer cancel()
-	answer, err := g.decide(ctx, g.dec.Load(), client, datagram, wire, fwd)
+	dec := g.dec.Load()
+	if g.deciderRead != nil {
+		g.deciderRead()
+	}
+	answer, err := g.decide(ctx, dec, client, datagram, wire, fwd)
 	if err != nil {
 		return buildServfail(wire)
 	}

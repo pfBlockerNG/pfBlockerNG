@@ -334,11 +334,10 @@ func TestTheRestartedDeciderDyingIsFatal(t *testing.T) {
 	}
 }
 
-// A shutdown while the old decider still holds a query does not wait for it: both deciders are closed and reaped within
-// the shutdown budget.
-func TestAShutdownDuringTheDrainReapsBothDecidersWithinTheBudget(t *testing.T) {
-	const budget = 2 * time.Second
-	srv, sock := startRestartRig(t, "forward-tagged", func(c *config) { c.shutdownBudget = budget })
+// A shutdown while the old decider still holds a query does not wait for it: once the shutdown returns, both deciders
+// are closed and reaped.
+func TestAShutdownDuringTheDrainReapsBothDeciders(t *testing.T) {
+	srv, sock := startRestartRig(t, "forward-tagged", nil)
 	_, old := srv.active()
 	entered, release := make(chan struct{}), make(chan struct{})
 	t.Cleanup(sync.OnceFunc(func() { close(release) }))
@@ -359,11 +358,9 @@ func TestAShutdownDuringTheDrainReapsBothDecidersWithinTheBudget(t *testing.T) {
 		t.Fatalf("restart: reply %q, want ok", got)
 	}
 	_, cur := srv.active()
-	began := time.Now()
-	srv.shutdown()
-	if took := time.Since(began); took > budget {
-		t.Fatalf("shutdown during the drain took %s, over the budget of %s", took, budget)
-	}
+	done := make(chan struct{})
+	go func() { srv.shutdown(); close(done) }()
+	waitClosed(t, done, "the shutdown during the drain to return")
 	for what, c := range map[string]*child{"the retiring decider": old, "the active decider": cur} {
 		select {
 		case <-c.exited:

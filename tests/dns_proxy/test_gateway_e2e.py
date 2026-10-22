@@ -239,7 +239,9 @@ def _gateway_process(
 ) -> Iterator[tuple[GatewayProcess, Path]]:
     """The gateway with `flags` added: the REAL decider on the module dir, Unbound's PROXYv2 port upstream.
 
-    The gateway is given an unbound.conf that includes access_lists.conf (`acl_text`) and carries `clause_rows`.
+    The gateway is given an unbound.conf that includes access_lists.conf (`acl_text`) and carries `clause_rows`, and a
+    control socket of its own unless `flags` name one: it is bound in every mode, and as root the default path would
+    replace a real gateway's.
     """
     acl = tmp_path / "access_lists.conf"
     acl.write_text(acl_text, encoding="utf-8")
@@ -251,18 +253,21 @@ def _gateway_process(
     site.mkdir()
     (site / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
     env = {**os.environ, "PYTHONPATH": str(site), "PFB_TEST_LOG_DIR": str(log_dir)}
-    argv = [
-        str(gateway_binary), "--listen", "127.0.0.1", "--port", "0",
-        "--upstream", f"127.0.0.1:{unbound.port}", "--unbound-conf", str(conf), *flags,
-        "--",
-        sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--decision-fd", "3", "--module-dir", str(module_dir),
-    ]  # fmt: skip
-    process = GatewayProcess(argv, env)
-    try:
-        process.wait_for("ready upstream ")
-        yield process, log_dir
-    finally:
-        process.stop()
+    with contextlib.ExitStack() as stack:
+        if "--ctl-socket" not in flags:
+            flags = [*flags, "--ctl-socket", str(stack.enter_context(control_socket()))]
+        argv = [
+            str(gateway_binary), "--listen", "127.0.0.1", "--port", "0",
+            "--upstream", f"127.0.0.1:{unbound.port}", "--unbound-conf", str(conf), *flags,
+            "--",
+            sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--decision-fd", "3", "--module-dir", str(module_dir),
+        ]  # fmt: skip
+        process = GatewayProcess(argv, env)
+        try:
+            process.wait_for("ready upstream ")
+            yield process, log_dir
+        finally:
+            process.stop()
 
 
 @pytest.fixture
