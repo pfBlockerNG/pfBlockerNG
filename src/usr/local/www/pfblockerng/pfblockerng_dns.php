@@ -124,6 +124,9 @@ if ($_POST) {
 		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_sslcertref') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
 		}
+		if (pfb_dns_proxy_ddr_doh_443_locked()) {
+			$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns/pfb_dns_ddr_doh_443');	// a disabled control posts nothing: the form shows the stored value, as the save keeps it
+		}
 		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
 		}

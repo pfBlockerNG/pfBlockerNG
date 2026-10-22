@@ -231,6 +231,33 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 	}
 
+	/** Does the restore-on-error block, right after the loop that brings back the posted scalar fields, show the STORED "DoH on port 443" toggle while the page disables that control, once? */
+	private static function restoresLockedDohOn443FromStored(string $page): bool
+	{
+		return preg_match_all('/\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';\s*\}\s*if \(pfb_dns_proxy_ddr_doh_443_locked\(\)\) \{\s*\$pconfig\[\'pfb_dns_ddr_doh_443\'\] = PfbConfig::read\(\'dns\/pfb_dns_ddr_doh_443\'\);[^\n]*\s*\}/', $page) === 1;
+	}
+
+	public function testTheRestoreCheckSeesAnUnguardedANegatedAPostedAWrongKeyAndAnEarlierRestore(): void
+	{
+		$loop = "\$pconfig[\$pfb_dns_field] = \$_POST[\$pfb_dns_field] ?? '';\n}\n";
+		$restore = "if (pfb_dns_proxy_ddr_doh_443_locked()) {\n\t\$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns/pfb_dns_ddr_doh_443');\t// x\n}\n";
+
+		$this->assertTrue(self::restoresLockedDohOn443FromStored($loop . $restore), 'the stored value restored under the lock, after the loop');
+		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop), 'never restored');
+		$this->assertFalse(self::restoresLockedDohOn443FromStored($restore . $loop), 'restored before the loop, which then overwrites it with the empty post');
+		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('if (pfb_dns_proxy_ddr_doh_443_locked())', 'if (!pfb_dns_proxy_ddr_doh_443_locked())', $restore)), 'negated lock');
+		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('PfbConfig::read(\'dns/pfb_dns_ddr_doh_443\')', '$_POST[\'pfb_dns_ddr_doh_443\']', $restore)), 'the posted value');
+		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('dns/pfb_dns_ddr_doh_443', 'dns/pfb_dns_ddr', $restore)), 'the other toggle');
+	}
+
+	public function testAFailedSaveShowsTheStoredDohOn443ToggleWhileThePageDisablesIt(): void
+	{
+		$this->assertTrue(
+			self::restoresLockedDohOn443FromStored(self::src('www/pfblockerng/pfblockerng_dns.php')),
+			'a disabled checkbox posts nothing, so the restore must read dns/pfb_dns_ddr_doh_443 from the store while pfb_dns_proxy_ddr_doh_443_locked(), as the save keeps it'
+		);
+	}
+
 	/** Is the 443 checkbox disabled exactly once, and only under the helper that says the stored DoH port is 443? */
 	private static function disabledOnlyForDohPort443(string $page): bool
 	{

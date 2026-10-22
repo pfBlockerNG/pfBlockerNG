@@ -320,6 +320,24 @@ final class DnsProxyDdrWarningTest extends TestCase
 		$this->assertFalse(openssl_error_string(), 'OpenSSL error queue left empty');
 	}
 
+	public function testASanWhoseTextCarriesANulByteIsSkippedAndNothingThrows(): void
+	{
+		// Given a certificate whose DNS SAN reads as the IP SAN "8.8.8.8" followed by a NUL byte, and a genuine IP SAN for 1.1.1.1.
+		// OpenSSL's config parser cannot carry a NUL, so the bytes replace a same-length placeholder in the DER (openssl_x509_parse() does not check the signature).
+		$crafted = "a, IP Address:8.8.8.8\0";
+		$placeholder = str_repeat('Q', strlen($crafted));
+		$this->box(['wan' => ['8.8.8.8'], 'opt1' => ['1.1.1.1']], ["DNS:{$placeholder}", 'IP:1.1.1.1']);
+		$pem = (string) base64_decode($GLOBALS['config']['cert'][0]['crt']);
+		$der = (string) base64_decode((string) preg_replace('/-----[^-]+-----|\s/', '', $pem), TRUE);
+		$this->assertSame(1, substr_count($der, $placeholder), 'the placeholder is in the certificate once');
+		$pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode(str_replace($placeholder, $crafted, $der)), 64, "\n") . "-----END CERTIFICATE-----\n";
+		$this->assertStringContainsString($crafted, (string) openssl_x509_parse($pem)['extensions']['subjectAltName'], 'the NUL reaches the parsed SAN text');
+		$GLOBALS['config']['cert'][0]['crt'] = base64_encode($pem);
+
+		// Then nothing throws: the NUL-carrying entry credits no address, the genuine SAN covers 1.1.1.1
+		$this->assertSame([self::warning('8.8.8.8', 'DoT')], pfb_dns_proxy_ddr_warnings());
+	}
+
 	// -----------------------------------------------------------------------
 	// public or not
 	// -----------------------------------------------------------------------

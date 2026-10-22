@@ -4459,23 +4459,15 @@ const PFB_DNS_PROXY_NON_PUBLIC = [
 
 /**
  * Is this a public address: a valid one outside every range of PFB_DNS_PROXY_NON_PUBLIC? An IPv4-mapped IPv6 address
- * (::ffff:a.b.c.d) is classified by its IPv4 address. Compares the packed bytes, so spelling does not matter.
+ * (::ffff:a.b.c.d) is classified by its IPv4 address. Compares the packed bytes (pfb_ip_in_cidr()), so spelling does not matter.
  */
 function pfb_dns_proxy_public_address(string $address): bool {
-	$packed = @inet_pton($address);
-	if ($packed === FALSE) {
+	if (@inet_pton($address) === FALSE) {
 		return FALSE;
 	}
-	if (strlen($packed) === 16 && str_starts_with($packed, str_repeat("\0", 10) . "\xff\xff")) {
-		$packed = substr($packed, 12);
-	}
+	$address = pfb_ipv4_from_mapped($address) ?? $address;
 	foreach (PFB_DNS_PROXY_NON_PUBLIC as $range) {
-		[$network, $bits] = explode('/', $range);
-		$network = (string) inet_pton($network);
-		$whole = intdiv((int) $bits, 8);
-		$rest = (int) $bits % 8;
-		if (strlen($network) === strlen($packed) && strncmp($packed, $network, $whole) === 0 &&
-		    ($rest === 0 || ((ord($packed[$whole]) ^ ord($network[$whole])) >> (8 - $rest)) === 0)) {
+		if (pfb_ip_in_cidr($address, $range)) {
 			return FALSE;
 		}
 	}
@@ -4498,11 +4490,12 @@ function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
 	while (openssl_error_string() !== FALSE) {
 		continue; // the parse leaves its reason in OpenSSL's error queue, which is the next caller's
 	}
-	// shortcut: openssl_x509_parse() gives the SANs as one text, so a DNS or URI SAN containing ", IP Address:x" reads as an IP SAN. That can
-	// only silence an advisory about that certificate itself; upgrade if pfSense exposes the SANs structured.
+	// shortcut: openssl_x509_parse() gives the SANs as one text, so a crafted DNS or URI SAN containing ", IP Address:x" reads as an IP SAN
+	// and can silence the advisory for its own certificate; an entry with a NUL byte is skipped (inet_pton() throws on one). Upgrade if
+	// pfSense exposes the SANs structured.
 	$sans = [];
 	foreach (explode(', ', is_array($parsed) ? (string) ($parsed['extensions']['subjectAltName'] ?? '') : '') as $san) {
-		if (str_starts_with($san, 'IP Address:') && ($packed = @inet_pton(substr($san, 11))) !== FALSE) {
+		if (str_starts_with($san, 'IP Address:') && !str_contains($san, "\0") && ($packed = @inet_pton(substr($san, 11))) !== FALSE) {
 			$sans[$packed] = TRUE;
 		}
 	}
@@ -5615,7 +5608,7 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
 
 /**
  * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
- * reload, and restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ
+ * reload, and restart a live one whose rc script changed. The script bakes in the addresses the proxy listens on and the DoH/DoQ/DDR
  * settings, so a new address or a changed setting is not served until the proxy restarts. Whatever it did, the proxy must
  * then be READY: one that is alive but never published its marker (restarted by its supervisor every few seconds) fails
  * the activation and is rolled back, which a pidfile alone would never notice.
@@ -5655,10 +5648,10 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		$rc_changed = $before !== @file_get_contents(PFB_DNS_PROXY_RCFILE);
 		if ($deferred) {
 			if ($rc_changed) {
-				pfb_dns_proxy_defer_restart('its listen addresses or DoH/DoQ settings changed');
+				pfb_dns_proxy_defer_restart('its listen addresses or DoH/DoQ/DDR settings changed');
 			}
 		} elseif ($rc_changed) {
-			$why = 'its listen addresses or DoH/DoQ settings changed';
+			$why = 'its listen addresses or DoH/DoQ/DDR settings changed';
 		} elseif (file_exists($pfb['dns_proxy_restart_pending'])) {
 			$why = 'a restart was deferred to this update';
 		} elseif (pfb_dns_proxy_ready()) {
