@@ -3110,9 +3110,9 @@ function pfb_dnsbl_vip_candidates(int $family): array {
 
 // [ ADR-13 ] Return the first candidate sinkhole address (pfb_dnsbl_vip_candidates)
 // for the given family that is free to use as an auto-created DNSBL VIP, or null if
-// every candidate conflicts. A candidate is free iff it is (a) not already an
-// existing IP-Alias VIP (pfb_get_vips) and (b) overlaps no configured subnet
-// (where_is_ipaddr_configured) — the SAME overlap semantics pfb_validate_vips uses
+// every candidate conflicts. A candidate is free iff it is (a) not the address of an
+// existing CARP/IP-Alias VIP (get_configured_vip_list) and (b) overlaps no configured
+// interface subnet (where_is_ipaddr_configured) — the SAME overlap semantics pfb_validate_vips uses
 // (inc:746/:753). Pure: enumerates state, creates/changes nothing. $interface is
 // accepted for parity with the create path and future per-interface scoping; the
 // conflict checks here are interface-independent (a VIP/subnet conflict anywhere is
@@ -3128,24 +3128,17 @@ function pfb_pick_free_dnsbl_vip(int $family, string $interface, ?string $addres
 		return null;
 	}
 
-	// Existing IP-Alias VIP addresses for this family (values are the addresses).
-	$vips = pfb_get_vips();
-	if ($family === AF_INET) {
-		$existing = $vips['v4'];
-	} elseif ($family === AF_INET6) {
-		$existing = $vips['v6'];
-	} else {
-		return null;
-	}
-	$existing_addresses = array_values($existing);
+	// Bare stored addresses (pfb_get_vips() values are display labels), compared as binary so a
+	// differently spelt IPv6 VIP still counts, as pfSense's own duplicate-address check does.
+	$existing = array_map('inet_pton', get_configured_vip_list());
 
 	foreach ($candidates as $candidate) {
 		// (a) Not an address already used by an existing VIP.
-		if (in_array($candidate, $existing_addresses, TRUE)) {
+		if (in_array(inet_pton($candidate), $existing, TRUE)) {
 			continue;
 		}
-		// (b) Does not overlap any configured subnet (interface IPs, other VIPs,
-		// etc.) — same call shape as pfb_validate_vips.
+		// (b) Does not overlap any configured interface subnet — same call shape as
+		// pfb_validate_vips.
 		if (count(where_is_ipaddr_configured($candidate, '', TRUE, TRUE, ''))) {
 			continue;
 		}

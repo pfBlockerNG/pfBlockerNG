@@ -10,9 +10,9 @@ automatically". Each node owns its own VIP object (B's uniqid is never A's); onl
   the way, so it picks 172.16.53.53) sends, B removes its marked VIP, creates none, leaves its interface alone and
   lists the conflict on the Sync page.
 
-A node's picker (``pfb_pick_free_dnsbl_vip``) treats an address as taken when it lies inside an interface subnet that
-is live on the node; an unmarked IP-alias VIP does not count. The conflict is therefore LAN readdressed into
-172.16.53.0/24, which the HA pair does not use (WAN, the harness' management path and the SYNC link stay as they are).
+A node's picker (``pfb_pick_free_dnsbl_vip``) treats an address as taken when a VIP already holds it or it lies inside
+an interface subnet that is live on the node. Here the conflict is LAN readdressed into 172.16.53.0/24, which the HA
+pair does not use (WAN, the harness' management path and the SYNC link stay as they are).
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``). Run locally::
 
