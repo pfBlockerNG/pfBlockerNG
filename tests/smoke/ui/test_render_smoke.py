@@ -34,6 +34,7 @@ import subprocess
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from typing import TYPE_CHECKING
 
 import pytest
@@ -44,7 +45,7 @@ from .. import helpers, pkg_identity
 from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .test_category import _snapshot_node
 from .test_category_edit import CFG_DNSBL, CFG_IPV4, _del_rowid, _free_rowid
-from .webui import row_containing, scrape_form_fields
+from .webui import _has_flag, row_containing, scrape_form_fields
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -2143,8 +2144,18 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         for tag in re.findall(r"<input\b[^>]*>", html)
         if re.search(r"""\btype=["']?checkbox\b""", tag) and (name := re.search(r'\bname="([^"]+)"', tag))
     ]
-    assert checkboxes == ["pfb_dns", "pfb_dns_dot", "pfb_dns_doh", "pfb_dns_doq", "pfb_py_reply"], (
-        f"the page has the enable checkbox, the DoT, DoH and DoQ ones, then DNS Reply Logging; got {checkboxes}"
+    expected = [
+        "pfb_dns",
+        "pfb_dns_dot",
+        "pfb_dns_doh",
+        "pfb_dns_doq",
+        "pfb_dns_ddr",
+        "pfb_dns_ddr_doh_443",
+        "pfb_py_reply",
+    ]
+    assert checkboxes == expected, (
+        "the page has the enable checkbox, the DoT, DoH and DoQ ones, the two DDR ones, then DNS Reply Logging; "
+        f"got {checkboxes}"
     )
     help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
     for needle in (
@@ -2485,6 +2496,320 @@ def test_pfb_dns_page_load_seeds_its_settings_from_the_resolver_once(
         assert _read_config_paths(vm, seeded_paths) == expected, "a later Resolver change must not alter the settings"
     finally:
         _write_config_paths(vm, priors)
+
+
+# issue #3583: the DDR section and its certificate warning. 192.88.99.1 is public by the page's classification: it is
+# in none of the private, reserved, documentation or benchmarking ranges the warning skips.
+_DDR_TITLE = "Discovery of Designated Resolvers (DDR)"
+_DDR_WARNING_ADDRESS = "192.88.99.1"
+_VIP_ADDRESS = re.compile(rf"(?<![\d.]){re.escape(_DDR_WARNING_ADDRESS)}(?![\d.])")
+_DDR_WARNING_VIP = "pfb3583vip"
+# Everything the warning tests set, and what the page's first load seeds beside it on a box that was never seeded.
+_DDR_WARNING_KEYS = (
+    "pfb_dns_interface",
+    "pfb_dns_sslcertref",
+    "pfb_dns_dot",
+    "pfb_dns_dot_port",
+    "pfb_dns_dot_interface",
+    "pfb_dns_doh",
+    "pfb_dns_doh_port",
+    "pfb_dns_doh_interface",
+    "pfb_dns_doq",
+    "pfb_dns_doq_port",
+    "pfb_dns_doq_interface",
+    "pfb_dns_ddr",
+    "pfb_dns_ddr_doh_443",
+)
+
+
+class _WarningTexts(HTMLParser):
+    """The text of every ``div.alert-warning`` (nested divs included), whitespace collapsed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.texts: list[str] = []
+        self._depth = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "div":
+            return
+        if self._depth:
+            self._depth += 1
+        elif "alert-warning" in (dict(attrs).get("class") or "").split():
+            self._depth, self._parts = 1, []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "div" or not self._depth:
+            return
+        self._depth -= 1
+        if not self._depth:
+            self.texts.append(" ".join("".join(self._parts).split()))
+
+    def handle_data(self, data: str) -> None:
+        if self._depth:
+            self._parts.append(data)
+
+
+def _alert_warnings(page_html: str) -> list[str]:
+    parser = _WarningTexts()
+    parser.feed(page_html)
+    return parser.texts
+
+
+def _control_name(page_html: str, field: str) -> str | None:
+    """What names the control ``field`` to assistive technology: its aria-label, else the text of the ``<label for>``
+    that points at it; None when neither does."""
+    at = page_html.find(f'name="{field}"')
+    if at == -1:
+        return None
+    aria = re.search(r'\baria-label="([^"]*)"', _tag_at(page_html, at))
+    if aria:
+        return aria.group(1)
+    match = re.search(rf'<label\b[^>]*\bfor="{re.escape(field)}"[^>]*>(.*?)</label>', page_html, re.DOTALL)
+    return " ".join(re.sub(r"<[^>]+>", " ", match.group(1)).split()) if match else None
+
+
+def _tag_at(page_html: str, position: int) -> str:
+    """The HTML start tag around ``position``, an offset inside it (of its ``name="..."``, say)."""
+    return page_html[page_html.rfind("<", 0, position + 1) : page_html.index(">", position) + 1]
+
+
+def _set_dns(vm: SmokeVM, **leaves: str) -> None:
+    """Set pfB-DNS leaves (``pfb_dns_dot="on"``, ...) in one write_config()."""
+    _write_config_paths(vm, {f"{_DNS_CFG}{key}": value for key, value in leaves.items()})
+
+
+def test_pfb_dns_page_renders_the_ddr_section_with_both_toggles_between_doq_and_reply_logging(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3583: the DDR section follows DoQ and precedes DNS Reply Logging.
+
+    Given the pfB-DNS page renders, Then the DDR section title is there; `pfb_dns_ddr` and `pfb_dns_ddr_doh_443` are
+    checkboxes of value `on`, the second with the text `Advertise DoH on port 443`; the DoQ interface list, the DDR
+    section title, the two checkboxes and the DNS Reply Logging checkbox follow one another in the markup.
+    """
+    resp = webui.get(_PFB_DNS_PAGE)
+    result = evaluate_render(_PFB_DNS_PAGE, resp.status_code, resp.text, ("pfB-DNS Settings", _DDR_TITLE))
+    assert result.ok, f"pfB-DNS DDR render oracle failed: {result.detail}"
+    html = resp.text
+    marks = {
+        "DoQ interface list": html.find('name="pfb_dns_doq_interface'),
+        "DDR section title": html.find(_DDR_TITLE),
+        "DDR checkbox": html.find('name="pfb_dns_ddr"'),
+        "DoH on port 443 checkbox": html.find('name="pfb_dns_ddr_doh_443"'),
+        "DNS Reply Logging checkbox": html.find('name="pfb_py_reply"'),
+    }
+    assert -1 not in marks.values(), f"something between DoQ and DNS Reply Logging is missing: {marks}"
+    assert list(marks.values()) == sorted(marks.values()), f"expected the order of these markers, got {marks}"
+    for control, mark in (("pfb_dns_ddr", "DDR checkbox"), ("pfb_dns_ddr_doh_443", "DoH on port 443 checkbox")):
+        tag = _tag_at(html, marks[mark])
+        assert re.search(r"""\btype=["']?checkbox\b""", tag) and re.search(r"""\bvalue=["']?on\b""", tag), (
+            f"{control} must be a checkbox of value on, got {tag}"
+        )
+    visible = " ".join(
+        re.sub(r"<[^>]+>", " ", html[marks["DoH on port 443 checkbox"] : marks["DNS Reply Logging checkbox"]]).split()
+    )
+    assert "Advertise DoH on port 443" in visible, (
+        f"the DoH on port 443 checkbox lacks its text 'Advertise DoH on port 443'; the text after it starts: "
+        f"{visible[:200]!r}"
+    )
+
+
+def test_pfb_dns_page_names_the_ddr_checkboxes_by_their_visible_labels(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3583: assistive technology reads `DDR` and `DoH on port 443` for the two checkboxes.
+
+    pfSense's Form_Group prints the visible label as `<label class="col-sm-2 control-label">` with no `for`, so the
+    control must carry the name itself (an `aria-label`, as the interface lists do, issue #3517) or be pointed at.
+    """
+    resp = webui.get(_PFB_DNS_PAGE)
+    result = evaluate_render(_PFB_DNS_PAGE, resp.status_code, resp.text, ("pfB-DNS Settings", _DDR_TITLE))
+    assert result.ok, f"pfB-DNS DDR render oracle failed: {result.detail}"
+    for control, label in (("pfb_dns_ddr", "DDR"), ("pfb_dns_ddr_doh_443", "DoH on port 443")):
+        named = _control_name(resp.text, control)
+        assert named == label, f"{control}: expected its accessible name {label!r}, got {named!r}"
+
+
+@pytest.mark.ui_e2e
+def test_pfb_dns_page_disables_the_doh_on_port_443_checkbox_only_while_the_stored_doh_port_is_443(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3583: DoH already on port 443 leaves the toggle nothing to change, so the checkbox renders disabled.
+
+    Given the stored DoH port is 4443, Then `pfb_dns_ddr_doh_443` renders without the `disabled` attribute;
+    When the stored DoH port is 443, Then it renders with it.
+    """
+    vm = smoke_vm
+    paths = [f"{_DNS_CFG}{key}" for key in ("pfb_dns_interface", "pfb_dns_doh_port")]
+    priors = _read_config_paths(vm, paths)
+    try:
+        # A stored plain interface list keeps the page's first load from seeding (rewriting) other settings.
+        _set_dns(vm, pfb_dns_interface="lo0")
+        for port, disabled in (("4443", False), ("443", True)):
+            _set_dns(vm, pfb_dns_doh_port=port)
+            resp = webui.get(_PFB_DNS_PAGE)
+            result = evaluate_render(_PFB_DNS_PAGE, resp.status_code, resp.text, ("pfB-DNS Settings",))
+            assert result.ok, f"pfB-DNS render oracle failed with the DoH port {port}: {result.detail}"
+            at = resp.text.find('name="pfb_dns_ddr_doh_443"')
+            assert at != -1, f"DoH port {port}: the page has no pfb_dns_ddr_doh_443 checkbox"
+            tag = _tag_at(resp.text, at)
+            assert _has_flag(tag, "disabled") is disabled, (
+                f"stored DoH port {port}: expected the checkbox {'disabled' if disabled else 'enabled'}, got {tag}"
+            )
+    finally:
+        _restore_config_paths(vm, priors)
+
+
+def _set_ddr_warning_vip(vm: SmokeVM, present: bool) -> None:
+    """Add or remove the IP-alias VIP on lo0 that gives the page a public address to list.
+
+    Config only: the page's interface lists read config.xml (get_configured_vip_list()), so no alias is brought up.
+    """
+    entry = {
+        "mode": "ipalias",
+        "interface": "lo0",
+        "type": "single",
+        "subnet": _DDR_WARNING_ADDRESS,
+        "subnet_bits": "32",
+        "descr": "pfB-DNS issue 3583",
+        "uniqid": _DDR_WARNING_VIP,
+    }
+    result = helpers.php_eval(
+        vm,
+        "$keep = array();\n"
+        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+        f"  if (($v['uniqid'] ?? '') !== {helpers._php_str(_DDR_WARNING_VIP)}) {{ $keep[] = $v; }}\n"
+        "}\n"
+        + (f"$keep[] = {helpers._php_kv_array(entry)};\n" if present else "")
+        + "if ($keep) { config_set_path('virtualip/vip', $keep); } else { config_del_path('virtualip/vip'); }\n"
+        "write_config('pfBlockerNG smoke: issue 3583 listener VIP');\n"
+        "$left = 0;\n"
+        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+        f"  if (($v['uniqid'] ?? '') === {helpers._php_str(_DDR_WARNING_VIP)}) {{ $left++; }}\n"
+        "}\n"
+        f"echo $left === {int(present)} ? 'VIP-OK' : 'VIP-BAD:' . $left;",
+    )
+    assert result.returncode == 0 and "VIP-OK" in result.stdout, (
+        f"the issue 3583 VIP (present={present}) did not take: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def _restore_config_paths(vm: SmokeVM, priors: Mapping[str, str | None]) -> None:
+    """Put the leaves back exactly (absent stays absent), then read them again: a restore that did not take fails."""
+    _write_config_paths(vm, priors)
+    now = _read_config_paths(vm, list(priors))
+    assert now == dict(priors), f"the restore did not take: expected {dict(priors)}, got {now}"
+
+
+@contextmanager
+def _ddr_on_with_a_certificate_and_a_public_vip(vm: SmokeVM, webui: WebUI) -> Iterator[None]:
+    """DDR on, a certificate selected, DoT, DoH and DoQ off on the interface list All, and a lo0 IP-alias VIP at the
+    public address. A box's own certificates carry no iPAddress SAN for it, so a transport turned on warns.
+
+    Every leaf touched and the VIP are put back on the way out.
+    """
+    paths = [f"{_DNS_CFG}{key}" for key in _DDR_WARNING_KEYS]
+    priors = _read_config_paths(vm, paths)
+    try:
+        # An unseeded box is seeded by this first load (the keys above, restored below); the form's first certificate
+        # is the one used.
+        cert = scrape_form_fields(webui.get(_PFB_DNS_PAGE).text).get("pfb_dns_sslcertref", "")
+        assert cert, (
+            "the pfB-DNS form offers no certificate (this box has none with a private key): criterion 8 needs one"
+        )
+        _set_dns(
+            vm,
+            pfb_dns_interface="lo0",
+            pfb_dns_sslcertref=cert,
+            pfb_dns_dot="",
+            pfb_dns_dot_port="853",
+            pfb_dns_dot_interface="all",
+            pfb_dns_doh="",
+            pfb_dns_doh_port="4443",
+            pfb_dns_doh_interface="all",
+            pfb_dns_doq="",
+            pfb_dns_doq_port="853",
+            pfb_dns_doq_interface="all",
+            pfb_dns_ddr="on",
+            pfb_dns_ddr_doh_443="",
+        )
+        _set_ddr_warning_vip(vm, True)
+        yield
+    finally:
+        try:
+            _set_ddr_warning_vip(vm, False)
+        finally:
+            _restore_config_paths(vm, priors)
+
+
+def _assert_ddr_warnings(webui: WebUI, when: str, *, naming_the_vip: int) -> list[str]:
+    """Load the pfB-DNS page and expect `naming_the_vip` alert-warnings starting `DDR: ` that name the public VIP.
+
+    Only the VIP's warnings are counted, so another public address on the box (a pool VM's WAN or LAN) cannot fail the
+    count. They are returned, sorted, as the other `DDR: ` warnings. With `naming_the_vip` 0 the page must carry no
+    `DDR: ` warning at all: a state with nothing to check (toggle off, the only listener excluded) warns for no address.
+    """
+    resp = webui.get(_PFB_DNS_PAGE)
+    result = evaluate_render(_PFB_DNS_PAGE, resp.status_code, resp.text, ("pfB-DNS Settings",))
+    assert result.ok, f"pfB-DNS render oracle failed ({when}): {result.detail}"
+    warnings = _alert_warnings(resp.text)
+    ddr = [text for text in warnings if text.startswith("DDR: ")]
+    named = [text for text in ddr if _VIP_ADDRESS.search(text)]
+    others = sorted(text for text in ddr if text not in named)
+    assert len(named) == naming_the_vip, (
+        f"{when}: expected {naming_the_vip} alert-warning(s) starting 'DDR: ' and naming {_DDR_WARNING_ADDRESS}, "
+        f"got {named}; every alert-warning: {warnings}"
+    )
+    assert naming_the_vip or not others, (
+        f"{when}: expected no alert-warning starting 'DDR: ' at all, got {others}; every alert-warning: {warnings}"
+    )
+    return others
+
+
+@pytest.mark.ui_e2e
+def test_pfb_dns_page_warns_about_a_public_dot_address_the_certificate_lacks_only_while_ddr_is_on(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3583, criterion 8: DDR on, a certificate selected and DoT on All warn about a public VIP; off does not.
+
+    Given a certificate the form offers, DoT on with the interface list All and a lo0 IP-alias VIP at 192.88.99.1,
+    When the page loads with DDR on, Then exactly one div.alert-warning starts with `DDR: ` and names that address;
+    When only the DDR toggle is turned off and the page loads again, Then no `DDR: ` warning is left.
+    """
+    with _ddr_on_with_a_certificate_and_a_public_vip(smoke_vm, webui):
+        _set_dns(smoke_vm, pfb_dns_dot="on")
+        _assert_ddr_warnings(webui, "DDR on, DoT on All", naming_the_vip=1)
+        _set_dns(smoke_vm, pfb_dns_ddr="")
+        _assert_ddr_warnings(webui, "DDR off (only the toggle changed)", naming_the_vip=0)
+
+
+@pytest.mark.ui_e2e
+def test_pfb_dns_page_leaves_the_doh_listener_unchecked_while_doh_on_port_443_is_on_but_still_checks_dot(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3583, criterion 8 (revised): DoH on port 443 is served through a reverse proxy, whose certificate the
+    page cannot see, so the DoH listener is not checked; DoT and DoQ are.
+
+    Given DDR on, a certificate, a lo0 IP-alias VIP at 192.88.99.1 and DoH on All as the only transport (DoH on port
+      443 off),
+    Then exactly one `DDR: ` warning names the address (the DoH listener is checked);
+    When only DoH on port 443 is turned on, Then no `DDR: ` warning is left;
+    When DoT is also turned on All, Then the warning is back (DoT is still checked) and the `DDR: ` warnings for any
+    other public address of the box are the same as when DoH was the checked listener.
+    """
+    with _ddr_on_with_a_certificate_and_a_public_vip(smoke_vm, webui):
+        _set_dns(smoke_vm, pfb_dns_doh="on")
+        others = _assert_ddr_warnings(webui, "DoH on All, DoH on port 443 off", naming_the_vip=1)
+        _set_dns(smoke_vm, pfb_dns_ddr_doh_443="on")
+        _assert_ddr_warnings(webui, "DoH on All, only DoH on port 443 turned on", naming_the_vip=0)
+        _set_dns(smoke_vm, pfb_dns_dot="on")
+        again = _assert_ddr_warnings(webui, "DoH on port 443 on, DoT also on All", naming_the_vip=1)
+        assert again == others, (
+            f"DoH and DoT list the same addresses (All): the warnings for the box's other public addresses must not "
+            f"change when DoT replaces DoH as the checked listener; before {others}, after {again}"
+        )
 
 
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and

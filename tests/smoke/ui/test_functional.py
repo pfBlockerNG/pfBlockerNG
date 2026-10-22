@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import PhpErrorLogGuard
+from .render_oracle import NO_INPUT_ERRORS, PhpErrorLogGuard, input_errors_block
 from .test_render_smoke import (
     software_panel_forced,
 )
@@ -1959,6 +1959,63 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
         for key, state in originals.items():
             helpers.config_restore_state(vm, DNS_PROXY_CFG + key, state)
         helpers.config_restore_state(vm, CERT_CFG, original_cert)
+
+
+# issue #3583: DDR and DoH on port 443, saved like the other pfB-DNS toggles: posted `on` is stored `on`, posted `''`
+# is stored as the empty Off token.
+DDR_CFG = DNS_PROXY_CFG + "pfb_dns_ddr"
+DDR_443_CFG = DNS_PROXY_CFG + "pfb_dns_ddr_doh_443"
+
+
+@contextlib.contextmanager
+def _dns_page_settings_restored(vm: helpers.SmokeVM) -> Iterator[None]:
+    """Every pfB-DNS setting the page's Save writes, put back (presence included) on the way out."""
+    paths = [DNS_PROXY_CFG + key for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS)]
+    paths += [CERT_CFG, DDR_CFG, DDR_443_CFG]
+    originals = {path: helpers.config_get_state(vm, path) for path in paths}
+    try:
+        yield
+    finally:
+        for path, state in originals.items():
+            helpers.config_restore_state(vm, path, state)
+
+
+def _input_errors_text(body: str) -> str:
+    """The page's input-errors box as one line of text, for a failure message; NO_INPUT_ERRORS when it has none."""
+    block = input_errors_block(body)
+    return " ".join(re.sub(r"<[^>]+>", " ", block).split()) if block else NO_INPUT_ERRORS
+
+
+def test_pfb_dns_ddr_toggles_save_on_and_clearing_both_stores_the_off_tokens(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #3583: DDR and DoH on port 443 persist `on` and `on`; clearing both persists the empty Off tokens.
+
+    Given both stored Off and the stored DoH port 4443 (seeded directly, so the before-state does not depend on the
+      save path under test; the 443 checkbox renders disabled on port 443),
+    When the page's Save posts both on, Then `dns/pfb_dns_ddr` and `dns/pfb_dns_ddr_doh_443` are stored `on`;
+    When it posts both as `''` (WebUI.post cannot omit a key, so an absent key is not exercised here), Then both are
+      stored `''`.
+    """
+    vm = smoke_vm
+
+    def stored() -> tuple[str, str]:
+        return helpers.config_get(vm, DDR_CFG), helpers.config_get(vm, DDR_443_CFG)
+
+    with _dns_page_settings_restored(vm):
+        helpers.config_set(vm, DNS_PROXY_CFG + "pfb_dns_doh_port", "4443")
+        helpers.config_set(vm, DDR_CFG, "")
+        helpers.config_set(vm, DDR_443_CFG, "")
+        assert stored() == ("", ""), f"seed did not take: both DDR toggles must start Off, got {stored()}"
+        for posted, expected in (("on", ("on", "on")), ("", ("", ""))):
+            saved = webui.post(DNS_PAGE, {"pfb_dns_ddr": posted, "pfb_dns_ddr_doh_443": posted}, timeout=SAVE_TIMEOUT)
+            assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
+            now = stored()
+            assert now == expected, (
+                f"Save posting both toggles as {posted!r}: stored (dns/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443) "
+                f"expected {expected}, got {now}; the page's input errors: {_input_errors_text(saved.text)}"
+            )
 
 
 def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(
