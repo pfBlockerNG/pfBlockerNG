@@ -797,6 +797,10 @@ before `rc.start_packages` begins, and the proxy must keep its pids and keep ans
 prints the daemon launch, the listening socket, Unbound's process start, the first correct answers and Unbound's sync as
 separate times; a launch is not an answer.
 
+The boot check's nominal recovery budgets total 340 s before the upstream socket inventory. Certificate sync can run
+one inventory before the readiness wait, and a final probe can extend that wait's deadline; each costs at most 1 s plus
+the 5 s kill grace. The combined nominal bound is 352 s, leaving 8 s under the 360 s cap, not a measured slow-hardware ceiling.
+
 **Known limits.**
 
 - Edits made to the Resolver page's Custom options while the Resolver is moved survive until the proxy is turned
