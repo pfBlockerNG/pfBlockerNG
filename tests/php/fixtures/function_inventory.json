@@ -2400,6 +2400,11 @@
             }
         ]
     },
+    "pfb_dns_proxy_serving_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_dns_proxy_setting": {
         "returnsRef": false,
         "returnType": "mixed",

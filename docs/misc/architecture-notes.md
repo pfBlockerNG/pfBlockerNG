@@ -639,18 +639,24 @@ record its port. Recovery reports that the proxy did not become ready, and DNS c
 After resolving the lock or stop failure, turn pfB-DNS off and apply to restore the ordinary Resolver on its currently
 selected port, or correct the Listen Port and apply. Retry removal after DNS is restored; no fallback port is guessed.
 
-**Readiness and rollback.** A proxy is READY, not merely alive, only when the gateway and its configured Unbound upstream serve
-(`pfb_dns_proxy_ready()`, issue #3560). The rc script passes `--ready-file /var/unbound/pfb_dns_ready`
-(`$pfb['dns_proxy_ready']`) to the gateway, which writes its own PID atomically after binding its sockets, dropping privileges
+**Readiness and rollback.** A proxy is READY, not merely alive. `pfb_dns_proxy_ready()` (issue #3560) holds only when the gateway's
+child pidfile and its ready marker name the same live PID: the rc script passes `--ready-file /var/unbound/pfb_dns_ready`
+(`$pfb['dns_proxy_ready']`), and the gateway writes its own PID there atomically after binding its sockets, dropping privileges
 and receiving its decider's READY. The marker is PID-only; the complete startup log ends in `ready upstream <host>:<port> pid <pid>`.
-`pfb_dns_proxy_gateway_ready()` requires a live child pidfile and the same positive decimal PID in that marker.
 `pfb_dns_proxy_upstream_ready()` additionally requires a live Unbound pidfile and native `sockstat -46lw` TCP and UDP
-listeners owned by that Unbound PID on the **actual rc command's `--upstream` endpoint**. A foreign port holder, or Unbound
-running elsewhere, cannot satisfy it. Only the selected endpoint is required: dual-stack and `do-ip6: no` hosts using IPv4
-need no IPv6 upstream, and a host without `127.0.0.1` uses IPv6. Port 5354 is not the gateway's upstream.
+listeners owned by that Unbound PID on the `--upstream` endpoint of the **running** gateway. That endpoint comes from the gateway's
+command line, read with a bounded `ps -ww -o args=` for the marker's PID, which must be the installed
+`dns_proxy/bin/freebsd-(amd64|arm64)/pfb-dns` with exactly one `--upstream`. The rc script is not the source: it is the desired
+state, and after a deferred restart it can name an endpoint the running gateway does not forward to. Any other command line (none,
+a foreign binary, two upstreams) fails closed. A foreign port holder, or Unbound running elsewhere, cannot satisfy it. Only the
+selected endpoint is required: dual-stack and `do-ip6: no` hosts using IPv4 need no IPv6 upstream, and a host without `127.0.0.1`
+uses IPv6. Port 5354 is not the gateway's upstream.
+`pfb_dns_proxy_serving_ready()` is `pfb_dns_proxy_ready()` and `pfb_dns_proxy_upstream_ready()`: what an activation waits for and what
+the status panel's Service reads as Running. The frontend listeners, the unlogged check, the active-transport gate, the installer's
+keep, the certificate push and the apply's change gate use the gateway-level READY alone.
 The socket inventory uses the bounded control-command seam with a one-second budget plus its kill grace; the outer wait
 keeps its startup deadline, with at most that final probe's bound beyond it. `pfb_dns_proxy_running()` remains pidfile-only
-liveness for the zero-downtime swap and apply ledger. The status shows Starting until the full predicate holds, but retains
+liveness for the zero-downtime swap and apply ledger. The status shows Starting until the serving predicate holds, but retains
 the current gateway's PID-confirmed front-end bindings independently. Listener ownership does not prove successful recursion;
 the boot query probe and native rollback smoke prove actual DNS answers. The rc script
 removes a previous marker only before a fresh launch (a healthy repeated `start` keeps the serving proxy's), its stop removes
@@ -659,7 +665,7 @@ the marker only when it names a process that stop signalled, and `start` runs un
 variable): the boot hook's background start and an apply's `start_service()` otherwise both pass the "already serving?"
 check before `daemon(8)` has written a pidfile and both launch. A start that cannot take the lock logs an error and exits 75.
 
-Every caller that starts or restarts the proxy waits for readiness (`pfb_dns_proxy_await_ready()`: 30 s, the Unbound
+Every caller that starts or restarts the proxy waits for serving readiness (`pfb_dns_proxy_await_ready()`, which waits on `pfb_dns_proxy_serving_ready()`: 30 s, the Unbound
 startup budget `PFB_UNBOUND_START_WAIT`, no setting of its own, never under a lock): `pfb_dns_proxy_restart()` (the reload's
 restart path and the installer) and `pfb_dns_proxy_ensure_running()` (the apply; it also checks a proxy that is alive with an
 unchanged script, so a crash-looping listener is noticed). The boot check (`dns_check`, which the boot hook backgrounds) confirms a
