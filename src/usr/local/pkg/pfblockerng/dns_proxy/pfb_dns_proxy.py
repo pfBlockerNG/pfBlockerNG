@@ -107,7 +107,14 @@ def code_fingerprint(module_dir: str | None = None) -> str:
 
 try:
     IMPORTED_CODE_FINGERPRINT = code_fingerprint()
-except OSError:
+    # Python compiled this script before its imports: disk bytes must still describe the executing module.
+    with open(__file__, "rb") as source:
+        if (
+            compile(source.read(), __file__, "exec", dont_inherit=True, optimize=sys.flags.optimize)
+            != sys._getframe().f_code
+        ):
+            IMPORTED_CODE_FINGERPRINT = None
+except (OSError, SyntaxError):
     IMPORTED_CODE_FINGERPRINT = None
 
 import decision_service  # noqa: E402 -- source fingerprint must precede frontend imports

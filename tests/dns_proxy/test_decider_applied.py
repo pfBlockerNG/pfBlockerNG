@@ -66,6 +66,7 @@ def _start(
     as_account: bool = True,
     extra_fds: tuple[int, ...] = (),
     group: int | None = None,
+    environment: dict[str, str] | None = None,
 ) -> tuple[subprocess.Popen[str], socket.socket]:
     """The decider from `layout.own` on one end of a socketpair, as ACCOUNT (or as the current user)."""
     go, py = socket.socketpair()
@@ -82,6 +83,7 @@ def _start(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
+        env=environment,
         **identity,  # type: ignore[call-overload]
     )
     py.close()
@@ -234,6 +236,54 @@ def test_code_replaced_during_boot_never_gets_a_record_for_code_the_decider_did_
         assert not record.exists(), (
             f"{changed} changed after import, but the old decider vouched for installed code: {record.read_text()}"
         )
+    finally:
+        parent.close()
+        go.close()
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=WATCHDOG)
+
+
+@pytest.mark.parametrize("timeout_source", ["6.0", "("], ids=["new-version", "invalid-replacement"])
+def test_the_main_script_replaced_before_its_first_fingerprint_cannot_attest_to_the_replacement(
+    layout: Layout, timeout_source: str
+) -> None:
+    parent, barrier = socket.socketpair()
+    parent.settimeout(WATCHDOG)
+    (layout.own / "sitecustomize.py").write_text(
+        "import builtins, socket\n"
+        "_import = builtins.__import__\n"
+        "def intercept(name, *args, **kwargs):\n"
+        "    if name == 'argparse':\n"
+        "        builtins.__import__ = _import\n"
+        f"        with socket.socket(fileno={barrier.fileno()}) as gate:\n"
+        "            gate.sendall(b'L')\n"
+        "            if gate.recv(1) != b'R':\n"
+        "                raise RuntimeError('early import barrier closed')\n"
+        "    return _import(name, *args, **kwargs)\n"
+        "builtins.__import__ = intercept\n",
+        encoding="utf-8",
+    )
+    child, go = _start(
+        layout,
+        "--no-module",
+        user=ACCOUNT.pw_name,
+        extra_fds=(barrier.fileno(),),
+        environment={**os.environ, "PYTHONPATH": str(layout.own)},
+    )
+    barrier.close()
+    try:
+        assert parent.recv(1) == b"L", "the executing main script never reached its first import"
+        path = layout.own / "pfb_dns_proxy.py"
+        source = path.read_text(encoding="utf-8")
+        replacement = source.replace("UNBOUND_TIMEOUT = 5.0", f"UNBOUND_TIMEOUT = {timeout_source}")
+        assert replacement != source, "the fixture did not replace the timeout constant"
+        path.write_text(replacement, encoding="utf-8")
+        parent.sendall(b"R")
+        got = Gateway(go, child).recv()
+        assert got == (READY, 0, b""), f"the replacement changed readiness: {got!r}"
+        record = layout.module / RECORD
+        assert not record.exists(), f"the executing old script attested to replacement code: {record.read_text()}"
     finally:
         parent.close()
         go.close()
