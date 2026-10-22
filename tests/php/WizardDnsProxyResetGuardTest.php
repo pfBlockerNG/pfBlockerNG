@@ -173,7 +173,7 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		$GLOBALS['config']['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode(self::BLOCK)];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($snapshot)));
 		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
-		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
+		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_rc_kept', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
 			$GLOBALS['pfb'][$file] = "{$this->dir}/{$file}";
 		}
 		$this->configXmlOnDisk($answer, 'Restored the DNS Resolver');
@@ -215,7 +215,7 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		$GLOBALS['config']['unbound'] = ['active_interface' => 'lo0', 'custom_options' => base64_encode(self::BLOCK)];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($snapshot)));
 		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
-		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
+		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_rc_kept', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
 			$GLOBALS['pfb'][$file] = "{$this->dir}/{$file}";
 		}
 		file_put_contents("{$this->dir}/feeds.json", (string) json_encode([
@@ -306,7 +306,7 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		// Given a Resolver pfB-DNS never moved, in this request's copy and in config.xml
 		$GLOBALS['config']['unbound'] = ['active_interface' => 'lan'];
 		config_set_path(self::SAVED, '');
-		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
+		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_rc_kept', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
 			$GLOBALS['pfb'][$file] = "{$this->dir}/{$file}";
 		}
 		file_put_contents("{$this->dir}/feeds.json", (string) json_encode([
@@ -366,7 +366,7 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 	{
 		$GLOBALS['config']['unbound'] = ['active_interface' => 'lan'];
 		config_set_path(self::SAVED, '');
-		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
+		foreach (['dns_proxy_pidfile', 'dns_proxy_ready', 'dns_proxy_rc_kept', 'dns_proxy_cert', 'dns_proxy_cert_legacy', 'dns_proxy_ctl'] as $file) {
 			$GLOBALS['pfb'][$file] = "{$this->dir}/{$file}";
 		}
 		mkdir($GLOBALS['pfb']['dbdir']);
