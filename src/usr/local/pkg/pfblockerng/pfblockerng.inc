@@ -5261,18 +5261,10 @@ function pfb_dns_proxy_upstream_ready(): bool {
 }
 
 /**
- * Is the DNS proxy READY: its listener serves queries and Unbound owns both transports on its actual upstream endpoint.
- * The proxy writes its own PID to --ready-file only once its sockets are bound, privileges dropped and matcher initialised, so the
- * child pidfile (daemon(8) -p) must name a live process AND the marker must hold that very decimal PID. A live process that never
- * published one (a listener that cannot bind, which its supervisor restarts every few seconds), the marker an earlier
- * incarnation left, a live supervisor with no child and a marker with no live child are all NOT ready.
- *
- * pfb_dns_proxy_running() stays the pidfile-only LIVENESS predicate (is the module host up? what the zero-downtime swap and the
- * ledger ask); this one answers whether an activation worked, and the status panel shows Running only while it holds (a live
- * child that has not published its marker shows Starting). This also requires the live Unbound PID's TCP and UDP upstream
- * sockets, not successful recursion: the boot query probe covers that.
+ * The gateway's sockets and matcher are ready only when its child pidfile names a live process and its ready marker holds
+ * that same positive decimal PID. Liveness alone (pfb_dns_proxy_running()) still serves the swap and apply ledger.
  */
-function pfb_dns_proxy_ready(): bool {
+function pfb_dns_proxy_gateway_ready(): bool {
 	global $pfb;
 
 	if (!isvalidpid($pfb['dns_proxy_pidfile'])) {
@@ -5281,8 +5273,12 @@ function pfb_dns_proxy_ready(): bool {
 	$child = (string) @file_get_contents($pfb['dns_proxy_pidfile']);
 	$marker = (string) @file_get_contents($pfb['dns_proxy_ready']);
 	$decimal = '/\A[1-9][0-9]*\n?\z/';
-	return preg_match($decimal, $child) === 1 && preg_match($decimal, $marker) === 1 &&
-	    rtrim($child, "\n") === rtrim($marker, "\n") && pfb_dns_proxy_upstream_ready();
+	return preg_match($decimal, $child) === 1 && preg_match($decimal, $marker) === 1 && rtrim($child, "\n") === rtrim($marker, "\n");
+}
+
+/** Activation also requires Unbound-owned TCP and UDP on the configured upstream, not successful recursion. */
+function pfb_dns_proxy_ready(): bool {
+	return pfb_dns_proxy_gateway_ready() && pfb_dns_proxy_upstream_ready();
 }
 
 /**
@@ -14773,11 +14769,11 @@ function pfb_dns_proxy_port(): string {
  * is on while nothing is moved is never running: it is said not to be active, with the reason (pfBlockerNG or the Resolver disabled,
  * or the Resolver not moved yet or refused), and claims no transport (`transports` is NULL).
  * A transport is `off` (its toggle is off and it has no active listener), `no_listener` (on, but the rc script's command gives it none)
- * or `rows` (pfb_dns_status_rows()). A running proxy lists what its current start bound (pfb_dns_proxy_listeners(), matched to its
+ * or `rows` (pfb_dns_status_rows()). A ready gateway lists what its current start bound (pfb_dns_proxy_listeners(), matched to its
  * readiness-marker PID) as `listening`, then each address the rc script's command names (pfb_dns_proxy_command_listeners()) that it did
- * not bind as `not_listening` with the logged reason. A saved toggle change cannot hide those listeners before Update applies it. A
- * proxy that is not running lists the command's addresses as `configured_not_bound`; one whose latest complete log record does not
- * match its PID, as `configured_unconfirmed`.
+ * not bind as `not_listening` with the logged reason. A saved toggle change or unavailable upstream cannot hide those front-end listeners.
+ * A gateway that is not ready lists the command's addresses as `configured_not_bound`; a ready gateway whose latest complete log record
+ * does not match its PID, as `configured_unconfirmed`.
  *
  * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>}
  */
@@ -14785,8 +14781,9 @@ function pfb_dns_status(): array {
 	global $pfb;
 
 	$saved = pfb_dns_proxy_saved();
-	// Running means ready (pfb_dns_proxy_ready()); a live child that has not published its marker is still starting
+	// Running requires the gateway and Unbound; front-end binding evidence depends only on the gateway's own readiness.
 	$service = pfb_dns_proxy_ready() ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
+	$gateway_ready = ($service === 'Running') || pfb_dns_proxy_gateway_ready();
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
 		return [
 			'service'    => $service,
@@ -14825,17 +14822,17 @@ function pfb_dns_status(): array {
 	}
 
 	$configured = pfb_dns_proxy_command_listeners();
-	$listeners = ($service === 'Running')
+	$listeners = $gateway_ready
 	    ? pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"))
 	    : NULL;
-	$unlogged = ($service === 'Running') ? 'configured_unconfirmed' : 'configured_not_bound';
+	$unlogged = $gateway_ready ? 'configured_unconfirmed' : 'configured_not_bound';
 	$labels = pfb_dns_proxy_address_interfaces();
 	$entry = static fn (string $at, string $state, string $reason = ''): array => ['address' => $at, 'state' => $state, 'reason' => $reason];
 	$transports = [];
 	foreach (['plain' => 'udp+tcp', 'dot' => 'dot', 'doh' => 'doh', 'doq' => 'doq'] as $row => $kind) {
 		$addresses = $configured[$kind] ?? [];
 		$bound = array_keys($listeners['listening'][$kind] ?? []);
-		$active = $service === 'Running' && ($addresses !== [] || $bound !== []);
+		$active = $gateway_ready && ($addresses !== [] || $bound !== []);
 		if ($kind !== 'udp+tcp' && !$active && pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
 			$transports[$row] = ['state' => 'off'];
 		} elseif ($addresses === [] && $bound === []) {
