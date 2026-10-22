@@ -161,6 +161,29 @@ if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
 }
 unset($pfb_test_sockstat);
 
+// ps(1) reads the running gateway's command line (PFB_DNS_PROXY_PS) from a fake process table: each row is `PID command line`, and a PID
+// with no row exits 1, as ps does for an absent process. A test writes the rows of the gateway it stands for; nothing else is listed.
+$GLOBALS['pfb_test_ps_output'] = "{$pfb_test_tmp}/ps.out";
+file_put_contents($GLOBALS['pfb_test_ps_output'], '');
+$pfb_test_ps = "{$pfb_test_tmp}/ps";
+$pfb_test_ps_script = <<<'SH'
+#!/bin/sh
+pid=''
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-p) pid="$2"; shift ;;
+	esac
+	shift
+done
+awk -v p="$pid" '$1 == p { sub(/^[^ ]+ /, ""); print; found = 1 } END { exit(found ? 0 : 1) }' @TABLE@
+SH;
+file_put_contents($pfb_test_ps, str_replace('@TABLE@', escapeshellarg($GLOBALS['pfb_test_ps_output']), $pfb_test_ps_script) . "\n");
+chmod($pfb_test_ps, 0755);
+if (!defined('PFB_DNS_PROXY_PS')) {
+	define('PFB_DNS_PROXY_PS', $pfb_test_ps);
+}
+unset($pfb_test_ps, $pfb_test_ps_script);
+
 // 4g. The installed package XML pfblockerng.inc re-registers the package's menu and services from after an aborted removal
 //     (issue #3515): the shipped file, so a unit test never reads the appliance's.
 if (!defined('PFB_PACKAGE_XML')) {

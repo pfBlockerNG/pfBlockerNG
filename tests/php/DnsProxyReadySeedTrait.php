@@ -89,6 +89,8 @@ trait DnsProxyReadySeedTrait
 	/** A proxy whose child is $child: its pidfile names it and the double says it lives; the marker is $marker ('' = absent). */
 	private function seedProxy(string $child, ?string $marker, bool $alive = TRUE): void
 	{
+		// The process table lists no gateway until a test seeds its command line (seedRunningGateway())
+		file_put_contents($GLOBALS['pfb_test_ps_output'], '');
 		file_put_contents($this->proxyPidfile(), "{$child}\n");
 		if ($marker === NULL) {
 			@unlink($this->proxyMarker());
@@ -111,11 +113,23 @@ trait DnsProxyReadySeedTrait
 		$this->seedProxy($child, NULL);
 	}
 
+	/**
+	 * The running gateway's command line in the process table, for child $child: the installed binary the wrapper execs, with its
+	 * --upstream ($upstream = NULL: none). The running argv names the endpoint the gateway forwards to, not the rc script.
+	 */
+	private function seedRunningGateway(string $child = '4242', ?string $upstream = '127.0.0.1:5353'): void
+	{
+		$flag = $upstream === NULL ? '' : " --upstream {$upstream}";
+		file_put_contents($GLOBALS['pfb_test_ps_output'], "{$child} " . PFB_DNS_PROXY_DIR
+			. "/bin/freebsd-amd64/pfb-dns --listen 127.0.0.1 --port 53 --ready-file /var/unbound/pfb_dns_ready{$flag}\n");
+	}
+
 	private function clearProxyFiles(): void
 	{
 		@unlink($this->proxyPidfile());
 		@unlink($this->proxyMarker());
 		unset($GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()], $GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE]);
+		file_put_contents($GLOBALS['pfb_test_ps_output'], '');
 	}
 
 	/**
