@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #3560 -- the upstream a serving proxy relies on is the one its running gateway was started with, read from the process table
- * (PFB_DNS_PROXY_PS), not from the rc script on disk. The rc script is the desired state an apply writes: an update that was not
+ * (`$pfb['ps']`), not from the rc script on disk. The rc script is the desired state an apply writes: an update that was not
  * applied, a package upgrade that unlinked it, and an orphaned Resolver whose rc refuses to start all leave it out of step with the
  * process that runs. Readiness asks the process what it forwards to, and that Unbound owns that endpoint over TCP and UDP.
  */

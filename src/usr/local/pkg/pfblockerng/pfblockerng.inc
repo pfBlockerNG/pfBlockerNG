@@ -3643,9 +3643,6 @@ if (!defined('PFB_DNS_PROXY_RCFILE')) {
 if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
 	define('PFB_DNS_PROXY_SOCKSTAT', '/usr/bin/sockstat');
 }
-if (!defined('PFB_DNS_PROXY_PS')) {
-	define('PFB_DNS_PROXY_PS', '/bin/ps');
-}
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
@@ -5211,7 +5208,7 @@ function pfb_dns_proxy_upstream_address(): string {
 
 /**
  * The upstream the RUNNING gateway forwards to must have both transports owned by the live Unbound pidfile's process. The endpoint
- * is the one in the command line the gateway was started with, read from the process table (PFB_DNS_PROXY_PS) for the PID the ready
+ * is the one in the command line the gateway was started with, read from the process table ($pfb['ps'], default /bin/ps) for the PID the ready
  * marker names; the rc script is not consulted, because an unapplied update, a package upgrade or an orphaned Resolver leaves it out of
  * step with the process. Anything that cannot be established (no such process, another binary, no single --upstream, an unusable
  * endpoint) fails closed.
@@ -5233,7 +5230,7 @@ function pfb_dns_proxy_upstream_ready(): bool {
 		return FALSE;
 	}
 	$lines = [];
-	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_PS) . ' -ww -o args= -p ' . escapeshellarg(rtrim($gateway, "\n")),
+	if (pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg(rtrim($gateway, "\n")),
 	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
 		return FALSE;
 	}
