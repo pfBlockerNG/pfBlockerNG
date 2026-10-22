@@ -22,12 +22,13 @@ names. Nothing else is a flag: there is no DNS listener, so no address, port, up
 option.
 
 --user: the supplementary groups are cleared and group and user are set to NAME's, then the module boots, so every
-file it creates belongs to NAME. An unknown NAME (or '') or a switch the OS refuses exits 1 with the reason.
+file it creates belongs to NAME. A non-root process that already is NAME, as the decider the gateway respawns after its
+own drop, switches nothing. An unknown NAME (or '') or a switch the OS refuses exits 1 with the reason.
 
---no-module: no module is imported or booted, so --module-dir is neither read nor needs to exist, the working
-directory stays where it is and there is no observer socket (--observer is refused with it). A query that passes the
-header checks and parses is forwarded to Unbound as it is and Unbound's reply relayed as it is (silence is a SERVFAIL,
-as in the module mode); there are no decisions and no MODDONE pass.
+--no-module: no module is imported or booted, so --module-dir does not need to exist (it is read only for the code
+record below), the working directory stays where it is and there is no observer socket (--observer is refused with
+it). A query that passes the header checks and parses is forwarded to Unbound as it is and Unbound's reply relayed as
+it is (silence is a SERVFAIL, as in the module mode); there are no decisions and no MODDONE pass.
 
 --reply-log (only with --no-module): the DNS Reply log of the module mode without the module (issue #3515). The decider
 imports the shipped pfb_unbound.py from its own source directory (--module-dir stays unread), reads no feed and decides
@@ -55,6 +56,11 @@ a DROP, a FORWARD/REPLY exchange standing in for the Unbound round trip where th
 module. EOF on the socket exits 0; malformed framing is logged and exits 1. A REPLY is waited for twice
 UNBOUND_TIMEOUT.
 
+The code record: after the boot (after the drop with --no-module) and before READY, pfb_dns_decider.applied is written
+in --module-dir: the md5 hex digests of CODE_RECORD_FILES concatenated, so a package update can tell whether this
+process runs the code now installed. A member that cannot be read leaves no record (a stale one is removed); a record
+that cannot be written is one error line.
+
 The module expects /var/log/pfblockerng to exist, as on pfSense. Standard library only; Python 3.11+.
 """
 
@@ -64,6 +70,7 @@ import argparse
 import asyncio
 import contextlib
 import errno
+import hashlib
 import ipaddress
 import json
 import logging
@@ -86,6 +93,12 @@ import dnswire
 import unbound_shim as shim
 
 LOG_DIR = "/var/log/pfblockerng"
+# The code record's members in the order PHP fingerprints them: (directory, name); None is --module-dir.
+CODE_RECORD_FILES: tuple[tuple[str | None, str], ...] = tuple(
+    (os.path.dirname(os.path.abspath(__file__)), name)
+    for name in ("pfb_dns_proxy.py", "decision_service.py", "dns_reply_log.py", "dnswire.py", "unbound_shim.py")
+) + ((None, "pfb_unbound.py"), (None, "pfb_dnsbl_regex_rules.py"))
+CODE_RECORD = "pfb_dns_decider.applied"  # in --module-dir
 RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 SILENCE_LOG_INTERVAL = 30.0  # seconds between two "no reply from Unbound" lines, whatever Unbound answers in between
@@ -152,13 +165,37 @@ def lookup_user(name: str) -> pwd.struct_passwd:
 
 def drop_privileges(account: pwd.struct_passwd) -> None:
     """Become `account`: supplementary groups first, then the group, then the user, which takes away the right to
-    do the other two. Becoming the user the process already is (root to root) works and changes nothing."""
+    do the other two. Becoming the user the process already is (root to root) works and changes nothing; a non-root
+    process that already is `account` (the gateway's respawn after its drop) switches nothing, as it could not."""
+    if account.pw_uid != 0 and os.geteuid() == account.pw_uid and os.getegid() == account.pw_gid:
+        return
     try:
         os.setgroups([])
         os.setgid(account.pw_gid)
         os.setuid(account.pw_uid)
     except OSError as exc:
         raise DropError(f"cannot switch to user {account.pw_name!r}: {exc}") from None
+
+
+def write_code_record(module_dir: str) -> None:
+    """Publish CODE_RECORD, or remove it when a member is unreadable. Best-effort, like pfb_py_module.applied: a failure
+    is one error line, never an exit, and the next update then sees a missing record and restarts the decider."""
+    record = os.path.join(module_dir, CODE_RECORD)
+    try:
+        digests = []
+        for directory, name in CODE_RECORD_FILES:
+            try:
+                with open(os.path.join(directory or module_dir, name), "rb") as handle:
+                    digests.append(hashlib.md5(handle.read()).hexdigest())
+            except OSError:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(record)
+                return
+        with open(f"{record}.tmp", "w", encoding="ascii") as handle:
+            handle.write("".join(digests))
+        os.replace(f"{record}.tmp", record)
+    except OSError as exc:
+        shim.log_err(f"cannot write the code record {record}: {exc}")
 
 
 # --- replies the proxy builds itself -------------------------------------------------------------
@@ -501,14 +538,16 @@ async def _serve_observer(frontend: Frontend) -> None:
 
 async def serve_decisions(args: argparse.Namespace) -> None:
     """Serve the decision protocol on the inherited socket until the gateway closes it. The user drop, the module
-    boot (not with `args.no_module`) and the reply log (with `args.reply_log`) come first, in that order; the observer
-    socket is made only with `args.observer`, before READY. A ProtocolError is logged here and re-raised for exit 1;
-    all that was started is shut down."""
+    boot (not with `args.no_module`), the code record and the reply log (with `args.reply_log`) come first, in that
+    order; the observer socket is made only with `args.observer`, before READY. A ProtocolError is logged here and
+    re-raised for exit 1; all that was started is shut down."""
     account = lookup_user(args.user) if args.user is not None else None
     sock = socket.socket(fileno=args.decision_fd)
     if account is not None:
         drop_privileges(account)
+    module_dir = os.path.abspath(args.module_dir)  # boot() makes it the working directory
     module = None if args.no_module else boot(args.module_dir)
+    write_code_record(module_dir)
     reply_log = _open_reply_log() if args.reply_log else None
     frontend = Frontend(module, reply_log)
     try:
