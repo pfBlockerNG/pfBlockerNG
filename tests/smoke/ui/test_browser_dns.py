@@ -480,15 +480,22 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
         cells.nth(0).evaluate("(el, text) => { el.textContent = text; }", WIDE_INTERFACE)
         cells.nth(1).evaluate("(el, text) => { el.textContent = text; }", WIDE_ADDRESS)
         cells.nth(2).evaluate("(el, text) => el.append(' ' + text)", WIDE_REASON)
-        # the precondition that makes the overflow check bite: the screen-reader text is laid out past the screen
-        said_at = cells.nth(2).locator(".sr-only").evaluate("el => el.getBoundingClientRect().left")
-        assert said_at > PHONE["width"], f"the wide row must put the State cell past the screen, it starts at {said_at}"
-        scroller = panel.locator("#pfb-dns-status-plain .table-responsive")
-        hidden = scroller.evaluate("el => el.scrollWidth - el.clientWidth")
-        overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        # the precondition: the row is laid out past the screen's right edge
+        right = cells.nth(2).evaluate("el => el.getBoundingClientRect().right")
+        assert right > PHONE["width"], f"the wide row must reach past the screen, it ends at {right}"
+        # Content wider than the screen is drawn past its edge, unreachable, unless something scrolls it sideways: the
+        # nearest ancestor of the table that does must be inside the table's own section, and that section on screen
+        scrolled_in = cells.nth(2).evaluate(
+            """el => { for (let a = el.closest('table').parentElement; a; a = a.parentElement) {
+                const x = getComputedStyle(a).overflowX;
+                if ((x === 'auto' || x === 'scroll') && a.scrollWidth > a.clientWidth) {
+                    const section = a.closest('.panel'); return section ? section.id : a.tagName; } }
+                return null; }"""
+        )
+        section = panel.locator("#pfb-dns-status-plain").bounding_box()
         _shot(page, screenshot_dir, "dns_status_tables_phone")
-        assert hidden > 0, "the wide row is wider than the phone, so its table must scroll"
-        assert overflow <= 0, f"on a phone the page is {overflow}px wider than the screen"
+        assert scrolled_in == "pfb-dns-status-plain", f"on a phone the wide table is scrolled by {scrolled_in!r}"
+        assert section is not None and section["x"] + section["width"] <= PHONE["width"], f"the section is {section}"
     finally:
         for key, state in originals.items():
             helpers.config_restore_state(smoke_vm, f"{DNS_CFG}{key}", state)

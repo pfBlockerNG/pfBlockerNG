@@ -158,13 +158,11 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$panel = $this->panel(self::withTransports(self::rows(self::row('LAN', ['192.0.2.1:853'])), ['state' => 'off'], self::rows(self::row('LAN', ['192.0.2.1:853']))));
 
 		foreach (['plain', 'dot', 'doh', 'doq'] as $transport) {
-			// position: relative makes the scroller the containing block of the sr-only state text (position: absolute), which
-			// would otherwise escape the scroller and widen the page on a phone
 			$this->assertSame(
 				1,
-				$panel->query(self::block($transport) . "/div[@class='panel-body collapse in']/div[@class='table-responsive'][@style='position: relative;']"
+				$panel->query(self::block($transport) . "/div[@class='panel-body collapse in']/div[@class='table-responsive']"
 				    . "/table[@class='table table-striped table-hover table-condensed']")->length,
-				"{$transport}'s table, with rows or without, is inside a positioned table-responsive container"
+				"{$transport}'s table, with rows or without, is inside a table-responsive container"
 			);
 			$this->assertSame(1, $panel->query(self::block($transport) . '//table')->length);
 		}
