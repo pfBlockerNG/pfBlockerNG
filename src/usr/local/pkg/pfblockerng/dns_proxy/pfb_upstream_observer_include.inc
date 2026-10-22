@@ -36,10 +36,11 @@
  * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command,
  * bounded by timeout(1) (360 s: an outer salvage deadline, not a proved bound on normal completion; the components include the 30 s
  * readiness budget, a rollback's 30 s operation-lock wait, the config-lock and proxy-stop waits it bounds and its Unbound restarts; untimed
- * pfBlockerNG mount/umount execs and pfSense services_unbound_configure() are outside any total) and dead with its task, confirms the start as an apply does, told the gateway log's size from before the start:
+ * pfBlockerNG mount/umount execs and pfSense services_unbound_configure() are outside any total), confirms the start as an apply does, told the gateway log's size from before the start:
  * a start with problems gets the pfB-DNS startup notice, and one that does not become ready is rolled back
  * (pfb_dns_proxy_confirm_ready()). The ready marker says the front end can answer queries; it is no proof that recursion works,
- * which needs the Unbound this hook runs before.
+ * which needs the Unbound this hook runs before. timeout(1) runs it in --foreground mode: the Unbound a rollback restarts must outlive
+ * the check, and the default (reaper) mode would wait for it and kill it at the deadline (docs/misc/external-process-waits.md).
  *
  * Core functions only: on the non-verbose boot path none of pfBlockerNG's own includes are loaded. This file runs inside
  * pfSense's function, so it must leave no variable behind.
@@ -50,6 +51,6 @@ if (is_executable($pfb_dns_rc) && !isvalidpid('/var/run/pfb_dns_proxy.pid') && !
 	// after the start was backgrounded, it could already include them
 	$pfb_dns_since = (int) @filesize(defined('PFB_DNS_PROXY_LOG') ? PFB_DNS_PROXY_LOG : '/var/log/pfblockerng/dns_proxy.log');
 	mwexec_bg($pfb_dns_rc . ' start');
-	mwexec_bg('/usr/bin/timeout -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
+	mwexec_bg('/usr/bin/timeout --foreground -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
 }
 unset($pfb_dns_rc, $pfb_dns_since);
