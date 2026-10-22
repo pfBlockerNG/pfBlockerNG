@@ -788,7 +788,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$snapshot = (string) config_get_path(self::SAVED, '');
 		$moved = self::sorted(config_get_path('unbound'));
 		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'before: no rc script');
-		$this->assertSame($healthy, pfb_dns_proxy_ready(), 'before: the proxy serves only in the healthy row');
+		$this->assertSame($healthy, pfb_dns_proxy_gateway_ready(), 'before: only the healthy row has a ready gateway');
+		$this->assertFalse(pfb_dns_proxy_ready(), 'before: the missing rc script prevents confirming the actual upstream');
 
 		// When the restore is asked for
 		$changed = pfb_dns_proxy_resolver(FALSE);

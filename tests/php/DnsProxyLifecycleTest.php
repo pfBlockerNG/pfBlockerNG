@@ -72,10 +72,12 @@ final class DnsProxyLifecycleTest extends TestCase
 		$GLOBALS['pfb_test_valid_pids'] = [];
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		DnsProxyCertificateFixtures::seedResolver($this->tmp);
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
@@ -145,7 +147,13 @@ final class DnsProxyLifecycleTest extends TestCase
 	/** The proxy's rc script on disk and the live proxy it started, which any stop clears. */
 	private function seedRunningProxy(): void
 	{
-		file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n");
+		$config = $GLOBALS['config'];
+		try {
+			config_set_path(self::SAVED, self::snapshotOfOriginal());
+			pfb_dns_proxy_service();
+		} finally {
+			$GLOBALS['config'] = $config;
+		}
 		$this->seedLiveProxyThatAStopClears();
 	}
 
