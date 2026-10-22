@@ -565,12 +565,11 @@ if (!function_exists('try_lock')) {
 	// while this process holds it (a second acquire fails like the timeout it would be); $GLOBALS['pfb_test_try_lock_fail']
 	// makes another process hold it for good, and $GLOBALS['pfb_test_try_lock_busy_for'] (seconds) makes it hold it that much
 	// longer: an attempt waits its whole $timeout and gets NULL while the holder has longer to go, and otherwise waits the
-	// rest out and takes the lock. Any other name: $GLOBALS['pfb_test_try_lock_fail_names'][name] makes another process
-	// hold it for good; $GLOBALS['pfb_test_lock_holders'][name] is the handle this process holds it with.
+	// rest out and takes the lock. Other names are tracked by their open handles in $GLOBALS['pfb_test_lock_holders'].
 	function try_lock($lock, $timeout = 5) {
 		$GLOBALS['pfb_test_lock_events'][] = ['try_lock', $lock, $timeout];
 		if ($lock !== 'pfb_dns_config') {
-			if (isset($GLOBALS['pfb_test_lock_holders'][$lock]) || !empty($GLOBALS['pfb_test_try_lock_fail_names'][$lock])) {
+			if (isset($GLOBALS['pfb_test_lock_holders'][$lock])) {
 				return NULL;
 			}
 			$GLOBALS['pfb_test_lock_holders'][$lock] = fopen('php://memory', 'r');

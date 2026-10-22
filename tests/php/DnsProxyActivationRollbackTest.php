@@ -67,7 +67,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held',
 		'pfb_test_write_config_args', 'pfb_test_rcfile_dir',
 		'pfb_test_mwexec', 'pfb_test_mwexec_hook',
-		'pfb_test_lock_holders', 'pfb_test_try_lock_fail_names', 'pfb_test_try_lock_busy_for', 'pfb_test_config_read_fails',
+		'pfb_test_lock_holders', 'pfb_test_try_lock_busy_for', 'pfb_test_config_read_fails',
 		'pfb_test_config_read_fails_for',
 	];
 
@@ -122,7 +122,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$GLOBALS['pfb_test_lock_held'] = FALSE;
 		unset($GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles']);
 		$GLOBALS['pfb_test_lock_holders'] = [];
-		unset($GLOBALS['pfb_test_try_lock_fail_names'], $GLOBALS['pfb_test_try_lock_busy_for'], $GLOBALS['pfb_test_config_read_fails'],
+		unset($GLOBALS['pfb_test_try_lock_busy_for'], $GLOBALS['pfb_test_config_read_fails'],
 			$GLOBALS['pfb_test_config_read_fails_for']);
 		// The Resolver the proxy took over listened on lan and opt1: both are configured, up and addressed, so a healthy start has
 		// no warning for the startup check to report
