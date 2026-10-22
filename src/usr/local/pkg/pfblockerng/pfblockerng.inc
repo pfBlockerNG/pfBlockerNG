@@ -3112,8 +3112,8 @@ function pfb_dnsbl_vip_candidates(int $family): array {
 // for the given family that is free to use as an auto-created DNSBL VIP, or null if
 // every candidate conflicts. A candidate is free iff it is (a) not the address of an
 // existing CARP/IP-Alias VIP (get_configured_vip_list) and (b) overlaps no configured
-// interface subnet (where_is_ipaddr_configured) — the SAME overlap semantics pfb_validate_vips uses
-// (inc:746/:753). Pure: enumerates state, creates/changes nothing. $interface is
+// interface subnet (where_is_ipaddr_configured) — the SAME overlap semantics pfb_validate_vips
+// uses. Pure: enumerates state, creates/changes nothing. $interface is
 // accepted for parity with the create path and future per-interface scoping; the
 // conflict checks here are interface-independent (a VIP/subnet conflict anywhere is
 // disqualifying). issue #3540: a non-NULL $address narrows the list to that one
@@ -3146,6 +3146,17 @@ function pfb_pick_free_dnsbl_vip(int $family, string $interface, ?string $addres
 	}
 
 	return null;
+}
+
+// [ADR-13] The address auto-create uses for $family: a marked VIP's own subnet, as pfb_manage_dnsbl_vip
+// reuses it, else the first free candidate (the picker counts that marked VIP as taken).
+function pfb_dnsbl_auto_vip_address(int $family, string $interface): ?string {
+
+	$marker = ($family === AF_INET6) ? PFB_AUTO_VIP_DESCR_V6 : PFB_AUTO_VIP_DESCR_V4;
+	$vips   = config_get_path('virtualip/vip', []);
+	$idx    = pfb_find_marked_vip($vips, $marker, null);
+
+	return ($idx !== null) ? (string) ($vips[$idx]['subnet'] ?? '') : pfb_pick_free_dnsbl_vip($family, $interface);
 }
 
 // [ADR-13] True iff Unbound is configured to listen on IPv6. Mirrors unbound_generate_config_text()

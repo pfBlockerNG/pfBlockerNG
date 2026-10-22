@@ -2912,13 +2912,13 @@ $section->addInput(new Form_Checkbox(
 
 // [ ADR-13 ] Compute the address(es) the package WOULD auto-create, for the currently
 // selected DNSBL Web Server interface, so the UI can pre-fill them and detect conflict
-// exhaustion. pfb_pick_free_dnsbl_vip() returns the first free candidate from
-// pfb_dnsbl_vip_candidates() (null when every candidate conflicts). A v6 VIP is only relevant when the
-// DNS Resolver listens on IPv6 (pfb_unbound_listens_v6()); otherwise v6 is not required.
+// exhaustion. pfb_dnsbl_auto_vip_address() returns a family's existing marked VIP address, else the
+// first free candidate from pfb_dnsbl_vip_candidates() (null when every candidate conflicts). A v6 VIP
+// is only relevant when the DNS Resolver listens on IPv6 (pfb_unbound_listens_v6()); otherwise v6 is not required.
 $pfb_auto_iface		= $pconfig['dnsbl_interface'] ?: 'lo0';
 $pfb_auto_v6_needed	= pfb_unbound_listens_v6();
-$pfb_auto_vip4		= pfb_pick_free_dnsbl_vip(AF_INET, $pfb_auto_iface);
-$pfb_auto_vip6		= $pfb_auto_v6_needed ? pfb_pick_free_dnsbl_vip(AF_INET6, $pfb_auto_iface) : null;
+$pfb_auto_vip4		= pfb_dnsbl_auto_vip_address(AF_INET, $pfb_auto_iface);
+$pfb_auto_vip6		= $pfb_auto_v6_needed ? pfb_dnsbl_auto_vip_address(AF_INET6, $pfb_auto_iface) : null;
 
 // Conflict exhaustion: v4 is always required; v6 only when the resolver listens on it.
 // When no free candidate exists for a required family the checkbox is rendered disabled
