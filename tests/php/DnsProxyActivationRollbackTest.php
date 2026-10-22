@@ -422,13 +422,18 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$start = pfb_stop_start_unbound('');
 		$this->assertSame(1, $start['retval'], 'the real bounded Unbound start command failed after the Resolver move');
 		$this->assertTrue($start['start_completed'], 'the start exited nonzero, rather than failing to launch');
+		$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
+		$this->assertTrue(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'before: the gateway supervisor is alive');
 
 		$ok = pfb_dns_proxy_ensure_running();
 
 		$this->assertFalse($ok, 'a gateway that published its marker cannot activate over a failed Unbound start');
 		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
 		$this->assertResolverIsTheOriginal('failed upstream activation rolled back');
-		$this->assertSame(['start_service', 'rc stop'], $this->proxyCalls);
+		$this->assertFalse(pfb_dns_proxy_running(), 'the failed activation leaves no live gateway child');
+		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'the failed activation leaves no live supervisor');
+		$this->assertFileDoesNotExist($this->proxyPidfile(), 'the gateway child pidfile is removed');
+		$this->assertFileDoesNotExist($this->proxyMarker(), 'the stopped gateway leaves no ready marker');
 		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'), 'DNSBL is back in the original Resolver');
 		$this->assertStringContainsString('DNS Resolver was restored', implode("\n", array_column($this->notices(), 'notice')));
 		$this->assertStringContainsString('did not become ready', $this->pfbLog());
