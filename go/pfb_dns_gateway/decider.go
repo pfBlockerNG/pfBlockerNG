@@ -162,14 +162,15 @@ type Decider struct {
 
 	wmu sync.Mutex // serialises frame writes and their deadlines
 
-	mu      sync.Mutex
-	calls   map[uint32]*call
-	nextID  uint32
-	err     error
-	closing bool
-	retired bool          // a restart replaced it: the queries it holds finish, no new one registers
-	capHit  bool          // the burst over maxOutstanding is logged; cleared when the table drains
-	idle    chan struct{} // see drained; made by its first caller
+	mu       sync.Mutex
+	calls    map[uint32]*call
+	nextID   uint32
+	err      error
+	closing  bool
+	retired  bool          // a restart replaced it: the queries it holds finish, no new one registers
+	capHit   bool          // the burst over maxOutstanding is logged; cleared when the table drains
+	idle     chan struct{} // see drained; made by its first caller
+	finished func()        // test seam, read under mu: finish calls it once it has updated the table and released mu
 }
 
 // NewDecider starts reading conn; READY, failure and queries are observed through the methods below.
@@ -249,17 +250,22 @@ func (d *Decider) lookup(id uint32) *call {
 	return d.calls[id]
 }
 
+// finish hands the call its final frame before it leaves the table: an empty table lets the retirement close the session,
+// and the answer must be in the call by then. final holds one and is sent to once, so the send under mu never blocks.
 func (d *Decider) finish(id uint32, answer []byte) {
 	d.mu.Lock()
-	c := d.calls[id]
-	delete(d.calls, id)
+	if c := d.calls[id]; c != nil {
+		c.final <- answer
+		delete(d.calls, id)
+	}
 	if len(d.calls) == 0 {
 		d.capHit = false
 		d.closeIdle()
 	}
+	hook := d.finished
 	d.mu.Unlock()
-	if c != nil {
-		c.final <- answer
+	if hook != nil {
+		hook()
 	}
 }
 
