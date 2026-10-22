@@ -8,6 +8,9 @@ it up themselves (documentation), or whether it does not apply. The investigatio
 [#3554](https://github.com/pfBlockerNG/pfBlockerNG/issues/3554). This specification records the answers to its open
 questions, one verdict per candidate, and the follow-up work. It ships no `src/` or `tests/` change.
 
+Amended 2026-10-22 (owner decision): the optional "Advertised DoH URL" setting is replaced by one toggle,
+`dns/pfb_dns_ddr_doh_443` ("Advertise DoH on port 443"); see "DoH on port 443 (candidate 4)".
+
 ## Fixed constraints
 
 - ISC dhcpd is out of scope; only the Kea DHCP backend is considered.
@@ -187,10 +190,10 @@ radvd 2.20 (S1, S1s), P1 has `radvd-2.20`, and radvd's `DNR` block exists only o
 | 1 | DNR in DHCPv4/DHCPv6 as a pfB-DNS toggle | Not applicable (owner decision, 2026-10-22) | No hook exists; owning entries in user-owned Kea JSON risks an untested Kea start (global JSON) or the loss of all user custom JSON (interface JSON), spreads through HA sync, and touches a surface pfSense treats as privileged (Q6). Few clients read DNR: opt-in Windows builds and systemd-networkd v257+ (Q4, [systemd v257 NEWS](https://github.com/systemd/systemd/blob/v257/NEWS)). Candidate 2 is the DNR route. |
 | 2 | DNR as documentation | Documentation | Kea 2.6.2 and later, on every supported pfSense, build DNR from the string syntax (Q5); users paste a known-good snippet into their own JSON. |
 | 3 | DNR in Router Advertisements | Not applicable now | No released radvd supports DNR; pfSense ships radvd 2.20 and generates `radvd.conf` with no custom field (Q7). Revisit only if pfSense ships a DNR-capable radvd and exposes it. |
-| 4 | DDR toggle on the pfB-DNS page | Toggle | The gateway can answer per queried address and the answer disappears with pfB-DNS (Q3). It can help only verified-discovery clients (Apple; Windows with DDR on) that query a public listener address (candidate 7); for private addresses no current client uses it (Q2). Whether Apple and Windows accept DoH on a port other than 443 is [UNVERIFIED]. An optional "Advertised DoH URL" covers DoH behind a front end. |
+| 4 | DDR toggle on the pfB-DNS page | Toggle | The gateway can answer per queried address and the answer disappears with pfB-DNS (Q3). It can help only verified-discovery clients (Apple; Windows with DDR on) that query a public listener address (candidate 7); for private addresses no current client uses it (Q2). Whether Apple and Windows accept DoH on a port other than 443 is [UNVERIFIED]. An optional "Advertise DoH on port 443" toggle omits the DoH `port` for clients that reject one, for DoH behind a reverse proxy on 443. |
 | 5 | Opportunistic DoT | Documentation | Works with no pfB-DNS change: Android's default "Automatic" mode upgrades to DoT if the network's DNS server supports it ([Android, 2018](https://android-developers.googleblog.com/2018/04/dns-over-tls-support-in-android-p.html)), connects to port 853 of each DHCP- or RA-provided server ([DnsTlsServer.h:39](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/DnsTlsServer.h#39), [PrivateDnsCommon.h:22](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/PrivateDnsCommon.h#22)) and verifies no certificate when no hostname is set ([DnsTlsSocket.cpp:238-251](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/DnsTlsSocket.cpp#238)). Verified from source, not on a device [UNVERIFIED on a device]. |
-| 6 | Certificate guidance and warning | Documentation and page warning for public addresses | Verified DDR needs a trusted chain and the queried address as an `iPAddress` SAN (RFC 9462 §4.2); DNR needs the ADN as a name in the certificate (RFC 9463 §3.3). The page warns, only with the DDR toggle on and only for public listener addresses missing from the certificate's `iPAddress` SANs, and not for the DoH listener when an advertised DoH URL puts a front end in front of it. Loopback, private, CGNAT, link-local, ULA and reserved addresses never warn (RFC 9462 §4.3 names the private ones; the rest are not globally routable). It says nothing about CA trust, and nothing about DNR ADNs, which pfB-DNS cannot see in the user's Kea JSON. See "Certificate warning". |
-| 7 | Public resolver address | Documentation | The only route to verified DDR that Apple accepts (Q2). An IP certificate from Let's Encrypt needs ACME package 1.3.2 (CE 2.8.1 baseline, Plus 26.07; Q1). With a front end such as HAProxy, the certificate it serves must carry the queried resolver address as an `iPAddress` SAN ("Advertised DoH URL"). Costs and failure cases stay as listed in #3554. |
+| 6 | Certificate guidance and warning | Documentation and page warning for public addresses | Verified DDR needs a trusted chain and the queried address as an `iPAddress` SAN (RFC 9462 §4.2); DNR needs the ADN as a name in the certificate (RFC 9463 §3.3). The page warns, only with the DDR toggle on and only for public listener addresses missing from the certificate's `iPAddress` SANs, and not for the DoH listener when "Advertise DoH on port 443" is on (clients then reach the reverse proxy's certificate). Loopback, private, CGNAT, link-local, ULA and reserved addresses never warn (RFC 9462 §4.3 names the private ones; the rest are not globally routable). It says nothing about CA trust, and nothing about DNR ADNs, which pfB-DNS cannot see in the user's Kea JSON. See "Certificate warning". |
+| 7 | Public resolver address | Documentation | The only route to verified DDR that Apple accepts (Q2). An IP certificate from Let's Encrypt needs ACME package 1.3.2 (CE 2.8.1 baseline, Plus 26.07; Q1). With a reverse proxy such as HAProxy on 443, the certificate it serves must carry the queried resolver address as an `iPAddress` SAN ("DoH on port 443"). Costs and failure cases stay as listed in #3554. |
 
 ### DDR answer (candidate 4)
 
@@ -208,8 +211,7 @@ radvd 2.20 (S1, S1s), P1 has `radvd-2.20`, and radvd's `DNR` block exists only o
   transport that listens on L and has a certificate loaded (a listener with no certificate fails every handshake,
   [dns-gateway-transports.md](../misc/dns-gateway-transports.md), "Certificate"), TTL 300:
   - DoH: priority 1, `alpn=h2`, `dohpath=/dns-query{?dns}`, and `port` only when the DoH port is not 443. No `h3`:
-    the gateway serves no HTTP/3. With `dns/pfb_dns_ddr_doh_url` set, TargetName, `port` and `dohpath` come from it
-    (see "Advertised DoH URL").
+    the gateway serves no HTTP/3. With `dns/pfb_dns_ddr_doh_443` on, `port` is omitted (see "DoH on port 443").
   - DoT: priority 2, `alpn=dot`, and `port` only when the DoT port is not 853.
   - DoQ: priority 3, `alpn=doq`, and `port` only when the DoQ port is not 853.
   - `port` is a mandatory key for clients ([RFC 9461 §4.2](https://www.rfc-editor.org/rfc/rfc9461#section-4.2)), so a
@@ -245,31 +247,30 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
   CE 2.8.0 has none and forwards `resolver.arpa.` names like any other (RFC 9462 §6.1 says a forwarder SHOULD NOT);
   that is existing behaviour pfB-DNS does not change.
 
-### Advertised DoH URL (candidate 4)
+### DoH on port 443 (candidate 4)
 
-- Setting: optional `dns/pfb_dns_ddr_doh_url`, registered through `PfbConfig`, labelled "Advertised DoH URL", empty by
-  default. Empty: the DoH record is as in "DDR answer". The owner runs `https://dns.brait.dev` behind HAProxy (443 to
-  gateway port 4443); a front end changes the name, port and path a client must use.
-- Set to `https://host[:port]/path`, the DoH record is still emitted only where DoH listens on the queried address L
-  with a certificate loaded, and differs as follows; DoT and DoQ records are unchanged:
-  - TargetName is `host` (absolute); `port` only when the URL port is not 443; `dohpath` is `path` + `{?dns}`.
-  - No `ipv4hint` or `ipv6hint` and no Additional A or AAAA record for it: the host may be a front end on another
-    address, so the client resolves it normally.
-- Save-time validation (trust boundary), on the whole string: at most 255 characters; scheme exactly `https`; host
-  ASCII only (internationalised names only as `xn--` punycode), lowercased on save, one trailing dot stripped; the host
-  is an RFC 1123 LDH name: labels of 1-63 letters, digits and hyphens, none starting or ending with a hyphen, at most
-  253 characters in total, last label not all-numeric (which also rejects IP literals); no userinfo, backslash or `%` in
-  the host; optional port written as 1-5 digits without a leading zero or sign, 1-65535 (`:443` is accepted and omitted
-  from the record); path non-empty, starting with `/`, of `/` and RFC 3986 `pchar` characters only (well-formed `%XX`
-  allowed), so no query, fragment, `{`, `}`, whitespace, control character or backslash. Anything else is rejected with
-  an input error (acceptance criteria 9 and 10); a `{?dns}` suffix gets a message saying it is appended automatically.
-- Limit: RFC 9462 §4.2 still checks the certificate the client gets from the front end against the resolver address it
-  queried. A hostname-only certificate (for example Let's Encrypt for `dns.brait.dev`) therefore does not make DDR
-  verified. The URL matters for verified DDR only with the public-address route (candidate 7) and a front-end
-  certificate that carries the queried resolver address as an `iPAddress` SAN. The same URL is what a user enters as the
-  DNR ADN and `dohpath` in Kea (candidate 2), where a hostname certificate is what clients check (RFC 9463 §3.3); the
-  documentation follow-up points to it.
-- DoT and DoQ overrides are out of scope.
+- Setting: optional toggle `dns/pfb_dns_ddr_doh_443`, labelled "Advertise DoH on port 443", registered through
+  `PfbConfig`, off by default (owner decision, 2026-10-22). Off: the DoH record is as in "DDR answer", with `port`
+  exactly when the DoH port is not 443. On: the DoH record omits `port` even when the DoH listener port is not 443.
+  Everything else in the record is unchanged: TargetName the firewall FQDN, `ipv4hint` or `ipv6hint` and the Additional
+  A or AAAA record = L, `dohpath=/dns-query{?dns}`. It is still emitted only where DoH listens on L with a certificate
+  loaded. DoT and DoQ records are unchanged.
+- Page: the toggle is rendered disabled (greyed out) when the configured DoH port is already 443, where it would change
+  nothing. Help text (owner wording): "Some clients might not accept a port for the DoH server provided over DDR. This
+  option removes the port, so clients reach DoH on port 443. If DoH is not already listening on port 443, it will no
+  longer be reachable. It is intended for users who, for example, serve multiple sites over HTTPS through a reverse
+  proxy, and who are responsible for configuring that reverse proxy correctly."
+- Use: the owner runs `https://dns.brait.dev` behind HAProxy (443 to gateway port 4443). With the toggle on, a client
+  that follows the record connects to the firewall FQDN on 443, where the reverse proxy answers. Configuring the proxy
+  is the user's responsibility; pfB-DNS cannot see it.
+- Limit: RFC 9462 §4.2 checks the certificate the client gets on 443 against the resolver address it queried. A
+  hostname-only certificate (for example Let's Encrypt for `dns.brait.dev`) therefore does not make DDR verified. It
+  matters for verified DDR only with the public-address route (candidate 7) and a reverse-proxy certificate that carries
+  the queried resolver address as an `iPAddress` SAN. For DNR (candidate 2) the ADN must be a name in the certificate
+  the client reaches (RFC 9463 §3.3), the reverse proxy's when DoH is fronted on 443; the documentation follow-up says
+  so.
+- No URL, hostname, path, or DoT or DoQ override (owner decision, 2026-10-22). DoQ cannot be fronted by HAProxy, and a
+  DoT name is irrelevant to DDR verification, which checks the queried address (RFC 9462 §4.2).
 
 ### Certificate warning (candidate 6)
 
@@ -283,8 +284,8 @@ needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses, not
   IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is classified by its embedded IPv4 address. Every other address is public.
   RFC 9462 §4.3 names the private ranges (RFC 1918, ULA, link-local) as the ones a public CA cannot certify; the rest
   are reserved or not globally routable, so a missing SAN there is not actionable either.
-- With `dns/pfb_dns_ddr_doh_url` set, the DoH listener is excluded: its clients see the front end's certificate, which
-  pfB-DNS cannot see. DoT and DoQ listeners are still checked.
+- With `dns/pfb_dns_ddr_doh_443` on, the DoH listener is excluded: its clients reach the reverse proxy's certificate,
+  which pfB-DNS cannot see. DoT and DoQ listeners are still checked.
 - No certificate selected: no warning. Saving already requires one when DoT, DoH or DoQ is on.
 - No warning about CA trust or DNR ADNs. The owner asked for this scope (2026-10-22). Acceptance criterion 8.
 
@@ -300,15 +301,15 @@ yet (`docs/misc/` holds developer notes); the documentation issue picks the loca
   name in the pfB-DNS certificate; that the entries must be removed when pfB-DNS or its encrypted transports are turned
   off, because the options would then point at nothing; and that the JSON field is privileged (pfSense-SA-26_20). The
   #3554 example `alpn=dot\\,doq\\,h2 dohpath=/dns-query{?dns}` without a port advertises DoH on 443 and is wrong for
-  the default pfB-DNS DoH port. When a front end such as HAProxy serves DoH on 443, the ADN and `dohpath` are those of
-  the advertised DoH URL (`dns/pfb_dns_ddr_doh_url`); there a certificate for that hostname is what clients check
-  (RFC 9463 §3.3).
+  the default pfB-DNS DoH port. The ADN must be a name in the certificate the client reaches: the pfB-DNS certificate,
+  or the reverse proxy's when a reverse proxy such as HAProxy serves DoH on 443 (RFC 9463 §3.3); the instance then
+  carries no `port`.
 - Opportunistic DoT (candidate 5): DoT enabled on the interface whose address DHCP hands out, on port 853; Android
   "Automatic" mode; no certificate requirement.
 - Certificates (candidate 6): which SANs each mechanism checks (DDR: `iPAddress` of the queried address; DNR: the ADN),
   that public CAs cannot certify private addresses (RFC 9462 §4.3), the page warning for public addresses (see
-  "Certificate warning"), and that a hostname-only certificate behind a front end does not make DDR verified (see
-  "Advertised DoH URL").
+  "Certificate warning"), and that a hostname-only certificate behind a reverse proxy does not make DDR verified (see
+  "DoH on port 443").
 - Public resolver address (candidate 7): the IPv6 and IPv4 setups, costs and failure cases from #3554, the ACME
   package version and settings from Q1, that DHCP must hand out the public address for verified DDR (RFC 9462 §4.2),
   and the WAN rules that keep 53, 853 and the DoH port closed to the internet.
@@ -347,52 +348,29 @@ These apply to the follow-up work; this specification is met when it is on `deve
    | Reserved or documentation address (`0.0.0.1`, `::`, `192.0.2.1`, `2001:db8::1`, `198.18.0.1`) | No warning |
    | `::ffff:10.0.0.1` (classified by the embedded IPv4) | No warning |
    | `::ffff:8.8.8.8` with no matching SAN | Warning |
-   | `dns/pfb_dns_ddr_doh_url` set, the DoH listener serves a public address missing from the certificate | No warning for the DoH listener; DoT and DoQ listeners are still checked |
+   | `dns/pfb_dns_ddr_doh_443` on, the DoH listener serves a public address missing from the certificate | No warning for the DoH listener; DoT and DoQ listeners are still checked |
    | No certificate selected | No warning (saving already requires one for DoT, DoH and DoQ) |
    | DDR toggle off | No warning |
 
    The page never warns about CA trust or DNR ADNs, and the warning never blocks saving.
-9. WHEN `dns/pfb_dns_ddr_doh_url` is empty THEN the DoH record is as in criterion 1. WHEN it is set to
-   `https://host[:port]/path` THEN the DoH record is emitted only where DoH listens on L with a certificate loaded,
-   with TargetName `host.` (exactly one trailing dot), `port` only when the URL port is not 443, `dohpath` = path +
-   `{?dns}`, no `ipv4hint` or `ipv6hint`, no Additional A or AAAA record for it, and the DoT and DoQ records are
-   unchanged.
-10. WHEN `dns/pfb_dns_ddr_doh_url` is saved with any value in the first column THEN the save fails with an input error
-    and the stored value is unchanged. The checks run on the whole string (a `$`-anchored regular expression lets a
-    trailing newline through in PHP):
-
-    | Value | Reason |
-    |---|---|
-    | `http://dns.example/dns-query`, `HTTPS://dns.example/dns-query`, `dns.example/dns-query` | Scheme is not exactly `https` |
-    | `https://192.0.2.1/dns-query`, `https://[2001:db8::1]/dns-query`, `https://1.2/p`, `https://0x7f.1/p` | IP literal, or last label all-numeric |
-    | `https://user@dns.example/dns-query`, `https://user:pw@dns.example/dns-query` | Userinfo |
-    | `https://dns.example`, `https://dns.example:8443`, `https://dns.example?x` | No path |
-    | `https://dns.example/p?x=1`, `https://dns.example/p#f` | Query or fragment |
-    | `https://dns.example/dns-query{?dns}`, `https://dns.example/{dns}` | Brace; the message tells the user to omit `{?dns}`, which is appended |
-    | `https://dns.example/a b`, `https://dns.example/p` followed by a newline, tab or other control character | Whitespace or control character |
-    | `https://dns.example/a\b`, `https://dns.example/%zz`, `https://dns.example/%4`, `https://dns.example/é` | Path character outside RFC 3986 `pchar` and `/`, malformed `%` escape, or non-ASCII |
-    | `https://:443/p`, `https:///p` | Empty host |
-    | `https://dns%2eexample/p`, `https://dns.example\@x/p`, `https://dns.example\x/p` | `%` or backslash in the host |
-    | `https://dns.example:0/p`, `https://dns.example:65536/p`, `https://dns.example:x/p`, `https://dns.example:-1/p`, `https://dns.example:+443/p` | Port not a number from 1 to 65535 |
-    | `https://dns.example:/p`, `https://dns.example:0443/p` | Empty port, leading zero |
-    | `https://-bad-.example/p`, `https://a..b/p`, `https://exa_mple/p`, `https://dns.example../p` | Not an LDH host name |
-    | `https://dnß.example/p`, `https://münchen.example/p` | Raw non-ASCII host; only `xn--` punycode is accepted |
-    | `https://` + 64 `a` + `.example/p`, a host over 253 characters, any URL over 255 characters | Length limit |
-
-    These are accepted: `https://dns.example/dns-query`, `https://dns.example:8443/dns-query`,
-    `https://dns.example:443/dns-query` (the port is omitted from the record), `https://DNS.Example/dns-query`
-    (stored with the host lowercased), `https://dns.example./dns-query` (stored without the trailing dot, so
-    TargetName has exactly one), and `https://xn--mnchen-3ya.example/dns-query`.
-11. WHEN reading the documentation page THEN its Kea DNR section tells users to use the advertised DoH URL host as the
-    ADN when a front end (for example HAProxy) serves DoH on 443, and its certificate section states the limit given
-    under "Advertised DoH URL".
+9. WHEN `dns/pfb_dns_ddr_doh_443` is off THEN the DoH record carries `port` exactly when the DoH port is not 443. WHEN
+   it is on THEN the DoH record carries no `port` and is otherwise identical to the off case (TargetName the firewall
+   FQDN, `ipv4hint` or `ipv6hint` and Additional A or AAAA = L, `dohpath=/dns-query{?dns}`), still emitted only where
+   DoH listens on L with a certificate loaded, and the DoT and DoQ records are unchanged. WHEN the configured DoH port
+   is 443 THEN the page renders the toggle disabled.
+10. Removed (owner decision, 2026-10-22): the advertised DoH URL setting and its save-time validation no longer exist.
+    The number is kept so references stay stable.
+11. WHEN reading the documentation page THEN its Kea DNR section states that the ADN must be a name in the certificate
+    the client reaches (the pfB-DNS certificate, or a reverse proxy's when one serves DoH on 443), and its certificate
+    section states the limit given under "DoH on port 443".
 
 ## Out of scope
 
 - ISC dhcpd (`numberoptions` custom options included).
 - pfB-DNS writing Kea configuration (candidate 1).
 - Router Advertisement DNR, a patched radvd, or any pfSense core change (DHCP or RA hooks, generator fields).
-- DoT and DoQ advertised-address overrides (only DoH has one, see "Advertised DoH URL").
+- URL, hostname or DoT and DoQ overrides for the advertised records (only the port-443 toggle exists, see "DoH on port
+  443").
 - HTTP/3 in the gateway, which Android's DDR would need (Q2).
 - Browser DoH policies (Chrome, Firefox), NetworkManager, dhcpcd: they consume none of these mechanisms (#3554).
 - DNR ADN-only mode and resolver-name DDR (RFC 9462 §5).
@@ -403,7 +381,7 @@ None. Candidates 1 and 3 are decided as not applicable (Verdicts); candidate 6 i
 limited to public addresses. The follow-up work is filed:
 
 - Candidate 4 and the candidate 6 warning: Feature [#3583](https://github.com/pfBlockerNG/pfBlockerNG/issues/3583),
-  "pfB-DNS: answer DDR queries from the gateway". Acceptance criteria 1-6 and 8-10.
+  "pfB-DNS: answer DDR queries from the gateway". Acceptance criteria 1-6, 8 and 9.
 - Candidates 2, 5, 6 and 7: Task [#3584](https://github.com/pfBlockerNG/pfBlockerNG/issues/3584),
   "Document encrypted DNS discovery for pfB-DNS (Kea DNR, Android opportunistic DoT, certificates, public-address DDR)".
   Acceptance criteria 7 and 11.
