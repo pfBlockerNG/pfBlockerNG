@@ -13,6 +13,9 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `70b820fa7`  dns: roll back a failed pfB-DNS start after reboot  (#3575) — finished review of `37a1df9ba` only; two quota notices later; Codex resolved
+- `9bcbd074c`  pfb-dns: offer and keep the Resolver's listener interface tokens  (#3570) — two quota notices; condensed review, Codex clean
+- `2818d0393`  dns proxy: file the busy-lock restore notice only when pfB-DNS was in use  (#3563) — two quota notices; condensed review; Codex timed out
 - `2ec24c967`  dns: add independent experimental pfB-DNS frontend and reporting  (#3517) — declined: 325 files over its 100-file cap; condensed review, Codex resolved
 - `be317588b`  pkg: keep pending marks made during an update pass  (#3501) — finished review pre-redesign; full review timed out; Codex resolved
 - `b1341ce5`  sync: hint to re-select the DNSBL VIP in the HA warning (3.3)  (#3460) — two quota notices; condensed review, Codex clean
