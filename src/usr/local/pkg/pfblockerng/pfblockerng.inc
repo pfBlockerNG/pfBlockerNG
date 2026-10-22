@@ -14949,6 +14949,68 @@ function pfb_dns_status_panel(array $status): string {
 }
 
 /**
+ * The dashboard widget's pfB-DNS status row for a pfb_dns_status() result: the service, then DNS, DoT, DoH and DoQ, each a cell of
+ * anchor (the class its icon is polled by), label, icon classes and a hover title that says why. Green: on and working; yellow: on with a
+ * fault; red: off, or pfBlockerNG disabled (nothing is served). A status that claims no transport is yellow for every transport whose
+ * toggle is on (plain DNS always is). A title is one line of plain text with no `||`, which the widget's AJAX payload cannot carry.
+ *
+ * @param array{service:string,mode:string,transports:?array<string,array<string,mixed>>} $status
+ * @return list<array{anchor:string,label:string,icon:string,title:string}>
+ */
+function pfb_dns_widget_status(array $status): array {
+	global $pfb;
+
+	$green = 'fa-solid fa-check-circle text-success';
+	$yellow = 'fa-solid fa-exclamation-circle text-warning';
+	$red = 'fa-solid fa-times-circle text-danger';
+	$line = static fn (string $text): string => trim((string) preg_replace('/\s*(?:[\r\n]+|\|{2,})\s*/', ' ', $text));
+
+	$enabled = ($pfb['enable'] ?? NULL) === PfbToggle::On;
+	$inactive = $enabled ? $yellow : $red;
+	$cells = [[
+	    'anchor' => 'PFBDNSSTATUS_service',
+	    'label'  => 'pfB-DNS',
+	    'icon'   => !$enabled ? $red : (($status['service'] === 'Running' && $status['transports'] !== NULL) ? $green : $yellow),
+	    'title'  => $line("{$status['service']}: {$status['mode']}"),
+	]];
+	foreach (['plain' => 'DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $key => $label) {
+		$transport = $status['transports'][$key] ?? NULL;
+		if ($transport === NULL) {
+			$on = $key === 'plain' || pfb_dns_proxy_setting("pfb_dns_{$key}") === PfbToggle::On;
+			[$icon, $title] = $on ? [$inactive, "{$label} is on, but pfB-DNS is not active"] : [$red, "{$label} is off"];
+		} elseif ($transport['state'] === 'off') {
+			[$icon, $title] = [$red, "{$label} is off"];
+		} elseif ($transport['state'] === 'no_listener') {
+			[$icon, $title] = [$yellow, "{$label}: {$transport['notice']}"];
+		} else {
+			$rows = $transport['rows'];
+			$faulty = count(array_filter($rows, static fn (array $row): bool => $row['state'] !== 'listening'));
+			[$icon, $title] = $faulty === 0
+			    ? [$green, "{$label} is listening on " . implode(', ', array_unique(array_column($rows, 'interface')))]
+			    : [$yellow, "{$label}: {$faulty} of " . count($rows) . ' listener rows are not listening; see the pfB-DNS tab'];
+		}
+		$cells[] = ['anchor' => "PFBDNSSTATUS_{$key}", 'label' => $label, 'icon' => $icon, 'title' => $line($title)];
+	}
+	return $cells;
+}
+
+/**
+ * The widget header's pfB-DNS row for pfb_dns_widget_status() cells: one `<tr>` of the five status cells (each icon carries its anchor
+ * class, the service label in <strong>, the rest in <small>, like the IP and DNSBL rows) and a link to the pfB-DNS tab. Titles escaped here, once.
+ *
+ * @param list<array{anchor:string,label:string,icon:string,title:string}> $cells
+ */
+function pfb_dns_widget_row(array $cells): string {
+	$html = "<tr>\n";
+	foreach ($cells as $i => $cell) {
+		$label = $i === 0 ? "<strong>{$cell['label']}</strong>" : "<small>{$cell['label']}</small>";
+		$html .= '<td style="text-align: left;" title="' . htmlspecialchars($cell['title']) . "\"><i class=\"{$cell['anchor']} {$cell['icon']}\"></i>&nbsp;&nbsp;{$label}</td>\n";
+	}
+	return $html . "<td><a target='_blank' rel='noopener noreferrer' href='pfblockerng/pfblockerng_dns.php' title='Click to open the pfB-DNS tab'>"
+	    . "<i class='fa-regular fa-rectangle-list'></i></a></td>\n</tr>\n";
+}
+
+/**
  * The networks pfSense's unbound_acls_config() would grant through `access-control` from the Resolver's
  * active_interface, derived from the interfaces pfB-DNS serves a listener on, where its clients arrive: its plain DNS list, and the DoT,
  * DoH and DoQ lists of the transports that are on (a list of a transport that is off is no listener, whatever it holds): the

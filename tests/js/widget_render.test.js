@@ -263,3 +263,38 @@ test('pfBlockerNG_fetch_new_widget_callback: DNSBLSTATUS payload preserves the D
 		uninstallJQueryStub();
 	}
 });
+
+// Scenario: the pfB-DNS status row (issue #3588) polls like the IP and DNSBL rows.
+//
+// Given the widget renders one icon per pfB-DNS cell anchored "PFBDNSSTATUS_<cell>",
+// When the AJAX payload carries only the icon classes and the title for a cell,
+// Then the anchor class is re-applied and the title set, as for PFBSTATUS (issue #714);
+// and a status anchor outside the known set is ignored, so a payload never picks the selector.
+
+test('pfBlockerNG_fetch_new_widget_callback: PFBDNSSTATUS payload preserves the cell anchor class and sets the title', () => {
+	var state = installJQueryStub();
+	try {
+		pfBlockerNG_fetch_new_widget_callback('PFBDNSSTATUS_dot||fa-solid fa-exclamation-circle text-warning||DoT: 1 of 2 listener rows are not listening\n');
+
+		assert.equal(
+			state['.PFBDNSSTATUS_dot'].class,
+			'PFBDNSSTATUS_dot fa-solid fa-exclamation-circle text-warning',
+			'the PFBDNSSTATUS_dot anchor class must survive the AJAX class update',
+		);
+		assert.equal(state['.PFBDNSSTATUS_dot'].title, 'DoT: 1 of 2 listener rows are not listening');
+	} finally {
+		uninstallJQueryStub();
+	}
+});
+
+test('pfBlockerNG_fetch_new_widget_callback: a status anchor outside the known set selects nothing', () => {
+	var state = installJQueryStub();
+	try {
+		pfBlockerNG_fetch_new_widget_callback('x,body||fa-solid fa-check-circle text-success||hijack\n');
+		pfBlockerNG_fetch_new_widget_callback('PFBDNSSTATUS_a b||fa-solid fa-check-circle text-success||hijack\n');
+
+		assert.deepEqual(Object.keys(state), [], 'no selector was built from the payload');
+	} finally {
+		uninstallJQueryStub();
+	}
+});

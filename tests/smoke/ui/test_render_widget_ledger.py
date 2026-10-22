@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -66,6 +67,7 @@ ICON_RED = "fa-solid fa-times-circle text-danger"
 
 CFG_LISTSV4 = "installedpackages/pfblockernglistsv4/config"
 CFG_DNSBL = "installedpackages/pfblockerngdnsblsettings/config/0"
+CFG_PFB_DNS = "installedpackages/pfblockerngdns/config/0/pfb_dns"
 
 
 @pytest.fixture
@@ -529,3 +531,65 @@ def test_get_failed_python_side_entry_renders_as_plain_text(
         assert "pfb_py_zone.txt" in body, "the Python-side entry's message must still render"
     finally:
         _remove_remote_file(vm, _PY_STATUS_PATH)
+
+
+# --------------------------------------------------------------------------- #
+# pfB-DNS row (issue #3588) -- config-only: the Resolver is not moved, so the
+# status is "Not in use" and the row's colours do not depend on a running proxy.
+# --------------------------------------------------------------------------- #
+
+_DNS_ANCHORS = [f"PFBDNSSTATUS_{key}" for key in ("service", "plain", "dot", "doh", "doq")]
+
+
+def _widget_header_payload(webui: WebUI) -> str:
+    """The widget's AJAX header refresh (pfblockerng.js ``getNewWidget``)."""
+    resp = webui.get(WIDGET_PAGE, params={"getNewWidget": "1"})
+    assert resp.status_code == 200, f"GET {WIDGET_PAGE}?getNewWidget -> HTTP {resp.status_code} (expected 200)"
+    return resp.text
+
+
+@pytest.mark.ui_render
+@pytest.mark.ui_e2e
+def test_pfb_dns_row_shows_only_while_pfb_dns_is_on(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
+    """The pfB-DNS status row sits above the IP row while pfB-DNS is on, and is absent (page and poll) while off.
+
+    Off first, so the on assertions prove the toggle CAUSED the row. On with the Resolver not moved: the
+    service icon is yellow ("Not in use"), and the poll carries the same five anchors in the same order.
+    """
+    vm = smoke_vm
+    helpers.set_package_enabled(vm, True)
+    original = helpers.config_get_state(vm, CFG_PFB_DNS)
+    try:
+        helpers.config_set(vm, CFG_PFB_DNS, "")
+        assert "PFBDNSSTATUS_" not in _widget_body(webui), "the page shows a pfB-DNS row while pfB-DNS is off"
+        assert "PFBDNSSTATUS_" not in _widget_header_payload(webui), (
+            "the poll carries pfB-DNS lines while pfB-DNS is off"
+        )
+
+        helpers.config_set(vm, CFG_PFB_DNS, "on")
+        body = _widget_body(webui)
+        icons = re.findall(r'<i class="(PFBDNSSTATUS_\w+) ([^"]*)"', body)
+        assert [anchor for anchor, _ in icons] == _DNS_ANCHORS, f"the pfB-DNS icons are {icons}"
+
+        first = body.index("PFBDNSSTATUS_")
+        row = body[body.rindex("<tr", 0, first) : body.index("</tr>", first)]
+        assert [anchor for anchor in _DNS_ANCHORS if anchor in row] == _DNS_ANCHORS, "the five icons are not in one row"
+        assert row.count("<td") == 6, f"the pfB-DNS row has {row.count('<td')} cells, expected 5 icons and a link"
+        assert first < body.index("PFBSTATUS"), "the pfB-DNS row is not above the IP row"
+
+        assert icons[0][1] == ICON_YELLOW, f"the service icon is {icons[0][1]!r}, expected yellow while not in use"
+        title = re.search(r'title="([^"]*)"><i class="PFBDNSSTATUS_service ', body)
+        assert title is not None and title.group(1).startswith("Not in use: "), f"the service title is {title}"
+
+        lines = [ln for ln in _widget_header_payload(webui).splitlines() if ln.startswith("PFBDNSSTATUS_")]
+        assert [ln.split("||")[0] for ln in lines] == _DNS_ANCHORS, f"the poll's pfB-DNS lines are {lines}"
+        assert all(len(ln.split("||")) == 3 for ln in lines), f"a poll line is not anchor||icon||title: {lines}"
+        assert lines[0].split("||")[1] == ICON_YELLOW
+        assert lines[0].split("||")[2].startswith("Not in use: ")
+    finally:
+        helpers.config_restore_state(vm, CFG_PFB_DNS, original)

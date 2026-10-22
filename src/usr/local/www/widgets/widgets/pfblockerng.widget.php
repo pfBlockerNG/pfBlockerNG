@@ -761,8 +761,15 @@ function pfBlockerNG_get_header($mode='') {
 		}
 	}
 
+	// issue #3588: the pfB-DNS status row exists only while pfB-DNS is on
+	$pfb_dns_cells = (($pfb['pfb_dns'] ?? NULL) === PfbToggle::On) ? pfb_dns_widget_status(pfb_dns_status()) : [];
+
 	// Update values via AJAX
 	if ($mode == 'js') {
+
+		foreach ($pfb_dns_cells as $cell) {
+			print("{$cell['anchor']}||{$cell['icon']}||{$cell['title']}\n");
+		}
 
 		foreach ($stats as $key => $group) {
 			foreach ($group as $type => $value) {
@@ -829,6 +836,11 @@ function pfBlockerNG_get_header($mode='') {
 									. "\nLast clear: {$dnsbl_last_clear}",
 						'Percent'	=> 'Percentage of Domains Blocked vs Unbound Resolver Queries',
 						'Whitelist'	=> 'Number of Domain entries in the DNSBL Whitelist'));
+
+		// pfB-DNS status row, above the IP and DNSBL rows (issue #3588)
+		if ($pfb_dns_cells !== []) {
+			print(pfb_dns_widget_row($pfb_dns_cells));
+		}
 
 		foreach ($stats as $key => $line) {
 			$col = 0;

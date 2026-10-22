@@ -2632,6 +2632,32 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_widget_row": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "cells",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_widget_status": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "status",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_abp_extract_ip": {
         "returnsRef": false,
         "returnType": null,

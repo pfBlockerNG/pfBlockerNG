@@ -84,14 +84,12 @@ function pfBlockerNG_fetch_new_widget_callback(callback_data) {
 				} else if (row_split[2] == 'title') {
 					row_split[1] = row_split[1].replaceAll('_BR_', '\n');
 					$('.pfb_title_' + row_split[0]).attr('title', row_split[1]);
-				} else if (row_split[0] == 'PFBSTATUS') {
-					// The anchor class (PFBSTATUS) must be re-applied, not just the icon
-					// class: the AJAX payload carries only the icon class, and overwriting
-					// the whole class attribute would drop the anchor so the NEXT poll's
-					// $('.PFBSTATUS') selector matches nothing (issue #714).
-					$('.PFBSTATUS').attr('class', 'PFBSTATUS ' + row_split[1]).prop('title', row_split[2]);
-				} else if (row_split[0] == 'DNSBLSTATUS') {
-					$('.DNSBLSTATUS').attr('class', 'DNSBLSTATUS ' + row_split[1]).prop('title', row_split[2]);
+				} else if (/^(PFBSTATUS|DNSBLSTATUS|PFBDNSSTATUS_[a-z]+)$/.test(row_split[0])) {
+					// The anchor class must be re-applied, not just the icon class: the AJAX
+					// payload carries only the icon class, and overwriting the whole class
+					// attribute would drop the anchor so the NEXT poll's selector matches
+					// nothing (issue #714). The regex keeps payload text out of the selector.
+					$('.' + row_split[0]).attr('class', row_split[0] + ' ' + row_split[1]).prop('title', row_split[2]);
 				}
 			}
 			else if (row_cnt > 4) {

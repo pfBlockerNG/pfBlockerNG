@@ -751,6 +751,13 @@ transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the
 `test_smoke_dns_gateway.py` (native all-transport tables, also with Unbound stopped while gateway bindings remain) and the
 `ui_browser` test in `test_browser_dns.py`.
 
+**Dashboard widget row (issue #3588).** While pfB-DNS is on, the widget's status header gains a row above the IP and DNSBL rows: the
+service, then DNS, DoT, DoH and DoQ, each an icon (green on and working, yellow on with a fault, red off) whose hover title says why.
+`pfb_dns_widget_status()` derives the five cells from the same `pfb_dns_status()` the tab renders, so the two never disagree (a
+transport is green only when every one of its rows is `listening`), and `pfb_dns_widget_row()` renders them. The AJAX poll sends one
+`PFBDNSSTATUS_<cell>||<icon>||<title>` line per cell; titles are stripped of newlines and `||`, and the JS applies only anchors of the
+known shape. Pinned by `PfbDnsWidgetStatusTest` and `tests/js/widget_render.test.js`.
+
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,
 which is reachable in either mode; the DNSBL tab no longer has it, and its save never assigns the key, so what the pfB-DNS
