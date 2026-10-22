@@ -156,6 +156,9 @@ pfb_software_add_tab($tab_array);
 $tab_array[]	= array(gettext('Wizard'),	FALSE,	'/wizard.php?xml=pfblockerng_wizard.xml');
 display_top_tabs($tab_array, TRUE);
 pfb_print_pending_changes_box();
+foreach (pfb_dns_proxy_ddr_warnings() as $pfb_ddr_warning) {
+	print_info_box($pfb_ddr_warning, 'warning', FALSE);
+}
 
 $form = new Form('Save pfB-DNS settings');
 
@@ -336,20 +339,21 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
+))->setAttribute('aria-label', gettext('DDR'))
+  ->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
 		. 'Answers Discovery of Designated Resolvers (RFC 9462) queries for <code>resolver.arpa</code> from pfB-DNS, so that clients that support DDR can find and switch to the encrypted transports enabled above (DoT, DoH, DoQ). '
 		. 'Clients verify the certificate against the address they queried, as an IP address SAN. '
 		. 'Disabled: the DNS Resolver answers these names, as before.'
 		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
 
 // DoH already listens on 443, so there is no port to leave out
-$pfb_ddr_doh_443 = new Form_Checkbox(
+$pfb_ddr_doh_443 = (new Form_Checkbox(
 	'pfb_dns_ddr_doh_443',
 	gettext('DoH on port 443'),
 	'Advertise DoH on port 443',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr_doh_443'] ?? NULL) === PfbToggle::On,
 	'on'
-);
+))->setAttribute('aria-label', gettext('DoH on port 443'));
 if (pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443') {
 	$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');
 }

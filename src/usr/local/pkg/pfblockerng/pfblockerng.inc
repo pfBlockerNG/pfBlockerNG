@@ -4439,6 +4439,115 @@ function pfb_dns_proxy_ddr_flags(): string {
 	    ((PfbConfig::read('dns/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '');
 }
 
+// Ranges pfB-DNS never warns about (issue #3583): the private and local ones a public CA cannot certify (RFC 9462 section 4.3), and the
+// reserved, documentation and benchmarking ones, where a missing SAN is not actionable either.
+const PFB_DNS_PROXY_NON_PUBLIC = [
+	'0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.0.2.0/24', '192.168.0.0/16',
+	'198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '::/128', '::1/128', 'fc00::/7', 'fe80::/10', '2001:db8::/32',
+];
+
+/**
+ * Is this a public address: a valid one outside every range of PFB_DNS_PROXY_NON_PUBLIC? An IPv4-mapped IPv6 address
+ * (::ffff:a.b.c.d) is classified by its IPv4 address. Compares the packed bytes, so spelling does not matter.
+ */
+function pfb_dns_proxy_public_address(string $address): bool {
+	$packed = @inet_pton($address);
+	if ($packed === FALSE) {
+		return FALSE;
+	}
+	if (strlen($packed) === 16 && str_starts_with($packed, str_repeat("\0", 10) . "\xff\xff")) {
+		$packed = substr($packed, 12);
+	}
+	foreach (PFB_DNS_PROXY_NON_PUBLIC as $range) {
+		[$network, $bits] = explode('/', $range);
+		$network = (string) inet_pton($network);
+		$whole = intdiv((int) $bits, 8);
+		$rest = (int) $bits % 8;
+		if (strlen($network) === strlen($packed) && strncmp($packed, $network, $whole) === 0 &&
+		    ($rest === 0 || ((ord($packed[$whole]) ^ ord($network[$whole])) >> (8 - $rest)) === 0)) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+/**
+ * The iPAddress SANs of a config.xml <cert> entry, as packed addresses (inet_pton bytes => TRUE) so that two spellings of one address
+ * match. A DNS SAN is not an address; a certificate that cannot be decoded or parsed has none.
+ *
+ * @param array<string,mixed> $entry
+ * @return array<string,true>
+ */
+function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
+	try {
+		$parsed = @openssl_x509_parse(pfb_dns_proxy_pem_field($entry, 'cert', 'crt'));
+	} catch (RuntimeException $e) {
+		return [];
+	}
+	while (openssl_error_string() !== FALSE) {
+		continue; // the parse leaves its reason in OpenSSL's error queue, which is the next caller's
+	}
+	$sans = [];
+	foreach (explode(', ', is_array($parsed) ? (string) ($parsed['extensions']['subjectAltName'] ?? '') : '') as $san) {
+		if (str_starts_with($san, 'IP Address:') && ($packed = @inet_pton(substr($san, 11))) !== FALSE) {
+			$sans[$packed] = TRUE;
+		}
+	}
+	return $sans;
+}
+
+/**
+ * The pfB-DNS page's DDR certificate warnings (issue #3583), from the stored settings: with DDR on and a certificate selected, one text per
+ * public address that DoT, DoH or DoQ listens on and that is not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462
+ * section 4.2) checks the address it queried against that SAN, so it will not use those transports there. The DoH listener is left out
+ * while dns/pfb_dns_ddr_doh_443 is on: its clients reach a reverse proxy, whose certificate is not visible here. Never blocks a save.
+ *
+ * @return list<string> HTML, each text starting "DDR: " and naming the address and the transports it serves
+ */
+function pfb_dns_proxy_ddr_warnings(): array {
+	if (pfb_dns_proxy_setting('pfb_dns_ddr') !== PfbToggle::On) {
+		return [];
+	}
+	$ref = trim((string) pfb_dns_proxy_setting('pfb_dns_sslcertref'));
+	$certificate = ($ref === '') ? NULL : (lookup_cert($ref)['item'] ?? NULL);
+	if (!is_array($certificate)) {
+		return [];
+	}
+
+	// A transport listens when pfb_dns_proxy_tls_flags() gives it flags: toggle on, usable port, an interface list with an address.
+	$served = [];
+	foreach (['dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
+		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On ||
+		    ($kind === 'doh' && pfb_dns_proxy_setting('pfb_dns_ddr_doh_443') === PfbToggle::On) ||
+		    pfb_dns_proxy_listener_port(pfb_dns_proxy_setting("pfb_dns_{$kind}_port")) === NULL) {
+			continue;
+		}
+		$interfaces = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
+		foreach (pfb_dns_proxy_interface_addresses($interfaces) as $address) {
+			if (pfb_dns_proxy_public_address($address)) {
+				$packed = (string) inet_pton($address);
+				$served[$packed] ??= ['address' => $address, 'labels' => []];
+				$served[$packed]['labels'][$label] = $label;
+			}
+		}
+	}
+
+	$sans = ($served === []) ? [] : pfb_dns_proxy_certificate_ip_sans($certificate);
+	$warnings = [];
+	foreach ($served as $packed => $listener) {
+		if (!isset($sans[$packed])) {
+			$names = array_keys($listener['labels']);
+			$last = array_pop($names);
+			$warnings[] = sprintf(
+				'DDR: %s on %s will not be used by clients that verify DDR, because the selected SSL/TLS Certificate has no IP address (iPAddress) SAN for it.',
+				($names === []) ? $last : implode(', ', $names) . " and {$last}",
+				htmlspecialchars($listener['address'])
+			);
+		}
+	}
+	return $warnings;
+}
+
 /**
  * Does the gateway serve an encrypted transport: is pfB-DNS's DoT, DoH or DoQ toggle on?
  */

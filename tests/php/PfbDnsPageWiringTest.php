@@ -257,6 +257,59 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertStringContainsString("\$section->addInput(\$pfb_ddr_doh_443)", $page, 'and the disabled-or-not checkbox is the one added to the section');
 	}
 
+	/** Does the loop that prints the DDR certificate warnings come right after the pending-changes box, one 'warning' box per text, printed once? */
+	private static function warningsFollowThePendingChangesBox(string $page): bool
+	{
+		return preg_match_all('/pfb_print_pending_changes_box\(\);\s*foreach \(pfb_dns_proxy_ddr_warnings\(\) as (\$\w+)\) \{\s*print_info_box\(\1, \'warning\', FALSE\);\s*\}/', $page) === 1
+			&& substr_count($page, 'pfb_dns_proxy_ddr_warnings()') === 1;
+	}
+
+	public function testTheWarningsCheckSeesAMisplacedAWrongClassAnUnprintedAndADoubledLoop(): void
+	{
+		$loop = "foreach (pfb_dns_proxy_ddr_warnings() as \$w) {\n\tprint_info_box(\$w, 'warning', FALSE);\n}\n";
+
+		$this->assertTrue(self::warningsFollowThePendingChangesBox("pfb_print_pending_changes_box();\n\n{$loop}"), 'the loop after the box');
+		$this->assertFalse(self::warningsFollowThePendingChangesBox("{$loop}pfb_print_pending_changes_box();\n"), 'the loop before the box');
+		$this->assertFalse(self::warningsFollowThePendingChangesBox("pfb_print_pending_changes_box();\n\$form = 1;\n{$loop}"), 'the loop somewhere below it');
+		$this->assertFalse(self::warningsFollowThePendingChangesBox("pfb_print_pending_changes_box();\n" . str_replace("'warning'", "'success'", $loop)), 'another box class');
+		$this->assertFalse(self::warningsFollowThePendingChangesBox("pfb_print_pending_changes_box();\n" . str_replace('$w, ', '"x", ', $loop)), 'a box that does not print the warning');
+		$this->assertFalse(self::warningsFollowThePendingChangesBox("pfb_print_pending_changes_box();\n{$loop}{$loop}"), 'a second loop');
+		$this->assertFalse(self::warningsFollowThePendingChangesBox("pfb_print_pending_changes_box();\n"), 'no loop');
+	}
+
+	public function testThePagePrintsTheDdrCertificateWarningsRightAfterThePendingChangesBox(): void
+	{
+		$this->assertTrue(
+			self::warningsFollowThePendingChangesBox(self::src('www/pfblockerng/pfblockerng_dns.php')),
+			'pfb_print_pending_changes_box() is followed by foreach (pfb_dns_proxy_ddr_warnings() as $w) { print_info_box($w, \'warning\', FALSE); }'
+		);
+	}
+
+	/** Does the checkbox of this name carry the aria-label, on its own constructor call and no other control's? */
+	private static function checkboxNamedBy(string $page, string $field, string $label): bool
+	{
+		return preg_match('/new Form_Checkbox\(\s*\'' . preg_quote($field, '/') . '\',(?:(?!new Form_).)*?\)\)->setAttribute\(\'aria-label\', gettext\(\'' . preg_quote($label, '/') . '\'\)\)/s', $page) === 1;
+	}
+
+	public function testTheNamedCheckboxCheckSeesAMissingAWrongAndAMisplacedLabel(): void
+	{
+		$head = "\$s->addInput(new Form_Checkbox('pfb_dns_ddr', gettext('DDR'), 'Enable', TRUE, 'on'))";
+		$label = "->setAttribute('aria-label', gettext('DDR'))";
+
+		$this->assertTrue(self::checkboxNamedBy("{$head}{$label}->setHelp('x');\n", 'pfb_dns_ddr', 'DDR'), 'named');
+		$this->assertFalse(self::checkboxNamedBy("{$head}->setHelp('x');\n", 'pfb_dns_ddr', 'DDR'), 'no label');
+		$this->assertFalse(self::checkboxNamedBy("{$head}->setAttribute('aria-label', gettext('Enable'))->setHelp('x');\n", 'pfb_dns_ddr', 'DDR'), 'another label');
+		$this->assertFalse(self::checkboxNamedBy("{$head}->setHelp('x');\n\$s->addInput(new Form_Checkbox('other', 'o', 'o', TRUE, 'on')){$label};\n", 'pfb_dns_ddr', 'DDR'), 'the label on the next control');
+	}
+
+	public function testTheTwoDdrCheckboxesHaveAnAccessibleNameBecauseTheirGroupLabelHasNoFor(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr', 'DDR'), "the pfb_dns_ddr checkbox has aria-label gettext('DDR')");
+		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr_doh_443', 'DoH on port 443'), "the pfb_dns_ddr_doh_443 checkbox has aria-label gettext('DoH on port 443')");
+	}
+
 	public function testThePageSeedsItsListenerSettingsUnderTheLockOnLoadBeforeItReadsAny(): void
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');

@@ -36,19 +36,34 @@ final class DnsProxyCertificateFixtures
 	}
 
 	/**
-	 * A certificate for $cn and its key as PEM, signed by $parent (self-signed when NULL).
+	 * A certificate for $cn and its key as PEM, signed by $parent (self-signed when NULL), with a subjectAltName extension
+	 * when $san is not empty.
 	 *
 	 * @param array{cert:string,key:string}|null $parent
+	 * @param list<string> $san OpenSSL subjectAltName entries, e.g. 'IP:203.0.113.5', 'IP:2606:4700::1', 'DNS:fw.example.lan'
 	 * @return array{cert:string,key:string}
 	 */
-	public static function issue(string $cn, ?array $parent = NULL): array
+	public static function issue(string $cn, ?array $parent = NULL, array $san = []): array
 	{
 		$key = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1']);
 		if ($key === FALSE) {
 			throw new RuntimeException('openssl_pkey_new() failed: ' . self::drain());
 		}
 		$csr = openssl_csr_new(['commonName' => $cn], $key, ['digest_alg' => 'sha256']);
-		$signed = ($csr === FALSE) ? FALSE : openssl_csr_sign($csr, $parent['cert'] ?? NULL, $parent['key'] ?? $key, 2);
+		$options = [];
+		$config = '';
+		if ($san !== []) {
+			$config = (string) tempnam(sys_get_temp_dir(), 'pfb_san_');
+			file_put_contents($config, "[req]\ndistinguished_name = dn\n[dn]\n[san]\nsubjectAltName = " . implode(',', $san) . "\n");
+			$options = ['config' => $config, 'x509_extensions' => 'san'];
+		}
+		try {
+			$signed = ($csr === FALSE) ? FALSE : openssl_csr_sign($csr, $parent['cert'] ?? NULL, $parent['key'] ?? $key, 2, $options);
+		} finally {
+			if ($config !== '') {
+				unlink($config);
+			}
+		}
 		if ($signed === FALSE || !openssl_x509_export($signed, $cert) || !openssl_pkey_export($key, $pem)) {
 			throw new RuntimeException('could not issue a test certificate: ' . self::drain());
 		}
