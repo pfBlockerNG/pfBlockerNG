@@ -111,6 +111,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$GLOBALS['pfb_test_configured_ipv6'] = [];
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => $up, 'opt1' => $up];
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		return $gateway;
 	}
 
@@ -130,6 +131,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = [[$fn, $service], $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0];
 			$this->proxyServes();
+			$this->seedRunningGateway();
 		};
 
 		// When the apply finds nothing to reload
@@ -146,6 +148,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->setProxyMode();
 		pfb_dns_proxy_service();
 		$this->proxyServes();
+		$this->seedRunningGateway();
 
 		// When the apply finds nothing to reload
 		$ready = pfb_dns_proxy_ensure_running();
@@ -161,11 +164,13 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->setProxyMode('192.0.2.1');
 		pfb_dns_proxy_service();
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$this->assertStringContainsString("'192.0.2.1'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the old address');
 		$seen = [];
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = [[$fn, $service], (string) file_get_contents(PFB_DNS_PROXY_RCFILE)];
 			$this->proxyServes();
+			$this->seedRunningGateway();
 		};
 
 		// When the LAN gets a new address and the apply runs
@@ -188,11 +193,13 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->setProxyMode();
 		pfb_dns_proxy_service();
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$this->assertStringNotContainsString('--reply-log', (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: not logging');
 		$seen = [];
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = [[$fn, $service], (string) file_get_contents(PFB_DNS_PROXY_RCFILE)];
 			$this->proxyServes();
+			$this->seedRunningGateway();
 		};
 
 		// When the preference is switched on and the apply finds nothing to reload
@@ -243,6 +250,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {
 			$seen[] = [[$fn, $service], $GLOBALS['pfb_test_rcfile_writes']['pfb_dns_proxy.sh'] ?? 0];
 			$this->proxyServes();
+			$this->seedRunningGateway();
 		};
 		pfb_dns_proxy_ensure_running($gateway);
 
@@ -258,6 +266,7 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->clearProxyFiles();
 		$GLOBALS['pfb_test_service_hook'] = function (): void {
 			$this->proxyServes();
+			$this->seedRunningGateway();
 		};
 		$this->configure(['pfb_dns_doh' => 'on']);
 

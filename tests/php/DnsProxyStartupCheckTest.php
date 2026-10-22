@@ -775,6 +775,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		// Given a proxy that is ready and a start that lacks DoT on lan
 		$this->box(self::DOT_ON);
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
 		[$clock, $confirm] = $this->clockedConfirm();
 

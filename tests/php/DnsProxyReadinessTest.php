@@ -203,18 +203,24 @@ final class DnsProxyReadinessTest extends TestCase
 		];
 	}
 
-	private function commandUpstream(?string $upstream): void
+	/** The running gateway's command line for child 4242: its --upstream is $upstream (NULL: none). The rc script is not consulted. */
+	private function runningUpstream(?string $upstream = '127.0.0.1:5353'): void
 	{
-		$rc = (string) file_get_contents(PFB_DNS_PROXY_RCFILE);
-		$replacement = $upstream === NULL ? '' : " --upstream {$upstream}";
-		file_put_contents(PFB_DNS_PROXY_RCFILE, preg_replace('/ --upstream \S+/', $replacement, $rc));
+		$this->seedRunningGateway('4242', $upstream);
+	}
+
+	/** A gateway that serves: child live and marked, its command line forwards to the healthy IPv4 endpoint that Unbound owns. */
+	private function servingGateway(): void
+	{
+		$this->proxyServes();
+		$this->runningUpstream();
 	}
 
 	#[DataProvider('upstreamRows')]
 	public function testReadinessRequiresBothTransportsOwnedByTheLiveUnboundPid(string $endpoint, string $rows, bool $expected): void
 	{
 		$this->proxyServes();
-		$this->commandUpstream($endpoint);
+		$this->runningUpstream($endpoint);
 		file_put_contents($GLOBALS['pfb_test_sockstat_output'], $rows);
 
 		$this->assertSame($expected, pfb_dns_proxy_serving_ready(), "upstream={$endpoint}; sockstat:\n{$rows}");
@@ -222,7 +228,7 @@ final class DnsProxyReadinessTest extends TestCase
 
 	public function testADeadUnboundCannotBeServedByTheGatewayMarkerOrItsOldSockets(): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
 
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the gateway is up but its Unbound backend has exited, so it does not serve');
@@ -230,7 +236,7 @@ final class DnsProxyReadinessTest extends TestCase
 
 	public function testTheGatewayIsReadyWhileItsUnboundBackendIsDead(): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
 
 		$this->assertTrue(pfb_dns_proxy_ready(), 'readiness is the gateway alone: its child pidfile and ready marker, as #3566 keeps it');
@@ -247,7 +253,7 @@ final class DnsProxyReadinessTest extends TestCase
 	#[DataProvider('unusableUnboundPids')]
 	public function testUnboundNeedsItsOwnMatchingDecimalPidfile(?string $pid): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		if ($pid === NULL) {
 			unlink($this->unboundPidfile());
 		} else {
@@ -259,7 +265,7 @@ final class DnsProxyReadinessTest extends TestCase
 
 	public function testAnUnavailableSockstatExecutableFailsClosed(): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		chmod(PFB_DNS_PROXY_SOCKSTAT, 0644);
 		try {
 			$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the listener inventory command cannot be executed');
@@ -283,42 +289,40 @@ final class DnsProxyReadinessTest extends TestCase
 	public function testAnUnusableUpstreamCommandFailsClosed(?string $endpoint): void
 	{
 		$this->proxyServes();
-		$this->commandUpstream($endpoint);
+		$this->runningUpstream($endpoint);
 
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'unusable --upstream: ' . var_export($endpoint, TRUE));
 	}
 
-	public function testMissingOrEmptyRcCommandFailsClosed(): void
+	public function testAMissingOrForeignRunningCommandFailsClosed(): void
 	{
-		$this->proxyServes();
-		foreach (['', "#!/bin/sh\n# no daemon command\n"] as $rc) {
-			file_put_contents(PFB_DNS_PROXY_RCFILE, $rc);
-			$this->assertFalse(pfb_dns_proxy_serving_ready(), 'no daemon command in rc: ' . var_export($rc, TRUE));
+		$this->servingGateway();
+		foreach (['', "4242 /usr/bin/someone-else --upstream 127.0.0.1:5353"] as $row) {
+			file_put_contents($GLOBALS['pfb_test_ps_output'], $row === '' ? '' : "{$row}\n");
+			$this->assertFalse(pfb_dns_proxy_serving_ready(), 'no running gateway command: ' . var_export($row, TRUE));
 		}
-		unlink(PFB_DNS_PROXY_RCFILE);
-		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'missing rc command');
 	}
 
 	public function testSockstatFailureFailsClosedEvenIfItsStdoutNamesHealthySockets(): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
 
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'sockstat exited nonzero with otherwise healthy stdout');
 	}
 
-	public function testReadinessUsesTheActualRcEndpointRatherThanCurrentInterfaceAvailability(): void
+	public function testReadinessUsesTheRunningGatewayEndpointRatherThanCurrentInterfaceAvailability(): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		$GLOBALS['pfb_test_interface_ip']['lo0'] = NULL;
-		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the generated rc still targets healthy IPv4');
-		$this->commandUpstream('[::1]:5353');
-		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the actual rc now targets absent IPv6, not healthy IPv4');
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the running gateway forwards to healthy IPv4, whatever the interface holds now');
+		$this->runningUpstream('[::1]:5353');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the running gateway forwards to absent IPv6, not healthy IPv4');
 	}
 
 	public function testTheAwaitReturnsOnTheTickTheBackendStartsServing(): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
 		[$clock, $await] = $this->clockedAwait();
 		$clock->setOnSleep(function () use ($clock): void {
@@ -333,7 +337,7 @@ final class DnsProxyReadinessTest extends TestCase
 
 	public function testTheAwaitSpendsItsFullControlledBudgetWhenTheBackendNeverServes(): void
 	{
-		$this->proxyServes();
+		$this->servingGateway();
 		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
 		[$clock, $await] = $this->clockedAwait();
 
@@ -366,6 +370,7 @@ final class DnsProxyReadinessTest extends TestCase
 			return TRUE;
 		};
 		file_put_contents($this->proxyPidfile(), "4242\n");
+		$this->runningUpstream();
 		[$clock, $await] = $this->clockedAwait();
 
 		// When the activation waits for it
@@ -411,6 +416,7 @@ final class DnsProxyReadinessTest extends TestCase
 		// Given child 4241 with the marker of an earlier incarnation (4242), a supervisor that replaces the child by 4243
 		// while PHP waits, and the new child's marker landing two probes later
 		$this->seedProxy('4241', "4242\n");
+		$this->seedRunningGateway('4243');
 		$probes = 0;
 		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function () use (&$probes): bool {
 			$probes++;

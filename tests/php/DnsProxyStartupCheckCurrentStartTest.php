@@ -396,6 +396,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		// Given a proxy that is ready, an older start in the log, and a start whose lines are not logged yet
 		$this->box();
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$this->log($this->healthyStart());
 		$since = $this->logSize();
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_confirm_ready']);
@@ -418,6 +419,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		// Given a proxy that is ready the moment it restarts, and an older start in the log
 		$this->box();
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$this->log($this->healthyStart());
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_restart']);
 		// The new start logs its first lines while restart_service() runs, and the rest only after its marker was published
@@ -457,6 +459,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->log($this->healthyStart());
 		if ($live) {
 			$this->proxyServes();
+			$this->seedRunningGateway();
 			file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n# stale\n");
 		}
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_ensure_running']);
@@ -465,6 +468,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 			if ($fn === $call) {
 				$this->appendLog(self::PLAIN);
 				$this->proxyServes();
+				$this->seedRunningGateway();
 			}
 		};
 		$clock->setOnSleep(function () use ($clock): void {
@@ -487,6 +491,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		// Given a live proxy whose script is unchanged, and a log with no ready line to judge by
 		$this->box();
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$this->log(self::PLAIN);
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_ensure_running']);
 

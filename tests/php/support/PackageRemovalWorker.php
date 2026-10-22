@@ -92,6 +92,13 @@ function worker_rc_present(array $service): bool
 	return !empty($service['rcfile']) && file_exists(RCFILEPREFIX . $service['rcfile']);
 }
 
+/** The running gateway's command line in the process table: the installed wrapper's child, serving the upstream its rc names. */
+function worker_seed_gateway_argv(): void
+{
+	file_put_contents($GLOBALS['pfb_test_ps_output'], WORKER_PROXY_PID . ' ' . PFB_DNS_PROXY_DIR
+		. "/bin/freebsd-amd64/pfb-dns --listen 127.0.0.1 --port 53 --upstream 127.0.0.1:5353\n");
+}
+
 /**
  * A service coming up. The proxy comes up as the real one does (a start over a live one keeps it): its child pidfile, then the
  * marker the proxy publishes once it serves, naming that same PID; pfb_dns_proxy_ready() reads both.
@@ -101,6 +108,7 @@ function worker_service_up(string $name): void
 	if ($name === 'pfb_dns_proxy' && !file_exists(WORKER_STATE . '/running.pfb_dns_proxy')) {
 		file_put_contents($GLOBALS['pfb']['dns_proxy_pidfile'], WORKER_PROXY_PID . "\n");
 		file_put_contents($GLOBALS['pfb']['dns_proxy_ready'], WORKER_PROXY_PID . "\n");
+		worker_seed_gateway_argv();
 	}
 	touch(WORKER_STATE . "/running.{$name}");
 }
@@ -112,6 +120,7 @@ function worker_service_down(string $name): void
 	if ($name === 'pfb_dns_proxy') {
 		@unlink($GLOBALS['pfb']['dns_proxy_pidfile']);
 		@unlink($GLOBALS['pfb']['dns_proxy_ready']);
+		file_put_contents($GLOBALS['pfb_test_ps_output'], '');
 	}
 }
 
@@ -341,6 +350,9 @@ $pfb['dns_proxy_cert'] = "{$state}/etc/pfb_dns/tls.pem";
 $pfb['dns_proxy_cert_legacy'] = "{$state}/chroot/pfb_dns_cert.pem";
 $pfb['dns_proxy_ctl'] = "{$state}/ctl.sock";
 $alive = static fn (): bool => file_exists(WORKER_STATE . '/running.pfb_dns_proxy');
+if ($alive()) {
+	worker_seed_gateway_argv();
+}
 $GLOBALS['pfb_test_valid_pids'] = [
 	PFB_DNS_PROXY_PIDFILE        => $alive,
 	PFB_DNS_PROXY_DAEMON_PIDFILE => $alive,

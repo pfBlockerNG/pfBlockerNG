@@ -131,6 +131,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 			];
 			if ($proxyComesUp) {
 				$this->proxyServes();
+				$this->seedRunningGateway();
 			} else {
 				$this->clearProxyFiles();
 			}
@@ -257,6 +258,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 				return FALSE;
 			}
 			$this->proxyServes();
+			$this->seedRunningGateway();
 			return TRUE;
 		};
 		$GLOBALS['pfb_test_service_hook'] = static function (string $fn) use (&$state): void {

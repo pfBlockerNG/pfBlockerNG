@@ -115,6 +115,7 @@ final class PfbDnsStatusTest extends TestCase
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => 'LAN'];
 		$this->seedProxy('4242', "4242\n", $up);
+		$this->seedRunningGateway('4242');
 	}
 
 	/**
@@ -515,6 +516,7 @@ final class PfbDnsStatusTest extends TestCase
 	{
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
 		$this->seedProxy('4242', $marker);
+		$this->seedRunningGateway('4242');
 		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
 
 		$status = pfb_dns_status();
@@ -587,6 +589,7 @@ final class PfbDnsStatusTest extends TestCase
 
 		// daemon -r changes the child PID without re-running the rc script or changing its addresses
 		$this->seedProxy('4243', "4243\n");
+		$this->seedRunningGateway('4243');
 		$unknown = [
 			'plain' => self::served('53', 'configured_unconfirmed'),
 			'dot'   => self::served('853', 'configured_unconfirmed'),
@@ -769,6 +772,7 @@ final class PfbDnsStatusTest extends TestCase
 		config_set_path(self::SAVED, '');
 		$GLOBALS['pfb']['pfb_dns'] = $toggle;
 		$this->seedProxy('4242', "4242\n", $serving);
+		$this->seedRunningGateway('4242');
 
 		// When the status is read
 		$status = pfb_dns_status();

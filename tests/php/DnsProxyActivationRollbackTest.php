@@ -155,6 +155,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			}
 			if ($this->behaviour === 'serves') {
 				$this->proxyServes();
+				$this->seedRunningGateway();
 			} elseif ($this->behaviour === 'lives') {
 				// Alive, as the supervisor keeps its child alive between restarts, and never publishing the marker; each probe of the
 				// readiness wait notes whether the config lock is held (the budget is 0 under test, so a wait probes once and only its
@@ -187,6 +188,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 				// A pair that still serves is kept; anything less is replaced by one that serves
 				if (!isvalidpid(PFB_DNS_PROXY_PIDFILE) || !isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
 					$this->proxyServes();
+					$this->seedRunningGateway();
 					$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 				}
 			}
@@ -905,6 +907,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->activate(TRUE);
 		pfb_dns_proxy_service();
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
 		$GLOBALS['pfb_test_service_calls'] = [];
 
@@ -1321,6 +1324,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// and a proxy that survives the rollback's stop
 		$this->activate(TRUE);
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$served = $this->servedPort();
 		config_set_path('unbound/port', '5353');
 		$this->survivesStop = TRUE;
@@ -1851,6 +1855,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Given pfB-DNS on with the Resolver moved, and a proxy that serves
 		$this->activate(TRUE);
 		$this->proxyServes();
+		$this->seedRunningGateway();
 		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
 
 		// When the cron tick runs
@@ -1894,7 +1899,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	{
 		$this->activate(TRUE);
 		$this->proxyServes();
-		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway and its Unbound upstream serve');
+		$this->seedRunningGateway();
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'before: the gateway and its Unbound upstream serve');
 		$this->seedUnbound(alive: $foreign);
 		file_put_contents($GLOBALS['pfb_test_sockstat_output'], $foreign
 			? "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\nroot nc 6161 4 udp4 127.0.0.1:5353 *:*\n" : '');
@@ -1936,6 +1942,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Given pfB-DNS on with the Resolver moved, and a proxy that serves
 		$this->activate(TRUE);
 		$this->proxyServes();
+		$this->seedRunningGateway();
 
 		// When the boot check runs
 		$this->dnsCheckArm('0');
