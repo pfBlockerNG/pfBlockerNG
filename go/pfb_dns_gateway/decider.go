@@ -40,6 +40,7 @@ func (e protocolError) Error() string { return string(e) }
 
 var errDeciderClosed = errors.New("decision socket closed by the gateway")
 var errDeciderBusy = errors.New("decider has too many queries outstanding")
+var errDeciderRetired = errors.New("decider replaced by a restart")
 
 // writeFrame sends the frame with one Write, so concurrent callers cannot interleave bytes.
 func writeFrame(w io.Writer, typ byte, id uint32, payload []byte) error {
@@ -166,6 +167,7 @@ type Decider struct {
 	nextID  uint32
 	err     error
 	closing bool
+	retired bool          // a restart replaced it: the queries it holds finish, no new one registers
 	capHit  bool          // the burst over maxOutstanding is logged; cleared when the table drains
 	idle    chan struct{} // see drained; made by its first caller
 }
@@ -261,8 +263,14 @@ func (d *Decider) finish(id uint32, answer []byte) {
 	}
 }
 
-// drained is closed once no query is outstanding (at once when none is). Only a decider no new query is sent to waits
-// on it.
+// markRetired makes every later register fail with errDeciderRetired, so the drain waits only for what it holds.
+func (d *Decider) markRetired() {
+	d.mu.Lock()
+	d.retired = true
+	d.mu.Unlock()
+}
+
+// drained is closed once no query is outstanding (at once when none is); only a retired decider waits on it.
 func (d *Decider) drained() <-chan struct{} {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -334,6 +342,9 @@ func (d *Decider) read() {
 func (d *Decider) register(c *call) (uint32, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.retired { // before done: the retirement closes it, and the query belongs to the active decider either way
+		return 0, errDeciderRetired
+	}
 	select {
 	case <-d.done:
 		return 0, d.err

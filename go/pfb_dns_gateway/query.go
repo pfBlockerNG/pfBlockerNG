@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -213,11 +214,21 @@ func (g *gateway) screen(client netip.Addr, wire []byte) (disposition, []byte) {
 func (g *gateway) resolve(ctx context.Context, client netip.Addr, datagram bool, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(ctx, 2*g.timeout+g.grace)
 	defer cancel()
-	answer, err := g.dec.Load().Decide(ctx, client, datagram, wire, fwd)
+	answer, err := g.decide(ctx, g.dec.Load(), client, datagram, wire, fwd)
 	if err != nil {
 		return buildServfail(wire)
 	}
 	return answer
+}
+
+// decide asks dec. A query that dec refused because a restart retired it before the query registered (nothing was sent
+// to it) is asked of the active decider, once; every other failure is the query's.
+func (g *gateway) decide(ctx context.Context, dec *Decider, client netip.Addr, datagram bool, wire []byte, fwd forwarder) ([]byte, error) {
+	answer, err := dec.Decide(ctx, client, datagram, wire, fwd)
+	if errors.Is(err, errDeciderRetired) {
+		return g.dec.Load().Decide(ctx, client, datagram, wire, fwd)
+	}
+	return answer, err
 }
 
 // resolveShared is resolve under the cap DoH and DoQ share: they carry many queries on one connection, so their

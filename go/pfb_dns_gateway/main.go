@@ -473,6 +473,7 @@ func (s *server) restartDecider() error {
 	oldDec, oldChild := s.dec, s.child
 	s.dec, s.child = dec, ch
 	s.g.dec.Store(dec)
+	oldDec.markRetired() // after the store: a query that still read the old one is handed to this one
 	s.retiring[oldChild] = oldDec
 	close(s.swapped)
 	s.swapped = make(chan struct{})
@@ -483,8 +484,6 @@ func (s *server) restartDecider() error {
 }
 
 // retire lets a replaced decider finish what it holds (as long as a query may take), then closes and reaps it.
-// shortcut: a query that read the old decider just before the swap and registers after the drain gets SERVFAIL; retry
-// it on the active decider if that window ever shows.
 func (s *server) retire(dec *Decider, ch *child) {
 	drain := time.NewTimer(2*s.cfg.timeout + s.g.grace)
 	defer drain.Stop()
