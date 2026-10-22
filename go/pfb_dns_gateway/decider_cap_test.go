@@ -17,7 +17,7 @@ func newCall() *call { return &call{forward: make(chan []byte, 1), final: make(c
 func TestAtTheCapOfOutstandingIDsNewQueriesGetServfailAndNothingIsEvicted(t *testing.T) {
 	r := newRig(t, rigConfig{acl: aclMixed})
 	r.autoAnswer(echoAnswer)
-	d := r.g.dec
+	d := r.g.dec.Load()
 	for range maxOutstandingIDs {
 		if _, err := d.register(newCall()); err != nil {
 			t.Fatalf("an id below the cap was refused: %v", err)

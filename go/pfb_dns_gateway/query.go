@@ -106,7 +106,7 @@ func (l *addrLimit) release(a netip.Addr) {
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
 	acl                                                        *ACL
-	dec                                                        *Decider
+	dec                                                        atomic.Pointer[Decider] // the active decider; a query keeps the one it started on
 	up                                                         *upstream
 	timeout                                                    time.Duration // wait for Unbound per exchange
 	grace                                                      time.Duration
@@ -171,13 +171,14 @@ func (q *idleGroup) Wait() {
 
 func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, logf func(format string, args ...any)) *gateway {
 	g := &gateway{
-		acl: acl, dec: dec, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, logf: logf,
+		acl: acl, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, logf: logf,
 		closeBound: defaultCloseWait, stopBound: defaultStopWait,
 		udpPerAddr: maxUDPPerAddr, muxPerAddr: maxMuxPerAddr, tcpPerAddr: maxTCPPerAddr, dohPerAddr: maxDoHPerAddr, doqPerAddr: maxDoQPerAddr,
 		clients:  map[net.Conn]struct{}{},
 		dohConns: newConnLimit("DoH", maxDoHConns), doqConns: newConnLimit("DoQ", maxDoQConns),
 	}
 	g.ctx, g.cancel = context.WithCancel(context.Background())
+	g.dec.Store(dec)
 	return g
 }
 
@@ -212,7 +213,7 @@ func (g *gateway) screen(client netip.Addr, wire []byte) (disposition, []byte) {
 func (g *gateway) resolve(ctx context.Context, client netip.Addr, datagram bool, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(ctx, 2*g.timeout+g.grace)
 	defer cancel()
-	answer, err := g.dec.Decide(ctx, client, datagram, wire, fwd)
+	answer, err := g.dec.Load().Decide(ctx, client, datagram, wire, fwd)
 	if err != nil {
 		return buildServfail(wire)
 	}

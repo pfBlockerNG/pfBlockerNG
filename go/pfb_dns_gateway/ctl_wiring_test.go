@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// The control socket in the gateway's life: bound while it is still root, reported before it says ready, kept when it gives
-// root up, and never bound for a gateway that serves no TLS.
+// The control socket in the gateway's life: bound while it is still root, reported before it says ready, and kept when it
+// gives root up.
 
 func ctlConfig(t *testing.T) (config, *capture, string) {
 	t.Helper()
@@ -49,23 +49,6 @@ func TestTheControlSocketIsReportedBeforeReady(t *testing.T) {
 	at, ready := strings.Index(text, "control socket "+sock), strings.Index(text, "ready upstream")
 	if at < 0 || ready < at {
 		t.Fatalf("`control socket %s` must be reported before `ready upstream`:\n%s", sock, text)
-	}
-}
-
-// A gateway that serves no TLS has no certificate to renew: nothing is bound, nothing is made.
-func TestNoControlSocketIsBoundWhenNoTLSTransportIsRequested(t *testing.T) {
-	cfg, logs, sock := ctlConfig(t)
-	cfg.dotListen = nil
-	srv, err := start(cfg, logs.logf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer srv.shutdown()
-	if _, err := os.Lstat(filepath.Dir(sock)); err == nil {
-		t.Fatalf("the directory of the control socket was made for a gateway that serves no TLS")
-	}
-	if strings.Contains(logs.text(), "control socket") {
-		t.Fatalf("nothing about a control socket may be logged:\n%s", logs.text())
 	}
 }
 

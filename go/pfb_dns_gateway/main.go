@@ -13,12 +13,15 @@
 //	ready upstream <host>:<port> pid <pid>
 //
 // --ready-file PATH: the gateway writes its own pid there, mode 0600, once it serves, and removes the file at stop
-// while the file still names it.
+// while the file still names it. Just before, it writes PATH.sha256: the SHA-256 of its own executable as read at start,
+// 64 lowercase hex digits and a newline, never removed (a failure to write it is logged; the gateway serves anyway).
 // The ready upstream line logs the same pid the ready file holds.
 package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -39,6 +42,7 @@ import (
 
 const (
 	defaultReadyTimeout   = 300 * time.Second          // the decider boots the whole DNSBL database before it says READY
+	defaultRestartTimeout = 30 * time.Second           // a decider restarted on the control socket: pfBlockerNG waits 40 s for the reply
 	defaultKillAfter      = 3 * time.Second            // how long the decider gets to leave on EOF
 	defaultShutdownBudget = 4 * time.Second            // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
 	defaultTLSPEM         = "/var/etc/pfb_dns/tls.pem" // the certificate and key pfBlockerNG writes from the pfB-DNS page's selection: root only
@@ -70,6 +74,7 @@ type config struct {
 	drop           func() error      // replaces the privilege drop to --user
 	trace          func(step string) // called after bind, decider start and READY (the drop hook records itself)
 	readyTimeout   time.Duration
+	restartTimeout time.Duration
 	killAfter      time.Duration
 	shutdownBudget time.Duration
 	interrupt      <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
@@ -253,11 +258,15 @@ type server struct {
 	cfg     config
 	logf    func(format string, args ...any)
 	g       *gateway
-	dec     *Decider
-	child   *child
 	failed  chan error
 	stopped chan struct{}
 	once    sync.Once
+
+	mu       sync.Mutex // guards the fields below: a restart replaces the active decider, the shutdown takes them all
+	dec      *Decider   // the active decider, the one g asks: only its end is fatal
+	child    *child
+	swapped  chan struct{}       // closed, and replaced, when a restart makes another decider the active one
+	retiring map[*child]*Decider // deciders a restart replaced that are not gone yet
 }
 
 // start binds every --listen address (one that fails is logged and skipped), starts the decider, gives up root,
@@ -278,11 +287,19 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	if cfg.readyTimeout == 0 {
 		cfg.readyTimeout = defaultReadyTimeout
 	}
+	if cfg.restartTimeout == 0 {
+		cfg.restartTimeout = defaultRestartTimeout
+	}
 	if cfg.killAfter == 0 {
 		cfg.killAfter = defaultKillAfter
 	}
 	if cfg.shutdownBudget == 0 {
 		cfg.shutdownBudget = defaultShutdownBudget
+	}
+	var binSum string
+	var binErr error
+	if cfg.readyFile != "" {
+		binSum, binErr = executableSHA256() // now: an update replaces the file this process was started from
 	}
 
 	acl := NewACL(cfg.unboundConf, logf)
@@ -296,16 +313,30 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		listeners = append(listeners, l)
 	}
 	var secure *tlsListeners
+	var ctl *ctlServer
 	closeListeners := func() {
 		for _, l := range listeners {
 			l.close()
 		}
 		secure.close()
+		if ctl != nil {
+			_ = ctl.ln.Close()
+		}
 	}
 	if len(listeners) == 0 {
 		return nil, errors.New("no address could be bound")
 	}
 	secure = bindTLS(cfg, logf) // the certificate file is read, and the sockets are bound, before the privilege drop
+	if cfg.ctlSocket != "" {    // in every mode: a decider restart needs it as much as a certificate renewal does
+		var err error
+		var certs *certStore
+		if secure != nil {
+			certs = secure.certs
+		}
+		if ctl, err = bindCtl(cfg.ctlSocket, certs, logf); err != nil {
+			logf("control socket: %v; the certificate cannot be renewed without a restart, nor the decider restarted alone", err)
+		}
+	}
 	trace("bind")
 
 	conn, deciderEnd, err := newSocketpair()
@@ -333,24 +364,24 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 			return abort(err)
 		}
 	}
-	select {
-	case <-dec.Ready():
-	case <-dec.Done():
-		return abort(fmt.Errorf("decider failed before READY: %w", dec.Err()))
-	case <-ch.exited:
-		return abort(fmt.Errorf("decider exited before READY: %v", ch.err))
-	case <-cfg.interrupt:
+	if err := awaitReady(dec, ch, cfg.interrupt, cfg.readyTimeout); errors.Is(err, errGivenUp) {
 		return abort(errInterrupted)
-	case <-time.After(cfg.readyTimeout):
-		return abort(fmt.Errorf("decider sent no READY within %s", cfg.readyTimeout))
+	} else if err != nil {
+		return abort(fmt.Errorf("decider %w", err))
 	}
 	trace("ready")
 
 	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
+	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
+		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}
 	for _, l := range listeners {
 		g.serve(l)
 	}
 	secure.serve(g, cfg.dohTrusted)
+	if ctl != nil {
+		ctl.restart = s.restartDecider
+		ctl.serve(g)
+	}
 	g.wg.Add(1)
 	go func() { // a rewrite of the config or any file it includes reaches the matcher within a second
 		defer g.wg.Done()
@@ -365,7 +396,15 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 			}
 		}
 	}()
-	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{})}
+	if cfg.readyFile != "" {
+		err := binErr
+		if err == nil {
+			err = replaceFile(cfg.readyFile+".sha256", []byte(binSum+"\n"))
+		}
+		if err != nil { // pfBlockerNG reads a missing record as a changed binary: the next update restarts the pair
+			logf("cannot record the SHA-256 of the gateway binary: %v", err)
+		}
+	}
 	if err := publishReady(cfg.readyFile); err != nil {
 		s.shutdown()
 		return nil, err
@@ -374,65 +413,195 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		logf("listening udp+tcp %s", l.addr())
 	}
 	secure.report(logf)
+	if ctl != nil {
+		logf("control socket %s", ctl.path)
+	}
 	logf("ready upstream %s pid %d", cfg.upstream, os.Getpid())
 	go s.watch()
 	return s, nil
 }
 
-// watch turns the end of the decider session, or of the decider process, into a fatal error.
-func (s *server) watch() {
-	var err error
+var errGivenUp = errors.New("was given up: the gateway is stopping")
+
+// awaitReady waits at most bound for the decider's READY; its session ending, its exit and stop end the wait first.
+func awaitReady(dec *Decider, ch *child, stop <-chan struct{}, bound time.Duration) error {
+	t := time.NewTimer(bound)
+	defer t.Stop()
 	select {
+	case <-dec.Ready():
+		return nil
+	case <-dec.Done():
+		return fmt.Errorf("failed before READY: %w", dec.Err())
+	case <-ch.exited:
+		return fmt.Errorf("exited before READY: %v", ch.err)
+	case <-stop:
+		return errGivenUp
+	case <-t.C:
+		return fmt.Errorf("sent no READY within %s", bound)
+	}
+}
+
+// restartDecider starts a new decider with the first one's argv and, once it is READY, makes it the active one and
+// retires the old one. A new decider that does not get READY is closed and killed; the old one stays active.
+func (s *server) restartDecider() error {
+	conn, end, err := newSocketpair()
+	if err != nil {
+		return err
+	}
+	ch, err := startDecider(s.cfg.decider, end)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	dec := NewDecider(conn, s.logf)
+	pid := ch.cmd.Process.Pid
+	giveUp := func(err error) error {
+		dec.Close()
+		ch.kill(s.logf, s.cfg.killAfter)
+		return fmt.Errorf("the new decider (pid %d) %w", pid, err)
+	}
+	if err := awaitReady(dec, ch, s.stopped, s.cfg.restartTimeout); err != nil {
+		return giveUp(err)
+	}
+	s.mu.Lock()
+	select {
+	case <-s.stopped: // the shutdown has taken the deciders it reaps: this one is not among them
+		s.mu.Unlock()
+		return giveUp(errGivenUp)
+	default:
+	}
+	oldDec, oldChild := s.dec, s.child
+	s.dec, s.child = dec, ch
+	s.g.dec.Store(dec)
+	s.retiring[oldChild] = oldDec
+	close(s.swapped)
+	s.swapped = make(chan struct{})
+	s.mu.Unlock()
+	s.logf("decider restarted: pid %d took over from pid %d", pid, oldChild.cmd.Process.Pid)
+	go s.retire(oldDec, oldChild)
+	return nil
+}
+
+// retire lets a replaced decider finish what it holds (as long as a query may take), then closes and reaps it.
+// shortcut: a query that read the old decider just before the swap and registers after the drain gets SERVFAIL; retry
+// it on the active decider if that window ever shows.
+func (s *server) retire(dec *Decider, ch *child) {
+	drain := time.NewTimer(2*s.cfg.timeout + s.g.grace)
+	defer drain.Stop()
+	select {
+	case <-dec.drained():
+	case <-dec.Done():
+	case <-drain.C:
+		s.logf("the replaced decider (pid %d) still holds queries after %s: closing it", ch.cmd.Process.Pid, 2*s.cfg.timeout+s.g.grace)
 	case <-s.stopped:
 		return
-	case <-s.dec.Done():
-		err = fmt.Errorf("decider session ended: %w", s.dec.Err())
-	case <-s.child.exited:
-		err = fmt.Errorf("decider exited: %v", s.child.err)
 	}
+	dec.Close()
+	leave := time.NewTimer(s.cfg.killAfter)
+	defer leave.Stop()
 	select {
-	case <-s.stopped: // our own shutdown made the decider leave
-	default:
-		s.failed <- err
+	case <-ch.exited:
+	case <-leave.C:
+		s.logf("the replaced decider (pid %d) did not exit within %s of EOF: killing it", ch.cmd.Process.Pid, s.cfg.killAfter)
+		ch.kill(s.logf, s.cfg.killAfter)
+	case <-s.stopped:
+		return
+	}
+	s.mu.Lock()
+	delete(s.retiring, ch)
+	s.mu.Unlock()
+}
+
+// watch turns the end of the active decider's session, or of its process, into a fatal error. A decider a restart
+// replaced may end as it likes.
+func (s *server) watch() {
+	for {
+		s.mu.Lock()
+		dec, ch, swapped := s.dec, s.child, s.swapped
+		s.mu.Unlock()
+		var err error
+		select {
+		case <-s.stopped:
+			return
+		case <-swapped:
+			continue
+		case <-dec.Done():
+			err = fmt.Errorf("decider session ended: %w", dec.Err())
+		case <-ch.exited:
+			err = fmt.Errorf("decider exited: %v", ch.err)
+		}
+		if cur, _ := s.active(); cur != dec { // replaced while this waited: its end is the retirement's
+			continue
+		}
+		select {
+		case <-s.stopped: // our own shutdown made the decider leave
+		default:
+			s.failed <- err
+		}
+		return
 	}
 }
 
 // fatal delivers the reason the gateway can no longer serve; a requested shutdown delivers nothing.
 func (s *server) fatal() <-chan error { return s.failed }
 
-// shutdown stops accepting, closes the decision socket (the decider reads EOF and exits), and waits for the
-// decider, killing it when it does not leave in time. Everything in it, the transports' stop included, fits in
-// shutdownBudget: the decider's patience for EOF is whatever the transports left, less an eighth of the budget
-// that the kill and its reap keep.
+func (s *server) active() (*Decider, *child) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dec, s.child
+}
+
+// shutdown stops accepting, closes the decision sockets of the active decider and of any being retired (each reads EOF
+// and exits), and waits for them, killing those that do not leave in time. Everything in it, the transports' stop
+// included, fits in shutdownBudget: the deciders' patience for EOF is whatever the transports left, less an eighth of
+// the budget that the kills and their reaps keep.
 func (s *server) shutdown() {
 	s.once.Do(func() {
 		deadline := time.Now().Add(s.cfg.shutdownBudget)
-		close(s.stopped)
+		s.mu.Lock()
+		close(s.stopped) // under mu: a restart has either made its decider active, or sees this and gives it up
+		decs, children := []*Decider{s.dec}, []*child{s.child}
+		for ch, dec := range s.retiring {
+			decs, children = append(decs, dec), append(children, ch)
+		}
+		s.mu.Unlock()
 		if err := removeReady(s.cfg.readyFile); err != nil {
 			s.logf("cannot remove the ready file: %v", err)
 		}
-		s.dec.Close() // first: queries blocked writing to a decider that reads nothing would hold g.stop() up to the write deadline
+		for _, dec := range decs {
+			dec.Close() // first: queries blocked writing to a decider that reads nothing would hold g.stop() up to the write deadline
+		}
 		s.g.stop()
 		patience := max(min(s.cfg.killAfter, time.Until(deadline)-s.cfg.shutdownBudget/8), 0)
-		if !s.child.waitExit(patience) {
-			s.logf("the decider did not exit within %s of EOF: killing it", patience.Round(time.Millisecond))
-			s.child.kill(s.logf, time.Until(deadline))
+		eof := time.Now().Add(patience)
+		for _, ch := range children {
+			if !ch.waitExit(max(time.Until(eof), 0)) {
+				s.logf("the decider did not exit within %s of EOF: killing it", patience.Round(time.Millisecond))
+				ch.kill(s.logf, time.Until(deadline))
+			}
 		}
 	})
 }
 
-// publishReady writes the gateway's pid to path, mode 0600: a temporary file in the same directory, renamed over
-// path, so a reader sees all of it or none, and a symlink planted at path is replaced rather than written through.
-// An empty path publishes nothing.
+// publishReady writes the gateway's pid to path, mode 0600. An empty path publishes nothing.
 func publishReady(path string) error {
 	if path == "" {
 		return nil
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
+	if err := replaceFile(path, fmt.Appendf(nil, "%d\n", os.Getpid())); err != nil {
 		return fmt.Errorf("cannot write the ready file: %w", err)
 	}
-	_, err = fmt.Fprintf(tmp, "%d\n", os.Getpid())
+	return nil
+}
+
+// replaceFile writes data to a temporary file, mode 0600, in path's directory and renames it over path, so a reader sees
+// all of it or none, and a symlink planted at path is replaced rather than written through.
+func replaceFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(data)
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
@@ -441,9 +610,26 @@ func publishReady(path string) error {
 	}
 	if err != nil {
 		_ = os.Remove(tmp.Name())
-		return fmt.Errorf("cannot write the ready file: %w", err)
 	}
-	return nil
+	return err
+}
+
+// executableSHA256 is the SHA-256 of the running binary, in lowercase hex.
+func executableSHA256() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // removeReady deletes the ready file only while it still holds this process's pid. Anything else (another pid, a

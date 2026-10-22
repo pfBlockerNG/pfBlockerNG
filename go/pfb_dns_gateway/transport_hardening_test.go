@@ -143,7 +143,7 @@ func TestStopGivesUpOnAHandlerNothingCanInterrupt(t *testing.T) {
 	r := newRig(t, rigConfig{acl: aclMixed})
 	r.autoAnswer(echoAnswer)
 	r.g.stopBound = 50 * time.Millisecond
-	d := r.g.dec
+	d := r.g.dec.Load()
 	d.wmu.Lock() // the handler's QUERY can never be written
 	t.Cleanup(sync.OnceFunc(d.wmu.Unlock))
 	c := r.tcpClient("")

@@ -48,7 +48,7 @@ func TestStopAnswersWhatIsInFlightWithServfailNeverWithUnboundsReply(t *testing.
 			query := buildQuery(t, 7, "inflight.example.", true)
 			tcpSend(t, c, query)
 			r.up.next() // Unbound has the query and holds its answer
-			r.g.dec.Close()
+			r.g.dec.Load().Close()
 			r.g.stop()
 			release() // too late: nobody is waiting for it
 
@@ -75,7 +75,7 @@ func TestStopWaitsForADoHHandlerThatIsStillRunning(t *testing.T) {
 	r.g.stopBound = time.Hour // this test lets the handler go itself
 	addr := r.serveDoH(m)
 	c := newDoHClient(t, addr, m, dohOptions{})
-	d := r.g.dec
+	d := r.g.dec.Load()
 	d.wmu.Lock()
 	var unlock = sync.OnceFunc(d.wmu.Unlock)
 	t.Cleanup(unlock) // before the rig's own cleanup: its stop() must not wait for this handler forever

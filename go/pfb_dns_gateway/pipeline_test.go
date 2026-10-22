@@ -174,7 +174,7 @@ func TestAClosedClientFreesItsSlotOnceItsQueriesAreDecided(t *testing.T) {
 			})
 			c := k.dial(t, r)
 			tcpSend(t, c, buildQuery(t, 1, "held.example.", true))
-			inFlight := r.g.dec.lookup(r.nextQuery().id)
+			inFlight := r.g.dec.Load().lookup(r.nextQuery().id)
 			if n := r.g.tcpConns.Load(); n != 1 {
 				t.Fatalf("one client is connected but %d slots are held", n)
 			}

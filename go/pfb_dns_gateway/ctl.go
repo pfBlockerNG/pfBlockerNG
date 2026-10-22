@@ -15,15 +15,17 @@ import (
 	"time"
 )
 
-// The control socket is how root hands the gateway a renewed TLS certificate once the gateway no longer is root: a Unix
-// stream socket in a directory only root can enter, bound before the privilege drop and kept after it. One message per
-// connection: a 4-byte big-endian length, then that many bytes of PEM (the certificate, the CAs after it, the key). One
+// The control socket is how root reaches the gateway once the gateway no longer is root: a Unix stream socket in a
+// directory only root can enter, bound before the privilege drop and kept after it, in every mode. One message per
+// connection, starting with 4 bytes: FF FF FF FF (nothing after it) restarts the decider; anything else is the big-endian
+// length of the PEM that follows (the certificate, the CAs after it, the key), which replaces the TLS certificate. One
 // reply line, `ok` or `error: <reason>`. Whoever is not root, by the kernel's credential of the peer, is closed on without
 // a byte read from it.
 
 const (
 	defaultCtlSocket   = "/var/run/pfb_dns/ctl.sock"
 	ctlMaxPEM          = 64 << 10 // a chain of a few certificates and a key are a few KiB
+	ctlRestart         = 0xffffffff
 	defaultCtlDeadline = 5 * time.Second
 )
 
@@ -33,11 +35,12 @@ var ctlUID uint32
 type ctlServer struct {
 	ln       *net.UnixListener
 	path     string
-	certs    *certStore
+	certs    *certStore // nil when no TLS transport is served: a push is refused
 	logf     func(format string, args ...any)
 	peerUID  func(*net.UnixConn) (uint32, error) // the kernel's credential of the peer; a test replaces it
 	deadline time.Duration                       // for reading the message, and again for writing the reply
 	refusing atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
+	restart  func() error                        // the decider restart; start() sets it
 }
 
 // bindCtl makes path's directory private to the user running the gateway (root), replaces what an earlier gateway left at
@@ -137,6 +140,14 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		return
 	}
 	n := binary.BigEndian.Uint32(head[:])
+	if n == ctlRestart {
+		if err := c.restart(); err != nil {
+			reply("error: " + err.Error())
+			return
+		}
+		reply("ok")
+		return
+	}
 	if n == 0 || n > ctlMaxPEM {
 		reply(fmt.Sprintf("error: a message of %d bytes is not between 1 and %d", n, ctlMaxPEM))
 		return
@@ -144,6 +155,10 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 	pem := make([]byte, n)
 	if got, err := io.ReadFull(conn, pem); err != nil {
 		reply(fmt.Sprintf("error: the message ended after %d of %d bytes: %v", got, n, reason(err)))
+		return
+	}
+	if c.certs == nil {
+		reply("error: no TLS transport is served, so there is no certificate to replace")
 		return
 	}
 	if err := c.certs.push(pem); err != nil {

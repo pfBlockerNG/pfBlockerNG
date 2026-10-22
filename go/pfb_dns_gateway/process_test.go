@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -43,8 +44,11 @@ func TestMain(m *testing.M) {
 // fakeDecider is the Python side of the socketpair (fd 3). Modes:
 //
 //	serve           READY, then answer every QUERY with the query echoed and QR set; exit 0 at EOF
+//	forward-tagged  serve, but each QUERY is FORWARDed first and its ANSWER, once the REPLY is in, ends in "pid=<its pid>"
+//	from-file       the mode the file PFB_FAKE_MODEFILE holds when the process starts
 //	no-ready-exit   exit 3 at once, never READY
 //	no-ready-hang   never READY; wait for EOF
+//	bad-frame-before-ready a frame whose length is below the minimum, never READY; wait for EOF
 //	boot-ignores-eof never READY; ignore everything, EOF included
 //	ready-then-exit READY, then exit 0
 //	bad-frame       READY, then a frame whose length is below the minimum
@@ -57,6 +61,14 @@ func TestMain(m *testing.M) {
 // duration) holds the exit after EOF: it only gives a gateway that exits before its child the time to do so, and the verdict is
 // the recorded parent, not how long anything took.
 func fakeDecider(mode string) int {
+	if mode == "from-file" { // every decider of a gateway has the same argv: the file is how a test makes the next one differ
+		b, err := os.ReadFile(os.Getenv("PFB_FAKE_MODEFILE"))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fake decider: mode file:", err)
+			return 4
+		}
+		mode = strings.TrimSpace(string(b))
+	}
 	conn, err := net.FileConn(os.NewFile(3, "decision"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fake decider: no fd 3:", err)
@@ -76,6 +88,10 @@ func fakeDecider(mode string) int {
 		return 0
 	case "boot-ignores-eof": // a module that is still booting reads no socket, so EOF goes unnoticed
 		time.Sleep(time.Hour)
+		return 0
+	case "bad-frame-before-ready":
+		_, _ = conn.Write([]byte{0, 0, 0, 3})
+		_, _ = io.Copy(io.Discard, conn)
 		return 0
 	}
 	if watch := os.Getenv("PFB_FAKE_WATCH"); watch != "" {
@@ -99,19 +115,21 @@ func fakeDecider(mode string) int {
 	}
 	r := bufio.NewReader(conn)
 	for {
-		var head [9]byte
-		if _, err := io.ReadFull(r, head[:]); err != nil {
+		typ, id, payload, err := fakeFrame(r)
+		if err != nil {
 			break
 		}
-		payload := make([]byte, int(head[0])<<24|int(head[1])<<16|int(head[2])<<8|int(head[3])-5)
-		if _, err := io.ReadFull(r, payload); err != nil {
-			break
-		}
-		if head[4] == tQuery {
+		if typ == tQuery {
 			wire := payload[2+int(payload[1]):] // payload[0] is the transport byte
 			answer := bytes.Clone(wire)
 			answer[2] |= 0x80
-			id := uint32(head[5])<<24 | uint32(head[6])<<16 | uint32(head[7])<<8 | uint32(head[8])
+			if mode == "forward-tagged" {
+				_, _ = conn.Write(pack(tForward, id, wire))
+				if !fakeAwaitReply(r, id) {
+					break
+				}
+				answer = append(answer, "pid="+strconv.Itoa(os.Getpid())...)
+			}
 			_, _ = conn.Write(pack(tAnswer, id, answer))
 		}
 	}
@@ -120,6 +138,32 @@ func fakeDecider(mode string) int {
 	}
 	fakeEvent("exit parent=%d", os.Getppid())
 	return 0
+}
+
+// fakeFrame reads one frame of the decision protocol.
+func fakeFrame(r io.Reader) (typ byte, id uint32, payload []byte, err error) {
+	var head [9]byte
+	if _, err = io.ReadFull(r, head[:]); err != nil {
+		return 0, 0, nil, err
+	}
+	payload = make([]byte, int(binary.BigEndian.Uint32(head[:4]))-5)
+	if _, err = io.ReadFull(r, payload); err != nil {
+		return 0, 0, nil, err
+	}
+	return head[4], binary.BigEndian.Uint32(head[5:]), payload, nil
+}
+
+// fakeAwaitReply reads frames until the REPLY to id; false when the session ends first.
+func fakeAwaitReply(r io.Reader, id uint32) bool {
+	for {
+		typ, got, _, err := fakeFrame(r)
+		if err != nil {
+			return false
+		}
+		if typ == tReply && got == id {
+			return true
+		}
+	}
 }
 
 // fakeEvent appends one line to the file PFB_FAKE_EVENTS names (nothing when it is unset).
@@ -181,8 +225,13 @@ type gatewayProcess struct {
 	log []string
 }
 
+// startGatewayProcess runs the gateway with flags; its control socket is a private one unless flags name it, so a test never
+// touches the system's.
 func startGatewayProcess(t *testing.T, flags []string, deciderArgv []string) *gatewayProcess {
 	t.Helper()
+	if !slices.Contains(flags, "--ctl-socket") {
+		flags = append(slices.Clone(flags), "--ctl-socket", filepath.Join(shortTempDir(t), "run", "ctl.sock"))
+	}
 	args := append(append([]string{"--as-gateway"}, flags...), "--")
 	cmd := exec.Command(os.Args[0], append(args, deciderArgv...)...)
 	stderr, err := cmd.StderrPipe()

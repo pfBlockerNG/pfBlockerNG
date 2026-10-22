@@ -31,23 +31,33 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
 
 ### The control socket
 
-- **Made** with the other TLS sockets, before the privilege drop, only when a TLS transport is requested (`--dot-listen`, `--doh-listen`
-  or `--doq-listen`), and reported as `control socket <path>` before `ready upstream`. Its directory is created mode 0700 (or
+- **Made** before the privilege drop in every mode, TLS transport or not (the decider restart below needs it as much as a
+  renewal does), and reported as `control socket <path>` before `ready upstream`. Its directory is created mode 0700 (or
   must already be a real directory, not a symlink, owned by the user running the gateway, and is chmod'ed 0700 if it was left
   open); the socket is mode 0600; a stale file at the path is replaced. A socket that cannot be made is logged once
-  (`control socket: <reason>; the certificate cannot be renewed without a restart`) and the gateway serves the certificate it
-  read at start: a renewal then needs a restart, which pfBlockerNG reports as a notice.
+  (`control socket: <reason>; the certificate cannot be renewed without a restart, nor the decider restarted alone`) and the
+  gateway serves the certificate it read at start: a renewal then needs a restart, which pfBlockerNG reports as a notice.
 - **Who may push.** One credential, read from the kernel for every connection: the peer's uid must be 0. Linux:
   `getsockopt(SO_PEERCRED)` (`unix.GetsockoptUcred`, the `uid` field). FreeBSD (pfSense): `getsockopt(SOL_LOCAL, LOCAL_PEERCRED)`
   (`unix.GetsockoptXucred`, `cr_uid`, `cr_version` must be 0). Any other OS reads no credential, so every connection is
   refused. A connection from another user, or whose credential cannot be read, is closed without being read and logged once per
   burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
   line). The mode 0600 on the socket is a second wall, not the one relied on.
-- **Frame.** One message per connection: the length of the PEM as 4 bytes big-endian (1 to 65536; judged before the body is read),
-  then the PEM (the chain, then the key). Reads have a 5 s deadline. The one reply line is `ok` or `error: <reason>`. A push that does
+- **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FF`, with nothing after it, is the decider restart
+  below. Anything else is the length of the PEM, big-endian (1 to 65536; judged before the body is read), then the PEM (the
+  chain, then the key). Reads have a 5 s deadline. The one reply line is `ok` or `error: <reason>`. A push that does
   not parse, or whose key is not the certificate's, changes nothing and logs
   `TLS certificate not replaced: <reason>; keeping the previous one`; one that does logs `TLS certificate replaced by a push` and
-  is served from the next handshake on.
+  is served from the next handshake on. A push to a gateway that serves no TLS transport is answered
+  `error: no TLS transport is served, so there is no certificate to replace`.
+- **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
+  30 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
+  `decider restarted: pid N took over from pid M` is logged; the old one answers the queries it holds (for as long as a query
+  may take, 2 x `--timeout` + 1 s), then gets EOF and is killed when it does not leave within 3 s. No READY (the bound, an exit,
+  a protocol error, or the gateway stopping): the new decider is closed and killed, the old one stays, and the reply is
+  `error: the new decider (pid N) <what happened>`. Only the active decider's end is fatal to the gateway; a shutdown closes
+  and reaps a decider still being retired within the same 4 s budget. A gateway older than the restart answers the frame with
+  `error: a message of 4294967295 bytes is not between 1 and 65536` and restarts nothing.
 
 A renewal needs no restart. Every TLS config of the three transports takes its certificate from `GetCertificate`, an atomic
 pointer the push replaces: no handshake fails and no connection is touched: an open DoT, DoH or DoQ connection keeps the
@@ -60,7 +70,7 @@ process (3 s per step: connect, send, reply; no external process, so no `timeout
 refusal, a gateway that does not answer, a missing socket: one notice per distinct reason (`pfBlockerNG DNS Proxy certificate`), the
 gateway keeps the certificate it has, and the next apply or tick tries again, because nothing records a push that failed.
 
-Pinned by `ctl_test.go` and `ctl_wiring_test.go` (peer credentials with a real unprivileged process, frame limits, directory and
+Pinned by `ctl_test.go`, `ctl_wiring_test.go` and `restart_test.go` (peer credentials with a real unprivileged process, frame limits, directory and
 socket modes, bound before the drop and kept after a real one), `tls_reload_test.go` (a gateway process serving all three
 transports through a rotation, a refused push and a rotation under load: no failed handshake, no unanswered query),
 `tlsconfig_test.go`, `tests/dns_proxy/test_gateway_e2e.py` (the real binary, a pushed certificate, the modes of the socket and its

@@ -166,7 +166,8 @@ type Decider struct {
 	nextID  uint32
 	err     error
 	closing bool
-	capHit  bool // the burst over maxOutstanding is logged; cleared when the table drains
+	capHit  bool          // the burst over maxOutstanding is logged; cleared when the table drains
+	idle    chan struct{} // see drained; made by its first caller
 }
 
 // NewDecider starts reading conn; READY, failure and queries are observed through the methods below.
@@ -252,10 +253,37 @@ func (d *Decider) finish(id uint32, answer []byte) {
 	delete(d.calls, id)
 	if len(d.calls) == 0 {
 		d.capHit = false
+		d.closeIdle()
 	}
 	d.mu.Unlock()
 	if c != nil {
 		c.final <- answer
+	}
+}
+
+// drained is closed once no query is outstanding (at once when none is). Only a decider no new query is sent to waits
+// on it.
+func (d *Decider) drained() <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.idle == nil {
+		d.idle = make(chan struct{})
+		if len(d.calls) == 0 {
+			d.closeIdle()
+		}
+	}
+	return d.idle
+}
+
+// closeIdle closes idle, once, if drained was asked for; d.mu is held.
+func (d *Decider) closeIdle() {
+	if d.idle == nil {
+		return
+	}
+	select {
+	case <-d.idle:
+	default:
+		close(d.idle)
 	}
 }
 
