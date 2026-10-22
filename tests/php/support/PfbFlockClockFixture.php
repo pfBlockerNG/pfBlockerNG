@@ -148,6 +148,7 @@ final class PfbFlockClockFixture
 				$reflection->getEndLine() - $reflection->getStartLine() + 1
 			)) . "\n";
 		}
+		$imports = self::globalClassImports($bodies);
 
 		$constantLines = '';
 		foreach ($constants as $name => $value) {
@@ -156,6 +157,7 @@ final class PfbFlockClockFixture
 
 		eval(<<<PHP
 			namespace {$namespace};
+			{$imports}
 			{$constantLines}
 
 			function microtime(bool \$as_float = false) {
@@ -178,5 +180,22 @@ final class PfbFlockClockFixture
 			PHP);
 
 		return $namespace;
+	}
+
+	/**
+	 * The global classes the loaded bodies name, to import into their namespace: PHP falls back to the global function of
+	 * a name the namespace does not define, never to a global class, so an unqualified PfbConfig:: in a loaded body would
+	 * not be found.
+	 */
+	private static function globalClassImports(string $bodies): string
+	{
+		$imports = [];
+		foreach (token_get_all("<?php\n" . $bodies) as $token) {
+			if (is_array($token) && $token[0] === T_STRING && !isset($imports[$token[1]])
+			    && (class_exists($token[1], FALSE) || interface_exists($token[1], FALSE) || enum_exists($token[1], FALSE))) {
+				$imports[$token[1]] = "use \\{$token[1]};";
+			}
+		}
+		return implode("\n", $imports);
 	}
 }

@@ -558,14 +558,24 @@ if (!function_exists('config_read_file')) {
 
 if (!function_exists('try_lock')) {
 	// pfSense util.inc: a named flock() polled once a second for up to $timeout seconds; the handle on success,
-	// NULL when the lock stayed taken. Locks are per open handle, so a process that already holds the name waits
-	// on itself: a second acquire while $GLOBALS['pfb_test_lock_held'] is set fails like the timeout it would
-	// be. Every attempt is recorded in $GLOBALS['pfb_test_lock_events'] as ['try_lock', name, timeout];
-	// $GLOBALS['pfb_test_try_lock_fail'] makes another process hold the name for good, and
-	// $GLOBALS['pfb_test_try_lock_busy_for'] (seconds) makes it hold the name that much longer: an attempt waits its whole
-	// $timeout and gets NULL while the holder has longer to go, and otherwise waits the rest out and takes the lock.
+	// NULL when the lock stayed taken. Locks are per NAME: a process holds several at once (a rollback's operation lock
+	// is held while it takes the DNS config lock), and only a name it already holds fails. Every attempt is recorded in
+	// $GLOBALS['pfb_test_lock_events'] as ['try_lock', name, timeout].
+	// The DNS config lock ('pfb_dns_config') keeps its own observation and faults: $GLOBALS['pfb_test_lock_held'] is TRUE
+	// while this process holds it (a second acquire fails like the timeout it would be); $GLOBALS['pfb_test_try_lock_fail']
+	// makes another process hold it for good, and $GLOBALS['pfb_test_try_lock_busy_for'] (seconds) makes it hold it that much
+	// longer: an attempt waits its whole $timeout and gets NULL while the holder has longer to go, and otherwise waits the
+	// rest out and takes the lock. Any other name: $GLOBALS['pfb_test_try_lock_fail_names'][name] makes another process
+	// hold it for good; $GLOBALS['pfb_test_lock_holders'][name] is the handle this process holds it with.
 	function try_lock($lock, $timeout = 5) {
 		$GLOBALS['pfb_test_lock_events'][] = ['try_lock', $lock, $timeout];
+		if ($lock !== 'pfb_dns_config') {
+			if (isset($GLOBALS['pfb_test_lock_holders'][$lock]) || !empty($GLOBALS['pfb_test_try_lock_fail_names'][$lock])) {
+				return NULL;
+			}
+			$GLOBALS['pfb_test_lock_holders'][$lock] = fopen('php://memory', 'r');
+			return $GLOBALS['pfb_test_lock_holders'][$lock];
+		}
 		$busy = (int) ($GLOBALS['pfb_test_try_lock_busy_for'] ?? 0);
 		if ($busy > $timeout) {
 			$GLOBALS['pfb_test_try_lock_busy_for'] = $busy - $timeout;
@@ -587,7 +597,12 @@ if (!function_exists('unlock')) {
 			return;
 		}
 		$GLOBALS['pfb_test_lock_events'][] = ['unlock'];
-		$GLOBALS['pfb_test_lock_held'] = FALSE;
+		$name = array_search($cfglckkey, $GLOBALS['pfb_test_lock_holders'] ?? [], TRUE);
+		if ($name === FALSE) {
+			$GLOBALS['pfb_test_lock_held'] = FALSE;
+		} else {
+			unset($GLOBALS['pfb_test_lock_holders'][$name]);
+		}
 		fclose($cfglckkey);
 	}
 }

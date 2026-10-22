@@ -7,6 +7,7 @@ require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
 
 require_once __DIR__ . '/ConfigXmlDiskTrait.php';
+require_once __DIR__ . '/support/ProcessRunner.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -66,6 +67,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		'pfb_test_write_config_result', 'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_config_read_lock_held',
 		'pfb_test_write_config_args', 'pfb_test_rcfile_dir',
 		'pfb_test_mwexec', 'pfb_test_mwexec_hook',
+		'pfb_test_lock_holders', 'pfb_test_try_lock_fail_names', 'pfb_test_try_lock_busy_for', 'pfb_test_config_read_fails',
+		'pfb_test_config_read_fails_for',
 	];
 
 	private string $tmp;
@@ -118,6 +121,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		DnsProxyCertificateFixtures::seedResolver($this->tmp);
 		$GLOBALS['pfb_test_lock_held'] = FALSE;
 		unset($GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles']);
+		$GLOBALS['pfb_test_lock_holders'] = [];
+		unset($GLOBALS['pfb_test_try_lock_fail_names'], $GLOBALS['pfb_test_try_lock_busy_for'], $GLOBALS['pfb_test_config_read_fails'],
+			$GLOBALS['pfb_test_config_read_fails_for']);
 		// The Resolver the proxy took over listened on lan and opt1: both are configured, up and addressed, so a healthy start has
 		// no warning for the startup check to report
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
@@ -1896,5 +1902,525 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
 		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
 		$this->assertSame([], $this->proxyCalls, 'the proxy is neither stopped nor started');
+	}
+
+	// -----------------------------------------------------------------------
+	// F -- a recovery never acts on a copy of config.xml that predates another write (issue #3572). The sequential cases use
+	// this class's fixture; the race cases run the owner and the contender as two real processes (raceTheRecovery()).
+	// -----------------------------------------------------------------------
+
+	/** Another process's write to config.xml, which this process has not read: the disk takes $value at $path. */
+	private function diskWrites(string $path, mixed $value): void
+	{
+		$memory = $GLOBALS['config'];
+		$GLOBALS['config'] = $this->disk;
+		config_set_path($path, $value);
+		$this->disk = $GLOBALS['config'];
+		$GLOBALS['config'] = $memory;
+	}
+
+	/** config.xml after the admin restored the Resolver: pfB-DNS off, no snapshot, the Resolver as the admin saved it. */
+	private function diskRestoredByTheAdmin(): void
+	{
+		$this->diskWrites(self::TOGGLE, '');
+		$this->diskWrites(self::SAVED, '');
+		$this->diskWrites('unbound', self::originalResolver());
+	}
+
+	/** A second valid snapshot, as another activation stores it: the one this box holds, with another Listen Port. */
+	private function snapshotB(): string
+	{
+		$saved = pfb_dns_proxy_saved();
+		$saved['port'] = ['present' => TRUE, 'value' => '5300'];
+		return base64_encode(json_encode($saved, JSON_THROW_ON_ERROR));
+	}
+
+	public function testAStaleConfirmerAfterTheRollbackIsDoneSaysNothingAndChangesNothing(): void
+	{
+		// Given a proxy that never serves: the first confirmation rolls the activation back, and this process keeps the copy it read before
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		$stale = $GLOBALS['config'];
+		$this->assertFalse(pfb_dns_proxy_confirm_ready(), 'before: the first confirmation rolls the activation back');
+		$this->assertResolverIsTheOriginal('before: rolled back');
+		$writes = $GLOBALS['pfb_test_write_config_calls'];
+		$calls = $this->proxyCalls;
+		$notices = $this->notices();
+
+		// When the stale copy, which still holds the snapshot, confirms the proxy once more
+		$GLOBALS['config'] = $stale;
+		$ready = pfb_dns_proxy_confirm_ready();
+
+		// Then it never says ready, and nothing is written, stopped, restarted or announced again
+		$this->assertFalse($ready);
+		$this->assertSame($writes, $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame($calls, $this->proxyCalls);
+		$this->assertSame($notices, $this->notices());
+	}
+
+	public function testAnAdminRestoreWhileTheReadinessWaitRunsLeavesTheConfirmerQuiet(): void
+	{
+		// Given a proxy that never serves, and this process holding the snapshot it read before the admin's restore
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		$probed = FALSE;
+		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function () use (&$probed): bool {
+			// The admin's restore lands on config.xml while the wait probes the proxy
+			$probed = TRUE;
+			$this->diskRestoredByTheAdmin();
+			$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = TRUE;
+			return TRUE;
+		};
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$this->proxyCalls = [];
+
+		// When the confirmation finds the proxy not ready
+		$ready = pfb_dns_proxy_confirm_ready();
+
+		// Then it is quiet: no write, no stop, no start, no notice, and the admin's Off stays
+		$this->assertTrue($probed, 'before: the wait probed the proxy, so the admin wrote during it');
+		$this->assertFalse($ready);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame([], $this->notices());
+		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'on'), 'the admin\'s Off stays');
+	}
+
+	public function testADifferentValidSnapshotStoredWhileTheWaitRunsIsKeptAndTheStaleRecoveryDoesNothing(): void
+	{
+		// Given a proxy that never serves, and another valid snapshot B that lands on config.xml while the wait probes the proxy
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		$b = $this->snapshotB();
+		$probed = FALSE;
+		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function () use (&$probed, $b): bool {
+			$probed = TRUE;
+			$this->diskWrites(self::SAVED, $b);
+			$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = TRUE;
+			return TRUE;
+		};
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$this->proxyCalls = [];
+
+		// When the confirmation of the snapshot A it read finds the proxy not ready
+		$ready = pfb_dns_proxy_confirm_ready();
+
+		// Then B, pfB-DNS and the proxy are kept, and nothing of the stale recovery runs
+		$this->assertTrue($probed, 'before: the wait probed the proxy, so B landed during it');
+		$this->assertFalse($ready);
+		$this->assertSame($b, (string) $this->onDisk(self::SAVED, ''), 'B stays on config.xml');
+		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, ''), 'pfB-DNS stays on');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame([], $this->proxyCalls, 'the proxy is neither stopped nor restarted');
+		$this->assertSame([], $this->notices());
+	}
+
+	public function testAFailedRollbackThatCannotStopTheProxyIsRetriedByAFreshRecoveryWhichRestoresTheResolver(): void
+	{
+		// Given a rollback whose proxy survives its stop: the snapshot is kept and Off is stored
+		$this->activate(TRUE);
+		$this->survivesStop = TRUE;
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		$this->assertFalse(pfb_dns_proxy_roll_back(), 'before: the first attempt cannot finish');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is kept');
+		$this->assertSame('', $this->toggleStored(), 'before: Off is stored');
+
+		// When the proxy stops on the next, fresh attempt
+		$this->survivesStop = FALSE;
+		$this->assertTrue(pfb_dns_proxy_roll_back(), 'the fresh attempt restores the Resolver');
+
+		// Then the Resolver is restored and the snapshot consumed
+		$this->assertResolverIsTheOriginal('retried');
+	}
+
+	public function testAnOperationLockHeldElsewhereStopsTheRecoveryBeforeAnyWriteStopOrRestore(): void
+	{
+		// Given a moved Resolver and a proxy that never serves, while another recovery holds the operation lock
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		$GLOBALS['pfb_test_try_lock_fail_names'] = ['pfb_dns_proxy_rollback' => TRUE];
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = config_get_path('unbound');
+
+		// When this recovery is asked to roll back
+		$ok = pfb_dns_proxy_roll_back();
+
+		// Then it says so and does nothing: no write, no stop, no restore, no success claim
+		$this->assertFalse($ok);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), 'the snapshot is kept');
+		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')), 'the Resolver stays moved');
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS is not turned off by a recovery that did not run');
+		$texts = implode("\n", array_column($this->notices(), 'notice'));
+		$this->assertStringContainsString('in progress', $texts, 'the notice says another recovery is in progress');
+		$this->assertStringNotContainsString('was restored', $texts);
+		$this->assertStringNotContainsString('turned off', $texts);
+	}
+
+	/** @return array<string,array{string}> the fault that keeps this process from reading config.xml under the config lock */
+	public static function configXmlNotReadUnderTheLock(): array
+	{
+		return [
+			'the config lock stays taken' => ['lock'],
+			'the fresh read fails' => ['read'],
+		];
+	}
+
+	#[DataProvider('configXmlNotReadUnderTheLock')]
+	public function testAProxyThatNeverBecameReadyWithNoConfigXmlReadIsNotDiagnosedAndNothingIsDestroyed(string $fault): void
+	{
+		// Given a proxy that never serves, and config.xml that this process cannot read under the config lock
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$this->configXmlOnDisk();
+		if ($fault === 'lock') {
+			$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		} else {
+			$GLOBALS['pfb_test_config_read_fails_for'] = 2; // the lock's own retry reads again
+		}
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$moved = config_get_path('unbound');
+
+		// When the confirmation runs
+		$ready = pfb_dns_proxy_confirm_ready();
+
+		// Then the only notice is the recovery's failure: ownership was never validated, so nothing is diagnosed, stopped or written
+		$this->assertFalse($ready);
+		$this->assertSame(['pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), 'the recovery failure only');
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), 'the snapshot is kept');
+		$this->assertSame(self::sorted($moved), self::sorted(config_get_path('unbound')), 'the Resolver stays moved');
+		$this->assertStringNotContainsString('was restored', implode("\n", array_column($this->notices(), 'notice')));
+	}
+
+	public function testAStandDownWhoseResolverIsAlreadyRestoredOnDiskIsQuietAndWritesNothing(): void
+	{
+		// Given pfB-DNS fronting a Resolver the admin disabled, and config.xml already holding its restore
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->disableTheResolver();
+		$this->configXmlOnDisk();
+		$this->diskRestoredByTheAdmin();
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$this->proxyCalls = [];
+
+		// When the stand-down runs on this process's copy, which still holds the snapshot
+		$stood = pfb_dns_proxy_stand_down();
+
+		// Then nothing is done and nothing is announced
+		$this->assertFalse($stood);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame([], $this->notices());
+		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'on'));
+	}
+
+	public function testATurnOffAskedToRetireASnapshotAnotherProcessReplacedWritesNothingAndSaysSo(): void
+	{
+		// Given the snapshot A this process holds, and config.xml on which another process has stored B
+		$this->activate(TRUE);
+		$this->configXmlOnDisk();
+		$a = (string) config_get_path(self::SAVED, '');
+		$b = $this->snapshotB();
+		$this->diskWrites(self::SAVED, $b);
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+
+		// When the turn-off asked to retire A runs
+		$turned = pfb_dns_proxy_turn_off('the test', $a);
+
+		// Then nothing is written: B is not this recovery's to retire
+		$this->assertNull($turned);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame($b, (string) $this->onDisk(self::SAVED, ''));
+		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, ''));
+	}
+
+	public function testATurnOffWithNoOwnershipAndNoRecoveryToDoIsNullAndWritesNothing(): void
+	{
+		// Given config.xml and this process agree that the Resolver is restored: no snapshot and no block of ours
+		$this->activate(TRUE);
+		$this->configXmlOnDisk();
+		$this->diskRestoredByTheAdmin();
+		$GLOBALS['config'] = $this->disk;
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+
+		// When a turn-off runs
+		$turned = pfb_dns_proxy_turn_off('the test');
+
+		// Then there is nothing to turn off: NULL, and nothing is written
+		$this->assertNull($turned);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame('', (string) config_get_path(self::TOGGLE, 'on'));
+	}
+
+	public function testATurnOffThatIsPersistedIsTrueAndTheToggleIsOffOnDisk(): void
+	{
+		// Given a box still owned by pfB-DNS: the snapshot is stored and the Resolver moved
+		$this->activate(TRUE);
+		$this->configXmlOnDisk();
+
+		// When the turn-off writes config.xml
+		$this->assertTrue(pfb_dns_proxy_turn_off('the test'));
+
+		// Then the toggle is Off on disk, and the snapshot is still there for the restore
+		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'on'));
+		$this->assertNotNull(pfb_dns_proxy_saved());
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testATurnOffWhoseWriteIsRefusedIsFalseAndTheStoredSnapshotAndToggleAreKept(mixed $answer): void
+	{
+		// Given a box still owned by pfB-DNS, and config.xml that refuses the write that turns it off
+		$this->activate(TRUE);
+		$this->configXmlOnDisk($answer);
+
+		// When the turn-off runs
+		$this->assertFalse(pfb_dns_proxy_turn_off('the test'));
+
+		// Then the snapshot and the stored toggle are as they were
+		$this->assertNotNull(pfb_dns_proxy_saved());
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, 'on'));
+	}
+
+	/** @return array<string,array{string,string,int,string}> the gateway lines an older start logged, the lines this start logged after the size was taken, the quote its notice carries */
+	public static function gatewayErrorsAroundTheStart(): array
+	{
+		return [
+			'an error of an older start and none from this start' => [['pfb_dns_gateway: old error'], ['listening udp+tcp 127.0.0.1:53'], ''],
+			'an error of an older start and this start\'s own' => [['pfb_dns_gateway: old error'], ['pfb_dns_gateway: this start'], ' (last gateway error: pfb_dns_gateway: this start)'],
+		];
+	}
+
+	#[DataProvider('gatewayErrorsAroundTheStart')]
+	public function testAFailedConfirmationQuotesOnlyTheGatewayErrorOfItsOwnStartAndRollsBack(array $before, array $after, string $quote): void
+	{
+		// Given a log with an error of an older start, the size taken, and what this start logged after it
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		$log = $GLOBALS['pfb']['dns_proxy_log'];
+		try {
+			file_put_contents($log, implode("\n", $before) . "\n");
+			$since = pfb_dns_proxy_log_size();
+			file_put_contents($log, implode("\n", $after) . "\n", FILE_APPEND);
+
+			// When the confirmation of this start finds the proxy not ready
+			$ready = pfb_dns_proxy_confirm_ready($since);
+		} finally {
+			@unlink($log);
+		}
+
+		// Then the activation is rolled back, and the startup notice names only this start's own gateway error
+		$this->assertFalse($ready);
+		$this->assertResolverIsTheOriginal('rolled back');
+		$startup = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy startup'));
+		$this->assertCount(1, $startup, 'one startup notice');
+		$this->assertStringNotContainsString('old error', $startup[0]['notice'], 'an older start\'s error is never blamed on this one');
+		if ($quote === '') {
+			$this->assertStringNotContainsString('last gateway error', $startup[0]['notice']);
+		} else {
+			$this->assertStringContainsString($quote, $startup[0]['notice']);
+		}
+	}
+
+	public function testTheOwnerAndTheContenderEachDoOneRestorationAndTheContenderWaitsForTheOwner(): void
+	{
+		// Given two recoveries of this box that run concurrently, with the owner held after its Off write
+		$this->activate(TRUE);
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$race = $this->raceTheRecovery(1);
+		$this->assertOwnerHeld($race, '', $snapshot, 'after its Off write and config unlock');
+		$this->assertContenderWaitedAndDidNothing($race);
+	}
+
+	public function testAContenderThatConfirmedWhileTheOwnerWasHeldAfterTheSnapshotWasConsumedWaitsForTheOwnerAndDoesNothing(): void
+	{
+		// Given two recoveries of this box, with the owner held after the snapshot is consumed, before its Unbound restart
+		$this->activate(TRUE);
+		$race = $this->raceTheRecovery(2);
+		$this->assertOwnerHeld($race, '', '', 'after the snapshot is consumed and config unlocked, before its Unbound restart');
+		$this->assertContenderWaitedAndDidNothing($race);
+	}
+
+	/**
+	 * Two recoveries of this box, each a real process (support/DnsProxyRecoveryWorker.php), so the locks are the kernel's:
+	 * the owner runs the recovery and is held after its $pause-th DNS config unlock; then the contender, which holds the copy
+	 * of config.xml it read before the owner ran, confirms the proxy while the owner is held; then the owner is released.
+	 * Every worker is reaped before this returns. Nothing waits on the clock: each step is a line a worker writes, read
+	 * within a deadline that is never read as a verdict.
+	 *
+	 * @return array{paused: ?string, first: ?string, ownerDone: ?string, contenderDone: ?string, events: list<string>, disk: array, stderr: string}
+	 */
+	private function raceTheRecovery(int $pause): array
+	{
+		$this->proxyLivesButNeverServes();
+		$dir = sys_get_temp_dir() . '/pfb_dns_race_' . bin2hex(random_bytes(6));
+		mkdir($dir, 0700, TRUE);
+		$this->writeRaceState($dir);
+		$race = ['paused' => NULL, 'first' => NULL, 'ownerDone' => NULL, 'contenderDone' => NULL, 'events' => [], 'disk' => [], 'stderr' => ''];
+		$workers = [];
+		try {
+			$owner = $this->startWorker($dir, 'owner', $pause);
+			$workers[] = $owner;
+			$ownerBuffer = '';
+			$line = $this->readLine($owner, $ownerBuffer, ['PAUSED ', 'DONE '], 15.0);
+			if (str_starts_with((string) $line, 'DONE ')) {
+				$race['ownerDone'] = $line;
+			} elseif ($line !== NULL) {
+				$race['paused'] = $line;
+				$contender = $this->startWorker($dir, 'contender', 0);
+				$workers[] = $contender;
+				$contenderBuffer = '';
+				$race['first'] = $this->readLine($contender, $contenderBuffer, ['BLOCKED ', 'DONE '], 15.0);
+				if (str_starts_with((string) $race['first'], 'DONE ')) {
+					$race['contenderDone'] = $race['first'];
+				}
+				fwrite($owner[1][0], "RELEASE\n");
+				$race['ownerDone'] = $this->readLine($owner, $ownerBuffer, ['DONE '], 20.0);
+				$race['contenderDone'] ??= $this->readLine($contender, $contenderBuffer, ['DONE '], 20.0);
+			}
+		} finally {
+			foreach ($workers as $worker) {
+				if (is_resource($worker[1][0])) {
+					fclose($worker[1][0]);
+				}
+				try {
+					$race['stderr'] .= pfb_test_finish_process($worker, 5.0)['stderr'];
+				} catch (RuntimeException $stuck) {
+					$race['stderr'] .= $stuck->getMessage();
+				}
+			}
+			$race['events'] = array_values(array_filter(explode("\n", (string) @file_get_contents("{$dir}/events.log")), 'strlen'));
+			$race['disk'] = json_decode((string) @file_get_contents("{$dir}/disk.json"), TRUE) ?? [];
+			rmdir_recursive($dir);
+		}
+		return $race;
+	}
+
+	/** The state the workers start from: the config the owner and the contender both read at start, and the shared disk. */
+	private function writeRaceState(string $dir): void
+	{
+		file_put_contents("{$dir}/memory.json", json_encode($GLOBALS['config'], JSON_THROW_ON_ERROR));
+		file_put_contents("{$dir}/disk.json", json_encode($GLOBALS['config'], JSON_THROW_ON_ERROR));
+		file_put_contents("{$dir}/pfb.ser", serialize([
+			'pfb' => $GLOBALS['pfb'],
+			'g' => $GLOBALS['g'],
+			'doubles' => array_intersect_key($GLOBALS, array_flip(['pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_process_running'])),
+		]));
+		file_put_contents("{$dir}/unbound-start", "#!/bin/sh\nprintf '%s unbound_start\\n' \"\$1\" >> \"\$2\"\nexit 0\n");
+		chmod("{$dir}/unbound-start", 0755);
+		file_put_contents("{$dir}/events.log", '');
+	}
+
+	/** @return array{0: resource, 1: array<int, resource>, 2: string} a worker: its stdin takes RELEASE, its output is read without blocking */
+	private function startWorker(string $dir, string $role, int $pause): array
+	{
+		$command = [PHP_BINARY, __DIR__ . '/support/DnsProxyRecoveryWorker.php', $role, $dir, (string) $pause, PFB_DNS_PROXY_RCFILE];
+		$process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+		if (!is_resource($process)) {
+			throw new RuntimeException("test bootstrap: could not start the {$role} worker");
+		}
+		stream_set_blocking($pipes[1], FALSE);
+		stream_set_blocking($pipes[2], FALSE);
+		return [$process, $pipes, implode(' ', $command)];
+	}
+
+	/**
+	 * The first line the worker writes that starts with one of $prefixes, or NULL when none comes within $seconds. A worker
+	 * that never writes one is reported by the caller; the wait is never read as a verdict. $buffer keeps what was read past the line.
+	 *
+	 * @param array{0: resource, 1: array<int, resource>, 2: string} $worker
+	 */
+	private function readLine(array $worker, string &$buffer, array $prefixes, float $seconds): ?string
+	{
+		$deadline = microtime(TRUE) + $seconds;
+		$out = $worker[1][1];
+		while (TRUE) {
+			while (($newline = strpos($buffer, "\n")) !== FALSE) {
+				$line = substr($buffer, 0, $newline);
+				$buffer = (string) substr($buffer, $newline + 1);
+				foreach ($prefixes as $prefix) {
+					if (str_starts_with($line, $prefix)) {
+						return $line;
+					}
+				}
+			}
+			$left = $deadline - microtime(TRUE);
+			if ($left <= 0) {
+				return NULL;
+			}
+			$read = [$out];
+			$write = [];
+			$except = [];
+			if (stream_select($read, $write, $except, (int) floor($left), (int) (($left - floor($left)) * 1000000)) === FALSE) {
+				return NULL;
+			}
+			if ($read === []) {
+				continue;
+			}
+			$chunk = fread($out, 8192);
+			if ($chunk === FALSE || ($chunk === '' && feof($out))) {
+				return NULL;
+			}
+			$buffer .= $chunk;
+		}
+	}
+
+	/** @param array{paused: ?string, first: ?string, ownerDone: ?string, contenderDone: ?string, events: list<string>, disk: array, stderr: string} $race */
+	private function assertOwnerHeld(array $race, string $toggle, string $saved, string $where): void
+	{
+		$this->assertNotNull($race['paused'], "the owner was not held {$where}: {$race['stderr']}");
+		[, , $json] = explode(' ', (string) $race['paused'], 3);
+		$this->assertSame(['toggle' => $toggle, 'saved' => $saved], json_decode($json, TRUE), "the owner is held {$where}");
+	}
+
+	/** @param array{paused: ?string, first: ?string, ownerDone: ?string, contenderDone: ?string, events: list<string>, disk: array, stderr: string} $race */
+	private function assertContenderWaitedAndDidNothing(array $race): void
+	{
+		$log = 'events: ' . implode(' | ', $race['events']);
+
+		// The contender changed nothing while the owner was held: no write, service call, stop or Unbound restart
+		$effects = array_values(array_filter(
+			$race['events'],
+			static fn (string $event): bool => preg_match('/^contender (write|svc|rc_stop|unbound_start)\b/', $event) === 1
+		));
+		$this->assertSame([], $effects, "the contender changed nothing while the owner was held; {$log}");
+
+		// One restoration and one Unbound restart in total, both the owner's
+		$restarts = array_values(array_filter($race['events'], static fn (string $event): bool => $event === 'owner unbound_start'));
+		$this->assertCount(1, $restarts, "one restoration and one Unbound restart in total; {$log}");
+
+		// The contender waited for the owner's operation lock rather than finishing while the owner was held
+		$this->assertNotNull($race['first'], "the contender neither waited nor finished: {$race['stderr']}; {$log}");
+		$this->assertTrue(
+			str_starts_with((string) $race['first'], 'BLOCKED '),
+			"the contender finished while the owner was held (first: {$race['first']}); {$log}"
+		);
+
+		// Both completed, the contender only after the owner's restart, and quietly: not ready, nothing to say
+		$this->assertNotNull($race['ownerDone'], "the owner did not complete after its release: {$race['stderr']}");
+		$this->assertNotNull($race['contenderDone'], "the contender did not complete after the owner: {$race['stderr']}");
+		$ownerRestart = array_search('owner unbound_start', $race['events'], TRUE);
+		$contenderDone = array_search('contender done', $race['events'], TRUE);
+		$this->assertIsInt($ownerRestart, 'the owner restarted Unbound');
+		$this->assertIsInt($contenderDone, 'the contender finished');
+		$this->assertGreaterThan($ownerRestart, $contenderDone, 'the contender finished only after the owner restarted Unbound');
+		$this->assertSame(['confirmed' => FALSE], json_decode(substr((string) $race['contenderDone'], strlen('DONE ')), TRUE), 'the contender quietly said not ready');
+
+		// And config.xml holds the admin's Resolver: the snapshot consumed, pfB-DNS off
+		$this->disk = $race['disk'];
+		$this->assertSame('', (string) $this->onDisk(self::SAVED, 'stored'), 'the snapshot is consumed on config.xml');
+		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'stored'), 'pfB-DNS is off on config.xml');
+		$this->assertSame('lan,opt1', (string) $this->onDisk('unbound/active_interface'), 'the Resolver is the admin\'s again');
 	}
 }

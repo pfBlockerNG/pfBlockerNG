@@ -788,9 +788,10 @@ final class DnsProxyStartupCheckTest extends TestCase
 		);
 	}
 
-	public function testAProxyThatNeverBecameReadyIsReportedBeforeTheRollbackNotice(): void
+	public function testAProxyThatNeverBecameReadyWhileConfigXmlIsLockedIsNotDiagnosedAsAStartupFailure(): void
 	{
-		// Given a moved box whose proxy never becomes ready, and a rollback that cannot turn pfB-DNS off (the lock stays taken)
+		// Given a moved box whose proxy never becomes ready, and a rollback that cannot turn pfB-DNS off (the config lock stays
+		// taken): ownership is not validated, so nothing about this start is diagnosed from this process's copy
 		$this->box();
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 		$this->log('pfb_dns_gateway: cannot start: boom');
@@ -799,12 +800,12 @@ final class DnsProxyStartupCheckTest extends TestCase
 		// When the activation confirms it
 		$ready = $confirm();
 
-		// Then the wait ran out, and the startup notice was filed first: the rollback consumes the snapshot, the notice names the failure
+		// Then the wait ran out, and the only notice is the rollback's recovery failure: no startup diagnosis is filed
 		$this->assertFalse($ready);
 		$this->assertSame(array_fill(0, 10, 100000), $clock->sleeps);
-		$ids = array_column($GLOBALS['pfb_test_file_notices'], 'id');
-		$this->assertSame([self::ID, 'pfBlockerNG DNS Proxy'], $ids, 'the startup notice, then the rollback notice');
-		$this->assertStringContainsString('(last gateway error: pfb_dns_gateway: cannot start: boom)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertSame(['pfBlockerNG DNS Proxy'], array_column($GLOBALS['pfb_test_file_notices'], 'id'), 'the recovery failure only');
+		$this->assertStringContainsString('locked', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertStringNotContainsString('boom', implode("\n", array_column($GLOBALS['pfb_test_file_notices'], 'notice')));
 	}
 
 }
