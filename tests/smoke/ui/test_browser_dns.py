@@ -15,6 +15,9 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 * the status panel is a collapsible section per transport holding a table of Interface | Address | State rows, each
   state an icon with a hover title and a screen-reader text, and an off transport's table is empty; on a phone the
   tables scroll inside their sections.
+* the DNS top tab replaces the separate DNSBL and pfB-DNS tabs and opens pfB-DNS from General and from the keyboard;
+  each of the five second-row tabs (pfB-DNS, DNSBL, DNSBL Groups, DNSBL Category, DNSBL SafeSearch) opens its page with
+  DNS selected, its own tab selected and the DNS breadcrumb, and the DNSBL group editor stays under DNSBL Groups.
 
 Scope is the controls and disclosures on this page only: no whole-page axe claim, since the
 header breadcrumb and other shared framework markup are outside it. Measured in the box's
@@ -27,6 +30,7 @@ from __future__ import annotations
 import base64
 import json
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -38,7 +42,7 @@ pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tie
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from playwright.sync_api import Page, ViewportSize
+    from playwright.sync_api import Locator, Page, ViewportSize
 
     from .webui import WebUI
 
@@ -500,3 +504,156 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
         for key, state in originals.items():
             helpers.config_restore_state(smoke_vm, f"{DNS_CFG}{key}", state)
         _write_rc_script(smoke_vm)
+
+
+# issue #3593: the DNS top tab replaces the separate DNSBL and pfB-DNS tabs. Its second row holds, in order, pfB-DNS,
+# DNSBL, DNSBL Groups, DNSBL Category and DNSBL SafeSearch; each opens its own page with DNS still selected.
+GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
+UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
+DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
+GROUPS_PAGE = "/pfblockerng/pfblockerng_category.php?type=dnsbl"
+BLACKLIST_PAGE = "/pfblockerng/pfblockerng_blacklist.php"
+SAFESEARCH_PAGE = "/pfblockerng/pfblockerng_safesearch.php"
+GROUP_EDITOR = "/pfblockerng/pfblockerng_category_edit.php"
+DNS_SUBTABS = (
+    ("pfB-DNS", DNS_PAGE),
+    ("DNSBL", DNSBL_PAGE),
+    ("DNSBL Groups", GROUPS_PAGE),
+    ("DNSBL Category", BLACKLIST_PAGE),
+    ("DNSBL SafeSearch", SAFESEARCH_PAGE),
+)
+# A tab row is a ``ul.nav``; the breadcrumb is not, so its crumbs are the matches outside every tab row.
+_OUTSIDE_TAB_ROWS = '[not(ancestor::ul[contains(concat(" ", normalize-space(@class), " "), " nav ")])]'
+_DNS_CRUMB = f'xpath=//a[normalize-space(.)="DNS"]{_OUTSIDE_TAB_ROWS}'
+# (label, href, active) for each tab of a row, in order.
+_TABS_JS = """row => [...row.querySelectorAll(':scope > li')].map(li => {
+    const a = li.querySelector('a');
+    return [(a && a.textContent.trim()) || '', a && a.getAttribute('href'), li.classList.contains('active')];
+})"""
+
+
+def _nav_row(page: Page, *hrefs: str) -> Locator:
+    """The one tab row holding a link to each of ``hrefs``."""
+    row = page.locator("ul.nav")
+    for href in hrefs:
+        row = row.filter(has=page.locator(f'a[href="{href}"]'))
+    assert row.count() == 1, f"expected one tab row with links to {list(hrefs)}, found {row.count()}"
+    return row
+
+
+def _tabs(row: Locator) -> list[tuple[str, str | None, bool]]:
+    return [(tab[0], tab[1], tab[2]) for tab in row.evaluate(_TABS_JS)]
+
+
+def _target(url: str) -> str:
+    """The path and query of ``url``, in the form a tab's ``href`` takes."""
+    parts = urlsplit(url)
+    return parts.path + (f"?{parts.query}" if parts.query else "")
+
+
+def _follow(page: Page, link: Locator) -> None:
+    """Click ``link`` and wait for the page it loads to settle."""
+    with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
+        link.click()
+
+
+def _assert_single_dns_top(top: list[tuple[str, str | None, bool]]) -> None:
+    labels = [label for label, _, _ in top]
+    assert labels.count("DNS") == 1 and "DNSBL" not in labels and "pfB-DNS" not in labels, (
+        f"the top tabs are {labels}, expected one DNS tab and no separate DNSBL or pfB-DNS tab"
+    )
+
+
+def _assert_dns_navigation(page: Page, subtab: str) -> None:
+    """DNS is the one selected top tab; the second row reads as approved, with ``subtab`` selected."""
+    top = _tabs(_nav_row(page, UPDATE_PAGE))
+    _assert_single_dns_top(top)
+    selected = [(label, href) for label, href, active in top if active]
+    assert selected == [("DNS", DNS_PAGE)], f"the selected top tab is {selected}, expected DNS -> {DNS_PAGE}"
+    row = _tabs(_nav_row(page, SAFESEARCH_PAGE, GROUPS_PAGE))
+    shown = [(label, href) for label, href, _ in row]
+    assert shown == list(DNS_SUBTABS), f"the DNS sub-tabs are {shown}, expected {list(DNS_SUBTABS)}"
+    selected = [label for label, _, active in row if active]
+    assert selected == [subtab], f"the selected DNS sub-tab is {selected}, expected [{subtab!r}]"
+
+
+def _assert_dns_crumb(page: Page) -> None:
+    """The breadcrumb's DNS parent links to pfB-DNS."""
+    hrefs = page.locator(_DNS_CRUMB).evaluate_all("crumbs => crumbs.map(a => a.getAttribute('href'))")
+    assert hrefs == [DNS_PAGE], f"the breadcrumb's DNS parent links {hrefs}, expected [{DNS_PAGE!r}]"
+
+
+def test_dns_navigation_general_top_tab_opens_pfb_dns(browser_page: Page, webui: WebUI, screenshot_dir: Path) -> None:
+    """From General, the one DNS top tab opens pfB-DNS with DNS selected and pfB-DNS the selected sub-tab."""
+    page = browser_page
+    _open(page, webui, GENERAL_PAGE)
+    top = _tabs(_nav_row(page, UPDATE_PAGE))
+    _assert_single_dns_top(top)
+    assert ("DNS", DNS_PAGE, False) in top, f"General's top tabs are {top}, expected an unselected DNS tab"
+    _follow(page, _nav_row(page, UPDATE_PAGE).locator(f'a[href="{DNS_PAGE}"]'))
+    assert _target(page.url) == DNS_PAGE, f"the DNS tab opened {_target(page.url)}, expected {DNS_PAGE}"
+    _assert_dns_navigation(page, "pfB-DNS")
+    _assert_dns_crumb(page)
+    _shot(page, screenshot_dir, "dns_navigation_from_general")
+
+
+def test_dns_navigation_top_tab_opens_from_the_keyboard(browser_page: Page, webui: WebUI, screenshot_dir: Path) -> None:
+    """Focusing the General page's DNS top tab and pressing Enter opens pfB-DNS, as a click does."""
+    page = browser_page
+    _open(page, webui, GENERAL_PAGE)
+    link = _nav_row(page, UPDATE_PAGE).locator(f'a[href="{DNS_PAGE}"]')
+    assert link.count() == 1, f"General has {link.count()} DNS top-tab links, expected one"
+    link.focus()
+    with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
+        page.keyboard.press("Enter")
+    assert _target(page.url) == DNS_PAGE, f"Enter on the DNS tab opened {_target(page.url)}, expected {DNS_PAGE}"
+    _assert_dns_navigation(page, "pfB-DNS")
+    _shot(page, screenshot_dir, "dns_navigation_keyboard_top_tab")
+
+
+@pytest.mark.parametrize(
+    ("label", "target", "shot"),
+    [
+        ("pfB-DNS", DNS_PAGE, "dns_navigation_pfb_dns"),
+        ("DNSBL", DNSBL_PAGE, "dns_navigation_dnsbl"),
+        ("DNSBL Groups", GROUPS_PAGE, "dns_navigation_dnsbl_groups"),
+        ("DNSBL Category", BLACKLIST_PAGE, "dns_navigation_dnsbl_category"),
+        ("DNSBL SafeSearch", SAFESEARCH_PAGE, "dns_navigation_dnsbl_safesearch"),
+    ],
+    ids=["pfb-dns", "dnsbl", "dnsbl-groups", "dnsbl-category", "dnsbl-safesearch"],
+)
+def test_dns_navigation_subtab_opens_its_page_under_dns(
+    browser_page: Page, webui: WebUI, screenshot_dir: Path, label: str, target: str, shot: str
+) -> None:
+    """Each second-row tab under DNS opens its own page, which keeps DNS selected and selects that tab."""
+    page = browser_page
+    _open(page, webui, DNS_PAGE)
+    _assert_dns_navigation(page, "pfB-DNS")
+    _follow(page, _nav_row(page, SAFESEARCH_PAGE, GROUPS_PAGE).get_by_role("link", name=label, exact=True))
+    assert _target(page.url) == target, f"{label!r} opened {_target(page.url)}, expected {target}"
+    _assert_dns_navigation(page, label)
+    _assert_dns_crumb(page)
+    _shot(page, screenshot_dir, shot)
+
+
+def test_dns_navigation_group_editor_stays_under_dnsbl_groups(
+    browser_page: Page, webui: WebUI, screenshot_dir: Path
+) -> None:
+    """Add on DNSBL Groups opens the DNSBL group editor, which stays under DNS with DNSBL Groups selected."""
+    page = browser_page
+    _open(page, webui, GROUPS_PAGE)
+    _assert_dns_navigation(page, "DNSBL Groups")
+    add = page.locator(f'nav.action-buttons a[href*="{GROUP_EDITOR}?type=dnsbl"]')
+    assert add.count() == 1, f"the DNSBL Groups page has {add.count()} Add links, expected one"
+    _follow(page, add)
+    assert _target(page.url).startswith(f"{GROUP_EDITOR}?type=dnsbl&rowid="), (
+        f"Add opened {_target(page.url)}, expected the DNSBL group editor"
+    )
+    _assert_dns_navigation(page, "DNSBL Groups")
+    _assert_dns_crumb(page)
+    crumb = page.locator(_DNS_CRUMB).locator(
+        'xpath=following::*[self::li or self::a or self::span][normalize-space(.)="DNSBL Groups"]'
+        f"{_OUTSIDE_TAB_ROWS}[1]"
+    )
+    assert crumb.count() == 1, "the editor's breadcrumb does not read DNS > DNSBL Groups after the DNS crumb"
+    _shot(page, screenshot_dir, "dns_navigation_dnsbl_group_editor")
