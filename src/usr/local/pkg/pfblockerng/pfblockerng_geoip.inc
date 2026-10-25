@@ -22,15 +22,29 @@
 
 /** Refresh legacy navigation without regenerating country data or populated page options. */
 function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfblockerng'): bool {
+	$dnsbl_continent = "\n\$tab_array[]\t= array(gettext('DNSBL'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n";
+	$dnsbl_reputation = "\n\$tab_array[]\t= array(gettext('DNSBL'),\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n";
+	$pfbdns = "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
+	$update_continent = "\$tab_array[]\t= array(gettext('Update'),\t\tFALSE,\t'/pfblockerng/pfblockerng_update.php');\n";
+	$update_reputation = "\$tab_array[]\t= array(gettext('Update'),\tFALSE,\t'/pfblockerng/pfblockerng_update.php');\n";
+	$dns_continent = "\n\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
+	$dns_reputation = "\n\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
+	// The unchanged Update row bounds the known layouts, excluding literal page data.
 	$legacy = [
-		"\$tab_array[]\t= array(gettext('DNSBL'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n"
-			. "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
-		"\$tab_array[]\t= array(gettext('DNSBL'),\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n"
-			. "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
+		$dnsbl_continent . $pfbdns . $update_continent,
+		$dnsbl_reputation . $pfbdns . $update_reputation,
+		$dnsbl_continent . $update_continent,
+		$dnsbl_reputation . $update_reputation,
+		str_replace('FALSE', 'false', $dnsbl_continent . $update_continent),
+		str_replace('FALSE', 'false', $dnsbl_reputation . $update_reputation),
 	];
 	$current = [
-		"\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
-		"\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
+		$dns_continent . $update_continent,
+		$dns_reputation . $update_reputation,
+		$dns_continent . $update_continent,
+		$dns_reputation . $update_reputation,
+		$dns_continent . str_replace('FALSE', 'false', $update_continent),
+		$dns_reputation . str_replace('FALSE', 'false', $update_reputation),
 	];
 	$pages = [
 		'Top_Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North_America',

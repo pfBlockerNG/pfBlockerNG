@@ -1,7 +1,7 @@
 # Encrypted DNS discovery with pfB-DNS
 
 Choose a mechanism your clients support, then enable the corresponding encrypted listener under
-**Firewall > pfBlockerNG > pfB-DNS**. Discovery is not a policy that forces every device or application to use
+**Firewall > pfBlockerNG > DNS > pfB-DNS**. Discovery is not a policy that forces every device or application to use
 pfB-DNS. DNR advertises configuration through DHCP; DDR discovers encrypted service from the DNS address the client
 already uses; Android can also try DoT without either mechanism. [RFC 9463 §3.3][dnr-validation],
 [RFC 9462 §4][ddr], and [Android's announcement][android-blog] describe these different paths.

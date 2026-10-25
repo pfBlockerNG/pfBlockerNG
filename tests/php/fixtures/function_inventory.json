@@ -6888,6 +6888,19 @@
             }
         ]
     },
+    "pfb_geoip_refresh_navigation": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "output_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/www/pfblockerng'"
+            }
+        ]
+    },
     "pfb_get_gateways": {
         "returnsRef": false,
         "returnType": null,

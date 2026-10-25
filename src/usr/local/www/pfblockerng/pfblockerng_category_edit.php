@@ -346,12 +346,12 @@ $pgtype = 'IP';
 $pg_url = '/pfblockerng/pfblockerng_category.php?type=ipv4';
 
 if ($gtype == 'dnsbl') {
-	$pgtype = 'DNSBL';
-	$pg_url = '/pfblockerng/pfblockerng_dnsbl.php';
+	$pgtype = 'DNS';
+	$pg_url = '/pfblockerng/pfblockerng_dns.php';
 }
 
-$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext($gtype == 'dnsbl' ? 'DNS' : $pgtype), gettext($gtype == 'dnsbl' ? 'DNSBL Groups' : $type));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', $gtype == 'dnsbl' ? '/pfblockerng/pfblockerng_dns.php' : "{$pg_url}", '@self');
+$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext($pgtype), gettext($gtype == 'dnsbl' ? 'DNSBL Groups' : $type));
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', "{$pg_url}", '@self');
 $shortcut_section = 'pfblockerng';
 
 include_once('head.inc');

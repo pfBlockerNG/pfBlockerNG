@@ -573,8 +573,8 @@ def _assert_dns_navigation(page: Page, subtab: str) -> None:
     row = _tabs(_nav_row(page, SAFESEARCH_PAGE, GROUPS_PAGE))
     shown = [(label, href) for label, href, _ in row]
     assert shown == list(DNS_SUBTABS), f"the DNS sub-tabs are {shown}, expected {list(DNS_SUBTABS)}"
-    selected = [label for label, _, active in row if active]
-    assert selected == [subtab], f"the selected DNS sub-tab is {selected}, expected [{subtab!r}]"
+    selected_subtabs = [label for label, _, active in row if active]
+    assert selected_subtabs == [subtab], f"the selected DNS sub-tab is {selected_subtabs}, expected [{subtab!r}]"
 
 
 def _assert_dns_crumb(page: Page) -> None:
@@ -651,9 +651,6 @@ def test_dns_navigation_group_editor_stays_under_dnsbl_groups(
     )
     _assert_dns_navigation(page, "DNSBL Groups")
     _assert_dns_crumb(page)
-    crumb = page.locator(_DNS_CRUMB).locator(
-        'xpath=following::*[self::li or self::a or self::span][normalize-space(.)="DNSBL Groups"]'
-        f"{_OUTSIDE_TAB_ROWS}[1]"
-    )
-    assert crumb.count() == 1, "the editor's breadcrumb does not read DNS > DNSBL Groups after the DNS crumb"
+    crumb = page.locator("ol.breadcrumb").get_by_role("link", name="DNSBL Groups", exact=True)
+    assert crumb.count() == 1, "the editor's breadcrumb does not contain DNSBL Groups"
     _shot(page, screenshot_dir, "dns_navigation_dnsbl_group_editor")

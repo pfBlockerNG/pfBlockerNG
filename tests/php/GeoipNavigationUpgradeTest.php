@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/PageStatementLoader.php';
@@ -99,6 +100,26 @@ final class GeoipNavigationUpgradeTest extends TestCase
 				basename($page) . ': a migrated page must equal the current generator output');
 		}
 		$this->assertSame($names, $this->listing($this->output), 'migration must not add or remove files');
+	}
+
+	public function testAtomicPublicationKeepsExistingReadersOnTheCompleteOriginalPage(): void
+	{
+		$this->generateCurrentPages();
+		$this->downgradeToPreCutoverNavigation();
+		$page = "{$this->output}/pfblockerng_reputation.php";
+		$before = $this->read($page);
+		$inode = fileinode($page);
+		$reader = fopen($page, 'rb');
+		$this->assertIsResource($reader);
+		try {
+			$this->assertTrue($this->refresh($this->output));
+			clearstatcache(TRUE, $page);
+			$this->assertNotSame($inode, fileinode($page), 'publication must replace the inode, not overwrite it');
+			$this->assertSame($before, stream_get_contents($reader), 'an existing reader keeps the complete old page');
+		} finally {
+			fclose($reader);
+		}
+		$this->assertStringContainsString(self::REPUTATION_NEW, $this->read($page));
 	}
 
 	public function testMigratedPagesKeepTheirOriginalOwnerGroupAndMode(): void
@@ -201,6 +222,76 @@ final class GeoipNavigationUpgradeTest extends TestCase
 			'the generated pages in the same root are still migrated');
 	}
 
+	/** @return array<string, array{string, bool}> */
+	public static function singleRowLayouts(): array
+	{
+		return [
+			'pre-pfB-DNS continent' => ['Africa', FALSE],
+			'pre-pfB-DNS Reputation' => ['reputation', FALSE],
+			'stable 3.3.11 continent' => ['Africa', TRUE],
+			'stable 3.3.11 Reputation' => ['reputation', TRUE],
+		];
+	}
+
+	#[DataProvider('singleRowLayouts')]
+	public function testSupportedSingleDnsblRowsKeepUpdateAndEveryOtherByte(string $slug, bool $lowercase): void
+	{
+		$this->generateCurrentPages();
+		$page = "{$this->output}/pfblockerng_{$slug}.php";
+		$current = $this->read($page);
+		$old = explode("\n", $this->oldPair($page))[0];
+		$tabs = $slug === 'reputation' ? "\t" : "\t\t";
+		$update = "\$tab_array[]\t= array(gettext('Update'),{$tabs}FALSE,\t'/pfblockerng/pfblockerng_update.php');";
+		$oldUpdate = $update;
+		if ($lowercase) {
+			$old = str_replace('FALSE', 'false', $old);
+			$oldUpdate = str_replace('FALSE', 'false', $update);
+		}
+		$before = str_replace($this->currentRow($page) . "\n" . $update, $old . "\n" . $oldUpdate, $current, $matches);
+		$this->assertSame(1, $matches, 'the fixture must replace the one generated DNS/Update row pair');
+		$this->assertNotFalse(file_put_contents($page, $before));
+
+		$this->assertTrue($this->refresh($this->output));
+
+		$this->assertSame(str_replace($old, $this->currentRow($page), $before), $this->read($page),
+			'the supported legacy DNSBL row alone changes; Update and populated options retain their bytes');
+	}
+
+	/** @return array<string, array{string, string}> */
+	public static function nonNavigationPairs(): array
+	{
+		return [
+			'commented continent' => ['Africa', 'comment'],
+			'commented Reputation' => ['reputation', 'comment'],
+			'suffixed continent' => ['Africa', 'suffix'],
+			'suffixed Reputation' => ['reputation', 'suffix'],
+			'embedded continent' => ['Africa', 'embedded'],
+			'embedded Reputation' => ['reputation', 'embedded'],
+		];
+	}
+
+	#[DataProvider('nonNavigationPairs')]
+	public function testLegacyTextOutsideCompleteNavigationRowsIsNeverRewritten(string $slug, string $kind): void
+	{
+		$this->generateCurrentPages();
+		$page = "{$this->output}/pfblockerng_{$slug}.php";
+		$current = $this->read($page);
+		$old = $this->oldPair($page);
+		$before = match ($kind) {
+			'comment' => str_replace($this->currentRow($page), '// ' . $old, $current),
+			'suffix' => str_replace($this->currentRow($page), $old . ' // retained operator note', $current),
+			'embedded' => $current . "\n<?php\n\$saved = <<<'PFB_NAV_DATA'\n{$old}\nPFB_NAV_DATA;\n",
+		};
+		$this->assertNotFalse(file_put_contents($page, $before));
+		$this->pin($page);
+		$snapshot = $this->snapshot($page);
+
+		$this->assertTrue($this->refresh($this->output));
+
+		$this->assertSame($snapshot, $this->snapshot($page),
+			'commented/suffixed rows and literal page data are not the known generated navigation');
+	}
+
 	public function testMalformedNavigationPairsAreLeftAlone(): void
 	{
 		$cases = [
@@ -223,7 +314,7 @@ final class GeoipNavigationUpgradeTest extends TestCase
 			'a lone, reversed or separated DNSBL/pfB-DNS row must never be rewritten');
 	}
 
-	public function testReadOnlyPublicationFailureReturnsFalseKeepsOriginalBytesAndLeavesNoTempFiles(): void
+	public function testReadOnlyStagingFailureReturnsFalseKeepsOriginalBytesAndLeavesNoTempFiles(): void
 	{
 		$this->generateCurrentPages();
 		$this->downgradeToPreCutoverNavigation();
