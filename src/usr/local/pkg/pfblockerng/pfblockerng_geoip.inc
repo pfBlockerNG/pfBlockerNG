@@ -29,7 +29,7 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 	$update_reputation = "\$tab_array[]\t= array(gettext('Update'),\tFALSE,\t'/pfblockerng/pfblockerng_update.php');\n";
 	$dns_continent = "\n\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
 	$dns_reputation = "\n\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
-	// The unchanged Update row bounds the known layouts, excluding literal page data.
+	// The unchanged Update row bounds the supported navigation layouts.
 	$legacy = [
 		$dnsbl_continent . $pfbdns . $update_continent,
 		$dnsbl_reputation . $pfbdns . $update_reputation,
