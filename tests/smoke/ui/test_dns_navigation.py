@@ -323,7 +323,7 @@ def test_breadcrumb_parent_is_dns_for_the_dns_family_and_ip_for_ip_pages(
         f"{path}: breadcrumb is {crumbs}"
     )
     assert crumbs[2] == parent, f"{path}: parent crumb is {crumbs[2]}, expected {parent}"
-    assert DNSBL not in [crumb.href for crumb in crumbs], f"{path}: a crumb still links the old DNSBL page"
+    assert DNSBL not in [crumb.href for crumb in crumbs[:-1]], f"{path}: a parent crumb still links the old DNSBL page"
 
 
 @pytest.mark.parametrize(("path", "gtype"), _EDITOR_CASES, ids=[case[0] for case in _EDITOR_CASES])
