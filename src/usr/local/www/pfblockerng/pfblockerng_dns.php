@@ -133,8 +133,8 @@ if ($_POST) {
 	}
 }
 
-$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('pfB-DNS'));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
+$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('DNS'), gettext('pfB-DNS'));
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_dns.php', '@self');
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
@@ -148,8 +148,7 @@ $get_req = pfb_alerts_default_page();
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('pfB-DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
@@ -157,6 +156,13 @@ $tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php')
 $tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
 $tab_array[]	= array(gettext('Wizard'),	FALSE,	'/wizard.php?xml=pfblockerng_wizard.xml');
+display_top_tabs($tab_array, TRUE);
+$tab_array	= array();
+$tab_array[]	= array(gettext('pfB-DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
+$tab_array[]	= array(gettext('DNSBL Category'),	FALSE,	'/pfblockerng/pfblockerng_blacklist.php');
+$tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,	'/pfblockerng/pfblockerng_safesearch.php');
 display_top_tabs($tab_array, TRUE);
 pfb_print_pending_changes_box();
 foreach (pfb_dns_proxy_ddr_warnings() as $pfb_ddr_warning) {

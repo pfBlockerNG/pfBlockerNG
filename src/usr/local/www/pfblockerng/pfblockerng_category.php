@@ -340,8 +340,8 @@ if ($gtype == 'dnsbl') {
 	$pg_url = '/pfblockerng/pfblockerng_dnsbl.php';
 }
 
-$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext($pgtype), gettext($type));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', "{$pg_url}", '@self');
+$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext($gtype == 'dnsbl' ? 'DNS' : $pgtype), gettext($type));
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', $gtype == 'dnsbl' ? '/pfblockerng/pfblockerng_dns.php' : "{$pg_url}", '@self');
 $shortcut_section = 'pfblockerng';
 
 include_once('head.inc');
@@ -352,8 +352,7 @@ $get_req = pfb_alerts_default_page();
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,			'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		$active['ip'],		'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNS'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,			'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,			"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,			'/pfblockerng/pfblockerng_feeds.php');
@@ -371,6 +370,8 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6' || $gtype == 'geoip') {
 	$tab_array[]	= array(gettext('Reputation'),	FALSE,			'/pfblockerng/pfblockerng_reputation.php');
 }
 else {
+	$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
+	$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
 	$tab_array[]	= array(gettext('DNSBL Groups'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
 	$tab_array[]	= array(gettext('DNSBL Category'),	FALSE,			'/pfblockerng/pfblockerng_blacklist.php');
 	$tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,			'/pfblockerng/pfblockerng_safesearch.php');
