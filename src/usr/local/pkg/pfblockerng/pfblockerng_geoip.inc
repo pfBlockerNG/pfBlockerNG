@@ -20,6 +20,72 @@
  * limitations under the License.
  */
 
+/** Refresh legacy navigation without regenerating country data or populated page options. */
+function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfblockerng'): bool {
+	$legacy = [
+		"\$tab_array[]\t= array(gettext('DNSBL'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n"
+			. "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
+		"\$tab_array[]\t= array(gettext('DNSBL'),\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n"
+			. "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
+	];
+	$current = [
+		"\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
+		"\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');",
+	];
+	$pages = [
+		'Top_Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North_America',
+		'Oceania', 'South_America', 'Proxy_and_Satellite', 'reputation',
+	];
+	$success = TRUE;
+	foreach ($pages as $page) {
+		$path = "{$output_root}/pfblockerng_{$page}.php";
+		if (is_link($path)) {
+			$success = FALSE;
+			continue;
+		}
+		if (!file_exists($path)) {
+			continue;
+		}
+		if (!is_file($path)) {
+			$success = FALSE;
+			continue;
+		}
+		$content = @file_get_contents($path);
+		$stat = @stat($path);
+		if ($content === FALSE || $stat === FALSE) {
+			$success = FALSE;
+			continue;
+		}
+		$updated = str_replace($legacy, $current, $content, $matches);
+		if ($matches === 0) {
+			continue;
+		}
+
+		// Stage beside the page: tempnam() may fall back to another filesystem.
+		$tmp = "{$output_root}/.pfbnav_" . bin2hex(random_bytes(8));
+		$handle = @fopen($tmp, 'x');
+		if ($handle === FALSE) {
+			$success = FALSE;
+			continue;
+		}
+		$ok = @chmod($tmp, 0600)
+			&& @fwrite($handle, $updated) === strlen($updated)
+			&& @fflush($handle) && @fsync($handle);
+		$ok = @fclose($handle) && $ok;
+		if ($ok) {
+			$ok = (fileowner($tmp) === $stat['uid'] || @chown($tmp, $stat['uid']))
+				&& (filegroup($tmp) === $stat['gid'] || @chgrp($tmp, $stat['gid']))
+				&& @chmod($tmp, $stat['mode'] & 07777)
+				&& @rename($tmp, $path);
+		}
+		if (!$ok) {
+			@unlink($tmp);
+			$success = FALSE;
+		}
+	}
+	return $success;
+}
+
 // Function to process Continent txt files and create Country ISO files and to Generate GUI PHP files.
 function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') {
 	global $g, $pfb;

@@ -5,10 +5,13 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * Byte oracle captured by executing the pre-move functions from 4b5ef5a5.
+ * Byte oracle captured by executing the pre-move functions from 4b5ef5a5, then amended for
+ * each later intentional template change (the fixture's *_amended keys). Its continent and
+ * Reputation hashes pin the current navigation (issue #3593, 11fe12538), not the 4b5ef5a5
+ * output; its country_files hashes have not changed since they were first recorded.
  *
  * It intentionally does not use the frozen missing-symbol test: the oracle compares
- * real package output with the pre-move country files, every continent/special page,
+ * real package output with the country files, every continent/special page,
  * and both empty/populated Reputation outputs.
  */
 final class GeoipPreMoveGoldenOracleTest extends TestCase

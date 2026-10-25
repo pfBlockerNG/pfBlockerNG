@@ -386,8 +386,12 @@ in v3.
 
 ## DNSBL tab: new and advanced
 
-Open **Firewall → pfBlockerNG → DNSBL**. There is no **DNSBL Mode** switch on
-this page. Python in Unbound is the only path.
+Open **Firewall → pfBlockerNG → DNS → DNSBL**. The **DNS** parent opens
+**pfB-DNS** by default. Its second row is **pfB-DNS**, **DNSBL**, **DNSBL Groups**,
+**DNSBL Category**, and **DNSBL SafeSearch**. Existing bookmarks and settings
+are unchanged.
+
+There is no **DNSBL Mode** switch on this page. Python in Unbound is the only path.
 
 Click the blue help icon next to **Enable DNSBL** for the evaluation order
 (first match wins: feed exact name → wildcard → TLD Allow → IDN → regex,

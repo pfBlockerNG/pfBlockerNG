@@ -150,6 +150,13 @@ pfb_install_settings_family_finalize($pfb_installed_family);
 // issue #3194: comment out stored Regex List lines Python would reject.
 pfb_dnsbl_regex_upgrade_comment_out();
 
+update_status("\nRefreshing generated GeoIP navigation...");
+if (pfb_geoip_refresh_navigation()) {
+	update_status(" done.");
+} else {
+	update_status(" failed.");
+}
+
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");
