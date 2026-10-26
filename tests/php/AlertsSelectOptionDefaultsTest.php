@@ -42,11 +42,6 @@ final class AlertsSelectOptionDefaultsTest extends TestCase
 		require_once __DIR__ . '/PageStatementLoader.php';
 	}
 
-	protected function setUp(): void
-	{
-		$_POST = [];
-	}
-
 	protected function tearDown(): void
 	{
 		$_POST = [];

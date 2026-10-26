@@ -2308,6 +2308,68 @@ def test_reports_dns_reply_filter_limit_saves_from_the_rendered_form_with_dnsbl_
             helpers.config_restore_state(smoke_vm, path, prior)
 
 
+_PFB_CHART_COUNT = "installedpackages/pfblockerngglobal/pfbchartcnt"
+_PFB_REPLY_TYPES = "installedpackages/pfblockerngglobal/pfbreplytypes"
+_PFB_REPLY_REC = "installedpackages/pfblockerngglobal/pfbreplyrec"
+_PFB_DNSBL_REPLY_STAT = "installedpackages/pfblockerngglobal/pfbdnsblreplystat"
+_PFB_DNSBL_STAT = "installedpackages/pfblockerngglobal/pfbdnsblstat"
+
+
+@pytest.mark.ui_e2e
+def test_reports_save_with_reply_logging_off_defaults_the_omitted_reply_controls(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3543: with DNSBL off and DNS Reply Logging off, the Reports form omits the reply-log selects and
+    the DNSBL stat select, so the save POST carries no key for them. A rendered-form save stores the visible
+    chart history count, stores the declared default for each omitted select, and logs no PHP diagnostic."""
+    paths = (
+        CFG_PFB_DNSBL,
+        _PFB_DNS_TOGGLE,
+        _PFB_PY_REPLY,
+        _PFB_CHART_COUNT,
+        _DNS_REPLY_FILTER_LIMIT,
+        _PFB_REPLY_TYPES,
+        _PFB_REPLY_REC,
+        _PFB_DNSBL_REPLY_STAT,
+        _PFB_DNSBL_STAT,
+    )
+    priors = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    try:
+        _set_scalar_or_absent(smoke_vm, CFG_PFB_DNSBL, "")
+        _set_scalar_or_absent(smoke_vm, _PFB_DNS_TOGGLE, "on")
+        _set_scalar_or_absent(smoke_vm, _PFB_PY_REPLY, "")
+        _set_scalar_or_absent(smoke_vm, _PFB_CHART_COUNT, "24")
+        assert helpers.config_get_state(smoke_vm, _PFB_CHART_COUNT) == (True, "24"), (
+            "before state: the seeded chart history count is not stored as 24"
+        )
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        page = webui.get(path)
+        result = evaluate_render(path, page.status_code, page.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        assert "pfbchartcnt" in scrape_form_fields(page.text), (
+            "the Reports form has no chart history count field (DNSBL off, reply logging off)"
+        )
+        for field in (
+            'name="pfbreplytypes',
+            'name="pfbreplyrec',
+            'name="pfbdnsblreplystat',
+            'name="dnsfilterlimitentries',
+            'name="pfbdnsblstat',
+        ):
+            assert field not in page.text, f"{field} must be absent (DNSBL off, reply logging off)"
+        webui.post(path, {"pfbchartcnt": "48"})
+        assert helpers.config_get_state(smoke_vm, _PFB_CHART_COUNT) == (True, "48"), (
+            "Save did not store the chart history count the form posted"
+        )
+        for default_path in (_PFB_REPLY_TYPES, _PFB_REPLY_REC, _PFB_DNSBL_REPLY_STAT, _PFB_DNSBL_STAT):
+            assert helpers.config_get_state(smoke_vm, default_path)[1] == "", (
+                f"{default_path} must store its declared default (empty) when the form omits it"
+            )
+    finally:
+        for path, prior in priors.items():
+            helpers.config_restore_state(smoke_vm, path, prior)
+
+
 _DNS_LISTENER_FIELDS = (
     "pfb_dns_interface",
     "pfb_dns_dot",
