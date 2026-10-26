@@ -527,7 +527,8 @@ jobs:
 
   shell-tests:
     name: shellspec (POSIX sh)
-    runs-on: ubuntu-latest
+    # Pinned until #3615 ports this suite to ubuntu-26.04 (#3614).
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     # kcov v43 — the commit that tag pointed at when the pin was taken. Job-level so the
@@ -872,7 +873,8 @@ jobs:
   php-unit:
     name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
     needs: read-matrix
-    runs-on: ubuntu-latest
+    # Pinned until #3615 ports this suite to ubuntu-26.04 (#3614).
+    runs-on: ubuntu-24.04
     # issue #2614: PHPUnit loads the real .inc and its fixtures fork workers that
     # contend for the same lock, and a flock(2) acquire has no timeout of its own, so
     # this budget is the only bound. Observed median 2.2 min, worst 2.6.
