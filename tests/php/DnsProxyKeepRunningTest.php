@@ -109,6 +109,17 @@ final class DnsProxyKeepRunningTest extends TestCase
 		return ['restart_service pfb_dns_proxy'];
 	}
 
+	/** Whether this host takes an unprivileged UDP bind on $host (port 0), closed at once: the question the tick's restart asks. */
+	private static function binds(string $host): bool
+	{
+		$probe = @stream_socket_server("udp://{$host}:0", $errno, $errstr, STREAM_SERVER_BIND);
+		if ($probe === FALSE) {
+			return FALSE;
+		}
+		fclose($probe);
+		return TRUE;
+	}
+
 	public function testAQuietBoxRestartsNothing(): void
 	{
 		// Given the box with nothing different since the proxy started
@@ -457,6 +468,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 			'ready upstream 127.0.0.1:5353 pid 4242',
 		]]);
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$this->assertTrue(self::binds('127.0.0.1'), 'before: this host binds 127.0.0.1, so the row would pass for the wrong reason');
 		$this->assertFalse(pfb_dns_proxy_ready(), 'before: the proxy is alive and not ready');
 		$this->assertSame(['127.0.0.1:53' => "bind: can't assign requested address"], pfb_dns_proxy_listeners()['refused'] ?? NULL, 'before: the refusal is in the record');
 
@@ -465,6 +477,66 @@ final class DnsProxyKeepRunningTest extends TestCase
 
 		// Then the tick does not restart it for the address: a proxy that is not ready has no record of its own to judge
 		$this->assertNotContains('restart_service pfb_dns_proxy', $this->krProxyCalls());
+	}
+
+	public function testAZonedRefusalIsNeverRecordedSoItIsNeverProbedNorRestartedFor(): void
+	{
+		// Given a ready proxy whose latest start refused a zoned link-local address as not assignable
+		$this->krApply(['gatewayLog' => [
+			"cannot listen on [fe80::1%lo0]:53: bind: can't assign requested address", 'ready upstream 127.0.0.1:5353 pid 4242',
+		]]);
+
+		// When the log is read, the update pass runs and then the cron tick
+		$refused = pfb_dns_proxy_listeners()['refused'] ?? NULL;
+		$ready = $this->krEnsure();
+		$this->krTick();
+
+		// Then the parser never recorded the refusal, so neither pass restarted the proxy
+		$this->assertSame([], $refused);
+		$this->assertTrue($ready);
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	public function testTheTickRestartsOnceForSeveralBindableRefusals(): void
+	{
+		// Given a ready proxy whose latest start refused three addresses this box binds, and a restart whose new start serves them
+		$this->assertTrue(self::binds('127.0.0.1') && self::binds('[::1]'), 'before: this host binds 127.0.0.1 and ::1');
+		$cant = "bind: can't assign requested address";
+		$this->krApply([
+			'gatewayLog' => [
+				"cannot listen on 127.0.0.1:53: {$cant}", "cannot listen on [::1]:53: {$cant}", "cannot listen on 127.0.0.1:853: {$cant}",
+				'ready upstream 127.0.0.1:5353 pid 4242',
+			],
+			'restartLog' => ['listening udp+tcp 127.0.0.1:53', 'ready upstream 127.0.0.1:5353 pid 4242'],
+		]);
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then the pair is restarted once, not once per address
+		$this->assertSame($this->pair(), $this->krProxyCalls());
+	}
+
+	public function testATickRestartConsumesAPendingRestartSoTheNextPassDoesNotRestartAgain(): void
+	{
+		// Given a restart pending for the rc script, and a ready proxy whose latest start refused 127.0.0.1 (which this box binds)
+		$this->assertTrue(self::binds('127.0.0.1'), 'before: this host binds 127.0.0.1');
+		$this->krApply([
+			'marker' => 'the package changed its rc script',
+			'gatewayLog' => ["cannot listen on 127.0.0.1:53: bind: can't assign requested address", 'ready upstream 127.0.0.1:5353 pid 4242'],
+			'restartLog' => ['listening udp+tcp 127.0.0.1:53', 'ready upstream 127.0.0.1:5353 pid 4242'],
+		]);
+
+		// When the cron tick runs, and then the update pass
+		$this->krTick();
+		$afterTick = [$this->krProxyCalls(), $this->krMarker()];
+		// the tick's config seams change what the rc script is generated from: the pass compares it with the one on disk
+		pfb_dns_proxy_service($this->krProxyDir);
+		$this->krEnsure();
+
+		// Then the tick's restart ran the rc script on disk, so the marker is gone and the pass restarts nothing more
+		$this->assertSame([$this->pair(), NULL], $afterTick);
+		$this->assertSame($this->pair(), $this->krProxyCalls());
 	}
 
 	public function testADueWholePairRestartNeverAlsoSendsTheDeciderRestart(): void

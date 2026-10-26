@@ -6857,7 +6857,8 @@ function pfblockerng_tick(
 
 	// issue #3515: a DNS Resolver disabled under pfB-DNS must not wait for the next apply; a pass that is running does it itself
 	// issue #3538: so does the check of a pfB-DNS start (a listener the gateway did not bind, a start that never became ready), which the
-	// tick reports as a notice while pfB-DNS is meant to serve, and closes once a start is healthy
+	// tick reports as a notice while pfB-DNS is meant to serve and closes once a start is healthy; it also restarts the proxy for a
+	// refused address that now binds (below)
 	$pass_running = pfb_update_pass_running($ps_lines);
 	if (!$pass_running) {
 		pfb_dns_proxy_stand_down();
@@ -6872,11 +6873,11 @@ function pfblockerng_tick(
 		// issue #3598: an address the gateway's start could not assign yet is served by a restart once it can be bound; every other
 		// restart stays with the update pass (pfb_dns_proxy_ensure_running())
 		$since = NULL;
-		$why = pfb_dns_proxy_ready() ? pfb_dns_proxy_refusal_cleared() : NULL;
-		if ($why !== NULL && !pfb_dns_proxy_restart_deferred()) {
+		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred() && ($why = pfb_dns_proxy_refusal_cleared()) !== NULL) {
 			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
 			$since = pfb_dns_proxy_log_size();
 			restart_service('pfb_dns_proxy');
+			unlink_if_exists($pfb['dns_proxy_restart_pending']);
 		}
 		pfb_dns_proxy_confirm_ready($since);
 	}

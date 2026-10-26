@@ -5494,8 +5494,8 @@ function pfb_dns_proxy_refusal_cleared(): ?string {
  * @param bool $ready whether the proxy became ready (the caller waited for it). With no snapshot stored (nothing is meant to serve)
  *        and the proxy ready, nothing is checked, closed or waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
- *        it; NULL = no start was made (the cron tick, an apply that restarted nothing): the log's latest start is judged. A log now
- *        shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway error is looked for
+ *        it; NULL = no start was made (a cron tick that restarted nothing, an apply that restarted nothing): the log's latest start
+ *        is judged. A log now shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway error is looked for
  *        the same way, only in the bytes after $since (none quoted when this start logged none); with NULL, in the whole tail
  */
 function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
