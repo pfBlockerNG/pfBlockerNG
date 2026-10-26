@@ -44,13 +44,4 @@ final class WidgetUpstreamRowUiTest extends TestCase
 			$source
 		);
 	}
-
-	public function testAliasPopupStillSkipsUpstream(): void
-	{
-		$source = self::source();
-		$this->assertStringContainsString(
-			"\$pfb['popup'] == 'on' && \$pfb_alias !== 'Upstream'",
-			$source
-		);
-	}
 }

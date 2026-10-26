@@ -918,7 +918,8 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 					. '">' . $alias_html . '</span>';
 			}
 
-			if (strpos($pfb_alias, 'DNSBL_') !== FALSE) {
+			// DNSBL group rows are DNSBL_* plus the Upstream pseudo-group (issue #3602).
+			if (strpos($pfb_alias, 'DNSBL_') !== FALSE || $pfb_alias === 'Upstream') {
 				// Packet column pivot to Alerts Tab
 				if ($values['packets'] > 0) {
 					$packets  = "<a href=\"/pfblockerng/pfblockerng_alerts.php?filterdnsbl={$pfb_alias}\" ";
@@ -948,7 +949,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 				}
 
 				// Alias table popup
-				if ($values['count'] > 0 && $pfb['popup'] == 'on' && $pfb_alias !== 'Upstream') {
+				if ($values['count'] > 0 && $pfb['popup'] == 'on') {
 					$alias_html = "<a href=\"/firewall_aliases_edit.php?id={$values['id']}\" data-popover=\"true\" "
 						. " data-trigger=\"hover focus\" title=\"pfBlockerNG Alias details\" data-content=\""
 						. alias_info_popup($values['id']) . "\" data-html=\"true\">" . htmlspecialchars($pfb_alias) . "</a>";

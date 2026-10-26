@@ -79,6 +79,27 @@ PHP;
 	}
 
 	/**
+	 * Scenario: the alias popup is for firewall aliases only.
+	 * Given the widget's alias popup setting is on,
+	 * When an Upstream row with a count renders,
+	 * Then its name stays plain: Upstream has no firewall alias to link to.
+	 */
+	public function testUpstreamRowNeverGetsTheAliasPopup(): void
+	{
+		$row = var_export(['count' => '5', 'img' => 'ROW_ICON', 'update' => '', 'packets' => '0', 'type' => 'DNSBL'], TRUE);
+		$after = <<<PHP
+\$pfb['popup'] = 'on';
+echo "\\n__ROW__";
+pfBlockerNG_get_table(['Upstream' => {$row}], 'js');
+PHP;
+		$result = $this->runWidget([], [], FALSE, '', $after);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$alias = explode('||', (string) strtok(substr($result['stdout'], (int) strpos($result['stdout'], '__ROW__') + 7), "\n"))[0];
+		$this->assertStringContainsString('>Upstream</span>', $alias);
+		$this->assertStringNotContainsString('firewall_aliases_edit.php', $alias);
+	}
+
+	/**
 	 * Scenario: the include shim is per-invocation scratch.
 	 * Given a render of the real widget,
 	 * When the subprocess exits,
