@@ -117,6 +117,24 @@ EOF
 	chmod +x "$1"
 }
 
+# grepcidr(1) dual-family stand-in for MIXED-family pattern files, composed from
+# the two stubs above. Probed against the real binary: it scans an input row only
+# for the families its patterns name, so -v drops a row of an unnamed family as
+# carrying no address. Test-only simplification: v4 rows print before v6 rows.
+make_grepcidr_dual_stub() {
+	make_grepcidr_stub "$1.v4"
+	make_grepcidr_v6_stub "$1.v6"
+	cat > "$1" <<EOF
+#!/bin/sh
+grep -v : "\$2" > "\$2.p4"; grep : "\$2" > "\$2.p6"
+grep -v : "\$3" > "\$3.t4"; grep : "\$3" > "\$3.t6"
+"$1.v4" -vf "\$2.p4" "\$3.t4"
+"$1.v6" -vf "\$2.p6" "\$3.t6"
+rm -f "\$2.p4" "\$2.p6" "\$3.t4" "\$3.t6"
+EOF
+	chmod +x "$1"
+}
+
 setup_grepcidr_stub_fidelity() {
 	work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recgrepcidr.XXXXXX")"
 	patterns="${work}/patterns"
@@ -463,6 +481,52 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$countsfile" should include 'UnderBroad_v4 1'
 	End
 
+	It 'keeps a later CIDR that an earlier narrower CIDR only partially covers (issue #3606)'
+		printf '185.192.100.0/24\n' > "${snap}/FeedA_v4.orig"
+		printf '185.192.100.0/23\n' > "${snap}/FeedB_v4.orig"
+		printf '%s\n%s\n' "${snap}/FeedA_v4.orig" "${snap}/FeedB_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}FeedA_v4.txt" should equal '185.192.100.0/24'
+		The contents of file "${pfbdeny}FeedB_v4.txt" should equal '185.192.100.0/23'
+		The contents of file "$masterfile" should include 'FeedB_v4 185.192.100.0/23'
+		The result of "pfb_counts_line()" should equal 'FeedB_v4 1'
+	End
+
+	It 'keeps a later CIDR whose network address an earlier bare host merely equals (issue #3606)'
+		printf '10.0.0.0\n' > "${snap}/FeedA_v4.orig"
+		printf '10.0.0.0/8\n' > "${snap}/FeedB_v4.orig"
+		printf '%s\n%s\n' "${snap}/FeedA_v4.orig" "${snap}/FeedB_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}FeedB_v4.txt" should equal '10.0.0.0/8'
+		The result of "pfb_counts_line()" should equal 'FeedB_v4 1'
+	End
+
+	It 'still prunes every later row an earlier row fully covers: a /24 inside a /23, a host inside a CIDR, an equal CIDR (issue #3606 negative control)'
+		printf '198.51.100.0/23\n192.0.2.0/24\n' > "${snap}/FeedA_v4.orig"
+		printf '198.51.101.0/24\n192.0.2.77\n192.0.2.0/24\n203.0.113.9\n' > "${snap}/FeedB_v4.orig"
+		printf '%s\n%s\n' "${snap}/FeedA_v4.orig" "${snap}/FeedB_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}FeedB_v4.txt" should equal '203.0.113.9'
+		The result of "pfb_counts_line()" should equal 'FeedB_v4 1'
+	End
+
+	It 'judges a later row only by earlier rows at least as wide: a /8 still prunes a /16 inside it, a /25 never prunes the /24 holding it (issue #3606)'
+		printf '10.0.0.0/8\n192.0.2.0/25\n' > "${snap}/FeedA_v4.orig"
+		printf '10.1.0.0/16\n192.0.2.0/24\n' > "${snap}/FeedB_v4.orig"
+		printf '%s\n%s\n' "${snap}/FeedA_v4.orig" "${snap}/FeedB_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}FeedB_v4.txt" should equal '192.0.2.0/24'
+		The result of "pfb_counts_line()" should equal 'FeedB_v4 1'
+	End
+
 	It 'dedups an internal repeat within a single feed snapshot (within-feed dupes, issue #1084 review)'
 		printf '192.0.2.9\n192.0.2.9\n192.0.2.10\n' > "${snap}/DupFeed_v4.orig"
 		printf '%s\n' "${snap}/DupFeed_v4.orig" > "$memberlist"
@@ -622,6 +686,17 @@ Describe 'pfb_recompute() v6 dedup (same Stage A/B/D/E loop, per family)'
 		The result of "pfb_allnet_v6_log_count()" should equal 1
 	End
 
+	It 'keeps a later v6 CIDR an earlier narrower one only partially covers, and still prunes a fully covered one (issue #3606)'
+		printf '2001:db8::/48\n' > "${snap}/SixA_v6.orig"
+		printf '2001:db8::/32\n2001:db8:0:1::/64\n' > "${snap}/SixB_v6.orig"
+		printf '%s\n%s\n' "${snap}/SixA_v6.orig" "${snap}/SixB_v6.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v6 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}SixB_v6.txt" should equal '2001:db8::/32'
+		The contents of file "$countsfile" should include 'SixB_v6 1'
+	End
+
 	It 'keeps v4 and v6 masterfile rows separate: a v6 recompute never touches v4 family rows and vice versa'
 		printf 'Legacy_v4 1.2.3.4\n' > "$masterfile"
 		printf 'fd99::5\n' > "${snap}/Six_v6.orig"
@@ -631,6 +706,108 @@ Describe 'pfb_recompute() v6 dedup (same Stage A/B/D/E loop, per family)'
 		The status should be success
 		The contents of file "$masterfile" should include 'Legacy_v4 1.2.3.4'
 		The contents of file "$masterfile" should include 'Six_v6 fd99::5'
+	End
+End
+
+Describe 'pfb_cidr_dedup() full-containment cross-feed filter (issue #3606)'
+	# shellcheck disable=SC2034  # consumed by the sourced pfb_cidr_dedup()
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/cidrdedup.XXXXXX")"
+		pathgrepcidr="${work}/grepcidr"; make_grepcidr_stub "$pathgrepcidr"
+		patterns="${work}/patterns"; input="${work}/input"; expected="${work}/expected"
+		mkdir -p "${work}/out dir"; output="${work}/out dir/owned.txt"
+	}
+	cleanup() { rm -rf "$work"; }
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	cidr_dedup_matches_expected() {
+		pfb_cidr_dedup "$patterns" "$input" "$output" || return
+		cmp "$expected" "$output"
+	}
+
+	It 'matches the old single grepcidr -vf call byte for byte when no row is partially covered: order, repeats, CR and padded rows survive'
+		printf '192.0.2.0/24\r\n198.51.100.7\n10.0.0.0/8\n' > "$patterns"
+		printf '203.0.113.1\n192.0.2.9\n172.16.0.0/12\n203.0.113.1\n10.20.0.0/16\n198.51.100.7\n172.16.0.0/12\n203.0.113.2/31\n203.0.113.9\r\n  203.0.113.10  \n203.0.113.11/33\n' > "$input"
+		"$pathgrepcidr" -vf "$patterns" "$input" > "$expected"
+
+		When call cidr_dedup_matches_expected
+		The status should be success
+		The contents of file "$output" should equal "$(printf '203.0.113.1\n172.16.0.0/12\n203.0.113.1\n172.16.0.0/12\n203.0.113.2/31\n203.0.113.9\r\n  203.0.113.10  \n203.0.113.11/33')"
+	End
+
+	It 'leaves an unterminated final row unterminated, as grepcidr itself does'
+		printf '203.0.113.0/24\n' > "$patterns"
+		printf '192.0.2.1\n203.0.113.5\n198.51.100.0/24' > "$input"
+		printf '192.0.2.1\n198.51.100.0/24' > "$expected"
+
+		When call cidr_dedup_matches_expected
+		The status should be success
+	End
+
+	Describe 'never feeds grepcidr a pattern-free file (issue #1279 class)'
+		Parameters
+			'blank, whitespace-only and CR-only lines' '\n   \n\t\r\n'
+			'zero bytes' ''
+		End
+
+		It "keeps every row when the pattern file holds only $1"
+			true > "${work}/grepcidr.never-called"
+			printf '#!/bin/sh\nrm -f "%s/grepcidr.never-called"\n' "$work" > "$pathgrepcidr"
+			chmod +x "$pathgrepcidr"
+			printf '%b' "$2" > "$patterns"
+			printf '192.0.2.1\n198.51.100.0/24\n' > "$input"
+			cp "$input" "$expected"
+
+			When call cidr_dedup_matches_expected
+			The status should be success
+			The path "${work}/grepcidr.never-called" should be exist
+		End
+	End
+
+	It 'never judges a row by the other family: a v6 CIDR beside v4 patterns, overlapped only by a narrower v6 row, is kept'
+		make_grepcidr_dual_stub "$pathgrepcidr"
+		printf '198.51.100.0/24\n2001:db8::/48\n' > "$patterns"
+		printf '2001:db8::/32\n2001:db8:0:1::5\n198.51.100.9\n203.0.113.5\n' > "$input"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should be success
+		The contents of file "$output" should equal "$(printf '2001:db8::/32\n203.0.113.5')"
+	End
+
+	It 'matches the old single call for rows of a family no pattern names (grepcidr never scans that family, so -v drops them)'
+		make_grepcidr_dual_stub "$pathgrepcidr"
+		printf '198.51.100.0/24\n' > "$patterns"
+		printf '2001:db8::1\n203.0.113.5\n2001:db8::/32\n' > "$input"
+		"$pathgrepcidr" -vf "$patterns" "$input" > "$expected"
+
+		When call cidr_dedup_matches_expected
+		The status should be success
+		The contents of file "$output" should equal '203.0.113.5'
+	End
+
+	It 'returns the grepcidr rc>=2 and leaves neither output nor scratch behind, even over a stale output file'
+		printf '#!/bin/sh\nexit 3\n' > "$pathgrepcidr"
+		chmod +x "$pathgrepcidr"
+		printf '192.0.2.0/24\n' > "$patterns"
+		printf '192.0.2.1\n' > "$input"
+		printf 'stale\n' > "$output"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should equal 3
+		The path "$output" should not be exist
+		The path "${output}.cidr" should not be exist
+	End
+
+	It 'fails with rc 2 and no output when the input cannot be read'
+		printf '192.0.2.0/24\n' > "$patterns"
+		printf 'stale\n' > "$output"
+
+		When call silently pfb_cidr_dedup "$patterns" "${work}/missing" "$output"
+		The status should equal 2
+		The path "$output" should not be exist
+		The path "${output}.cidr" should not be exist
 	End
 End
 
