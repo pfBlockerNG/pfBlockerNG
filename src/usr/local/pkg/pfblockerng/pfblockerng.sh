@@ -862,6 +862,76 @@ pfb_aggregate() {
 }
 
 
+# issue #3606: grepcidr 2.0 judges a row by its address alone (its /prefix is ignored) and
+# scans only the families its patterns name, so each family+prefix group of rows is checked
+# against just the same-family patterns at least as wide: only a fully covered row is pruned.
+# $1 patternfile  $2 inputfile  $3 outputfile; returns 0, else >=2 and no $3
+pfb_cidr_dedup() {
+	cdd_dir="${3}.cidr"
+	rm -rf "${cdd_dir}"
+	if ! mkdir -p "${cdd_dir}" || ! LC_ALL=C awk -v d="${cdd_dir}" '
+		function fmax(s) { return index(s, ":") ? 128 : 32 }
+		function bits(s, m,   b) {
+			if (!match(s, /\/[0-9]+/)) return m
+			b = substr(s, RSTART + 1, RLENGTH - 1) + 0
+			return b < m ? b : m
+		}
+		FILENAME == ARGV[1] {
+			sub(/\r$/, "")
+			if (!NF) next
+			m = fmax($0); q = bits($0, m)
+			npat++; ntot[m]++; nq[m, q]++
+			# a host-width bucket is never read: the host-width group always takes "all"
+			if (q < m) print > (d "/p" m "_" q)
+			next
+		}
+		{ m = fmax($0); g = m "_" bits($0, m); grp[g] = m; print > (d "/g" g) }
+		END {
+			for (k in nq) { split(k, kq, SUBSEP); close(d "/p" kq[1] "_" kq[2]) }
+			for (g in grp) {
+				close(d "/g" g)
+				m = grp[g]; p = substr(g, index(g, "_") + 1) + 0; use = 0
+				for (q = 0; q <= p; q++) if ((m, q) in nq) use += nq[m, q]
+				if (use == ntot[m] && npat) { print g, "all"; continue }
+				if (!use) { print g, "keep"; continue }
+				for (q = 0; q <= p; q++) if ((m, q) in nq) {
+					f = d "/p" m "_" q
+					while ((getline l < f) > 0) print l > (d "/u" g)
+					close(f)
+				}
+				close(d "/u" g)
+				print g, "some"
+			}
+		}' "$1" "$2" > "${cdd_dir}/plan"; then
+		rm -rf "${cdd_dir}" "$3"
+		return 2
+	fi
+	cdd_rc=0
+	while [ "${cdd_rc}" -lt 2 ] && read -r cdd_g cdd_mode; do
+		case "${cdd_mode}" in
+			keep) cat "${cdd_dir}/g${cdd_g}" || cdd_rc=2; continue ;;
+			all) cdd_pat="$1" ;;
+			*) cdd_pat="${cdd_dir}/u${cdd_g}" ;;
+		esac
+		"${pathgrepcidr}" -vf "${cdd_pat}" "${cdd_dir}/g${cdd_g}"
+		cdd_rc=$?
+	done < "${cdd_dir}/plan" > "${cdd_dir}/kept" || cdd_rc=2
+	# grepcidr keeps an unterminated last line as it is; FNR > n marks that line
+	if [ "${cdd_rc}" -lt 2 ]; then
+		LC_ALL=C awk -v n="$(wc -l < "$2")" '
+			FILENAME == ARGV[1] { k[$0]; next }
+			$0 in k { printf "%s%s", $0, (FNR > n + 0 ? "" : "\n") }
+		' "${cdd_dir}/kept" "$2" > "$3" || cdd_rc=2
+	fi
+	rm -rf "${cdd_dir}"
+	[ "${cdd_rc}" -lt 2 ] && return 0
+	rm -f "$3"
+	return "${cdd_rc}"
+}
+
+
+
+
 # issue #1084: single-pass batch recompute -- cross-feed v4/v6-Deny dedup +
 # v4 dMax/pMax reputation, replacing duplicate()/reputation_dmax()'s masterfile
 # surgery and dmax/pmax's incremental per-file mutation for the CALLERS the
@@ -905,9 +975,10 @@ pfb_aggregate() {
 # Pipeline (sequential, temp files, no pipes; LC_ALL=C inline per ADR-26):
 #   A cumulative dedup -- for each snapshot in priority order: plain copy
 #     when dedup=off OR the cumulative pattern set is still empty; else
-#     `grepcidr -vf cumulative snapshot` (containment-aware, the #713 rc
-#     gate: rc 0/1 publish, rc>=2 aborts the WHOLE pass, prior artifacts
-#     untouched). Ownership is decided by loop order (memberlist priority).
+#     `pfb_cidr_dedup cumulative snapshot` (full containment only, issue
+#     #3606; the #713 rc gate: rc>=2 aborts the WHOLE pass, prior
+#     artifacts untouched). Ownership is decided by loop order (memberlist
+#     priority).
 #   B reputation decision (v4 + dmax/pmax only) -- a hashmap awk counts rows
 #     per /24 prefix straight over the owned files (placeholder excluded);
 #     offender prefixes are classified into an actionmap (dMax: today's
@@ -1025,7 +1096,7 @@ pfb_recompute() {
 				return 1
 			fi
 		else
-			"${pathgrepcidr}" -vf "${rec_cumulative}" "${rec_snap}" > "${rec_ownedfile}"
+			pfb_cidr_dedup "${rec_cumulative}" "${rec_snap}" "${rec_ownedfile}"
 			rec_grc=$?
 			if [ "${rec_grc}" -ge 2 ]; then
 				log="recompute [ ${rec_family} ]: grepcidr error (rc=${rec_grc}) de-duplicating [ ${rec_alias} ]; aborting pass, keeping previous artifacts"
