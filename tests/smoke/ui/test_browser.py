@@ -307,7 +307,7 @@ def test_widget_header_sort_keeps_ip_aliases_before_dnsbl_groups(
     page.evaluate(
         """names => {
             document.getElementById('pfBNG-table').innerHTML = names
-                .map(n => pfBlockerNG_buildWidgetRow([n, '1', '0', '', '']))
+                .map(n => pfBlockerNG_buildWidgetRow([n, '1', '0', '', '', n.startsWith('pfB_') ? 'ip' : 'dnsbl']))
                 .join('');
         }""",
         ["Upstream", "pfB_Top_v4", "DNSBL_Mal", "pfB_PRI1_v4", "DNSBL_Ads"],

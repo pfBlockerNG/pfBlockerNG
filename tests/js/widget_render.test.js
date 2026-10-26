@@ -179,20 +179,29 @@ test('pfBlockerNG_buildWidgetRow: col4 (img) passes through as server-rendered m
 
 test('pfBlockerNG_buildWidgetRow: plain row (no metacharacters) renders correctly', () => {
 	// Given: a normal row with no special characters.
-	var cols = ['pfB_Deny_v4', '1,234', '0', 'Jun 01 12:00', '<i class="fa-solid fa-turn-down"></i>'];
+	var cols = ['pfB_Deny_v4', '1,234', '0', 'Jun 01 12:00', '<i class="fa-solid fa-turn-down"></i>', 'ip'];
 
 	// When
 	var row = pfBlockerNG_buildWidgetRow(cols);
 
 	// Then: all five columns appear in the expected td structure, wrapped in a
-	// complete <tr>...</tr> (the row owns both its opening and closing tags).
-	assert.ok(row.startsWith('<tr>'), 'row starts with opening <tr>');
+	// complete <tr>...</tr> tagged with the row's group (the row owns both tags).
+	assert.ok(row.startsWith('<tr data-pfb-group="ip">'), 'row starts with opening <tr> carrying its group');
 	assert.ok(row.endsWith('</td></tr>'), 'row ends with closing </td></tr>');
 	assert.ok(row.includes('<td><small>pfB_Deny_v4</small></td>'), 'col0 present');
 	assert.ok(row.includes('<td><small>1,234</small></td>'), 'col1 present');
 	assert.ok(row.includes('<td><small>0</small></td>'), 'col2 present');
 	assert.ok(row.includes('<td><small>Jun 01 12:00</small></td>'), 'col3 present');
 	assert.ok(row.includes('<td><i class="fa-solid fa-turn-down"></i></td></tr>'), 'col4 present');
+});
+
+// Scenario: the server tags each row ip or dnsbl; the header-sort handler groups by that tag
+// (issue #3602), so it must survive the AJAX rebuild, escaped like the other data columns.
+test('pfBlockerNG_buildWidgetRow: col5 (group) tags the row and is HTML-escaped', () => {
+	var row = pfBlockerNG_buildWidgetRow(['Upstream', '1', '0', '', '<i></i>', 'dnsbl']);
+	assert.ok(row.startsWith('<tr data-pfb-group="dnsbl">'), row);
+	var hostile = pfBlockerNG_buildWidgetRow(['x', '1', '0', '', '<i></i>', '"><script>']);
+	assert.ok(hostile.startsWith('<tr data-pfb-group="&quot;&gt;&lt;script&gt;">'), hostile);
 });
 
 // Scenario: the row is self-contained — exactly one <tr>/</tr> pair, no nesting.
@@ -203,11 +212,11 @@ test('pfBlockerNG_buildWidgetRow: plain row (no metacharacters) renders correctl
 //   must NOT add its own wrapping tags — issue #288).
 
 test('pfBlockerNG_buildWidgetRow: emits exactly one <tr>/</tr> pair', () => {
-	var cols = ['pfB_Deny_v4', '1,234', '0', 'Jun 01 12:00', '<i class="fa"></i>'];
+	var cols = ['pfB_Deny_v4', '1,234', '0', 'Jun 01 12:00', '<i class="fa"></i>', 'ip'];
 
 	var row = pfBlockerNG_buildWidgetRow(cols);
 
-	assert.equal(row.split('<tr>').length - 1, 1, 'exactly one opening <tr>');
+	assert.equal(row.split('<tr').length - 1, 1, 'exactly one opening <tr>');
 	assert.equal(row.split('</tr>').length - 1, 1, 'exactly one closing </tr>');
 });
 
@@ -221,15 +230,15 @@ test('pfBlockerNG_buildWidgetRow: emits exactly one <tr>/</tr> pair', () => {
 
 test('pfBlockerNG_buildWidgetRow: rows join into well-formed markup with no stray commas', () => {
 	// Given: two distinct rows.
-	var rowA = pfBlockerNG_buildWidgetRow(['AliasA', '1', '0', 'Jun 01 12:00', '<i></i>']);
-	var rowB = pfBlockerNG_buildWidgetRow(['AliasB', '2', '0', 'Jun 02 12:00', '<i></i>']);
+	var rowA = pfBlockerNG_buildWidgetRow(['AliasA', '1', '0', 'Jun 01 12:00', '<i></i>', 'ip']);
+	var rowB = pfBlockerNG_buildWidgetRow(['AliasB', '2', '0', 'Jun 02 12:00', '<i></i>', 'dnsbl']);
 
 	// When: assembled the way the AJAX callback inserts them.
 	var assembled = [rowA, rowB].join('');
 
 	// Then: no comma artifact, and exactly one <tr>/</tr> per row (no extra trailing tag).
 	assert.ok(!assembled.includes(','), 'no stray comma between rows');
-	assert.equal(assembled.split('<tr>').length - 1, 2, 'one opening <tr> per row');
+	assert.equal(assembled.split('<tr').length - 1, 2, 'one opening <tr> per row');
 	assert.equal(assembled.split('</tr>').length - 1, 2, 'one closing </tr> per row');
 });
 
@@ -322,16 +331,22 @@ test('pfBlockerNG_fetch_new_widget_callback: a status anchor outside the known s
 	}
 });
 
-// ── pfBlockerNG_onWidgetSorted: header-click sort honours "Combined sort" (issue #3600) ──
+// ── pfBlockerNG_onWidgetSorted: header-click sort honours "Combined sort" (issues #3600, #3602) ──
 //
 // pfSense's sortable.js re-sorts every row of #pfb-tbl on a header click and then fires
-// 'Sortable.sorted'. With Combined sort off, IP aliases must stay ahead of DNSBL groups,
-// each group keeping the order the click produced; with it on, the mixed order stands.
+// 'Sortable.sorted'. With Combined sort off, IP rows must stay ahead of DNSBL rows, each
+// group keeping the order the click produced; with it on, the mixed order stands. A row's
+// group is the data-pfb-group tag the server sets, never inferred from its name.
 
 // A tbody double: appendChild moves an existing row to the end, as the DOM does.
-function sortedEvent(id, sortmix, names) {
+function sortedEvent(id, sortmix, rows) {
 	var tbody = {
-		rows: names.map(function(name) { return { cells: [{ textContent: name }] }; }),
+		rows: rows.map(function(r) {
+			return {
+				cells: [{ textContent: r[0] }],
+				getAttribute: function(name) { return name === 'data-pfb-group' ? r[1] : null; },
+			};
+		}),
 		appendChild: function(row) {
 			this.rows.splice(this.rows.indexOf(row), 1);
 			this.rows.push(row);
@@ -345,9 +360,10 @@ function sortedEvent(id, sortmix, names) {
 	return { target: table, order: function() { return tbody.rows.map(function(r) { return r.cells[0].textContent; }); } };
 }
 
-var MIXED = ['DNSBL_Ads', 'pfB_PRI1_v4', 'Upstream', 'pfB_Top_v4', 'DNSBL_Mal'];
+var MIXED = [['DNSBL_Ads', 'dnsbl'], ['pfB_PRI1_v4', 'ip'], ['Upstream', 'dnsbl'], ['pfB_Top_v4', 'ip'], ['DNSBL_Mal', 'dnsbl']];
+var MIXED_NAMES = MIXED.map(function(r) { return r[0]; });
 
-test('pfBlockerNG_onWidgetSorted: Combined sort off keeps IP aliases before DNSBL groups, each in clicked order', () => {
+test('pfBlockerNG_onWidgetSorted: Combined sort off keeps IP rows before DNSBL rows, each in clicked order', () => {
 	var ev = sortedEvent('pfb-tbl', 'off', MIXED);
 	pfBlockerNG_onWidgetSorted(ev);
 	assert.deepEqual(ev.order(), ['pfB_PRI1_v4', 'pfB_Top_v4', 'DNSBL_Ads', 'Upstream', 'DNSBL_Mal']);
@@ -356,19 +372,17 @@ test('pfBlockerNG_onWidgetSorted: Combined sort off keeps IP aliases before DNSB
 test('pfBlockerNG_onWidgetSorted: Combined sort on leaves the mixed header-click order', () => {
 	var ev = sortedEvent('pfb-tbl', 'on', MIXED);
 	pfBlockerNG_onWidgetSorted(ev);
-	assert.deepEqual(ev.order(), MIXED);
+	assert.deepEqual(ev.order(), MIXED_NAMES);
 });
 
 test('pfBlockerNG_onWidgetSorted: another sortable table on the dashboard is left alone', () => {
 	var ev = sortedEvent('other-widget-tbl', 'off', MIXED);
 	pfBlockerNG_onWidgetSorted(ev);
-	assert.deepEqual(ev.order(), MIXED);
+	assert.deepEqual(ev.order(), MIXED_NAMES);
 });
 
-// The server's IP group also holds firewall-rule aliases named with pfb_ anywhere, any case
-// (pfb_rule_alias_packets); DNSBL group names are only ever DNSBL_* or Upstream.
-test('pfBlockerNG_onWidgetSorted: a rule alias without the pfB_ prefix stays in the IP group', () => {
-	var ev = sortedEvent('pfb-tbl', 'off', ['DNSBL_Ads', 'LAN_pfB_peers', 'Upstream', 'pfb_custom_hosts', 'pfB_PRI1_v4']);
+test('pfBlockerNG_onWidgetSorted: the row group tag decides, not the row name', () => {
+	var ev = sortedEvent('pfb-tbl', 'off', [['DNSBL_named_alias', 'ip'], ['pfB_named_group', 'dnsbl'], ['LAN_peers', 'ip']]);
 	pfBlockerNG_onWidgetSorted(ev);
-	assert.deepEqual(ev.order(), ['LAN_pfB_peers', 'pfb_custom_hosts', 'pfB_PRI1_v4', 'DNSBL_Ads', 'Upstream']);
+	assert.deepEqual(ev.order(), ['DNSBL_named_alias', 'LAN_peers', 'pfB_named_group']);
 });

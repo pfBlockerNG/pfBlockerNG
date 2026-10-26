@@ -51,7 +51,8 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	 *   on a box where the pf table read failed,
 	 * When the widget renders it,
 	 * Then no PHP warning is raised, its packets link filters DNSBL (not IP) alerts,
-	 *   and its status icon is its own, not the pf error icon IP aliases get.
+	 *   its status icon is its own, not the pf error icon IP aliases get, and the row
+	 *   is tagged dnsbl for the header-sort handler.
 	 */
 	public function testUpstreamRowRendersAsADnsblGroup(): void
 	{
@@ -73,9 +74,31 @@ PHP;
 		$row = substr($result['stdout'], (int) strpos($result['stdout'], '__ROW__') + 7);
 		$this->assertStringContainsString("\n__DIAG__[]\n", $row, 'rendering the Upstream row must raise no PHP diagnostic');
 		$cols = explode('||', (string) strtok($row, "\n"));
-		$this->assertCount(5, $cols, 'one js-mode row: alias||count||packets||update||img');
+		$this->assertCount(6, $cols, 'one js-mode row: alias||count||packets||update||img||group');
 		$this->assertStringContainsString('filterdnsbl=Upstream', $cols[2]);
 		$this->assertSame('ROW_ICON', $cols[4]);
+		$this->assertSame('dnsbl', $cols[5]);
+	}
+
+	/**
+	 * Scenario: a row's group comes from where the server built it, not from its name.
+	 * Given an IP alias row named like a DNSBL group, and a DNSBL row named like an IP alias,
+	 * When the widget renders them for the first page load,
+	 * Then each <tr> carries its real group for the header-sort handler (issue #3602).
+	 */
+	public function testRowsAreTaggedByTheirGroupNotTheirName(): void
+	{
+		$ip = var_export(['count' => '1', 'img' => '', 'update' => '', 'packets' => 0, 'rule' => 0], TRUE);
+		$dnsbl = var_export(['count' => '1', 'img' => '', 'update' => '', 'packets' => '0', 'type' => 'DNSBL'], TRUE);
+		$after = <<<PHP
+echo "\\n__ROWS__";
+pfBlockerNG_get_table(['DNSBL_lookalike' => {$ip}, 'pfB_lookalike' => {$dnsbl}]);
+PHP;
+		$result = $this->runWidget([], [], FALSE, '', $after);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$rows = substr($result['stdout'], (int) strpos($result['stdout'], '__ROWS__'));
+		$this->assertMatchesRegularExpression('/<tr data-pfb-group="ip">\s*<td><small>DNSBL_lookalike</', $rows);
+		$this->assertMatchesRegularExpression('/<tr data-pfb-group="dnsbl">\s*<td><small>pfB_lookalike</', $rows);
 	}
 
 	/**
