@@ -1,8 +1,8 @@
 // Unit coverage for the Dashboard widget's client-side render helpers.
 // Run: node --test tests/js/  (from repo root) — no browser / jQuery needed.
 //
-// These pin the escaping contract: col1 (count) and col3 (update) are escaped
-// by the client before DOM insertion; col0 (alias), col2 (packets), and col4 (img)
+// These pin the escaping contract: col1 (count), col3 (update) and col5 (group) are
+// escaped by the client before DOM insertion; col0 (alias), col2 (packets), and col4 (img)
 // are server-rendered markup that passes through unescaped.
 
 'use strict';
@@ -26,7 +26,7 @@ function installJQueryStub() {
 	var state = {};
 	function stub(sel) {
 		if (!state[sel]) {
-			state[sel] = { class: null, title: null, closest: null, cellTitle: null };
+			state[sel] = { class: null, title: null, closest: null, cellTitle: null, html: null };
 		}
 		var record = state[sel];
 		var chain = {
@@ -40,6 +40,13 @@ function installJQueryStub() {
 				if (name === 'title') {
 					record.title = val;
 				}
+				return chain;
+			},
+			html: function(val) {
+				record.html = val;
+				return chain;
+			},
+			popover: function() {
 				return chain;
 			},
 			// The element .closest() would reach, recorded with the title written onto it
@@ -385,4 +392,18 @@ test('pfBlockerNG_onWidgetSorted: the row group tag decides, not the row name', 
 	var ev = sortedEvent('pfb-tbl', 'off', [['DNSBL_named_alias', 'ip'], ['pfB_named_group', 'dnsbl'], ['LAN_peers', 'ip']]);
 	pfBlockerNG_onWidgetSorted(ev);
 	assert.deepEqual(ev.order(), ['DNSBL_named_alias', 'LAN_peers', 'pfB_named_group']);
+});
+
+// The 15 s AJAX refresh rebuilds every row; the group must survive it or the next header click
+// regroups nothing (issue #3602).
+test('pfBlockerNG_fetch_new_widget_callback: a refreshed row keeps the group the server sent', () => {
+	var state = installJQueryStub();
+	try {
+		pfBlockerNG_fetch_new_widget_callback('Upstream||1||0||t||<i></i>||dnsbl\npfB_Top_v4||2||0||t||<i></i>||ip\n');
+		var html = state['#pfBNG-table'].html;
+		assert.ok(html.startsWith('<tr data-pfb-group="dnsbl"><td><small>Upstream</small></td>'), html);
+		assert.ok(html.includes('<tr data-pfb-group="ip"><td><small>pfB_Top_v4</small></td>'), html);
+	} finally {
+		uninstallJQueryStub();
+	}
 });

@@ -51,14 +51,15 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	 *   on a box where the pf table read failed,
 	 * When the widget renders it,
 	 * Then no PHP warning is raised, its packets link filters DNSBL (not IP) alerts,
-	 *   its status icon is its own, not the pf error icon IP aliases get, and the row
-	 *   is tagged dnsbl for the header-sort handler.
+	 *   its status icon is its own, not the pf error icon IP aliases get, its name gets
+	 *   no firewall-alias popup, and the row is tagged dnsbl for the header-sort handler.
 	 */
 	public function testUpstreamRowRendersAsADnsblGroup(): void
 	{
 		$row = var_export(['count' => '5', 'img' => 'ROW_ICON', 'update' => '2026-10-26 10:00:00', 'packets' => '3', 'type' => 'DNSBL'], TRUE);
 		$after = <<<PHP
 \$pfb['pfctlerr'] = TRUE;
+\$pfb['popup'] = 'on';
 error_reporting(E_ALL);
 \$diag = [];
 set_error_handler(static function (int \$severity, string \$message) use (&\$diag): bool {
@@ -75,9 +76,45 @@ PHP;
 		$this->assertStringContainsString("\n__DIAG__[]\n", $row, 'rendering the Upstream row must raise no PHP diagnostic');
 		$cols = explode('||', (string) strtok($row, "\n"));
 		$this->assertCount(6, $cols, 'one js-mode row: alias||count||packets||update||img||group');
+		$this->assertStringNotContainsString('firewall_aliases_edit.php', $cols[0]);
 		$this->assertStringContainsString('filterdnsbl=Upstream', $cols[2]);
 		$this->assertSame('ROW_ICON', $cols[4]);
 		$this->assertSame('dnsbl', $cols[5]);
+	}
+
+	/**
+	 * Scenario: an IP alias row as pfBlockerNG_update_table() builds it from a block rule.
+	 * When the widget renders it,
+	 * Then its packets link filters IP (not DNSBL) alerts and the row is tagged ip.
+	 */
+	public function testIpAliasRowRendersAsAnIpGroup(): void
+	{
+		$row = var_export(['count' => '5', 'img' => 'ROW_ICON', 'update' => '', 'packets' => '3', 'rule' => 2, 'type' => 'Block', 'id' => 7], TRUE);
+		$after = <<<PHP
+echo "\\n__ROW__";
+pfBlockerNG_get_table(['pfB_Top_v4' => {$row}], 'js');
+PHP;
+		$result = $this->runWidget([], [], FALSE, '', $after);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$cols = explode('||', (string) strtok(substr($result['stdout'], (int) strpos($result['stdout'], '__ROW__') + 7), "\n"));
+		$this->assertStringContainsString('filterip=pfB_Top_v4', $cols[2]);
+		$this->assertSame('ip', $cols[5]);
+	}
+
+	/**
+	 * Scenario: the header counts a row by its group too (issue #3602).
+	 * Given a block rule with 77 packets on an IP alias that has no aliases/alias entry,
+	 *   so its row carries no alias id,
+	 * When the widget refreshes,
+	 * Then those packets count as Deny, not DNSBL.
+	 */
+	public function testHeaderCountsAnIpRowWithoutAnAliasIdAsIp(): void
+	{
+		$setup = "\$GLOBALS['config'] = ['filter' => ['rule' => [['tracker' => '100', 'type' => 'block', 'descr' => 'x', 'destination' => ['address' => 'pfB_Stale_v4']]]]];"
+			. "\$GLOBALS['pfb_test_pf_rules'] = [['tracker' => '100', 'packets' => 77]];";
+		$result = $this->runWidget(['getNewWidget' => '1'], [], FALSE, $setup);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertStringContainsString('Deny||Number of BLOCK & REJECT packet(s) blocked: 77_BR_', $result['stdout']);
 	}
 
 	/**
@@ -88,7 +125,7 @@ PHP;
 	 */
 	public function testRowsAreTaggedByTheirGroupNotTheirName(): void
 	{
-		$ip = var_export(['count' => '1', 'img' => '', 'update' => '', 'packets' => 0, 'rule' => 0], TRUE);
+		$ip = var_export(['count' => '1', 'img' => '', 'update' => '', 'packets' => 0, 'rule' => 1, 'type' => 'Block', 'id' => 3], TRUE);
 		$dnsbl = var_export(['count' => '1', 'img' => '', 'update' => '', 'packets' => '0', 'type' => 'DNSBL'], TRUE);
 		$after = <<<PHP
 echo "\\n__ROWS__";
@@ -99,27 +136,6 @@ PHP;
 		$rows = substr($result['stdout'], (int) strpos($result['stdout'], '__ROWS__'));
 		$this->assertMatchesRegularExpression('/<tr data-pfb-group="ip">\s*<td><small>DNSBL_lookalike</', $rows);
 		$this->assertMatchesRegularExpression('/<tr data-pfb-group="dnsbl">\s*<td><small>pfB_lookalike</', $rows);
-	}
-
-	/**
-	 * Scenario: the alias popup is for firewall aliases only.
-	 * Given the widget's alias popup setting is on,
-	 * When an Upstream row with a count renders,
-	 * Then its name stays plain: Upstream has no firewall alias to link to.
-	 */
-	public function testUpstreamRowNeverGetsTheAliasPopup(): void
-	{
-		$row = var_export(['count' => '5', 'img' => 'ROW_ICON', 'update' => '', 'packets' => '0', 'type' => 'DNSBL'], TRUE);
-		$after = <<<PHP
-\$pfb['popup'] = 'on';
-echo "\\n__ROW__";
-pfBlockerNG_get_table(['Upstream' => {$row}], 'js');
-PHP;
-		$result = $this->runWidget([], [], FALSE, '', $after);
-		$this->assertSame(0, $result['status'], $result['stderr']);
-		$alias = explode('||', (string) strtok(substr($result['stdout'], (int) strpos($result['stdout'], '__ROW__') + 7), "\n"))[0];
-		$this->assertStringContainsString('>Upstream</span>', $alias);
-		$this->assertStringNotContainsString('firewall_aliases_edit.php', $alias);
 	}
 
 	/**
