@@ -1362,7 +1362,9 @@ def test_widget_table_carries_combined_sort_setting(webui: WebUI, php_error_log_
 @contextmanager
 def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int) -> Iterator[None]:
     """Enable DNSBL and seed one SQLite 'dnsbl' stat row (the widget's own read path,
-    ``SELECT * FROM dnsbl``); remove the row and restore enable_cb/pfb_dnsbl afterwards."""
+    ``SELECT * FROM dnsbl``); afterwards put back any rows the group already had and
+    restore enable_cb/pfb_dnsbl. A real group such as Upstream may already hold stats on
+    the session VM, so they are saved before the seed replaces them."""
     helpers.ensure_dnsbl_vip(vm)
     orig_enable = helpers.config_get(vm, _CFG_PFB_ENABLE)
     orig_dnsbl = helpers.config_get(vm, CFG_PFB_DNSBL)
@@ -1378,7 +1380,15 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
         f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
         '$db->exec("CREATE TABLE IF NOT EXISTS dnsbl '
         '(groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);");'
-        "$stmt = $db->prepare('INSERT OR REPLACE INTO dnsbl (groupname, timestamp, entries, counter) "
+        "$saved = [];"
+        "$q = $db->prepare('SELECT * FROM dnsbl WHERE groupname = :g');"
+        f"$q->bindValue(':g', '{group}', SQLITE3_TEXT);"
+        "$r = $q->execute();"
+        "while ($row = $r->fetchArray(SQLITE3_ASSOC)) { $saved[] = $row; }"
+        "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
+        f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
+        "$stmt->execute();"
+        "$stmt = $db->prepare('INSERT INTO dnsbl (groupname, timestamp, entries, counter) "
         "VALUES (:g, :t, :e, :c)');"
         f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
         f"$stmt->bindValue(':t', '{timestamp}', SQLITE3_TEXT);"
@@ -1386,22 +1396,30 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
         f"$stmt->bindValue(':c', {counter}, SQLITE3_INTEGER);"
         "$stmt->execute();"
         "$db->close();"
-        "echo 'OK';"
+        "echo 'OK' . base64_encode(json_encode($saved));"
     )
     seed = helpers.php_eval(vm, seed_snippet)
-    assert "OK" in seed.stdout, (
+    assert seed.stdout.strip().startswith("OK"), (
         f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
     )
+    saved = seed.stdout.strip()[2:]
 
     try:
         yield
     finally:
-        helpers.php_eval(
+        restore = helpers.php_eval(
             vm,
             f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
             "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
             f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
             "$stmt->execute();"
+            f"foreach (json_decode(base64_decode('{saved}'), TRUE) as $row) {{"
+            "  $cols = array_keys($row);"
+            "  $stmt = $db->prepare('INSERT INTO dnsbl (' . implode(',', $cols) . ')"
+            " VALUES (:' . implode(',:', $cols) . ')');"
+            "  foreach ($row as $col => $value) { $stmt->bindValue(':' . $col, $value); }"
+            "  $stmt->execute();"
+            "}"
             "$db->close();"
             "echo 'OK';",
         )
@@ -1412,6 +1430,7 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
             "write_config('pfBlockerNG smoke: restore enable_cb/pfb_dnsbl after a widget stat render check');\n"
             "echo 'OK';",
         )
+        assert "OK" in restore.stdout, f"failed to restore the dnsbl stat rows: {restore.stderr!r} {restore.stdout!r}"
 
 
 # Dual-marked ui_e2e (issue #810, same rationale as test_alerts_unified_log_colour_fields_render):
