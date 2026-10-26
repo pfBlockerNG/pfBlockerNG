@@ -21,7 +21,8 @@ use PHPUnit\Framework\TestCase;
  *   - the decider-only restart runs only when hw.usermem holds a second decider (twice its RSS plus 64 MiB), and the update's log
  *     names the RSS and hw.usermem it measured (issue #3580); a shortfall, or a decider, its RSS or hw.usermem that cannot be read,
  *     is a whole-pair restart whose log line says why;
- *   - a proxy that is not ready is never asked for either restart, and a due whole-pair restart never also sends the decider's.
+ *   - a proxy that is not ready is never asked for either restart, and a due whole-pair restart never also sends the decider's;
+ *   - nor does the cron tick restart a proxy that is not ready for an address its log says the start could not assign (issue #3598).
  *
  * Every row starts from the quiet box (nothing differs: nothing restarts) and changes one thing.
  */
@@ -30,6 +31,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_decider_restart')]
 #[CoversFunction('pfb_dns_proxy_restart')]
 #[CoversFunction('pfb_reload_unbound')]
+#[CoversFunction('pfblockerng_tick')]
 final class DnsProxyKeepRunningTest extends TestCase
 {
 	use KeepRunningScenario;
@@ -444,6 +446,25 @@ final class DnsProxyKeepRunningTest extends TestCase
 		// Then neither restart was asked for
 		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
 		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	public function testTheTickNeverRestartsAProxyThatIsAliveButNotReadyForAnAddressItCanBindNow(): void
+	{
+		// Given a live proxy that never published its marker, whose log's latest start refused 127.0.0.1 (which this box binds) as
+		// not assignable; the rollback its failed readiness leads to finds the config locked (issue #3598)
+		$this->krApply(['proxy' => 'lives', 'gatewayLog' => [
+			'listening udp+tcp 192.0.2.1:53', "cannot listen on 127.0.0.1:53: bind: can't assign requested address", 'listening udp+tcp [::1]:53',
+			'ready upstream 127.0.0.1:5353 pid 4242',
+		]]);
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+		$this->assertFalse(pfb_dns_proxy_ready(), 'before: the proxy is alive and not ready');
+		$this->assertSame(['127.0.0.1:53' => "bind: can't assign requested address"], pfb_dns_proxy_listeners()['refused'] ?? NULL, 'before: the refusal is in the record');
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then the tick does not restart it for the address: a proxy that is not ready has no record of its own to judge
+		$this->assertNotContains('restart_service pfb_dns_proxy', $this->krProxyCalls());
 	}
 
 	public function testADueWholePairRestartNeverAlsoSendsTheDeciderRestart(): void

@@ -6869,7 +6869,16 @@ function pfblockerng_tick(
 	// issue #3556: a proxy that does not become ready within the budget is rolled back as a failed apply is; with no gateway process alive
 	// nothing is waited for or rolled back: a stopped service, or a restart between its stop and its launch, is no failed start
 	if (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
-		pfb_dns_proxy_confirm_ready();
+		// issue #3598: an address the gateway's start could not assign yet is served by a restart once it can be bound; every other
+		// restart stays with the update pass (pfb_dns_proxy_ensure_running())
+		$since = NULL;
+		$why = pfb_dns_proxy_ready() ? pfb_dns_proxy_refusal_cleared() : NULL;
+		if ($why !== NULL && !pfb_dns_proxy_restart_deferred()) {
+			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
+			$since = pfb_dns_proxy_log_size();
+			restart_service('pfb_dns_proxy');
+		}
+		pfb_dns_proxy_confirm_ready($since);
 	}
 
 	$now   = time();

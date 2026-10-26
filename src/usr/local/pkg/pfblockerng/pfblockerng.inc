@@ -5453,6 +5453,26 @@ function pfb_dns_proxy_command_listeners(): array {
 }
 
 /**
+ * issue #3598: why a restart would serve an address the gateway's latest start refused with EADDRNOTAVAIL (`can't`/`cannot assign
+ * requested address`) and that an unprivileged bind of it (port 0, closed at once) now takes; NULL when there is none. Only a host
+ * inet_pton() accepts is probed: a name would be resolved.
+ */
+function pfb_dns_proxy_refusal_cleared(): ?string {
+	foreach (pfb_dns_proxy_listeners()['refused'] ?? [] as $at => $reason) {
+		$host = substr($at, 0, (int) strrpos($at, ':'));
+		if (!str_contains($reason, 'assign requested address') || @inet_pton(trim($host, '[]')) === FALSE) {
+			continue;
+		}
+		$probe = @stream_socket_server("udp://{$host}:0", $errno, $errstr, STREAM_SERVER_BIND);
+		if ($probe !== FALSE) {
+			fclose($probe);
+			return "the gateway could not bind {$at} when it started, and that address can be bound now";
+		}
+	}
+	return NULL;
+}
+
+/**
  * After a pfB-DNS start (an apply, the boot start) and on the cron tick, from pfb_dns_proxy_confirm_ready(), while the proxy is meant
  * to serve: raise ONE notice, id `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id
  * when there is none. The notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or
@@ -5765,7 +5785,9 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * once for a pending restart or a changed gateway binary (pfb_dns_proxy_gateway_changed()), and only the decider, on the gateway's
  * control socket, for changed decider code (pfb_dns_proxy_decider_changed()) when a second decider fits in memory beside it
  * (pfb_dns_proxy_decider_restart_fits_ram()); one that may not fit, or that the gateway does not take, is logged and becomes the
- * whole-pair restart. Neither change is looked for while the proxy is not READY: it has no record to judge.
+ * whole-pair restart. Neither change is looked for while the proxy is not READY: it has no record to judge. The whole pair is also
+ * restarted once for an address the gateway's latest start could not assign and the box can bind now (pfb_dns_proxy_refusal_cleared(),
+ * issue #3598): looked for only while READY, and never under a package operation.
  *
  * Only a deferred pass (under a package operation) that acted on nothing and finds the gateway READY skips the upstream confirmation: it
  * files the startup problems its log shows and returns ready (issue #3560, D-a). The tick and the boot check confirm the upstream and roll
@@ -5808,7 +5830,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		} elseif (pfb_dns_proxy_ready()) {
 			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
 				$why = 'the package installed another gateway';
-			} else {
+			} elseif (($why = pfb_dns_proxy_refusal_cleared()) === NULL) {
 				$decider = pfb_dns_proxy_decider_changed();
 			}
 		}

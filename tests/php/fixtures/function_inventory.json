@@ -2237,6 +2237,11 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_proxy_refusal_cleared": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": []
+    },
     "pfb_dns_proxy_refuse": {
         "returnsRef": false,
         "returnType": "bool",
