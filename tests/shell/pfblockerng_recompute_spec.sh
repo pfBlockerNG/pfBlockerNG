@@ -13,7 +13,7 @@
 # exits 1 -- never "no patterns matched, so keep every line" -- so a
 # whitespace-only pattern line is skipped like a blank one (issue #1279)
 # and `n == 0` short-circuits to that outcome before the per-line filter
-# ever runs.
+# ever runs. Like grep(1), both stand-ins exit 1 whenever they print nothing.
 make_grepcidr_stub() {
 	cat > "$1" <<'EOF'
 #!/bin/sh
@@ -46,9 +46,9 @@ n == 0 { next }
 	for (i = 1; i <= n; i++) {
 		if (net(ip2int(tp[1]), pbits[i]) == pnet[i]) { matched = 1; break }
 	}
-	if (!matched) print
+	if (!matched) { print; out++ }
 }
-END { if (n == 0) exit 1 }
+END { if (n == 0 || !out) exit 1 }
 ' "$3"
 EOF
 	chmod +x "$1"
@@ -109,9 +109,9 @@ n == 0 { next }
 		}
 		if (ok) { matched = 1; break }
 	}
-	if (!matched) print
+	if (!matched) { print; out++ }
 }
-END { if (n == 0) exit 1 }
+END { if (n == 0 || !out) exit 1 }
 ' "$3"
 EOF
 	chmod +x "$1"
@@ -787,6 +787,52 @@ Describe 'pfb_cidr_dedup() full-containment cross-feed filter (issue #3606)'
 		The contents of file "$output" should equal '203.0.113.5'
 	End
 
+	It 'unions every same-family bucket at least as wide: a /25 row is judged by the /8 and /24 rows together, never by the narrower /27'
+		printf '10.0.0.0/8\n192.0.2.0/24\n203.0.113.0/27\n' > "$patterns"
+		printf '192.0.2.0/25\n10.1.0.0/25\n198.51.100.0/25\n203.0.113.0/25\n' > "$input"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should be success
+		The contents of file "$output" should equal "$(printf '198.51.100.0/25\n203.0.113.0/25')"
+	End
+
+	It 'reads an out-of-range prefix as the family width, so a hostile /99999999999999999999999 row is judged like a host'
+		printf '192.0.2.0/25\n' > "$patterns"
+		printf '192.0.2.0/24\n192.0.2.5/99999999999999999999999\n' > "$input"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should be success
+		The contents of file "$output" should equal '192.0.2.0/24'
+	End
+
+	# whichever order awk walks the groups in, one row pair puts the pruned group first
+	Describe 'keeps judging the remaining groups after grepcidr prunes a whole group (rc 1)'
+		Parameters
+			'10.1.2.0/24' '172.16.0.0/16' '172.16.0.0/16'
+			'172.16.5.0/24' '10.1.0.0/16' '172.16.5.0/24'
+		End
+
+		It "keeps $3 from the rows $1 and $2"
+			printf '10.0.0.0/8\n' > "$patterns"
+			printf '%s\n%s\n' "$1" "$2" > "$input"
+
+			When call pfb_cidr_dedup "$patterns" "$input" "$output"
+			The status should be success
+			The contents of file "$output" should equal "$3"
+		End
+	End
+
+	It 'recovers from the scratch directory an interrupted earlier call left behind'
+		printf '192.0.2.0/25\n' > "$patterns"
+		printf '192.0.2.0/24\n192.0.2.5\n' > "$input"
+		mkdir -p "${output}.cidr/leftover"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should be success
+		The contents of file "$output" should equal '192.0.2.0/24'
+		The path "${output}.cidr" should not be exist
+	End
+
 	It 'hands an input with no row wider than a host to grepcidr unchanged, in the one plain call it always made'
 		printf '#!/bin/sh\nprintf "%%s %%s %%s\\n" "$1" "$2" "$3" >> "%s/calls"\n' "$work" > "$pathgrepcidr"
 		chmod +x "$pathgrepcidr"
@@ -817,6 +863,7 @@ Describe 'pfb_cidr_dedup() full-containment cross-feed filter (issue #3606)'
 		chmod +x "$pathgrepcidr"
 		printf '10.0.0.0/8\n192.0.2.0/25\n' > "$patterns"
 		printf '192.0.2.0/24\n203.0.113.9\n10.1.0.0/16\n' > "$input"
+		printf 'stale\n' > "$output"
 
 		When call pfb_cidr_dedup "$patterns" "$input" "$output"
 		The status should equal 2
