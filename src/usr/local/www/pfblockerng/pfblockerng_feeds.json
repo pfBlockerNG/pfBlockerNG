@@ -111,6 +111,14 @@
 					"header":	"Pulsedive"
 				},
 				{
+					"feed":		"Q-Feeds",
+					"website":	"https://qfeeds.com/",
+					"url":		"https://api.qfeeds.com/api?feed_type=malware_ip&api_token=_API_KEY_",
+					"register":	"https://tip.qfeeds.com/",
+					"info":		"API token required (free Community license available). Community data refreshes daily: set the Update Frequency to Once a day. Plus refreshes every 4 hours, Premium every 20 minutes.",
+					"header":	"QFeeds_Malware_IP"
+				},
+				{
 					"feed":		"Spamhaus",
 					"website":	"https://www.spamhaus.org/blocklists/do-not-route-or-peer/",
 					"contact":	"https://contact-center.spamhaus.org/",
@@ -912,6 +920,14 @@
 						]
 				},
 				{
+					"feed":		"Q-Feeds",
+					"website":	"https://qfeeds.com/",
+					"url":		"https://api.qfeeds.com/api?feed_type=malware_ip&api_token=_API_KEY_",
+					"register":	"https://tip.qfeeds.com/",
+					"info":		"API token required (free Community license available). Community data refreshes daily: set the Update Frequency to Once a day. Plus refreshes every 4 hours, Premium every 20 minutes.",
+					"header":	"QFeeds_Malware_IP6"
+				},
+				{
 					"feed":		"Spamhaus",
 					"website":	"https://www.spamhaus.org/blocklists/do-not-route-or-peer/",
 					"contact":	"https://contact-center.spamhaus.org/",
@@ -1468,6 +1484,14 @@
 					"website":	"https://winhelp2002.mvps.org/",
 					"url":		"https://winhelp2002.mvps.org/hosts.txt",
 					"header":	"MVPS"
+				},
+				{
+					"feed":		"Q-Feeds",
+					"website":	"https://qfeeds.com/",
+					"url":		"https://api.qfeeds.com/api?feed_type=malware_domains&api_token=_API_KEY_",
+					"register":	"https://tip.qfeeds.com/",
+					"info":		"API token required (free Community license available). Community data refreshes daily: set the Update Frequency to Once a day. Plus refreshes every 4 hours, Premium every 20 minutes.",
+					"header":	"QFeeds_Malware_Domains"
 				},
 				{
 					"feed":		"Spam404",

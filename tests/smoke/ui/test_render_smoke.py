@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from tests._workflow_steps import extract_between
+from tests.test_feeds_catalog import QFEEDS_ENTRIES
 
 from .. import helpers, pkg_identity
 from .render_oracle import PhpErrorLogGuard, evaluate_render
@@ -2126,6 +2127,26 @@ def test_feeds_non_contiguous_alternate_bucket_renders_every_row(
         )
     finally:
         _del_rowid(smoke_vm, CFG_IPV4, rowid)
+
+
+@pytest.mark.parametrize(("ftype", "group", "url", "header"), QFEEDS_ENTRIES, ids=[row[3] for row in QFEEDS_ENTRIES])
+def test_feeds_tab_lists_qfeeds_under_its_group(
+    ftype: str, group: str, url: str, header: str, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """Each Feeds sub-tab offers its Q-Feeds row under the matrix group (issue #3595).
+
+    One row carries the group, the provider link, the registration link that issues
+    the API token, and the feed link with the catalog header.
+    """
+    path = f"/pfblockerng/pfblockerng_feeds.php?type={ftype}"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+    assert result.ok, f"Feeds render oracle failed: {result.detail}"
+    row = row_containing(resp.text, f'href="{url}"')
+    assert re.search(rf">\s*{re.escape(group)}\s*<", row), f"{header} row is not under {group}: {row}"
+    assert 'href="https://qfeeds.com/">Q-Feeds</a>' in row, f"{header} row lacks the provider link: {row}"
+    assert 'href="https://tip.qfeeds.com/"' in row, f"{header} row lacks the registration link: {row}"
+    assert re.search(rf">\s*{re.escape(header)}\s*</a>", row), f"{header} row lacks its feed link: {row}"
 
 
 def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

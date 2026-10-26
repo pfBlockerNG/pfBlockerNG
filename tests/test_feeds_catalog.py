@@ -11,6 +11,8 @@ Pins that:
   is shipped anywhere in the catalog (issue #3205).
 - The ADs group offers the upstream AdGuard DNS filter, and the Firebog copy
   stays in Firebog_Advertising (issue #3533).
+- Q-Feeds ships as keyed feeds in PRI1, PRI1_6 and Malicious, each once, with
+  the _API_KEY_ placeholder and its registration link (issue #3595).
 """
 
 from __future__ import annotations
@@ -42,6 +44,20 @@ _MALTRAIL_FEEDS = (
 
 _ADGUARD_DNS_URL = "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
 _FIREBOG_ADGUARD_URL = "https://v.firebog.net/hosts/AdguardDNS.txt"
+
+# Q-Feeds coverage matrix (issue #3595): (section, group, url, header). The ipv4 and
+# ipv6 rows share the mixed-family malware_ip URL, as BlockListDE / BlockListDE_6 do.
+QFEEDS_IP_URL = "https://api.qfeeds.com/api?feed_type=malware_ip&api_token=_API_KEY_"
+QFEEDS_ENTRIES = (
+    ("ipv4", "PRI1", QFEEDS_IP_URL, "QFeeds_Malware_IP"),
+    ("ipv6", "PRI1_6", QFEEDS_IP_URL, "QFeeds_Malware_IP6"),
+    (
+        "dnsbl",
+        "Malicious",
+        "https://api.qfeeds.com/api?feed_type=malware_domains&api_token=_API_KEY_",
+        "QFeeds_Malware_Domains",
+    ),
+)
 
 
 @pytest.fixture(scope="module")
@@ -171,3 +187,42 @@ def test_ads_group_offers_upstream_adguard_dns_filter_beside_firebog_copy(catalo
     assert firebog.get(_FIREBOG_ADGUARD_URL) == "Adguard_DNS", f"Firebog copy must stay — got {firebog}"
     headers = [h.lower() for h in _all_headers(catalog)]
     assert headers.count("adguard_dns_filter") == 1, "AdGuard_DNS_Filter header must be unique across the catalog"
+
+
+@pytest.mark.parametrize(("section", "group", "url", "header"), QFEEDS_ENTRIES, ids=[row[3] for row in QFEEDS_ENTRIES])
+def test_qfeeds_is_offered_once_in_its_matrix_group(  # type: ignore[type-arg]
+    catalog: dict, section: str, group: str, url: str, header: str
+) -> None:
+    """Q-Feeds is a selectable keyed feed in exactly its matrix group (issue #3595).
+
+    Each user registers for an own token: the url carries the _API_KEY_ placeholder,
+    the register link opens the portal that issues it, and the info tells Community
+    users to update once a day, the rate their license refreshes.
+    """
+    homes = [
+        (sec, name, feed)
+        for sec in ("ipv4", "ipv6", "dnsbl")
+        for name, grp in catalog.get(sec, {}).items()
+        for feed in grp.get("feeds", [])
+        if feed.get("header") == header
+    ]
+    assert [(sec, name) for sec, name, _ in homes] == [(section, group)], (
+        f"{header} must ship once, in {section}/{group} — got {[(sec, name) for sec, name, _ in homes]}"
+    )
+    feed = homes[0][2]
+    expected = {"feed": "Q-Feeds", "website": "https://qfeeds.com/", "url": url, "register": "https://tip.qfeeds.com/"}
+    assert {key: feed.get(key) for key in expected} == expected
+    for phrase in ("API token required", "free Community license", "Once a day"):
+        assert phrase in feed.get("info", ""), f"{header} info must say {phrase!r} — got {feed.get('info')!r}"
+    headers = [h.lower() for h in _all_headers(catalog)]
+    assert headers.count(header.lower()) == 1, f"{header} header must be unique across the catalog"
+
+
+def test_qfeeds_ships_no_feed_url_beyond_its_matrix() -> None:
+    """Only the matrix rows reference the Q-Feeds API (issue #3595).
+
+    Scanned in the file text so an added feed, alternate, or past_urls entry
+    carrying a Q-Feeds API URL fails too.
+    """
+    count = _FEEDS_JSON.read_text(encoding="utf-8").count("api.qfeeds.com")
+    assert count == len(QFEEDS_ENTRIES), f"expected {len(QFEEDS_ENTRIES)} Q-Feeds API URLs, found {count}"
