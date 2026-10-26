@@ -262,6 +262,59 @@ def test_a_grepcidr_failure_keeps_the_list_whole_and_logs_it(tmp_path: Path) -> 
     assert outcome.scratch_left == [], f"scratch files left behind: {outcome.scratch_left}"
 
 
+def test_a_grepcidr_failure_midway_keeps_the_list_whole(tmp_path: Path, grepcidr: str) -> None:
+    """One failed grepcidr run is not outvoted by a later run that succeeds: the list is kept
+    whole and the failure logged, whichever group of rows the failing run was judging."""
+    marker = tmp_path / "failed-once"
+    flaky = tmp_path / "grepcidr-flaky"
+    flaky.write_text(
+        f"#!/bin/sh\nif [ ! -e {shlex.quote(str(marker))} ]; then\n"
+        f"\t: > {shlex.quote(str(marker))}; echo 'grepcidr: Out of memory' >&2; exit 2\nfi\n"
+        f'exec {shlex.quote(grepcidr)} "$@"\n',
+        encoding="utf-8",
+    )
+    flaky.chmod(0o755)
+    earlier = ["192.0.2.0/24", "10.0.0.0/7"]
+
+    # Two groups, two grepcidr runs: the /8 against the /7, the host against both patterns.
+    outcome = _duplicate(tmp_path, str(flaky), earlier, ["203.0.113.9", "10.0.0.0/8"])
+
+    assert marker.exists(), "the injected failure never ran"
+    assert outcome.deny == "10.0.0.0/8\n203.0.113.9\n", outcome.stderr
+    assert outcome.masterfile == (
+        "Earlier_v4 192.0.2.0/24\nEarlier_v4 10.0.0.0/7\nLater_v4 10.0.0.0/8\nLater_v4 203.0.113.9\n"
+    )
+    assert "Later_v4" in outcome.errorlog, f"error log does not name the list: {outcome.errorlog!r}"
+    assert outcome.scratch_left == [], f"scratch files left behind: {outcome.scratch_left}"
+
+
+@pytest.mark.parametrize(
+    "patterns",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(b"\n   \n\t\n", id="blank-lines"),
+        pytest.param(b"\r\n", id="cr-only-line"),
+    ],
+)
+def test_a_pattern_file_without_patterns_keeps_every_row(tmp_path: Path, grepcidr: str, patterns: bytes) -> None:
+    """grepcidr given no usable pattern prints nothing at all (issue #1279), so with nothing to
+    judge against, every row, CIDR or host, either family, comes back untouched."""
+    work = tmp_path / "box"
+    work.mkdir()
+    rows = b"10.0.0.0/8\n192.0.2.9\n2001:db8::/32\n"
+    (work / "patterns").write_bytes(patterns)
+    (work / "rows").write_bytes(rows)
+
+    args = " ".join(shlex.quote(str(work / name)) for name in ("patterns", "rows", "out"))
+    proc = _sh(work, grepcidr, f"pfb_cidr_dedup {args}\n")
+
+    assert proc.returncode == 0, proc.stderr
+    out = (work / "out").read_bytes()
+    assert out == rows, f"pfb_cidr_dedup: expected {rows!r}, got {out!r}"
+    leftovers = sorted(p.name for p in work.iterdir())
+    assert leftovers == ["out", "patterns", "rows", "scratch"], f"files left behind: {leftovers}"
+
+
 @pytest.mark.parametrize(
     ("pattern", "dropped", "control"),
     [
