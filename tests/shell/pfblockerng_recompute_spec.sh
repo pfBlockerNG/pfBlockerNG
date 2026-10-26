@@ -787,6 +787,52 @@ Describe 'pfb_cidr_dedup() full-containment cross-feed filter (issue #3606)'
 		The contents of file "$output" should equal '203.0.113.5'
 	End
 
+	It 'hands an input with no row wider than a host to grepcidr unchanged, in the one plain call it always made'
+		printf '#!/bin/sh\nprintf "%%s %%s %%s\\n" "$1" "$2" "$3" >> "%s/calls"\n' "$work" > "$pathgrepcidr"
+		chmod +x "$pathgrepcidr"
+		printf '192.0.2.0/24\n' > "$patterns"
+		printf '192.0.2.1\n198.51.100.9/32\n2001:db8::1/128\n203.0.113.4/33\n' > "$input"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should be success
+		The contents of file "${work}/calls" should equal "-vf ${patterns} ${input}"
+	End
+
+	It 'never feeds grepcidr a pattern-free file on that plain-call path either'
+		true > "${work}/grepcidr.never-called"
+		printf '#!/bin/sh\nrm -f "%s/grepcidr.never-called"\n' "$work" > "$pathgrepcidr"
+		chmod +x "$pathgrepcidr"
+		printf '\n   \n\t\r\n' > "$patterns"
+		printf '192.0.2.1\n2001:db8::1\n' > "$input"
+		cp "$input" "$expected"
+
+		When call cidr_dedup_matches_expected
+		The status should be success
+		The path "${work}/grepcidr.never-called" should be exist
+	End
+
+	It 'fails without output when grepcidr errors on one group even though a later group succeeds'
+		make_grepcidr_stub "${work}/grepcidr.ok"
+		printf '#!/bin/sh\nif [ -e "%s/failed-once" ]; then exec "%s/grepcidr.ok" "$@"; fi\ntrue > "%s/failed-once"\nexit 2\n' "$work" "$work" "$work" > "$pathgrepcidr"
+		chmod +x "$pathgrepcidr"
+		printf '10.0.0.0/8\n192.0.2.0/25\n' > "$patterns"
+		printf '192.0.2.0/24\n203.0.113.9\n10.1.0.0/16\n' > "$input"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should equal 2
+		The path "$output" should not be exist
+		The path "${output}.cidr" should not be exist
+	End
+
+	It 'fails without creating anything when the output directory does not exist'
+		printf '192.0.2.0/25\n' > "$patterns"
+		printf '192.0.2.0/24\n' > "$input"
+
+		When call silently pfb_cidr_dedup "$patterns" "$input" "${work}/no dir/owned.txt"
+		The status should equal 2
+		The path "${work}/no dir" should not be exist
+	End
+
 	It 'returns the grepcidr rc>=2 and leaves neither output nor scratch behind, even over a stale output file'
 		printf '#!/bin/sh\nexit 3\n' > "$pathgrepcidr"
 		chmod +x "$pathgrepcidr"
