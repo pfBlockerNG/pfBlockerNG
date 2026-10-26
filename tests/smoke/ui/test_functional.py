@@ -35,7 +35,6 @@ import json
 import re
 import shlex
 import subprocess
-import time
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -2270,7 +2269,7 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
 
 
 # ---------------------------------------------------------------------------
-# Issue #2308 — Update page Run Now leaves the tick-owned cache alone
+# Issue #2308 — Update page Run Now leaves the scheduled tick's last_run alone
 # ---------------------------------------------------------------------------
 
 _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
@@ -2316,11 +2315,16 @@ def _assert_tick_run_not_claimed(before: int | None, after: int | None, scope: s
     UpdateRunNowScheduleOwnershipTest holds the stronger byte-identity version, and
     DueLedgerTest pins both branches of the deferral write.
 
-    Removal is treated as a failure because no actor in this harness turns the schedule
-    off mid-test -- each lane boots its own VM and runs one test stream, and a General
-    save never reaches the pass tail that rewrites this file. In production a concurrent
-    admin disabling the schedule would drop the row legitimately, so this is a fact about
-    the harness rather than a product invariant.
+    Removal is treated as a failure only because the callers sample ``before`` from a cache
+    rebuilt for the current config (_regenerate_schedule_cache) and read ``after`` once the
+    pass has ended. The pass tail republishes the cache from config, so a row that belonged
+    to a config since replaced legitimately disappears -- that is the pass tidying a stale
+    file, not an ownership breach, and it is why an unreconciled baseline cannot be compared.
+    Against a coherent baseline nothing in this harness turns the schedule off mid-test --
+    each lane boots its own VM and runs one test stream, and a General save never reaches
+    the pass tail that rewrites this file -- so a vanished row is a real change. In
+    production a concurrent admin disabling the schedule would drop the row legitimately, so
+    this is a fact about the harness rather than a product invariant.
     """
     assert not (after is None and before is not None), (
         f"{scope} Run Now removed the cron entry, and nothing in this test disables the schedule"
@@ -2338,48 +2342,80 @@ def _assert_tick_run_not_claimed(before: int | None, after: int | None, scope: s
     )
 
 
-def _settle_runnow(vm: helpers.SmokeVM, timeout: float = 25.0) -> None:
-    """Best-effort wait for a dispatched Run Now to finish.
+def _regenerate_schedule_cache(vm: helpers.SmokeVM) -> None:
+    """Rebuild the derived due ledger from the config this test starts with.
 
-    pfb_runnow() unlinks the pidfile and calls mwexec_bg, and daemon(8) writes the
-    pidfile only once it has started -- so "no live pid" is true before the run exists
-    as well as after it ends. Waiting for the up edge first distinguishes them; a run
-    that finishes before it is ever observed up is not an error, so neither poll is
-    allowed to fail the test. This gates the next dispatch, which
-    pfb_active_task_running() would otherwise refuse; the assertions do not depend on
-    it, because last_run is unchanged at every instant of the run.
+    The per-test isolation restore (conftest ``_ui_pfb_isolation``) puts config.xml back but
+    not the ledger derived from it: a sibling that added a scheduled group and ran a pass
+    leaves a cron row for a config that no longer exists. Sampling that row as the baseline
+    would blame Run Now for the pass tail's republication.
     """
+    helpers.wait_no_active_pfb_task(vm)  # regeneration skips while a pass holds the scheduler locks
+    result = helpers.php_eval(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        "echo pfb_schedule_cache_regenerate() ? 'REGEN_OK' : 'REGEN_FAILED';",
+    )
+    assert result.returncode == 0 and "REGEN_OK" in result.stdout, (
+        "pfb_schedule_cache_regenerate() did not rebuild the due ledger from the restored config:\n"
+        f"  rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
 
-    def _up() -> bool:
-        probe = vm.ssh(
-            "/bin/sh",
-            "-c",
-            "p=$(cat /var/run/pfb_runnow.pid 2>/dev/null); "
-            'if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo up; else echo down; fi',
+
+_PASS_END_MARKER = "UPDATE PROCESS ENDED"
+
+
+def _run_now_to_completion(webui: WebUI, vm: helpers.SmokeVM, scope: str) -> None:
+    """Submit Run Now for ``scope`` and return once its detached pass has ended.
+
+    pfb_runnow() answers before the pass exists, so neither the POST response nor ps(1)
+    says anything about completion: "no process" is true before the child spawns as well as
+    after it exits. The pass logs its end marker only after publishing the schedule cache, so
+    a marker beyond the pre-POST count means the ledger read next is this pass's own. The
+    child outlives its marker, and the next dispatch is skipped while it lives, hence the
+    final drain. Expiry of the watchdog is a stuck run, never a verdict.
+    """
+    helpers.wait_no_active_pfb_task(vm)  # a live task makes the page skip the dispatch
+    ended_before = helpers.count_log_marker(vm, helpers.PFB_LOG, _PASS_END_MARKER)
+    resp = webui.post(
+        UPDATE_PAGE,
+        overrides={"pfb_scope": scope},
+        submit=("run", "Run Now"),
+        timeout=SAVE_TIMEOUT,
+    )
+    assert not looks_like_login_page(resp.text), f"scope={scope} POST returned the login form (session lost)"
+    assert "Run Now skipped" not in resp.text, f"scope={scope} Run Now was skipped by the active-task guard"
+    try:
+        helpers.wait_until(
+            lambda: helpers.count_log_marker(vm, helpers.PFB_LOG, _PASS_END_MARKER) > ended_before,
+            timeout=120.0,
+            interval=1.0,
         )
-        return probe.stdout.strip() == "up"
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline and not _up():
-        time.sleep(0.5)
-    while time.monotonic() < deadline and _up():
-        time.sleep(0.5)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"{exc}; scope={scope} Run Now never logged {_PASS_END_MARKER!r} past its {ended_before} earlier ones"
+        ) from exc
+    helpers.wait_no_active_pfb_task(vm)
 
 
 def test_update_runnow_does_not_publish_schedule_cache(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Run Now never publishes the derived schedule cache.
+    """Run Now never claims the scheduled tick's ``cron.last_run``.
 
     Scenario: scope-guard — partial scope=ip must NOT advance cron.last_run.
       Background: pfBlockerNG deployed and enabled; no feeds configured (fast run).
 
-    Given pfBlockerNG is enabled,
-    When Run Now is submitted for partial and full scopes,
+    Given pfBlockerNG is enabled and the derived schedule cache matches the current config,
+    When Run Now is submitted for partial and full scopes and each pass has ended,
     Then ``cron.last_run`` in ``pfb_due_ledger.json`` never advances.
 
-    The next locked tick owns cache regeneration from config and durable state.
+    Every pass republishes the whole cache from config in its tail, so the file itself
+    legitimately changes; only the tick's durable last_run belongs to the scheduled tick. A
+    sibling's config restore leaves a ledger for the config it replaced, which is why the
+    baseline is rebuilt first and why the samples bracket a completed pass.
     """
     vm = smoke_vm
     # Ensure pfBlockerNG is enabled; restore the original state at the end.
@@ -2388,37 +2424,17 @@ def test_update_runnow_does_not_publish_schedule_cache(
         helpers.set_package_enabled(vm, True)
 
     try:
+        _regenerate_schedule_cache(vm)
         before_ip = _cron_last_run(vm)
 
-        # ACT 1: POST scope=ip — a partial run must not claim the tick's run.
-        # pfb_runnow() dispatches a detached process (#671), so the read below may land at
-        # any point of the run. That is fine for last_run, which is unchanged throughout;
-        # it was not fine for the whole document, which the pass tail rewrites.
-        resp = webui.post(
-            UPDATE_PAGE,
-            overrides={"pfb_scope": "ip"},
-            submit=("run", "Run Now"),
-            timeout=SAVE_TIMEOUT,
-        )
-        assert not looks_like_login_page(resp.text), "scope=ip POST returned the login form (session lost)"
-
+        # ACT 1: scope=ip — a partial run must not claim the tick's run.
+        _run_now_to_completion(webui, vm, "ip")
         _assert_tick_run_not_claimed(before_ip, _cron_last_run(vm), "scope=ip")
-        _settle_runnow(vm)
 
-        # ACT 2: a full pass must leave the same ownership boundary intact. The settle
-        # above gates this dispatch, which pfb_active_task_running() would otherwise
-        # refuse while the scope=ip process is alive.
+        # ACT 2: a full pass must leave the same ownership boundary intact.
         before_both = _cron_last_run(vm)
-        resp2 = webui.post(
-            UPDATE_PAGE,
-            overrides={"pfb_scope": "both"},
-            submit=("run", "Run Now"),
-            timeout=SAVE_TIMEOUT,
-        )
-        assert not looks_like_login_page(resp2.text), "scope=both POST returned the login form (session lost)"
-
+        _run_now_to_completion(webui, vm, "both")
         _assert_tick_run_not_claimed(before_both, _cron_last_run(vm), "scope=both")
-        _settle_runnow(vm)
 
         # Re-render the Update page and confirm the Schedule section is present.
         page_resp = webui.get(UPDATE_PAGE)
