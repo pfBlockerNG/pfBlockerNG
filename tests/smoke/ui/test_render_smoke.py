@@ -2308,11 +2308,34 @@ def test_reports_dns_reply_filter_limit_saves_from_the_rendered_form_with_dnsbl_
             helpers.config_restore_state(smoke_vm, path, prior)
 
 
-_PFB_CHART_COUNT = "installedpackages/pfblockerngglobal/pfbchartcnt"
-_PFB_REPLY_TYPES = "installedpackages/pfblockerngglobal/pfbreplytypes"
-_PFB_REPLY_REC = "installedpackages/pfblockerngglobal/pfbreplyrec"
-_PFB_DNSBL_REPLY_STAT = "installedpackages/pfblockerngglobal/pfbdnsblreplystat"
-_PFB_DNSBL_STAT = "installedpackages/pfblockerngglobal/pfbdnsblstat"
+_AGLOBAL = "installedpackages/pfblockerngglobal"
+# Settings the Reports save writes: the visible chart count, the form-posted selects, the conditional selects the
+# form omits when DNSBL and reply logging are off, and the checkbox and limit the same save rewrites.
+_ALERTS_SAVE_KEYS = (
+    "pfbchartcnt",
+    "pfbpageload",
+    "pfbmaxtable",
+    "pfbextdns",
+    "pfbchartstyle",
+    "pfbblockstat",
+    "pfbpermitstat",
+    "pfbmatchstat",
+    "pfbdnsblstat",
+    "pfbreplytypes",
+    "pfbreplyrec",
+    "pfbdnsblreplystat",
+    "alertrefresh",
+    "dnsfilterlimitentries",
+)
+# Selects the form omits when DNSBL or reply logging is off, each with a non-default seed and the declared default a
+# save that omits it must store. pfbextdns is rendered only while DNSBL is on.
+_OMITTED_SELECTS = {
+    "pfbdnsblstat": ("dnsblchart", ""),
+    "pfbreplytypes": ("resolver", ""),
+    "pfbreplyrec": ("A", ""),
+    "pfbdnsblreplystat": ("replychart", ""),
+    "pfbextdns": ("8.8.4.4", "8.8.8.8"),
+}
 
 
 @pytest.mark.ui_e2e
@@ -2321,27 +2344,26 @@ def test_reports_save_with_reply_logging_off_defaults_the_omitted_reply_controls
 ) -> None:
     """issue #3543: with DNSBL off and DNS Reply Logging off, the Reports form omits the reply-log selects and
     the DNSBL stat select, so the save POST carries no key for them. A rendered-form save stores the visible
-    chart history count, stores the declared default for each omitted select, and logs no PHP diagnostic."""
-    paths = (
+    chart history count, stores the declared empty default for each omitted select (seeded non-empty first), and
+    logs no PHP diagnostic under the strict guard."""
+    paths = tuple(f"{_AGLOBAL}/{key}" for key in _ALERTS_SAVE_KEYS) + (
         CFG_PFB_DNSBL,
         _PFB_DNS_TOGGLE,
         _PFB_PY_REPLY,
-        _PFB_CHART_COUNT,
-        _DNS_REPLY_FILTER_LIMIT,
-        _PFB_REPLY_TYPES,
-        _PFB_REPLY_REC,
-        _PFB_DNSBL_REPLY_STAT,
-        _PFB_DNSBL_STAT,
     )
     priors = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     try:
         _set_scalar_or_absent(smoke_vm, CFG_PFB_DNSBL, "")
         _set_scalar_or_absent(smoke_vm, _PFB_DNS_TOGGLE, "on")
         _set_scalar_or_absent(smoke_vm, _PFB_PY_REPLY, "")
-        _set_scalar_or_absent(smoke_vm, _PFB_CHART_COUNT, "24")
-        assert helpers.config_get_state(smoke_vm, _PFB_CHART_COUNT) == (True, "24"), (
-            "before state: the seeded chart history count is not stored as 24"
-        )
+        _set_scalar_or_absent(smoke_vm, f"{_AGLOBAL}/pfbchartcnt", "24")
+        for key, (seeded, _declared) in _OMITTED_SELECTS.items():
+            _set_scalar_or_absent(smoke_vm, f"{_AGLOBAL}/{key}", seeded)
+        seeds = {"pfbchartcnt": "24", **{key: seeded for key, (seeded, _declared) in _OMITTED_SELECTS.items()}}
+        for key, expected in seeds.items():
+            assert helpers.config_get_state(smoke_vm, f"{_AGLOBAL}/{key}") == (True, expected), (
+                f"before state: {key} is not stored as {expected!r}"
+            )
         path = "/pfblockerng/pfblockerng_alerts.php"
         page = webui.get(path)
         result = evaluate_render(path, page.status_code, page.text, ("Alert Settings",))
@@ -2355,15 +2377,16 @@ def test_reports_save_with_reply_logging_off_defaults_the_omitted_reply_controls
             'name="pfbdnsblreplystat',
             'name="dnsfilterlimitentries',
             'name="pfbdnsblstat',
+            'name="pfbextdns',
         ):
             assert field not in page.text, f"{field} must be absent (DNSBL off, reply logging off)"
         webui.post(path, {"pfbchartcnt": "48"})
-        assert helpers.config_get_state(smoke_vm, _PFB_CHART_COUNT) == (True, "48"), (
+        assert helpers.config_get_state(smoke_vm, f"{_AGLOBAL}/pfbchartcnt") == (True, "48"), (
             "Save did not store the chart history count the form posted"
         )
-        for default_path in (_PFB_REPLY_TYPES, _PFB_REPLY_REC, _PFB_DNSBL_REPLY_STAT, _PFB_DNSBL_STAT):
-            assert helpers.config_get_state(smoke_vm, default_path)[1] == "", (
-                f"{default_path} must store its declared default (empty) when the form omits it"
+        for key, (_seeded, declared) in _OMITTED_SELECTS.items():
+            assert helpers.config_get_state(smoke_vm, f"{_AGLOBAL}/{key}") == (True, declared), (
+                f"{key} must store its declared default {declared!r} when the form omits it"
             )
     finally:
         for path, prior in priors.items():
