@@ -205,11 +205,16 @@ def test_qfeeds_is_offered_once_in_its_matrix_group(  # type: ignore[type-arg]
     assert list(homes) == [(section, group)], f"{header} must ship once, in {section}/{group} — got {list(homes)}"
     feed = homes[section, group]
     expected = {"feed": "Q-Feeds", "website": "https://qfeeds.com/", "url": url, "register": "https://tip.qfeeds.com/"}
-    assert expected.items() <= feed.items(), f"{header} fields differ: {feed}"
+    assert set(feed) == {*expected, "info", "header"}, (
+        f"{header} keys must be exactly the matrix row — got {sorted(feed)}"
+    )
+    assert expected.items() <= feed.items(), f"{header} must carry {expected} — got {feed}"
     for phrase in ("API token required", "free Community license", "Once a day"):
         assert phrase in feed.get("info", ""), f"{header} info must say {phrase!r} — got {feed.get('info')!r}"
     headers = [h.lower() for h in _all_headers(catalog)]
-    assert headers.count(header.lower()) == 1, f"{header} header must be unique across the catalog"
+    assert headers.count(header.lower()) == 1, (
+        f"{header} must appear once in the catalog — got {headers.count(header.lower())}"
+    )
 
 
 def test_qfeeds_ships_no_feed_url_beyond_its_matrix() -> None:
