@@ -2286,10 +2286,11 @@ def _cron_last_run(vm: helpers.SmokeVM) -> int | None:
     pass's own, so comparing it is comparing something Run Now is entitled to change.
 
     last_run is different: it moves only through pfb_schedule_state_record_outcome(), whose
-    feed-pass call sites are gated on scheduled_runtime_cron (pfblockerng_apply.inc) or
-    scheduled_runtime (pfblockerng_cron.inc), and which pfblockerng_tick() calls for its own
-    Extras. Only pfblockerng_sync_cron(FALSE, ...) sets those flags; the pfb_trigger pass a
-    manual Run Now dispatches never does. That is the ownership boundary this test holds.
+    feed-pass call sites are gated on the $pfb flag scheduled_runtime_cron (pfblockerng_apply.inc)
+    or on the local $scheduled_runtime of pfblockerng_sync_cron() (pfblockerng_cron.inc), and
+    which pfblockerng_tick() calls for its own Extras. Only pfblockerng_sync_cron(FALSE, ...) sets
+    those; the pfb_trigger pass a manual Run Now dispatches never does. That is the ownership
+    boundary this test holds.
     """
     result = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
     assert result.returncode == 0, (
@@ -2406,13 +2407,35 @@ def _run_now_to_completion(webui: WebUI, vm: helpers.SmokeVM, scope: str) -> Non
     helpers.wait_no_active_pfb_task(vm)
 
 
-def _assert_run_now_leaves_tick_run_alone(webui: WebUI, vm: helpers.SmokeVM, *, row_required: bool) -> None:
+def _assert_run_now_leaves_tick_run_alone(
+    webui: WebUI, vm: helpers.SmokeVM, *, row_required: bool, list_file: str | None = None
+) -> None:
     """Hold the ownership boundary across Run Now for scope=ip, then scope=both.
 
     ``row_required`` says the fixture schedules something, so the rebuilt ledger must carry the
-    tick's cron row. Without a row a pass that wrongly recorded the tick's run would leave
-    nothing to compare, and the assertions below could only prove that no row is invented.
+    tick's cron row; without one the assertions below could only prove that no row is invented.
+
+    A row alone does not make an advance visible: the outcome is recorded inside a pass's
+    fresh-download branch, which the pass skips when the list's published file already exists
+    (a previous act, or a previous run on a reused VM, leaves it there). ``list_file`` is that
+    file for the test's own list. It is removed and shown gone before each act and shown
+    republished after it, so both passes demonstrably fetched the list.
     """
+
+    def drop_list() -> None:
+        if list_file is not None:
+            vm.ssh("/bin/rm", "-f", list_file)
+            assert vm.ssh("/bin/test", "-f", list_file).returncode == 1, (
+                f"{list_file} survived its removal, so the next pass would reuse it instead of fetching"
+            )
+
+    def assert_fetched(scope: str) -> None:
+        if list_file is not None:
+            assert vm.ssh("/bin/test", "-f", list_file).returncode == 0, (
+                f"scope={scope} Run Now did not republish {list_file}: the pass never fetched the list, so "
+                "the branch that records a scheduled outcome was not exercised"
+            )
+
     _regenerate_schedule_cache(vm)
     before_ip = _cron_last_run(vm)
     assert before_ip is not None or not row_required, (
@@ -2420,12 +2443,16 @@ def _assert_run_now_leaves_tick_run_alone(webui: WebUI, vm: helpers.SmokeVM, *, 
     )
 
     # ACT 1: scope=ip — a partial run must not claim the tick's run.
+    drop_list()
     _run_now_to_completion(webui, vm, "ip")
+    assert_fetched("ip")
     _assert_tick_run_not_claimed(before_ip, _cron_last_run(vm), "scope=ip")
 
     # ACT 2: a full pass must leave the same ownership boundary intact.
     before_both = _cron_last_run(vm)
+    drop_list()
     _run_now_to_completion(webui, vm, "both")
+    assert_fetched("both")
     _assert_tick_run_not_claimed(before_both, _cron_last_run(vm), "scope=both")
 
 
@@ -2479,18 +2506,23 @@ def test_update_runnow_does_not_advance_a_scheduled_ticks_last_run(
       local file so the pass needs no egress.
 
     Given the rebuilt ledger carries the tick's cron row for that list,
+    And the list's published file is removed before each pass, so each pass fetches it again,
     When Run Now is submitted for scope=ip and scope=both and each pass has ended,
-    Then the cron row is still there and its ``last_run`` has not advanced.
+    Then the list was republished, the cron row is still there and its ``last_run`` has not
+      advanced.
 
     The unscheduled sibling above has no row to compare, so a pass that wrongly recorded the
-    tick's outcome would go unseen there. Here the same boundary has a row to move.
+    tick's outcome would go unseen there. Here the same boundary has a row to move, and a
+    pass that fetches, which is where that outcome is recorded.
     """
     vm = smoke_vm
     feed_path = helpers.write_local_feed(vm, "ui_runnow_sched.txt", "198.51.100.7\n")
+    list_file = f"{helpers.PFB_DBDIR}/deny/uirunnowsched_v4.txt"  # the list's published file
     helpers.inject(vm, helpers.IpCase(aliasname="uirunnowsched", feed_url=feed_path, header="uirunnowsched"))
     try:
-        _assert_run_now_leaves_tick_run_alone(webui, vm, row_required=True)
+        _assert_run_now_leaves_tick_run_alone(webui, vm, row_required=True, list_file=list_file)
     finally:
+        vm.ssh("/bin/rm", "-f", list_file)  # this test's own artifact; the config restore does not own it
         helpers.reset(vm)  # drop the derived tables; the isolation fixture restores the config
 
 
