@@ -2285,9 +2285,11 @@ def _cron_last_run(vm: helpers.SmokeVM) -> int | None:
     next_due to wall-clock time whenever the plan is due. That republication is the
     pass's own, so comparing it is comparing something Run Now is entitled to change.
 
-    last_run is different: it moves only through pfb_schedule_state_record_outcome(),
-    whose two call sites are both gated on scheduled_runtime_cron, which a manual Run
-    Now never sets. That is the ownership boundary this test exists to hold.
+    last_run is different: it moves only through pfb_schedule_state_record_outcome(), whose
+    feed-pass call sites are gated on scheduled_runtime_cron (pfblockerng_apply.inc) or
+    scheduled_runtime (pfblockerng_cron.inc), and which pfblockerng_tick() calls for its own
+    Extras. Only pfblockerng_sync_cron(FALSE, ...) sets those flags; the pfb_trigger pass a
+    manual Run Now dispatches never does. That is the ownership boundary this test holds.
     """
     result = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
     assert result.returncode == 0, (
@@ -2312,8 +2314,9 @@ def _assert_tick_run_not_claimed(before: int | None, after: int | None, scope: s
     On a box with no schedule configured the ledger carries no cron row at all, so the
     strongest available statement is that a manual pass does not invent one. Where a row
     does exist, last_run must not move. The off-appliance
-    UpdateRunNowScheduleOwnershipTest holds the stronger byte-identity version, and
-    DueLedgerTest pins both branches of the deferral write.
+    UpdateRunNowScheduleOwnershipTest holds the dispatch-level version (the ledger bytes are
+    identical across the Run Now dispatch, with no pass executed), and DueLedgerTest pins
+    both branches of the deferral write.
 
     Removal is treated as a failure only because the callers sample ``before`` from a cache
     rebuilt for the current config (_regenerate_schedule_cache) and read ``after`` once the
@@ -2371,10 +2374,11 @@ def _run_now_to_completion(webui: WebUI, vm: helpers.SmokeVM, scope: str) -> Non
 
     pfb_runnow() answers before the pass exists, so neither the POST response nor ps(1)
     says anything about completion: "no process" is true before the child spawns as well as
-    after it exits. The pass logs its end marker only after publishing the schedule cache, so
-    a marker beyond the pre-POST count means the ledger read next is this pass's own. The
-    child outlives its marker, and the next dispatch is skipped while it lives, hence the
-    final drain. Expiry of the watchdog is a stuck run, never a verdict.
+    after it exits. The pass logs its end marker after its publication attempt for the
+    schedule cache, so a marker beyond the pre-POST count means the ledger read next is the
+    one this pass left behind. The child outlives its marker, and the next dispatch is
+    skipped while it lives, hence the final drain. Expiry of the watchdog is a stuck run,
+    never a verdict.
     """
     helpers.wait_no_active_pfb_task(vm)  # a live task makes the page skip the dispatch
     ended_before = helpers.count_log_marker(vm, helpers.PFB_LOG, _PASS_END_MARKER)
@@ -2385,7 +2389,10 @@ def _run_now_to_completion(webui: WebUI, vm: helpers.SmokeVM, scope: str) -> Non
         timeout=SAVE_TIMEOUT,
     )
     assert not looks_like_login_page(resp.text), f"scope={scope} POST returned the login form (session lost)"
-    assert "Run Now skipped" not in resp.text, f"scope={scope} Run Now was skipped by the active-task guard"
+    assert f"Running: scope={scope}" in resp.text, (
+        f"scope={scope} Run Now did not dispatch: no 'Running:' status in the POST response "
+        "(skipped by the active-task guard, or the POST never reached the handler)"
+    )
     try:
         helpers.wait_until(
             lambda: helpers.count_log_marker(vm, helpers.PFB_LOG, _PASS_END_MARKER) > ended_before,
@@ -2399,23 +2406,47 @@ def _run_now_to_completion(webui: WebUI, vm: helpers.SmokeVM, scope: str) -> Non
     helpers.wait_no_active_pfb_task(vm)
 
 
+def _assert_run_now_leaves_tick_run_alone(webui: WebUI, vm: helpers.SmokeVM, *, row_required: bool) -> None:
+    """Hold the ownership boundary across Run Now for scope=ip, then scope=both.
+
+    ``row_required`` says the fixture schedules something, so the rebuilt ledger must carry the
+    tick's cron row. Without a row a pass that wrongly recorded the tick's run would leave
+    nothing to compare, and the assertions below could only prove that no row is invented.
+    """
+    _regenerate_schedule_cache(vm)
+    before_ip = _cron_last_run(vm)
+    assert before_ip is not None or not row_required, (
+        "the rebuilt ledger has no cron row for a scheduled baseline, so a last_run advance could not be seen"
+    )
+
+    # ACT 1: scope=ip — a partial run must not claim the tick's run.
+    _run_now_to_completion(webui, vm, "ip")
+    _assert_tick_run_not_claimed(before_ip, _cron_last_run(vm), "scope=ip")
+
+    # ACT 2: a full pass must leave the same ownership boundary intact.
+    before_both = _cron_last_run(vm)
+    _run_now_to_completion(webui, vm, "both")
+    _assert_tick_run_not_claimed(before_both, _cron_last_run(vm), "scope=both")
+
+
 def test_update_runnow_does_not_publish_schedule_cache(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Run Now never claims the scheduled tick's ``cron.last_run``.
+    """Run Now never claims the scheduled tick's ``cron.last_run``, nor invents a cron row.
 
     Scenario: scope-guard — partial scope=ip must NOT advance cron.last_run.
       Background: pfBlockerNG deployed and enabled; no feeds configured (fast run).
 
     Given pfBlockerNG is enabled and the derived schedule cache matches the current config,
     When Run Now is submitted for partial and full scopes and each pass has ended,
-    Then ``cron.last_run`` in ``pfb_due_ledger.json`` never advances.
+    Then no cron row has appeared claiming a run (and ``cron.last_run`` never advances).
 
     Every pass republishes the whole cache from config in its tail, so the file itself
     legitimately changes; only the tick's durable last_run belongs to the scheduled tick. A
     sibling's config restore leaves a ledger for the config it replaced, which is why the
-    baseline is rebuilt first and why the samples bracket a completed pass.
+    baseline is rebuilt first and why the samples bracket a completed pass. With nothing
+    scheduled there is no row to advance: the sibling below holds that branch.
     """
     vm = smoke_vm
     # Ensure pfBlockerNG is enabled; restore the original state at the end.
@@ -2424,17 +2455,7 @@ def test_update_runnow_does_not_publish_schedule_cache(
         helpers.set_package_enabled(vm, True)
 
     try:
-        _regenerate_schedule_cache(vm)
-        before_ip = _cron_last_run(vm)
-
-        # ACT 1: scope=ip — a partial run must not claim the tick's run.
-        _run_now_to_completion(webui, vm, "ip")
-        _assert_tick_run_not_claimed(before_ip, _cron_last_run(vm), "scope=ip")
-
-        # ACT 2: a full pass must leave the same ownership boundary intact.
-        before_both = _cron_last_run(vm)
-        _run_now_to_completion(webui, vm, "both")
-        _assert_tick_run_not_claimed(before_both, _cron_last_run(vm), "scope=both")
+        _assert_run_now_leaves_tick_run_alone(webui, vm, row_required=False)
 
         # Re-render the Update page and confirm the Schedule section is present.
         page_resp = webui.get(UPDATE_PAGE)
@@ -2445,6 +2466,32 @@ def test_update_runnow_does_not_publish_schedule_cache(
     finally:
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
+
+
+def test_update_runnow_does_not_advance_a_scheduled_ticks_last_run(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Run Now never claims the ``cron.last_run`` of a schedule that exists.
+
+    Scenario: scope-guard on a scheduled box — a manual pass must NOT record the tick's run.
+      Background: pfBlockerNG enabled with one IPv4 list on the EveryDay schedule, fed from a
+      local file so the pass needs no egress.
+
+    Given the rebuilt ledger carries the tick's cron row for that list,
+    When Run Now is submitted for scope=ip and scope=both and each pass has ended,
+    Then the cron row is still there and its ``last_run`` has not advanced.
+
+    The unscheduled sibling above has no row to compare, so a pass that wrongly recorded the
+    tick's outcome would go unseen there. Here the same boundary has a row to move.
+    """
+    vm = smoke_vm
+    feed_path = helpers.write_local_feed(vm, "ui_runnow_sched.txt", "198.51.100.7\n")
+    helpers.inject(vm, helpers.IpCase(aliasname="uirunnowsched", feed_url=feed_path, header="uirunnowsched"))
+    try:
+        _assert_run_now_leaves_tick_run_alone(webui, vm, row_required=True)
+    finally:
+        helpers.reset(vm)  # drop the derived tables; the isolation fixture restores the config
 
 
 def test_update_page_cron_status_reports_permanent_suppression_with_tick_installed(
