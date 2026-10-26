@@ -46,6 +46,39 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	}
 
 	/**
+	 * Scenario: the Upstream DNSBL row renders as a DNSBL group (issue #3602).
+	 * Given an Upstream row as pfBlockerNG_update_table() builds it from the dnsbl table,
+	 *   on a box where the pf table read failed,
+	 * When the widget renders it,
+	 * Then no PHP warning is raised, its packets link filters DNSBL (not IP) alerts,
+	 *   and its status icon is its own, not the pf error icon IP aliases get.
+	 */
+	public function testUpstreamRowRendersAsADnsblGroup(): void
+	{
+		$row = var_export(['count' => '5', 'img' => 'ROW_ICON', 'update' => '2026-10-26 10:00:00', 'packets' => '3', 'type' => 'DNSBL'], TRUE);
+		$after = <<<PHP
+\$pfb['pfctlerr'] = TRUE;
+error_reporting(E_ALL);
+\$diag = [];
+set_error_handler(static function (int \$severity, string \$message) use (&\$diag): bool {
+	\$diag[] = \$message;
+	return TRUE;
+});
+echo "\\n__ROW__";
+pfBlockerNG_get_table(['Upstream' => {$row}], 'js');
+echo "__DIAG__" . json_encode(\$diag) . "\\n";
+PHP;
+		$result = $this->runWidget([], [], FALSE, '', $after);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$row = substr($result['stdout'], (int) strpos($result['stdout'], '__ROW__') + 7);
+		$this->assertStringContainsString("\n__DIAG__[]\n", $row, 'rendering the Upstream row must raise no PHP diagnostic');
+		$cols = explode('||', (string) strtok($row, "\n"));
+		$this->assertCount(5, $cols, 'one js-mode row: alias||count||packets||update||img');
+		$this->assertStringContainsString('filterdnsbl=Upstream', $cols[2]);
+		$this->assertSame('ROW_ICON', $cols[4]);
+	}
+
+	/**
 	 * Scenario: the include shim is per-invocation scratch.
 	 * Given a render of the real widget,
 	 * When the subprocess exits,
@@ -79,7 +112,7 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	}
 
 	/** @return array{status:int,stdout:string,stderr:string,pid:int} */
-	private function runWidget(array $get, array $post, bool $plantStaleShim = FALSE, string $setup = ''): array
+	private function runWidget(array $get, array $post, bool $plantStaleShim = FALSE, string $setup = '', string $after = ''): array
 	{
 		$root = var_export(self::ROOT, TRUE);
 		$widget = var_export(self::WIDGET, TRUE);
@@ -97,6 +130,7 @@ error_reporting(E_ERROR | E_PARSE);
 require {$root} . '/tests/php/bootstrap.php';
 {$setup}
 require {$widget};
+{$after}
 echo 'after-include';
 PHP;
 		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
