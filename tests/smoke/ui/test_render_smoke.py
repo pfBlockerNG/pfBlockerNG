@@ -1359,6 +1359,61 @@ def test_widget_table_carries_combined_sort_setting(webui: WebUI, php_error_log_
     )
 
 
+@contextmanager
+def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int) -> Iterator[None]:
+    """Enable DNSBL and seed one SQLite 'dnsbl' stat row (the widget's own read path,
+    ``SELECT * FROM dnsbl``); remove the row and restore enable_cb/pfb_dnsbl afterwards."""
+    helpers.ensure_dnsbl_vip(vm)
+    orig_enable = helpers.config_get(vm, _CFG_PFB_ENABLE)
+    orig_dnsbl = helpers.config_get(vm, CFG_PFB_DNSBL)
+    helpers.php_eval(
+        vm,
+        f"config_set_path('{_CFG_PFB_ENABLE}', 'on');\n"
+        f"config_set_path('{CFG_PFB_DNSBL}', 'on');\n"
+        "write_config('pfBlockerNG smoke: enable DNSBL for a widget stat render check');\n"
+        "echo 'OK';",
+    )
+
+    seed_snippet = (
+        f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
+        '$db->exec("CREATE TABLE IF NOT EXISTS dnsbl '
+        '(groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);");'
+        "$stmt = $db->prepare('INSERT OR REPLACE INTO dnsbl (groupname, timestamp, entries, counter) "
+        "VALUES (:g, :t, :e, :c)');"
+        f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
+        f"$stmt->bindValue(':t', '{timestamp}', SQLITE3_TEXT);"
+        "$stmt->bindValue(':e', 42, SQLITE3_INTEGER);"
+        f"$stmt->bindValue(':c', {counter}, SQLITE3_INTEGER);"
+        "$stmt->execute();"
+        "$db->close();"
+        "echo 'OK';"
+    )
+    seed = helpers.php_eval(vm, seed_snippet)
+    assert "OK" in seed.stdout, (
+        f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
+    )
+
+    try:
+        yield
+    finally:
+        helpers.php_eval(
+            vm,
+            f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
+            "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
+            f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
+            "$stmt->execute();"
+            "$db->close();"
+            "echo 'OK';",
+        )
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{_CFG_PFB_ENABLE}', '{orig_enable}');\n"
+            f"config_set_path('{CFG_PFB_DNSBL}', '{orig_dnsbl}');\n"
+            "write_config('pfBlockerNG smoke: restore enable_cb/pfb_dnsbl after a widget stat render check');\n"
+            "echo 'OK';",
+        )
+
+
 # Dual-marked ui_e2e (issue #810, same rationale as test_alerts_unified_log_colour_fields_render):
 # this test mutates config.xml (enable_cb + pfb_dnsbl) as setup.
 @pytest.mark.ui_e2e
@@ -1369,66 +1424,38 @@ def test_widget_dnsbl_stat_renders_year_bearing_iso_timestamp(
     ISO timestamp (ADR-60 P10 -- dnsbl_stats_update() stores 'Y-m-d H:i:s', not the
     old year-less 'M j H:i:s' that pfb_iso_timestamp() had to guess a year for).
 
-    Seeds the SQLite 'dnsbl' row directly (the widget's own read path, ``SELECT * FROM
-    dnsbl``) with a value in the NEW year-bearing shape, then confirms the rendered
-    group row shows that exact value -- proving pfb_iso_timestamp()'s round-trip-unchanged
-    branch is what actually reaches the page for a fresh (post-fix) stored value.
+    Seeds the SQLite 'dnsbl' row with a value in the NEW year-bearing shape, then confirms
+    the rendered group row shows that exact value -- proving pfb_iso_timestamp()'s
+    round-trip-unchanged branch is what actually reaches the page for a fresh (post-fix)
+    stored value.
     """
-    helpers.ensure_dnsbl_vip(smoke_vm)
-    orig_enable = helpers.config_get(smoke_vm, _CFG_PFB_ENABLE)
-    orig_dnsbl = helpers.config_get(smoke_vm, CFG_PFB_DNSBL)
-    helpers.php_eval(
-        smoke_vm,
-        f"config_set_path('{_CFG_PFB_ENABLE}', 'on');\n"
-        f"config_set_path('{CFG_PFB_DNSBL}', 'on');\n"
-        "write_config('pfBlockerNG smoke: enable DNSBL for the widget stat render check');\n"
-        "echo 'OK';",
-    )
-
     group = f"PFB_SMOKE_WIDGETSTAT_{uuid.uuid4().hex[:8]}"
-    seed_snippet = (
-        f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
-        '$db->exec("CREATE TABLE IF NOT EXISTS dnsbl '
-        '(groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);");'
-        "$stmt = $db->prepare('INSERT OR REPLACE INTO dnsbl (groupname, timestamp, entries, counter) "
-        "VALUES (:g, :t, :e, :c)');"
-        f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
-        "$stmt->bindValue(':t', '2025-01-01 09:00:45', SQLITE3_TEXT);"
-        "$stmt->bindValue(':e', 42, SQLITE3_INTEGER);"
-        "$stmt->bindValue(':c', 0, SQLITE3_INTEGER);"
-        "$stmt->execute();"
-        "$db->close();"
-        "echo 'OK';"
-    )
-    seed = helpers.php_eval(smoke_vm, seed_snippet)
-    assert "OK" in seed.stdout, (
-        f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
-    )
-
-    try:
+    with _seeded_dnsbl_stat_row(smoke_vm, group, "2025-01-01 09:00:45", 0):
         resp = webui.get(_WIDGET_PAGE)
         result = evaluate_render(_WIDGET_PAGE, resp.status_code, resp.text, ('id="pfblockerngack"',))
         assert result.ok, f"Widget render oracle failed: {result.detail}"
         assert "2025-01-01 09:00:45" in resp.text, (
             f"widget must render the year-bearing ISO stat for group {group!r} unchanged; not found in body"
         )
-    finally:
-        helpers.php_eval(
-            smoke_vm,
-            f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
-            "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
-            f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
-            "$stmt->execute();"
-            "$db->close();"
-            "echo 'OK';",
+
+
+# Dual-marked ui_e2e for the same reason as the test above.
+@pytest.mark.ui_e2e
+def test_widget_upstream_row_renders_as_a_dnsbl_group(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The Upstream DNSBL row (domains blocked by the upstream resolver) renders as a DNSBL
+    group, not an IP alias (issue #3602): its packet count links to the Alerts tab filtered
+    by DNSBL group, never by IP alias.
+    """
+    with _seeded_dnsbl_stat_row(smoke_vm, "Upstream", "2026-10-26 10:00:00", 3):
+        resp = webui.get(_WIDGET_PAGE)
+        result = evaluate_render(_WIDGET_PAGE, resp.status_code, resp.text, ('id="pfblockerngack"',))
+        assert result.ok, f"Widget render oracle failed: {result.detail}"
+        assert "pfblockerng_alerts.php?filterdnsbl=Upstream" in resp.text, (
+            "the Upstream row's packet count must link to the DNSBL-filtered Alerts tab"
         )
-        helpers.php_eval(
-            smoke_vm,
-            f"config_set_path('{_CFG_PFB_ENABLE}', '{orig_enable}');\n"
-            f"config_set_path('{CFG_PFB_DNSBL}', '{orig_dnsbl}');\n"
-            "write_config('pfBlockerNG smoke: restore enable_cb/pfb_dnsbl after widget stat render check');\n"
-            "echo 'OK';",
-        )
+        assert "filterip=Upstream" not in resp.text, "the Upstream row must not link to IP-filtered alerts"
 
 
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
