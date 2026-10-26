@@ -1018,7 +1018,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 
 	<!-- Print main table header -->
 	<div class="table-responsive" style="max-height: <?=$pfb['maxheight'];?>px; overflow: auto;">
-		<table id="pfb-tbl" class="table table-striped table-hover table-condensed sortable-theme-bootstrap" data-sortable>
+		<table id="pfb-tbl" class="table table-striped table-hover table-condensed sortable-theme-bootstrap" data-sortable data-pfb-sortmix="<?=htmlspecialchars($pfb['sortmix'])?>">
 			<thead>
 				<tr>
 					<th id="pfB_col1" ><?=gettext("Alias");?></th>
