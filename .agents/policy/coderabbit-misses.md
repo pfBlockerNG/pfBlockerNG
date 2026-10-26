@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `1fe857b0e`  feeds: add Q-Feeds malware IP and domain feeds to the catalog  (#3611) — two quota notices; four legs, two rounds; Codex clean
 - `e2da38f2e`  tests: rebuild the schedule cache and await the pass in the Run Now ownership test  (#3596) — one quota notice, owner waived the retry; Codex timed out; four legs, three rounds
 - `70b820fa7`  dns: roll back a failed pfB-DNS start after reboot  (#3575) — finished review of `37a1df9ba` only; two quota notices later; Codex resolved
 - `9bcbd074c`  pfb-dns: offer and keep the Resolver's listener interface tokens  (#3570) — two quota notices; condensed review, Codex clean
