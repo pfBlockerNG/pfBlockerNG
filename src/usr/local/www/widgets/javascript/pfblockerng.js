@@ -39,16 +39,16 @@ function pfBlockerNG_escapeHtml(s) {
 
 /**
  * Build the table-row cells for one widget alias/group from the AJAX columns.
- * The data columns (count, updated) are HTML-escaped here; the server-rendered
+ * The data columns (count, updated, group) are HTML-escaped here; the server-rendered
  * markup columns (alias cell, packets pivot link, status icon) pass through
  * verbatim. Mirrors the per-column escaping contract in pfblockerng.widget.php.
  *
- * @param {string[]} cols - [alias, count, packets, updated, img].
+ * @param {string[]} cols - [alias, count, packets, updated, img, group ('ip'|'dnsbl')].
  * @returns {string} a complete <tr>...</tr> table row; the caller concatenates
  *   the rows with join('') (no separator), so the markup stays well-formed.
  */
 function pfBlockerNG_buildWidgetRow(cols) {
-	var line = '<tr><td><small>' + cols[0] + '</small></td>';
+	var line = '<tr data-pfb-group="' + pfBlockerNG_escapeHtml(cols[5]) + '"><td><small>' + cols[0] + '</small></td>';
 	line += '<td><small>' + pfBlockerNG_escapeHtml(cols[1]) + '</small></td>';
 	line += '<td><small>' + cols[2] + '</small></td>';
 	line += '<td><small>' + pfBlockerNG_escapeHtml(cols[3]) + '</small></td>';
@@ -58,8 +58,8 @@ function pfBlockerNG_buildWidgetRow(cols) {
 
 /**
  * 'Sortable.sorted' handler: sortable.js re-sorts every #pfb-tbl row on a header click, so with
- * Combined sort (IP/DNSBL) off, move the DNSBL rows (DNSBL_* groups and Upstream) back behind
- * the IP alias rows, keeping the clicked order inside each group (issue #3600).
+ * Combined sort (IP/DNSBL) off, move the rows the server tagged dnsbl back behind the IP rows,
+ * keeping the clicked order inside each group (issues #3600, #3602).
  *
  * @param {Event} event - the bubbling 'Sortable.sorted' event; event.target is the table.
  */
@@ -70,7 +70,7 @@ function pfBlockerNG_onWidgetSorted(event) {
 	}
 	var tbody = table.tBodies[0];
 	Array.prototype.filter.call(tbody.rows, function(row) {
-		return /^(DNSBL_|Upstream$)/.test(row.cells[0].textContent);
+		return row.getAttribute('data-pfb-group') === 'dnsbl';
 	}).forEach(function(row) {
 		tbody.appendChild(row);
 	});

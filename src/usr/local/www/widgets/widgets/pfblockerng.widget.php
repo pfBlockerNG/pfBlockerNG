@@ -918,8 +918,9 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 					. '">' . $alias_html . '</span>';
 			}
 
-			// DNSBL group rows are DNSBL_* plus the Upstream pseudo-group (issue #3602).
-			if (strpos($pfb_alias, 'DNSBL_') !== FALSE || $pfb_alias === 'Upstream') {
+			// pfBlockerNG_update_table() types every dnsbl-table row 'DNSBL'; IP rows never carry it.
+			$group = (($values['type'] ?? '') === 'DNSBL') ? 'dnsbl' : 'ip';
+			if ($group === 'dnsbl') {
 				// Packet column pivot to Alerts Tab
 				if ($values['packets'] > 0) {
 					$packets  = "<a href=\"/pfblockerng/pfblockerng_alerts.php?filterdnsbl={$pfb_alias}\" ";
@@ -957,10 +958,10 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 			}
 
 			if ($mode == 'js') {
-				print "{$alias_html}||{$values['count']}||{$packets}||{$values['update']}||{$values['img']}\n";
+				print "{$alias_html}||{$values['count']}||{$packets}||{$values['update']}||{$values['img']}||{$group}\n";
 			}
 			else {
-				print ("<tr>
+				print ("<tr data-pfb-group=\"{$group}\">
 						<td><small>{$alias_html}</small></td>
 						<td><small>{$values['count']}</small></td>
 						<td><small>{$packets}</small></td>
