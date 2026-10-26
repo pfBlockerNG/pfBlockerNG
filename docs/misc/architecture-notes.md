@@ -939,8 +939,8 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   resolved). A probe that binds restarts the whole pair once, from `pfb_dns_proxy_ensure_running()` (while READY, through `$why`) and from
   every cron tick before its confirmation, which then judges the new start through `$since`, not the one it replaced. Any other refusal
   (such as address already in use), an address that still cannot be bound, a log with no complete start and any package operation restart
-  nothing; the tick takes no other restart (the rc script, the pending marker and the binaries stay with the update pass). Its own
-  restart runs the rc script on disk, so it clears a pending-restart marker as every whole-pair restart does.
+  nothing; the tick takes no other restart (the rc script, the pending marker and the binaries stay with the update pass). It leaves a
+  pending-restart marker in place, since one written during its restart must not be lost: the next update pass restarts once more for it.
 - **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
   in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first
   one's argv on a new socketpair and waits up to 30 s for its READY, then makes it the active one, replies `ok`, lets the old one's

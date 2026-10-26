@@ -481,9 +481,10 @@ final class DnsProxyKeepRunningTest extends TestCase
 
 	public function testAZonedRefusalIsNeverRecordedSoItIsNeverProbedNorRestartedFor(): void
 	{
-		// Given a ready proxy whose latest start refused a zoned link-local address as not assignable
+		// Given a ready proxy whose latest start refused zoned link-local addresses (a named and a numeric zone) as not assignable
 		$this->krApply(['gatewayLog' => [
-			"cannot listen on [fe80::1%lo0]:53: bind: can't assign requested address", 'ready upstream 127.0.0.1:5353 pid 4242',
+			"cannot listen on [fe80::1%lo0]:53: bind: can't assign requested address",
+			"cannot listen on [fe80::1%1]:53: bind: can't assign requested address", 'ready upstream 127.0.0.1:5353 pid 4242',
 		]]);
 
 		// When the log is read, the update pass runs and then the cron tick
@@ -517,7 +518,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->assertSame($this->pair(), $this->krProxyCalls());
 	}
 
-	public function testATickRestartConsumesAPendingRestartSoTheNextPassDoesNotRestartAgain(): void
+	public function testATickRestartLeavesAPendingRestartToTheUpdatePass(): void
 	{
 		// Given a restart pending for the rc script, and a ready proxy whose latest start refused 127.0.0.1 (which this box binds)
 		$this->assertTrue(self::binds('127.0.0.1'), 'before: this host binds 127.0.0.1');
@@ -534,9 +535,11 @@ final class DnsProxyKeepRunningTest extends TestCase
 		pfb_dns_proxy_service($this->krProxyDir);
 		$this->krEnsure();
 
-		// Then the tick's restart ran the rc script on disk, so the marker is gone and the pass restarts nothing more
-		$this->assertSame([$this->pair(), NULL], $afterTick);
-		$this->assertSame($this->pair(), $this->krProxyCalls());
+		// Then the tick restarted without consuming the marker (a marker written during its restart must not be lost), and the
+		// pass owns it: it restarts once more and clears it
+		$this->assertSame([$this->pair(), 'the package changed its rc script'], $afterTick);
+		$this->assertSame([...$this->pair(), ...$this->pair()], $this->krProxyCalls());
+		$this->assertNull($this->krMarker());
 	}
 
 	public function testADueWholePairRestartNeverAlsoSendsTheDeciderRestart(): void

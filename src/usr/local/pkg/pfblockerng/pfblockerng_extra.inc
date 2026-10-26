@@ -6877,7 +6877,6 @@ function pfblockerng_tick(
 			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
 			$since = pfb_dns_proxy_log_size();
 			restart_service('pfb_dns_proxy');
-			unlink_if_exists($pfb['dns_proxy_restart_pending']);
 		}
 		pfb_dns_proxy_confirm_ready($since);
 	}
