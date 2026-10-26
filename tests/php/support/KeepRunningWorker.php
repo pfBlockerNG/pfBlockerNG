@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Child process for DnsProxyKeepRunningPkgTest: runs one pass of the shipped .inc over the PHPUnit doubles, as a descendant of a
  * process whose command line reads `pkg upgrade` (the test starts it that way), so that pfb_pkg_operation() reports what it reports
  * under a real package operation. Nothing is stubbed: the classification reads the live process table.
- * argv: scenario JSON (the KeepRunningScenario::krApply() keys, plus `op`: ensure | reload), result file.
+ * argv: scenario JSON (the KeepRunningScenario::krApply() keys, plus `op`: ensure | reload | tick), result file.
  */
 
 $scenario = json_decode((string) $argv[1], TRUE, 8, JSON_THROW_ON_ERROR);
@@ -29,6 +29,8 @@ final class KeepRunningWorker
 		$returned = NULL;
 		if ($scenario['op'] === 'ensure') {
 			$returned = $this->krEnsure();
+		} elseif ($scenario['op'] === 'tick') {
+			$this->krTick();
 		} else {
 			pfb_reload_unbound('enabled', FALSE, TRUE);
 		}

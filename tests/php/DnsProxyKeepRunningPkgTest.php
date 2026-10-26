@@ -23,11 +23,14 @@ use PHPUnit\Framework\TestCase;
  *   - a proxy that is down is still started (and nothing stays pending);
  *   - a pending restart, a gateway or a decider that differs are left for the next pass: no restart, no control-socket request,
  *     the marker kept;
+ *   - a start that could not assign an address the box can bind now (issue #3598) is not restarted by the update pass or the cron tick
+ *     either (DnsProxyRefusedAddressRestartTest has the restart outside one);
  *   - with pfB-DNS off nothing is deferred and no marker is written, whatever the operation.
  */
 #[CoversFunction('pfb_dns_proxy_restart_deferred')]
 #[CoversFunction('pfb_dns_proxy_defer_restart')]
 #[CoversFunction('pfb_dns_proxy_ensure_running')]
+#[CoversFunction('pfblockerng_tick')]
 #[CoversFunction('pfb_reload_unbound')]
 final class DnsProxyKeepRunningPkgTest extends TestCase
 {
@@ -186,6 +189,35 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertSame([], $result['calls']);
 		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
 		$this->assertSame('the package changed its rc script', $result['marker']);
+	}
+
+	/** The gateway's log after a start that could not assign 127.0.0.1 (this host binds it now), the other two addresses listening. */
+	private const REFUSED_START = [
+		'listening udp+tcp 192.0.2.1:53',
+		"cannot listen on 127.0.0.1:53: bind: can't assign requested address",
+		'listening udp+tcp [::1]:53',
+		'ready upstream 127.0.0.1:5353 pid 4242',
+	];
+
+	public function testAnAddressTheStartCouldNotAssignIsNotRestartedByTheUpdatePassUnderAPackageOperation(): void
+	{
+		// Given a quiet box whose latest start refused an address that can be bound now, run under a package upgrade
+		$result = $this->runUnderPkg(['op' => 'ensure', 'gatewayLog' => self::REFUSED_START]);
+
+		// Then the proxy is left running: no restart is made or announced
+		$this->assertTrue($result['returned']);
+		$this->assertSame([], $result['calls']);
+		$this->assertStringNotContainsString('Restarting the DNS proxy', $result['log']);
+	}
+
+	public function testAnAddressTheStartCouldNotAssignIsNotRestartedByTheCronTickUnderAPackageOperation(): void
+	{
+		// Given a serving proxy whose latest start refused an address that can be bound now, and the cron tick run under a package upgrade
+		$result = $this->runUnderPkg(['op' => 'tick', 'serving' => TRUE, 'gatewayLog' => self::REFUSED_START]);
+
+		// Then the proxy is left running: no restart is made or announced
+		$this->assertSame([], $result['calls']);
+		$this->assertStringNotContainsString('Restarting the DNS proxy', $result['log']);
 	}
 
 	public static function passes(): array

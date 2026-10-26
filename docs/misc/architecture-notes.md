@@ -673,7 +673,8 @@ startup budget `PFB_UNBOUND_START_WAIT`, no setting of its own, never under a lo
 restart path and the installer) and `pfb_dns_proxy_ensure_running()` (the apply; it also checks a proxy that is alive with an
 unchanged script, so a crash-looping listener is noticed). The boot check (`dns_check`, which the boot hook backgrounds) confirms a
 stored snapshot's start through the same `pfb_dns_proxy_confirm_ready()`, and so does the cron tick, but only while a gateway pidfile
-is live: with none live the tick waits for nothing and rolls nothing back. A proxy that is not ready within the budget has FAILED its
+is live: with none live the tick waits for nothing and rolls nothing back. It may first restart the pair once for an address the gateway's
+start could not assign and the box can bind now (issue #3598, below). A proxy that is not ready within the budget has FAILED its
 activation, and `pfb_dns_proxy_roll_back()` runs: under the config lock the requested toggle goes Off (so the next apply
 cannot enable it again, and there is no retry or suppression state of its own), then `pfb_unbound_python($mode, FALSE)` stops
 the proxy and gives the Resolver exactly its saved settings back and, iff DNSBL is on, puts the DNSBL module back into
@@ -931,6 +932,15 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   `pfb_dns_proxy_decider_changed()` fingerprints the same seven paths (`$pfb['dns_proxy_decider_src']`), and a different or absent record
   restarts the decider alone. An unreadable installed file is no signal. Unbound's own module-drift check (`$pfb['unbound_py_module_applied']`) is
   asked only while Unbound hosts the module, so code-only drift in proxy mode does not restart the pair a second time.
+- **An address the start could not assign (issue #3598).** The gateway logs `cannot listen on <host:port>: <reason>` for an address it
+  could not bind, and serves without it until something restarts it. `pfb_dns_proxy_refusal_cleared()` reads the latest start's refusals
+  (`pfb_dns_proxy_listeners()`); one whose reason contains `assign requested address` (EADDRNOTAVAIL: an interface address that was not
+  there yet) is probed with an unprivileged UDP bind on port 0, closed at once, and only for a host `inet_pton()` accepts (a name would be
+  resolved). A probe that binds restarts the whole pair once, from `pfb_dns_proxy_ensure_running()` (while READY, through `$why`) and from
+  every cron tick before its confirmation, which then judges the new start through `$since`, not the one it replaced. Any other refusal
+  (such as address already in use), an address that still cannot be bound, a log with no complete start and any package operation restart
+  nothing; the tick takes no other restart (the rc script, the pending marker and the binaries stay with the update pass). It leaves a
+  pending-restart marker in place, since one written during its restart must not be lost: the next update pass restarts once more for it.
 - **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
   in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first
   one's argv on a new socketpair and waits up to 30 s for its READY, then makes it the active one, replies `ok`, lets the old one's
@@ -944,8 +954,9 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   plus 1.02 KiB per entry (235 MiB at 189,643 entries).
 
 Pinned by `DnsProxyUpgradeStopTest` (the stop's walk, run in a sandbox), `DnsProxyKeepRunningTest`, `DnsProxyKeepRunningPkgTest` and
-`DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `tests/dns_proxy/test_decider_applied.py` (the code
-record), the gateway's Go tests (the binary record and the control-socket restart) and `tests/smoke/test_smoke_dns_proxy.py` (live).
+`DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `DnsProxyRefusedAddressRestartTest` (the refused-address
+restart), `tests/dns_proxy/test_decider_applied.py` (the code record), the gateway's Go tests (the binary record and the control-socket
+restart) and `tests/smoke/test_smoke_dns_proxy.py` (live).
 
 ### ADR-08 — IDN homoglyph protection
 

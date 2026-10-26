@@ -21,6 +21,8 @@ trait KeepRunningScenario
 	private string $krProxyDir = '';
 	/** @var list<array{string,string}> the service calls the proxy got, in order: [function, service] */
 	private array $krCalls = [];
+	/** @var ?list<string> the lines the gateway's log gains when the service starts or restarts the proxy (krApply() `restartLog`), NULL = none */
+	private ?array $krRestartLog = NULL;
 
 	private function krSeed(string $dir): void
 	{
@@ -60,6 +62,7 @@ trait KeepRunningScenario
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
 		$this->krCalls = [];
+		$this->krRestartLog = NULL;
 		$this->krPs(self::krPsTable([self::krPsSupervisor(), self::krPsGateway(), self::krPsDecider()]));
 		$this->clearProxyFiles();
 		@unlink(PFB_DNS_PROXY_RCFILE);
@@ -70,6 +73,10 @@ trait KeepRunningScenario
 				$this->proxyServes();
 				$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 				$this->seedRunningGateway();
+				// The new start's record, as the supervisor relays it once the gateway has bound its addresses
+				if ($this->krRestartLog !== NULL) {
+					file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", $this->krRestartLog) . "\n", FILE_APPEND);
+				}
 			}
 		};
 	}
@@ -154,11 +161,13 @@ trait KeepRunningScenario
 	 *   ctl       ?string         the control socket's path, NULL = nobody listens
 	 *   dot       bool            a DoT listener on lan (192.0.2.1:853) is configured
 	 *   gatewayLog ?list<string>  the gateway's log lines, NULL = no log is written
+	 *   restartLog ?list<string>  the lines the gateway's log gains when the proxy is started or restarted (the new start's record), NULL = none
 	 */
 	private function krApply(array $s): void
 	{
 		// serving: the Unbound backend answers too, so a full confirmation can pass; a worker passes FALSE, and its package rows prove a deferred pass needs no confirmation
-		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE, 'dot' => FALSE, 'gatewayLog' => NULL];
+		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE, 'dot' => FALSE, 'gatewayLog' => NULL, 'restartLog' => NULL];
+		$this->krRestartLog = $s['restartLog'];
 		// The rc script bakes the control socket's path in: it is set before the script is written
 		if ($s['ctl'] !== NULL) {
 			$GLOBALS['pfb']['dns_proxy_ctl'] = $s['ctl'];
@@ -255,6 +264,27 @@ trait KeepRunningScenario
 	private function krEnsure(): bool
 	{
 		return pfb_dns_proxy_ensure_running($this->krProxyDir);
+	}
+
+	/** The cron tick with every scheduled job behind a seam, so only its pfB-DNS check acts; its ledger and state stay under krDir. */
+	private function krTick(array $ps = []): void
+	{
+		$GLOBALS['pfb']['schedule_state_dir'] = $this->krDir;
+		$GLOBALS['pfb']['runlog'] = "{$this->krDir}/run.log";
+		$GLOBALS['pfb']['extraslog'] = "{$this->krDir}/extras.log";
+		$GLOBALS['pfb']['pending_marker'] = "{$this->krDir}/pfb_pending_changes";
+		// The tick ends with pfb_log_mgmt(), which reads these back through pfb_global(): a stored value each, so that it has nothing to warn about
+		config_set_path('installedpackages/pfblockerng/config/0/skipfeed', '0');
+		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport', '8081');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport_ssl', '8443');
+		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
+		pfblockerng_tick(
+			$ps, static function (): void {}, NULL, 5.0, static function (): void {}, NULL, 5.0,
+			static fn (string $_job, string $_argument = ''): bool => TRUE,
+			static function (): void {},
+			static fn (): bool => TRUE
+		);
 	}
 
 	private function krMarker(): ?string
