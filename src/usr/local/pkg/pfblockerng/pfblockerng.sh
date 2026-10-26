@@ -862,9 +862,7 @@ pfb_aggregate() {
 }
 
 
-# issue #3606: grepcidr 2.0 judges a row by its address alone (its /prefix is ignored) and
-# scans only the families its patterns name, so each family+prefix group of rows is checked
-# against just the same-family patterns at least as wide: only a fully covered row is pruned.
+# issue #3606: grepcidr 2.0 ignores a row's /prefix, so only a fully covering row may prune it
 # $1 patternfile  $2 inputfile  $3 outputfile; returns 0, else >=2 and no $3
 pfb_cidr_dedup() {
 	cdd_dir="${3}.cidr"

@@ -1233,11 +1233,12 @@ earlier row of the same family, at least as wide (prefix <= the row's own), cont
 `grepcidr` 2.0 judges an input row by its address alone and scans only the address families
 its patterns name, so `pfb_cidr_dedup()` groups the snapshot's rows by family and prefix and
 runs `grepcidr -vf` once per group against just the qualifying patterns (the cumulative file
-itself when every same-family pattern qualifies); a group with no qualifying pattern is kept
-as is. A partially covered row therefore stays in the lower-priority feed: the overlap is
-retained, no coverage is lost. Row order, repeats and an unterminated last line come out
-exactly as one `grepcidr -vf` call would leave them; a snapshot with no row wider than a host
-skips the grouping and gets that one call unchanged.
+itself when every same-family pattern qualifies); a group whose family has patterns but none
+wide enough is kept as is, and rows of a family no pattern names are dropped as before. A
+partially covered row therefore stays in the lower-priority feed: the overlap is retained, no
+coverage is lost. Row order, repeats and an unterminated last line come out exactly as one
+`grepcidr -vf` call would leave them; a snapshot with no row wider than a host skips the
+grouping and gets that one call unchanged.
 
 **Ownership = config priority order.** A row's owning alias is decided by memberlist order
 (`pfb_ip_recompute_family_headers()`, following `$pfb['existing']['deny']`'s config order) —
