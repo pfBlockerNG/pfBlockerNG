@@ -246,7 +246,14 @@ def test_without_partial_overlap_the_output_is_byte_identical_to_grepcidr(
     assert leftovers == ["out", "patterns", "rows", "scratch"], f"files left behind: {leftovers}"
 
 
-def test_a_grepcidr_failure_keeps_the_list_whole_and_logs_it(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "later",
+    [
+        pytest.param(["203.0.113.0/24", "192.0.2.9"], id="cidr-and-host"),
+        pytest.param(["203.0.113.9", "192.0.2.9"], id="hosts-only"),
+    ],
+)
+def test_a_grepcidr_failure_keeps_the_list_whole_and_logs_it(tmp_path: Path, later: list[str]) -> None:
     """grepcidr exiting 2 is an error, not a verdict: the list keeps every row rather than
     being emptied down to the placeholder, and the error log names the list."""
     failing = tmp_path / "grepcidr"
@@ -254,10 +261,11 @@ def test_a_grepcidr_failure_keeps_the_list_whole_and_logs_it(tmp_path: Path) -> 
     failing.chmod(0o755)
     earlier = ["192.0.2.0/24"]
 
-    outcome = _duplicate(tmp_path, str(failing), earlier, ["203.0.113.0/24", "192.0.2.9"])
+    outcome = _duplicate(tmp_path, str(failing), earlier, later)
 
-    assert outcome.deny == "192.0.2.9\n203.0.113.0/24\n", outcome.stderr
-    assert outcome.masterfile == "Earlier_v4 192.0.2.0/24\nLater_v4 192.0.2.9\nLater_v4 203.0.113.0/24\n"
+    kept = sorted(later)
+    assert outcome.deny == "".join(f"{row}\n" for row in kept), outcome.stderr
+    assert outcome.masterfile == "Earlier_v4 192.0.2.0/24\n" + "".join(f"Later_v4 {row}\n" for row in kept)
     assert "Later_v4" in outcome.errorlog, f"error log does not name the list: {outcome.errorlog!r}"
     assert outcome.scratch_left == [], f"scratch files left behind: {outcome.scratch_left}"
 
@@ -296,12 +304,20 @@ def test_a_grepcidr_failure_midway_keeps_the_list_whole(tmp_path: Path, grepcidr
         pytest.param(b"\r\n", id="cr-only-line"),
     ],
 )
-def test_a_pattern_file_without_patterns_keeps_every_row(tmp_path: Path, grepcidr: str, patterns: bytes) -> None:
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param(b"10.0.0.0/8\n192.0.2.9\n2001:db8::/32\n", id="cidr-and-host-rows"),
+        pytest.param(b"192.0.2.9\n2001:db8::1\n", id="host-rows-only"),
+    ],
+)
+def test_a_pattern_file_without_patterns_keeps_every_row(
+    tmp_path: Path, grepcidr: str, patterns: bytes, rows: bytes
+) -> None:
     """grepcidr given no usable pattern prints nothing at all (issue #1279), so with nothing to
     judge against, every row, CIDR or host, either family, comes back untouched."""
     work = tmp_path / "box"
     work.mkdir()
-    rows = b"10.0.0.0/8\n192.0.2.9\n2001:db8::/32\n"
     (work / "patterns").write_bytes(patterns)
     (work / "rows").write_bytes(rows)
 

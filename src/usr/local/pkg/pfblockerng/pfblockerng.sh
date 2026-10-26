@@ -321,7 +321,16 @@ cidr_aggregate() {
 pfb_cidr_dedup() {
 	cdd_dir="${3}.cidr"
 	rm -rf "${cdd_dir}"
-	if ! mkdir -p "${cdd_dir}" || ! LC_ALL=C awk -v d="${cdd_dir}" '
+	# no row wider than a host: the plain call already prunes only full containment
+	if LC_ALL=C awk 'match($0, /\/[0-9]+/) && substr($0, RSTART + 1, RLENGTH - 1) + 0 < (index($0, ":") ? 128 : 32) { exit 1 }' "$2" \
+		&& LC_ALL=C grep -q '[^[:space:]]' "$1"; then
+		"${pathgrepcidr}" -vf "$1" "$2" > "$3"
+		cdd_rc=$?
+		[ "${cdd_rc}" -lt 2 ] && return 0
+		rm -f "$3"
+		return "${cdd_rc}"
+	fi
+	if ! mkdir "${cdd_dir}" || ! LC_ALL=C awk -v d="${cdd_dir}" '
 		function fmax(s) { return index(s, ":") ? 128 : 32 }
 		function bits(s, m,   b) {
 			if (!match(s, /\/[0-9]+/)) return m
@@ -339,40 +348,36 @@ pfb_cidr_dedup() {
 		}
 		{ m = fmax($0); g = m "_" bits($0, m); grp[g] = m; print > (d "/g" g) }
 		END {
-			for (k in nq) { split(k, kq, SUBSEP); close(d "/p" kq[1] "_" kq[2]) }
 			for (g in grp) {
-				close(d "/g" g)
-				m = grp[g]; p = substr(g, index(g, "_") + 1) + 0; use = 0
-				for (q = 0; q <= p; q++) if ((m, q) in nq) use += nq[m, q]
-				if (use == ntot[m] && npat) { print g, "all"; continue }
-				if (!use) { print g, "keep"; continue }
-				for (q = 0; q <= p; q++) if ((m, q) in nq) {
-					f = d "/p" m "_" q
-					while ((getline l < f) > 0) print l > (d "/u" g)
-					close(f)
-				}
-				close(d "/u" g)
-				print g, "some"
+				m = grp[g]; p = substr(g, index(g, "_") + 1) + 0; use = 0; qs = ""
+				for (q = 0; q <= p; q++) if ((m, q) in nq) { use += nq[m, q]; qs = qs " p" m "_" q }
+				if (use == ntot[m] && npat) print g, "all"
+				else if (!use) print g, "keep"
+				else print g, "some" qs
 			}
 		}' "$1" "$2" > "${cdd_dir}/plan"; then
 		rm -rf "${cdd_dir}" "$3"
 		return 2
 	fi
 	cdd_rc=0
-	while [ "${cdd_rc}" -lt 2 ] && read -r cdd_g cdd_mode; do
+	while [ "${cdd_rc}" -lt 2 ] && read -r cdd_g cdd_mode cdd_qs; do
 		case "${cdd_mode}" in
 			keep) cat "${cdd_dir}/g${cdd_g}" || cdd_rc=2; continue ;;
 			all) cdd_pat="$1" ;;
-			*) cdd_pat="${cdd_dir}/u${cdd_g}" ;;
+			*)
+				cdd_pat="${cdd_dir}/u${cdd_g}"
+				# shellcheck disable=SC2086 # bucket names (no spaces) split on purpose
+				(cd "${cdd_dir}" && exec cat ${cdd_qs}) > "${cdd_pat}" || { cdd_rc=2; continue; }
+				;;
 		esac
 		"${pathgrepcidr}" -vf "${cdd_pat}" "${cdd_dir}/g${cdd_g}"
 		cdd_rc=$?
-	done < "${cdd_dir}/plan" > "${cdd_dir}/kept" || cdd_rc=2
+	done < "${cdd_dir}/plan" > "${cdd_dir}/kept"
 	# grepcidr keeps an unterminated last line as it is; FNR > n marks that line
 	if [ "${cdd_rc}" -lt 2 ]; then
 		LC_ALL=C awk -v n="$(wc -l < "$2")" '
 			FILENAME == ARGV[1] { k[$0]; next }
-			$0 in k { printf "%s%s", $0, (FNR > n + 0 ? "" : "\n") }
+			$0 in k { printf "%s%s", $0, (FNR > n ? "" : "\n") }
 		' "${cdd_dir}/kept" "$2" > "$3" || cdd_rc=2
 	fi
 	rm -rf "${cdd_dir}"
