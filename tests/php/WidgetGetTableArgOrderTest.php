@@ -33,6 +33,19 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	}
 
 	/**
+	 * Scenario: Combined sort (IP/DNSBL) is on (issue #3600).
+	 * Given the stored widget-sortmix setting is 'on',
+	 * When the widget renders,
+	 * Then the table tells the header-sort handler so, and IP and DNSBL rows may interleave.
+	 */
+	public function testWidgetTableCarriesTheStoredCombinedSortSetting(): void
+	{
+		$result = $this->runWidget([], [], FALSE, "\$GLOBALS['config'] = ['installedpackages' => ['pfblockerngglobal' => ['widget-sortmix' => 'on']]];");
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertMatchesRegularExpression('/<table id="pfb-tbl"[^>]*\sdata-pfb-sortmix="on"/', $result['stdout']);
+	}
+
+	/**
 	 * Scenario: the include shim is per-invocation scratch.
 	 * Given a render of the real widget,
 	 * When the subprocess exits,
@@ -66,7 +79,7 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	}
 
 	/** @return array{status:int,stdout:string,stderr:string,pid:int} */
-	private function runWidget(array $get, array $post, bool $plantStaleShim = FALSE): array
+	private function runWidget(array $get, array $post, bool $plantStaleShim = FALSE, string $setup = ''): array
 	{
 		$root = var_export(self::ROOT, TRUE);
 		$widget = var_export(self::WIDGET, TRUE);
@@ -82,6 +95,7 @@ error_reporting(E_ERROR | E_PARSE);
 \$_SERVER = [];\$widgetname = 'pfblockerng';
 {$preamble}
 require {$root} . '/tests/php/bootstrap.php';
+{$setup}
 require {$widget};
 echo 'after-include';
 PHP;

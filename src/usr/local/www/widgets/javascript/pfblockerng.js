@@ -58,8 +58,8 @@ function pfBlockerNG_buildWidgetRow(cols) {
 
 /**
  * 'Sortable.sorted' handler: sortable.js re-sorts every #pfb-tbl row on a header click, so with
- * Combined sort (IP/DNSBL) off, move the DNSBL rows back behind the IP alias (pfB_*) rows,
- * keeping the clicked order inside each group (issue #3600).
+ * Combined sort (IP/DNSBL) off, move the DNSBL rows (DNSBL_* groups and Upstream) back behind
+ * the IP alias rows, keeping the clicked order inside each group (issue #3600).
  *
  * @param {Event} event - the bubbling 'Sortable.sorted' event; event.target is the table.
  */
@@ -70,7 +70,7 @@ function pfBlockerNG_onWidgetSorted(event) {
 	}
 	var tbody = table.tBodies[0];
 	Array.prototype.filter.call(tbody.rows, function(row) {
-		return row.cells[0].textContent.indexOf('pfB_') !== 0;
+		return /^(DNSBL_|Upstream$)/.test(row.cells[0].textContent);
 	}).forEach(function(row) {
 		tbody.appendChild(row);
 	});
@@ -156,7 +156,7 @@ function fetch_new_pfBlockerNG_widget() {
 }
 
 if (typeof window !== 'undefined') {
-	// Document-level: the dashboard may load this script before or after the widget table.
+	// Document-level: event.target scopes it to #pfb-tbl, so no table lookup is needed.
 	document.addEventListener('Sortable.sorted', pfBlockerNG_onWidgetSorted);
 
 	/* start local AJAX engine */

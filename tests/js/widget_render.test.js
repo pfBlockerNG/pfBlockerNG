@@ -364,3 +364,11 @@ test('pfBlockerNG_onWidgetSorted: another sortable table on the dashboard is lef
 	pfBlockerNG_onWidgetSorted(ev);
 	assert.deepEqual(ev.order(), MIXED);
 });
+
+// The server's IP group also holds firewall-rule aliases named with pfb_ anywhere, any case
+// (pfb_rule_alias_packets); DNSBL group names are only ever DNSBL_* or Upstream.
+test('pfBlockerNG_onWidgetSorted: a rule alias without the pfB_ prefix stays in the IP group', () => {
+	var ev = sortedEvent('pfb-tbl', 'off', ['DNSBL_Ads', 'LAN_pfB_peers', 'Upstream', 'pfb_custom_hosts', 'pfB_PRI1_v4']);
+	pfBlockerNG_onWidgetSorted(ev);
+	assert.deepEqual(ev.order(), ['LAN_pfB_peers', 'pfb_custom_hosts', 'pfB_PRI1_v4', 'DNSBL_Ads', 'Upstream']);
+});
