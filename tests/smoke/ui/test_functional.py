@@ -2408,7 +2408,7 @@ def _run_now_to_completion(webui: WebUI, vm: helpers.SmokeVM, scope: str) -> Non
 
 
 def _assert_run_now_leaves_tick_run_alone(
-    webui: WebUI, vm: helpers.SmokeVM, *, row_required: bool, list_file: str | None = None
+    webui: WebUI, vm: helpers.SmokeVM, *, row_required: bool, own_list: tuple[str, str] | None = None
 ) -> None:
     """Hold the ownership boundary across Run Now for scope=ip, then scope=both.
 
@@ -2416,24 +2416,26 @@ def _assert_run_now_leaves_tick_run_alone(
     tick's cron row; without one the assertions below could only prove that no row is invented.
 
     A row alone does not make an advance visible: the outcome is recorded inside a pass's
-    fresh-download branch, which the pass skips when the list's published file already exists
-    (a previous act, or a previous run on a reused VM, leaves it there). ``list_file`` is that
-    file for the test's own list. It is removed and shown gone before each act and shown
-    republished after it, so both passes demonstrably fetched the list.
+    fresh-download branch. A pass skips that branch when the list's published file exists, and
+    can republish the list without fetching when its ``.orig`` copy exists (a reload, or a
+    failed download that restores it). ``own_list`` is that pair, (published file, ``.orig``
+    copy), for the test's own list. Both are removed and shown gone before each act, so the list
+    can only come back by a fetch, and the published file must be back after it.
     """
 
     def drop_list() -> None:
-        if list_file is not None:
-            vm.ssh("/bin/rm", "-f", list_file)
-            assert vm.ssh("/bin/test", "-f", list_file).returncode == 1, (
-                f"{list_file} survived its removal, so the next pass would reuse it instead of fetching"
-            )
+        if own_list is not None:
+            vm.ssh("/bin/rm", "-f", *own_list)
+            for path in own_list:
+                assert vm.ssh("/bin/test", "-f", path).returncode == 1, (
+                    f"{path} survived its removal, so the next pass could skip fetching the list"
+                )
 
     def assert_fetched(scope: str) -> None:
-        if list_file is not None:
-            assert vm.ssh("/bin/test", "-f", list_file).returncode == 0, (
-                f"scope={scope} Run Now did not republish {list_file}: the pass never fetched the list, so "
-                "the branch that records a scheduled outcome was not exercised"
+        if own_list is not None:
+            assert vm.ssh("/bin/test", "-f", own_list[0]).returncode == 0, (
+                f"scope={scope} Run Now did not republish {own_list[0]}: the pass never fetched the list, "
+                "so the branch that records a scheduled outcome was not exercised"
             )
 
     _regenerate_schedule_cache(vm)
@@ -2506,7 +2508,8 @@ def test_update_runnow_does_not_advance_a_scheduled_ticks_last_run(
       local file so the pass needs no egress.
 
     Given the rebuilt ledger carries the tick's cron row for that list,
-    And the list's published file is removed before each pass, so each pass fetches it again,
+    And the list's published file and its ``.orig`` copy are removed before each pass, so the
+    list can only come back by a fetch,
     When Run Now is submitted for scope=ip and scope=both and each pass has ended,
     Then the list was republished, the cron row is still there and its ``last_run`` has not
       advanced.
@@ -2517,12 +2520,13 @@ def test_update_runnow_does_not_advance_a_scheduled_ticks_last_run(
     """
     vm = smoke_vm
     feed_path = helpers.write_local_feed(vm, "ui_runnow_sched.txt", "198.51.100.7\n")
-    list_file = f"{helpers.PFB_DBDIR}/deny/uirunnowsched_v4.txt"  # the list's published file
+    # What a fetch of this list leaves behind; the config restore does not own either file.
+    own_list = (f"{helpers.PFB_DBDIR}/deny/uirunnowsched_v4.txt", f"{_IP_ORIG_DIR}/uirunnowsched_v4.orig")
     helpers.inject(vm, helpers.IpCase(aliasname="uirunnowsched", feed_url=feed_path, header="uirunnowsched"))
     try:
-        _assert_run_now_leaves_tick_run_alone(webui, vm, row_required=True, list_file=list_file)
+        _assert_run_now_leaves_tick_run_alone(webui, vm, row_required=True, own_list=own_list)
     finally:
-        vm.ssh("/bin/rm", "-f", list_file)  # this test's own artifact; the config restore does not own it
+        vm.ssh("/bin/rm", "-f", *own_list)
         helpers.reset(vm)  # drop the derived tables; the isolation fixture restores the config
 
 
