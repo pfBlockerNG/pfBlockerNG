@@ -56,6 +56,26 @@ function pfBlockerNG_buildWidgetRow(cols) {
 	return line;
 }
 
+/**
+ * 'Sortable.sorted' handler: sortable.js re-sorts every #pfb-tbl row on a header click, so with
+ * Combined sort (IP/DNSBL) off, move the DNSBL rows back behind the IP alias (pfB_*) rows,
+ * keeping the clicked order inside each group (issue #3600).
+ *
+ * @param {Event} event - the bubbling 'Sortable.sorted' event; event.target is the table.
+ */
+function pfBlockerNG_onWidgetSorted(event) {
+	var table = event.target;
+	if (table.id !== 'pfb-tbl' || table.getAttribute('data-pfb-sortmix') === 'on') {
+		return;
+	}
+	var tbody = table.tBodies[0];
+	Array.prototype.filter.call(tbody.rows, function(row) {
+		return row.cells[0].textContent.trim().indexOf('pfB_') !== 0;
+	}).forEach(function(row) {
+		tbody.appendChild(row);
+	});
+}
+
 /* update timers (10000 ms = 10 seconds, 60000 ms = 1 minute, 300000 ms = 5 mins) */
 var pfBlockerNGupdateFailedDelay	= 300000;
 var pfBlockerNGupdateWidgetDelay	= 15000;
@@ -136,6 +156,9 @@ function fetch_new_pfBlockerNG_widget() {
 }
 
 if (typeof window !== 'undefined') {
+	// Document-level: the dashboard may load this script before or after the widget table.
+	document.addEventListener('Sortable.sorted', pfBlockerNG_onWidgetSorted);
+
 	/* start local AJAX engine */
 	pfBlockerNGFailedTimer	= setInterval('fetch_new_pfBlockerNG_failed()', pfBlockerNGupdateFailedDelay);
 	pfBlockerNGWidgetTimer	= setInterval('fetch_new_pfBlockerNG_widget()', pfBlockerNGupdateWidgetDelay);
@@ -232,6 +255,7 @@ if (typeof module !== 'undefined' && module.exports) {
 	module.exports = {
 		pfBlockerNG_escapeHtml: pfBlockerNG_escapeHtml,
 		pfBlockerNG_buildWidgetRow: pfBlockerNG_buildWidgetRow,
-		pfBlockerNG_fetch_new_widget_callback: pfBlockerNG_fetch_new_widget_callback
+		pfBlockerNG_fetch_new_widget_callback: pfBlockerNG_fetch_new_widget_callback,
+		pfBlockerNG_onWidgetSorted: pfBlockerNG_onWidgetSorted
 	};
 }

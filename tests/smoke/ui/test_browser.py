@@ -286,6 +286,47 @@ def test_dashboard_widget_renders(
     _shot(page, screenshot_dir, "dashboard_widget")
 
 
+def test_widget_header_sort_keeps_ip_aliases_before_dnsbl_groups(
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """With Combined sort (IP/DNSBL) off, a column-header click keeps every IP alias ahead of
+    every DNSBL group (issue #3600); each group is still ordered by the clicked column.
+
+    The standalone widget GET carries no dashboard scripts, so the test loads the box's own
+    ``sortable.js`` (what the dashboard's ``data-sortable`` header click runs) and the widget JS
+    onto the server-rendered ``#pfb-tbl``. A fresh box has no IP aliases or DNSBL groups, so the
+    rows are seeded through the widget's own row builder before ``sortable.js`` initialises.
+    """
+    page = browser_page
+    _open(page, webui, WIDGET_PAGE)
+    expect(page.locator("#pfb-tbl")).to_have_attribute("data-pfb-sortmix", "off", timeout=JS_TIMEOUT_MS)
+
+    page.evaluate("window.events = []")  # the dashboard's deferred-init queue the widget JS pushes to
+    page.add_script_tag(url=webui.url("/widgets/javascript/pfblockerng.js"))
+    page.evaluate(
+        """names => {
+            document.getElementById('pfBNG-table').innerHTML = names
+                .map(n => pfBlockerNG_buildWidgetRow([n, '1', '0', '', '']))
+                .join('');
+        }""",
+        ["Upstream", "pfB_Top_v4", "DNSBL_Mal", "pfB_PRI1_v4", "DNSBL_Ads"],
+    )
+    page.add_script_tag(url=webui.url("/vendor/sortable/sortable.js"))
+    expect(page.locator("#pfb-tbl")).to_have_attribute("data-sortable-initialized", "true", timeout=JS_TIMEOUT_MS)
+
+    for _ in range(2):  # first click sorts, second click reverses
+        page.locator("#pfB_col1").click()
+        names = page.locator("#pfBNG-table tr td:first-child").all_inner_texts()
+        ip = [n for n in names if n.startswith("pfB_")]
+        dnsbl = [n for n in names if not n.startswith("pfB_")]
+        assert names == ip + dnsbl, f"IP aliases and DNSBL groups interleaved after a header click: {names}"
+        assert len(ip) == 2 and len(dnsbl) == 3, names
+        reverse = page.locator("#pfB_col1").get_attribute("data-sorted-direction") == "descending"
+        for group in (ip, dnsbl):
+            assert group == sorted(group, key=str.lower, reverse=reverse), f"group not in clicked order: {names}"
+
+
 def test_dnsvip_auto_checkbox_disables_manual_dropdowns(
     browser_page: Page,
     webui: WebUI,

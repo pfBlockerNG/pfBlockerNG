@@ -326,11 +326,12 @@ PAGE_TABLE: tuple[Page, ...] = (
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a
     # query param, so the plain GET exercises the full-render branch. "Show Aggregated Aliases" is
     # the #494 settings checkbox label (rendered in the widget's settings panel), proving the new
-    # toggle renders.
+    # toggle renders. The table carries the Combined sort setting (default off) that the widget JS
+    # reads to keep IP aliases ahead of DNSBL groups after a column-header sort (issue #3600).
     Page(
         "widget",
         "/widgets/widgets/pfblockerng.widget.php",
-        ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases"),
+        ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases", 'data-pfb-sortmix="off"'),
     ),
     # pfblockerng.php dispatches `ugc`; pfblockerng_geoip.inc writes these nine
     # continent/category pages and the Reputation page from local MaxMind-schema CSVs.

@@ -13,6 +13,7 @@ const {
 	pfBlockerNG_escapeHtml,
 	pfBlockerNG_buildWidgetRow,
 	pfBlockerNG_fetch_new_widget_callback,
+	pfBlockerNG_onWidgetSorted,
 } = require('../../src/usr/local/www/widgets/javascript/pfblockerng.js');
 
 // ── jQuery test double for pfBlockerNG_fetch_new_widget_callback ──────────────
@@ -319,4 +320,47 @@ test('pfBlockerNG_fetch_new_widget_callback: a status anchor outside the known s
 	} finally {
 		uninstallJQueryStub();
 	}
+});
+
+// ── pfBlockerNG_onWidgetSorted: header-click sort honours "Combined sort" (issue #3600) ──
+//
+// pfSense's sortable.js re-sorts every row of #pfb-tbl on a header click and then fires
+// 'Sortable.sorted'. With Combined sort off, IP aliases must stay ahead of DNSBL groups,
+// each group keeping the order the click produced; with it on, the mixed order stands.
+
+// A tbody double: appendChild moves an existing row to the end, as the DOM does.
+function sortedEvent(id, sortmix, names) {
+	var tbody = {
+		rows: names.map(function(name) { return { cells: [{ textContent: name }] }; }),
+		appendChild: function(row) {
+			this.rows.splice(this.rows.indexOf(row), 1);
+			this.rows.push(row);
+		},
+	};
+	var table = {
+		id: id,
+		tBodies: [tbody],
+		getAttribute: function(name) { return name === 'data-pfb-sortmix' ? sortmix : null; },
+	};
+	return { target: table, order: function() { return tbody.rows.map(function(r) { return r.cells[0].textContent; }); } };
+}
+
+var MIXED = ['DNSBL_Ads', 'pfB_PRI1_v4', 'Upstream', 'pfB_Top_v4', 'DNSBL_Mal'];
+
+test('pfBlockerNG_onWidgetSorted: Combined sort off keeps IP aliases before DNSBL groups, each in clicked order', () => {
+	var ev = sortedEvent('pfb-tbl', 'off', MIXED);
+	pfBlockerNG_onWidgetSorted(ev);
+	assert.deepEqual(ev.order(), ['pfB_PRI1_v4', 'pfB_Top_v4', 'DNSBL_Ads', 'Upstream', 'DNSBL_Mal']);
+});
+
+test('pfBlockerNG_onWidgetSorted: Combined sort on leaves the mixed header-click order', () => {
+	var ev = sortedEvent('pfb-tbl', 'on', MIXED);
+	pfBlockerNG_onWidgetSorted(ev);
+	assert.deepEqual(ev.order(), MIXED);
+});
+
+test('pfBlockerNG_onWidgetSorted: another sortable table on the dashboard is left alone', () => {
+	var ev = sortedEvent('other-widget-tbl', 'off', MIXED);
+	pfBlockerNG_onWidgetSorted(ev);
+	assert.deepEqual(ev.order(), MIXED);
 });
