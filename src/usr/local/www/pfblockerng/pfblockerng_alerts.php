@@ -531,6 +531,8 @@ if (isset($_POST) && !empty($_POST)) {
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
+			// issue #3543: a select the native form omits reads as null; default it before array_key_exists()
+			$_POST[$s_option] ??= $s_default;
 			if (is_array($_POST[$s_option])) {
 				$_POST[$s_option] = $s_default;
 			}
@@ -552,6 +554,7 @@ if (isset($_POST) && !empty($_POST)) {
 		$select_ip_options = array( 'pfbblockstat', 'pfbpermitstat', 'pfbmatchstat' );
 
 		foreach ($select_options as $s_option => $s_default) {
+			$_POST[$s_option] ??= $s_default;
 
 			// Array to validate against
 			if (in_array($s_option, $select_ip_options)) {
