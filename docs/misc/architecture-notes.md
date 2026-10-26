@@ -1236,7 +1236,8 @@ runs `grepcidr -vf` once per group against just the qualifying patterns (the cum
 itself when every same-family pattern qualifies); a group with no qualifying pattern is kept
 as is. A partially covered row therefore stays in the lower-priority feed: the overlap is
 retained, no coverage is lost. Row order, repeats and an unterminated last line come out
-exactly as one `grepcidr -vf` call would leave them.
+exactly as one `grepcidr -vf` call would leave them; a snapshot with no row wider than a host
+skips the grouping and gets that one call unchanged.
 
 **Ownership = config priority order.** A row's owning alias is decided by memberlist order
 (`pfb_ip_recompute_family_headers()`, following `$pfb['existing']['deny']`'s config order) —
