@@ -326,12 +326,11 @@ PAGE_TABLE: tuple[Page, ...] = (
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a
     # query param, so the plain GET exercises the full-render branch. "Show Aggregated Aliases" is
     # the #494 settings checkbox label (rendered in the widget's settings panel), proving the new
-    # toggle renders. The table carries the Combined sort setting (default off) that the widget JS
-    # reads to keep IP aliases ahead of DNSBL groups after a column-header sort (issue #3600).
+    # toggle renders.
     Page(
         "widget",
         "/widgets/widgets/pfblockerng.widget.php",
-        ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases", 'data-pfb-sortmix="off"'),
+        ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases"),
     ),
     # pfblockerng.php dispatches `ugc`; pfblockerng_geoip.inc writes these nine
     # continent/category pages and the Reputation page from local MaxMind-schema CSVs.
@@ -1345,6 +1344,18 @@ _CFG_PFB_ENABLE = "installedpackages/pfblockerng/config/0/enable_cb"
 _CFG_TICK_INTERVAL = "installedpackages/pfblockerng/config/0/pfb_tick_interval"
 _DNSBL_STAT_DB = "/var/unbound/pfb_py_dnsbl.sqlite"
 _WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
+
+
+def test_widget_table_carries_combined_sort_setting(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The widget table tells the widget JS whether Combined sort (IP/DNSBL) is on, so a
+    column-header sort keeps IP aliases ahead of DNSBL groups while it is off (issue #3600).
+    The setting defaults to off on a fresh box.
+    """
+    resp = webui.get(_WIDGET_PAGE)
+    assert resp.status_code == 200, f"widget GET returned {resp.status_code}"
+    assert re.search(r'<table id="pfb-tbl"[^>]*\sdata-pfb-sortmix="off"', resp.text), (
+        'the #pfb-tbl table must carry data-pfb-sortmix="off" for the default Combined sort setting'
+    )
 
 
 # Dual-marked ui_e2e (issue #810, same rationale as test_alerts_unified_log_colour_fields_render):
