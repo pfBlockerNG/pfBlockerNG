@@ -230,7 +230,7 @@ function pfBlockerNG_update_table() {
 					'rule'		- Total number of Firewall rules per alias
 					'count'		- Total Line Count per alias
 					'packets'	- Total number of pf packets per alias
-					'type'		- Rule type - block|reject|pass|match
+					'type'		- Rule type - block|reject|pass|match; DNSBL marks a dnsbl-table row (its group)
 					'id'		- Alias key value				*/
 
 	// Issue #2645: one pfctl -vvsTables parse. Count from Addresses.
@@ -491,7 +491,7 @@ function pfBlockerNG_get_header($mode='') {
 				$values['type'] = 'Deny';
 			}
 
-			if (!isset($values['id'])) {
+			if (($values['type'] ?? '') === 'DNSBL') {
 				if (!isset($pfb_table['stats']['DNSBL'])) {
 					$pfb_table['stats']['DNSBL'] = 0;
 				}
@@ -506,7 +506,7 @@ function pfBlockerNG_get_header($mode='') {
 					$pfb_table['counts']['DNSBL']		+= $values['count'];
 				}
 			}
-			elseif (isset($values['id']) && isset($values['type']) && isset($pfb_ip_types[$values['type']])) {
+			elseif (isset($pfb_ip_types[$values['type'] ?? ''])) {
 				if (!isset($pfb_table['stats'][$values['type']])) {
 					$pfb_table['stats'][$values['type']] = 0;
 				}
