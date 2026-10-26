@@ -44,6 +44,8 @@ Landing view defaults to **Unified** (`pfbpageload` default `'unified'`) with 20
 - `convert_dns_reply_log()` — DNS-reply rows. String work only; cheap.
 - `convert_ip_log()` — IP rows. Re-validates logged IP/CIDR still present in logged feed's file; on miss, hunts where IP lives *now* (new feed, new CIDR, new alias table) and renders drift.
 
+The Reports settings form omits controls for disabled DNSBL or DNS reply logging. On save, omitted select fields take their declared defaults before option validation; valid submitted selections remain unchanged.
+
 Because DNSBL rows need no lookup, `convert_dnsbl_log()`'s counter/limit gate runs first, unconditionally, before any per-row work — no "corrected fields" ordering constraint to preserve on DNSBL side anymore. `convert_ip_log` keeps own cheap-first order: filters on raw log fields, so exec cost bounded by accepted rows, and IP filter-match ordering constraint (below) still applies.
 
 ### IP filter/lookup ordering
