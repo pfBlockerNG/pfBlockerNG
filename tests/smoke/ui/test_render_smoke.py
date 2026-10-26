@@ -1396,13 +1396,13 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
         f"$stmt->bindValue(':c', {counter}, SQLITE3_INTEGER);"
         "$stmt->execute();"
         "$db->close();"
-        "echo 'OK' . base64_encode(json_encode($saved));"
+        "echo 'PFB_SAVED[' . base64_encode(json_encode($saved)) . ']';"
     )
     seed = helpers.php_eval(vm, seed_snippet)
-    assert seed.stdout.strip().startswith("OK"), (
-        f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
-    )
-    saved = seed.stdout.strip()[2:]
+    # php_eval runs through pfSsh.php, whose banner precedes the snippet's own output.
+    found = re.search(r"PFB_SAVED\[([A-Za-z0-9+/=]*)\]", seed.stdout)
+    assert found, f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
+    saved = found.group(1)
 
     try:
         yield
@@ -1421,7 +1421,7 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
             "  $stmt->execute();"
             "}"
             "$db->close();"
-            "echo 'OK';",
+            "echo 'PFB_' . 'RESTORED';",
         )
         helpers.php_eval(
             vm,
@@ -1430,7 +1430,9 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
             "write_config('pfBlockerNG smoke: restore enable_cb/pfb_dnsbl after a widget stat render check');\n"
             "echo 'OK';",
         )
-        assert "OK" in restore.stdout, f"failed to restore the dnsbl stat rows: {restore.stderr!r} {restore.stdout!r}"
+        assert "PFB_RESTORED" in restore.stdout, (
+            f"failed to restore the dnsbl stat rows: {restore.stderr!r} {restore.stdout!r}"
+        )
 
 
 # Dual-marked ui_e2e (issue #810, same rationale as test_alerts_unified_log_colour_fields_render):
