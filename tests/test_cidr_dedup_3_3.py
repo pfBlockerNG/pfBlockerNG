@@ -166,6 +166,12 @@ def _expect(outcome: _Outcome, earlier: list[str], kept: list[str]) -> None:
             ["10.0.0.0/8", "185.192.100.0/23", "198.51.100.0/24"],
             id="partial-and-full-cover-in-one-list",
         ),
+        pytest.param(
+            ["10.0.0.0/8", "192.0.2.0/24", "203.0.113.0/27"],
+            ["192.0.2.0/25", "10.1.0.0/25", "198.51.100.0/25", "203.0.113.0/25"],
+            ["198.51.100.0/25", "203.0.113.0/25"],
+            id="earlier-rows-of-several-widths",
+        ),
     ],
 )
 def test_a_row_only_partly_covered_by_earlier_lists_is_kept(
@@ -332,6 +338,69 @@ def test_a_pattern_file_without_patterns_keeps_every_row(
 
 
 @pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param(b"192.0.2.9\n203.0.113.9\n", id="host-rows-only"),
+        pytest.param(b"192.0.2.0/25\n203.0.113.9\n", id="cidr-and-host-rows"),
+    ],
+)
+def test_a_failed_run_leaves_no_output_file(tmp_path: Path, rows: bytes) -> None:
+    """A failed run reports its exit status and leaves no output file at all -- not one from
+    an earlier run, not a partial one -- so a caller can never publish it."""
+    failing = tmp_path / "grepcidr"
+    failing.write_text("#!/bin/sh\necho 198.51.100.1\nexit 2\n", encoding="utf-8")
+    failing.chmod(0o755)
+    work = tmp_path / "box"
+    work.mkdir()
+    (work / "patterns").write_bytes(b"192.0.2.0/24\n")
+    (work / "rows").write_bytes(rows)
+    (work / "out").write_bytes(b"10.0.0.0/8\n")
+
+    args = " ".join(shlex.quote(str(work / name)) for name in ("patterns", "rows", "out"))
+    proc = _sh(work, str(failing), f"pfb_cidr_dedup {args}\n")
+
+    assert proc.returncode == 2, proc.stderr
+    leftovers = sorted(p.name for p in work.iterdir())
+    assert leftovers == ["patterns", "rows", "scratch"], f"files left behind: {leftovers}"
+
+
+def test_a_scratch_directory_left_by_a_killed_run_does_not_block_the_next(tmp_path: Path, grepcidr: str) -> None:
+    """A run killed midway leaves ``<output>.cidr`` behind; the next run that draws the same
+    output name still de-duplicates, and starts from an empty scratch directory."""
+    work = tmp_path / "box"
+    work.mkdir()
+    (work / "patterns").write_bytes(b"192.0.2.0/24\n")
+    (work / "rows").write_bytes(b"192.0.2.0/25\n10.0.0.0/8\n")
+    (work / "out.cidr").mkdir()
+    (work / "out.cidr" / "kept").write_bytes(b"192.0.2.0/25\n")
+
+    args = " ".join(shlex.quote(str(work / name)) for name in ("patterns", "rows", "out"))
+    proc = _sh(work, grepcidr, f"pfb_cidr_dedup {args}\n")
+
+    assert proc.returncode == 0, proc.stderr
+    out = (work / "out").read_bytes()
+    assert out == b"10.0.0.0/8\n", f"pfb_cidr_dedup: expected b'10.0.0.0/8\\n', got {out!r}"
+    leftovers = sorted(p.name for p in work.iterdir())
+    assert leftovers == ["out", "patterns", "rows", "scratch"], f"files left behind: {leftovers}"
+
+
+def test_a_prefix_length_beyond_the_address_width_counts_as_a_host(tmp_path: Path, grepcidr: str) -> None:
+    """A row such as ``192.0.2.5/99999999999999999999999`` is judged as the host it names. The
+    CPU limit turns a run that never finishes on such a prefix into a failed one."""
+    work = tmp_path / "box"
+    work.mkdir()
+    (work / "patterns").write_bytes(b"192.0.2.0/25\n")
+    (work / "rows").write_bytes(b"192.0.2.0/24\n192.0.2.5/99999999999999999999999\n")
+
+    args = " ".join(shlex.quote(str(work / name)) for name in ("patterns", "rows", "out"))
+    proc = _sh(work, grepcidr, f"ulimit -t 20\npfb_cidr_dedup {args}\n")
+
+    assert proc.returncode == 0, f"rc {proc.returncode} (a CPU-limit kill means the run never finished)\n{proc.stderr}"
+    out = (work / "out").read_bytes()
+    assert out == b"192.0.2.0/24\n", f"pfb_cidr_dedup: expected b'192.0.2.0/24\\n', got {out!r}"
+
+
+@pytest.mark.parametrize(
     ("pattern", "dropped", "control"),
     [
         pytest.param("185.192.100.0/24", "185.192.100.0/23", "198.51.100.1", id="v4-row-prefix-ignored"),
@@ -349,6 +418,9 @@ def test_grepcidr_drops_these_rows_outright(
     (tmp_path / "patterns").write_text(f"{pattern}\n", encoding="utf-8")
     (tmp_path / "rows").write_text(f"{dropped}\n{control}\n", encoding="utf-8")
     proc = subprocess.run(
-        [grepcidr, "-vf", str(tmp_path / "patterns"), str(tmp_path / "rows")], capture_output=True, text=True, check=False
+        [grepcidr, "-vf", str(tmp_path / "patterns"), str(tmp_path / "rows")],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert (proc.stdout, proc.returncode) == (f"{control}\n", 0)
