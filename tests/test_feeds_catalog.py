@@ -67,9 +67,9 @@ def catalog() -> dict:  # type: ignore[type-arg]
 
 
 def _all_headers(catalog: dict) -> list[str]:  # type: ignore[type-arg]
-    """Collect every 'header' value from ipv4, ipv6, and dnsbl sections."""
+    """Collect every 'header' value, alternates included, from ipv4, ipv6, and dnsbl sections."""
     headers: list[str] = []
-    for section in ("ipv4", "ipv6"):
+    for section in ("ipv4", "ipv6", "dnsbl"):
         for grp in catalog.get(section, {}).values():
             for feed in grp.get("feeds", []):
                 if h := feed.get("header"):
@@ -77,10 +77,6 @@ def _all_headers(catalog: dict) -> list[str]:  # type: ignore[type-arg]
                 for alt in feed.get("alternate", []):
                     if h2 := alt.get("header"):
                         headers.append(h2)
-    for grp in catalog.get("dnsbl", {}).values():
-        for feed in grp.get("feeds", []):
-            if h := feed.get("header"):
-                headers.append(h)
     return headers
 
 
@@ -199,19 +195,17 @@ def test_qfeeds_is_offered_once_in_its_matrix_group(  # type: ignore[type-arg]
     the register link opens the portal that issues it, and the info tells Community
     users to update once a day, the rate their license refreshes.
     """
-    homes = [
-        (sec, name, feed)
+    homes = {
+        (sec, name): feed
         for sec in ("ipv4", "ipv6", "dnsbl")
         for name, grp in catalog.get(sec, {}).items()
         for feed in grp.get("feeds", [])
         if feed.get("header") == header
-    ]
-    assert [(sec, name) for sec, name, _ in homes] == [(section, group)], (
-        f"{header} must ship once, in {section}/{group} — got {[(sec, name) for sec, name, _ in homes]}"
-    )
-    feed = homes[0][2]
+    }
+    assert list(homes) == [(section, group)], f"{header} must ship once, in {section}/{group} — got {list(homes)}"
+    feed = homes[section, group]
     expected = {"feed": "Q-Feeds", "website": "https://qfeeds.com/", "url": url, "register": "https://tip.qfeeds.com/"}
-    assert {key: feed.get(key) for key in expected} == expected
+    assert expected.items() <= feed.items(), f"{header} fields differ: {feed}"
     for phrase in ("API token required", "free Community license", "Once a day"):
         assert phrase in feed.get("info", ""), f"{header} info must say {phrase!r} — got {feed.get('info')!r}"
     headers = [h.lower() for h in _all_headers(catalog)]
