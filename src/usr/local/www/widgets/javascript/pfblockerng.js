@@ -70,7 +70,7 @@ function pfBlockerNG_onWidgetSorted(event) {
 	}
 	var tbody = table.tBodies[0];
 	Array.prototype.filter.call(tbody.rows, function(row) {
-		return row.cells[0].textContent.trim().indexOf('pfB_') !== 0;
+		return row.cells[0].textContent.indexOf('pfB_') !== 0;
 	}).forEach(function(row) {
 		tbody.appendChild(row);
 	});
