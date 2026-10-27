@@ -1375,63 +1375,68 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
         "write_config('pfBlockerNG smoke: enable DNSBL for a widget stat render check');\n"
         "echo 'OK';",
     )
-
-    seed_snippet = (
-        f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
-        '$db->exec("CREATE TABLE IF NOT EXISTS dnsbl '
-        '(groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);");'
-        "$saved = [];"
-        "$q = $db->prepare('SELECT * FROM dnsbl WHERE groupname = :g');"
-        f"$q->bindValue(':g', '{group}', SQLITE3_TEXT);"
-        "$r = $q->execute();"
-        "while ($row = $r->fetchArray(SQLITE3_ASSOC)) { $saved[] = $row; }"
-        "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
-        f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
-        "$stmt->execute();"
-        "$stmt = $db->prepare('INSERT INTO dnsbl (groupname, timestamp, entries, counter) "
-        "VALUES (:g, :t, :e, :c)');"
-        f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
-        f"$stmt->bindValue(':t', '{timestamp}', SQLITE3_TEXT);"
-        "$stmt->bindValue(':e', 42, SQLITE3_INTEGER);"
-        f"$stmt->bindValue(':c', {counter}, SQLITE3_INTEGER);"
-        "$stmt->execute();"
-        "$db->close();"
-        "echo 'PFB_SAVED[' . base64_encode(json_encode($saved)) . ']';"
-    )
-    seed = helpers.php_eval(vm, seed_snippet)
-    # php_eval runs through pfSsh.php, whose banner precedes the snippet's own output.
-    found = re.search(r"PFB_SAVED\[([A-Za-z0-9+/=]*)\]", seed.stdout)
-    assert found, f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
-    saved = found.group(1)
-
     try:
-        yield
-    finally:
-        restore = helpers.php_eval(
-            vm,
+        seed_snippet = (
             f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
-            "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
-            f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
-            "$stmt->execute();"
-            f"foreach (json_decode(base64_decode('{saved}'), TRUE) as $row) {{"
-            "  $cols = array_keys($row);"
-            "  $stmt = $db->prepare('INSERT INTO dnsbl (' . implode(',', $cols) . ')"
-            " VALUES (:' . implode(',:', $cols) . ')');"
-            "  foreach ($row as $col => $value) { $stmt->bindValue(':' . $col, $value); }"
+            '$db->exec("CREATE TABLE IF NOT EXISTS dnsbl '
+            '(groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);");'
+            "$saved = [];"
+            "$q = $db->prepare('SELECT * FROM dnsbl WHERE groupname = :g');"
+            f"$q->bindValue(':g', '{group}', SQLITE3_TEXT);"
+            "$r = $q->execute();"
+            "while ($row = $r->fetchArray(SQLITE3_ASSOC)) { $saved[] = $row; }"
+            # A snapshot that cannot be encoded could not be put back: stop before deleting anything.
+            "$enc = json_encode($saved);"
+            "if ($enc !== FALSE) {"
+            "  $stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
+            f"  $stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
             "  $stmt->execute();"
+            "  $stmt = $db->prepare('INSERT INTO dnsbl (groupname, timestamp, entries, counter) "
+            "VALUES (:g, :t, :e, :c)');"
+            f"  $stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
+            f"  $stmt->bindValue(':t', '{timestamp}', SQLITE3_TEXT);"
+            "  $stmt->bindValue(':e', 42, SQLITE3_INTEGER);"
+            f"  $stmt->bindValue(':c', {counter}, SQLITE3_INTEGER);"
+            "  $stmt->execute();"
+            "  echo 'PFB_SAVED[' . base64_encode($enc) . ']';"
             "}"
             "$db->close();"
-            "echo 'PFB_' . 'RESTORED';",
         )
+        seed = helpers.php_eval(vm, seed_snippet)
+        # php_eval runs through pfSsh.php, whose banner precedes the snippet's own output.
+        found = re.search(r"PFB_SAVED\[([A-Za-z0-9+/=]+)\]", seed.stdout)
+        assert found, f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
+        saved = found.group(1)
+
+        try:
+            yield
+        finally:
+            restore = helpers.php_eval(
+                vm,
+                f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
+                "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
+                f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
+                "$stmt->execute();"
+                f"foreach (json_decode(base64_decode('{saved}'), TRUE) as $row) {{"
+                "  $cols = array_keys($row);"
+                "  $stmt = $db->prepare('INSERT INTO dnsbl (' . implode(',', $cols) . ')"
+                " VALUES (:' . implode(',:', $cols) . ')');"
+                "  foreach ($row as $col => $value) { $stmt->bindValue(':' . $col, $value); }"
+                "  $stmt->execute();"
+                "}"
+                "$db->close();"
+                "echo 'PFB_' . 'RESTORED';",
+            )
+            assert "PFB_RESTORED" in restore.stdout, (
+                f"failed to restore the dnsbl stat rows: {restore.stderr!r} {restore.stdout!r}"
+            )
+    finally:
         helpers.php_eval(
             vm,
             f"config_set_path('{_CFG_PFB_ENABLE}', '{orig_enable}');\n"
             f"config_set_path('{CFG_PFB_DNSBL}', '{orig_dnsbl}');\n"
             "write_config('pfBlockerNG smoke: restore enable_cb/pfb_dnsbl after a widget stat render check');\n"
             "echo 'OK';",
-        )
-        assert "PFB_RESTORED" in restore.stdout, (
-            f"failed to restore the dnsbl stat rows: {restore.stderr!r} {restore.stdout!r}"
         )
 
 
