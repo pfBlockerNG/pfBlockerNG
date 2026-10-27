@@ -30,6 +30,9 @@ _EDIT_ACTION_SELECT_RE = re.compile(
     r'<select\b[^>]*\bname=["\']action["\'][^>]*>(.*?)</select>', re.IGNORECASE | re.DOTALL
 )
 _OPTION_RE = re.compile(r'<option\b[^>]*\bvalue=["\']([^"\']*)["\'][^>]*>(.*?)</option>', re.IGNORECASE | re.DOTALL)
+_HELP_BLOCK_RE = re.compile(
+    r'class=["\'][^"\']*\bhelp-block\b[^"\']*["\'][^>]*>(.*?)</(?:span|div|p)>', re.IGNORECASE | re.DOTALL
+)
 
 
 def _assert_enable_option(body: str, select_re: re.Pattern[str], where: str) -> None:
@@ -65,5 +68,12 @@ def test_dnsbl_group_action_edit_option_is_labelled_enable(webui: WebUI, smoke_v
         assert page.status_code == 200, f"DNSBL category edit page HTTP {page.status_code}"
         assert not looks_like_login_page(page.text), "webConfigurator session not authenticated"
         _assert_enable_option(page.text, _EDIT_ACTION_SELECT_RE, "category edit")
+        # The group Action's own help is the first help-block rendered after its select.
+        select = _EDIT_ACTION_SELECT_RE.search(page.text)
+        assert select is not None
+        help_block = _HELP_BLOCK_RE.search(page.text, select.end())
+        assert help_block is not None, "group Action help not rendered after its select"
+        for word in ("Enable", "Deny", "Permit", "Custom List"):
+            assert word in help_block.group(1), f"group Action help lacks {word!r}: {help_block.group(1)!r}"
     finally:
         _restore_node(vm, DNSBL_GROUPS, snap)

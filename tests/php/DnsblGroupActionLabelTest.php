@@ -64,6 +64,9 @@ final class DnsblGroupActionLabelTest extends TestCase
 		$this->assertStringContainsString('Select <strong>Enable</strong>', $help, 'help must name the Enable option');
 		$this->assertStringContainsString('<strong>Deny</strong>', $help, 'help must name the per-feed Deny action');
 		$this->assertStringContainsString('<strong>Permit</strong>', $help, 'help must name the per-feed Permit action');
+		// Permit feeds sit at band 2: they beat plain feed blocks but lose to important rules and Custom List blocks.
+		$this->assertStringContainsString('overriding ordinary block feeds', $help, 'help must say what Permit overrides');
+		$this->assertStringContainsString('Custom List', $help, 'help must say a Custom List block still wins over Permit');
 		$this->assertStringNotContainsString('Select <strong>Block</strong>', $help, 'help must not name the retired Block label');
 	}
 }

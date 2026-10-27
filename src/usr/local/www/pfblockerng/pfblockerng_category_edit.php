@@ -1507,7 +1507,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			</div>";
 }
 else {
-	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Enable</strong> to activate this DNSBL Group. Each feed's <strong>Action</strong> then decides how its domains are used: <strong>Deny</strong> blocks them, <strong>Permit</strong> allows them.";
+	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Enable</strong> to activate this DNSBL Group. Each feed's <strong>Action</strong> then decides how its domains are used: <strong>Deny</strong> blocks them; <strong>Permit</strong> allows them, overriding ordinary block feeds but not rules marked important or Custom List blocks.";
 }
 
 $form->add($section);
