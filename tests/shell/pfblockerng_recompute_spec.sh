@@ -893,6 +893,19 @@ Describe 'pfb_cidr_dedup() full-containment cross-feed filter (issue #3606)'
 		The path "${output}.cidr" should not be exist
 	End
 
+	It 'returns the grepcidr rc>=2 and removes the scratch directory on the grouped path'
+		printf '#!/bin/sh\nexit 3\n' > "$pathgrepcidr"
+		chmod +x "$pathgrepcidr"
+		printf '192.0.2.0/24\n' > "$patterns"
+		printf '192.0.2.0/25\n' > "$input"
+		printf 'stale\n' > "$output"
+
+		When call pfb_cidr_dedup "$patterns" "$input" "$output"
+		The status should equal 3
+		The path "$output" should not be exist
+		The path "${output}.cidr" should not be exist
+	End
+
 	It 'fails with rc 2 and no output when the input cannot be read'
 		printf '192.0.2.0/24\n' > "$patterns"
 		printf 'stale\n' > "$output"
