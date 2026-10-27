@@ -211,7 +211,9 @@ $GLOBALS['pfb']['dns_proxy_rc_kept'] = "{$pfb_test_tmp}/pfb_dns_proxy_rc.kept";
 $GLOBALS['pfb']['dns_proxy_log'] = "{$pfb_test_tmp}/dns_proxy.log";
 $pfb_test_timeout_out = [];
 $pfb_test_timeout_rc = 0;
-exec('command -v timeout 2>/dev/null', $pfb_test_timeout_out, $pfb_test_timeout_rc);
+// Issue #3610: Ubuntu 26.04's default timeout(1) is uutils, which on expiry signals only its child and
+// orphans the rest of the tree. FreeBSD's and GNU's kill the whole tree; GNU ships there as gnutimeout.
+exec('command -v gnutimeout 2>/dev/null || command -v timeout 2>/dev/null', $pfb_test_timeout_out, $pfb_test_timeout_rc);
 $pfb_test_timeout = trim((string) ($pfb_test_timeout_out[0] ?? ''));
 if ($pfb_test_timeout_rc !== 0 || !is_executable($pfb_test_timeout)) {
 	throw new RuntimeException('PHPUnit requires a real timeout(1) on PATH for bounded process tests.');
