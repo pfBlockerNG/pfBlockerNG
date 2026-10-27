@@ -72,17 +72,10 @@ final class ReentryBoundsTest extends TestCase
 		return $m[1];
 	}
 
-	/** Real timeout(1) from PATH. A gate whose tool is missing is a failure, never a skip. */
+	/** Real timeout(1): the bootstrap's tree-killing resolution, which already fails loud when missing. */
 	private function realTimeout(): string
 	{
-		$out = [];
-		$rc  = 0;
-		exec('command -v timeout 2>/dev/null', $out, $rc);
-		$path = trim((string) ($out[0] ?? ''));
-		if ($path === '' || !is_executable($path)) {
-			$this->fail('no timeout(1) on PATH: the executed re-entry rows need a real one');
-		}
-		return $path;
+		return $GLOBALS['pfb_test_timeout'];
 	}
 
 	/**

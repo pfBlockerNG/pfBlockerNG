@@ -61,17 +61,6 @@ final class RsyncWallDeadlineTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$timeout_bin = NULL;
-		foreach (['/usr/bin/timeout', '/opt/homebrew/bin/timeout', '/usr/local/bin/gtimeout', '/usr/local/bin/timeout'] as $bin) {
-			if (is_executable($bin)) {
-				$timeout_bin = $bin;
-				break;
-			}
-		}
-		if ($timeout_bin === NULL) {
-			$this->markTestSkipped('no timeout(1) binary available on this host');
-		}
-
 		$workdir = tempnam(sys_get_temp_dir(), 'pfbrwl');
 		$this->assertNotFalse($workdir);
 		$this->assertTrue(unlink($workdir) && mkdir($workdir, 0700));
@@ -102,7 +91,7 @@ final class RsyncWallDeadlineTest extends TestCase
 		$GLOBALS['pfb']['mime_types'] = $GLOBALS['pfb_shipped_mime_types'] ?? [];
 
 		// The bounded-wait injection points under test (see pfb_rsync_transfer_cmd()).
-		$GLOBALS['pfb']['timeout']   = $timeout_bin;
+		$GLOBALS['pfb']['timeout']   = $GLOBALS['pfb_test_timeout'];
 		$GLOBALS['pfb']['rsync_bin'] = "{$workdir}/rsync-double.sh";
 
 		// The double announces itself and records PIDs here; exec()'s child

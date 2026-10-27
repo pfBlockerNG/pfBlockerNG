@@ -26,7 +26,7 @@ final class PkgCaHookDelegateTest extends TestCase
 		// issue #2828: rows whose hook exits on its own get the shipped PFB_PKG_TIMEOUT
 		// bound, a salvage-only watchdog, so a loaded host cannot turn "ran" into "killed".
 		// Only the hanging row uses a bound meant to fire.
-		$timeout = escapeshellarg(trim((string) shell_exec('command -v timeout')));
+		$timeout = escapeshellarg($GLOBALS['pfb_test_timeout']);
 		$this->timeout = str_replace('/usr/bin/timeout', $timeout, PFB_PKG_TIMEOUT);
 		$this->hangBound = $timeout . ' -s TERM -k 1 1';
 		file_put_contents(

@@ -29,15 +29,11 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 
 	/**
 	 * #2016: the extras runner now spawns through pfb_reentry_exec(), so a row that
-	 * drives it needs a real timeout(1). A gate whose tool is missing is a failure.
+	 * drives it needs a real timeout(1): the bootstrap's, which fails loud when missing.
 	 */
 	private function realTimeout(): string
 	{
-		$path = trim((string) shell_exec('command -v timeout 2>/dev/null'));
-		if ($path === '' || !is_executable($path)) {
-			$this->fail('no timeout(1) on PATH: the extras runner rows spawn through the bounded seam');
-		}
-		return $path;
+		return $GLOBALS['pfb_test_timeout'];
 	}
 
 	private function general(string $master = ''): array
