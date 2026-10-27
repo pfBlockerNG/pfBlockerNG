@@ -1228,6 +1228,18 @@ emit runs. Reputation cost scales with offender rows, not class size.
 live masterfile minus this pass's family-suffixed rows (a sibling family's rows survive
 untouched), then every owned alias's surviving rows are appended — never patched in place.
 
+**Full containment only (issue #3606).** Stage A prunes a later feed's row only when one
+earlier row of the same family, at least as wide (prefix <= the row's own), contains it.
+`grepcidr` 2.0 judges an input row by its address alone and scans only the address families
+its patterns name, so `pfb_cidr_dedup()` groups the snapshot's rows by family and prefix and
+runs `grepcidr -vf` once per group against just the qualifying patterns (the cumulative file
+itself when every same-family pattern qualifies); a group whose family has patterns but none
+wide enough is kept as is, and rows of a family no pattern names are dropped as before. A
+partially covered row therefore stays in the lower-priority feed: the overlap is retained, no
+coverage is lost. Row order, repeats and an unterminated last line come out exactly as one
+`grepcidr -vf` call would leave them; a snapshot with no row wider than a host skips the
+grouping and gets that one call unchanged.
+
 **Ownership = config priority order.** A row's owning alias is decided by memberlist order
 (`pfb_ip_recompute_family_headers()`, following `$pfb['existing']['deny']`'s config order) —
 a deliberate delta from the old `duplicate()` accretion, where ownership fell out of whichever
