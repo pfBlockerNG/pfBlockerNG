@@ -7,9 +7,11 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The DNSBL group Action dropdown offers the 'unbound' stored value under the label
- * Block. The stored key stays 'unbound' so existing configs keep resolving; only the
- * user-facing label changed. Each page builds its own option array, so each is
- * evaluated from its comment-free source.
+ * Enable: the group setting only switches the group on, while each feed row's own
+ * Action (Deny/Permit) decides whether its domains block or allow. The stored key
+ * stays 'unbound' so existing configs keep resolving; only the user-facing label
+ * changed. Each page builds its own option array, so each is evaluated from its
+ * comment-free source.
  */
 final class DnsblGroupActionLabelTest extends TestCase
 {
@@ -41,25 +43,30 @@ final class DnsblGroupActionLabelTest extends TestCase
 	}
 
 	#[DataProvider('pages')]
-	public function testDnsblGroupActionOffersUnboundStoredValueAsBlock(string $relative, string $pattern): void
+	public function testDnsblGroupActionOffersUnboundStoredValueAsEnable(string $relative, string $pattern): void
 	{
 		$options = self::optionsFromPage($relative, $pattern);
 
-		$this->assertSame('Block', $options['unbound'] ?? NULL, 'the stored unbound value must be labelled Block');
+		$this->assertSame('Enable', $options['unbound'] ?? NULL, 'the stored unbound value must be labelled Enable');
 		$this->assertSame('Disabled', $options['Disabled'] ?? NULL, 'Disabled must stay on the dropdown');
 		$this->assertNotContains('Unbound', $options, 'no option may still be labelled Unbound');
 	}
 
-	public function testAliasActionHelpNamesTheBlockOption(): void
+	public function testGroupActionHelpNamesEnableAndThePerFeedAction(): void
 	{
 		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/' . self::CATEGORY_EDIT);
-		if (preg_match("/\\\$action_txt = (\"[^\"\\n]*to enable 'Domain Name' blocking for this Alias\\.\");/", $source, $match) !== 1) {
-			self::fail('alias action help text not found in category edit page');
+		if (preg_match("/\\\$action_txt = (\"[^\"\\n]*Each feed's <strong>Action<\\/strong>[^\"\\n]*\");/", $source, $match) !== 1) {
+			self::fail('DNSBL group action help text not found in category edit page');
 		}
 		$help = '';
 		eval('$help = ' . $match[1] . ';');
 
-		$this->assertStringContainsString('Select <strong>Block</strong>', $help, 'help must name the Block option');
-		$this->assertStringNotContainsString('Unbound', $help, 'help must not name the retired Unbound label');
+		$this->assertStringContainsString('Select <strong>Enable</strong>', $help, 'help must name the Enable option');
+		$this->assertStringContainsString('<strong>Deny</strong>', $help, 'help must name the per-feed Deny action');
+		$this->assertStringContainsString('<strong>Permit</strong>', $help, 'help must name the per-feed Permit action');
+		// Permit feeds sit at band 2: they beat plain feed blocks but lose to important rules and Custom List blocks.
+		$this->assertStringContainsString('overriding ordinary block feeds', $help, 'help must say what Permit overrides');
+		$this->assertStringContainsString('Custom List', $help, 'help must say a Custom List block still wins over Permit');
+		$this->assertStringNotContainsString('Select <strong>Block</strong>', $help, 'help must not name the retired Block label');
 	}
 }

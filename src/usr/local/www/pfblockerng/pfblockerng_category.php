@@ -488,7 +488,7 @@ if (isset($savemsg)) {
 										'Alias_Deny' => 'Alias Deny', 'Alias_Permit' => 'Alias Permit',
 										'Alias_Match' => 'Alias Match', 'Alias_Native' => 'Alias Native' );
 						} else {
-							$list_array = array(	'Disabled' => 'Disabled', 'unbound' => 'Block' );
+							$list_array = array(	'Disabled' => 'Disabled', 'unbound' => 'Enable' );
 						}
 						if (!pfb_group_action_valid($rowdata[$r_id]['action'] ?? NULL, $gtype)) {
 							$rowdata[$r_id]['action'] = 'Disabled';
