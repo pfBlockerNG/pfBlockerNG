@@ -149,7 +149,7 @@ jobs:
         run: uv sync --locked --only-group dep-pkg-build
 
       - name: Require a zstd encoder
-        # ubuntu-24.04 ships zstd, and its version cannot change a .pkg's contents,
+        # The runner image ships zstd, and its version cannot change a .pkg's contents,
         # so installing over it bought nothing. Assert instead: a runner image that
         # drops it must fail this job loudly rather than fall back to a slower codec.
         run: |

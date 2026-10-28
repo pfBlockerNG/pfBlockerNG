@@ -527,8 +527,7 @@ jobs:
 
   shell-tests:
     name: shellspec (POSIX sh)
-    # Pinned until #3615 ports this suite to ubuntu-26.04 (#3614).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     # kcov v43 — the commit that tag pointed at when the pin was taken. Job-level so the
@@ -553,7 +552,7 @@ jobs:
 
       - name: Require jq and dash
         # jq drives the ip_pre_AWS_*.sh region filters; dash is the test shell the
-        # shellspec run below pins. ubuntu-24.04 ships both, and neither changes a gate
+        # shellspec run below pins. The runner image ships both, and neither changes a gate
         # verdict by version, so installing them over the image bought nothing. Assert
         # them instead: a runner image that drops one must fail this job loudly rather
         # than let the suite fall back to whatever /bin/sh is (#2185).
@@ -873,8 +872,7 @@ jobs:
   php-unit:
     name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
     needs: read-matrix
-    # Pinned until #3615 ports this suite to ubuntu-26.04 (#3614).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     # issue #2614: PHPUnit loads the real .inc and its fixtures fork workers that
     # contend for the same lock, and a flock(2) acquire has no timeout of its own, so
     # this budget is the only bound. Observed median 2.2 min, worst 2.6.

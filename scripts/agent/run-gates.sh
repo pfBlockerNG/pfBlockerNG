@@ -224,7 +224,10 @@ run_gate() {
 	gate_exec=$(gate_command "$1")
 	gate_output_file=$skip_report_dir/gate-output
 	rm -f "$gate_output_file"
-	(cd "$worktree" && exec timeout -s KILL "$gate_timeout" sh -c "$gate_exec" < "$gate_input") \
+	# Issue #3615: Ubuntu 26.04's timeout(1) is uutils, whose KILL reaches only its direct child and
+	# orphans a hung gate's tree. GNU's kills the whole group; GNU ships there as gnutimeout.
+	gate_timeout_bin=$(command -v gnutimeout || command -v timeout)
+	(cd "$worktree" && exec "$gate_timeout_bin" -s KILL "$gate_timeout" sh -c "$gate_exec" < "$gate_input") \
 		> "$gate_output_file" 2>&1 &
 	active_gate=$!
 	wait "$active_gate"

@@ -32,7 +32,7 @@ make_recording_enforcing_timeout() {
   cat > "$pathtimeout" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${TIMEOUT_ARGS}"
-exec timeout "$@"
+exec "${REAL_TIMEOUT}" "$@"
 EOF
   chmod +x "$pathtimeout"
 }
@@ -66,7 +66,9 @@ EOF
 }
 
 pfb_require_real_timeout() {
-  real_timeout="$(command -v timeout)"
+  # Issue #3615: Ubuntu 26.04's timeout(1) is uutils, whose -k KILL reaches only its direct
+  # child; GNU's, like the appliance's reaper, kills the whole tree and ships there as gnutimeout.
+  real_timeout="$(command -v gnutimeout || command -v timeout)"
   if [ -z "${real_timeout}" ]; then
     echo "no timeout(1) on PATH: the executed batch rows need a real one" >&2
     return 1
@@ -93,11 +95,11 @@ Describe 'whoisconvert() bounds the total batch duration (issue #2877)'
     true > "$timeout_args"
     host_count="${work}/host.count"; echo 0 > "$host_count"
     pfb_require_real_timeout
-    export TIMEOUT_ARGS="$timeout_args" HOST_COUNT="$host_count"
+    export TIMEOUT_ARGS="$timeout_args" HOST_COUNT="$host_count" REAL_TIMEOUT="$real_timeout"
   }
   cleanup() {
     rm -rf "$work"
-    unset TIMEOUT_ARGS HOST_COUNT HOST_SLEEP whoisbatchtimeout
+    unset TIMEOUT_ARGS HOST_COUNT HOST_SLEEP REAL_TIMEOUT whoisbatchtimeout
   }
   BeforeAll 'pfb_source'
   Before 'setup'
