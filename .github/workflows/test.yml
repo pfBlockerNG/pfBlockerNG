@@ -659,8 +659,8 @@ jobs:
         run: echo "id=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
       - name: Restore cached kcov binary
-        # kcov was removed from ubuntu-latest's apt repos; build from source and
-        # cache the install dir so subsequent runs skip the compile step.
+        # kcov builds from source at the pinned KCOV_COMMIT; cache the install dir so
+        # subsequent runs skip the compile step.
         id: cache-kcov
         uses: actions/cache/restore@v6
         with:
