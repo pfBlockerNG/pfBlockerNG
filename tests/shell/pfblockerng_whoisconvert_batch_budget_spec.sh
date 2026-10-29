@@ -75,6 +75,16 @@ pfb_require_real_timeout() {
   fi
 }
 
+# `satisfy` hands the subject over in a variable named after the function. dash reports
+# "Killed" when the kill grace's group SIGKILL ends the timeout(1) behind a command
+# substitution; bash reports nothing. Any other stderr is a real diagnostic.
+empty_or_shell_kill_report() {
+  case "${empty_or_shell_kill_report-}" in
+    '' | Killed) return 0 ;;
+  esac
+  return 1
+}
+
 twenty_domains() {
   _wd_i=1
   while [ "${_wd_i}" -le 20 ]; do
@@ -198,13 +208,15 @@ EOF
     # A host(1) stand-in where NOTHING dies on TERM -- only the reaper's kill
     # grace (-k 5) can end this transient tree (issue #2877 hostile row). The
     # second list entry exists only so the loop reaches the deadline check
-    # after the reaped first lookup.
+    # after the reaped first lookup. The grandchild stays off the capture pipe,
+    # or whoisconvert would wait out its sleep and the poll below could never
+    # see an orphan; only the reaper ends it before the poll does.
     pathhost="${work}/host"
     grandpid_file="${work}/grandpid"
     cat > "$pathhost" <<EOF
 #!/bin/sh
 trap '' TERM
-(sleep 10) &
+(sleep 30) >/dev/null 2>&1 &
 echo \$! > '${grandpid_file}'
 sleep 10
 EOF
@@ -217,7 +229,7 @@ EOF
     The stdout should include 'WHOIS batch [ BudgetList ] TIMED OUT after 2s total; remaining Domain/AS entries skipped'
     The contents of file "${pfborig}${alias}.orig" should equal '198.51.100.7'
     The path "${pfborig}${alias}.fail" should be exist
-    The stderr should be present
+    The stderr should satisfy empty_or_shell_kill_report
     # The tree the lookup left behind is reaped once the kill grace lapses --
     # before the batch reports its expiry, not orphaned past it.
     reap_waits=0

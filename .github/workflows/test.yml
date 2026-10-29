@@ -710,14 +710,15 @@ jobs:
           sudo apt-get update && sudo apt-get install -y libcurl4 libelf1 libdw1
           echo "$HOME/.local/kcov/bin" >> "$GITHUB_PATH"
 
-      - name: Coverage (kcov) — informational
-        # Informational only (no floor yet, mirroring #38); never gates CI. Guard on
-        # kcov being present so a missing tool does not leave an error annotation.
+      - name: Coverage (kcov)
+        # The coverage figure is informational (no floor yet, mirroring #38), but the
+        # specs it re-runs must pass, so a failing example cannot hide behind a green
+        # job (#3615). Guard on kcov being present so a missing tool skips the step
+        # instead of failing it.
         # shellspec's kcov integration refuses a plain POSIX shell ("Require to
         # use bash/zsh/ksh to run kcov") — override to bash for this re-run only; the
         # gating `shellspec` run above stays pinned to dash, and the POSIX specs run
-        # unchanged under bash (a superset) purely to collect coverage.
-        continue-on-error: true
+        # unchanged under bash (a superset) to collect coverage.
         run: |
           if command -v kcov >/dev/null 2>&1; then
             shellspec --kcov --shell bash \
