@@ -528,6 +528,16 @@ Describe 'run-gates.sh Composer vendor guard'
     Assert [ ! -e "$phpunit_marker" ]
   End
 
+  It 'runs its gates when gnutimeout is the only timeout(1) on PATH (issue #3615)'
+    mv "$stubdir/timeout" "$stubdir/gnutimeout"
+    When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
+    The stderr should include 'GATE RUN:'
+    The status should equal 1
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+    The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py'
+    The output should not include 'TOOL-MISSING: timeout'
+  End
+
   It 'suppresses successful Composer checker diagnostics while running PHP gates'
     printf '#!/bin/sh\ntouch "%s"\nprintf "checker stdout\\n"\nprintf "checker stderr\\n" >&2\nexit 0\n' "$checker_marker" > "$stubdir/uv"
     chmod +x "$stubdir/uv"

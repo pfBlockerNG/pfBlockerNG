@@ -362,7 +362,7 @@ $cmds"
 		printf '%s' "$all_cmds"
 		exit 0
 	fi
-	require_tool timeout
+	command -v gnutimeout >/dev/null 2>&1 || require_tool timeout
 
 	# A redirected loop stays in this shell, so signal traps retain ownership of
 	# the active gate process group.
