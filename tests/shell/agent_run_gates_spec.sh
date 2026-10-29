@@ -529,7 +529,9 @@ Describe 'run-gates.sh Composer vendor guard'
   End
 
   It 'runs its gates when gnutimeout is the only timeout(1) on PATH (issue #3615)'
-    mv "$stubdir/timeout" "$stubdir/gnutimeout"
+    # uutils' multicall timeout refuses to run under another name, so link a real gnutimeout when one exists.
+    rm -f "$stubdir/timeout"
+    ln -s "$(command -v gnutimeout || command -v timeout)" "$stubdir/gnutimeout"
     When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
     The stderr should include 'GATE RUN:'
     The status should equal 1
