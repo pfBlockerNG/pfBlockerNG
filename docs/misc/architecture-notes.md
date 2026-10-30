@@ -673,8 +673,8 @@ startup budget `PFB_UNBOUND_START_WAIT`, no setting of its own, never under a lo
 restart path and the installer) and `pfb_dns_proxy_ensure_running()` (the apply; it also checks a proxy that is alive with an
 unchanged script, so a crash-looping listener is noticed). The boot check (`dns_check`, which the boot hook backgrounds) confirms a
 stored snapshot's start through the same `pfb_dns_proxy_confirm_ready()`, and so does the cron tick, but only while a gateway pidfile
-is live: with none live the tick waits for nothing and rolls nothing back. It may first restart the pair once for an address the gateway's
-start could not assign and the box can bind now (issue #3598, below). A proxy that is not ready within the budget has FAILED its
+is live: with none live the tick waits for nothing and rolls nothing back. It may first change the proxy's listeners live, and restart the
+pair once only for a change the gateway does not take (issues #3598 and #3599, below). A proxy that is not ready within the budget has FAILED its
 activation, and `pfb_dns_proxy_roll_back()` runs: under the config lock the requested toggle goes Off (so the next apply
 cannot enable it again, and there is no retry or suppression state of its own), then `pfb_unbound_python($mode, FALSE)` stops
 the proxy and gives the Resolver exactly its saved settings back and, iff DNSBL is on, puts the DNSBL module back into
@@ -932,15 +932,32 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   `pfb_dns_proxy_decider_changed()` fingerprints the same seven paths (`$pfb['dns_proxy_decider_src']`), and a different or absent record
   restarts the decider alone. An unreadable installed file is no signal. Unbound's own module-drift check (`$pfb['unbound_py_module_applied']`) is
   asked only while Unbound hosts the module, so code-only drift in proxy mode does not restart the pair a second time.
-- **An address the start could not assign (issue #3598).** The gateway logs `cannot listen on <host:port>: <reason>` for an address it
-  could not bind, and serves without it until something restarts it. `pfb_dns_proxy_refusal_cleared()` reads the latest start's refusals
-  (`pfb_dns_proxy_listeners()`); one whose reason contains `assign requested address` (EADDRNOTAVAIL: an interface address that was not
-  there yet) is probed with an unprivileged UDP bind on port 0, closed at once, and only for a host `inet_pton()` accepts (a name would be
-  resolved). A probe that binds restarts the whole pair once, from `pfb_dns_proxy_ensure_running()` (while READY, through `$why`) and from
-  every cron tick before its confirmation, which then judges the new start through `$since`, not the one it replaced. Any other refusal
-  (such as address already in use), an address that still cannot be bound, a log with no complete start and any package operation restart
-  nothing; the tick takes no other restart (the rc script, the pending marker and the binaries stay with the update pass). It leaves a
-  pending-restart marker in place, since one written during its restart must not be lost: the next update pass restarts once more for it.
+- **Listen addresses change live (issues #3598, #3599).** The gateway binds only before it drops root, so a listener added later is bound by
+  root PHP (`pfb_dns_proxy_listener_bind()`: TCP, then UDP, and only for a host `inet_pton()` accepts: a name would be resolved) and handed
+  over on the control socket with `SCM_RIGHTS`, in the one `sendmsg(2)` that carries its frame (`pfb_dns_proxy_listener_add()`: `FF FF FF FE`,
+  a 4-byte big-endian length, `<kind> <host:port>`; `pfb_dns_proxy_listener_remove()`: `FF FF FF FD`, no descriptor). The gateway answers
+  `ok` or `error:` and logs `listening <kind> <host:port>` or `stopped listening <kind> <host:port>`; PHP closes its own copies afterwards.
+  The log stays the record of what is served. A start logs `starting pid <pid>` first, and `pfb_dns_proxy_listeners()` reads the latest
+  complete start (after the last `starting pid` line before the last `ready upstream` line; an older gateway's log, which has none, from the
+  second-to-last `ready upstream` line) and then, in log order, the `listening` and `stopped listening` lines up to the next `starting pid`
+  line, so that a listener added to a process that is gone is not credited to the next one. `pfb_dns_proxy_ensure_running()` masks every
+  `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument out of the rc script it read before the pass and out of the one the
+  pass wrote: equal remainders are an address-only change, reconciled live while the proxy is READY and its log holds a complete start.
+  Any other difference (a port, a TLS group turned on or off, `--doh-trusted`, DDR, a module flag) restarts the pair, as does an
+  address-only change with the proxy not READY or with no complete start to compare with. `pfb_dns_proxy_listeners_sync()` compares
+  the command (`pfb_dns_proxy_command_listeners()`) with what is served, per kind: it removes the served listeners the command does not
+  name, then adds the ones it names that nothing serves, one frame each, each change one line of the pfB log, and after a change the
+  gateway took it waits (bounded, `PFB_DNS_PROXY_LOG_WAIT`) until the log shows it, so the startup check that follows judges what is
+  served. An address that cannot be assigned yet (EADDRNOTAVAIL: an interface address that was not there yet) is left for a later pass
+  with nothing logged, any other failed bind is logged and skipped, and neither restarts anything. A change the gateway does not take (an
+  `error:` reply, including an older gateway's, a hang-up, no control socket, no `socket_sendmsg()`) stops the reconcile with no further frame
+  and restarts the whole pair once; that start binds every address the box can bind, so no restart loop follows. Every cron tick calls the
+  same sync before its confirmation, under the same guards (no update pass running, READY, no package operation); a reason it returns
+  restarts the pair, and the confirmation then judges the new start through `$since`, not the one it replaced. While a restart is pending
+  the rc script may differ in more than addresses: nothing is removed or added live, and a missing listener that binds now is the reason to
+  restart (the tick leaves the marker, since one written during its restart must not be lost: the next update pass restarts once more
+  for it). A log with no complete start changes nothing, and a package operation changes nothing live: an address-only change of the rc
+  script is recorded as a pending restart, as any other.
 - **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
   in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first
   one's argv on a new socketpair and waits up to 30 s for its READY, then makes it the active one, replies `ok`, lets the old one's
@@ -954,9 +971,10 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   plus 1.02 KiB per entry (235 MiB at 189,643 entries).
 
 Pinned by `DnsProxyUpgradeStopTest` (the stop's walk, run in a sandbox), `DnsProxyKeepRunningTest`, `DnsProxyKeepRunningPkgTest` and
-`DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `DnsProxyRefusedAddressRestartTest` (the refused-address
-restart), `tests/dns_proxy/test_decider_applied.py` (the code record), the gateway's Go tests (the binary record and the control-socket
-restart) and `tests/smoke/test_smoke_dns_proxy.py` (live).
+`DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `DnsProxyLiveListenersTest` (the live reconcile of the
+update pass and the tick, and every case that restarts instead), `DnsProxyListenerFramesTest` (the frames and the sockets they carry),
+`DnsProxyListenersFoldTest` (the log fold), `tests/dns_proxy/test_decider_applied.py` (the code record), the gateway's Go tests (the
+binary record and the control-socket verbs) and `tests/smoke/test_smoke_dns_proxy.py` (live).
 
 ### ADR-08 — IDN homoglyph protection
 

@@ -1874,6 +1874,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "fds",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
@@ -2060,6 +2067,74 @@
         "returnType": "?string",
         "params": []
     },
+    "pfb_dns_proxy_listener_add": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "at",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "sockets",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "socket",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "3.0"
+            }
+        ]
+    },
+    "pfb_dns_proxy_listener_bind": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "at",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "why",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_dns_proxy_listener_directive": {
         "returnsRef": false,
         "returnType": "?array",
@@ -2083,6 +2158,40 @@
                 "variadic": false,
                 "type": "mixed",
                 "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_listener_remove": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "at",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "socket",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "3.0"
             }
         ]
     },
@@ -2118,6 +2227,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dns_proxy_listeners_sync": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": []
     },
     "pfb_dns_proxy_log_lines": {
         "returnsRef": false,
@@ -2235,11 +2349,6 @@
     "pfb_dns_proxy_recovery_required": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
-    },
-    "pfb_dns_proxy_refusal_cleared": {
-        "returnsRef": false,
-        "returnType": "?string",
         "params": []
     },
     "pfb_dns_proxy_refuse": {
