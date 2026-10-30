@@ -628,6 +628,30 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame(0, $this->linesWith('cannot be added live'));
 	}
 
+	public function testAnAddressOnlyChangeWithACutLogRestartsTheWholePairAndSendsNoFrame(): void
+	{
+		// Given a ready proxy whose log is longer than 64 KiB with its latest start's `starting pid` line out of the window, and an
+		// interface that has 0.0.0.0 now (before: with the marker in the window the same change is made live, above)
+		$this->quiet([
+			'lan' => '0.0.0.0', 'restartLog' => $this->started(['0.0.0.0', '127.0.0.1', '[::1]']),
+			'gatewayLog' => [
+				'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", ...self::filler(),
+				"listening udp+tcp 192.0.2.1:{$this->port}", "listening udp+tcp [::1]:{$this->port}", self::READY,
+			],
+		]);
+		$record = $this->gateway();
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the window');
+		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the start\'s marker is outside the window');
+
+		// When the update pass runs
+		$this->krEnsure();
+
+		// Then the pair is restarted once, as with no record of the ready gateway, and no listener is changed live on a cut record
+		$this->assertSame(['restart_service pfb_dns_proxy'], $this->krProxyCalls());
+		$this->assertSame([], self::frames($record));
+		$this->assertStringContainsString('Restarting the DNS proxy: its listen addresses changed', $this->krLog());
+	}
+
 	public function testALogLongerThanTheWindowWhoseLatestStartIsInItWholeIsReconciledLive(): void
 	{
 		// Given a log of more than 64 KiB whose latest start, marker included, is inside the last 64 KiB and did not bind 127.0.0.1

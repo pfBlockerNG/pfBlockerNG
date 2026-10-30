@@ -5965,8 +5965,9 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its log holds a complete start of the gateway that published the
  * ready marker (pfb_dns_proxy_ready_listeners(); right after a restart the log shows the previous start's until the new gateway's lines
- * arrive); with the proxy not READY, or with no such start to compare with, it restarts the pair. Whatever it did, the proxy must
- * then serve (pfb_dns_proxy_serving_ready()): one that is alive but never published its marker (restarted every few seconds) fails
+ * arrive; a start the 64 KiB read cut, with its `starting pid` line out of it, is none); with the proxy not READY, or with no such start
+ * to compare with, it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()): one that is alive but
+ * never published its marker (restarted every few seconds) fails
  * the activation and is rolled back, which a pidfile alone would never notice.
  *
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
@@ -6022,7 +6023,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		} elseif (pfb_dns_proxy_ready()) {
 			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
 				$why = 'the package installed another gateway';
-			} elseif ($rc_changed && pfb_dns_proxy_ready_listeners() === NULL) {
+			} elseif ($rc_changed && (pfb_dns_proxy_ready_listeners()['partial'] ?? TRUE)) {
 				$why = 'its listen addresses changed';
 			} elseif (($why = pfb_dns_proxy_listeners_sync()) === NULL) {
 				$decider = pfb_dns_proxy_decider_changed();
