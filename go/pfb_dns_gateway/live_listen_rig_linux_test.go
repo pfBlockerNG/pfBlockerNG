@@ -420,9 +420,9 @@ func (r *liveRig) remove(kind string, ap netip.AddrPort) {
 	r.waitLine("stopped listening " + kind + " " + ap.String())
 }
 
-// refuse runs one request that must be refused: the reply is an add or remove error, every descriptor the row made is
-// closed again, and the gateway reports nothing new as listening.
-func (r *liveRig) refuse(row string, eof bool, build func() []livePart) {
+// refuse runs one request that must be refused: the reply is an add or remove error (returned, for a row that pins the
+// reason), every descriptor the row made is closed again, and the gateway reports nothing new as listening.
+func (r *liveRig) refuse(row string, eof bool, build func() []livePart) string {
 	t := r.t
 	t.Helper()
 	base, listening := liveOpenFDs(t), r.countLines("listening ")
@@ -432,6 +432,7 @@ func (r *liveRig) refuse(row string, eof bool, build func() []livePart) {
 	if n := r.countLines("listening "); n != listening {
 		t.Fatalf("%s: %d `listening` lines before, %d after; log:\n%s", row, listening, n, r.logs.text())
 	}
+	return reply
 }
 
 // Probes -------------------------------------------------------------------------------------------------------------------

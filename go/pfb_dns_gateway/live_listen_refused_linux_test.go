@@ -291,18 +291,22 @@ func TestAnAddOrRemoveWithAMalformedFrameIsRefusedAndItsDescriptorsAreClosed(t *
 	r := newLiveRig(t)
 	p := strconv.Itoa(r.port["udp+tcp"])
 	v4 := r.at("udp+tcp", "127.0.0.2")
-	sockets := func(verb []byte, head []byte, eof bool, row string) {
-		r.refuse(row, eof, func() []livePart {
+	sockets := func(verb []byte, head []byte, eof bool, row, reason string) {
+		reply := r.refuse(row, eof, func() []livePart {
 			return []livePart{{append(slices.Clone(verb), head...), liveSockets(t, "udp+tcp", v4)}}
 		})
+		if !strings.Contains(reply, reason) {
+			t.Fatalf("%s: reply %q, want one that says %q", row, reply, reason)
+		}
 	}
 	for _, v := range []struct {
 		name string
 		verb []byte
 	}{{"add", liveAdd}, {"remove", liveRemove}} {
-		sockets(v.verb, []byte{0, 0, 0, 0}, false, v.name+" of length 0")
-		sockets(v.verb, binary.BigEndian.AppendUint32(nil, 257), false, v.name+" of length 257, judged before its body is read")
-		sockets(v.verb, append(binary.BigEndian.AppendUint32(nil, 40), "udp+tcp 127"...), true, v.name+" whose body is shorter than its length")
+		// No body follows these lengths and the connection stays open: only a length judged before the body is read is answered.
+		sockets(v.verb, []byte{0, 0, 0, 0}, false, v.name+" of length 0", "between 1 and 256")
+		sockets(v.verb, binary.BigEndian.AppendUint32(nil, 257), false, v.name+" of length 257", "between 1 and 256")
+		sockets(v.verb, append(binary.BigEndian.AppendUint32(nil, 40), "udp+tcp 127"...), true, v.name+" whose body is shorter than its length", "the message ended after 11 of 40 bytes")
 	}
 	rows := []struct{ name, body string }{
 		{"an unknown kind", "tls 127.0.0.2:" + p},
@@ -337,6 +341,11 @@ func TestAnAddOrRemoveWithAMalformedFrameIsRefusedAndItsDescriptorsAreClosed(t *
 		})
 		r.refuse("remove of "+row.name, false, func() []livePart { return []livePart{{liveFrame(liveRemove, row.body), nil}} })
 	}
+	// The sockets of this row are bound to the mapped address itself: only the spelling of the frame is wrong.
+	mapped := netip.AddrPortFrom(netip.MustParseAddr("::ffff:127.0.0.2"), v4.Port())
+	r.refuse("add of IPv4-mapped IPv6 with sockets bound to that very address", false, func() []livePart {
+		return []livePart{{liveFrame(liveAdd, "udp+tcp "+mapped.String()), liveSockets(t, "udp+tcp", mapped)}}
+	})
 	r.add("udp+tcp", v4) // none of the refusals took the address
 	r.ask("udp+tcp", v4)
 }

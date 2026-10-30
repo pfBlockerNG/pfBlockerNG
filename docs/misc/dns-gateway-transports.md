@@ -66,8 +66,9 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   from the store, DoH with the start's `--doh-trusted` prefixes), logs `listening <kind> <host:port>` (the line a start logs) and
   replies `ok`. A remove closes a served listener (bound at start or added; both sockets of `udp+tcp`), logs
   `stopped listening <kind> <host:port>` and replies `ok`; one that is not served is
-  `error: <kind> <host:port> is not served`. Connections a closed listener already accepted run to their own end, as at a
-  shutdown. A descriptor that comes with any other frame (restart, certificate, remove) is closed and the frame is handled as
+  `error: <kind> <host:port> is not served`. Connections the removed listener had accepted: plain TCP and DoT connections
+  keep running to their own end (or the shutdown's); DoH connections (the HTTP server is closed) and DoQ connections (closed
+  with `DOQ_NO_ERROR`) end with the listener. A descriptor that comes with any other frame (restart, certificate, remove) is closed and the frame is handled as
   without it; descriptors may ride with any byte of the frame. The shutdown closes every listener, added ones included, and a
   removed one is not closed again. A gateway older than the verbs answers `FF FF FF FE` with
   `error: a message of 4294967294 bytes is not between 1 and 65536`.

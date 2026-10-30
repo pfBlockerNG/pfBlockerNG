@@ -159,10 +159,6 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		reply("ok")
 		return
 	case ctlAdd, ctlRemove:
-		if c.listeners == nil {
-			reply("error: this gateway has no listeners to change")
-			return
-		}
 		reply(c.listeners.change(n == ctlAdd, in))
 		return
 	}
@@ -205,7 +201,7 @@ func (in *ctlInput) Read(p []byte) (int, error) {
 			in.fds = append(in.fds, fds...)
 		}
 	}
-	return n, err
+	return max(n, 0), err // recvmsg's n is -1 on a timeout: an io.Reader's is not
 }
 
 func (in *ctlInput) closeRights() {
