@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"slices"
 	"testing"
 
@@ -56,4 +57,30 @@ func TestDDRDesignatesTheListenersServedNowAfterLiveAddsAndRemoves(t *testing.T)
 	r.remove("doh", r.at("doh", added))
 	r.requireDesignates("removed the added doh", added, "dot", "doq")
 	r.requireDesignates("the start's address is unchanged by that remove", bound, "doh", "doq")
+}
+
+// An add the gateway refuses is not served, so it is not designated: DDR never names a listener that does not exist.
+func TestDDRDoesNotDesignateAnAddTheGatewayRefuses(t *testing.T) {
+	r := newLiveRig(t, liveDDR)
+	const bound, added = "127.0.0.1", "127.0.0.2"
+	dotAt := r.at("dot", added)
+	r.add("udp+tcp", r.at("udp+tcp", added)) // somewhere to ask: nothing encrypted listens there
+	r.requireDesignates("before: nothing designated on "+added, added)
+
+	rows := []struct {
+		name string
+		ap   netip.AddrPort // the address the frame names
+		have netip.AddrPort // the address the descriptors are bound to
+	}{
+		{"a port no kind is on", netip.AddrPortFrom(dotAt.Addr(), uint16(r.stranger)), netip.AddrPortFrom(dotAt.Addr(), uint16(r.stranger))},
+		{"sockets bound to another address", dotAt, r.at("dot", "127.0.0.3")},
+	}
+	for _, row := range rows {
+		reply := r.refuse("dot on "+row.name, false, func() []livePart {
+			return []livePart{{r.addFrame("dot", row.ap), liveSockets(t, "dot", row.have)}}
+		})
+		t.Logf("%s: %s", row.name, reply)
+		r.requireDesignates("refused add, "+row.name+": still nothing on "+added, added)
+	}
+	r.requireDesignates("the start's own address is unchanged by the refused adds", bound, "doh", "dot", "doq")
 }
