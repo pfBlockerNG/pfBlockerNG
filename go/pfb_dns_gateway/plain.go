@@ -108,19 +108,37 @@ func (l *plainListener) close() {
 	_ = l.udp.Close()
 }
 
-// serve starts answering on l until stop().
-func (g *gateway) serve(l *plainListener) {
-	g.closeOnStop(l.close)
+// serve starts answering on l until stop() or the returned closeNow, whichever comes first.
+func (g *gateway) serve(l *plainListener) (closeNow func()) {
+	closeNow = g.closeOnStop(l.close)
 	g.wg.Add(2)
 	go g.serveUDP(l.udp)
 	go g.serveTCP(l.tcp, nil)
+	return closeNow
 }
 
-// closeOnStop registers what stop() closes: a listener, or a server that owns its connections.
-func (g *gateway) closeOnStop(closeFn func()) {
+// closer is one thing stop() closes. run closes it at most once, whoever calls it.
+type closer struct{ run func() }
+
+// closeOnStop registers what stop() closes: a listener, or a server that owns its connections. The returned closeNow
+// closes it at once and takes it off the list. A gateway that is stopping has taken its list already: what is registered
+// then is closed here.
+func (g *gateway) closeOnStop(closeFn func()) (closeNow func()) {
+	c := &closer{run: sync.OnceFunc(closeFn)}
 	g.mu.Lock()
-	g.closers = append(g.closers, closeFn)
+	if g.ctx.Err() != nil {
+		g.mu.Unlock()
+		c.run()
+		return c.run
+	}
+	g.closers = append(g.closers, c)
 	g.mu.Unlock()
+	return func() {
+		g.mu.Lock()
+		g.closers = slices.DeleteFunc(g.closers, func(x *closer) bool { return x == c })
+		g.mu.Unlock()
+		c.run()
+	}
 }
 
 // stop ends serving: listeners are closed and queries in flight are cancelled. TCP and DoT connections answer what
@@ -132,8 +150,8 @@ func (g *gateway) stop() {
 	g.mu.Lock()
 	closers := slices.Clone(g.closers) // a closer may wait: not under g.mu, which new connections and handlers take
 	g.mu.Unlock()
-	for _, closeFn := range closers {
-		closeFn()
+	for _, c := range closers {
+		c.run()
 	}
 	done := make(chan struct{})
 	go func() { g.wg.Wait(); close(done) }()

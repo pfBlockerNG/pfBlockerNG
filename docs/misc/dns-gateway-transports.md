@@ -44,12 +44,33 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
   line). The mode 0600 on the socket is a second wall, not the one relied on.
 - **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FF`, with nothing after it, is the decider restart
-  below. Anything else is the length of the PEM, big-endian (1 to 65536; judged before the body is read), then the PEM (the
-  chain, then the key). Reads have a 5 s deadline. The one reply line is `ok` or `error: <reason>`. A push that does
+  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener (below). Anything else is the length of the PEM,
+  big-endian (1 to 65536; judged before the body is read), then the PEM (the chain, then the key). Reads have a 5 s
+  deadline. The one reply line is `ok` or `error: <reason>`. A push that does
   not parse, or whose key is not the certificate's, changes nothing and logs
   `TLS certificate not replaced: <reason>; keeping the previous one`; one that does logs `TLS certificate replaced by a push` and
   is served from the next handshake on. A push to a gateway that serves no TLS transport is answered
   `error: no TLS transport is served, so there is no certificate to replace`.
+- **Add and remove a listener** (issue #3599). The gateway binds only before it drops root; root PHP binds the socket and hands
+  it over here with `SCM_RIGHTS`, in the same `sendmsg()` as the frame. `FF FF FF FE` (add) or `FF FF FF FD` (remove), a 4-byte
+  big-endian length 1 to 256 (judged before the body is read), then `<kind> <host:port>` in ASCII: `kind` is `udp+tcp`, `dot`,
+  `doh` or `doq`, exactly; `host:port` is Go's `netip.AddrPort` spelling and must equal its own `String()` (IPv6 bracketed and
+  compressed; no zone, no IPv4-mapped form, no port 0; no space, tab, NUL or non-ASCII byte anywhere else). An add carries
+  `udp+tcp` the UDP socket then the listening TCP socket, `dot` and `doh` one listening TCP socket, `doq` one UDP socket. It is
+  taken only when the kind is served by this gateway (`udp+tcp` always, a TLS kind only when its `--<kind>-listen` was given at
+  start), the port is the kind's own (`--port`, `--dot-port`, `--doh-port`, `--doq-port`), `<kind> <host:port>` is not served
+  already, the descriptor count is the kind's and nothing was truncated (`MSG_CTRUNC`; room for 8 descriptors), each descriptor
+  is a socket of the type expected (`SO_TYPE`), a stream socket is listening (`SO_ACCEPTCONN`) and every one is bound
+  (`getsockname()`) to the frame's address in its family, and the gateway is not stopping; otherwise the reply is
+  `error: <reason>` and every descriptor is closed. A taken add is served as a start-bound listener of its kind (certificate
+  from the store, DoH with the start's `--doh-trusted` prefixes), logs `listening <kind> <host:port>` (the line a start logs) and
+  replies `ok`. A remove closes a served listener (bound at start or added; both sockets of `udp+tcp`), logs
+  `stopped listening <kind> <host:port>` and replies `ok`; one that is not served is
+  `error: <kind> <host:port> is not served`. Connections a closed listener already accepted run to their own end, as at a
+  shutdown. A descriptor that comes with any other frame (restart, certificate, remove) is closed and the frame is handled as
+  without it; descriptors may ride with any byte of the frame. The shutdown closes every listener, added ones included, and a
+  removed one is not closed again. A gateway older than the verbs answers `FF FF FF FE` with
+  `error: a message of 4294967294 bytes is not between 1 and 65536`.
 - **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
   30 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
   `decider restarted: pid N took over from pid M` is logged; the old one answers the queries it holds (for as long as a query
@@ -71,7 +92,9 @@ refusal, a gateway that does not answer, a missing socket: one notice per distin
 gateway keeps the certificate it has, and the next apply or tick tries again, because nothing records a push that failed.
 
 Pinned by `ctl_test.go`, `ctl_wiring_test.go` and `restart_test.go` (peer credentials with a real unprivileged process, frame limits, directory and
-socket modes, bound before the drop and kept after a real one), `tls_reload_test.go` (a gateway process serving all three
+socket modes, bound before the drop and kept after a real one), `live_listen_linux_test.go`, `live_listen_refused_linux_test.go`
+and `starting_pid_test.go` (add and remove over real sockets and descriptors: served on every kind and family, refused rows,
+hostile frames, descriptors closed, shutdown closes each listener once, `starting pid` first), `tls_reload_test.go` (a gateway process serving all three
 transports through a rotation, a refused push and a rotation under load: no failed handshake, no unanswered query),
 `tlsconfig_test.go`, `tests/dns_proxy/test_gateway_e2e.py` (the real binary, a pushed certificate, the modes of the socket and its
 directory) and, for the PHP side, `DnsProxyCertificateExportTest`, `DnsProxyCertificatePushTest` (a stand-in gateway on a real
@@ -89,8 +112,10 @@ directory is a separate hardening and is not part of this change.
 | DoH | `--doh-listen` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
 | DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle 30 s; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 
-A listener that cannot be bound is logged and skipped. Readiness lines, before `ready upstream`, in the order udp+tcp,
-dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracketed (`[::1]:853`).
+A listener that cannot be bound is logged and skipped. Every start logs `starting pid <pid>` first (before any bind error), so
+that a reader of the log finds where a start begins; then, before `ready upstream`, the readiness lines in the order udp+tcp,
+dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracketed (`[::1]:853`). A listener added or removed
+while the gateway serves logs `listening <kind> <host>:<port>` or `stopped listening <kind> <host>:<port>` after `ready upstream`.
 
 pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
 `--dot-listen`, `--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoT,

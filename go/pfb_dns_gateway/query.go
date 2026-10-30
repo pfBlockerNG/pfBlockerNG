@@ -136,7 +136,7 @@ type gateway struct {
 	udpAddrs, muxAddrs, tcpAddrs, dohAddrs, doqAddrs addrLimit // what each client address holds of the budgets above
 
 	mu      sync.Mutex
-	closers []func() // what stop() closes besides client connections: listeners, servers
+	closers []*closer // what stop() closes besides client connections: listeners, servers
 	clients map[net.Conn]struct{}
 }
 

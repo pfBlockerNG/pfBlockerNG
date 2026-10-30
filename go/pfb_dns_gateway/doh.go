@@ -117,9 +117,9 @@ func rawConnInfo(c net.Conn) connInfo {
 	return connInfo{peer: addrPortOf(c.RemoteAddr()), local: addrPortOf(c.LocalAddr())}
 }
 
-// serveDoH answers DoH on ln until stop(). Connections: TCP, the cap, PROXY header parsing for trusted peers only
-// (everyone else's bytes are never parsed as one), TLS, HTTP.
-func (g *gateway) serveDoH(ln *net.TCPListener, conf *tls.Config, trusted []netip.Prefix) {
+// serveDoH answers DoH on ln until stop() or the returned closeNow. Connections: TCP, the cap, PROXY header parsing for
+// trusted peers only (everyone else's bytes are never parsed as one), TLS, HTTP.
+func (g *gateway) serveDoH(ln *net.TCPListener, conf *tls.Config, trusted []netip.Prefix) (closeNow func()) {
 	limited := &limitedListener{Listener: ln, limit: g.dohConns, addrs: &g.dohAddrs, perAddr: g.dohPerAddr, trusted: trusted, logf: g.logf}
 	proxied := &proxyproto.Listener{
 		Listener:          limited,
@@ -143,12 +143,13 @@ func (g *gateway) serveDoH(ln *net.TCPListener, conf *tls.Config, trusted []neti
 			return context.WithValue(ctx, connInfoKey{}, rawConnInfo(c))
 		},
 	}
-	g.closeOnStop(func() { _ = srv.Close() })
+	closeNow = g.closeOnStop(func() { _ = srv.Close() })
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
 		_ = srv.Serve(tls.NewListener(proxied, conf))
 	}()
+	return closeNow
 }
 
 func (g *gateway) serveDoHRequest(w http.ResponseWriter, r *http.Request, trusted []netip.Prefix) {
