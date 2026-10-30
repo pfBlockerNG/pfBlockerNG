@@ -248,6 +248,38 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
+	public function testAListenerAddedLiveAfterTheStartIsServedAndTheStandingNoticeIsClosed(): void
+	{
+		// Given a start that lacks DoT on lan, its problem standing, and the gateway logging the DoT listener it took live afterwards (issue #3599)
+		$this->box();
+		$this->log(self::PLAIN, self::DOT_LOOPBACK, self::READY);
+		pfb_dns_proxy_startup_check(TRUE);
+		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts(), 'before: the start lacks DoT on lan');
+		$this->appendLog('listening dot 192.0.2.1:853');
+
+		// When the check judges the log again
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the added listener counts as served: no problem, and the notice is closed
+		$this->assertSame([], $this->startupTexts());
+	}
+
+	public function testAListenerRemovedLiveAfterTheStartIsNoLongerServed(): void
+	{
+		// Given a start that served DoT on lan (nothing wrong), and the gateway logging that it stopped listening there
+		$this->box();
+		$this->log($this->healthyStart());
+		pfb_dns_proxy_startup_check(TRUE);
+		$this->assertSame([], $this->startupTexts(), 'before: the start served every listener');
+		$this->appendLog('stopped listening dot 192.0.2.1:853');
+
+		// When the check judges the log again
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the command still names it, and it is reported as not served
+		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
+	}
+
 	public function testTheLast64KiBLimitHoldsWhenTheStartIsKnown(): void
 	{
 		// Given a standing notice and a log whose only ready line is out of its last 64 KiB, the size taken before it all
