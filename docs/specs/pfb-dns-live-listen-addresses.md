@@ -76,7 +76,8 @@ store's configs, DoH with the start's `--doh-trusted` prefixes), logs `listening
 
 A remove names one served listener (bound at start or added): it is closed (both sockets for `udp+tcp`), logs
 `stopped listening <kind> <host:port>`, and replies `ok`; one that is not served is `error: <kind> <host:port> is not
-served`. Connections a closed listener already accepted run to their own end, as at a shutdown's start.
+served`. Plain TCP and DoT connections a removed listener already accepted run to their own end; DoH and DoQ
+connections end with their listener (the HTTP server and the QUIC transport own them).
 
 Descriptors that arrive with any other frame (decider restart, certificate push, remove) are closed, and the frame is
 handled as without them. A peer that is not uid 0 is closed on unread, as today: the kernel disposes of descriptors
