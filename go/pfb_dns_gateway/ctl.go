@@ -151,7 +151,6 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 	n := binary.BigEndian.Uint32(head[:])
 	switch n {
 	case ctlRestart:
-		in.closeRights() // not held for as long as a restart takes
 		if err := c.restart(); err != nil {
 			reply("error: " + err.Error())
 			return

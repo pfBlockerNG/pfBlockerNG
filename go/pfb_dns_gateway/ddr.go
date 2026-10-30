@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -29,13 +31,17 @@ var (
 	ddrNobody    = dnsmessage.MustNewName("nobody.invalid.")
 )
 
-// ddr is what answers DDR queries; built once at start, read-only afterwards.
+// ddr is what answers DDR queries; built once at start. Only the listener addresses change afterwards (change).
 type ddr struct {
-	target        dnsmessage.Name  // the firewall's FQDN, which every record names
-	doh443        bool             // --ddr-doh-443: the DoH record has no port, whatever port DoH listens on
-	certs         *certStore       // nil when no TLS transport is configured
-	dot, doh, doq []netip.AddrPort // the bound listeners: unmapped, no zone
+	target dnsmessage.Name // the firewall's FQDN, which every record names
+	doh443 bool            // --ddr-doh-443: the DoH record has no port, whatever port DoH listens on
+	certs  *certStore      // nil when no TLS transport is configured
+	addrs  atomic.Pointer[ddrAddrs]
 }
+
+// ddrAddrs are the listeners DDR designates: unmapped, no zone. A stored value is never edited, so a query that loaded it
+// reads one consistent set.
+type ddrAddrs struct{ dot, doh, doq []netip.AddrPort }
 
 // ddrName is the --ddr value as an absolute name; one trailing dot is optional.
 func ddrName(s string) (dnsmessage.Name, error) {
@@ -61,7 +67,9 @@ func newDDR(target string, doh443 bool, certs *certStore, dot, doh, doq []netip.
 	if err != nil {
 		return nil, err
 	}
-	return &ddr{target: name, doh443: doh443, certs: certs, dot: ddrBound(dot), doh: ddrBound(doh), doq: ddrBound(doq)}, nil
+	d := &ddr{target: name, doh443: doh443, certs: certs}
+	d.addrs.Store(&ddrAddrs{dot: ddrBound(dot), doh: ddrBound(doh), doq: ddrBound(doq)})
+	return d, nil
 }
 
 // ddrOnListeners is newDDR over the TLS listeners start() bound (t is nil without any), so a port the kernel picked for a
@@ -89,6 +97,35 @@ func ddrBound(in []netip.AddrPort) []netip.AddrPort {
 		out[i] = netip.AddrPortFrom(ap.Addr().Unmap().WithZone(""), ap.Port())
 	}
 	return out
+}
+
+// change makes designation follow a listener that was added or removed live; udp+tcp is not designated. A nil d (no --ddr)
+// has nothing to follow. The writer is the control socket's one goroutine (the listenerSet's contract), so a plain Store
+// cannot lose an update.
+func (d *ddr) change(add bool, kind string, ap netip.AddrPort) {
+	if d == nil {
+		return
+	}
+	old := d.addrs.Load()
+	next := &ddrAddrs{dot: old.dot, doh: old.doh, doq: old.doq}
+	var on *[]netip.AddrPort
+	switch kind {
+	case "dot":
+		on = &next.dot
+	case "doh":
+		on = &next.doh
+	case "doq":
+		on = &next.doq
+	default:
+		return
+	}
+	one := ddrBound([]netip.AddrPort{ap})[0]
+	if add {
+		*on = append(slices.Clone(*on), one)
+	} else {
+		*on = slices.DeleteFunc(slices.Clone(*on), func(have netip.AddrPort) bool { return have == one })
+	}
+	d.addrs.Store(next)
 }
 
 // answer is the reply to wire when it is a query for a name at or under resolver.arpa., and nil when it is not (it does
@@ -216,16 +253,17 @@ func (d *ddr) designate(owner dnsmessage.Name, local netip.Addr) (answers, extra
 	if !local.IsValid() || local.IsUnspecified() {
 		return nil, nil
 	}
-	if port, ok := ddrListening(d.doh, local); ok {
+	a := d.addrs.Load()
+	if port, ok := ddrListening(a.doh, local); ok {
 		if d.doh443 {
 			port = ddrDoHPort
 		}
 		answers = append(answers, ddrRecord(owner, d.target, 1, "h2", port, ddrDoHPort, local, dohPath))
 	}
-	if port, ok := ddrListening(d.dot, local); ok {
+	if port, ok := ddrListening(a.dot, local); ok {
 		answers = append(answers, ddrRecord(owner, d.target, 2, "dot", port, defaultDoTPort, local, ""))
 	}
-	if port, ok := ddrListening(d.doq, local); ok {
+	if port, ok := ddrListening(a.doq, local); ok {
 		answers = append(answers, ddrRecord(owner, d.target, 3, "doq", port, ddrDoQPort, local, ""))
 	}
 	if len(answers) > 0 { // every record names the firewall, so the address of that name is owed

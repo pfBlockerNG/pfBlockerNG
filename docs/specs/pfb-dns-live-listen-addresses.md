@@ -74,6 +74,9 @@ received:
 A taken add is served exactly as a start serves its own listener of that kind (DoT, DoH and DoQ with the certificate
 store's configs, DoH with the start's `--doh-trusted` prefixes), logs `listening <kind> <host:port>`, and replies `ok`.
 
+With `--ddr`, the DoT, DoH and DoQ listeners that DDR designates follow adds and removes: an added one is designated, a
+removed one (bound at start or added) no longer is.
+
 A remove names one served listener (bound at start or added): it is closed (both sockets for `udp+tcp`), logs
 `stopped listening <kind> <host:port>`, and replies `ok`; one that is not served is `error: <kind> <host:port> is not
 served`. Plain TCP and DoT connections a removed listener already accepted run to their own end; DoH and DoQ

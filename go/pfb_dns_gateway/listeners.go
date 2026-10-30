@@ -95,6 +95,7 @@ func (s *listenerSet) change(add bool, in *ctlInput) string {
 			return "error: " + key + " is not served"
 		}
 		delete(s.served, key)
+		s.g.ddr.change(false, kind, ap) // before the close: a client is never sent to a listener that is closing
 		closeNow()
 		s.g.logf("stopped listening %s", key)
 		return "ok"
@@ -107,6 +108,7 @@ func (s *listenerSet) change(add bool, in *ctlInput) string {
 		return "error: " + err.Error()
 	}
 	s.served[key] = closeNow
+	s.g.ddr.change(true, kind, ap)
 	s.g.logf("listening %s", key)
 	return "ok"
 }

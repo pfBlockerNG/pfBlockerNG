@@ -64,7 +64,8 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   (`getsockname()`) to the frame's address in its family, and the gateway is not stopping; otherwise the reply is
   `error: <reason>` and every descriptor is closed. A taken add is served as a start-bound listener of its kind (certificate
   from the store, DoH with the start's `--doh-trusted` prefixes), logs `listening <kind> <host:port>` (the line a start logs) and
-  replies `ok`. A remove closes a served listener (bound at start or added; both sockets of `udp+tcp`), logs
+  replies `ok`. With `--ddr`, a DoT, DoH or DoQ listener is designated from its add on and not after its remove (see DDR).
+  A remove closes a served listener (bound at start or added; both sockets of `udp+tcp`), logs
   `stopped listening <kind> <host:port>` and replies `ok`; one that is not served is
   `error: <kind> <host:port> is not served`. Connections the removed listener had accepted: plain TCP and DoT connections
   keep running to their own end (or the shutdown's); DoH connections (the HTTP server is closed) and DoQ connections (closed
@@ -351,6 +352,9 @@ wildcard address is never matched to L. A plain socket bound to a wildcard addre
 address) but not over UDP (the socket's address is the wildcard), so over UDP that query gets no data, and no record ever
 carries `0.0.0.0` or `::` as a hint. Without `--ddr`, or with pfB-DNS off, the gateway does not touch `resolver.arpa.` and
 the client gets Unbound's own answer unchanged.
+
+The listeners DDR designates are the ones the gateway serves now: a DoT, DoH or DoQ listener added over the control socket
+is designated from then on, and one that is removed (bound at start or added) no longer is, with no restart.
 
 ## RFCs read for this step
 
