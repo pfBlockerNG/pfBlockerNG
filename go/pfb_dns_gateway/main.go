@@ -5,12 +5,15 @@
 //	pfb_dns_gateway [flags] -- <decider command...>
 //
 // The decider command is started with the decision socket as fd 3; docs/misc/dns-gateway-protocol.md is the
-// protocol, docs/misc/dns-gateway-transports.md the encrypted transports. Readiness lines on stderr, once the
-// decider has sent READY:
+// protocol, docs/misc/dns-gateway-transports.md the encrypted transports. Log lines on stderr:
 //
-//	listening udp+tcp <host>:<port>     one per bound --listen address
+//	starting pid <pid>                  the first line of every start, before the decider is READY
+//	listening udp+tcp <host>:<port>     one per bound --listen address, once the decider has sent READY
 //	listening dot|doh|doq <host>:<port> one per bound TLS listener
 //	ready upstream <host>:<port> pid <pid>
+//
+// While it serves, the control socket adds a listener (`listening <kind> <host>:<port>`) or removes one
+// (`stopped listening <kind> <host>:<port>`).
 //
 // --ready-file PATH: the gateway writes its own pid there, mode 0600, once it serves, and removes the file at stop
 // while the file still names it. Just before, it writes PATH.sha256: the SHA-256 of its own executable as read at start,
@@ -281,9 +284,10 @@ type server struct {
 	retiring map[*child]*Decider // deciders a restart replaced that are not gone yet
 }
 
-// start binds every --listen address (one that fails is logged and skipped), starts the decider, gives up root,
-// waits for READY, reports readiness and begins serving. On any error nothing is left running or bound.
+// start logs `starting pid`, binds every --listen address (one that fails is logged and skipped), starts the decider,
+// gives up root, waits for READY, reports readiness and begins serving. On any error nothing is left running or bound.
 func start(cfg config, logf func(format string, args ...any)) (*server, error) {
+	logf("starting pid %d", os.Getpid()) // first, so that a reader of the log finds where this start begins
 	trace := cfg.trace
 	if trace == nil {
 		trace = func(string) {}
@@ -395,12 +399,13 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	g.ddr = ddrAnswers
 	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
 		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}
+	set := newListenerSet(g, cfg, secure)
 	for _, l := range listeners {
-		g.serve(l)
+		set.track("udp+tcp", l.addr(), g.serve(l))
 	}
-	secure.serve(g, cfg.dohTrusted)
+	secure.serve(set)
 	if ctl != nil {
-		ctl.restart = s.restartDecider
+		ctl.restart, ctl.listeners = s.restartDecider, set
 		ctl.serve(g)
 	}
 	g.wg.Add(1)

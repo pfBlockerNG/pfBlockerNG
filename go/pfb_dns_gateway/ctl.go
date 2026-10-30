@@ -17,15 +17,21 @@ import (
 
 // The control socket is how root reaches the gateway once the gateway no longer is root: a Unix stream socket in a
 // directory only root can enter, bound before the privilege drop and kept after it, in every mode. One message per
-// connection, starting with 4 bytes: FF FF FF FF (nothing after it) restarts the decider; anything else is the big-endian
-// length of the PEM that follows (the certificate, the CAs after it, the key), which replaces the TLS certificate. One
-// reply line, `ok` or `error: <reason>`. Whoever is not root, by the kernel's credential of the peer, is closed on without
-// a byte read from it.
+// connection, starting with 4 bytes: FF FF FF FF (nothing after it) restarts the decider; FF FF FF FE adds and FF FF FF FD
+// removes a listener, each followed by a 4-byte big-endian length (1 to 256) and `<kind> <host:port>`, an add carrying
+// its sockets as SCM_RIGHTS (see listeners.go); anything else is the big-endian length of the PEM that follows (the
+// certificate, the CAs after it, the key), which replaces the TLS certificate. One reply line, `ok` or `error: <reason>`.
+// Whoever is not root, by the kernel's credential of the peer, is closed on without a byte read from it. Descriptors that
+// come with anything but an add that is taken are closed.
 
 const (
 	defaultCtlSocket   = "/var/run/pfb_dns/ctl.sock"
 	ctlMaxPEM          = 64 << 10 // a chain of a few certificates and a key are a few KiB
+	ctlMaxListener     = 256      // `<kind> <host:port>`: the longest is 7 + 1 + 47 bytes
 	ctlRestart         = 0xffffffff
+	ctlAdd             = 0xfffffffe // above ctlMaxPEM, so that no certificate's length is one
+	ctlRemove          = 0xfffffffd
+	ctlRightsRoom      = 8 // descriptors one read takes: an add carries 2
 	defaultCtlDeadline = 5 * time.Second
 )
 
@@ -33,14 +39,15 @@ const (
 var ctlUID uint32
 
 type ctlServer struct {
-	ln       *net.UnixListener
-	path     string
-	certs    *certStore // nil when no TLS transport is served: a push is refused
-	logf     func(format string, args ...any)
-	peerUID  func(*net.UnixConn) (uint32, error) // the kernel's credential of the peer; a test replaces it
-	deadline time.Duration                       // for reading the message, and again for writing the reply
-	refusing atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
-	restart  func() error                        // the decider restart; start() sets it
+	ln        *net.UnixListener
+	path      string
+	certs     *certStore // nil when no TLS transport is served: a push is refused
+	logf      func(format string, args ...any)
+	peerUID   func(*net.UnixConn) (uint32, error) // the kernel's credential of the peer; a test replaces it
+	deadline  time.Duration                       // for reading the message, and again for writing the reply
+	refusing  atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
+	restart   func() error                        // the decider restart; start() sets it
+	listeners *listenerSet                        // what an add or remove changes; start() sets it. nil in a test of the PEM alone: no add or remove may be sent to it (a nil set would panic)
 }
 
 // bindCtl makes path's directory private to the user running the gateway (root), replaces what an earlier gateway left at
@@ -130,22 +137,28 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		return
 	}
 	c.refusing.Store(false)
+	in := &ctlInput{conn: conn, oob: make([]byte, syscall.CmsgSpace(4*ctlRightsRoom))}
+	defer in.closeRights()      // before the connection is closed: the sender sees its sockets go
 	reply := func(msg string) { // its own deadline: the read that failed may have used up the first
 		_ = conn.SetWriteDeadline(time.Now().Add(c.deadline))
 		_, _ = conn.Write([]byte(strings.ReplaceAll(msg, "\n", " ") + "\n"))
 	}
 	var head [4]byte
-	if _, err := io.ReadFull(conn, head[:]); err != nil {
+	if _, err := io.ReadFull(in, head[:]); err != nil {
 		reply("error: no message: " + reason(err).Error())
 		return
 	}
 	n := binary.BigEndian.Uint32(head[:])
-	if n == ctlRestart {
+	switch n {
+	case ctlRestart:
 		if err := c.restart(); err != nil {
 			reply("error: " + err.Error())
 			return
 		}
 		reply("ok")
+		return
+	case ctlAdd, ctlRemove:
+		reply(c.listeners.change(n == ctlAdd, in))
 		return
 	}
 	if n == 0 || n > ctlMaxPEM {
@@ -153,7 +166,7 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		return
 	}
 	pem := make([]byte, n)
-	if got, err := io.ReadFull(conn, pem); err != nil {
+	if got, err := io.ReadFull(in, pem); err != nil {
 		reply(fmt.Sprintf("error: the message ended after %d of %d bytes: %v", got, n, reason(err)))
 		return
 	}
@@ -166,4 +179,33 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		return
 	}
 	reply("ok")
+}
+
+// ctlInput is the connection read with recvmsg, so that a descriptor riding with any byte of the message is found and
+// owned here: whatever no verb takes is closed when the handler ends. Descriptors on bytes never read are the kernel's.
+type ctlInput struct {
+	conn *net.UnixConn
+	oob  []byte
+	fds  []int // received and neither taken nor closed yet
+	cut  bool  // the kernel dropped control data that did not fit oob, or it did not parse
+}
+
+func (in *ctlInput) Read(p []byte) (int, error) {
+	n, oobn, flags, _, err := in.conn.ReadMsgUnix(p, in.oob)
+	in.cut = in.cut || flags&syscall.MSG_CTRUNC != 0
+	msgs, perr := syscall.ParseSocketControlMessage(in.oob[:oobn])
+	in.cut = in.cut || perr != nil
+	for i := range msgs {
+		if fds, err := syscall.ParseUnixRights(&msgs[i]); err == nil {
+			in.fds = append(in.fds, fds...)
+		}
+	}
+	return max(n, 0), err // recvmsg's n is -1 on a timeout: an io.Reader's is not
+}
+
+func (in *ctlInput) closeRights() {
+	for _, fd := range in.fds {
+		_ = syscall.Close(fd)
+	}
+	in.fds = nil
 }

@@ -79,21 +79,20 @@ func (t *tlsListeners) report(logf func(format string, args ...any)) {
 	}
 }
 
-// serve starts answering on every bound TLS listener.
-func (t *tlsListeners) serve(g *gateway, trusted []string) {
+// serve starts answering on every bound TLS listener and records each in set, where the control socket's remove finds it.
+func (t *tlsListeners) serve(set *listenerSet) {
 	if t == nil {
 		return
 	}
 	for _, ln := range t.dot {
-		g.serveDoT(ln, t.certs.dot())
+		set.track("dot", ln.Addr().(*net.TCPAddr).AddrPort(), set.g.serveDoT(ln, t.certs.dot()))
 	}
-	if len(t.doh) > 0 {
-		prefixes := parseTrusted(trusted, g.logf)
-		for _, ln := range t.doh {
-			g.serveDoH(ln, t.certs.doh(), prefixes)
-		}
+	for _, ln := range t.doh {
+		set.track("doh", ln.Addr().(*net.TCPAddr).AddrPort(), set.g.serveDoH(ln, t.certs.doh(), set.trusted))
 	}
 	for _, ln := range t.doq {
-		g.serveDoQ(ln, t.certs.doq())
+		if closeNow, err := set.g.serveDoQ(ln, t.certs.doq()); err == nil { // serveDoQ has logged what failed
+			set.track("doq", ln.LocalAddr().(*net.UDPAddr).AddrPort(), closeNow)
+		}
 	}
 }

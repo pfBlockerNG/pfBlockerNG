@@ -32,7 +32,15 @@ from typing import Any, cast
 
 import dnswire
 import pytest
-from dot_helpers import control_socket, dot_exchange, make_certificate, push_certificate, write_certificate_file
+from dot_helpers import (
+    PORT_PICKS,
+    control_socket,
+    dot_exchange,
+    free_loopback_port,
+    make_certificate,
+    push_certificate,
+    write_certificate_file,
+)
 from frontend_constants import (
     ALLOWED,
     BLOCKED,
@@ -752,6 +760,110 @@ def test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handsh
         dot_exchange(tls_gateway.dot, build_query(ALLOWED), renewed / "server.crt", source=ALLOWED_CLIENT_TCP)
     )[0]
     assert dnswire.parse(reply).rcode == 0, "the refused push left the pushed certificate in place"
+
+
+LIVE_PHP = (
+    "[, $boot, $verb, $kind, $at, $ctl] = $argv; require $boot;"
+    "if ($verb === 'add') {"
+    "    $sockets = pfb_dns_proxy_listener_bind($kind, $at, $why);"
+    '    $error = ($sockets === NULL) ? "bind: {$why}" : pfb_dns_proxy_listener_add($kind, $at, $sockets, $ctl);'
+    "} else {"
+    "    $error = pfb_dns_proxy_listener_remove($kind, $at, $ctl);"
+    "}"
+    "echo $error ?? 'ok';"
+)
+
+
+def _live_listener(verb: str, at: str, ctl: Path) -> str:
+    """What the real PHP (pfb_dns_proxy_listener_bind/add/remove, as root) says for `udp+tcp <at>`: `ok` or why not."""
+    boot = REPO_ROOT / "tests" / "php" / "bootstrap.php"
+    with watched(f"PHP to {verb} {at}"):
+        done = subprocess.run(
+            ["php", "-r", LIVE_PHP, "--", str(boot), verb, "udp+tcp", at, str(ctl)],
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            timeout=WATCHDOG,
+        )
+    return done.stdout
+
+
+def _port_free_on_every_listener_address() -> int:
+    """A port free for UDP and TCP on 127.0.0.1, 127.0.0.2 and ::1."""
+    for _ in range(PORT_PICKS * 8):
+        port = free_loopback_port()
+        try:
+            for family, host in ((socket.AF_INET, "127.0.0.2"), (socket.AF_INET6, "::1")):
+                for kind in (socket.SOCK_DGRAM, socket.SOCK_STREAM):
+                    with socket.socket(family, kind) as probe:
+                        probe.bind((host, port))
+        except OSError:
+            continue
+        return port
+    raise RuntimeError("no port free for UDP and TCP on 127.0.0.1, 127.0.0.2 and ::1")
+
+
+def _refuses(host: str, port: int) -> bool:
+    """True when nothing listens at host:port for TCP and for UDP (loopback answers a datagram with an ICMP refusal)."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as tcp, socket.socket(family, socket.SOCK_DGRAM) as udp:
+        tcp.settimeout(WATCHDOG)
+        udp.settimeout(WATCHDOG)
+        try:
+            tcp.connect((host, port))
+        except ConnectionRefusedError:
+            pass
+        else:
+            return False
+        udp.connect((host, port))
+        try:
+            udp.send(build_query(ALLOWED))
+            udp.recv(512)
+        except ConnectionRefusedError:
+            return True
+        return False
+
+
+def _outcome(wire: bytes) -> tuple[int, list[tuple[str, int, bytes]]]:
+    return dnswire.parse(wire).rcode, _answers(wire)
+
+
+# E1
+@NEEDS_ROOT
+def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_the_real_gateway(
+    gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path, acl_text: str
+) -> None:
+    port = _port_free_on_every_listener_address()
+    with (
+        control_socket() as ctl,
+        _gateway_process(
+            gateway_binary,
+            module_dir,
+            unbound,
+            tmp_path,
+            acl_text,
+            ["--port", str(port), "--ctl-socket", str(ctl)],
+        ) as (process, _),
+    ):
+        original = ("127.0.0.1", port)
+        assert process.server() == original
+        # A ::1 client gets REFUSED (from the gateway's ACL or the rig's 127/8-only Unbound): a reply on a socket that
+        # refused before the add is the adopted listener serving
+        served = {"127.0.0.2": (0, [ALLOWED_ANSWER]), "::1": (5, [])}
+        for host, at in (("127.0.0.2", f"127.0.0.2:{port}"), ("::1", f"[::1]:{port}")):
+            assert _refuses(host, port), f"{at} is served before it is added"
+            assert _live_listener("add", at, ctl) == "ok"
+            process.wait_for(f"listening udp+tcp {at}")
+            for transport, ask in (("UDP", _udp), ("TCP", _tcp)):
+                assert _outcome(ask((host, port), ALLOWED, host)) == served[host], f"{transport} at {at}"
+
+        assert _live_listener("remove", f"127.0.0.2:{port}", ctl) == "ok"
+        process.wait_for(f"stopped listening udp+tcp 127.0.0.2:{port}")
+        assert _refuses("127.0.0.2", port)
+        assert _answers(_udp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]
+        assert _answers(_tcp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]
+        assert _outcome(_tcp(("::1", port), ALLOWED, "::1")) == served["::1"], "the other added listener stays"
 
 
 def test_readiness_lines_name_every_tls_listener_before_ready(tls_gateway: TlsRunning) -> None:

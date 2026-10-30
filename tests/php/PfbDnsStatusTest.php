@@ -611,6 +611,34 @@ final class PfbDnsStatusTest extends TestCase
 		], pfb_dns_proxy_listeners(NULL, '4243')['listening']);
 	}
 
+	public function testAListenerTheGatewayTookLiveShowsAsListening(): void
+	{
+		// Given a current start that lacks plain DNS on lan (issue #3599: the gateway may take it later, live)
+		$this->box();
+		$this->log('listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53', self::READY);
+		$this->assertSame(self::lanRefused('53', 'the gateway did not report it'), $this->transports()['plain'], 'before: lan is not listening');
+
+		// When the gateway logs that it took the listener after its ready line
+		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], "listening udp+tcp 192.0.2.1:53\n", FILE_APPEND);
+
+		// Then the panel shows it listening
+		$this->assertSame(self::served('53'), $this->transports()['plain']);
+	}
+
+	public function testAListenerTheGatewayRemovedLiveIsNoLongerListening(): void
+	{
+		// Given a current start that serves plain DNS on lan
+		$this->box();
+		$this->log(self::PLAIN, self::READY);
+		$this->assertSame(self::served('53'), $this->transports()['plain'], 'before: every address listens');
+
+		// When the gateway logs that it stopped listening there
+		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], "stopped listening udp+tcp 192.0.2.1:53\n", FILE_APPEND);
+
+		// Then the panel shows it as not listening (the command still names it)
+		$this->assertSame(self::lanRefused('53', 'the gateway did not report it'), $this->transports()['plain']);
+	}
+
 	public function testATransportThatIsOnButHasNoListenerInTheCommandSaysSo(): void
 	{
 		// Given DoT on with a stored port that is no port: the generator leaves DoT out of the command

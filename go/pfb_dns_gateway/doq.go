@@ -63,20 +63,21 @@ func (c *doqConns) closeAll() {
 	wg.Wait()
 }
 
-// serveDoQ serves QUIC on udp until stop(). No 0-RTT (a replayed query is not harmless here) and no unidirectional
-// streams (RFC 9250 4.3.3 makes opening one a protocol error). Connections are admitted before their handshake.
-func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
+// serveDoQ serves QUIC on udp until stop() or the returned closeNow; when QUIC cannot listen on udp it is closed, the
+// reason is logged and returned. No 0-RTT (a replayed query is not harmless here) and no unidirectional streams
+// (RFC 9250 4.3.3 makes opening one a protocol error). Connections are admitted before their handshake.
+func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) (closeNow func(), err error) {
 	// A slot taken at the first Initial packet is only safe when its source is real: a Retry proves it first.
 	tr := &quic.Transport{Conn: udp, ConnContext: g.admitDoQ, VerifySourceAddress: func(net.Addr) bool { return true }}
 	ln, err := tr.Listen(conf, &quic.Config{MaxIncomingStreams: maxDoQStreams, MaxIncomingUniStreams: -1, MaxIdleTimeout: doqIdleTimeout})
 	if err != nil {
 		g.logf("DoQ on %s: %v", udp.LocalAddr(), err)
 		_ = udp.Close()
-		return
+		return nil, err
 	}
 	conns := &doqConns{open: map[*quic.Conn]struct{}{}}
 	acceptEnded := make(chan struct{})
-	g.closeOnStop(func() {
+	closeNow = g.closeOnStop(func() {
 		closed := make(chan struct{})
 		go func() {
 			defer close(closed)
@@ -120,6 +121,7 @@ func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) {
 			go g.serveQUICConn(conn)
 		}
 	}()
+	return closeNow, nil
 }
 
 // admitDoQ runs before the handshake (quic-go's ConnContext): an address the ACL denies never holds a slot, and a

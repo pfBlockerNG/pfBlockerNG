@@ -85,6 +85,7 @@ pytest:tests.dns_proxy.test_decider_applied::test_the_named_user_with_a_differen
 
 # pytest -- the TLS control-socket push: the gateway takes a push only from uid 0 (ctl.go ctlUID); the pytest job's root step runs it.
 pytest:tests.dns_proxy.test_gateway_e2e::test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing  # skipped when os.geteuid() != 0: the control socket takes pushes from uid 0 only; the pytest job's root step runs it as root
+pytest:tests.dns_proxy.test_gateway_e2e::test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_the_real_gateway  # skipped when os.geteuid() != 0: the control socket takes pushes and listener frames from uid 0 only; the pytest job's root step runs it as root
 
 # ui -- the live-VM Tier-B browser legs. Whether any pre-defined feed exposes an
 # Alternate-URL radio is feed-data dependent, so the case has always skipped cleanly when

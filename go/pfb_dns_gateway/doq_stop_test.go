@@ -27,8 +27,8 @@ var stopModes = []struct {
 		g.mu.Lock()
 		closers := slices.Clone(g.closers)
 		g.mu.Unlock()
-		for _, closeFn := range closers {
-			closeFn()
+		for _, c := range closers {
+			c.run()
 		}
 	}},
 }

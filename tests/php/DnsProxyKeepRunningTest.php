@@ -22,7 +22,7 @@ use PHPUnit\Framework\TestCase;
  *     names the RSS and hw.usermem it measured (issue #3580); a shortfall, or a decider, its RSS or hw.usermem that cannot be read,
  *     is a whole-pair restart whose log line says why;
  *   - a proxy that is not ready is never asked for either restart, and a due whole-pair restart never also sends the decider's;
- *   - nor does the cron tick restart a proxy that is not ready for an address its log says the start could not assign (issue #3598).
+ *   - the listen-address rows (a start's refused address, a pending marker, the tick) are DnsProxyLiveListenersTest's.
  *
  * Every row starts from the quiet box (nothing differs: nothing restarts) and changes one thing.
  */
@@ -107,17 +107,6 @@ final class DnsProxyKeepRunningTest extends TestCase
 	private function pair(): array
 	{
 		return ['restart_service pfb_dns_proxy'];
-	}
-
-	/** Whether this host takes an unprivileged UDP bind on $host (port 0), closed at once: the question the tick's restart asks. */
-	private static function binds(string $host): bool
-	{
-		$probe = @stream_socket_server("udp://{$host}:0", $errno, $errstr, STREAM_SERVER_BIND);
-		if ($probe === FALSE) {
-			return FALSE;
-		}
-		fclose($probe);
-		return TRUE;
 	}
 
 	public function testAQuietBoxRestartsNothing(): void
@@ -457,89 +446,6 @@ final class DnsProxyKeepRunningTest extends TestCase
 		// Then neither restart was asked for
 		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
 		$this->assertSame([], $this->krProxyCalls());
-	}
-
-	public function testTheTickNeverRestartsAProxyThatIsAliveButNotReadyForAnAddressItCanBindNow(): void
-	{
-		// Given a live proxy that never published its marker, whose log's latest start refused 127.0.0.1 (which this box binds) as
-		// not assignable; the rollback its failed readiness leads to finds the config locked (issue #3598)
-		$this->krApply(['proxy' => 'lives', 'gatewayLog' => [
-			'listening udp+tcp 192.0.2.1:53', "cannot listen on 127.0.0.1:53: bind: can't assign requested address", 'listening udp+tcp [::1]:53',
-			'ready upstream 127.0.0.1:5353 pid 4242',
-		]]);
-		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
-		$this->assertTrue(self::binds('127.0.0.1'), 'before: this host binds 127.0.0.1, so the row would pass for the wrong reason');
-		$this->assertFalse(pfb_dns_proxy_ready(), 'before: the proxy is alive and not ready');
-		$this->assertSame(['127.0.0.1:53' => "bind: can't assign requested address"], pfb_dns_proxy_listeners()['refused'] ?? NULL, 'before: the refusal is in the record');
-
-		// When the cron tick runs
-		$this->krTick();
-
-		// Then the tick does not restart it for the address: a proxy that is not ready has no record of its own to judge
-		$this->assertNotContains('restart_service pfb_dns_proxy', $this->krProxyCalls());
-	}
-
-	public function testAZonedRefusalIsNeverRecordedSoItIsNeverProbedNorRestartedFor(): void
-	{
-		// Given a ready proxy whose latest start refused zoned link-local addresses (a named and a numeric zone) as not assignable
-		$this->krApply(['gatewayLog' => [
-			"cannot listen on [fe80::1%lo0]:53: bind: can't assign requested address",
-			"cannot listen on [fe80::1%1]:53: bind: can't assign requested address", 'ready upstream 127.0.0.1:5353 pid 4242',
-		]]);
-
-		// When the log is read, the update pass runs and then the cron tick
-		$refused = pfb_dns_proxy_listeners()['refused'] ?? NULL;
-		$ready = $this->krEnsure();
-		$this->krTick();
-
-		// Then the parser never recorded the refusal, so neither pass restarted the proxy
-		$this->assertSame([], $refused);
-		$this->assertTrue($ready);
-		$this->assertSame([], $this->krProxyCalls());
-	}
-
-	public function testTheTickRestartsOnceForSeveralBindableRefusals(): void
-	{
-		// Given a ready proxy whose latest start refused three addresses this box binds, and a restart whose new start serves them
-		$this->assertTrue(self::binds('127.0.0.1') && self::binds('[::1]'), 'before: this host binds 127.0.0.1 and ::1');
-		$cant = "bind: can't assign requested address";
-		$this->krApply([
-			'gatewayLog' => [
-				"cannot listen on 127.0.0.1:53: {$cant}", "cannot listen on [::1]:53: {$cant}", "cannot listen on 127.0.0.1:853: {$cant}",
-				'ready upstream 127.0.0.1:5353 pid 4242',
-			],
-			'restartLog' => ['listening udp+tcp 127.0.0.1:53', 'ready upstream 127.0.0.1:5353 pid 4242'],
-		]);
-
-		// When the cron tick runs
-		$this->krTick();
-
-		// Then the pair is restarted once, not once per address
-		$this->assertSame($this->pair(), $this->krProxyCalls());
-	}
-
-	public function testATickRestartLeavesAPendingRestartToTheUpdatePass(): void
-	{
-		// Given a restart pending for the rc script, and a ready proxy whose latest start refused 127.0.0.1 (which this box binds)
-		$this->assertTrue(self::binds('127.0.0.1'), 'before: this host binds 127.0.0.1');
-		$this->krApply([
-			'marker' => 'the package changed its rc script',
-			'gatewayLog' => ["cannot listen on 127.0.0.1:53: bind: can't assign requested address", 'ready upstream 127.0.0.1:5353 pid 4242'],
-			'restartLog' => ['listening udp+tcp 127.0.0.1:53', 'ready upstream 127.0.0.1:5353 pid 4242'],
-		]);
-
-		// When the cron tick runs, and then the update pass
-		$this->krTick();
-		$afterTick = [$this->krProxyCalls(), $this->krMarker()];
-		// the tick's config seams change what the rc script is generated from: the pass compares it with the one on disk
-		pfb_dns_proxy_service($this->krProxyDir);
-		$this->krEnsure();
-
-		// Then the tick restarted without consuming the marker (a marker written during its restart must not be lost), and the
-		// pass owns it: it restarts once more and clears it
-		$this->assertSame([$this->pair(), 'the package changed its rc script'], $afterTick);
-		$this->assertSame([...$this->pair(), ...$this->pair()], $this->krProxyCalls());
-		$this->assertNull($this->krMarker());
 	}
 
 	public function testADueWholePairRestartNeverAlsoSendsTheDeciderRestart(): void

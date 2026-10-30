@@ -61,6 +61,7 @@ trait KeepRunningScenario
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
+		$GLOBALS['pfb_test_configured_ipv6'] = [];
 		$this->krCalls = [];
 		$this->krRestartLog = NULL;
 		$this->krPs(self::krPsTable([self::krPsSupervisor(), self::krPsGateway(), self::krPsDecider()]));
@@ -87,7 +88,7 @@ trait KeepRunningScenario
 		return [
 			'pfb', 'config', 'g', 'pfb_test_process_running', 'pfb_test_valid_pids', 'pfb_test_service_calls', 'pfb_test_service_hook',
 			'pfb_test_rcfile_writes', 'pfb_test_rcfiles', 'pfb_test_rcfile_dir', 'pfb_test_try_lock_fail', 'pfb_test_file_notices',
-			'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_swap_wait_s',
+			'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_interfaces', 'pfb_test_swap_wait_s', 'pfb_test_configured_ipv6',
 			'pfb_test_unbound_py_sentinel_published', 'pfb_test_sysctl',
 			'pfb_test_ps_output',
 		];
@@ -162,15 +163,21 @@ trait KeepRunningScenario
 	 *   dot       bool            a DoT listener on lan (192.0.2.1:853) is configured
 	 *   gatewayLog ?list<string>  the gateway's log lines, NULL = no log is written
 	 *   restartLog ?list<string>  the lines the gateway's log gains when the proxy is started or restarted (the new start's record), NULL = none
+	 *   port      ?string         the plain DNS port the rc script is written with (unbound/port), NULL = 53
+	 *   lan       ?string         the IPv4 address lan has when the NEXT pass runs; the rc script on disk was written with 192.0.2.1, NULL = it still has it
+	 *   lan6      ?string         the IPv6 address lan has when the next pass runs (the rc script on disk was written with none), NULL = none
 	 */
 	private function krApply(array $s): void
 	{
 		// serving: the Unbound backend answers too, so a full confirmation can pass; a worker passes FALSE, and its package rows prove a deferred pass needs no confirmation
-		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE, 'dot' => FALSE, 'gatewayLog' => NULL, 'restartLog' => NULL];
+		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE, 'dot' => FALSE, 'gatewayLog' => NULL, 'restartLog' => NULL, 'port' => NULL, 'lan' => NULL, 'lan6' => NULL];
 		$this->krRestartLog = $s['restartLog'];
 		// The rc script bakes the control socket's path in: it is set before the script is written
 		if ($s['ctl'] !== NULL) {
 			$GLOBALS['pfb']['dns_proxy_ctl'] = $s['ctl'];
+		}
+		if ($s['port'] !== NULL) {
+			config_set_path('unbound/port', $s['port']);
 		}
 		if ($s['snapshot']) {
 			$keys = [];
@@ -202,24 +209,35 @@ trait KeepRunningScenario
 			file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", $s['gatewayLog']) . "\n");
 		}
 		if ($s['dot']) {
-			// A DoT listener on lan, configured as the pfB-DNS page configures it: the gateway's log decides whether it is reported
-			// A stored plain interface list: without one, the one-time seed (pfb_dns_proxy_seed_values()) turns DoT off
-			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
-			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot', 'on');
-			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface', 'lan');
-			config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_port', '853');
-			$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
+			$this->krEnableDot();
 		}
 		if ($s['rc'] === 'same') {
 			pfb_dns_proxy_service($this->krProxyDir);
 		} else {
 			file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n# the rc script an older package wrote\n");
 		}
+		if ($s['lan'] !== NULL) {
+			$GLOBALS['pfb_test_interface_ip'] = ['lan' => $s['lan']];
+		}
+		if ($s['lan6'] !== NULL) {
+			$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => $s['lan6']];
+		}
 		if ($s['marker'] !== NULL) {
 			file_put_contents($GLOBALS['pfb']['dns_proxy_restart_pending'], "{$s['marker']}\n");
 		}
 		$this->krGateway($s['gateway']);
 		$this->krDecider($s['decider']);
+	}
+
+	/** A DoT listener on lan (192.0.2.1:853), configured as the pfB-DNS page configures it: the gateway's log decides whether it is reported. */
+	private function krEnableDot(): void
+	{
+		// A stored plain interface list: without one, the one-time seed (pfb_dns_proxy_seed_values()) turns DoT off
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot', 'on');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface', 'lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_port', '853');
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
 	}
 
 	private function krGateway(string $mode): void
