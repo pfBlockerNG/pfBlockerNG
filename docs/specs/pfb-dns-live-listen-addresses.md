@@ -129,7 +129,11 @@ It compares `pfb_dns_proxy_command_listeners()` (what the rc script asks for) wi
    gateway in more than addresses, so nothing is changed live: a missing listener that binds now returns why (the
    whole-pair restart #3598 makes, which leaves the marker to the update pass), and served listeners the command does
    not name are kept.
-8. A log with no complete start (`pfb_dns_proxy_listeners()` is NULL) changes nothing; the caller decides (D1).
+8. The reconcile reads the record of the gateway that published the ready marker: `pfb_dns_proxy_ready_listeners()` is
+   `pfb_dns_proxy_listeners()` for the marker's pid, as the status panel reads it. A log with no complete start of that
+   gateway (NULL: no `ready upstream` line, or the latest one ends with another pid) changes nothing; the caller decides
+   (D1). After a (re)start the marker is published before the gateway's log lines are relayed, so until they arrive the
+   latest complete start is the previous gateway's: acting on it could remove a listener the new gateway never served.
 
 ### D5. Answers to the packet's questions
 

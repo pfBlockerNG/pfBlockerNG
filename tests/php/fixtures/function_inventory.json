@@ -2346,6 +2346,11 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_proxy_ready_listeners": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": []
+    },
     "pfb_dns_proxy_recovery_required": {
         "returnsRef": false,
         "returnType": "bool",

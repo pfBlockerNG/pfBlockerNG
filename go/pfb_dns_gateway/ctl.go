@@ -47,7 +47,7 @@ type ctlServer struct {
 	deadline  time.Duration                       // for reading the message, and again for writing the reply
 	refusing  atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
 	restart   func() error                        // the decider restart; start() sets it
-	listeners *listenerSet                        // what an add or remove changes; start() sets it, nil in a test of the PEM alone
+	listeners *listenerSet                        // what an add or remove changes; start() sets it. nil in a test of the PEM alone: no add or remove may be sent to it (a nil set would panic)
 }
 
 // bindCtl makes path's directory private to the user running the gateway (root), replaces what an earlier gateway left at

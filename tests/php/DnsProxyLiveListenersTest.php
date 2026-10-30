@@ -19,9 +19,11 @@ use PHPUnit\Framework\TestCase;
  *   - an rc script that differs only in its listen addresses, with the proxy READY and its log holding a complete start, is
  *     reconciled live by the update pass: the gone addresses removed, the new ones added, nothing restarted; any other difference
  *     (a port, a TLS group on or off, DDR, a module flag), a proxy that is not READY and a log with no complete start restart the pair;
- *   - an address the box cannot assign yet is left for a later pass with nothing sent, logged or restarted; one that fails to bind
- *     otherwise is logged and skipped; a change the gateway does not take (an older gateway's error, a hang-up, no socket) restarts
- *     the pair once and sends no further frame;
+ *   - an address the box cannot assign yet (in the words of Linux and of FreeBSD) is left for a later pass with nothing sent, logged or
+ *     restarted; one that fails to bind otherwise is logged and skipped, a restart pending or not; a change the gateway does not take
+ *     (an older gateway's error, a hang-up, no socket) restarts the pair once and sends no further frame;
+ *   - the reconcile acts on the record of the gateway that published the ready marker (its pid) only: while the log's latest complete
+ *     start is an earlier gateway's it sends nothing, and an address-only change restarts the pair;
  *   - the cron tick adds an address the start refused and the box binds now, and removes one the command no longer names, live;
  *     with a restart pending it changes nothing live and restarts once for a missing listener that binds (the update pass keeps the
  *     marker); under an update pass it does nothing. A package operation's rows are DnsProxyKeepRunningPkgTest's.
@@ -42,6 +44,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 	use LiveListenerStandIn;
 
 	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
+	/** The ready line of the gateway before the one whose pid the ready marker names (4242). */
+	private const PREVIOUS = 'ready upstream 127.0.0.1:5353 pid 4141';
 	private const CANT = "bind: can't assign requested address";
 	private const STARTUP = 'pfBlockerNG DNS Proxy startup';
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
@@ -81,13 +85,13 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 	/**
 	 * The gateway's log of one start: it listens on $served (hosts as the gateway spells them, IPv6 bracketed), refuses $refused
-	 * (host => the reason) and ends with its ready line.
+	 * (host => the reason) and ends with $ready, the ready line of the gateway of the pid the ready marker names unless a row says otherwise.
 	 *
 	 * @param list<string> $served
 	 * @param array<string,string> $refused
 	 * @return list<string>
 	 */
-	private function started(array $served, array $refused = []): array
+	private function started(array $served, array $refused = [], string $ready = self::READY): array
 	{
 		$lines = [];
 		foreach ($served as $host) {
@@ -96,7 +100,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		foreach ($refused as $host => $reason) {
 			$lines[] = "cannot listen on {$host}:{$this->port}: {$reason}";
 		}
-		return [...$lines, self::READY];
+		return [...$lines, $ready];
 	}
 
 	/** A ready proxy whose rc script names 192.0.2.1, loopback and ::1 at the free port, and whose log says all three serve. */
@@ -386,6 +390,30 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
+	public function testTheFreeBSDWordingOfAnAddressThatIsNotThereYetIsLeftForALaterPassToo(): void
+	{
+		// Given a ready proxy whose command names 192.0.2.1, which its start could not assign, and a bind that fails in the words
+		// FreeBSD gives EADDRNOTAVAIL ("Can't ...": Linux says "Cannot ...")
+		$this->quietWithoutLan();
+		$record = $this->gateway();
+		$this->rewriteRc();
+		$clock = new PfbFlockClockFixture();
+		$namespace = $clock->loadChain(['pfb_dns_proxy_listeners_sync', 'pfb_dns_proxy_listener_bind']);
+		eval("namespace {$namespace}; function stream_socket_server(string \$address, &\$errno = NULL, &\$errstr = NULL, int \$flags = 0, \$context = NULL) { \$errno = 49; \$errstr = \"Can't assign requested address\"; return FALSE; }");
+		$this->assertNull(($namespace . '\\pfb_dns_proxy_listener_bind')('udp+tcp', "192.0.2.1:{$this->port}", $failure), 'before: the bind fails');
+		$this->assertSame("Can't assign requested address", $failure, 'before: in the words of FreeBSD');
+		$logged = strlen($this->pfbLog());
+
+		// When the reconcile runs
+		$why = ($namespace . '\\pfb_dns_proxy_listeners_sync')();
+
+		// Then nothing is sent, logged or asked for: the next pass tries again
+		$this->assertNull($why);
+		$this->assertSame([], self::frames($record));
+		$this->assertSame($logged, strlen($this->pfbLog()), 'nothing was logged about an address that is not there yet');
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
 	#[DataProvider('addressesTheBoxDoesNotHave')]
 	public function testTheUpdatePassRestartsNothingForAnAddressTheBoxCannotAssignYet(string $host, ?string $lan6): void
 	{
@@ -422,6 +450,27 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame(1, $this->linesWith("0.0.0.0:{$this->port}"));
 		$this->assertMatchesRegularExpression('/Plain DNS[^\n]*0\.0\.0\.0:' . $this->port . '[^\n]*in use/i', $this->pfbLog());
 		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	public function testAnAddressThatFailsToBindForAnotherReasonIsLoggedWhileARestartIsPendingToo(): void
+	{
+		// Given a restart pending, and a ready proxy that needs 0.0.0.0 on a port that something else holds (before: the bind fails, and not as EADDRNOTAVAIL)
+		$this->hold("0.0.0.0:{$this->port}");
+		$this->assertStringContainsStringIgnoringCase('in use', self::bindError("0.0.0.0:{$this->port}"), 'before: the port is taken');
+		$this->quietWithoutLan(['lan' => '0.0.0.0', 'marker' => 'the package changed its rc script']);
+		$record = $this->gateway();
+		$this->rewriteRc();
+
+		// When the reconcile runs
+		$why = pfb_dns_proxy_listeners_sync();
+
+		// Then, as with no restart pending, the failure is one line of the pfB log; nothing is sent, nothing restarts, the marker stays
+		$this->assertNull($why);
+		$this->assertSame([], self::frames($record));
+		$this->assertSame(1, $this->linesWith("0.0.0.0:{$this->port}"));
+		$this->assertMatchesRegularExpression('/Plain DNS[^\n]*0\.0\.0\.0:' . $this->port . '[^\n]*in use/i', $this->pfbLog());
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertSame('the package changed its rc script', $this->krMarker());
 	}
 
 	public function testTheUpdatePassRestartsNothingForAnAddressItCannotBind(): void
@@ -570,6 +619,42 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame('stream', $types["doh 127.0.0.1:{$doh}"]);
 		$this->assertSame('dgram', $types["doq 127.0.0.1:{$doq}"]);
 		$this->assertSame('', $types["doq 192.0.2.1:{$doq}"], 'a remove carries no descriptor');
+	}
+
+	// -----------------------------------------------------------------------
+	// The record of the gateway that published the ready marker (D4.8)
+	// -----------------------------------------------------------------------
+
+	public function testTheReconcileSendsNothingWhileTheLogHoldsOnlyAnEarlierGatewaysStart(): void
+	{
+		// Given a ready marker that names pid 4242, and a log whose latest complete start ends `pid 4141` and served 0.0.0.0, which the command no longer names
+		$this->quiet(['gatewayLog' => $this->started([...self::ADDRESSES, '0.0.0.0'], [], self::PREVIOUS)]);
+		$record = $this->gateway();
+		$this->assertSame('4242', rtrim((string) file_get_contents($GLOBALS['pfb']['dns_proxy_ready'])), 'before: the marker names the gateway of pid 4242');
+		$this->assertTrue(isset(pfb_dns_proxy_listeners()['listening']['udp+tcp']["0.0.0.0:{$this->port}"]), 'before: the log holds that start, which served 0.0.0.0');
+
+		// When the reconcile runs
+		$why = pfb_dns_proxy_listeners_sync();
+
+		// Then it did nothing: that record is not the ready gateway's, so no remove was sent and nothing restarts
+		$this->assertNull($why);
+		$this->assertSame([], self::frames($record));
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	public function testAnAddressOnlyChangeWithNoRecordOfTheReadyGatewayRestartsTheWholePair(): void
+	{
+		// Given a ready marker that names pid 4242 and a log whose only complete start is the previous gateway's, and an interface that has 0.0.0.0 now
+		$this->quiet(['lan' => '0.0.0.0', 'gatewayLog' => $this->started(self::ADDRESSES, [], self::PREVIOUS), 'restartLog' => $this->started(['0.0.0.0', '127.0.0.1', '[::1]'])]);
+		$record = $this->gateway();
+
+		// When the update pass runs
+		$this->krEnsure();
+
+		// Then the pair is restarted once, as with no complete start, and no listener is changed live on the previous gateway's record
+		$this->assertSame(['restart_service pfb_dns_proxy'], $this->krProxyCalls());
+		$this->assertSame([], self::frames($record));
+		$this->assertStringContainsString('Restarting the DNS proxy: its listen addresses changed', $this->krLog());
 	}
 
 	// -----------------------------------------------------------------------

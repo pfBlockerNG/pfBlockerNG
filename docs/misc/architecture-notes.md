@@ -942,22 +942,25 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   second-to-last `ready upstream` line) and then, in log order, the `listening` and `stopped listening` lines up to the next `starting pid`
   line, so that a listener added to a process that is gone is not credited to the next one. `pfb_dns_proxy_ensure_running()` masks every
   `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument out of the rc script it read before the pass and out of the one the
-  pass wrote: equal remainders are an address-only change, reconciled live while the proxy is READY and its log holds a complete start.
-  Any other difference (a port, a TLS group turned on or off, `--doh-trusted`, DDR, a module flag) restarts the pair, as does an
-  address-only change with the proxy not READY or with no complete start to compare with. `pfb_dns_proxy_listeners_sync()` compares
-  the command (`pfb_dns_proxy_command_listeners()`) with what is served, per kind: it removes the served listeners the command does not
-  name, then adds the ones it names that nothing serves, one frame each, each change one line of the pfB log, and after a change the
-  gateway took it waits (bounded, `PFB_DNS_PROXY_LOG_WAIT`) until the log shows it, so the startup check that follows judges what is
-  served. An address that cannot be assigned yet (EADDRNOTAVAIL: an interface address that was not there yet) is left for a later pass
-  with nothing logged, any other failed bind is logged and skipped, and neither restarts anything. A change the gateway does not take (an
-  `error:` reply, including an older gateway's, a hang-up, no control socket, no `socket_sendmsg()`) stops the reconcile with no further frame
-  and restarts the whole pair once; that start binds every address the box can bind, so no restart loop follows. Every cron tick calls the
-  same sync before its confirmation, under the same guards (no update pass running, READY, no package operation); a reason it returns
-  restarts the pair, and the confirmation then judges the new start through `$since`, not the one it replaced. While a restart is pending
+  pass wrote: equal remainders are an address-only change, reconciled live while the proxy is READY and its log holds a complete start of
+  the gateway that published the ready marker (`pfb_dns_proxy_ready_listeners()`: `pfb_dns_proxy_listeners()` for the marker's pid, as the
+  status panel reads it, because a start publishes the marker before its log lines are relayed and the log's latest complete start is the
+  previous gateway's until they arrive). Any other difference (a port, a TLS group turned on or off, `--doh-trusted`, DDR, a module flag)
+  restarts the pair, as does an address-only change with the proxy not READY or with no such start to compare with.
+  `pfb_dns_proxy_listeners_sync()` compares the command (`pfb_dns_proxy_command_listeners()`) with what is served, per kind: it removes
+  the served listeners the command does not name, then adds the ones it names that nothing serves, one frame each, each change one line
+  of the pfB log, and after a change the gateway took it waits (bounded, `PFB_DNS_PROXY_LOG_WAIT`) until the log shows it, so the startup
+  check that follows judges what is served. An address that cannot be assigned yet (EADDRNOTAVAIL: an interface address that was not
+  there yet, worded `Can't assign` by FreeBSD and `Cannot assign` by Linux) is left for a later pass with nothing logged, any other
+  failed bind is logged and skipped, a restart pending or not, and neither restarts anything. A change the gateway does not take (an
+  `error:` reply, including an older gateway's, a hang-up, no control socket, no `socket_sendmsg()`) stops the reconcile with no further
+  frame and restarts the whole pair once; that start binds every address the box can bind, so no restart loop follows. Every cron tick
+  calls the same sync before its confirmation, under the same guards (no update pass running, READY, no package operation); a reason
+  it returns restarts the pair, and the confirmation then judges the new start through `$since`, not the one it replaced. While a restart is pending
   the rc script may differ in more than addresses: nothing is removed or added live, and a missing listener that binds now is the reason to
   restart (the tick leaves the marker, since one written during its restart must not be lost: the next update pass restarts once more
-  for it). A log with no complete start changes nothing, and a package operation changes nothing live: an address-only change of the rc
-  script is recorded as a pending restart, as any other.
+  for it). A log with no complete start of the ready gateway changes nothing, and a package operation changes nothing live: an
+  address-only change of the rc script is recorded as a pending restart, as any other.
 - **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
   in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first
   one's argv on a new socketpair and waits up to 30 s for its READY, then makes it the active one, replies `ok`, lets the old one's
