@@ -842,13 +842,14 @@ def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_
             module_dir,
             unbound,
             tmp_path,
-            f"{acl_text}access-control: ::1/128 allow_snoop\n",  # the ACL has no IPv6 row; the ::1 client needs one
+            acl_text,
             ["--port", str(port), "--ctl-socket", str(ctl)],
         ) as (process, _),
     ):
         original = ("127.0.0.1", port)
         assert process.server() == original
-        # The rig's Unbound allows only 127.0.0.0/8: it REFUSES a ::1 client, which still shows the listener serves
+        # A ::1 client gets REFUSED (from the gateway's ACL or the rig's 127/8-only Unbound): a reply on a socket that
+        # refused before the add is the adopted listener serving
         served = {"127.0.0.2": (0, [ALLOWED_ANSWER]), "::1": (5, [])}
         for host, at in (("127.0.0.2", f"127.0.0.2:{port}"), ("::1", f"[::1]:{port}")):
             assert _refuses(host, port), f"{at} is served before it is added"
