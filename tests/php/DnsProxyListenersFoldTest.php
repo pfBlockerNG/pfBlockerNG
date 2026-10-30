@@ -16,8 +16,13 @@ use PHPUnit\Framework\TestCase;
  *
  * Without the marker, what a running gateway logs after its ready line falls inside the NEXT start's range: a listener added to the old
  * process would be credited to a new one that never bound it.
+ *
+ * A log cut by the 64 KiB window inside its latest start (the `starting pid` line out of the window) is flagged `partial`: its listeners
+ * may be missing from what is read. pfb_dns_proxy_host_port() spells an IPv4-mapped IPv6 address as the IPv4 address, as the gateway logs it.
  */
 #[CoversFunction('pfb_dns_proxy_listeners')]
+#[CoversFunction('pfb_dns_proxy_log_lines')]
+#[CoversFunction('pfb_dns_proxy_host_port')]
 final class DnsProxyListenersFoldTest extends TestCase
 {
 	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
@@ -248,5 +253,72 @@ final class DnsProxyListenersFoldTest extends TestCase
 
 		// Then the panel's pid decides whether the record is its own, and a record that is gives the live add too
 		$this->assertSame($read ? ['udp+tcp 127.0.0.1:53', 'udp+tcp 192.0.2.1:53'] : NULL, $this->served(NULL, $pid));
+	}
+
+	public function testAStoppedLineBeforeTheReadyLineIsNotApplied(): void
+	{
+		// Given a start whose log has a `stopped listening` line for a listener it reported, before its ready line
+		$this->log(['starting pid 4242', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53', 'stopped listening udp+tcp 127.0.0.1:53', self::READY]);
+
+		// Then the start's own report stands: only a line after the ready line removes a listener
+		$this->assertSame(['udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'], $this->served());
+	}
+
+	/** @return list<string> lines of another writer: 70,000 bytes, more than the 64 KiB the log is read within */
+	private static function filler(): array
+	{
+		return array_fill(0, 700, str_repeat('f', 99));
+	}
+
+	public function testAWindowThatCutOffTheLatestStartsMarkerIsFlaggedPartial(): void
+	{
+		// Given a log longer than 64 KiB whose latest start's `starting pid` line and first listener are before the last 64 KiB
+		$this->log(['starting pid 4242', 'listening udp+tcp 127.0.0.1:53', ...self::filler(), 'listening udp+tcp [::1]:53', self::READY]);
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the window');
+		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the marker is outside the window');
+
+		// Then the record says it may miss listeners, and what the window shows is read as for a log with no marker
+		$this->assertTrue(pfb_dns_proxy_listeners()['partial'] ?? NULL);
+		$this->assertSame(['udp+tcp [::1]:53'], $this->served());
+	}
+
+	public function testAWindowThatHoldsTheLatestStartsMarkerIsNotPartial(): void
+	{
+		// Given a log longer than 64 KiB whose latest start, `starting pid` line included, is inside the last 64 KiB
+		$this->log([...self::filler(), 'starting pid 4242', 'listening udp+tcp 127.0.0.1:53', self::READY]);
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the window');
+		$this->assertContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the marker is inside the window');
+
+		// Then the record is whole
+		$this->assertFalse(pfb_dns_proxy_listeners()['partial'] ?? NULL);
+	}
+
+	public function testAShortLogWithNoMarkerIsNotPartial(): void
+	{
+		// Given an older gateway's log: short, with no `starting pid` line
+		$this->log(['listening udp+tcp 127.0.0.1:53', self::READY]);
+
+		// Then the record is whole: nothing was cut
+		$this->assertFalse(pfb_dns_proxy_listeners()['partial'] ?? NULL);
+	}
+
+	/** @return array<string,array{string,string,string}> a host as an rc script or the gateway's log spells it, a port, and the host:port as the gateway prints it */
+	public static function hostPorts(): array
+	{
+		return [
+			'an IPv4 address' => ['127.0.0.1', '53', '127.0.0.1:53'],
+			'an IPv6 address, compressed and bracketed' => ['2001:DB8:0:0:0:0:0:1', '53', '[2001:db8::1]:53'],
+			'an IPv4-mapped address in dotted form' => ['::ffff:127.0.0.1', '53', '127.0.0.1:53'],
+			'an IPv4-mapped address in hex form' => ['::FFFF:7f00:1', '53', '127.0.0.1:53'],
+			'an IPv4-mapped wildcard' => ['::ffff:0.0.0.0', '853', '0.0.0.0:853'],
+			'an address that is not mapped but has the same tail' => ['64:ff9b::7f00:1', '53', '[64:ff9b::7f00:1]:53'],
+			'a text that is no address' => ['127.1', '53', '127.1:53'],
+		];
+	}
+
+	#[DataProvider('hostPorts')]
+	public function testHostPortSpellsAnAddressAsTheGatewayPrintsIt(string $host, string $port, string $printed): void
+	{
+		$this->assertSame($printed, pfb_dns_proxy_host_port($host, $port));
 	}
 }

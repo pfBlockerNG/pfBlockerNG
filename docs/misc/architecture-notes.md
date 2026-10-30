@@ -940,7 +940,9 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   The log stays the record of what is served. A start logs `starting pid <pid>` first, and `pfb_dns_proxy_listeners()` reads the latest
   complete start (after the last `starting pid` line before the last `ready upstream` line; an older gateway's log, which has none, from the
   second-to-last `ready upstream` line) and then, in log order, the `listening` and `stopped listening` lines up to the next `starting pid`
-  line, so that a listener added to a process that is gone is not credited to the next one. `pfb_dns_proxy_ensure_running()` masks every
+  line, so that a listener added to a process that is gone is not credited to the next one. Every host:port is spelled as the gateway
+  prints it, an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as its IPv4 address (Go's `Unmap()`), so that an rc script spelling a host
+  that way matches the log's line for it, not a remove and a refused add on every pass. `pfb_dns_proxy_ensure_running()` masks every
   `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument out of the rc script it read before the pass and out of the one the
   pass wrote: equal remainders are an address-only change, reconciled live while the proxy is READY and its log holds a complete start of
   the gateway that published the ready marker (`pfb_dns_proxy_ready_listeners()`: `pfb_dns_proxy_listeners()` for the marker's pid, as the
@@ -959,7 +961,11 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   it returns restarts the pair, and the confirmation then judges the new start through `$since`, not the one it replaced. While a restart is pending
   the rc script may differ in more than addresses: nothing is removed or added live, and a missing listener that binds now is the reason to
   restart (the tick leaves the marker, since one written during its restart must not be lost: the next update pass restarts once more
-  for it). A log with no complete start of the ready gateway changes nothing, and a package operation changes nothing live: an
+  for it). A log with no complete start of the ready gateway changes nothing, and neither does one whose 64 KiB read cut the latest
+  start's `starting pid` line off (`pfb_dns_proxy_listeners()` flags it `partial`: its `listening` lines may be missing, and the sync
+  would take the missing ones for unserved, re-add them and log `Address already in use` on every pass; the startup check and the
+  status panel read it as before), nor does an rc script that names no plain DNS listener (missing, empty or with no command line: a real
+  one always names loopback, so it is unreadable, not a wish to stop serving). A package operation changes nothing live: an
   address-only change of the rc script is recorded as a pending restart, as any other.
 - **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
   in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first

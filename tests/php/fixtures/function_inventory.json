@@ -2243,6 +2243,13 @@
                 "variadic": false,
                 "type": "?int",
                 "default": "NULL"
+            },
+            {
+                "name": "limited",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },

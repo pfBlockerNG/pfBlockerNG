@@ -4111,9 +4111,9 @@ EOF;
  * @return list<string>
  */
 function pfb_dns_proxy_interface_addresses(array $interfaces, ?array &$skipped = NULL): array {
-	// shortcut: addresses are read at apply time and baked into the rc script. The proxy skips one that has gone away
-	// since (logged, the others are served) but does not listen on one added since until the next apply, which restarts
-	// the proxy when they changed (pfb_dns_proxy_ensure_running()).
+	// shortcut: addresses are read at apply time and baked into the rc script. The proxy skips one that has gone away since (logged,
+	// the others are served); one added since is listened on once the next update pass rewrites the script and adds it live
+	// (pfb_dns_proxy_listeners_sync()), and the cron tick adds one the start could not bind. No restart.
 	$skipped = [];
 	$listen = [];
 	foreach (in_array('all', $interfaces, TRUE) ? ['all'] : $interfaces as $interface) {
@@ -5462,25 +5462,34 @@ function pfb_dns_proxy_log_size(): int {
  * 64 KiB, right-trimmed; none when it is missing or unreadable. The read starts one byte early: a cut at a line start leaves an empty
  * first element, a cut inside a line its partial remainder, and the first element is dropped either way.
  *
+ * @param bool|null $limited gets whether the 64 KiB limit left out lines of the log that $from alone would have kept
+ * @param-out bool $limited
  * @return list<string>
  */
-function pfb_dns_proxy_log_lines(?int $from = NULL): array {
+function pfb_dns_proxy_log_lines(?int $from = NULL, ?bool &$limited = NULL): array {
 	global $pfb;
 
+	$limited = FALSE;
 	$handle = @fopen($pfb['dns_proxy_log'], 'rb');
 	if ($handle === FALSE) {
 		return [];
 	}
 	$size = pfb_dns_proxy_log_size();
-	$at = max(($from === NULL || $from > $size) ? 0 : $from, $size - 65536);
+	$start = ($from === NULL || $from > $size) ? 0 : $from;
+	$at = max($start, $size - 65536);
+	$limited = $at > $start;
 	$cut = $at > 0 && fseek($handle, $at - 1) === 0;
 	$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
 	fclose($handle);
 	return $cut ? array_slice($lines, 1) : $lines;
 }
 
-/** host:port the way the gateway prints it (Go's netip): IPv6 compressed and bracketed. Only IP characters reach inet_pton(). */
+/**
+ * host:port the way the gateway prints it (Go's netip, which unmaps): IPv6 compressed and bracketed, an IPv4-mapped one as its IPv4
+ * address. Only IP characters reach inet_pton().
+ */
 function pfb_dns_proxy_host_port(string $host, string $port): string {
+	$host = pfb_ipv4_from_mapped($host) ?? $host;
 	$packed = @inet_pton($host);
 	$host = ($packed === FALSE) ? $host : (string) inet_ntop($packed);
 	return (str_contains($host, ':') ? "[{$host}]" : $host) . ":{$port}";
@@ -5497,13 +5506,14 @@ function pfb_dns_proxy_host_port(string $host, string $port): string {
  * @param string|null $pid the status panel's readiness-marker PID: the latest complete record must end in ` pid <pid>`, else
  *        NULL is returned until that child's log arrives. NULL keeps the startup check's PID-agnostic parsing, including legacy logs
  *
- * @return array{listening: array<string, array<string, true>>, refused: array<string, string>}|null NULL when the lines hold no
- *         `ready upstream` line (rotated, truncated, or a start that has not logged it yet). `listening`: kind (udp+tcp, dot, doh,
- *         doq) => each host:port served, in log order; `refused`: host:port => the reason of the start's own
- *         `cannot listen on <host:port>: <reason>` line. Every host:port as pfb_dns_proxy_host_port() spells it
+ * @return array{listening: array<string, array<string, true>>, refused: array<string, string>, partial: bool}|null NULL when the lines
+ *         hold no `ready upstream` line (rotated, truncated, or a start that has not logged it yet). `listening`: kind (udp+tcp, dot,
+ *         doh, doq) => each host:port served, in log order; `refused`: host:port => the reason of the start's own
+ *         `cannot listen on <host:port>: <reason>` line. Every host:port as pfb_dns_proxy_host_port() spells it. `partial`: the 64 KiB
+ *         read cut the log and no `starting pid` line is in it, so the start's own lines may be missing (listeners it bound among them)
  */
 function pfb_dns_proxy_listeners(?int $since = NULL, ?string $pid = NULL): ?array {
-	$lines = pfb_dns_proxy_log_lines($since);
+	$lines = pfb_dns_proxy_log_lines($since, $limited);
 	$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
 	if ($ends === []) {
 		return NULL;
@@ -5518,7 +5528,7 @@ function pfb_dns_proxy_listeners(?int $since = NULL, ?string $pid = NULL): ?arra
 	} else {
 		$from = (count($ends) > 1) ? $ends[count($ends) - 2] + 1 : 0;
 	}
-	$listeners = ['listening' => [], 'refused' => []];
+	$listeners = ['listening' => [], 'refused' => [], 'partial' => $limited && $starts === []];
 	for ($i = $from, $count = count($lines); $i < $count; $i++) {
 		$line = $lines[$i];
 		if ($i > $last && str_starts_with($line, 'starting pid ')) {
@@ -5541,7 +5551,7 @@ function pfb_dns_proxy_listeners(?int $since = NULL, ?string $pid = NULL): ?arra
  * until they arrive the log's latest start is the previous gateway's: the live reconcile must not take that for what is served, as the
  * status panel (pfb_dns_status(), which reads the same record with the same PID) does not. NULL too when there is no marker.
  *
- * @return array{listening: array<string, array<string, true>>, refused: array<string, string>}|null as pfb_dns_proxy_listeners()
+ * @return array{listening: array<string, array<string, true>>, refused: array<string, string>, partial: bool}|null as pfb_dns_proxy_listeners()
  */
 function pfb_dns_proxy_ready_listeners(): ?array {
 	global $pfb;
@@ -5583,16 +5593,20 @@ function pfb_dns_proxy_command_listeners(): array {
  * @return string|null NULL when nothing is left to do; why the pair must be restarted: the gateway did not take a change (an older
  *         gateway, an error, no control socket: no further frame is sent), or a restart is pending and a missing listener binds. NULL
  *         too, with nothing done, when the log holds no complete start of the gateway that published the ready marker
- *         (pfb_dns_proxy_ready_listeners())
+ *         (pfb_dns_proxy_ready_listeners()) or only a cut one (`partial`: a cut log window is not what is served), and when the rc
+ *         script names no plain DNS listener (a real one always names loopback: it is unreadable, not a wish to serve nothing)
  */
 function pfb_dns_proxy_listeners_sync(): ?string {
 	global $pfb;
 
 	$served = pfb_dns_proxy_ready_listeners();
-	if ($served === NULL) {
+	if ($served === NULL || $served['partial']) {
 		return NULL;
 	}
 	$wanted = pfb_dns_proxy_command_listeners();
+	if (($wanted['udp+tcp'] ?? []) === []) {
+		return NULL;
+	}
 	$pending = file_exists($pfb['dns_proxy_restart_pending']);
 	$added = $removed = [];
 	foreach (['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {

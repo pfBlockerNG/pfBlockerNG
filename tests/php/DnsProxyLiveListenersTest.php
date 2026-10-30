@@ -27,6 +27,10 @@ use PHPUnit\Framework\TestCase;
  *   - the cron tick adds an address the start refused and the box binds now, and removes one the command no longer names, live;
  *     with a restart pending it changes nothing live and restarts once for a missing listener that binds (the update pass keeps the
  *     marker); under an update pass it does nothing. A package operation's rows are DnsProxyKeepRunningPkgTest's.
+ *   - the sync takes no gap in what it reads for a change: an rc script that names no plain listener (missing, empty, no command) or a
+ *     log window that cut off the latest start's `starting pid` line changes nothing; a host the gateway prints differently (an
+ *     IPv4-mapped one) is spelled as it prints it; one TLS kind's address changes live by itself; and the wait for the log ends
+ *     as soon as the log shows the change, and confirms a remove too.
  *
  * Every row that binds uses a port above 1024 picked free at runtime and configured as the rc script's port, so that it runs as a
  * user that is not root too. Every row starts from the quiet box (nothing differs: nothing is sent or restarted).
@@ -224,6 +228,41 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame([
 			"remove udp+tcp 192.0.2.1:{$this->port}", "add udp+tcp 0.0.0.0:{$this->port}", "add udp+tcp 127.0.0.1:{$this->port}",
 		], self::verbs($record));
+	}
+
+	/** @return array<string,array{string}> the TLS transports: each has its own `--<kind>-listen` flag and its own port */
+	public static function tlsKinds(): array
+	{
+		return ['DoT' => ['dot'], 'DoH' => ['doh'], 'DoQ' => ['doq']];
+	}
+
+	#[DataProvider('tlsKinds')]
+	public function testAnAddressChangeOfOnlyOneTlsKindIsMadeLiveAndRestartsNothing(string $kind): void
+	{
+		// Given plain DNS on lan and the kind on opt1 at a port of its own, all served, and an opt1 that has 0.0.0.0 by the time the pass runs
+		[$this->port, $port] = self::freePorts(2);
+		foreach (['' => 'on', '_port' => (string) $port, '_interface' => 'opt1'] as $suffix => $value) {
+			config_set_path(self::SETTINGS . "pfb_dns_{$kind}{$suffix}", $value);
+		}
+		config_set_path(self::SETTINGS . 'pfb_dns_interface', 'lan');
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
+		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'up', 'enable' => TRUE];
+		$GLOBALS['pfb_test_interfaces']['opt1'] = '';
+		$tls = array_map(static fn (string $host): string => "listening {$kind} {$host}:{$port}", ['198.51.100.1', '127.0.0.1', '[::1]']);
+		$this->quiet(['gatewayLog' => [...array_slice($this->started(self::ADDRESSES), 0, -1), ...$tls, self::READY]]);
+		$record = $this->gateway();
+		$this->assertStringContainsString("--{$kind}-listen '198.51.100.1'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the rc script names opt1\'s address for the kind');
+		$GLOBALS['pfb_test_interface_ip']['opt1'] = '0.0.0.0';
+
+		// When the update pass runs
+		$ready = $this->krEnsure();
+
+		// Then only that kind's address changed, live, with the kind's own socket; nothing restarted and plain DNS was left alone
+		$this->assertTrue($ready);
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertSame(["remove {$kind} 198.51.100.1:{$port}", "add {$kind} 0.0.0.0:{$port}"], self::verbs($record));
+		$this->assertSame([[($kind === 'doq') ? 'dgram' : 'stream', "0.0.0.0:{$port}", $kind !== 'doq']], self::fdsOf($record, 1));
+		$this->assertSame([], $this->startupNotices());
 	}
 
 	public function testAQuietBoxSendsNothing(): void
@@ -506,6 +545,123 @@ final class DnsProxyLiveListenersTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// What the sync must not take for a change
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{string}> an rc script from which no plain listener can be read */
+	public static function rcScriptsThatNameNoPlainListener(): array
+	{
+		return ['a missing script' => ['missing'], 'an empty script' => ['empty'], 'a script with no command' => ['no command']];
+	}
+
+	#[DataProvider('rcScriptsThatNameNoPlainListener')]
+	public function testTheTickRemovesNoListenerWhenTheRcScriptNamesNoPlainListener(string $state): void
+	{
+		// Given a ready proxy that serves three addresses, whose rc script can no longer be read for any (a real script always names loopback)
+		$this->quiet();
+		$record = $this->gateway();
+		$this->assertCount(3, pfb_dns_proxy_listeners()['listening']['udp+tcp'] ?? [], 'before: the log shows three listeners served');
+		match ($state) {
+			'missing' => unlink(PFB_DNS_PROXY_RCFILE),
+			'empty' => file_put_contents(PFB_DNS_PROXY_RCFILE, ''),
+			'no command' => file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n# the rc script an older package wrote\n"),
+		};
+		$this->assertSame([], pfb_dns_proxy_command_listeners()['udp+tcp'] ?? [], 'before: the script names no plain listener');
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then nothing was removed and nothing restarted: an unreadable script is no wish to stop serving
+		$this->assertSame([], self::frames($record));
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	/** @return array<string,array{string}> a host the rc script spells as IPv4-mapped IPv6, which the gateway prints as the IPv4 address */
+	public static function mappedHosts(): array
+	{
+		return ['dotted' => ['::ffff:127.0.0.1'], 'hex' => ['::ffff:7f00:1']];
+	}
+
+	#[DataProvider('mappedHosts')]
+	public function testAnIPv4MappedHostIsTheIPv4AddressTheGatewayLogsSoTheTickChangesNothing(string $host): void
+	{
+		// Given a ready proxy whose rc script names loopback as an IPv4-mapped address, and a log that has it served as the gateway prints it
+		$this->quiet();
+		$rc = (string) file_get_contents(PFB_DNS_PROXY_RCFILE);
+		file_put_contents(PFB_DNS_PROXY_RCFILE, str_replace("--listen '127.0.0.1'", "--listen '{$host}'", $rc));
+		$record = $this->gateway();
+		$this->assertStringContainsString("--listen '{$host}'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the script spells loopback as the mapped address');
+		$this->assertTrue(isset(pfb_dns_proxy_listeners()['listening']['udp+tcp']["127.0.0.1:{$this->port}"]), 'before: the log has 127.0.0.1 served');
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then it is the same listener: nothing is removed or added, and nothing restarts
+		$this->assertSame([], self::frames($record));
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	/** @return list<string> the lines another writer logged: 70,000 bytes, more than the 64 KiB the log is read within */
+	private static function filler(): array
+	{
+		return array_fill(0, 700, str_repeat('f', 99));
+	}
+
+	public function testALogWindowThatCutOffTheLatestStartsMarkerIsNotTakenForTheWholeServedSet(): void
+	{
+		// Given a start whose `starting pid` line and listener on 127.0.0.1 are before the last 64 KiB of the log, its ready line inside it
+		$this->quiet(['gatewayLog' => [
+			'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", ...self::filler(),
+			"listening udp+tcp 192.0.2.1:{$this->port}", "listening udp+tcp [::1]:{$this->port}", self::READY,
+		]]);
+		$record = $this->gateway();
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the window');
+		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the start\'s marker is outside the window');
+		$this->assertSame('', self::bindError("127.0.0.1:{$this->port}"), 'before: this host binds 127.0.0.1, which the window does not show served');
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then the sync changed nothing: 127.0.0.1 is served, and was neither added again nor logged as failing to be
+		$this->assertSame([], self::frames($record));
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertSame(0, $this->linesWith('cannot be added live'));
+	}
+
+	public function testALogLongerThanTheWindowWhoseLatestStartIsInItWholeIsReconciledLive(): void
+	{
+		// Given a log of more than 64 KiB whose latest start, marker included, is inside the last 64 KiB and did not bind 127.0.0.1
+		$this->quiet(['gatewayLog' => [
+			...self::filler(), 'starting pid 4242', "listening udp+tcp 192.0.2.1:{$this->port}", "listening udp+tcp [::1]:{$this->port}", self::READY,
+		]]);
+		$record = $this->gateway();
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the window');
+		$this->assertContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the start\'s marker is inside the window');
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then the listener the start did not bind is added, as with a short log
+		$this->assertSame(["add udp+tcp 127.0.0.1:{$this->port}"], self::verbs($record));
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	public function testAnOlderGatewaysLogWithNoMarkerThatIsNotCutIsReconciledLive(): void
+	{
+		// Given a short log with no `starting pid` line (an older gateway's) that did not bind 127.0.0.1
+		$this->quiet(['gatewayLog' => $this->started(['192.0.2.1', '[::1]'])]);
+		$record = $this->gateway();
+		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the log has no marker');
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then it is reconciled as it always was
+		$this->assertSame(["add udp+tcp 127.0.0.1:{$this->port}"], self::verbs($record));
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
+	// -----------------------------------------------------------------------
 	// A change the gateway does not take restarts the pair once (D4.4)
 	// -----------------------------------------------------------------------
 
@@ -582,6 +738,45 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame([100000], array_values(array_unique($clock->sleeps)));
 		$this->assertLessThanOrEqual(1100000, array_sum($clock->sleeps));
 		$this->assertGreaterThanOrEqual(1000000, array_sum($clock->sleeps));
+	}
+
+	/** @return array<string,array{bool,string,bool}> a change the gateway takes: whether it is a remove, the reply, and whether the log shows it */
+	public static function changesWaitedForInTheLog(): array
+	{
+		return [
+			'an add the gateway logs at once' => [FALSE, 'ok', FALSE],
+			'a remove the gateway logs at once' => [TRUE, 'ok', FALSE],
+			'a remove whose line never appears' => [TRUE, 'ok silent', TRUE],
+		];
+	}
+
+	#[DataProvider('changesWaitedForInTheLog')]
+	public function testTheLogWaitEndsAtOnceWhenTheLogShowsTheChangeAndAlsoConfirmsARemove(bool $remove, string $reply, bool $waits): void
+	{
+		// Given a ready proxy with one change to make (an address to add, or a served one the command does not name to remove)
+		if ($remove) {
+			$this->quiet(['gatewayLog' => [...$this->started(self::ADDRESSES), "listening udp+tcp 0.0.0.0:{$this->port}"]]);
+		} else {
+			$this->quietWithoutLan(['lan' => '0.0.0.0']);
+			$this->rewriteRc();
+		}
+		$record = $this->gateway([$reply]);
+		$clock = new PfbFlockClockFixture();
+		$namespace = $clock->loadChain(['pfb_dns_proxy_listeners_sync'], ['PFB_DNS_PROXY_LOG_WAIT' => 1]);
+
+		// When the reconcile runs on a virtual clock
+		$why = ($namespace . '\\pfb_dns_proxy_listeners_sync')();
+
+		// Then the frame was sent once, and it waited the budget only when the log never showed the change
+		$this->assertNull($why);
+		$this->assertSame([($remove ? 'remove' : 'add') . " udp+tcp 0.0.0.0:{$this->port}"], self::verbs($record));
+		if ($waits) {
+			$this->assertSame([100000], array_values(array_unique($clock->sleeps)));
+			$this->assertGreaterThanOrEqual(1000000, array_sum($clock->sleeps));
+			$this->assertLessThanOrEqual(1100000, array_sum($clock->sleeps));
+		} else {
+			$this->assertSame([], $clock->sleeps, 'the log showed the change at once, so nothing was waited for');
+		}
 	}
 
 	public function testEveryKindIsReconciledRemovesBeforeAddsPerKindWithItsOwnSockets(): void
