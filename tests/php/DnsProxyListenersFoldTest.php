@@ -27,8 +27,8 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyListenersFoldTest extends TestCase
 {
 	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
-	/** The gateway log's read limit (PFB_DNS_PROXY_LOG_READ_MAX, 16 MiB): a start whose beginning is further back is not judged. */
-	private const READ_LIMIT = 16777216;
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 
 	private string $dir = '';
 	private array $savedGlobals = [];
@@ -333,6 +333,44 @@ final class DnsProxyListenersFoldTest extends TestCase
 		// Then the latest start's beginning, the older start's ready line, is in the read: the record is whole
 		$this->assertFalse(pfb_dns_proxy_listeners()['partial'] ?? NULL);
 		$this->assertSame(['udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'], $this->served());
+	}
+
+	public function testAStartAboutEightMiBBackIsReadWithinTheReadLimitAndIsWhole(): void
+	{
+		// Given a start whose `starting pid` line and first listener are 8 MB before its ready line: only the 16 MiB read holds them
+		$this->log(['starting pid 4242', 'listening udp+tcp 127.0.0.1:53', self::other(8000000) . 'listening udp+tcp [::1]:53', self::READY]);
+		$this->assertGreaterThan(4 * 1048576, pfb_dns_proxy_log_size(), 'before: the start is beyond the 4 MiB read');
+
+		// Then the read grew to hold it: the record is whole, and both of its listeners are served
+		$this->assertFalse(pfb_dns_proxy_listeners()['partial'] ?? NULL);
+		$this->assertSame(['udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'], $this->served());
+	}
+
+	public function testTheLineTheReadLimitCutsInsideOfIsNeverParsed(): void
+	{
+		// Given a log of the read limit plus two bytes whose first line, a DoT line with one byte in front of it, is cut by the read
+		// one byte in: what the read sees of it is a complete-looking `listening dot 192.0.2.1:853`
+		$first = "Xlistening dot 192.0.2.1:853\n";
+		$last = "listening udp+tcp 127.0.0.1:53\n" . self::READY . "\n";
+		$size = self::READ_LIMIT + 2;
+		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], $first . str_repeat('f', $size - strlen($first) - strlen($last) - 1) . "\n" . $last);
+		$this->assertSame($size, pfb_dns_proxy_log_size(), 'before: the fixture is the length that cuts the first line at the limit');
+
+		// Then the cut line is dropped: the record is partial and holds only the listener logged in full
+		$this->assertTrue(pfb_dns_proxy_listeners()['partial'] ?? NULL);
+		$this->assertSame(['udp+tcp 127.0.0.1:53'], $this->served());
+	}
+
+	public function testAGrownReadNeverReachesBeforeSince(): void
+	{
+		// Given an older complete start, then $since, then a start that has logged its marker and a listener but no ready line yet,
+		// followed by more than 64 KiB of other output
+		$this->log(['starting pid 111', 'listening udp+tcp 192.0.2.9:53', 'ready upstream 127.0.0.1:5353 pid 111']);
+		$since = pfb_dns_proxy_log_size();
+		$this->log(['starting pid 4242', 'listening udp+tcp 127.0.0.1:53', ...self::filler()], TRUE);
+
+		// Then the read from $since holds no ready line: the older start is not taken for this one
+		$this->assertNull($this->served($since));
 	}
 
 	/** @return array<string,array{string,string,string}> a host as an rc script or the gateway's log spells it, a port, and the host:port as the gateway prints it */

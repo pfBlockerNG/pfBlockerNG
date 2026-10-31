@@ -48,8 +48,8 @@ final class PfbDnsStatusTest extends TestCase
 	private const DOH = ['listening doh 192.0.2.1:443', 'listening doh 127.0.0.1:443', 'listening doh [::1]:443'];
 	private const DOQ = ['listening doq 192.0.2.1:8853', 'listening doq 127.0.0.1:8853', 'listening doq [::1]:8853'];
 	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
-	/** The gateway log's read limit (PFB_DNS_PROXY_LOG_READ_MAX, 16 MiB): a start whose beginning is further back is not judged. */
-	private const READ_LIMIT = 16777216;
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 	private const OFF = ['state' => 'off'];
 	private const NO_LISTENER = ['state' => 'no_listener', 'notice' => 'On, but the service has no listener for it: see the notices, or run an Update'];
 

@@ -36,8 +36,8 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-	/** The gateway log's read limit (PFB_DNS_PROXY_LOG_READ_MAX, 16 MiB): a start whose beginning is further back is not judged. */
-	private const READ_LIMIT = 16777216;
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 
 	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
@@ -303,29 +303,6 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 
 		// Then nothing was found to judge by: had it judged the start, it would have closed the notice
 		$this->assertSame($before, $this->standing());
-	}
-
-	/** @return array<string,array{int}> the sizes of a log that a first window of 64 KiB reads: its cut falls inside its first line */
-	public static function firstWindowSizes(): array
-	{
-		return ['64 KiB' => [65536], '64 KiB and 1 byte' => [65537], '64 KiB and 2 bytes' => [65538]];
-	}
-
-	#[DataProvider('firstWindowSizes')]
-	public function testTheFirstLineOfALogOfTheFirstWindowSizeIsNeverTakenForAListener(int $size): void
-	{
-		// Given a log of $size bytes whose first line is a DoT line for lan with one byte in front of it, then the start
-		$this->box();
-		$first = "Xlistening dot 192.0.2.1:853\n";
-		$last = $this->lines(self::PLAIN, self::DOT_LOOPBACK, self::READY);
-		$filler = str_repeat('f', $size - strlen($first) - strlen($last) - 1) . "\n";
-		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], $first . $filler . $last);
-		$this->assertSame($size, $this->logSize(), 'before: the fixture is the length that cuts the first line');
-
-		pfb_dns_proxy_startup_check(TRUE);
-
-		// Then the cut line is not the start's: DoT on lan was never reported, whichever read showed it
-		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
 	public function testALogCutAtTheReadLimitIsNotJudgedWhateverItsCutLineSays(): void

@@ -49,8 +49,8 @@ final class DnsProxyStartupCheckTest extends TestCase
 	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
 	private const READY = 'ready upstream 127.0.0.1:5353';
-	/** The gateway log's read limit (PFB_DNS_PROXY_LOG_READ_MAX, 16 MiB): a start whose beginning is further back is not judged. */
-	private const READ_LIMIT = 16777216;
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_file_notices', 'pfb_test_valid_pids', 'pfb_test_rcfile_dir', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',

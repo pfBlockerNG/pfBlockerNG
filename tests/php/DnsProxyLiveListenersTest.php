@@ -56,8 +56,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 	/** The hosts the rc script's command listens on in this fixture (lan is 192.0.2.1), as the gateway logs them. */
 	private const ADDRESSES = ['192.0.2.1', '127.0.0.1', '[::1]'];
 	private const OLD_GATEWAY = 'error: a message of 4294967294 bytes is not between 1 and 65536';
-	/** The gateway log's read limit (PFB_DNS_PROXY_LOG_READ_MAX, 16 MiB): a start whose beginning is further back is not judged. */
-	private const READ_LIMIT = 16777216;
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 
 	private array $savedGlobals = [];
 	private int $port = 0;

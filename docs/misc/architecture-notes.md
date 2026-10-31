@@ -739,7 +739,7 @@ command gives it none, or a list of rows. Once the gateway itself is ready, rows
 then each command address it did not bind (`not_listening`, with the logged reason). These front-end rows remain visible when an
 unavailable upstream leaves the service Starting. A saved toggle, interface or port change cannot replace that evidence before
 an Update applies it. Without a ready gateway (`configured_not_bound`), or with no matching PID-ready log record, including
-untagged records from an older gateway (`configured_unconfirmed`), the rows are the command's addresses.
+untagged records from an older gateway and a record the read limit cut (`partial`) (`configured_unconfirmed`), the rows are the command's addresses.
 
 **Status panel tables (issues #3555, #3586).** `pfb_dns_status_panel()` renders that status under the form as sections like the
 page's own (the markup of an open `COLLAPSIBLE` `Form_Section`, toggled from its title): `pfB-DNS Status` with the service and the
