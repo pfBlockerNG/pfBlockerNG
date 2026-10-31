@@ -49,6 +49,8 @@ final class DnsProxyStartupCheckTest extends TestCase
 	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
 	private const READY = 'ready upstream 127.0.0.1:5353';
+	/** The gateway log's read limit (PFB_DNS_PROXY_LOG_READ_MAX, 16 MiB): a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = 16777216;
 
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_file_notices', 'pfb_test_valid_pids', 'pfb_test_rcfile_dir', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',
@@ -187,6 +189,12 @@ final class DnsProxyStartupCheckTest extends TestCase
 	private function fileOther(string $id, string $text): void
 	{
 		file_notice($id, $text, 'pfBlockerNG', self::URL, 2);
+	}
+
+	/** Other output the gateway logs: $bytes of it, as lines of 100 bytes, each ended by a newline (one string, not one array item a line). */
+	private static function other(int $bytes): string
+	{
+		return str_repeat(str_repeat('f', 99) . "\n", intdiv($bytes, 100) + 1);
 	}
 
 	// -----------------------------------------------------------------------
@@ -593,19 +601,34 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$this->assertSame([$this->problemText('plain DNS interface opt1 is down or disabled; it adds no listener.')], $this->startupTexts());
 	}
 
-	public function testOnlyTheLast64KiBOfTheLogIsRead(): void
+	public function testAReadyLineSeventyKiBBackIsJudgedWithinTheReadLimitAndClosesTheNotice(): void
 	{
-		// Given a complete start with its ready line, then 70 KiB of other output: the ready line is out of the tail
+		// Given a standing notice, and a complete start with its ready line, then 70 KiB of other output: the ready line is out of the first 64 KiB
+		$this->box(self::DOT_ON);
+		$this->fileOther(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.');
+		$this->log($this->healthyStart());
+		$this->appendLog(array_fill(0, 720, str_repeat('f', 99)));
+		$this->assertGreaterThan(65536 + 1024, (int) filesize($GLOBALS['pfb']['dns_proxy_log']), 'before: the fixture is longer than the first window');
+
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the read grew until it held the start: the start is judged whole, and the standing notice is closed
+		$this->assertSame([], $this->startupTexts());
+	}
+
+	public function testAReadyLineBeyondTheReadLimitIsNeverJudgedAndTheNoticeStands(): void
+	{
+		// Given a standing notice, and a complete start with its ready line, then more than the read limit of other output
 		$this->box(self::DOT_ON);
 		$this->fileOther(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.');
 		$before = $this->standing();
 		$this->log($this->healthyStart());
-		$this->appendLog(array_fill(0, 720, str_repeat('f', 99)));
-		$this->assertGreaterThan(65536 + 1024, (int) filesize($GLOBALS['pfb']['dns_proxy_log']), 'before: the fixture is longer than the tail');
+		$this->appendLog(self::other(self::READ_LIMIT + 100000));
+		$this->assertGreaterThan(self::READ_LIMIT, (int) filesize($GLOBALS['pfb']['dns_proxy_log']), 'before: the fixture is longer than the read limit');
 
 		pfb_dns_proxy_startup_check(TRUE);
 
-		// Then the check found no ready line to judge by: had it read the whole file, it would have closed the notice
+		// Then the start's beginning is beyond the read, so nothing is judged and the standing notice stands
 		$this->assertSame($before, $this->standing());
 	}
 

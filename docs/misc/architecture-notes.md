@@ -721,8 +721,9 @@ takes the size now). With a `$since` only the bytes after it count (a log now sh
 from its start), and while the proxy is ready but no `ready upstream` line follows it yet the check polls the log every 100 ms, for at
 most `PFB_DNS_PROXY_LOG_WAIT` seconds (3, overridable before load). A line that still does not come leaves the start unjudged, as
 a log with no `ready upstream` line is: nothing filed, nothing closed. With no `$since` (the tick; an apply that restarted nothing)
-the latest segment of the log's last 64 KiB is judged at once. The last `pfb_dns_gateway:` line of a start that never became ready is
-searched the same way, only in the bytes after `$since`, so an error of an older start is never quoted for this one (none is quoted when
+the latest start is judged at once, from a read that grows from 64 KiB up to the read limit (`PFB_DNS_PROXY_LOG_READ_MAX`, 16 MiB) until
+it holds the start's beginning; a start the limit cuts off is not judged. The last `pfb_dns_gateway:` line of a start that never became
+ready is searched the same way, only in the bytes after `$since`, so an error of an older start is never quoted for this one (none is quoted when
 this start logged none); with no `$since` it is searched in the whole tail. Pinned by `DnsProxyStartupCheckTest`,
 `DnsProxyStartupCheckCurrentStartTest`, `DnsProxyBootTest` and `DnsProxyActivationRollbackTest`.
 
@@ -949,7 +950,7 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   status panel reads it, because a start publishes the marker before its log lines are relayed and the log's latest complete start is the
   previous gateway's until they arrive). Any other difference (a port, a TLS group turned on or off, `--doh-trusted`, DDR, a module flag)
   restarts the pair, as does an address-only change with the proxy not READY or with no such start to compare with (a record cut by the
-  64 KiB read, `partial` below, is none).
+  read limit, `partial` below, is none).
   `pfb_dns_proxy_listeners_sync()` compares the command (`pfb_dns_proxy_command_listeners()`) with what is served, per kind: it removes
   the served listeners the command does not name, then adds the ones it names that nothing serves, one frame each, each change one line
   of the pfB log, and after a change the gateway took it waits (bounded, `PFB_DNS_PROXY_LOG_WAIT`) until the log shows it, so the startup
@@ -962,12 +963,13 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   it returns restarts the pair, and the confirmation then judges the new start through `$since`, not the one it replaced. While a restart is pending
   the rc script may differ in more than addresses: nothing is removed or added live, and a missing listener that binds now is the reason to
   restart (the tick leaves the marker, since one written during its restart must not be lost: the next update pass restarts once more
-  for it). A log with no complete start of the ready gateway changes nothing, and neither does one whose 64 KiB read cut the latest
+  for it). A log with no complete start of the ready gateway changes nothing, and neither does one whose read limit cut the latest
   start's `starting pid` line off (`pfb_dns_proxy_listeners()` flags it `partial`: its `listening` lines may be missing, and the sync
   would take the missing ones for unserved, re-add them and log `Address already in use` on every pass; the startup check and the
-  status panel read it as before; the update pass, which has just rewritten the script and would never see the change again, restarts
-  the pair for an address-only change on such a record, as on none), nor does an rc script that names no plain DNS listener (missing,
-  empty or with no command line: a real one always names loopback, so it is unreadable, not a wish to stop serving). A package operation
+  status panel judge nothing from it (no problem filed, no `not_listening` row); the update pass, which has just rewritten the
+  script and would never see the change again, restarts the pair for an address-only change on such a record, as on none), nor does
+  an rc script that names no plain DNS listener (missing, empty or with no command line: a real one always names loopback, so it is
+  unreadable, not a wish to stop serving). A package operation
   changes nothing live: an address-only change of the rc script is recorded as a pending restart, as any other.
 - **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
   in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first

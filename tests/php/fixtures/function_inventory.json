@@ -2250,6 +2250,13 @@
                 "variadic": false,
                 "type": "?bool",
                 "default": "NULL"
+            },
+            {
+                "name": "window",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": "65536"
             }
         ]
     },
