@@ -250,7 +250,7 @@ func TestAPushThatIsNotAUsableCertificateKeepsTheServedOneAndSaysWhy(t *testing.
 // 4 length bytes sent, and the connection is closed.
 func TestAMessageWhoseLengthIsOutOfBoundsIsRefusedBeforeItIsRead(t *testing.T) {
 	k := newCtlRig(t)
-	for name, n := range map[string]uint32{"zero": 0, "one over the limit": ctlMaxPEM + 1, "far over the limit": 0xfffffffc} { // 0xfffffffd to 0xffffffff are verbs
+	for name, n := range map[string]uint32{"zero": 0, "one over the limit": ctlMaxPEM + 1, "far over the limit": 0xfffffffb} { // 0xfffffffc to 0xffffffff are verbs
 		c := dialCtl(t, k.path)
 		if _, err := c.Write(binary.BigEndian.AppendUint32(nil, n)); err != nil {
 			t.Fatal(err)

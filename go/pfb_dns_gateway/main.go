@@ -319,11 +319,13 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 
 	acl := NewACL(cfg.unboundConf, logf)
+	refused := map[string]string{} // start-time bind refusals, for the list verb
 	var listeners []*plainListener
 	for _, host := range cfg.listen {
 		l, err := bindPlain(host, cfg.port)
 		if err != nil {
 			logf("%v", err)
+			refuse(refused, "udp+tcp", host, cfg.port, err)
 			continue
 		}
 		listeners = append(listeners, l)
@@ -342,8 +344,8 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	if len(listeners) == 0 {
 		return nil, errors.New("no address could be bound")
 	}
-	secure = bindTLS(cfg, logf) // the certificate file is read, and the sockets are bound, before the privilege drop
-	if cfg.ctlSocket != "" {    // in every mode: a decider restart needs it as much as a certificate renewal does
+	secure = bindTLS(cfg, logf, refused) // the certificate file is read, and the sockets are bound, before the privilege drop
+	if cfg.ctlSocket != "" {             // in every mode: a decider restart needs it as much as a certificate renewal does
 		var err error
 		var certs *certStore
 		if secure != nil {
@@ -400,6 +402,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
 		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}
 	set := newListenerSet(g, cfg, secure)
+	set.refused = refused // the binds above record into it before the set exists
 	for _, l := range listeners {
 		set.track("udp+tcp", l.addr(), g.serve(l))
 	}

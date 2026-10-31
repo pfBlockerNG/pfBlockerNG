@@ -19,8 +19,9 @@ import (
 // directory only root can enter, bound before the privilege drop and kept after it, in every mode. One message per
 // connection, starting with 4 bytes: FF FF FF FF (nothing after it) restarts the decider; FF FF FF FE adds and FF FF FF FD
 // removes a listener, each followed by a 4-byte big-endian length (1 to 256) and `<kind> <host:port>`, an add carrying
-// its sockets as SCM_RIGHTS (see listeners.go); anything else is the big-endian length of the PEM that follows (the
-// certificate, the CAs after it, the key), which replaces the TLS certificate. One reply line, `ok` or `error: <reason>`.
+// its sockets as SCM_RIGHTS (see listeners.go); FF FF FF FC (nothing after it) lists the listeners, lines then `ok`;
+// anything else is the big-endian length of the PEM that follows (the certificate, the CAs after it, the key), which
+// replaces the TLS certificate. One reply line, `ok` or `error: <reason>`, except the list's (listeners.go).
 // Whoever is not root, by the kernel's credential of the peer, is closed on without a byte read from it. Descriptors that
 // come with anything but an add that is taken are closed.
 
@@ -31,6 +32,7 @@ const (
 	ctlRestart         = 0xffffffff
 	ctlAdd             = 0xfffffffe // above ctlMaxPEM, so that no certificate's length is one
 	ctlRemove          = 0xfffffffd
+	ctlList            = 0xfffffffc
 	ctlRightsRoom      = 8 // descriptors one read takes: an add carries 2
 	defaultCtlDeadline = 5 * time.Second
 )
@@ -159,6 +161,10 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		return
 	case ctlAdd, ctlRemove:
 		reply(c.listeners.change(n == ctlAdd, in))
+		return
+	case ctlList:
+		_ = conn.SetWriteDeadline(time.Now().Add(c.deadline))
+		_, _ = conn.Write([]byte(c.listeners.list()))
 		return
 	}
 	if n == 0 || n > ctlMaxPEM {

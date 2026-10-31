@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -24,6 +25,7 @@ type listenerSet struct {
 	certs   *certStore // nil when no TLS kind is served
 	trusted []netip.Prefix
 	served  map[string]func() // closeNow of each
+	refused map[string]string // start-time bind refusals by key, cleared by track when the key is served
 }
 
 func newListenerSet(g *gateway, cfg config, secure *tlsListeners) *listenerSet {
@@ -38,7 +40,32 @@ func newListenerSet(g *gateway, cfg config, secure *tlsListeners) *listenerSet {
 }
 
 func (s *listenerSet) track(kind string, ap netip.AddrPort, closeNow func()) {
-	s.served[kind+" "+ap.String()] = closeNow
+	key := kind + " " + ap.String()
+	s.served[key] = closeNow
+	delete(s.refused, key) // served now: the refusal the start made of key no longer stands
+}
+
+// list is the reply to the list verb: served listeners, then refusals standing, each group in key order, then ok.
+func (s *listenerSet) list() string {
+	var b strings.Builder
+	for _, key := range slices.Sorted(maps.Keys(s.served)) {
+		b.WriteString("listening " + key + "\n")
+	}
+	for _, key := range slices.Sorted(maps.Keys(s.refused)) {
+		b.WriteString("refused " + key + " " + strings.ReplaceAll(s.refused[key], "\n", " ") + "\n")
+	}
+	b.WriteString("ok\n")
+	return b.String()
+}
+
+// refuse records why the start's bind of kind on host:port was refused, under the key track gives that listener.
+// A host that is not an IP address has no key: the start's log line says why.
+func refuse(refused map[string]string, kind, host string, port int, err error) {
+	ap, aerr := bindAddr(host, port)
+	if aerr != nil {
+		return
+	}
+	refused[kind+" "+ap.String()] = errors.Unwrap(err).Error() // listenError wraps the bind's own error
 }
 
 // port is the port kind is configured on, and whether this gateway serves kind at all: a TLS kind only when its listen
@@ -107,7 +134,7 @@ func (s *listenerSet) change(add bool, in *ctlInput) string {
 	if err != nil {
 		return "error: " + err.Error()
 	}
-	s.served[key] = closeNow
+	s.track(kind, ap, closeNow)
 	s.g.ddr.change(true, kind, ap)
 	s.g.logf("listening %s", key)
 	return "ok"

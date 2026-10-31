@@ -12,9 +12,9 @@ type tlsListeners struct {
 // bindTLS binds every requested TLS transport. The certificate file is read here, as root; when it is unusable the reason
 // is logged once and the store starts empty: the listeners are bound, handshakes fail, and the first certificate pushed on
 // the control socket (bound by start() in every mode) is served with no restart (plain DNS is unaffected either way: a
-// broken certificate must not take :53 down). An address that cannot be bound is logged and skipped. The file is not
-// looked at unless a transport is requested.
-func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
+// broken certificate must not take :53 down). An address that cannot be bound is logged, kept in refused and skipped.
+// The file is not looked at unless a transport is requested.
+func bindTLS(cfg config, logf func(format string, args ...any), refused map[string]string) *tlsListeners {
 	if len(cfg.dotListen) == 0 && len(cfg.dohListen) == 0 && len(cfg.doqListen) == 0 {
 		return nil
 	}
@@ -27,6 +27,7 @@ func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
 	for _, host := range cfg.dotListen {
 		if ln, err := bindTCP(host, cfg.dotPort); err != nil {
 			logf("%v", err)
+			refuse(refused, "dot", host, cfg.dotPort, err)
 		} else {
 			t.dot = append(t.dot, ln)
 		}
@@ -34,6 +35,7 @@ func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
 	for _, host := range cfg.dohListen {
 		if ln, err := bindTCP(host, cfg.dohPort); err != nil {
 			logf("%v", err)
+			refuse(refused, "doh", host, cfg.dohPort, err)
 		} else {
 			t.doh = append(t.doh, ln)
 		}
@@ -41,6 +43,7 @@ func bindTLS(cfg config, logf func(format string, args ...any)) *tlsListeners {
 	for _, host := range cfg.doqListen {
 		if ln, err := bindUDP(host, cfg.doqPort); err != nil {
 			logf("%v", err)
+			refuse(refused, "doq", host, cfg.doqPort, err)
 		} else {
 			t.doq = append(t.doq, ln)
 		}
