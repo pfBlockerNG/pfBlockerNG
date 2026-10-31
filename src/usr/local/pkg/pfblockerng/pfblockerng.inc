@@ -5697,8 +5697,9 @@ function pfb_dns_proxy_listeners_sync(): ?string {
  *        and the proxy ready, nothing is checked, closed or waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
  *        it; NULL = no start was made (a cron tick that restarted nothing, an apply that restarted nothing): the log's latest start
- *        is judged. A log now shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway error is looked for
- *        the same way, only in the bytes after $since (none quoted when this start logged none); with NULL, in the whole tail
+ *        is judged. A log now shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway
+ *        error is looked for in the log's last 64 KiB only (that read does not grow), in the bytes after $since (none quoted when this
+ *        start logged none); with NULL, in all of those 64 KiB
  */
 function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 	$saved = pfb_dns_proxy_saved();

@@ -723,8 +723,8 @@ most `PFB_DNS_PROXY_LOG_WAIT` seconds (3, overridable before load). A line that 
 a log with no `ready upstream` line is: nothing filed, nothing closed. With no `$since` (the tick; an apply that restarted nothing)
 the latest start is judged at once, from a read that grows from 64 KiB up to the read limit (`PFB_DNS_PROXY_LOG_READ_MAX`, 16 MiB) until
 it holds the start's beginning; a start the limit cuts off is not judged. The last `pfb_dns_gateway:` line of a start that never became
-ready is searched the same way, only in the bytes after `$since`, so an error of an older start is never quoted for this one (none is quoted when
-this start logged none); with no `$since` it is searched in the whole tail. Pinned by `DnsProxyStartupCheckTest`,
+ready is searched in the log's last 64 KiB only (that lookup does not grow its read), and only in the bytes after `$since`, so an error of
+an older start is never quoted for this one (none is quoted when this start logged none). Pinned by `DnsProxyStartupCheckTest`,
 `DnsProxyStartupCheckCurrentStartTest`, `DnsProxyBootTest` and `DnsProxyActivationRollbackTest`.
 
 **Status panel transports (issues #3548, #3555).** The pfB-DNS tab's status (`pfb_dns_status()`) has an entry per transport: plain DNS,

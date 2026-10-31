@@ -323,6 +323,18 @@ final class DnsProxyListenersFoldTest extends TestCase
 		$this->assertFalse(pfb_dns_proxy_listeners()['partial'] ?? NULL);
 	}
 
+	public function testALegacyLogWithTwoReadyLinesInTheReadIsNotPartial(): void
+	{
+		// Given an older gateway's log (no `starting pid` line) longer than 64 KiB: other output, an older start, then the latest start
+		$this->log([...self::filler(), 'listening udp+tcp 127.0.0.1:53', self::READY, 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53', self::READY]);
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the first window');
+		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the log has no marker');
+
+		// Then the latest start's beginning, the older start's ready line, is in the read: the record is whole
+		$this->assertFalse(pfb_dns_proxy_listeners()['partial'] ?? NULL);
+		$this->assertSame(['udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'], $this->served());
+	}
+
 	/** @return array<string,array{string,string,string}> a host as an rc script or the gateway's log spells it, a port, and the host:port as the gateway prints it */
 	public static function hostPorts(): array
 	{
