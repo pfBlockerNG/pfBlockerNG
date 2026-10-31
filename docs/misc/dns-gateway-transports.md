@@ -99,10 +99,12 @@ gateway keeps the certificate it has, and the next apply or tick tries again, be
 Pinned by `ctl_test.go`, `ctl_wiring_test.go` and `restart_test.go` (peer credentials with a real unprivileged process, frame limits, directory and
 socket modes, bound before the drop and kept after a real one), `live_listen_linux_test.go`, `live_listen_refused_linux_test.go`
 and `starting_pid_test.go` (add and remove over real sockets and descriptors: served on every kind and family, refused rows,
-hostile frames, descriptors closed, shutdown closes each listener once, `starting pid` first), `tls_reload_test.go` (a gateway process serving all three
+hostile frames, descriptors closed, shutdown closes each listener once, `starting pid` first), `live_listen_list_linux_test.go`
+(the `list` reply: every kind listening and refused, refusals cleared by a live add), `tls_reload_test.go` (a gateway process serving all three
 transports through a rotation, a refused push and a rotation under load: no failed handshake, no unanswered query),
 `tlsconfig_test.go`, `tests/dns_proxy/test_gateway_e2e.py` (the real binary, a pushed certificate, the modes of the socket and its
-directory) and, for the PHP side, `DnsProxyCertificateExportTest`, `DnsProxyCertificatePushTest` (a stand-in gateway on a real
+directory, and row E1: the real PHP `list` probe against the real gateway) and, for the PHP side, `DnsProxyCertificateExportTest`,
+`DnsProxyCertificatePushTest` (a stand-in gateway on a real
 Unix socket records the bytes it was sent) and `DnsProxyCertificateStartTest`.
 
 **Not done, tracked as follow-up #3525: the chroot.** The gateway does not `chroot(2)` after the privilege drop. What keeps the

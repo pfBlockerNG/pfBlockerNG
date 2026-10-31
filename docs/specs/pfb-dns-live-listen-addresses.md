@@ -61,6 +61,10 @@ The existing framing is kept: 4 bytes first. Two new values that no certificate 
 | `FF FF FF FE` | add a listener |
 | `FF FF FF FD` | remove a listener |
 
+> **Amendment 2026-10-31 (#3625).** A third value, `FF FF FF FC` with nothing after it, lists what the gateway serves: one
+> `listening <kind> <host:port>` line per served listener, one `refused <kind> <host:port> <reason>` line per start-time bind
+> failure not served now, then `ok`.
+
 Then a 4-byte big-endian length `L` (1 to 256) and `L` bytes of ASCII `<kind> <host:port>`: `kind` is `udp+tcp`,
 `dot`, `doh` or `doq`; `host:port` is Go's `netip.AddrPort` spelling (IPv6 bracketed and compressed; no zone; no
 IPv4-mapped IPv6), which `pfb_dns_proxy_host_port()` produces. One reply line, `ok` or `error: <reason>`, as for the

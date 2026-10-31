@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// A start's first log line is `starting pid <pid>`: pfBlockerNG reads the gateway's log from the last such line to know
-// which lines belong to which start, whatever the start went on to log or fail with.
+// A start's first log line is `starting pid <pid>`, so that a person reading the gateway's log finds where each start begins,
+// whatever the start went on to log or fail with.
 
 // G12: the line comes before every line a start logs, and it names the process that logs it.
 func TestAStartLogsItsPidBeforeAnyOtherLine(t *testing.T) {
