@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
-require_once __DIR__ . '/support/PfbFlockClockFixture.php';
+require_once __DIR__ . '/support/ControlSocketStandIn.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
@@ -30,16 +30,11 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyCertificatePushTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
+	use ControlSocketStandIn;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const OK_AT_ONCE = [[0.0, "ok\n"]];
 
-	private string $dir = '';
-	private string $socket = '';
-	/** @var list<array{resource,array<int,resource>}> */
-	private array $servers = [];
-	/** @var list<PfbFlockClockFixture> kept for the whole test: a loaded body reaches its clock through a weak reference */
-	private array $clocks = [];
 	private array $savedGlobals = [];
 
 	protected function setUp(): void
@@ -73,33 +68,6 @@ final class DnsProxyCertificatePushTest extends TestCase
 		}
 		$this->savedGlobals = [];
 		rmdir_recursive($this->dir);
-	}
-
-	/** A gateway that listens on the control socket and takes one push; it writes only what the test releases (see support/ControlSocketServer.php). Returns the file its frame is recorded in. */
-	private function listen(): string
-	{
-		@unlink($this->socket);
-		$record = "{$this->dir}/frame." . count($this->servers);
-		$proc = proc_open([PHP_BINARY, __DIR__ . '/support/ControlSocketServer.php', $this->socket, $record], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-		$this->assertIsResource($proc);
-		$read = [$pipes[1]];
-		$write = $except = NULL;
-		$this->assertSame(1, stream_select($read, $write, $except, 15), 'the stand-in gateway did not start listening');
-		$this->assertSame("ready\n", fgets($pipes[1]));
-		$this->servers[] = [$proc, $pipes];
-		return $record;
-	}
-
-	/** Let every stand-in gateway go: its stdin closes, which is all a silent one waits for. */
-	private function finish(): void
-	{
-		foreach ($this->servers as [$proc, $pipes]) {
-			@fclose($pipes[0]);
-			@fclose($pipes[1]);
-			@fclose($pipes[2]);
-			proc_close($proc);
-		}
-		$this->servers = [];
 	}
 
 	private function pem(): string
@@ -269,35 +237,6 @@ final class DnsProxyCertificatePushTest extends TestCase
 		return "no reply from {$this->socket} within {$seconds} s";
 	}
 
-	/**
-	 * Loads $functions onto a virtual clock, against the gateway listen() started last. $script is what that gateway writes, in
-	 * order: [seconds after the previous write, bytes], or [seconds, NULL] to hang up. Each write is released by the test, so the
-	 * clock, not the host, decides when it arrives. The clock lives until tearDown(), which the loaded bodies need.
-	 *
-	 * @param list<string> $functions
-	 * @param list<array{float,?string}> $script
-	 * @return array{0: string, 1: PfbFlockClockFixture} the namespace the functions were loaded into, and the clock
-	 */
-	private function onVirtualClock(array $functions, array $script): array
-	{
-		$this->assertNotEmpty($this->servers, 'a gateway must be listening before a push');
-		$pipes = end($this->servers)[1];
-		$clock = new PfbFlockClockFixture();
-		$namespace = $clock->loadChain($functions);
-		$clock->setIdle(function (float $wait) use (&$script, $pipes): ?float {
-			if ($script === [] || $script[0][0] > $wait) {
-				return NULL;
-			}
-			[$delay, $bytes] = array_shift($script);
-			$this->release($pipes, $bytes);
-
-			return $delay;
-		});
-		$this->clocks[] = $clock;
-
-		return [$namespace, $clock];
-	}
-
 	/** The certificate refresh on a virtual clock, against the gateway listen() started last: its name in that namespace. */
 	private function refreshOnVirtualClock(array $script = self::OK_AT_ONCE): string
 	{
@@ -319,18 +258,6 @@ final class DnsProxyCertificatePushTest extends TestCase
 		[$namespace, $clock] = $this->onVirtualClock(['pfb_dns_proxy_certificate_push', 'pfb_dns_proxy_ctl_exchange'], $script);
 
 		return [($namespace . '\\pfb_dns_proxy_certificate_push')('certificate and key', $this->socket, $timeout), $clock->now()];
-	}
-
-	/** The stand-in gateway writes $bytes now (or hangs up, for NULL), and acknowledges once it has: PHP's next poll sees the result. */
-	private function release($pipes, ?string $bytes): void
-	{
-		fwrite($pipes[0], ($bytes === NULL ? 'close' : 'x' . bin2hex($bytes)) . "\n");
-		fflush($pipes[0]);
-		stream_set_timeout($pipes[1], 10);
-		$ack = fgets($pipes[1]);
-		if ($ack !== "ack\n") {
-			throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in gateway did not acknowledge its write: ' . var_export($ack, TRUE));
-		}
 	}
 
 	public function testAGatewayThatNeverRepliesIsGivenUpOnAndNothingIsRecorded(): void
@@ -385,11 +312,21 @@ final class DnsProxyCertificatePushTest extends TestCase
 
 	public function testAnOverlongReplyIsRejectedWithoutAcceptingTheCertificate(): void
 	{
-		// Given a gateway whose reply is longer than the reply cap, with no newline in it
-		[$why] = $this->pushOnVirtualClock([[0.0, str_repeat('a', 512)]], 0.3);
+		// Given a gateway whose reply is longer than the reply cap (64 KiB), with no newline in it
+		[$why] = $this->pushOnVirtualClock([[0.0, str_repeat('a', 65537)]], 0.3);
 
 		// Then the push rejects it at the cap, and reads no further
 		$this->assertSame("{$this->socket} sent no complete reply", self::verdictOf($why), 'an overlong reply is rejected, not waited on');
+	}
+
+	public function testALongErrorLineIsReadWholeNotRejectedAsIncomplete(): void
+	{
+		// Given a gateway that refuses the certificate with a reason of 600 bytes, far longer than a one-line reply was once allowed to be
+		$reason = 'error: ' . str_repeat('x', 600);
+		[$why] = $this->pushOnVirtualClock([[0.0, "{$reason}\n"]], 0.3);
+
+		// Then the push reports the whole reason, not that the reply was incomplete
+		$this->assertSame("the gateway did not take the certificate: {$reason}", self::verdictOf($why), 'a long error line is read whole');
 	}
 
 	public function testASocketNobodyListensOnIsAReasonThatNamesIt(): void

@@ -4690,14 +4690,16 @@ function pfb_dns_proxy_certificate_pushed_path(): string {
 }
 
 /**
- * One request on the gateway's control socket (--ctl-socket; the gateway's ctl.go): connect, send $frame, read the one reply line.
+ * One request on the gateway's control socket (--ctl-socket; the gateway's ctl.go): connect, send $frame, read the reply: one or more
+ * lines, the last of which is `ok` or starts with `error:` (every verb but the listener list answers that one line). The reply is
+ * read up to 65536 bytes in all; one that is not complete by then, or by $timeout from the end of the send, is a failure.
  * Every step (connect, send, reply) is bounded by $timeout, so that a gateway that does not answer costs a bounded wait, not a hang;
  * the connection is made in this process, so that no other process is started and no external wait is involved.
  *
  * @param string $what what the frame carries, as the failure messages name it ("the certificate")
  * @param array<int,resource> $fds sockets that go with the frame as SCM_RIGHTS, in the one sendmsg(2) that sends it (the gateway takes them
  *        with the frame's first byte); a short or failed send is a failure. [] = a plain write
- * @return array{0: string|null, 1: string|null} [the reply with its newline trimmed, NULL] or [NULL, why the exchange failed]
+ * @return array{0: string|null, 1: string|null} [the reply, its lines joined by "\n", with its final newline removed and nothing else trimmed, NULL] or [NULL, why the exchange failed]
  */
 function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeout, string $what, array $fds = []): array {
 	$conn = @stream_socket_client("unix://{$socket}", $errno, $errstr, $timeout);
@@ -4728,8 +4730,9 @@ function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeou
 		$sent += $wrote;
 	}
 	$reply = '';
+	$final = FALSE;
 	$deadline = hrtime(TRUE) + (int) ($timeout * 1000000000);
-	while (!str_ends_with($reply, "\n") && strlen($reply) < 511) {
+	while (!$final && strlen($reply) < 65536) {
 		$left = ($deadline - hrtime(TRUE)) / 1000000000;
 		$read = [$conn];
 		$write = $except = NULL;
@@ -4737,18 +4740,24 @@ function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeou
 			fclose($conn);
 			return [NULL, "no reply from {$socket} within {$timeout} s"];
 		}
-		$chunk = @fread($conn, 511 - strlen($reply));
+		$chunk = @fread($conn, 65536 - strlen($reply));
 		if ($chunk === FALSE || $chunk === '') {
 			fclose($conn);
 			return [NULL, "{$socket} closed the connection with no reply"];
 		}
 		$reply .= $chunk;
+		if (str_ends_with($reply, "\n")) {
+			// The reply's last line is the one before the empty tail that its final "\n" leaves
+			$lines = explode("\n", $reply);
+			$last = $lines[count($lines) - 2];
+			$final = ($last === 'ok' || str_starts_with($last, 'error:'));
+		}
 	}
 	fclose($conn);
-	if (!str_ends_with($reply, "\n")) {
+	if (!$final) {
 		return [NULL, "{$socket} sent no complete reply"];
 	}
-	return [trim($reply), NULL];
+	return [substr($reply, 0, -1), NULL];
 }
 
 /**
@@ -4870,6 +4879,49 @@ function pfb_dns_proxy_listener_remove(string $kind, string $at, ?string $socket
 		return "cannot remove {$body}: {$why}";
 	}
 	return ($reply === 'ok') ? NULL : "the gateway did not remove {$body}: {$reply}";
+}
+
+/**
+ * Ask the running gateway which listeners it serves, on its control socket (FF FF FF FC, nothing after it; ctl.go): it answers a line
+ * `listening <kind> <host:port>` for each it serves and `refused <kind> <host:port> <reason>` for each it could not take, then a final
+ * `ok` line, or one `error: <reason>` line (a gateway older than this verb answers it as a bad message length). <kind> is udp+tcp, dot,
+ * doh or doq; <host:port> is spelled as pfb_dns_proxy_host_port() spells it (IPv6 bracketed). The reply is taken only when every line
+ * is exactly that wire: any other byte, spacing, kind, address or order makes the whole list unknown, and there is no fallback to the log.
+ *
+ * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
+ * @param float $timeout seconds the whole reply may take
+ * @return array{listening: array<string,array<string,true>>, refused: array<string,array<string,string>>}|null what the gateway serves and
+ *         what it refused with the reason, each by kind and then host:port, both keys always there; NULL = unknown (no gateway, no
+ *         answer in time, an `error:`, or a reply that is not exactly the wire above), never a partial list
+ */
+function pfb_dns_proxy_listener_list(?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?array {
+	global $pfb;
+
+	[$reply] = pfb_dns_proxy_ctl_exchange("\xFF\xFF\xFF\xFC", $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the listener list');
+	// Only the "\n" that ends a line may be a control byte
+	if ($reply === NULL || preg_match('/[\x00-\x09\x0B-\x1F\x7F]/', $reply) === 1) {
+		return NULL;
+	}
+	$lines = explode("\n", $reply);
+	if (array_pop($lines) !== 'ok') {
+		return NULL;
+	}
+	$list = ['listening' => [], 'refused' => []];
+	foreach ($lines as $line) {
+		// A refused line has a reason (anything after the third space, not starting with a space), a listening line has none
+		if (preg_match('/\A(listening|refused) (udp\+tcp|dot|doh|doq) (\S+)(?: ([^ ].*))?\z/', $line, $m) !== 1 || ($m[1] === 'refused') !== isset($m[4])) {
+			return NULL;
+		}
+		// host:port exactly as the gateway prints it: re-spelling the parts must give back the same text
+		$colon = (int) strrpos($m[3], ':');
+		$host = trim(substr($m[3], 0, $colon), '[]');
+		$port = substr($m[3], $colon + 1);
+		if (@inet_pton($host) === FALSE || !ctype_digit($port) || (string) (int) $port !== $port || (int) $port > 65535 || pfb_dns_proxy_host_port($host, $port) !== $m[3]) {
+			return NULL;
+		}
+		$list[$m[1]][$m[2]][$m[3]] = $m[4] ?? TRUE;
+	}
+	return $list;
 }
 
 /**

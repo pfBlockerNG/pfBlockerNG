@@ -2148,6 +2148,26 @@
             }
         ]
     },
+    "pfb_dns_proxy_listener_list": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "socket",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "3.0"
+            }
+        ]
+    },
     "pfb_dns_proxy_listener_port": {
         "returnsRef": false,
         "returnType": "?string",

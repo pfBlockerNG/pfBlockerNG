@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 /**
  * A stand-in for the pfB-DNS gateway's control socket (go/pfb_dns_gateway, ctl.go), for the tests of
- * pfb_dns_proxy_certificate_push(): listens on a Unix socket, takes ONE connection, reads the frame (4-byte big-endian length,
- * then that many bytes), stores the raw frame in a file, and then writes only what the test releases. Prints "ready" once it listens.
+ * pfb_dns_proxy_certificate_push() and pfb_dns_proxy_listener_list(): listens on a Unix socket, takes ONE connection, reads the
+ * frame (4-byte big-endian length, then that many bytes; a head above 65536, the verbs FF FF FF Fx, carries no body), stores the
+ * raw frame in a file, and then writes only what the test releases. Prints "ready" once it listens.
  *
  *   php ControlSocketServer.php <socket> <record file>
  *
@@ -44,7 +45,7 @@ $read = static function ($stream, int $want): string {
 };
 $head = $read($conn, 4);
 $length = (strlen($head) === 4) ? unpack('N', $head)[1] : 0;
-file_put_contents($record, $head . $read($conn, $length));
+file_put_contents($record, $head . (($length > 65536) ? '' : $read($conn, $length)));
 
 while (($command = fgets(STDIN)) !== FALSE) {
 	if ($command === "close\n") {
