@@ -22,11 +22,11 @@ use PHPUnit\Framework\TestCase;
  *   - the Resolver reload's proxy restart, an rc script that changed and a proxy that must reload its lists are deferred, never
  *     performed, and each records its reason in the marker;
  *   - a proxy that is down is still started (and nothing stays pending);
- *   - a pending restart, a gateway or a decider that differs are left for the next pass: no restart, no control-socket request,
- *     the marker kept;
+ *   - a pending restart, a gateway or a decider that differs are left for the next pass: no restart, no decider restart on the control
+ *     socket (the gateway is only asked what it serves), the marker kept;
  *   - an address-only change of the rc script (issue #3599) and a start that could not assign an address the box can bind now (issue
- *     #3598) are neither made live nor restarted by the update pass or the cron tick under one: nothing is sent on the control socket,
- *     the first is recorded as a pending restart (DnsProxyLiveListenersTest has the live changes outside one);
+ *     #3598) are neither made live nor restarted by the update pass or the cron tick under one: no add or remove is sent on the control
+ *     socket (the gateway is only asked what it serves), the first is recorded as a pending restart (DnsProxyLiveListenersTest has the live changes outside one);
  *   - with pfB-DNS off nothing is deferred and no marker is written, whatever the operation.
  */
 #[CoversFunction('pfb_dns_proxy_restart_deferred')]
@@ -84,7 +84,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		return $result;
 	}
 
-	/** A gateway that listens on the control socket and records what it is sent; returns the socket and the record's paths. */
+	/** A gateway that listens on the control socket and records what it is sent but for the list request, which it answers as an older gateway does; returns the socket and the record's paths. */
 	private function listen(): array
 	{
 		$socket = "{$this->dir}/ctl.sock";
@@ -107,12 +107,6 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 	private static function frames(string $record): array
 	{
 		return array_values(array_filter(self::everyFrame($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
-	}
-
-	/** The gateway was asked for no decider restart: nobody connected, or only the pass's own listener-list request came in. */
-	private function assertNoDeciderRestart(string $record, string $message): void
-	{
-		$this->assertContains(is_file($record) ? (string) file_get_contents($record) : '', ['', "\xFF\xFF\xFF\xFC"], $message);
 	}
 
 	public function testTheReloadsProxyRestartIsDeferredAndRecordsItsReason(): void
@@ -183,7 +177,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 	public function testADeferredPassStillFilesAListenerTheGatewayDidNotReport(): void
 	{
 		// Given a quiet box under a package upgrade, a DoT listener on lan, and a gateway that lists every listener but that one
-		$this->standIn("{$this->dir}/live.sock", "{$this->dir}/dns_proxy.log", [], ['listening' => [
+		$this->standIn("{$this->dir}/live.sock", [], ['listening' => [
 			'udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53', 'dot 127.0.0.1:853', 'dot [::1]:853',
 		]]);
 		$result = $this->runUnderPkg(['op' => 'ensure', 'dot' => TRUE, 'ctl' => "{$this->dir}/live.sock"]);
@@ -204,26 +198,24 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		]);
 		$this->finish();
 
-		// Then nothing restarted, nothing was sent on the control socket, and the pending restart is still there
+		// Then nothing restarted, no decider restart was sent on the control socket, and the pending restart is still there
 		$this->assertTrue($result['returned']);
 		$this->assertSame([], $result['calls']);
-		$this->assertNoDeciderRestart($record, 'no decider restart was sent');
+		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
 		$this->assertSame('the package changed its rc script', $result['marker']);
 	}
 
 	/**
-	 * The gateway's log after a start that could not assign 127.0.0.1 (this host binds it now), the other two addresses listening, with
-	 * the rc script's port at $port: a live add would be sent here, were it not for the package operation.
+	 * What the gateway serves after a start that could not assign 127.0.0.1 (this host binds it now), the other two addresses listening,
+	 * with the rc script's port at $port: a live add would be sent here, were it not for the package operation.
 	 *
-	 * @return list<string>
+	 * @return array{listening:list<string>,refused:array<string,string>}
 	 */
 	private static function refusedStart(int $port): array
 	{
 		return [
-			"listening udp+tcp 192.0.2.1:{$port}",
-			"cannot listen on 127.0.0.1:{$port}: bind: can't assign requested address",
-			"listening udp+tcp [::1]:{$port}",
-			'ready upstream 127.0.0.1:5353 pid 4242',
+			'listening' => ["udp+tcp 192.0.2.1:{$port}", "udp+tcp [::1]:{$port}"],
+			'refused' => ["udp+tcp 127.0.0.1:{$port}" => "bind: can't assign requested address"],
 		];
 	}
 
@@ -231,8 +223,8 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 	{
 		// Given a quiet box whose latest start refused an address that can be bound now, run under a package upgrade, and a gateway that would take the add
 		$port = self::freePort();
-		$record = $this->standIn("{$this->dir}/live.sock", "{$this->dir}/dns_proxy.log");
-		$result = $this->runUnderPkg(['op' => 'ensure', 'port' => (string) $port, 'ctl' => "{$this->dir}/live.sock", 'gatewayLog' => self::refusedStart($port)]);
+		$record = $this->standIn("{$this->dir}/live.sock", [], self::refusedStart($port));
+		$result = $this->runUnderPkg(['op' => 'ensure', 'port' => (string) $port, 'ctl' => "{$this->dir}/live.sock"]);
 
 		// Then the proxy is left running: no frame is sent, and no restart is made or announced
 		$this->assertTrue($result['returned']);
@@ -245,8 +237,8 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 	{
 		// Given a serving proxy whose latest start refused an address that can be bound now, the cron tick run under a package upgrade, and a gateway that would take the add
 		$port = self::freePort();
-		$record = $this->standIn("{$this->dir}/live.sock", "{$this->dir}/dns_proxy.log");
-		$result = $this->runUnderPkg(['op' => 'tick', 'serving' => TRUE, 'port' => (string) $port, 'ctl' => "{$this->dir}/live.sock", 'gatewayLog' => self::refusedStart($port)]);
+		$record = $this->standIn("{$this->dir}/live.sock", [], self::refusedStart($port));
+		$result = $this->runUnderPkg(['op' => 'tick', 'serving' => TRUE, 'port' => (string) $port, 'ctl' => "{$this->dir}/live.sock"]);
 
 		// Then the proxy is left running: no frame is sent, and no restart is made or announced
 		$this->assertSame([], $result['calls']);
@@ -259,9 +251,9 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		// Given a running proxy whose rc script differs from the one the pass writes only in a listen address (the gateway served 192.0.2.1,
 		// the interface has 0.0.0.0 now), run under a package upgrade, and a gateway that would take the change
 		$port = self::freePort();
-		$record = $this->standIn("{$this->dir}/live.sock", "{$this->dir}/dns_proxy.log");
-		$served = ["listening udp+tcp 192.0.2.1:{$port}", "listening udp+tcp 127.0.0.1:{$port}", "listening udp+tcp [::1]:{$port}", 'ready upstream 127.0.0.1:5353 pid 4242'];
-		$result = $this->runUnderPkg(['op' => 'ensure', 'port' => (string) $port, 'lan' => '0.0.0.0', 'ctl' => "{$this->dir}/live.sock", 'gatewayLog' => $served]);
+		$served = ['listening' => ["udp+tcp 192.0.2.1:{$port}", "udp+tcp 127.0.0.1:{$port}", "udp+tcp [::1]:{$port}"]];
+		$record = $this->standIn("{$this->dir}/live.sock", [], $served);
+		$result = $this->runUnderPkg(['op' => 'ensure', 'port' => (string) $port, 'lan' => '0.0.0.0', 'ctl' => "{$this->dir}/live.sock"]);
 
 		// Then nothing was sent or restarted, and the restart is pending as it is for any other change of the script
 		$this->assertTrue($result['returned']);

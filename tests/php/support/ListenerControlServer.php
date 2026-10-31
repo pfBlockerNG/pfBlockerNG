@@ -9,15 +9,14 @@ declare(strict_types=1);
  * remove, FF FF FF FC list), and for add and remove a 4-byte big-endian length and that many bytes `<kind> <host:port>`, sent in ONE
  * sendmsg(2) with its SCM_RIGHTS descriptors; a list frame is the four head bytes alone. Per connection it records one JSON line
  * {"head": hex, "body": text, "fds": [{"type": "stream"|"dgram", "name": "host:port", "listening": bool}]} in <record file> BEFORE it
- * replies, so that what a test reads after the call under test returns is complete; then it appends `listening <body>` (add) or
- * `stopped listening <body>` (remove) to <gateway log> when the reply is `ok` (what the real gateway logs), closes every received
- * descriptor and writes the reply. Prints "ready" once it listens.
+ * replies, so that what a test reads after the call under test returns is complete; then it closes every received descriptor and
+ * writes the reply. Prints "ready" once it listens.
  *
- *   php ListenerControlServer.php <socket> <record file> <gateway log> <replies JSON> <served JSON>
+ *   php ListenerControlServer.php <socket> <record file> <replies JSON> <served JSON>
  *
- * <replies JSON> is a list, one entry per add or remove connection in order: a reply line without its newline ("ok", "error: ...", or
- * "ok silent": `ok` with nothing logged), or null to hang up with no reply; connections past the list's end are answered "ok". A list
- * frame takes no entry of it. The test's barrier is stdin: when it closes, the server ends.
+ * <replies JSON> is a list, one entry per add or remove connection in order: a reply line without its newline ("ok", "error: ..."),
+ * or null to hang up with no reply; connections past the list's end are answered "ok". A list frame takes no entry of it. The test's
+ * barrier is stdin: when it closes, the server ends.
  *
  * <served JSON> is what the gateway serves: {"listening": ["<kind> <host:port>", ...], "refused": {"<kind> <host:port>": "<reason>"},
  * "list": absent | null | "<reply>"}; the default serves nothing and refuses nothing. A list frame is answered with one
@@ -26,7 +25,7 @@ declare(strict_types=1);
  * with no reply. An add or remove answered `ok` also changes what is served: an added listener is served (and no longer refused), a
  * removed one is not.
  */
-[, $socket, $record, $log, $script, $servedJson] = $argv + [NULL, NULL, NULL, NULL, '[]', '{}'];
+[, $socket, $record, $script, $servedJson] = $argv + [NULL, NULL, NULL, '[]', '{}'];
 $replies = json_decode((string) $script, TRUE, 4, JSON_THROW_ON_ERROR);
 $served = json_decode((string) $servedJson, TRUE, 4, JSON_THROW_ON_ERROR) + ['listening' => [], 'refused' => []];
 
@@ -96,14 +95,6 @@ while (TRUE) {
 		}
 	} else {
 		$reply = array_key_exists(0, $replies) ? array_shift($replies) : 'ok';
-		// "ok silent": a gateway that takes the frame and does not log it (the test of the log wait)
-		$silent = ($reply === 'ok silent');
-		$reply = $silent ? 'ok' : $reply;
-		if ($reply === 'ok' && !$silent && $head === 'fffffffe') {
-			file_put_contents($log, "listening {$body}\n", FILE_APPEND);
-		} elseif ($reply === 'ok' && !$silent && $head === 'fffffffd') {
-			file_put_contents($log, "stopped listening {$body}\n", FILE_APPEND);
-		}
 		if ($reply === 'ok' && $head === 'fffffffe') {
 			$served['listening'] = array_values(array_unique([...$served['listening'], $body]));
 			unset($served['refused'][$body]);

@@ -21,9 +21,12 @@ use PHPUnit\Framework\TestCase;
  *     gateway's error, a hang-up or the 64 KiB cap before the final `ok`, and any line that is not exactly one of the two forms
  *     (spacing, control bytes, an address that is not the canonical `host:port` the gateway prints, an unknown kind, an empty reason,
  *     `ok` or `error:` anywhere but last).
+ *   - pfb_dns_proxy_host_port() spells a host and a port as the gateway prints them (compressed and bracketed IPv6, an IPv4-mapped
+ *     address as the IPv4 one), which is the spelling every `host:port` of a list is compared with.
  */
 #[CoversFunction('pfb_dns_proxy_listener_list')]
 #[CoversFunction('pfb_dns_proxy_ctl_exchange')]
+#[CoversFunction('pfb_dns_proxy_host_port')]
 final class DnsProxyListenerListTest extends TestCase
 {
 	use ControlSocketStandIn;
@@ -326,5 +329,25 @@ final class DnsProxyListenerListTest extends TestCase
 
 		// Then the whole list is unknown: a valid line beside the bad one is not returned
 		$this->assertNull($list, 'expected an unknown list (NULL) for ' . var_export($reply, TRUE) . ', got ' . var_export($list, TRUE));
+	}
+
+	/** @return array<string,array{string,string,string}> a host as an rc script or the gateway spells it, a port, and the host:port as the gateway prints it */
+	public static function hostPorts(): array
+	{
+		return [
+			'an IPv4 address' => ['127.0.0.1', '53', '127.0.0.1:53'],
+			'an IPv6 address, compressed and bracketed' => ['2001:DB8:0:0:0:0:0:1', '53', '[2001:db8::1]:53'],
+			'an IPv4-mapped address in dotted form' => ['::ffff:127.0.0.1', '53', '127.0.0.1:53'],
+			'an IPv4-mapped address in hex form' => ['::FFFF:7f00:1', '53', '127.0.0.1:53'],
+			'an IPv4-mapped wildcard' => ['::ffff:0.0.0.0', '853', '0.0.0.0:853'],
+			'an address that is not mapped but has the same tail' => ['64:ff9b::7f00:1', '53', '[64:ff9b::7f00:1]:53'],
+			'a text that is no address' => ['127.1', '53', '127.1:53'],
+		];
+	}
+
+	#[DataProvider('hostPorts')]
+	public function testHostPortSpellsAnAddressAsTheGatewayPrintsIt(string $host, string $port, string $printed): void
+	{
+		$this->assertSame($printed, pfb_dns_proxy_host_port($host, $port));
 	}
 }

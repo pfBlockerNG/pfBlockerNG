@@ -32,6 +32,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_dns_proxy_startup_check')]
 #[CoversFunction('pfb_dns_proxy_plain_listen')]
+#[CoversFunction('pfb_dns_proxy_log_lines')]
 #[CoversFunction('pfb_dns_proxy_confirm_ready')]
 final class DnsProxyStartupCheckTest extends TestCase
 {
@@ -290,6 +291,44 @@ final class DnsProxyStartupCheckTest extends TestCase
 		pfb_dns_proxy_startup_check(FALSE);
 
 		$this->assertStringContainsString('(last gateway error: pfb_dns_gateway: <script>alert(1)</script>).', $this->startupTexts()[0], 'file_notice() encodes it itself: never pre-escape');
+	}
+
+	/** @return array<string,array{list<string>,list<string>,?int,string}> log before the size is taken, lines appended after it, how far past the log's end the size is (NULL: no size is taken), and the error quoted */
+	public static function logWindowsOfANotReadyStart(): array
+	{
+		// 70,000 bytes of another writer's lines: more than the 64 KiB the log is read within
+		$chatter = array_fill(0, 700, str_repeat('f', 99));
+		return [
+			'an error older than the last 64 KiB of the log' => [['pfb_dns_gateway: too old', ...$chatter], [], NULL, ''],
+			'an error inside the last 64 KiB of the log' => [[...$chatter, 'pfb_dns_gateway: recent'], [], NULL, 'pfb_dns_gateway: recent'],
+			'an error of the start, after the size taken before it' => [['pfb_dns_gateway: before the start'], ['pfb_dns_gateway: of the start'], 0, 'pfb_dns_gateway: of the start'],
+			'a log rotated to less than the size taken before the start' => [['pfb_dns_gateway: rotated'], [], 4096, 'pfb_dns_gateway: rotated'],
+		];
+	}
+
+	/**
+	 * @param list<string> $before
+	 * @param list<string> $after
+	 */
+	#[DataProvider('logWindowsOfANotReadyStart')]
+	public function testANotReadyStartQuotesOnlyAGatewayErrorInsideTheWindowItIsJudgedBy(array $before, array $after, ?int $past, string $quote): void
+	{
+		// Given a moved box, a log of $before, and the size taken after it by the caller that made the start (none: a tick that made no start)
+		$this->box();
+		$this->log($before);
+		$since = ($past === NULL) ? NULL : pfb_dns_proxy_log_size() + $past;
+		if ($after !== []) {
+			file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", $after) . "\n", FILE_APPEND);
+		}
+
+		// When the check judges the start as not ready
+		pfb_dns_proxy_startup_check(FALSE, $since);
+
+		// Then only an error inside the last 64 KiB, and after the size when one was taken, is quoted
+		$this->assertSame(
+			[$this->problemText('pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s' . ($quote === '' ? '' : " (last gateway error: {$quote})") . '.')],
+			$this->startupTexts()
+		);
 	}
 
 	// -----------------------------------------------------------------------

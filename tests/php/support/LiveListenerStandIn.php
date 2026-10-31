@@ -22,12 +22,12 @@ trait LiveListenerStandIn
 	 *        entries, refusals with their reasons, and optionally the whole reply (a string) or a hang-up (null); [] = serves nothing
 	 * @return string the file its frames are recorded in; it does not exist until the first frame
 	 */
-	private function standIn(string $socket, string $gatewayLog, array $replies = [], array $served = []): string
+	private function standIn(string $socket, array $replies = [], array $served = []): string
 	{
 		@unlink($socket);
 		$record = $socket . '.frames.' . count($this->standIns);
 		$proc = proc_open(
-			[PHP_BINARY, __DIR__ . '/ListenerControlServer.php', $socket, $record, $gatewayLog, json_encode($replies, JSON_THROW_ON_ERROR), json_encode($served, JSON_THROW_ON_ERROR)],
+			[PHP_BINARY, __DIR__ . '/ListenerControlServer.php', $socket, $record, json_encode($replies, JSON_THROW_ON_ERROR), json_encode($served, JSON_THROW_ON_ERROR)],
 			[0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
 			$pipes
 		);
@@ -68,14 +68,14 @@ trait LiveListenerStandIn
 	private function gatewayServes(array $listening, array $refused = []): void
 	{
 		$this->standInsStop();
-		$this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], $GLOBALS['pfb']['dns_proxy_log'], [], ['listening' => $listening, 'refused' => $refused]);
+		$this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], [], ['listening' => $listening, 'refused' => $refused]);
 	}
 
 	/** A gateway that answers a list request with exactly $reply (NULL: it hangs up), as gatewayServes() starts it. */
 	private function gatewayAnswers(?string $reply): void
 	{
 		$this->standInsStop();
-		$this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], $GLOBALS['pfb']['dns_proxy_log'], [], ['list' => $reply]);
+		$this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], [], ['list' => $reply]);
 	}
 
 	/** @return list<array{head:string,body:string,fds:list<array{type:string,name:string,listening:bool}>}> the frames the stand-in got, in order */

@@ -31,7 +31,6 @@ final class DnsProxyListenerFramesTest extends TestCase
 
 	private string $dir = '';
 	private string $socket = '';
-	private string $log = '';
 	private int $port = 0;
 	private array $savedGlobals = [];
 
@@ -41,7 +40,6 @@ final class DnsProxyListenerFramesTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_listener_frames_' . getmypid() . '_' . bin2hex(random_bytes(4));
 		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
 		$this->socket = "{$this->dir}/ctl.sock";
-		$this->log = "{$this->dir}/dns_proxy.log";
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], ['dns_proxy_ctl' => $this->socket]);
 		$this->port = self::freePort();
 	}
@@ -86,7 +84,7 @@ final class DnsProxyListenerFramesTest extends TestCase
 		// Given a gateway that takes it, and an address this host binds
 		$at = "{$host}:{$this->port}";
 		$this->assertSame('', self::bindError($at), "before: this host binds {$at}");
-		$record = $this->standIn($this->socket, $this->log);
+		$record = $this->standIn($this->socket);
 		$sockets = pfb_dns_proxy_listener_bind($kind, $at, $why);
 		$this->assertIsArray($sockets, (string) $why);
 
@@ -103,7 +101,6 @@ final class DnsProxyListenerFramesTest extends TestCase
 			array_map(static fn (array $type): array => ['type' => $type[0], 'name' => $at, 'listening' => $type[1]], $types),
 			$frames[0]['fds']
 		);
-		$this->assertSame("listening {$kind} {$at}\n", (string) file_get_contents($this->log), 'the gateway logs what it took');
 	}
 
 	#[DataProvider('kindsAndHosts')]
@@ -111,7 +108,7 @@ final class DnsProxyListenerFramesTest extends TestCase
 	{
 		// Given a gateway that takes it
 		$at = "{$host}:{$this->port}";
-		$record = $this->standIn($this->socket, $this->log);
+		$record = $this->standIn($this->socket);
 
 		// When the listener is removed (with the control socket the globals name)
 		$failed = pfb_dns_proxy_listener_remove($kind, $at);
@@ -123,7 +120,6 @@ final class DnsProxyListenerFramesTest extends TestCase
 		$this->assertSame('fffffffd', $frames[0]['head']);
 		$this->assertSame("{$kind} {$at}", $frames[0]['body']);
 		$this->assertSame([], $frames[0]['fds']);
-		$this->assertSame("stopped listening {$kind} {$at}\n", (string) file_get_contents($this->log));
 	}
 
 	/** @return array<string,array{string|false|null,string}> what the gateway does (a reply, NULL = hangs up, FALSE = nobody listens) and what the reason says */
@@ -143,7 +139,7 @@ final class DnsProxyListenerFramesTest extends TestCase
 		// Given a gateway that does not take it, and the sockets bound for it
 		$at = "127.0.0.1:{$this->port}";
 		if ($reply !== FALSE) {
-			$this->standIn($this->socket, $this->log, [$reply]);
+			$this->standIn($this->socket, [$reply]);
 		}
 		$sockets = pfb_dns_proxy_listener_bind('udp+tcp', $at);
 		$this->assertIsArray($sockets);
@@ -158,7 +154,6 @@ final class DnsProxyListenerFramesTest extends TestCase
 		$this->assertStringContainsString($reason, $failed);
 		$this->assertSame([FALSE, FALSE], array_map('is_resource', $sockets));
 		$this->assertSame('', self::bindError($at), 'the address is free again');
-		$this->assertFileDoesNotExist($this->log, 'a change the gateway did not take is not logged');
 	}
 
 	#[DataProvider('failures')]
@@ -166,7 +161,7 @@ final class DnsProxyListenerFramesTest extends TestCase
 	{
 		// Given a gateway that does not take it
 		if ($reply !== FALSE) {
-			$this->standIn($this->socket, $this->log, [$reply]);
+			$this->standIn($this->socket, [$reply]);
 		}
 
 		// When the listener is removed
@@ -189,7 +184,7 @@ final class DnsProxyListenerFramesTest extends TestCase
 	{
 		// Given a gateway (or none), and one add already made, so that whatever a first call opens for good is open
 		if ($reply !== FALSE) {
-			$this->standIn($this->socket, $this->log, ['ok', $reply]);
+			$this->standIn($this->socket, ['ok', $reply]);
 		}
 		$at = "127.0.0.1:{$this->port}";
 		$this->assertTrue(is_dir('/proc/self/fd'), 'before: this host lists the descriptors of a process');
@@ -215,7 +210,7 @@ final class DnsProxyListenerFramesTest extends TestCase
 	{
 		// Given a gateway that would take it, the sockets bound for it, and a PHP that has no socket_sendmsg()
 		$at = "127.0.0.1:{$this->port}";
-		$record = $this->standIn($this->socket, $this->log);
+		$record = $this->standIn($this->socket);
 		$sockets = pfb_dns_proxy_listener_bind('dot', $at);
 		$this->assertIsArray($sockets);
 		$reflection = new ReflectionFunction('pfb_dns_proxy_listener_add');

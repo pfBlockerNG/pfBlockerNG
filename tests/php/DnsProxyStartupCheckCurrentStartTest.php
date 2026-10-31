@@ -192,7 +192,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	}
 
 	/**
-	 * The production functions on a virtual clock, with the budgets set to one second each: 100 ms ticks, so a wait that runs out is ten.
+	 * The production functions on a virtual clock, with the budget set to one second: 100 ms ticks, so a wait that runs out is ten.
 	 *
 	 * @param list<string> $entries the entry points, loaded together with the wait and the check they reach
 	 * @return array{PfbFlockClockFixture,string} the clock, and the namespace the functions were loaded into
@@ -202,7 +202,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$clock = new PfbFlockClockFixture();
 		$namespace = $clock->loadChain(
 			array_values(array_unique([...$entries, 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready', 'pfb_dns_proxy_startup_check'])),
-			['PFB_DNS_PROXY_START_WAIT' => 1, 'PFB_DNS_PROXY_LOG_WAIT' => 1]
+			['PFB_DNS_PROXY_START_WAIT' => 1]
 		);
 
 		return [$clock, $namespace];
@@ -406,11 +406,10 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 
 	public function testAnApplyThatActedOnNothingStartsNothingAndWaitsForNoLine(): void
 	{
-		// Given a live proxy whose script is unchanged, and a log with no ready line to judge by
+		// Given a live proxy whose script is unchanged, and no gateway answering on the control socket
 		$this->box();
 		$this->proxyServes();
 		$this->seedRunningGateway();
-		$this->log('listening udp+tcp 127.0.0.1:53');
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_ensure_running']);
 
 		$ready = ($namespace . '\\pfb_dns_proxy_ensure_running')();

@@ -730,7 +730,9 @@ final class PfbDnsStatusTest extends TestCase
 			$body = implode('', array_slice((array) file(self::INC), $reflection->getStartLine() - 1, $reflection->getEndLine() - $reflection->getStartLine() + 1));
 			$this->assertStringContainsString('pfb_dns_proxy_listener_list(', $body, "{$function}() asks the gateway which listeners it serves");
 			$this->assertStringContainsString('pfb_dns_proxy_command_listeners(', $body, "{$function}() reads the command's listeners");
-			$this->assertStringNotContainsString('pfb_dns_proxy_listeners(', $body, "{$function}() never reads listener state from the log");
+			if ($function === 'pfb_dns_status') {
+				$this->assertStringNotContainsString('pfb_dns_proxy_log_lines(', $body, 'the status never reads the gateway log');
+			}
 		}
 	}
 

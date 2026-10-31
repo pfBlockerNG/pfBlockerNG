@@ -2215,26 +2215,6 @@
             }
         ]
     },
-    "pfb_dns_proxy_listeners": {
-        "returnsRef": false,
-        "returnType": "?array",
-        "params": [
-            {
-                "name": "since",
-                "byRef": false,
-                "variadic": false,
-                "type": "?int",
-                "default": "NULL"
-            },
-            {
-                "name": "pid",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": "NULL"
-            }
-        ]
-    },
     "pfb_dns_proxy_listeners_stored": {
         "returnsRef": false,
         "returnType": "array",
@@ -2262,13 +2242,6 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "?int",
-                "default": "NULL"
-            },
-            {
-                "name": "limited",
-                "byRef": true,
-                "variadic": false,
-                "type": "?bool",
                 "default": "NULL"
             }
         ]
@@ -2371,11 +2344,6 @@
     "pfb_dns_proxy_ready": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
-    },
-    "pfb_dns_proxy_ready_listeners": {
-        "returnsRef": false,
-        "returnType": "?array",
         "params": []
     },
     "pfb_dns_proxy_recovery_required": {

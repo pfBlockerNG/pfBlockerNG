@@ -3650,11 +3650,6 @@ if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
-// Seconds pfb_dns_proxy_listeners_sync() waits for the gateway to log a listener change it took: daemon(8) relays the log asynchronously.
-// Overridable before load, like the budget above.
-if (!defined('PFB_DNS_PROXY_LOG_WAIT')) {
-	define('PFB_DNS_PROXY_LOG_WAIT', 3);
-}
 // Seconds pfb_dns_proxy_certificate_push() waits for each of its steps (connect, send, reply): below the 5 s the gateway gives a
 // connection on its control socket, above what a gateway that is serving needs.
 if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
@@ -3673,7 +3668,7 @@ $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 $pfb['dns_proxy_rc_kept'] = '/var/run/pfb_dns_proxy_rc.kept';
 // What the next update must restart once because a package operation could not (a pass under pkg defers it): one line, the reason.
 $pfb['dns_proxy_restart_pending'] = '/var/run/pfb_dns_proxy_restart_pending';
-// The gateway's log (daemon(8) -o): the startup check reads it for the error of a start that never became ready, pfb_dns_proxy_listeners() for the live-listener sync.
+// The gateway's log (daemon(8) -o): read only for the last `pfb_dns_gateway:` error of a start that never became ready.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
 // The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
 // It is root's alone, in a directory root alone can enter and outside the Unbound chroot: the gateway reads it once, at start, while it is
@@ -5471,8 +5466,8 @@ function pfb_dns_proxy_await_ready(): bool {
  * become ready within the budget has failed its activation: the activation is rolled back (pfb_dns_proxy_roll_back()), which diagnoses
  * the start once it has won its guard, and then restores.
  *
- * @param int|null $since the gateway log's size from before the start (pfb_dns_proxy_log_size()), so that the check judges that start's
- *        own lines; NULL = nothing was started: the log's latest start is judged
+ * @param int|null $since the gateway log's size from before the start (pfb_dns_proxy_log_size()), so that a start that never became ready
+ *        is blamed only for the gateway error it logged itself; NULL = nothing was started: the log's whole tail is read for it
  * @return bool TRUE iff the proxy is ready; FALSE after a failed activation, whatever the rollback achieved
  */
 function pfb_dns_proxy_confirm_ready(?int $since = NULL): bool {
@@ -5506,7 +5501,7 @@ function pfb_dns_proxy_notify(string $id, string $text, string $url): void {
 
 /**
  * The gateway log's size now, in bytes (0 without a log): what a caller reads just before it starts or restarts the proxy, so that
- * pfb_dns_proxy_startup_check() judges only the lines that start writes ($since).
+ * pfb_dns_proxy_startup_check() blames a start that never became ready only for the error that start logged ($since).
  */
 function pfb_dns_proxy_log_size(): int {
 	global $pfb;
@@ -5520,14 +5515,11 @@ function pfb_dns_proxy_log_size(): int {
  * 64 KiB, right-trimmed; none when it is missing or unreadable. The read starts one byte early: a cut at a line start leaves an empty
  * first element, a cut inside a line its partial remainder, and the first element is dropped either way.
  *
- * @param bool|null $limited gets whether the 64 KiB limit left out lines of the log that $from alone would have kept
- * @param-out bool $limited
  * @return list<string>
  */
-function pfb_dns_proxy_log_lines(?int $from = NULL, ?bool &$limited = NULL): array {
+function pfb_dns_proxy_log_lines(?int $from = NULL): array {
 	global $pfb;
 
-	$limited = FALSE;
 	$handle = @fopen($pfb['dns_proxy_log'], 'rb');
 	if ($handle === FALSE) {
 		return [];
@@ -5535,7 +5527,6 @@ function pfb_dns_proxy_log_lines(?int $from = NULL, ?bool &$limited = NULL): arr
 	$size = pfb_dns_proxy_log_size();
 	$start = ($from === NULL || $from > $size) ? 0 : $from;
 	$at = max($start, $size - 65536);
-	$limited = $at > $start;
 	$cut = $at > 0 && fseek($handle, $at - 1) === 0;
 	$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
 	fclose($handle);
@@ -5551,70 +5542,6 @@ function pfb_dns_proxy_host_port(string $host, string $port): string {
 	$packed = @inet_pton($host);
 	$host = ($packed === FALSE) ? $host : (string) inet_ntop($packed);
 	return (str_contains($host, ':') ? "[{$host}]" : $host) . ":{$port}";
-}
-
-/**
- * What the gateway's latest complete start reported, and what it has logged since, from its log lines from $since on
- * (pfb_dns_proxy_log_lines()). The start is the lines after the last `starting pid <pid>` line before the last `ready upstream` line, up
- * to that line; a log with no such line (an older gateway's) is read from the second-to-last `ready upstream` line. Then, in log order,
- * the lines after that ready line up to the next `starting pid` line (a start in progress) or the log's end change what is served:
- * `listening <kind> <host:port>` adds a listener, `stopped listening <kind> <host:port>` removes one (the live changes of
- * pfb_dns_proxy_listener_add() and _remove()). Both the startup check and status panel use this parser.
- *
- * @param string|null $pid the status panel's readiness-marker PID: the latest complete record must end in ` pid <pid>`, else
- *        NULL is returned until that child's log arrives. NULL keeps the startup check's PID-agnostic parsing, including legacy logs
- *
- * @return array{listening: array<string, array<string, true>>, refused: array<string, string>, partial: bool}|null NULL when the lines
- *         hold no `ready upstream` line (rotated, truncated, or a start that has not logged it yet). `listening`: kind (udp+tcp, dot,
- *         doh, doq) => each host:port served, in log order; `refused`: host:port => the reason of the start's own
- *         `cannot listen on <host:port>: <reason>` line. Every host:port as pfb_dns_proxy_host_port() spells it. `partial`: the 64 KiB
- *         read cut the log and no `starting pid` line is in it, so the start's own lines may be missing (listeners it bound among them)
- */
-function pfb_dns_proxy_listeners(?int $since = NULL, ?string $pid = NULL): ?array {
-	$lines = pfb_dns_proxy_log_lines($since, $limited);
-	$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
-	if ($ends === []) {
-		return NULL;
-	}
-	$last = (int) end($ends);
-	if ($pid !== NULL && (!ctype_digit($pid) || $pid[0] === '0' || !str_ends_with($lines[$last], " pid {$pid}"))) {
-		return NULL;
-	}
-	$starts = array_keys(array_filter(array_slice($lines, 0, $last, TRUE), static fn (string $line): bool => str_starts_with($line, 'starting pid ')));
-	if ($starts !== []) {
-		$from = (int) end($starts) + 1;
-	} else {
-		$from = (count($ends) > 1) ? $ends[count($ends) - 2] + 1 : 0;
-	}
-	$listeners = ['listening' => [], 'refused' => [], 'partial' => $limited && $starts === []];
-	for ($i = $from, $count = count($lines); $i < $count; $i++) {
-		$line = $lines[$i];
-		if ($i > $last && str_starts_with($line, 'starting pid ')) {
-			break;
-		}
-		if (preg_match('/^listening (udp\+tcp|dot|doh|doq) \[?([0-9A-Fa-f:.]+)\]?:([0-9]+)$/', $line, $found) === 1) {
-			$listeners['listening'][$found[1]][pfb_dns_proxy_host_port($found[2], $found[3])] = TRUE;
-		} elseif ($i > $last && preg_match('/^stopped listening (udp\+tcp|dot|doh|doq) \[?([0-9A-Fa-f:.]+)\]?:([0-9]+)$/', $line, $found) === 1) {
-			unset($listeners['listening'][$found[1]][pfb_dns_proxy_host_port($found[2], $found[3])]);
-		} elseif ($i < $last && preg_match('/^cannot listen on \[?([0-9A-Fa-f:.]+)\]?:([0-9]+): (.*)$/', $line, $found) === 1) {
-			$listeners['refused'][pfb_dns_proxy_host_port($found[1], $found[2])] = $found[3];
-		}
-	}
-	return $listeners;
-}
-
-/**
- * What the gateway that published the ready marker serves: pfb_dns_proxy_listeners() read for the marker's PID, so a log whose latest
- * complete start is another gateway's gives NULL. A (re)started gateway publishes its marker before daemon(8) relays its log lines, and
- * until they arrive the log's latest start is the previous gateway's: the live reconcile must not take that for what is served, as the
- * status panel (pfb_dns_status(), which reads the same record with the same PID) does not. NULL too when there is no marker.
- *
- * @return array{listening: array<string, array<string, true>>, refused: array<string, string>, partial: bool}|null as pfb_dns_proxy_listeners()
- */
-function pfb_dns_proxy_ready_listeners(): ?array {
-	global $pfb;
-
-	return pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"));
 }
 
 /**
@@ -5639,26 +5566,24 @@ function pfb_dns_proxy_command_listeners(): array {
 }
 
 /**
- * Make what the gateway serves what the rc script's command asks for, live (issue #3599): per kind, each served listener the command does
- * not name is removed and then each one it names that nothing serves is added, one frame each on the control socket
- * (pfb_dns_proxy_listener_remove(), pfb_dns_proxy_listener_add()), each change taken one line of the pfB log. An add binds first, as root,
- * here; an address that is not there yet (EADDRNOTAVAIL) is left for a later pass with nothing logged, any other failed bind is logged
- * and skipped, a restart pending or not. After a change the gateway took, the gateway's log is waited for (PFB_DNS_PROXY_LOG_WAIT)
- * until it shows it, so that the startup check that follows judges what is served. While a restart is pending the rc script may differ
- * from the running gateway in more than addresses: nothing is removed or added, and a missing listener that binds now is the reason to
- * restart (issue #3598).
+ * Make what the gateway serves what the rc script's command asks for, live (issue #3599): what it serves is what it lists on its control
+ * socket (pfb_dns_proxy_listener_list()); per kind, each served listener the command does not name is removed and then each one it
+ * names that nothing serves is added, one frame each (pfb_dns_proxy_listener_remove(), pfb_dns_proxy_listener_add()), each change taken
+ * one line of the pfB log. An add binds first, as root, here; an address that is not there yet (EADDRNOTAVAIL) is left for a later pass
+ * with nothing logged, any other failed bind is logged and skipped, a restart pending or not. While a restart is pending the rc script
+ * may differ from the running gateway in more than addresses: nothing is removed or added, and a missing listener that binds now is the
+ * reason to restart (issue #3598).
  *
  * @return string|null NULL when nothing is left to do; why the pair must be restarted: the gateway did not take a change (an older
  *         gateway, an error, no control socket: no further frame is sent), or a restart is pending and a missing listener binds. NULL
- *         too, with nothing done, when the log holds no complete start of the gateway that published the ready marker
- *         (pfb_dns_proxy_ready_listeners()) or only a cut one (`partial`: a cut log window is not what is served), and when the rc
- *         script names no plain DNS listener (a real one always names loopback: it is unreadable, not a wish to serve nothing)
+ *         too, with nothing done, when the gateway gives no list (nothing to compare with) and when the rc script names no plain DNS
+ *         listener (a real one always names loopback: it is unreadable, not a wish to serve nothing)
  */
 function pfb_dns_proxy_listeners_sync(): ?string {
 	global $pfb;
 
-	$served = pfb_dns_proxy_ready_listeners();
-	if ($served === NULL || $served['partial']) {
+	$served = pfb_dns_proxy_listener_list();
+	if ($served === NULL) {
 		return NULL;
 	}
 	$wanted = pfb_dns_proxy_command_listeners();
@@ -5666,7 +5591,6 @@ function pfb_dns_proxy_listeners_sync(): ?string {
 		return NULL;
 	}
 	$pending = file_exists($pfb['dns_proxy_restart_pending']);
-	$added = $removed = [];
 	foreach (['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
 		$have = array_keys($served['listening'][$kind] ?? []);
 		$want = $wanted[$kind] ?? [];
@@ -5675,7 +5599,6 @@ function pfb_dns_proxy_listeners_sync(): ?string {
 				return $why;
 			}
 			pfb_logger("\nDNS proxy: {$label} no longer listens on {$at} (removed live, no restart)", 1);
-			$removed[] = [$kind, $at];
 		}
 		foreach (array_diff($want, $have) as $at) {
 			$sockets = pfb_dns_proxy_listener_bind($kind, $at, $failure);
@@ -5693,23 +5616,7 @@ function pfb_dns_proxy_listeners_sync(): ?string {
 				return $why;
 			}
 			pfb_logger("\nDNS proxy: {$label} now listens on {$at} (added live, no restart)", 1);
-			$added[] = [$kind, $at];
 		}
-	}
-	$deadline = hrtime(TRUE) + PFB_DNS_PROXY_LOG_WAIT * 1000000000;
-	while (($added !== [] || $removed !== []) && hrtime(TRUE) < $deadline) {
-		$now = pfb_dns_proxy_listeners()['listening'] ?? [];
-		$shown = TRUE;
-		foreach ($added as [$kind, $at]) {
-			$shown = $shown && isset($now[$kind][$at]);
-		}
-		foreach ($removed as [$kind, $at]) {
-			$shown = $shown && !isset($now[$kind][$at]);
-		}
-		if ($shown) {
-			break;
-		}
-		usleep(100000);
 	}
 	return NULL;
 }
@@ -5859,8 +5766,8 @@ function pfb_dns_proxy_turn_off(string $why, ?string $expected_saved = NULL, boo
  * @param string|null $what why pfB-DNS is rolled back, as a clause that follows "pfB-DNS: "; NULL = the proxy did not become ready
  * @param string|null $next the operator's last sentence after a rollback that worked; NULL = read the proxy log, then turn pfB-DNS on again
  * @param string|null $expected_saved the raw marker the caller saw; NULL = the marker read now, before the operation lock is waited for
- * @param int|null $since the gateway log's size from before the start whose failure this is (pfb_dns_proxy_log_size()), judged once the
- *        guard has won; NULL = the log's latest start is judged
+ * @param int|null $since the gateway log's size from before the start whose failure this is (pfb_dns_proxy_log_size()), so that the
+ *        diagnosis quotes only the gateway error that start logged, once the guard has won; NULL = the log's whole tail is read for it
  * @return bool TRUE iff the DNS Resolver is restored and Unbound was restarted with its previous integration
  */
 function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL, ?string $expected_saved = NULL, ?int $since = NULL): bool {
@@ -6008,24 +5915,22 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * reload, and restart a live one whose rc script changed in more than its listen addresses. The script bakes in the ports and the
  * DoT/DoH/DoQ/DDR settings, so a changed one is not served until the proxy restarts. A script that differs only in its listen addresses
  * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) is reconciled
- * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its log holds a complete start of the gateway that published the
- * ready marker (pfb_dns_proxy_ready_listeners(); right after a restart the log shows the previous start's until the new gateway's lines
- * arrive; a start the 64 KiB read cut, with its `starting pid` line out of it, is none); with the proxy not READY, or with no such start
- * to compare with, it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()): one that is alive but
- * never published its marker (restarted every few seconds) fails
- * the activation and is rolled back, which a pidfile alone would never notice.
+ * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket
+ * (pfb_dns_proxy_listener_list()); with the proxy not READY, or with a gateway that gives no list (nothing to compare with), it
+ * restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()): one that is alive but never
+ * published its marker (restarted every few seconds) fails the activation and is rolled back, which a pidfile alone would never notice.
  *
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
  * pending restart (pfb_dns_proxy_defer_restart()), and nothing else is looked at. The next pass outside one restarts the whole pair
  * once for a pending restart or a changed gateway binary (pfb_dns_proxy_gateway_changed()), and only the decider, on the gateway's
  * control socket, for changed decider code (pfb_dns_proxy_decider_changed()) when a second decider fits in memory beside it
  * (pfb_dns_proxy_decider_restart_fits_ram()); one that may not fit, or that the gateway does not take, is logged and becomes the
- * whole-pair restart. Neither change is looked for while the proxy is not READY: it has no record to judge. The same reconcile adds,
- * live, an address the gateway's latest start could not assign and the box can bind now (issue #3598), and restarts the pair only when
+ * whole-pair restart. Neither change is looked for while the proxy is not READY: it has no running gateway to judge. The same reconcile
+ * adds, live, an address the gateway could not assign when it started and the box can bind now (issue #3598), and restarts the pair only when
  * the gateway does not take a change: looked for only while READY, and never under a package operation.
  *
  * Only a deferred pass (under a package operation) that acted on nothing and finds the gateway READY skips the upstream confirmation: it
- * files the startup problems its log shows and returns ready (issue #3560, D-a). The tick and the boot check confirm the upstream and roll
+ * files the startup problems the gateway's list shows and returns ready (issue #3560, D-a). The tick and the boot check confirm the upstream and roll
  * back a failed one; every other pass gets the full confirmation.
  *
  * @param string $proxyDir the package's dns_proxy directory, as for pfb_dns_proxy_service()
@@ -6068,7 +5973,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		} elseif (pfb_dns_proxy_ready()) {
 			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
 				$why = 'the package installed another gateway';
-			} elseif ($rc_changed && (pfb_dns_proxy_ready_listeners()['partial'] ?? TRUE)) {
+			} elseif ($rc_changed && pfb_dns_proxy_listener_list() === NULL) {
 				$why = 'its listen addresses changed';
 			} elseif (($why = pfb_dns_proxy_listeners_sync()) === NULL) {
 				$decider = pfb_dns_proxy_decider_changed();

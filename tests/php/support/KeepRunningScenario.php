@@ -21,8 +21,6 @@ trait KeepRunningScenario
 	private string $krProxyDir = '';
 	/** @var list<array{string,string}> the service calls the proxy got, in order: [function, service] */
 	private array $krCalls = [];
-	/** @var ?list<string> the lines the gateway's log gains when the service starts or restarts the proxy (krApply() `restartLog`), NULL = none */
-	private ?array $krRestartLog = NULL;
 
 	private function krSeed(string $dir): void
 	{
@@ -47,7 +45,7 @@ trait KeepRunningScenario
 			'php' => PHP_BINARY, 'ps' => "{$dir}/ps",
 			'dns_proxy_restart_pending' => "{$dir}/restart.pending", 'dns_proxy_gateway_applied' => "{$dir}/gateway.sha256",
 			'dns_proxy_decider_applied' => "{$dir}/decider.applied", 'dns_proxy_decider_src' => $decider,
-			'dns_proxy_ctl' => "{$dir}/ctl.sock", 'dns_proxy_rc_kept' => "{$dir}/rc.kept",
+			'dns_proxy_ctl' => "{$dir}/ctl.sock", 'dns_proxy_rc_kept' => "{$dir}/rc.kept", 'dns_proxy_log' => "{$dir}/dns_proxy.log",
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['g']['varrun_path'] = $dir;
@@ -63,7 +61,6 @@ trait KeepRunningScenario
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
 		$GLOBALS['pfb_test_configured_ipv6'] = [];
 		$this->krCalls = [];
-		$this->krRestartLog = NULL;
 		$this->krPs(self::krPsTable([self::krPsSupervisor(), self::krPsGateway(), self::krPsDecider()]));
 		$this->clearProxyFiles();
 		@unlink(PFB_DNS_PROXY_RCFILE);
@@ -74,10 +71,6 @@ trait KeepRunningScenario
 				$this->proxyServes();
 				$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 				$this->seedRunningGateway();
-				// The new start's record, as the supervisor relays it once the gateway has bound its addresses
-				if ($this->krRestartLog !== NULL) {
-					file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", $this->krRestartLog) . "\n", FILE_APPEND);
-				}
 			}
 		};
 	}
@@ -161,8 +154,6 @@ trait KeepRunningScenario
 	 *             the record of the decider's code against the installed files (unreadable_member = one is missing)
 	 *   ctl       ?string         the control socket's path, NULL = nobody listens
 	 *   dot       bool            a DoT listener on lan (192.0.2.1:853) is configured
-	 *   gatewayLog ?list<string>  the gateway's log lines, NULL = no log is written
-	 *   restartLog ?list<string>  the lines the gateway's log gains when the proxy is started or restarted (the new start's record), NULL = none
 	 *   port      ?string         the plain DNS port the rc script is written with (unbound/port), NULL = 53
 	 *   lan       ?string         the IPv4 address lan has when the NEXT pass runs; the rc script on disk was written with 192.0.2.1, NULL = it still has it
 	 *   lan6      ?string         the IPv6 address lan has when the next pass runs (the rc script on disk was written with none), NULL = none
@@ -170,8 +161,7 @@ trait KeepRunningScenario
 	private function krApply(array $s): void
 	{
 		// serving: the Unbound backend answers too, so a full confirmation can pass; a worker passes FALSE, and its package rows prove a deferred pass needs no confirmation
-		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE, 'dot' => FALSE, 'gatewayLog' => NULL, 'restartLog' => NULL, 'port' => NULL, 'lan' => NULL, 'lan6' => NULL];
-		$this->krRestartLog = $s['restartLog'];
+		$s += ['snapshot' => TRUE, 'proxy' => 'serves', 'rc' => 'same', 'marker' => NULL, 'gateway' => 'equal', 'decider' => 'equal', 'ctl' => NULL, 'serving' => TRUE, 'dot' => FALSE, 'port' => NULL, 'lan' => NULL, 'lan6' => NULL];
 		// The rc script bakes the control socket's path in: it is set before the script is written
 		if ($s['ctl'] !== NULL) {
 			$GLOBALS['pfb']['dns_proxy_ctl'] = $s['ctl'];
@@ -202,11 +192,6 @@ trait KeepRunningScenario
 			if ($s['proxy'] === 'serves') {
 				$this->seedRunningGateway();
 			}
-		}
-		if ($s['gatewayLog'] !== NULL) {
-			// The gateway's own log, as its supervisor relays it: a per-scenario file, so no other test's log is read
-			$GLOBALS['pfb']['dns_proxy_log'] = "{$this->krDir}/dns_proxy.log";
-			file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", $s['gatewayLog']) . "\n");
 		}
 		if ($s['dot']) {
 			$this->krEnableDot();
