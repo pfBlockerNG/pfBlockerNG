@@ -65,7 +65,11 @@ func refuse(refused map[string]string, kind, host string, port int, err error) {
 	if aerr != nil {
 		return
 	}
-	refused[kind+" "+ap.String()] = errors.Unwrap(err).Error() // listenError wraps the bind's own error
+	reason := err
+	if inner := errors.Unwrap(err); inner != nil { // listenError wraps the bind's own error
+		reason = inner
+	}
+	refused[kind+" "+ap.String()] = reason.Error()
 }
 
 // port is the port kind is configured on, and whether this gateway serves kind at all: a TLS kind only when its listen

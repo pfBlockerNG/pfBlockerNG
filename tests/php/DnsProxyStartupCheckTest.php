@@ -303,6 +303,8 @@ final class DnsProxyStartupCheckTest extends TestCase
 			'an error inside the last 64 KiB of the log' => [[...$chatter, 'pfb_dns_gateway: recent'], [], NULL, 'pfb_dns_gateway: recent'],
 			'an error of the start, after the size taken before it' => [['pfb_dns_gateway: before the start'], ['pfb_dns_gateway: of the start'], 0, 'pfb_dns_gateway: of the start'],
 			'a log rotated to less than the size taken before the start' => [['pfb_dns_gateway: rotated'], [], 4096, 'pfb_dns_gateway: rotated'],
+			// 65,516 bytes follow the error line's tail, so the read (from one byte before the window) starts exactly at `pfb_dns_gateway:`
+			'an error line the 64 KiB window starts inside of' => [[str_repeat('f', 10) . 'pfb_dns_gateway: cut', ...array_fill(0, 655, str_repeat('f', 99)), str_repeat('f', 15)], [], NULL, ''],
 		];
 	}
 
