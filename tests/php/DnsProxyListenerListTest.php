@@ -30,7 +30,7 @@ final class DnsProxyListenerListTest extends TestCase
 
 	private const TIMEOUT = 0.3;
 	private const CAP = 65536;
-	private const LISTENING = "listening udp+tcp 127.0.0.1:53\n";
+	private const LINES = 1800;
 
 	private array $savedGlobals = [];
 
@@ -78,16 +78,27 @@ final class DnsProxyListenerListTest extends TestCase
 		return $this->askedWhen([[0.0, $reply]])[0];
 	}
 
+	/** $count listening lines for distinct ports (1000 up), each 33 bytes while the ports have four digits: a listener is named once. */
+	private static function listeningLines(int $count): string
+	{
+		$lines = '';
+		for ($port = 1000; $port < 1000 + $count; $port++) {
+			$lines .= "listening udp+tcp 127.0.0.1:{$port}\n";
+		}
+
+		return $lines;
+	}
+
 	/** The length of the one refused line's reason that makes replyOfLength($length) exactly $length bytes. */
 	private static function reasonLengthFor(int $length): int
 	{
-		return $length - 2000 * strlen(self::LISTENING) - strlen("ok\n") - strlen("refused dot 192.0.2.1:853 \n");
+		return $length - strlen(self::listeningLines(self::LINES)) - strlen("ok\n") - strlen("refused dot 192.0.2.1:853 \n");
 	}
 
 	/** A valid reply of exactly $length bytes: listening lines, then one refused line whose reason takes up the slack, then `ok`. */
 	private static function replyOfLength(int $length): string
 	{
-		return str_repeat(self::LISTENING, 2000) . 'refused dot 192.0.2.1:853 ' . str_repeat('r', self::reasonLengthFor($length)) . "\nok\n";
+		return self::listeningLines(self::LINES) . 'refused dot 192.0.2.1:853 ' . str_repeat('r', self::reasonLengthFor($length)) . "\nok\n";
 	}
 
 	public function testTheRequestIsTheFourBytesFFFFFFFCOnTheControlSocketTheGlobalsName(): void
@@ -146,7 +157,12 @@ final class DnsProxyListenerListTest extends TestCase
 
 	public function testAGatewayThatServesNothingIsAnEmptyListNotAnUnknownOne(): void
 	{
-		$this->assertSame(['listening' => [], 'refused' => []], $this->listed("ok\n"));
+		// Given a gateway that serves no listener at all
+		// When the list is asked for
+		$list = $this->listed("ok\n");
+
+		// Then the list is empty, which is a known answer, not an unknown one
+		$this->assertSame(['listening' => [], 'refused' => []], $list);
 	}
 
 	public function testOkInsideAReasonIsTheReasonNotTheEndOfTheReply(): void
@@ -182,8 +198,30 @@ final class DnsProxyListenerListTest extends TestCase
 
 		// Then it is listed, the long reason included
 		$this->assertIsArray($list, 'a reply that ends at the cap is read whole');
-		$this->assertSame(['127.0.0.1:53' => TRUE], $list['listening']['udp+tcp']);
+		$this->assertCount(self::LINES, $list['listening']['udp+tcp']);
+		$this->assertTrue($list['listening']['udp+tcp']['127.0.0.1:1000'] ?? NULL, 'the first listener is listed');
 		$this->assertSame(self::reasonLengthFor(self::CAP), strlen($list['refused']['dot']['192.0.2.1:853']), 'the refusal reason is whole');
+	}
+
+	public function testTheLastByteOfAReplyOfExactlyTheCapArrivingOnItsOwnIsReadWhole(): void
+	{
+		// Given a valid reply of exactly 64 KiB whose final newline arrives after all the rest
+		$reply = self::replyOfLength(self::CAP);
+
+		// When the list is asked for
+		[$list] = $this->askedWhen([[0.0, substr($reply, 0, -1)], [0.001, "\n"]]);
+
+		// Then the byte that ends it at the cap is read: the cap is the count of bytes that may be read, not one fewer
+		$this->assertIsArray($list, 'the last byte of a reply of exactly the cap is read');
+	}
+
+	public function testOneAddressListeningUnderOneKindAndRefusedUnderAnotherIsListedExactly(): void
+	{
+		// Given a gateway that serves DoT on an address and refused DoQ on the same address: two listeners, not one named twice
+		$list = $this->listed("listening dot 192.0.2.1:853\nrefused doq 192.0.2.1:853 bind: x\nok\n");
+
+		// Then both outcomes are listed, each under its own kind
+		$this->assertSame(['listening' => ['dot' => ['192.0.2.1:853' => TRUE]], 'refused' => ['doq' => ['192.0.2.1:853' => 'bind: x']]], $list);
 	}
 
 	public function testNoControlSocketIsUnknown(): void
@@ -213,7 +251,7 @@ final class DnsProxyListenerListTest extends TestCase
 			'an older gateway answers the verb as a bad message length' => [[[0.0, "error: a message of 4294967292 bytes is not between 1 and 65536\n"]]],
 			'lines with no final ok, then a hang-up' => [[[0.0, "listening udp+tcp 127.0.0.1:53\n"], [0.0, NULL]]],
 			'lines with no final ok, then silence' => [[[0.0, "listening udp+tcp 127.0.0.1:53\n"]]],
-			'more than 64 KiB of listening lines with no ok by the cap' => [[[0.0, str_repeat(self::LISTENING, 2200)]]],
+			'more than 64 KiB of listening lines with no ok by the cap' => [[[0.0, self::listeningLines(2200)]]],
 			'a valid reply one byte over the cap' => [[[0.0, self::replyOfLength(self::CAP + 1)]]],
 			'the final ok has no newline, then silence' => [[[0.0, "listening udp+tcp 127.0.0.1:53\nok"]]],
 			'the final ok has no newline, then a hang-up' => [[[0.0, "listening udp+tcp 127.0.0.1:53\nok"], [0.0, NULL]]],
@@ -243,6 +281,7 @@ final class DnsProxyListenerListTest extends TestCase
 			'a tab between the fields' => ["listening\tudp+tcp 127.0.0.1:53\nok\n"],
 			'a tab inside a reason' => ["refused dot 192.0.2.1:853 bind:\tx\nok\n"],
 			'a DEL byte inside a reason' => ["refused dot 192.0.2.1:853 bind: \x7Fx\nok\n"],
+			'a CR inside a reason' => ["refused dot 192.0.2.1:853 bind: x\ry\nok\n"],
 			'a CR before the LF of a line' => ["listening udp+tcp 127.0.0.1:53\r\nok\n"],
 			'a CR before the LF of the final ok' => ["listening udp+tcp 127.0.0.1:53\nok\r\n"],
 			'text after the final ok' => ["listening udp+tcp 127.0.0.1:53\nok now\n"],
@@ -251,6 +290,7 @@ final class DnsProxyListenerListTest extends TestCase
 			'no port' => ["listening udp+tcp 127.0.0.1\nok\n"],
 			'a port above 65535' => ["listening udp+tcp 127.0.0.1:99999\nok\n"],
 			'a port with a leading zero' => ["listening udp+tcp 127.0.0.1:053\nok\n"],
+			'a negative port' => ["listening udp+tcp 127.0.0.1:-1\nok\n"],
 			'an IPv4 address in brackets' => ["listening udp+tcp [127.0.0.1]:53\nok\n"],
 			'an IPv6 address without brackets' => ["listening udp+tcp ::1:53\nok\n"],
 			'an IPv6 address that is not canonical' => ["listening udp+tcp [::0001]:53\nok\n"],
@@ -271,13 +311,16 @@ final class DnsProxyListenerListTest extends TestCase
 			'an error line after lines' => ["listening udp+tcp 127.0.0.1:53\nerror: x\n"],
 			'an empty first line' => ["\nok\n"],
 			'an empty line between lines' => ["listening udp+tcp 127.0.0.1:53\n\nok\n"],
+			'a listening line twice' => ["listening udp+tcp 127.0.0.1:53\nlistening udp+tcp 127.0.0.1:53\nok\n"],
+			'a refused line twice with two reasons' => ["refused dot 192.0.2.1:853 bind: a\nrefused dot 192.0.2.1:853 bind: b\nok\n"],
+			'one listener both listening and refused' => ["listening dot 192.0.2.1:853\nrefused dot 192.0.2.1:853 bind: x\nok\n"],
 		];
 	}
 
 	#[DataProvider('repliesThatBreakTheFormat')]
 	public function testAReplyWithOneLineThatBreaksTheFormatIsUnknownWhole(string $reply): void
 	{
-		// Given a reply whose lines are valid but for one
+		// Given a reply whose lines are valid but for one, or whose lines name one listener twice
 		// When the list is asked for
 		$list = $this->listed($reply);
 

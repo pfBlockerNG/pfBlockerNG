@@ -4887,6 +4887,7 @@ function pfb_dns_proxy_listener_remove(string $kind, string $at, ?string $socket
  * `ok` line, or one `error: <reason>` line (a gateway older than this verb answers it as a bad message length). <kind> is udp+tcp, dot,
  * doh or doq; <host:port> is spelled as pfb_dns_proxy_host_port() spells it (IPv6 bracketed). The reply is taken only when every line
  * is exactly that wire: any other byte, spacing, kind, address or order makes the whole list unknown, and there is no fallback to the log.
+ * A <kind> <host:port> named on more than one line, `listening` or `refused` in any combination, makes it unknown too: the gateway names each once.
  *
  * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
  * @param float $timeout seconds the whole reply may take
@@ -4907,6 +4908,7 @@ function pfb_dns_proxy_listener_list(?string $socket = NULL, float $timeout = PF
 		return NULL;
 	}
 	$list = ['listening' => [], 'refused' => []];
+	$named = [];
 	foreach ($lines as $line) {
 		// A refused line has a reason (anything after the third space, not starting with a space), a listening line has none
 		if (preg_match('/\A(listening|refused) (udp\+tcp|dot|doh|doq) (\S+)(?: ([^ ].*))?\z/', $line, $m) !== 1 || ($m[1] === 'refused') !== isset($m[4])) {
@@ -4919,6 +4921,11 @@ function pfb_dns_proxy_listener_list(?string $socket = NULL, float $timeout = PF
 		if (@inet_pton($host) === FALSE || !ctype_digit($port) || (string) (int) $port !== $port || (int) $port > 65535 || pfb_dns_proxy_host_port($host, $port) !== $m[3]) {
 			return NULL;
 		}
+		$key = "{$m[2]} {$m[3]}";
+		if (isset($named[$key])) {
+			return NULL;
+		}
+		$named[$key] = TRUE;
 		$list[$m[1]][$m[2]][$m[3]] = $m[4] ?? TRUE;
 	}
 	return $list;

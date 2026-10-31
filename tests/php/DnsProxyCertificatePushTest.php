@@ -321,7 +321,7 @@ final class DnsProxyCertificatePushTest extends TestCase
 
 	public function testALongErrorLineIsReadWholeNotRejectedAsIncomplete(): void
 	{
-		// Given a gateway that refuses the certificate with a reason of 600 bytes, far longer than a one-line reply was once allowed to be
+		// Given a gateway that refuses the certificate with one `error:` line of 600 bytes
 		$reason = 'error: ' . str_repeat('x', 600);
 		[$why] = $this->pushOnVirtualClock([[0.0, "{$reason}\n"]], 0.3);
 
