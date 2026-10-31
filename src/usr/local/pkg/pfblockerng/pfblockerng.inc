@@ -3628,6 +3628,8 @@ if (!defined('PFB_DNS_PROXY_DAEMON_PIDFILE')) {
 	define('PFB_DNS_PROXY_DAEMON_PIDFILE', '/var/run/pfb_dns_proxy_daemon.pid');
 }
 const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
+// The most of the gateway log one read takes (16 MiB): a start further back than that is not judged.
+const PFB_DNS_PROXY_LOG_READ_MAX = 16777216;
 // The lock file that serializes the rc script's starts (lockf(1), kept between starts): the boot hook's background start and an
 // apply's start_service() both run `rc start`, and both could pass its "already serving?" check before the first daemon wrote a pidfile.
 const PFB_DNS_PROXY_LOCKFILE = '/var/run/pfb_dns_proxy.lock';
@@ -5459,14 +5461,15 @@ function pfb_dns_proxy_log_size(): int {
 
 /**
  * The gateway log's lines from byte $from on (NULL, or past the log's end, which a rotation leaves: from its start), within its last
- * 64 KiB, right-trimmed; none when it is missing or unreadable. The read starts one byte early: a cut at a line start leaves an empty
- * first element, a cut inside a line its partial remainder, and the first element is dropped either way.
+ * $window bytes (64 KiB by default), right-trimmed; none when it is missing or unreadable. The read starts one byte early: a cut at a
+ * line start leaves an empty first element, a cut inside a line its partial remainder, and the first element is dropped either way.
  *
- * @param bool|null $limited gets whether the 64 KiB limit left out lines of the log that $from alone would have kept
+ * @param bool|null $limited gets whether the $window limit left out lines of the log that $from alone would have kept
+ * @param int $window the bytes read from the end of the log
  * @param-out bool $limited
  * @return list<string>
  */
-function pfb_dns_proxy_log_lines(?int $from = NULL, ?bool &$limited = NULL): array {
+function pfb_dns_proxy_log_lines(?int $from = NULL, ?bool &$limited = NULL, int $window = 65536): array {
 	global $pfb;
 
 	$limited = FALSE;
@@ -5476,7 +5479,7 @@ function pfb_dns_proxy_log_lines(?int $from = NULL, ?bool &$limited = NULL): arr
 	}
 	$size = pfb_dns_proxy_log_size();
 	$start = ($from === NULL || $from > $size) ? 0 : $from;
-	$at = max($start, $size - 65536);
+	$at = max($start, $size - $window);
 	$limited = $at > $start;
 	$cut = $at > 0 && fseek($handle, $at - 1) === 0;
 	$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
@@ -5509,12 +5512,25 @@ function pfb_dns_proxy_host_port(string $host, string $port): string {
  * @return array{listening: array<string, array<string, true>>, refused: array<string, string>, partial: bool}|null NULL when the lines
  *         hold no `ready upstream` line (rotated, truncated, or a start that has not logged it yet). `listening`: kind (udp+tcp, dot,
  *         doh, doq) => each host:port served, in log order; `refused`: host:port => the reason of the start's own
- *         `cannot listen on <host:port>: <reason>` line. Every host:port as pfb_dns_proxy_host_port() spells it. `partial`: the 64 KiB
- *         read cut the log and no `starting pid` line is in it, so the start's own lines may be missing (listeners it bound among them)
+ *         `cannot listen on <host:port>: <reason>` line. Every host:port as pfb_dns_proxy_host_port() spells it. `partial`: the read
+ *         reached PFB_DNS_PROXY_LOG_READ_MAX and still cut the start's beginning off (no `starting pid` line, fewer than two
+ *         `ready upstream` lines in it), so the start's own lines may be missing (listeners it bound among them)
  */
 function pfb_dns_proxy_listeners(?int $since = NULL, ?string $pid = NULL): ?array {
-	$lines = pfb_dns_proxy_log_lines($since, $limited);
-	$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
+	// The read grows from 64 KiB, four times wider each time, until it holds the start's beginning or reaches the read limit
+	$window = 65536;
+	while (TRUE) {
+		$lines = pfb_dns_proxy_log_lines($since, $limited, $window);
+		$ends = array_keys(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'ready upstream ')));
+		$starts = $ends === [] ? [] : array_keys(array_filter(
+		    array_slice($lines, 0, (int) end($ends), TRUE),
+		    static fn (string $line): bool => str_starts_with($line, 'starting pid ')
+		));
+		if (!$limited || $starts !== [] || count($ends) > 1 || $window >= PFB_DNS_PROXY_LOG_READ_MAX) {
+			break;
+		}
+		$window = min(4 * $window, PFB_DNS_PROXY_LOG_READ_MAX);
+	}
 	if ($ends === []) {
 		return NULL;
 	}
@@ -5522,13 +5538,12 @@ function pfb_dns_proxy_listeners(?int $since = NULL, ?string $pid = NULL): ?arra
 	if ($pid !== NULL && (!ctype_digit($pid) || $pid[0] === '0' || !str_ends_with($lines[$last], " pid {$pid}"))) {
 		return NULL;
 	}
-	$starts = array_keys(array_filter(array_slice($lines, 0, $last, TRUE), static fn (string $line): bool => str_starts_with($line, 'starting pid ')));
 	if ($starts !== []) {
 		$from = (int) end($starts) + 1;
 	} else {
 		$from = (count($ends) > 1) ? $ends[count($ends) - 2] + 1 : 0;
 	}
-	$listeners = ['listening' => [], 'refused' => [], 'partial' => $limited && $starts === []];
+	$listeners = ['listening' => [], 'refused' => [], 'partial' => $limited && $starts === [] && count($ends) < 2];
 	for ($i = $from, $count = count($lines); $i < $count; $i++) {
 		$line = $lines[$i];
 		if ($i > $last && str_starts_with($line, 'starting pid ')) {
@@ -5667,10 +5682,12 @@ function pfb_dns_proxy_listeners_sync(): ?string {
  *      (`cannot listen on <host:port>: <reason>`), else that it did not report it. The current start is what the log holds after the
  *      last `starting pid` line before the last `ready upstream` line and up to it (an older gateway's log: after the second-to-last
  *      `ready upstream` line), plus the changes it logged since (`listening`/`stopped listening`, issue #3599), of the bytes written
- *      since $since (the size from before the start) or, with no $since, of the last 64 KiB. The gateway publishes its ready marker
+ *      since $since (the size from before the start) or, with no $since, of the log as far back as the read limit
+ *      (PFB_DNS_PROXY_LOG_READ_MAX) reads. The gateway publishes its ready marker
  *      BEFORE it logs those lines and daemon(8) relays them asynchronously, so with a $since and no `ready upstream` line after it yet
  *      the log is polled (bounded, PFB_DNS_PROXY_LOG_WAIT), and an older start is never judged in its place. A start whose line does not
- *      come, and a log with no such line (rotated, truncated), cannot be judged: it gives no problem and closes nothing;
+ *      come, a log with no such line (rotated, truncated), or a start the read limit cut off cannot be judged: it gives no problem
+ *      and closes nothing;
  *   3. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
  *      the code the service uses (pfb_dns_proxy_plain_listen(), pfb_dns_proxy_tls_flags()).
  * A notice is closed only when the start was judged and nothing was found; file_notice() files a row for every changed text and
@@ -5680,8 +5697,9 @@ function pfb_dns_proxy_listeners_sync(): ?string {
  *        and the proxy ready, nothing is checked, closed or waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
  *        it; NULL = no start was made (a cron tick that restarted nothing, an apply that restarted nothing): the log's latest start
- *        is judged. A log now shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway error is looked for
- *        the same way, only in the bytes after $since (none quoted when this start logged none); with NULL, in the whole tail
+ *        is judged. A log now shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway
+ *        error is looked for in the log's last 64 KiB only (that read does not grow), in the bytes after $since (none quoted when this
+ *        start logged none); with NULL, in all of those 64 KiB
  */
 function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 	$saved = pfb_dns_proxy_saved();
@@ -5711,8 +5729,8 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 			}
 			usleep(100000);
 		}
-		$judged = ($listeners !== NULL);
-		if ($listeners !== NULL) {
+		$judged = ($listeners !== NULL && !$listeners['partial']);
+		if ($judged) {
 			$labels = ['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'];
 			foreach (pfb_dns_proxy_command_listeners() as $kind => $addresses) {
 				foreach ($addresses as $at) {
@@ -5965,7 +5983,8 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its log holds a complete start of the gateway that published the
  * ready marker (pfb_dns_proxy_ready_listeners(); right after a restart the log shows the previous start's until the new gateway's lines
- * arrive; a start the 64 KiB read cut, with its `starting pid` line out of it, is none); with the proxy not READY, or with no such start
+ * arrive; a start the read limit cut short (`partial`, its `starting pid` line out of the read) is none); with the proxy not READY,
+ * or with no such start
  * to compare with, it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()): one that is alive but
  * never published its marker (restarted every few seconds) fails
  * the activation and is rolled back, which a pidfile alone would never notice.
@@ -15024,7 +15043,7 @@ function pfb_dns_proxy_port(): string {
  * readiness-marker PID) as `listening`, then each address the rc script's command names (pfb_dns_proxy_command_listeners()) that it did
  * not bind as `not_listening` with the logged reason. A saved toggle change or unavailable upstream cannot hide those front-end listeners.
  * A gateway that is not ready lists the command's addresses as `configured_not_bound`; a ready gateway whose latest complete log record
- * does not match its PID, as `configured_unconfirmed`.
+ * does not match its PID, or whose start the read limit cut short, as `configured_unconfirmed`.
  *
  * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>}
  */
@@ -15076,6 +15095,10 @@ function pfb_dns_status(): array {
 	$listeners = $ready
 	    ? pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"))
 	    : NULL;
+	// A record the read limit cut short is not what the gateway serves: it is read as no record, like one with no start
+	if ($listeners !== NULL && $listeners['partial']) {
+		$listeners = NULL;
+	}
 	$unlogged = $ready ? 'configured_unconfirmed' : 'configured_not_bound';
 	$labels = pfb_dns_proxy_address_interfaces();
 	$entry = static fn (string $at, string $state, string $reason = ''): array => ['address' => $at, 'state' => $state, 'reason' => $reason];

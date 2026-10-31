@@ -48,6 +48,8 @@ final class PfbDnsStatusTest extends TestCase
 	private const DOH = ['listening doh 192.0.2.1:443', 'listening doh 127.0.0.1:443', 'listening doh [::1]:443'];
 	private const DOQ = ['listening doq 192.0.2.1:8853', 'listening doq 127.0.0.1:8853', 'listening doq [::1]:8853'];
 	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 	private const OFF = ['state' => 'off'];
 	private const NO_LISTENER = ['state' => 'no_listener', 'notice' => 'On, but the service has no listener for it: see the notices, or run an Update'];
 
@@ -145,6 +147,12 @@ final class PfbDnsStatusTest extends TestCase
 	private function log(string|array ...$lines): void
 	{
 		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", array_merge(...array_map(static fn (string|array $part): array => (array) $part, $lines))) . "\n");
+	}
+
+	/** Other output the gateway logs: $bytes of it, as lines of 100 bytes, each ended by a newline (one string, not one array item a line). */
+	private static function other(int $bytes): string
+	{
+		return str_repeat(str_repeat('f', 99) . "\n", intdiv($bytes, 100) + 1);
 	}
 
 	/** @return array<string,array<string,mixed>> the four transports of the status; none while the status claims none */
@@ -543,6 +551,43 @@ final class PfbDnsStatusTest extends TestCase
 			'dot'   => self::served('853', 'configured_unconfirmed'),
 			'doh'   => self::served('443', 'configured_unconfirmed'),
 			'doq'   => self::served('8853', 'configured_unconfirmed'),
+		], $this->transports());
+	}
+
+	public function testAReadyGatewayWhoseLogWarnsAfterItsStartShowsEveryListenerAsListening(): void
+	{
+		// Given a ready gateway with every transport on, whose start (its `starting pid` line, every listener, its ready line) is
+		// followed by 70 KB of warnings
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->log('starting pid 4242', self::PLAIN, self::DOT, self::DOH, self::DOQ, 'control socket /var/run/pfb_dns/ctl.sock', self::READY, self::other(70000));
+		$this->assertGreaterThan(65536, (int) filesize($GLOBALS['pfb']['dns_proxy_log']), 'before: the start is outside the first 64 KiB');
+
+		// Then every listener the start bound shows as listening, and none as not listening
+		$this->assertSame([
+			'plain' => self::served('53'),
+			'dot'   => self::served('853'),
+			'doh'   => self::served('443'),
+			'doq'   => self::served('8853'),
+		], $this->transports());
+	}
+
+	public function testAStartBeyondTheReadLimitShowsItsAddressesAsUnconfirmedNotAsNotListening(): void
+	{
+		// Given a ready gateway with DoT on, whose start's `starting pid` line and first listener are beyond the read limit, its other
+		// listeners and its ready line inside the last 64 KiB
+		$this->box(self::DOT_ON);
+		$this->log(
+			'starting pid 4242', 'listening udp+tcp 192.0.2.1:53', self::other(self::READ_LIMIT + 100000),
+			array_slice(self::PLAIN, 1), self::DOT, self::READY
+		);
+		$this->assertGreaterThan(self::READ_LIMIT, (int) filesize($GLOBALS['pfb']['dns_proxy_log']), 'before: the start is beyond the read limit');
+
+		// Then the start is not judged whole, so each configured address is unconfirmed: none is shown as not listening
+		$this->assertSame([
+			'plain' => self::served('53', 'configured_unconfirmed'),
+			'dot'   => self::served('853', 'configured_unconfirmed'),
+			'doh'   => self::OFF,
+			'doq'   => self::OFF,
 		], $this->transports());
 	}
 

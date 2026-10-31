@@ -17,7 +17,8 @@ use PHPUnit\Framework\TestCase;
  * log whose last `ready upstream` is the PREVIOUS start's. A caller that starts or restarts the proxy therefore passes the log's size
  * from before the start ($since): only the bytes after it are the start's, the check waits (bounded, PFB_DNS_PROXY_LOG_WAIT) for the
  * `ready upstream` line among them, and a start whose line never comes cannot be judged: no problem is filed and nothing is closed.
- * With no $since (the cron tick, an apply that restarted nothing) the latest segment of the log's last 64 KiB is judged, as before.
+ * With no $since (the cron tick, an apply that restarted nothing) the latest start is judged from a read that grows from 64 KiB, up to
+ * the read limit, until it holds the start's beginning; a start whose beginning is beyond the limit is not judged.
  *
  * Every wait here is the production loop on the virtual clock (PfbFlockClockFixture): no test sleeps.
  */
@@ -35,6 +36,8 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 
 	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
 	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
@@ -184,6 +187,12 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		file_notice(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.', 'pfBlockerNG', self::URL, 2);
 	}
 
+	/** Other output the gateway logs: $bytes of it, as lines of 100 bytes, each ended by a newline (one string, not one array item a line). */
+	private static function other(int $bytes): string
+	{
+		return str_repeat(str_repeat('f', 99) . "\n", intdiv($bytes, 100) + 1);
+	}
+
 	/**
 	 * The production functions on a virtual clock, with the budgets set to one second each: 100 ms ticks, so a wait that runs out is ten.
 	 *
@@ -280,37 +289,93 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
-	public function testTheLast64KiBLimitHoldsWhenTheStartIsKnown(): void
+	public function testTheReadLimitHoldsWhenTheStartIsKnown(): void
 	{
-		// Given a standing notice and a log whose only ready line is out of its last 64 KiB, the size taken before it all
+		// Given a standing notice and a log whose only ready line is beyond the read limit, the size taken before it all
 		$this->box();
 		$this->fileStandingNotice();
 		$before = $this->standing();
 		$this->log($this->healthyStart());
-		$this->appendLog(array_fill(0, 720, str_repeat('f', 99)));
-		$this->assertGreaterThan(65536 + 1024, $this->logSize(), 'before: the fixture is longer than the tail');
+		$this->appendLog(self::other(self::READ_LIMIT + 100000));
+		$this->assertGreaterThan(self::READ_LIMIT, $this->logSize(), 'before: the fixture is longer than the read limit');
 
 		pfb_dns_proxy_startup_check(TRUE, 0);
 
-		// Then nothing was found to judge by: had it read from the size, it would have closed the notice
+		// Then nothing was found to judge by: had it judged the start, it would have closed the notice
 		$this->assertSame($before, $this->standing());
 	}
 
-	public function testTheLineTheTailCutsInsideOfIsNeverJudged(): void
+	public function testALogCutAtTheReadLimitIsNotJudgedWhateverItsCutLineSays(): void
 	{
-		// Given a log of 64 KiB and 2 bytes whose first line is a DoT line for lan with one byte in front of it: the tail starts at byte 2,
-		// and what it reads of that line from byte 1 on is a complete-looking `listening dot 192.0.2.1:853`
+		// Given a log of the read limit plus two bytes: the read's cut falls inside its first line, a DoT line for lan, and the
+		// start's beginning is beyond the read
 		$this->box();
 		$first = "Xlistening dot 192.0.2.1:853\n";
 		$last = $this->lines(self::PLAIN, self::DOT_LOOPBACK, self::READY);
-		$filler = str_repeat('f', 65538 - strlen($first) - strlen($last) - 1) . "\n";
-		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], $first . $filler . $last);
-		$this->assertSame(65538, $this->logSize(), 'before: the fixture is the length that cuts the first line');
+		$size = self::READ_LIMIT + 2;
+		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], $first . str_repeat('f', $size - strlen($first) - strlen($last) - 1) . "\n" . $last);
+		$this->assertSame($size, $this->logSize(), 'before: the fixture is the length that cuts the first line at the limit');
 
 		pfb_dns_proxy_startup_check(TRUE);
 
-		// Then the cut line is not the start's: DoT on lan was never reported
-		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
+		// Then the start is not judged: nothing is filed
+		$this->assertSame([], $this->startupTexts());
+	}
+
+	// -----------------------------------------------------------------------
+	// The read grows to hold the start's beginning, up to the read limit
+	// -----------------------------------------------------------------------
+
+	public function testAGatewayThatLogsWarningsAfterItsReadyLineIsJudgedAndItsNoticeCloses(): void
+	{
+		// Given a standing notice, and a start whose `starting pid` line, every listener and its ready line are more than 64 KiB
+		// from the end, followed by 70 KB of warnings
+		$this->box();
+		$this->fileStandingNotice();
+		$this->log('starting pid 4242', $this->healthyStart());
+		$this->appendLog(self::other(70000));
+
+		// When the check judges the log with no $since (the cron tick)
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the start is judged whole: no problem is filed, and the standing notice is closed
+		$this->assertSame([], $this->startupTexts());
+	}
+
+	public function testALegacyLogWhoseLatestStartIsBeyondTheFirstWindowIsJudgedAndItsNoticeCloses(): void
+	{
+		// Given a standing notice, and a log with no `starting pid` line: an older complete start, then the latest one, whose
+		// listeners are more than 64 KiB from the end, then 70 KB of warnings (the live box's shape)
+		$this->box();
+		$this->fileStandingNotice();
+		$this->log($this->healthyStart(), self::PLAIN, self::DOT, self::READY);
+		$this->appendLog(self::other(70000));
+
+		// When the check judges the log with no $since
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the latest start is judged whole: no problem is filed, and the standing notice is closed
+		$this->assertSame([], $this->startupTexts());
+	}
+
+	public function testAStartWhoseBeginningIsBeyondTheReadLimitIsNotJudgedAndTheNoticeStands(): void
+	{
+		// Given a standing notice, and a start whose `starting pid` line and first listener are beyond the read limit from the end,
+		// its other listeners and its ready line inside the last 64 KiB
+		$this->box();
+		$this->fileStandingNotice();
+		$before = $this->standing();
+		file_put_contents($GLOBALS['pfb']['dns_proxy_log'],
+			$this->lines('starting pid 4242', 'listening udp+tcp 192.0.2.1:53') .
+			self::other(self::READ_LIMIT + 100000) .
+			$this->lines([...array_slice(self::PLAIN, 1), ...self::DOT, self::READY])
+		);
+
+		// When the check judges the log with no $since
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the start cannot be judged whole: no problem is filed for its first listener, and nothing is closed
+		$this->assertSame($before, $this->standing());
 	}
 
 	// -----------------------------------------------------------------------

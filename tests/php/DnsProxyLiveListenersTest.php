@@ -56,6 +56,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 	/** The hosts the rc script's command listens on in this fixture (lan is 192.0.2.1), as the gateway logs them. */
 	private const ADDRESSES = ['192.0.2.1', '127.0.0.1', '[::1]'];
 	private const OLD_GATEWAY = 'error: a message of 4294967294 bytes is not between 1 and 65536';
+	/** The gateway log's read limit: a start whose beginning is further back is not judged. */
+	private const READ_LIMIT = PFB_DNS_PROXY_LOG_READ_MAX;
 
 	private array $savedGlobals = [];
 	private int $port = 0;
@@ -607,15 +609,21 @@ final class DnsProxyLiveListenersTest extends TestCase
 		return array_fill(0, 700, str_repeat('f', 99));
 	}
 
+	/** Other output the gateway logs: $bytes of it, as lines of 100 bytes, each ended by a newline (one string, not one array item a line). */
+	private static function other(int $bytes): string
+	{
+		return str_repeat(str_repeat('f', 99) . "\n", intdiv($bytes, 100) + 1);
+	}
+
 	public function testALogWindowThatCutOffTheLatestStartsMarkerIsNotTakenForTheWholeServedSet(): void
 	{
-		// Given a start whose `starting pid` line and listener on 127.0.0.1 are before the last 64 KiB of the log, its ready line inside it
+		// Given a start whose `starting pid` line and listener on 127.0.0.1 are beyond the read limit, its ready line inside the last 64 KiB
 		$this->quiet(['gatewayLog' => [
-			'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", ...self::filler(),
+			'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", self::other(self::READ_LIMIT + 100000),
 			"listening udp+tcp 192.0.2.1:{$this->port}", "listening udp+tcp [::1]:{$this->port}", self::READY,
 		]]);
 		$record = $this->gateway();
-		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the window');
+		$this->assertGreaterThan(self::READ_LIMIT, pfb_dns_proxy_log_size(), 'before: the log is longer than the read limit');
 		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the start\'s marker is outside the window');
 		$this->assertSame('', self::bindError("127.0.0.1:{$this->port}"), 'before: this host binds 127.0.0.1, which the window does not show served');
 
@@ -630,17 +638,17 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 	public function testAnAddressOnlyChangeWithACutLogRestartsTheWholePairAndSendsNoFrame(): void
 	{
-		// Given a ready proxy whose log is longer than 64 KiB with its latest start's `starting pid` line out of the window, and an
-		// interface that has 0.0.0.0 now (before: with the marker in the window the same change is made live, above)
+		// Given a ready proxy whose log's latest start has its `starting pid` line beyond the read limit, and an interface that has
+		// 0.0.0.0 now (before: with the marker in the window the same change is made live, above)
 		$this->quiet([
 			'lan' => '0.0.0.0', 'restartLog' => $this->started(['0.0.0.0', '127.0.0.1', '[::1]']),
 			'gatewayLog' => [
-				'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", ...self::filler(),
+				'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", self::other(self::READ_LIMIT + 100000),
 				"listening udp+tcp 192.0.2.1:{$this->port}", "listening udp+tcp [::1]:{$this->port}", self::READY,
 			],
 		]);
 		$record = $this->gateway();
-		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the window');
+		$this->assertGreaterThan(self::READ_LIMIT, pfb_dns_proxy_log_size(), 'before: the log is longer than the read limit');
 		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the start\'s marker is outside the window');
 
 		// When the update pass runs
@@ -650,6 +658,51 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame(['restart_service pfb_dns_proxy'], $this->krProxyCalls());
 		$this->assertSame([], self::frames($record));
 		$this->assertStringContainsString('Restarting the DNS proxy: its listen addresses changed', $this->krLog());
+	}
+
+	public function testAWholeRecordBeyondTheFirstWindowIsReconciledLiveByTheUpdatePass(): void
+	{
+		// Given a ready proxy whose log is longer than 64 KiB: its latest start's `starting pid` line and loopback listener are 70 KB
+		// back, inside the read limit, its other listeners and its ready line after them, and an interface that has 0.0.0.0 now
+		$this->quiet([
+			'lan' => '0.0.0.0',
+			'gatewayLog' => [
+				'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", self::other(70000),
+				"listening udp+tcp 192.0.2.1:{$this->port}", "listening udp+tcp [::1]:{$this->port}", self::READY,
+			],
+		]);
+		$record = $this->gateway();
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than the first window');
+		$this->assertNotContains('starting pid 4242', pfb_dns_proxy_log_lines(), 'before: the start\'s marker is outside the first window');
+
+		// When the update pass runs
+		$ready = $this->krEnsure();
+
+		// Then the record is whole: the gone address is removed and the new one added live, with nothing restarted or filed
+		$this->assertTrue($ready);
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertSame(["remove udp+tcp 192.0.2.1:{$this->port}", "add udp+tcp 0.0.0.0:{$this->port}"], self::verbs($record));
+		$this->assertSame([], $this->startupNotices());
+	}
+
+	public function testTheCronTickJudgesAWholeRecordBeyondTheFirstWindowAndChangesNothing(): void
+	{
+		// Given a ready proxy whose log's latest start, its `starting pid` line included, is 70 KB back and binds every address the command names
+		$this->quiet([
+			'gatewayLog' => [
+				'starting pid 4242', "listening udp+tcp 127.0.0.1:{$this->port}", self::other(70000),
+				"listening udp+tcp 192.0.2.1:{$this->port}", "listening udp+tcp [::1]:{$this->port}", self::READY,
+			],
+		]);
+		$record = $this->gateway();
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then the record is whole: nothing is added, restarted or sent, and nothing is filed
+		$this->assertSame([], self::frames($record));
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertSame([], $this->startupNotices());
 	}
 
 	public function testALogLongerThanTheWindowWhoseLatestStartIsInItWholeIsReconciledLive(): void
