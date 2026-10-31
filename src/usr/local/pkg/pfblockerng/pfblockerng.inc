@@ -3650,8 +3650,7 @@ if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
 if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 	define('PFB_DNS_PROXY_START_WAIT', PFB_UNBOUND_START_WAIT);
 }
-// Seconds pfb_dns_proxy_startup_check() waits for the `ready upstream` line of a start it was told the log's size from before: the
-// gateway publishes its ready marker before it logs that line and daemon(8) relays the log asynchronously.
+// Seconds pfb_dns_proxy_listeners_sync() waits for the gateway to log a listener change it took: daemon(8) relays the log asynchronously.
 // Overridable before load, like the budget above.
 if (!defined('PFB_DNS_PROXY_LOG_WAIT')) {
 	define('PFB_DNS_PROXY_LOG_WAIT', 3);
@@ -3674,7 +3673,7 @@ $pfb['dns_proxy_ready'] = '/var/unbound/pfb_dns_ready';
 $pfb['dns_proxy_rc_kept'] = '/var/run/pfb_dns_proxy_rc.kept';
 // What the next update must restart once because a package operation could not (a pass under pkg defers it): one line, the reason.
 $pfb['dns_proxy_restart_pending'] = '/var/run/pfb_dns_proxy_restart_pending';
-// The gateway's log (daemon(8) -o), which pfb_dns_proxy_listeners() reads for the startup check and the status panel: which listeners the current start bound.
+// The gateway's log (daemon(8) -o): the startup check reads it for the error of a start that never became ready, pfb_dns_proxy_listeners() for the live-listener sync.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
 // The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
 // It is root's alone, in a directory root alone can enter and outside the Unbound chroot: the gateway reads it once, at start, while it is
@@ -5721,26 +5720,21 @@ function pfb_dns_proxy_listeners_sync(): ?string {
  * when there is none. The notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or
  * replaced here. The problems, in this order, each one sentence that says what is not served and why:
  *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one (this start's own, with a $since);
- *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the
- *      CURRENT start did not report as `listening <kind> <host:port>`, with the reason the gateway logged for that address
- *      (`cannot listen on <host:port>: <reason>`), else that it did not report it. The current start is what the log holds after the
- *      last `starting pid` line before the last `ready upstream` line and up to it (an older gateway's log: after the second-to-last
- *      `ready upstream` line), plus the changes it logged since (`listening`/`stopped listening`, issue #3599), of the bytes written
- *      since $since (the size from before the start) or, with no $since, of the last 64 KiB. The gateway publishes its ready marker
- *      BEFORE it logs those lines and daemon(8) relays them asynchronously, so with a $since and no `ready upstream` line after it yet
- *      the log is polled (bounded, PFB_DNS_PROXY_LOG_WAIT), and an older start is never judged in its place. A start whose line does not
- *      come, and a log with no such line (rotated, truncated), cannot be judged: it gives no problem and closes nothing;
+ *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the running
+ *      gateway does not serve, as it lists them on its control socket (pfb_dns_proxy_listener_list(), issue #3625), with the reason it
+ *      refused that address when it did, else that it did not report it. A gateway that gives no list (no socket, no answer in time, an
+ *      older gateway, a reply that is not the list) cannot be judged: it gives no problem and closes nothing, and the log is never read for it;
  *   3. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
  *      the code the service uses (pfb_dns_proxy_plain_listen(), pfb_dns_proxy_tls_flags()).
- * A notice is closed only when the start was judged and nothing was found; file_notice() files a row for every changed text and
+ * A notice is closed only when the gateway's list was known and nothing was found; file_notice() files a row for every changed text and
  * close_notice() removes one row per call, so every row of the id is closed, by its key.
  *
  * @param bool $ready whether the proxy became ready (the caller waited for it). With no snapshot stored (nothing is meant to serve)
  *        and the proxy ready, nothing is checked, closed or waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
- *        it; NULL = no start was made (a cron tick that restarted nothing, an apply that restarted nothing): the log's latest start
- *        is judged. A log now shorter than $since was rotated: it is judged from its start. When the proxy is not ready the last gateway error is looked for
- *        the same way, only in the bytes after $since (none quoted when this start logged none); with NULL, in the whole tail
+ *        it; NULL = no start was made (a cron tick that restarted nothing, an apply that restarted nothing). It bounds only the gateway
+ *        error looked for when the proxy is not ready: the bytes after it (none quoted when this start logged none; a log now shorter
+ *        than $since was rotated and is read from its start); with NULL, the whole tail. A ready gateway is judged by its list, never by the log
  */
 function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 	$saved = pfb_dns_proxy_saved();
@@ -5761,22 +5755,14 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 		$problems[] = 'pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s' .
 		    (($error === '') ? '' : " (last gateway error: {$error})");
 	} else {
-		// A start just made ($since): the gateway logs its `ready upstream` line after it publishes its ready marker, so wait for it
-		$deadline = hrtime(TRUE) + PFB_DNS_PROXY_LOG_WAIT * 1000000000;
-		while (TRUE) {
-			$listeners = pfb_dns_proxy_listeners($since);
-			if ($listeners !== NULL || $since === NULL || hrtime(TRUE) >= $deadline) {
-				break;
-			}
-			usleep(100000);
-		}
+		$listeners = pfb_dns_proxy_listener_list();
 		$judged = ($listeners !== NULL);
 		if ($listeners !== NULL) {
 			$labels = ['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'];
 			foreach (pfb_dns_proxy_command_listeners() as $kind => $addresses) {
 				foreach ($addresses as $at) {
 					if (!isset($listeners['listening'][$kind][$at])) {
-						$problems[] = "{$labels[$kind]} is not served on {$at}: " . ($listeners['refused'][$at] ?? 'the gateway did not report it listening');
+						$problems[] = "{$labels[$kind]} is not served on {$at}: " . ($listeners['refused'][$kind][$at] ?? 'the gateway did not report it listening');
 					}
 				}
 			}
@@ -15079,11 +15065,11 @@ function pfb_dns_proxy_port(): string {
  * is on while nothing is moved is never running: it is said not to be active, with the reason (pfBlockerNG or the Resolver disabled,
  * or the Resolver not moved yet or refused), and claims no transport (`transports` is NULL).
  * A transport is `off` (its toggle is off and it has no active listener), `no_listener` (on, but the rc script's command gives it none)
- * or `rows` (pfb_dns_status_rows()). A ready gateway lists what its current start bound (pfb_dns_proxy_listeners(), matched to its
- * readiness-marker PID) as `listening`, then each address the rc script's command names (pfb_dns_proxy_command_listeners()) that it did
- * not bind as `not_listening` with the logged reason. A saved toggle change or unavailable upstream cannot hide those front-end listeners.
- * A gateway that is not ready lists the command's addresses as `configured_not_bound`; a ready gateway whose latest complete log record
- * does not match its PID, as `configured_unconfirmed`.
+ * or `rows` (pfb_dns_status_rows()). A ready gateway lists what it serves, asked of its control socket (pfb_dns_proxy_listener_list()), as
+ * `listening`, then each address the rc script's command names (pfb_dns_proxy_command_listeners()) that it does not serve as `not_listening`
+ * with the reason it refused it when it gave one. A saved toggle change or unavailable upstream cannot hide those front-end listeners.
+ * A gateway that is not ready lists the command's addresses as `configured_not_bound`; a ready gateway that gives no list, as
+ * `configured_unconfirmed`.
  *
  * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>}
  */
@@ -15132,10 +15118,8 @@ function pfb_dns_status(): array {
 	}
 
 	$configured = pfb_dns_proxy_command_listeners();
-	$listeners = $ready
-	    ? pfb_dns_proxy_listeners(NULL, rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n"))
-	    : NULL;
-	$unlogged = $ready ? 'configured_unconfirmed' : 'configured_not_bound';
+	$listeners = $ready ? pfb_dns_proxy_listener_list() : NULL;
+	$unconfirmed = $ready ? 'configured_unconfirmed' : 'configured_not_bound';
 	$labels = pfb_dns_proxy_address_interfaces();
 	$entry = static fn (string $at, string $state, string $reason = ''): array => ['address' => $at, 'state' => $state, 'reason' => $reason];
 	$transports = [];
@@ -15148,12 +15132,12 @@ function pfb_dns_status(): array {
 		} elseif ($addresses === [] && $bound === []) {
 			$transports[$row] = ['state' => 'no_listener', 'notice' => 'On, but the service has no listener for it: see the notices, or run an Update'];
 		} elseif ($listeners === NULL) {
-			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows(array_map(static fn (string $at): array => $entry($at, $unlogged), $addresses), $labels)];
+			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows(array_map(static fn (string $at): array => $entry($at, $unconfirmed), $addresses), $labels)];
 		} else {
 			$entries = [
 				...array_map(static fn (string $at): array => $entry($at, 'listening'), $bound),
 				...array_map(
-				    static fn (string $at): array => $entry($at, 'not_listening', $listeners['refused'][$at] ?? 'the gateway did not report it'),
+				    static fn (string $at): array => $entry($at, 'not_listening', $listeners['refused'][$kind][$at] ?? 'the gateway did not report it'),
 				    array_diff($addresses, $bound)
 				),
 			];
@@ -15220,7 +15204,7 @@ function pfb_dns_status_panel(array $status): string {
 				'listening'              => ['fa-check-circle text-success', 'Listening'],
 				'not_listening'          => ['fa-times-circle text-danger', 'Not listening'],
 				'configured_not_bound'   => ['fa-exclamation-circle text-warning', 'Configured, not bound'],
-				'configured_unconfirmed' => ['fa-exclamation-circle text-warning', 'Configured, not confirmed by the log'],
+				'configured_unconfirmed' => ['fa-exclamation-circle text-warning', 'Configured, not confirmed by the gateway'],
 			};
 			$rows .= '<tr><td>' . htmlspecialchars($row['interface']) . '</td><td>' . implode('<br />', array_map('htmlspecialchars', $row['addresses'])) . '</td><td>'
 			    . "<i class=\"fa-solid {$icon}\" title=\"{$meaning}\" aria-hidden=\"true\"></i><span class=\"sr-only\">{$meaning}</span>"

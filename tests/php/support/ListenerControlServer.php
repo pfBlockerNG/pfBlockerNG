@@ -4,22 +4,31 @@ declare(strict_types=1);
 
 /**
  * A stand-in for the pfB-DNS gateway's control socket (go/pfb_dns_gateway, ctl.go), for the tests of the live listen-address verbs
- * (docs/specs/pfb-dns-live-listen-addresses.md, D2): listens on a Unix socket and takes connections until the test ends it. Each
- * connection is one frame: four head bytes (FF FF FF FE add, FF FF FF FD remove), a 4-byte big-endian length and that many bytes
- * `<kind> <host:port>`, sent in ONE sendmsg(2) with its SCM_RIGHTS descriptors. Per connection it records one JSON line
+ * and of everything that asks which listeners the gateway serves (docs/specs/pfb-dns-live-listen-addresses.md, D2): listens on a Unix
+ * socket and takes connections until the test ends it. Each connection is one frame: four head bytes (FF FF FF FE add, FF FF FF FD
+ * remove, FF FF FF FC list), and for add and remove a 4-byte big-endian length and that many bytes `<kind> <host:port>`, sent in ONE
+ * sendmsg(2) with its SCM_RIGHTS descriptors; a list frame is the four head bytes alone. Per connection it records one JSON line
  * {"head": hex, "body": text, "fds": [{"type": "stream"|"dgram", "name": "host:port", "listening": bool}]} in <record file> BEFORE it
  * replies, so that what a test reads after the call under test returns is complete; then it appends `listening <body>` (add) or
  * `stopped listening <body>` (remove) to <gateway log> when the reply is `ok` (what the real gateway logs), closes every received
  * descriptor and writes the reply. Prints "ready" once it listens.
  *
- *   php ListenerControlServer.php <socket> <record file> <gateway log> <replies JSON>
+ *   php ListenerControlServer.php <socket> <record file> <gateway log> <replies JSON> <served JSON>
  *
- * <replies JSON> is a list, one entry per connection in order: a reply line without its newline ("ok", "error: ...", or "ok silent":
- * `ok` with nothing logged), or null to hang up with no reply; connections past the list's end are answered "ok". The test's barrier
- * is stdin: when it closes, the server ends.
+ * <replies JSON> is a list, one entry per add or remove connection in order: a reply line without its newline ("ok", "error: ...", or
+ * "ok silent": `ok` with nothing logged), or null to hang up with no reply; connections past the list's end are answered "ok". A list
+ * frame takes no entry of it. The test's barrier is stdin: when it closes, the server ends.
+ *
+ * <served JSON> is what the gateway serves: {"listening": ["<kind> <host:port>", ...], "refused": {"<kind> <host:port>": "<reason>"},
+ * "list": absent | null | "<reply>"}; the default serves nothing and refuses nothing. A list frame is answered with one
+ * `listening <key>` line for each served listener (in the given order), one `refused <key> <reason>` line for each refusal and a final
+ * `ok`; "list" as a string is the whole reply instead, byte for byte (nothing is added to it), and as null the connection is closed
+ * with no reply. An add or remove answered `ok` also changes what is served: an added listener is served (and no longer refused), a
+ * removed one is not.
  */
-[, $socket, $record, $log, $script] = $argv + [NULL, NULL, NULL, NULL, '[]'];
+[, $socket, $record, $log, $script, $servedJson] = $argv + [NULL, NULL, NULL, NULL, '[]', '{}'];
 $replies = json_decode((string) $script, TRUE, 4, JSON_THROW_ON_ERROR);
+$served = json_decode((string) $servedJson, TRUE, 4, JSON_THROW_ON_ERROR) + ['listening' => [], 'refused' => []];
 
 $server = stream_socket_server("unix://{$socket}", $errno, $errstr);
 if ($server === FALSE) {
@@ -50,9 +59,12 @@ while (TRUE) {
 	$message = ['name' => [], 'buffer_size' => 264, 'controllen' => socket_cmsg_space(SOL_SOCKET, SCM_RIGHTS, 4)];
 	$got = @socket_recvmsg($conn, $message, 0);
 	$data = ($got === FALSE) ? '' : (string) $message['iov'][0];
+	$head = bin2hex(substr($data, 0, 4));
 	$length = (strlen($data) >= 8) ? unpack('N', substr($data, 4, 4))[1] : 0;
-	while (strlen($data) < 8 + min($length, 256)) {
-		$more = @socket_read($conn, 8 + min($length, 256) - strlen($data));
+	// A list frame is its four head bytes alone: waiting for a length would cost the whole receive timeout
+	$want = ($head === 'fffffffc') ? 4 : 8 + min($length, 256);
+	while (strlen($data) < $want) {
+		$more = @socket_read($conn, $want - strlen($data));
 		if ($more === FALSE || $more === '') {
 			break;
 		}
@@ -69,22 +81,40 @@ while (TRUE) {
 			];
 		}
 	}
-	$head = bin2hex(substr($data, 0, 4));
 	$body = substr($data, 8, $length);
 	file_put_contents($record, json_encode(['head' => $head, 'body' => $body, 'fds' => $fds], JSON_THROW_ON_ERROR) . "\n", FILE_APPEND);
 
-	$reply = array_key_exists(0, $replies) ? array_shift($replies) : 'ok';
-	// "ok silent": a gateway that takes the frame and does not log it (the test of the log wait)
-	$silent = ($reply === 'ok silent');
-	$reply = $silent ? 'ok' : $reply;
-	if ($reply === 'ok' && !$silent && $head === 'fffffffe') {
-		file_put_contents($log, "listening {$body}\n", FILE_APPEND);
-	} elseif ($reply === 'ok' && !$silent && $head === 'fffffffd') {
-		file_put_contents($log, "stopped listening {$body}\n", FILE_APPEND);
+	if ($head === 'fffffffc') {
+		if (!array_key_exists('list', $served)) {
+			$lines = array_map(static fn (string $key): string => "listening {$key}", $served['listening']);
+			foreach ($served['refused'] as $key => $reason) {
+				$lines[] = "refused {$key} {$reason}";
+			}
+			$wire = implode("\n", [...$lines, 'ok']) . "\n";
+		} else {
+			$wire = $served['list'];
+		}
+	} else {
+		$reply = array_key_exists(0, $replies) ? array_shift($replies) : 'ok';
+		// "ok silent": a gateway that takes the frame and does not log it (the test of the log wait)
+		$silent = ($reply === 'ok silent');
+		$reply = $silent ? 'ok' : $reply;
+		if ($reply === 'ok' && !$silent && $head === 'fffffffe') {
+			file_put_contents($log, "listening {$body}\n", FILE_APPEND);
+		} elseif ($reply === 'ok' && !$silent && $head === 'fffffffd') {
+			file_put_contents($log, "stopped listening {$body}\n", FILE_APPEND);
+		}
+		if ($reply === 'ok' && $head === 'fffffffe') {
+			$served['listening'] = array_values(array_unique([...$served['listening'], $body]));
+			unset($served['refused'][$body]);
+		} elseif ($reply === 'ok' && $head === 'fffffffd') {
+			$served['listening'] = array_values(array_diff($served['listening'], [$body]));
+		}
+		$wire = ($reply === NULL) ? NULL : "{$reply}\n";
 	}
 	unset($message, $fd, $control);
-	if ($reply !== NULL) {
-		@socket_write($conn, "{$reply}\n");
+	if ($wire !== NULL) {
+		@socket_write($conn, $wire);
 	}
 	fclose($stream);
 	unset($conn);

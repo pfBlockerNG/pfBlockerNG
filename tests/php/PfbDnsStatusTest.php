@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/support/LiveListenerStandIn.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issues #3515, #3548, #3555 -- the pfB-DNS tab's status data: whether the proxy is running, starting or stopped, which mode the box is
+ * issues #3515, #3548, #3555, #3625 -- the pfB-DNS tab's status data: whether the proxy is running, starting or stopped, which mode the box is
  * in, and for each transport (plain DNS, DoT, DoH, DoQ) either a whole-transport state (`off`, or `no_listener`) or the rows of its
  * table: one per interface and outcome, with the addresses it covers. Service and mode derive from the Resolver snapshot (the box is
  * moved or it is not), the toggle (what the admin asked for) and DNSBL (whether the proxy makes DNSBL decisions); a toggle that is on
@@ -18,15 +19,16 @@ use PHPUnit\Framework\TestCase;
  * never to run, and shows no transport at all.
  *
  * A transport is `off` when its toggle is off and there are no active listeners. Otherwise, with the proxy running, its rows are what
- * the gateway's current start reported `listening <kind>` in its log (state `listening`), then every address the rc script's command
- * names that the start did not bind (`not_listening`, with the `cannot listen on` reason when the log has one); with the proxy not
- * running its rows are the command's addresses (`configured_not_bound`), and with no log record that matches the running PID the same
- * addresses are `configured_unconfirmed`. An address sits under the pfSense description of the interface that carries it. The startup
- * check reads the same parsed start, so the panel and the notice never disagree. The rc script is the real generator's output
- * (pfb_dns_proxy_service()), the log a real file in the gateway's shape.
+ * the gateway itself lists on its control socket as served (state `listening`), then every address the rc script's command names that
+ * it does not serve (`not_listening`, with the reason it refused that address when it gave one); with the proxy not running its rows are
+ * the command's addresses (`configured_not_bound`), and with a running gateway that gives no list the same addresses are
+ * `configured_unconfirmed`. An address sits under the pfSense description of the interface that carries it. The startup check asks the
+ * same gateway the same way, so the panel and the notice never disagree. The rc script is the real generator's output
+ * (pfb_dns_proxy_service()); the gateway is a stand-in process on a real Unix socket that answers the list as the real one does
+ * (support/ListenerControlServer.php); the log is read for nothing here, and a real file only where a test shows the status ignores it.
  */
 #[CoversFunction('pfb_dns_status')]
-#[CoversFunction('pfb_dns_proxy_listeners')]
+#[CoversFunction('pfb_dns_proxy_listener_list')]
 #[CoversFunction('pfb_dns_proxy_command_listeners')]
 #[CoversFunction('pfb_dns_status_rows')]
 #[CoversFunction('pfb_dns_proxy_address_interfaces')]
@@ -34,6 +36,7 @@ use PHPUnit\Framework\TestCase;
 final class PfbDnsStatusTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
+	use LiveListenerStandIn;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
@@ -43,11 +46,11 @@ final class PfbDnsStatusTest extends TestCase
 	private const DOH_ON = ['pfb_dns_doh' => 'on', 'pfb_dns_doh_interface' => 'lan', 'pfb_dns_doh_port' => '443'];
 	private const DOQ_ON = ['pfb_dns_doq' => 'on', 'pfb_dns_doq_interface' => 'lan', 'pfb_dns_doq_port' => '8853'];
 
-	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
-	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
-	private const DOH = ['listening doh 192.0.2.1:443', 'listening doh 127.0.0.1:443', 'listening doh [::1]:443'];
-	private const DOQ = ['listening doq 192.0.2.1:8853', 'listening doq 127.0.0.1:8853', 'listening doq [::1]:8853'];
-	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
+	private const PLAIN = ['udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'];
+	private const DOT = ['dot 192.0.2.1:853', 'dot 127.0.0.1:853', 'dot [::1]:853'];
+	private const DOH = ['doh 192.0.2.1:443', 'doh 127.0.0.1:443', 'doh [::1]:443'];
+	private const DOQ = ['doq 192.0.2.1:8853', 'doq 127.0.0.1:8853', 'doq [::1]:8853'];
+	private const DOQ_ON_853 = ['pfb_dns_doq' => 'on', 'pfb_dns_doq_interface' => 'lan', 'pfb_dns_doq_port' => '853'];
 	private const OFF = ['state' => 'off'];
 	private const NO_LISTENER = ['state' => 'no_listener', 'notice' => 'On, but the service has no listener for it: see the notices, or run an Update'];
 
@@ -88,6 +91,7 @@ final class PfbDnsStatusTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		$this->standInsStop();
 		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
@@ -135,6 +139,12 @@ final class PfbDnsStatusTest extends TestCase
 		}
 		pfb_dns_proxy_service();
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE, 'the generator wrote the rc script the status reads');
+	}
+
+	/** @return list<string> what a gateway lists when it serves the whole box with DoT, DoH and DoQ on: every transport on lan and loopback */
+	private function everything(): array
+	{
+		return [...self::PLAIN, ...self::DOT, ...self::DOH, ...self::DOQ];
 	}
 
 	/**
@@ -246,20 +256,16 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame('Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices', $mode);
 	}
 
-	public function testARunningProxyListsForEachTransportTheAddressesItsCurrentStartBound(): void
+	public function testARunningProxyListsForEachTransportTheAddressesTheGatewayServes(): void
 	{
-		// Given a running proxy with DoT, DoH and DoQ on, and a log whose older start bound DoT on another address
+		// Given a running proxy with DoT, DoH and DoQ on, and a gateway that lists every listener
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(
-			self::PLAIN, 'listening dot 198.51.100.9:853', self::READY,
-			self::PLAIN, self::DOT, self::DOH, self::DOQ, 'control socket /var/run/pfb_dns/ctl.sock', self::READY,
-			'pfb_dns_proxy warning: no reply from Unbound for 1.2.0.192.in-addr.arpa. PTR'
-		);
+		$this->gatewayServes($this->everything());
 
 		// When the status is read
 		$status = pfb_dns_status();
 
-		// Then each of the four tables lists what the current start bound, loopback first; the older start's DoT is gone
+		// Then each of the four tables lists what the gateway serves, loopback first
 		$this->assertSame([
 			'service'    => 'Running',
 			'mode'       => 'On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else',
@@ -274,9 +280,9 @@ final class PfbDnsStatusTest extends TestCase
 
 	public function testATransportWithNoActiveListenersAndItsToggleOffIsOff(): void
 	{
-		// Given DoT on, DoH and DoQ off, and a current start that serves only plain DNS and DoT
+		// Given DoT on, DoH and DoQ off, and a gateway that serves only plain DNS and DoT
 		$this->box(self::DOT_ON + ['pfb_dns_doh' => '', 'pfb_dns_doq' => '']);
-		$this->log(self::PLAIN, self::DOT, self::READY);
+		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
 
 		// Then DoT lists its listeners and the two that are off are off
 		$this->assertSame([
@@ -294,10 +300,10 @@ final class PfbDnsStatusTest extends TestCase
 	}
 
 	#[DataProvider('encryptedTransports')]
-	public function testSavingATransportToggleDoesNotChangeWhatTheRunningStartServes(string $kind, string $port): void
+	public function testSavingATransportToggleDoesNotChangeWhatTheRunningGatewayServes(string $kind, string $port): void
 	{
 		$this->box();
-		$this->log(self::PLAIN, self::READY);
+		$this->gatewayServes(self::PLAIN);
 		$this->assertSame(self::OFF, $this->transports()[$kind], 'before: no active transport');
 
 		foreach (["pfb_dns_{$kind}" => 'on', "pfb_dns_{$kind}_interface" => 'lan', "pfb_dns_{$kind}_port" => $port] as $key => $value) {
@@ -306,42 +312,42 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame(self::NO_LISTENER, $this->transports()[$kind], 'enable saved but not applied');
 
 		pfb_dns_proxy_service();
-		$this->log(self::PLAIN, "listening {$kind} 192.0.2.1:{$port}", "listening {$kind} 127.0.0.1:{$port}", "listening {$kind} [::1]:{$port}", self::READY);
+		$this->gatewayServes([...self::PLAIN, "{$kind} 192.0.2.1:{$port}", "{$kind} 127.0.0.1:{$port}", "{$kind} [::1]:{$port}"]);
 		$active = self::served($port);
 		$this->assertSame($active, $this->transports()[$kind], 'enable applied: every listener bound');
 
 		config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
 		$this->assertSame($active, $this->transports()[$kind], 'disable saved: gateway still serves its existing listeners');
 
-		$this->log(self::PLAIN, "listening {$kind} 127.0.0.1:{$port}");
-		$this->assertSame(self::served($port, 'configured_unconfirmed'), $this->transports()[$kind], 'missing readiness lines cannot prove a pending disable has stopped the configured service');
+		$this->standInsStop();
+		$this->assertSame(self::served($port, 'configured_unconfirmed'), $this->transports()[$kind], 'no list cannot prove a pending disable has stopped the configured service');
 
-		$this->log(self::PLAIN, "cannot listen on 192.0.2.1:{$port}: bind failed", "listening {$kind} 127.0.0.1:{$port}", "listening {$kind} [::1]:{$port}", self::READY);
+		$this->gatewayServes([...self::PLAIN, "{$kind} 127.0.0.1:{$port}", "{$kind} [::1]:{$port}"], ["{$kind} 192.0.2.1:{$port}" => 'bind failed']);
 		$this->assertSame(self::lanRefused($port, 'bind failed'), $this->transports()[$kind], 'pending disable must not hide a failed listener either');
 
 		pfb_dns_proxy_service();
-		$this->log(self::PLAIN, self::READY);
+		$this->gatewayServes(self::PLAIN);
 		$this->assertSame(self::OFF, $this->transports()[$kind], 'disable applied: no listeners remain');
 	}
 
 	#[DataProvider('encryptedTransports')]
-	public function testTheCurrentStartStillShowsItsBoundListenersWhenTheServiceScriptIsMissing(string $kind, string $port): void
+	public function testTheGatewayStillShowsItsServedListenersWhenTheServiceScriptIsMissing(string $kind, string $port): void
 	{
 		$this->box(["pfb_dns_{$kind}" => 'on', "pfb_dns_{$kind}_interface" => 'lan', "pfb_dns_{$kind}_port" => $port]);
-		$this->log(self::PLAIN, "listening {$kind} 127.0.0.1:{$port}", self::READY);
+		$this->gatewayServes([...self::PLAIN, "{$kind} 127.0.0.1:{$port}"]);
 		unlink(PFB_DNS_PROXY_RCFILE);
 
 		$only = ['state' => 'rows', 'rows' => [self::row('Localhost', ["127.0.0.1:{$port}"], 'listening')]];
 		$this->assertSame($only, $this->transports()[$kind], 'a missing command cannot erase a listener confirmed by the running start');
 		config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
-		$this->assertSame($only, $this->transports()[$kind], 'a pending disable cannot hide log-confirmed listeners when the command is missing');
+		$this->assertSame($only, $this->transports()[$kind], 'a pending disable cannot hide listeners the gateway lists when the command is missing');
 	}
 
 	public function testAFailedUpstreamDoesNotEraseTheGatewaysConfirmedFrontendListeners(): void
 	{
-		// Given every transport on, and a healthy start: the gateway's log confirms its listeners and Unbound serves both transports
+		// Given every transport on, and a healthy gateway: it lists its listeners and Unbound serves both transports
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
+		$this->gatewayServes($this->everything());
 		$served = [
 			'plain' => self::served('53'),
 			'dot'   => self::served('853'),
@@ -351,7 +357,7 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame('Running', pfb_dns_status()['service'], 'before: the gateway and Unbound serve');
 		$this->assertSame($served, $this->transports(), 'before: every transport lists its listeners');
 
-		// When Unbound's PID is no longer alive, while the gateway child is still the one its log and ready marker name
+		// When Unbound's PID is no longer alive, while the gateway child is still the one its ready marker names
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
 		$status = pfb_dns_status();
 
@@ -382,7 +388,7 @@ final class PfbDnsStatusTest extends TestCase
 			}
 		}
 
-		// When the encrypted toggles are saved off but not applied: the live gateway still holds the listeners its log confirmed
+		// When the encrypted toggles are saved off but not applied: the live gateway still holds the listeners it lists
 		foreach (['dot', 'doh', 'doq'] as $kind) {
 			config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
 		}
@@ -391,11 +397,10 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame($served, $this->transports(), 'a pending disable hides no listener the live gateway still has');
 	}
 
-	public function testAFailedUpstreamKeepsUnloggedFrontendBindingsUnconfirmed(): void
+	public function testAFailedUpstreamKeepsTheBindingsOfAGatewayThatGivesNoListUnconfirmed(): void
 	{
-		// Given every transport on, a live gateway with its ready marker, a log with no complete `ready upstream` line, and Unbound dead
+		// Given every transport on, a live gateway with its ready marker that gives no list, and Unbound dead
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ);
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
 
 		// When the status is read
@@ -424,7 +429,7 @@ final class PfbDnsStatusTest extends TestCase
 	public function testPendingAddressAndPortChangesDoNotReplaceTheRunningStart(string $row, string $kind, string $port): void
 	{
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
+		$this->gatewayServes($this->everything());
 		$active = self::served($port);
 		$this->assertSame($active, $this->transports()[$row], 'before: old listeners are active');
 
@@ -437,11 +442,11 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame($active, $this->transports()[$row], 'save alone does not change the active addresses or port');
 
 		pfb_dns_proxy_service();
-		$this->log("listening {$kind} 198.51.100.1:5553", "listening {$kind} 127.0.0.1:5553", "listening {$kind} [::1]:5553", self::READY);
+		$this->gatewayServes(["{$kind} 198.51.100.1:5553", "{$kind} 127.0.0.1:5553", "{$kind} [::1]:5553"]);
 		$this->assertSame(['state' => 'rows', 'rows' => [
 			self::row('Localhost', ['127.0.0.1:5553', '[::1]:5553'], 'listening'),
 			self::row('OPT1', ['198.51.100.1:5553'], 'listening'),
-		]], $this->transports()[$row], 'after apply: the new start, not the pending settings, confirms the listeners');
+		]], $this->transports()[$row], 'after apply: the gateway, not the pending settings, confirms the listeners');
 	}
 
 	public function testDotIsPfbDnsOwnToggleAndPortWhateverTheResolversTlsPort(): void
@@ -453,24 +458,36 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame(self::served('8853', 'configured_not_bound'), $this->transports()['dot']);
 	}
 
-	public function testAnAddressTheCommandNamesThatTheStartDidNotBindIsNotListeningWithItsReasonWhenLogged(): void
+	public function testAnAddressTheGatewayRefusedIsNotListeningWithItsReasonMatchedByKind(): void
 	{
-		// Given DoT and DoH on lan + loopback, and a current start that lacks both on lan: DoT with a logged reason, DoH without one
-		$this->box(self::DOT_ON + self::DOH_ON);
-		$this->log(
-			self::PLAIN,
-			'cannot listen on 192.0.2.1:853: listen tcp 192.0.2.1:853: bind: address already in use',
-			'listening dot 127.0.0.1:853', 'listening dot [::1]:853',
-			'listening doh 127.0.0.1:443', 'listening doh [::1]:443',
-			self::READY
+		// Given DoT and DoQ both on port 853 of lan + loopback, and the gateway refused each on lan for a reason of its own
+		$this->box(self::DOT_ON + self::DOQ_ON_853);
+		$this->gatewayServes(
+			[...self::PLAIN, 'dot 127.0.0.1:853', 'dot [::1]:853', 'doq 127.0.0.1:853', 'doq [::1]:853'],
+			['dot 192.0.2.1:853' => 'listen tcp 192.0.2.1:853: bind: address already in use', 'doq 192.0.2.1:853' => 'listen udp 192.0.2.1:853: bind: permission denied']
 		);
 
-		// Then each table lists what was bound, then the address it missed, with the gateway's reason or that it was not reported
+		// Then each table gives its own kind's reason for the one host:port, never the other's
+		$transports = $this->transports();
+		$this->assertSame(self::lanRefused('853', 'listen tcp 192.0.2.1:853: bind: address already in use'), $transports['dot']);
+		$this->assertSame(self::lanRefused('853', 'listen udp 192.0.2.1:853: bind: permission denied'), $transports['doq']);
+	}
+
+	public function testAnAddressTheGatewayNeitherListsNorRefusesIsNotListeningAndSaysItWasNotReported(): void
+	{
+		// Given DoT, DoH and DoQ on lan + loopback (DoT and DoQ on the same port), the gateway lists loopback only and refused DoT on lan
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON_853);
+		$this->gatewayServes(
+			[...self::PLAIN, 'dot 127.0.0.1:853', 'dot [::1]:853', 'doh 127.0.0.1:443', 'doh [::1]:443', 'doq 127.0.0.1:853', 'doq [::1]:853'],
+			['dot 192.0.2.1:853' => 'listen tcp 192.0.2.1:853: bind: address already in use']
+		);
+
+		// Then DoH and DoQ on lan say they were not reported, and DoQ does not borrow DoT's refusal of the same host:port
 		$this->assertSame([
 			'plain' => self::served('53'),
 			'dot'   => self::lanRefused('853', 'listen tcp 192.0.2.1:853: bind: address already in use'),
 			'doh'   => self::lanRefused('443', 'the gateway did not report it'),
-			'doq'   => self::OFF,
+			'doq'   => self::lanRefused('853', 'the gateway did not report it'),
 		], $this->transports());
 	}
 
@@ -478,7 +495,7 @@ final class PfbDnsStatusTest extends TestCase
 	{
 		// Given a reason carrying markup and the rows' own separator
 		$this->box(self::DOT_ON);
-		$this->log(self::PLAIN, 'cannot listen on 192.0.2.1:853: <b>bind</b> & "x", y', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayServes([...self::PLAIN, 'dot 127.0.0.1:853', 'dot [::1]:853'], ['dot 192.0.2.1:853' => '<b>bind</b> & "x", y']);
 
 		// Then the status carries it as the gateway wrote it; only the panel escapes (PfbDnsStatusPanelTest)
 		$this->assertSame(self::lanRefused('853', '<b>bind</b> & "x", y'), $this->transports()['dot']);
@@ -486,9 +503,9 @@ final class PfbDnsStatusTest extends TestCase
 
 	public function testAStoppedProxyShowsTheConfiguredAddressesOfEachTransportThatIsOnNotTheLogsOldListeners(): void
 	{
-		// Given a stopped proxy with DoT, DoH and DoQ on, and a log from when it last ran in which DoT on lan had failed
+		// Given a stopped proxy with DoT, DoH and DoQ on, and a gateway socket that still answers, listing DoT on loopback only
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON, FALSE);
-		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', self::DOH, self::DOQ, self::READY);
+		$this->gatewayServes([...self::PLAIN, 'dot 127.0.0.1:853', ...self::DOH, ...self::DOQ]);
 
 		$status = pfb_dns_status();
 
@@ -517,7 +534,7 @@ final class PfbDnsStatusTest extends TestCase
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
 		$this->seedProxy('4242', $marker);
 		$this->seedRunningGateway('4242');
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
+		$this->gatewayServes($this->everything());
 
 		$status = pfb_dns_status();
 
@@ -531,13 +548,25 @@ final class PfbDnsStatusTest extends TestCase
 		], $this->transports());
 	}
 
-	public function testARunningProxyWhoseLogHoldsNoStartShowsItsConfiguredAddressesAsNotConfirmed(): void
+	/** @return array<string,array{bool,string}> whether a gateway listens, and what it answers a list request with */
+	public static function unknownListenerLists(): array
 	{
-		// Given a running proxy whose log was rotated: listening lines, but no `ready upstream` line
-		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ);
+		return [
+			'no gateway socket' => [FALSE, ''],
+			'an older gateway answers a bad message length' => [TRUE, "error: a message of 4294967292 bytes is not between 1 and 65536\n"],
+		];
+	}
 
-		// Then nothing is claimed bound: the configured addresses, said not to be confirmed by the log
+	#[DataProvider('unknownListenerLists')]
+	public function testARunningProxyWhoseGatewayGivesNoListShowsItsConfiguredAddressesAsNotConfirmed(bool $gateway, string $reply): void
+	{
+		// Given a running proxy whose gateway gives no list
+		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		if ($gateway) {
+			$this->gatewayAnswers($reply);
+		}
+
+		// Then nothing is claimed bound: the configured addresses, said not to be confirmed by the gateway
 		$this->assertSame([
 			'plain' => self::served('53', 'configured_unconfirmed'),
 			'dot'   => self::served('853', 'configured_unconfirmed'),
@@ -546,80 +575,40 @@ final class PfbDnsStatusTest extends TestCase
 		], $this->transports());
 	}
 
-	/** @return array<string,array{string,list<string>,bool}> */
-	public static function logsWithoutCurrentPidReadiness(): array
+	/** @return array<string,array{bool}> issue #3550: a start the log's last 64 KiB cannot hold whole */
+	public static function startsTheLogWindowCannotHold(): array
 	{
-		return [
-			'old PID, zero current bytes' => ['ready upstream 127.0.0.1:5353 pid 4241', [], FALSE],
-			'old PID, partial current listeners' => ['ready upstream 127.0.0.1:5353 pid 4241',
-				['listening udp+tcp 198.51.100.1:53', 'listening dot 198.51.100.1:853'], FALSE],
-			'legacy record without PID' => ['ready upstream 127.0.0.1:5353', [], FALSE],
-			'PID suffix must match exactly' => ['ready upstream 127.0.0.1:5353 pid 42420', [], FALSE],
-			'malformed PID suffix' => ['ready upstream 127.0.0.1:5353 pid 4242x', [], FALSE],
-			'never search backward for a matching PID' => ['ready upstream 127.0.0.1:5353 pid 4241', [], TRUE],
-		];
+		return ['a start more than 64 KiB back' => [FALSE], 'a window that cuts inside the start' => [TRUE]];
 	}
 
-	/** @param list<string> $partial */
-	#[DataProvider('logsWithoutCurrentPidReadiness')]
-	public function testPreviousStartBindingsStayUnconfirmedUntilTheCurrentPidLogsReadiness(string $ready, array $partial, bool $olderMatch): void
+	#[DataProvider('startsTheLogWindowCannotHold')]
+	public function testAGatewayThatListsEveryListenerShowsEveryRowListeningWhateverTheLogHoldsOfItsStart(bool $cutsInside): void
 	{
-		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$GLOBALS['pfb_test_interface_ip']['lan'] = '198.51.100.1';
-		pfb_dns_proxy_service();
-		$older = $olderMatch ? [...self::PLAIN, ...self::DOT, ...self::DOH, ...self::DOQ, self::READY] : [];
-		$this->log($older, self::PLAIN, self::DOT, self::DOH, self::DOQ, $ready, $partial);
+		// Given a log of a start that its last 64 KiB cannot hold whole (more than 64 KiB of chatter after it, or in the middle of it)
+		// and a gateway that lists every listener
+		$this->box(self::DOT_ON);
+		$start = ['starting pid 4242', ...array_map(static fn (string $at): string => "listening {$at}", [...self::PLAIN, ...self::DOT]), 'ready upstream 127.0.0.1:5353 pid 4242'];
+		$chatter = array_fill(0, 900, 'pfb_dns_proxy warning: no reply from Unbound for 1.2.0.192.in-addr.arpa. PTR');
+		$this->log($cutsInside ? [...array_slice($start, 0, 3), ...$chatter, ...array_slice($start, 3)] : [...$start, ...$chatter]);
+		$window = pfb_dns_proxy_log_lines();
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than its window');
+		$this->assertNotContains('starting pid 4242', $window, 'before: the start\'s first line is outside the window');
+		$this->assertSame($cutsInside, in_array(end($start), $window, TRUE), 'before: the ready line is inside the window only when the cut is inside the start');
+		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
 
-		$this->assertSame('Running', pfb_dns_status()['service'], 'the current child already published its PID marker');
-		$this->assertSame([
-			'plain' => self::served('53', 'configured_unconfirmed', '198.51.100.1'),
-			'dot'   => self::served('853', 'configured_unconfirmed', '198.51.100.1'),
-			'doh'   => self::served('443', 'configured_unconfirmed', '198.51.100.1'),
-			'doq'   => self::served('8853', 'configured_unconfirmed', '198.51.100.1'),
-		], $this->transports(), 'neither the old bindings nor partial new output confirms the current start');
-		$this->assertNull(pfb_dns_proxy_listeners(NULL, '4242'));
-	}
-
-	public function testSupervisorRespawnOnTheSameAddressesNeedsItsOwnPidReadinessRecord(): void
-	{
-		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
-		$bound = ['plain' => self::served('53'), 'dot' => self::served('853'), 'doh' => self::served('443'), 'doq' => self::served('8853')];
-		$this->assertSame($bound, $this->transports(), 'before: the complete record belongs to PID 4242');
-
-		// daemon -r changes the child PID without re-running the rc script or changing its addresses
-		$this->seedProxy('4243', "4243\n");
-		$this->seedRunningGateway('4243');
-		$unknown = [
-			'plain' => self::served('53', 'configured_unconfirmed'),
-			'dot'   => self::served('853', 'configured_unconfirmed'),
-			'doh'   => self::served('443', 'configured_unconfirmed'),
-			'doq'   => self::served('8853', 'configured_unconfirmed'),
-		];
-		$this->assertSame($unknown, $this->transports(), 'new ready marker, zero new log bytes');
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY, self::PLAIN, self::DOT);
-		$this->assertSame($unknown, $this->transports(), 'same-address partial startup is still not its complete readiness record');
-
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY,
-			self::PLAIN, self::DOT, self::DOH, self::DOQ, 'ready upstream 127.0.0.1:5353 pid 4243');
-		$this->assertSame($bound, $this->transports(), 'only the new PID record confirms its same-address listeners');
-		$this->assertSame([
-			'udp+tcp' => array_fill_keys(['192.0.2.1:53', '127.0.0.1:53', '[::1]:53'], TRUE),
-			'dot' => array_fill_keys(['192.0.2.1:853', '127.0.0.1:853', '[::1]:853'], TRUE),
-			'doh' => array_fill_keys(['192.0.2.1:443', '127.0.0.1:443', '[::1]:443'], TRUE),
-			'doq' => array_fill_keys(['192.0.2.1:8853', '127.0.0.1:8853', '[::1]:8853'], TRUE),
-		], pfb_dns_proxy_listeners(NULL, '4243')['listening']);
+		// Then every row of plain DNS and DoT is listening
+		$this->assertSame(['plain' => self::served('53'), 'dot' => self::served('853'), 'doh' => self::OFF, 'doq' => self::OFF], $this->transports());
 	}
 
 	public function testAListenerTheGatewayTookLiveShowsAsListening(): void
 	{
-		// Given a current start that lacks plain DNS on lan (issue #3599: the gateway may take it later, live)
+		// Given a gateway that lacks plain DNS on lan (issue #3599: it may take it later, live)
 		$this->box();
-		$this->log('listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53', self::READY);
+		$this->gatewayServes(['udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53']);
 		$this->assertSame(self::lanRefused('53', 'the gateway did not report it'), $this->transports()['plain'], 'before: lan is not listening');
 
-		// When the gateway logs that it took the listener after its ready line
-		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], "listening udp+tcp 192.0.2.1:53\n", FILE_APPEND);
+		// When the gateway takes the listener (the stand-in takes the add frame without its descriptor)
+		$this->assertNull(pfb_dns_proxy_listener_add('udp+tcp', '192.0.2.1:53', []));
 
 		// Then the panel shows it listening
 		$this->assertSame(self::served('53'), $this->transports()['plain']);
@@ -627,13 +616,13 @@ final class PfbDnsStatusTest extends TestCase
 
 	public function testAListenerTheGatewayRemovedLiveIsNoLongerListening(): void
 	{
-		// Given a current start that serves plain DNS on lan
+		// Given a gateway that serves plain DNS on lan
 		$this->box();
-		$this->log(self::PLAIN, self::READY);
+		$this->gatewayServes(self::PLAIN);
 		$this->assertSame(self::served('53'), $this->transports()['plain'], 'before: every address listens');
 
-		// When the gateway logs that it stopped listening there
-		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], "stopped listening udp+tcp 192.0.2.1:53\n", FILE_APPEND);
+		// When the gateway stops listening there
+		$this->assertNull(pfb_dns_proxy_listener_remove('udp+tcp', '192.0.2.1:53'));
 
 		// Then the panel shows it as not listening (the command still names it)
 		$this->assertSame(self::lanRefused('53', 'the gateway did not report it'), $this->transports()['plain']);
@@ -644,7 +633,7 @@ final class PfbDnsStatusTest extends TestCase
 		// Given DoT on with a stored port that is no port: the generator leaves DoT out of the command
 		$this->box(['pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'lan', 'pfb_dns_dot_port' => 'abc']);
 		$this->assertStringNotContainsString('--dot-', (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the command has no DoT');
-		$this->log(self::PLAIN, self::READY);
+		$this->gatewayServes(self::PLAIN);
 
 		$this->assertSame(self::NO_LISTENER, $this->transports()['dot']);
 	}
@@ -685,33 +674,32 @@ final class PfbDnsStatusTest extends TestCase
 		], pfb_dns_status());
 	}
 
-	/** @return array<string,array{list<string>,list<string>}> logs of one start with DoT, DoH and DoQ on lan + loopback, and the listeners it missed */
-	public static function startLogs(): array
+	/** @return array<string,array{list<string>,array<string,string>,list<string>}> what the gateway lists, what it refused, and the (transport, address) it missed, with every transport on lan + loopback */
+	public static function gatewayStates(): array
 	{
+		$loopback = ['udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53', 'dot 127.0.0.1:853', 'dot [::1]:853', 'doh 127.0.0.1:443', 'doh [::1]:443', 'doq 127.0.0.1:8853', 'doq [::1]:8853'];
 		return [
-			'everything bound' => [[...self::PLAIN, ...self::DOT, ...self::DOH, ...self::DOQ, self::READY], []],
-			'loopback only, one reason' => [[
-				'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853',
-				'listening doh 127.0.0.1:443', 'listening doh [::1]:443', 'listening doq 127.0.0.1:8853', 'listening doq [::1]:8853',
-				'cannot listen on 192.0.2.1:53: listen tcp 192.0.2.1:53: bind: address already in use', self::READY,
-			], ['plain 192.0.2.1:53', 'dot 192.0.2.1:853', 'doh 192.0.2.1:443', 'doq 192.0.2.1:8853']],
-			'an older start that missed DoQ, a current one that missed DoT' => [[
-				...self::PLAIN, ...self::DOT, ...self::DOH, 'listening doq 127.0.0.1:8853', self::READY,
-				...self::PLAIN, 'listening dot garbage', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', ...self::DOH, ...self::DOQ, self::READY,
-			], ['dot 192.0.2.1:853']],
+			'everything served' => [[...self::PLAIN, ...self::DOT, ...self::DOH, ...self::DOQ], [], []],
+			'loopback only, one reason' => [
+				$loopback,
+				['udp+tcp 192.0.2.1:53' => 'listen tcp 192.0.2.1:53: bind: address already in use'],
+				['plain 192.0.2.1:53', 'dot 192.0.2.1:853', 'doh 192.0.2.1:443', 'doq 192.0.2.1:8853'],
+			],
+			'only DoT missing on lan, nothing refused' => [[...self::PLAIN, 'dot 127.0.0.1:853', 'dot [::1]:853', ...self::DOH, ...self::DOQ], [], ['dot 192.0.2.1:853']],
 		];
 	}
 
 	/**
-	 * @param list<string> $lines
+	 * @param list<string> $listening
+	 * @param array<string,string> $refused
 	 * @param list<string> $missed
 	 */
-	#[DataProvider('startLogs')]
-	public function testTheStatusAndTheStartupCheckJudgeTheSameStart(array $lines, array $missed): void
+	#[DataProvider('gatewayStates')]
+	public function testTheStatusAndTheStartupCheckJudgeTheSameGateway(array $listening, array $refused, array $missed): void
 	{
-		// Given a running proxy with every transport on and a log of its start
+		// Given a running proxy with every transport on and a gateway that lists what it serves
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log($lines);
+		$this->gatewayServes($listening, $refused);
 
 		// When the startup check judges it and the status is read
 		pfb_dns_proxy_startup_check(TRUE);
@@ -731,20 +719,18 @@ final class PfbDnsStatusTest extends TestCase
 		}
 
 		// Then the addresses the notice names are exactly those the panel shows not listening
-		$this->assertSame($missed, $fromNotice, 'the notice names what the start missed');
+		$this->assertSame($missed, $fromNotice, 'the notice names what the gateway lacks');
 		$this->assertSame($fromNotice, $fromStatus, 'the panel shows not listening exactly what the notice names');
 	}
 
-	public function testTheLogHasOneParserThatTheStatusAndTheStartupCheckBothCall(): void
+	public function testTheStatusAndTheStartupCheckBothAskTheGatewayForItsList(): void
 	{
-		$inc = (string) file_get_contents(self::INC);
-		$this->assertSame(1, substr_count($inc, "'/^listening (udp\\+tcp|dot|doh|doq) "), 'one parser of the listening lines');
-		$this->assertSame(1, substr_count($inc, "'/^cannot listen on "), 'one parser of the cannot-listen lines');
 		foreach (['pfb_dns_status', 'pfb_dns_proxy_startup_check'] as $function) {
 			$reflection = new ReflectionFunction($function);
 			$body = implode('', array_slice((array) file(self::INC), $reflection->getStartLine() - 1, $reflection->getEndLine() - $reflection->getStartLine() + 1));
-			$this->assertStringContainsString('pfb_dns_proxy_listeners(', $body, "{$function}() reads the parsed start");
+			$this->assertStringContainsString('pfb_dns_proxy_listener_list(', $body, "{$function}() asks the gateway which listeners it serves");
 			$this->assertStringContainsString('pfb_dns_proxy_command_listeners(', $body, "{$function}() reads the command's listeners");
+			$this->assertStringNotContainsString('pfb_dns_proxy_listeners(', $body, "{$function}() never reads listener state from the log");
 		}
 	}
 
@@ -979,14 +965,12 @@ final class PfbDnsStatusTest extends TestCase
 		$this->box(self::DOT_ON);
 		$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => '2001:db8::1'];
 		pfb_dns_proxy_service();
-		$this->log(
-			self::PLAIN,
-			'cannot listen on [2001:db8::1]:853: listen tcp [2001:db8::1]:853: bind: address already in use',
-			'listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853',
-			self::READY
+		$this->gatewayServes(
+			[...self::PLAIN, 'dot 192.0.2.1:853', 'dot 127.0.0.1:853', 'dot [::1]:853'],
+			['dot [2001:db8::1]:853' => 'listen tcp [2001:db8::1]:853: bind: address already in use']
 		);
 
-		// Then lan has a row for what listens and a row of its own for what failed, with the logged reason
+		// Then lan has a row for what listens and a row of its own for what failed, with the gateway's reason
 		$this->assertSame(['state' => 'rows', 'rows' => [
 			self::row('Localhost', ['127.0.0.1:853', '[::1]:853'], 'listening'),
 			self::row('LAN', ['192.0.2.1:853'], 'listening'),
@@ -1012,13 +996,13 @@ final class PfbDnsStatusTest extends TestCase
 	{
 		// Given every transport on and served by the current start
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(self::PLAIN, self::DOT, self::DOH, self::DOQ, self::READY);
+		$this->gatewayServes($this->everything());
 		$this->assertSame(self::served($port), $this->transports()[$row], 'before: the transport lists its listeners');
 
 		if ($row === 'plain') {
 			// When plain DNS has no listener left (it has no toggle to turn off)
 			unlink(PFB_DNS_PROXY_RCFILE);
-			$this->log(self::DOT, self::DOH, self::DOQ, self::READY);
+			$this->gatewayServes([...self::DOT, ...self::DOH, ...self::DOQ]);
 
 			// Then it is a fault to report, never Off
 			$this->assertSame(self::NO_LISTENER, $this->transports()['plain']);
@@ -1029,7 +1013,7 @@ final class PfbDnsStatusTest extends TestCase
 		config_set_path(self::SETTINGS . "pfb_dns_{$row}", '');
 		pfb_dns_proxy_service();
 		$others = array_diff_key(['dot' => self::DOT, 'doh' => self::DOH, 'doq' => self::DOQ], [$row => TRUE]);
-		$this->log(self::PLAIN, array_merge(...array_values($others)), self::READY);
+		$this->gatewayServes([...self::PLAIN, ...array_merge(...array_values($others))]);
 
 		// Then it is Off
 		$this->assertSame(self::OFF, $this->transports()[$row]);
@@ -1037,9 +1021,9 @@ final class PfbDnsStatusTest extends TestCase
 
 	public function testThePanelShowsWhatTheStatusReturnedForAnAddressTheStartDidNotBind(): void
 	{
-		// Given DoT on lan, the start bound loopback only and logged why it could not bind lan
+		// Given DoT on lan, the gateway lists loopback only and refused lan with its reason
 		$this->box(self::DOT_ON);
-		$this->log(self::PLAIN, 'cannot listen on 192.0.2.1:853: bind failed', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayServes([...self::PLAIN, 'dot 127.0.0.1:853', 'dot [::1]:853'], ['dot 192.0.2.1:853' => 'bind failed']);
 
 		// When the panel is rendered from that status
 		$html = pfb_dns_status_panel(pfb_dns_status());

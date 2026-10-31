@@ -226,10 +226,10 @@ final class PfbDnsStatusPanelTest extends TestCase
 	{
 		return [
 			'listening' => ['listening', 'fa-solid fa-check-circle text-success', 'Listening', ''],
-			'not listening, with the logged reason' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', self::REASON],
-			'not listening, none logged' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', 'the gateway did not report it'],
+			'not listening, with the gateway\'s reason' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', self::REASON],
+			'not listening, no reason given' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', 'the gateway did not report it'],
 			'configured, the service is not running' => ['configured_not_bound', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not bound', ''],
-			'configured, the log does not confirm it' => ['configured_unconfirmed', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not confirmed by the log', ''],
+			'configured, the gateway does not confirm it' => ['configured_unconfirmed', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not confirmed by the gateway', ''],
 		];
 	}
 

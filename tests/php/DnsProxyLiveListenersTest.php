@@ -45,7 +45,9 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyLiveListenersTest extends TestCase
 {
 	use KeepRunningScenario;
-	use LiveListenerStandIn;
+	use LiveListenerStandIn {
+		frames as private everyFrame;
+	}
 
 	private const READY = 'ready upstream 127.0.0.1:5353 pid 4242';
 	/** The ready line of the gateway before the one whose pid the ready marker names (4242). */
@@ -119,10 +121,48 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->quiet($extra + ['gatewayLog' => $this->started(['127.0.0.1', '[::1]'], ['192.0.2.1' => self::CANT])]);
 	}
 
-	/** The stand-in gateway on the control socket; returns the file its frames are recorded in. @param list<string|null> $replies */
+	/**
+	 * The stand-in gateway on the control socket, serving what the gateway's log says it serves now (the listener list the startup check
+	 * asks for); returns the file its frames are recorded in.
+	 *
+	 * @param list<string|null> $replies
+	 */
 	private function gateway(array $replies = []): string
 	{
-		return $this->standIn($this->socket, "{$this->krDir}/dns_proxy.log", $replies);
+		$log = "{$this->krDir}/dns_proxy.log";
+		$listening = [];
+		$refused = [];
+		foreach (is_file($log) ? (array) file($log, FILE_IGNORE_NEW_LINES) : [] as $line) {
+			if (preg_match('/^listening (\S+ \S+)$/', $line, $m) === 1) {
+				$listening[$m[1]] = TRUE;
+			} elseif (preg_match('/^stopped listening (\S+ \S+)$/', $line, $m) === 1) {
+				unset($listening[$m[1]]);
+			} elseif (preg_match('/^cannot listen on (\S+): (.+)$/', $line, $m) === 1) {
+				$refused["udp+tcp {$m[1]}"] = $m[2];
+			}
+		}
+		return $this->standIn($this->socket, $log, $replies, ['listening' => array_keys($listening), 'refused' => array_diff_key($refused, $listening)]);
+	}
+
+	/** From now on a restart of the proxy replaces the stand-in gateway: the old one stops, and the new one ($answers) serves what the log then says. */
+	private function restartReplacesTheGateway(bool $answers): void
+	{
+		$serviceHook = $GLOBALS['pfb_test_service_hook'];
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use ($serviceHook, $answers): void {
+			$serviceHook($fn, $service);
+			if ($fn === 'restart_service') {
+				$this->standInsStop();
+				if ($answers) {
+					$this->gateway();
+				}
+			}
+		};
+	}
+
+	/** @return list<array{head:string,body:string,fds:list<array{type:string,name:string,listening:bool}>}> the frames that change the gateway: the pass's own listener-list request (issue #3625) is not one */
+	private static function frames(string $record): array
+	{
+		return array_values(array_filter(self::everyFrame($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
 	}
 
 	/** The rc script the next pass would write, as the update pass has written it already (for the rows that call the sync alone). */
@@ -931,6 +971,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Given the same serving proxy and standing notice, and a gateway that refuses the add; the restart's new start binds every address
 		$this->quiet(['gatewayLog' => $this->started(['192.0.2.1', '[::1]'], ['127.0.0.1' => self::CANT]), 'restartLog' => $this->started(self::ADDRESSES)]);
 		$record = $this->gateway(['error: refused']);
+		$this->restartReplacesTheGateway(TRUE);
 		pfb_dns_proxy_startup_check(TRUE);
 		$this->assertNotSame([], $this->startupNotices(), 'before: the old start left a startup notice');
 
@@ -943,11 +984,12 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame([], $this->startupNotices());
 	}
 
-	public function testTheTickDoesNotJudgeTheStartItReplacedWhileTheNewOneHasNotLoggedYet(): void
+	public function testTheTickDoesNotJudgeTheStartItReplacedWhileTheNewGatewayDoesNotAnswerYet(): void
 	{
-		// Given the same old start and standing notice, a gateway that refuses the add, and a restart whose new start has not logged its record
+		// Given the same old start and standing notice, a gateway that refuses the add, and a restart whose new gateway does not answer yet
 		$this->quiet(['gatewayLog' => $this->started(['192.0.2.1', '[::1]'], ['127.0.0.1' => self::CANT]), 'restartLog' => NULL]);
 		$record = $this->gateway(['error: refused']);
+		$this->restartReplacesTheGateway(FALSE);
 		pfb_dns_proxy_startup_check(TRUE);
 		$this->assertNotSame([], $this->startupNotices(), 'before: the old start left a startup notice');
 		$logged = strlen($this->pfbLog());

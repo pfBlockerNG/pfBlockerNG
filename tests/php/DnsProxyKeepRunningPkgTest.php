@@ -36,7 +36,9 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_reload_unbound')]
 final class DnsProxyKeepRunningPkgTest extends TestCase
 {
-	use LiveListenerStandIn;
+	use LiveListenerStandIn {
+		frames as private everyFrame;
+	}
 
 	private string $dir = '';
 	/** @var list<array{resource,array<int,resource>}> */
@@ -99,6 +101,18 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertSame("ready\n", fgets($pipes[1]));
 		$this->servers[] = [$proc, $pipes];
 		return [$socket, $record];
+	}
+
+	/** @return list<array{head:string,body:string,fds:list<array{type:string,name:string,listening:bool}>}> the frames that change the gateway: the pass's own listener-list request (issue #3625) is not one */
+	private static function frames(string $record): array
+	{
+		return array_values(array_filter(self::everyFrame($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
+	}
+
+	/** The gateway was asked for no decider restart: nobody connected, or only the pass's own listener-list request came in. */
+	private function assertNoDeciderRestart(string $record, string $message): void
+	{
+		$this->assertContains(is_file($record) ? (string) file_get_contents($record) : '', ['', "\xFF\xFF\xFF\xFC"], $message);
 	}
 
 	public function testTheReloadsProxyRestartIsDeferredAndRecordsItsReason(): void
@@ -168,10 +182,11 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 
 	public function testADeferredPassStillFilesAListenerTheGatewayDidNotReport(): void
 	{
-		// Given a quiet box under a package upgrade, a DoT listener on lan, and a gateway log that reports no DoT listener
-		$result = $this->runUnderPkg([
-			'op' => 'ensure', 'dot' => TRUE, 'gatewayLog' => ['ready upstream 127.0.0.1:5353'],
-		]);
+		// Given a quiet box under a package upgrade, a DoT listener on lan, and a gateway that lists every listener but that one
+		$this->standIn("{$this->dir}/live.sock", "{$this->dir}/dns_proxy.log", [], ['listening' => [
+			'udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53', 'dot 127.0.0.1:853', 'dot [::1]:853',
+		]]);
+		$result = $this->runUnderPkg(['op' => 'ensure', 'dot' => TRUE, 'ctl' => "{$this->dir}/live.sock"]);
 
 		// Then nothing restarts and the pass returns ready, and the missing listener is still filed as a startup problem
 		$this->assertTrue($result['returned']);
@@ -192,7 +207,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		// Then nothing restarted, nothing was sent on the control socket, and the pending restart is still there
 		$this->assertTrue($result['returned']);
 		$this->assertSame([], $result['calls']);
-		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
+		$this->assertNoDeciderRestart($record, 'no decider restart was sent');
 		$this->assertSame('the package changed its rc script', $result['marker']);
 	}
 

@@ -4,20 +4,20 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/support/LiveListenerStandIn.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3538 -- the startup check judges only the CURRENT start, never an older one.
+ * issues #3538, #3625 -- the startup check judges the gateway as it is NOW, never the log of an older start.
  *
- * The gateway logs `listening ...` lines and then `ready upstream ...` once it serves, and publishes its ready marker BEFORE it logs
- * either (go/pfb_dns_gateway/main.go), which daemon(8) then relays to the log asynchronously: a check that sees the marker can read a
- * log whose last `ready upstream` is the PREVIOUS start's. A caller that starts or restarts the proxy therefore passes the log's size
- * from before the start ($since): only the bytes after it are the start's, the check waits (bounded, PFB_DNS_PROXY_LOG_WAIT) for the
- * `ready upstream` line among them, and a start whose line never comes cannot be judged: no problem is filed and nothing is closed.
- * With no $since (the cron tick, an apply that restarted nothing) the latest segment of the log's last 64 KiB is judged, as before.
+ * A ready gateway is asked which listeners it serves (pfb_dns_proxy_listener_list()): what it lists at the moment of the check is what
+ * is judged, so a listener it took or dropped live (issue #3599) counts at once, and a gateway that gives no list judges nothing: no
+ * problem is filed and nothing is closed. A caller that starts or restarts the proxy passes the log's size from before the start
+ * ($since); it only bounds the gateway error that a start that never became ready is blamed for, so an older start's error is never
+ * quoted. Nothing waits for a log line.
  *
  * Every wait here is the production loop on the virtual clock (PfbFlockClockFixture): no test sleeps.
  */
@@ -29,6 +29,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
+	use LiveListenerStandIn;
 
 	private const ID = 'pfBlockerNG DNS Proxy startup';
 	private const URL = '/pfblockerng/pfblockerng_dns.php';
@@ -36,10 +37,9 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 
-	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
-	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
-	private const DOT_LOOPBACK = ['listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
-	private const READY = 'ready upstream 127.0.0.1:5353';
+	private const PLAIN = ['udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'];
+	private const DOT = ['dot 192.0.2.1:853', 'dot 127.0.0.1:853', 'dot [::1]:853'];
+	private const DOT_LOOPBACK = ['dot 127.0.0.1:853', 'dot [::1]:853'];
 	private const DOT_MISSING = 'DoT is not served on 192.0.2.1:853: the gateway did not report it listening.';
 
 	private const GLOBALS = [
@@ -81,6 +81,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		$this->standInsStop();
 		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
@@ -124,10 +125,16 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE, 'the generator wrote the rc script the check reads');
 	}
 
-	/** One complete start of the box, as the gateway logs it. */
-	private function healthyStart(): array
+	/** The gateway lists every listener of the box: plain DNS and DoT, on lan and loopback. */
+	private function gatewayServesEverything(): void
 	{
-		return [...self::PLAIN, ...self::DOT, 'control socket /var/run/pfb_dns/ctl.sock', self::READY];
+		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
+	}
+
+	/** The gateway serves DoT on loopback only: DoT on lan is neither listed nor refused. */
+	private function gatewayLacksDotOnLan(): void
+	{
+		$this->gatewayServes([...self::PLAIN, ...self::DOT_LOOPBACK]);
 	}
 
 	/** @param string|list<string> ...$lines */
@@ -202,173 +209,74 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// An older start is never judged
+	// What the gateway serves now is what is judged
 	// -----------------------------------------------------------------------
 
-	public function testAnOlderCompleteStartFollowedByALatestStartThatLacksAListenerIsReported(): void
+	public function testAListenerTheGatewayTookLiveIsServedAndTheStandingNoticeIsClosed(): void
 	{
-		// Given the restart-after-a-settings-change log: a complete start, then a latest start that lacks DoT on lan
+		// Given a gateway that lacks DoT on lan, its problem standing
 		$this->box();
-		$this->log($this->healthyStart(), self::PLAIN, self::DOT_LOOPBACK, self::READY);
-
-		// When the check judges the latest start
+		$this->gatewayLacksDotOnLan();
 		pfb_dns_proxy_startup_check(TRUE);
+		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts(), 'before: the gateway lacks DoT on lan');
 
-		// Then the DoT listener the older start had is not credited to it
-		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
-	}
-
-	public function testBytesBeforeTheSizeTakenBeforeTheStartAreNeverJudged(): void
-	{
-		// Given a complete start, then what an aborted run left (its DoT line for lan, no ready line): all of it before $since
-		$this->box();
-		$this->log($this->healthyStart(), 'listening dot 192.0.2.1:853', 'pfb_dns_gateway: aborted');
-		$since = $this->logSize();
-		// and, after it, the new start, which lacks DoT on lan
-		$this->appendLog(self::PLAIN, self::DOT_LOOPBACK, self::READY);
-
-		pfb_dns_proxy_startup_check(TRUE, $since);
-
-		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts(), 'the aborted run\'s line is not the new start\'s');
-	}
-
-	public function testALogShorterThanTheSizeWasRotatedAndIsJudgedFromItsStart(): void
-	{
-		// Given a log that was rotated since the size was taken: shorter than it, holding only the new start, which lacks DoT on lan
-		$this->box();
-		$this->log(self::PLAIN, self::DOT_LOOPBACK, self::READY);
-		$since = $this->logSize() + 4096;
-		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_startup_check']);
-
-		// When the check judges it
-		($namespace . '\\pfb_dns_proxy_startup_check')(TRUE, $since);
-
-		// Then all of it is the start's: judged at once, with nothing waited for
-		$this->assertSame([], $clock->sleeps);
-		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
-	}
-
-	public function testAListenerAddedLiveAfterTheStartIsServedAndTheStandingNoticeIsClosed(): void
-	{
-		// Given a start that lacks DoT on lan, its problem standing, and the gateway logging the DoT listener it took live afterwards (issue #3599)
-		$this->box();
-		$this->log(self::PLAIN, self::DOT_LOOPBACK, self::READY);
-		pfb_dns_proxy_startup_check(TRUE);
-		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts(), 'before: the start lacks DoT on lan');
-		$this->appendLog('listening dot 192.0.2.1:853');
-
-		// When the check judges the log again
+		// When the gateway takes that listener live (issue #3599; the stand-in takes the frame without its descriptor) and the check asks again
+		$this->assertNull(pfb_dns_proxy_listener_add('dot', '192.0.2.1:853', []));
 		pfb_dns_proxy_startup_check(TRUE);
 
 		// Then the added listener counts as served: no problem, and the notice is closed
 		$this->assertSame([], $this->startupTexts());
 	}
 
-	public function testAListenerRemovedLiveAfterTheStartIsNoLongerServed(): void
+	public function testAListenerTheGatewayRemovedLiveIsNoLongerServed(): void
 	{
-		// Given a start that served DoT on lan (nothing wrong), and the gateway logging that it stopped listening there
+		// Given a gateway that serves every listener (nothing wrong)
 		$this->box();
-		$this->log($this->healthyStart());
+		$this->gatewayServesEverything();
 		pfb_dns_proxy_startup_check(TRUE);
-		$this->assertSame([], $this->startupTexts(), 'before: the start served every listener');
-		$this->appendLog('stopped listening dot 192.0.2.1:853');
+		$this->assertSame([], $this->startupTexts(), 'before: the gateway serves every listener');
 
-		// When the check judges the log again
+		// When it stops listening on DoT on lan and the check asks again
+		$this->assertNull(pfb_dns_proxy_listener_remove('dot', '192.0.2.1:853'));
 		pfb_dns_proxy_startup_check(TRUE);
 
 		// Then the command still names it, and it is reported as not served
 		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
-	public function testTheLast64KiBLimitHoldsWhenTheStartIsKnown(): void
+	public function testACheckWithASizeJudgesTheGatewaysListAtOnceAndNeverWaitsForALogLine(): void
 	{
-		// Given a standing notice and a log whose only ready line is out of its last 64 KiB, the size taken before it all
+		// Given a size taken before a start (the log is empty) and a gateway that lacks DoT on lan
 		$this->box();
-		$this->fileStandingNotice();
-		$before = $this->standing();
-		$this->log($this->healthyStart());
-		$this->appendLog(array_fill(0, 720, str_repeat('f', 99)));
-		$this->assertGreaterThan(65536 + 1024, $this->logSize(), 'before: the fixture is longer than the tail');
+		$this->gatewayLacksDotOnLan();
+		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_startup_check']);
 
-		pfb_dns_proxy_startup_check(TRUE, 0);
+		// When the check judges that start
+		($namespace . '\\pfb_dns_proxy_startup_check')(TRUE, 0);
 
-		// Then nothing was found to judge by: had it read from the size, it would have closed the notice
-		$this->assertSame($before, $this->standing());
-	}
-
-	public function testTheLineTheTailCutsInsideOfIsNeverJudged(): void
-	{
-		// Given a log of 64 KiB and 2 bytes whose first line is a DoT line for lan with one byte in front of it: the tail starts at byte 2,
-		// and what it reads of that line from byte 1 on is a complete-looking `listening dot 192.0.2.1:853`
-		$this->box();
-		$first = "Xlistening dot 192.0.2.1:853\n";
-		$last = $this->lines(self::PLAIN, self::DOT_LOOPBACK, self::READY);
-		$filler = str_repeat('f', 65538 - strlen($first) - strlen($last) - 1) . "\n";
-		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], $first . $filler . $last);
-		$this->assertSame(65538, $this->logSize(), 'before: the fixture is the length that cuts the first line');
-
-		pfb_dns_proxy_startup_check(TRUE);
-
-		// Then the cut line is not the start's: DoT on lan was never reported
+		// Then it judged at once, with nothing waited for
+		$this->assertSame([], $clock->sleeps);
 		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
-	// -----------------------------------------------------------------------
-	// The race: the ready marker comes before the log lines
-	// -----------------------------------------------------------------------
-
-	public function testAStartWhoseLinesAreNotLoggedYetIsWaitedForWithinTheBoundAndThenNotJudged(): void
+	/** @return array<string,array{?int}> the size a check is given: none, or one taken before a start */
+	public static function sizesOfACheck(): array
 	{
-		// Given a standing notice, and a log that still ends with the OLDER start, which was complete
+		return ['no size (the cron tick, an apply that restarted nothing)' => [NULL], 'a size taken before a start' => [0]];
+	}
+
+	#[DataProvider('sizesOfACheck')]
+	public function testAListThatIsNotKnownIsNeverWaitedForAndJudgesNothing(?int $since): void
+	{
+		// Given a standing notice and no gateway to ask
 		$this->box();
 		$this->fileStandingNotice();
-		$this->log($this->healthyStart());
-		$since = $this->logSize();
 		$before = $this->standing();
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_startup_check']);
 
-		// When the check judges a start whose lines never come
 		($namespace . '\\pfb_dns_proxy_startup_check')(TRUE, $since);
 
-		// Then it polled the log every 100 ms for the whole budget, and judged nothing: no problem filed, the standing notice kept
-		$this->assertSame(array_fill(0, 10, 100000), $clock->sleeps);
-		$this->assertSame($before, $this->standing());
-	}
-
-	public function testAStartWhoseLinesAreLoggedWhileTheCheckWaitsIsJudgedOnAllOfThem(): void
-	{
-		// Given a log that ends with the older start, complete
-		$this->box();
-		$this->log($this->healthyStart());
-		$since = $this->logSize();
-		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_startup_check']);
-		// and the new start, which lacks DoT on lan, logged in two parts: its first lines at once, the rest in the third tick
-		$this->appendLog(self::PLAIN);
-		$clock->setOnSleep(function () use ($clock): void {
-			if (count($clock->sleeps) === 3) {
-				$this->appendLog(self::DOT_LOOPBACK, self::READY);
-			}
-		});
-
-		// When the check judges it
-		($namespace . '\\pfb_dns_proxy_startup_check')(TRUE, $since);
-
-		// Then it stopped waiting the moment the ready line came, and judged the lines of both parts
-		$this->assertSame(array_fill(0, 3, 100000), $clock->sleeps);
-		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
-	}
-
-	public function testWithNoSizeTheLatestSegmentIsJudgedAtOnceAndNothingIsWaitedFor(): void
-	{
-		// Given no start was made (the cron tick, an apply that restarted nothing) and a log that cannot be judged
-		$this->box();
-		$this->fileStandingNotice();
-		$this->log(self::PLAIN);
-		$before = $this->standing();
-		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_startup_check']);
-
-		($namespace . '\\pfb_dns_proxy_startup_check')(TRUE);
-
+		// Then nothing was waited for and nothing was judged: the standing notice stays
 		$this->assertSame([], $clock->sleeps);
 		$this->assertSame($before, $this->standing());
 	}
@@ -379,7 +287,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		return [
 			'an old error and nothing from this start' => [['pfb_dns_gateway: old error'], [], 0, ''],
 			'an old error, then this start\'s own' => [['pfb_dns_gateway: old error'], ['pfb_dns_gateway: this start'], 0, ' (last gateway error: pfb_dns_gateway: this start)'],
-			'an old error, then lines of this start that are no error' => [['pfb_dns_gateway: old error'], self::PLAIN, 0, ''],
+			'an old error, then lines of this start that are no error' => [['pfb_dns_gateway: old error'], ['listening udp+tcp 127.0.0.1:53'], 0, ''],
 			'a log rotated since the size was taken' => [['pfb_dns_gateway: rotated'], [], 4096, ' (last gateway error: pfb_dns_gateway: rotated)'],
 		];
 	}
@@ -423,54 +331,38 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$this->assertSame(6, pfb_dns_proxy_log_size(), 'the size now, not the one read before');
 	}
 
-	public function testTheConfirmationPassesTheSizeToTheCheck(): void
+	public function testTheConfirmationJudgesTheStartByTheGatewaysListAtOnce(): void
 	{
-		// Given a proxy that is ready, an older start in the log, and a start whose lines are not logged yet
+		// Given a proxy that is ready, a size from before its start, and a gateway that lacks DoT on lan
 		$this->box();
 		$this->proxyServes();
 		$this->seedRunningGateway();
-		$this->log($this->healthyStart());
-		$since = $this->logSize();
+		$this->gatewayLacksDotOnLan();
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_confirm_ready']);
-		$this->appendLog(self::PLAIN);
-		$clock->setOnSleep(function () use ($clock): void {
-			if (count($clock->sleeps) === 2) {
-				$this->appendLog(self::DOT_LOOPBACK, self::READY);
-			}
-		});
 
-		$ready = ($namespace . '\\pfb_dns_proxy_confirm_ready')($since);
+		$ready = ($namespace . '\\pfb_dns_proxy_confirm_ready')(0);
 
+		// Then it is ready, nothing was waited for, and the missing listener is a notice
 		$this->assertTrue($ready);
-		$this->assertSame(array_fill(0, 2, 100000), $clock->sleeps);
+		$this->assertSame([], $clock->sleeps);
 		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
-	public function testARestartTakesTheSizeBeforeItAndJudgesTheStartItMade(): void
+	public function testARestartJudgesTheStartItMadeByTheGatewaysList(): void
 	{
-		// Given a proxy that is ready the moment it restarts, and an older start in the log
+		// Given a proxy that is ready the moment it restarts, and a gateway that lacks DoT on lan
 		$this->box();
 		$this->proxyServes();
 		$this->seedRunningGateway();
-		$this->log($this->healthyStart());
+		$this->gatewayLacksDotOnLan();
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_restart']);
-		// The new start logs its first lines while restart_service() runs, and the rest only after its marker was published
-		$GLOBALS['pfb_test_service_hook'] = function (string $fn): void {
-			if ($fn === 'restart_service') {
-				$this->appendLog(self::PLAIN);
-			}
-		};
-		$clock->setOnSleep(function () use ($clock): void {
-			if (count($clock->sleeps) === 3) {
-				$this->appendLog(self::DOT_LOOPBACK, self::READY);
-			}
-		});
 
 		$ready = ($namespace . '\\pfb_dns_proxy_restart')();
 
-		// Then the lines the start logged during its restart count, and so do the ones it logged after the check began to wait
+		// Then it restarted, nothing was waited for, and the missing listener is a notice
 		$this->assertTrue($ready);
-		$this->assertSame(array_fill(0, 3, 100000), $clock->sleeps);
+		$this->assertSame([['restart_service', 'pfb_dns_proxy']], $GLOBALS['pfb_test_service_calls']);
+		$this->assertSame([], $clock->sleeps);
 		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
@@ -484,47 +376,41 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	}
 
 	#[DataProvider('activations')]
-	public function testAnApplyTakesTheSizeBeforeItsStartAndJudgesTheStartItMade(string $call, bool $live): void
+	public function testAnApplyJudgesTheStartItMadeByTheGatewaysList(string $call, bool $live): void
 	{
-		// Given an older start in the log and, for a restart, a live proxy and an rc script that differs from the one a start would run
+		// Given, for a restart, a live proxy and an rc script that differs from the one a start would run, and a gateway that lacks DoT on lan
 		$this->box();
-		$this->log($this->healthyStart());
 		if ($live) {
 			$this->proxyServes();
 			$this->seedRunningGateway();
 			file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n# stale\n");
 		}
+		$this->gatewayLacksDotOnLan();
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_ensure_running']);
-		// The new start logs its first lines while the service call runs, and the rest only after its marker was published
+		// The service call is what makes the proxy ready
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn) use ($call): void {
 			if ($fn === $call) {
-				$this->appendLog(self::PLAIN);
 				$this->proxyServes();
 				$this->seedRunningGateway();
 			}
 		};
-		$clock->setOnSleep(function () use ($clock): void {
-			if (count($clock->sleeps) === 3) {
-				$this->appendLog(self::DOT_LOOPBACK, self::READY);
-			}
-		});
 
 		$ready = ($namespace . '\\pfb_dns_proxy_ensure_running')();
 
-		// Then it made the call, and judged exactly the start that call began
+		// Then it made the call, waited for nothing, and the missing listener is a notice
 		$this->assertTrue($ready);
 		$this->assertSame([[$call, 'pfb_dns_proxy']], $GLOBALS['pfb_test_service_calls']);
-		$this->assertSame(array_fill(0, 3, 100000), $clock->sleeps);
+		$this->assertSame([], $clock->sleeps);
 		$this->assertSame([$this->problemText(self::DOT_MISSING)], $this->startupTexts());
 	}
 
-	public function testAnApplyThatActedOnNothingJudgesTheLatestSegmentAndWaitsForNoLine(): void
+	public function testAnApplyThatActedOnNothingStartsNothingAndWaitsForNoLine(): void
 	{
 		// Given a live proxy whose script is unchanged, and a log with no ready line to judge by
 		$this->box();
 		$this->proxyServes();
 		$this->seedRunningGateway();
-		$this->log(self::PLAIN);
+		$this->log('listening udp+tcp 127.0.0.1:53');
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_ensure_running']);
 
 		$ready = ($namespace . '\\pfb_dns_proxy_ensure_running')();

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/support/LiveListenerStandIn.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -15,17 +16,19 @@ use PHPUnit\Framework\TestCase;
  * After every start (an apply, the boot start) and on the cron tick while the proxy is meant to serve,
  * pfb_dns_proxy_startup_check() raises ONE notice, id `pfBlockerNG DNS Proxy startup`, naming every problem, and a check that
  * finds none closes the standing notice of that id. Three kinds of problem, in this order: the proxy never became ready (with the
- * gateway's last error from its log); a listener the rc script's command names that the gateway's CURRENT start did not report
- * listening (with its own reason when it logged one); and a setting skipped, or an interface that adds no listener, while the
- * command line was built. The notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed
- * or replaced by it.
+ * gateway's last error from its log); a listener the rc script's command names that the running gateway does not serve, as the
+ * gateway itself lists them on its control socket (issue #3625), with the reason it refused that listener when it did; and a setting
+ * skipped, or an interface that adds no listener, while the command line was built. A gateway that gives no list judges nothing: no
+ * listener problem, and nothing closed. The notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are
+ * never closed or replaced by it.
  *
  * pfSense's close_notice($id) removes ONE row per call (the one keyed $id, else the oldest row of that id), and file_notice()
  * appends a row for every changed text, so "closed" here means every row of the id, which the double mirrors.
  *
- * The rc script is the real generator's output (pfb_dns_proxy_service()), the log a real file in the shape the gateway writes
- * (go/pfb_dns_gateway/main.go, tlsbind.go), readiness a seeded marker; no test waits: an explicit $ready, or the production wait
- * on the virtual clock.
+ * The rc script is the real generator's output (pfb_dns_proxy_service()); the gateway is a stand-in process on a real Unix socket
+ * that answers the listener list as the real one does (support/ListenerControlServer.php); the log is a real file in the shape the
+ * gateway writes, read only for the error of a start that never became ready; readiness is a seeded marker; no test waits: an
+ * explicit $ready, or the production wait on the virtual clock.
  */
 #[CoversFunction('pfb_dns_proxy_startup_check')]
 #[CoversFunction('pfb_dns_proxy_plain_listen')]
@@ -33,6 +36,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyStartupCheckTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
+	use LiveListenerStandIn;
 
 	private const ID = 'pfBlockerNG DNS Proxy startup';
 	private const URL = '/pfblockerng/pfblockerng_dns.php';
@@ -46,9 +50,10 @@ final class DnsProxyStartupCheckTest extends TestCase
 	private const DOH_ON = ['pfb_dns_doh' => 'on', 'pfb_dns_doh_interface' => 'lan', 'pfb_dns_doh_port' => '443'];
 	private const DOQ_ON = ['pfb_dns_doq' => 'on', 'pfb_dns_doq_interface' => 'lan', 'pfb_dns_doq_port' => '8853'];
 
-	private const PLAIN = ['listening udp+tcp 192.0.2.1:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53'];
-	private const DOT = ['listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853'];
-	private const READY = 'ready upstream 127.0.0.1:5353';
+	private const PLAIN = ['udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'];
+	private const DOT = ['dot 192.0.2.1:853', 'dot 127.0.0.1:853', 'dot [::1]:853'];
+	private const DOT_LOOPBACK = ['dot 127.0.0.1:853', 'dot [::1]:853'];
+	private const DOQ_ON_853 = ['pfb_dns_doq' => 'on', 'pfb_dns_doq_interface' => 'lan', 'pfb_dns_doq_port' => '853'];
 
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_file_notices', 'pfb_test_valid_pids', 'pfb_test_rcfile_dir', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',
@@ -88,6 +93,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		$this->standInsStop();
 		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
@@ -149,16 +155,16 @@ final class DnsProxyStartupCheckTest extends TestCase
 		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", array_merge(...array_map(static fn (string|array $part): array => (array) $part, $lines))) . "\n");
 	}
 
-	/** @param string|list<string> ...$lines */
-	private function appendLog(string|array ...$lines): void
+	/** The gateway lists every listener of the default box with DoT on: plain DNS and DoT, on lan and loopback. */
+	private function gatewayServesEverything(): void
 	{
-		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", array_merge(...array_map(static fn (string|array $part): array => (array) $part, $lines))) . "\n", FILE_APPEND);
+		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
 	}
 
-	/** One start of the default box with DoT on, as the gateway logs it when it serves everything. */
-	private function healthyStart(): array
+	/** The gateway serves DoT on loopback only: DoT on lan is neither listed nor refused. */
+	private function gatewayLacksDotOnLan(): void
 	{
-		return [...self::PLAIN, ...self::DOT, 'control socket /var/run/pfb_dns/ctl.sock', self::READY];
+		$this->gatewayServes([...self::PLAIN, ...self::DOT_LOOPBACK]);
 	}
 
 	/** @return list<array{string,string}> the (id, text) of each notice standing, in queue order */
@@ -246,9 +252,10 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 	public function testANotReadyStartDoesNotCompareListenersButStillReportsTheWarnings(): void
 	{
-		// Given a log whose last start lacks a listener, and a selected interface that is down
+		// Given a gateway that serves nothing (a probe of it would name every listener), a last log error, and a selected interface that is down
 		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
-		$this->log(self::PLAIN, 'ready upstream 127.0.0.1:5353', 'pfb_dns_gateway: gone');
+		$this->gatewayServes([]);
+		$this->log('pfb_dns_gateway: gone');
 
 		pfb_dns_proxy_startup_check(FALSE);
 
@@ -286,22 +293,33 @@ final class DnsProxyStartupCheckTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Rows 2, 3 -- a listener the command names that the current start did not report
+	// Rows 2, 3 -- a listener the command names that the gateway does not serve
 	// -----------------------------------------------------------------------
 
-	public function testADotListenerTheGatewayCouldNotBindIsNamedWithItsReason(): void
+	/** @return array<string,array{string,string,string}> the kind the gateway refused, the kind it serves on the same host:port, and the refused one's label */
+	public static function kindsOnOneAddress(): array
 	{
-		// Given plain DNS on lan + loopback and DoT on lan + loopback, and a current start that lacks DoT on lan, with the reason
-		$this->box(self::DOT_ON);
-		$this->log(
-			self::PLAIN,
-			'cannot listen on 192.0.2.1:853: listen tcp 192.0.2.1:853: bind: address already in use',
-			'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY
+		return [
+			'DoT refused, DoQ served on the same address' => ['dot', 'doq', 'DoT'],
+			'DoQ refused, DoT served on the same address' => ['doq', 'dot', 'DoQ'],
+		];
+	}
+
+	#[DataProvider('kindsOnOneAddress')]
+	public function testAListenerTheGatewayRefusedIsNamedWithItsReasonAndNotTheOtherKindOnTheSameAddress(string $refused, string $served, string $label): void
+	{
+		// Given DoT and DoQ both on port 853 of lan + loopback, one kind refused on lan with its reason and the other served there
+		$this->box(self::DOT_ON + self::DOQ_ON_853);
+		$this->gatewayServes(
+			[...self::PLAIN, "{$refused} 127.0.0.1:853", "{$refused} [::1]:853", "{$served} 192.0.2.1:853", "{$served} 127.0.0.1:853", "{$served} [::1]:853"],
+			["{$refused} 192.0.2.1:853" => "bind: can't assign requested address"]
 		);
+
 		pfb_dns_proxy_startup_check(TRUE);
 
+		// Then one sentence names the refused kind with its reason, and nothing is said about the other
 		$this->assertSame(
-			[$this->problemText('DoT is not served on 192.0.2.1:853: listen tcp 192.0.2.1:853: bind: address already in use.')],
+			[$this->problemText("{$label} is not served on 192.0.2.1:853: bind: can't assign requested address.")],
 			$this->startupTexts()
 		);
 		$this->assertSame(self::URL, $GLOBALS['pfb_test_file_notices'][0]['url']);
@@ -310,7 +328,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testADohListenerTheGatewayNeverReportedIsNamedWithoutAReason(): void
 	{
 		$this->box(self::DOH_ON);
-		$this->log(self::PLAIN, 'listening doh 127.0.0.1:443', 'listening doh [::1]:443', self::READY);
+		$this->gatewayServes([...self::PLAIN, 'doh 127.0.0.1:443', 'doh [::1]:443']);
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -320,17 +338,34 @@ final class DnsProxyStartupCheckTest extends TestCase
 		);
 	}
 
+	public function testARefusalOfAnotherKindOnTheSameAddressIsNeverBorrowed(): void
+	{
+		// Given DoT and DoQ on port 853, DoQ refused on lan, and DoT on lan neither listed nor refused
+		$this->box(self::DOT_ON + self::DOQ_ON_853);
+		$this->gatewayServes([...self::PLAIN, ...self::DOT_LOOPBACK, 'doq 127.0.0.1:853', 'doq [::1]:853'], ['doq 192.0.2.1:853' => 'bind: address already in use']);
+
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then DoT on lan is not said to be refused for DoQ's reason, and DoQ keeps its own
+		$this->assertSame(
+			[$this->problemText(
+				'DoT is not served on 192.0.2.1:853: the gateway did not report it listening.',
+				'DoQ is not served on 192.0.2.1:853: bind: address already in use.'
+			)],
+			$this->startupTexts()
+		);
+	}
+
 	public function testEveryTransportIsNamedByItsLabelAndEveryMissingListenerAlone(): void
 	{
-		// Given plain DNS, DoT, DoH and DoQ on lan + loopback, and a start that reports only loopback
+		// Given plain DNS, DoT, DoH and DoQ on lan + loopback, and a gateway that lists only loopback, refusing plain DNS on lan
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
-		$this->log(
-			'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53',
-			'listening dot 127.0.0.1:853', 'listening dot [::1]:853',
-			'listening doh 127.0.0.1:443', 'listening doh [::1]:443',
-			'listening doq 127.0.0.1:8853', 'listening doq [::1]:8853',
-			'cannot listen on 192.0.2.1:53: listen tcp 192.0.2.1:53: bind: address already in use',
-			self::READY
+		$this->gatewayServes(
+			[
+				'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53', 'dot 127.0.0.1:853', 'dot [::1]:853',
+				'doh 127.0.0.1:443', 'doh [::1]:443', 'doq 127.0.0.1:8853', 'doq [::1]:8853',
+			],
+			['udp+tcp 192.0.2.1:53' => 'listen tcp 192.0.2.1:53: bind: address already in use']
 		);
 
 		pfb_dns_proxy_startup_check(TRUE);
@@ -347,36 +382,22 @@ final class DnsProxyStartupCheckTest extends TestCase
 		);
 	}
 
-	public function testAListeningLineWithJunkAfterItsKindIsIgnored(): void
-	{
-		$this->box(self::DOT_ON);
-		$this->log(self::PLAIN, 'listening dot garbage', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
-
-		pfb_dns_proxy_startup_check(TRUE);
-
-		$this->assertSame(
-			[$this->problemText('DoT is not served on 192.0.2.1:853: the gateway did not report it listening.')],
-			$this->startupTexts()
-		);
-	}
-
 	// -----------------------------------------------------------------------
-	// Row 4 -- only the CURRENT start counts
+	// Row 4 -- a gateway that serves every listener closes the standing notice
 	// -----------------------------------------------------------------------
 
-	public function testAnOlderStartThatMissedAListenerIsNotJudgedAndTheStandingNoticeIsClosed(): void
+	public function testAGatewayThatServesEveryListenerClosesTheStandingStartupNotice(): void
 	{
-		// Given a standing startup notice from the older start, and a log whose older start missed DoT and whose latest is complete
+		// Given a standing startup notice from an earlier start
 		$this->box(self::DOT_ON);
 		$this->fileOther(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.');
-		$this->log(
-			self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY,
-			$this->healthyStart()
-		);
+		$this->assertCount(1, $this->startupTexts(), 'before: the notice stands');
+		$this->gatewayServesEverything();
 
+		// When the check asks the gateway, which lists every listener of the command
 		pfb_dns_proxy_startup_check(TRUE);
 
-		// Then the older start raised nothing, and the notice is gone
+		// Then the notice is gone
 		$this->assertSame([], $this->standing());
 	}
 
@@ -394,7 +415,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$before = get_notices();
 		$this->assertCount(3, $before, 'before: all three stand');
 		$this->assertSame([self::ID, 'pfBlockerNG DNS Proxy', 'pfBlockerNG DNS Proxy certificate'], array_column(array_values($before), 'id'));
-		$this->log($this->healthyStart());
+		$this->gatewayServesEverything();
 
 		// When the next start is healthy
 		pfb_dns_proxy_startup_check(TRUE);
@@ -410,7 +431,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testAHealthyStartWithNothingStandingWritesNothing(): void
 	{
 		$this->box(self::DOT_ON);
-		$this->log($this->healthyStart());
+		$this->gatewayServesEverything();
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -441,7 +462,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	{
 		// Given every listener of the command serves, and one selected interface added none
 		$this->box(['pfb_dns_interface' => 'lan,opt1'] + self::DOT_ON, $v4, [], $down);
-		$this->log($this->healthyStart());
+		$this->gatewayServesEverything();
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -451,7 +472,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testAnUnknownSelectedInterfaceIsNamedAsStored(): void
 	{
 		$this->box(['pfb_dns_interface' => 'lan,wan9'] + self::DOT_ON);
-		$this->log($this->healthyStart());
+		$this->gatewayServesEverything();
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -462,7 +483,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	{
 		// Given DoT on with a stored port that is no port: the command has no DoT at all
 		$this->box(['pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'lan', 'pfb_dns_dot_port' => 'abc']);
-		$this->log(self::PLAIN, self::READY);
+		$this->gatewayServes(self::PLAIN);
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -476,7 +497,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	{
 		// Given a stored plain list of separators only: loopback still serves, and the sentence says so
 		$this->box(['pfb_dns_interface' => ',']);
-		$this->log('listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53', self::READY);
+		$this->gatewayServes(['udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53']);
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -489,7 +510,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testTheListenersComeBeforeTheWarningsInTheNotice(): void
 	{
 		$this->box(['pfb_dns_interface' => 'lan,opt1'] + self::DOT_ON, ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
-		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayLacksDotOnLan();
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -517,26 +538,26 @@ final class DnsProxyStartupCheckTest extends TestCase
 	{
 		$this->box(self::DOT_ON, ['lan' => '192.0.2.1'], ['lan' => $spelling]);
 		$this->assertStringContainsString("--dot-listen '{$spelling}'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the command names it as given');
-		$this->log(
-			'listening udp+tcp 192.0.2.1:53', 'listening udp+tcp [2001:db8::1]:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53',
-			'listening dot 192.0.2.1:853', 'listening dot [2001:db8::1]:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853',
-			self::READY
-		);
+		$this->gatewayServes([
+			'udp+tcp 192.0.2.1:53', 'udp+tcp [2001:db8::1]:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53',
+			'dot 192.0.2.1:853', 'dot [2001:db8::1]:853', 'dot 127.0.0.1:853', 'dot [::1]:853',
+		]);
 
 		pfb_dns_proxy_startup_check(TRUE);
 
 		$this->assertSame([], $this->startupTexts(), 'no problem: the same listener, spelled the other way');
 	}
 
-	public function testTheReasonOfAnIpv6ListenerIsFoundWhateverSpellingTheGatewayEchoed(): void
+	public function testTheReasonOfAnIpv6ListenerIsFoundByItsBracketedCompressedForm(): void
 	{
-		// Given the gateway echoes the address as the flag spelled it, and prints the listeners it bound in canonical form
+		// Given the rc script spells the address in full, and the gateway lists and refuses it in the form it prints
 		$this->box(self::DOT_ON, ['lan' => '192.0.2.1'], ['lan' => '2001:0db8::0001']);
-		$this->log(
-			'listening udp+tcp 192.0.2.1:53', 'listening udp+tcp [2001:db8::1]:53', 'listening udp+tcp 127.0.0.1:53', 'listening udp+tcp [::1]:53',
-			'listening dot 192.0.2.1:853', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853',
-			'cannot listen on [2001:0db8::0001]:853: bind: cannot assign requested address',
-			self::READY
+		$this->gatewayServes(
+			[
+				'udp+tcp 192.0.2.1:53', 'udp+tcp [2001:db8::1]:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53',
+				'dot 192.0.2.1:853', 'dot 127.0.0.1:853', 'dot [::1]:853',
+			],
+			['dot [2001:db8::1]:853' => 'bind: cannot assign requested address']
 		);
 
 		pfb_dns_proxy_startup_check(TRUE);
@@ -548,80 +569,78 @@ final class DnsProxyStartupCheckTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Row 9 and the hostile log rows -- a log that cannot be judged
+	// Rows 9, 10 -- a gateway that gives no list judges nothing; the log is not what a listener is judged by
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{?string}> */
-	public static function logsThatCannotBeJudged(): array
+	/** @return array<string,array{bool,?string}> whether a gateway listens, and what it answers a list request with (NULL: it hangs up) */
+	public static function unknownListenerLists(): array
 	{
 		return [
-			'no log file' => [NULL],
-			'an empty log' => [''],
-			'a log that is a directory' => ['<dir>'],
-			'listening lines but no ready line (rotated away)' => [implode("\n", [...self::PLAIN, ...self::DOT]) . "\n"],
-			'a ready line that is not the gateway\'s' => ["ready upstream\n"],
+			'no gateway socket' => [FALSE, NULL],
+			'an older gateway answers a bad message length' => [TRUE, "error: a message of 4294967292 bytes is not between 1 and 65536\n"],
+			'a gateway that hangs up' => [TRUE, NULL],
+			'a malformed reply' => [TRUE, "listening dot garbage\nok\n"],
 		];
 	}
 
-	#[DataProvider('logsThatCannotBeJudged')]
-	public function testALogThatCannotBeJudgedFilesNothingAndClosesNothing(?string $content): void
+	#[DataProvider('unknownListenerLists')]
+	public function testAListThatIsNotKnownFilesNothingAndClosesNothing(bool $gateway, ?string $reply): void
 	{
-		// Given no warning and a startup notice from an earlier start
+		// Given no warning, a startup notice from an earlier start, and a gateway that gives no list
 		$this->box(self::DOT_ON);
 		$this->fileOther(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.');
 		$before = $this->standing();
-		$path = $GLOBALS['pfb']['dns_proxy_log'];
-		if ($content === '<dir>') {
-			mkdir($path);
-		} elseif ($content !== NULL) {
-			file_put_contents($path, $content);
+		if ($gateway) {
+			$this->gatewayAnswers($reply);
 		}
 
 		pfb_dns_proxy_startup_check(TRUE);
 
-		// Then nothing was judged: the standing notice stays and no notice is added
+		// Then nothing was judged: the old notice stays (not closed) and none is added
 		$this->assertSame($before, $this->standing());
+		$this->assertCount(1, $this->startupTexts(), 'the old notice still stands, alone');
 	}
 
-	public function testALogThatCannotBeJudgedStillReportsAWarning(): void
+	#[DataProvider('unknownListenerLists')]
+	public function testAListThatIsNotKnownStillReportsAWarning(bool $gateway, ?string $reply): void
 	{
 		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
-		$this->log(self::PLAIN);
+		if ($gateway) {
+			$this->gatewayAnswers($reply);
+		}
 
 		pfb_dns_proxy_startup_check(TRUE);
 
 		$this->assertSame([$this->problemText('plain DNS interface opt1 is down or disabled; it adds no listener.')], $this->startupTexts());
 	}
 
-	public function testOnlyTheLast64KiBOfTheLogIsRead(): void
+	/** @return array<string,array{bool}> issue #3550: a start the log's last 64 KiB cannot hold whole */
+	public static function startsTheLogWindowCannotHold(): array
 	{
-		// Given a complete start with its ready line, then 70 KiB of other output: the ready line is out of the tail
-		$this->box(self::DOT_ON);
-		$this->fileOther(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.');
-		$before = $this->standing();
-		$this->log($this->healthyStart());
-		$this->appendLog(array_fill(0, 720, str_repeat('f', 99)));
-		$this->assertGreaterThan(65536 + 1024, (int) filesize($GLOBALS['pfb']['dns_proxy_log']), 'before: the fixture is longer than the tail');
-
-		pfb_dns_proxy_startup_check(TRUE);
-
-		// Then the check found no ready line to judge by: had it read the whole file, it would have closed the notice
-		$this->assertSame($before, $this->standing());
+		return ['a start more than 64 KiB back' => [FALSE], 'a window that cuts inside the start' => [TRUE]];
 	}
 
-	public function testAStartInTheLast64KiBAfterALargePrefixIsFoundWhereverTheTailCutsALine(): void
+	#[DataProvider('startsTheLogWindowCannotHold')]
+	public function testAGatewayThatListsEveryListenerIsNotJudgedByWhatTheLogHoldsOfItsStart(bool $cutsInside): void
 	{
-		// Given 200 KiB of other output (the cut falls inside one of its lines), then a start that lacks DoT on lan
+		// Given a standing notice, a log of a start that its last 64 KiB cannot hold whole (more than 64 KiB of chatter after it,
+		// or in the middle of it), and a gateway that lists every listener
 		$this->box(self::DOT_ON);
-		$this->log(array_fill(0, 2000, str_repeat('p', 99)));
-		$this->appendLog(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->fileOther(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.');
+		$start = ['starting pid 4242', ...array_map(static fn (string $at): string => "listening {$at}", [...self::PLAIN, ...self::DOT]), 'ready upstream 127.0.0.1:5353 pid 4242'];
+		$chatter = array_fill(0, 900, 'pfb_dns_proxy warning: no reply from Unbound for 1.2.0.192.in-addr.arpa. PTR');
+		$this->log($cutsInside ? [...array_slice($start, 0, 3), ...$chatter, ...array_slice($start, 3)] : [...$start, ...$chatter]);
+		$window = pfb_dns_proxy_log_lines();
+		$this->assertGreaterThan(65536, pfb_dns_proxy_log_size(), 'before: the log is longer than its window');
+		$this->assertNotContains('starting pid 4242', $window, 'before: the start\'s first line is outside the window');
+		$this->assertSame($cutsInside, in_array(end($start), $window, TRUE), 'before: the ready line is inside the window only when the cut is inside the start');
+		$this->gatewayServesEverything();
 
+		// When the cron tick checks it (no start was made: no size)
 		pfb_dns_proxy_startup_check(TRUE);
 
-		$this->assertSame(
-			[$this->problemText('DoT is not served on 192.0.2.1:853: the gateway did not report it listening.')],
-			$this->startupTexts()
-		);
+		// Then no problem is filed and the standing notice is closed
+		$this->assertSame([], $this->standing());
 	}
 
 	public function testAMissingRcScriptNamesNoMissingListener(): void
@@ -629,7 +648,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		// Given a moved box whose rc script is gone, and a start that reports only loopback
 		$this->box(self::DOT_ON);
 		unlink(PFB_DNS_PROXY_RCFILE);
-		$this->log('listening udp+tcp 127.0.0.1:53', self::READY);
+		$this->gatewayServes(['udp+tcp 127.0.0.1:53']);
 
 		pfb_dns_proxy_startup_check(TRUE);
 
@@ -643,12 +662,12 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testAHealthyStartAfterAFailedOneClosesTheNoticeTheFailedOneFiled(): void
 	{
 		$this->box(self::DOT_ON);
-		$this->log(self::PLAIN, 'cannot listen on 192.0.2.1:853: bind: address already in use', 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayServes([...self::PLAIN, ...self::DOT_LOOPBACK], ['dot 192.0.2.1:853' => 'bind: address already in use']);
 
 		pfb_dns_proxy_startup_check(TRUE);
 		$this->assertCount(1, $this->startupTexts(), 'the failed start filed one notice');
 
-		$this->appendLog($this->healthyStart());
+		$this->gatewayServesEverything();
 		pfb_dns_proxy_startup_check(TRUE);
 
 		$this->assertSame([], $this->standing(), 'the healthy start closed it');
@@ -657,7 +676,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testTheSameProblemTwiceIsOneNotice(): void
 	{
 		$this->box(self::DOT_ON);
-		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayLacksDotOnLan();
 
 		pfb_dns_proxy_startup_check(TRUE);
 		pfb_dns_proxy_startup_check(TRUE);
@@ -670,14 +689,14 @@ final class DnsProxyStartupCheckTest extends TestCase
 		// Given two starts that failed differently: pfb_dns_proxy_notify() files a row for each text
 		$this->box(self::DOT_ON);
 		$this->fileOther('pfBlockerNG DNS Proxy', 'rollback text');
-		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayLacksDotOnLan();
 		pfb_dns_proxy_startup_check(TRUE);
-		$this->log(self::PLAIN, 'listening dot [::1]:853', self::READY);
+		$this->gatewayServes([...self::PLAIN, 'dot [::1]:853']);
 		pfb_dns_proxy_startup_check(TRUE);
 		$this->assertCount(2, $this->startupTexts(), 'before: two rows of the startup id stand');
 
 		// When a start is healthy
-		$this->log($this->healthyStart());
+		$this->gatewayServesEverything();
 		pfb_dns_proxy_startup_check(TRUE);
 
 		// Then no row of the id is left (close_notice() removes one row per call), and the rollback row is untouched
@@ -700,7 +719,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		// Given no snapshot, a standing notice and a healthy log: only the early return keeps the notice (a check that went on would close it)
 		$this->fileOther(self::ID, 'pfB-DNS started with problems: old.');
 		$before = $this->standing();
-		$this->log($this->healthyStart());
+		$this->gatewayServesEverything();
 
 		pfb_dns_proxy_startup_check($ready);
 
@@ -742,11 +761,11 @@ final class DnsProxyStartupCheckTest extends TestCase
 		);
 	}
 
-	public function testAReadyStartIsJudgedOnTheLogWithoutAnyTick(): void
+	public function testAReadyStartIsJudgedOnTheGatewaysListWithoutAnyTick(): void
 	{
 		$this->box(self::DOT_ON);
 		$this->proxyServes();
-		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayLacksDotOnLan();
 		[$clock, $check] = $this->clockedCheck();
 
 		$check(TRUE);
@@ -770,13 +789,13 @@ final class DnsProxyStartupCheckTest extends TestCase
 		return [$clock, $namespace . '\\pfb_dns_proxy_confirm_ready'];
 	}
 
-	public function testAReadyProxyIsCheckedOnTheLogByTheConfirmation(): void
+	public function testAReadyProxyIsCheckedOnTheGatewaysListByTheConfirmation(): void
 	{
 		// Given a proxy that is ready and a start that lacks DoT on lan
 		$this->box(self::DOT_ON);
 		$this->proxyServes();
 		$this->seedRunningGateway();
-		$this->log(self::PLAIN, 'listening dot 127.0.0.1:853', 'listening dot [::1]:853', self::READY);
+		$this->gatewayLacksDotOnLan();
 		[$clock, $confirm] = $this->clockedConfirm();
 
 		// When the activation confirms it

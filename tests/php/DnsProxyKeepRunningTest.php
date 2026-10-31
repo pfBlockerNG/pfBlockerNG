@@ -104,6 +104,12 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->servers = [];
 	}
 
+	/** The gateway was asked for no decider restart: nobody connected, or only the pass's own listener-list request (issue #3625) came in. */
+	private function assertNoDeciderRestart(string $record, string $message): void
+	{
+		$this->assertContains(is_file($record) ? (string) file_get_contents($record) : '', ['', "\xFF\xFF\xFF\xFC"], $message);
+	}
+
 	private function pair(): array
 	{
 		return ['restart_service pfb_dns_proxy'];
@@ -359,7 +365,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 		// Then the whole pair restarted, no decider restart was sent, and the log names what was measured
 		$this->assertTrue($ready);
 		$this->assertSame($this->pair(), $this->krProxyCalls());
-		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
+		$this->assertNoDeciderRestart($record, 'no decider restart was sent');
 		$this->assertStringContainsString(
 			'Restarting the DNS proxy: a second decider is not known to fit in memory (decider pid 4243 uses ' . self::DECIDER_RSS_KIB . " KiB, hw.usermem is {$short} bytes)",
 			$this->krLog()
@@ -409,7 +415,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 		// Then the whole pair restarted, no decider restart was sent, and the log says why the second decider was not known to fit
 		$this->assertTrue($ready);
 		$this->assertSame($this->pair(), $this->krProxyCalls());
-		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
+		$this->assertNoDeciderRestart($record, 'no decider restart was sent');
 		$this->assertStringContainsString("Restarting the DNS proxy: a second decider is not known to fit in memory ({$reason})", $this->krLog());
 	}
 
@@ -425,7 +431,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 
 		// Then nothing is sent and nothing restarts
 		$this->assertTrue($ready);
-		$this->assertFileDoesNotExist($record, 'nothing connected to the control socket');
+		$this->assertNoDeciderRestart($record, 'nothing but the listener list was asked of the control socket');
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
@@ -444,7 +450,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->finish();
 
 		// Then neither restart was asked for
-		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
+		$this->assertNoDeciderRestart($record, 'no decider restart was sent');
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
@@ -461,7 +467,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 		// Then the whole pair restarted and the control socket was not used
 		$this->assertTrue($ready);
 		$this->assertSame($this->pair(), $this->krProxyCalls());
-		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
+		$this->assertNoDeciderRestart($record, 'no decider restart was sent');
 		$this->assertNull($this->krMarker());
 	}
 
