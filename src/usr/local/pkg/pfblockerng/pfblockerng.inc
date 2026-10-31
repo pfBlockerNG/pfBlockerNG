@@ -4693,9 +4693,11 @@ function pfb_dns_proxy_certificate_pushed_path(): string {
  * @param string $what what the frame carries, as the failure messages name it ("the certificate")
  * @param array<int,resource> $fds sockets that go with the frame as SCM_RIGHTS, in the one sendmsg(2) that sends it (the gateway takes them
  *        with the frame's first byte); a short or failed send is a failure. [] = a plain write
+ * @param bool $whole TRUE = the reply is all the gateway sends (the list's: one write, then it closes): after its last line the exchange reads
+ *        on to the end of the connection within the same deadline, and a byte past that line is a failure. FALSE = stop at the last line
  * @return array{0: string|null, 1: string|null} [the reply, its lines joined by "\n", with its final newline removed and nothing else trimmed, NULL] or [NULL, why the exchange failed]
  */
-function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeout, string $what, array $fds = []): array {
+function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeout, string $what, array $fds = [], bool $whole = FALSE): array {
 	$conn = @stream_socket_client("unix://{$socket}", $errno, $errstr, $timeout);
 	if ($conn === FALSE) {
 		return [NULL, "cannot connect to {$socket}: {$errstr}"];
@@ -4726,7 +4728,7 @@ function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeou
 	$reply = '';
 	$final = FALSE;
 	$deadline = hrtime(TRUE) + (int) ($timeout * 1000000000);
-	while (!$final && strlen($reply) < 65536) {
+	while ($final ? $whole : strlen($reply) < 65536) {
 		$left = ($deadline - hrtime(TRUE)) / 1000000000;
 		$read = [$conn];
 		$write = $except = NULL;
@@ -4734,7 +4736,11 @@ function pfb_dns_proxy_ctl_exchange(string $frame, string $socket, float $timeou
 			fclose($conn);
 			return [NULL, "no reply from {$socket} within {$timeout} s"];
 		}
-		$chunk = @fread($conn, 65536 - strlen($reply));
+		$chunk = @fread($conn, $final ? 1 : 65536 - strlen($reply));
+		if ($final) {
+			fclose($conn);
+			return ($chunk === FALSE || $chunk === '') ? [substr($reply, 0, -1), NULL] : [NULL, "{$socket} sent more after its reply"];
+		}
 		if ($chunk === FALSE || $chunk === '') {
 			fclose($conn);
 			return [NULL, "{$socket} closed the connection with no reply"];
@@ -4882,6 +4888,7 @@ function pfb_dns_proxy_listener_remove(string $kind, string $at, ?string $socket
  * doh or doq; <host:port> is spelled as pfb_dns_proxy_host_port() spells it (IPv6 bracketed). The reply is taken only when every line
  * is exactly that wire: any other byte, spacing, kind, address or order makes the whole list unknown, and there is no fallback to the log.
  * A <kind> <host:port> named on more than one line, `listening` or `refused` in any combination, makes it unknown too: the gateway names each once.
+ * The gateway writes the reply in one write and closes: a byte after its last line, or no close within $timeout, makes it unknown too.
  *
  * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
  * @param float $timeout seconds the whole reply may take
@@ -4892,7 +4899,7 @@ function pfb_dns_proxy_listener_remove(string $kind, string $at, ?string $socket
 function pfb_dns_proxy_listener_list(?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?array {
 	global $pfb;
 
-	[$reply] = pfb_dns_proxy_ctl_exchange("\xFF\xFF\xFF\xFC", $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the listener list');
+	[$reply] = pfb_dns_proxy_ctl_exchange("\xFF\xFF\xFF\xFC", $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the listener list', [], TRUE);
 	// Only the "\n" that ends a line may be a control byte
 	if ($reply === NULL || preg_match('/[\x00-\x09\x0B-\x1F\x7F]/', $reply) === 1) {
 		return NULL;
@@ -5567,22 +5574,24 @@ function pfb_dns_proxy_command_listeners(): array {
 
 /**
  * Make what the gateway serves what the rc script's command asks for, live (issue #3599): what it serves is what it lists on its control
- * socket (pfb_dns_proxy_listener_list()); per kind, each served listener the command does not name is removed and then each one it
- * names that nothing serves is added, one frame each (pfb_dns_proxy_listener_remove(), pfb_dns_proxy_listener_add()), each change taken
+ * socket, as the caller's one pfb_dns_proxy_listener_list() answered (this never asks again); per kind, each served listener the command
+ * does not name is removed and then each one it names that nothing serves is added, one frame each (pfb_dns_proxy_listener_remove(),
+ * pfb_dns_proxy_listener_add()), each change taken
  * one line of the pfB log. An add binds first, as root, here; an address that is not there yet (EADDRNOTAVAIL) is left for a later pass
  * with nothing logged, any other failed bind is logged and skipped, a restart pending or not. While a restart is pending the rc script
  * may differ from the running gateway in more than addresses: nothing is removed or added, and a missing listener that binds now is the
  * reason to restart (issue #3598).
  *
+ * @param array{listening: array<string,array<string,true>>, refused: array<string,array<string,string>>}|null $served the gateway's list,
+ *        NULL = unknown (nothing to compare with: nothing is done)
  * @return string|null NULL when nothing is left to do; why the pair must be restarted: the gateway did not take a change (an older
  *         gateway, an error, no control socket: no further frame is sent), or a restart is pending and a missing listener binds. NULL
  *         too, with nothing done, when the gateway gives no list (nothing to compare with) and when the rc script names no plain DNS
  *         listener (a real one always names loopback: it is unreadable, not a wish to serve nothing)
  */
-function pfb_dns_proxy_listeners_sync(): ?string {
+function pfb_dns_proxy_listeners_sync(?array $served): ?string {
 	global $pfb;
 
-	$served = pfb_dns_proxy_listener_list();
 	if ($served === NULL) {
 		return NULL;
 	}
@@ -5915,10 +5924,11 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * reload, and restart a live one whose rc script changed in more than its listen addresses. The script bakes in the ports and the
  * DoT/DoH/DoQ/DDR settings, so a changed one is not served until the proxy restarts. A script that differs only in its listen addresses
  * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) is reconciled
- * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket
- * (pfb_dns_proxy_listener_list()); with the proxy not READY, or with a gateway that gives no list (nothing to compare with), it
- * restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()): one that is alive but never
- * published its marker (restarted every few seconds) fails the activation and is rolled back, which a pidfile alone would never notice.
+ * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket: the pass
+ * asks once (pfb_dns_proxy_listener_list()) and the sync acts on that answer; with the proxy not READY, or with a gateway that gives
+ * no list (nothing to compare with), it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()):
+ * one that is alive but never published its marker (restarted every few seconds) fails the activation and is rolled back, which a
+ * pidfile alone would never notice.
  *
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
  * pending restart (pfb_dns_proxy_defer_restart()), and nothing else is looked at. The next pass outside one restarts the whole pair
@@ -5973,9 +5983,9 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		} elseif (pfb_dns_proxy_ready()) {
 			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
 				$why = 'the package installed another gateway';
-			} elseif ($rc_changed && pfb_dns_proxy_listener_list() === NULL) {
+			} elseif (($served = pfb_dns_proxy_listener_list()) === NULL && $rc_changed) {
 				$why = 'its listen addresses changed';
-			} elseif (($why = pfb_dns_proxy_listeners_sync()) === NULL) {
+			} elseif (($why = pfb_dns_proxy_listeners_sync($served)) === NULL) {
 				$decider = pfb_dns_proxy_decider_changed();
 			}
 		} elseif ($rc_changed) {

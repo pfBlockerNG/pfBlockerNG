@@ -21,6 +21,8 @@ use PHPUnit\Framework\TestCase;
  *     gateway's error, a hang-up or the 64 KiB cap before the final `ok`, and any line that is not exactly one of the two forms
  *     (spacing, control bytes, an address that is not the canonical `host:port` the gateway prints, an unknown kind, an empty reason,
  *     `ok` or `error:` anywhere but last).
+ *   - the reply is the whole of what the gateway sends, as the real one writes it in one write and closes: a byte after its final line,
+ *     or no hang-up by the timeout, makes the list unknown, so every row that expects a list has the stand-in hang up after it;
  *   - pfb_dns_proxy_host_port() spells a host and a port as the gateway prints them (compressed and bracketed IPv6, an IPv4-mapped
  *     address as the IPv4 one), which is the spelling every `host:port` of a list is compared with.
  */
@@ -75,10 +77,10 @@ final class DnsProxyListenerListTest extends TestCase
 		return [($namespace . '\\pfb_dns_proxy_listener_list')($this->socket, $timeout), $clock->now()];
 	}
 
-	/** The listener list when the gateway writes $reply in one go. */
+	/** The listener list when the gateway writes $reply in one go and hangs up, as the real one does. */
 	private function listed(string $reply): ?array
 	{
-		return $this->askedWhen([[0.0, $reply]])[0];
+		return $this->askedWhen([[0.0, $reply], [0.0, NULL]])[0];
 	}
 
 	/** $count listening lines for distinct ports (1000 up), each 33 bytes while the ports have four digits: a listener is named once. */
@@ -108,7 +110,7 @@ final class DnsProxyListenerListTest extends TestCase
 	{
 		// Given a gateway that answers an empty list
 		$record = $this->listen();
-		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_listener_list', 'pfb_dns_proxy_ctl_exchange'], [[0.0, "ok\n"]]);
+		[$namespace] = $this->onVirtualClock(['pfb_dns_proxy_listener_list', 'pfb_dns_proxy_ctl_exchange'], [[0.0, "ok\n"], [0.0, NULL]]);
 
 		// When the list is asked for with no socket named
 		$list = ($namespace . '\\pfb_dns_proxy_listener_list')();
@@ -181,7 +183,7 @@ final class DnsProxyListenerListTest extends TestCase
 	{
 		// Given a reply released byte by byte, a virtual millisecond apart, all within the timeout
 		$reply = "listening udp+tcp 127.0.0.1:53\nrefused dot [2001:db8::1]:853 bind: ok\nok\n";
-		$script = array_map(static fn (string $byte): array => [0.001, $byte], str_split($reply));
+		$script = [...array_map(static fn (string $byte): array => [0.001, $byte], str_split($reply)), [0.0, NULL]];
 
 		// When the list is asked for
 		[$list] = $this->askedWhen($script, 3.0);
@@ -212,7 +214,7 @@ final class DnsProxyListenerListTest extends TestCase
 		$reply = self::replyOfLength(self::CAP);
 
 		// When the list is asked for
-		[$list] = $this->askedWhen([[0.0, substr($reply, 0, -1)], [0.001, "\n"]]);
+		[$list] = $this->askedWhen([[0.0, substr($reply, 0, -1)], [0.001, "\n"], [0.0, NULL]]);
 
 		// Then the byte that ends it at the cap is read: the cap is the count of bytes that may be read, not one fewer
 		$this->assertIsArray($list, 'the last byte of a reply of exactly the cap is read');
@@ -247,11 +249,31 @@ final class DnsProxyListenerListTest extends TestCase
 		$this->assertEqualsWithDelta(self::TIMEOUT, $took, 1e-9, 'given up on after exactly the timeout');
 	}
 
+	public function testAReplyThatGoesOnAfterItsFinalLineIsUnknown(): void
+	{
+		// Given a gateway that writes `ok`, and a few virtual milliseconds later a whole list, then hangs up
+		// When the list is asked for
+		[$list] = $this->askedWhen([[0.0, "ok\n"], [0.005, "listening dot 192.0.2.1:853\nok\n"], [0.0, NULL]]);
+
+		// Then it is unknown: the first `ok` is not the whole of what the gateway sent, so it is no empty list
+		$this->assertNull($list, 'expected an unknown list (NULL), got ' . var_export($list, TRUE));
+	}
+
+	public function testAValidReplyThatTheGatewayDoesNotHangUpAfterIsUnknownAtExactlyTheTimeout(): void
+	{
+		// Given a gateway that writes a whole list and keeps the connection open
+		[$list, $took] = $this->askedWhen([[0.0, "listening dot 192.0.2.1:853\nok\n"]]);
+
+		// Then the list is unknown, given up on after exactly the timeout (virtual seconds): no hang-up, no end of the reply
+		$this->assertNull($list, 'expected an unknown list (NULL), got ' . var_export($list, TRUE));
+		$this->assertEqualsWithDelta(self::TIMEOUT, $took, 1e-9, 'given up on after exactly the timeout');
+	}
+
 	/** @return array<string,array{list<array{float,?string}>}> what the gateway writes, and in what pieces, instead of a whole list */
 	public static function answersThatAreNotAWholeList(): array
 	{
 		return [
-			'an older gateway answers the verb as a bad message length' => [[[0.0, "error: a message of 4294967292 bytes is not between 1 and 65536\n"]]],
+			'an older gateway answers the verb as a bad message length' => [[[0.0, "error: a message of 4294967292 bytes is not between 1 and 65536\n"], [0.0, NULL]]],
 			'lines with no final ok, then a hang-up' => [[[0.0, "listening udp+tcp 127.0.0.1:53\n"], [0.0, NULL]]],
 			'lines with no final ok, then silence' => [[[0.0, "listening udp+tcp 127.0.0.1:53\n"]]],
 			'more than 64 KiB of listening lines with no ok by the cap' => [[[0.0, self::listeningLines(2200)]]],

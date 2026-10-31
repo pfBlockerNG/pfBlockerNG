@@ -36,9 +36,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_reload_unbound')]
 final class DnsProxyKeepRunningPkgTest extends TestCase
 {
-	use LiveListenerStandIn {
-		frames as private everyFrame;
-	}
+	use LiveListenerStandIn;
 
 	private string $dir = '';
 	/** @var list<array{resource,array<int,resource>}> */
@@ -101,12 +99,6 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertSame("ready\n", fgets($pipes[1]));
 		$this->servers[] = [$proc, $pipes];
 		return [$socket, $record];
-	}
-
-	/** @return list<array{head:string,body:string,fds:list<array{type:string,name:string,listening:bool}>}> the frames that change the gateway: the pass's own listener-list request (issue #3625) is not one */
-	private static function frames(string $record): array
-	{
-		return array_values(array_filter(self::everyFrame($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
 	}
 
 	public function testTheReloadsProxyRestartIsDeferredAndRecordsItsReason(): void
@@ -229,7 +221,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		// Then the proxy is left running: no frame is sent, and no restart is made or announced
 		$this->assertTrue($result['returned']);
 		$this->assertSame([], $result['calls']);
-		$this->assertSame([], self::frames($record));
+		$this->assertSame([], self::changeFrames($record));
 		$this->assertStringNotContainsString('Restarting the DNS proxy', $result['log']);
 	}
 
@@ -242,7 +234,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 
 		// Then the proxy is left running: no frame is sent, and no restart is made or announced
 		$this->assertSame([], $result['calls']);
-		$this->assertSame([], self::frames($record));
+		$this->assertSame([], self::changeFrames($record));
 		$this->assertStringNotContainsString('Restarting the DNS proxy', $result['log']);
 	}
 
@@ -258,7 +250,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		// Then nothing was sent or restarted, and the restart is pending as it is for any other change of the script
 		$this->assertTrue($result['returned']);
 		$this->assertSame([], $result['calls']);
-		$this->assertSame([], self::frames($record));
+		$this->assertSame([], self::changeFrames($record));
 		$this->assertIsString($result['marker']);
 		$this->assertStringContainsString('listen addresses', $result['marker']);
 		$this->assertStringContainsString('deferred', $result['log']);

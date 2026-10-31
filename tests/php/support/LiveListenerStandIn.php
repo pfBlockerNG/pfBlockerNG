@@ -85,6 +85,12 @@ trait LiveListenerStandIn
 		return array_map(static fn (string $line): array => json_decode($line, TRUE, 8, JSON_THROW_ON_ERROR), $lines);
 	}
 
+	/** @return list<array{head:string,body:string,fds:list<array{type:string,name:string,listening:bool}>}> the frames that change the gateway: its list requests (issue #3625) are not one */
+	private static function changeFrames(string $record): array
+	{
+		return array_values(array_filter(self::frames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
+	}
+
 	/**
 	 * Distinct ports above 1024 that a TCP and a UDP socket on loopback both bind now (a CI user that is not root binds them too).
 	 *

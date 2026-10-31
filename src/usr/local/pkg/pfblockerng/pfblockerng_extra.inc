@@ -6874,7 +6874,7 @@ function pfblockerng_tick(
 		// command no longer names is removed live; the pair restarts only when the gateway does not take it. Every other restart stays with
 		// the update pass (pfb_dns_proxy_ensure_running())
 		$since = NULL;
-		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred() && ($why = pfb_dns_proxy_listeners_sync()) !== NULL) {
+		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred() && ($why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list())) !== NULL) {
 			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
 			$since = pfb_dns_proxy_log_size();
 			restart_service('pfb_dns_proxy');
