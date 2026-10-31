@@ -17,12 +17,18 @@ makes once an address the gateway's start could not bind becomes bindable.
 - The gateway log stays the record of what is served: `pfb_dns_proxy_listeners()`, the startup check
   (`pfb_dns_proxy_startup_check()`) and the status panel (`pfb_dns_status()`) read it. An added listener logs
   `listening <kind> <host:port>`, the same line a start logs.
+
+> **Amendment 2026-10-31 (#3625).** The gateway is asked, not read: `pfb_dns_proxy_listener_list()` sends `FF FF FF FC` (nothing after it) on the control socket and reads `listening <kind> <host:port>` and `refused <kind> <host:port> <reason>` lines, then `ok`. Unknown (NULL: no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change. The log lines stay for people reading them.
+
 - Port changes and TLS, DDR or module setting changes keep restarting the whole pair.
 - Under a package operation (`pfb_dns_proxy_restart_deferred()`) a live proxy is not restarted.
 - The cron tick never calls `pfb_dns_proxy_ensure_running()` (#3598 owner decision); rc-script rewrites stay with the
   update pass.
 - No unbounded wait: every control-socket step is bounded by `PFB_DNS_PROXY_CTL_TIMEOUT` and every log wait by
   `PFB_DNS_PROXY_LOG_WAIT` (`docs/misc/external-process-waits.md`).
+
+> **Amendment 2026-10-31 (#3625).** `PFB_DNS_PROXY_LOG_WAIT` is deleted: no caller waits on the log for a listener. The one wait left is the list probe, one control-socket exchange (`FF FF FF FC`, `listening`/`refused` lines, then `ok`) bounded by `PFB_DNS_PROXY_CTL_TIMEOUT`. Unknown (no socket, no reply in time, an `error:` line, a malformed reply, or one over 64 KiB): the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change.
+
 - Test-first red→green per `.agents/policy/testing.md`; PHPUnit through the real `.inc`; Go tests through the real
   control socket.
 
@@ -43,6 +49,8 @@ equal. Each TLS group always lists loopback, so a group that is on never has an 
 
 An address-only change is reconciled live (D4) when the proxy is READY and its log holds a complete start. Otherwise
 (not READY, or no complete start to compare with) it restarts the whole pair as today.
+
+> **Amendment 2026-10-31 (#3625).** "Its log holds a complete start" now means the list probe answers. A known reply is the comparison; a NULL is the "no complete start" case, so the pass restarts the whole pair as today. The probe is `FF FF FF FC`, read as `listening`/`refused` lines then `ok`. Unknown (no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change.
 
 ### D2. Control-socket verbs
 
@@ -106,6 +114,8 @@ inside the next start's range, and a listener added to the old process would be 
 it. The startup check and the status panel read `pfb_dns_proxy_listeners()`, so both see live changes with no change
 of their own.
 
+> **Amendment 2026-10-31 (#3625).** This section is superseded. `pfb_dns_proxy_listeners()` and its log folding (the `starting pid` marker, the lines after `ready upstream`) are deleted. The gateway is asked instead, with `FF FF FF FC` (`listening`/`refused` lines, then `ok`), so a listener is served only if the process answering the control socket now lists it. The log lines stay human-readable. Unknown (no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change.
+
 ### D4. The reconcile (`pfb_dns_proxy_listeners_sync()`)
 
 One helper, used by `pfb_dns_proxy_ensure_running()` and by the cron tick, replaces `pfb_dns_proxy_refusal_cleared()`.
@@ -127,6 +137,9 @@ It compares `pfb_dns_proxy_command_listeners()` (what the rc script asks for) wi
    nothing missing that it could bind: no restart loop.
 5. After a change the gateway took, it waits (bounded by `PFB_DNS_PROXY_LOG_WAIT`, polled every 100 ms) until the log
    shows it, so the startup check that follows judges what is served.
+
+   > **Amendment 2026-10-31 (#3625).** The log wait after a change is deleted. The gateway applies an add or remove before it answers `ok`, so the next probe (the startup check that follows) already sees it. The probe is `FF FF FF FC`, read as `listening`/`refused` lines then `ok`. Unknown (no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the sync changes nothing, the startup check judges no listener, the status panel shows `configured_unconfirmed`, and the update pass restarts an address-only change.
+
 6. Each change taken is logged on `pfblockerng.log`.
 7. While a restart is pending (`/var/run/pfb_dns_proxy_restart_pending`), the rc script may differ from the running
    gateway in more than addresses, so nothing is changed live: a missing listener that binds now returns why (the
@@ -138,6 +151,8 @@ It compares `pfb_dns_proxy_command_listeners()` (what the rc script asks for) wi
    (D1). After a (re)start the marker is published before the gateway's log lines are relayed, so until they arrive the
    latest complete start is the previous gateway's: acting on it could remove a listener the new gateway never served.
 
+> **Amendment 2026-10-31 (#3625).** The marker's pid selects no log record any more: `pfb_dns_proxy_ready_listeners()` is deleted, and the reconcile asks the gateway that answers the control socket now, with `FF FF FF FC` (`listening`/`refused` lines, then `ok`). A previous gateway's log lines are not read at all. Unknown (no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the reconcile changes nothing and the caller decides (D1); the startup check judges no listener, the status panel shows `configured_unconfirmed`, and the update pass restarts an address-only change.
+
 ### D5. Answers to the packet's questions
 
 - **(a) Version skew.** A running gateway that predates the verbs answers `error:` (D2), which D4.4 turns into the
@@ -146,6 +161,9 @@ It compares `pfb_dns_proxy_command_listeners()` (what the rc script asks for) wi
   as a pending restart as today, and the tick does not reconcile under it. A live add is no restart, but its failure
   path is one, and the gateway that runs during a package operation is the one most likely to predate the verbs.
 - **(c) Folding.** D3.
+
+> **Amendment 2026-10-31 (#3625).** Folding is gone with D3, so no post-ready line can be credited to another start. The probe is `FF FF FF FC` (`listening`/`refused` lines, then `ok`). Unknown (no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change.
+
 - **(d) The tick.** `pfblockerng_tick()`'s pfB-DNS branch calls `pfb_dns_proxy_listeners_sync()` where it called
   `pfb_dns_proxy_refusal_cleared()`, under the same guards (no update pass running, READY, no package operation). A
   returned why restarts the pair and passes its `$since` to `pfb_dns_proxy_confirm_ready()`, as #3598 does.
@@ -203,6 +221,8 @@ and remove.
 | P17 PHP closes its socket copies after the send | no descriptor left in the PHP process |
 | E1 real PHP to real gateway (root-only CI step) | add over `SCM_RIGHTS` served and logged; remove stops it |
 
+> **Amendment 2026-10-31 (#3625).** Row P15 is superseded: the startup check and the status panel read the list probe, not the log, so there is no folding to pin. The probe is `FF FF FF FC` (`listening`/`refused` lines, then `ok`); row E1 asserts it after each step with the real PHP and the real gateway. Unknown (no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change.
+
 ### Hostile-input rows
 
 | Input | Expected |
@@ -214,11 +234,15 @@ and remove.
 | Log line `stopped listening` for a listener never served; trailing spaces on log lines; decider lines between them | no effect beyond D3 |
 | rc text where a non-address flag changes next to an address change | not address-only |
 
+> **Amendment 2026-10-31 (#3625).** The log row above is superseded by the reply's own rows: the reply is read as exactly `listening` and `refused` lines then `ok`, each kind and address spelled as the gateway spells it and named once. Any other reply (an `error:` line, a control byte, a malformed or repeated line, or one over 64 KiB) is unknown: the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change.
+
 ## Out of scope
 
 - A faster trigger than the tick (for example a pfSense new-address event hook).
 - Port changes and TLS, DDR or module setting changes: they keep restarting the whole pair.
 - Asking the gateway what it serves: the log stays the record.
+
+> **Amendment 2026-10-31 (#3625).** "Asking the gateway what it serves" is done: `pfb_dns_proxy_listener_list()` sends `FF FF FF FC` on the control socket and reads `listening`/`refused` lines, then `ok`. Unknown (no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): the startup check judges no listener, the status panel shows `configured_unconfirmed`, the sync changes nothing, and the update pass restarts an address-only change. The log is read by people, never for listener state.
 
 ## Open forks
 

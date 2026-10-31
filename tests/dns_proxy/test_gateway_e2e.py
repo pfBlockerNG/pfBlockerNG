@@ -14,6 +14,7 @@ import base64
 import contextlib
 import csv
 import http.client
+import json
 import os
 import shutil
 import signal
@@ -764,6 +765,10 @@ def test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handsh
 
 LIVE_PHP = (
     "[, $boot, $verb, $kind, $at, $ctl] = $argv; require $boot;"
+    "if ($verb === 'list') {"
+    "    echo json_encode(pfb_dns_proxy_listener_list($ctl), JSON_FORCE_OBJECT);"
+    "    exit;"
+    "}"
     "if ($verb === 'add') {"
     "    $sockets = pfb_dns_proxy_listener_bind($kind, $at, $why);"
     '    $error = ($sockets === NULL) ? "bind: {$why}" : pfb_dns_proxy_listener_add($kind, $at, $sockets, $ctl);'
@@ -787,6 +792,29 @@ def _live_listener(verb: str, at: str, ctl: Path) -> str:
             timeout=WATCHDOG,
         )
     return done.stdout
+
+
+def _live_list(ctl: Path) -> dict[str, Any] | None:
+    """What the real PHP pfb_dns_proxy_listener_list() reads from the gateway, as JSON; null when unknown."""
+    boot = REPO_ROOT / "tests" / "php" / "bootstrap.php"
+    with watched("PHP to list the listeners"):
+        done = subprocess.run(
+            ["php", "-r", LIVE_PHP, "--", str(boot), "list", "", "", str(ctl)],
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            timeout=WATCHDOG,
+        )
+    listing: dict[str, Any] | None = json.loads(done.stdout)
+    return listing
+
+
+def _assert_listed(ctl: Path, addresses: set[str], point: str) -> None:
+    """The real PHP probe reads exactly these udp+tcp listeners from the gateway, and no refusal."""
+    expected = {"listening": {"udp+tcp": dict.fromkeys(addresses, True)}, "refused": {}}
+    listed = _live_list(ctl)
+    assert listed == expected, f"{point}: the PHP probe read {listed}, expected {expected}"
 
 
 def _port_free_on_every_listener_address() -> int:
@@ -848,6 +876,8 @@ def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_
     ):
         original = ("127.0.0.1", port)
         assert process.server() == original
+        listening = {f"127.0.0.1:{port}"}
+        _assert_listed(ctl, listening, "before the adds")
         # A ::1 client gets REFUSED (from the gateway's ACL or the rig's 127/8-only Unbound): a reply on a socket that
         # refused before the add is the adopted listener serving
         served = {"127.0.0.2": (0, [ALLOWED_ANSWER]), "::1": (5, [])}
@@ -855,11 +885,15 @@ def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_
             assert _refuses(host, port), f"{at} is served before it is added"
             assert _live_listener("add", at, ctl) == "ok"
             process.wait_for(f"listening udp+tcp {at}")
+            listening.add(at)
+            _assert_listed(ctl, listening, f"after adding {at}")
             for transport, ask in (("UDP", _udp), ("TCP", _tcp)):
                 assert _outcome(ask((host, port), ALLOWED, host)) == served[host], f"{transport} at {at}"
 
         assert _live_listener("remove", f"127.0.0.2:{port}", ctl) == "ok"
         process.wait_for(f"stopped listening udp+tcp 127.0.0.2:{port}")
+        listening.remove(f"127.0.0.2:{port}")
+        _assert_listed(ctl, listening, "after removing 127.0.0.2")
         assert _refuses("127.0.0.2", port)
         assert _answers(_udp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]
         assert _answers(_tcp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]

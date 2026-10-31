@@ -44,9 +44,12 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
   line). The mode 0600 on the socket is a second wall, not the one relied on.
 - **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FF`, with nothing after it, is the decider restart
-  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener (below). Anything else is the length of the PEM,
+  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener (below). `FF FF FF FC`, with nothing after it, lists the
+  listeners: `listening <kind> <host:port>` for each one served, then `refused <kind> <host:port> <reason>` for each start-time
+  bind not served since (keyed by kind, then address, so DoT and DoQ on :853 are two lines), then `ok`; a live add clears the
+  refusal of the same kind and address. Anything else is the length of the PEM,
   big-endian (1 to 65536; judged before the body is read), then the PEM (the chain, then the key). Reads have a 5 s
-  deadline. The one reply line is `ok` or `error: <reason>`. A push that does
+  deadline. The one reply line is `ok` or `error: <reason>`, except the list's lines above. A push that does
   not parse, or whose key is not the certificate's, changes nothing and logs
   `TLS certificate not replaced: <reason>; keeping the previous one`; one that does logs `TLS certificate replaced by a push` and
   is served from the next handshake on. A push to a gateway that serves no TLS transport is answered
@@ -118,6 +121,7 @@ A listener that cannot be bound is logged and skipped. Every start logs `startin
 that a reader of the log finds where a start begins; then, before `ready upstream`, the readiness lines in the order udp+tcp,
 dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracketed (`[::1]:853`). A listener added or removed
 while the gateway serves logs `listening <kind> <host>:<port>` or `stopped listening <kind> <host>:<port>` after `ready upstream`.
+These lines are for people reading the log: nothing parses them for listener state, which the list (`FF FF FF FC`, above) answers.
 
 pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
 `--dot-listen`, `--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoT,

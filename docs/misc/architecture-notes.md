@@ -696,49 +696,25 @@ the real Unbound bind fails, activation rolls back with a notice, and native Res
 **Single-flight recovery and stale ownership (issue #3572).** A rollback of one box never overlaps another: `pfb_dns_proxy_roll_back()` runs entirely under the operation lock `pfb_dns_proxy_rollback` (a close-on-exec file, `pfb_flock_bounded()`, `PFB_DNS_PROXY_START_WAIT`, 30 s), taken before the DNS config lock, so the order is operation lock, then config lock, and no config lock is held across a full Unbound restart or readiness wait. A rollback that cannot take it changes nothing and files one notice that the operation lock could not be acquired; a recovery may still be running. A recovery never acts on a copy of the stored marker that predates another write: the caller passes the raw marker it saw (`pfb_dns_proxy_confirm_ready()` reads it before its readiness wait; `pfb_dns_proxy_roll_back()` reads it before its operation-lock wait; a NULL argument reads it at entry and is never a bypass). Under the config lock, `pfb_dns_proxy_turn_off()` compares the fresh marker with that value and writes the Off only while they match and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs recovery. A different or consumed marker, or an unowned box, makes it return NULL: nothing is written, stopped, restarted or announced, because another save or recovery already resolved the state. The failed start is diagnosed (`pfb_dns_proxy_startup_check()`) only after that guard has won and before the restore consumes the snapshot. `pfb_dns_proxy_stand_down()` uses the same tri-state: NULL is a quiet FALSE, FALSE the existing error, TRUE the existing restore. A recovery that fails part way keeps the snapshot and the moved Resolver, and the next apply's ordinary restore retries from the stored marker. Pinned by `DnsProxyActivationRollbackTest` (the stale-ownership, operation-lock and race rows) and `DnsProxyStartupCheckTest`; the owner and the contender race as two real processes (`tests/php/support/DnsProxyRecoveryWorker.php`) over real `flock()` locks.
 The operation lock serializes calls to `pfb_dns_proxy_roll_back()`, including failed starts and unsafe-setting recovery. It does not serialize or coalesce other DNS proxy starts, restarts or GUI service calls.
 
-**Startup check (issue #3538).** "Ready" requires the gateway and its Unbound upstream; it does not say every client address the rc script names is served (an
+**Startup check (issues #3538, #3625).** "Ready" requires the gateway and its Unbound upstream; it does not say every client address the rc script names is served (an
 address that cannot be bound is logged and skipped, plain.go and tlsbind.go). After every start, `pfb_dns_proxy_confirm_ready()` runs
-`pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool` and its only wait is the bounded log poll: ready, with `TRUE`; not ready,
-with `FALSE`: the rollback diagnoses it once its guard has won and before the restore consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
+`pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool`. Ready, it asks the gateway what it serves: `pfb_dns_proxy_listener_list()`, one control-socket exchange (`FF FF FF FC`), is its only wait, bounded by `PFB_DNS_PROXY_CTL_TIMEOUT`, and it polls nothing. Not ready, it reads the log (below). The rollback diagnoses a start that is not ready once its guard has won and before the restore consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
 stored, no update pass runs and a gateway pidfile is live (with none live it waits for nothing). The boot hook backgrounds
 `php -f pfblockerng.inc dns_check` under `timeout(1)` (certificate sync, then, while a snapshot is stored, the same confirmation),
 because boot has no apply to confirm the start. One notice, id
 `pfBlockerNG DNS Proxy startup`, names every problem, each as a sentence, in this order: the proxy never became ready (with the last
 `pfb_dns_gateway:` line of `dns_proxy.log`); a `--listen`, `--dot-listen`, `--doh-listen` or `--doq-listen` address of the rc
-script's command that the CURRENT start did not log as `listening <kind> <host:port>` (the part of the log between the second-to-last
-and the last `ready upstream` line, of the bytes that start wrote, below), with the `cannot listen on <host:port>: <reason>` the gateway logged for it;
-and every warning building the command line gives now (`pfb_dns_proxy_plain_listen()` and `pfb_dns_proxy_tls_flags()`, the code
-the service uses). Addresses are compared as the gateway prints them (IPv6 compressed and bracketed). A log with no
-`ready upstream` line cannot be judged: the check files nothing from it and closes nothing. A start with no problem closes the
-notice, every row of the id: pfSense's `close_notice()` removes ONE row per call and `file_notice()` files a row for every changed
-text, so rows are closed by key. The notices `pfBlockerNG DNS Proxy` and `pfBlockerNG DNS Proxy certificate` are never touched.
-The gateway publishes the ready marker BEFORE it logs its `listening` and `ready upstream` lines (`main.go`), and daemon(8) relays them
-asynchronously, so a log that ends with the previous start must never be judged as the new one. Every caller that makes a start reads
-the log's size BEFORE it (`pfb_dns_proxy_log_size()`; the boot hook, with core functions only, `filesize()`) and passes it on as
-`$since`: `pfb_dns_proxy_restart()` and `pfb_dns_proxy_ensure_running()` (when it started or restarted the proxy) through
-`pfb_dns_proxy_confirm_ready()`, the boot hook to the `dns_check` arm as `argv[2]` (digits only; anything else, or none, and the arm
-takes the size now). With a `$since` only the bytes after it count (a log now shorter than it was rotated: it is judged
-from its start), and while the proxy is ready but no `ready upstream` line follows it yet the check polls the log every 100 ms, for at
-most `PFB_DNS_PROXY_LOG_WAIT` seconds (3, overridable before load). A line that still does not come leaves the start unjudged, as
-a log with no `ready upstream` line is: nothing filed, nothing closed. With no `$since` (the tick; an apply that restarted nothing)
-the latest segment of the log's last 64 KiB is judged at once. The last `pfb_dns_gateway:` line of a start that never became ready is
-searched the same way, only in the bytes after `$since`, so an error of an older start is never quoted for this one (none is quoted when
-this start logged none); with no `$since` it is searched in the whole tail. Pinned by `DnsProxyStartupCheckTest`,
-`DnsProxyStartupCheckCurrentStartTest`, `DnsProxyBootTest` and `DnsProxyActivationRollbackTest`.
+script's command that the list does not give as `listening <kind> <host:port>`, with the `refused` reason the list gives for it or else `the gateway did not report it listening`; and every warning building the command line gives now (`pfb_dns_proxy_plain_listen()` and `pfb_dns_proxy_tls_flags()`, the code
+the service uses). Addresses are compared as the gateway prints them (IPv6 compressed and bracketed). An unknown list (NULL: no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB) judges no listener and closes none of the notice's rows, though the warnings still file. A start with no problem closes the notice, every row of the id: pfSense's `close_notice()` removes ONE row per call and `file_notice()` files a row for every changed text, so rows are closed by key. The notices `pfBlockerNG DNS Proxy` and `pfBlockerNG DNS Proxy certificate` are never touched.
+Every caller that makes a start reads the log's size BEFORE it (`pfb_dns_proxy_log_size()`; the boot hook, with core functions only, `filesize()`) and passes it on as `$since`: `pfb_dns_proxy_restart()` and `pfb_dns_proxy_ensure_running()` (when it started or restarted the proxy) through `pfb_dns_proxy_confirm_ready()`, the boot hook to the `dns_check` arm as `argv[2]` (digits only; anything else, or none, and the arm takes the size now). `$since` bounds only the not-ready error lookup: with a `$since` only the bytes after it are searched (a log now shorter than it was rotated is searched from its start), so an error of an older start is never quoted for this one (none is quoted when this start logged none); with no `$since` (the tick; an apply that restarted nothing) the lookup searches the log's last 64 KiB. A ready start never reads the log for what it serves: the list answers for the gateway running now, so the ready marker, which the gateway publishes before its log lines are relayed, cannot make it judge a previous start. Pinned by `DnsProxyStartupCheckTest`, `DnsProxyStartupCheckCurrentStartTest`, `DnsProxyBootTest` and `DnsProxyActivationRollbackTest`.
 
-**Status panel transports (issues #3548, #3555).** The pfB-DNS tab's status (`pfb_dns_status()`) has an entry per transport: plain DNS,
-DoT, DoH and DoQ. It reads the same two helpers as the startup check: `pfb_dns_proxy_listeners()` (the complete start's
-`listening` and `cannot listen on` lines, with no `$since`) and `pfb_dns_proxy_command_listeners()` (the rc script's addresses).
-The status reader also supplies the readiness-marker PID: the latest complete `ready upstream` record must end in a space
-followed by `pid <pid>`, or bindings remain unconfirmed. It never searches backward for an earlier matching PID. This covers the interval
-between publishing the PID marker and daemon(8) relaying the log, including automatic child respawn and same-address restarts;
-the startup check's default parsing and notices remain unchanged.
-A transport is `off` when its toggle is off and the gateway has no listeners for it, `no_listener` when it is on and the
-command gives it none, or a list of rows. Once the gateway itself is ready, rows name what the matching start bound (`listening`),
-then each command address it did not bind (`not_listening`, with the logged reason). These front-end rows remain visible when an
-unavailable upstream leaves the service Starting. A saved toggle, interface or port change cannot replace that evidence before
-an Update applies it. Without a ready gateway (`configured_not_bound`), or with no matching PID-ready log record, including
-untagged records from an older gateway (`configured_unconfirmed`), the rows are the command's addresses.
+**Status panel transports (issues #3548, #3555, #3625).** The pfB-DNS tab's status (`pfb_dns_status()`) has an entry per transport: plain DNS,
+DoT, DoH and DoQ. It reads the same two sources as the startup check: `pfb_dns_proxy_listener_list()` (what the gateway lists as served and refused, asked on the control socket) and `pfb_dns_proxy_command_listeners()` (the rc script's addresses).
+A transport is `off` when its toggle is off and the gateway has no listeners for it, `no_listener` when it is on and the command gives it none, or a list of rows.
+Once the gateway itself is ready, rows name what the list gives as `listening`, then each command address it does not list (`not_listening`, with the `refused` reason, or `the gateway did not report it` when there is none).
+These front-end rows remain visible when an unavailable upstream leaves the service Starting. A saved toggle, interface or port change cannot replace that evidence before
+an Update applies it. Without a ready gateway (`configured_not_bound`), the rows are the command's addresses. So are they when the list is unknown (NULL: no socket, no reply
+within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): `configured_unconfirmed`, labelled `Configured, not confirmed by the gateway`.
 
 **Status panel tables (issues #3555, #3586).** `pfb_dns_status_panel()` renders that status under the form as sections like the
 page's own (the markup of an open `COLLAPSIBLE` `Form_Section`, toggled from its title): `pfB-DNS Status` with the service and the
@@ -932,43 +908,10 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
   `pfb_dns_proxy_decider_changed()` fingerprints the same seven paths (`$pfb['dns_proxy_decider_src']`), and a different or absent record
   restarts the decider alone. An unreadable installed file is no signal. Unbound's own module-drift check (`$pfb['unbound_py_module_applied']`) is
   asked only while Unbound hosts the module, so code-only drift in proxy mode does not restart the pair a second time.
-- **Listen addresses change live (issues #3598, #3599).** The gateway binds only before it drops root, so a listener added later is bound by
-  root PHP (`pfb_dns_proxy_listener_bind()`: TCP, then UDP, and only for a host `inet_pton()` accepts: a name would be resolved) and handed
-  over on the control socket with `SCM_RIGHTS`, in the one `sendmsg(2)` that carries its frame (`pfb_dns_proxy_listener_add()`: `FF FF FF FE`,
-  a 4-byte big-endian length, `<kind> <host:port>`; `pfb_dns_proxy_listener_remove()`: `FF FF FF FD`, no descriptor). The gateway answers
-  `ok` or `error:` and logs `listening <kind> <host:port>` or `stopped listening <kind> <host:port>`; PHP closes its own copies afterwards.
-  The log stays the record of what is served. A start logs `starting pid <pid>` first, and `pfb_dns_proxy_listeners()` reads the latest
-  complete start (after the last `starting pid` line before the last `ready upstream` line; an older gateway's log, which has none, from the
-  second-to-last `ready upstream` line) and then, in log order, the `listening` and `stopped listening` lines up to the next `starting pid`
-  line, so that a listener added to a process that is gone is not credited to the next one. Every host:port is spelled as the gateway
-  prints it, an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as its IPv4 address (Go's `Unmap()`), so that an rc script spelling a host
-  that way matches the log's line for it, not a remove and a refused add on every pass. `pfb_dns_proxy_ensure_running()` masks every
-  `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument out of the rc script it read before the pass and out of the one the
-  pass wrote: equal remainders are an address-only change, reconciled live while the proxy is READY and its log holds a complete start of
-  the gateway that published the ready marker (`pfb_dns_proxy_ready_listeners()`: `pfb_dns_proxy_listeners()` for the marker's pid, as the
-  status panel reads it, because a start publishes the marker before its log lines are relayed and the log's latest complete start is the
-  previous gateway's until they arrive). Any other difference (a port, a TLS group turned on or off, `--doh-trusted`, DDR, a module flag)
-  restarts the pair, as does an address-only change with the proxy not READY or with no such start to compare with (a record cut by the
-  64 KiB read, `partial` below, is none).
-  `pfb_dns_proxy_listeners_sync()` compares the command (`pfb_dns_proxy_command_listeners()`) with what is served, per kind: it removes
-  the served listeners the command does not name, then adds the ones it names that nothing serves, one frame each, each change one line
-  of the pfB log, and after a change the gateway took it waits (bounded, `PFB_DNS_PROXY_LOG_WAIT`) until the log shows it, so the startup
-  check that follows judges what is served. An address that cannot be assigned yet (EADDRNOTAVAIL: an interface address that was not
-  there yet, worded `Can't assign` by FreeBSD and `Cannot assign` by Linux) is left for a later pass with nothing logged, any other
-  failed bind is logged and skipped, a restart pending or not, and neither restarts anything. A change the gateway does not take (an
-  `error:` reply, including an older gateway's, a hang-up, no control socket, no `socket_sendmsg()`) stops the reconcile with no further
-  frame and restarts the whole pair once; that start binds every address the box can bind, so no restart loop follows. Every cron tick
-  calls the same sync before its confirmation, under the same guards (no update pass running, READY, no package operation); a reason
-  it returns restarts the pair, and the confirmation then judges the new start through `$since`, not the one it replaced. While a restart is pending
-  the rc script may differ in more than addresses: nothing is removed or added live, and a missing listener that binds now is the reason to
-  restart (the tick leaves the marker, since one written during its restart must not be lost: the next update pass restarts once more
-  for it). A log with no complete start of the ready gateway changes nothing, and neither does one whose 64 KiB read cut the latest
-  start's `starting pid` line off (`pfb_dns_proxy_listeners()` flags it `partial`: its `listening` lines may be missing, and the sync
-  would take the missing ones for unserved, re-add them and log `Address already in use` on every pass; the startup check and the
-  status panel read it as before; the update pass, which has just rewritten the script and would never see the change again, restarts
-  the pair for an address-only change on such a record, as on none), nor does an rc script that names no plain DNS listener (missing,
-  empty or with no command line: a real one always names loopback, so it is unreadable, not a wish to stop serving). A package operation
-  changes nothing live: an address-only change of the rc script is recorded as a pending restart, as any other.
+- **Listen addresses change live (issues #3598, #3599, #3625).** The gateway binds only before it drops root, so a listener added later is bound by root PHP (`pfb_dns_proxy_listener_bind()`: TCP, then UDP, and only for a host `inet_pton()` accepts: a name would be resolved) and handed over on the control socket with `SCM_RIGHTS`, in the one `sendmsg(2)` that carries its frame (`pfb_dns_proxy_listener_add()`: `FF FF FF FE`, a 4-byte big-endian length, `<kind> <host:port>`; `pfb_dns_proxy_listener_remove()`: `FF FF FF FD`, no descriptor). The gateway answers `ok` or `error:` once it has applied the change, and logs `listening <kind> <host:port>` or `stopped listening <kind> <host:port>` for people reading the log; PHP closes its own copies afterwards.
+  What is served is asked, not read: `pfb_dns_proxy_listener_list()` sends `FF FF FF FC` (nothing after it) and reads `listening <kind> <host:port>` and `refused <kind> <host:port> <reason>` lines, then `ok`. A reply that is not exactly that wire, or none in time, is unknown (NULL: no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB), and an unknown list is never read as an empty one. Every host:port is spelled as the gateway prints it, an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as its IPv4 address (Go's `Unmap()`), so that an rc script spelling a host that way matches the reply's line for it, not a remove and a refused add on every pass.
+  `pfb_dns_proxy_ensure_running()` masks every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument out of the rc script it read before the pass and out of the one the pass wrote: equal remainders are an address-only change, reconciled live while the proxy is READY. Any other difference (a port, a TLS group turned on or off, `--doh-trusted`, DDR, a module flag) restarts the pair, as does an address-only change with the proxy not READY. An address-only change with an unknown list restarts the pair too: there is nothing to compare with, as with no record.
+  `pfb_dns_proxy_listeners_sync()` compares the command (`pfb_dns_proxy_command_listeners()`) with the list's `listening`, per kind: it removes the served listeners the command does not name, then adds the ones it names that nothing serves, one frame each, each change one line of the pfB log. An unknown list changes nothing and sends nothing. There is no log wait after a change: the gateway applied it before it answered `ok`, so the startup check that follows reads the list and sees it. An address that cannot be assigned yet (EADDRNOTAVAIL: an interface address that was not there yet, worded `Can't assign` by FreeBSD and `Cannot assign` by Linux) is left for a later pass with nothing logged, any other failed bind is logged and skipped, a restart pending or not, and neither restarts anything. A change the gateway does not take (an `error:` reply, including an older gateway's, a hang-up, no control socket, no `socket_sendmsg()`) stops the reconcile with no further frame and restarts the whole pair once; that start binds every address the box can bind, so no restart loop follows. Every cron tick calls the same sync before its confirmation, under the same guards (no update pass running, READY, no package operation); a reason it returns restarts the pair, and the confirmation then judges the new start through `$since`, not the one it replaced. While a restart is pending the rc script may differ in more than addresses: nothing is removed or added live, and a missing listener that binds now is the reason to restart (the tick leaves the marker, since one written during its restart must not be lost: the next update pass restarts once more for it). Nothing changes live for an rc script that names no plain DNS listener (missing, empty or with no command line: a real one always names loopback, so it is unreadable, not a wish to stop serving). A package operation changes nothing live: an address-only change of the rc script is recorded as a pending restart, as any other.
 - **The decider-only restart.** `pfb_dns_proxy_decider_restart()` sends four `0xFF` bytes on the gateway's `ctl.sock`, which is now bound
   in every mode (a certificate push to a gateway with no TLS transport answers `error:`). The gateway starts a new decider with the first
   one's argv on a new socketpair and waits up to 30 s for its READY, then makes it the active one, replies `ok`, lets the old one's
@@ -984,8 +927,7 @@ Unbound), and `go/pfb_dns_gateway/client_transport_test.go`.
 Pinned by `DnsProxyUpgradeStopTest` (the stop's walk, run in a sandbox), `DnsProxyKeepRunningTest`, `DnsProxyKeepRunningPkgTest` and
 `DnsProxyInstallKeepRunningTest` (deferral, the marker and the per-side decisions), `DnsProxyLiveListenersTest` (the live reconcile of the
 update pass and the tick, and every case that restarts instead), `DnsProxyListenerFramesTest` (the frames and the sockets they carry),
-`DnsProxyListenersFoldTest` (the log fold), `tests/dns_proxy/test_decider_applied.py` (the code record), the gateway's Go tests (the
-binary record and the control-socket verbs) and `tests/smoke/test_smoke_dns_proxy.py` (live).
+`DnsProxyListenerListTest` (the list probe: its request, its replies and the unknown ones), `tests/dns_proxy/test_decider_applied.py` (the code record), the gateway's Go tests (the binary record, the control-socket verbs and the `list` reply in `live_listen_list_linux_test.go`), `tests/dns_proxy/test_gateway_e2e.py` row `E1` (the real PHP probe against the real gateway) and `tests/smoke/test_smoke_dns_proxy.py` (live).
 
 ### ADR-08 — IDN homoglyph protection
 
