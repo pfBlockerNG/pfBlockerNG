@@ -810,9 +810,12 @@ def _live_list(ctl: Path) -> dict[str, Any] | None:
     return listing
 
 
-def _assert_listed(ctl: Path, addresses: set[str], point: str) -> None:
-    """The real PHP probe reads exactly these udp+tcp listeners from the gateway, and no refusal."""
-    expected = {"listening": {"udp+tcp": dict.fromkeys(addresses, True)}, "refused": {}}
+def _assert_listed(ctl: Path, addresses: set[str], refused: dict[str, str], point: str) -> None:
+    """The real PHP probe reads exactly these udp+tcp listeners and refusals from the gateway."""
+    expected = {
+        "listening": {"udp+tcp": dict.fromkeys(addresses, True)},
+        "refused": {"udp+tcp": refused} if refused else {},  # PHP has no kind with no refusal in it
+    }
     listed = _live_list(ctl)
     assert listed == expected, f"{point}: the PHP probe read {listed}, expected {expected}"
 
@@ -857,13 +860,24 @@ def _outcome(wire: bytes) -> tuple[int, list[tuple[str, int, bytes]]]:
     return dnswire.parse(wire).rcode, _answers(wire)
 
 
+@contextlib.contextmanager
+def _held_tcp(host: str, port: int) -> Iterator[socket.socket]:
+    """A TCP socket listening on host:port until closed: while it holds the port, a bind of that port is refused."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as held:
+        held.bind((host, port))
+        held.listen()
+        yield held
+
+
 # E1
 @NEEDS_ROOT
 def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_the_real_gateway(
     gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path, acl_text: str
 ) -> None:
     port = _port_free_on_every_listener_address()
+    # The start's bind of 127.0.0.2 is refused while `held` holds its TCP port; closing `held` frees it for PHP.
     with (
+        _held_tcp("127.0.0.2", port) as held,
         control_socket() as ctl,
         _gateway_process(
             gateway_binary,
@@ -871,13 +885,15 @@ def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_
             unbound,
             tmp_path,
             acl_text,
-            ["--port", str(port), "--ctl-socket", str(ctl)],
+            ["--listen", "127.0.0.2", "--port", str(port), "--ctl-socket", str(ctl)],
         ) as (process, _),
     ):
         original = ("127.0.0.1", port)
         assert process.server() == original
         listening = {f"127.0.0.1:{port}"}
-        _assert_listed(ctl, listening, "before the adds")
+        refused_at_start = {f"127.0.0.2:{port}": "bind: address already in use"}
+        _assert_listed(ctl, listening, refused_at_start, "before the adds")
+        held.close()  # released for PHP's add of 127.0.0.2 below
         # A ::1 client gets REFUSED (from the gateway's ACL or the rig's 127/8-only Unbound): a reply on a socket that
         # refused before the add is the adopted listener serving
         served = {"127.0.0.2": (0, [ALLOWED_ANSWER]), "::1": (5, [])}
@@ -886,14 +902,14 @@ def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_
             assert _live_listener("add", at, ctl) == "ok"
             process.wait_for(f"listening udp+tcp {at}")
             listening.add(at)
-            _assert_listed(ctl, listening, f"after adding {at}")
+            _assert_listed(ctl, listening, {}, f"after adding {at}")
             for transport, ask in (("UDP", _udp), ("TCP", _tcp)):
                 assert _outcome(ask((host, port), ALLOWED, host)) == served[host], f"{transport} at {at}"
 
         assert _live_listener("remove", f"127.0.0.2:{port}", ctl) == "ok"
         process.wait_for(f"stopped listening udp+tcp 127.0.0.2:{port}")
         listening.remove(f"127.0.0.2:{port}")
-        _assert_listed(ctl, listening, "after removing 127.0.0.2")
+        _assert_listed(ctl, listening, {}, "after removing 127.0.0.2")
         assert _refuses("127.0.0.2", port)
         assert _answers(_udp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]
         assert _answers(_tcp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]
