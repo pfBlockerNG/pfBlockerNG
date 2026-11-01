@@ -2353,12 +2353,11 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	public function testAFailedStartReportsSnapshotDependentListenerWarningsBeforeRestoring(): void
 	{
-		// Given a valid snapshot that names lan and opt1, a proxy that never serves, and opt1 now configured but down with no address
+		// Given a valid snapshot that names lan and opt1, a proxy that never serves, and opt1 now configured with no address
 		$this->activate(TRUE);
 		$this->proxyLivesButNeverServes();
 		$this->configXmlOnDisk();
 		$GLOBALS['pfb_test_interface_ip']['opt1'] = '';
-		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'down', 'enable' => TRUE];
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is stored');
 
 		// When the activation confirms the start, which fails
