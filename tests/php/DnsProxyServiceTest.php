@@ -2210,6 +2210,19 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertStringContainsString("DNS proxy: plain DNS interface \"{$name}\" is not a configured interface; it is skipped", $this->errorLog());
 	}
 
+	public function testASelectedInterfaceThatIsDownIsLeftOutAndLogged(): void
+	{
+		// Given pfB-DNS's list: lan, and opt1 whose link is down (issue #3627: logged, never a notice)
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1']);
+		$GLOBALS['pfb_test_interface_info']['opt1']['status'] = 'down';
+		$this->ownSettings(['pfb_dns_interface' => 'lan,opt1']);
+
+		$this->generate();
+
+		$this->assertSame(["'192.0.2.1'", "'127.0.0.1'", "'::1'"], $this->scriptValues('--listen'));
+		$this->assertStringContainsString('DNS proxy: plain DNS interface opt1 is down or disabled; it adds no listener', $this->errorLog());
+	}
+
 	public function testDotIsServedOnItsOwnInterfaceWhilePlainDnsStaysOnItsOwn(): void
 	{
 		// Given plain DNS on lan (192.0.2.1), and pfB-DNS's own DoT on opt1 (198.51.100.1), port 853

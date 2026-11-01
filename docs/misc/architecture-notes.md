@@ -547,7 +547,7 @@ starts the decider as its child and hands the three mode flags on to it. `--list
 `pfb_dns_proxy_listen()` derives the addresses of pfB-DNS's own interface list (`dns/pfb_dns_interface`) the way `unbound.inc` binds them (explicit interfaces that are up
 and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for `all`, every
 address pfSense lists for the box (`get_configured_ip_addresses()` / `get_configured_ipv6_addresses()`, which carry
-alias/carp VIPs; a list that names no interface gives none), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. An entry that adds no address (not a configured interface, down or disabled, no usable address) is warned about by name (`pfb_dns_proxy_skipped_warnings()`). The gateway binds each
+alias/carp VIPs; a list that names no interface gives none), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. An entry that adds no address (not a configured interface, down or disabled, no usable address) is warned about by name (`pfb_dns_proxy_skipped_warnings()`); a down or disabled one is only logged, never put in the startup notice, since its listeners return with its link (#3627). The gateway binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
 disabled interface) is logged once and skipped, the others are served, and it exits non-zero only when
 no address binds. A DoT/DoH/DoQ setup whose certificate file (written from `dns/pfb_dns_sslcertref`, below) is unusable or absent at start (a passphrase-protected key, no file)

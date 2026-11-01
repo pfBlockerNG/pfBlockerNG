@@ -484,28 +484,15 @@ final class DnsProxyStartupCheckTest extends TestCase
 	// Rows 6, 7 -- what building the command line warned about
 	// -----------------------------------------------------------------------
 
-	/** @return array<string,array{array<string,?string>,list<string>,string}> */
-	public static function interfaceThatAddsNoListener(): array
+	public function testASelectedInterfaceWithNoAddressIsNamedBesideAHealthyStart(): void
 	{
-		return [
-			'no address' => [['lan' => '192.0.2.1', 'opt1' => NULL], [], 'plain DNS interface opt1 has no usable address; it adds no listener.'],
-		];
-	}
-
-	/**
-	 * @param array<string,?string> $v4
-	 * @param list<string> $down
-	 */
-	#[DataProvider('interfaceThatAddsNoListener')]
-	public function testASelectedInterfaceThatAddsNoListenerIsNamedBesideAHealthyStart(array $v4, array $down, string $sentence): void
-	{
-		// Given every listener of the command serves, and one selected interface added none
-		$this->box(['pfb_dns_interface' => 'lan,opt1'] + self::DOT_ON, $v4, [], $down);
+		// Given every listener of the command serves, and one selected interface has no address
+		$this->box(['pfb_dns_interface' => 'lan,opt1'] + self::DOT_ON, ['lan' => '192.0.2.1', 'opt1' => NULL]);
 		$this->gatewayServesEverything();
 
 		pfb_dns_proxy_startup_check(TRUE);
 
-		$this->assertSame([$this->problemText($sentence)], $this->startupTexts());
+		$this->assertSame([$this->problemText('plain DNS interface opt1 has no usable address; it adds no listener.')], $this->startupTexts());
 	}
 
 	public function testASelectedInterfaceThatIsDownRaisesNoNoticeAndClosesTheStandingOne(): void
@@ -519,6 +506,21 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 		// Then a down link is nothing to correct: no notice stands
 		$this->assertSame([], $this->standing());
+	}
+
+	public function testANotReadyStartDoesNotNameASelectedInterfaceThatIsDown(): void
+	{
+		// Given a start that did not become ready and a selected interface whose link is down
+		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
+		$this->gatewayServes([]);
+
+		pfb_dns_proxy_startup_check(FALSE);
+
+		// Then the notice names the failure alone
+		$this->assertSame(
+			[$this->problemText('pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s.')],
+			$this->startupTexts()
+		);
 	}
 
 	public function testAnUnknownSelectedInterfaceIsNamedAsStored(): void
