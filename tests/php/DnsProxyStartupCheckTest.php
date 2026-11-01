@@ -253,8 +253,8 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 	public function testANotReadyStartDoesNotCompareListenersButStillReportsTheWarnings(): void
 	{
-		// Given a gateway that serves nothing (a probe of it would name every listener), a last log error, and a selected interface that is down
-		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
+		// Given a gateway that serves nothing (a probe of it would name every listener), a last log error, and a selected interface with no address
+		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => NULL]);
 		$this->gatewayServes([]);
 		$this->log('pfb_dns_gateway: gone');
 
@@ -264,7 +264,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$this->assertSame(
 			[$this->problemText(
 				'pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s (last gateway error: pfb_dns_gateway: gone).',
-				'plain DNS interface opt1 is down or disabled; it adds no listener.'
+				'plain DNS interface opt1 has no usable address; it adds no listener.'
 			)],
 			$this->startupTexts()
 		);
@@ -487,9 +487,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	/** @return array<string,array{array<string,?string>,list<string>,string}> */
 	public static function interfaceThatAddsNoListener(): array
 	{
-		$v4 = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
 		return [
-			'down' => [$v4, ['opt1'], 'plain DNS interface opt1 is down or disabled; it adds no listener.'],
 			'no address' => [['lan' => '192.0.2.1', 'opt1' => NULL], [], 'plain DNS interface opt1 has no usable address; it adds no listener.'],
 		];
 	}
@@ -508,6 +506,19 @@ final class DnsProxyStartupCheckTest extends TestCase
 		pfb_dns_proxy_startup_check(TRUE);
 
 		$this->assertSame([$this->problemText($sentence)], $this->startupTexts());
+	}
+
+	public function testASelectedInterfaceThatIsDownRaisesNoNoticeAndClosesTheStandingOne(): void
+	{
+		// Given a standing startup notice, every listener of the command served, and a selected interface whose link is down (issue #3627)
+		$this->box(['pfb_dns_interface' => 'lan,opt1'] + self::DOT_ON, ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
+		$this->fileOther(self::ID, 'pfB-DNS started with problems: plain DNS interface opt1 is down or disabled; it adds no listener.');
+		$this->gatewayServesEverything();
+
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then a down link is nothing to correct: no notice stands
+		$this->assertSame([], $this->standing());
 	}
 
 	public function testAnUnknownSelectedInterfaceIsNamedAsStored(): void
@@ -550,7 +561,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 	public function testTheListenersComeBeforeTheWarningsInTheNotice(): void
 	{
-		$this->box(['pfb_dns_interface' => 'lan,opt1'] + self::DOT_ON, ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
+		$this->box(['pfb_dns_interface' => 'lan,opt1'] + self::DOT_ON, ['lan' => '192.0.2.1', 'opt1' => NULL]);
 		$this->gatewayLacksDotOnLan();
 
 		pfb_dns_proxy_startup_check(TRUE);
@@ -558,7 +569,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$this->assertSame(
 			[$this->problemText(
 				'DoT is not served on 192.0.2.1:853: the gateway did not report it listening.',
-				'plain DNS interface opt1 is down or disabled; it adds no listener.'
+				'plain DNS interface opt1 has no usable address; it adds no listener.'
 			)],
 			$this->startupTexts()
 		);
@@ -645,14 +656,14 @@ final class DnsProxyStartupCheckTest extends TestCase
 	#[DataProvider('unknownListenerLists')]
 	public function testAListThatIsNotKnownStillReportsAWarning(bool $gateway, ?string $reply): void
 	{
-		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], [], ['opt1']);
+		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => NULL]);
 		if ($gateway) {
 			$this->gatewayAnswers($reply);
 		}
 
 		pfb_dns_proxy_startup_check(TRUE);
 
-		$this->assertSame([$this->problemText('plain DNS interface opt1 is down or disabled; it adds no listener.')], $this->startupTexts());
+		$this->assertSame([$this->problemText('plain DNS interface opt1 has no usable address; it adds no listener.')], $this->startupTexts());
 	}
 
 	/** @return array<string,array{bool}> issue #3550: a start the log's last 64 KiB cannot hold whole */

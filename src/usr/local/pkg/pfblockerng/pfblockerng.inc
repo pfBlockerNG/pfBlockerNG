@@ -4178,6 +4178,9 @@ function pfb_dns_proxy_address_interfaces(): array {
 	return $labels;
 }
 
+/** How a skipped-interface warning for an interface that is down or disabled ends: logged, never a notice (issue #3627). */
+const PFB_DNS_PROXY_DOWN_WARNING = 'is down or disabled; it adds no listener';
+
 /**
  * One "DNS proxy: ..." line per entry pfb_dns_proxy_interface_addresses() reported. The name is the stored text, verbatim: the
  * line reaches the log and a notice (pfb_dns_proxy_notify(), whose file_notice() stores the text encoded itself), so
@@ -4193,7 +4196,7 @@ function pfb_dns_proxy_skipped_warnings(string $label, array $skipped): array {
 		$name = $entry['interface'];
 		$warnings[] = match ($entry['why']) {
 			'unknown' => "DNS proxy: {$label} interface \"{$name}\" is not a configured interface; it is skipped",
-			'down' => "DNS proxy: {$label} interface {$name} is down or disabled; it adds no listener",
+			'down' => "DNS proxy: {$label} interface {$name} " . PFB_DNS_PROXY_DOWN_WARNING,
 			default => "DNS proxy: {$label} interface {$name} has no usable address; it adds no listener",
 		};
 	}
@@ -5641,7 +5644,8 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
  *      refused that address when it did, else that it did not report it. A gateway that gives no list (no socket, no answer in time, an
  *      older gateway, a reply that is not the list) cannot be judged: it gives no problem and closes nothing, and the log is never read for it;
  *   3. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
- *      the code the service uses (pfb_dns_proxy_plain_listen(), pfb_dns_proxy_tls_flags()).
+ *      the code the service uses (pfb_dns_proxy_plain_listen(), pfb_dns_proxy_tls_flags()), except an interface that is down or
+ *      disabled: its link coming back restores its listeners, so there is nothing to correct (issue #3627; the service still logs it).
  * A notice is closed only when the gateway's list was known and nothing was found; file_notice() files a row for every changed text and
  * close_notice() removes one row per call, so every row of the id is closed, by its key.
  *
@@ -5689,7 +5693,9 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 		pfb_dns_proxy_plain_listen($warnings);
 		pfb_dns_proxy_tls_flags($warnings);
 		foreach ($warnings as $warning) {
-			$problems[] = (string) preg_replace('/^DNS proxy: /', '', $warning, 1);
+			if (!str_ends_with($warning, PFB_DNS_PROXY_DOWN_WARNING)) {
+				$problems[] = (string) preg_replace('/^DNS proxy: /', '', $warning, 1);
+			}
 		}
 	}
 
