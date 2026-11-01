@@ -92,7 +92,7 @@ final class LogSettingsLayoutUiTest extends TestCase
 		$this->assertStringNotContainsString('forced-color-adjust', $source);
 		$this->assertStringNotContainsString('data:image/svg+xml', $source);
 		$this->assertStringNotContainsString('max-width:180pt', $source);
-		$this->assertStringContainsString('viewBox="128 172 384 384"', $source);
+		$this->assertStringContainsString('viewBox="0 0 256 256"', $source);
 		$this->assertStringNotContainsString('enable-background', $source);
 		$this->assertStringNotContainsString('width="180.0pt"', $source);
 		$this->assertStringNotContainsString('height="180.0pt"', $source);

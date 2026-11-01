@@ -3762,7 +3762,7 @@ def test_wizard_welcome_step_renders_the_fluid_support_logo(
 ) -> None:
     """The wizard's Support logo renders responsively and unclipped (issue #2863).
 
-    The viewBox must contain the circle and the column must be fluid, as shipped.
+    The viewBox must frame the shield and the column must be fluid, as shipped.
     """
     resp = webui.get(_WIZARD_WELCOME_STEP)
     # The step's own <title>, not a generic marker: this PR makes the wizard logo markup
@@ -3771,7 +3771,8 @@ def test_wizard_welcome_step_renders_the_fluid_support_logo(
     result = evaluate_render(_WIZARD_WELCOME_STEP, resp.status_code, resp.text, ("pfBlockerNG Setup",))
     assert result.ok, f"wizard welcome step render oracle failed: {result.detail}"
     body = resp.text
-    assert 'viewBox="128 172 384 384"' in body, "wizard logo still uses the clipping viewBox"
+    assert 'viewBox="0 0 256 256"' in body, "wizard logo is not the shield viewBox"
+    assert 'viewBox="128 172 384 384"' not in body, "wizard logo still uses the retired circle viewBox"
     assert "col-sm-3" in body, "wizard logo column is not the fluid Bootstrap column"
     assert "width: 25%; height: 170px; float: right;" not in body, (
         "wizard logo still uses the fixed float column that overflows narrow viewports"
