@@ -41,6 +41,7 @@ def test_support_logo_uses_the_shield_viewbox(webui: WebUI) -> None:
     resp = webui.get("/pfblockerng/pfblockerng_general.php")
     assert resp.status_code == 200
     assert 'viewBox="0 0 256 256"' in resp.text
+    assert 'viewBox="128 172 384 384"' not in resp.text
     assert 'class="col-sm-9"' in resp.text
     assert 'class="col-sm-3"' in resp.text
 

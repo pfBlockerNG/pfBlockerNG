@@ -59,6 +59,30 @@ final class SupportLogoUiTest extends TestCase
 		}
 	}
 
+	/** Each inline copy draws the approved shield asset, not a lookalike or the old circle. */
+	#[DataProvider('logoPages')]
+	public function testSupportLogoDrawsTheApprovedShieldAsset(string $page): void
+	{
+		$root = dirname(__DIR__, 2);
+		$source = file_get_contents($root . '/' . $page);
+		$asset = file_get_contents($root . '/docs/assets/logo.svg');
+		$this->assertNotFalse($source, "{$page} must be readable");
+		$this->assertNotFalse($asset, 'docs/assets/logo.svg must be readable');
+
+		$this->assertSame(5, preg_match_all('/<path fill="[^"]*" d="[^"]*"/', $asset, $paths),
+			'the approved shield asset changed shape; re-sync both inline copies');
+		foreach ($paths[0] as $path) {
+			$this->assertStringContainsString($path, $source, "{$page}: shield path drifted from the asset: {$path}");
+		}
+		$this->assertStringContainsString('<rect width="256" height="256" rx="46" fill="#2b2b2b"/>', $source,
+			"{$page}: shield background tile");
+		$this->assertStringContainsString('aria-label="pfBlockerNG"', $source, "{$page}: logo accessible name");
+
+		foreach (['<circle', 'XMLID_', '.st0{'] as $retired) {
+			$this->assertStringNotContainsString($retired, $source, "{$page}: old circle logo is back: {$retired}");
+		}
+	}
+
 	/** Every SVG viewBox under src/, not just the two known logo copies. */
 	public function testEverySvgViewBoxInTheTreeIsTheContractValue(): void
 	{
