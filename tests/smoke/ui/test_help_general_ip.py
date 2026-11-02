@@ -263,20 +263,29 @@ def test_default_schedule_help_sits_inside_its_group(browser_page: Page, webui: 
 
 
 @pytest.mark.ui_browser
-def test_apply_callout_renders_above_the_ip_form(browser_page: Page, webui: WebUI) -> None:
-    """The apply guidance that names Run Now is printed above the IP form, not inside it."""
+def test_apply_guidance_naming_run_now_renders_above_the_ip_form(browser_page: Page, webui: WebUI) -> None:
+    """Apply guidance that names Run Now is rendered outside the IP form and before it in document order.
+
+    Identity is the rendered text outside the form, not a print_callout class, so a markup
+    change in the helper cannot silently select nothing.
+    """
     _open(browser_page, webui, IP)
     placement = browser_page.evaluate(
         """() => {
-            const callout = [...document.querySelectorAll('.alert')].find((el) => el.textContent.includes('Run Now'));
             const field = document.querySelector('[name="enable_dup"]');
             const form = field ? field.closest('form') : null;
-            return {
-                callout: Boolean(callout),
-                form: Boolean(form),
-                above: Boolean(callout && form)
-                    && (callout.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-            };
+            if (!form) return { form: false, named: 0, above: false };
+            const outside = [...document.body.querySelectorAll('*:not(script):not(style)')].filter(
+                (el) => !el.contains(form) && !form.contains(el) && el.textContent.includes('Run Now')
+            );
+            const innermost = outside.filter((el) => !outside.some((other) => other !== el && el.contains(other)));
+            const above = innermost.length > 0 && innermost.every(
+                (el) => (el.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+            );
+            return { form: true, named: innermost.length, above };
         }"""
     )
-    assert placement == {"callout": True, "form": True, "above": True}, f"apply callout placement: {placement!r}"
+    assert placement["form"] is True, "the IP form carrying enable_dup is missing"
+    assert placement["named"] > 0 and placement["above"] is True, (
+        f"Run Now guidance must render outside and above the IP form: {placement!r}"
+    )
