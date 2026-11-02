@@ -11,8 +11,11 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 const proxySignature = "0d0a0d0a000d0a515549540a"
@@ -42,6 +45,8 @@ type fakeUpstream struct {
 	mu      sync.Mutex
 	conns   int
 	headers int
+
+	ipv6 bool
 }
 
 func echoWithQR(q seenQuery) [][]byte {
@@ -62,18 +67,30 @@ func closingAfter(n int) upstreamOption { return func(f *fakeUpstream) { f.close
 
 func hangingUp() upstreamOption { return func(f *fakeUpstream) { f.hangUp = true } }
 
+func listenIPv6() upstreamOption { return func(f *fakeUpstream) { f.ipv6 = true } }
+
 func newFakeUpstream(t *testing.T, opts ...upstreamOption) *fakeUpstream {
 	t.Helper()
+	f := &fakeUpstream{t: t, answer: echoWithQR, queries: make(chan seenQuery, 256)}
+	for _, o := range opts {
+		o(f)
+	}
+	ip := net.IPv4(127, 0, 0, 1)
+	tcpNet, udpNet, host := "tcp4", "udp4", "127.0.0.1"
+	if f.ipv6 {
+		ip = net.IPv6loopback
+		tcpNet, udpNet, host = "tcp6", "udp6", "::1"
+	}
 	var (
 		tcp *net.TCPListener
 		udp *net.UDPConn
 	)
 	for range 20 { // the same port for both: pick a TCP port, take the UDP one next to it
-		l, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		l, err := net.ListenTCP(tcpNet, &net.TCPAddr{IP: ip})
 		if err != nil {
 			t.Fatal(err)
 		}
-		u, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: l.Addr().(*net.TCPAddr).Port})
+		u, err := net.ListenUDP(udpNet, &net.UDPAddr{IP: ip, Port: l.Addr().(*net.TCPAddr).Port})
 		if err == nil {
 			tcp, udp = l, u
 			break
@@ -83,13 +100,8 @@ func newFakeUpstream(t *testing.T, opts ...upstreamOption) *fakeUpstream {
 	if tcp == nil {
 		t.Fatal("no loopback port free for both TCP and UDP")
 	}
-	f := &fakeUpstream{
-		t: t, udp: udp, tcp: tcp, answer: echoWithQR, queries: make(chan seenQuery, 256),
-		addr: net.JoinHostPort("127.0.0.1", strconv.Itoa(tcp.Addr().(*net.TCPAddr).Port)),
-	}
-	for _, o := range opts {
-		o(f)
-	}
+	f.udp, f.tcp = udp, tcp
+	f.addr = net.JoinHostPort(host, strconv.Itoa(tcp.Addr().(*net.TCPAddr).Port))
 	go f.serveUDP()
 	go f.serveTCP()
 	t.Cleanup(func() { _ = udp.Close(); _ = tcp.Close() })
@@ -512,5 +524,267 @@ func TestTCPUpstreamSilenceIsNoReplyAndDropsTheConnection(t *testing.T) {
 	f.next()
 	if conns, headers := f.counts(); conns != 2 || headers != 2 {
 		t.Fatalf("%d connections and %d headers after two silent exchanges, want 2 and 2", conns, headers)
+	}
+}
+
+// Largest UDP payload one datagram can carry. IPv4's total length includes a 20-byte header; IPv6's payload
+// length does not include its 40-byte header. Both include the 8-byte UDP header.
+const (
+	ipv4UDPPayloadMax = 65535 - 20 - 8
+	ipv6UDPPayloadMax = 65535 - 8
+)
+
+func dnsMessage(t testing.TB, id uint16, name string, typ dnsmessage.Type, class dnsmessage.Class, response bool) []byte {
+	t.Helper()
+	n, err := dnsmessage.NewName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := (&dnsmessage.Message{
+		Header:    dnsmessage.Header{ID: id, Response: response, RecursionDesired: true},
+		Questions: []dnsmessage.Question{{Name: n, Type: typ, Class: class}},
+	}).Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
+func replyMarked(q seenQuery) [][]byte {
+	reply := echoWithQR(q)[0]
+	if q.tcp {
+		return [][]byte{append(reply, "tcp"...)}
+	}
+	return [][]byte{append(reply, "udp"...)}
+}
+
+func markedReply(wire []byte, tcp bool) []byte {
+	out := bytes.Clone(wire)
+	out[2] |= 0x80
+	if tcp {
+		return append(out, "tcp"...)
+	}
+	return append(out, "udp"...)
+}
+
+func head(b []byte) []byte {
+	if len(b) > 16 {
+		return b[:16]
+	}
+	return b
+}
+
+// paddedQuery is a real question followed by padding so header+wire is payloadMax+over bytes.
+func paddedQuery(t *testing.T, src, dst string, payloadMax, over int) (wire, udpHeader, tcpHeader []byte) {
+	t.Helper()
+	var err error
+	if udpHeader, err = proxyHeader(ap(src), ap(dst), false); err != nil {
+		t.Fatal(err)
+	}
+	if tcpHeader, err = proxyHeader(ap(src), ap(dst), true); err != nil {
+		t.Fatal(err)
+	}
+	n := payloadMax - len(udpHeader) + over
+	base := buildQuery(t, 0x4242, "example.", true)
+	if n < len(base) {
+		t.Fatalf("room for the query is %d bytes, the question alone is %d", n, len(base))
+	}
+	wire = make([]byte, n)
+	copy(wire, base)
+	return wire, udpHeader, tcpHeader
+}
+
+func newMarkedUpstream(t *testing.T, ipv6 bool) (*fakeUpstream, *upstream) {
+	t.Helper()
+	opts := []upstreamOption{answering(replyMarked)}
+	if ipv6 {
+		opts = append([]upstreamOption{listenIPv6()}, opts...)
+	}
+	f := newFakeUpstream(t, opts...)
+	return f, newUpstream(f.addr, watchdog)
+}
+
+func requireReply(t *testing.T, got, want []byte) {
+	t.Helper()
+	if !bytes.Equal(got, want) {
+		t.Fatalf("reply len %d head %x, want len %d head %x", len(got), head(got), len(want), head(want))
+	}
+}
+
+// A datagram the address family cannot carry, and one the kernel refuses as too long, is asked again over TCP.
+// A UDP failure that is not "too long" is still no reply.
+func TestExchangeUsesTCPWhenTheUDPDatagramCannotBeSent(t *testing.T) {
+	cases := []struct {
+		name       string
+		ipv6       bool
+		src, dst   string
+		payloadMax int
+	}{
+		{"ipv4", false, "203.0.113.5:40000", "198.51.100.1:53", ipv4UDPPayloadMax},
+		{"ipv6", true, "[2001:db8::1]:40000", "[2001:db8::53]:53", ipv6UDPPayloadMax},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Run("new connection", func(t *testing.T) {
+				f, u := newMarkedUpstream(t, c.ipv6)
+				wire, _, tcpHeader := paddedQuery(t, c.src, c.dst, c.payloadMax, 1)
+				got := u.exchangeUDPThenTCP(context.Background(), ap(c.src), ap(c.dst), wire)
+				requireReply(t, got, markedReply(wire, true))
+				seen := f.next()
+				if !seen.tcp || !bytes.Equal(seen.header, tcpHeader) || !bytes.Equal(seen.wire, wire) {
+					t.Fatalf("Unbound saw tcp=%v header=%x wire-len=%d, want the TCP header and the same query", seen.tcp, head(seen.header), len(seen.wire))
+				}
+				if conns, _ := f.counts(); conns != 1 {
+					t.Fatalf("%d TCP connections, want 1", conns)
+				}
+			})
+			t.Run("pool", func(t *testing.T) {
+				f, u := newMarkedUpstream(t, c.ipv6)
+				wire, udpHeader, tcpHeader := paddedQuery(t, c.src, c.dst, c.payloadMax, 1)
+				p := u.newPool(tcpHeader)
+				t.Cleanup(p.close)
+				got := u.exchangeUDPThenPool(context.Background(), udpHeader, p, wire)
+				requireReply(t, got, markedReply(wire, true))
+				seen := f.next()
+				if !seen.tcp || !bytes.Equal(seen.header, tcpHeader) || !bytes.Equal(seen.wire, wire) {
+					t.Fatalf("pool retry: tcp=%v header=%x wire-len=%d, want the pooled TCP header and the same query", seen.tcp, head(seen.header), len(seen.wire))
+				}
+				if idle := len(p.idle); idle != 1 {
+					t.Fatalf("the TCP connection that answered was not kept (%d idle)", idle)
+				}
+			})
+		})
+	}
+}
+
+func TestExchangeKeepsADatagramThatFitsInOneUDPPacket(t *testing.T) {
+	cases := []struct {
+		name       string
+		ipv6       bool
+		src, dst   string
+		payloadMax int
+	}{
+		{"ipv4", false, "203.0.113.5:40000", "198.51.100.1:53", ipv4UDPPayloadMax},
+		{"ipv6", true, "[2001:db8::1]:40000", "[2001:db8::53]:53", ipv6UDPPayloadMax},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, u := newMarkedUpstream(t, c.ipv6)
+			wire, _, _ := paddedQuery(t, c.src, c.dst, c.payloadMax, 0)
+			got := u.exchangeUDPThenTCP(context.Background(), ap(c.src), ap(c.dst), wire)
+			requireReply(t, got, markedReply(wire, false))
+			seen := f.next()
+			if seen.tcp || !bytes.Equal(seen.wire, wire) {
+				t.Fatalf("a datagram that fits went out as tcp=%v wire-len=%d", seen.tcp, len(seen.wire))
+			}
+			if conns, _ := f.counts(); conns != 0 {
+				t.Fatalf("a fitting datagram opened %d TCP connections, want 0", conns)
+			}
+		})
+	}
+}
+
+func TestExchangeDoesNotUseTCPWhenUDPFailsOtherwise(t *testing.T) {
+	f := newFakeUpstream(t, silent())
+	u := newUpstream(f.addr, 50*time.Millisecond)
+	query := buildQuery(t, 7, "example.", true)
+	src, dst := ap("203.0.113.5:40000"), ap("198.51.100.1:53")
+	if got := u.exchangeUDPThenTCP(context.Background(), src, dst, query); got != nil {
+		t.Fatalf("UDP silence became %x", got)
+	}
+	p := u.newPool(headerFor(t, "ipv4 tcp"))
+	t.Cleanup(p.close)
+	if got := u.exchangeUDPThenPool(context.Background(), headerFor(t, "ipv4 udp"), p, query); got != nil {
+		t.Fatalf("UDP silence on the pool path became %x", got)
+	}
+	if conns, _ := f.counts(); conns != 0 {
+		t.Fatalf("a UDP failure opened %d TCP connections, want 0", conns)
+	}
+}
+
+// A reused local port can deliver a late datagram for another question, or a copy of the query, under the same id.
+func TestExchangeUDPIgnoresADatagramThatIsNotTheResponse(t *testing.T) {
+	query := buildQuery(t, 0x4242, "example.", true)
+	real := echoWithQR(seenQuery{wire: query})[0]
+	cases := []struct {
+		name string
+		bad  []byte
+	}{
+		{"qr clear", bytes.Clone(query)},
+		{"different name", dnsMessage(t, 0x4242, "previous.example.", dnsmessage.TypeA, dnsmessage.ClassINET, true)},
+		{"different type", dnsMessage(t, 0x4242, "example.", dnsmessage.TypeAAAA, dnsmessage.ClassINET, true)},
+		{"different class", dnsMessage(t, 0x4242, "example.", dnsmessage.TypeA, dnsmessage.ClassCHAOS, true)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bad := c.bad
+			f := newFakeUpstream(t, answering(func(q seenQuery) [][]byte {
+				return [][]byte{bad, echoWithQR(q)[0]}
+			}))
+			u := newUpstream(f.addr, watchdog)
+			got := u.exchangeUDP(context.Background(), headerFor(t, "ipv4 udp"), query)
+			if !bytes.Equal(got, real) {
+				t.Fatalf("reply:\n got  %x\n want %x", got, real)
+			}
+		})
+	}
+	t.Run("late datagram alone", func(t *testing.T) {
+		late := dnsMessage(t, 0x4242, "previous.example.", dnsmessage.TypeA, dnsmessage.ClassINET, true)
+		f := newFakeUpstream(t, answering(func(seenQuery) [][]byte { return [][]byte{late} }))
+		u := newUpstream(f.addr, 300*time.Millisecond)
+		if got := u.exchangeUDP(context.Background(), headerFor(t, "ipv4 udp"), query); got != nil {
+			t.Fatalf("a late datagram for another question completed the exchange: %x", got)
+		}
+	})
+}
+
+func TestUpstreamTCPRejectsAReplyThatDoesNotCarryTheQueryID(t *testing.T) {
+	query := buildQuery(t, 0x4242, "example.", true)
+	cases := []struct {
+		name  string
+		reply []byte
+	}{
+		{"wrong id", withID(echoWithQR(seenQuery{wire: query})[0], 0x4243)},
+		{"shorter than two bytes", []byte{0x42}},
+		{"empty", []byte{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reply := c.reply
+			f := newFakeUpstream(t, answering(func(seenQuery) [][]byte { return [][]byte{reply} }))
+			u := newUpstream(f.addr, watchdog)
+			p := u.newPool(headerFor(t, "ipv4 tcp"))
+			t.Cleanup(p.close)
+			got := p.exchange(context.Background(), query)
+			idle := len(p.idle)
+			conns, _ := f.counts()
+			if got != nil || idle != 0 || conns != 1 {
+				t.Fatalf("got %x, idle %d, connections %d; want no reply, nothing idle, one dial", got, idle, conns)
+			}
+		})
+	}
+}
+
+func TestUpstreamTCPDeadlineDoesNotDialAgain(t *testing.T) {
+	var n atomic.Int32
+	f := newFakeUpstream(t, answering(func(q seenQuery) [][]byte {
+		if n.Add(1) == 1 {
+			return echoWithQR(q)
+		}
+		return nil
+	}))
+	u := newUpstream(f.addr, 150*time.Millisecond)
+	conn := u.newTCP(headerFor(t, "ipv4 tcp"))
+	defer conn.close()
+	first := buildQuery(t, 1, "example.", true)
+	if got := conn.exchange(context.Background(), first); !bytes.Equal(got, echoWithQR(seenQuery{wire: first})[0]) {
+		t.Fatalf("first exchange: got %x", got)
+	}
+	if got := conn.exchange(context.Background(), buildQuery(t, 2, "example.", true)); got != nil {
+		t.Fatalf("deadline returned %x, want nil", got)
+	}
+	conns, _ := f.counts()
+	if gotOpen := conn.conn != nil; gotOpen || conns != 1 {
+		t.Fatalf("connections %d, socket still open %v; a deadline must close the socket and not dial again", conns, gotOpen)
 	}
 }
