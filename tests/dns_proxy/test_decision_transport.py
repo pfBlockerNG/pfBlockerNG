@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import dnswire
+import pfb_dns_proxy
 import pytest
 from frontend_constants import ALLOWED, PROTO_DIR
 from frontend_helpers import WATCHDOG, FakeUnbound, build_query, watched
@@ -216,7 +217,6 @@ def test_an_answer_exactly_as_big_as_the_datagram_clients_size_is_not_truncated_
     assert verdicts == [(len(full), False), (len(full) - 1, True)]
 
 
-SERVFAIL = 2
 PADDING_OPTION = 12  # RFC 7830: the EDNS option a client pads its query with
 
 
@@ -232,25 +232,23 @@ def test_a_safesearch_chase_over_one_dns_message_is_servfail_and_never_forwarded
     """Issue #3641: the chase repeats the client's EDNS options and its target name is 5 bytes longer than DUCK, so a
     65535-byte query makes a 65540-byte FORWARD. The gateway treats an oversized FORWARD as a protocol error and exits;
     the client gets SERVFAIL instead and the decider keeps running."""
-    query = _padded(65535)
-    assert len(query) == 65535
+    query = _padded(_MESSAGE_MAXIMUM)
+    assert len(query) == _MESSAGE_MAXIMUM
     with running_decider(module_dir) as gateway:
         wire = gateway.answer_to(query, 1, STREAM, FakeUnbound(_target_zone(1)))
-        forwards = list(gateway.forwards)
     reply = dnswire.parse(wire)
-    assert forwards == [65535], f"FORWARD sizes {forwards}: the chase must not be sent"
-    assert (reply.rcode, reply.answers) == (SERVFAIL, [])
+    assert gateway.forwards == [_MESSAGE_MAXIMUM], f"FORWARD sizes {gateway.forwards}: the chase must not be sent"
+    assert (reply.rcode, reply.answers) == (pfb_dns_proxy.RCODE_SERVFAIL, [])
 
 
 def test_a_safesearch_chase_of_exactly_one_dns_message_is_forwarded(safesearch_csv: None, module_dir: Path) -> None:
     """The guard is over 65535 bytes, not at it: a chase of exactly that size is still forwarded and answered."""
-    query = _padded(65530)  # its chase is 5 bytes longer than the query: 65535
-    assert len(query) == 65530
+    query = _padded(_MESSAGE_MAXIMUM - 5)  # its chase is 5 bytes longer than the query
+    assert len(query) == _MESSAGE_MAXIMUM - 5
     with running_decider(module_dir) as gateway:
         wire = gateway.answer_to(query, 1, STREAM, FakeUnbound(_target_zone(1)))
-        forwards = list(gateway.forwards)
     reply = dnswire.parse(wire)
-    assert forwards == [65530, 65535]
+    assert gateway.forwards == [_MESSAGE_MAXIMUM - 5, _MESSAGE_MAXIMUM]
     assert (reply.rcode, len(reply.answers)) == (0, 2)
 
 

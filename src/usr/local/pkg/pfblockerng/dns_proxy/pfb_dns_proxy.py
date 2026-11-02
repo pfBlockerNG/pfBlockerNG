@@ -333,6 +333,7 @@ class Frontend:
         self._observer: tuple[asyncio.DatagramTransport, str] | None = None
         self._malformed_reported = False
         self._silence_logged = float("-inf")  # when "no reply from Unbound" was last logged
+        self._oversized_chase_logged = float("-inf")  # when an oversized SafeSearch chase was last logged
 
     def _operate(self, qstate: shim.module_qstate, event: int) -> int:
         module = self.module
@@ -446,7 +447,9 @@ class Frontend:
         )
         wire = dnswire.encode(chase)
         if len(wire) > MAX_DNS_MESSAGE:
-            shim.log_err(f"SafeSearch chase for {target.name} is {len(wire)} bytes, over one DNS message; SERVFAIL")
+            if (now := monotonic()) - self._oversized_chase_logged >= SILENCE_LOG_INTERVAL:  # a client can repeat it
+                self._oversized_chase_logged = now
+                shim.log_err(f"SafeSearch chase for {target.name} is {len(wire)} bytes, over one DNS message; SERVFAIL")
             return shim.MODULE_ERROR
         reply = await forward(wire)
         message = None if reply is None else dnswire.parse(reply)  # an unparseable reply is a SERVFAIL, as above

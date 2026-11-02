@@ -82,8 +82,7 @@ For a plain-UDP client the first FORWARD goes to Unbound over UDP only and its r
 is (Unbound saw the client's own UDP size). Every FORWARD after the first within one QUERY goes over UDP and, when Unbound's
 reply has TC set, again over TCP behind a stream PROXYv2 header for the same client; the REPLY is the TCP reply, or empty when
 that failed. Only the SafeSearch chase issues a second FORWARD today: it must read the target's addresses whole, and a
-truncated reply says nothing about them. A chase that would exceed 65535 bytes is not forwarded: the client gets SERVFAIL.
-For a stream client (TCP, DoT, DoH, DoQ) every FORWARD goes over UDP and, when
+truncated reply says nothing about them. For a stream client (TCP, DoT, DoH, DoQ) every FORWARD goes over UDP and, when
 Unbound's reply has TC set, again over TCP behind a stream PROXYv2 header for the same client, so the client gets the
 whole answer; a TCP or DoT client keeps one pool of upstream TCP connections for those retries, DoH and DoQ open one per
 retry.
@@ -92,7 +91,8 @@ The transport byte tells the decider whether the client has a UDP size limit: fo
 builds itself is held to the UDP size the client advertised (512 without EDNS, at most the 1232 the decider advertises
 itself; over it the answer is the question alone with TC set, so the client asks again over TCP), for a stream client it is
 sent whole up to 65535 bytes, the most one DNS message can carry; a longer one is the bare SERVFAIL, since the gateway
-cannot frame it. A relayed reply is never cut: it is Unbound's own.
+cannot frame it. A relayed reply is never cut: it is Unbound's own. A SafeSearch chase longer than 65535 bytes (the
+client's EDNS options with a longer target name) is never forwarded: the client gets that same SERVFAIL.
 
 Frames of different ids interleave freely and complete in any order; the decider never waits for one query before
 reading the next. An id is in flight from the gateway's QUERY until the gateway has read the decider's ANSWER or DROP
