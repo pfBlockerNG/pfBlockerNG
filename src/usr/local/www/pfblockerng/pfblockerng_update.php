@@ -235,16 +235,16 @@ if (pfb_cron_disabled()) {
 	$nextcron = '--';
 }
 
-$status = 'NEXT Scheduled CRON Event will run at'
-	. "&emsp;<strong>{$cronreal}</strong>&emsp;with<strong><span style=\"color: red;\">&emsp;{$nextcron}"
-	. '&emsp;</span></strong> time remaining.';
+$status = 'Next schedule check:'
+	. "&emsp;<strong>{$cronreal}</strong>&emsp;(in <strong><span style=\"color: red;\">&emsp;{$nextcron}"
+	. '&emsp;</span></strong>). Feed groups update at their own <strong>Update Frequency</strong>; see below.';
 
 // Query for any active pfBlockerNG task (captured once: reused by the status line AND the
 // auto-tail decision below).
 $pfb_task_running = pfb_active_task_running();
 if ($pfb_task_running) {
 	$status = '<span style="color: red;">&emsp;&emsp;'
-		. 'Active pfBlockerNG CRON JOB'
+		. 'An update is running.'
 		. '</span>&emsp;<i class="fa-solid fa-spinner fa-pulse fa-lg"></i>';
 }
 
@@ -336,7 +336,7 @@ $group->add(new Form_Checkbox(
 	'Both',
 	$pfb_scope_val === 'both',
 	'both'
-))->displayAsRadio('pfb_scope_both')->setAttribute('title', 'Sync IP and DNSBL feeds.')->setWidth(2);
+))->displayAsRadio('pfb_scope_both')->setAttribute('title', 'Update IP and DNSBL lists.')->setWidth(2);
 
 $group->add(new Form_Checkbox(
 	'pfb_scope',
@@ -344,7 +344,7 @@ $group->add(new Form_Checkbox(
 	'IP',
 	$pfb_scope_val === 'ip',
 	'ip'
-))->displayAsRadio('pfb_scope_ip')->setAttribute('title', 'Sync IP feeds only.')->setWidth(2);
+))->displayAsRadio('pfb_scope_ip')->setAttribute('title', 'Update IP lists only.')->setWidth(2);
 
 $group->add(new Form_Checkbox(
 	'pfb_scope',
@@ -352,9 +352,9 @@ $group->add(new Form_Checkbox(
 	'DNSBL',
 	$pfb_scope_val === 'dnsbl',
 	'dnsbl'
-))->displayAsRadio('pfb_scope_dnsbl')->setAttribute('title', 'Sync DNSBL feeds only.')->setWidth(2);
+))->displayAsRadio('pfb_scope_dnsbl')->setAttribute('title', 'Update DNSBL lists only.')->setWidth(2);
 
-$group->setHelp('Which lists to sync: Both, IP-only, or DNSBL-only.');
+$group->setHelp('Which lists to update.');
 $section->add($group);
 
 // Force mode — mutually-exclusive radios. None = a plain detector-respecting run.
@@ -398,7 +398,7 @@ if (!isset($pconfig['log_view'])) {
 // Alternate view/end view title text
 $btn_logview_title = 'Click to End Log View';
 if ($pconfig['log_view'] == 'View') {
-	$btn_logview_title = 'Click to View a running Cron Update.';
+	$btn_logview_title = 'View the log of the running update.';
 }
 
 $btn_logview = new Form_Button(
@@ -424,15 +424,15 @@ $section->addInput(new Form_StaticText(
 	$status
 ));
 $section->addInput(new Form_StaticText(
-	'Feed cron',
+	'Feed groups',
 	pfb_ledger_entry_html($ledger_cron)
 ));
 $section->addInput(new Form_StaticText(
-	'MaxMind/Extras',
+	'Extras (MaxMind, ASN, TOP1M)',
 	pfb_ledger_entry_html($ledger_dcc)
 ));
 $section->addInput(new Form_StaticText(
-	'DNSBL category',
+	'DNSBL Category',
 	pfb_dnsbl_category_schedule_html($pfb, $ledger_bl)
 ));
 $form->add($section);
@@ -501,23 +501,17 @@ if ($pfb['enable'] === PfbToggle::On && isset($pconfig['run']) &&
 
 		$wizard_log =
 '<div class="pull-left alert alert-info clearfix" style="width: 100%;" role="alert">
-	<p>pfBlockerNG has been successfully configured and updated. This installation will now block IPs based on some recommended
-		Feed source providers. It will also block most ADverts based on Feed sources including EasyList/EasyPrivacy. Some additional
-		Feed source providers include some malicious domain blocking.</p>
-	<p>Please note that this is an entry level configuration for pfBlockerNG IP and DNSBL components. It is designed to allow new
-		users to get running quickly to learn how effective pfBlockerNG can be for their networks.</p>
-	<p>The Feeds tab includes many different types of IP and DNSBL feed sources. Careful review should be completed to select which feeds are
-		appropriate for your needs.</p><br />
-	<p><u>NOTE</u>:</p><br />
+	<p>Wizard settings have been saved. Check the update log above to confirm that the lists loaded successfully.</p>
 	<ul>
-		<li>Please review the update log above for any errors.</li>
-		<li>For DNSBL, ensure that all of your LAN devices are pointed at pfSense ONLY for DNS resolution.</li>
-		<li>For users who have VLANS, please enable the DNSBL permit firewall rule option to allow all subnets to access the
-			DNSBL Webserver, or there may be some browser timeouts.</li>
-		<li>All IP/DNSBL events will be reported to the Reports/Alerts Tab. You can whitelist from the Alerts tab directly.</li>
-		<li>Review the Reports/Statistics tabs for an in-depth summary of all IP and DNSBL events</li>
-	</ul><br />
-	<p>The Wizard is now finalized!</p>
+		<li>IP: the PRI1 feeds block listed addresses on the selected outbound interfaces.</li>
+		<li>DNSBL: the ADs Basic group uses the Steven Black hosts feed.</li>
+	</ul>
+	<p>Add other feeds from <strong>Feeds</strong> as needed.</p>
+	<ul>
+		<li>Point LAN devices at this firewall for DNS.</li>
+		<li>Open <strong>Reports</strong> > <strong>Alerts</strong> to review logged blocks and add exceptions.</li>
+		<li>Open <strong>Reports</strong> > <strong>IP Block Stats</strong> or <strong>DNSBL Block Stats</strong> for totals.</li>
+	</ul>
 	<p><small>A copy of this message has been saved to the wizard.log file</small></p>
 </div>';
 		print ("{$wizard_log}");

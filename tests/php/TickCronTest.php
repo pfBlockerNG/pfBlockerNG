@@ -295,7 +295,7 @@ final class TickCronTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfb_next_tick_boundary — the Update page's "NEXT Scheduled CRON Event".
+	// pfb_next_tick_boundary — the Update page's "Next schedule check" time.
 	//
 	// The ADR-43 tick is a star-slash-N minute cron, so the next event is the
 	// next minute-of-hour that is a multiple of $tick_min. The Update page used

@@ -219,8 +219,8 @@ $section->addInput(new Form_StaticText(
 	. gettext('Update Hooks run an admin-authored <strong>script</strong> <strong>once per update pass</strong> '
 		. '&mdash; a <strong>Pre</strong> hook at the start of the update (before any feed is processed) and a '
 		. '<strong>Post</strong> hook at the end (after all IP/DNSBL reloads). They are <strong>not</strong> the '
-		. 'per-feed <em>ip_pre_*.sh</em> list pre-scripts (which transform a single downloaded feed); these run once '
-		. 'for the whole pass and are intended for downstream nudges such as reloading another service.')
+		. 'per-feed <code>ip_pre_*.sh</code> list pre-scripts (which transform a single downloaded feed); these run once '
+		. 'for the whole pass and are intended for follow-up actions such as reloading another service.')
 	. '</small>'
 ));
 
@@ -228,22 +228,21 @@ $section->addInput(new Form_StaticText(
 	'Script source',
 	'<small>'
 	. sprintf(gettext('For security, a hook runs a script <strong>file you place on the firewall</strong>, not a command '
-		. 'typed here &mdash; this picker only selects from that folder. Create the script over SSH/console (root '
-		. 'shell) in <code>%1$s</code>, name it <code>hook_pre_<em>name</em>.sh</code> or '
-		. '<code>hook_post_<em>name</em>.sh</code> (<code>.sh</code> or <code>.py</code>). The dependency-derived '
-		. 'versioned interpreter runs Python hooks; <strong>Python hooks do not require</strong> an executable bit or shebang; '
-		. '<strong>Shell hooks still require</strong> both. Only files matching that naming appear in the '
-		. 'list below for the matching Pre/Post. (Same picker model as the per-feed list scripts.)'), PFB_HOOK_SCRIPT_DIR)
+		. 'typed here &mdash; this picker only selects from that folder. A hook runs a script from <code>%1$s</code> '
+		. 'named <code>hook_pre_NAME.sh</code> or <code>hook_post_NAME.sh</code> (<code>.py</code> is also accepted). '
+		. 'Create it on the <strong>Edit Hooks</strong> tab (full administrators only) or from a shell. Only files '
+		. 'matching that naming appear in the list below for the matching Pre/Post. Python hooks use the package '
+		. 'Python interpreter and need no shebang or execute bit. <strong>Shell hooks still require</strong> both.'), PFB_HOOK_SCRIPT_DIR)
 	. '</small>'
 ));
 
 $section->addInput(new Form_StaticText(
 	'Run as root',
-	'<span class="text-danger">' . gettext('Warning: ') . '</span>'
+	'<span class="text-danger"><strong>' . gettext('Warning:') . '</strong></span> '
 	. '<small>'
 	. gettext('The selected script runs <strong>as root</strong> &mdash; the same trust class as pfSense Shellcmd / '
-		. 'cron. Only an administrator can edit this page, and only a user with shell access can add a script to the '
-		. 'folder. The script runs under <code>/usr/bin/timeout</code>; if it exceeds its timeout it is killed '
+		. 'cron. Anyone who can use <strong>Edit Hooks</strong> or a root shell can create such a script. The script runs '
+		. 'under <code>/usr/bin/timeout</code>; if it exceeds its timeout it is killed '
 		. '(SIGTERM, then SIGKILL after a short grace period). A hook\'s non-zero exit <strong>or</strong> timeout is '
 		. 'logged to the pfBlockerNG log and the update <strong>continues</strong> &mdash; a hook can never abort or '
 		. 'stall an update. Hooks run in the order listed: all Pre hooks before processing, all Post hooks after '
@@ -254,41 +253,34 @@ $section->addInput(new Form_StaticText(
 $section->addInput(new Form_StaticText(
 	'Environment',
 	'<small>'
-	. gettext('Each hook receives these environment variables:') . '<br />'
-	. '<code>PFB_WHEN</code> &mdash; ' . gettext('the fire point: <code>pre</code> or <code>post</code>.') . '<br />'
-	. '<code>PFB_TRIGGER</code> &mdash; ' . gettext('what started the update: <code>cron</code> (the scheduled update, '
-		. 'and a Run Now with Force: Download or Both), <code>update</code> (a settings save, or a Run Now with '
-		. 'Force: None), or <code>force-reload</code> (a Run Now with Force: Parse). '
-		. 'Set for both <code>pre</code> and <code>post</code>.') . '<br />'
-	. '<code>PFB_POST_INSTALL</code> &mdash; ' . gettext('<code>1</code> when this run is the reconfigure right '
-		. 'after pfBlockerNG was installed or upgraded, else <code>0</code>.') . '<br />'
-	. '<code>PFB_PRE_UNINSTALL</code> &mdash; ' . gettext('<code>1</code> when this run is the teardown while '
-		. 'pfBlockerNG is being removed, else <code>0</code>. Fires on an uninstall and on a major pfSense '
-		. 'version upgrade (which fully removes packages); a normal package update keeps pfBlockerNG live and '
-		. 'does not fire it.') . '<br />'
-	. '<code>PFB_PKG_OP</code> &mdash; ' . gettext('the package-manager operation this run belongs to: '
-		. '<code>install</code>, <code>upgrade</code>, <code>reinstall</code>, or <code>delete</code>; empty when '
-		. 'the run is not a package operation (a normal cron/manual update).') . '<br />'
-	. gettext('The following are set on <code>post</code> hooks only (a <code>pre</code> hook runs before anything is '
-		. 'downloaded, so nothing has changed yet):') . '<br />'
-	. '<code>PFB_IP_CHANGED</code> &mdash; ' . gettext('<code>1</code> if the IP/firewall side changed (a filter '
-		. 'reload was applied) this pass, else <code>0</code>.') . '<br />'
-	. '<code>PFB_DNSBL_CHANGED</code> &mdash; ' . gettext('<code>1</code> if the DNSBL side changed this pass, else '
-		. '<code>0</code>.') . '<br />'
-	. '<code>PFB_STATUS</code> &mdash; ' . gettext('overall pass status. Currently always <code>ok</code> (reserved '
-		. 'for future use).') . '<br />'
-	. '<code>PFB_CHANGED_IP_ALIASES</code> &mdash; ' . gettext('space-separated list of IP firewall aliases '
-		. '(<code>pfB_*</code>) updated this pass; empty when none.') . '<br />'
-	. '<code>PFB_CHANGED_DNSBL_GROUPS</code> &mdash; ' . gettext('space-separated list of DNSBL groups '
-		. '(<code>DNSBL_*</code>) updated this pass; empty when none.')
+	. '<p>' . gettext('Each hook receives these environment variables.') . '</p>'
+	. '<dl class="dl-horizontal">'
+	. '<dt><code>PFB_WHEN</code></dt><dd>' . gettext('the fire point: <code>pre</code> or <code>post</code>.') . '</dd>'
+	. '<dt><code>PFB_TRIGGER</code></dt><dd>' . gettext('what started the update. Set for both <code>pre</code> and <code>post</code>:')
+	. '<ul>'
+	. '<li><code>cron</code>: the scheduled update, or <strong>Run Now</strong> with <strong>Force</strong> set to <strong>Download</strong> or <strong>Both</strong>.</li>'
+	. '<li><code>update</code>: a settings save, or <strong>Run Now</strong> with <strong>Force</strong> set to <strong>None</strong>.</li>'
+	. '<li><code>force-reload</code>: <strong>Run Now</strong> with <strong>Force</strong> set to <strong>Parse</strong>.</li>'
+	. '</ul></dd>'
+	. '<dt><code>PFB_POST_INSTALL</code></dt><dd>' . gettext('<code>1</code> when this run is the reconfigure right after pfBlockerNG was installed or upgraded, else <code>0</code>.') . '</dd>'
+	. '<dt><code>PFB_PRE_UNINSTALL</code></dt><dd>' . gettext('<code>1</code> when this run is the teardown while pfBlockerNG is being removed, including a major pfSense version upgrade, else <code>0</code>. A normal package update keeps pfBlockerNG live and does not set it.') . '</dd>'
+	. '<dt><code>PFB_PKG_OP</code></dt><dd>' . gettext('the package-manager operation this run belongs to: <code>install</code>, <code>upgrade</code>, <code>reinstall</code>, or <code>delete</code>; empty when the run is not a package operation (a normal cron or manual update).') . '</dd>'
+	. '</dl>'
+	. '<p>' . gettext('<strong>Post hooks only</strong>: a <strong>Pre</strong> hook runs before anything is downloaded, so nothing has changed yet.') . '</p>'
+	. '<dl class="dl-horizontal">'
+	. '<dt><code>PFB_IP_CHANGED</code></dt><dd>' . gettext('<code>1</code> if the IP/firewall side changed (a filter reload was applied) this pass, else <code>0</code>.') . '</dd>'
+	. '<dt><code>PFB_DNSBL_CHANGED</code></dt><dd>' . gettext('<code>1</code> if the DNSBL side changed this pass, else <code>0</code>.') . '</dd>'
+	. '<dt><code>PFB_STATUS</code></dt><dd>' . gettext('overall pass status. Currently always <code>ok</code> (reserved for future use).') . '</dd>'
+	. '<dt><code>PFB_CHANGED_IP_ALIASES</code></dt><dd>' . gettext('space-separated list of IP firewall aliases (<code>pfB_*</code>) updated this pass; empty when none.') . '</dd>'
+	. '<dt><code>PFB_CHANGED_DNSBL_GROUPS</code></dt><dd>' . gettext('space-separated list of DNSBL groups (<code>DNSBL_*</code>) updated this pass; empty when none.') . '</dd>'
+	. '</dl>'
 	. '</small>'
 ));
 
 $section->addInput(new Form_StaticText(
 	'HA / sync',
 	'<small>'
-	. gettext('Hooks are stored in the pfBlockerNG configuration, so they replicate to a CARP/HA secondary and run on '
-		. 'whichever node performs the update.')
+	. gettext('Hook entries are copied only when <strong>Sync Scope</strong> is <strong>All settings (legacy)</strong>. Configuration sync never copies the script files: install them on each node. Hooks run on whichever node performs the update.')
 	. '</small>'
 ));
 $form->add($section);

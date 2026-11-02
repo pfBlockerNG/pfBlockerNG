@@ -299,8 +299,9 @@ $form->add($section);
 // on-disk file Save writes to; they are ALWAYS re-validated server-side
 // (pfb_hook_script_valid()) regardless of what a crafted POST claims.
 $section = new Form_Section('Editor');
+$pfb_eh_when_names = array('pre' => gettext('Pre'), 'post' => gettext('Post'));
 $pfb_eh_loaded_label = ($pfb_eh_sel_script !== '')
-	? sprintf(gettext('Editing <strong>%1$s</strong> (%2$s)'), htmlspecialchars($pfb_eh_sel_script), htmlspecialchars($pfb_eh_sel_when))
+	? sprintf(gettext('Editing <code>%1$s</code> (<strong>%2$s</strong>)'), htmlspecialchars($pfb_eh_sel_script), htmlspecialchars($pfb_eh_when_names[$pfb_eh_sel_when] ?? ''))
 	: gettext('Load an existing script above, or create a new one, to start editing.');
 $section->addInput(new Form_StaticText('Now editing', $pfb_eh_loaded_label));
 
@@ -333,7 +334,7 @@ $pfb_eh_textarea->removeClass('form-control')
 	->setAttribute('style', 'width: 100%; font-family: monospace;')
 	->setHelp(gettext('Saved as typed, except line endings are normalized to LF, trailing whitespace is ' .
 		'stripped from each line, and control characters other than tab are removed -- write a literal ' .
-		'control byte as an escape (e.g. \\033) instead.'));
+		'control byte as an escape (e.g. <code>\\033</code>) instead.'));
 $section->addInput($pfb_eh_textarea);
 
 // Named pfb_eh_save directly -- same native-submit reasoning as the Create button

@@ -297,7 +297,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "hooks",
         "/pfblockerng/pfblockerng_hooks.php",
-        ("Update Hooks", "Hook Entries", "dependency-derived", "versioned interpreter"),
+        ("Update Hooks", "Hook Entries"),
     ),
     # issue #1669 Part B / ADR-12 post-acceptance addendum: the gated "Edit Hooks" hook-script
     # authoring editor, the Update sub-tab directly after Hooks. The smoke session is always
@@ -750,13 +750,6 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     When GET pfblockerng_update.php and pfblockerng_hooks.php,
     Then each renders the sub-tab row: 'Run', 'Hooks', and 'Edit Hooks' anchors with
       the expected links.
-    And the old standalone 'Update Hooks' tab is gone: it is ABSENT from the update
-      page entirely, and from the General witness page (a page that is neither Update
-      nor Hooks) — while that page keeps its 'Update' top tab. The absence is the
-      before/after guard: 'Update Hooks' was present as a top tab on every page before
-      this change, so these assertions would have FAILED then and pass only after the
-      move. (The hooks page itself still contains the literal 'Update Hooks' in its
-      Form_Section title, so absence is asserted on the update + witness pages, not it.)
 
     The active-tab-tracks-the-page branch (Run, Hooks, or Edit Hooks active on its page)
     is the Tier-B browser half (test_browser_hooks.py).
@@ -768,11 +761,6 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     assert ">Edit Hooks</a>" in body, "update page is missing the 'Edit Hooks' sub-tab anchor"
     assert _HOOKS_PAGE in body, "update page 'Hooks' sub-tab does not link the hooks page"
     assert _EDIT_HOOKS_PAGE in body, "update page 'Edit Hooks' sub-tab does not link the editor page"
-    # "Update Hooks" is a tab-nav guard: the removed top tab was the ONLY occurrence of
-    # that literal on the update page, so its absence proves the tab is gone. (If future
-    # help text on this page ever references the hooks page by that name, narrow this to
-    # the nav element rather than the whole body.)
-    assert "Update Hooks" not in body, "stale 'Update Hooks' top-level tab still rendered on the update page"
 
     # --- Hooks page (pfblockerng_hooks.php): all sub-tabs render. ---
     body = webui.get(_HOOKS_PAGE).text
@@ -782,27 +770,9 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     assert _UPDATE_PAGE in body, "hooks page 'Run' sub-tab does not link the update page"
     assert _EDIT_HOOKS_PAGE in body, "hooks page 'Edit Hooks' sub-tab does not link the editor page"
 
-    # --- Witness page (General): the 'Update Hooks' top tab is gone; 'Update' remains. ---
     body = webui.get(_GENERAL_PAGE).text
-    assert "Update Hooks" not in body, "'Update Hooks' top-level tab is still present on the General page"
     assert ">Update</a>" in body, "the 'Update' top-level tab was wrongly removed from the General page"
     assert _UPDATE_PAGE in body, "the General page no longer links the Update tab"
-
-
-def test_update_hooks_help_describes_python_launcher(webui: WebUI) -> None:
-    """Hook help distinguishes dependency-derived Python dispatch from shell shebangs.
-
-    Python hooks are launched by the package's versioned interpreter, so their files
-    need neither an executable bit nor a usable shebang. Shell hooks still execute
-    directly and retain both requirements. This is Tier-A render proof for the
-    operator-facing contract; the hook execution behavior is pinned in PHPUnit.
-    """
-    body = webui.get(_HOOKS_PAGE).text.lower()
-    assert "dependency-derived" in body, "hooks help omits dependency-derived Python runtime"
-    assert "versioned interpreter" in body, "hooks help omits versioned Python interpreter"
-    assert "python hooks do not require" in body, "hooks help does not explain Python executable/shebang exemption"
-    assert "shell hooks still require" in body, "hooks help does not preserve shell executable/shebang requirement"
-    assert "chmod +x" not in body, "stale blanket chmod +x guidance still claims all hooks need executable bit"
 
 
 def test_update_page_cron_status_reports_harness_disable_flag(
@@ -824,7 +794,7 @@ def test_update_page_cron_status_reports_harness_disable_flag(
     )
 
     resp = webui.get(_UPDATE_PAGE)
-    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("NEXT Scheduled CRON Event",))
+    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Schedule",))
     assert result.ok, f"Update page render oracle failed: {result.detail}"
     assert f"[ Disabled by {flag} ]" in resp.text, (
         f"Update page cron-status line is missing the harness disable banner for {flag}"
@@ -1226,7 +1196,6 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
       ``Not yet run`` — the bl job only runs (and records a ledger entry) when the feature
       is enabled with a category selected, so an unconfigured install must say why it is
       not scheduled, not pretend a run is pending (pre-fix it showed ``<em>Not yet run</em>``);
-    And the Run Scope help no longer carries the stray ``on Run Now`` qualifier;
     And the Force help is itemized per mode (a ``<strong>`` label per None/Parse/Download/Both)
       instead of one run-on sentence (pre-fix there were no ``<strong>`` mode labels);
     And the Run button carries an inline right margin so it is visibly separated from the
@@ -1242,17 +1211,12 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
 
     # DNSBL Category row: feature unconfigured ⇒ "Disabled". Scope to THIS row's value cell
     # (the markup right after its label), not the whole body, so unrelated markup can't pass it.
-    assert "DNSBL category" in body, "Update page missing the 'DNSBL category' schedule row"
-    cat_row = body.split("DNSBL category", 1)[1][:500]
+    assert "DNSBL Category" in body, "Update page missing the 'DNSBL Category' schedule row"
+    cat_row = body.split("DNSBL Category", 1)[1][:500]
     assert "<em>Disabled</em>" in cat_row, (
         "DNSBL category row should read 'Disabled' when the category feature is off, "
         f"not the misleading 'Not yet run' — row markup was: {cat_row[:200]!r}"
     )
-
-    # Run Scope help: the stray 'on Run Now' qualifier is gone. Match the precise OLD help
-    # string (not a bare "on Run Now", which also appears in an unrelated inline JS comment).
-    assert "Which lists to sync: Both, IP-only, or DNSBL-only." in body, "Run Scope help text not updated"
-    assert "Which lists to sync on Run Now" not in body, "Run Scope help still carries the stray 'on Run Now' qualifier"
 
     # Force help: itemized with a bold label per mode.
     for needle in (

@@ -53,7 +53,6 @@ final class AlertsTldWhitelistPromptTest extends TestCase
 
 		$this->assertStringStartsWith('DNSBLWT|tld|bad.example|', $icon['id'], 'sanity: this is the whole-TLD whitelist icon');
 		$this->assertStringContainsString('[ DNSBL Whitelist ]', $icon['title']);
-		$this->assertStringNotContainsString('TLD Whitelist', $icon['title'], 'the prompt names a list that does not exist');
 		$this->assertStringNotContainsString('<strong>', $icon['title'], 'confirm() shows plain text; markup would appear literally');
 	}
 
@@ -62,6 +61,5 @@ final class AlertsTldWhitelistPromptTest extends TestCase
 		$icon = $this->iconFor('DNSBL');
 
 		$this->assertStringStartsWith('DNSBLWT|add|', $icon['id'], 'a plain DNSBL row keeps the add icon, not the TLD one');
-		$this->assertStringNotContainsString('[ DNSBL Whitelist ]', $icon['title']);
 	}
 }

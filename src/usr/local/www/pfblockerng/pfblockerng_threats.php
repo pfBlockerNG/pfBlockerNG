@@ -74,8 +74,7 @@ $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblo
 		<h4 class="panel-title"><?=gettext("Threat {$title}:&emsp;" . $host . $domain . $port); ?></h4>
 	</div>
 	<div>
-		<p class="text-center"><br />NOTE:&emsp;The following links are to external services, so their reliability cannot be guaranteed.
-			It is also recommended to open these links in a different Browser</p>
+		<p class="text-center"><br /><strong>Note:</strong> These links open third-party lookup services, and most send the selected IP, domain or port to that service. Their reliability cannot be guaranteed.</p>
 	</div>
 	<div>
 		<table class="table table-striped table-hover table-compact">
@@ -131,7 +130,7 @@ $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblo
 				<tr>
 					<td><i class="fa-solid fa-globe pull-right"></i></td>
 					<td><a target="_blank" rel="noopener noreferrer" href="https://sitecheck.sucuri.net/results/<?=$host;?>">
-						<?=gettext("Securi SiteCheck");?></a></td>
+						<?=gettext("Sucuri SiteCheck");?></a></td>
 				</tr>
 				<tr>
 					<td><i class="fa-solid fa-globe pull-right"></i></td>
@@ -151,7 +150,7 @@ $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblo
 				<tr>
 					<td><i class="fa-solid fa-globe pull-right"></i></td>
 					<td><a target="_blank" rel="noopener noreferrer" href="https://quttera.com/sitescan/<?=$host;?>">
-						<?=gettext("Quattera");?></a></td>
+						<?=gettext("Quttera");?></a></td>
 				</tr>
 				<tr>
 					<td><i class="fa-solid fa-globe pull-right"></i></td>
@@ -364,7 +363,7 @@ $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblo
 				<tr>
 					<td><i class="fa-solid fa-globe pull-right"></i></td>
 					<td><a target="_blank" rel="noopener noreferrer" href="https://www.virustotal.com/en/domain/<?=$domain;?>/information/">
-						<?=gettext("Virus Total");?></a></td>
+						<?=gettext("VirusTotal");?></a></td>
 				</tr>
 				<tr>
 					<td><i class="fa-solid fa-globe pull-right"></i></td>
