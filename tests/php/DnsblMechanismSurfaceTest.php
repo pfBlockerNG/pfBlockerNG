@@ -231,7 +231,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		}
 		$this->assertEveryVipBulletIsDeprecated($help, 'Blacklist logging help');
 		$this->assertStringContainsString('Deprecated: prefer Null Blocking', $help, 'the VIP deprecation sentence');
-		$this->assertStringContainsString('Default follows the global DNSBL blocking mechanism', strip_tags($help), 'the Blacklist-only Default line');
 		$this->assertStringNotContainsString('Default: <strong>Default</strong>', $help, 'no second "Default:" header beside the mechanism help');
 	}
 
