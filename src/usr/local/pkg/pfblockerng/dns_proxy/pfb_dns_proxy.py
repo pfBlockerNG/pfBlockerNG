@@ -135,6 +135,7 @@ MAX_REPORT_OPTION_HEX = 1024  # hex of one option's data: fits a 2 KiB datagram 
 MAX_REPORT_BYTES = 2048  # one report is one datagram from the observer, which never sends more
 OBSERVER_RCVBUF = 256 * 1024  # bytes asked for the observer socket, so a burst queues in it
 MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
+MAX_DNS_MESSAGE = 65535  # one DNS message; a longer ANSWER is a protocol error at the gateway
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 ReplyLogger = Callable[[dnswire.Message, str, bytes | None], None]  # query, client, Unbound's reply
 
@@ -255,7 +256,8 @@ def _error(query: dnswire.Message, rcode: int) -> bytes:
 def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> bytes:
     """The module's replacement message, addressed to this client, with its rcode. AD is not kept: the data is no longer
     the one Unbound validated. Over `limit` bytes (a UDP client's) it becomes the question alone with TC set, so the
-    client asks again over TCP."""
+    client asks again over TCP. With no limit (a stream client), a message over MAX_DNS_MESSAGE bytes is a bare
+    SERVFAIL: it cannot be sent whole and it is not truncated."""
     flags = (
         dnswire.QR
         | dnswire.RA
@@ -264,6 +266,8 @@ def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> byte
     )
     additional = [*msg.additional, *_edns_for(query)]
     wire = dnswire.encode(dnswire.Message(query.id, flags, query.questions, msg.answer, msg.authority, additional))
+    if limit is None and len(wire) > MAX_DNS_MESSAGE:
+        return _error(query, RCODE_SERVFAIL)
     if limit is None or len(wire) <= limit:
         return wire
     return dnswire.encode(dnswire.Message(query.id, flags | dnswire.TC, query.questions, additional=_edns_for(query)))

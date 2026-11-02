@@ -158,6 +158,44 @@ def test_a_stream_clients_answer_is_sent_whole_however_big(safesearch_csv: None,
     assert (reply.flags & dnswire.TC, len(reply.answers)) == (0, 95)
 
 
+# A records on this name grow the rebuilt answer by 16 bytes, so one TXT is what lands it on an exact length:
+# 4091 addresses encode to 65522, an empty TXT adds 13 (the message maximum) and a one-character TXT adds 14.
+_AT_MESSAGE_MAXIMUM = 4091
+_MESSAGE_MAXIMUM = 65535
+
+
+def _zone_at(txt: str) -> dict[tuple[str, int], list[str]]:
+    zone = _target_zone(_AT_MESSAGE_MAXIMUM)
+    zone[(TARGET, dnswire.TYPE_A)].append(f"{TARGET} 300 IN TXT {txt}")
+    return zone
+
+
+def test_a_rebuilt_stream_answer_over_the_message_maximum_is_an_error(safesearch_csv: None, module_dir: Path) -> None:
+    """A rebuilt stream answer at the message maximum is sent whole; one byte over is a bare SERVFAIL."""
+    question = dnswire.Question(DUCK, dnswire.TYPE_A)
+    with running_decider(module_dir) as gateway:
+        exact = gateway.answer_to(build_query(DUCK), 1, STREAM, FakeUnbound(_zone_at('""')))
+        over = gateway.answer_to(build_query(DUCK), 2, STREAM, FakeUnbound(_zone_at('"x"')))
+        empty = gateway.answer_to(build_query("noaaaa.example.", dnswire.TYPE_AAAA), 3, STREAM, FakeUnbound(ZONE))
+    exact_reply = dnswire.parse(exact)
+    assert (len(exact), exact_reply.rcode, exact_reply.flags & dnswire.TC, len(exact_reply.answers)) == (
+        _MESSAGE_MAXIMUM,
+        0,
+        0,
+        1 + _AT_MESSAGE_MAXIMUM + 1,
+    )
+    over_reply = dnswire.parse(over)
+    got = (len(over), over_reply.rcode, len(over_reply.answers), over_reply.questions)
+    assert len(over) <= _MESSAGE_MAXIMUM and got[1:] == (2, 0, [question]), got
+    empty_reply = dnswire.parse(empty)
+    assert (empty_reply.rcode, empty_reply.answers, [rr.rtype for rr in empty_reply.authority]) == (
+        0,
+        [],
+        [dnswire.TYPE_SOA],
+    )
+    assert len(empty) <= _MESSAGE_MAXIMUM
+
+
 def test_an_answer_exactly_as_big_as_the_datagram_clients_size_is_not_truncated_and_one_byte_less_is(
     safesearch_csv: None, module_dir: Path
 ) -> None:
