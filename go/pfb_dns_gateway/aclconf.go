@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -27,10 +28,12 @@ type aclFile struct {
 	info os.FileInfo
 }
 
-// aclGlob is an `include:` pattern and the files it matched.
+// aclGlob is an `include:` pattern and the files it matched. failed is set when a directory the pattern needs could
+// not be listed (matches is then empty): the glob stays a dependency, so the ACL reloads once it can be listed.
 type aclGlob struct {
 	pattern string
 	matches []string
+	failed  bool
 }
 
 // aclDeps is everything a load read: a change to any of it can change the rules.
@@ -47,7 +50,7 @@ func (d aclDeps) changed() bool {
 		}
 	}
 	for _, g := range d.globs {
-		if matches, _ := globFiles(g.pattern); !slices.Equal(matches, g.matches) {
+		if matches, err := globFiles(g.pattern); (err != nil) != g.failed || !slices.Equal(matches, g.matches) {
 			return true
 		}
 	}
@@ -162,10 +165,10 @@ func (w *confWalker) include(from string, depth int, directive string) error {
 	}
 	pattern := strings.ReplaceAll(target, "[!", "[^") // glob(3) negates with '!'; filepath.Match negates with '^'
 	matches, err := globFiles(pattern)
+	w.deps.globs = append(w.deps.globs, aclGlob{pattern: pattern, matches: matches, failed: err != nil})
 	if err != nil {
 		return fmt.Errorf("%s: include %q: %w", from, target, err)
 	}
-	w.deps.globs = append(w.deps.globs, aclGlob{pattern: pattern, matches: matches})
 	for _, m := range matches {
 		if err := w.file(m, depth+1); err != nil {
 			return err
@@ -183,41 +186,66 @@ func (w *confWalker) allowImplicit() {
 	}
 }
 
-// globFiles is filepath.Glob without its leading-dot rule: a wildcard never matches a dot-name the pattern does not
-// spell out, as glob(3) does. A missing pattern directory is no match; any other stat or open error is returned
-// (issue #3654: filepath.Glob swallows those, so an unlistable directory reloaded as an empty include).
+// globFiles is filepath.Glob without its leading-dot rule (a wildcard never matches a dot-name the pattern does not
+// spell out, as glob(3) does) and without its silence about I/O: a directory it cannot list, whether the pattern spells
+// it out or a wildcard names it, fails the walk (issue #3654), where filepath.Glob skips it and the include reads as
+// empty. A directory that is not there, is not one, or is a symlink loop matches nothing, as in glob(3): a stray link
+// in a directory a `*` names must not fail the include, which would forward the clients its rows deny.
 func globFiles(pattern string) ([]string, error) {
-	dir := filepath.Dir(pattern)
-	if _, err := os.Stat(dir); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
+	if _, err := filepath.Match(pattern, ""); err != nil {
 		return nil, err
 	}
-	d, err := os.Open(dir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
+	dir, file := filepath.Split(pattern)
+	switch dir {
+	case "":
+		dir = "."
+	case string(filepath.Separator):
+	default:
+		dir = dir[:len(dir)-1]
 	}
-	d.Close()
-
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, err
-	}
-	pat := strings.Split(filepath.Clean(pattern), string(filepath.Separator))
-	return slices.DeleteFunc(matches, func(m string) bool {
-		parts := strings.Split(filepath.Clean(m), string(filepath.Separator))
-		if len(parts) != len(pat) {
-			return false
+	dirs := []string{dir}
+	if strings.ContainsAny(dir, `*?[\`) {
+		var err error
+		if dirs, err = globFiles(dir); err != nil {
+			return nil, err
 		}
-		for i, part := range parts {
-			if strings.HasPrefix(part, ".") && !strings.HasPrefix(pat[i], ".") {
-				return true
+	}
+	var matches []string
+	for _, d := range dirs {
+		fi, err := os.Stat(d)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
+				continue
+			}
+			return nil, err
+		}
+		if !fi.IsDir() {
+			continue // a wildcard directory component also names plain files
+		}
+		names, err := readDirNames(d)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			if strings.HasPrefix(n, ".") && !strings.HasPrefix(file, ".") {
+				continue
+			}
+			if ok, _ := filepath.Match(file, n); ok {
+				matches = append(matches, filepath.Join(d, n))
 			}
 		}
-		return false
-	}), nil
+	}
+	return matches, nil
+}
+
+// readDirNames returns the sorted names in dir, and any error listing it.
+func readDirNames(dir string) ([]string, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	slices.Sort(names)
+	return names, err
 }
