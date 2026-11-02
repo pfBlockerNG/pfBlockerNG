@@ -40,7 +40,18 @@ final class SyncDnsUnseededUpgradeTest extends TestCase
 	public function testUpgradeKeepsEffectiveResolverInheritanceInsteadOfPromotingUnseededDefaults(?string $interface, bool $unseeded): void
 	{
 		// The old installer materialized these DoT defaults even before first page load.
-		$old = ['pfb_dns' => '', 'pfb_dns_saved' => '', 'pfb_dns_dot' => '', 'pfb_dns_dot_port' => '853'];
+		$otherShared = [
+			'pfb_dns_doh' => 'on',
+			'pfb_dns_doh_port' => '8448',
+			'pfb_dns_doq' => 'on',
+			'pfb_dns_doq_port' => '8855',
+			'pfb_dns_doh_trusted' => base64_encode('192.0.2.0/24'),
+			'pfb_dns_ddr' => 'on',
+			'pfb_dns_ddr_doh_443' => 'on',
+		];
+		$old = array_merge([
+			'pfb_dns' => '', 'pfb_dns_saved' => '', 'pfb_dns_dot' => '', 'pfb_dns_dot_port' => '853',
+		], $otherShared);
 		if ($interface !== NULL) {
 			$old['pfb_dns_interface'] = $interface;
 		}
@@ -51,12 +62,20 @@ final class SyncDnsUnseededUpgradeTest extends TestCase
 		pfb_run_migrations();
 		$this->assertSame($interface ?? '', PfbConfig::read('dns/pfb_dns_interface'), 'migration never seeds interfaces');
 		$this->assertSame('', PfbConfig::read('dns/pfb_dns_saved'), 'migration never touches recovery state');
+		foreach ($otherShared as $key => $value) {
+			$this->assertSame($value, PfbConfig::readSection(PFB_SECTIONS['dns_shared'])[$key] ?? NULL,
+				"migration must preserve {$key}, including on an unseeded node");
+		}
 		pfb_install_registry_writeback(self::sections(), $modes);
 		pfb_dns_proxy_seed();
 		$this->assertSame($unseeded ? PfbToggle::On : PfbToggle::Off, pfb_dns_proxy_setting('pfb_dns_dot'), 'upgrade must preserve effective DoT choice');
 		$this->assertSame($unseeded ? '8853' : '853', pfb_dns_proxy_setting('pfb_dns_dot_port'), 'upgrade must preserve effective DoT port');
 		$this->assertArrayNotHasKey('pfb_dns_dot', PfbConfig::readSection(PFB_SECTIONS['dns']));
 		$this->assertArrayNotHasKey('pfb_dns_dot_port', PfbConfig::readSection(PFB_SECTIONS['dns']));
+		foreach ($otherShared as $key => $value) {
+			$this->assertSame($value, PfbConfig::readSection(PFB_SECTIONS['dns_shared'])[$key] ?? NULL,
+				"installer and seeding must preserve migrated {$key}");
+		}
 	}
 
 	public function testReceivedExplicitOffAndEmptyPortStillWinOnAnUnseededUpgrade(): void
