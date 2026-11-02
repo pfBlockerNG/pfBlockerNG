@@ -117,7 +117,7 @@ directory is a separate hardening and is not part of this change.
 |---|---|---|---|---|
 | DoT | `--dot-listen` (repeatable), `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
 | DoH | `--doh-listen` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
-| DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle 30 s; receive window one message (65535 bytes) per stream and 100 messages per connection; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
+| DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle `max(30 s, 2*timeout+grace)` (the query budget, so an in-flight query is not cut off) and no keepalive; receive window one message (65535 bytes) per stream and 100 messages per connection; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 
 A listener that cannot be bound is logged and skipped. Every start logs `starting pid <pid>` first (before any bind error), so
 that a reader of the log finds where a start begins; then, before `ready upstream`, the readiness lines in the order udp+tcp,
@@ -167,10 +167,11 @@ covers (the pfSense GUI does not offer it) is refused over UDP, where a native U
 DoQ clients already behave this way.
 
 A client that closes its sending side between two frames (a FIN, or a TLS close_notify) is still owed every answer: the
-queries it sent are decided and answered, then the connection is closed. Any other end of the client's stream (a reset,
-an end inside a frame, the idle timeout) and a reply that cannot be written abandon what is in flight and free the slot.
-A connection at its 4 queries is not read, so it learns of such an end when one of them finishes (at most one
-whole-query limit).
+queries it sent are decided and answered, then the connection is closed. A read that hits the idle timeout does the same:
+a query still in flight runs to its own budget and is answered, then the connection is closed; with nothing in flight the
+connection is closed at once. Any other end of the client's stream (a reset, an end inside a frame) and a reply that
+cannot be written abandon what is in flight and free the slot. A connection at its 4 queries is not read, so it learns of
+such an end when one of them finishes (at most one whole-query limit).
 
 A DoT connection ends with a TLS close_notify (RFC 8446 6.1) whatever ends it: the idle timeout, a failed write, or
 the gateway stopping. A client that does not take it is cut off at the TCP level after 250 ms.
