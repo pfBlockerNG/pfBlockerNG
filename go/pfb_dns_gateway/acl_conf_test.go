@@ -8,12 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -191,36 +188,40 @@ func TestACLMissingIncludeIsPickedUpWhenItAppears(t *testing.T) {
 	checkLookup(t, a, "192.0.2.1", ACLRefuse)
 }
 
-// runAsModeUser runs testName as a user the mode bits apply to. The Go gate runs the suite as root, and root
-// opens a mode 000 file, so this failure would never happen in-process.
+// runAsModeUser runs testName in a child that drops to a user the mode bits apply to. The Go gate runs the
+// suite as root, and root opens a mode 000 file, so this failure would never happen in-process. The child
+// starts as root because the test binary sits in a build directory only root may enter.
 func runAsModeUser(t *testing.T, testName string) {
 	t.Helper()
-	nobody, err := user.Lookup("nobody")
+	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$", "-test.count=1", "-test.timeout=2m")
+	cmd.Env = append(os.Environ(), "PFB_ACL_MODE_USER=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mode-bits run as nobody failed: %v\n%s", err, out)
+	}
+}
+
+// becomeModeUser is runAsModeUser's child giving up root before the test body runs.
+func becomeModeUser(t *testing.T) {
+	t.Helper()
+	nobody, err := lookupAccount("nobody")
 	if err != nil {
 		t.Fatalf("root ignores mode 000 and user nobody is unavailable: %v", err)
 	}
-	uid, err1 := strconv.Atoi(nobody.Uid)
-	gid, err2 := strconv.Atoi(nobody.Gid)
-	if err1 != nil || err2 != nil {
-		t.Fatalf("user nobody has no numeric uid/gid (%s/%s)", nobody.Uid, nobody.Gid)
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$", "-test.count=1", "-test.timeout=2m")
-	cmd.Env = append(os.Environ(), "PFB_ACL_MODE_USER=1")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)},
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("mode-bits run as %s failed: %v\n%s", nobody.Username, err, out)
+	if err := nobody.drop(); err != nil {
+		t.Fatal(err)
 	}
 }
 
 // An include made mode 000 is a failed reload, not a missing file. The last good rules stay, the same
 // permission error is logged once across two Refreshes, and chmod 0644 alone loads the include again.
 func TestACLUnreadableIncludeKeepsLastGoodRulesUntilTheModeReturns(t *testing.T) {
-	if os.Getuid() == 0 && os.Getenv("PFB_ACL_MODE_USER") == "" {
-		runAsModeUser(t, "TestACLUnreadableIncludeKeepsLastGoodRulesUntilTheModeReturns")
-		return
+	if os.Getuid() == 0 {
+		if os.Getenv("PFB_ACL_MODE_USER") == "" {
+			runAsModeUser(t, "TestACLUnreadableIncludeKeepsLastGoodRulesUntilTheModeReturns")
+			return
+		}
+		becomeModeUser(t)
 	}
 	a, dir, log := newACLTree(t, map[string]string{
 		"unbound.conf":      "include: {dir}/access_lists.conf\n",
