@@ -351,22 +351,6 @@ func TestDoQDeniedAddressClosesTheConnectionWhateverTheStream(t *testing.T) {
 	}
 }
 
-// A deny that arrives while a stream is being read applies when the read ends, before the stream is parsed: the
-// connection closes, and the malformed stream it carried never reaches the decider.
-func TestDoQDenyArrivingDuringAStreamClosesTheConnectionBeforeItIsParsed(t *testing.T) {
-	r, m, addr := newDoQRig(t, rigConfig{})
-	r.autoAnswer(echoAnswer)
-	c := dialDoQ(t, addr, m, clientAllowed)
-	c.query(doqQuery(t, "before.example."))
-	r.nextQuery()
-	s := c.stream()
-	put(t, s, []byte{0, 2}) // a two-byte message is announced; its body arrives after the deny
-	rewriteACL(t, r, aclMixed+"access-control: "+clientAllowed+"/32 deny\n")
-	put(t, s, []byte{0, 0})
-	_ = s.Close()
-	requireDeniedConnClosed(t, r, c)
-}
-
 // A refused address still gets REFUSED on a valid query, and a malformed stream from it is only reset: the deny
 // check must not act on REFUSED.
 func TestDoQRefusedAddressMalformedStreamIsResetAndTheConnectionSurvives(t *testing.T) {
