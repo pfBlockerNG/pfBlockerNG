@@ -18,6 +18,7 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - each hook-capsule `additionalContext` payload     1,800 B
 - any single hook command (pre-tokenization cap)   11,000 B
 - `coderabbit-misses.md` (append-only ledger)      16,384 B (owner-raised, #3329)
+- `git.md`                                         14,336 B (owner-raised, #3642)
 - each `coderabbit-misses.md` ledger entry            200 B
 - that ledger's header prose (above the list)      1,200 B
 
@@ -89,6 +90,8 @@ FILE_BUDGETS = {
     # Append-only ledger (#3329): grows one capped line per missed review; the
     # owner raised its cap once it filled the policy default.
     ".agents/policy/coderabbit-misses.md": 16_384,
+    # The owner raised it so the replay rule (#3642) and its trust limit fit.
+    ".agents/policy/git.md": 14_336,
 }
 
 # The append-only missed-review ledger (review-bots.md "Missed-review backlog").

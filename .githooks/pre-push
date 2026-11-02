@@ -205,12 +205,27 @@ fi
         agent_author_email=$(git log -1 --format=%ae "$agent_commit" 2>/dev/null) || return 1
         agent_committer_name=$(git log -1 --format=%cn "$agent_commit" 2>/dev/null) || return 1
         agent_committer_email=$(git log -1 --format=%ce "$agent_commit" 2>/dev/null) || return 1
-        if [ "$agent_author_name" != "$configured_name" ] ||
-            [ "$agent_author_email" != "$configured_email" ] ||
-            [ "$agent_committer_name" != "$configured_name" ] ||
+        if [ "$agent_committer_name" != "$configured_name" ] ||
             [ "$agent_committer_email" != "$configured_email" ]; then
             echo "Agent commits must use the configured user identity" >&2
             return 1
+        fi
+        # A foreign author is allowed only when the commit replays a published
+        # one: rebase and cherry-pick keep author name, email and timestamp (#3642).
+        if [ "$agent_author_name" != "$configured_name" ] ||
+            [ "$agent_author_email" != "$configured_email" ]; then
+            replay_helper=$(dirname -- "$0")/replayed-author.sh
+            if [ ! -r "$replay_helper" ]; then
+                echo "pre-push: replayed-author helper missing: $replay_helper" >&2
+                return 1
+            fi
+            # shellcheck source=replayed-author.sh
+            . "$replay_helper"
+            agent_author_at=$(git log -1 --format=%at "$agent_commit" 2>/dev/null) || return 1
+            if ! author_is_replayed "$agent_author_name" "$agent_author_email" "$agent_author_at"; then
+                echo "Agent commits must use the configured user identity" >&2
+                return 1
+            fi
         fi
 
         if [ -z "$configured_fingerprint" ]; then
