@@ -788,7 +788,7 @@ row('Row 6d: an expired start returns only once its SIGKILLed group is gone -- s
 		'pfb_stop_start_unbound() must not return while a group it SIGKILLed with its unresponsive supervisor still has members');
 });
 
-row('Row 6e: a group member that outlasts the post-KILL grace is logged and the start still returns', function () use ($src) {
+row('Row 6e: a group member that outlasts the post-KILL grace is logged after one full grace and the start still returns', function () use ($src) {
 	// The runner's own child joins the supervised group. The runner cannot reap it while it is
 	// inside pfb_stop_start_unbound(), so once killed it stays a (zombie) member for the whole grace.
 	$joiner = 'if (!posix_setpgid(0, $pgid = (int) file_get_contents($argv[1]))) { exit(3); } '
@@ -799,6 +799,29 @@ row('Row 6e: a group member that outlasts the post-KILL grace is logged and the 
 		]),
 		['pfb_stop_start_unbound'],
 		stopStartPrelude() . '$joiner_code = ' . var_export($joiner, true) . ";\n" . <<<'PHP'
+function posix_kill(int $pid, int $sig): bool
+{
+	exec("kill -{$sig} {$pid} 2>/dev/null", $output, $status);
+	$GLOBALS['pfb_kill_calls'][] = [$pid, $sig, $status === 0, hrtime(true)];
+	return $status === 0;
+}
+// Controlled clock: time moves only when the code sleeps. Sleeps are real until the group
+// SIGKILL, so the real start and supervisor make progress, then virtual, so the wait after
+// the KILL is measured by this clock alone.
+$GLOBALS['pfb_clock_ns'] = 0;
+function hrtime(bool $as_number = false): array|int
+{
+	$ns = $GLOBALS['pfb_clock_ns'];
+	return $as_number ? $ns : [intdiv($ns, 1000000000), $ns % 1000000000];
+}
+function usleep(int $microseconds): void
+{
+	$GLOBALS['pfb_clock_ns'] += $microseconds * 1000;
+	foreach ($GLOBALS['pfb_kill_calls'] ?? [] as [$pid, $sig]) {
+		if ($pid < 0 && $sig === 9) { return; }
+	}
+	time_nanosleep(intdiv($microseconds, 1000000), ($microseconds % 1000000) * 1000);
+}
 posix_mkfifo("$dir/pgid.fifo", 0600);
 $joiner = proc_open([PHP_BINARY, '-r', $joiner_code, '--', "$dir/pgid.fifo", "$dir/joined"],
 	[0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
@@ -807,14 +830,29 @@ $final = pfb_stop_start_unbound('');
 $pgid = (int) trim((string) @file_get_contents("$dir/joined"));
 proc_terminate($joiner, 9);
 proc_close($joiner);
-echo json_encode(['final' => $final, 'pgid' => $pgid, 'errlog' => (string) @file_get_contents($GLOBALS['pfb']['errlog'])]) . "\n";
+echo json_encode(['final' => $final, 'pgid' => $pgid, 'kill_calls' => $GLOBALS['pfb_kill_calls'] ?? [],
+	'grace' => PFB_HOOK_KILL_GRACE, 'errlog' => (string) @file_get_contents($GLOBALS['pfb']['errlog'])]) . "\n";
 PHP
+		, 15, ['disable_functions=posix_kill,hrtime,usleep']
 	);
 	check($run['status'] === 0, 'isolated runner must exit cleanly: ' . implode("\n", $run['output']));
 	$p = $run['payload'];
 	same(124, $p['final']['retval'] ?? null, 'the row must exercise a real start expiry');
 	$pgid = (int) ($p['pgid'] ?? 0);
 	check($pgid > 0, 'the runner child must have joined the supervised group before the expiry');
+	$calls = $p['kill_calls'] ?? [];
+	$kills = array_keys(array_filter($calls, fn ($call) => $call[0] === -$pgid && $call[1] === 9));
+	check($kills !== [], 'the row must reach the group SIGKILL; kill calls: ' . json_encode($calls));
+	$kill = $calls[end($kills)];
+	$after = array_slice($calls, end($kills) + 1);
+	$last = end($after) ?: null;
+	same([-$pgid, 0, true], $last === null ? null : array_slice($last, 0, 3),
+		'the wait must give up on a group it still finds present; calls after KILL: ' . json_encode($after));
+	$grace_ns = (int) ($p['grace'] ?? 0) * 1000000000;
+	$waited_ns = $last[3] - $kill[3];
+	check($grace_ns > 0 && $waited_ns >= $grace_ns && $waited_ns < 2 * $grace_ns,
+		"the wait after the group SIGKILL must last one full PFB_HOOK_KILL_GRACE on the controlled clock, and no more: "
+		. "expected [{$grace_ns}, " . (2 * $grace_ns) . ") ns, actual {$waited_ns} ns");
 	check(str_contains((string) $p['errlog'], "process group {$pgid} still present"),
 		'a member the post-KILL grace cannot remove must be named in the error log; errlog: ' . $p['errlog']);
 	rmdir_recursive_local($run['dir']);

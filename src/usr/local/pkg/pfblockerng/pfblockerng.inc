@@ -3349,9 +3349,7 @@ function pfb_stop_start_unbound($type) {
 			@proc_terminate($proc, 9);
 			@proc_close($proc);
 			$proc = NULL;
-			if ($group_ready) {
-				$await_group_gone($pid);
-			}
+			$await_group_gone($pid);
 			return;
 		}
 
