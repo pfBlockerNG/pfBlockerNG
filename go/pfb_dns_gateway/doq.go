@@ -196,16 +196,41 @@ func (g *gateway) serveQUICConn(conn *quic.Conn) {
 	}
 }
 
+// doqDenied reports whether the ACL denies the connection's current address. RemoteAddr moves when the path migrates,
+// so the address is read at each check, not once at admission.
+func (g *gateway) doqDenied(conn *quic.Conn) bool {
+	return g.acl.Lookup(addrPortOf(conn.RemoteAddr()).Addr().Unmap().WithZone("")) == ACLDrop
+}
+
+// doqHangUp resets the stream and closes its connection. The admission slot is held until the connection's context
+// ends, so a stream reset alone would keep the slot.
+func doqHangUp(conn *quic.Conn, s *quic.Stream) {
+	reset(s, doqRequestCancelled)
+	_ = conn.CloseWithError(doqRequestCancelled, "")
+}
+
 // serveDoQStream answers one query stream. A malformed stream is reset with DOQ_PROTOCOL_ERROR and the connection
 // carries on; a non-zero Message ID, or an edns-tcp-keepalive option, closes the connection (RFC 9250 4.3.3 lists the
 // first as a protocol error to be answered with CONNECTION_CLOSE and DOQ_PROTOCOL_ERROR, 5.5.2 the second). An ACL
-// deny of the stream's current address closes it too, so the admission slot is released.
+// deny of the connection's current address closes it whatever the stream holds, before the stream is parsed.
 func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.AddrPort) {
 	defer g.wg.Done()
+	// A denied address is refused before the read too, so its stream holds no read budget.
+	if g.doqDenied(conn) {
+		doqHangUp(conn, s)
+		return
+	}
 	// A query that never finishes must not keep a stream slot for a raised --timeout. The read stops at the Unbound
 	// wait or the handshake budget, whichever is shorter. Only the query read is bounded: Unbound still has g.timeout.
 	_ = s.SetReadDeadline(time.Now().Add(min(g.timeout, g.handshake)))
 	wire, ok := readDoQQuery(s)
+	// RemoteAddr is the path this stream's bytes arrived on. A path can change during the read, so the address is read
+	// once the read ends, and the ACL judges it before the stream is parsed or dropped as malformed.
+	src, dst := proxyEndpoints(addrPortOf(conn.RemoteAddr()), local)
+	if g.acl.Lookup(src.Addr()) == ACLDrop {
+		doqHangUp(conn, s)
+		return
+	}
 	if !ok {
 		reset(s, doqProtocolError)
 		return
@@ -218,17 +243,13 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 		_ = conn.CloseWithError(doqProtocolError, "edns-tcp-keepalive is not allowed")
 		return
 	}
-	// RemoteAddr is the path this packet arrived on. A later path replaces it, so it is read per stream.
-	src, dst := proxyEndpoints(addrPortOf(conn.RemoteAddr()), local)
 	disp, reply := g.screen(src.Addr(), netip.Addr{}, false, wire)
 	switch disp {
 	case discard:
 		reset(s, doqProtocolError)
 		return
 	case hangUp:
-		// The handshake address holds its admission slot until this connection's context ends.
-		reset(s, doqRequestCancelled)
-		_ = conn.CloseWithError(doqRequestCancelled, "")
+		doqHangUp(conn, s)
 		return
 	case toDecider:
 		// RFC 9250 4.2.1: "When forwarding a DNS message from DoQ over another transport, a DNS Message ID MUST be
