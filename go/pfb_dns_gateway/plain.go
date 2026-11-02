@@ -402,7 +402,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	ctx, cancel := context.WithCancel(g.ctx)
 	var (
 		handlers sync.WaitGroup
-		running  atomic.Int32  // handlers still inside resolve or its write
+		running  atomic.Int32 // handlers still inside resolve or its write
 		wmu      sync.Mutex   // frames are written one at a time, each by one Write
 		broken   bool         // a reply could not be written; guarded by wmu
 		slots    = make(chan struct{}, connPipeline)
