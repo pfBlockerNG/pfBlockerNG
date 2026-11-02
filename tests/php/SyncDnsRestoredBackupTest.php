@@ -49,6 +49,7 @@ final class SyncDnsRestoredBackupTest extends TestCase
 
 		$this->assertSame(PfbToggle::On, pfb_dns_proxy_setting('pfb_dns_dot'), 'unseeded node inherits the Resolver DoT');
 		$this->assertSame('8853', pfb_dns_proxy_setting('pfb_dns_dot_port'));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns_shared/pfb_dns_dot'), 'an unseeded installer default is not a restored choice');
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_doh'), 'other restored choices still apply');
 	}
 }

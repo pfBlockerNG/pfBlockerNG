@@ -1742,6 +1742,26 @@
             }
         ]
     },
+    "pfb_dns_legacy_shared_value": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "old",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_acl_networks": {
         "returnsRef": false,
         "returnType": "array",
