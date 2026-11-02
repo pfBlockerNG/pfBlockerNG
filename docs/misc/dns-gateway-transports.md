@@ -257,10 +257,12 @@ same directory.
   gateway picked; the client gets its reply with ID 0.
 - A query with a non-zero Message ID: RFC 9250 4.3.3 lists it as a protocol error ("It SHOULD forcibly abort the
   connection using QUIC's CONNECTION_CLOSE mechanism and SHOULD use the DoQ error code DOQ_PROTOCOL_ERROR"). The
-  connection is closed with `DOQ_PROTOCOL_ERROR`.
+  connection is closed with `DOQ_PROTOCOL_ERROR`. A denied current address gets `DOQ_REQUEST_CANCELLED` instead: see the
+  deny bullet below.
 - A query that carries the edns-tcp-keepalive option (code 11, RFC 7828): RFC 9250 4.3.3 lists receiving it as a
   protocol error and 5.5.2 forbids sending it on DoQ ("because it is specific to the use of TCP/TLS as a transport").
-  The connection is closed with `DOQ_PROTOCOL_ERROR`, as for a non-zero Message ID. Other options, padding for one, pass.
+  The connection is closed with `DOQ_PROTOCOL_ERROR`, as for a non-zero Message ID, and a denied current address gets
+  `DOQ_REQUEST_CANCELLED` instead. Other options, padding for one, pass.
 - Other malformed streams (FIN before the announced length, more bytes than announced, a second query, no FIN within
   the query timeout, fewer bytes than a DNS header, a response instead of a query) are reset with `DOQ_PROTOCOL_ERROR`
   and the connection goes on. RFC 9250 4.3.3 lists most of these as connection-fatal with the same SHOULD; the gateway
@@ -274,10 +276,11 @@ same directory.
   packet, every new client first proves its address with a Retry (one extra round trip), so a spoofed source cannot
   hold slots. ACL refuse still needs the handshake: REFUSED is a DNS answer on a stream.
 - An ACL deny of a connection's current address closes the connection with `DOQ_REQUEST_CANCELLED`, whatever the stream
-  holds (a query, a malformed or partial one, a response), and frees its admission slot. The address is checked before
-  a stream's read and again when the read ends, before the stream is parsed; a stream already being read when the deny
-  arrives is judged when its read ends, which the query timeout bounds. A decider DROP cancels only its stream, with the
-  same code.
+  holds (a query, a non-zero Message ID, edns-tcp-keepalive, a malformed or partial frame, a response), and frees its
+  admission slot. The address is checked before a stream's read and again when the read ends, before the stream is
+  parsed. A path that moves onto a denied address is judged the same way. A stream already being read when the deny
+  arrives is judged when its read ends, which the read deadline bounds (the shorter of `--timeout` and the handshake
+  budget). A decider DROP cancels only its stream, with the same code.
 - Over the 512 queries in flight that DoQ shares with DoH, a stream is answered with a SERVFAIL (Message ID 0) built by
   the gateway, without asking the decider or Unbound; one log line per flood. DoQ has no status code to use instead.
 - A query is resolved on a context that ends with its connection, so a connection that drops while its queries wait
