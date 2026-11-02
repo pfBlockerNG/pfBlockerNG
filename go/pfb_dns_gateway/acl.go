@@ -49,7 +49,7 @@ type aclRules struct {
 type aclSnapshot struct {
 	deps   aclDeps
 	rules  aclRules
-	broken bool // Unbound would not start on this config: the gateway forwards everything
+	broken bool // no good load yet: Lookup forwards every client
 }
 
 // ACL mirrors the client part of Unbound's access-control list: the rows of its config file and of every file the
@@ -105,11 +105,16 @@ func (r *aclRules) lookup(client netip.Addr) ACLAction {
 	return ACLRefuse
 }
 
-// load never fails: on any trouble it logs and returns a broken snapshot tied to the files it saw, so an unchanged
-// broken config is not retried (and logged) every tick.
+// load never fails. On trouble it logs and returns a snapshot tied to the files it saw, so an unchanged
+// failure is not retried (and logged) every tick. After a good load those rules stay; only a failure
+// before the first good load forwards every query.
 func (a *ACL) load() *aclSnapshot {
 	w := newConfWalker()
 	if err := w.file(a.path, 0); err != nil {
+		if prev := a.snap.Load(); prev != nil && !prev.broken {
+			a.logf("acl: %v; keeping the last good rules", err)
+			return &aclSnapshot{deps: w.deps, rules: prev.rules}
+		}
 		a.logf("acl: %v; forwarding every query", err)
 		return &aclSnapshot{deps: w.deps, broken: true}
 	}
