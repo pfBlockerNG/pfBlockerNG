@@ -66,6 +66,7 @@ def test_tld_dialog_on_a_fresh_page_is_labelled_and_whitelists_into_the_dnsbl_wh
     assert form["#domain"] == "bad.example"
     assert form["#table"] == "www.bad.example"
     assert form.get("#dnsbl_exclude", "") == ""
+    assert form.get("#dnsbl_wildcard", "") in ("", "false")
     assert "#dnsbl_add" not in form
     assert "#ip_white" not in form
 
