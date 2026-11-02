@@ -264,11 +264,14 @@ same directory.
   protocol error and 5.5.2 forbids sending it on DoQ ("because it is specific to the use of TCP/TLS as a transport").
   The connection is closed with `DOQ_PROTOCOL_ERROR`, as for a non-zero Message ID, and a denied current address gets
   `DOQ_REQUEST_CANCELLED` instead. Other options, padding for one, pass.
-- Other malformed streams (FIN before the announced length, more bytes than announced, a second query, no FIN within
-  the query timeout, fewer bytes than a DNS header, a response instead of a query) are reset with `DOQ_PROTOCOL_ERROR`
+- Other malformed streams (FIN before the announced length, more bytes than announced, a second query, no FIN after
+  a complete message, fewer bytes than a DNS header, a response instead of a query) are reset with `DOQ_PROTOCOL_ERROR`
   and the connection goes on. RFC 9250 4.3.3 lists most of these as connection-fatal with the same SHOULD; the gateway
   resets the stream only, so one bad stream cannot cancel the other queries of the connection. A denied current address
   is different: its connection closes on any stream (see the deny bullet below).
+  A stream whose length or body is not complete within the query timeout is reset with `DOQ_REQUEST_CANCELLED`, not
+  `DOQ_PROTOCOL_ERROR`: the client was slow, the message was not wrong. A complete message that never gets its FIN
+  stays `DOQ_PROTOCOL_ERROR`.
 - A stream is read for at most the query timeout (`--timeout`, default 5 s), not the 30 s TCP idle timeout: a client
   sends its query and the FIN at once, and a stream has no idle wait between queries as a TCP connection has.
 - Admission happens before the handshake (quic-go `ConnContext`). An address the ACL denies, and a connection over the
@@ -284,8 +287,9 @@ same directory.
   budget). A decider DROP cancels only its stream, with the same code.
 - Over the 512 queries in flight that DoQ shares with DoH, a stream is answered with a SERVFAIL (Message ID 0) built by
   the gateway, without asking the decider or Unbound; one log line per flood. DoQ has no status code to use instead.
-- A query is resolved on a context that ends with its connection, so a connection that drops while its queries wait
-  for the decider or Unbound frees their in-flight slots at once instead of holding them for the whole wait.
+- A query is resolved on a context that ends with its connection or its stream (the client's STOP_SENDING), so a
+  connection that drops, or a stream the client abandons, while the query waits for the decider or
+  Unbound frees its in-flight slot at once instead of holding it for the whole wait.
 
 ## DoH details (RFC 8484)
 
