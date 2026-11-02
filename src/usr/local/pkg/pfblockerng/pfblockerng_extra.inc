@@ -504,15 +504,8 @@ function pfb_editor_toggle_label(): string
 
 function pfb_editor_toggle_help(): string
 {
-	return 'Adds line numbers, syntax highlighting and undo/redo to list and script textareas. '
-		. 'Uncheck to keep those fields as plain text boxes (skips loading the editor on a slow machine).'
-		. '<div class="infoblock">'
-		. 'Covers the list and script textareas this package draws, including: DNSBL lists (Regex, DNSBL Whitelist, '
-		. 'no-AAAA, Group Policy Bypass IPs, TLD Exclusion, TLD Blacklist), per-feed Custom List, IP suppression '
-		. 'lists, General Block Private-Address Exceptions, and hook scripts. '
-		. 'The DNSBL Regex List and hook scripts also get inline linting. '
-		. 'Validation always stays server-side either way.'
-		. '</div>';
+	return 'Adds line numbers, highlighting and undo to list and script fields; regex and hook fields also show syntax warnings. '
+		. 'Turn off for plain text boxes. Entries are still checked when saved.';
 }
 
 /** Render one CodeMirror asset tag when the Advanced Text Editor is enabled. */
@@ -615,14 +608,14 @@ function pfb_js_asset(string $src, string $path, string $attributes = ''): strin
 /** The DNSBL regex-list help shown by the Form_Textarea field. */
 function pfb_dnsbl_regex_help_text(): string
 {
-	return 'List of Regex\'s to block via DNSBL:<br /><br />
-		Enter a single regex per line.<br /><br />
-		End a line with "<strong>#</strong>" to give it a Description, as in&emsp;"regex (Regular Expression) # Regex Description".<br /><br />
-		The first <strong>unescaped</strong> "#" on the line starts the Description, whether or not a space precedes it. To match a literal "#" inside a pattern, escape it as "<strong>\\#</strong>".<br /><br />
-		Keep the Description to 15 characters or fewer — it is shown on the Alerts Tab, and a longer one is flagged in this editor. If no Description is entered a default Regex line number will be utilized.<br /><br />
-		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
-		Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.<br /><br />
-		Patterns use a bounded subset of Python regular-expression syntax (the <a target="_blank" rel="noopener noreferrer" href="https://docs.python.org/3/library/re.html#regular-expression-syntax">re</a> module): printable ASCII without spaces, at most 256 characters, no lookarounds, backreferences, named groups, inline flags or numeric escapes, and a fixed limit on matching work and on the characters listed in [...] classes. Unanchored patterns with an open run before a literal tail, such as <code>\S+\\.example\\.com</code> or <code>ad.*\\.example\\.com</code>, are refused unless anchored with <code>^</code>. They are validated on save by the same Python admission rules and engine that load them &mdash; that result is authoritative. The inline checker in this editor is an editing aid and may flag a valid pattern; if a line saves without an input error, it compiles.';
+	return '<p>Enter one pattern per line in <strong>Regex List</strong>. The first unescaped <code>#</code> starts a description; use <code>\#</code> to match a literal hash.</p>'
+		. '<ul>'
+		. '<li>Patterns use a subset of Python <a target="_blank" rel="noopener noreferrer" href="https://docs.python.org/3/library/re.html#regular-expression-syntax">regular-expression syntax</a>: at most 256 printable ASCII characters, without spaces. <strong>Limit regex length to 200 characters</strong> reduces this to 200.</li>'
+		. '<li>No lookarounds, backreferences, named groups, inline flags or numeric escapes.</li>'
+		. '<li>Patterns must pass the matching-work and character-class checks.</li>'
+		. '<li>Patterns such as <code>ad.*\.example\.com</code> need a leading <code>^</code>.</li>'
+		. '</ul>'
+		. '<p>Descriptions should be 15 characters or fewer. Invalid patterns are rejected when saved; editor warnings are advisory.</p>';
 }
 
 /** Whether regex validation must run for a save request. */
@@ -637,7 +630,7 @@ function pfb_category_script_pre_settings(string $listPrefix, array $options): a
 	$help = 'Pre-processing Shell script, run after download and charset normalization: '
 		. 'it receives a staged copy of the normalized feed text (UTF-8, control characters stripped, '
 		. 'lines right-trimmed) and rewrites that copy in place.<br />'
-		. 'Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>';
+		. 'Script location: <code>/usr/local/pkg/pfblockerng/list_scripts/</code>, named <code>ip_pre_*.sh</code>, <code>ip_pre_*.py</code>, <code>dnsbl_pre_*.sh</code> or <code>dnsbl_pre_*.py</code>.';
 	if ($listPrefix === 'dnsbl') {
 		$help .= '<br /><span class="text-danger">Note:</span>&nbsp;'
 			. 'A DNSBL pre-process script must not remove IP-shaped or ABP-shaped lines: the '
@@ -4139,7 +4132,7 @@ function pfb_dnsbl_regex_description_warnings(string $contents): array
  * Runs pfb_dnsbl_regex_rules.py (issue #1765) as the save-time probe -- the
  * SAME module pfb_unbound.py imports, not a duplicated nowdoc.
  *
- * @param bool $regex_cap Mirrors the "Limit long/complex regex" toggle: gates the
+ * @param bool $regex_cap Mirrors the "Limit regex length to 200 characters" toggle: gates the
  *     save-time length-cap diagnostic so it agrees with the resolver's load-time drop.
  * @param ?string $script Test seam, like $python and $timeout_bin: NULL resolves the
  *     shipped module beside this file, which is what production always uses.
@@ -9327,7 +9320,7 @@ function pfb_edit_hooks_warning(): array
 	return [
 		'style' => 'danger',
 		'title' => gettext('Advanced Users Only'),
-		'message' => gettext('The capabilities offered here can be dangerous. No support is available. Scripts you create or edit on this page run as ROOT during every pfBlockerNG update pass -- the same trust class as pfSense Diagnostics > Command Prompt / Edit File. Use them at your own risk!'),
+		'message' => gettext('The capabilities offered here can be dangerous. No support is available. Scripts selected and enabled on <strong>Hooks</strong> run <strong>as root</strong> during updates. Saving a script here does not enable it. Edit only scripts you trust.'),
 	];
 }
 

@@ -84,19 +84,6 @@ final class GateDisableUiTest extends TestCase
 		}
 	}
 
-	public function testEachDisabledControlNamesItsGateInHelp(): void
-	{
-		$dnsbl = self::dnsbl();
-		$this->assertStringContainsString('Applies when Wildcard Blocking is enabled.', $dnsbl);
-		$this->assertStringContainsString('Applies when Web Server Interface is not Localhost.', $dnsbl);
-		$this->assertStringContainsString('Applies when Allow Only Selected Domain Suffixes is enabled.', $dnsbl);
-		$this->assertStringContainsString('Applies when the selected Type requires an API token.', $dnsbl);
-		$this->assertStringContainsString('Applies when List Action is not Disabled.', $dnsbl);
-
-		$ip = self::ip();
-		$this->assertStringContainsString('Applies in Auto and Delta modes.', $ip);
-	}
-
 	public function testSubmitReenablesGatedControlsSoPostKeepsTheirValues(): void
 	{
 		$dnsbl = self::dnsbl();

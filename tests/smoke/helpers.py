@@ -258,7 +258,7 @@ class DnsblCase:
                        'on' + pfb_regex_list, newline list, inc:849-850,2711). User
                        regex are sovereign block patterns; they load into userRegexDB
                        and count toward pfb_py_regex_count.
-      regex_cap     -> the opt-in "Limit long/complex regex" static cap
+      regex_cap     -> the opt-in "Limit regex length to 200 characters" static cap
                        (CFG_DNSBL_SETTINGS/pfb_regex_cap 'on', inc:2685 -> ini
                        regex_cap=on). When on, an over-length (>200) pattern is
                        DROPPED at load for FEED and USER regex (the inlined

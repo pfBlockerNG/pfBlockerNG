@@ -24,32 +24,6 @@ final class DnsblRegexHelpTextTest extends TestCase
 		}
 	}
 
-	public function testEveryLineBreakLandsAtTheEndOfASentence(): void
-	{
-		$fragments = preg_split('#<br\s*/?>#', pfb_dnsbl_regex_help_render());
-		$this->assertIsArray($fragments);
-		array_pop($fragments);
-
-		$midSentence = [];
-		foreach ($fragments as $fragment) {
-			$trimmed = rtrim($fragment);
-			if ($trimmed !== '' && preg_match('/[.:!?]$/', $trimmed) !== 1) {
-				$midSentence[] = $trimmed;
-			}
-		}
-
-		$this->assertSame([], $midSentence, 'help breaks must follow complete sentences');
-	}
-
-	public function testHelpExplainsUnescapedHashAndLiteralHashEscape(): void
-	{
-		$help = pfb_dnsbl_regex_help_render();
-
-		$this->assertDoesNotMatchRegularExpression('/space\s+is\s+entered\s+before/i', $help);
-		$this->assertMatchesRegularExpression('/first\b.*\bunescaped\b/is', $help);
-		$this->assertStringContainsString('\\#', $help);
-	}
-
 	/**
 	 * Pin the page's executable help-render call without booting its live Form_*
 	 * stack, which would require a real pfSense appliance request context.

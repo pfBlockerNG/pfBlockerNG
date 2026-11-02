@@ -13,7 +13,7 @@ DECOUPLED concerns, both stdlib + in-process, applied to FEED *and* user regex:
        backtracking-cost bound is dropped at LOAD UNCONDITIONALLY -- independent of any
        setting. Pure static string analysis, NO execution of the candidate;
   (1b) opt-in LENGTH ceiling -- a long-but-safe pattern is dropped at LOAD only when the
-       "Limit long/complex regex" setting is enabled; length alone is a tunable
+       "Limit regex length to 200 characters" setting is enabled; length alone is a tunable
        convenience cap, NOT a safety gate, so it stays behind the flag;
   (2) always-on RUNTIME timing -- a match over the warn ceiling logs one line per rule, and a
       list scan whose rules sum over the ceiling logs one line per list; every admitted rule

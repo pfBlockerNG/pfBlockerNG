@@ -156,7 +156,7 @@ PHP;
 		$warning = pfb_edit_hooks_warning();
 		$this->assertSame('danger', $warning['style']);
 		$this->assertSame('Advanced Users Only', $warning['title']);
-		$this->assertStringContainsString('Command Prompt', $warning['message']);
+		$this->assertStringContainsString('<strong>' . pfb_edit_hooks_tabs('edit')[1][0] . '</strong>', $warning['message'], 'the warning names the Hooks tab that enables scripts');
 	}
 
 	public function testPrivIncDoesNotMatchThisPage(): void

@@ -36,7 +36,7 @@ import warnings
 from dataclasses import dataclass, field
 
 # Length ceiling (heuristic): a pattern over this many characters is dropped
-# at load ONLY when the opt-in "Limit long/complex regex" setting is enabled.
+# at load ONLY when the opt-in "Limit regex length to 200 characters" setting is enabled.
 # Length alone is a tunable convenience cap, NOT a safety gate -- a long
 # pattern is not inherently pathological -- so it stays behind the flag.
 REGEX_STATIC_LEN_CAP = 200
@@ -513,7 +513,7 @@ def main(argv: list[str]) -> int:
             _report(
                 line_number,
                 pattern,
-                f'over the {REGEX_STATIC_LEN_CAP}-character length cap ("Limit long/complex regex")',
+                f'over the {REGEX_STATIC_LEN_CAP}-character length cap ("Limit regex length to 200 characters")',
             )
             failed = True
             continue

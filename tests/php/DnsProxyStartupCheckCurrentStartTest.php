@@ -183,7 +183,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private function problemText(string ...$sentences): string
 	{
 		return 'pfB-DNS started with problems: ' . implode(' ', $sentences) .
-			' Correct the settings on the pfB-DNS page or the cause named, then run an Update.';
+			' Correct the settings on "DNS" > "pfB-DNS" or the cause named, then use "Run Now" on "Update".';
 	}
 
 	private function fileStandingNotice(): void

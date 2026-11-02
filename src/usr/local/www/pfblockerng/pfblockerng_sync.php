@@ -197,7 +197,12 @@ pfb_print_pending_changes_box();
 // foreign key: hasync/synchronizerules is a pfSense core key, not in registry
 if (pfblockerng_sync_dnsblip_mismatch($pconfig['syncscope'], $pconfig['varsynconchanges'], PfbConfig::read('gen/enable_cb'),
 	PfbConfig::read('dnsbl/pfb_dnsbl'), PfbConfig::read('dnsbl/action'), config_get_path('hasync/synchronizerules'))) {
-	print_info_box(gettext('<strong>DNSBL IP rules may be skipped on the High Availability peer.</strong> System &gt; High Availability Sync copies this firewall\'s rules, including the pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 auto rules, to the peer, but the "Lists and global settings only (legacy)" sync scope keeps this firewall\'s DNSBL settings off the peer. Unless DNSBL and DNSBL IP are enabled there, the peer\'s pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 aliases stay empty and pfSense skips those rules as "Unresolvable alias". Enable DNSBL with the same DNSBL IP settings on both nodes, or choose the "Policy and lists" or "All settings (legacy)" sync scope. If the peer\'s pfBlockerNG log still shows "DNSBL disabled", re-select the DNSBL Virtual IP on the peer: a VIP that was deleted and re-created keeps a stale reference until it is selected again.'), 'warning');
+	print_info_box(gettext('<p><strong>DNSBL IP rules may be skipped on the High Availability peer.</strong></p>'
+		. '<p><strong>System &gt; High Availability Sync</strong> copies firewall rules, but <strong>Lists and global settings only (legacy)</strong> omits the DNSBL settings needed for the <code>pfB_DNSBLIP_v4</code> and <code>pfB_DNSBLIP_v6</code> aliases.</p>'
+		. '<ul>'
+		. '<li>Enable matching DNSBL IP settings on both nodes, or choose a scope that copies those settings.</li>'
+		. '<li>If the peer still reports <code>DNSBL disabled</code>, re-select its <strong>IPv4 VIP</strong> or <strong>IPv6 VIP</strong> under <strong>DNSBL Virtual IP</strong> and save; a re-created VIP can leave a stale selection.</li>'
+		. '</ul>'), 'warning');
 }
 
 $form = new Form('Save XMLRPC sync settings');
@@ -216,13 +221,12 @@ $section->addInput(new Form_Select(
 	'Enable Sync',
 	$pconfig['varsynconchanges'],
 	$options_varsynconchanges
-))->setHelp('Push this firewall\'s pfBlockerNG configuration to other firewalls. '
-		. '<b>Sync to configured system backup server</b> includes pfBlockerNG in the firewall\'s '
-		. 'normal config sync to the peer set under System &gt; High Availability Sync '
-		. '(the Replication Targets below are ignored). <b>Sync to host(s) defined below</b> pushes '
-		. 'to the Replication Targets configured here.<br /><br />'
-		. '<b>Important:</b> While using "Sync to host(s) defined below", only sync from host A to B, A to C'
-		. '<br /> but <b>do not</b> enable XMLRPC sync <b>to</b> A. This will result in a loop!');
+))->setHelp('Push this firewall\'s pfBlockerNG configuration to other firewalls.'
+		. '<ul>'
+		. '<li><strong>Sync to configured system backup server</strong>: use the peer under <strong>System &gt; High Availability Sync</strong>; ignore <strong>XMLRPC Replication Targets</strong> below.</li>'
+		. '<li><strong>Sync to host(s) defined below</strong>: use <strong>XMLRPC Replication Targets</strong> below.</li>'
+		. '</ul>'
+		. '<p><span class="text-danger"><strong>Warning:</strong></span> Replicate from A to B or C, not back to A; two-way replication creates a loop.</p>');
 
 $section->addInput(new Form_Input(
 	'varsynctimeout',
@@ -237,9 +241,17 @@ $section->addInput(new Form_Select(
 	'Sync Scope',
 	$pconfig['syncscope'],
 	$options_syncscope
-))->setHelp('<b>Policy and lists</b> sends what this firewall blocks, permits, logs or transforms; its interfaces, VIPs, ports, gateways, credentials and other local settings stay local. '
-		. '<b>All settings (legacy)</b> sends every pfBlockerNG tab whole. <b>Lists and global settings only (legacy)</b> leaves out the \'General\', \'IP\', and \'DNSBL\' tabs.'
-		. '<br /><br /><b>Note:</b> When System &gt; High Availability Sync also synchronizes Firewall rules, enable DNSBL with the same DNSBL IP settings on both nodes. Otherwise the peer skips the pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 auto rules as "Unresolvable alias".');
+))->setHelp('<ul>'
+		. '<li><strong>Policy and lists (local settings stay local)</strong>: copies what this firewall blocks, permits, logs or transforms. Interfaces, VIPs, ports, gateways, credentials, pfB-DNS settings and other local settings stay local.</li>'
+		. '<li><strong>All settings (legacy)</strong>: copies the <strong>General</strong>, <strong>IP</strong> and <strong>DNSBL</strong> settings, lists, GeoIP, Reputation, DNSBL Category, SafeSearch and hook entries, '
+		. 'plus the pfB-DNS transport settings: DoT, DoH and DoQ on/off and ports, trusted DoH front ends, DDR and DDR DoH on 443. '
+		. 'The pfB-DNS enable switch, saved Resolver settings, listen interfaces and certificate stay on each firewall.</li>'
+		. '<li><strong>Lists and global settings only (legacy)</strong>: copies lists and global settings without the <strong>General</strong>, <strong>IP</strong>, <strong>DNSBL</strong> and pfB-DNS settings.</li>'
+		. '</ul>'
+		. '<p>Received pfB-DNS settings are stored only; the receiving firewall applies them at its next update, or with <strong>Run Now</strong> on <strong>Update</strong> there. '
+		. 'Hook entries are copied only with <strong>All settings (legacy)</strong>; hook script files are never copied. Sync settings themselves are not copied.</p>'
+		. '<p><strong>Note:</strong> When <strong>System &gt; High Availability Sync</strong> also synchronizes firewall rules, enable DNSBL with the same DNSBL IP settings on both nodes. '
+		. 'Otherwise the peer skips the <code>pfB_DNSBLIP_v4</code> and <code>pfB_DNSBLIP_v6</code> rules as "Unresolvable alias".</p>');
 $form->add($section);
 
 $section = new Form_Section('XMLRPC Replication Targets');
@@ -248,7 +260,7 @@ $section->addInput(new Form_StaticText(
 	'<small>'
 	. 'For each target, match the protocol, IP/hostname and port of the remote firewall\'s '
 	. 'webConfigurator &mdash; the protocol (http or https) must match the remote, or the sync will fail.<br />'
-	. 'Using a dedicated user in the <i>admins</i> group on the target (rather than the primary admin '
+	. 'Using a dedicated user in the <code>admins</code> group on the target (rather than the primary admin '
 	. 'account) is recommended, so the primary account is not exposed for syncing.'
 	. '</small>'
 ));
@@ -348,7 +360,7 @@ $btnadd = new Form_Button(
 );
 $btnadd->removeClass('btn-primary')
 	->addClass('btn-success btn-xs')
-	->setAttribute('title', 'Click to Enable all State fields');
+	->setAttribute('title', 'Add a replication target');
 
 $group = new Form_Group(NULL);
 $group->add(new Form_StaticText(
@@ -361,7 +373,7 @@ $form->add($section);
 print ($form);
 print pfb_sync_receiver_panel(pfb_sync_receive_state_read($pfb['dbdir']), pfb_sync_receive_drift($pfb['dbdir']), pfb_sync_findings_read($pfb['dbdir']), pfb_sync_copied_read($pfb['dbdir']));
 print pfb_sync_sender_panel(pfb_sync_send_state_read($pfb['dbdir']));
-print_callout('<strong>Sync settings are used by the XMLRPC engine on each sync: automatically on configuration changes, or after each update pass (Manual mode).</strong>');
+print_callout('<p><strong>Sync to configured system backup server</strong> sends with configuration changes. <strong>Sync to host(s) defined below</strong> sends after each update.</p>');
 
 include('foot.inc');
 ?>
