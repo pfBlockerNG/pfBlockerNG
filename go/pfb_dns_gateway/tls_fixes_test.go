@@ -71,8 +71,8 @@ func TestDoQFailedHandshakesDoNotHoldSlots(t *testing.T) {
 	dialDoQ(t, addr, m, "").query(doqQuery(t, "after.example."))
 }
 
-// F-2: a deny rule that arrives on an open connection cancels the next stream (the early refusal only sees the
-// address at connect time).
+// F-2: a deny rule that arrives on an open connection closes it. Admission screened the address at connect time;
+// the next stream is screened as the current address, and a deny ends the connection so the slot is released.
 func TestDoQDenyRuleArrivingOnAnOpenConnectionCancelsItsStreams(t *testing.T) {
 	r, m, addr := newDoQRig(t, rigConfig{})
 	r.autoAnswer(echoAnswer)
@@ -81,7 +81,7 @@ func TestDoQDenyRuleArrivingOnAnOpenConnectionCancelsItsStreams(t *testing.T) {
 	rewriteACL(t, r, aclMixed+"access-control: "+clientAllowed+"/32 deny\n")
 	s := c.stream()
 	sendDoQ(t, s, doqQuery(t, "after.example."))
-	requireStreamReset(t, s, rfcDoQRequestCancelled)
+	requireConnClosed(t, c.conn, rfcDoQRequestCancelled)
 }
 
 // retryCounter counts the Retry packets a client receives (RFC 9000 17.2.5: long header, fixed bit, type 3).
