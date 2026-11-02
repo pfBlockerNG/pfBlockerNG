@@ -29,6 +29,7 @@ final class RegistryPassTest extends TestCase
 	private const GLOBAL_SECTION = 'installedpackages/pfblockerngglobal';
 	private const SYNC_SECTION   = 'installedpackages/pfblockerngsync/config/0';
 	private const DNS_SECTION    = 'installedpackages/pfblockerngdns/config/0';
+	private const DNS_SHARED_SECTION = 'installedpackages/pfblockerngdnssettings/config/0';
 
 	protected function setUp(): void
 	{
@@ -88,6 +89,7 @@ final class RegistryPassTest extends TestCase
 			self::GLOBAL_SECTION => 'OLDCFG',
 			self::SYNC_SECTION   => 'NEWCFG',
 			self::DNS_SECTION    => 'NEWCFG',
+			self::DNS_SHARED_SECTION => 'NEWCFG',
 		], $modes);
 	}
 
@@ -124,6 +126,7 @@ final class RegistryPassTest extends TestCase
 			self::GLOBAL_SECTION => [],
 			self::SYNC_SECTION   => [],
 			self::DNS_SECTION    => [],
+			self::DNS_SHARED_SECTION => [],
 		];
 
 		$result = pfb_registry_pass($sections);

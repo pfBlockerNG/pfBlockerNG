@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_resolver')]
 final class DnsProxySeedWriteFailureTest extends TestCase
 {
-	private const SECTION = 'installedpackages/pfblockerngdns/config/0/';
 	private const SEEDED = [
 		'pfb_dns_interface', 'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_interface', 'pfb_dns_sslcertref',
 		'pfb_dns_doh_interface', 'pfb_dns_doq_interface',
@@ -75,7 +74,7 @@ final class DnsProxySeedWriteFailureTest extends TestCase
 		$this->seedBox(['active_interface' => 'lan', 'enablessl' => 'on', 'tlsport' => '8853', 'sslcertref' => 'abc']);
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE), 'precondition: the first turn-on moves the Resolver');
 		foreach (self::SEEDED as $leaf) {
-			config_del_path(self::SECTION . $leaf);
+			config_del_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($leaf), 2)[0]] . '/' . $leaf);
 		}
 		$this->assertSame('', PfbConfig::read('dns/pfb_dns_interface'), 'before: unseeded');
 		$GLOBALS['pfb_test_write_config_result'] = FALSE;

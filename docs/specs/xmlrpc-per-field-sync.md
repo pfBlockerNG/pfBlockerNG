@@ -698,3 +698,22 @@ Fail-closed mixed-version behaviour is the 2026-10-04 owner
 clarified for the probe-free design in the map's Decisions so far. Sender authority and the facts
 behind the blocking list are in
 [BBcan177's review](https://github.com/pfBlockerNG/pfBlockerNG/issues/3443#issuecomment-5981971807).
+
+## Amendment 2026-11-02 — pfB-DNS legacy settings (#3649)
+
+The owner approved splitting the pfB-DNS section rather than changing the legacy receive
+protocol. **All settings (legacy)** adds `pfblockerngdnssettings` as a twentieth whole section:
+DoT/DoH/DoQ toggles and ports, trusted DoH front ends, DDR and DDR DoH-on-443. The original
+`pfblockerngdns` section retains node enable, Resolver snapshot, four listen-interface/address
+lists and certificate reference; it is never sent. **Policy and lists** and
+**Lists and global settings only (legacy)** retain their original section sets.
+
+Both transports keep their existing methods and receive behavior, with no extra peer call.
+Keeping enable local preserves the secondary-first activation/deactivation requirement when
+DNS Resolver sync is enabled. That core sync can still copy a moved Resolver; this change
+neither sends its snapshot nor activates an unprepared receiver.
+
+The one-time migration preserves explicit stored values and favors already-received new
+values over stale old keys. An older automatic receiver ignores the new section; an older
+manual receiver stores it inertly. Their node-local activation and recovery state remain
+untouched. See `docs/misc/config-gateway.md` for seeding and downgrade semantics.

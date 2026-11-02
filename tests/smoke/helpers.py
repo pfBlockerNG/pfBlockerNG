@@ -1089,6 +1089,27 @@ _CFG_VAL_OPEN = "<<<CFGVAL>>>"
 _CFG_VAL_CLOSE = "<<<CFGEND>>>"
 
 
+DNS_SHARED_FIELDS = frozenset(
+    (
+        "pfb_dns_dot",
+        "pfb_dns_doh",
+        "pfb_dns_doq",
+        "pfb_dns_dot_port",
+        "pfb_dns_doh_port",
+        "pfb_dns_doq_port",
+        "pfb_dns_doh_trusted",
+        "pfb_dns_ddr",
+        "pfb_dns_ddr_doh_443",
+    )
+)
+
+
+def dns_config_path(key: str) -> str:
+    """Route a pfB-DNS leaf without moving node-local state or interface lists."""
+    section = "pfblockerngdnssettings" if key in DNS_SHARED_FIELDS else "pfblockerngdns"
+    return f"installedpackages/{section}/config/0/{key}"
+
+
 def config_get(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> str:
     """Read a scalar config value back via the config API (for self-tests).
 

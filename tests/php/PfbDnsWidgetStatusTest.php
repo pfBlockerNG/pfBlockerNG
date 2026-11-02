@@ -19,7 +19,6 @@ final class PfbDnsWidgetStatusTest extends TestCase
 	private const GREEN = 'fa-solid fa-check-circle text-success';
 	private const YELLOW = 'fa-solid fa-exclamation-circle text-warning';
 	private const RED = 'fa-solid fa-times-circle text-danger';
-	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const MODE = 'On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else';
 	private const NOTICE = 'On, but the service has no listener for it: see the notices, or run an Update';
 	private const ANCHORS = ['PFBDNSSTATUS_service', 'PFBDNSSTATUS_plain', 'PFBDNSSTATUS_dot', 'PFBDNSSTATUS_doh', 'PFBDNSSTATUS_doq'];
@@ -120,7 +119,7 @@ final class PfbDnsWidgetStatusTest extends TestCase
 	public function testPfBlockerNgDisabledMakesEveryCellRedIncludingPlainDns(): void
 	{
 		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
-		config_set_path(self::SETTINGS . 'pfb_dns_dot', 'on');
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot', 'on');
 		$status = self::statusOf(NULL, 'Not in use', 'On, but not active: pfBlockerNG is disabled');
 
 		$cells = self::cells($status);
@@ -163,7 +162,7 @@ final class PfbDnsWidgetStatusTest extends TestCase
 	{
 		// A stored interface makes the saved toggles authoritative; without it the Resolver's own settings seed them
 		foreach ($settings + ['pfb_dns_interface' => 'lan'] as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 		$labels = ['plain' => 'DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'];
 

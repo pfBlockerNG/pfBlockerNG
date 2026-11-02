@@ -54,16 +54,16 @@ $pconfig['pfb_dns_sslcertref']		= pfb_dns_proxy_setting('pfb_dns_sslcertref');
 $pconfig['pfb_dns_dot']			= pfb_dns_proxy_setting('pfb_dns_dot');
 $pconfig['pfb_dns_dot_port']		= pfb_dns_proxy_setting('pfb_dns_dot_port');
 $pconfig['pfb_dns_dot_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_dot_interface'));
-$pconfig['pfb_dns_doh']			= PfbConfig::read('dns/pfb_dns_doh');
-$pconfig['pfb_dns_doh_port']		= PfbConfig::read('dns/pfb_dns_doh_port');
+$pconfig['pfb_dns_doh']			= PfbConfig::read('dns_shared/pfb_dns_doh');
+$pconfig['pfb_dns_doh_port']		= PfbConfig::read('dns_shared/pfb_dns_doh_port');
 $pconfig['pfb_dns_doh_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doh_interface'));
-$pconfig['pfb_dns_doh_trusted']		= PfbConfig::read('dns/pfb_dns_doh_trusted');
-$pconfig['pfb_dns_doq']			= PfbConfig::read('dns/pfb_dns_doq');
-$pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns/pfb_dns_doq_port');
+$pconfig['pfb_dns_doh_trusted']		= PfbConfig::read('dns_shared/pfb_dns_doh_trusted');
+$pconfig['pfb_dns_doq']			= PfbConfig::read('dns_shared/pfb_dns_doq');
+$pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns_shared/pfb_dns_doq_port');
 $pconfig['pfb_dns_doq_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doq_interface'));
 // issue #3583: DDR (RFC 9462) answers, and the option that leaves the port out of the DoH record they carry
-$pconfig['pfb_dns_ddr']			= PfbConfig::read('dns/pfb_dns_ddr');
-$pconfig['pfb_dns_ddr_doh_443']		= PfbConfig::read('dns/pfb_dns_ddr_doh_443');
+$pconfig['pfb_dns_ddr']			= PfbConfig::read('dns_shared/pfb_dns_ddr');
+$pconfig['pfb_dns_ddr_doh_443']		= PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');
 // The Resolver's Network Interfaces (virtual IPs included) plus every stored token no longer offered (issue #3557)
 $options_dns_interface = pfb_dns_proxy_interface_options();
 // The certificates the Resolver offers: the same call, so the same list and descriptions
@@ -100,7 +100,7 @@ if ($_POST) {
 
 		if (!$input_errors) {
 			foreach (pfb_dns_proxy_listeners_stored($_POST) as $pfb_dns_key => $pfb_dns_value) {
-				PfbConfig::write('dns/' . $pfb_dns_key, $pfb_dns_value);
+				PfbConfig::write(pfb_dns_config_key($pfb_dns_key), $pfb_dns_value);
 			}
 			PfbConfig::write('dnsbl/pfb_py_reply', $pfb_py_reply);
 			PfbConfig::write('dns/pfb_dns', $pfb_dns);
@@ -125,7 +125,7 @@ if ($_POST) {
 			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
 		}
 		if (pfb_dns_proxy_ddr_doh_443_locked()) {
-			$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns/pfb_dns_ddr_doh_443');	// a disabled control posts nothing: the form shows the stored value, as the save keeps it
+			$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');	// a disabled control posts nothing: the form shows the stored value, as the save keeps it
 		}
 		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
@@ -220,7 +220,9 @@ $section->addInput(new Form_Checkbox(
 		. 'With the sync on, do not enable this option on the primary before the secondary: the secondary then gets the moved Resolver with no saved snapshot and refuses it on every apply. '
 		. 'Do not turn it off on the primary while the secondary still has it on: the restored Resolver settings reach the secondary, whose Unbound then collides with its running proxy on the client port. '
 		. 'Enable it on the secondary first, or turn the DNS Resolver sync off.<br />'
-		. 'The interface, DoT and certificate settings below are taken from the DNS Resolver once, the first time this page loads or pfB-DNS is turned on; later Resolver changes do not alter them.<br />'
+		. 'The pfB-DNS enable toggle is never synced. <b>All settings (legacy)</b> sends DoT, DoH and DoQ toggles and ports, trusted DoH front ends and DDR settings. '
+		. 'The Resolver snapshot, listen interfaces/addresses (including VIPs) and certificate stay per node. <b>Policy and lists</b> and <b>Lists and global settings only (legacy)</b> do not send pfB-DNS settings.<br />'
+		. 'Unset interface, DoT and certificate settings below are taken from the DNS Resolver once, the first time this page loads or pfB-DNS is turned on; received explicit DoT choices are kept. Later Resolver changes do not alter them.<br />'
 		. 'The change is applied on the next Update.<br />'
 		. 'Default: <strong>Disabled</strong>'
 		. '</div>');

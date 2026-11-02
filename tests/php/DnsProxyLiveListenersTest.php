@@ -404,7 +404,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Given plain DNS on lan and the kind on opt1 at a port of its own, all served, and an opt1 that has 0.0.0.0 by the time the pass runs
 		[$this->port, $port] = self::freePorts(2);
 		foreach (['' => 'on', '_port' => (string) $port, '_interface' => 'opt1'] as $suffix => $value) {
-			config_set_path(self::SETTINGS . "pfb_dns_{$kind}{$suffix}", $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key("pfb_dns_{$kind}{$suffix}"), 2)[0]] . "/pfb_dns_{$kind}{$suffix}", $value);
 		}
 		config_set_path(self::SETTINGS . 'pfb_dns_interface', 'lan');
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
@@ -464,8 +464,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 		match ($what) {
 			'the port' => config_set_path('unbound/port', (string) ($this->port + 1)),
 			'a TLS group turned on' => $this->krEnableDot(),
-			'a TLS group turned off' => config_set_path(self::SETTINGS . 'pfb_dns_dot', ''),
-			'DDR' => config_set_path(self::SETTINGS . 'pfb_dns_ddr', 'on'),
+			'a TLS group turned off' => config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot', ''),
+			'DDR' => config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_ddr', 'on'),
 			'the module turned off' => $GLOBALS['pfb']['dnsbl'] = PfbToggle::Off,
 			'the observer' => config_set_path('unbound/forwarding', ''),
 		};

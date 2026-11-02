@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_resolver')]
 final class DnsProxySeedTest extends TestCase
 {
-	private const SECTION = 'installedpackages/pfblockerngdns/config/0/';
 	/** The keys the seed fills, bare; a box turned on by this release has all of them set. */
 	private const SEEDED = [
 		'pfb_dns_interface', 'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_interface', 'pfb_dns_sslcertref',
@@ -65,13 +64,16 @@ final class DnsProxySeedTest extends TestCase
 	 * A box as pfSense keeps it: the Resolver's own keys (absent keys are left out) and the pfB-DNS section.
 	 *
 	 * @param array<string,mixed>  $unbound
-	 * @param array<string,string> $dns     leaf => stored value of installedpackages/pfblockerngdns/config/0
+	 * @param array<string,string> $dns     leaf => stored value, routed to the local or shared pfB-DNS section
 	 */
 	private function seedBox(array $unbound, array $dns = []): void
 	{
 		$GLOBALS['config'] = [
 			'unbound' => $unbound + ['enable' => '', 'port' => '53', 'custom_options' => base64_encode("do-ip6: no\nprefetch: yes")],
-			'installedpackages' => ['pfblockerngdns' => ['config' => [0 => $dns]]],
+			'installedpackages' => [
+				'pfblockerngdns' => ['config' => [0 => array_diff_key($dns, array_flip(PFB_DNS_SHARED_FIELDS))]],
+				'pfblockerngdnssettings' => ['config' => [0 => array_intersect_key($dns, array_flip(PFB_DNS_SHARED_FIELDS))]],
+			],
 		];
 	}
 
@@ -266,7 +268,7 @@ final class DnsProxySeedTest extends TestCase
 
 		// Then the stored values are the Resolver's values at that time.
 		$this->assertSame('lan', PfbConfig::read('dns/pfb_dns_interface'));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns_dot'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_dot'));
 
 		// When the Resolver then changes (interface and SSL), the stored values hold.
 		$this->assertSame('lan', config_get_path('unbound/active_interface'), 'before the change: the Resolver is on lan');
@@ -274,7 +276,7 @@ final class DnsProxySeedTest extends TestCase
 		config_del_path('unbound/enablessl');
 		$this->assertFalse(pfb_dns_proxy_seed(), 'the second seed writes nothing');
 		$this->assertSame('lan', PfbConfig::read('dns/pfb_dns_interface'));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns_dot'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_dot'));
 	}
 
 	// -----------------------------------------------------------------------
@@ -290,7 +292,7 @@ final class DnsProxySeedTest extends TestCase
 		$this->assertSame('8853', pfb_dns_proxy_setting('pfb_dns_dot_port'), 'the seed value');
 		$this->assertSame(PfbToggle::On, pfb_dns_proxy_setting('pfb_dns_dot'), 'the seed value');
 
-		$this->assertNull(config_get_path(self::SECTION . 'pfb_dns_dot_port'), 'not written: the key stays absent');
+		$this->assertNull(config_get_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot_port'), 'not written: the key stays absent');
 		$this->assertSame('', PfbConfig::read('dns/pfb_dns_interface'), 'not written: still unseeded');
 		$this->assertSame($writes, $this->writes(), 'no write_config');
 	}
@@ -317,7 +319,7 @@ final class DnsProxySeedTest extends TestCase
 	{
 		// Given an unmoved, unseeded box: SSL on and the Resolver on lan.
 		$this->seedBox(['active_interface' => 'lan', 'enablessl' => 'on', 'tlsport' => '8853', 'sslcertref' => 'abc']);
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns_dot'), 'before: DoT off');
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns_shared/pfb_dns_dot'), 'before: DoT off');
 		$this->assertSame('', PfbConfig::read('dns/pfb_dns_interface'), 'before: not seeded');
 		$writes = $this->writes();
 
@@ -325,9 +327,9 @@ final class DnsProxySeedTest extends TestCase
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE), 'the move changed config.xml');
 
 		// Then the seed holds the Resolver's values, the Resolver is moved, and one write covered both.
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns_dot'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_dot'));
 		$this->assertSame('lan', PfbConfig::read('dns/pfb_dns_interface'));
-		$this->assertSame('8853', PfbConfig::read('dns/pfb_dns_dot_port'));
+		$this->assertSame('8853', PfbConfig::read('dns_shared/pfb_dns_dot_port'));
 		$this->assertSame('abc', PfbConfig::read('dns/pfb_dns_sslcertref'));
 		$this->assertNull(config_get_path('unbound/enablessl'), 'enablessl deleted by the move');
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
@@ -340,7 +342,7 @@ final class DnsProxySeedTest extends TestCase
 		$this->seedBox(['active_interface' => 'lan', 'enablessl' => 'on', 'tlsport' => '8853', 'sslcertref' => 'abc']);
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE), 'precondition: the first turn-on moves the Resolver');
 		foreach (self::SEEDED as $leaf) {
-			config_del_path(self::SECTION . $leaf);
+			config_del_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($leaf), 2)[0]] . '/' . $leaf);
 		}
 		$this->assertSame('', PfbConfig::read('dns/pfb_dns_interface'), 'before: unseeded');
 		$writes = $this->writes();
@@ -350,7 +352,7 @@ final class DnsProxySeedTest extends TestCase
 
 		// Then the snapshot's interface and the live TLS settings are stored, in one write with the seed text.
 		$this->assertSame('lan', PfbConfig::read('dns/pfb_dns_interface'));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns_dot'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_dot'));
 		$this->assertSame($writes + 1, $this->writes(), 'one write_config');
 		$this->assertSame(
 			'pfBlockerNG: pfB-DNS took its listener settings from the DNS Resolver',

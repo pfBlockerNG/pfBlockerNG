@@ -1311,7 +1311,6 @@ final class DnsProxyServiceTest extends TestCase
 	// issues #3513, #3517 -- pfb-dns, the Go gateway, is the only front end: the Python proxy is its decider
 	// -----------------------------------------------------------------------
 
-	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const DECIDER = [
 		'--', '/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py',
 		'--decision-fd', '3', '--module-dir', '/var/unbound', '--user', 'unbound',
@@ -1341,7 +1340,7 @@ final class DnsProxyServiceTest extends TestCase
 
 	private function setting(string $key, string $value): void
 	{
-		config_set_path(self::SETTINGS . $key, $value);
+		config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 	}
 
 	/** The Resolver of a box with two interfaces: lan (192.0.2.1, 2001:db8::1) and opt1 (198.51.100.1, 2001:db8:1::1). */

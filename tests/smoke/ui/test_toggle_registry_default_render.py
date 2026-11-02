@@ -353,9 +353,7 @@ def test_swept_dnsbl_toggle_renders_on_when_stored_and_off_when_absent(
     )
 
 
-_SWEPT_DNS_TOGGLES = {
-    name: f"installedpackages/pfblockerngdns/config/0/{name}" for name in ("pfb_dns", "pfb_dns_doh", "pfb_dns_doq")
-}
+_SWEPT_DNS_TOGGLES = {name: helpers.dns_config_path(name) for name in ("pfb_dns", "pfb_dns_doh", "pfb_dns_doq")}
 
 
 @pytest.mark.ui_e2e

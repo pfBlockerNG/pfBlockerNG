@@ -2610,12 +2610,11 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
 
 
 _PFB_DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
-_DNS_CFG = "installedpackages/pfblockerngdns/config/0/"
-# The one-time seed's marker is an empty pfb_dns_interface; the others sit at their defaults until it runs.
+# Empty local interfaces and absent shared DoT values mark the first Resolver seed.
 _DNS_UNSEEDED = {
     "pfb_dns_interface": "",
-    "pfb_dns_dot": "",
-    "pfb_dns_dot_port": "853",
+    "pfb_dns_dot": None,
+    "pfb_dns_dot_port": None,
     "pfb_dns_dot_interface": "",
     "pfb_dns_doh_interface": "",
     "pfb_dns_doq_interface": "",
@@ -2669,13 +2668,13 @@ def test_pfb_dns_page_load_seeds_its_settings_from_the_resolver_once(
 ) -> None:
     """issue #3538: loading the pfB-DNS page seeds its interface, DoT and certificate settings once.
 
-    Given pfB-DNS is off, its seeded settings sit at their defaults (not seeded yet) and the Resolver has an interface,
+    Given pfB-DNS is off, local settings are empty, shared DoT settings absent, and the Resolver has an interface,
     SSL/TLS, a TLS port and a certificate, When the page loads, Then config.xml holds those values under pfB-DNS's own
     keys (no save needed); When the Resolver's interface, port and certificate change and the page loads again, Then
     the stored values are unchanged.
     """
     vm = smoke_vm
-    unseeded = {f"{_DNS_CFG}{key}": value for key, value in _DNS_UNSEEDED.items()}
+    unseeded = {helpers.dns_config_path(key): value for key, value in _DNS_UNSEEDED.items()}
     seeded_paths = list(unseeded)
     touched = [*seeded_paths, *_RESOLVER_BEFORE, _PFB_DNS_TOGGLE]
     priors = _read_config_paths(vm, touched)
@@ -2686,7 +2685,7 @@ def test_pfb_dns_page_load_seeds_its_settings_from_the_resolver_once(
         resp = webui.get(_PFB_DNS_PAGE)
         result = evaluate_render(_PFB_DNS_PAGE, resp.status_code, resp.text, ("pfB-DNS Settings",))
         assert result.ok, f"pfB-DNS render oracle failed: {result.detail}"
-        expected = {f"{_DNS_CFG}{key}": value for key, value in _DNS_SEEDED.items()}
+        expected = {helpers.dns_config_path(key): value for key, value in _DNS_SEEDED.items()}
         assert _read_config_paths(vm, seeded_paths) == expected, "the first page load must seed from the Resolver"
 
         _write_config_paths(vm, dict(_RESOLVER_AFTER))
@@ -2779,7 +2778,7 @@ def _tag_at(page_html: str, position: int) -> str:
 
 def _set_dns(vm: SmokeVM, **leaves: str) -> None:
     """Set pfB-DNS leaves (``pfb_dns_dot="on"``, ...) in one write_config()."""
-    _write_config_paths(vm, {f"{_DNS_CFG}{key}": value for key, value in leaves.items()})
+    _write_config_paths(vm, {helpers.dns_config_path(key): value for key, value in leaves.items()})
 
 
 def test_pfb_dns_page_renders_the_ddr_section_with_both_toggles_between_doq_and_reply_logging(
@@ -2844,7 +2843,7 @@ def test_pfb_dns_page_disables_the_doh_on_port_443_checkbox_only_while_the_store
     When the stored DoH port is 443, Then it renders with it.
     """
     vm = smoke_vm
-    paths = [f"{_DNS_CFG}{key}" for key in ("pfb_dns_interface", "pfb_dns_doh_port")]
+    paths = [helpers.dns_config_path(key) for key in ("pfb_dns_interface", "pfb_dns_doh_port")]
     priors = _read_config_paths(vm, paths)
     try:
         # A stored plain interface list keeps the page's first load from seeding (rewriting) other settings.
@@ -2912,7 +2911,7 @@ def _ddr_on_with_a_certificate_and_a_public_vip(vm: SmokeVM, webui: WebUI) -> It
 
     Every leaf touched and the VIP are put back on the way out.
     """
-    paths = [f"{_DNS_CFG}{key}" for key in _DDR_WARNING_KEYS]
+    paths = [helpers.dns_config_path(key) for key in _DDR_WARNING_KEYS]
     priors = _read_config_paths(vm, paths)
     try:
         # An unseeded box is seeded by this first load (the keys above, restored below); the form's first certificate

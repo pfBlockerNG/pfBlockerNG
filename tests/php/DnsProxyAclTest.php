@@ -204,7 +204,7 @@ final class DnsProxyAclTest extends TestCase
 		$this->seedResolver('lan');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh_interface', 'opt1');
-		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh', 'on');
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh', 'on');
 
 		$this->moveOn();
 
@@ -240,7 +240,7 @@ final class DnsProxyAclTest extends TestCase
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doh_interface', 'opt2');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_doq_interface', 'opt3');
 		foreach (['pfb_dns_dot', 'pfb_dns_doh', 'pfb_dns_doq'] as $toggle) {
-			config_set_path("installedpackages/pfblockerngdns/config/0/{$toggle}", 'on');
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($toggle), 2)[0]] . '/' . $toggle, 'on');
 		}
 
 		$this->moveOn();
@@ -275,7 +275,7 @@ final class DnsProxyAclTest extends TestCase
 		$this->seedBox(['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1'], ['lan' => '64', 'opt1' => '64']);
 		$this->seedResolver('lan');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
-		config_set_path("installedpackages/pfblockerngdns/config/0/{$toggle}", $stored);
+		config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($toggle), 2)[0]] . '/' . $toggle, $stored);
 		config_set_path("installedpackages/pfblockerngdns/config/0/{$toggle}_interface", $list);
 	}
 

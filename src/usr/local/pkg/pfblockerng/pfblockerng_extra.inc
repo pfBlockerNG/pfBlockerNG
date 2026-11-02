@@ -881,7 +881,21 @@ const PFB_SECTIONS = [
 	// issue #3515: pfB-DNS, the experimental DNS proxy tab. Its own section, so the DNSBL page's section save cannot touch
 	// the Resolver snapshot kept beside the toggle; never synced (not one of pfblockerng_sync_sections()).
 	'dns'    => 'installedpackages/pfblockerngdns/config/0',
+	// issue #3649: shared transport settings, separate from the receiver's Resolver recovery state.
+	'dns_shared' => 'installedpackages/pfblockerngdnssettings/config/0',
 ];
+
+const PFB_DNS_SHARED_FIELDS = [
+	'pfb_dns_dot', 'pfb_dns_doh', 'pfb_dns_doq',
+	'pfb_dns_dot_port', 'pfb_dns_doh_port', 'pfb_dns_doq_port',
+	'pfb_dns_doh_trusted', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443',
+];
+
+/** The registered home of a pfB-DNS page field (issue #3649). */
+function pfb_dns_config_key(string $key): string
+{
+	return (in_array($key, PFB_DNS_SHARED_FIELDS, TRUE) ? 'dns_shared/' : 'dns/') . $key;
+}
 
 // issue #1921: dedicated map key standing for "key genuinely absent" inside a
 // 'grandfather' map below -- a PHP array literal coerces a NULL key to '', so absence
@@ -921,8 +935,8 @@ const PFB_GF_ABSENT = "\0absent";
  * keys CfgRegistryGrandfatherGateTest::EXCEPTIONS documents (a mode instrument and a
  * cross-key bespoke seed), which carry neither.
  *
- * Required 'sync': spec ownership class; `policy` syncs in policy scope, `local` never
- * leaves this node (issue #3450).
+ * Required 'sync': `policy` selects policy scope; `local` excludes that scope (issue #3450).
+ * Legacy whole-section scopes do not use this classification.
  *
  * Optional 'zero_reads_default' => TRUE (issue #3450): a stored '0' reads the registered
  * default, as the retired `$stored ?: <default>` page/runtime expressions did. Set on exactly
@@ -2399,7 +2413,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// -------------------------------------------------------------------
-		// pfB-DNS section (pfblockerngdns/config/0, issue #3515)
+		// pfB-DNS local state (dns, #3515) and legacy-shared transport settings (dns_shared, #3649).
 		// -------------------------------------------------------------------
 
 		// EXPERIMENTAL DNS proxy on the Resolver's client-facing interfaces, with or without DNSBL. Default off.
@@ -2421,16 +2435,15 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
 		],
 
-		// issue #3513: DoH / DoQ served by pfB-DNS's Go binary (pfb-dns). Default off; the interface lists
-		// (comma-joined names) and the trusted front ends (space-joined IPs/CIDRs) are per-node values.
-		'dns/pfb_dns_doh' => [
+		// issue #3513: DoH / DoQ default off; only their interface lists remain node-local (#3649).
+		'dns_shared/pfb_dns_doh' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoH listener)',
 		],
-		'dns/pfb_dns_doh_port' => [
+		'dns_shared/pfb_dns_doh_port' => [
 			'default'       => '4443',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -2444,21 +2457,21 @@ function pfb_cfg_registry(): array
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from dns/pfb_dns_interface, only matters once DoH is turned on',
 		],
-		'dns/pfb_dns_doh_trusted' => [
+		'dns_shared/pfb_dns_doh_trusted' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads \'\' = no trusted front end (PROXY protocol and X-Forwarded-For ignored)',
 		],
-		'dns/pfb_dns_doq' => [
+		'dns_shared/pfb_dns_doq' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (no DoQ listener)',
 		],
-		'dns/pfb_dns_doq_port' => [
+		'dns_shared/pfb_dns_doq_port' => [
 			'default'       => '853',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -2474,15 +2487,15 @@ function pfb_cfg_registry(): array
 		],
 
 		// issue #3583: DDR (RFC 9462) answers for resolver.arpa. from pfB-DNS's gateway, and the option that leaves the port out of
-		// the DoH record they carry. Per-node values; both are applied by the next Update.
-		'dns/pfb_dns_ddr' => [
+		// the DoH record they carry. Both are applied by the next Update.
+		'dns_shared/pfb_dns_ddr' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (the gateway does not touch resolver.arpa. names, the DNS Resolver answers them)',
 		],
-		'dns/pfb_dns_ddr_doh_443' => [
+		'dns_shared/pfb_dns_ddr_doh_443' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -2496,16 +2509,16 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'local',
-			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from the Resolver\'s interfaces (or its snapshot), \'all\' when it had none; clearing it by hand re-seeds the DoT toggle, DoT port and certificate too',
+			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from the Resolver\'s interfaces (or its snapshot), \'all\' when it had none; shared explicit DoT choices survive reseeding',
 		],
-		'dns/pfb_dns_dot' => [
+		'dns_shared/pfb_dns_dot' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads Off = no DoT listener, and pfb_dns_proxy_seed() fills it once from the Resolver\'s SSL setting',
 		],
-		'dns/pfb_dns_dot_port' => [
+		'dns_shared/pfb_dns_dot_port' => [
 			'default'       => '853',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -3798,7 +3811,41 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: migrated the Sync tab-settings opt-out to the sync scope (issue #3452)',
 			'since'   => '4.0.0',
 		],
+		[
+			'id'       => 'issue3649-dns-settings-split',
+			'sections' => [PFB_SECTIONS['dns'], PFB_SECTIONS['dns_shared']],
+			'apply'    => 'pfb_dns_settings_migrate',
+			'message'  => 'pfBlockerNG: separated shared pfB-DNS settings from node-local state (issue #3649)',
+			'since'    => '4.0.0',
+		],
 	];
+}
+
+/**
+ * Move transport settings without canonicalising stored values or touching node-local state.
+ * A value already received in the new section wins, including explicit Off/empty/false.
+ *
+ * @param array<string,mixed> $sections
+ * @return array<string,array<string,mixed>>|null
+ */
+function pfb_dns_settings_migrate(array $sections): ?array
+{
+	$old_path = PFB_SECTIONS['dns'];
+	$new_path = PFB_SECTIONS['dns_shared'];
+	$old = is_array($sections[$old_path] ?? NULL) ? $sections[$old_path] : [];
+	$new = is_array($sections[$new_path] ?? NULL) ? $sections[$new_path] : [];
+	$changed = FALSE;
+	foreach ($old as $key => $value) {
+		if (!in_array($key, PFB_DNS_SHARED_FIELDS, TRUE)) {
+			continue;
+		}
+		if (!array_key_exists($key, $new)) {
+			$new[$key] = $old[$key];
+		}
+		unset($old[$key]);
+		$changed = TRUE;
+	}
+	return $changed ? [$old_path => $old, $new_path => $new] : NULL;
 }
 
 /**

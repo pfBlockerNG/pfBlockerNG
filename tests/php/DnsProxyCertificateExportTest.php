@@ -312,7 +312,7 @@ final class DnsProxyCertificateExportTest extends TestCase
 			'custom_options'   => ['present' => FALSE, 'value' => NULL],
 		];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
-		config_set_path(self::SETTINGS . 'pfb_dns_dot', $dot ? 'on' : '');
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot', $dot ? 'on' : '');
 	}
 
 	/** @return array<string,array{?bool,string,string,bool}> stored DoT toggle on a moved box (NULL = not moved), DoH, DoQ => is a certificate wanted */
@@ -339,8 +339,8 @@ final class DnsProxyCertificateExportTest extends TestCase
 		if ($dot !== NULL) {
 			$this->moveResolver($dot);
 		}
-		config_set_path(self::SETTINGS . 'pfb_dns_doh', $doh);
-		config_set_path(self::SETTINGS . 'pfb_dns_doq', $doq);
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh', $doh);
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq', $doq);
 
 		// When the cron tick looks at it
 		pfb_dns_proxy_certificate_sync();
@@ -390,9 +390,9 @@ final class DnsProxyCertificateExportTest extends TestCase
 	{
 		// Given pfB-DNS's own stored toggles (no saved Resolver is consulted)
 		config_set_path(self::SETTINGS . 'pfb_dns_interface', 'lan');
-		config_set_path(self::SETTINGS . 'pfb_dns_dot', $dot);
-		config_set_path(self::SETTINGS . 'pfb_dns_doh', $doh);
-		config_set_path(self::SETTINGS . 'pfb_dns_doq', $doq);
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot', $dot);
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh', $doh);
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq', $doq);
 
 		$this->assertSame($wanted, pfb_dns_proxy_tls_wanted());
 	}

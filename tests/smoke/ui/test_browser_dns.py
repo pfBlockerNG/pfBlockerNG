@@ -180,7 +180,7 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
     page is opened and put back, presence included, afterwards.
     """
     page = browser_page
-    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     try:
         _open(page, webui, DNS_PAGE)
@@ -196,7 +196,7 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
         _save(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
-        assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_dot") == "on"
+        assert helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns_dot")) == "on"
         assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_interface") == "lo0"
         assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_dot_interface") == "lo0"
         assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_sslcertref") == cert_ref
@@ -209,7 +209,7 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
 # checkboxes, and the DoH port the tests set (a stored 443 disables the second checkbox).
 DDR_SECTION = "Discovery of Designated Resolvers (DDR)"
 DDR_TOGGLES = (("DDR", "pfb_dns_ddr"), ("DoH on port 443", "pfb_dns_ddr_doh_443"))
-DOH_PORT_CFG = f"{DNS_CFG}pfb_dns_doh_port"
+DOH_PORT_CFG = helpers.dns_config_path("pfb_dns_doh_port")
 
 
 def test_dns_reply_logging_precedes_proxy_settings_and_stays_independent(
@@ -279,7 +279,7 @@ def test_doh_on_port_443_checkbox_is_disabled_only_while_the_stored_doh_port_is_
     loads again, Then it is disabled. One screenshot per state is an artifact, not an asserted baseline.
     """
     page = browser_page
-    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     try:
         for port, disabled in (("4443", False), ("443", True)):
@@ -300,15 +300,15 @@ def test_doh_on_port_443_checkbox_is_disabled_only_while_the_stored_doh_port_is_
 def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
     browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
 ) -> None:
-    """issue #3583: checking both DDR checkboxes and saving stores `dns/pfb_dns_ddr` and `dns/pfb_dns_ddr_doh_443` on.
+    """issue #3583: saving both DDR checkboxes stores `dns_shared/pfb_dns_ddr` and `dns_shared/pfb_dns_ddr_doh_443` on.
 
     Given both stored empty and the DoH port 4443 (before-state, seeded directly), the save rewrites every setting of
     the page and the first load seeds the unset ones, so each one is read before the page is opened and put back.
     """
     page = browser_page
-    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
-    toggle_paths = [f"{DNS_CFG}{name}" for _label, name in DDR_TOGGLES]
+    toggle_paths = [helpers.dns_config_path(name) for _label, name in DDR_TOGGLES]
     try:
         for path in toggle_paths:
             helpers.config_set(smoke_vm, path, "")
@@ -324,7 +324,7 @@ def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         stored = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
         assert stored == ("on", "on"), (
-            f"stored (dns/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443): expected on and on, got {stored}"
+            f"stored (dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443): expected on and on, got {stored}"
         )
     finally:
         for path, state in originals.items():
@@ -347,7 +347,7 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
     page = browser_page
     vip = f"_vip{_VIP_UNIQID}"
     stored = f"lo0,{vip},{_GONE}"
-    paths = [f"{DNS_CFG}{key}" for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     entry = {"mode": "ipalias", "interface": "lo0", "type": "single", "subnet": _VIP_ADDR, "subnet_bits": "32"}
     lists = [f"{DNS_CFG}pfb_dns{kind}_interface" for kind in ("", "_dot", "_doh", "_doq")]
@@ -357,7 +357,8 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
         "config_set_path('virtualip/vip', $vips);\n"
         + "".join(f"config_set_path({helpers._php_str(path)}, {helpers._php_str(stored)});\n" for path in lists)
         + "".join(
-            f"config_set_path({helpers._php_str(f'{DNS_CFG}pfb_dns_{kind}')}, '');\n" for kind in ("dot", "doh", "doq")
+            f"config_set_path({helpers._php_str(helpers.dns_config_path(f'pfb_dns_{kind}'))}, '');\n"
+            for kind in ("dot", "doh", "doq")
         )
         + "write_config('pfBlockerNG smoke: issue 3557 stored listener tokens');\n"
         "echo 'OK';"
@@ -421,15 +422,12 @@ WIDE_REASON = "listen tcp [2001:db8:ffff:ffff:ffff:ffff:ffff:ffff]:853: bind: ad
 def _write_rc_script(vm: helpers.SmokeVM, settings: dict[str, str] | None = None) -> None:
     """Store ``settings`` in the pfB-DNS section, if any, and have the package write its service script from what is
     stored, as an apply does: the status panel reads the addresses to list from that script."""
-    section = helpers._php_str(DNS_CFG.rstrip("/"))
     stores = "".join(
-        f"$d[{helpers._php_str(key)}] = {helpers._php_str(value)};\n" for key, value in (settings or {}).items()
+        f"config_set_path({helpers._php_str(helpers.dns_config_path(key))}, {helpers._php_str(value)});\n"
+        for key, value in (settings or {}).items()
     )
     store = (
-        f"$d = config_get_path({section}, array());\n{stores}config_set_path({section}, $d);\n"
-        "write_config('pfBlockerNG smoke: pfB-DNS settings for the #3555 status panel');\n"
-        if settings
-        else ""
+        stores + "write_config('pfBlockerNG smoke: pfB-DNS settings for the #3555 status panel');\n" if settings else ""
     )
     php = f"require_once({helpers._php_str(PFB_INC)});\nglobal $pfb;\n{store}pfb_global();\npfb_dns_proxy_service();"
     result = helpers.php_eval(vm, f"{php}\necho 'OK';")
@@ -460,7 +458,7 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
         "pfb_dns_doh": "",
         "pfb_dns_doq": "",
     }
-    originals = {key: helpers.config_get_state(smoke_vm, f"{DNS_CFG}{key}") for key in settings}
+    originals = {key: helpers.config_get_state(smoke_vm, helpers.dns_config_path(key)) for key in settings}
     try:
         _write_rc_script(smoke_vm, settings)
         _open(page, webui, DNS_PAGE)
@@ -493,7 +491,7 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
             assert block.locator("table").count() == 1, f"{key}: an off transport keeps its table"
             bodies, rows_shown = block.locator("tbody").count(), block.locator("tbody tr").count()
             if bodies or rows_shown:
-                stored = helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_{key}")
+                stored = helpers.config_get(smoke_vm, helpers.dns_config_path(f"pfb_dns_{key}"))
                 pytest.fail(
                     f"{key} is off ({stored!r} stored): its table must be a header alone, it has {bodies} tbody and "
                     f"{rows_shown} rows: {block.inner_html()}"
@@ -532,7 +530,7 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
         assert section is not None and section["x"] + section["width"] <= PHONE["width"], f"the section is {section}"
     finally:
         for key, state in originals.items():
-            helpers.config_restore_state(smoke_vm, f"{DNS_CFG}{key}", state)
+            helpers.config_restore_state(smoke_vm, helpers.dns_config_path(key), state)
         _write_rc_script(smoke_vm)
 
 

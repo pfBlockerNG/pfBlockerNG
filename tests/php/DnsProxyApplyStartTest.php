@@ -31,7 +31,6 @@ final class DnsProxyApplyStartTest extends TestCase
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',
 		'pfb_test_valid_pids', 'pfb_test_rcfile_dir', 'pfb_test_interface_ip', 'pfb_test_interface_info',
@@ -119,7 +118,7 @@ final class DnsProxyApplyStartTest extends TestCase
 	private function configure(array $settings): void
 	{
 		foreach ($settings as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 	}
 
