@@ -717,6 +717,76 @@ PHP
 	rmdir_recursive_local($run['dir']);
 });
 
+// A group this wide takes init measurably longer to reap than a supervisor needs to return.
+const EXPIRED_GROUP_MEMBERS = 400;
+
+/**
+ * Expire a start whose command joins EXPIRED_GROUP_MEMBERS TERM-ignoring helpers to the
+ * supervised group, then look at the group in the runner at the instant
+ * pfb_stop_start_unbound() returns. $stopSupervisor additionally SIGSTOPs the group leader,
+ * so TERM never ends it and the stop must take the leader-unresponsive branch.
+ */
+function expiredGroupRun(string $src, bool $stopSupervisor): array
+{
+	$script = str_replace(['@MEMBERS@', '@STOP_SUPERVISOR@'],
+		[(string) EXPIRED_GROUP_MEMBERS, $stopSupervisor ? 'kill -STOP "$PFB_UNBOUND_START_PGID"' : ':'], <<<'SH'
+trap '' TERM
+printf %s "$PFB_UNBOUND_START_PGID" > "$1/pgid"
+i=0
+while [ "$i" -lt @MEMBERS@ ]; do
+	sleep 30 &
+	i=$((i + 1))
+done
+printf %s "$i" > "$1/helpers"
+@STOP_SUPERVISOR@
+wait
+SH);
+	return run_isolated($src, fastConstants([
+			'PFB_UNBOUND_START_CMD' => 'sh {{DIR}}/start.sh {{DIR}}',
+			'PFB_UNBOUND_START_WAIT' => 1,
+			'PFB_UNBOUND_KILL_WAIT' => 5,
+		]),
+		['pfb_stop_start_unbound'],
+		stopStartPrelude()
+		. "\nfile_put_contents(\"\$dir/start.sh\", " . var_export($script, true) . ");\n"
+		. <<<'PHP'
+$GLOBALS['pfb_process_running']['unbound'] = false;
+$final = pfb_stop_start_unbound('');
+$pgid = (int) trim((string) @file_get_contents("$dir/pgid"));
+$group_alive = $pgid > 0 && posix_kill(-$pgid, 0);
+if ($group_alive) { posix_kill(-$pgid, 9); }
+echo json_encode([
+	'final' => $final,
+	'pgid' => $pgid,
+	'helpers' => (int) trim((string) @file_get_contents("$dir/helpers")),
+	'group_alive' => $group_alive,
+]) . "\n";
+PHP
+	);
+}
+
+function checkExpiredGroupGone(array $run, string $why): void
+{
+	check($run['status'] === 0, 'isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+	$p = $run['payload'];
+	same(124, $p['final']['retval'] ?? null, 'the row must exercise a real expiry');
+	same(false, $p['final']['start_completed'] ?? null, 'an expired start must never produce a completion record');
+	check(($p['pgid'] ?? 0) > 0, 'the row must observe the supervised group before evaluating cleanup');
+	same(EXPIRED_GROUP_MEMBERS, $p['helpers'] ?? null, 'the group must really have held its TERM-ignoring helpers');
+	same(false, $p['group_alive'] ?? null, "SIGKILL is only queued -- {$why}");
+	rmdir_recursive_local($run['dir']);
+}
+
+row('Row 6c: an expired start returns only after its whole process group has left -- TERM-ignoring descendants', function () use ($src) {
+	checkExpiredGroupGone(expiredGroupRun($src, false),
+		'an expired start must not return until every member of its group is gone');
+});
+
+row('Row 6d: an expired start returns only after its whole process group has left -- unresponsive supervisor', function () use ($src) {
+	checkExpiredGroupGone(expiredGroupRun($src, true),
+		'a start whose supervisor ignores TERM must not return until its whole group is gone');
+});
+
 function reloadCauseAwareRun(string $src, string $mode, bool $pyBlacklist): array
 {
 	$py_bool = $pyBlacklist ? 'true' : 'false';
