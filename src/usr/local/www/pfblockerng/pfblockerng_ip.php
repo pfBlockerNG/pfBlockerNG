@@ -54,7 +54,7 @@ $options_pfb_agg_types		= [ 'Deny' => 'Deny', 'Permit' => 'Permit', 'Match' => '
 $pconfig['pfb_agg_types']	= explode(',', (string) PfbConfig::read('gen/pfb_agg_types'));
 
 // ADR-40: alias-table apply mode (gateway-registered, general section).
-$options_pfb_alias_delta_mode	= [ 'auto' => 'Auto (delta for small churn, replace for large)', 'delta' => 'Delta (-T add/-T delete)', 'replace' => 'Replace (-T replace, pre-4.0 behaviour)' ];
+$options_pfb_alias_delta_mode	= [ 'auto' => 'Auto (recommended)', 'delta' => 'Always incremental', 'replace' => 'Always full replace' ];
 $pconfig['pfb_alias_delta_mode']	= (string) PfbConfig::read('gen/pfb_alias_delta_mode')->toStored();
 $pconfig['pfb_alias_delta_batch']	= pfb_alias_delta_batch_clamp((string) PfbConfig::read('gen/pfb_alias_delta_batch'));
 
@@ -399,8 +399,8 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['enable_dup'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('Default: <strong>Off</strong><br />'
-		. 'Remove duplicate IPv4 addresses across Deny lists so the same host is not listed more than once. '
-		. 'Only used for IPv4 Deny Lists.');
+		. 'Remove duplicate addresses across Deny lists so the same host is listed only once. '
+		. 'Applies to IPv4 and IPv6 Deny lists.');
 
 $section->addInput(new Form_Checkbox(
 	'enable_agg',
@@ -417,13 +417,12 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_ip_suppression_enabled($pconfig['suppression'] ?? NULL),
 	'on'
-))->setHelp('Default: <strong>Enabled</strong><br />This will prevent Selected IPs (and private/reserved addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128). '
+))->setHelp('Default: <strong>Enabled</strong><br />Prevent selected IPs and private/reserved addresses from being blocked. Applies to IPv4 entries from <code>/8</code> through <code>/32</code> and IPv6 entries from <code>/32</code> through <code>/128</code>. '
 	. pfb_list_section_help_note(['IPv4 Suppression', 'IPv6 Suppression'], FALSE)
 	. '<div class="infoblock">'
-	. 'GeoIP blocklist cannot be suppressed.<br /><br />'
-	. 'Alerts can be suppressed using the \'+\' icon in the Alerts tab; the IP is added to the matching family\'s (IPv4/IPv6) Suppression custom list.<br />'
-	. 'For GeoIP, or Blocked IPs in a CIDR broader than the supported range (/8 IPv4, /32 IPv6), use a \'Whitelist alias\' w/ a List Action: \'Permit Outbound\' Firewall rule.<br />'
-	. 'Only \'Deny\' type Aliases can be suppressed!'
+	. '<p>Use the <strong>+</strong> icon on <strong>Reports</strong> &gt; <strong>Alerts</strong> to suppress a single host, even inside a large feed range. The IP is added to the matching family\'s suppression custom list.</p>'
+	. '<p>GeoIP blocks cannot be suppressed; for those, create a list with <strong>List Action</strong> set to <strong>Permit Outbound</strong> and add the addresses to allow.</p>'
+	. '<p>Only Deny-type aliases can be suppressed.</p>'
 	. '</div>'
 );
 
@@ -435,7 +434,7 @@ $group->add(new Form_Select(
 	$options_suppression_cidr
 ))->setHelp('Default: <strong>8</strong> on a new install, <strong>Disabled</strong> after an upgrade<br />'
 	. 'Reduces an IPv4 range broader than this limit to a single address, for the DNSBL IPs alias (pfB_DNSBLIP_v4) and every IPv4 list without its own '
-	. 'Suppression CIDR Limit (Advanced Settings). Applies only when Suppression is enabled. Not applied to GeoIP feeds.')
+	. '<strong>Suppression CIDR Limit</strong> (<strong>Advanced Settings</strong>). Applies only when <strong>Suppression</strong> is enabled. Not applied to GeoIP feeds.')
   ->setAttribute('style', 'width: auto');
 
 $group->add(new Form_Select(
@@ -445,7 +444,7 @@ $group->add(new Form_Select(
 	$options_suppression_cidr_v6
 ))->setHelp('Default: <strong>32</strong> on a new install, <strong>Disabled</strong> after an upgrade<br />'
 	. 'Reduces an IPv6 range broader than this limit to a single address, for the DNSBL IPs alias (pfB_DNSBLIP_v6) and every IPv6 list. '
-	. 'Applies only when Suppression is enabled. Not applied to GeoIP feeds.')
+	. 'Applies only when <strong>Suppression</strong> is enabled. Not applied to GeoIP feeds.')
   ->setAttribute('style', 'width: auto');
 $section->add($group);
 
@@ -456,7 +455,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['enable_log'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('Default: <strong>Off</strong><br />'
-		. 'Forces logging on for every IP Alias, overriding the per-alias settings in the GeoIP/IPv4/IPv6 tabs. '
+		. 'Forces logging on for every IP alias, overriding the per-alias <strong>Enable Logging</strong> settings on <strong>GeoIP</strong>, <strong>IPv4</strong> and <strong>IPv6</strong>. '
 		. 'It cannot turn logging off.'
 );
 
@@ -477,7 +476,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['killstates'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('Default: <strong>Off</strong><br />'
-		. 'When enabled, after a cron event or any Force command, any blocked IPs found in the Firewall states will be cleared.');
+		. 'After each update, clear firewall states for addresses that are now blocked. Not done on an update that also reloads the firewall rules (for example when an alias or auto rule is added); those states stay until they expire.');
 
 $form->add($section);
 
@@ -498,7 +497,7 @@ $group->add(new Form_Select(
 	'Rule Action',
 	$pconfig['inbound_deny_action'],
 	$options_inbound_deny_action
-))->setHelp('Default: <strong>Block</strong><br />Select \'Rule action\' for Inbound rules:')
+))->setHelp('Default: <strong>Block</strong><br />Select <strong>Rule Action</strong> for inbound rules:')
   ->setAttribute('style', 'width: auto');
 $section->add($group);
 
@@ -518,7 +517,7 @@ $group->add(new Form_Select(
 	'Rule Action',
 	$pconfig['outbound_deny_action'],
 	$options_outbound_deny_action
-))->setHelp('Default: <strong>Reject</strong><br />Select \'Rule action\' for Outbound rules:')
+))->setHelp('Default: <strong>Reject</strong><br />Select <strong>Rule Action</strong> for outbound rules:')
   ->setAttribute('style', 'width: auto');
 $section->add($group);
 
@@ -539,17 +538,14 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['fw_self_outbound'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('Default: <strong>Off</strong><br />'
-		. 'When enabled, every outbound auto-rule (Deny/Permit/Match Outbound and the outbound part of the Both actions) '
-		. 'is also applied to traffic originating from the firewall itself, as a floating <em>out</em> rule on the '
-		. 'selected Inbound interfaces with source <em>This Firewall (self)</em>.<br />'
-		. '<strong>Caution:</strong> this affects the firewall\'s own connections (package updates, feed downloads, NTP, '
-		. 'DNS upstreams, VPN endpoints); a large GeoIP outbound list can cut the firewall off from the Internet.<br />'
-		. '<strong>Note:</strong> <em>self</em> is an address match. Floating rules are evaluated after NAT, so on IPv4, '
-		. 'NAT\'d LAN clients leaving those interfaces also match (their translated source is the firewall\'s address) '
-		. 'and are logged with that address. Clients on selected Outbound interfaces are already blocked on ingress. '
-		. 'In practice this only newly affects clients on interfaces not selected as Outbound. '
-		. 'IPv6 without NAT matches only the firewall.'
+))->setHelp('<p>Default: <strong>Off</strong>.</p>'
+		. '<p>Apply outbound automatic rules to firewall-originated traffic as well.</p>'
+		. '<p><span class="text-danger"><strong>Warning:</strong></span> These rules can block the firewall\'s own updates, feed downloads, NTP, DNS upstreams and VPN connections. A large GeoIP outbound list can cut the firewall off from the Internet.</p>'
+		. '<p>The additional floating rule uses direction <code>out</code> on the interfaces selected under <strong>Inbound Firewall Rules</strong>, matching the firewall\'s source address:</p>'
+		. '<ul>'
+		. '<li>With IPv4 NAT, translated clients can also match the firewall address and are logged with that address. Clients on selected <strong>Outbound Firewall Rules</strong> interfaces are already blocked on ingress; this can newly affect clients on interfaces not selected there.</li>'
+		. '<li>With IPv6 and no NAT, only firewall-originated traffic matches.</li>'
+		. '</ul>'
 );
 
 $section->addInput(new Form_Select(
@@ -558,13 +554,10 @@ $section->addInput(new Form_Select(
 	$pconfig['pass_order'],
 	$options_pass_order
 ))->setHelp('Default Order:<strong>| pfB_Pass/Match/Block/Reject | All other Rules | (Default format)</strong><br />'
-		. '<span class="text-danger"><strong>Note: \'Auto type\' Firewall Rules will be \'ordered\' by this selection.</strong></span>'
+		. '<p><span class="text-danger"><strong>Warning:</strong></span> This selection can reorder all firewall rules, not just pfBlockerNG rules.</p>'
 		. '<div class="infoblock">'
-		. 'Refer to the blue infoblock \'List Action\' icon in the IPv4 tab for details on how to use \'Alias type\'<br />'
-		. '(ie: \'Alias Deny\') instead of \'Auto generated rules\', if required for your network design.<br /><br />'
-		. 'Select the \'<strong>Order</strong>\' of the Rules<br /><br />'
-		. '&emsp;Selecting \'Default format\', sets pfBlockerNG rules at the top of the Firewall TAB.<br />'
-		. '&emsp;Selecting any other \'Order\' will re-order <strong>all the rules to the format indicated!</strong></div>')
+		. '<p>See <strong>List Action</strong> on <strong>IPv4</strong> for alias-only actions such as <strong>Alias Deny</strong>, if you need to manage your own firewall rules.</p>'
+		. '<p>The default format places pfBlockerNG rules at the top. Any other selection reorders all rules to the displayed format.</p></div>')
   ->setAttribute('style', 'width: auto; max-width: 100%');
 
 $section->addInput(new Form_Select(
@@ -572,7 +565,7 @@ $section->addInput(new Form_Select(
 	'Firewall \'Auto\' Rule Suffix',
 	$pconfig['autorule_suffix'],
 	$options_autorule_suffix
-))->setHelp('Default: <strong>auto rule</strong><br />Select \'Auto Rule\' description suffix for auto defined rules. pfBlockerNG must be disabled to modify suffix.')
+))->setHelp('Default: <strong>auto rule</strong><br />Select the description suffix for automatic rules. Turn off <strong>pfBlockerNG</strong> on <strong>General</strong> before changing the suffix.')
   ->setAttribute('style', 'width: auto');
 
 $form->add($section);
@@ -583,7 +576,7 @@ $section->addInput(new Form_StaticText(
 	'<small>'
 	. 'ASN database distributed under the Creative Commons Attribution-ShareAlike 4.0 International License by: '
 	. '<a target="_blank" rel="noopener noreferrer" href="https://ipinfo.io">IPinfo</a><br />'
-	. 'The ASN database is automatically updated each day at a random hour.</small>'
+	. 'Checked daily at <strong>Default Schedule</strong> on <strong>General</strong>.</small>'
 ));
 
 
@@ -603,8 +596,8 @@ $section->addInput(new Form_Input(
 	['placeholder' => 'Enter your IPinfo Token -- leave blank to keep the current token']
 ))->setHelp('To utilize the free IPinfo ASN functionality, you must first register for a free IPinfo user account. Visit the following '
 	. '<a href="https://ipinfo.io/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free IPinfo user account. '
-	. '<strong>NOTE: If you use Snort/Suricata, check for IPinfo blocked events!</strong>'
-	. ' The stored token is never displayed here; leaving this field blank on Save keeps the existing token unchanged.')
+	. '<p><strong>Note:</strong> If you use Snort/Suricata, check for IPinfo blocked events.</p>'
+	. '<p>The stored token is never displayed here; leaving this field blank when saving keeps the existing token unchanged.</p>')
   ->setAttribute('autocomplete', 'off');
 
 $form->add($section);
@@ -615,7 +608,7 @@ $section->addInput(new Form_StaticText(
         '<small>'
         . 'GeoIP database GeoLite2 distributed under the Creative Commons Attribution-ShareAlike 4.0 International License by: '
 	. '<a target="_blank" rel="noopener noreferrer" href="https://www.maxmind.com">MaxMind Inc.</a><br />'
-	. 'The GeoIP database is automatically updated each day at a random hour.</small>'
+	. 'Checked daily at <strong>Default Schedule</strong> on <strong>General</strong>.</small>'
 ));
 
 $section->addInput(new Form_Input(
@@ -626,7 +619,7 @@ $section->addInput(new Form_Input(
 	['placeholder' => 'Enter your MaxMind GeoLite2 Account ID']
 ))->setHelp('To utilize the free MaxMind GeoLite2 GeoIP functionality, you must first register for a free MaxMind user account. Visit the following '
 	. '<a href="https://www.maxmind.com/en/geolite2/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free MaxMind user account. '
-	. '<strong>Use the GeoIP Update version 3.1.1 or newer registration option.</strong>')
+	. 'Use the GeoIP Update version 3.1.1 or newer registration option.')
   ->setAttribute('autocomplete', 'off');
 
 $section->addInput(new Form_Input(
@@ -637,8 +630,8 @@ $section->addInput(new Form_Input(
 	['placeholder' => 'Enter your MaxMind GeoLite2 License Key -- leave blank to keep the current key']
 ))->setHelp('To utilize the free MaxMind GeoLite2 GeoIP functionality, you must first register for a free MaxMind user account. Visit the following '
 	. '<a href="https://www.maxmind.com/en/geolite2/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free MaxMind user account. '
-	. '<strong>Utilize the GeoIP Update version 3.1.1 or newer registration option.</strong>'
-	. ' The stored key is never displayed here; leaving this field blank on Save keeps the existing key unchanged.')
+	. 'Use the GeoIP Update version 3.1.1 or newer registration option. '
+	. 'The stored key is never displayed here; leaving this field blank when saving keeps the existing key unchanged.')
   ->setAttribute('autocomplete', 'off');
 
 $section->addInput(new Form_Select(
@@ -657,26 +650,20 @@ $section->addInput(new Form_Checkbox(
 	'Check to disable MaxMind CSV updates',
 	pfb_cfg_toggle_read($pconfig['database_cc'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('Default: <strong>Off</strong> (CSV updates run).<br />This will disable the MaxMind monthly CSV GeoIP database cron update. This does not affect the MaxMind binary cron update that is used for other GeoIP funcionality in the package.');
+))->setHelp('Default: <strong>Off</strong> (CSV updates run).<br />Stop the daily MaxMind CSV download. The MaxMind binary database (used by <strong>Reports</strong> and GeoIP lookups) still updates.');
 
 $form->add($section);
 
 $pfb_ip_anchor_layout = pfb_ip_anchor_layout_render();
 $section = new Form_Section('IPv4 Suppression', $pfb_ip_anchor_layout['suppression'], COLLAPSIBLE|SEC_CLOSED);
-$suppression_text = '<strong><u>This suppression list is for [ /8 through /32 ] IPv4 addresses only!</u></strong><br /><br />
-
-			When \'Suppression\' is enabled, all RFC1918, loopback and reserved (documentation, multicast, CGN, benchmarking, 6to4)
-			addresses are also filtered on feed download|Update|Reload.<br /><br />
-
-			Enter one &emsp; <strong>IPv4 address</strong>&emsp; per line<br />
-			You may use "<strong>#</strong>" after any address to add comments. &emsp;IE: (x.x.x.x/32 # example.com)<br /><br />
-
-			To utilize this <strong>Suppression List</strong>, enable <strong>Suppression</strong> and click on the "+"
-			icon(s) in the Alerts tab to add the IPv4 addresses automatically to this Suppression list and immediately
-			remove the IPv4 address from the Deny aliastable.<br /><br />
-
-			Note: When manually adding an IPv4 address <strong>[ /8 through /32 only! ]</strong> to this Suppression List,
-			you must run a forced IP reload for the changes to take effect: on the Update tab, run <strong>\'Run Now\' (Run Scope: IP, Force: Parse)</strong>.';
+$suppression_text = '<p>Applies to IPv4 entries from <code>/8</code> through <code>/32</code>.</p>
+			<p>When <strong>Suppression</strong> is enabled, RFC1918, loopback and reserved (documentation, multicast, CGN, benchmarking, 6to4)
+			addresses are also filtered on feed download, update or reload.</p>
+			<p>Enter one IPv4 address per line. Use <code>#</code> after an address to add a comment, for example <code>203.0.113.7/32 # example.com</code>.</p>
+			<p>Enable <strong>Suppression</strong> and use the <strong>+</strong> icon on <strong>Reports</strong> &gt; <strong>Alerts</strong>
+			to add IPv4 addresses automatically to <strong>IPv4 Suppression</strong> and immediately remove them from the Deny alias table.</p>
+			<p>After manually adding addresses, open <strong>Update</strong>, set <strong>Run Scope</strong> to <strong>IP</strong> and
+			<strong>Force</strong> to <strong>Parse</strong>, then use <strong>Run Now</strong>.</p>';
 
 $section->addInput(new Form_Textarea(
 	'v4suppression',
@@ -693,20 +680,14 @@ $section->addInput(new Form_Textarea(
 $form->add($section);
 
 $section = new Form_Section('IPv6 Suppression', 'IPv6_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
-$suppression_text_v6 = '<strong><u>This suppression list is for [ /32 through /128 ] IPv6 addresses only!</u></strong><br /><br />
-
-			When \'Suppression\' is enabled, all ULA (fc00::/7), link-local, loopback and reserved (documentation, multicast, NAT64)
-			addresses are also filtered on feed download|Update|Reload.<br /><br />
-
-			Enter one &emsp; <strong>IPv6 address</strong>&emsp; per line<br />
-			You may use "<strong>#</strong>" after any address to add comments. &emsp;IE: (2001:db8::1/128 # example.com)<br /><br />
-
-			To utilize this <strong>Suppression List</strong>, enable <strong>Suppression</strong> and click on the "+"
-			icon(s) in the Alerts tab to add the IPv6 addresses automatically to this Suppression list and immediately
-			remove the IPv6 address from the Deny aliastable.<br /><br />
-
-			Note: When manually adding an IPv6 address <strong>[ /32 through /128 only! ]</strong> to this Suppression List,
-			you must run a forced IP reload for the changes to take effect: on the Update tab, run <strong>\'Run Now\' (Run Scope: IP, Force: Parse)</strong>.';
+$suppression_text_v6 = '<p>Applies to IPv6 entries from <code>/32</code> through <code>/128</code>.</p>
+			<p>When <strong>Suppression</strong> is enabled, ULA (<code>fc00::/7</code>), link-local, loopback and reserved (documentation, multicast, NAT64)
+			addresses are also filtered on feed download, update or reload.</p>
+			<p>Enter one IPv6 address per line. Use <code>#</code> after an address to add a comment, for example <code>2001:db8::1/128 # example.com</code>.</p>
+			<p>Enable <strong>Suppression</strong> and use the <strong>+</strong> icon on <strong>Reports</strong> &gt; <strong>Alerts</strong>
+			to add IPv6 addresses automatically to <strong>IPv6 Suppression</strong> and immediately remove them from the Deny alias table.</p>
+			<p>After manually adding addresses, open <strong>Update</strong>, set <strong>Run Scope</strong> to <strong>IP</strong> and
+			<strong>Force</strong> to <strong>Parse</strong>, then use <strong>Run Now</strong>.</p>';
 
 $section->addInput(new Form_Textarea(
 	'v6suppression',
@@ -731,10 +712,10 @@ $section->addInput(new Form_Select(
 	$options_pfb_agg_types,
 	TRUE
 ))->setHelp('Default: <strong>none</strong><br />'
-		. 'For each type selected, build a <strong>pfB_&lt;Type&gt;_Aggregated_v4/_v6</strong> '
-		. 'alias holding the CIDR-aggregated union of <strong>every feed of that type</strong>, '
-		. 'whichever List Action produced it &mdash; <em>Deny</em> covers Deny Inbound, Outbound '
-		. 'and Both as well as Alias Deny.<br />'
+		. 'For each type selected, build a <code>pfB_&lt;Type&gt;_Aggregated_v4/_v6</code> '
+		. 'alias holding the CIDR-aggregated union of every feed of that type, '
+		. 'whichever <strong>List Action</strong> produced it &mdash; <strong>Deny</strong> covers <strong>Deny Inbound</strong>, <strong>Deny Outbound</strong> '
+		. 'and <strong>Deny Both</strong> as well as <strong>Alias Deny</strong>.<br />'
 		. 'Each aggregate is <strong>reference only &mdash; no firewall rule is added</strong>. '
 		. 'Use it by name where you need it (your own rule, an HAProxy ACL). Each one loads as a '
 		. 'pf table, so enable only the types you use.')
@@ -746,25 +727,24 @@ $section->addInput(new Form_Select(
 	'Alias Table Apply Mode',
 	$pconfig['pfb_alias_delta_mode'],
 	$options_pfb_alias_delta_mode
-))->setHelp('Default: <strong>Auto</strong><br />'
-		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for small churn (&lt;~5%); '
-		. 'full replace for initial load, boot, or large churn. Safe default.<br />'
-		. '<strong>Delta:</strong> always delta apply — no large-churn replace fallback. Power-user override; '
-		. 'can be slow on a full-table rebuild.<br />'
-		. '<strong>Replace:</strong> always full -T replace (pre-4.0 behaviour).')
+))->setHelp('<p>Default: <strong>Auto (recommended)</strong>.</p>'
+		. '<ul>'
+		. '<li><strong>Auto (recommended)</strong>: small changes are incremental; first load, boot and large changes replace the table.</li>'
+		. '<li><strong>Always incremental</strong>: keep existing entries during the update; a full rebuild can be slow.</li>'
+		. '<li><strong>Always full replace</strong>: reload the whole table every time.</li>'
+		. '</ul>')
   ->setAttribute('id', 'pfb_alias_delta_mode')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Input(
 	'pfb_alias_delta_batch',
-	'Alias Table Delta Batch Size',
+	'Alias Table Incremental Batch Size',
 	'number',
 	$pconfig['pfb_alias_delta_batch'],
 	[ 'min' => '64', 'max' => '4096', 'placeholder' => '512' ]
-))->setHelp('Default: <strong>512</strong> (range 64–4096). '
-		. 'Entries applied per pfctl call in delta mode. '
-		. 'Use 512 for typical tables; 1024+ for tables with 1M+ entries. '
-		. 'Applies in Auto and Delta modes.');
+))->setHelp('Default: 512 (range 64–4096). '
+		. 'Number of entries applied per update step in <strong>Auto (recommended)</strong> and <strong>Always incremental</strong> modes. '
+		. 'Use 512 for typical tables; 1024+ for tables with 1M+ entries.');
 
 $section->addInput(new Form_Input(
 	'ip_placeholder',
@@ -780,7 +760,7 @@ $section->addInput(new Form_Input(
 
 $form->add($section);
 
-print_callout('<strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.');
+print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.</p>');
 print ($form);
 
 ?>

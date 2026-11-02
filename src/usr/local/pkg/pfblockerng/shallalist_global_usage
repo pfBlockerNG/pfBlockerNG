@@ -115,7 +115,7 @@ NAME ES:
 NAME RU: Автотранспорт/Автомобили
 
 NAME:	automobile_bikes
-DESC EN: All sites related to motorcycles. Included are vendor sites, resellers, fan and hobby pages as well as and suppliers. Scooters included.
+DESC EN: All sites related to motorcycles. Included are vendor sites, resellers, fan and hobby pages as well as suppliers. Scooters included.
 DESC DE: Rund um das Motorad: Hersteller, Zulieferer, Reparaturen u.ä.
 DESC FR:
 DESC RU: Сайты о мототранспорте, скутерах, включая производителей, дилеров. Также в категорию включены ресурсы описаний, забавных историй владельцев и фанатов мототехники.
@@ -129,7 +129,7 @@ NAME ES:
 NAME RU: Автотранспорт/Мототехника
 
 NAME:	automobile_boats
-DESC EN: All sites related motorboats. Included are vendor sites, resellers, fan and hobby pages as well as and suppliers.
+DESC EN: All sites related to motorboats. Included are vendor sites, resellers, fan and hobby pages as well as suppliers.
 DESC DE: Alles zur Thematik Motorboote; Bezug, Typen, Hersteller, Zulieferer, Wartung und Pflege.
 DESC FR:
 DESC RU: Сайты о водном транспорте, судоходстве, включая производителей, дилеров. Также в категорию включены ресурсы описаний, забавных историй владельцев и фанатов водного транспорта.
@@ -171,7 +171,7 @@ NAME ES:
 NAME RU: Чат
 
 NAME:	costtraps
-DESC EN: Sites that lure with free of charge services but then give then give you a costly subscription (written somewhere in tiny letters nearly unreadable).
+DESC EN: Sites advertised as free that enroll users in paid subscriptions.
 DESC DE: Seiten mit undurchsichtiger Preisgestaltung: scheinbar kostenlose Dienste, die jedoch in einem kostenpflichtigen Abbonement enden (in kleinster Schrift unleserlich dargelegt).
 DESC FR:
 DESC RU: Сайты, привлекающие бесплатными сервисами, но впоследствии взымающие оплату за подписку (о необходимости оплаты обычно указано в письме мелким незаметным шрифтом).
@@ -185,7 +185,7 @@ NAME ES:
 NAME RU: Мошенничество
 
 NAME:	dating
-DESC EN: Sites to contact people for love and living together. He seeks her, she seeks him and so on.
+DESC EN: Dating sites.
 DESC DE: Kontaktbörsen für das Leben zu zweit.
 DESC FR: Sites de rencontres
 DESC RU: Сайты знакомств, обещния, поиск людей для создания отношений. Ищу парня, девушку и т.д.
@@ -479,7 +479,7 @@ NAME ES:
 NAME RU: Хобби - Домашние животные
 
 NAME:	homestyle
-DESC EN: Sites about everything need to create a cozy home (interior design and accessories).
+DESC EN: Home interiors and accessories.
 DESC DE: Seiten bzgl. Inneneinrichtungen; alles, was ein Heim heimelig und angenehm macht.
 DESC FR:
 DESC RU: Сайты о создании домашнего интерьера, дизайна.
@@ -773,7 +773,7 @@ NAME ES:
 NAME RU: Отдых - Здоровье
 
 NAME:	redirector
-DESC EN: Sites that actively help to bypass url filters by accepting urls via form and play a proxing and redirecting role.
+DESC EN: Web proxies and redirectors used to bypass URL filters.
 DESC DE: Seiten mit Proxydiensten, die eine aktive Umgehung des URL Filters erlauben.
 DESC FR: Quelques sites qui permettent de contourner les filtres.
 DESC RU: Ресурсы, позволяющие обходить ограничения доступа в интернет, перенаправление трафика.

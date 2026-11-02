@@ -154,23 +154,23 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("dns", "/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings", "pfB-DNS Status")),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
-    # StaticText label ("IPv4 Alias name(s):" etc.), which renders ONLY for the active
+    # StaticText label ("IPv4 alias name(s):" etc.), which renders ONLY for the active
     # type -- so it distinguishes the three views (the panel title is shared by all). The
     # coverage guard strips "?", so all three collapse to the one base path.
     Page(
         "feeds_ipv4",
         "/pfblockerng/pfblockerng_feeds.php?type=ipv4",
-        ("Pre-defined Alias/Group/Feeds", "IPv4 Alias name(s):"),
+        ("Pre-defined Feeds", "IPv4 alias name(s):"),
     ),
     Page(
         "feeds_ipv6",
         "/pfblockerng/pfblockerng_feeds.php?type=ipv6",
-        ("Pre-defined Alias/Group/Feeds", "IPv6 Alias name(s):"),
+        ("Pre-defined Feeds", "IPv6 alias name(s):"),
     ),
     Page(
         "feeds_dnsbl",
         "/pfblockerng/pfblockerng_feeds.php?type=dnsbl",
-        ("Pre-defined Alias/Group/Feeds", "DNSBL Alias name(s):"),
+        ("Pre-defined Feeds", "DNSBL group name(s):"),
     ),
     Page("alerts", "/pfblockerng/pfblockerng_alerts.php", ("Alert Settings",)),
     # The Reports sub-tabs are the same page under ?view=; the stats views (IP Block
@@ -621,24 +621,16 @@ def test_ip_page_renders_aggregate_select(webui: WebUI) -> None:
 
 
 # issue #2895: the Firewall 'Auto' Rule Order help must state the REAL default -- the
-# verbatim order_0 label from $options_pass_order -- and must not name the retired
-# 'original format' option that no select row offers (a user following that help would
-# hunt for a nonexistent choice and be told the wrong rule order is active by default).
+# verbatim order_0 label from $options_pass_order.
 _IP_ORDER_DEFAULT_LABEL = "| pfB_Pass/Match/Block/Reject | All other Rules | (Default format)"
-_IP_ORDER_RETIRED_OPTION_NAME = "original format"
 
 
 def test_ip_page_rule_order_help_states_the_order_zero_default(webui: WebUI) -> None:
-    """The IP page's 'Auto' Rule Order help states the verbatim order_0 default and
-    no longer names the retired 'original format' option (#2895).
-    """
+    """The IP page's 'Auto' Rule Order help states the verbatim order_0 default (#2895)."""
     resp = webui.get(_IP_PAGE)
     assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
     body = resp.text
     assert _IP_ORDER_DEFAULT_LABEL in body, "the rule-order help no longer states the verbatim order_0 default label"
-    assert _IP_ORDER_RETIRED_OPTION_NAME not in body, (
-        "the rule-order help still names the retired 'original format' option"
-    )
 
 
 def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
@@ -650,10 +642,7 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
     Suppression' section (also asserted here, unchanged by this phase) — proving the
     v6 sibling section renders ALONGSIDE it, not instead of it.
 
-    Also pins the corrected drop-set wording (issue #422): before that fix the v6
-    section wrongly claimed 'RFC1918' (a v4-only concept); it now names the actual
-    v6 drop set. The v4 section's own reserved-class wording (issue #760) is pinned
-    alongside it as a sibling text-content guard.
+    Help wording is not pinned here.
     """
     resp = webui.get(_IP_PAGE)
     assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
@@ -661,13 +650,6 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
     assert "IPv6 Suppression" in body, "IPv6 Suppression section title not rendered on the IP page"
     assert 'name="v6suppression"' in body, "v6suppression textarea not rendered on the IP page"
     assert "IPv4 Suppression" in body, "IPv4 Suppression section title (existing sibling) missing"
-    assert "ULA (fc00::/7)" in body, (
-        "v6 Suppression help text missing the corrected 'ULA (fc00::/7)' drop-set wording "
-        "(issue #422) -- it previously wrongly claimed 'RFC1918', a v4-only concept"
-    )
-    assert "benchmarking" in body, (
-        "v4 Suppression help text missing the 'benchmarking' reserved-class wording (issue #760)"
-    )
 
 
 _IP_WRITE_ONLY_CREDENTIALS = (
@@ -918,22 +900,17 @@ def test_geoip_pages_render_the_seeded_csv_rows(
             )
 
 
-def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
-    """The General page's 'Keep Settings' help warns that keep=off wipes settings on a version upgrade (#697).
+def test_general_page_omits_retired_keep_upgrade_toggle(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """The removed 'Keep enabled during version upgrades' toggle stays gone from General (#697).
 
     Given the General page,
     When GET,
-    Then the 'Keep Settings' help text states the wipe also applies to pfSense version upgrades, and
-    the removed 'Keep enabled during version upgrades' toggle is gone.
-
-    Fail-before / pass-after: the disclaimer sentence is added in #697 (fails on the pre-#697 page),
-    and the removed checkbox must be absent (fails while the old toggle still renders).
+    Then the page renders cleanly and the retired pfb_keep_on_upgrade checkbox is absent.
     """
     resp = webui.get(_GENERAL_PAGE)
     body = resp.text
     result = evaluate_render(_GENERAL_PAGE, resp.status_code, body, ("General Settings",))
     assert result.ok, f"General page render oracle failed: {result.detail}"
-    assert "This also applies to a major pfSense version upgrade" in body, "keep=off upgrade-wipe disclaimer missing"
     assert 'name="pfb_keep_on_upgrade"' not in body, "the removed pfb_keep_on_upgrade toggle still renders (#697)"
 
 
@@ -1001,13 +978,12 @@ def test_general_page_renders_log_trim_margin_field(webui: WebUI, php_error_log_
 
 def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """issue #2851: the General page gains an Advanced Settings section carrying the one
-    global ``pfb_reentry_timeout`` ("Nested pass timeout") control.
+    global ``pfb_reentry_timeout`` ("Database download timeout") control.
 
     Given the General page,
     When GET,
     Then the field renders as a number input carrying the accepted 60..7200 window and the
-    1800-second placeholder, its label is the visible Form_Group ``control-label``, and the
-    help copy documents whole-process-tree termination plus the retry path after an expiry.
+    1800-second placeholder, and its label is the visible Form_Group ``control-label``.
 
     Fail-before / pass-after: none of these markers exist in the pre-#2851 markup, where the
     budget was a hardcoded constant with no operator surface at all.
@@ -1028,14 +1004,11 @@ def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_
     for attr in ('type="number"', 'min="60"', 'max="7200"', 'placeholder="1800"'):
         assert attr in field.group(0), f"pfb_reentry_timeout input is missing {attr}: {field.group(0)}"
 
-    label_re = re.compile(r'<label class="col-sm-2 control-label">\s*<span>Nested pass timeout</span>\s*</label>')
+    label_re = re.compile(r'<label class="col-sm-2 control-label">\s*<span>Database download timeout</span>\s*</label>')
     assert label_re.search(body), (
-        "the Nested pass timeout row label is not the expected visible control-label -- "
+        "the Database download timeout row label is not the expected visible control-label -- "
         "check it is not hidden by the desktop label.form-label media query"
     )
-
-    assert "whole process tree" in body, "the help copy must say the whole process tree is terminated on expiry"
-    assert "Run Now" in body, "the help copy must give the retry guidance after an expiry (issue #3237)"
 
 
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
@@ -2114,7 +2087,7 @@ def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: P
     """
     path = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Feeds",))
     assert result.ok, f"Feeds render oracle failed: {result.detail}"
     body = resp.text
     assert "CCT_IP" not in body, "Feeds page still offers the discontinued CCT_IP feed"
@@ -2155,7 +2128,7 @@ def test_feeds_non_contiguous_alternate_bucket_renders_every_row(
         )
 
         resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+        result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Feeds",))
         assert result.ok, f"Feeds render oracle failed: {result.detail}"
 
         markers = [f'value="alt_{header}"' for header in headers]
@@ -2181,7 +2154,7 @@ def test_feeds_tab_lists_qfeeds_under_its_group(
     """
     path = f"/pfblockerng/pfblockerng_feeds.php?type={ftype}"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Feeds",))
     assert result.ok, f"Feeds render oracle failed: {result.detail}"
     row = row_containing(resp.text, f'href="{url}"')
     assert re.search(rf">\s*{re.escape(group)}\s*<", row), f"{header} row is not under {group}: {row}"

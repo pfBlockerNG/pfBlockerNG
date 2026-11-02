@@ -187,7 +187,7 @@ NAME DE: Chat
 NAME ES: Chat
 
 NAME:	tricheur
-DESC EN: Sites which are designed to explains cheating on exams.
+DESC EN: Sites explaining how to cheat on exams.
 DESC FR: Sites qui expliquent comme tricher aux examens.
 DESC RU: Сайты, которые предназначены для объяснения как смошенничать на экзамене.
 DESC ES: Sitios que explican cómo hacer trampas en los exámenes.
@@ -200,7 +200,7 @@ NAME DE: Schummler
 NAME ES: Tramposos
 
 NAME:	child
-DESC EN: Any website allowed to child (less than 10 years old)
+DESC EN: Sites suitable for children under 10.
 DESC FR: Tout ce qui est autorisé pour des enfants
 DESC RU: Любой веб-сайт, разрешенный ребенку (до 10 лет).
 DESC ES: Sitos autorizados para niños (menosres de 10 años)
@@ -328,7 +328,7 @@ NAME DE: File Hosting
 NAME ES: Almacenamiento de Ficheros
 
 NAME:	financial
-DESC EN: Sites relative financial information.
+DESC EN: Financial information sites.
 DESC FR: Informations financières, bourses.
 DESC RU: Сайты, связанные с финансовой информацией.
 NAME ES: Sitios relacionados con información financiera, bolsas.
@@ -406,7 +406,7 @@ NAME DE: Internet Radio
 NAME ES: Radio Internet
 
 NAME:	jobsearch
-DESC EN: Site to looking for job
+DESC EN: Job-search sites.
 DESC FR: Site pour trouver un emploi
 DESC RU: Сайты о поиске работы.
 DESC ES: Sitios de búsqueda de empleo
@@ -471,7 +471,7 @@ NAME DE: Marketingware
 NAME ES: Marketingware
 
 NAME:	mixed_adult
-DESC EN: Websites which contains adult sections unstructured
+DESC EN: Sites with mixed adult and non-adult content.
 DESC FR: Sites qui contiennent des portions adultes non structurés
 DESC RU: Сайты, которые содержат неструктурированные разделы для взрослых.
 DESC ES: Sitios que contienen secciones para adultos no estructuradas.
@@ -536,12 +536,12 @@ NAME DE: Proxy
 NAME ES: Proxy
 
 NAME:	reaffected
-DESC EN: Websites which have been reaffected
+DESC EN: Domains with changed owners or content.
 DESC FR: Sites qui ont changé de propriétaire et donc de contenu
 DESC RU: Сайты, которые изменили владельца и, поэтому, содержимое.
 DESC ES: Sitios que han cambiado propietario y por tanto el contenido
 NAME RU: Пострадавшие.
-NAME EN: Reaffected
+NAME EN: Repurposed domains
 NAME FR: Reaffected
 NAME IT: Reaffected
 NAME NL: Reaffected
@@ -549,7 +549,7 @@ NAME DE: Reaffected
 NAME ES: Sitios Reutilizados (Reaffected)
 
 NAME:	associations_religieuses
-DESC EN: Religeous Associations
+DESC EN: Religious Associations
 DESC FR: Sites d'associations religieuses
 NAME RU: религиозное_объединение
 NAME EN: Religious Association
@@ -560,7 +560,7 @@ NAME DE: Teligionsgemeinschaft
 NAME ES: Asociación Religiosa
 
 NAME:	remote-control
-DESC EN: site which allow remote control of user s dekstop
+DESC EN: Remote desktop access services.
 DESC FR: Site permettant la prise de contrôle à distance
 DESC RU: Cайты, которые делают возможным удаленное (дистанционное) управление рабочим столом пользователя.
 DESC ES: Sitios que permiten el control remoto del escritorio del usuario.
@@ -604,7 +604,7 @@ DESC FR: Sites qui parlent d éducation sexuelle et qui peuvent être détectés
 DESC RU: Сайты, которые рассказывают о половом воспитании и могут быть ошибочно определены как порно.
 DESC ES: Sitios con contenidos acerca de la educación sexsual, y podrían ser catalogados por error como porno.
 NAME RU: Сексуальное образование.
-NAME EN: SexuaL Education
+NAME EN: Sexual Education
 NAME FR: Education Sexuelle
 NAME IT: Sexual Education
 NAME NL: Sexual Education
@@ -638,7 +638,7 @@ NAME DE: Social Networks
 NAME ES: Relaciones Sociales
 
 NAME:	download
-DESC EN: Sites which propose to download software
+DESC EN: Software download sites.
 DESC FR: Sites qui permettent de télécharger des logiciels
 NAME EN: Software Download
 NAME FR: Telechargement de logiciels
@@ -670,7 +670,7 @@ NAME DE: Strickt Proxy
 NAME ES: Proxy estricto
 
 NAME:	strong_redirector
-DESC EN: Same as strict_redirector, but, for google, yahoo, we are only blocking some terms.
+DESC EN: Like strict_redirector. Designed for URL filters that block certain search terms; pfBlockerNG uses only its domain list.
 DESC FR: Comme strict_redirector, mais, pour google et autres, on ne bloque que certains termes.
 DESC RU: Тоже, что и strict_redirector, но для google, yahoo блокируются только некоторые условия.
 DESC ES: Como strict_redirector, pero para google, yahoo y otros sólo bloquean algunos términos.

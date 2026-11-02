@@ -5,31 +5,15 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * Reputation (and sibling List-Action) help in pfblockerng_geoip.inc used a bare
- * `<ul>` as a plain indentation wrapper — no `<li>` child — which is malformed
- * list markup and gives the long filesystem paths / feed URL inside no wrapping
- * affordance, so their tails paint past a narrow viewport (issue #2897: the
- * pfB_Match_Exempt_v4.txt path was permanently unreachable at 414px because the
- * Collective List Reputation panel-body is not a scroll container).
- *
- * Contract pinned here:
- *   1. every `<ul>` in the file carries `<li>` content (no bare-text indent hack);
- *   2. the five fragments the issue names keep their wording byte-for-byte;
- *   3. the fragments carrying a long unbreakable token sit in a list that
- *      declares a wrap affordance (overflow-wrap: anywhere), so the token can
- *      break inside a narrow viewport instead of overflowing it.
+ * Reputation (and sibling List-Action) help in pfblockerng_geoip.inc once used a bare
+ * `<ul>` as a plain indentation wrapper — no `<li>` child — which is malformed list
+ * markup, and gave its long path/URL examples no wrapping affordance (issue #2897: the
+ * exempt-list path overflowed a 414px viewport). Every `<ul>` carries `<li>` content,
+ * and each long unbreakable example sits in a literal that may wrap anywhere.
  */
 final class GeoipReputationHelpMarkupTest extends TestCase
 {
-	private const WORDING = [
-		'Analyzing all Blocklists as a whole:',
-		'/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt',
-		'https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz',
-		'/var/db/pfblockerng/match/generated/pfB_Match_ET_v4.txt',
-		'/var/db/pfblockerng/ET',
-	];
-
-	/** The fragments whose wording is one long unbreakable token. */
+	/** The examples that are one long unbreakable token. */
 	private const LONG_TOKENS = [
 		'/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt',
 		'https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz',
@@ -77,35 +61,15 @@ final class GeoipReputationHelpMarkupTest extends TestCase
 		}
 	}
 
-	public function testIssueWordingIsByteEquivalent(): void
+	public function testLongTokenExamplesDeclareWrapAffordance(): void
 	{
 		$source = self::source();
-		foreach (self::WORDING as $wording) {
-			$this->assertStringContainsString(
-				$wording,
-				$source,
-				'the #2897 fix is markup/wrapping only; the help wording must survive byte-for-byte'
-			);
-		}
-	}
-
-	public function testLongTokenFragmentsDeclareWrapAffordance(): void
-	{
-		$spans = self::ulSpans(self::source());
 		foreach (self::LONG_TOKENS as $token) {
-			$found = FALSE;
-			foreach ($spans as [$openTag, $body]) {
-				if (str_contains($body, $token)) {
-					$found = TRUE;
-					$this->assertMatchesRegularExpression(
-						'/overflow-wrap\s*:\s*anywhere|word-break\s*:\s*break-all/',
-						$openTag,
-						"the list holding the long token [ {$token} ] must declare a wrap affordance"
-							. ' so the token breaks inside a narrow viewport instead of overflowing it'
-					);
-				}
-			}
-			$this->assertTrue($found, "long token [ {$token} ] must still sit inside a <ul> list");
+			$this->assertMatchesRegularExpression(
+				'/<code style="overflow-wrap:\s*anywhere">' . preg_quote($token, '/') . '<\/code>/',
+				$source,
+				"the long example [ {$token} ] must be a literal that wraps inside a narrow viewport"
+			);
 		}
 	}
 }

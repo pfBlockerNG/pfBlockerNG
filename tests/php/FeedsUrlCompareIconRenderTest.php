@@ -72,7 +72,7 @@ final class FeedsUrlCompareIconRenderTest extends TestCase
 	 * Isolates the rendered <tr> row whose HTML contains $needle, then returns the
 	 * content of that row's LAST <td> -- the `<td><?=$icon;?></td>` cell (:593).
 	 * The row's OTHER cells can also carry a "fa-solid fa-check" (the separate
-	 * $status "Alias/Group exists" icon at :340), so scoping strictly to the last
+	 * $status "IP alias or DNSBL group exists" icon at :340), so scoping strictly to the last
 	 * <td> is what makes the assertion sensitive to $icon specifically.
 	 */
 	private function iconCellForRow(string $html, string $needle): string

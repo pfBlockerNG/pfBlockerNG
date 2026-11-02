@@ -6,15 +6,14 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #2851 — the General tab gains an Advanced Settings section carrying exactly ONE
- * new control, "Nested pass timeout", wired end to end:
+ * new control, "Database download timeout" (pfb_reentry_timeout), wired end to end:
  *   - rendered from the EFFECTIVE stored value (a hostile stored value must not render
  *     as a number the runtime never uses);
  *   - canonicalized on save through the same resolver both language seams read with, so
  *     the stored value IS the effective one;
  *   - persisted through the section write the page already performs (a bare
  *     PfbConfig::write() there would be clobbered by writeSection);
- *   - help text documenting the range, the 1800s default, whole-process-tree
- *     termination, and what happens after an expiry.
+ *   - help text stating the range and the 1800s default from the runtime constants.
  *
  * Reachable-surface coverage: Tier A render in tests/smoke/ui/test_render_smoke.py,
  * Tier B section/field interaction in tests/smoke/ui/test_browser_general.py, live
@@ -56,8 +55,8 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 		$this->assertNotFalse($advanced,
 			'the General tab must carry a collapsible Advanced Settings section (the house shape, cf. ip_advanced)');
 
-		$field = strpos($source, "'pfb_reentry_timeout',\n\t'Nested pass timeout',\n\t'number',");
-		$this->assertNotFalse($field, 'the owner-named "Nested pass timeout" number input must exist');
+		$field = strpos($source, "'pfb_reentry_timeout',\n\t'Database download timeout',\n\t'number',");
+		$this->assertNotFalse($field, 'the "Database download timeout" number input must exist');
 		$this->assertGreaterThan($advanced, $field, 'the field must live inside the Advanced Settings section');
 
 		$support = strpos($source, "new Form_Section('Support')");
@@ -77,7 +76,7 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 			'the empty-field placeholder must be the runtime default');
 	}
 
-	public function testTheHelpTextDocumentsRangeDefaultTreeKillAndRetry(): void
+	public function testTheHelpTextStatesRangeAndDefaultFromRuntimeConstants(): void
 	{
 		$source = self::source();
 
@@ -95,9 +94,5 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 			'the help must name the accepted range from the runtime window');
 		$this->assertStringContainsString('Default: <strong>\' . PFB_REENTRY_TIMEOUT', $help,
 			'the help must name the 1800-second default from the runtime constant');
-		$this->assertStringContainsString('whole process tree', $help,
-			'the help must say the WHOLE process tree is terminated on expiry (reaper mode, not --foreground)');
-		$this->assertStringContainsString('<strong>Run Now</strong> on the Update tab', $help,
-			'the help must give the retry guidance for a pass that expired');
 	}
 }

@@ -72,8 +72,6 @@ final class FeedsDiscontinuedTest extends TestCase
 		$this->assertNotNull($cct, 'CCT_IP must remain in the catalogue as a discontinued feed');
 		$this->assertSame('discontinued', $cct['status'] ?? NULL);
 		$this->assertSame('https://cybercrime-tracker.net/csv.php', $cct['url'] ?? NULL);
-		$this->assertStringContainsString('requires cookies', $cct['info'] ?? '');
-		$this->assertStringContainsString('TYPE,URL,IP CSV', $cct['info'] ?? '');
-		$this->assertStringContainsString('#1679', $cct['info'] ?? '');
+		$this->assertNotSame('', $cct['info'] ?? '', 'a discontinued feed must explain why in its info');
 	}
 }

@@ -142,7 +142,7 @@ if (isset($blacklist_types)) {
 $options_blacklist_enable	= ['Disable' => 'Disable', 'Enable' => 'Enable'];
 $options_blacklist_lang		= ['EN' => 'English', 'DE' => 'German', 'FR' => 'French', 'IT' => 'Italian',
 					'NL' => 'Dutch', 'PT' => 'Portuguese', 'ES' => 'Spanish', 'RU' => 'Russian'];
-$options_blacklist_freq		= ['Never' => 'Never', 'EveryDay' => 'Once a day (Random hour)', 'Weekly' => 'Weekly (Sunday)'];
+$options_blacklist_freq		= ['Never' => 'Never', 'EveryDay' => 'Once a day', 'Weekly' => 'Weekly'];
 $options_blacklist_logging	= ['default' => 'Default'] + pfb_dnsbl_mechanism_labels();
 
 // Unconditional (not just inside the $_POST branch below): $input_errors is read
@@ -284,7 +284,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 			}
 		}
 		if ($savemsg) {
-			$savemsg .= 'BR *** Large categories selected! Please review DNSBL TLD memory recommendations before continuing ***';
+			$savemsg .= 'BR Large categories selected: these can use a lot of memory, especially with Wildcard Blocking on.';
 		}
 	}
 
@@ -344,7 +344,7 @@ if (isset($_REQUEST['savemsg'])) {
 // Create Form
 $form = new Form('Save');
 
-$section = new Form_Section('Blacklist Category settings');
+$section = new Form_Section('DNSBL Category Settings');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
@@ -355,30 +355,29 @@ $section->addInput(new Form_StaticText(
 
 $section->addInput(new Form_Select(
 	'blacklist_enable',
-	gettext('Blacklist Category'),
+	gettext('DNSBL Category'),
 	$pconfig['blacklist_enable'],
 	$options_blacklist_enable
-))->setHelp('Select to enable DNSBL category based Blacklist(s)<br />'
-		. '<span class="text-danger">Note: </span> Save changes prior to enable/disable'
-		. '<br /><span class="text-danger">Note: </span>To achieve the full potential of Category blocking,'
-		. ' the <strong>TLD</strong> option should be utilized which will allow blocking of all sub-domains.')
+))->setHelp('<p>Enable category-based domain blocking.</p>'
+		. '<p>Changing this setting saves the page immediately.</p>'
+		. '<p>To also block subdomains of listed domains, enable <strong>Wildcard Blocking</strong> on <strong>DNS</strong> &gt; <strong>DNSBL</strong>.</p>')
   ->setAttribute('style', 'width: auto');
 
 if (!empty($blacklist_types)) {
 	$section->addInput(new Form_Select(
 		'blacklist_selected',
-		gettext('Blacklists'),
+		gettext('Category Providers'),
 		$pconfig['blacklist_selected'],
 		$blacklist_options,
 		TRUE
-	))->setHelp('Select Blacklist(s) to enable')
+	))->setHelp('Select the category providers to use.')
 	  ->setAttribute('size', count($blacklist_types) ?: 1)
 	  ->setAttribute('style', 'width: auto');
 }
 else {
 	$section->addInput(new Form_StaticText(
 		NULL,
-		'<span style="color: red;">No Blacklist(s) global_usage files have been found!</span><br /><br />'
+		'<span class="text-danger">No category providers are installed.</span>'
 	));
 }
 
@@ -397,17 +396,17 @@ $section->addInput(new Form_Select(
 	$pconfig['blacklist_freq'],
 	$options_blacklist_freq
 ))->setHelp('Default: <strong>Never</strong><br />
-	Select how often the Blacklist database(s) will be downloaded.')
+	Select how often to download category databases. Runs at the <strong>Default Schedule</strong> time and weekday on <strong>General</strong>.')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Select(
 	'blacklist_logging',
-	'Logging',
+	'Logging/Blocking Mode',
 	$pconfig['blacklist_logging'],
 	$options_blacklist_logging
-))->setHelp('<strong>Default</strong> follows the global DNSBL blocking mechanism (DNSBL tab); an explicit choice applies to the Blacklist category only.<br />'
+))->setHelp('<strong>Default</strong> follows the <strong>Global Logging/Blocking Mode</strong> on <strong>DNS</strong> &gt; <strong>DNSBL</strong>; an explicit choice applies to <strong>DNSBL Category</strong> only.<br />'
 	. pfb_dnsbl_mechanism_help()
-	. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.')
+	. 'Set <strong>Run Scope</strong> to <strong>DNSBL</strong> or <strong>Both</strong>, then use <strong>Run Now</strong>.')
   ->setAttribute('style', 'width: auto');
 
 $form->add($section);
@@ -449,7 +448,7 @@ foreach ($blacklist_types as $type => $setting) {
 			'password',
 			$pconfig['blacklist_' . $type . '_password'],
 			['placeholder' => 'Enter the password']
-		))->setHelp("Password<br /><br />")
+		))
 		  ->setAttribute('autocomplete', 'off');
 	}
 
@@ -554,9 +553,8 @@ foreach ($blacklist_types as $type => $setting) {
 }
 
 print($form);
-print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.<br /><br />
-		DNSBL Category Feeds are processed first, followed by the DNSBL Groups.<br />
-		DNSBL Groups can be prioritized first, by selecting the \'Group Order\' option.</p>');
+print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.</p>
+		<p>DNSBL Category feeds are processed before DNSBL groups. To process a DNSBL group first, set its <strong>Group Order</strong> to <strong>Primary</strong>.</p>');
 ?>
 
 <script type="text/javascript">

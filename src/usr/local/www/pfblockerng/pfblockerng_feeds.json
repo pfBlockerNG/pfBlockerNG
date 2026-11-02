@@ -115,7 +115,7 @@
 					"website":	"https://qfeeds.com/",
 					"url":		"https://api.qfeeds.com/api?feed_type=malware_ip&api_token=_API_KEY_",
 					"register":	"https://tip.qfeeds.com/",
-					"info":		"API token required (free Community license available). Community data refreshes daily: set the Update Frequency to Once a day. Plus refreshes every 4 hours, Premium every 20 minutes.",
+					"info":		"API token required (free Community license available). Community data refreshes daily: set 'Update Frequency' to 'Once a day'. Plus refreshes every 4 hours, Premium every 20 minutes.",
 					"header":	"QFeeds_Malware_IP"
 				},
 				{
@@ -381,7 +381,7 @@
 					"feed":		"Cyber Crime WHQ",
 					"website":	"https://cybercrime-tracker.net/about.php",
 					"url":		"https://cybercrime-tracker.net/csv.php",
-					"info":		"Discontinued in pfBlockerNG: the upstream feed now requires cookies and returns TYPE,URL,IP CSV. Configurable request/parser support is tracked in #1679.",
+					"info":		"Discontinued: the provider changed its access rules and format; this feed is not currently supported.",
 					"header":	"CCT_IP"
 				},
 				{
@@ -530,7 +530,7 @@
 		},
 		"SCANNERS": {
 			"info":		"These are feeds that scan the Internet for exposed services",
-			"description":	"Scanners - Searching for exposted services",
+			"description":	"Scanners - Searching for exposed services",
 			"action":	"block",
 			"cron":		"EveryDay",
 			"feeds": [
@@ -730,7 +730,7 @@
 			]
 		},
 		"Internic_4": {
-			"info":		"Internic is a list of the 13 IPv4 Root DNS servers via Internic Domain Registration service.-LB-Typically used for a Permit Outbound usage.-LB-The frequency of updates is set to once per week.",
+			"info":		"Internic is a list of the 13 IPv4 Root DNS servers via Internic Domain Registration service.-LB-Typically used with 'Permit Outbound'.-LB-The frequency of updates is set to once per week.",
 			"description":	"Internic - List of the 13 IPv4 Root DNS servers via Internic Domain Registration service.",
 			"action":	"permit",
 			"cron":		"Weekly",
@@ -886,7 +886,7 @@
 			]
 		},
 		"AWS_4": {
-			"info":		"IP ranges for Amazon AWS. Use IPv4 Advanced Settings to configure a Pre-Script to collect the AWS Region IPs",
+			"info":		"IP ranges for Amazon AWS. Use the 'Advanced Settings' section of 'IPv4' to select a 'Pre-process Script' that collects the AWS Region IPs",
 			"description":	"IP ranges for Amazon AWS.",
 			"action":	"permit",
 			"cron":		"Weekly",
@@ -924,7 +924,7 @@
 					"website":	"https://qfeeds.com/",
 					"url":		"https://api.qfeeds.com/api?feed_type=malware_ip&api_token=_API_KEY_",
 					"register":	"https://tip.qfeeds.com/",
-					"info":		"API token required (free Community license available). Community data refreshes daily: set the Update Frequency to Once a day. Plus refreshes every 4 hours, Premium every 20 minutes.",
+					"info":		"API token required (free Community license available). Community data refreshes daily: set 'Update Frequency' to 'Once a day'. Plus refreshes every 4 hours, Premium every 20 minutes.",
 					"header":	"QFeeds_Malware_IP6"
 				},
 				{
@@ -1014,7 +1014,7 @@
 			]
 		},
 		"Internic_6": {
-			"info":		"Internic is a list of the 13 IPv6 Root DNS servers via Internic Domain Registration service.-LB-Typically used for a Permit Outbound usage.-LB-The frequency of updates is set to once per week.",
+			"info":		"Internic is a list of the 13 IPv6 Root DNS servers via Internic Domain Registration service.-LB-Typically used with 'Permit Outbound'.-LB-The frequency of updates is set to once per week.",
 			"description":	"Internic - List of the 13 IPv6 Root DNS servers via Internic Domain Registration service.",
 			"action":	"permit",
 			"cron":		"Weekly",
@@ -1043,7 +1043,7 @@
 			]
 		},
 		"AWS_6": {
-			"info":		"IP ranges for Amazon AWS. Use IPv6 Advanced Settings to configure a Pre-Script to collect the AWS Region IPs",
+			"info":		"IP ranges for Amazon AWS. Use the 'Advanced Settings' section of 'IPv6' to select a 'Pre-process Script' that collects the AWS Region IPs",
 			"description":	"IP ranges for Amazon AWS.",
 			"action":	"permit",
 			"cron":		"Weekly",
@@ -1175,7 +1175,7 @@
 	},
 	"dnsbl": {
 		"EasyList": {
-			"info":		"EasyList are Feeds originaly designed for filering on browser based extensions. The DNSBL parser will only utilize those domains which are listed to be blocked in full",
+			"info":		"EasyList are Feeds originally designed for filtering on browser based extensions. The DNSBL parser will only utilize those domains which are listed to be blocked in full",
 			"description":	"EasyList Feeds - Utilizing only the domains which are listed to be blocked in full.",
 			"action":	"block",
 			"cron":		"EveryDay",
@@ -1490,7 +1490,7 @@
 					"website":	"https://qfeeds.com/",
 					"url":		"https://api.qfeeds.com/api?feed_type=malware_domains&api_token=_API_KEY_",
 					"register":	"https://tip.qfeeds.com/",
-					"info":		"API token required (free Community license available). Community data refreshes daily: set the Update Frequency to Once a day. Plus refreshes every 4 hours, Premium every 20 minutes.",
+					"info":		"API token required (free Community license available). Community data refreshes daily: set 'Update Frequency' to 'Once a day'. Plus refreshes every 4 hours, Premium every 20 minutes.",
 					"header":	"QFeeds_Malware_Domains"
 				},
 				{
@@ -1522,7 +1522,7 @@
 			]
 		},
 		"Phishing": {
-			"info":		"Phishing group is a collection of Phishing Domain Feeds.-LB-These phising domains are based on full URLs, so there may be some False Positives.-LB-Its recommended to use the TOP1M whitelist.-LB-The frequency of updates is set to once per day.",
+			"info":		"Phishing group is a collection of Phishing Domain Feeds.-LB-These phishing domains are based on full URLs, so there may be some False Positives.-LB-It's recommended to use the 'TOP1M Whitelist'.-LB-The frequency of updates is set to once per day.",
 			"description":	"Phishing - Collection of Phishing Domain Feeds.",
 			"action":	"block",
 			"cron":		"EveryDay",
@@ -1950,7 +1950,7 @@
 					"feed":		"Monero Miner",
 					"website":	"https://laskowski-tech.com/2017/12/15/crypto-miners-on-webservers-part-2/",
 					"url":		"https://raw.githubusercontent.com/Hestat/minerchk/master/hostslist.txt",
-					"info":		"This feed is also contained in the CoinbBlocker Feed",
+					"info":		"This feed is also contained in the CoinBlocker feed",
 					"header":	"MoneroMiner"
 				},
 				{
@@ -1990,8 +1990,8 @@
 			]
 		},
 		"Firebog_Suspicious": {
-			"info":		"Something's fishy here.",
-			"description":	"Something's fishy here.",
+			"info":		"Suspicious domains",
+			"description":	"Suspicious domains",
 			"action":	"block",
 			"cron":		"EveryDay",
 			"feeds": [
@@ -2047,8 +2047,8 @@
 			]
 		},
 		"Firebog_Advertising": {
-			"info":		"Waste of bandwith trying to sell stuff.",
-			"description":	"Waste of bandwith trying to sell stuff.",
+			"info":		"Advertising domains",
+			"description":	"Advertising domains",
 			"action":	"block",
 			"cron":		"EveryDay",
 			"feeds": [
@@ -2106,8 +2106,8 @@
 			]
 		},
 		"Firebog_Trackers": {
-			"info":		"Places that track you.",
-			"description":	"Places that track you.",
+			"info":		"Tracking domains",
+			"description":	"Tracking domains",
 			"action":	"block",
 			"cron":		"EveryDay",
 			"feeds": [
@@ -2176,8 +2176,8 @@
 			]
 		},
 		"Firebog_Malicious": {
-			"info":		"Bad places.",
-			"description":	"Bad places.",
+			"info":		"Malicious domains",
+			"description":	"Malicious domains",
 			"action":	"block",
 			"cron":		"EveryDay",
 			"feeds": [
@@ -2255,8 +2255,8 @@
 			]
 		},
 		"Firebog_Other": {
-			"info":		"Other random lists.",
-			"description":	"Other random lists.",
+			"info":		"Other lists: cryptocurrency mining, adult content and social-network domains",
+			"description":	"Other lists: cryptocurrency mining, adult content and social-network domains",
 			"action":	"block",
 			"cron":		"EveryDay",
 			"feeds": [

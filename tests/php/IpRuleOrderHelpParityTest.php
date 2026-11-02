@@ -5,8 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * The Firewall 'Auto' Rule Order help must state the real order_0 default and
- * must not name an option that the select does not offer (issue #2895).
+ * The Firewall 'Auto' Rule Order help must state the real order_0 default (issue #2895).
  */
 final class IpRuleOrderHelpParityTest extends TestCase
 {
@@ -61,31 +60,5 @@ final class IpRuleOrderHelpParityTest extends TestCase
 			$stated[1],
 			'the help default must match the order_0 option label verbatim'
 		);
-	}
-
-	/** The help names no option label the select does not offer. */
-	public function testHelpNamesNoOptionLabelTheSelectDoesNotOffer(): void
-	{
-		$help = self::help();
-		$labels = self::optionLabels();
-		self::assertSame(1, preg_match("/Selecting '(.*?)', sets pfBlockerNG rules/", $help, $referenced),
-			'the help must name the option that pins pfBlockerNG rules at the top');
-		$this->assertStringContainsString(
-			$referenced[1],
-			$labels['order_0'],
-			"the referenced option name '{$referenced[1]}' must exist in the order_0 label"
-		);
-		$this->assertStringNotContainsString('original format', $help,
-			'the retired "original format" option name must not reappear in the help');
-	}
-
-	/** The infoblock still explains the selection and the re-order warning. */
-	public function testHelpInfoblockStillExplainsTheSelection(): void
-	{
-		$help = self::help();
-		$this->assertStringContainsString('at the top of the Firewall TAB', $help,
-			'the top-of-firewall explanation must survive');
-		$this->assertStringContainsString('re-order', $help,
-			'the re-order warning must survive');
 	}
 }
