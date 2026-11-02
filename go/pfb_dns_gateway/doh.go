@@ -62,6 +62,7 @@ type limitedListener struct {
 	addrs   *addrLimit // what one address may hold of limit, at most perAddr
 	perAddr int
 	trusted []netip.Prefix // front ends: their connections carry many clients, so they hold no share
+	acl     *ACL           // an untrusted TCP peer; a trusted front end is accepted and screened per request
 	logf    func(format string, args ...any)
 }
 
@@ -72,7 +73,11 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		peer := addrPortOf(conn.RemoteAddr()).Addr()
-		metered := !trusts(l.trusted, peer) // the TCP peer: a PROXY header or X-Forwarded-For is only believed from a trusted one
+		metered := !trusts(l.trusted, peer)                                // the TCP peer: a PROXY header or X-Forwarded-For is only believed from a trusted one
+		if metered && l.acl.Lookup(peer.Unmap().WithZone("")) == ACLDrop { // an untrusted denied peer never holds a slot
+			_ = conn.Close()
+			continue
+		}
 		if metered && !l.addrs.take(peer, l.perAddr, "DoH connections", l.logf) {
 			_ = conn.Close()
 			continue
@@ -120,7 +125,7 @@ func rawConnInfo(c net.Conn) connInfo {
 // serveDoH answers DoH on ln until stop() or the returned closeNow. Connections: TCP, the cap, PROXY header parsing for
 // trusted peers only (everyone else's bytes are never parsed as one), TLS, HTTP.
 func (g *gateway) serveDoH(ln *net.TCPListener, conf *tls.Config, trusted []netip.Prefix) (closeNow func()) {
-	limited := &limitedListener{Listener: ln, limit: g.dohConns, addrs: &g.dohAddrs, perAddr: g.dohPerAddr, trusted: trusted, logf: g.logf}
+	limited := &limitedListener{Listener: ln, limit: g.dohConns, addrs: &g.dohAddrs, perAddr: g.dohPerAddr, trusted: trusted, acl: g.acl, logf: g.logf}
 	proxied := &proxyproto.Listener{
 		Listener:          limited,
 		ReadHeaderTimeout: g.handshake,

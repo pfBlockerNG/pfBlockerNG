@@ -112,7 +112,7 @@ type gateway struct {
 	timeout                                                    time.Duration // wait for Unbound per exchange
 	grace                                                      time.Duration
 	tcpIdle                                                    time.Duration // idle limit for reading a query and for writing a reply
-	handshake                                                  time.Duration // limit for a TLS handshake, a PROXY header and request headers
+	handshake                                                  time.Duration // limit for a TLS handshake, a PROXY header, request headers and a DoQ query read
 	doqHandshakeIdle                                           time.Duration // QUIC handshake idle timeout, read when the DoQ listener starts; production is 5s
 	closeBound                                                 time.Duration // limit for sending close_notify
 	stopBound                                                  time.Duration // limit for each of stop()'s waits for the serving goroutines

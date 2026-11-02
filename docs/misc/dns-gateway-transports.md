@@ -117,7 +117,7 @@ directory is a separate hardening and is not part of this change.
 |---|---|---|---|---|
 | DoT | `--dot-listen` (repeatable), `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
 | DoH | `--doh-listen` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
-| DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle 30 s; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
+| DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle 30 s; receive window one message (65535 bytes) per stream and 100 messages per connection; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 
 A listener that cannot be bound is logged and skipped. Every start logs `starting pid <pid>` first (before any bind error), so
 that a reader of the log finds where a start begins; then, before `ready upstream`, the readiness lines in the order udp+tcp,
@@ -196,8 +196,10 @@ every file it includes, globs too: the `access-control` rows of `access_lists.co
 of the admin's Custom Options. The most specific prefix matches and, of identical prefixes, the row read last wins; deny:
 nothing is answered; refuse, and a client no row names (Unbound's default): REFUSED built by the gateway. Supported
 rows accept a netblock immediately after the colon, as Unbound 1.26.1 does: `access-control:10.0.0.0/8 deny` counts.
-Include-loading failures (a missing include, an include cycle, a brace pattern) are logged once and the gateway
-forwards everything; any file or glob match that changes is picked up within a second.
+Include-loading failures (a missing or unreadable include, an include cycle, a brace pattern) are logged once and
+retried when a file or glob match changes (a chmod counts). Any other error opening a file, which can be transient, is
+retried and logged every second. After a good load the gateway keeps its last good rules through such a failure;
+before the first good load it forwards everything. Any file or glob match that changes is picked up within a second.
 
 Two Unbound rules the gateway follows too. A netblock named only by `access-control-view`, `access-control-tag`,
 `access-control-tag-action` or `access-control-tag-data` is allowed, unless an identical `access-control` row names it.
@@ -269,6 +271,8 @@ same directory.
   `DOQ_REQUEST_CANCELLED`.
 - Over the 512 queries in flight that DoQ shares with DoH, a stream is answered with a SERVFAIL (Message ID 0) built by
   the gateway, without asking the decider or Unbound; one log line per flood. DoQ has no status code to use instead.
+- A query is resolved on a context that ends with its connection, so a connection that drops while its queries wait
+  for the decider or Unbound frees their in-flight slots at once instead of holding them for the whole wait.
 
 ## DoH details (RFC 8484)
 

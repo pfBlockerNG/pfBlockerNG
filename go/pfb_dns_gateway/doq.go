@@ -30,6 +30,11 @@ const (
 	maxDoQStreams           = 100              // concurrent query streams per connection
 	doqIdleTimeout          = 30 * time.Second // QUIC idle timeout; RFC 9250 4.4 asks for it to be negotiated
 	defaultDoQHandshakeIdle = 5 * time.Second  // quic-go's handshake idle timeout, set explicitly; not g.handshake (10s)
+
+	// One stream carries one DNS message (maxWire). The connection window is every stream it may hold.
+	// A zero quic.Config receive window selects quic-go's default, which is not a DNS message.
+	doqStreamReceiveWindow = maxWire
+	doqConnReceiveWindow   = maxWire * maxDoQStreams
 )
 
 // doqConns is the accepted connections of one DoQ listener. quic-go's Listener.Close leaves accepted connections
@@ -64,14 +69,33 @@ func (c *doqConns) closeAll() {
 	wg.Wait()
 }
 
-// doqQUICConfig is the listener's QUIC config. HandshakeIdleTimeout is explicit: an admitted connection holds its
-// slot until the handshake finishes or this idle timeout, and quic-go's implicit value is not named on the listener.
+// doqQUICConfig is the listener config: the stream cap and idle timeout, a receive window of one DNS message per
+// stream, enough of them for every stream the connection may hold, and an explicit HandshakeIdleTimeout: an
+// admitted connection holds its slot until the handshake finishes or this idle timeout.
 func (g *gateway) doqQUICConfig() *quic.Config {
 	return &quic.Config{
-		MaxIncomingStreams:    maxDoQStreams,
-		MaxIncomingUniStreams: -1,
-		MaxIdleTimeout:        doqIdleTimeout,
-		HandshakeIdleTimeout:  g.doqHandshakeIdle,
+		MaxIncomingStreams:             maxDoQStreams,
+		MaxIncomingUniStreams:          -1,
+		MaxIdleTimeout:                 doqIdleTimeout,
+		HandshakeIdleTimeout:           g.doqHandshakeIdle,
+		InitialStreamReceiveWindow:     doqStreamReceiveWindow,
+		MaxStreamReceiveWindow:         doqStreamReceiveWindow,
+		InitialConnectionReceiveWindow: doqConnReceiveWindow,
+		MaxConnectionReceiveWindow:     doqConnReceiveWindow,
+	}
+}
+
+// doqQueryContext is the context resolveShared sees for one DoQ query. It ends when the gateway stops or the
+// connection does, so a dropped connection releases the shared in-flight slot instead of holding it until shutdown.
+func doqQueryContext(gateway, conn context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(gateway)
+	stop := context.AfterFunc(conn, cancel)
+	return ctx, func() {
+		stop() // unregisters the AfterFunc, so a long-lived connection does not keep one callback per query
+		// cancel() drops this child of the gateway context when the caller stops the query.
+		// AfterFunc only runs when the connection context ends, so removing cancel() leaves
+		// every query context registered until the gateway itself stops.
+		cancel()
 	}
 }
 
@@ -178,18 +202,13 @@ func (g *gateway) serveQUICConn(conn *quic.Conn) {
 func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local netip.AddrPort) {
 	defer g.wg.Done()
 	// A query that never finishes must not keep a stream slot for a raised --timeout. The read stops at the Unbound
-	// wait or the handshake budget, whichever is shorter. The deadline ends with the read: Unbound still has g.timeout.
-	readFor := g.timeout
-	if g.handshake < readFor {
-		readFor = g.handshake
-	}
-	_ = s.SetReadDeadline(time.Now().Add(readFor))
+	// wait or the handshake budget, whichever is shorter. Only the query read is bounded: Unbound still has g.timeout.
+	_ = s.SetReadDeadline(time.Now().Add(min(g.timeout, g.handshake)))
 	wire, ok := readDoQQuery(s)
 	if !ok {
 		reset(s, doqProtocolError)
 		return
 	}
-	_ = s.SetReadDeadline(time.Time{})
 	if len(wire) >= 2 && wire[0]|wire[1] != 0 {
 		_ = conn.CloseWithError(doqProtocolError, "Message ID must be 0")
 		return
@@ -212,8 +231,10 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local ne
 		// generated according to the rules of the protocol that is in use."
 		binary.BigEndian.PutUint16(wire, uint16(1+rand.IntN(65535)))
 		fwd := func(ctx context.Context, q []byte) []byte { return g.up.exchangeUDPThenTCP(ctx, src, dst, q) }
+		qctx, stopQuery := doqQueryContext(g.ctx, conn.Context())
+		defer stopQuery()
 		var admitted bool
-		if reply, admitted = g.resolveShared(g.ctx, src.Addr(), wire, fwd); !admitted {
+		if reply, admitted = g.resolveShared(qctx, src.Addr(), wire, fwd); !admitted {
 			reply = buildServfail(wire) // over the shared in-flight cap
 		} else if reply == nil {
 			reset(s, doqRequestCancelled) // the decider dropped the query
