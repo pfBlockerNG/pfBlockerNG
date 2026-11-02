@@ -386,25 +386,29 @@ The receiver's own `syncscope` is not consulted.
   configuration was accepted; the apply has its own record (see [Reporting](#reporting), item 4).
 - Legacy-scope receives trigger no apply, so their behaviour is unchanged.
 - **Received-digest suppression, in any scope.** After every accepted policy receive the node
-  records the **accepted digest** (see [Reporting](#reporting)). While its current policy digest
-  still equals that record, the node originates no pfBlockerNG sync, whatever its own scope
-  (`policy`, `all`, or `lists`) and whichever targets it lists: `pfblockerng_sync_on_changes()`,
+  records the **accepted digest** (see [Reporting](#reporting)) and, for each legacy scope, the
+  digest of the payload that scope would send once the receive is written (#3674). While the
+  payload of its own scope still equals that record (in `policy` scope its current policy digest,
+  in `all` or `lists` its legacy payload), the node originates no pfBlockerNG sync, whichever
+  targets it lists: `pfblockerng_sync_on_changes()`,
   which runs after every apply (`pfblockerng_apply.inc:5169-5171`), returns before its target
   loop, and `plugin_xmlrpc_send()` returns no pfBlockerNG path, while pfSense still syncs its own
   sections. A receive-triggered apply therefore never originates a sync. The sender's authority
   holds even when the receiver is itself configured as a sender or lists the original sender as a
-  target, and the receiver's scope plays no part.
-- **Lifting it.** A local policy edit changes the digest, so a node also configured as a sender
-  syncs that edit as before. Saving the Sync page, a deliberate role flip, clears the stored
+  target.
+- **Lifting it.** A local edit to what the node's own scope sends changes that digest, so a node
+  also configured as a sender syncs that edit as before: a policy edit in `policy` scope, any edit
+  its legacy payload carries in `all` or `lists` scope. Saving the Sync page, a deliberate role flip, clears the stored
   accepted digest until the next receive. Losing the state file, such as `dbdir` on a RAM disk,
   ends the suppression until the next receive, so the node sends as it did before this change; a
-  peer treats a repeated policy payload as a no-op.
+  peer treats a repeated policy payload as a no-op. A state file written before the legacy
+  digests existed suppresses no legacy-scope send, as a lost one.
 - **Legacy behaviour otherwise unchanged.** The accepted digest exists only after a policy
   receive, and legacy receives record none. A node that has never accepted a policy payload, or
   whose workflow is legacy only, sends exactly as it did before this change. A node that holds an
-  accepted digest and sends in `all` or `lists` scope is a chained relay, which is out of scope, or
-  a role flip. While its policy digest is unchanged, an edit of its local-only settings does not
-  trigger a send until a policy edit or a Sync-page save.
+  accepted digest and sends in `all` or `lists` scope is a chained relay or a role flip: it does
+  not forward the received policy on its own, and sends its legacy payload, the received policy
+  included, after any edit that payload carries.
 
 ### Reporting
 
@@ -582,12 +586,14 @@ Off-box suites; each behaviour test runs RED before its production change, per
     record reads accepted in every case, while the apply record is separate: waiting inside a
     quiet-hours window, failed with the pending marker kept after a failed apply, and applied
     after a completed one.
-11. Received-digest suppression holds in every scope. With an accepted digest equal to the current
-    policy digest, `pfblockerng_sync_on_changes()` returns before its target loop, so a recording
+11. Received-digest suppression holds in every scope. With an accepted receive and the payload of
+    the node's own scope unchanged since (the policy digest in `policy` scope, the legacy payload in
+    `all` or `lists`), `pfblockerng_sync_on_changes()` returns before its target loop, so a recording
     client double sees no call, and `plugin_xmlrpc_send()` returns no pfBlockerNG path. Both hold
     for a node whose own scope is `policy`, `all`, or `lists`, whatever scope the sender used, with
     the original sender listed as a manual target and again in automatic mode. Both send after a
-    local policy edit changes the digest and after a Sync-page save clears the stored digest. A
+    local edit changes that payload (in a legacy scope, also an edit outside the policy, #3674) and
+    after a Sync-page save clears the stored digest. A
     node with no accepted digest produces the pre-change output (criterion 3).
 12. The digest ignores key order and local leaves and changes with row order. The receiver records
     drift after a local edit, refusal reasons without touching configuration, and effective-policy

@@ -416,7 +416,7 @@ final class SyncPolicyStatusTest extends TestCase
 		$state = $this->state();
 		$keys  = array_keys($state);
 		sort($keys);
-		$this->assertSame(['accepted_digest', 'last'], $keys, 'no prior apply or value may be synthesized');
+		$this->assertSame(['accepted_digest', 'last', 'legacy_digests'], $keys, 'no prior apply or value may be synthesized; the legacy digests are this receive\'s');
 		$this->assertSame(
 			['time', 'outcome', 'incoming_digest', 'accepted_digest', 'ignored', 'ignored_count'],
 			array_keys($this->last())

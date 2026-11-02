@@ -14613,6 +14613,19 @@
             }
         ]
     },
+    "pfb_sync_legacy_digests": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_sync_legacy_sections": {
         "returnsRef": false,
         "returnType": "array",
@@ -14840,6 +14853,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
+            },
+            {
+                "name": "legacy_digests",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -15299,7 +15319,15 @@
     "pfb_sync_stored_sections": {
         "returnsRef": false,
         "returnType": "array",
-        "params": []
+        "params": [
+            {
+                "name": "names",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_syslog_emit": {
         "returnsRef": false,

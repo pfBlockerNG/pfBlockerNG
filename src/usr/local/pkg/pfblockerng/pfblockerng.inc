@@ -25735,6 +25735,20 @@ function pfb_sync_legacy_sections(bool $all): array {
 }
 
 /**
+ * Digest of the payload each legacy scope would send from $sections (bare section name => subtree, in the
+ * persisted shape), so a received policy suppresses a legacy send only while that payload is as accepted (#3674).
+ * @return array{all: string, lists: string}
+ */
+function pfb_sync_legacy_digests(array $sections): array {
+	$digests = array();
+	foreach (array('all' => TRUE, 'lists' => FALSE) as $scope => $all) {
+		$payload         = array_intersect_key($sections, array_flip(pfb_sync_legacy_sections($all)));
+		$digests[$scope] = hash('sha256', json_encode(pfb_sync_copied_sorted($payload), JSON_THROW_ON_ERROR));
+	}
+	return $digests;
+}
+
+/**
  * pfb_sync_path_is_local — TRUE when the section-relative key path $rel of a deny-list synced
  * section is receiver-local under the pfb_sync_local_paths() schema $local (issue #3450). The
  * projection and the receive merge (issue #3451) share this deny-list rule.
@@ -26684,10 +26698,11 @@ function pfb_sync_sender_panel(array $send): string {
 
 /*
  * Receive state, {$dbdir}/pfb_sync_receive.json (root-only, never a payload value): the digest of the
- * last accepted policy, the last receive outcome and, once a changed receive opened one, the apply
- * record. A missing or corrupt file reads as both NULL with no apply key.
+ * last accepted policy, the last receive outcome, once a changed receive opened one, the apply
+ * record and, from an accepted receive on, the legacy payload digests at that receive (#3674).
+ * A missing or corrupt file reads as both NULL with no apply or legacy_digests key.
  *
- * @return array{accepted_digest: ?string, last: ?array<string,mixed>, apply?: array<string,mixed>}
+ * @return array{accepted_digest: ?string, last: ?array<string,mixed>, apply?: array<string,mixed>, legacy_digests?: array<string,mixed>}
  */
 function pfb_sync_receive_state_read(string $dbdir): array {
 	$state = array('accepted_digest' => NULL, 'last' => NULL);
@@ -26697,6 +26712,9 @@ function pfb_sync_receive_state_read(string $dbdir): array {
 		$state['last']            = is_array($data['last'] ?? NULL) ? $data['last'] : NULL;
 		if (is_array($data['apply'] ?? NULL)) {
 			$state['apply'] = $data['apply'];
+		}
+		if (is_array($data['legacy_digests'] ?? NULL)) {
+			$state['legacy_digests'] = $data['legacy_digests'];
 		}
 	}
 	return $state;
@@ -26729,13 +26747,14 @@ function pfb_sync_receive_state_update(string $dbdir, callable $mutate, array $i
 }
 
 /*
- * Records one receive and logs one value-free line. A refusal keeps the previous accepted digest;
- * an accepted receive ('changed' or 'unchanged') replaces it with $accepted_digest. An accepted receive
+ * Records one receive and logs one value-free line. A refusal keeps the previous accepted digest and
+ * legacy digests; an accepted receive ('changed' or 'unchanged') replaces them with $accepted_digest and
+ * $legacy_digests (none given, none kept). An accepted receive
  * that could not be recorded fails closed, so only the unpublished-state line is logged for it.
  * $detail (digests, ignored paths) joins the last record; it is never logged and never overrides time/outcome/reason.
  */
-function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir, array $io = [], array $detail = []): bool {
-	$published = pfb_sync_receive_state_update($dbdir, static function (array $state) use ($outcome, $accepted_digest, $reason, $detail): array {
+function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, string $reason, string $dbdir, array $io = [], array $detail = [], ?array $legacy_digests = NULL): bool {
+	$published = pfb_sync_receive_state_update($dbdir, static function (array $state) use ($outcome, $accepted_digest, $reason, $detail, $legacy_digests): array {
 		$last = array('time' => time(), 'outcome' => $outcome);
 		if ($reason !== '') {
 			$last['reason'] = $reason;
@@ -26746,6 +26765,10 @@ function pfb_sync_receive_record(string $outcome, ?string $accepted_digest, stri
 		);
 		if (isset($state['apply'])) {
 			$next['apply'] = $state['apply'];
+		}
+		$legacy = $outcome === 'refused' ? ($state['legacy_digests'] ?? NULL) : $legacy_digests;
+		if ($legacy !== NULL) {
+			$next['legacy_digests'] = $legacy;
 		}
 		return $next;
 	}, $io);
@@ -26788,6 +26811,7 @@ function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
 			return NULL;
 		}
 		$state['accepted_digest'] = NULL;
+		unset($state['legacy_digests']);
 		return $state;
 	}, $io);
 	// A failed clear leaves the node accepting, so its findings stay.
@@ -27024,10 +27048,10 @@ function pfb_sync_stored_scope(): ?string {
 	return in_array($scope, array('policy', 'all', 'lists'), TRUE) ? $scope : NULL;
 }
 
-// This node's stored synced sections, bare section name => subtree; absent sections are omitted.
-function pfb_sync_stored_sections(): array {
+// This node's stored synced sections (or $names), bare section name => subtree; absent sections are omitted.
+function pfb_sync_stored_sections(?array $names = NULL): array {
 	$sections = array();
-	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+	foreach ($names ?? pfblockerng_sync_sections(TRUE) as $section) {
 		$stored = config_get_path("installedpackages/{$section}");
 		if ($stored !== NULL) {
 			$sections[$section] = $stored;
@@ -27078,12 +27102,24 @@ function pfb_sync_policy_current_digest(): string {
 	);
 }
 
-// TRUE while this node's policy still equals the last accepted received one (it must not echo it back).
+/*
+ * TRUE while what this node would send still equals the last accepted received policy (it must not echo it back):
+ * in scope 'policy' its policy digest, in a legacy scope its legacy payload (#3674). A state without legacy digests
+ * (written before them) suppresses no legacy send, as a lost state file.
+ */
 function pfb_sync_receive_suppressed(): bool {
 	global $pfb;
 
-	$accepted = pfb_sync_receive_state_read($pfb['dbdir'])['accepted_digest'];
-	return $accepted !== NULL && $accepted === pfb_sync_policy_current_digest();
+	$state = pfb_sync_receive_state_read($pfb['dbdir']);
+	if ($state['accepted_digest'] === NULL) {
+		return FALSE;
+	}
+	$scope = pfb_sync_stored_scope();
+	if ($scope === 'all' || $scope === 'lists') {
+		$current = array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections(pfb_sync_legacy_sections(TRUE)));
+		return ($state['legacy_digests'][$scope] ?? NULL) === pfb_sync_legacy_digests($current)[$scope];
+	}
+	return $state['accepted_digest'] === pfb_sync_policy_current_digest();
 }
 
 // NULL without an accepted digest, else whether this node's policy has moved off it.
@@ -27139,6 +27175,8 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 		}
 	}
 	$accepted = pfb_sync_policy_digest(pfb_sync_policy_projection($settled));
+	// What this node's legacy scopes send once the merge is written: merged sections as settled, the rest as stored.
+	$legacy = pfb_sync_legacy_digests($settled + array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections(pfb_sync_legacy_sections(TRUE))));
 
 	// The accepted digest suppresses the echo of this policy: a receive whose record cannot be published fails closed, applying nothing.
 	if (!pfb_sync_receive_record(
@@ -27152,7 +27190,8 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 			'accepted_digest' => $accepted,
 			'ignored'         => array_slice($ignored, 0, 100),
 			'ignored_count'   => count($ignored),
-		)
+		),
+		$legacy
 	)) {
 		return array();
 	}

@@ -731,16 +731,18 @@ final class SyncPolicyReceiveTest extends TestCase
 		$this->assertTrue($this->syncAttempted());
 	}
 
+	// Local-only leaves are outside the policy payload but inside the legacy ones, so only a legacy scope sends them (#3674).
 	#[DataProvider('receiverScopes')]
-	public function testLocalOnlyEditKeepsTheSuppression(string $scope): void
+	public function testLocalOnlyEditKeepsOnlyThePolicyScopeSuppressed(string $scope): void
 	{
 		$this->seedReceiver($scope);
 		$this->receive(self::senderSections());
+		$this->assertFalse($this->syncAttempted(), 'before-state: suppressed after the receive');
 
 		config_set_path('installedpackages/pfblockerngglobal/alertrefresh', 'edited-locally');
 		config_set_path('installedpackages/pfblockernglistsv4/config/0/srcint', 'edited-locally');
 
-		$this->assertFalse($this->syncAttempted());
+		$this->assertSame($scope !== 'policy', $this->syncAttempted(), "scope {$scope}");
 	}
 
 	#[DataProvider('receiverScopes')]
