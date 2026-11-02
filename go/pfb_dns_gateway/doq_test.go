@@ -315,3 +315,84 @@ func TestStopClosesDoQConnections(t *testing.T) {
 		t.Fatal("STUCK/ENVIRONMENT: the DoQ connection is still open after stop()")
 	}
 }
+
+// A denied current address closes the connection whatever the stream holds. The ACL is applied before the stream is
+// parsed or dropped as short, so a malformed stream cannot keep the connection and its admission slot.
+func TestDoQDeniedAddressClosesTheConnectionWhateverTheStream(t *testing.T) {
+	response := doqQuery(t, "denied.example.")
+	response[2] |= 0x80
+	cases := []struct {
+		name string
+		send func(t *testing.T, s *quic.Stream)
+	}{
+		{"a two-byte message", func(t *testing.T, s *quic.Stream) { sendDoQ(t, s, []byte{0, 0}) }},
+		{"a frame longer than its data", func(t *testing.T, s *quic.Stream) {
+			put(t, s, []byte{0, 32, 1, 2, 3})
+			_ = s.Close()
+		}},
+		{"a response", func(t *testing.T, s *quic.Stream) { sendDoQ(t, s, response) }},
+		{"a partial frame that never finishes", func(t *testing.T, s *quic.Stream) { put(t, s, []byte{0, 32, 1, 2}) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The read budget is an hour: a stream from a denied address must end the connection without waiting for it.
+			r := newRig(t, rigConfig{acl: aclMixed, timeout: time.Hour})
+			r.g.handshake = time.Hour
+			m := newTLSMaterial(t)
+			addr := r.serveDoQ(m)
+			r.autoAnswer(echoAnswer)
+			c := dialDoQ(t, addr, m, clientAllowed)
+			c.query(doqQuery(t, "before.example."))
+			r.nextQuery()
+			rewriteACL(t, r, aclMixed+"access-control: "+clientAllowed+"/32 deny\n")
+			tc.send(t, c.stream())
+			requireDeniedConnClosed(t, r, c)
+		})
+	}
+}
+
+// A deny that arrives while a stream is being read applies when the read ends, before the stream is parsed: the
+// connection closes, and the malformed stream it carried never reaches the decider.
+func TestDoQDenyArrivingDuringAStreamClosesTheConnectionBeforeItIsParsed(t *testing.T) {
+	r, m, addr := newDoQRig(t, rigConfig{})
+	r.autoAnswer(echoAnswer)
+	c := dialDoQ(t, addr, m, clientAllowed)
+	c.query(doqQuery(t, "before.example."))
+	r.nextQuery()
+	s := c.stream()
+	put(t, s, []byte{0, 2}) // a two-byte message is announced; its body arrives after the deny
+	rewriteACL(t, r, aclMixed+"access-control: "+clientAllowed+"/32 deny\n")
+	put(t, s, []byte{0, 0})
+	_ = s.Close()
+	requireDeniedConnClosed(t, r, c)
+}
+
+// A refused address still gets REFUSED on a valid query, and a malformed stream from it is only reset: the deny
+// check must not act on REFUSED.
+func TestDoQRefusedAddressMalformedStreamIsResetAndTheConnectionSurvives(t *testing.T) {
+	r, m, addr := newDoQRig(t, rigConfig{})
+	r.autoAnswer(echoAnswer)
+	c := dialDoQ(t, addr, m, clientRefused)
+	s := c.stream()
+	sendDoQ(t, s, []byte{0, 0})
+	requireStreamReset(t, s, rfcDoQProtocolError)
+	query := doqQuery(t, "refused.example.")
+	requireRefused(t, query, c.query(query))
+	r.requireNoOtherQuery()
+}
+
+// requireDeniedConnClosed asserts that the connection of a denied address ends with DOQ_REQUEST_CANCELLED, frees its
+// admission slot, and that the decider was never asked.
+func requireDeniedConnClosed(t *testing.T, r *rig, c *doqClient) {
+	t.Helper()
+	select {
+	case <-c.conn.Context().Done():
+	case <-time.After(watchdog):
+		t.Fatal("the connection stayed up after a stream from its denied address")
+	}
+	requireConnClosed(t, c.conn, rfcDoQRequestCancelled)
+	eventually(t, "the closed connection to free its admission slot", func() bool {
+		return r.g.doqConns.n.Load() == 0 && doqHeld(r.g, clientAllowed) == 0
+	})
+	r.requireNoOtherQuery()
+}
