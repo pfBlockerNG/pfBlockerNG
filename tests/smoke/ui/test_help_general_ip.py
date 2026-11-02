@@ -122,7 +122,7 @@ def test_keep_settings_warning_and_clear_procedure_stay_with_the_control(browser
     assert label == "Keep Settings", f"unexpected retention control label: {label!r}"
     assert label in _strong_texts(row), "Keep Settings is not emphasized in its own help"
 
-    warning = row.locator("p").filter(has=row.locator(".text-danger"))
+    warning = row.locator("p:has(.text-danger)")
     assert warning.count() == 1, f"expected one warning paragraph in the Keep Settings row, found {warning.count()}"
     assert label in _strong_texts(warning), "the warning does not name Keep Settings"
 
@@ -147,7 +147,7 @@ def test_ip_alternatives_and_firewall_warning_are_structured(browser_page: Page,
     )
 
     warning_row = _row(browser_page, "fw_self_outbound")
-    warning = warning_row.locator("p").filter(has=warning_row.locator(".text-danger"))
+    warning = warning_row.locator("p:has(.text-danger)")
     assert warning.count() == 1, "the self-traffic control must carry its own warning paragraph"
     cases = warning_row.locator("ul > li")
     assert cases.count() == 2, f"expected separate IPv4 NAT and IPv6 cases, found {cases.all_text_contents()!r}"
