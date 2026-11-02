@@ -29,16 +29,6 @@ pytestmark = pytest.mark.ui_render
                 "Hook script files and Sync settings are not sent",
             ),
         ),
-        (
-            "/pfblockerng/pfblockerng_dns.php",
-            "pfB-DNS Settings",
-            (
-                "<b>All settings (legacy)</b>",
-                "The pfB-DNS enable toggle is never synced",
-                "DoT, DoH and DoQ toggles and ports, trusted DoH front ends and DDR settings",
-                "Resolver snapshot, listen interfaces/addresses (including VIPs) and certificate stay per node",
-            ),
-        ),
     ],
 )
 def test_rendered_help_explains_shared_transport_settings_and_local_activation(

@@ -97,17 +97,17 @@ function step2_submitphpaction() {
 
 		foreach (array($_POST['inbound_interface'], $_POST['outbound_interface']) as $wizard_interface) {
 			if (empty($wizard_interface)) {
-				$input_errors[] = 'pfBlockerNG IP Category configuration | Atleast one Inbound and one Outbound interfaces must be selected.';
+				$input_errors[] = 'pfBlockerNG IP settings | At least one Inbound interface and one Outbound interface must be selected.';
 			}
 			if (is_array($wizard_interface)) {
 				foreach ($wizard_interface as $w_interface) {
 					if (!array_key_exists($w_interface, $pfb_wizard['interface_list'])) {
-						$input_errors[] = 'pfBlockerNG IP Category configuration | Invalid Interface selection';
+						$input_errors[] = 'pfBlockerNG IP settings | Invalid Interface selection';
 					}
 				}
 			}
 			elseif (!array_key_exists($wizard_interface, $pfb_wizard['interface_list'])) {
-				$input_errors[] = 'pfBlockerNG IP Category configuration | Invalid Interface selection';
+				$input_errors[] = 'pfBlockerNG IP settings | Invalid Interface selection';
 			}
 		}
 

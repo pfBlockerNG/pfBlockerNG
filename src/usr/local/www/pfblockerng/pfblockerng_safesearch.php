@@ -70,7 +70,7 @@ if (isset($_POST['save'])) {
 		$msg = 'Saved SafeSearch configuration';
 		write_config("[ pfBlockerNG ] {$msg}");
 		pfb_mark_pending_changes();	// applies on the next Update, not on save
-		$savemsg = "{$msg}. Run an Update ('Run Now' on the Update tab) to apply the changes!";
+		$savemsg = 'Changes saved. Apply them using "Run Now" on "Update", or wait for the next automatic apply.';
 		header("Location: /pfblockerng/pfblockerng_safesearch.php?savemsg={$savemsg}");
 	}
 }
@@ -126,9 +126,9 @@ $section->addInput(new Form_StaticText(
 ));
 
 $section->addInput(new Form_StaticText(
-	'NOTES:',
-	'These settings will force these Search sites to utilize the "Safe Search" algorithms.<br />'
-	. 'All enabled Safe Search sites will be wildcard whitelisted to ensure that DNSBL is not blocking these Safe Search Sites.'
+	'Note:',
+	'Redirect the supported search sites (listed under <strong>SafeSearch Redirection</strong>) to their SafeSearch addresses.<br />'
+	. 'All enabled SafeSearch sites will be wildcard whitelisted to ensure that DNSBL is not blocking these SafeSearch sites.'
 ));
 
 $section->addInput(new Form_Select(
@@ -136,7 +136,7 @@ $section->addInput(new Form_Select(
 	gettext('SafeSearch Redirection'),
 	$pconfig['safesearch_enable'],
 	$options_safesearch_enable
-))->setHelp("Select to enable SafeSearch Redirection. At the moment it is supported by Google, Yandex, DuckDuckGo, Bing and Pixabay. <br /> 
+))->setHelp("Select to enable <strong>SafeSearch Redirection</strong>. At the moment it is supported by Google, Yandex, DuckDuckGo, Bing and Pixabay. <br />
 Only Google, YouTube, and Pixabay support both IPv4/IPv6 SafeSearch redirection. Other search engines support IPv4 SafeSearch only.")
   ->setAttribute('style', 'width: auto');
 
@@ -145,12 +145,12 @@ $section->addInput(new Form_Select(
 	gettext('YouTube Restrictions'),
 	$pconfig['safesearch_youtube'],
 	$options_safesearch_youtube
-))->setHelp('Select YouTube Restrictions. You can check it by visiting: '
+))->setHelp('Select <strong>YouTube Restrictions</strong>. You can check it by visiting: '
 		. '<a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/check_content_restrictions">Check Youtube Content Restrictions</a>.')
   ->setAttribute('style', 'width: auto');
 $form->add($section);
 print($form);
-print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
+print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong>. Set <strong>Run Scope</strong> to <strong>DNSBL</strong> or <strong>Both</strong>, then use <strong>Run Now</strong>.</p>');
 ?>
 
 <?php include('foot.inc');?>

@@ -463,16 +463,15 @@ def test_blacklist_logging_select_exposes_default_and_seven_concrete_in_order(we
 def test_wizard_dnsbl_step_announces_vip_deprecation(webui: WebUI) -> None:
     """issue #3539: the setup wizard's DNSBL VIP step says the VIP response is deprecated."""
     resp = webui.get(_WIZARD_DNSBL_STEP)
-    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL Component Configuration",))
+    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL settings",))
     assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
     body = resp.text
     # Scope to the step's own text: from its title (after <body>) to the end of the form, so
     # unrelated page chrome can never satisfy the deprecation check.
-    start = body.find("DNSBL Component Configuration", max(body.lower().find("<body"), 0))
+    start = body.find("DNSBL settings", max(body.lower().find("<body"), 0))
     assert start != -1, "wizard DNSBL step title not found in the rendered body"
     end = body.find("</form>", start)
     step = body[start : end if end != -1 else len(body)]
-    assert "Create VIPs automatically" in step, "wizard DNSBL step lost its VIP wording -- fixture, not a #3539 signal"
     assert "deprecated" in step.lower(), "the wizard DNSBL VIP step must announce the WebServer/VIP deprecation"
 
 

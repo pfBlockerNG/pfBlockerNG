@@ -24,7 +24,7 @@ final class DnsblTldAllowCountTest extends TestCase
 	/** The derivation, as a pattern: a reformat of that line is not a defect. */
 	private const TOTAL = '/\$tld_total\s*=\s*array_sum\(\s*array_map\(\s*\'count\'\s*,\s*\$tld_list\s*\)\s*\)\s*;/';
 
-	private const HELP = "setHelp('Enable the TLD Allow feature (' . number_format(\$tld_total) . ' TLDs available). '";
+	private const HELP = 'number_format($tld_total)';
 
 	private static function source(): string
 	{

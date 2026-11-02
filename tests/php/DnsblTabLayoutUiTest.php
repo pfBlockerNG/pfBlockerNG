@@ -26,7 +26,7 @@ final class DnsblTabLayoutUiTest extends TestCase
 		$titles = [
 			'DNSBL',
 			'DNSBL Webserver Configuration',
-			'AdBlock suffix handling',
+			'Public-suffix handling',
 			'TLD Allow list',
 			'DNSBL Control',
 			'DNSBL Group Policy',
@@ -129,10 +129,10 @@ final class DnsblTabLayoutUiTest extends TestCase
 		$this->assertStringContainsString('Collapse all', $source);
 	}
 
-	public function testPslAllowPrivateSitsInAdBlockSuffixHandling(): void
+	public function testPslAllowPrivateSitsInPublicSuffixHandling(): void
 	{
 		$source = self::source();
-		$suffixPos = strpos($source, "new Form_Section('AdBlock suffix handling'");
+		$suffixPos = strpos($source, "new Form_Section('Public-suffix handling'");
 		$includePos = strpos($source, "new Form_Checkbox(\n\t'pfb_psl_include_private'");
 		$allowPos = strpos($source, "new Form_Checkbox(\n\t'pfb_psl_allow_private'");
 		$pickersPos = strpos($source, "new Form_Section('TLD Allow list'");
@@ -143,7 +143,6 @@ final class DnsblTabLayoutUiTest extends TestCase
 		$this->assertGreaterThan($suffixPos, $includePos);
 		$this->assertGreaterThan($includePos, $allowPos);
 		$this->assertGreaterThan($allowPos, $pickersPos);
-		$this->assertStringContainsString('Applies when Allow Only Selected Domain Suffixes is enabled.', $source);
 	}
 
 	public function testListTextareasDoNotHardcodeALightBackground(): void

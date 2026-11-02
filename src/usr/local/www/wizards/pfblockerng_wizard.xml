@@ -30,12 +30,12 @@
 		<![CDATA[
 		<div class="row">
 		<div class="col-sm-9">
-			<p><h4>Welcome to pfBlockerNG!</h4></p>
-			<p>This wizard will configure an entry level configuration of pfBlockerNG for IP and DNSBL.</p>
+			<h4>Welcome to pfBlockerNG!</h4>
+			<p>This wizard replaces your pfBlockerNG configuration with a basic IP and DNSBL setup.</p>
 			<p><strong>pfBlockerNG</strong> is created by
 				<a target="_blank" rel="noopener noreferrer" href="https://github.com/BBcan177">BBcan177</a>,
 				who designs, supports and maintains it with
-				<a target="_blank" rel="noopener noreferrer" href="https://github.com/andrebrait">André Brait</a>.<br />
+				<a target="_blank" rel="noopener noreferrer" href="https://github.com/andrebrait">André Brait</a>.</p>
 
 			<ul class="list-inline" style="margin-top: 4px; margin-bottom: -2px; border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
 				<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://pfblockerng.com">
@@ -81,7 +81,7 @@
 			<name>pfb_wizard_disable</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
-			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<description><![CDATA[Select <strong>Do not show this again</strong> and click <strong>Skip</strong> to exit and prevent automatic wizard launches.]]></description>
 			<type>checkbox</type>
 			<value>on</value>
 		</field>
@@ -105,20 +105,19 @@
 		<div class="col-sm-11 alert-info" style="border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
 			<ul>
 				<li>The pfBlockerNG wizard will configure a default setup for pfBlockerNG.</li>
-				<li>This default configuration is an entry level setup which is designed to assist beginners of pfBlockerNG.</li>
-				<li>If you have previously configured pfBlockerNG,
-					<span style="color: red;">all settings will be wiped</span> on completion of this wizard!</li>
+				<li>This default configuration is a basic setup for new installations.</li>
+				<li><span class="text-danger"><strong>Warning:</strong></span> If you have previously configured pfBlockerNG, this wizard replaces your lists and settings and clears downloaded feeds. <strong>Scheduled Feed Updates</strong>, the <strong>Default Schedule</strong> and the <strong>Download Failure Threshold</strong> are kept.</li>
 				<li>Two components will be installed:</li>
 			</ul>
 			<dl class="dl-horizontal responsive">
 				<dt><strong>IP</strong>:</dt>
-				<dd>Firewall rules will be added to the selected Outbound interfaces to block the worst offenders.</dd>
+				<dd>Adds outbound reject rules for the PRI1 feeds on the selected Outbound interfaces.</dd>
 
 				<dt><strong>DNSBL</strong>:</dt>
-				<dd>Utilizing the DNS Resolver, ADverts and the worst known malicious domains will be blocked.</dd>
+				<dd>DNSBL blocks domains from the configured feeds through the DNS Resolver.</dd>
 			</dl>
 			<ul>
-				<li>A VIP on the Localhost interface can be configured manually at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, or pfBlockerNG can create one automatically in the DNSBL step. The DNSBL WebServer/VIP response is deprecated: the VIP is only needed while a DNSBL block answers with it.</li>
+				<li>A VIP on the Localhost interface can be configured manually at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, or set <strong>Auto VIP</strong> in the DNSBL step. The DNSBL WebServer/VIP response is deprecated: the VIP is only needed while a DNSBL block answers with it.</li>
 			</ul>
 		</div>
 		</div>
@@ -133,7 +132,7 @@
 			<name>pfb_wizard_disable</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
-			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<description><![CDATA[Select <strong>Do not show this again</strong> and click <strong>Skip</strong> to exit and prevent automatic wizard launches.]]></description>
 			<type>checkbox</type>
 			<value>on</value>
 		</field>
@@ -148,14 +147,14 @@
 </step>
 <step>
 	<id>3</id>
-	<title>pfBlockerNG IP Component Configuration</title>
-	<description>On this screen the pfBlockerNG IP Category parameters will be set.</description>
+	<title>IP settings</title>
+	<description>Choose the firewall interfaces for the IP settings.</description>
 	<fields>
 		<field>
 			<name>inbound_interface</name>
 			<displayname>Select Inbound Firewall Interface</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step2-&gt;inbound_interface</bindstofield>
-			<description>Select the Inbound interface(s) you want to apply auto rules to:</description>
+			<description>Inbound interface(s) saved for the IP settings. This wizard creates no inbound rules.</description>
 			<type>select</type>
 			<value>wan</value>
 			<multiple>yes</multiple>
@@ -171,7 +170,7 @@
 			<name>outbound_interface</name>
 			<displayname>Select Outbound Firewall Interface</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step2-&gt;outbound_interface</bindstofield>
-			<description>Select the Outbound interface(s) you want to apply auto rules to:</description>
+			<description>Select the Outbound interface(s) where the PRI1 outbound reject rules are created.</description>
 			<type>select</type>
 			<value>lan</value>
 			<multiple>yes</multiple>
@@ -195,7 +194,7 @@
 			<name>pfb_wizard_disable</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
-			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<description><![CDATA[Select <strong>Do not show this again</strong> and click <strong>Skip</strong> to exit and prevent automatic wizard launches.]]></description>
 			<type>checkbox</type>
 			<value>on</value>
 		</field>
@@ -209,8 +208,8 @@
 </step>
 <step>
 	<id>4</id>
-	<title>pfBlockerNG DNSBL Component Configuration</title>
-	<description><![CDATA[On this screen the pfBlockerNG DNSBL Category parameters will be set.<br />The DNSBL WebServer/VIP response is deprecated: the Virtual IP below is only needed while a DNSBL block answers with it.<br />Enable <strong>Create VIPs automatically</strong> below to have pfBlockerNG manage the DNSBL sinkhole Virtual IP, or configure a VIP on the Localhost interface manually first at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.]]></description>
+	<title>DNSBL settings</title>
+	<description><![CDATA[Configure the DNSBL settings. The DNSBL WebServer/VIP response is deprecated: a Virtual IP is only needed while a DNSBL block answers with it. Enable <strong>Auto VIP</strong> below to have pfBlockerNG manage the DNSBL sinkhole Virtual IP, or configure a VIP on the Localhost interface manually first at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.<br />Optional: the ports below are used only if you later switch a DNSBL group to the deprecated WebServer/VIP mode and set <strong>Web Server Interface</strong> to something other than <strong>Localhost</strong>.]]></description>
 	<fields>
 		<field>
 			<name>DNSBL Webserver Configuration</name>
@@ -220,7 +219,7 @@
 			<name>pfb_dnsvip_auto</name>
 			<displayname>Auto VIP</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip_auto</bindstofield>
-			<description><![CDATA[Create VIPs automatically. When enabled, pfBlockerNG picks and manages the DNSBL sinkhole Virtual IP itself &#8212; the manual selections below are ignored. The address it chose is shown on the DNSBL page once the wizard finishes.<br /><span class="text-info">HA:</span> with pfBlockerNG Sync in Policy scope, a secondary that also uses Auto VIP creates its VIP at the address the primary chose. If that address is in use on the secondary, no VIP is created and the Sync page reports the conflict.]]></description>
+			<description><![CDATA[<strong>Auto VIP</strong>: when enabled, pfBlockerNG manages the DNSBL sinkhole Virtual IP itself, but only while a DNSBL block answers with it. The wizard's DNSBL group uses Null Blocking, so no VIP is created now; the DNSBL page shows the address it would use. The manual selections below are ignored while Auto VIP is on.<br /><span class="text-info">HA:</span> with pfBlockerNG Sync set to Policy and lists (local settings stay local), a secondary that also uses Auto VIP creates its VIP at the address the primary chose. If that address is in use on the secondary, no VIP is created and the Sync page reports the conflict.]]></description>
 			<type>checkbox</type>
 			<value>on</value>
 		</field>
@@ -230,7 +229,7 @@
 			<source><![CDATA[pfb_get_vip_options(AF_INET, true)]]></source>
 			<source_name>descr</source_name>
 			<source_value>id</source_value>
-			<description>Select the IPv4 DNSBL Virtual IP (manual mode only — ignored when Auto VIP is enabled)</description>
+			<description><![CDATA[Select the IPv4 DNSBL Virtual IP (manual mode only — ignored when <strong>Auto VIP</strong> is enabled)]]></description>
 			<displayname>IPv4 DNSBL Virtual IP</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip4</bindstofield>
 		</field>
@@ -240,7 +239,7 @@
 			<source><![CDATA[pfb_get_vip_options(AF_INET6, true)]]></source>
 			<source_name>descr</source_name>
 			<source_value>id</source_value>
-			<description>Select the IPv6 DNSBL Virtual IP (manual mode only — ignored when Auto VIP is enabled)</description>
+			<description><![CDATA[Select the IPv6 DNSBL Virtual IP (manual mode only — ignored when <strong>Auto VIP</strong> is enabled)]]></description>
 			<displayname>IPv6 DNSBL Virtual IP</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip6</bindstofield>
 		</field>
@@ -248,7 +247,7 @@
 			<name>pfb_dnsport</name>
 			<displayname>Port</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsport</bindstofield>
-			<description>Local port upon which DNSBL Webserver will listen for connections. The default port is 8081. This can be left at its default unless a different port needs to be used.</description>
+			<description>HTTP port for the DNSBL block page (default 8081).</description>
 			<type>input</type>
 			<value>8081</value>
 			<size>10</size>
@@ -257,7 +256,7 @@
 			<name>pfb_dnsport_ssl</name>
 			<displayname>SSL Port</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsport_ssl</bindstofield>
-			<description>Local port upon which DNSBL Webserver will listen for connections. The default port is 8443. This can be left at its default unless a different port needs to be used.</description>
+			<description>HTTPS port for the DNSBL block page (default 8443).</description>
 			<type>input</type>
 			<value>8443</value>
 			<size>10</size>
@@ -266,7 +265,7 @@
 			<name>suppression</name>
 			<displayname>DNSBL Whitelist</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;suppression</bindstofield>
-			<description>Enable a default DNSBL Domain Whitelist. This list can be removed and/or modified following wizard installation.</description>
+			<description><![CDATA[Enable the default <strong>DNSBL Whitelist</strong>. You can change or remove it after the wizard finishes.]]></description>
 			<type>checkbox</type>
 			<value>enabled</value>
 		</field>
@@ -282,7 +281,7 @@
 			<name>pfb_wizard_disable</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
-			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<description><![CDATA[Select <strong>Do not show this again</strong> and click <strong>Skip</strong> to exit and prevent automatic wizard launches.]]></description>
 			<type>checkbox</type>
 			<value>on</value>
 		</field>
@@ -302,11 +301,8 @@
 		<type>listtopic</type>
 	</field>
 	<description><![CDATA[All configuration parameters have been successfully collected.
-			<br/><br/>
-			Upon completion of this Wizard, any previously configured settings in pfBlockerNG, including any downloaded feeds will be
-			<span style="color: red;"> wiped!</span>
-			<br/><br/>
-			To save this default configuration and apply these changes, press the <strong>Finish</strong> button!
+			<p><span class="text-danger"><strong>Warning:</strong></span> Finishing this wizard replaces your pfBlockerNG lists and settings and clears downloaded feeds. <strong>Scheduled Feed Updates</strong>, the <strong>Default Schedule</strong> and the <strong>Download Failure Threshold</strong> are kept.</p>
+			To save this default configuration and apply these changes, press the <strong>Finish</strong> button.
 	]]></description>
 	<fields>
 		<field>
@@ -317,7 +313,7 @@
 			<name>pfb_wizard_disable</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
-			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<description><![CDATA[Select <strong>Do not show this again</strong> and click <strong>Skip</strong> to exit and prevent automatic wizard launches.]]></description>
 			<type>checkbox</type>
 			<value>on</value>
 		</field>

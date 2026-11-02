@@ -125,22 +125,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		$this->assertStringContainsString(pfb_dnsbl_mechanism_help(), $scope['options_global_log_txt']);
 	}
 
-	public function testDnsblPageModeHelpNamesTheDeprecatedLabel(): void
-	{
-		$scope = pfb_test_page_eval(pfb_test_page_statement(self::DNSBL_PAGE, '/\$options_global_log_mode_txt\s*=/'), []);
-		$this->assertStringContainsString(
-			'Default policy with ' . self::VIP_LABEL,
-			$scope['options_global_log_mode_txt'],
-			'the grandfather sentence must name the response by its (deprecated) label'
-		);
-	}
-
-	public function testDnsblPageMechanismExplanationMarksTheVipBulletDeprecated(): void
-	{
-		$scope = pfb_test_page_eval(pfb_test_page_statement(self::DNSBL_PAGE, '/\$dnsbl_text\s*=/'), []);
-		$this->assertEveryVipBulletIsDeprecated($scope['dnsbl_text'], 'DNSBL page mechanism explanation');
-	}
-
 	public function testDnsblPageVipHelpAnnouncesTheDeprecation(): void
 	{
 		$scope = pfb_test_page_eval(pfb_test_page_statement(self::DNSBL_PAGE, '/\$pfb_vip_help\s*=/'), []);

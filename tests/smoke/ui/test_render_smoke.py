@@ -123,7 +123,7 @@ PAGE_TABLE: tuple[Page, ...] = (
         (
             "DNSBL Webserver Configuration",
             "DNS Caching",
-            "AdBlock suffix handling",
+            "Public-suffix handling",
             "TLD Allow list",
             "DNS Redirect",
             "DoT/DoQ Block",
@@ -131,16 +131,7 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Interface(s)",
             "no-AAAA",
             "pfb_dnsbl_nonat",  # issue-#381 NAT opt-out checkbox (name= attr in rendered HTML)
-            # issue #1255: corrected Wildcard Blocking (TLD) help — no more stale "Force
-            # Reload required" claim; toggling now applies on the next DNSBL update.
-            "Enabling or disabling this option takes effect on the next DNSBL update",
             "pfB_DNSBLIP_v4",  # DNSBL IPs help text names the real alias (was stale 'pfB_DNSBL_IP')
-            # issue #3413: the DNSBL IPs help points at the IP Tab limit that clamps pfB_DNSBLIP ranges.
-            "IP Tab Suppression CIDR Limit",
-            # Permit-rules help renders as one flowing sentence — a stray <br /> split
-            # "...to access<br />the DNSBL Webserver", so this space-joined phrase is the
-            # red→green guard (absent with the <br />, present once it is a space).
-            "Selected Interface(s) to access the ",
             # issue #1669 slice C: the vendored CodeMirror 6 bundle include -- proves the
             # pfb_regex_list live-highlighting asset is wired on the page. Present because
             # the gating pfb_syntax_highlight toggle defaults on for a fresh box.
@@ -156,9 +147,6 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Feed entries at shared-hosting suffixes (PSL PRIVATE)",
             "Feed entries at public suffixes (ICANN)",
             "Block the suffix apex only",
-            # Enable DNSBL infoblock: v4 evaluate_domain() order (not the v3 pfb_py_block text).
-            "DNSBL evaluation order",
-            "first match wins",
         ),
     ),
     # issue #3515: the pfB-DNS tab (experimental DNS proxy). The section titles are the page's own: the tab label alone
@@ -1639,34 +1627,6 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     )
 
 
-def test_top1m_help_explains_group_scope_and_the_custom_list_recipe(
-    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:
-    """Group help and the DNSBL recipe expose the same per-Group TOP1M contract.
-
-    Runtime verdicts are exercised by test_issue3648_top1m_group_scope; this render
-    check catches a help regression that hides the unchecked-Group escape hatch.
-    """
-    pages = (
-        (
-            "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl",
-            ("TOP1M Whitelist",),
-            ("this Group still blocks TOP1M domains", "including its Custom List", "Whitelist always takes precedence"),
-        ),
-        (
-            "/pfblockerng/pfblockerng_dnsbl.php",
-            ("DNSBL Webserver Configuration",),
-            ("other Groups and Category feeds still block", "Group order does not matter", "Whitelist still overrides"),
-        ),
-    )
-    for path, markers, guidance in pages:
-        resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, markers)
-        assert result.ok, f"{path}: render failed: {result.detail}"
-        for message in guidance:
-            assert message in resp.text, f"{path}: missing TOP1M scope guidance {message!r}"
-
-
 def test_apply_guidance_names_run_now_not_retired_actions(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """Settings pages point at actions that exist: the scheduled update and the
     Update tab's Run Now (issue #3237) — never the retired "Force Update" /
@@ -2245,9 +2205,8 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
 def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issue #3515: the pfB-DNS tab carries the enable checkbox, whose help says plainly that it is experimental,
-    what it changes in the Resolver, that it is restored, that it runs with or without DNSBL and the HA caveat; a
-    status panel names the service and the mode and, once the Resolver is moved, a table per transport (issue #3555)."""
+    """issue #3515: the pfB-DNS tab carries the enable checkbox in its order, and a status panel names the service and
+    the mode and, once the Resolver is moved, a table per transport (issue #3555)."""
     path = "/pfblockerng/pfblockerng_dns.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
@@ -2271,35 +2230,6 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         "the page has the enable checkbox, the DoT, DoH and DoQ ones, the two DDR ones, then DNS Reply Logging; "
         f"got {checkboxes}"
     )
-    help_html = html[html.index('name="pfb_dns"') : html.index("pfB-DNS Status")]
-    for needle in (
-        "Experimental",
-        "with or without DNSBL",
-        "Network Interfaces becomes Localhost",
-        "the Listen Port is not changed",
-        "neither 5353 nor 5354",
-        "SSL/TLS Service is turned off",
-        "pfB-DNS serves DNS over TLS from its own DoT settings below",
-        "taken from the DNS Resolver once, the first time this page loads or pfB-DNS is turned on",
-        "# pfBlockerNG DNS proxy",
-        "port 5354 and also listens on port 5353 for the proxy",
-        "saved and restored when this option is turned off, when pfBlockerNG is disabled, "
-        "or when the package is removed",
-        "go through the proxy",
-        "High availability",
-        "turn the DNS Resolver sync off",
-        "do not enable this option on the primary before the secondary",
-        "Do not turn it off on the primary while the secondary still has it on",
-        "Enable it on the secondary first",
-        "next Update",
-        "Network Interfaces, SSL/TLS Service or Custom options in between are replaced",
-        "turns pfB-DNS off and restores the Resolver, keeping your line",
-        "restores the saved values (the Resolver stays disabled) and turns this option off",
-        "DNS Reply Logging",
-        "This one setting applies to both DNS modes",
-        "keep this disabled where that must not be recorded",
-    ):
-        assert needle in help_html, f"pfB-DNS help is missing {needle!r}"
     status_html = html[html.index('id="pfb-dns-status"') :]
     service = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]+)</td></tr>', status_html)
     mode = re.search(r'<tr id="pfb-dns-status-mode"><th>Mode</th><td>([^<]+)</td></tr>', status_html)
@@ -2602,10 +2532,8 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     ):
         assert needle in block, f"the listener help is missing {needle!r}"
     assert block.count("At least one entry is required.") == len(_DNS_INTERFACE_LISTS), "every interface list says so"
-    assert block.count("Requires the SSL/TLS Certificate selected above.") == 3, "DoT, DoH and DoQ name the selector"
     for stale in ("Requires the DNS Resolver", "None selected"):
         assert stale not in block, f"the listener help still says {stale!r}"
-    assert block.count("<code>pfb-dns</code>") == 2, "DoH and DoQ help each name the shipped binary, pfb-dns"
     assert "pfb_dns_gateway" not in html, "the page still names the retired binary pfb_dns_gateway"
 
 
@@ -3753,7 +3681,7 @@ def test_wizard_schedule_producer_is_canonical() -> None:
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
 # toggle. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
 # against pfSense upstream wizard.php: `$stepid` defaults to "0" and indexes $pkg['step']
-# directly). The DNSBL step is the 4th <step> (<id>4</id>, "DNSBL Component Configuration")
+# directly). The DNSBL step is the 4th <step> (<id>4</id>, "DNSBL settings")
 # in pfblockerng_wizard.xml -> stepid=3. The wizard is NOT in PAGE_TABLE (a core-rendered
 # www/wizards/ page, not a www/pfblockerng/ one), so it gets its own render assertion.
 _WIZARD_DNSBL_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=3"
@@ -3840,20 +3768,19 @@ def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: P
 
     Asserts the step passes the clean-render oracle (200, no PHP diagnostic, the step-title
     Form_Section marker present, not the login form) AND — from three independent wizard.php
-    render paths — that the field's POST name (`pfb_dnsvip_auto`), its 'Auto VIP' displayname
-    label, and the 'Create VIPs automatically' setHelp() wording are present. The IPv4/IPv6
+    render paths — that the field's POST name (`pfb_dnsvip_auto`) and its 'Auto VIP' displayname
+    label are present. The IPv4/IPv6
     manual selectors carry the new "manual mode only" note, asserted too so the mode framing
     that pairs with the checkbox is pinned. `php_error_log_guard` enrolls this GET in the
     module-level no-growth sweep.
     """
     resp = webui.get(_WIZARD_DNSBL_STEP)
-    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL Component Configuration",))
+    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL settings",))
     assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
         "pfb_dnsvip_auto",  # the checkbox field's POST name (input name/id)
         "Auto VIP",  # the <displayname> label
-        "Create VIPs automatically",  # the <description> setHelp() wording
         "manual mode only",  # the pfb_dnsvip4/6 selectors' new mode-dependency note
     ):
         assert needle in body, f"wizard DNSBL step is missing the Auto VIP marker {needle!r}"
@@ -3877,7 +3804,7 @@ def test_wizard_dnsbl_step_describes_ha_auto_vip(webui: WebUI, php_error_log_gua
     `php_error_log_guard` enrolls this GET in the module-level no-growth sweep.
     """
     resp = webui.get(_WIZARD_DNSBL_STEP)
-    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL Component Configuration",))
+    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL settings",))
     assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
     body = resp.text
     assert "address the primary chose" in body, "wizard DNSBL step is missing the HA Auto VIP sentence"

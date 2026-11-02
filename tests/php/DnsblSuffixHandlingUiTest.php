@@ -26,9 +26,9 @@ final class DnsblSuffixHandlingUiTest extends TestCase
 	{
 		$source = self::source();
 		$this->assertMatchesRegularExpression(
-			"/new Form_Section\(\s*'AdBlock suffix handling'\s*,\s*'dnsbl_suffix'\s*,\s*COLLAPSIBLE\s*\|\s*SEC_CLOSED\s*\)/",
+			"/new Form_Section\(\s*'Public-suffix handling'\s*,\s*'dnsbl_suffix'\s*,\s*COLLAPSIBLE\s*\|\s*SEC_CLOSED\s*\)/",
 			$source,
-			'AdBlock suffix handling must be its own collapsed Form_Section with id dnsbl_suffix'
+			'Public-suffix handling must be its own collapsed Form_Section with id dnsbl_suffix'
 		);
 		// The suffix panel itself is never .hide()d — that would bury the
 		// #2371 feed-policy selects behind tld_allow / Wildcard Blocking.
@@ -92,22 +92,22 @@ final class DnsblSuffixHandlingUiTest extends TestCase
 	public function testFeedPolicySelectsLiveInSuffixSectionAndStayUngated(): void
 	{
 		$source = self::source();
-		$suffixPos = strpos($source, "new Form_Section('AdBlock suffix handling'");
+		$suffixPos = strpos($source, "new Form_Section('Public-suffix handling'");
 		$privatePos = strpos($source, "gettext('Feed entries at shared-hosting suffixes (PSL PRIVATE)')");
 		$icannPos = strpos($source, "gettext('Feed entries at public suffixes (ICANN)')");
-		$globalLogPos = strpos($source, "'Global Logging/Blocking Mechanism'");
+		$globalLogPos = strpos($source, "'Global Logging/Blocking Mode'");
 		$wildcardPos = strpos($source, "gettext('Wildcard Blocking')");
 
-		$this->assertNotFalse($suffixPos, 'AdBlock suffix handling section missing');
+		$this->assertNotFalse($suffixPos, 'Public-suffix handling section missing');
 		$this->assertNotFalse($privatePos, 'PSL PRIVATE feed-policy label missing');
 		$this->assertNotFalse($icannPos, 'ICANN feed-policy label missing');
-		$this->assertNotFalse($globalLogPos, 'Global Logging/Blocking Mechanism missing');
+		$this->assertNotFalse($globalLogPos, 'Global Logging/Blocking Mode missing');
 		$this->assertNotFalse($wildcardPos, 'Wildcard Blocking missing');
 
 		$this->assertLessThan($globalLogPos, $wildcardPos, 'Wildcard Blocking stays in section 1 before Global Logging');
-		$this->assertLessThan($suffixPos, $globalLogPos, 'section 1 (Global Logging) closes before AdBlock suffix handling');
-		$this->assertLessThan($privatePos, $suffixPos, 'PSL PRIVATE feed-policy select must be added inside AdBlock suffix handling');
-		$this->assertLessThan($icannPos, $suffixPos, 'ICANN feed-policy select must be added inside AdBlock suffix handling');
+		$this->assertLessThan($suffixPos, $globalLogPos, 'section 1 (Global Logging) closes before Public-suffix handling');
+		$this->assertLessThan($privatePos, $suffixPos, 'PSL PRIVATE feed-policy select must be added inside Public-suffix handling');
+		$this->assertLessThan($icannPos, $suffixPos, 'ICANN feed-policy select must be added inside Public-suffix handling');
 
 		// issue #2371: moving the selects into a section is fine; hide-gating them is not.
 		$this->assertStringContainsString('issue #2371:', $source);

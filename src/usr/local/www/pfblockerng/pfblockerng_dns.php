@@ -179,14 +179,13 @@ $section->addInput(new Form_Checkbox(
 	pfb_dnsbl_toggle_enabled($pconfig['pfb_py_reply'] ?? NULL),
 	'on'
 ))->setHelp('Log each DNS reply to the DNS Reply log (the client, the name asked, the reply type, TTL and answer, and the answer\'s country), '
-		. 'which fills the DNS Reply tab of Reports.'
+		. 'which fills <strong>Reports</strong> &gt; <strong>DNS Reply</strong>.'
 		. '<div class="infoblock">'
 		. 'This one setting applies to both DNS modes. With DNSBL enabled, the DNSBL Python module logs the replies that were not blocked. '
 		. 'With pfB-DNS enabled and DNSBL disabled, the pfB-DNS proxy logs every reply it forwards from the DNS Resolver, '
 		. 'without loading any DNSBL feed or module. '
-		. 'Disabled: no reply is logged, and nothing is written to the DNS Reply log.<br />'
+		. 'When <strong>DNS Reply Logging</strong> is disabled, no replies are logged.<br />'
 		. 'The log lists the names each client looked up: keep this disabled where that must not be recorded.<br />'
-		. 'The change is applied on the next Update.<br />'
 		. 'Default: <strong>Enabled</strong>'
 		. '</div>');
 $form->add($section);
@@ -198,33 +197,34 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns']) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Runs pfBlockerNG\'s DNS proxy on the DNS Resolver\'s network interfaces and Listen Port, with or without DNSBL. '
-		. 'The proxy forwards every query to the DNS Resolver with the client\'s address (PROXY protocol v2), so the Resolver sees and logs the real client. '
-		. 'With DNSBL enabled the proxy also answers DNSBL blocks itself and the Resolver no longer loads the DNSBL Python module; '
-		. 'with DNSBL disabled the proxy makes no DNSBL decision and loads no DNSBL module (the Resolver only runs a small inert script, which lets pfSense start the proxy during boot).'
+))->setHelp('<p><strong>Experimental.</strong> <strong>pfB-DNS</strong> answers client DNS. '
+		. 'With DNSBL enabled, it answers blocked names locally and passes other queries to the DNS Resolver with the client address.</p>'
 		. '<div class="infoblock">'
-		. 'Enabling it changes these DNS Resolver settings: Network Interfaces becomes Localhost (the Listen Port is not changed, and must be neither 5353 nor 5354: the proxy and the Resolver use those loopback ports), '
-		. 'SSL/TLS Service is turned off (pfB-DNS serves DNS over TLS from its own DoT settings below), '
-		. 'and a <code>server:</code> clause marked <code># pfBlockerNG DNS proxy</code> is added at the end of Custom options: '
-		. 'the Resolver moves to 127.0.0.1 and ::1 port 5354 and also listens on port 5353 for the proxy, and the IPv6 networks of its interfaces stay allowed. '
-		. 'Do not set <code>port:</code> or listen on those two ports in Custom options. '
-		. 'A Custom options line with <code>interface:</code>, <code>port:</code> or <code>include:</code> (or a marker line without its partner) stops the move: nothing is changed and a notice names the line. '
-		. 'Such a line added after the move turns pfB-DNS off and restores the Resolver, keeping your line, and a notice names it. '
-		. 'Includes are refused because the file they name cannot be checked; turning this option off is never refused.<br />'
-		. 'The previous values are saved and restored when this option is turned off, when pfBlockerNG is disabled, or when the package is removed; '
-		. 'edits made to Network Interfaces, SSL/TLS Service or Custom options in between are replaced by the saved ones then.<br />'
-		. 'Disabling the DNS Resolver while this option is on stops the proxy, restores the saved values (the Resolver stays disabled) and turns this option off, with a notice.<br />'
-		. 'The firewall\'s own DNS lookups go through the proxy. The proxy starts together with the DNS Resolver, also at boot, so they are served while the system starts.<br />'
-		. '<strong>High availability:</strong> the DNS Resolver sync copies these settings to the secondary node. '
-		. 'With the sync on, do not enable this option on the primary before the secondary: the secondary then gets the moved Resolver with no saved snapshot and refuses it on every apply. '
-		. 'Do not turn it off on the primary while the secondary still has it on: the restored Resolver settings reach the secondary, whose Unbound then collides with its running proxy on the client port. '
-		. 'Enable it on the secondary first, or turn the DNS Resolver sync off.<br />'
-		. 'The pfB-DNS enable toggle is never synced. <b>All settings (legacy)</b> sends DoT, DoH and DoQ toggles and ports, trusted DoH front ends and DDR settings. '
-		. 'The Resolver snapshot, listen interfaces/addresses (including VIPs) and certificate stay per node. <b>Policy and lists</b> and <b>Lists and global settings only (legacy)</b> do not send pfB-DNS settings.<br />'
-		. 'Unset interface, DoT and certificate settings below are taken from the DNS Resolver once, the first time this page loads or pfB-DNS is turned on; received explicit DoT choices are kept. Later Resolver changes do not alter them.<br />'
-		. 'The change is applied on the next Update.<br />'
-		. 'Default: <strong>Disabled</strong>'
+		. '<p><strong>Resolver changes</strong></p>'
+		. '<ul>'
+		. '<li><strong>Network Interfaces</strong> becomes <strong>Localhost</strong>.</li>'
+		. '<li><strong>SSL/TLS Service</strong> is turned off; configure encrypted listeners with <strong>DoT</strong>, <strong>DoH</strong> and <strong>DoQ</strong> below.</li>'
+		. '<li>The Resolver uses loopback ports <code>5353</code> and <code>5354</code>. Its <strong>Listen Port</strong> must use neither port.</li>'
+		. '</ul>'
+		. '<p>A <strong>Custom options</strong> line containing <code>interface:</code>, <code>port:</code> or <code>include:</code>, or an unmatched proxy marker, prevents activation. '
+		. 'A notice identifies the conflict. Adding such a conflict later turns <strong>pfB-DNS</strong> off and restores the Resolver, retaining the conflicting line. '
+		. 'Turning the option off is never refused.</p>'
+		. '<p>Turning <strong>pfB-DNS</strong> off, disabling pfBlockerNG or removing the package restores the saved Resolver settings. '
+		. 'Later edits to the saved <strong>Network Interfaces</strong>, <strong>SSL/TLS Service</strong> and <strong>Custom options</strong> fields are replaced.</p>'
+		. '<p>Disabling the DNS Resolver stops <strong>pfB-DNS</strong>, restores the saved fields and turns this option off; the Resolver remains disabled. '
+		. 'The proxy starts with the Resolver, including during boot, and handles the firewall\'s own DNS lookups.</p>'
+		. '<p><span class="text-danger"><strong>Warning: High availability</strong></span></p>'
+		. '<ol>'
+		. '<li>With DNS Resolver sync enabled, enable <strong>pfB-DNS</strong> on the secondary before the primary. Otherwise the secondary receives the moved Resolver without a saved copy and refuses it on every apply.</li>'
+		. '<li>Disable it on the secondary before disabling it on the primary. Otherwise restored Resolver settings can conflict with the secondary\'s running proxy.</li>'
+		. '</ol>'
+		. '<p>Alternatively, turn DNS Resolver sync off before changing <strong>pfB-DNS</strong>.</p>'
+		. '<p>Unset DNS, DoT, DoH and DoQ interfaces, the DoT setting and port, and the certificate are taken from the DNS Resolver once, the first time this page loads or <strong>pfB-DNS</strong> is turned on; '
+		. 'later Resolver changes do not change them. Explicit DoT choices received through <strong>Sync</strong> are kept.</p>'
+		. '<p><strong>Sync:</strong> the <strong>pfB-DNS</strong> enable toggle is never synced. The saved Resolver settings, listen interfaces and addresses (including VIPs) and the certificate stay per node. '
+		. '<strong>All settings (legacy)</strong> sends the DoT, DoH and DoQ toggles and ports, trusted DoH front ends and DDR settings; '
+		. '<strong>Policy and lists</strong> and <strong>Lists and global settings only (legacy)</strong> send no pfB-DNS settings.</p>'
+		. '<p>Default: <strong>Disabled</strong></p>'
 		. '</div>');
 
 $section->addInput(new Form_Select(
@@ -236,8 +236,8 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DNS Interface(s)'))
-  ->setHelp('Interfaces pfB-DNS answers plain DNS on, at the DNS Resolver\'s Listen Port. Loopback (127.0.0.1 and ::1) is always served: the firewall\'s own lookups go through pfB-DNS. '
-		. 'Localhost: loopback only. All: every address of the firewall. At least one entry is required.');
+  ->setHelp('Interfaces pfB-DNS answers plain DNS on, at the DNS Resolver\'s <strong>Listen Port</strong>. Loopback (<code>127.0.0.1</code> and <code>::1</code>) is always served: the firewall\'s own lookups go through pfB-DNS. '
+		. '<strong>Localhost</strong>: loopback only. <strong>All</strong>: every firewall address. At least one entry is required.');
 
 if ($options_dns_cert) {
 	$section->addInput(new Form_Select(
@@ -266,8 +266,8 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_dot'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Serves DNS over TLS (RFC 7858) from pfB-DNS, with or without DNSBL. Requires the SSL/TLS Certificate selected above.'
-		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+		. 'Serves DNS over TLS (RFC 7858) from pfB-DNS, with or without DNSBL. Requires the <strong>SSL/TLS Certificate</strong> selected above.'
+		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_dot_port',
@@ -286,7 +286,7 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DoT Interface(s)'))
-  ->setHelp('Interface(s) DoT listens on, besides loopback (127.0.0.1 and ::1), which is always served. At least one entry is required.');
+  ->setHelp('Interface(s) DoT listens on, besides loopback (<code>127.0.0.1</code> and <code>::1</code>), which is always served. At least one entry is required.');
 $form->add($section);
 
 $section = new Form_Section('DNS over HTTPS (DoH)');
@@ -297,9 +297,9 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doh'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb-dns</code>). '
-		. 'Requires the SSL/TLS Certificate selected above.'
-		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from pfB-DNS, with or without DNSBL. '
+		. 'Requires the <strong>SSL/TLS Certificate</strong> selected above.'
+		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doh_port',
@@ -318,7 +318,7 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DoH Interface(s)'))
-  ->setHelp('Interface(s) DoH listens on, besides loopback (127.0.0.1 and ::1), which is always served for a local front end. At least one entry is required.');
+  ->setHelp('Interface(s) DoH listens on, besides loopback (<code>127.0.0.1</code> and <code>::1</code>), which is always served for a local front end. At least one entry is required.');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doh_trusted',
@@ -339,9 +339,9 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doq'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Serves DNS over QUIC (RFC 9250) from pfB-DNS, with or without DNSBL. It needs the pfB-DNS binary (<code>pfb-dns</code>). DoQ is UDP. '
-		. 'Requires the SSL/TLS Certificate selected above.'
-		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+		. 'Serves DNS over QUIC (RFC 9250) from pfB-DNS, with or without DNSBL. DoQ is UDP. '
+		. 'Requires the <strong>SSL/TLS Certificate</strong> selected above.'
+		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doq_port',
@@ -360,7 +360,7 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DoQ Interface(s)'))
-  ->setHelp('Interface(s) DoQ listens on, besides loopback (127.0.0.1 and ::1). At least one entry is required.');
+  ->setHelp('Interface(s) DoQ listens on, besides loopback (<code>127.0.0.1</code> and <code>::1</code>). At least one entry is required.');
 $form->add($section);
 
 $section = new Form_Section('Discovery of Designated Resolvers (DDR)');
@@ -374,8 +374,8 @@ $section->addInput(new Form_Checkbox(
   ->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
 		. 'Answers Discovery of Designated Resolvers (RFC 9462) queries for <code>resolver.arpa</code> from pfB-DNS, so that clients that support DDR can find and switch to the encrypted transports enabled above (DoT, DoH, DoQ). '
 		. 'Clients verify the certificate against the address they queried, as an IP address SAN. '
-		. 'Disabled: the DNS Resolver answers these names, as before.'
-		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+		. 'When disabled, the DNS Resolver answers these names.'
+		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
 
 // DoH already listens on 443, so there is no port to leave out
 $pfb_ddr_doh_443 = (new Form_Checkbox(
@@ -393,8 +393,9 @@ $section->addInput($pfb_ddr_doh_443)->setHelp('Some clients might not accept a p
 		. 'If DoH is not already listening on port 443, it will no longer be reachable. '
 		. 'It is intended for users who, for example, serve multiple sites over HTTPS through a reverse proxy, '
 		. 'and who are responsible for configuring that reverse proxy correctly.'
-		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
+		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
 $form->add($section);
+
 
 print ($form);
 print pfb_dns_status_panel(pfb_dns_status());

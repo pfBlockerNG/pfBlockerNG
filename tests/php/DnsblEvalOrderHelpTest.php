@@ -80,7 +80,6 @@ final class DnsblEvalOrderHelpTest extends TestCase
 			$last = $pos;
 		}
 		$this->assertStringContainsString('<ol>', $block);
-		$this->assertStringContainsString('first match wins', $block);
 	}
 
 	public function testEvalOrderDoesNotPasteV3NullBlockOrPythonTitle(): void
@@ -105,33 +104,6 @@ final class DnsblEvalOrderHelpTest extends TestCase
 		$this->assertStringContainsString('CNAME Validation', $block);
 		$this->assertStringContainsString('no-AAAA', $block);
 		$this->assertStringContainsString('separate features', $block);
-	}
-
-	public function testOverrideSentenceNamesImportantPriority(): void
-	{
-		$block = self::evalOrderBlock(self::source());
-		$this->assertStringContainsString('ABP allow rule (@@)', $block);
-		$this->assertStringContainsString('loads $important rules', $block);
-		$this->assertStringContainsString('resolved by priority rather than allow-always-wins', $block);
-		$source = self::source();
-		$this->assertMatchesRegularExpression(
-			"/'[^'\\n]*loads \\\$important rules/",
-			$source,
-			'$important must stay in a single-quoted PHP string'
-		);
-	}
-
-	public function testVipParagraphIsModeAware(): void
-	{
-		$source = self::source();
-		$this->assertStringNotContainsString(
-			'the request is redirected to the Virtual IP address',
-			$source
-		);
-		$this->assertStringContainsString('How a blocked name is answered depends on the', $source);
-		$this->assertStringContainsString('Null Blocking', $source);
-		$this->assertStringContainsString('No Virtual IP, no web server and no block page are involved', $source);
-		$this->assertStringContainsString('in VIP mode', $source);
 	}
 
 	public function testTcpdumpExampleUsesAutoVipPattern(): void

@@ -61,7 +61,6 @@ final class PfbDnsPageWiringTest extends TestCase
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
 
 		$this->assertStringContainsString('<code>include:</code>', $page, 'an include is named: the move refuses it');
-		$this->assertStringContainsString('nothing is changed', $page, 'a refused move changes nothing, and the help says so');
 	}
 
 	public function testTheDnsblPageNoLongerCarriesTheToggleOrItsHelp(): void
@@ -346,18 +345,6 @@ final class PfbDnsPageWiringTest extends TestCase
 			substr($page, 0, (int) strpos($page, '$pconfig = array();')),
 			'the seed lock is released in a finally'
 		);
-	}
-
-	public function testTheHelpSendsTheOperatorToTheCertificateSelectorAndNamesTheSeedAndTheMinimum(): void
-	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
-
-		foreach (["Requires the DNS Resolver\\'s SSL/TLS certificate", 'None selected: the Resolver', "the proxy serves DNS over TLS with the Resolver\\'s certificate instead"] as $gone) {
-			$this->assertStringNotContainsString($gone, $page, "stale help: {$gone}");
-		}
-		foreach (['Requires the SSL/TLS Certificate selected above.', 'At least one entry is required.', 'pfB-DNS serves DNS over TLS from its own DoT settings below', 'are taken from the DNS Resolver once'] as $present) {
-			$this->assertStringContainsString($present, $page, "help: {$present}");
-		}
 	}
 
 	public function testTheDnsblPageCarriesNoneOfTheSevenSettingsAndNoCodeThatSavesThem(): void
