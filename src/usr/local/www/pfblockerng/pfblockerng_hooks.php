@@ -396,7 +396,7 @@ $section->add($group);
 $form->add($section);
 print($form);
 print_callout(gettext('Hooks run during every update, including <strong>Run Now</strong> and the automatic apply of saved '
-	. 'changes. Saving this page does not run them.'));
+	. 'changes. Saving this page does not run them immediately.'));
 
 // Client-side convenience: keep each row's Script picker in sync with its Pre/Post
 // selection (the file prefix decides which scripts apply). Pure progressive

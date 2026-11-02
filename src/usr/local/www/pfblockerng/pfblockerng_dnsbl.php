@@ -2712,7 +2712,7 @@ $tld_wildcard_text = 'Block listed domains and their subdomains. '
 		A specific subdomain added to the <strong>DNSBL Whitelist</strong> is allowed even when its parent is wildcard blocked.<br />
 		To allow a domain and its subdomains, add <code>.example.com</code> to <strong>DNSBL Whitelist</strong>.<br /><br />
 
-		<strong>TLD Blacklist</strong>, can be used to block whole TLDs. For example: <code>xyz</code><br />
+		<strong>TLD Blacklist</strong> can be used to block whole TLDs. For example: <code>xyz</code><br />
 
 
 

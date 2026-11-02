@@ -112,7 +112,7 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	# floors an empty/non-numeric/zero value to its own default, so a degraded value can
 	# never restore an unbounded wait.
 	pathpfbphp=/usr/local/www/pfblockerng/pfblockerng.php
-	# issue #2851: the operator's budget (General -> Advanced, 'Nested pass timeout'),
+	# issue #2851: the operator's budget (General -> Advanced, 'Database download timeout'),
 	# normalized to the accepted window here -- the boundary where the stored value enters
 	# this process -- exactly as pfb_reentry_budget() normalizes it in PHP.
 	# issue #3140: PHP exports PFB_REENTRY_TIMEOUT per sync pass; prefer it and pay the

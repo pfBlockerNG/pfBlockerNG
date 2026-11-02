@@ -4715,7 +4715,7 @@ if (!$alert_summary):
 		<dt><i class="fa-solid fa-trash-can"></i></dt>
 			<dd><?=gettext('IP/Domain is already Whitelisted');?></dd>
 		<dt><i class="fa-regular fa-trash-can"></i></dt>
-			<dd><?=gettext('Domain is in the TLD Exclusion customlist');?></dd>
+			<dd><?=gettext('Domain is in the <strong>TLD Exclusion List</strong>');?></dd>
 		<dt><i class="fa-solid fa-lock text-danger"></i></dt>
 			<dd><?=gettext('IP/Domain is locked');?></dd>
 		<dt><i class="fa-solid fa-unlock"></i></dt>
