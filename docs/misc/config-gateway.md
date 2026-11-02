@@ -19,7 +19,7 @@ or checking foreign-key exclusions.
 - **Path addressing (issue #1931):** registry keys = `'<alias>/<config-key>'` path
   strings — `'gen/pfb_keep'`, `'ip/suppression'` — alias resolved through
   `PFB_SECTIONS` map (`gen`/`dnsbl`/`ss`/`ip`/`rep`, plus `global`/`sync` since
-  issue #2123, and `dns` since issue #3515), single home of eight real section paths. Same-named keys in different
+  issue #2123, `dns` since issue #3515, and `dns_shared` since issue #3649), single home of real section paths. Same-named keys in different
   sections cannot collide — which is what lets #2123 register the DNSBL page's
   `dnsbl/auto*` scalars while the identically named per-feed-row and per-continent keys
   stay foreign. Bare-name lookups throw (`InvalidArgumentException`) — no dual
@@ -231,35 +231,51 @@ Authorization = property of **write**, not call site (generalises
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
     the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
     service script. Package removal can instead be retried directly after the repair.
-  - **`dns/pfb_dns_doh` / `dns/pfb_dns_doq` → `PfbToggle`** (issue #3513, the pfB-DNS section): default Off, sync
+  - **`dns_shared/pfb_dns_doh` / `dns_shared/pfb_dns_doq` → `PfbToggle`** (issue #3513, the pfB-DNS section): default Off, sync
     `local`; serve DoH / DoQ from pfB-DNS through the Go binary, with or without DNSBL. New keys, no grandfather:
     absent reads Off = pre-feature behaviour. They never lived anywhere else in a release: the first version kept them
     on the DNSBL page as `dnsbl/pfb_dns_proxy_doh` and `_doq`, which are retired without an alias or a migration.
-  - **`dns/pfb_dns_doh_port` / `dns/pfb_dns_doq_port`** (issue #3513, plain strings): defaults `'4443'` / `'853'`,
+  - **`dns_shared/pfb_dns_doh_port` / `dns_shared/pfb_dns_doq_port`** (issue #3513, plain strings): defaults `'4443'` / `'853'`,
     sync `local`; the page validates a whole number 1-65535 and stores it without leading zeros. New keys, no
     grandfather.
   - **`dns/pfb_dns_doh_interface` / `dns/pfb_dns_doq_interface`** (issue #3513, plain strings): comma-joined
     configured interface names, default `''` = not seeded yet, filled from `dns/pfb_dns_interface` by
     `pfb_dns_proxy_seed()`, sync `local`. New keys, no grandfather.
-  - **`dns/pfb_dns_doh_trusted`** (issue #3513, plain string): space-joined IPs/CIDRs of front ends trusted to
+  - **`dns_shared/pfb_dns_doh_trusted`** (issue #3513, plain string): space-joined IPs/CIDRs of front ends trusted to
     send PROXY protocol v2 / X-Forwarded-For, default `''`, sync `local`. New key, no grandfather. These seven and the
     five #3538 keys below are written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`, under
     `pfb_dns_config_lock()` beside the toggle), read through `PfbConfig::read()` by `pfb_dns_proxy_service()`.
-  - **`dns/pfb_dns_interface` / `dns/pfb_dns_dot` / `dns/pfb_dns_dot_port` / `dns/pfb_dns_dot_interface` /
+  - **`dns/pfb_dns_interface` / `dns_shared/pfb_dns_dot` / `dns_shared/pfb_dns_dot_port` / `dns/pfb_dns_dot_interface` /
     `dns/pfb_dns_sslcertref`** (issue #3538, pfB-DNS's own listener settings): defaults `''` (interface, DoT
-    interface, certificate), Off (`dns/pfb_dns_dot`, a `PfbToggle`) and `'853'` (DoT port), sync `local`. New keys,
+    interface, certificate), Off (`dns_shared/pfb_dns_dot`, a `PfbToggle`) and `'853'` (DoT port), sync `local`. New keys,
     no grandfather. `pfb_dns_proxy_seed()` fills each one not seeded yet, from the DNS Resolver or, once pfB-DNS has
     moved it, from its snapshot, on every apply that turns the proxy on. The seed is keyed on
-    `dns/pfb_dns_interface` being `''`, not on absence: the installer's registry pass materialises every absent key's
-    default, so absence cannot mark "never seeded". The pfB-DNS page seeds on load (under the same lock) and shows a
+    `dns/pfb_dns_interface` being `''`. Shared DoT enable/port keys are left absent by the registry pass until this seed;
+    existing explicit values (including received Off/empty choices) are never replaced. The pfB-DNS page seeds on load and shows a
     setting through `pfb_dns_proxy_setting()`, so a seed the lock refused still shows; its save writes all twelve and the two DDR keys below.
-  - **`dns/pfb_dns_ddr` / `dns/pfb_dns_ddr_doh_443` → `PfbToggle`** (issue #3583, pfB-DNS's DDR answers, RFC 9462): default
+  - **`dns_shared/pfb_dns_ddr` / `dns_shared/pfb_dns_ddr_doh_443` → `PfbToggle`** (issue #3583, pfB-DNS's DDR answers, RFC 9462): default
     Off, sync `local`. New keys, no grandfather: absent reads Off = pre-feature behaviour (the gateway does not touch
     `resolver.arpa.`). The second one leaves the port out of the DDR DoH record and does nothing while DDR is Off. Both
     are written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`) and read through `PfbConfig::read()` by
     `pfb_dns_proxy_ddr_flags()` for the gateway's `--ddr` and `--ddr-doh-443`. The page disables the second checkbox while
     the STORED DoH port is `443` (`pfb_dns_proxy_ddr_doh_443_locked()`, no port to leave out); a disabled control posts
     nothing, so the save keeps the stored value of that toggle then, and takes the posted one at any other stored port.
+  - **pfB-DNS legacy sync split (issue #3649).** `dns_shared` resolves to
+    `installedpackages/pfblockerngdnssettings/config/0`. Its nine fields are the DoT/DoH/DoQ toggles
+    and ports, trusted DoH front ends, DDR and DDR DoH-on-443. Registry `sync: local` means
+    excluded from **Policy and lists**; **All settings (legacy)** alone sends this whole section
+    on either transport. **Lists and global settings only (legacy)** excludes it. Node enable,
+    Resolver snapshot, all four interface/address lists (VIPs included), and certificate reference
+    stay in `dns` and are never transmitted. The legacy wire methods/receive merge are unchanged.
+    Migration `issue3649-dns-settings-split` moves raw values before registry writeback, retains
+    all node-local fields, and removes only the nine retired locations. Already-received explicit
+    values win over stale old keys; a second run writes nothing. The registry pass preserves
+    these values even when its pre-migration section mode was NEWCFG. An old manual receiver stores
+    the new section inertly; an old automatic receiver ignores it. Neither receives the sender's
+    node enable or Resolver snapshot.
+    Package downgrade remains unsupported: an older package cannot consume the new shared section,
+    but retains its own snapshot and node-local settings. Restore the pre-upgrade configuration
+    backup or reinstall the current package; never copy another node's snapshot or erase one to downgrade.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. Section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,

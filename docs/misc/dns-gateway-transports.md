@@ -16,7 +16,7 @@ as one PEM text. The gateway does not read `config.xml`. It has the certificate 
    key that is neither encrypted nor another certificate's; it replaces the file by rename, when the certificate changed, at every
    apply, at every cron tick (15 minutes) and at a start that finds no file. The gateway reads it once, as root, before the privilege
    drop, and not at all unless `--dot-listen`, `--doh-listen` or `--doq-listen` is given. It never looks at the file again: what is in
-   it after the start is none of the running gateway's business. The DoT port is `--dot-port`, from `dns/pfb_dns_dot_port`
+   it after the start is none of the running gateway's business. The DoT port is `--dot-port`, from `dns_shared/pfb_dns_dot_port`
    (853 by default). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked for a
    passphrase).
 2. **While it runs, as a push on the control socket** (`--ctl-socket`, `/var/run/pfb_dns/ctl.sock`), from root. The gateway is

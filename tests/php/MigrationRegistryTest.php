@@ -96,13 +96,13 @@ final class MigrationRegistryTest extends TestCase
 	 * S2: the other four migrations folded into pfb_registry_pass(); issue #1907
 	 * adds the bespoke python-gated-toggles migration, positioned immediately
 	 * before ADR-02 -- it must run while dnsbl_mode still evidences pre-upgrade
-	 * Unbound mode, which ADR-02 overwrites. issue #3452's Sync scope migration is appended last.
+	 * Unbound mode, which ADR-02 overwrites. The Sync scope and pfB-DNS section-split migrations follow.
 	 */
-	public function testRegistryHasSevenEntriesInOrder(): void
+	public function testRegistryHasEightEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(7, $registry);
+		$this->assertCount(8, $registry);
 
 		// issue #3288: the DNSBL Default/Override policy migration runs first.
 		$this->assertSame('issue3288-dnsbl-policy-migrate', $registry[0]['id']);
@@ -119,6 +119,7 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertSame('issue2308-quarter-hour-schedule', $registry[5]['id']);
 		// issue #3452: the Sync scope migration reads only the Sync section.
 		$this->assertSame('issue3452-sync-scope-migrate', $registry[6]['id']);
+		$this->assertSame('issue3649-dns-settings-split', $registry[7]['id']);
 	}
 
 	/**

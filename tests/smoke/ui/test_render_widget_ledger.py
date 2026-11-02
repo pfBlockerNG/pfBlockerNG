@@ -566,11 +566,10 @@ def test_pfb_dns_row_shows_only_while_pfb_dns_is_on(
     helpers.set_package_enabled(vm, True)
     # A stored interface makes the stored transport toggles authoritative (else the Resolver's settings seed them)
     settings = {"pfb_dns_interface": "lan", "pfb_dns_dot": "", "pfb_dns_doh": "", "pfb_dns_doq": ""}
-    dns_cfg = CFG_PFB_DNS.rsplit("/", 1)[0]
-    originals = {key: helpers.config_get_state(vm, f"{dns_cfg}/{key}") for key in [*settings, "pfb_dns"]}
+    originals = {key: helpers.config_get_state(vm, helpers.dns_config_path(key)) for key in [*settings, "pfb_dns"]}
     try:
         for key, value in settings.items():
-            helpers.config_set(vm, f"{dns_cfg}/{key}", value)
+            helpers.config_set(vm, helpers.dns_config_path(key), value)
         helpers.config_set(vm, CFG_PFB_DNS, "")
         assert "PFBDNSSTATUS_" not in _widget_body(webui), "the page shows a pfB-DNS row while pfB-DNS is off"
         assert "PFBDNSSTATUS_" not in _widget_header_payload(webui), (
@@ -600,4 +599,4 @@ def test_pfb_dns_row_shows_only_while_pfb_dns_is_on(
         assert lines[0].split("||")[2].startswith("Not in use: ")
     finally:
         for key, state in originals.items():
-            helpers.config_restore_state(vm, f"{dns_cfg}/{key}", state)
+            helpers.config_restore_state(vm, helpers.dns_config_path(key), state)

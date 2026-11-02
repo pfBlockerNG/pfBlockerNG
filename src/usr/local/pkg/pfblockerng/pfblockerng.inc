@@ -4262,6 +4262,12 @@ function pfb_dns_proxy_seed_values(): array {
 		$values['pfb_dns_dot'] = $ssl ? PfbToggle::On : PfbToggle::Off;
 		$values['pfb_dns_dot_port'] = pfb_dns_proxy_listener_port($tlsport) ?? '853';
 		$values['pfb_dns_sslcertref'] = $sslcertref;
+		// A peer's explicit transport choices must survive first-load interface seeding (#3649).
+		foreach (PfbConfig::readSection(PFB_SECTIONS['dns_shared']) as $key => $value) {
+			if ($key === 'pfb_dns_dot' || $key === 'pfb_dns_dot_port') {
+				unset($values[$key]);
+			}
+		}
 	}
 	$list = $values['pfb_dns_interface'] ?? $stored;
 	foreach (['pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface'] as $key) {
@@ -4278,7 +4284,7 @@ function pfb_dns_proxy_seed_values(): array {
  */
 function pfb_dns_proxy_setting(string $key): mixed {
 	$seed = pfb_dns_proxy_seed_values();
-	return array_key_exists($key, $seed) ? $seed[$key] : PfbConfig::read("dns/{$key}");
+	return array_key_exists($key, $seed) ? $seed[$key] : PfbConfig::read(pfb_dns_config_key($key));
 }
 
 /**
@@ -4288,7 +4294,7 @@ function pfb_dns_proxy_setting(string $key): mixed {
 function pfb_dns_proxy_seed(): bool {
 	$values = pfb_dns_proxy_seed_values();
 	foreach ($values as $key => $value) {
-		PfbConfig::writeSystem("dns/{$key}", $value);
+		PfbConfig::writeSystem(pfb_dns_config_key($key), $value);
 	}
 	return $values !== [];
 }
@@ -4372,7 +4378,7 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
  * gateway reads it), so that there is no port to leave out? The save keeps the stored toggle while this holds (issue #3583).
  */
 function pfb_dns_proxy_ddr_doh_443_locked(): bool {
-	return pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443';
+	return pfb_dns_proxy_listener_port(PfbConfig::read('dns_shared/pfb_dns_doh_port')) === '443';
 }
 
 /**
@@ -4388,7 +4394,7 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 	$stored = ['pfb_dns_interface' => $list('pfb_dns_interface')];
 	foreach (['dot', 'doh', 'doq'] as $kind) {
 		$stored["pfb_dns_{$kind}"] = pfb_filter($post["pfb_dns_{$kind}"] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
-		$stored["pfb_dns_{$kind}_port"] = pfb_dns_proxy_listener_port($post["pfb_dns_{$kind}_port"] ?? '') ?? PfbConfig::read("dns/pfb_dns_{$kind}_port");
+		$stored["pfb_dns_{$kind}_port"] = pfb_dns_proxy_listener_port($post["pfb_dns_{$kind}_port"] ?? '') ?? PfbConfig::read("dns_shared/pfb_dns_{$kind}_port");
 		$stored["pfb_dns_{$kind}_interface"] = $list("pfb_dns_{$kind}_interface");
 		if ($kind === 'doh') {
 			$stored['pfb_dns_doh_trusted'] = implode(' ', pfb_dns_proxy_tokens((string) ($post['pfb_dns_doh_trusted'] ?? '')));
@@ -4399,7 +4405,7 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 	$stored['pfb_dns_ddr'] = pfb_filter($post['pfb_dns_ddr'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
 	// issue #3583: a control the page disables posts nothing, so its stored value stays
 	$stored['pfb_dns_ddr_doh_443'] = pfb_dns_proxy_ddr_doh_443_locked()
-	    ? PfbConfig::read('dns/pfb_dns_ddr_doh_443')->toStored()
+	    ? PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443')->toStored()
 	    : (pfb_filter($post['pfb_dns_ddr_doh_443'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '');
 	return $stored;
 }
@@ -4435,7 +4441,7 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 		}
 		$flags .= " --{$kind}-port " . escapeshellarg($port);
 		if ($kind === 'doh') {
-			foreach (pfb_dns_proxy_tokens((string) PfbConfig::read('dns/pfb_dns_doh_trusted')) as $entry) {
+			foreach (pfb_dns_proxy_tokens((string) PfbConfig::read('dns_shared/pfb_dns_doh_trusted')) as $entry) {
 				if (pfb_dns_proxy_trusted_entry($entry)) {
 					$flags .= ' --doh-trusted ' . escapeshellarg(strpos($entry, '/') !== FALSE ? $entry : $entry . (strpos($entry, ':') !== FALSE ? '/128' : '/32'));
 				}
@@ -4446,15 +4452,15 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 }
 
 /**
- * The gateway's --ddr arguments while DDR is on (dns/pfb_dns_ddr, issue #3583): the firewall's FQDN, and --ddr-doh-443 when
- * dns/pfb_dns_ddr_doh_443 is on too. That option alone adds nothing: the gateway rejects it without --ddr.
+ * The gateway's --ddr arguments while DDR is on (dns_shared/pfb_dns_ddr, issue #3583): the firewall's FQDN, and --ddr-doh-443 when
+ * dns_shared/pfb_dns_ddr_doh_443 is on too. That option alone adds nothing: the gateway rejects it without --ddr.
  */
 function pfb_dns_proxy_ddr_flags(): string {
-	if (PfbConfig::read('dns/pfb_dns_ddr') !== PfbToggle::On) {
+	if (PfbConfig::read('dns_shared/pfb_dns_ddr') !== PfbToggle::On) {
 		return '';
 	}
 	return ' --ddr ' . escapeshellarg(config_get_path('system/hostname', 'pfSense') . '.' . config_get_path('system/domain', 'localdomain')) .
-	    ((PfbConfig::read('dns/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '');
+	    ((PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '');
 }
 
 // Ranges pfB-DNS never warns about (issue #3583): the private and local ones a public CA cannot certify (RFC 9462 section 4.3), and the
@@ -4514,7 +4520,7 @@ function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
  * The pfB-DNS page's DDR certificate warnings (issue #3583), from the stored settings: with DDR on and a certificate selected, one text per
  * public address that DoT, DoH or DoQ listens on and that is not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462
  * section 4.2) checks the address it queried against that SAN, so it will not use those transports there. The DoH listener is left out
- * while dns/pfb_dns_ddr_doh_443 is on and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose certificate
+ * while dns_shared/pfb_dns_ddr_doh_443 is on and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose certificate
  * is not visible here (on 443 they reach this listener, so it is checked). Never blocks a save.
  *
  * @return list<string> HTML, each text starting "DDR: " and naming the address and the transports it serves
@@ -5023,8 +5029,8 @@ function pfb_dns_proxy_certificate_sync(): void {
  * transport is wanted. A start that finds the file missing, which is /var after a boot with RAM disks, has PHP write it first, and
  * forgets what was pushed to the proxy it replaces. DoT, DoH and DoQ each listen on their own interface list's addresses and on loopback
  * (--dot-listen, --doh-listen, --doq-listen) at their own port (pfb_dns_proxy_tls_flags()).
- * DDR (RFC 9462): with dns/pfb_dns_ddr On the line also carries, after the TLS flags, --ddr FQDN (system/hostname.system/domain) and, with
- * dns/pfb_dns_ddr_doh_443 On too, --ddr-doh-443 (pfb_dns_proxy_ddr_flags()); a changed setting changes the script and restarts the proxy.
+ * DDR (RFC 9462): with dns_shared/pfb_dns_ddr On the line also carries, after the TLS flags, --ddr FQDN (system/hostname.system/domain) and, with
+ * dns_shared/pfb_dns_ddr_doh_443 On too, --ddr-doh-443 (pfb_dns_proxy_ddr_flags()); a changed setting changes the script and restarts the proxy.
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
@@ -19061,6 +19067,12 @@ function pfb_registry_pass(array $sections, ?array $registry = NULL, ?array $mod
 		[$alias, $key] = explode('/', $path_key, 2);
 		$section = PFB_SECTIONS[$alias];
 		$blob    = $result[$section];
+		// Migrated/received values predate this section's captured NEWCFG mode (#3649).
+		// Unset DoT choices belong to the first Resolver seed, not the registry default.
+		if ($alias === 'dns_shared' && (array_key_exists($key, $blob) ||
+		    in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE))) {
+			continue;
+		}
 		$map     = $entry['grandfather'] ?? array();
 
 		// issue #1921: the registered default, stabilised through the map's own
@@ -25700,6 +25712,14 @@ function pfblockerng_sync_sections($include_interfaces) {
 }
 
 /**
+ * Legacy-only sections: never extend the policy projection with node listener settings (#3649).
+ * @return list<string>
+ */
+function pfb_sync_legacy_sections(bool $all): array {
+	return $all ? [...pfblockerng_sync_sections(TRUE), 'pfblockerngdnssettings'] : pfblockerng_sync_sections(FALSE);
+}
+
+/**
  * pfb_sync_path_is_local — TRUE when the section-relative key path $rel of a deny-list synced
  * section is receiver-local under the pfb_sync_local_paths() schema $local (issue #3450). The
  * projection and the receive merge (issue #3451) share this deny-list rule.
@@ -26203,7 +26223,7 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 		$method = 'merge_installedpackages_section';
 
 		// 'lists' removes the General/IP/DNSBL tab sections from the sync (#2123).
-		$sections = pfblockerng_sync_sections($scope === 'all');
+		$sections = pfb_sync_legacy_sections($scope === 'all');
 
 		/* xml will hold the sections to sync */
 		$xml = array();
@@ -26280,7 +26300,7 @@ function pfblockerng_plugin_xmlrpc_send() {
 		'installedpackages/pfblockerngsync/config/0/varsynconchanges'
 	];
 	// 'lists' removes the General/IP/DNSBL tab sections from the sync (#2123).
-	$sections = pfblockerng_sync_sections($scope === 'all');
+	$sections = pfb_sync_legacy_sections($scope === 'all');
 	foreach ($sections as $section) {
 		$section_paths_temp[] = "installedpackages/{$section}";
 	}
@@ -27171,7 +27191,7 @@ function pfblockerng_plugin_xmlrpc_recv($new_sections) {
 	}
 
 	$section_paths = [];
-	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+	foreach (pfb_sync_legacy_sections(TRUE) as $section) {
 		$section_paths[] = "installedpackages/{$section}";
 	}
 

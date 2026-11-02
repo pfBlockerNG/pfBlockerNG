@@ -1894,7 +1894,7 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
     """
     vm = smoke_vm
     originals = {
-        key: helpers.config_get_state(vm, DNS_PROXY_CFG + key)
+        key: helpers.config_get_state(vm, helpers.dns_config_path(key))
         for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS)
     }
     original_cert = helpers.config_get_state(vm, CERT_CFG)
@@ -1921,12 +1921,12 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
     expected = {**valid, "pfb_dns_doh_trusted": "192.0.2.10 2001:db8::/32"}
 
     def stored() -> dict[str, str]:
-        return {key: helpers.config_get(vm, DNS_PROXY_CFG + key) for key in DNS_PROXY_LISTENER_KEYS}
+        return {key: helpers.config_get(vm, helpers.dns_config_path(key)) for key in DNS_PROXY_LISTENER_KEYS}
 
     try:
         helpers.config_set(vm, CERT_CFG, "")
         for key, value in seeded.items():
-            helpers.config_set(vm, DNS_PROXY_CFG + key, value)
+            helpers.config_set(vm, helpers.dns_config_path(key), value)
         assert stored() == seeded, "seed did not take: DoH/DoQ must start Off with the default ports"
 
         accepted = webui.post(DNS_PAGE, posted, timeout=SAVE_TIMEOUT)
@@ -1956,20 +1956,20 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
         assert stored() == expected, "a rejected Save must leave config.xml unchanged"
     finally:
         for key, state in originals.items():
-            helpers.config_restore_state(vm, DNS_PROXY_CFG + key, state)
+            helpers.config_restore_state(vm, helpers.dns_config_path(key), state)
         helpers.config_restore_state(vm, CERT_CFG, original_cert)
 
 
 # issue #3583: DDR and DoH on port 443, saved like the other pfB-DNS toggles: posted `on` is stored `on`, posted `''`
 # is stored as the empty Off token.
-DDR_CFG = DNS_PROXY_CFG + "pfb_dns_ddr"
-DDR_443_CFG = DNS_PROXY_CFG + "pfb_dns_ddr_doh_443"
+DDR_CFG = helpers.dns_config_path("pfb_dns_ddr")
+DDR_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443")
 
 
 @contextlib.contextmanager
 def _dns_page_settings_restored(vm: helpers.SmokeVM) -> Iterator[None]:
     """Every pfB-DNS setting the page's Save writes, put back (presence included) on the way out."""
-    paths = [DNS_PROXY_CFG + key for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS)]
+    paths = [helpers.dns_config_path(key) for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS)]
     paths += [CERT_CFG, DDR_CFG, DDR_443_CFG]
     originals = {path: helpers.config_get_state(vm, path) for path in paths}
     try:
@@ -1993,7 +1993,7 @@ def test_pfb_dns_ddr_toggles_save_on_and_clearing_both_stores_the_off_tokens(
 
     Given both stored Off and the stored DoH port 4443 (seeded directly, so the before-state does not depend on the
       save path under test; the 443 checkbox renders disabled on port 443),
-    When the page's Save posts both on, Then `dns/pfb_dns_ddr` and `dns/pfb_dns_ddr_doh_443` are stored `on`;
+    When Save posts both on, Then `dns_shared/pfb_dns_ddr` and `dns_shared/pfb_dns_ddr_doh_443` are stored `on`;
     When it posts both as `''` (WebUI.post cannot omit a key, so an absent key is not exercised here), Then both are
       stored `''`.
     """
@@ -2003,7 +2003,7 @@ def test_pfb_dns_ddr_toggles_save_on_and_clearing_both_stores_the_off_tokens(
         return helpers.config_get(vm, DDR_CFG), helpers.config_get(vm, DDR_443_CFG)
 
     with _dns_page_settings_restored(vm):
-        helpers.config_set(vm, DNS_PROXY_CFG + "pfb_dns_doh_port", "4443")
+        helpers.config_set(vm, helpers.dns_config_path("pfb_dns_doh_port"), "4443")
         helpers.config_set(vm, DDR_CFG, "")
         helpers.config_set(vm, DDR_443_CFG, "")
         assert stored() == ("", ""), f"seed did not take: both DDR toggles must start Off, got {stored()}"
@@ -2012,7 +2012,8 @@ def test_pfb_dns_ddr_toggles_save_on_and_clearing_both_stores_the_off_tokens(
             assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
             now = stored()
             assert now == expected, (
-                f"Save posting both toggles as {posted!r}: stored (dns/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443) "
+                f"Save posting both toggles as {posted!r}: "
+                "stored (dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443) "
                 f"expected {expected}, got {now}; the page's input errors: {_input_errors_text(saved.text)}"
             )
 

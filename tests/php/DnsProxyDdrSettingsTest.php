@@ -146,9 +146,9 @@ final class DnsProxyDdrSettingsTest extends TestCase
 	{
 		// Given the stored DoH port and 443 toggle; the form posts the port field either way
 		if ($storedPort !== NULL) {
-			PfbConfig::write('dns/pfb_dns_doh_port', $storedPort);
+			PfbConfig::write('dns_shared/pfb_dns_doh_port', $storedPort);
 		}
-		PfbConfig::write('dns/' . self::DOH_443, $storedToggle);
+		PfbConfig::write(pfb_dns_config_key(self::DOH_443), $storedToggle);
 		$post = $this->post();
 		unset($post[self::DOH_443]);
 		if ($posted !== NULL) {
@@ -165,16 +165,16 @@ final class DnsProxyDdrSettingsTest extends TestCase
 	public function testOnlyTheStoredDohPortDecidesWhetherTheControlWasDisabledNotThePostedOne(): void
 	{
 		// Given the stored port 4443 (the checkbox was enabled)
-		PfbConfig::write('dns/pfb_dns_doh_port', '4443');
-		PfbConfig::write('dns/' . self::DOH_443, '');
+		PfbConfig::write('dns_shared/pfb_dns_doh_port', '4443');
+		PfbConfig::write(pfb_dns_config_key(self::DOH_443), '');
 		$this->assertSame('on', pfb_dns_proxy_listeners_stored($this->post(['pfb_dns_doh_port' => '4443', self::DOH_443 => 'on']))[self::DOH_443] ?? NULL, 'before: the same post with the port left alone');
 
 		// Then a post that moves DoH to 443 in the same save still takes the posted toggle
 		$this->assertSame('on', pfb_dns_proxy_listeners_stored($this->post(['pfb_dns_doh_port' => '443', self::DOH_443 => 'on']))[self::DOH_443] ?? NULL);
 
 		// And with the stored port 443 (control disabled, nothing posted) a post that moves DoH away keeps the stored On
-		PfbConfig::write('dns/pfb_dns_doh_port', '443');
-		PfbConfig::write('dns/' . self::DOH_443, 'on');
+		PfbConfig::write('dns_shared/pfb_dns_doh_port', '443');
+		PfbConfig::write(pfb_dns_config_key(self::DOH_443), 'on');
 		$post = $this->post(['pfb_dns_doh_port' => '4443']);
 		unset($post[self::DOH_443]);
 		$this->assertSame('on', pfb_dns_proxy_listeners_stored($post)[self::DOH_443] ?? NULL);
@@ -182,8 +182,8 @@ final class DnsProxyDdrSettingsTest extends TestCase
 
 	public function testTheDdrToggleIsAlwaysTakenFromThePostWhateverTheStoredDohPort(): void
 	{
-		PfbConfig::write('dns/pfb_dns_doh_port', '443');
-		PfbConfig::write('dns/' . self::DDR, 'on');
+		PfbConfig::write('dns_shared/pfb_dns_doh_port', '443');
+		PfbConfig::write(pfb_dns_config_key(self::DDR), 'on');
 		$post = $this->post();
 		unset($post[self::DDR]);
 

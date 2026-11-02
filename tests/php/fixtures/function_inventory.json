@@ -1706,6 +1706,19 @@
             }
         ]
     },
+    "pfb_dns_config_key": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_config_lock": {
         "returnsRef": false,
         "returnType": null,
@@ -2717,6 +2730,19 @@
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_dns_settings_migrate": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
     },
     "pfb_dns_status": {
         "returnsRef": false,
@@ -14556,6 +14582,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_legacy_sections": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "all",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
                 "default": null
             }
         ]

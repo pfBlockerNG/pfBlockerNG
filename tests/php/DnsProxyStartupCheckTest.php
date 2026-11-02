@@ -42,7 +42,6 @@ final class DnsProxyStartupCheckTest extends TestCase
 	private const ID = 'pfBlockerNG DNS Proxy startup';
 	private const URL = '/pfblockerng/pfblockerng_dns.php';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
-	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 
 	private const HEAD = 'pfB-DNS started with problems: ';
 	private const TAIL = ' Correct the settings on the pfB-DNS page or the cause named, then run an Update.';
@@ -132,7 +131,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::shared())];
 		foreach ($settings + ['pfb_dns_interface' => 'lan', 'pfb_dns_sslcertref' => 'cert1'] as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 		$names = array_keys($v4 + $v6);
 		$GLOBALS['pfb_test_interface_ip'] = $v4;

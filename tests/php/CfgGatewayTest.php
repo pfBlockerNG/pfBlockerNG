@@ -159,9 +159,9 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
-			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
-			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
-			'dns/pfb_dns_dot' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_dot',
+			'dns_shared/pfb_dns_doh' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh',
+			'dns_shared/pfb_dns_doq' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq',
+			'dns_shared/pfb_dns_dot' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
 			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
@@ -200,9 +200,9 @@ final class CfgGatewayTest extends TestCase
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'dns/pfb_dns'    => 'installedpackages/pfblockerngdns/config/0/pfb_dns',
-			'dns/pfb_dns_doh' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doh',
-			'dns/pfb_dns_doq' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_doq',
-			'dns/pfb_dns_dot' => 'installedpackages/pfblockerngdns/config/0/pfb_dns_dot',
+			'dns_shared/pfb_dns_doh' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh',
+			'dns_shared/pfb_dns_doq' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq',
+			'dns_shared/pfb_dns_dot' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -460,14 +460,14 @@ final class CfgGatewayTest extends TestCase
 	/** @return array<string,array{string}> */
 	public static function dnsProxyListenerToggleKeys(): array
 	{
-		return ['DoT' => ['dns/pfb_dns_dot'], 'DoH' => ['dns/pfb_dns_doh'], 'DoQ' => ['dns/pfb_dns_doq'], 'DDR' => ['dns/pfb_dns_ddr'], 'DDR DoH on 443' => ['dns/pfb_dns_ddr_doh_443']];
+		return ['DoT' => ['dns_shared/pfb_dns_dot'], 'DoH' => ['dns_shared/pfb_dns_doh'], 'DoQ' => ['dns_shared/pfb_dns_doq'], 'DDR' => ['dns_shared/pfb_dns_ddr'], 'DDR DoH on 443' => ['dns_shared/pfb_dns_ddr_doh_443']];
 	}
 
 	/** issue #3513: DoH/DoQ are opt-in; an absent key must leave them off. */
 	#[DataProvider('dnsProxyListenerToggleKeys')]
 	public function testDnsProxyListenerTogglesAreOffWhenAbsent(string $key): void
 	{
-		$this->assertNull(config_get_path('installedpackages/pfblockerngdns/config/0/' . substr($key, 4)));
+		$this->assertNull(config_get_path(PFB_SECTIONS[explode('/', $key, 2)[0]] . '/' . explode('/', $key, 2)[1]));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read($key), "{$key} absent -> Off (default)");
 	}
 
@@ -475,12 +475,12 @@ final class CfgGatewayTest extends TestCase
 	public static function dnsProxyListenerStringKeys(): array
 	{
 		return [
-			'DoH port'       => ['dns/pfb_dns_doh_port', '4443', '8443'],
+			'DoH port'       => ['dns_shared/pfb_dns_doh_port', '4443', '8443'],
 			'DoH interfaces' => ['dns/pfb_dns_doh_interface', '', 'lan,opt1'],
-			'DoH trusted'    => ['dns/pfb_dns_doh_trusted', '', '192.0.2.10 2001:db8::/32'],
-			'DoQ port'       => ['dns/pfb_dns_doq_port', '853', '8853'],
+			'DoH trusted'    => ['dns_shared/pfb_dns_doh_trusted', '', '192.0.2.10 2001:db8::/32'],
+			'DoQ port'       => ['dns_shared/pfb_dns_doq_port', '853', '8853'],
 			'DoQ interfaces' => ['dns/pfb_dns_doq_interface', '', 'lan'],
-			'DoT port'            => ['dns/pfb_dns_dot_port', '853', '8853'],
+			'DoT port'            => ['dns_shared/pfb_dns_dot_port', '853', '8853'],
 			'DoT interfaces'      => ['dns/pfb_dns_dot_interface', '', 'lan'],
 			'listener interfaces' => ['dns/pfb_dns_interface', '', 'lan,opt1'],
 			'certificate'         => ['dns/pfb_dns_sslcertref', '', 'cert123'],
@@ -491,7 +491,7 @@ final class CfgGatewayTest extends TestCase
 	#[DataProvider('dnsProxyListenerStringKeys')]
 	public function testDnsProxyListenerStringSettingsDefaultWhenAbsentAndRoundTripVerbatim(string $key, string $default, string $value): void
 	{
-		$path = 'installedpackages/pfblockerngdns/config/0/' . substr($key, 4);
+		$path = PFB_SECTIONS[explode('/', $key, 2)[0]] . '/' . explode('/', $key, 2)[1];
 		$this->assertNull(config_get_path($path), 'precondition: absent');
 		$this->assertSame($default, PfbConfig::read($key), "{$key} absent -> registered default");
 
@@ -503,7 +503,7 @@ final class CfgGatewayTest extends TestCase
 	/** @return array<string,array{string}> */
 	public static function ddrKeys(): array
 	{
-		return ['DDR' => ['dns/pfb_dns_ddr'], 'DDR DoH on port 443' => ['dns/pfb_dns_ddr_doh_443']];
+		return ['DDR' => ['dns_shared/pfb_dns_ddr'], 'DDR DoH on port 443' => ['dns_shared/pfb_dns_ddr_doh_443']];
 	}
 
 	/** issue #3583: the DDR toggles are per-node PfbToggles, default Off, with no grandfather. */
@@ -524,7 +524,7 @@ final class CfgGatewayTest extends TestCase
 	#[DataProvider('ddrKeys')]
 	public function testTheDdrTogglesDefaultOffAndRoundTrip(string $key): void
 	{
-		$path = 'installedpackages/pfblockerngdns/config/0/' . substr($key, 4);
+		$path = PFB_SECTIONS[explode('/', $key, 2)[0]] . '/' . explode('/', $key, 2)[1];
 
 		$this->assertNull(config_get_path($path), 'before: the key must be absent');
 		$this->assertSame(PfbToggle::Off, PfbConfig::read($key), 'absent -> Off');
@@ -560,8 +560,9 @@ final class CfgGatewayTest extends TestCase
 		$registry = pfb_cfg_registry();
 		foreach (['doh', 'doh_port', 'doh_interface', 'doh_trusted', 'doq', 'doq_port', 'doq_interface'] as $leaf) {
 			$this->assertArrayNotHasKey("dnsbl/pfb_dns_proxy_{$leaf}", $registry, "dnsbl/pfb_dns_proxy_{$leaf} left the registry");
-			$this->assertArrayHasKey("dns/pfb_dns_{$leaf}", $registry, "dns/pfb_dns_{$leaf} is registered");
-			$this->assertSame('local', $registry["dns/pfb_dns_{$leaf}"]['sync'], "dns/pfb_dns_{$leaf} never leaves the node");
+			$key = pfb_dns_config_key("pfb_dns_{$leaf}");
+			$this->assertArrayHasKey($key, $registry, "{$key} is registered");
+			$this->assertSame('local', $registry[$key]['sync'], "{$key} is excluded from policy-only sync");
 		}
 	}
 

@@ -34,7 +34,6 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private const ID = 'pfBlockerNG DNS Proxy startup';
 	private const URL = '/pfblockerng/pfblockerng_dns.php';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
-	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 
 	private const PLAIN = ['udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53'];
@@ -115,7 +114,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 			'pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'lan', 'pfb_dns_dot_port' => '853',
 		];
 		foreach ($settings as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
 		$GLOBALS['pfb_test_configured_ipv6'] = [];

@@ -42,13 +42,14 @@ What it proves, in file order:
   over UDP and TCP; the client VM too, on every transport, where its IPv6 address reaches the firewall: the smoke
   pfSense's pf carries `block drop in log inet6 all` and no LAN pass rule, so there it does not and the diagnostics
   are logged);
-* DDR (issue #3583), with ``dns/pfb_dns_ddr`` on and the gateway restarted with ``--ddr``: ``_dns.resolver.arpa. SVCB``
+* DDR (issue #3583), with ``dns_shared/pfb_dns_ddr`` on and the gateway restarted with ``--ddr``:
+  ``_dns.resolver.arpa. SVCB``
   over UDP and TCP gets the DoH, DoT and DoQ records for the LAN address (alpn, ``port`` only off its default,
   ``dohpath``, ``ipv4hint``, the firewall's FQDN as TargetName, its A record in Additional); another type or name under
   ``resolver.arpa.`` and the SVCB query over DoT and DoH get NODATA with the 300-second SOA, apex SOA and NS are
   answered, and Unbound's query log never names ``resolver.arpa``, so the decider saw none of it; a client the Resolver
   ACL refuses gets REFUSED; with the toggle off the client gets what Unbound itself answers, asked on the box at
-  port 5354; with ``dns/pfb_dns_ddr_doh_443`` on the DoH record has no ``port`` and keeps its hint and path;
+  port 5354; with ``dns_shared/pfb_dns_ddr_doh_443`` on the DoH record has no ``port`` and keeps its hint and path;
 * ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
@@ -86,7 +87,6 @@ from .test_smoke_dns_proxy import (
     CERT_CLIENT,
     CERT_GUEST,
     CERT_NAME,
-    CFG_PFB_DNS,
     DAEMON_PID_FILE,
     LAN_V6_ADDR,
     LAN_V6_ROW,
@@ -156,14 +156,14 @@ LISTENER_SETTINGS = {
     "pfb_dns_doq_port": str(DOQ_PORT),
     "pfb_dns_doq_interface": "lan",
 }
-CFG_DDR = f"{CFG_PFB_DNS}/pfb_dns_ddr"  # issue #3583: the DDR toggle and the DoH-on-port-443 toggle
-CFG_DDR_DOH_443 = f"{CFG_PFB_DNS}/pfb_dns_ddr_doh_443"
+CFG_DDR = h.dns_config_path("pfb_dns_ddr")  # issue #3583: the DDR toggle and the DoH-on-port-443 toggle
+CFG_DDR_DOH_443 = h.dns_config_path("pfb_dns_ddr_doh_443")
 # SNAPSHOT_PATHS already holds the interface lists, which LISTENER_SETTINGS names again
 CONFIG_PATHS = tuple(
     dict.fromkeys(
         (
             *SNAPSHOT_PATHS,
-            *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_SETTINGS),
+            *(h.dns_config_path(key) for key in LISTENER_SETTINGS),
             "unbound/acls",
             AUTO_ROWS_OFF,
             CFG_DDR,
@@ -483,12 +483,12 @@ def _restore(vm: SmokeVM) -> None:
 
 def _set_listeners(vm: SmokeVM) -> None:
     """DoH and DoQ on, on the LAN, as the pfB-DNS tab's seven settings store them."""
-    assignments = "".join(f"$d[{h._php_str(k)}] = {h._php_str(v)};\n" for k, v in LISTENER_SETTINGS.items())
+    assignments = "".join(
+        f"config_set_path({h._php_str(h.dns_config_path(k))}, {h._php_str(v)});\n" for k, v in LISTENER_SETTINGS.items()
+    )
     _php_ok(
         vm,
-        f"$d = config_get_path({h._php_str(CFG_PFB_DNS)}, array());\n{assignments}"
-        f"config_set_path({h._php_str(CFG_PFB_DNS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: pfB-DNS DoH and DoQ for the #3513 gateway smoke');",
+        assignments + "write_config('pfBlockerNG smoke: pfB-DNS DoH and DoQ for the #3513 gateway smoke');",
         "DoH/DoQ settings",
     )
 
@@ -1467,10 +1467,8 @@ def _set_ddr(vm: SmokeVM, on: bool, doh_443: bool) -> None:
     """The pfB-DNS tab's two DDR toggles as its Save stores them: 'on' or the empty Off token."""
     _php_ok(
         vm,
-        f"$d = config_get_path({h._php_str(CFG_PFB_DNS)}, array());\n"
-        f"$d['pfb_dns_ddr'] = {h._php_str('on' if on else '')};\n"
-        f"$d['pfb_dns_ddr_doh_443'] = {h._php_str('on' if doh_443 else '')};\n"
-        f"config_set_path({h._php_str(CFG_PFB_DNS)}, $d);\n"
+        f"config_set_path({h._php_str(CFG_DDR)}, {h._php_str('on' if on else '')});\n"
+        f"config_set_path({h._php_str(CFG_DDR_DOH_443)}, {h._php_str('on' if doh_443 else '')});\n"
         "write_config('pfBlockerNG smoke: pfB-DNS DDR for the #3583 gateway smoke');",
         "DDR settings",
     )
@@ -1493,7 +1491,7 @@ def _ensure_ddr(gw: Gateway, *, on: bool, doh_443: bool = False) -> None:
     stored = (h.config_get(vm, CFG_DDR), h.config_get(vm, CFG_DDR_DOH_443))
     assert seen == want, (
         f"after the apply the gateway should run with (--ddr, --ddr-doh-443) = {want}, runs with {seen}; stored "
-        f"(dns/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443) = {stored}\n{_proxy_log(vm, 30)}"
+        f"(dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443) = {stored}\n{_proxy_log(vm, 30)}"
     )
 
     def serves() -> bool:
@@ -1691,11 +1689,11 @@ def test_ddr_off_leaves_resolver_arpa_to_unbound_and_relays_its_answer_unchanged
 def test_ddr_doh_on_port_443_leaves_the_port_out_of_the_doh_record_and_nothing_else_changed(
     gw: Gateway, gateway_on: State
 ) -> None:
-    """Criterion 9 (revised): with `dns/pfb_dns_ddr_doh_443` on, the DoH record has no `port`, whatever DoH listens on.
+    """Criterion 9 (revised): with `dns_shared/pfb_dns_ddr_doh_443` on, DoH has no `port`, whatever DoH listens on.
 
     Given DoH listens on 4443 and the gateway runs with `--ddr`, whose DoH record carries `port=4443`
       (the before-state: the toggle is what removes it),
-    When `dns/pfb_dns_ddr_doh_443` is turned on and applied, so that the gateway runs with `--ddr --ddr-doh-443`,
+    When `dns_shared/pfb_dns_ddr_doh_443` is turned on and applied, so that the gateway runs with `--ddr --ddr-doh-443`,
     Then the DoH record has no `port` but the same TargetName (the firewall's `hostname.domain.`), `ipv4hint` (the LAN
       address) and `dohpath=/dns-query{?dns}`; DoT and DoQ are as before; Additional holds the firewall's A record.
     """

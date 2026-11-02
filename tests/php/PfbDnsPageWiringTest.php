@@ -86,21 +86,22 @@ final class PfbDnsPageWiringTest extends TestCase
 		// Given the pfB-DNS page
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
 
-		// Then its enable toggle comes first and the twelve settings follow it in order, each read from the dns section
+		// Then its enable toggle comes first and the twelve settings follow it in order, each read from its registered home
 		$after = (int) strpos($page, "'pfb_dns',");
 		$this->assertGreaterThan(0, $after, 'the enable checkbox');
 		foreach (self::LISTENER_FIELDS as $field) {
 			$at = strpos($page, "'{$field}',", $after);
 			$this->assertNotFalse($at, "the page has the {$field} control below the previous one");
 			$after = $at;
-			$read = in_array($field, self::SEEDED_FIELDS, true) ? "pfb_dns_proxy_setting('{$field}')" : "PfbConfig::read('dns/{$field}')";
-			$this->assertStringContainsString($read, $page, "{$field} is read through the gateway from the dns section");
+			$key = pfb_dns_config_key($field);
+			$read = in_array($field, self::SEEDED_FIELDS, true) ? "pfb_dns_proxy_setting('{$field}')" : "PfbConfig::read('{$key}')";
+			$this->assertStringContainsString($read, $page, "{$field} is read through the gateway from its registered section");
 		}
 
-		// And the save is validated, canonicalised and written to the same section, under the lock the snapshot needs
+		// And the save is validated, canonicalised and written to the registered sections, under the lock the snapshot needs
 		$this->assertStringContainsString('pfb_validate_dns_proxy_listeners_post(', $page, 'the twelve fields are validated');
 		$this->assertStringContainsString('pfb_dns_proxy_listeners_stored(', $page, 'and stored canonically');
-		$this->assertStringContainsString("PfbConfig::write('dns/' . ", $page, 'into the dns section');
+		$this->assertStringContainsString('PfbConfig::write(pfb_dns_config_key($pfb_dns_key), $pfb_dns_value)', $page, 'into the registered local or shared section');
 		$this->assertLessThan(
 			(int) strpos($page, 'pfb_dns_proxy_listeners_stored('),
 			(int) strpos($page, 'pfb_dns_config_lock()', (int) strpos($page, 'pfb_validate_dns_proxy_listeners_post(')),
@@ -128,7 +129,8 @@ final class PfbDnsPageWiringTest extends TestCase
 			$at = strpos($section, "'{$field}',", $after);
 			$this->assertNotFalse($at, "the DDR section has the {$field} control below the previous one");
 			$after = $at;
-			$this->assertStringContainsString("PfbConfig::read('dns/{$field}')", $page, "{$field} is read through the gateway from the dns section");
+			$key = pfb_dns_config_key($field);
+			$this->assertStringContainsString("PfbConfig::read('{$key}')", $page, "{$field} is read through the gateway from the shared section");
 		}
 
 		// And the controls carry the labels and help the operator sees
@@ -154,27 +156,27 @@ final class PfbDnsPageWiringTest extends TestCase
 	/** Does the restore-on-error block, right after the loop that brings back the posted scalar fields, show the STORED "DoH on port 443" toggle while the page disables that control, once? */
 	private static function restoresLockedDohOn443FromStored(string $page): bool
 	{
-		return preg_match_all('/\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';\s*\}\s*if \(pfb_dns_proxy_ddr_doh_443_locked\(\)\) \{\s*\$pconfig\[\'pfb_dns_ddr_doh_443\'\] = PfbConfig::read\(\'dns\/pfb_dns_ddr_doh_443\'\);[^\n]*\s*\}/', $page) === 1;
+		return preg_match_all('/\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';\s*\}\s*if \(pfb_dns_proxy_ddr_doh_443_locked\(\)\) \{\s*\$pconfig\[\'pfb_dns_ddr_doh_443\'\] = PfbConfig::read\(\'dns_shared\/pfb_dns_ddr_doh_443\'\);[^\n]*\s*\}/', $page) === 1;
 	}
 
 	public function testTheRestoreCheckSeesAnUnguardedANegatedAPostedAWrongKeyAndAnEarlierRestore(): void
 	{
 		$loop = "\$pconfig[\$pfb_dns_field] = \$_POST[\$pfb_dns_field] ?? '';\n}\n";
-		$restore = "if (pfb_dns_proxy_ddr_doh_443_locked()) {\n\t\$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns/pfb_dns_ddr_doh_443');\t// x\n}\n";
+		$restore = "if (pfb_dns_proxy_ddr_doh_443_locked()) {\n\t\$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');\t// x\n}\n";
 
 		$this->assertTrue(self::restoresLockedDohOn443FromStored($loop . $restore), 'the stored value restored under the lock, after the loop');
 		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop), 'never restored');
 		$this->assertFalse(self::restoresLockedDohOn443FromStored($restore . $loop), 'restored before the loop, which then overwrites it with the empty post');
 		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('if (pfb_dns_proxy_ddr_doh_443_locked())', 'if (!pfb_dns_proxy_ddr_doh_443_locked())', $restore)), 'negated lock');
-		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('PfbConfig::read(\'dns/pfb_dns_ddr_doh_443\')', '$_POST[\'pfb_dns_ddr_doh_443\']', $restore)), 'the posted value');
-		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('dns/pfb_dns_ddr_doh_443', 'dns/pfb_dns_ddr', $restore)), 'the other toggle');
+		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('PfbConfig::read(\'dns_shared/pfb_dns_ddr_doh_443\')', '$_POST[\'pfb_dns_ddr_doh_443\']', $restore)), 'the posted value');
+		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('dns_shared/pfb_dns_ddr_doh_443', 'dns_shared/pfb_dns_ddr', $restore)), 'the other toggle');
 	}
 
 	public function testAFailedSaveShowsTheStoredDohOn443ToggleWhileThePageDisablesIt(): void
 	{
 		$this->assertTrue(
 			self::restoresLockedDohOn443FromStored(self::src('www/pfblockerng/pfblockerng_dns.php')),
-			'a disabled checkbox posts nothing, so the restore must read dns/pfb_dns_ddr_doh_443 from the store while pfb_dns_proxy_ddr_doh_443_locked(), as the save keeps it'
+			'a disabled checkbox posts nothing, so the restore must read dns_shared/pfb_dns_ddr_doh_443 from the store while pfb_dns_proxy_ddr_doh_443_locked(), as the save keeps it'
 		);
 	}
 
@@ -192,7 +194,7 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertTrue(self::disabledOnlyForDohPort443($guard), 'the guarded disable');
 		$this->assertFalse(self::disabledOnlyForDohPort443("\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'unguarded');
 		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace('if (pfb_dns_proxy_ddr_doh_443_locked())', 'if (!pfb_dns_proxy_ddr_doh_443_locked())', $guard)), 'negated guard');
-		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace('pfb_dns_proxy_ddr_doh_443_locked()', "pfb_dns_proxy_listener_port(PfbConfig::read('dns/pfb_dns_doh_port')) === '443'", $guard)), 'an inline condition the save does not share');
+		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace('pfb_dns_proxy_ddr_doh_443_locked()', "pfb_dns_proxy_listener_port(PfbConfig::read('dns_shared/pfb_dns_doh_port')) === '443'", $guard)), 'an inline condition the save does not share');
 		$this->assertFalse(self::disabledOnlyForDohPort443($guard . "\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'disabled a second time');
 		$this->assertFalse(self::disabledOnlyForDohPort443(''), 'never disabled');
 	}

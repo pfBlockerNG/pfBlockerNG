@@ -23,7 +23,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_certificate_ip_sans')]
 final class DnsProxyDdrWarningTest extends TestCase
 {
-	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 
 	private const GLOBALS = [
 		'config', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_configured_ipv6', 'pfb_test_configured_ip_addresses', 'pfb_test_interfaces',
@@ -91,7 +90,7 @@ final class DnsProxyDdrWarningTest extends TestCase
 	private function store(array $settings): void
 	{
 		foreach ($settings as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 	}
 

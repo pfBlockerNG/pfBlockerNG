@@ -39,7 +39,6 @@ final class PfbDnsStatusTest extends TestCase
 	use LiveListenerStandIn;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
-	private const SETTINGS = 'installedpackages/pfblockerngdns/config/0/';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 
 	private const DOT_ON = ['pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'lan', 'pfb_dns_dot_port' => '853'];
@@ -135,7 +134,7 @@ final class PfbDnsStatusTest extends TestCase
 		$this->moved(FALSE, $up);
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::shared())];
 		foreach ($settings + ['pfb_dns_interface' => 'lan', 'pfb_dns_sslcertref' => 'cert1'] as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 		pfb_dns_proxy_service();
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE, 'the generator wrote the rc script the status reads');
@@ -307,7 +306,7 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame(self::OFF, $this->transports()[$kind], 'before: no active transport');
 
 		foreach (["pfb_dns_{$kind}" => 'on', "pfb_dns_{$kind}_interface" => 'lan', "pfb_dns_{$kind}_port" => $port] as $key => $value) {
-			config_set_path(self::SETTINGS . $key, $value);
+			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 		$this->assertSame(self::NO_LISTENER, $this->transports()[$kind], 'enable saved but not applied');
 
@@ -316,7 +315,7 @@ final class PfbDnsStatusTest extends TestCase
 		$active = self::served($port);
 		$this->assertSame($active, $this->transports()[$kind], 'enable applied: every listener bound');
 
-		config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/' . "pfb_dns_{$kind}", '');
 		$this->assertSame($active, $this->transports()[$kind], 'disable saved: gateway still serves its existing listeners');
 
 		$this->standInsStop();
@@ -339,7 +338,7 @@ final class PfbDnsStatusTest extends TestCase
 
 		$only = ['state' => 'rows', 'rows' => [self::row('Localhost', ["127.0.0.1:{$port}"], 'listening')]];
 		$this->assertSame($only, $this->transports()[$kind], 'a missing command cannot erase a listener confirmed by the running start');
-		config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/' . "pfb_dns_{$kind}", '');
 		$this->assertSame($only, $this->transports()[$kind], 'a pending disable cannot hide listeners the gateway lists when the command is missing');
 	}
 
@@ -390,7 +389,7 @@ final class PfbDnsStatusTest extends TestCase
 
 		// When the encrypted toggles are saved off but not applied: the live gateway still holds the listeners it lists
 		foreach (['dot', 'doh', 'doq'] as $kind) {
-			config_set_path(self::SETTINGS . "pfb_dns_{$kind}", '');
+			config_set_path('installedpackages/pfblockerngdnssettings/config/0/' . "pfb_dns_{$kind}", '');
 		}
 
 		// Then every transport keeps its listeners
@@ -437,8 +436,8 @@ final class PfbDnsStatusTest extends TestCase
 		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'up', 'enable' => TRUE];
 		$GLOBALS['pfb_test_interfaces']['opt1'] = 'OPT1';
 		$key = ($row === 'plain') ? 'pfb_dns_interface' : "pfb_dns_{$row}_interface";
-		config_set_path(self::SETTINGS . $key, 'opt1');
-		config_set_path(($row === 'plain') ? 'unbound/port' : self::SETTINGS . "pfb_dns_{$row}_port", '5553');
+		config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, 'opt1');
+		config_set_path(($row === 'plain') ? 'unbound/port' : 'installedpackages/pfblockerngdnssettings/config/0/' . "pfb_dns_{$row}_port", '5553');
 		$this->assertSame($active, $this->transports()[$row], 'save alone does not change the active addresses or port');
 
 		pfb_dns_proxy_service();
@@ -1012,7 +1011,7 @@ final class PfbDnsStatusTest extends TestCase
 		}
 
 		// When its toggle is turned off and applied, and the next start does not serve it
-		config_set_path(self::SETTINGS . "pfb_dns_{$row}", '');
+		config_set_path('installedpackages/pfblockerngdnssettings/config/0/' . "pfb_dns_{$row}", '');
 		pfb_dns_proxy_service();
 		$others = array_diff_key(['dot' => self::DOT, 'doh' => self::DOH, 'doq' => self::DOQ], [$row => TRUE]);
 		$this->gatewayServes([...self::PLAIN, ...array_merge(...array_values($others))]);

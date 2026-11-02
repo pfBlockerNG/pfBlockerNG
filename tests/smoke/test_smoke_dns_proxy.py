@@ -183,7 +183,7 @@ SNAPSHOT_PATHS = (
     CFG_GROUP_POLICY,
     CFG_GROUP_POLICY_LIST,
     CFG_WHITELIST,
-    *(f"{CFG_PFB_DNS}/{key}" for key in LISTENER_KEYS),
+    *(h.dns_config_path(key) for key in LISTENER_KEYS),
 )
 
 
@@ -356,6 +356,8 @@ def _configure_resolver(vm: SmokeVM, refid: str) -> None:
         f"$d = config_get_path({h._php_str(CFG_PFB_DNS)}, array());\n"
         f"foreach (array({', '.join(h._php_str(key) for key in LISTENER_LISTS)}) as $k) {{ $d[$k] = ''; }}\n"
         f"config_set_path({h._php_str(CFG_PFB_DNS)}, $d);\n"
+        f"config_del_path({h._php_str(h.dns_config_path('pfb_dns_dot'))});\n"
+        f"config_del_path({h._php_str(h.dns_config_path('pfb_dns_dot_port'))});\n"
         "write_config('pfBlockerNG smoke: Resolver DoT and log-queries for the #3515 smoke');\n"
         "services_unbound_configure();",
         "Resolver settings",
