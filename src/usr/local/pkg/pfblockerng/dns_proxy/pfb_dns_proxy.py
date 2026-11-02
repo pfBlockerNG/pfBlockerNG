@@ -429,7 +429,8 @@ class Frontend:
         plays the iterator: ask Unbound for the target as the same client, give the module the planted CNAME plus the
         target's answer records, and run that pass once. A chase that finds nothing leaves the CNAME alone in the
         message, which is what makes the module answer with its baked address. The chase carries the client's CD bit
-        and EDNS options. Returns the module's state.
+        and EDNS options. A chase over MAX_DNS_MESSAGE bytes is never forwarded: the state is MODULE_ERROR, a SERVFAIL.
+        Returns the module's state.
         """
         planted = qstate.return_msg
         if planted is None or len(planted.answer) != 1 or planted.answer[0].rtype != dnswire.TYPE_CNAME:
@@ -444,6 +445,9 @@ class Frontend:
             additional=_edns_for(query, options=True),
         )
         wire = dnswire.encode(chase)
+        if len(wire) > MAX_DNS_MESSAGE:
+            shim.log_err(f"SafeSearch chase for {target.name} is {len(wire)} bytes, over one DNS message; SERVFAIL")
+            return shim.MODULE_ERROR
         reply = await forward(wire)
         message = None if reply is None else dnswire.parse(reply)  # an unparseable reply is a SERVFAIL, as above
         answers = [] if message is None else message.answers

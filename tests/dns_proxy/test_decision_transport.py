@@ -50,6 +50,7 @@ class Gateway:
 
     def __init__(self, sock: socket.socket, child: subprocess.Popen[str]) -> None:
         self.sock, self.child = sock, child
+        self.forwards: list[int] = []  # the payload size of each FORWARD the decider sent
 
     def _read(self, size: int) -> bytes:
         data = b""
@@ -79,6 +80,7 @@ class Gateway:
                 return payload
             assert ftype == FORWARD, f"frame type {ftype}: want FORWARD or ANSWER"
             self.send(frame(REPLY, fid, unbound.answer(payload)))
+            self.forwards.append(len(payload))
 
 
 @contextmanager
@@ -212,6 +214,44 @@ def test_an_answer_exactly_as_big_as_the_datagram_clients_size_is_not_truncated_
             for fid, size in ((2, len(full)), (3, len(full) - 1))
         ]
     assert verdicts == [(len(full), False), (len(full) - 1, True)]
+
+
+SERVFAIL = 2
+PADDING_OPTION = 12  # RFC 7830: the EDNS option a client pads its query with
+
+
+def _padded(size: int) -> bytes:
+    """A query for DUCK of exactly `size` bytes: its EDNS padding option (RFC 7830) fills the OPT record."""
+    data = size - 45  # header 12, question 18, OPT record 11 and the option's own 4-byte header
+    return build_query(DUCK, edns=True, options=struct.pack("!HH", PADDING_OPTION, data) + bytes(data))
+
+
+def test_a_safesearch_chase_over_one_dns_message_is_servfail_and_never_forwarded(
+    safesearch_csv: None, module_dir: Path
+) -> None:
+    """Issue #3641: the chase repeats the client's EDNS options and its target name is 5 bytes longer than DUCK, so a
+    65535-byte query makes a 65540-byte FORWARD. The gateway treats an oversized FORWARD as a protocol error and exits;
+    the client gets SERVFAIL instead and the decider keeps running."""
+    query = _padded(65535)
+    assert len(query) == 65535
+    with running_decider(module_dir) as gateway:
+        wire = gateway.answer_to(query, 1, STREAM, FakeUnbound(_target_zone(1)))
+        forwards = list(gateway.forwards)
+    reply = dnswire.parse(wire)
+    assert forwards == [65535], f"FORWARD sizes {forwards}: the chase must not be sent"
+    assert (reply.rcode, reply.answers) == (SERVFAIL, [])
+
+
+def test_a_safesearch_chase_of_exactly_one_dns_message_is_forwarded(safesearch_csv: None, module_dir: Path) -> None:
+    """The guard is over 65535 bytes, not at it: a chase of exactly that size is still forwarded and answered."""
+    query = _padded(65530)  # its chase is 5 bytes longer than the query: 65535
+    assert len(query) == 65530
+    with running_decider(module_dir) as gateway:
+        wire = gateway.answer_to(query, 1, STREAM, FakeUnbound(_target_zone(1)))
+        forwards = list(gateway.forwards)
+    reply = dnswire.parse(wire)
+    assert forwards == [65530, 65535]
+    assert (reply.rcode, len(reply.answers)) == (0, 2)
 
 
 @pytest.mark.parametrize("transport", [STREAM, DATAGRAM], ids=["stream", "datagram"])
