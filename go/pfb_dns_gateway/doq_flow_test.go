@@ -10,7 +10,7 @@ import (
 // stream that connection may hold. The stream cap and the idle timeout stay as they are. A zero window is not
 // that size: quic-go substitutes its own default.
 func TestDoQListenerSetsReceiveWindowsForOneMessagePerStream(t *testing.T) {
-	cfg := doqQUICConfig()
+	cfg := newGateway(nil, nil, nil, time.Second, nil).doqQUICConfig()
 	if cfg.MaxIncomingStreams != maxDoQStreams || cfg.MaxIncomingUniStreams != -1 || cfg.MaxIdleTimeout != doqIdleTimeout {
 		t.Fatalf("DoQ stream cap or idle timeout changed: streams=%d uni=%d idle=%s; want %d, -1, %s",
 			cfg.MaxIncomingStreams, cfg.MaxIncomingUniStreams, cfg.MaxIdleTimeout, int64(maxDoQStreams), doqIdleTimeout)

@@ -112,7 +112,8 @@ type gateway struct {
 	timeout                                                    time.Duration // wait for Unbound per exchange
 	grace                                                      time.Duration
 	tcpIdle                                                    time.Duration // idle limit for reading a query and for writing a reply
-	handshake                                                  time.Duration // limit for a TLS handshake, a PROXY header and request headers
+	handshake                                                  time.Duration // limit for a TLS handshake, a PROXY header, request headers and a DoQ query read
+	doqHandshakeIdle                                           time.Duration // QUIC handshake idle timeout, read when the DoQ listener starts; production is 5s
 	closeBound                                                 time.Duration // limit for sending close_notify
 	stopBound                                                  time.Duration // limit for each of stop()'s waits for the serving goroutines
 	logf                                                       func(format string, args ...any)
@@ -175,7 +176,7 @@ func (q *idleGroup) Wait() {
 
 func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, logf func(format string, args ...any)) *gateway {
 	g := &gateway{
-		acl: acl, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, logf: logf,
+		acl: acl, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, doqHandshakeIdle: defaultDoQHandshakeIdle, logf: logf,
 		closeBound: defaultCloseWait, stopBound: defaultStopWait,
 		udpPerAddr: maxUDPPerAddr, muxPerAddr: maxMuxPerAddr, tcpPerAddr: maxTCPPerAddr, dohPerAddr: maxDoHPerAddr, doqPerAddr: maxDoQPerAddr,
 		clients:  map[net.Conn]struct{}{},
