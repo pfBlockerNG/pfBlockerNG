@@ -45,11 +45,12 @@ final class SyncDnsRestoredBackupTest extends TestCase
 	public function testUnseededRestoredDotDefaultsDoNotOverrideResolverInheritance(): void
 	{
 		config_set_path('unbound', ['active_interface' => 'lan', 'enablessl' => '', 'tlsport' => '8853']);
-		config_set_path(PFB_SECTIONS['dns'], ['pfb_dns_interface' => '', 'pfb_dns_dot' => '', 'pfb_dns_dot_port' => '853', 'pfb_dns_doh' => 'on']);
+		config_set_path(PFB_SECTIONS['dns'], ['pfb_dns_interface' => '', 'pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '9853', 'pfb_dns_doh' => 'on']);
 
 		$this->assertSame(PfbToggle::On, pfb_dns_proxy_setting('pfb_dns_dot'), 'unseeded node inherits the Resolver DoT');
 		$this->assertSame('8853', pfb_dns_proxy_setting('pfb_dns_dot_port'));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns_shared/pfb_dns_dot'), 'an unseeded installer default is not a restored choice');
+		$this->assertSame('853', PfbConfig::read('dns_shared/pfb_dns_dot_port'));
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_doh'), 'other restored choices still apply');
 	}
 }
