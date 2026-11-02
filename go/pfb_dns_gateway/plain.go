@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -402,9 +401,8 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	ctx, cancel := context.WithCancel(g.ctx)
 	var (
 		handlers sync.WaitGroup
-		running  atomic.Int32 // handlers still inside resolve or its write
-		wmu      sync.Mutex   // frames are written one at a time, each by one Write
-		broken   bool         // a reply could not be written; guarded by wmu
+		wmu      sync.Mutex // frames are written one at a time, each by one Write
+		broken   bool       // a reply could not be written; guarded by wmu
 		slots    = make(chan struct{}, connPipeline)
 	)
 	defer func() { // the handlers end before the stream closes: a Close during a Write sends no close_notify
@@ -429,10 +427,9 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		}
 		wire, err := g.readQuery(ctx, stream)
 		if err != nil {
-			// EOF still waits: the client half-closed, and what it asked is owed an answer. An idle timeout
-			// with a query still running and the context live waits too; the defer would cancel that query.
-			// A context that already ended, or a timeout with nothing running, still drops the connection.
-			if errors.Is(err, io.EOF) || (readTimedOut(err) && ctx.Err() == nil && running.Load() > 0) {
+			// EOF waits: the client half-closed, and what it asked is owed an answer. A read timeout waits too:
+			// a query still running keeps its own budget, and one the context already cancelled ends at once.
+			if errors.Is(err, io.EOF) || readTimedOut(err) {
 				handlers.Wait()
 			}
 			return
@@ -447,10 +444,8 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 			<-slots
 		case toDecider:
 			handlers.Add(1)
-			running.Add(1)
 			go func() {
 				defer handlers.Done()
-				defer running.Add(-1)
 				defer func() { <-slots }()
 				if reply := g.resolve(ctx, src.Addr(), false, wire, fwd); reply != nil {
 					write(reply)
@@ -486,8 +481,7 @@ func (g *gateway) readFull(ctx context.Context, conn net.Conn, buf []byte) error
 	return err
 }
 
-// readTimedOut is a read deadline. Stopping the connection also moves that deadline back; the caller uses the
-// context to tell an idle client from one that is already gone.
+// readTimedOut is a read deadline: the idle timeout, or the one the connection's context moved back when it ended.
 func readTimedOut(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
