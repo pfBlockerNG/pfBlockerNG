@@ -91,7 +91,8 @@ The transport byte tells the decider whether the client has a UDP size limit: fo
 builds itself is held to the UDP size the client advertised (512 without EDNS, at most the 1232 the decider advertises
 itself; over it the answer is the question alone with TC set, so the client asks again over TCP), for a stream client it is
 sent whole up to 65535 bytes, the most one DNS message can carry; a longer one is the bare SERVFAIL, since the gateway
-cannot frame it. A relayed reply is never cut: it is Unbound's own.
+cannot frame it. A relayed reply is never cut: it is Unbound's own. A SafeSearch chase longer than 65535 bytes (the
+client's EDNS options with a longer target name) is never forwarded: the client gets that same SERVFAIL.
 
 Frames of different ids interleave freely and complete in any order; the decider never waits for one query before
 reading the next. An id is in flight from the gateway's QUERY until the gateway has read the decider's ANSWER or DROP
