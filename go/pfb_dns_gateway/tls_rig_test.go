@@ -133,6 +133,8 @@ type dohOptions struct {
 	h2     bool   // negotiate HTTP/2
 	prefix []byte // written to the TCP connection before the TLS handshake (a PROXY header)
 	split  bool   // write the prefix one byte at a time
+
+	prefixAt func(local netip.AddrPort) []byte // else: built from the client's own address, for a header that names it
 }
 
 type dohClient struct {
@@ -156,14 +158,18 @@ func newDoHClient(t *testing.T, addr netip.AddrPort, m tlsMaterial, o dohOptions
 			if err != nil {
 				return nil, err
 			}
+			prefix := o.prefix
+			if o.prefixAt != nil {
+				prefix = o.prefixAt(addrPortOf(c.LocalAddr()))
+			}
 			if o.split {
 				c.(*net.TCPConn).SetNoDelay(true) //nolint:errcheck // loopback test helper
-				for i := range o.prefix {
-					if _, err := c.Write(o.prefix[i : i+1]); err != nil {
+				for i := range prefix {
+					if _, err := c.Write(prefix[i : i+1]); err != nil {
 						return nil, err
 					}
 				}
-			} else if _, err := c.Write(o.prefix); err != nil {
+			} else if _, err := c.Write(prefix); err != nil {
 				return nil, err
 			}
 			return c, nil

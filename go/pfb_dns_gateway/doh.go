@@ -107,8 +107,22 @@ func (c *countedConn) Close() error {
 	return c.Conn.Close()
 }
 
-// connInfo is the TCP connection as the kernel sees it, whatever a PROXY header says.
-type connInfo struct{ peer, local netip.AddrPort }
+// connInfo is the TCP connection as the kernel sees it, whatever a PROXY header says. proxy is the connection's PROXY
+// reader, nil unless the peer is trusted: its header is read by the time a request is handled, never in ConnContext.
+type connInfo struct {
+	peer, local netip.AddrPort
+	proxy       *proxyproto.Conn
+}
+
+// namedByProxy reports whether the connection's PROXY header named a client: a header that is not LOCAL and has an
+// address. An address equal to the peer's own IP counts.
+func (c connInfo) namedByProxy() bool {
+	if c.proxy == nil {
+		return false
+	}
+	h := c.proxy.ProxyHeader()
+	return h != nil && !h.Command.IsLocal() && h.SourceAddr != nil && addrPortOf(h.SourceAddr).IsValid()
+}
 
 type connInfoKey struct{}
 
@@ -116,10 +130,11 @@ func rawConnInfo(c net.Conn) connInfo {
 	if t, ok := c.(*tls.Conn); ok {
 		c = t.NetConn()
 	}
+	var proxy *proxyproto.Conn
 	if p, ok := c.(*proxyproto.Conn); ok {
-		c = p.Raw()
+		proxy, c = p, p.Raw()
 	}
-	return connInfo{peer: addrPortOf(c.RemoteAddr()), local: addrPortOf(c.LocalAddr())}
+	return connInfo{peer: addrPortOf(c.RemoteAddr()), local: addrPortOf(c.LocalAddr()), proxy: proxy}
 }
 
 // serveDoH answers DoH on ln until stop() or the returned closeNow. Connections: TCP, the cap, PROXY header parsing for
@@ -239,15 +254,16 @@ func dohWire(w http.ResponseWriter, r *http.Request) ([]byte, int) {
 	return nil, http.StatusMethodNotAllowed
 }
 
-// requestClient is the client of a request: a PROXY source whose address is not the TCP peer's, else the TCP peer.
-// Only then, for a trusted peer, the rightmost entry of the last X-Forwarded-For header replaces it when that entry
-// is an address (HAProxy's `option forwardfor` appends its own header line, so only the last one is the front end's).
+// requestClient is the client of a request: the PROXY source when the trusted peer's header named one, else the TCP
+// peer. Only without such a source, for a trusted peer, the rightmost entry of the last X-Forwarded-For header replaces
+// it when that entry is an address (HAProxy's `option forwardfor` appends its own header line, so only the last one is
+// the front end's).
 func requestClient(r *http.Request, info connInfo, trusted []netip.Prefix) netip.AddrPort {
 	client := info.peer
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil { // a PROXY header with no IP source leaves the peer
 		client = ap
 	}
-	if client.Addr() != info.peer.Addr() { // the header named a client; X-Forwarded-For must not replace it
+	if info.namedByProxy() { // at the peer's own IP too: X-Forwarded-For must not replace a named source
 		return client
 	}
 	if !trusts(trusted, info.peer.Addr()) {

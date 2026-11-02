@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 func newDoHRig(t *testing.T, trusted ...string) (*rig, tlsMaterial, netip.AddrPort) {
@@ -456,6 +458,92 @@ func TestDoHTrustedPeerProxySourceWinsOverXForwardedFor(t *testing.T) {
 			t.Fatalf("client %s, want the X-Forwarded-For address 203.0.113.9", q.ip)
 		}
 	})
+}
+
+// A PROXY source at the TCP peer's own IP names the client, whatever its port: X-Forwarded-For does not replace it,
+// the ACL screens that source, and the forward carries it. A malformed X-Forwarded-For changes nothing.
+func TestDoHTrustedPeerProxySourceAtThePeersOwnIP(t *testing.T) {
+	cases := []struct {
+		name, peer, forwarded string
+		samePort, allowed     bool
+	}{
+		{"allowed, same port", clientAllowed, clientRefused, true, true},
+		{"allowed, other port", clientAllowed, clientRefused, false, true},
+		{"denied, same port", clientDenied, clientAllowed, true, false},
+		{"denied, other port", clientDenied, clientAllowed, false, false},
+		{"denied, malformed X-Forwarded-For", clientDenied, "junk", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, m, addr := newDoHRig(t, "127.0.0.0/8")
+			r.autoForward()
+			var source netip.AddrPort // the PROXY source the header names: the client's own address, or the next port
+			prefixAt := func(local netip.AddrPort) []byte {
+				source = local
+				if !tc.samePort {
+					source = netip.AddrPortFrom(local.Addr(), local.Port()+1)
+				}
+				return pp2TCP(source.String(), "192.0.2.1:443")
+			}
+			c := newDoHClient(t, addr, m, dohOptions{source: tc.peer, prefixAt: prefixAt})
+			query := buildQuery(t, 0x6666, "allowed.example.", true)
+			if !tc.allowed {
+				if resp, err := c.http.Do(c.get(dnsParam(query), "X-Forwarded-For", tc.forwarded)); err == nil {
+					resp.Body.Close()
+					t.Fatalf("PROXY source %s with X-Forwarded-For %q got a response (status %d): a denied PROXY source must abort the request", source, tc.forwarded, resp.StatusCode)
+				}
+				r.requireNoOtherQuery()
+				return
+			}
+			resp, body := c.do(c.get(dnsParam(query), "X-Forwarded-For", tc.forwarded))
+			if resp.StatusCode != 200 {
+				t.Fatalf("status %d", resp.StatusCode)
+			}
+			if reply := parseReply(t, body); reply.RCode == dnsmessage.RCodeRefused {
+				t.Fatalf("PROXY source %s is allowed, but X-Forwarded-For %q was used instead: the reply is REFUSED", source, tc.forwarded)
+			}
+			if q := r.nextQuery(); q.ip != tc.peer {
+				t.Fatalf("the decider's client: got %s, want the PROXY source %s, not X-Forwarded-For %q", q.ip, tc.peer, tc.forwarded)
+			}
+			if src, _, _ := parsePP2(t, r.up.next().header); src != source {
+				t.Fatalf("Unbound was told the client is %s, want the PROXY source %s", src, source)
+			}
+		})
+	}
+}
+
+// An IPv4-mapped IPv6 PROXY source is the IPv4 address it maps: at a denied address it is denied as the plain form is.
+func TestDoHTrustedPeerMappedProxySourceIsScreenedAsItsIPv4Address(t *testing.T) {
+	r, m, addr := newDoHRig(t, "127.0.0.0/8")
+	r.autoForward()
+	c := newDoHClient(t, addr, m, dohOptions{source: clientDenied, prefix: pp2TCP("[::ffff:"+clientDenied+"]:51000", "[::ffff:192.0.2.1]:443")})
+	query := buildQuery(t, 0x6666, "allowed.example.", true)
+	if resp, err := c.http.Do(c.get(dnsParam(query), "X-Forwarded-For", clientAllowed)); err == nil {
+		resp.Body.Close()
+		t.Fatalf("the IPv4-mapped PROXY source of the denied %s got a response (status %d)", clientDenied, resp.StatusCode)
+	}
+	r.requireNoOtherQuery()
+}
+
+// Without a PROXY source that names a client (no header, a LOCAL command, or an AF_UNIX source), a trusted peer's
+// X-Forwarded-For names the client.
+func TestDoHTrustedPeerXForwardedForNamesTheClientWithoutAProxySource(t *testing.T) {
+	cases := map[string][]byte{
+		"no header":      nil,
+		"LOCAL command":  pp2(0, 0x00, nil),
+		"AF_UNIX stream": pp2(1, 0x31, make([]byte, 216)),
+	}
+	for name, header := range cases {
+		t.Run(name, func(t *testing.T) {
+			r, m, addr := newDoHRig(t, "127.0.0.0/8")
+			r.autoAnswer(echoAnswer)
+			c := newDoHClient(t, addr, m, dohOptions{source: clientAllowed, prefix: header})
+			c.do(c.get(dnsParam(buildQuery(t, 0, "example.", true)), "X-Forwarded-For", "203.0.113.9"))
+			if q := r.nextQuery(); q.ip != "203.0.113.9" {
+				t.Fatalf("client %s, want the X-Forwarded-For address 203.0.113.9", q.ip)
+			}
+		})
+	}
 }
 
 // T11: an unusable X-Forwarded-For leaves the client as it was: the PROXY source, else the peer.
