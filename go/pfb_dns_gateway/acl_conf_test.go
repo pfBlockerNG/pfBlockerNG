@@ -7,9 +7,13 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -185,6 +189,132 @@ func TestACLMissingIncludeIsPickedUpWhenItAppears(t *testing.T) {
 	}
 	checkLookup(t, a, "10.1.1.1", ACLDrop)
 	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+}
+
+// runAsModeUser runs testName as a user the mode bits apply to. The Go gate runs the suite as root, and root
+// opens a mode 000 file, so this failure would never happen in-process.
+func runAsModeUser(t *testing.T, testName string) {
+	t.Helper()
+	nobody, err := user.Lookup("nobody")
+	if err != nil {
+		t.Fatalf("root ignores mode 000 and user nobody is unavailable: %v", err)
+	}
+	uid, err1 := strconv.Atoi(nobody.Uid)
+	gid, err2 := strconv.Atoi(nobody.Gid)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("user nobody has no numeric uid/gid (%s/%s)", nobody.Uid, nobody.Gid)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$", "-test.count=1", "-test.timeout=2m")
+	cmd.Env = append(os.Environ(), "PFB_ACL_MODE_USER=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)},
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mode-bits run as %s failed: %v\n%s", nobody.Username, err, out)
+	}
+}
+
+// An include made mode 000 is a failed reload, not a missing file. The last good rules stay, the same
+// permission error is logged once across two Refreshes, and chmod 0644 alone loads the include again.
+func TestACLUnreadableIncludeKeepsLastGoodRulesUntilTheModeReturns(t *testing.T) {
+	if os.Getuid() == 0 && os.Getenv("PFB_ACL_MODE_USER") == "" {
+		runAsModeUser(t, "TestACLUnreadableIncludeKeepsLastGoodRulesUntilTheModeReturns")
+		return
+	}
+	a, dir, log := newACLTree(t, map[string]string{
+		"unbound.conf":      "include: {dir}/access_lists.conf\n",
+		"access_lists.conf": "access-control: 10.0.0.0/8 deny\n",
+	})
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+
+	inc := filepath.Join(dir, "access_lists.conf")
+	before := mustStat(t, inc)
+	if err := os.Chmod(inc, 0); err != nil {
+		t.Fatal(err)
+	}
+	after := mustStat(t, inc)
+	if !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) || before.Size() != after.Size() || before.Mode() == after.Mode() {
+		t.Fatalf("test premise: chmod 000 must keep inode, mtime and size and change mode; before mode %v mtime %v size %d, after mode %v mtime %v size %d",
+			before.Mode(), before.ModTime(), before.Size(), after.Mode(), after.ModTime(), after.Size())
+	}
+	// chmod leaves mtime and size alone, so touch the main file to reach the open failure.
+	main := filepath.Join(dir, "unbound.conf")
+	later := mustStat(t, main).ModTime().Add(2 * time.Second)
+	if err := os.Chtimes(main, later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	if !a.Refresh() {
+		t.Error("Refresh() after the include became unreadable: got changed=false, want true")
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+	if strings.Contains(log.joined(), "forwarding every query") {
+		t.Errorf("an unreadable include after a good load must not forward every client; log:\n%s", log.joined())
+	}
+	if got := strings.Count(log.joined(), "keeping the last good rules"); got != 1 {
+		t.Errorf("the unreadable include should be logged once so far, got %d; log:\n%s", got, log.joined())
+	}
+	if a.Refresh() {
+		t.Error("second Refresh() on an unchanged unreadable include: got changed=true, want false")
+	}
+	if got := strings.Count(log.joined(), "keeping the last good rules"); got != 1 {
+		t.Errorf("an unchanged permission error must not log again, got %d; log:\n%s", got, log.joined())
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+
+	if err := os.Chmod(inc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restored := mustStat(t, inc)
+	if !os.SameFile(after, restored) || !restored.ModTime().Equal(after.ModTime()) || restored.Size() != after.Size() || restored.Mode() == after.Mode() {
+		t.Fatalf("test premise: chmod 0644 must change mode only; unreadable mode %v mtime %v size %d, restored mode %v mtime %v size %d",
+			after.Mode(), after.ModTime(), after.Size(), restored.Mode(), restored.ModTime(), restored.Size())
+	}
+	if !a.Refresh() {
+		t.Error("Refresh() after chmod 0644 and no other edit: got changed=false, want true")
+	}
+	if got := strings.Count(log.joined(), "acl: loaded "); got != 2 {
+		t.Errorf("restoring the mode must load the include again, loaded-lines=%d; log:\n%s", got, log.joined())
+	}
+	if got := strings.Count(log.joined(), "keeping the last good rules"); got != 1 {
+		t.Errorf("restoring the mode must not be another failed reload, keeping-lines=%d; log:\n%s", got, log.joined())
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop) // the include's deny, not a forward-all fallback
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+}
+
+// A config that has never loaded forwards every client. An edit that still names the missing include must keep
+// forwarding the denied address, localhost and an address no row names; that broken snapshot is not rules to keep.
+func TestACLEditThatStillCannotLoadKeepsForwardingEveryone(t *testing.T) {
+	a, dir, log := newACLTree(t, map[string]string{
+		"unbound.conf": "access-control: 10.0.0.0/8 deny\ninclude: {dir}/absent.conf\n",
+	})
+	checkLookup(t, a, "10.1.2.3", ACLForward) // before-state: the deny row is not in force
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+	checkLookup(t, a, "198.51.100.1", ACLForward) // no row names it
+	if strings.Contains(log.joined(), "keeping the last good rules") {
+		t.Errorf("startup with a missing include has no rules to keep; log:\n%s", log.joined())
+	}
+
+	rewriteFile(t, filepath.Join(dir, "unbound.conf"),
+		"access-control: 10.0.0.0/8 deny\ninclude: "+filepath.Join(dir, "absent.conf")+"\n# edited\n")
+	if !a.Refresh() {
+		t.Error("Refresh() after an edit that still cannot load: got changed=false, want true")
+	}
+	checkLookup(t, a, "10.1.2.3", ACLForward)
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+	checkLookup(t, a, "198.51.100.1", ACLForward)
+	if strings.Contains(log.joined(), "keeping the last good rules") {
+		t.Errorf("a config that has never loaded must not be kept as rules; log:\n%s", log.joined())
+	}
 }
 
 // Every file the rules came from is watched: a change to any of them reloads, nothing else does.

@@ -18,10 +18,12 @@ const (
 	maxACLFiles = 4096 // files read for one config, so that a glob cycle cannot fan out without end
 )
 
-// aclFile is a file the rules came from; info is nil when it was absent.
+// aclFile is a file the rules came from. info is nil only when the path was absent.
+// openFailed means Open failed even though Stat succeeded.
 type aclFile struct {
-	path string
-	info os.FileInfo
+	path       string
+	info       os.FileInfo
+	openFailed bool
 }
 
 // aclGlob is an `include:` pattern and the files it matched.
@@ -39,6 +41,13 @@ type aclDeps struct {
 func (d aclDeps) changed() bool {
 	for _, f := range d.files {
 		fi, err := os.Stat(f.path)
+		if f.openFailed {
+			// The recorded stat, mode included, is this permission error. A chmod is a different stat.
+			if err != nil || f.info == nil || !sameFile(f.info, fi) {
+				return true
+			}
+			continue
+		}
 		if (err != nil) != (f.info == nil) || (err == nil && !sameFile(f.info, fi)) {
 			return true
 		}
@@ -63,8 +72,9 @@ type confWalker struct {
 func newConfWalker() *confWalker { return &confWalker{rows: map[netip.Prefix]ACLAction{}} }
 
 // file reads path as a stream (an include can be a DNSBL list of millions of lines). The identity recorded for it
-// is taken BEFORE the read: a writer racing the read then changes (mtime, size) against it, so the next Refresh
-// reloads instead of trusting a torn read. An error is one Unbound would not start on either.
+// is taken BEFORE the read: a writer racing the read then changes (mtime, size, mode) against it, so the next
+// Refresh reloads instead of trusting a torn read. Open failing where Stat succeeds records that stat; a path
+// Stat cannot see stays absent. An error is one Unbound would not start on either.
 func (w *confWalker) file(path string, depth int) error {
 	if depth > maxACLDepth {
 		return fmt.Errorf("%s: includes nest more than %d deep", path, maxACLDepth)
@@ -74,7 +84,12 @@ func (w *confWalker) file(path string, depth int) error {
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		w.deps.files = append(w.deps.files, aclFile{path: path})
+		info, statErr := os.Stat(path)
+		openFailed := statErr == nil
+		if statErr != nil {
+			info = nil
+		}
+		w.deps.files = append(w.deps.files, aclFile{path: path, info: info, openFailed: openFailed})
 		return err
 	}
 	defer f.Close()

@@ -69,7 +69,7 @@ func NewACL(path string, logf func(format string, args ...any)) *ACL {
 	return a
 }
 
-// Refresh reloads when any file or glob the rules came from changed (mtime, size, inode, matches) and reports
+// Refresh reloads when any file or glob the rules came from changed (mtime, size, inode, mode, matches) and reports
 // whether it did.
 func (a *ACL) Refresh() (changed bool) {
 	a.mu.Lock()
@@ -241,7 +241,8 @@ func parseNetblock(s string) (netip.Prefix, bool) {
 	return netip.PrefixFrom(a, a.BitLen()), true
 }
 
-// sameFile reports whether b is still the file (inode, mtime, size) a was.
+// sameFile reports whether b is still the file (inode, mtime, size, mode) a was.
+// Mode is included because chmod changes neither mtime nor size.
 func sameFile(a, b os.FileInfo) bool {
-	return os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size()
+	return os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size() && a.Mode() == b.Mode()
 }
