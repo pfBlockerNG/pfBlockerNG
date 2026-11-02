@@ -510,8 +510,12 @@ def test_dnsbl_webserver_defaults_closed_and_expands_without_changing_settings(
     """A fresh view hides the deprecated controls, but local and global toggles reveal them."""
     browser = browser_context.browser
     assert browser is not None, "the authenticated browser context must belong to a browser"
-    context = browser.new_context(ignore_https_errors=webui.base_url.startswith("https://"))
-    context.add_cookies(browser_context.cookies())
+    state = browser_context.storage_state()
+    state["origins"] = []
+    context = browser.new_context(
+        ignore_https_errors=webui.base_url.startswith("https://"),
+        storage_state=state,
+    )
     try:
         page = context.new_page()
         _open(page, webui, DNSBL_PAGE)

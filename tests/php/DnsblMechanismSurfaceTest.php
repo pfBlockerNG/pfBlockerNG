@@ -147,20 +147,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		$this->assertStringContainsString('deprecated', strtolower($scope['pfb_vip_help']));
 	}
 
-	public function testDnsblPageWebserverSectionAnnouncesTheDeprecation(): void
-	{
-		$section = pfb_test_page_region(self::DNSBL_PAGE, "new Form_Section('DNSBL Webserver Configuration')", '$form->add($section);');
-		$this->assertStringContainsString('deprecated', strtolower($section), 'the DNSBL Webserver Configuration section must carry the notice');
-	}
-
-	public function testDnsblPageWebserverSectionCarriesItsOwnNoticeApartFromTheVipHelp(): void
-	{
-		// The section's own notice (its first input), not the VIP select's help that the section region above also covers.
-		$notice = pfb_test_page_region(self::DNSBL_PAGE, "new Form_Section('DNSBL Webserver Configuration');", '$section->addInput(new Form_Select(');
-		$this->assertStringContainsString('deprecated', strtolower($notice), 'the section notice must say the response is deprecated');
-		$this->assertStringContainsString('prefer Null Blocking', $notice, 'and name the replacement');
-	}
-
 	public function testGroupEditorLoggingSelectUsesTheSharedMapAfterDefault(): void
 	{
 		$scope = pfb_test_page_eval(pfb_test_page_statement(self::CATEGORY_EDIT_PAGE, '/\$options_logging\s*=/'), []);

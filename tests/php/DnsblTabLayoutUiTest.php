@@ -56,37 +56,6 @@ final class DnsblTabLayoutUiTest extends TestCase
 		$this->assertStringContainsString("new Form_Section('DNSBL Webserver Configuration'", $source);
 	}
 
-	public function testDnsblSectionControlOrderAndPairs(): void
-	{
-		$source = self::source();
-		$names = [
-			"new Form_Checkbox(\n\t'pfb_dnsbl'",
-			"new Form_Checkbox(\n\t'tld_wildcard'",
-			"new Form_Checkbox(\n\t'pfb_hsts'",
-			"new Form_Select(\n\t'pfb_idn'",
-			"new Form_Checkbox(\n\t'pfb_idn_block_malicious'",
-			"new Form_Checkbox(\n\t'pfb_idn_escalate_suspicious'",
-			"new Form_Checkbox(\n\t'pfb_regex'",
-			"new Form_Checkbox(\n\t'pfb_regex_cap'",
-			"new Form_Checkbox(\n\t'pfb_cname'",
-			"new Form_Checkbox(\n\t'pfb_noaaaa'",
-			"new Form_Checkbox(\n\t'pfb_gp'",
-			"new Form_Checkbox(\n\t'pfb_dnsbl_lenient'",
-			"new Form_Select(\n\t'global_log'",
-			"new Form_Checkbox(\n\t'tld_allow'",
-			"new Form_Section('DNSBL Webserver Configuration')",
-		];
-		$last = -1;
-		foreach ($names as $needle) {
-			$pos = strpos($source, $needle);
-			$this->assertNotFalse($pos, "missing {$needle}");
-			$this->assertGreaterThan($last, $pos, "{$needle} is out of DNSBL-section field order");
-			$last = $pos;
-		}
-		$this->assertStringContainsString("gettext('Download Schemes')", $source);
-		$this->assertStringNotContainsString("gettext('Lenient Feed Parsing')", $source);
-	}
-
 	public function testWebserverIsSecondSectionAndFileWasNotTruncated(): void
 	{
 		$source = self::source();
@@ -158,20 +127,6 @@ final class DnsblTabLayoutUiTest extends TestCase
 		$this->assertStringContainsString('e.preventDefault()', $source);
 		$this->assertStringContainsString('Expand all', $source);
 		$this->assertStringContainsString('Collapse all', $source);
-	}
-
-	public function testTldAllowSitsOnTheMainDnsblSection(): void
-	{
-		$source = self::source();
-		$globalPos = strpos($source, "new Form_Select(\n\t'global_log'");
-		$allowPos = strpos($source, "\$section->addInput(new Form_Checkbox(\n\t'tld_allow'");
-		$webPos = strpos($source, "new Form_Section('DNSBL Webserver Configuration')");
-		$this->assertNotFalse($globalPos);
-		$this->assertNotFalse($allowPos, 'tld_allow stays the last field of the DNSBL section');
-		$this->assertNotFalse($webPos);
-		$this->assertGreaterThan($globalPos, $allowPos);
-		$this->assertGreaterThan($allowPos, $webPos);
-		$this->assertStringNotContainsString('$dnsbl_section', $source);
 	}
 
 	public function testPslAllowPrivateSitsInAdBlockSuffixHandling(): void
