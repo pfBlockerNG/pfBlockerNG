@@ -10,8 +10,9 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 * saving with a DNS interface list empty shows the input error and leaves config.xml alone, saving
   Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
   tokens render selected and survive a save that leaves the lists alone;
-* the DDR section sits after DoQ and before DNS Reply Logging, its two checkboxes resolve by their visible labels
-  ``DDR`` and ``DoH on port 443``, the second is disabled while the DoH port is 443, and saving both on persists them;
+* DNS Reply Logging comes first, ahead of pfB-DNS, DoT, DoH, DoQ and DDR, and remains operable with pfB-DNS off or on;
+* DDR's two checkboxes resolve by their visible labels ``DDR`` and ``DoH on port 443``, the second is disabled
+  while the DoH port is 443, and saving both on persists them;
 * the status panel is a collapsible section per transport holding a table of Interface | Address | State rows, each
   state an icon with a hover title and a screen-reader text, and an off transport's table is empty; on a phone the
   tables scroll inside their sections.
@@ -211,16 +212,45 @@ DDR_TOGGLES = (("DDR", "pfb_dns_ddr"), ("DoH on port 443", "pfb_dns_ddr_doh_443"
 DOH_PORT_CFG = f"{DNS_CFG}pfb_dns_doh_port"
 
 
-def test_ddr_section_follows_the_doq_section_and_precedes_dns_reply_logging(browser_page: Page, webui: WebUI) -> None:
-    """issue #3583: in the live DOM the DDR panel title sits after DoQ's and before DNS Reply Logging's."""
+def test_dns_reply_logging_precedes_proxy_settings_and_stays_independent(
+    browser_page: Page, webui: WebUI, screenshot_dir: Path
+) -> None:
+    """Reply logging is first in DOM and on screen, and works with the experimental proxy off or on."""
     page = browser_page
     _open(page, webui, DNS_PAGE)
     titles = [title.strip() for title in page.locator(".panel-title").all_inner_texts()]
-    wanted = ("DNS over QUIC (DoQ)", DDR_SECTION, "DNS Reply Logging")
-    found = [next((i for i, title in enumerate(titles) if title.startswith(want)), -1) for want in wanted]
-    assert -1 not in found and found == sorted(found), (
-        f"expected the panel titles {wanted} in this order, got positions {found} among {titles}"
+    wanted = [
+        "DNS Reply Logging",
+        "pfB-DNS Settings",
+        "DNS over TLS (DoT)",
+        "DNS over HTTPS (DoH)",
+        "DNS over QUIC (DoQ)",
+        DDR_SECTION,
+    ]
+    assert titles[: len(wanted)] == wanted, f"expected settings panels {wanted} first, got {titles}"
+    reply = page.locator('input[name="pfb_py_reply"]')
+    proxy = page.locator('input[name="pfb_dns"]')
+    assert reply.is_visible() and proxy.is_visible(), "reply logging and proxy controls must both be visible"
+    precedes = reply.evaluate(
+        "el => Boolean(el.compareDocumentPosition(document.querySelector('input[name=\"pfb_dns\"]')) "
+        "& Node.DOCUMENT_POSITION_FOLLOWING)"
     )
+    assert precedes, "reply logging checkbox must precede the proxy checkbox in the DOM"
+    reply_box, proxy_box = reply.bounding_box(), proxy.bounding_box()
+    assert reply_box is not None and proxy_box is not None, "both controls must have painted bounds"
+    assert reply_box["y"] + reply_box["height"] <= proxy_box["y"], (
+        f"reply logging must paint above proxy controls: reply={reply_box}, proxy={proxy_box}"
+    )
+    for enabled in (False, True):
+        proxy.set_checked(enabled)
+        assert proxy.is_checked() is enabled, f"proxy checkbox must be {enabled}"
+        assert reply.is_visible() and reply.is_enabled(), f"reply logging unavailable with proxy={enabled}"
+        before = reply.is_checked()
+        reply.set_checked(not before)
+        assert reply.is_checked() is not before, f"reply logging did not toggle with proxy={enabled}"
+        _shot(page, screenshot_dir, f"pfb_dns_reply_first_proxy_{'on' if enabled else 'off'}")
+        reply.set_checked(before)
+        assert reply.is_checked() is before, f"reply logging did not restore with proxy={enabled}"
 
 
 def test_ddr_checkboxes_resolve_by_their_visible_labels_inside_the_ddr_section(

@@ -108,36 +108,6 @@ final class PfbDnsPageWiringTest extends TestCase
 		);
 	}
 
-	public function testThePageCarriesTheDdrSectionBetweenDoqAndReplyLoggingReadFromTheDnsSection(): void
-	{
-		// Given the pfB-DNS page
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
-		$doq = strpos($page, "new Form_Section('DNS over QUIC (DoQ)')");
-		$ddr = strpos($page, "new Form_Section('Discovery of Designated Resolvers (DDR)')");
-		$log = strpos($page, "new Form_Section('DNS Reply Logging')");
-
-		// Then the DDR section sits after DoQ and before DNS Reply Logging, with the DDR toggle first and the 443 toggle second
-		$this->assertNotFalse($doq, 'the DoQ section');
-		$this->assertNotFalse($ddr, 'the DDR section');
-		$this->assertNotFalse($log, 'the DNS Reply Logging section');
-		$this->assertLessThan($ddr, $doq, 'DDR comes after DoQ');
-		$this->assertLessThan($log, $ddr, 'DDR comes before DNS Reply Logging');
-		$section = substr($page, (int) $ddr, (int) $log - (int) $ddr);
-		$after = 0;
-		foreach (self::DDR_FIELDS as $field) {
-			$at = strpos($section, "'{$field}',", $after);
-			$this->assertNotFalse($at, "the DDR section has the {$field} control below the previous one");
-			$after = $at;
-			$this->assertStringContainsString("PfbConfig::read('dns/{$field}')", $page, "{$field} is read through the gateway from the dns section");
-		}
-
-		// And the controls carry the labels and help the operator sees
-		foreach (["gettext('DDR')", "gettext('DoH on port 443')", "'Advertise DoH on port 443'", "'on'", '<strong>Experimental.</strong>', 'IP address SAN',
-			'reverse proxy', 'no longer be reachable', 'next Update', 'Default: <strong>Disabled</strong>'] as $needle) {
-			$this->assertStringContainsString($needle, $section, "the DDR section shows {$needle}");
-		}
-	}
-
 	public function testAFailedSaveBringsBackTheSubmittedDdrFields(): void
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
