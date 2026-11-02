@@ -391,7 +391,7 @@ def test_nested_pass_timeout_section_and_save_roundtrip(
     smoke_vm: helpers.SmokeVM,
     screenshot_dir: Path,
 ) -> None:
-    """The Nested pass timeout control lives in a collapsible Advanced Settings section,
+    """The Database download timeout control lives in a collapsible Advanced Settings section,
     accepts the window's bounds through a real save, and rejects nothing silently.
 
     Scenario: issue #2851's single operator surface for issue #2016's nested-pass budget.

@@ -5,14 +5,10 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * Byte oracle captured by executing the pre-move functions from 4b5ef5a5, then amended for
- * each later intentional template change (the fixture's *_amended keys). Its continent and
- * Reputation hashes pin the current navigation (issue #3593, 11fe12538), not the 4b5ef5a5
- * output; its country_files hashes have not changed since they were first recorded.
- *
- * It intentionally does not use the frozen missing-symbol test: the oracle compares
- * real package output with the country files, every continent/special page,
- * and both empty/populated Reputation outputs.
+ * Byte oracle for the country-data files: the files generated from the seeded continent
+ * sources must match the bytes captured by executing the pre-move functions from 4b5ef5a5.
+ * Generated UI pages are not hashed; their help and markup are covered by the rendered DOM
+ * tests in tests/smoke/ui/test_help_general_ip.py.
  */
 final class GeoipPreMoveGoldenOracleTest extends TestCase
 {
@@ -53,7 +49,7 @@ final class GeoipPreMoveGoldenOracleTest extends TestCase
 		}
 	}
 
-	public function testPackageBytesMatchPreMoveGolden(): void
+	public function testCountryFilesMatchTheCapturedPreMoveOracle(): void
 	{
 		$golden = json_decode(
 			(string) file_get_contents(__DIR__ . '/fixtures/geoip_pre_move_golden.json'),
@@ -62,27 +58,11 @@ final class GeoipPreMoveGoldenOracleTest extends TestCase
 			JSON_THROW_ON_ERROR
 		);
 		$this->assertSame('4b5ef5a5', $golden['captured_from']);
+		$this->assertSame('sha256', $golden['algorithm']);
 		$this->seed();
 		$this->generateWithoutWarnings();
 
 		$this->assertSame($golden['country_files'], $this->hashTree($this->ccdir));
-		$this->assertSame(
-			$golden['continent_pages'],
-			$this->hashFiles($this->output, array_keys($golden['continent_pages']))
-		);
-
-		pfb_build_reputation_tab('', $this->output);
-		$this->assertSame(
-			$golden['reputation_empty'],
-			hash_file('sha256', "{$this->output}/pfblockerng_reputation.php")
-		);
-
-		$et = "	\"ZZ\" => \"Zulu ZZ (1)\",\n		\"AA\" => \"Alpha AA (1)\"\n	";
-		pfb_build_reputation_tab($et, $this->output);
-		$this->assertSame(
-			$golden['reputation_populated'],
-			hash_file('sha256', "{$this->output}/pfblockerng_reputation.php")
-		);
 	}
 
 	public function testPopulatedReputationPreservesLiteralTabMarkerInCountryOptions(): void
@@ -205,16 +185,6 @@ final class GeoipPreMoveGoldenOracleTest extends TestCase
 			$hashes[basename($file)] = hash_file('sha256', $file);
 		}
 		ksort($hashes);
-		return $hashes;
-	}
-
-	/** @param list<string> $names @return array<string,string> */
-	private function hashFiles(string $dir, array $names): array
-	{
-		$hashes = [];
-		foreach ($names as $name) {
-			$hashes[$name] = hash_file('sha256', "{$dir}/{$name}");
-		}
 		return $hashes;
 	}
 

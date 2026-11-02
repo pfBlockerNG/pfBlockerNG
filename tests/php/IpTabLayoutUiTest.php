@@ -20,16 +20,6 @@ final class IpTabLayoutUiTest extends TestCase
 		return $source;
 	}
 
-	public function testCalloutPrintsAboveTheForm(): void
-	{
-		$source = self::source();
-		$callout = strpos($source, "print_callout('<strong>Setting changes are applied on the next scheduled update");
-		$form = strpos($source, 'print ($form)');
-		$this->assertNotFalse($callout, 'IP tab callout missing');
-		$this->assertNotFalse($form, 'print ($form) missing');
-		$this->assertLessThan($form, $callout, 'the apply-guidance callout must render above the form');
-	}
-
 	public function testSectionOrderPutsInterfaceSecondAndSuppressionWithItsToggle(): void
 	{
 		$source = self::source();

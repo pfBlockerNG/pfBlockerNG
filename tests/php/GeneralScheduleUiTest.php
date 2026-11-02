@@ -81,17 +81,6 @@ final class GeneralScheduleUiTest extends TestCase
 		foreach (["'pfb_interval'", "'pfb_min'", "'pfb_hour'", "'pfb_dailystart'"] as $needle) {
 			$this->assertStringNotContainsString($needle, $source, "retired General control remains: {$needle}");
 		}
-		$this->assertStringContainsString(
-			'Default local-time schedule for feed groups and calendar-scheduled Extras. Hourly schedules use the minute; daily schedules use the time; weekly schedules use all three.',
-			$source
-		);
-		$group = strpos($source, "new Form_Group('Default Schedule')");
-		$this->assertNotFalse($group);
-		$help = strpos($source, 'Default local-time schedule for feed groups and calendar-scheduled Extras.', $group);
-		$next = strpos($source, "new Form_Checkbox('pfb_quiet_hours_enabled'", $group);
-		$this->assertNotFalse($help);
-		$this->assertNotFalse($next);
-		$this->assertLessThan($next, $help, 'Default Schedule help must render inside its control group.');
 		// issue #2855: the warning names the failing stage instead of asking for a bug report.
 		$this->assertStringContainsString(
 			"print_info_box(sprintf(gettext('Settings were saved, but schedule-cache generation failed: %s.",

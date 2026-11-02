@@ -689,11 +689,11 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 	$section = new Form_Section("Advanced {$adv_mode}bound Firewall Rule Settings", "adv{$advmode}boundsettings", COLLAPSIBLE|SEC_CLOSED);
 	$section->addInput(new Form_StaticText(
 		NULL,
-		"<span class=\"text-danger\">Note:</span>&nbsp; In general, Auto-Rules are created as follows:<br />
+		"<p>In general, Auto-Rules are created as follows:</p>
 			<dl class=\"dl-horizontal\">
 				<dt>{$adv_mode}bound</dt><dd>'any' port, 'any' protocol, 'any' destination and 'any' gateway</dd>
 			</dl>
-			Use <strong>Advanced {$adv_mode}bound Firewall Rule Settings</strong> to customize these automatic rules."));
+			<p>Use <strong>Advanced {$adv_mode}bound Firewall Rule Settings</strong> to customize these automatic rules.</p>"));
 
 	$section->addInput(new Form_Checkbox(
 		'autoaddrnot_' . $advmode,
@@ -1236,7 +1236,7 @@ $section->addInput(new Form_StaticText(
 	'<p>Proofpoint ET IQRisk is a subscription-based reputation list.</p>'
 	. '<p>The URL must include <code>iprepdata.txt</code>. Enter it as a <strong>Source</strong> on <strong>IPv4</strong>, for example:</p>'
 	. '<p><code style="overflow-wrap:anywhere">https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz</code></p>'
-	. '<p>Select <strong>Format</strong> set to <strong>Auto</strong> and use a <code>.gz</code> file. '
+	. '<p>Set <strong>Format</strong> to <strong>Auto</strong> and use a <code>.gz</code> file. '
 	. 'Replace <code>XXXXXXXXXXXXXXXX</code> with your ETPRO code. See '
 	. '<a target="_blank" rel="noopener noreferrer" href="https://www.proofpoint.com/us/solutions/products/threat-intelligence">Proofpoint IQRisk</a> for details.</p>'
 	. '<p>To use the Match list, create an alias with <strong>List Action</strong> set to <strong>Alias Match</strong> and this file as its <strong>Source</strong>:</p>'
@@ -1259,7 +1259,7 @@ $section->addInput(new Form_Select(
 	$pconfig['etblock'],
 	$options_et_categories,
 	TRUE
-))->setHelp('Select Lists you want to BLOCK.<br /><strong>Use CTRL&nbsp;+&nbsp;CLICK to select/unselect Categories</strong>')
+))->setHelp('Select the lists to block. Use <code>Ctrl+click</code> to select or clear categories.')
   ->setAttribute('size', '35')
   ->setAttribute('style', 'overflow: auto;');
 
@@ -1269,7 +1269,7 @@ $section->addInput(new Form_Select(
 	$pconfig['etmatch'],
 	$options_et_categories,
 	TRUE
-))->setHelp('Select Lists you want to MATCH.<br /><strong>Use CTRL&nbsp;+&nbsp;CLICK to select/unselect Categories</strong>')
+))->setHelp('Select the lists to match. Use <code>Ctrl+click</code> to select or clear categories.')
   ->setAttribute('size', '35')
   ->setAttribute('style', 'overflow: auto;');
 

@@ -3510,7 +3510,7 @@ if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
 // blacklist download pass on a slow link, and its only job is to stop a stalled child
 // from holding the pass -- and pfblockerng_tick()'s log-maintenance gate -- open forever.
 // Since issue #2851 it is also the ABSENT/INVALID value of the configurable budget
-// (General -> Advanced, 'Nested pass timeout'), so a degraded setting lands here.
+// (General -> Advanced, 'Database download timeout'), so a degraded setting lands here.
 if (!defined('PFB_REENTRY_TIMEOUT')) {
 	define('PFB_REENTRY_TIMEOUT', 1800);
 }

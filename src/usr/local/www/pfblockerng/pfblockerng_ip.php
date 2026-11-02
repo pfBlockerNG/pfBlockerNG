@@ -738,14 +738,13 @@ $section->addInput(new Form_Select(
 
 $section->addInput(new Form_Input(
 	'pfb_alias_delta_batch',
-	'Alias Table Delta Batch Size',
+	'Alias Table Incremental Batch Size',
 	'number',
 	$pconfig['pfb_alias_delta_batch'],
 	[ 'min' => '64', 'max' => '4096', 'placeholder' => '512' ]
 ))->setHelp('Default: <strong>512</strong> (range 64–4096). '
-		. 'Entries applied per pfctl call in delta mode. '
-		. 'Use 512 for typical tables; 1024+ for tables with 1M+ entries. '
-		. 'Applies in <strong>Auto (recommended)</strong> and <strong>Always incremental</strong> modes.');
+		. 'Number of entries applied per update step in <strong>Auto (recommended)</strong> and <strong>Always incremental</strong> modes. '
+		. 'Use 512 for typical tables; 1024+ for tables with 1M+ entries.');
 
 $section->addInput(new Form_Input(
 	'ip_placeholder',

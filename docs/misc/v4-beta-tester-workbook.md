@@ -367,9 +367,9 @@ live table so traffic keeps flowing.
 | **Delta** | Always add/remove. Can be slow if the whole table must be rebuilt |
 | **Replace** | Always replace the whole table (old v3 behaviour) |
 
-**Alias Table Delta Batch Size** (default 512) is how many addresses are
-applied per step in Auto/Delta. Leave 512 unless you have million-entry
-tables.
+**Alias Table Incremental Batch Size** (default 512) is how many addresses are
+applied per step in Auto (recommended) and Always incremental modes. Leave 512
+unless you have million-entry tables.
 
 **Placeholder IP Address** is also here (still the dummy address used so an
 empty list is never empty). Leave the default unless you already changed it
@@ -819,7 +819,7 @@ window — that is not a bug.
 - [ ] **General → Advanced Text Editor** — line numbers and highlighting on
       list and script fields; regex and hook scripts can show errors in the
       gutter before you save
-- [ ] **General → Advanced Settings → Nested pass timeout** — how long one
+- [ ] **General → Advanced Settings → Database download timeout** — how long one
       child download may run. On expiry that download tree is killed, the
       log names it, and the **rest of the pass continues**. The download
       retries on the next update. On a slow link, look for that line before

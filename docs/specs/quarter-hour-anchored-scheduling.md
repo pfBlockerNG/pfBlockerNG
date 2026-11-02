@@ -83,6 +83,8 @@ Its help text is:
 > Default local-time schedule for feed groups and calendar-scheduled Extras. Hourly schedules
 > use the minute; daily schedules use the time; weekly schedules use all three.
 
+*Amendment 2026-11-02 (#2918): the rendered help now reads "Default local-time schedule for feed groups and calendar-scheduled Extras. Hourly schedules use Minute; daily schedules use Hour and Minute; weekly schedules also use Weekday." The quote above is historical.*
+
 Registry absence/corruption fallbacks are Sunday (`7`), hour `0`, and minute `0`. Fresh-install
 seeding and upgrade migration persist real values before runtime reads them.
 

@@ -257,7 +257,7 @@ def test_delta_batch_hidden_when_apply_mode_is_replace(
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """Alias Table Delta Batch Size is hidden when Apply Mode is Replace.
+    """Alias Table Incremental Batch Size is hidden when Apply Mode is Replace.
 
     The batch size only applies on the delta path. Replace mode leaves it
     editable today would be a no-op the user can still change. Both directions,

@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #2851 — issue #2016's nested-pass budget becomes ONE operator-configurable
- * setting (General -> Advanced, "Nested pass timeout") that can be raised for slow
+ * setting (General -> Advanced, "Database download timeout") that can be raised for slow
  * links and low-powered appliances WITHOUT ever becoming weakenable.
  *
  * The contract this pins:
