@@ -73,7 +73,7 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		peer := addrPortOf(conn.RemoteAddr()).Addr()
-		metered := !trusts(l.trusted, peer) // the TCP peer: a PROXY header or X-Forwarded-For is only believed from a trusted one
+		metered := !trusts(l.trusted, peer)                                // the TCP peer: a PROXY header or X-Forwarded-For is only believed from a trusted one
 		if metered && l.acl.Lookup(peer.Unmap().WithZone("")) == ACLDrop { // an untrusted denied peer never holds a slot
 			_ = conn.Close()
 			continue
