@@ -355,22 +355,22 @@ $section->addInput(new Form_StaticText(
 
 $section->addInput(new Form_Select(
 	'blacklist_enable',
-	gettext('Blacklist Category'),
+	gettext('DNSBL Category'),
 	$pconfig['blacklist_enable'],
 	$options_blacklist_enable
-))->setHelp('Select to enable DNSBL category based Blacklist(s)<br />'
-		. '<span class="text-danger">Note: </span> Changing this setting saves the page immediately.'
-		. '<br /><span class="text-danger">Note: </span>To also block subdomains of listed domains, enable <strong>Wildcard Blocking</strong> on <strong>DNS</strong> &gt; <strong>DNSBL</strong>.')
+))->setHelp('<p>Enable category-based domain blocking.</p>'
+		. '<p>Changing this setting saves the page immediately.</p>'
+		. '<p>To also block subdomains of listed domains, enable <strong>Wildcard Blocking</strong> on <strong>DNS</strong> &gt; <strong>DNSBL</strong>.</p>')
   ->setAttribute('style', 'width: auto');
 
 if (!empty($blacklist_types)) {
 	$section->addInput(new Form_Select(
 		'blacklist_selected',
-		gettext('Blacklists'),
+		gettext('Category Providers'),
 		$pconfig['blacklist_selected'],
 		$blacklist_options,
 		TRUE
-	))->setHelp('Select Blacklist(s) to enable')
+	))->setHelp('Select the category providers to use.')
 	  ->setAttribute('size', count($blacklist_types) ?: 1)
 	  ->setAttribute('style', 'width: auto');
 }
@@ -396,7 +396,7 @@ $section->addInput(new Form_Select(
 	$pconfig['blacklist_freq'],
 	$options_blacklist_freq
 ))->setHelp('Default: <strong>Never</strong><br />
-	Select how often the Blacklist database(s) will be downloaded. Runs at the <strong>Default Schedule</strong> time and weekday on <strong>General</strong>.')
+	Select how often to download category databases. Runs at the <strong>Default Schedule</strong> time and weekday on <strong>General</strong>.')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Select(
@@ -404,7 +404,7 @@ $section->addInput(new Form_Select(
 	'Logging/Blocking Mode',
 	$pconfig['blacklist_logging'],
 	$options_blacklist_logging
-))->setHelp('<strong>Default</strong> follows the <strong>Global Logging/Blocking Mode</strong> on <strong>DNS</strong> &gt; <strong>DNSBL</strong>; an explicit choice applies to the Blacklist category only.<br />'
+))->setHelp('<strong>Default</strong> follows the <strong>Global Logging/Blocking Mode</strong> on <strong>DNS</strong> &gt; <strong>DNSBL</strong>; an explicit choice applies to <strong>DNSBL Category</strong> only.<br />'
 	. pfb_dnsbl_mechanism_help()
 	. 'Set <strong>Run Scope</strong> to <strong>DNSBL</strong> or <strong>Both</strong>, then use <strong>Run Now</strong>.')
   ->setAttribute('style', 'width: auto');

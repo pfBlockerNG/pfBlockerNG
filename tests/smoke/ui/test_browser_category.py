@@ -30,8 +30,8 @@ ids/handlers/messages are taken from the page's inline ``<script>``
   selected entry?')`` (category.php:628) and only on accept does
   ``$('form').submit()``. The per-row trash icon's ``onclick``
   (category.php:536-539) sets ``#rowid``/``#act`` and calls it; a fresh box has
-  NO category rows (the "No Alias/Groups are defined." placeholder renders
-  instead, category.php:567-575), so no trash icon exists to click. We assert the
+  NO category rows (an empty-list placeholder renders
+  instead), so no trash icon exists to click. We assert the
   function is wired and its confirm() gate fires (cancelling it), and DEFER the
   end-to-end row removal (needs an injected category row) -- see the module
   report.
@@ -87,8 +87,8 @@ pytestmark = pytest.mark.ui_browser
 
 # The IPv4 Category "Summary" page. ?type=ipv4 -> the IP list view; its inline
 # <script> hosts the Save (confirm->AJAX) flow + the global pfb_rownamedelete().
-# A fresh box serves it (the page renders with the "No Alias/Groups" placeholder
-# when no categories are saved -- the JS wiring is unconditional regardless).
+# A fresh box serves it with an empty-list placeholder
+# when no categories are saved -- the JS wiring is unconditional regardless.
 CATEGORY_IPV4 = "/pfblockerng/pfblockerng_category.php?type=ipv4"
 
 # The exact confirm() messages from the inline JS -- asserting the message proves
@@ -219,8 +219,8 @@ def test_row_delete_helper_is_wired_and_confirm_gates_it(
     The per-row trash icon's ``onclick`` (category.php:536-539) calls the global
     ``pfb_rownamedelete()`` (category.php:627-631), which opens
     ``confirm('Delete selected entry?')`` and only on ACCEPT submits the form. A
-    fresh box has NO category rows (the "No Alias/Groups are defined." placeholder
-    renders instead, category.php:567-575), so there is no trash icon to click --
+    fresh box has NO category rows (an empty-list placeholder
+    renders instead), so there is no trash icon to click --
     we therefore drive the global function directly to exercise its confirm()
     gate, and DEFER the end-to-end row removal (needs an injected row).
 

@@ -101,7 +101,7 @@ if ($_POST) {
 
 			if (preg_match("/\W/", $_POST['feed_' . $l_aliasname])) {
 				$input_errors[] = "Feed Settings: [ {$aliasname} ]"
-						. 'Alias/Group name cannot contain spaces, special or international characters.';
+						. 'IP alias or DNSBL group names cannot contain spaces, special or international characters.';
 
 				$pconfig['feed_' . $l_aliasname] = htmlspecialchars($_POST['feed_' . $l_aliasname]) ?: '';
 			}
@@ -337,14 +337,14 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 							$status = "&emsp;"
 								. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
 								. "&rowid={$row['rowid']}\"<span class=\"text-danger\""
-								. "title=\"Alias/Group exists but is currently Disabled\">"
+								. "title=\"IP alias or DNSBL group exists but is currently Disabled\">"
 								. "<i class=\"fa-solid fa-check\"></i></span>"
 								. "</a>";
 						} else {
 							$status = "&emsp;"
 								. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
 								. "&rowid={$row['rowid']}\""
-								. "title=\"Alias/Group exists\">"
+								. "title=\"IP alias or DNSBL group exists\">"
 								. "<i class=\"fa-solid fa-check\"></i>"
 								. "</a>";
 						}
@@ -372,7 +372,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					$status = "&emsp;"
 						. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
 						. "&act=addgroup&atype={$aliasname}\""
-						. "title=\"Add Alias/Group: {$aliasname}\">"
+						. "title=\"Add IP alias or DNSBL group: {$aliasname}\">"
 						. "<i class=\"fa-solid fa-plus-circle\"></i>"
 						. "</a>";
 				}
@@ -684,8 +684,8 @@ pfb_print_pending_changes_box();
 $section = new Form_Section('Feed Settings', 'feedsettings', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	'Note:',
-	'The <strong>Feed Settings</strong> can be used to rename the pre-defined Alias/Group names, and/or<br />'
-	. ' combine multiple Alias/Groups together by using a duplicate Alias/Group name.'
+	'Use <strong>Feed Settings</strong> to rename predefined IP aliases or DNSBL groups. '
+	. 'Use the same name for multiple entries to combine their feeds.'
 ));
 
 // Render only the active type's alias-name override inputs (type-scoped UI).
@@ -743,13 +743,13 @@ print ($section);
 					<dt><?=gettext('Icon')?></dt>
 						<dd><?=gettext('Legend')?></dd>
 					<dt><i class="fa-solid fa-info-circle"></i></dt>
-						<dd><?=gettext('Alias/Group/Feed Description/Information');?></dd>
+						<dd><?=gettext('IP alias, DNSBL group or feed information');?></dd>
 					<dt><i class="fa-solid fa-check"></i></dt>
-						<dd><?=gettext('Item exists in pre-defined Alias/Group');?></dd>
+						<dd><?=gettext('Item exists in the predefined IP alias or DNSBL group');?></dd>
 					<dt><span class="text-danger"><i class="fa-solid fa-check"></i></span></dt>
-						<dd><?=gettext('Item exists but is Disabled in pre-defined Alias/Group');?></dd>
+						<dd><?=gettext('Item exists but is Disabled in the predefined IP alias or DNSBL group');?></dd>
 					<dt><i class="fa-regular fa-circle-check"></i></dt>
-						<dd><?=gettext('Item exists but in a different Alias/Group');?></dd>
+						<dd><?=gettext('Item exists in a different IP alias or DNSBL group');?></dd>
 					<dt><i class="fa-solid fa-plus-circle"></i></dt>
 						<dd><?=gettext('Add Item');?></dd>
 					<dt><span class="text-danger"><i class="fa-solid fa-key"></i></span></dt>
@@ -876,7 +876,7 @@ print ($section);
 								if ($type != $p_type) {
 									print ("{$type}");
 								} else {
-								print ("<p style=\"font-size:75%\">{$type}</p>");
+									print ("<p style=\"font-size:75%\">{$type}</p>");
 								}
 					?>
 				</td>
@@ -899,7 +899,7 @@ print ($section);
 									print ($aliasname);
 								}
 								else {
-								print ("<p style=\"font-size:75%\">{$row['aliasname']}</p>");
+									print ("<p style=\"font-size:75%\">{$row['aliasname']}</p>");
 								}
 					?>
 				</td>
