@@ -403,7 +403,7 @@ Unbound loads `pfb_unbound.py` iff DNSBL is on and nothing fronts it: otherwise 
 (`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it. With DNSBL on the decider imports
 the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
 moves the Resolver through config.xml (never `unbound.conf` directly): `active_interface` `lo0`, `enablessl`
-removed (DoT then comes from pfB-DNS's own `dns/pfb_dns_dot`, seeded once from it), and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its
+removed (DoT then comes from pfB-DNS's own `dns_shared/pfb_dns_dot`, seeded once from it unless an explicit shared choice exists), and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its
 Forwarding `forward-zone:` block, so a bare line there is a syntax error), then `services_unbound_configure(FALSE)`
 regenerates `unbound.conf`. `unbound/port` and `lo0` are **not** changed, so pfSense keeps `127.0.0.1` and `::1` in the
 firewall's `/etc/resolv.conf` (it does only while the port is 53): the proxy serves that loopback port itself, so the
@@ -862,7 +862,22 @@ by `pfb_dns_proxy` in its command line, or by the installed path of the binary t
 whose command line is neither. Pinned by
 `DnsProxyServiceTest`, `DnsProxyGatewayOnlyTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
 
-**DDR flags (issue #3583).** The pfB-DNS page's DDR section has two toggles, `dns/pfb_dns_ddr` and `dns/pfb_dns_ddr_doh_443`, both sync `local` and saved by the same save as the listener settings (`pfb_dns_proxy_listeners_stored()`; a toggle is on only for a posted `on`). `pfb_dns_proxy_service()` adds, right after the TLS flags and only while the snapshot is stored (pfB-DNS on) and `dns/pfb_dns_ddr` is On, `--ddr FQDN` (`system/hostname` + `.` + `system/domain`, quoted: `pfb_dns_proxy_ddr_flags()`) and, with `dns/pfb_dns_ddr_doh_443` On too, `--ddr-doh-443`, which leaves the port out of the DDR DoH record. The second toggle alone adds nothing, as the gateway rejects `--ddr-doh-443` without `--ddr`. A changed toggle changes the script, so a live proxy restarts on the next apply like for any other flag. The page disables the `dns/pfb_dns_ddr_doh_443` checkbox while the stored DoH port is 443 (there is no port to leave out); a disabled control is not posted, so the save keeps the stored value of that toggle while the STORED DoH port is 443 (`pfb_dns_proxy_ddr_doh_443_locked()`, the same condition the page disables it under) and takes the posted one at any other stored port. Pinned by `DnsProxyDdrSettingsTest`, `DnsProxyServiceTest` (the flags across both toggles and pfB-DNS on or off) and `PfbDnsPageWiringTest`.
+**DDR flags (issues #3583, #3649).** The pfB-DNS page's DDR section has two toggles,
+`dns_shared/pfb_dns_ddr` and `dns_shared/pfb_dns_ddr_doh_443`, both included only in **All settings (legacy)**
+and excluded from **Policy and lists** and **Lists and global settings only (legacy)**. They are saved by
+the same save as the listener settings (`pfb_dns_proxy_listeners_stored()`; a toggle is on only for a posted `on`).
+`pfb_dns_proxy_service()` adds, right after the TLS flags and only while the snapshot is stored (pfB-DNS on)
+and `dns_shared/pfb_dns_ddr` is On, `--ddr FQDN` (`system/hostname` + `.` + `system/domain`, quoted:
+`pfb_dns_proxy_ddr_flags()`) and, with `dns_shared/pfb_dns_ddr_doh_443` On too, `--ddr-doh-443`,
+which leaves the port out of the DDR DoH record. The second toggle alone adds nothing, as the gateway
+rejects `--ddr-doh-443` without `--ddr`. A changed toggle changes the script, so a live proxy restarts
+on the next apply like for any other changed flag. Legacy sync receives store configuration only,
+without marking changes pending; the receiver's next manual or scheduled Update regenerates the script.
+Use **Run Now** on **Update** at the receiver to apply received settings without waiting.
+The page disables the `dns_shared/pfb_dns_ddr_doh_443` checkbox while the stored DoH port is 443
+(there is no port to leave out); a disabled control is not posted, so the save keeps the stored value
+while the STORED DoH port is 443 (`pfb_dns_proxy_ddr_doh_443_locked()`) and takes the posted one otherwise.
+Pinned by `DnsProxyDdrSettingsTest`, `DnsProxyServiceTest` and `PfbDnsPageWiringTest`.
 
 In forwarding mode Unbound runs
 `pfb_upstream_observer.py` (`pfb_unbound_python()` and `pfb_unbound_dnsbl()` key on the saved snapshot, never on the

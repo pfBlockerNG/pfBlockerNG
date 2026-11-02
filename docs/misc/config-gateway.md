@@ -268,11 +268,23 @@ Authorization = property of **write**, not call site (generalises
     Resolver snapshot, all four interface/address lists (VIPs included), and certificate reference
     stay in `dns` and are never transmitted. The legacy wire methods/receive merge are unchanged.
     Migration `issue3649-dns-settings-split` moves raw values before registry writeback, retains
-    all node-local fields, and removes only the nine retired locations. Already-received explicit
-    values win over stale old keys; a second run writes nothing. The registry pass preserves
-    these values even when its pre-migration section mode was NEWCFG. An old manual receiver stores
-    the new section inertly; an old automatic receiver ignores it. Neither receives the sender's
-    node enable or Resolver snapshot.
+    all node-local fields, and removes only the nine retired locations. An exception preserves
+    first-load inheritance: if old `pfb_dns_interface` is absent or empty, old DoT enable/port
+    values were ignored installer defaults, so they are removed rather than promoted to shared
+    choices. Already-received explicit new values still win, including Off/empty; seeded old
+    explicit choices migrate unchanged. A second run writes nothing. The registry pass preserves
+    migrated/received choices even when its pre-migration section mode was NEWCFG.
+    An old manual receiver stores the new section inertly; an old automatic receiver ignores it.
+    Neither receives the sender's node enable or Resolver snapshot. If an old manual receiver's
+    administrator edits the old UI after receiving a new section, those later old-key edits still
+    lose to the previously received new values at upgrade. Review and reapply intended transport
+    changes in the upgraded UI; the approved received-wins rule does not track edit chronology.
+    Legacy receives store configuration only, without marking changes pending. The receiving
+    node applies transport changes at its next manual or scheduled Update; use **Run Now** on
+    **Update** there to apply them without waiting. Whole-section semantics also mean that an
+    unseeded sender's absent DoT fields clear the receiver's explicit choices; an already-seeded
+    receiver then reads Off/default port. Configure the sender's DoT choices before syncing if
+    the receiver must retain a particular choice.
     Package downgrade remains unsupported: an older package cannot consume the new shared section,
     but retains its own snapshot and node-local settings. Restore the pre-upgrade configuration
     backup or reinstall the current package; never copy another node's snapshot or erase one to downgrade.

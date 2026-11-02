@@ -240,6 +240,8 @@ $section->addInput(new Form_Select(
 ))->setHelp('<b>Policy and lists</b> sends what this firewall blocks, permits, logs or transforms; its interfaces, VIPs, ports, gateways, credentials and other local settings stay local. '
 		. '<b>All settings (legacy)</b> sends the General, IP and DNSBL settings plus lists, GeoIP, Reputation, Blacklists, Global and SafeSearch settings whole. It also sends pfB-DNS transport toggles, ports, trusted DoH front ends and DDR settings. '
 		. 'The pfB-DNS enable toggle, Resolver snapshot, listen interfaces/addresses (including VIPs) and certificate stay per node. Enable pfB-DNS on the secondary first when DNS Resolver sync is on; disable it on the secondary first too. '
+		. 'Received pfB-DNS settings are stored only, without a changes-pending marker. They take effect at the receiving node\'s next manual or scheduled Update; use <strong>Run Now</strong> on <strong>Update</strong> there to apply them without waiting. '
+		. 'Set the sender\'s DoT choices first: absent DoT fields clear the receiver\'s stored choices. '
 		. '<b>Lists and global settings only (legacy)</b> leaves out the General, IP, DNSBL and pfB-DNS settings. Hook script files and Sync settings are not sent (automatic HA sync carries only the Sync mode marker).'
 		. '<br /><br /><b>Note:</b> When System &gt; High Availability Sync also synchronizes Firewall rules, enable DNSBL with the same DNSBL IP settings on both nodes. Otherwise the peer skips the pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6 auto rules as "Unresolvable alias".');
 $form->add($section);

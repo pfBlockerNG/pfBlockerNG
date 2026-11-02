@@ -3834,12 +3834,15 @@ function pfb_dns_settings_migrate(array $sections): ?array
 	$new_path = PFB_SECTIONS['dns_shared'];
 	$old = is_array($sections[$old_path] ?? NULL) ? $sections[$old_path] : [];
 	$new = is_array($sections[$new_path] ?? NULL) ? $sections[$new_path] : [];
+	// Old installer defaults were ignored until the Resolver seed ran; they are not choices.
+	$unseeded = ($old['pfb_dns_interface'] ?? '') === '';
 	$changed = FALSE;
 	foreach ($old as $key => $value) {
 		if (!in_array($key, PFB_DNS_SHARED_FIELDS, TRUE)) {
 			continue;
 		}
-		if (!array_key_exists($key, $new)) {
+		if (!array_key_exists($key, $new) &&
+		    !($unseeded && in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE))) {
 			$new[$key] = $old[$key];
 		}
 		unset($old[$key]);
