@@ -344,12 +344,18 @@ def _runtime_state(vm: SmokeVM, *, root: str = "") -> dict:
 
 
 def _configure_top1m(vm: SmokeVM) -> None:
-    """Configure TOP1M via pfSsh.php -- a no-session CLI caller, hence PfbConfig::writeSystem()
-    (the gateway's system-context entry point) rather than the page-authorized
-    PfbConfig::writeSection() the DNSBL UI save uses (issue #2071)."""
+    """Enable global TOP1M and opt the injected Group into filtering through the
+    system-context config gateway (this CLI caller has no web session)."""
     result = h.php_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
+        f"$group_path = {h._php_str(f'{h.CFG_DNSBL_LISTS}/0')};\n"
+        "$group = PfbConfig::readSection($group_path);\n"
+        "if (($group['aliasname'] ?? '') !== 'Top1mFixedFile') {\n"
+        "    throw new RuntimeException('TOP1M smoke Group was not injected at row 0');\n"
+        "}\n"
+        "$group['filter_top1m'] = 'on';\n"
+        "PfbConfig::writeSectionSystem($group_path, $group);\n"
         "PfbConfig::writeSystem('dnsbl/top1m_enable', 'on');\n"
         "PfbConfig::writeSystem('dnsbl/top1m_source', PfbTop1mSource::Tranco);\n"
         "PfbConfig::writeSystem('dnsbl/top1m_count', '1');\n"
