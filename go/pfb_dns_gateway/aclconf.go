@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -18,7 +20,8 @@ const (
 	maxACLFiles = 4096 // files read for one config, so that a glob cycle cannot fan out without end
 )
 
-// aclFile is a file the rules came from; info is nil when it was absent.
+// aclFile is a file the rules came from. info is nil when the path was absent or could not be opened for any
+// reason but permission, so that failure is retried on the next Refresh.
 type aclFile struct {
 	path string
 	info os.FileInfo
@@ -63,8 +66,9 @@ type confWalker struct {
 func newConfWalker() *confWalker { return &confWalker{rows: map[netip.Prefix]ACLAction{}} }
 
 // file reads path as a stream (an include can be a DNSBL list of millions of lines). The identity recorded for it
-// is taken BEFORE the read: a writer racing the read then changes (mtime, size) against it, so the next Refresh
-// reloads instead of trusting a torn read. An error is one Unbound would not start on either.
+// is taken BEFORE the read: a writer racing the read then changes (mtime, size, mode) against it, so the next
+// Refresh reloads instead of trusting a torn read. A permission error keeps the stat taken before Open, so it
+// is retried only once that stat changes (a chmod included). An error is one Unbound would not start on either.
 func (w *confWalker) file(path string, depth int) error {
 	if depth > maxACLDepth {
 		return fmt.Errorf("%s: includes nest more than %d deep", path, maxACLDepth)
@@ -72,9 +76,14 @@ func (w *confWalker) file(path string, depth int) error {
 	if w.opened++; w.opened > maxACLFiles {
 		return fmt.Errorf("%s: more than %d files included", path, maxACLFiles)
 	}
+	before, statErr := os.Stat(path)
 	f, err := os.Open(path)
 	if err != nil {
-		w.deps.files = append(w.deps.files, aclFile{path: path})
+		failed := aclFile{path: path}
+		if statErr == nil && errors.Is(err, fs.ErrPermission) {
+			failed.info = before
+		}
+		w.deps.files = append(w.deps.files, failed)
 		return err
 	}
 	defer f.Close()

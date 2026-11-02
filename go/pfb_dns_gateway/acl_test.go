@@ -369,21 +369,31 @@ func TestACLReplacedByRenameIsReloadedByInode(t *testing.T) {
 	checkLookup(t, a, "11.1.1.1", ACLDrop)
 }
 
-// F7: a stale deny must never survive its file.
-func TestACLDeletedFileForwardsEverythingAndRecovers(t *testing.T) {
+// A deleted file is a failed reload. The last good rules stay in force, an unchanged
+// failure is not logged again, and a later successful load replaces that snapshot.
+func TestACLDeletedFileKeepsLastGoodRulesAndRecovers(t *testing.T) {
 	path := writeACLFile(t, aclText("10.0.0.0/8 deny"))
 	var log capturedLog
 	a := NewACL(path, log.logf)
 	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if !a.Refresh() {
 		t.Error("Refresh() after the file was deleted: got changed=false, want true")
 	}
-	checkLookup(t, a, "10.1.2.3", ACLForward)
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+	if strings.Contains(log.joined(), "forwarding every query") {
+		t.Errorf("a deleted file after a good load must not forward every client; log:\n%s", log.joined())
+	}
+	logged := log.count()
 	if a.Refresh() {
 		t.Error("second Refresh() on a still-deleted file: got changed=true, want false")
+	}
+	if log.count() != logged {
+		t.Errorf("an unchanged failed reload must not log again; log:\n%s", log.joined())
 	}
 	if err := os.WriteFile(path, []byte(aclText("10.0.0.0/8 refuse")), 0o644); err != nil {
 		t.Fatal(err)
@@ -392,6 +402,48 @@ func TestACLDeletedFileForwardsEverythingAndRecovers(t *testing.T) {
 		t.Error("Refresh() after the file came back: got changed=false, want true")
 	}
 	checkLookup(t, a, "10.1.2.3", ACLRefuse)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+}
+
+// A reload Unbound would refuse keeps the previous rules. The rows in the failed file
+// do not apply, and a later good file replaces the kept snapshot.
+func TestACLFailedReloadKeepsTheLastGoodRules(t *testing.T) {
+	path := writeACLFile(t, aclText("10.0.0.0/8 deny"))
+	var log capturedLog
+	a := NewACL(path, log.logf)
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "11.1.1.1", ACLRefuse)
+
+	absent := filepath.Join(t.TempDir(), "absent.conf")
+	rewriteFile(t, path, "access-control: 11.0.0.0/8 deny\ninclude: "+absent+"\n")
+	if !a.Refresh() {
+		t.Error("Refresh() after a reload Unbound could not load: got changed=false, want true")
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "11.1.1.1", ACLRefuse)
+	checkLookup(t, a, "127.0.0.1", ACLForward)
+	if strings.Contains(log.joined(), "forwarding every query") {
+		t.Errorf("a reload that fails after a good load must not forward every client; log:\n%s", log.joined())
+	}
+	if got := strings.Count(log.joined(), "keeping the last good rules"); got != 1 {
+		t.Errorf("the failed reload should be logged once, got %d; log:\n%s", got, log.joined())
+	}
+	logged := log.count()
+	if a.Refresh() {
+		t.Error("Refresh() on an unchanged failed reload: got changed=true, want false")
+	}
+	if log.count() != logged {
+		t.Errorf("an unchanged failed reload must not log again; log:\n%s", log.joined())
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	checkLookup(t, a, "11.1.1.1", ACLRefuse)
+
+	rewriteFile(t, path, aclText("11.0.0.0/8 deny"))
+	if !a.Refresh() {
+		t.Error("Refresh() after a later good load: got changed=false, want true")
+	}
+	checkLookup(t, a, "10.1.2.3", ACLRefuse)
+	checkLookup(t, a, "11.1.1.1", ACLDrop)
 }
 
 type lookupCheck struct {

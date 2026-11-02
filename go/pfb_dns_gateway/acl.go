@@ -13,7 +13,7 @@ import (
 type ACLAction int
 
 const (
-	ACLForward ACLAction = iota // let Unbound decide (every action but deny/refuse, and a config that cannot load)
+	ACLForward ACLAction = iota // let Unbound decide (every action but deny/refuse, and a config never loaded yet)
 	ACLDrop                     // Unbound `deny`: send nothing
 	ACLRefuse                   // Unbound `refuse`, or no row names the client: answer REFUSED
 )
@@ -49,7 +49,7 @@ type aclRules struct {
 type aclSnapshot struct {
 	deps   aclDeps
 	rules  aclRules
-	broken bool // Unbound would not start on this config: the gateway forwards everything
+	broken bool // no good load yet: Lookup forwards every client
 }
 
 // ACL mirrors the client part of Unbound's access-control list: the rows of its config file and of every file the
@@ -69,7 +69,7 @@ func NewACL(path string, logf func(format string, args ...any)) *ACL {
 	return a
 }
 
-// Refresh reloads when any file or glob the rules came from changed (mtime, size, inode, matches) and reports
+// Refresh reloads when any file or glob the rules came from changed (mtime, size, inode, mode, matches) and reports
 // whether it did.
 func (a *ACL) Refresh() (changed bool) {
 	a.mu.Lock()
@@ -105,11 +105,16 @@ func (r *aclRules) lookup(client netip.Addr) ACLAction {
 	return ACLRefuse
 }
 
-// load never fails: on any trouble it logs and returns a broken snapshot tied to the files it saw, so an unchanged
-// broken config is not retried (and logged) every tick.
+// load never fails. On trouble it logs and returns a snapshot tied to the files it saw, so an unchanged
+// failure is not retried (and logged) every tick. After a good load those rules stay; only a failure
+// before the first good load forwards every query.
 func (a *ACL) load() *aclSnapshot {
 	w := newConfWalker()
 	if err := w.file(a.path, 0); err != nil {
+		if prev := a.snap.Load(); prev != nil && !prev.broken {
+			a.logf("acl: %v; keeping the last good rules", err)
+			return &aclSnapshot{deps: w.deps, rules: prev.rules}
+		}
 		a.logf("acl: %v; forwarding every query", err)
 		return &aclSnapshot{deps: w.deps, broken: true}
 	}
@@ -236,7 +241,8 @@ func parseNetblock(s string) (netip.Prefix, bool) {
 	return netip.PrefixFrom(a, a.BitLen()), true
 }
 
-// sameFile reports whether b is still the file (inode, mtime, size) a was.
+// sameFile reports whether b is still the file (inode, mtime, size, mode) a was.
+// Mode is included because chmod changes neither mtime nor size.
 func sameFile(a, b os.FileInfo) bool {
-	return os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size()
+	return os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size() && a.Mode() == b.Mode()
 }
