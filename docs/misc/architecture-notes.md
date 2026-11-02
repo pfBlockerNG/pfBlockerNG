@@ -737,6 +737,10 @@ transport is green only when every one of its rows is `listening`), and `pfb_dns
 `PFBDNSSTATUS_<cell>||<icon>||<title>` line per cell; titles are stripped of newlines and `||`, and the JS applies only anchors of the
 known shape. Pinned by `PfbDnsWidgetStatusTest` and `tests/js/widget_render.test.js`.
 
+Widget settings no longer offer a DNSBL Resolver Query frequency (issue #3646): it had no consumer.
+Saving the remaining settings ignores legacy submissions and removes only the stale
+`widget-dnsblquery` key. The widget's fixed 15-second refresh is unchanged.
+
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,
 which is reachable in either mode; the DNSBL tab no longer has it, and its save never assigns the key, so what the pfB-DNS
