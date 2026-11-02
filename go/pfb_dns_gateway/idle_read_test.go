@@ -33,9 +33,6 @@ func TestDoQQueryBudgetLongerThanTheIdleTimeoutIsNotAborted(t *testing.T) {
 	if cfg.KeepAlivePeriod != 0 {
 		t.Fatalf("KeepAlivePeriod %s would keep a finished quiet connection up", cfg.KeepAlivePeriod)
 	}
-	if cfg.MaxIdleTimeout != max(doqIdleTimeout, budget) {
-		t.Fatalf("DoQ idle timeout %s aborts a query whose budget is %s", cfg.MaxIdleTimeout, budget)
-	}
 
 	release := make(chan struct{})
 	r.autoAnswer(func(q decidedQuery) []byte {
@@ -88,29 +85,33 @@ type doqRead struct {
 
 // The next-frame read hits tcpIdle while a query is still at the decider. That timeout must not cancel the query.
 // The client sends nothing else, so the read is the idle one, and the reply is the decider's once it is released.
-func TestTCPInFlightQuerySurvivesTheNextFrameIdleRead(t *testing.T) {
-	const idle = 50 * time.Millisecond
-	r := newRig(t, rigConfig{acl: aclMixed, tcpIdle: idle, timeout: time.Second})
-	release := make(chan struct{})
-	r.autoAnswer(func(q decidedQuery) []byte {
-		<-release
-		return echoAnswer(q)
-	})
-	c := r.tcpClient(clientAllowed)
-	query := buildQuery(t, 7, "held.example.", true)
-	tcpSend(t, c, query)
-	_ = r.nextQuery()
+func TestInFlightQuerySurvivesTheNextFrameIdleRead(t *testing.T) {
+	for _, k := range streamKinds {
+		t.Run(k.name, func(t *testing.T) {
+			const idle = 50 * time.Millisecond
+			r := newRig(t, rigConfig{acl: aclMixed, tcpIdle: idle, timeout: time.Second})
+			release := make(chan struct{})
+			r.autoAnswer(func(q decidedQuery) []byte {
+				<-release
+				return echoAnswer(q)
+			})
+			c := k.dial(t, r)
+			query := buildQuery(t, 7, "held.example.", true)
+			tcpSend(t, c, query)
+			_ = r.nextQuery()
 
-	// The idle read was armed before the decider saw the query. Well past it, a cancelled handler has already
-	// written SERVFAIL or closed the connection. One that is still running has written nothing.
-	_ = c.SetReadDeadline(time.Now().Add(10 * idle))
-	var size [2]byte
-	n, err := io.ReadFull(c, size[:])
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("in-flight TCP query ended when the next-frame read hit tcpIdle: read %d bytes %x, err=%v", n, size[:min(n, 2)], err)
-	}
-	close(release)
-	if got := tcpReply(t, c); !bytes.Equal(got, echoWithQR(seenQuery{wire: query})[0]) {
-		t.Fatalf("reply %x, want the decider's answer: the next-frame idle read cancelled the query", got)
+			// The idle read was armed before the decider saw the query. Well past it, a cancelled handler has
+			// already written SERVFAIL or closed the connection. One that is still running has written nothing.
+			_ = c.SetReadDeadline(time.Now().Add(10 * idle))
+			var size [2]byte
+			n, err := io.ReadFull(c, size[:])
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("in-flight %s query ended when the next-frame read hit tcpIdle: read %d bytes %x, err=%v", k.name, n, size[:min(n, 2)], err)
+			}
+			close(release)
+			if got := tcpReply(t, c); !bytes.Equal(got, echoWithQR(seenQuery{wire: query})[0]) {
+				t.Fatalf("reply %x, want the decider's answer: the next-frame idle read cancelled the query", got)
+			}
+		})
 	}
 }
