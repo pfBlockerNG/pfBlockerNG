@@ -109,6 +109,8 @@ test('TLD dialog on a fresh page is labelled and whitelists into the DNSBL White
 	assert.equal(page.submits.length, 1);
 	assert.equal(page.submits[0]['#addwhitelistdom'], 'true');
 	assert.equal(page.submits[0]['#domain'], 'bad.example');
+	assert.equal(page.submits[0]['#table'], 'www.bad.example');
+	assert.equal(page.submits[0]['#dnsbl_exclude'] || '', '');
 	assert.equal(page.submits[0]['#dnsbl_add'], undefined);
 	assert.equal(page.submits[0]['#ip_white'], undefined);
 });
@@ -121,6 +123,9 @@ test('TLD wildcard button whitelists the wildcard into the DNSBL Whitelist', () 
 
 	assert.equal(page.submits[0]['#dnsbl_wildcard'], 'true');
 	assert.equal(page.submits[0]['#addwhitelistdom'], 'true');
+	assert.equal(page.submits[0]['#domain'], 'bad.example');
+	assert.equal(page.submits[0]['#table'], 'www.bad.example');
+	assert.equal(page.submits[0]['#dnsbl_exclude'] || '', '');
 });
 
 test('add dialog keeps its whitelist labels and feed target', () => {

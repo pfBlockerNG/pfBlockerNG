@@ -28,7 +28,6 @@ from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .webui import looks_like_login_page, row_containing
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from pathlib import Path
 
     from playwright.sync_api import Page
@@ -49,21 +48,50 @@ _ROW = "DNSBL-python,{ts},{domain},127.0.0.1,Python,DNSBL_TLD,TldGroup,{root},TL
 
 
 @pytest.fixture
-def tld_row(smoke_vm: SmokeVM) -> Iterator[tuple[str, str]]:
-    """Seed one TLD-blocked ``dnsbl.log`` row; yield ``(domain, evaluated_root)``; restore log and toggle."""
+def tld_row(smoke_vm: SmokeVM, request: pytest.FixtureRequest) -> tuple[str, str]:
+    """Seed a TLD-blocked row; restore log and toggle even if setup or another cleanup fails."""
     vm = smoke_vm
     root = helpers.unique_domain("ui3647tld")
     domain = f"www.{root}"
 
     prior_dnsbl = helpers.config_get(vm, CFG_DNSBL_ENABLE)
+    exists = vm.ssh("test", "-f", DNSBL_LOG, timeout=15)
+    assert exists.returncode in (0, 1), f"failed to check {DNSBL_LOG}: stderr={exists.stderr!r}"
+    original_size = None
+    if exists.returncode == 0:
+        size_before = vm.ssh("stat", "-f", "%z", DNSBL_LOG, timeout=15)
+        assert size_before.returncode == 0, f"failed to stat {DNSBL_LOG}: stderr={size_before.stderr!r}"
+        original_size = size_before.stdout.strip()
+        assert original_size.isdecimal(), f"invalid {DNSBL_LOG} size: {original_size!r}"
+
+    def restore_dnsbl() -> None:
+        helpers.config_set(vm, CFG_DNSBL_ENABLE, prior_dnsbl)
+        assert helpers.config_get(vm, CFG_DNSBL_ENABLE) == prior_dnsbl, (
+            f"pfb_dnsbl toggle restore did not take (wanted {prior_dnsbl!r}) -- leaked to sibling tests"
+        )
+
+    def restore_log() -> None:
+        if original_size is None:
+            restore = vm.ssh("rm", "-f", DNSBL_LOG, timeout=15)
+            assert restore.returncode == 0, f"failed to remove fixture-created {DNSBL_LOG}: {restore.stderr!r}"
+            absent = vm.ssh("test", "-e", DNSBL_LOG, timeout=15)
+            assert absent.returncode == 1, f"fixture-created {DNSBL_LOG} remains: {absent.stderr!r}"
+        else:
+            restore = vm.ssh("truncate", "-s", original_size, DNSBL_LOG, timeout=15)
+            assert restore.returncode == 0, f"failed to restore {DNSBL_LOG} size: stderr={restore.stderr!r}"
+            size_after = vm.ssh("stat", "-f", "%z", DNSBL_LOG, timeout=15)
+            assert size_after.returncode == 0 and size_after.stdout.strip() == original_size, (
+                f"{DNSBL_LOG} restore did not take (before={original_size!r}, after={size_after.stdout.strip()!r})"
+            )
+
+    # Independent finalizers run even after setup fails or another finalizer raises; pytest reports
+    # cleanup errors separately, preserving the original setup/test failure.
+    request.addfinalizer(restore_dnsbl)
+    request.addfinalizer(restore_log)
     helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
-
     ensure = vm.ssh(f"mkdir -p {DNSBL_LOG.rsplit('/', 1)[0]} && touch {DNSBL_LOG}", timeout=15)
     assert ensure.returncode == 0, f"failed to ensure {DNSBL_LOG} exists: {ensure.stderr!r}"
-    size_before = vm.ssh("stat", "-f", "%z", DNSBL_LOG, timeout=15)
-    assert size_before.returncode == 0, f"failed to stat {DNSBL_LOG}: stderr={size_before.stderr!r}"
-    original_size = size_before.stdout.strip()
 
     append = subprocess.run(
         vm.ssh_argv("tee", "-a", DNSBL_LOG),
@@ -75,18 +103,7 @@ def tld_row(smoke_vm: SmokeVM) -> Iterator[tuple[str, str]]:
     )
     assert append.returncode == 0, f"failed to append the fixture row to {DNSBL_LOG}: stderr={append.stderr!r}"
 
-    yield domain, root
-
-    restore = vm.ssh(f"truncate -s {original_size} {DNSBL_LOG}", timeout=15)
-    assert restore.returncode == 0, f"failed to restore {DNSBL_LOG} size: stderr={restore.stderr!r}"
-    size_after = vm.ssh("stat", "-f", "%z", DNSBL_LOG, timeout=15)
-    assert size_after.returncode == 0 and size_after.stdout.strip() == original_size, (
-        f"{DNSBL_LOG} restore did not take (before={original_size!r}, after={size_after.stdout.strip()!r})"
-    )
-    helpers.config_set(vm, CFG_DNSBL_ENABLE, prior_dnsbl)
-    assert helpers.config_get(vm, CFG_DNSBL_ENABLE) == prior_dnsbl, (
-        f"pfb_dnsbl toggle restore did not take (wanted {prior_dnsbl!r}) -- leaked to sibling tests"
-    )
+    return domain, root
 
 
 @pytest.mark.ui_render
