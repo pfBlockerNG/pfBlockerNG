@@ -113,19 +113,17 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
   `--git-dir` vs `--git-common-dir`, never command text; agent-dedicated checkouts opt out via `CLAUDE_CODE_USER_EMAIL`
   (managed-remote) or
   `git config pfblockerng.allowprimarycommit true`), then rejects every
-  `Co-authored-by:` trailer and any agent author/committer identity that differs
-  from configured `user.name` / `user.email`; runs even under `--no-verify`.
+  `Co-authored-by:` trailer and any agent committer or author identity outside the
+  rule under "Author, committer, and signing"; runs even under `--no-verify`.
 - **`commit-msg`** — rejects any `Co-authored-by:` trailer after Git's message
   editor runs, closing the post-`prepare-commit-msg` insertion window.
 - **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; denies
   agent branch rewrites over unfetched remote history (#1307); validates the final
-  message of every outgoing commit and each outgoing agent commit's configured
-  author/committer identity and good signature from the configured user email; and
-  refuses a push whose `graphify-out/graph.json` differs from a rebuild
-  (`scripts/agent/check-graph-fresh.sh`, #3139) — one grade per pushed tip, in a scratch
-  worktree, decided by that tip's own tree and this host's Graphify. Refresh and commit
-  the graph after every rebase: a rebase replays commits without the pre-commit rebuild,
-  and only a pushed tip is ever proven. Contract: `repository-intelligence.md`.
+  message of every outgoing commit and each outgoing agent commit's author/committer
+  identity (same rule) and good signature from the configured user email; and refuses
+  a push whose `graphify-out/graph.json` differs from a rebuild (#3139; contract in
+  `repository-intelligence.md`). Refresh and commit the graph after every rebase: a
+  rebase replays commits without the pre-commit rebuild.
 
 ## Rebase and diff hygiene
 
@@ -181,8 +179,10 @@ Copilot's cloud agent), `GROK_SESSION_ID` / `GROK_AGENT`, and `OMP_CLI` / `PI_CL
 
 ## Author, committer, and signing (full text)
 
-- **Author = committer = configured user identity.** Never override either with an agent,
-  model, service, or harness identity.
+- **Committer = configured user identity**, never an agent, model, service, or harness.
+  **Author = the same**, or the unchanged author of a published commit an
+  agent rebases or cherry-picks (#3642): accepted only when a commit on a remote-tracking
+  ref has the same author name, email and timestamp. A fresh `--author=` is rejected.
 - **Sign with the user's configured key.** Valid signature + matching user email preserves
   GitHub's normal **Verified** result.
 - **Message = ordinary project commit message.** No generated-by line, attribution footer,

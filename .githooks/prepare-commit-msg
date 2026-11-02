@@ -75,6 +75,12 @@ ident_email() {
 		sed -n 's/^.* <\([^<>]*\)> [0-9][0-9]* [-+][0-9][0-9][0-9][0-9]$/\1/p'
 }
 
+ident_ts() {
+	# Extract the author timestamp from a "Name <email> ts tz" ident line.
+	printf '%s\n' "$1" |
+		sed -n 's/^.* <[^<>]*> \([0-9][0-9]*\) [-+][0-9][0-9][0-9][0-9]$/\1/p'
+}
+
 if [ "$agent_runtime" = "1" ]; then
 	configured_name=$(git config --get user.name 2>/dev/null || true)
 	configured_email=$(git config --get user.email 2>/dev/null || true)
@@ -86,12 +92,26 @@ if [ "$agent_runtime" = "1" ]; then
 	committer_email=$(ident_email "$committer_ident")
 
 	if [ -z "$configured_name" ] || [ -z "$configured_email" ] ||
-		[ "$author_name" != "$configured_name" ] ||
-		[ "$author_email" != "$configured_email" ] ||
 		[ "$committer_name" != "$configured_name" ] ||
 		[ "$committer_email" != "$configured_email" ]; then
 		echo "Agent commits must use the configured user identity" >&2
 		exit 1
+	fi
+
+	# A foreign author is allowed only when the commit replays a published one
+	# (rebase or cherry-pick keeps author name, email and timestamp; issue #3642).
+	if [ "$author_name" != "$configured_name" ] || [ "$author_email" != "$configured_email" ]; then
+		replay_helper=$(dirname -- "$0")/replayed-author.sh
+		if [ ! -r "$replay_helper" ]; then
+			echo "prepare-commit-msg: replayed-author helper missing: $replay_helper" >&2
+			exit 1
+		fi
+		# shellcheck source=replayed-author.sh
+		. "$replay_helper"
+		if ! author_is_replayed "$author_name" "$author_email" "$(ident_ts "$author_ident")"; then
+			echo "Agent commits must use the configured user identity" >&2
+			exit 1
+		fi
 	fi
 fi
 
