@@ -2550,7 +2550,7 @@ function convert_dnsbl_log($mode, $fields) {
 	$unlock_dom = '&nbsp;&nbsp;&nbsp;';
 
 
-	$tnote = "\n\nNote:&emsp;&#8226; Unlocking is temporary; the next update locks the Domain again.\n"
+	$tnote = "\n\nNote:&emsp;&#8226; Unlocking is temporary; the next DNSBL reload locks the Domain again.\n"
 		. "&emsp;&emsp;&emsp;&nbsp;&#8226; Review Threat Source ( i ) Icon for Domain details.\n"
 		. "&emsp;&emsp;&emsp;&nbsp;&#8226; Clear your Browser and OS cache after each Lock/Unlock!";
 
@@ -3169,7 +3169,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// row's table -- a host unlocked in another alias still shows the Unlock
 	// icon here.
 	if ($rtype == 'Block' && !$pfb_geoip) {
-		$tnote = "\n\nNote:\n&emsp;&emsp;&#8226; Unlocking is temporary; the next update locks the IP again.\n"
+		$tnote = "\n\nNote:\n&emsp;&emsp;&#8226; Unlocking is temporary; the next IP table reload locks the IP again.\n"
 			. "&emsp;&emsp;&#8226; Review Threat Source ( i ) Icons for further IP details.";
 
 		if (($ip_unlock[$host] ?? NULL) !== $table) {

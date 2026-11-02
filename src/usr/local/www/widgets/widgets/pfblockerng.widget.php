@@ -49,7 +49,7 @@ pfb_global();
 // Image source definition
 $pfb['down']	= '<i class="fa-solid fa-turn-down" title="No Rules are Defined using this Alias"></i>';
 $pfb['up']	= '<i class="fa-solid fa-turn-up text-success" title="Rules are Defined using this Alias (# of fw rules defined)"></i>';
-$pfb['err']	= '<i class="fa-solid fa-minus-circle text-danger" title="Firewall errors found for this alias."></i>';
+$pfb['err']	= '<i class="fa-solid fa-minus-circle text-danger" title="No pfB_ tables were found in the firewall."></i>';
 
 // Widget customizations
 $wglobal_array = array ('popup' => 'off', 'sortcolumn' => 'none', 'sortmix' => 'off', 'sortdir' => 'asc',

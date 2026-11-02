@@ -215,8 +215,8 @@ $section->addInput(new Form_Checkbox(
 		. 'The proxy starts with the Resolver, including during boot, and handles the firewall\'s own DNS lookups.</p>'
 		. '<p><span class="text-danger"><strong>Warning: High availability</strong></span></p>'
 		. '<ol>'
-		. '<li>With DNS Resolver sync enabled, enable <strong>pfB-DNS</strong> on the secondary before the primary. Otherwise the secondary receives the moved Resolver without a saved copy and refuses it on every apply.</li>'
-		. '<li>Disable it on the secondary before disabling it on the primary. Otherwise restored Resolver settings can conflict with the secondary\'s running proxy.</li>'
+		. '<li>With DNS Resolver sync enabled, enable <strong>pfB-DNS</strong> on the secondary before the primary: save it, apply it with <strong>Run Now</strong> on <strong>Update</strong> and confirm it took effect, because saving only marks the change pending. Otherwise the secondary receives the moved Resolver without a saved copy and refuses it on every apply.</li>'
+		. '<li>Disable it on the secondary before disabling it on the primary: save it, apply it with <strong>Run Now</strong> on <strong>Update</strong> and confirm it took effect first. Otherwise restored Resolver settings can conflict with the secondary\'s running proxy.</li>'
 		. '</ol>'
 		. '<p>Alternatively, turn DNS Resolver sync off before changing <strong>pfB-DNS</strong>.</p>'
 		. '<p>Unset DNS, DoT, DoH and DoQ interfaces, the DoT setting and port, and the certificate are taken from the DNS Resolver once, the first time this page loads or <strong>pfB-DNS</strong> is turned on; '
@@ -237,7 +237,7 @@ $section->addInput(new Form_Select(
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DNS Interface(s)'))
   ->setHelp('Interfaces pfB-DNS answers plain DNS on, at the DNS Resolver\'s <strong>Listen Port</strong>. Loopback (<code>127.0.0.1</code> and <code>::1</code>) is always served: the firewall\'s own lookups go through pfB-DNS. '
-		. '<strong>Localhost</strong>: loopback only. <strong>All</strong>: every firewall address. At least one entry is required.');
+		. '<strong>Localhost</strong>: loopback only. <strong>All</strong>: every firewall address except link-local. At least one entry is required.');
 
 if ($options_dns_cert) {
 	$section->addInput(new Form_Select(

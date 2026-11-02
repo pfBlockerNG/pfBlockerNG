@@ -614,8 +614,8 @@ $section->addInput(new Form_Input(
 	  'placeholder' => (string) PFB_REENTRY_TIMEOUT ]
 ))->setHelp('Default: <strong>' . PFB_REENTRY_TIMEOUT . '</strong> seconds (range '
 		. PFB_REENTRY_TIMEOUT_MIN . '&ndash;' . PFB_REENTRY_TIMEOUT_MAX . ').<br />'
-		. 'Maximum time for the MaxMind, ASN, TOP1M and DNSBL Category downloads during an update. '
-		. 'A download that runs longer is stopped, logged, and retried at the next update. '
+		. 'Maximum time for each nested download pass (MaxMind, ASN, TOP1M and DNSBL Category) during an update, not for each download. '
+		. 'A pass that runs longer is stopped with all its downloads, logged, and retried at the next update. '
 		. 'Raise it on slow links or hardware. A blank, non-numeric or out-of-range value falls back to '
 		. PFB_REENTRY_TIMEOUT . ' seconds.');
 

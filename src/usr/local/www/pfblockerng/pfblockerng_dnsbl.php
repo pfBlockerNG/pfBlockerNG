@@ -2797,7 +2797,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_regex_cap']) === PfbToggle::On,
 	'on'
-))->setHelp('<p>Applies when <strong>Regex Blocking</strong> is enabled. Drop regex patterns longer than 200 characters from feeds and <strong>Regex List</strong>. Without this setting, the limit is 256. Other checks always apply; see <strong>Regex List</strong>.</p>'
+))->setHelp('<p>Drop regex patterns longer than 200 characters from feeds, and from the <strong>Regex List</strong> when <strong>Regex Blocking</strong> is enabled. Feed regex rules are checked even when <strong>Regex Blocking</strong> is off. Without this setting, the limit is 256. Other checks always apply; see <strong>Regex List</strong>.</p>'
 		. '<div class="infoblock">Regex List patterns are checked before feed regex rules. The resolver log reports a rule whose match runs slow and a whole list scan that runs slow; it never removes a rule.</div>');
 
 $section->addInput(new Form_Checkbox(
@@ -3487,7 +3487,7 @@ $top1m_text = '<p><span class="text-danger"><strong>Warning:</strong></span> Pop
 		. '<div class="infoblock">'
 		. '<p><strong>Group scope:</strong> TOP1M is checked only for groups with <strong>TOP1M Whitelist</strong> ticked. Clear the box on groups that carry advertising feeds, such as yoyo or Adaway. Other groups and Category feeds still block TOP1M domains.</p>'
 		. '<p>To block a TOP1M domain, add it to a group\'s <strong>Custom List</strong> and clear that group\'s <strong>TOP1M Whitelist</strong> box. Group order does not matter. The user\'s <strong>DNSBL Whitelist</strong> overrides every block.</p>'
-		. '<p>For a name in the TOP1M list, a ticked group no longer blocks the name or its <code>www.</code> form; deeper subdomains stay blocked.</p>'
+		. '<p>For a name in the TOP1M list, a ticked group no longer blocks the name or its <code>www.</code> form as a domain entry; deeper subdomains stay blocked. Regex rules are not filtered, so a regex from a ticked group can still block a listed name.</p>'
 		. '<p>When enabled, the list is checked for updates daily at the <strong>Default Schedule</strong> time. After an upgrade, run a DNSBL update to apply saved group settings.</p>'
 		. '</div>';
 

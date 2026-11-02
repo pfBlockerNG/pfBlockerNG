@@ -505,7 +505,7 @@ function pfb_editor_toggle_label(): string
 function pfb_editor_toggle_help(): string
 {
 	return 'Adds line numbers, highlighting and undo to list and script fields; regex and hook fields also show syntax warnings. '
-		. 'Turn off for plain text boxes. Entries are still checked when saved.';
+		. 'Turn off for plain text boxes. Syntax warnings appear only in the editor; regex entries are still checked when saved, hook scripts are not.';
 }
 
 /** Render one CodeMirror asset tag when the Advanced Text Editor is enabled. */
