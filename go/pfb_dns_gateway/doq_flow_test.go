@@ -15,12 +15,15 @@ func TestDoQListenerSetsReceiveWindowsForOneMessagePerStream(t *testing.T) {
 		t.Fatalf("DoQ stream cap or idle timeout changed: streams=%d uni=%d idle=%s; want %d, -1, %s",
 			cfg.MaxIncomingStreams, cfg.MaxIncomingUniStreams, cfg.MaxIdleTimeout, int64(maxDoQStreams), doqIdleTimeout)
 	}
-	if cfg.InitialStreamReceiveWindow != doqStreamReceiveWindow || cfg.MaxStreamReceiveWindow != doqStreamReceiveWindow ||
-		cfg.InitialConnectionReceiveWindow != doqConnReceiveWindow || cfg.MaxConnectionReceiveWindow != doqConnReceiveWindow {
-		t.Fatalf("DoQ receive windows are stream initial=%d max=%d conn initial=%d max=%d; want one DNS message (%d) and %d messages (%d)",
+	// Literals, not the constants the config is built from: maxWire-1 or a connection window of one message must fail.
+	const wantStream uint64 = 65535
+	const wantConn uint64 = 100 * 65535
+	if cfg.InitialStreamReceiveWindow != wantStream || cfg.MaxStreamReceiveWindow != wantStream ||
+		cfg.InitialConnectionReceiveWindow != wantConn || cfg.MaxConnectionReceiveWindow != wantConn {
+		t.Fatalf("DoQ receive windows are stream initial=%d max=%d conn initial=%d max=%d; want stream %d and connection %d",
 			cfg.InitialStreamReceiveWindow, cfg.MaxStreamReceiveWindow,
 			cfg.InitialConnectionReceiveWindow, cfg.MaxConnectionReceiveWindow,
-			uint64(doqStreamReceiveWindow), maxDoQStreams, uint64(doqConnReceiveWindow))
+			wantStream, wantConn)
 	}
 }
 
@@ -37,6 +40,8 @@ func TestDoQQueryContextEndsWhenTheConnectionDoes(t *testing.T) {
 	}
 
 	stopConn()
+	// testing.md: the watchdog reports STUCK/ENVIRONMENT. On this wait that label is the regression, a query
+	// context that stays live after the connection ends, not an environment failure.
 	select {
 	case <-qctx.Done():
 	case <-time.After(watchdog):
@@ -52,6 +57,7 @@ func TestDoQQueryContextEndsWhenTheConnectionDoes(t *testing.T) {
 	qctx2, stopQuery2 := doqQueryContext(gateway2, conn2)
 	t.Cleanup(stopQuery2)
 	stopGateway2()
+	// Same watchdog contract: STUCK/ENVIRONMENT here means the query context survived gateway stop.
 	select {
 	case <-qctx2.Done():
 	case <-time.After(watchdog):
@@ -79,6 +85,7 @@ func TestDroppedDoQConnectionReleasesTheSharedInFlightSlot(t *testing.T) {
 	}
 
 	_ = c.conn.CloseWithError(0, "dropped")
+	// eventually reports STUCK/ENVIRONMENT. That is the regression if the slot is still held, not a stuck machine.
 	eventually(t, "the dropped DoQ connection to release its shared in-flight slot while the gateway is still serving", func() bool {
 		return r.g.muxInflight.Load() == 0 && r.g.ctx.Err() == nil
 	})
