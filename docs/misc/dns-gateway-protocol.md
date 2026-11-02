@@ -87,6 +87,15 @@ Unbound's reply has TC set, again over TCP behind a stream PROXYv2 header for th
 whole answer; a TCP or DoT client keeps one pool of upstream TCP connections for those retries, DoH and DoQ open one per
 retry.
 
+Over UDP the gateway keeps the first datagram that is Unbound's reply to the FORWARD and ignores every other one, such as a
+late reply to an earlier query on a reused local port. A reply is a whole 12-byte DNS header with the query's id and QR set,
+and the query's question: the same name (ASCII case-insensitively), type and class. A reply with no question counts only
+when its rcode is an error or it has TC set. Unbound answers a query it refuses before it reads the question (TC set, an
+opcode it does not implement, a bad count, a question that does not parse) with a bare header with QDCOUNT 0 and FORMERR or
+NOTIMP, and that header is the REPLY. A reply with TC set counts even when it has lost all or part of its question. When
+the query's own question does not parse there is no name to compare: any other reply that carries a question then counts
+only when what follows its header is the query's own bytes.
+
 The transport byte tells the decider whether the client has a UDP size limit: for a datagram client an answer the decider
 builds itself is held to the UDP size the client advertised (512 without EDNS, at most the 1232 the decider advertises
 itself; over it the answer is the question alone with TC set, so the client asks again over TCP), for a stream client it is

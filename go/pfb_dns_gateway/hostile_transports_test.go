@@ -20,17 +20,20 @@ import (
 // owns the answer (NOTIMP for another opcode, FORMERR for a bad count or OPT). So on UDP, TCP, DoT, DoH and DoQ a message
 // of the first kind gets no answer and never reaches Unbound, and one of the second kind reaches Unbound as the client
 // sent it (a DoQ message but for the Message ID, which RFC 9250 4.2.1 has the gateway pick) and the client gets
-// Unbound's answer back byte for byte. Unbound is a fake that answers each row with the rcode the row names.
+// Unbound's answer back byte for byte. Unbound is a fake that answers each row with the rcode the row names: once as
+// the message sent back, and once as the bare header the real Unbound sends for the rows marked bare.
 
 const hostileSentinelName = "sentinel.example." // a query sent after one that gets no answer: the barrier that says nothing is coming
 
 // hostileRow is a message and what the gateway must do with it: rcode is Unbound's answer to it, dropped means that the
-// gateway itself never answers it and never asks Unbound.
+// gateway itself never answers it and never asks Unbound, bare means that Unbound (1.26.1, probed) answers it with a
+// 12-byte header and no question.
 type hostileRow struct {
 	name    string
 	wire    []byte
 	rcode   byte
 	dropped bool
+	bare    bool
 }
 
 func hostileHeader(flags, qd, an, ns, ar uint16) []byte {
@@ -74,27 +77,27 @@ func hostileRows() []hostileRow {
 	root := []byte{0}
 	return []hostileRow{
 		{name: "control: an ordinary query", wire: q(rdFlag, 1, 0, 0, 0, hostileQuestion), rcode: 0},
-		{name: "opcode IQUERY", wire: q(1<<11|rdFlag, 1, 0, 0, 0, hostileQuestion), rcode: 4},
-		{name: "opcode STATUS", wire: q(2<<11|rdFlag, 1, 0, 0, 0, hostileQuestion), rcode: 4},
+		{name: "opcode IQUERY", wire: q(1<<11|rdFlag, 1, 0, 0, 0, hostileQuestion), rcode: 4, bare: true},
+		{name: "opcode STATUS", wire: q(2<<11|rdFlag, 1, 0, 0, 0, hostileQuestion), rcode: 4, bare: true},
 		{name: "opcode NOTIFY", wire: q(4<<11, 1, 0, 0, 0, hostileQuestion), rcode: 4},
-		{name: "opcode UPDATE", wire: q(5<<11, 1, 0, 0, 0, hostileQuestion), rcode: 4},
-		{name: "opcode 15", wire: q(15<<11, 1, 0, 0, 0, hostileQuestion), rcode: 4},
-		{name: "QDCOUNT 0", wire: q(rdFlag, 0, 0, 0, 0), rcode: 1},
-		{name: "QDCOUNT 2", wire: q(rdFlag, 2, 0, 0, 0, hostileQuestion, hostileQuestion), rcode: 1},
-		{name: "QDCOUNT 65535 over one question", wire: q(rdFlag, 0xffff, 0, 0, 0, hostileQuestion), rcode: 1},
-		{name: "ANCOUNT 1 and no record", wire: q(rdFlag, 1, 1, 0, 0, hostileQuestion), rcode: 1},
-		{name: "ANCOUNT 65535", wire: q(rdFlag, 1, 0xffff, 0, 0, hostileQuestion), rcode: 1},
-		{name: "NSCOUNT 65535", wire: q(rdFlag, 1, 0, 0xffff, 0, hostileQuestion), rcode: 1},
-		{name: "ARCOUNT 65535", wire: q(rdFlag, 1, 0, 0, 0xffff, hostileQuestion), rcode: 1},
-		{name: "TC set on a query", wire: q(0x0200|rdFlag, 1, 0, 0, 0, hostileQuestion), rcode: 1},
-		{name: "question cut short", wire: q(rdFlag, 1, 0, 0, 0, hostileQuestion[:5]), rcode: 1},
-		{name: "name that is a compression pointer to itself", wire: q(rdFlag, 1, 0, 0, 0, []byte{0xc0, 12, 0, 1, 0, 1}), rcode: 1},
-		{name: "label of 64 bytes", wire: q(rdFlag, 1, 0, 0, 0, []byte{0x40}, bytes.Repeat([]byte{'a'}, 64), []byte{0, 0, 1, 0, 1}), rcode: 1},
+		{name: "opcode UPDATE", wire: q(5<<11, 1, 0, 0, 0, hostileQuestion), rcode: 4, bare: true},
+		{name: "opcode 15", wire: q(15<<11, 1, 0, 0, 0, hostileQuestion), rcode: 4, bare: true},
+		{name: "QDCOUNT 0", wire: q(rdFlag, 0, 0, 0, 0), rcode: 1, bare: true},
+		{name: "QDCOUNT 2", wire: q(rdFlag, 2, 0, 0, 0, hostileQuestion, hostileQuestion), rcode: 1, bare: true},
+		{name: "QDCOUNT 65535 over one question", wire: q(rdFlag, 0xffff, 0, 0, 0, hostileQuestion), rcode: 1, bare: true},
+		{name: "ANCOUNT 1 and no record", wire: q(rdFlag, 1, 1, 0, 0, hostileQuestion), rcode: 1, bare: true},
+		{name: "ANCOUNT 65535", wire: q(rdFlag, 1, 0xffff, 0, 0, hostileQuestion), rcode: 1, bare: true},
+		{name: "NSCOUNT 65535", wire: q(rdFlag, 1, 0, 0xffff, 0, hostileQuestion), rcode: 1, bare: true},
+		{name: "ARCOUNT 65535", wire: q(rdFlag, 1, 0, 0, 0xffff, hostileQuestion), rcode: 1, bare: true},
+		{name: "TC set on a query", wire: q(0x0200|rdFlag, 1, 0, 0, 0, hostileQuestion), rcode: 1, bare: true},
+		{name: "question cut short", wire: q(rdFlag, 1, 0, 0, 0, hostileQuestion[:5]), rcode: 1, bare: true},
+		{name: "name that is a compression pointer to itself", wire: q(rdFlag, 1, 0, 0, 0, []byte{0xc0, 12, 0, 1, 0, 1}), rcode: 1, bare: true},
+		{name: "label of 64 bytes", wire: q(rdFlag, 1, 0, 0, 0, []byte{0x40}, bytes.Repeat([]byte{'a'}, 64), []byte{0, 0, 1, 0, 1}), rcode: 1, bare: true},
 		{name: "OPT whose RDLENGTH runs past the message", wire: q(rdFlag, 1, 0, 0, 1, hostileQuestion, opt(root, 0, 0xffff)), rcode: 1},
 		{name: "OPT with an option that runs past its RDATA", wire: q(rdFlag, 1, 0, 0, 1, hostileQuestion, opt(root, 0, 4, 0, 10, 0, 9)), rcode: 1},
 		{name: "OPT that is not at the root", wire: q(rdFlag, 1, 0, 0, 1, hostileQuestion, opt([]byte{1, 'a', 0}, 0, 0)), rcode: 1},
 		{name: "OPT of version 1", wire: q(rdFlag, 1, 0, 0, 1, hostileQuestion, opt(root, 1<<16, 0)), rcode: 1},
-		{name: "two OPT records", wire: q(rdFlag, 1, 0, 0, 2, hostileQuestion, opt(root, 0, 0), opt(root, 0, 0)), rcode: 1},
+		{name: "two OPT records", wire: q(rdFlag, 1, 0, 0, 2, hostileQuestion, opt(root, 0, 0), opt(root, 0, 0)), rcode: 1, bare: true},
 		{name: "a message that is already a response", wire: q(0x8000|rdFlag, 1, 0, 0, 0, hostileQuestion), dropped: true},
 		{name: "a runt of 11 bytes", wire: hostileHeader(rdFlag, 1, 0, 0, 0)[:11], dropped: true},
 		{name: "an empty message", wire: []byte{}, dropped: true},
@@ -114,7 +117,28 @@ func requireSentinel(t *testing.T, reply []byte) {
 }
 
 func TestTheSameHostileMessagesGetTheSameResultOnEveryTransport(t *testing.T) {
-	rows := hostileRows()
+	runHostileMessages(t, hostileRows(), func(row hostileRow, query []byte) []byte {
+		reply := bytes.Clone(query)
+		reply[2] = reply[2]&^0x02 | 0x80 // Unbound's answer never carries TC: a truncated one is asked again over TCP by every transport but UDP
+		reply[3] = reply[3]&0xf0 | row.rcode
+		return reply
+	})
+}
+
+// Unbound answers a message it refuses before it reads the question with no question at all, so a gateway that kept
+// only replies with the client's question would turn each of those into SERVFAIL on every transport.
+func TestTheSameBareErrorsFromUnboundReachTheClientOnEveryTransport(t *testing.T) {
+	var rows []hostileRow
+	for _, row := range hostileRows() {
+		if row.bare {
+			rows = append(rows, row)
+		}
+	}
+	runHostileMessages(t, rows, func(row hostileRow, query []byte) []byte { return bareReply(query, row.rcode, false) })
+}
+
+// runHostileMessages sends each row on every transport against a fake Unbound that answers a row with unboundReply.
+func runHostileMessages(t *testing.T, rows []hostileRow, unboundReply func(row hostileRow, query []byte) []byte) {
 	byBody := map[string]hostileRow{}
 	for _, row := range rows {
 		if len(row.wire) >= 2 {
@@ -123,19 +147,14 @@ func TestTheSameHostileMessagesGetTheSameResultOnEveryTransport(t *testing.T) {
 	}
 	sentinel := buildQuery(t, 0xBEEF, hostileSentinelName, true)
 	answerLikeUnbound := answering(func(q seenQuery) [][]byte {
-		reply := bytes.Clone(q.wire)
-		reply[2] = reply[2]&^0x02 | 0x80 // Unbound's answer never carries TC: a truncated one is asked again over TCP by every transport but UDP
 		if row, ok := byBody[string(q.wire[2:])]; ok {
-			reply[3] = reply[3]&0xf0 | row.rcode
+			return [][]byte{unboundReply(row, q.wire)}
 		}
+		reply := bytes.Clone(q.wire)
+		reply[2] = reply[2]&^0x02 | 0x80
 		return [][]byte{reply}
 	})
-	expected := func(row hostileRow) []byte {
-		reply := bytes.Clone(row.wire)
-		reply[2] = reply[2]&^0x02 | 0x80
-		reply[3] = reply[3]&0xf0 | row.rcode
-		return reply
-	}
+	expected := func(row hostileRow) []byte { return unboundReply(row, row.wire) }
 
 	for _, tr := range []string{"udp", "tcp", "dot", "doh", "doq"} {
 		t.Run(tr, func(t *testing.T) {
