@@ -47,22 +47,20 @@ final class SyncDnsMixedVersionTest extends TestCase
 		}
 		$this->assertArrayHasKey('pfblockerngdnssettings', $payload, 'vacuity guard: the new sender sent its new section');
 		$this->assertArrayNotHasKey('pfblockerngdns', $payload);
+		if ($transport === 'manual') {
+			// The live XMLRPC smoke case covers core's receiver; this case proves the sender's safe payload.
+			return;
+		}
 		$GLOBALS['config'] = ['unbound' => ['active_interface' => 'lo0', 'custom_options' => 'B-MOVED']];
 		config_set_path($localPath, $local);
 		$before = $GLOBALS['config'];
-		if ($transport === 'manual') {
-			// Core's whole-section merge stores the unknown section inertly.
-			config_set_path('installedpackages', array_merge(config_get_path('installedpackages'), $payload));
-			$this->assertSame('8853', config_get_path($sharedPath . '/pfb_dns_dot_port'));
-		} else {
-			// The released hook has no knowledge of the new section and ignores it.
-			foreach (pfb_test_released_plugin_xmlrpc_recv(['installedpackages' => $payload]) as $path => $value) {
-				if ($path !== 'xmlrpc_recv_result') {
-					config_set_path($path, $value);
-				}
+		// The released hook has no knowledge of the new section and ignores it.
+		foreach (pfb_test_released_plugin_xmlrpc_recv(['installedpackages' => $payload]) as $path => $value) {
+			if ($path !== 'xmlrpc_recv_result') {
+				config_set_path($path, $value);
 			}
-			$this->assertNull(config_get_path($sharedPath));
 		}
+		$this->assertNull(config_get_path($sharedPath));
 		$this->assertSame($local, config_get_path($localPath));
 		$this->assertSame($before['unbound'], config_get_path('unbound'));
 	}

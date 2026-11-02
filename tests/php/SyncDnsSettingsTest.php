@@ -91,19 +91,18 @@ final class SyncDnsSettingsTest extends TestCase
 		}
 		$this->assertSame(self::VALUES, $payload['pfblockerngdnssettings']['config'][0] ?? NULL);
 		$this->assertArrayNotHasKey('pfblockerngdns', $payload);
+		if ($transport === 'manual') {
+			// Core receive is covered by the permanent self-XMLRPC smoke case, not a copied merge.
+			return;
+		}
 		// B already owns a moved Resolver and its snapshot, or has explicitly disabled pfB-DNS.
 		$GLOBALS['config'] = ['unbound' => ['active_interface' => 'lo0', 'custom_options' => 'B-MOVED']];
 		config_set_path(self::LOCAL, self::local($toggle));
 		config_set_path(self::SHARED, ['pfb_dns_doh_port' => '4443']);
 		$unbound = $GLOBALS['config']['unbound'];
-		if ($transport === 'manual') {
-			// Core xmlrpc.php merge_installedpackages_section replaces sent sections, without package hooks.
-			config_set_path('installedpackages', array_merge(config_get_path('installedpackages'), $payload));
-		} else {
-			foreach (pfblockerng_plugin_xmlrpc_recv(['installedpackages' => $payload]) as $path => $value) {
-				if ($path !== 'xmlrpc_recv_result') {
-					config_set_path($path, $value);
-				}
+		foreach (pfblockerng_plugin_xmlrpc_recv(['installedpackages' => $payload]) as $path => $value) {
+			if ($path !== 'xmlrpc_recv_result') {
+				config_set_path($path, $value);
 			}
 		}
 		$this->assertSame(self::local($toggle), PfbConfig::readSection(self::LOCAL));
