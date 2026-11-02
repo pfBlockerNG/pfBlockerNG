@@ -411,14 +411,51 @@ func TestDoHTrustedPeerXForwardedForRightmostOfTheLastHeader(t *testing.T) {
 	}
 }
 
-func TestDoHTrustedPeerXForwardedForOverridesTheProxySource(t *testing.T) {
-	r, m, addr := newDoHRig(t, "127.0.0.0/8")
-	r.autoAnswer(echoAnswer)
-	c := newDoHClient(t, addr, m, dohOptions{prefix: pp2TCP("192.0.2.7:51000", "192.0.2.1:443")})
-	c.do(c.get(dnsParam(buildQuery(t, 0, "example.", true)), "X-Forwarded-For", "203.0.113.9"))
-	if q := r.nextQuery(); q.ip != "203.0.113.9" {
-		t.Fatalf("client %s, want the X-Forwarded-For address 203.0.113.9", q.ip)
-	}
+// A trusted peer's PROXY source is the client for the ACL and the forward. X-Forwarded-For does not replace it,
+// including when that source is denied and the header names an allowed address. With no PROXY source, the header's
+// address is still the client.
+func TestDoHTrustedPeerProxySourceWinsOverXForwardedFor(t *testing.T) {
+	t.Run("PROXY source", func(t *testing.T) {
+		r, m, addr := newDoHRig(t, "127.0.0.0/8")
+		r.autoForward()
+		c := newDoHClient(t, addr, m, dohOptions{prefix: pp2TCP("192.0.2.7:51000", "192.0.2.1:443")})
+		if resp, _ := c.do(c.get(dnsParam(buildQuery(t, 0, "allowed.example.", true)), "X-Forwarded-For", "203.0.113.9")); resp.StatusCode != 200 {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		if q := r.nextQuery(); q.ip != "192.0.2.7" {
+			t.Fatalf("client %s, want the PROXY source 192.0.2.7, not the X-Forwarded-For address 203.0.113.9", q.ip)
+		}
+		src, _, _ := parsePP2(t, r.up.next().header)
+		if src != netip.MustParseAddrPort("192.0.2.7:51000") {
+			t.Fatalf("Unbound was told the client is %s, want the PROXY source 192.0.2.7:51000", src)
+		}
+	})
+
+	t.Run("denied PROXY source", func(t *testing.T) {
+		for _, forwarded := range []string{clientAllowed, "127.0.0.1"} {
+			t.Run(forwarded, func(t *testing.T) {
+				r, m, addr := newDoHRig(t, "127.0.0.0/8")
+				r.autoAnswer(echoAnswer)
+				c := newDoHClient(t, addr, m, dohOptions{prefix: pp2TCP(clientDenied+":51000", "192.0.2.1:443")})
+				query := buildQuery(t, 0x6666, "blocked.example.", true)
+				if resp, err := c.http.Do(c.get(dnsParam(query), "X-Forwarded-For", forwarded)); err == nil {
+					resp.Body.Close()
+					t.Fatalf("PROXY source %s with X-Forwarded-For %s got a response (status %d): the request must still be denied", clientDenied, forwarded, resp.StatusCode)
+				}
+				r.requireNoOtherQuery()
+			})
+		}
+	})
+
+	t.Run("no PROXY source", func(t *testing.T) {
+		r, m, addr := newDoHRig(t, "127.0.0.0/8")
+		r.autoAnswer(echoAnswer)
+		c := newDoHClient(t, addr, m, dohOptions{source: clientAllowed})
+		c.do(c.get(dnsParam(buildQuery(t, 0, "example.", true)), "X-Forwarded-For", "203.0.113.9"))
+		if q := r.nextQuery(); q.ip != "203.0.113.9" {
+			t.Fatalf("client %s, want the X-Forwarded-For address 203.0.113.9", q.ip)
+		}
+	})
 }
 
 // T11: an unusable X-Forwarded-For leaves the client as it was: the PROXY source, else the peer.

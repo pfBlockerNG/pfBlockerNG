@@ -239,13 +239,16 @@ func dohWire(w http.ResponseWriter, r *http.Request) ([]byte, int) {
 	return nil, http.StatusMethodNotAllowed
 }
 
-// requestClient is the client of a request: the PROXY source of a trusted peer that sent a header, else the TCP peer;
-// then, for a trusted peer, the rightmost entry of the last X-Forwarded-For header when it is an address (HAProxy's
-// `option forwardfor` appends its own header line, so only the last one is the front end's).
+// requestClient is the client of a request: a PROXY source whose address is not the TCP peer's, else the TCP peer.
+// Only then, for a trusted peer, the rightmost entry of the last X-Forwarded-For header replaces it when that entry
+// is an address (HAProxy's `option forwardfor` appends its own header line, so only the last one is the front end's).
 func requestClient(r *http.Request, info connInfo, trusted []netip.Prefix) netip.AddrPort {
 	client := info.peer
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil { // a PROXY header with no IP source leaves the peer
 		client = ap
+	}
+	if client.Addr() != info.peer.Addr() { // the header named a client; X-Forwarded-For must not replace it
+		return client
 	}
 	if !trusts(trusted, info.peer.Addr()) {
 		return client
