@@ -88,7 +88,7 @@ func doqQueryContext(gateway, conn context.Context) (context.Context, context.Ca
 	ctx, cancel := context.WithCancel(gateway)
 	stop := context.AfterFunc(conn, cancel)
 	return ctx, func() {
-		stop()
+		stop() // unregisters the AfterFunc, so a long-lived connection does not keep one callback per query
 		// cancel() drops this child of the gateway context when the caller stops the query.
 		// AfterFunc only runs when the connection context ends, so removing cancel() leaves
 		// every query context registered until the gateway itself stops.
