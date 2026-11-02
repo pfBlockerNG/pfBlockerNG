@@ -6,17 +6,12 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3539 — only the apply pass decides whether the DNSBL web server runs. The resolver reload
- * (pfb_update_unbound() with a config change) and the dashboard widget's query-frequency save used to
- * restart it; with no VIP demand that would launch nothing useful, and with it the apply already restarts
- * it when its conf changed, so neither restarts it any more.
+ * issue #3539 — only the apply pass decides whether the DNSBL web server runs. A resolver
+ * reload with a config change must not restart it; the apply pass already handles conf changes.
  */
 #[CoversFunction('pfb_update_unbound')]
 final class DnsblWebServerNoRestartTest extends TestCase
 {
-	private const ROOT = __DIR__ . '/../..';
-	private const WIDGET = self::ROOT . '/src/usr/local/www/widgets/widgets/pfblockerng.widget.php';
-
 	private string $dir = '';
 	/** @var array<string,array{bool,mixed}> */
 	private array $savedGlobals = [];
@@ -88,57 +83,4 @@ final class DnsblWebServerNoRestartTest extends TestCase
 		$this->assertNotContains(['restart_service', 'pfb_dnsbl'], $GLOBALS['pfb_test_service_calls']);
 	}
 
-	public function testSavingTheWidgetQueryFrequencyDoesNotRestartTheWebServer(): void
-	{
-		// GIVEN the dashboard widget and a Query frequency that differs from the stored one
-		// WHEN the widget saves it
-		$result = $this->runWidget(['pfb_submit' => 'save', 'pfb_dnsblquery' => '77']);
-
-		// THEN the save ran (the new frequency is stored)
-		$this->assertSame(0, $result['status'], $result['stderr']);
-		$this->assertSame('77', $result['query'], 'the widget did not store the new Query frequency');
-		// AND the web server was not restarted
-		$this->assertNotContains(['restart_service', 'pfb_dnsbl'], $result['calls']);
-	}
-
-	/** @return array{status:int,stderr:string,query:mixed,calls:list<array{string,string}>} */
-	private function runWidget(array $post): array
-	{
-		$root     = var_export(self::ROOT, TRUE);
-		$widget   = var_export(self::WIDGET, TRUE);
-		$postCode = var_export($post, TRUE);
-		$shim     = var_export("{$this->dir}/shim", TRUE);
-		$script   = <<<PHP
-require {$root} . '/tests/php/bootstrap.php';
-\$_GET = [];
-\$_POST = {$postCode};
-\$_SERVER = ['HTTP_SEC_FETCH_SITE' => 'same-origin'];
-\$widgetname = 'pfblockerng';
-mkdir({$shim}, 0700, TRUE);
-file_put_contents({$shim} . '/guiconfig.inc', '<?php');
-set_include_path({$shim} . PATH_SEPARATOR . get_include_path());
-set_error_handler(static function (int \$severity, string \$message): bool {
-	fwrite(STDERR, \$severity . ': ' . \$message . "\\n");
-	return TRUE;
-});
-register_shutdown_function(static function (): void {
-	echo "\\n__PFB_RESULT__" . json_encode([
-		'query' => \$GLOBALS['pfb']['wglobal']['widget-dnsblquery'] ?? NULL,
-		'calls' => \$GLOBALS['pfb_test_service_calls'] ?? [],
-	]);
-});
-require {$widget};
-PHP;
-		$process = proc_open([PHP_BINARY, '-r', $script], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-		$this->assertIsResource($process);
-		$stdout = (string) stream_get_contents($pipes[1]);
-		$stderr = (string) stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$status = proc_close($process);
-		$marker = strrpos($stdout, '__PFB_RESULT__');
-		$this->assertIsInt($marker, $stdout);
-		$state = json_decode(substr($stdout, $marker + strlen('__PFB_RESULT__')), TRUE, 512, JSON_THROW_ON_ERROR);
-		return ['status' => $status, 'stderr' => $stderr, 'query' => $state['query'], 'calls' => $state['calls']];
-	}
 }

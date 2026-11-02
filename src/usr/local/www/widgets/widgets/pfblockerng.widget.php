@@ -52,7 +52,7 @@ $pfb['up']	= '<i class="fa-solid fa-turn-up text-success" title="Rules are Defin
 $pfb['err']	= '<i class="fa-solid fa-minus-circle text-danger" title="pf Errors found."></i>';
 
 // Widget customizations
-$wglobal_array = array ('popup' => 'off', 'sortcolumn' => 'none', 'sortmix' => 'off', 'sortdir' => 'asc', 'dnsblquery' => 5,
+$wglobal_array = array ('popup' => 'off', 'sortcolumn' => 'none', 'sortmix' => 'off', 'sortdir' => 'asc',
 			'maxfails' => 3, 'maxheight' => 2500, 'clearip' => 'never', 'cleardnsbl' => 'never', 'show_agg' => 'off');
 
 $pfb['wglobal'] = PfbConfig::readSection('installedpackages/pfblockerngglobal');
@@ -112,11 +112,6 @@ if ($_POST) {
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-cleardnsbl', $pfb['wglobal']['widget-cleardnsbl']);
 		}
-		if (is_numeric($_POST['pfb_dnsblquery'] ?? '') && $_POST['pfb_dnsblquery'] < 10000) {
-			$pfb['wglobal']['widget-dnsblquery']	= $_POST['pfb_dnsblquery'];
-			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
-			config_set_path('installedpackages/pfblockerngglobal/widget-dnsblquery', $pfb['wglobal']['widget-dnsblquery']);
-		}
 		if (is_numeric($_POST['pfb_maxfails'] ?? '') && $_POST['pfb_maxfails'] < 100) {
 			$pfb['wglobal']['widget-maxfails']	= $_POST['pfb_maxfails'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
@@ -174,6 +169,9 @@ if ($_POST) {
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_del_path('installedpackages/pfblockerngglobal/widget-maxpivot');
 		}
+		unset($pfb['wglobal']['widget-dnsblquery']);
+		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
+		config_del_path('installedpackages/pfblockerngglobal/widget-dnsblquery');
 
 		write_config('pfBlockerNG: Saved Widget customizations via Dashboard');
 		header("Location: /");
@@ -1083,13 +1081,6 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 				<option value="<?=$cleardnsbl?>" <?=($cleardnsbl == $pfb['cleardnsbl'] ? 'selected' : '')?> ><?=$cleartype?></option>
 			<?php endforeach;?>
 			</select>
-		</div>
-	</div>
-	<div class="form-group">
-		<label for="pfb_dnsblquery" class="col-sm-8 control-label">Enter DNSBL Resolver Query frequency (Default:5)</label>
-		<div class="col-sm-4">
-			<input type="number" name="pfb_dnsblquery" value="<?=$pfb['dnsblquery']?>"
-				min="5" max="300" class="form-control" />
 		</div>
 	</div>
 	<div class="form-group">
