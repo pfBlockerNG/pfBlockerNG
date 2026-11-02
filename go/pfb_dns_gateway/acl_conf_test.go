@@ -293,6 +293,74 @@ func TestACLUnreadableIncludeKeepsLastGoodRulesUntilTheModeReturns(t *testing.T)
 	checkLookup(t, a, "127.0.0.1", ACLForward)
 }
 
+// An include glob whose directory cannot be opened fails the reload, so a deny that lives in the glob stays
+// denied over the broader allow. A readable directory with no matches is an empty include and does not fail
+// the load; a directory that is not there is an empty include too.
+func TestACLUnreadableGlobDirectoryKeepsTheDeniedAddress(t *testing.T) {
+	if os.Getuid() == 0 {
+		if os.Getenv("PFB_ACL_MODE_USER") == "" {
+			runAsModeUser(t, "TestACLUnreadableGlobDirectoryKeepsTheDeniedAddress")
+			return
+		}
+		becomeModeUser(t)
+	}
+
+	dir := confTree(t, map[string]string{
+		"unbound.conf": "access-control: 10.0.0.0/8 allow\n" +
+			"include: {dir}/acl.d/*.conf\n" +
+			"include: {dir}/empty.d/*.conf\n" +
+			"include: {dir}/missing.d/*.conf\n",
+		"acl.d/deny.conf": "access-control: 10.1.2.3/32 deny\n",
+	})
+	emptyDir := filepath.Join(dir, "empty.d")
+	if err := os.Mkdir(emptyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := &capturedLog{}
+	a := NewACL(filepath.Join(dir, "unbound.conf"), log.logf)
+
+	entries, readErr := os.ReadDir(emptyDir)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("test premise: empty.d must be readable and empty, got %d entries, err %v", len(entries), readErr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing.d")); !os.IsNotExist(err) {
+		t.Fatalf("test premise: missing.d must be absent, stat err %v", err)
+	}
+	checkAll(t, a, map[string]ACLAction{
+		"10.1.2.3":  ACLDrop,    // the glob's deny, more specific than the allow
+		"10.9.9.9":  ACLForward, // the broader allow
+		"192.0.2.1": ACLRefuse,  // no row names it: Refuse, not a failed load's forward-all
+	})
+	loaded := log.joined()
+	if !strings.Contains(loaded, "acl: loaded 2 entries from 2 files") ||
+		strings.Contains(loaded, "forwarding every query") ||
+		strings.Contains(loaded, "keeping the last good rules") {
+		t.Errorf("a readable empty include directory must not fail the load; log:\n%s", loaded)
+	}
+
+	aclDir := filepath.Join(dir, "acl.d")
+	t.Cleanup(func() { _ = os.Chmod(aclDir, 0o755) })
+	if err := os.Chmod(aclDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Open(aclDir); err == nil {
+		f.Close()
+		t.Fatal("test premise: mode 000 directory opened; mode bits are not in force")
+	}
+	if !a.Refresh() {
+		t.Error("Refresh() after the glob directory became unreadable: got changed=false, want true")
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop) // still denied; the broader allow must not take over
+	checkLookup(t, a, "10.9.9.9", ACLForward)
+	checkLookup(t, a, "192.0.2.1", ACLRefuse)
+	if strings.Contains(log.joined(), "forwarding every query") {
+		t.Errorf("an unlistable glob after a good load must not forward every client; log:\n%s", log.joined())
+	}
+	if got := strings.Count(log.joined(), "keeping the last good rules"); got != 1 {
+		t.Errorf("the unlistable glob should keep the last good rules once, got %d; log:\n%s", got, log.joined())
+	}
+}
+
 // Only a permission error is a failure that waits for the file to change. Any other open error (here a socket,
 // standing in for a transient EMFILE or EIO) is retried on every Refresh, so the edit it hid is not lost.
 func TestACLOpenErrorThatIsNotPermissionIsRetriedOnEveryRefresh(t *testing.T) {

@@ -184,8 +184,25 @@ func (w *confWalker) allowImplicit() {
 }
 
 // globFiles is filepath.Glob without its leading-dot rule: a wildcard never matches a dot-name the pattern does not
-// spell out, as glob(3) does.
+// spell out, as glob(3) does. A missing pattern directory is no match; any other stat or open error is returned
+// (issue #3654: filepath.Glob swallows those, so an unlistable directory reloaded as an empty include).
 func globFiles(pattern string) ([]string, error) {
+	dir := filepath.Dir(pattern)
+	if _, err := os.Stat(dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d.Close()
+
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, err
