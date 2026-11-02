@@ -246,6 +246,34 @@ func TestDoHACLDenyClosesAtAcceptBeforeEitherConnectionCap(t *testing.T) {
 	r.requireNoOtherQuery()
 }
 
+// A trusted front end whose own address the ACL denies is still accepted. An allowed client it names, by
+// X-Forwarded-For or a PROXY header, gets a DoH answer; the per-request screen decides that client.
+func TestDoHTrustedFrontEndWhoseAddressIsDeniedStillAnswersTheClientItNames(t *testing.T) {
+	r, m, addr := newDoHRig(t, clientDenied)
+	r.autoAnswer(echoAnswer)
+	query := buildQuery(t, 0, "allowed.example.", true)
+	cases := []struct {
+		name string
+		opt  dohOptions
+		hdr  []string
+	}{
+		{"X-Forwarded-For", dohOptions{source: clientDenied}, []string{"X-Forwarded-For", clientAllowed}},
+		{"PROXY", dohOptions{source: clientDenied, prefix: pp2TCP(clientAllowed+":51000", "192.0.2.1:443")}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newDoHClient(t, addr, m, tc.opt)
+			resp, _ := c.do(c.get(dnsParam(query), tc.hdr...))
+			if resp.StatusCode != 200 {
+				t.Fatalf("status %d, want 200: an allowed client behind a denied trusted front end must get a DoH answer", resp.StatusCode)
+			}
+			if q := r.nextQuery(); q.ip != clientAllowed {
+				t.Fatalf("the decider's client %s, want the named client %s", q.ip, clientAllowed)
+			}
+		})
+	}
+}
+
 // T8: ACL refuse answers REFUSED; ACL deny aborts the request (the client sees a reset, never a reply).
 func TestDoHACLRefuseAnswersRefusedAndDenyAbortsTheRequest(t *testing.T) {
 	for _, h2 := range []bool{false, true} {

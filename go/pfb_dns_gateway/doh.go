@@ -62,7 +62,7 @@ type limitedListener struct {
 	addrs   *addrLimit // what one address may hold of limit, at most perAddr
 	perAddr int
 	trusted []netip.Prefix // front ends: their connections carry many clients, so they hold no share
-	acl     *ACL           // the TCP peer; a client behind a trusted front end is screened per request
+	acl     *ACL           // an untrusted TCP peer; a trusted front end is accepted and screened per request
 	logf    func(format string, args ...any)
 }
 
@@ -73,11 +73,11 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		peer := addrPortOf(conn.RemoteAddr()).Addr()
-		if l.acl.Lookup(peer.Unmap().WithZone("")) == ACLDrop { // a denied TCP peer never holds a slot
+		metered := !trusts(l.trusted, peer) // the TCP peer: a PROXY header or X-Forwarded-For is only believed from a trusted one
+		if metered && l.acl.Lookup(peer.Unmap().WithZone("")) == ACLDrop { // an untrusted denied peer never holds a slot
 			_ = conn.Close()
 			continue
 		}
-		metered := !trusts(l.trusted, peer) // the TCP peer: a PROXY header or X-Forwarded-For is only believed from a trusted one
 		if metered && !l.addrs.take(peer, l.perAddr, "DoH connections", l.logf) {
 			_ = conn.Close()
 			continue
