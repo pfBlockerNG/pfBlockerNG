@@ -195,6 +195,57 @@ func TestDoHLargestQueryIsAccepted(t *testing.T) {
 	}
 }
 
+// A denied DoH peer is closed inside Accept, before the address share or the connection budget takes a slot.
+// A client that a trusted front end names is still screened on the request: the TCP peer at accept is the front end.
+func TestDoHACLDenyClosesAtAcceptBeforeEitherConnectionCap(t *testing.T) {
+	r, m, addr := newDoHRig(t, clientAllowed) // the front end only; the denied address is not a trusted peer
+	r.autoAnswer(echoAnswer)
+	denied := netip.MustParseAddr(clientDenied)
+
+	held := make([]net.Conn, 0, maxDoHPerAddr)
+	for range maxDoHPerAddr {
+		held = append(held, dialRawFrom(t, addr.String(), clientDenied))
+	}
+	for range 2 { // accepted in order: once these are shut, every earlier peer has been through Accept
+		requireTCPClosed(t, dialRawFrom(t, addr.String(), clientDenied))
+	}
+	if n := r.g.dohConns.n.Load(); n != 0 {
+		t.Fatalf("%d DoH connections counted, want 0: a denied peer must not hold a slot", n)
+	}
+	r.g.dohAddrs.mu.Lock()
+	share := r.g.dohAddrs.held[denied]
+	r.g.dohAddrs.mu.Unlock()
+	if share != 0 {
+		t.Fatalf("denied peer holds %d of its address share, want 0: Accept took a slot before the ACL", share)
+	}
+	if n := addrLimitLogs(r); n != 0 {
+		t.Fatalf("a denied peer reached the address cap (%d lines): %s", n, r.logs.joined())
+	}
+	if n := strings.Count(r.logs.joined(), "DoH client limit"); n != 0 {
+		t.Fatalf("a denied peer reached the DoH connection cap (%d lines): %s", n, r.logs.joined())
+	}
+	for _, c := range held {
+		requireTCPClosed(t, c)
+	}
+
+	// The front end is allowed, so its connection is accepted; the denied client it names is still reset per request.
+	front := newDoHClient(t, addr, m, dohOptions{source: clientAllowed})
+	query := buildQuery(t, 0x6666, "blocked.example.", true)
+	if resp, err := front.http.Do(front.get(dnsParam(query), "X-Forwarded-For", clientDenied)); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a denied client behind an allowed front end got a response (status %d): the per-request screen must still reset it", resp.StatusCode)
+	}
+	front.http.CloseIdleConnections()
+	allowed := newDoHClient(t, addr, m, dohOptions{source: clientAllowed})
+	if resp, _ := allowed.do(allowed.get(dnsParam(buildQuery(t, 1, "allowed.example.", true)))); resp.StatusCode != 200 {
+		t.Fatalf("an allowed peer after the denied burst got status %d, want 200", resp.StatusCode)
+	}
+	if q := r.nextQuery(); q.ip != clientAllowed {
+		t.Fatalf("the decider's first query came from %s, want %s", q.ip, clientAllowed)
+	}
+	r.requireNoOtherQuery()
+}
+
 // T8: ACL refuse answers REFUSED; ACL deny aborts the request (the client sees a reset, never a reply).
 func TestDoHACLRefuseAnswersRefusedAndDenyAbortsTheRequest(t *testing.T) {
 	for _, h2 := range []bool{false, true} {
