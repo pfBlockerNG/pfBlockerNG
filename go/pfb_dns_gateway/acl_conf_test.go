@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -290,6 +291,42 @@ func TestACLUnreadableIncludeKeepsLastGoodRulesUntilTheModeReturns(t *testing.T)
 	checkLookup(t, a, "10.1.2.3", ACLDrop) // the include's deny, not a forward-all fallback
 	checkLookup(t, a, "192.0.2.1", ACLRefuse)
 	checkLookup(t, a, "127.0.0.1", ACLForward)
+}
+
+// Only a permission error is a failure that waits for the file to change. Any other open error (here a socket,
+// standing in for a transient EMFILE or EIO) is retried on every Refresh, so the edit it hid is not lost.
+func TestACLOpenErrorThatIsNotPermissionIsRetriedOnEveryRefresh(t *testing.T) {
+	sockDir, err := os.MkdirTemp("", "pfbacl") // short: a socket path is limited to about 100 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	inc := filepath.Join(sockDir, "inc.conf")
+	if err := os.WriteFile(inc, []byte("access-control: 10.0.0.0/8 deny\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, _, log := newACLTree(t, map[string]string{"unbound.conf": "include: " + inc + "\n"})
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+
+	if err := os.Remove(inc); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", inc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	if !a.Refresh() {
+		t.Error("Refresh() after the include became a socket: got changed=false, want true")
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
+	if strings.Contains(log.joined(), "forwarding every query") {
+		t.Errorf("an open error after a good load must not forward every client; log:\n%s", log.joined())
+	}
+	if !a.Refresh() {
+		t.Error("second Refresh() on a non-permission open error: got changed=false, want true (it must be retried)")
+	}
+	checkLookup(t, a, "10.1.2.3", ACLDrop)
 }
 
 // A config that has never loaded forwards every client. An edit that still names the missing include must keep

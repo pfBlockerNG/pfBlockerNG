@@ -196,8 +196,10 @@ every file it includes, globs too: the `access-control` rows of `access_lists.co
 of the admin's Custom Options. The most specific prefix matches and, of identical prefixes, the row read last wins; deny:
 nothing is answered; refuse, and a client no row names (Unbound's default): REFUSED built by the gateway. Supported
 rows accept a netblock immediately after the colon, as Unbound 1.26.1 does: `access-control:10.0.0.0/8 deny` counts.
-Include-loading failures (a missing include, an include cycle, a brace pattern) are logged once and the gateway
-forwards everything; any file or glob match that changes is picked up within a second.
+Include-loading failures (a missing or unreadable include, an include cycle, a brace pattern) are logged once and
+retried when a file or glob match changes (a chmod counts). Any other error opening a file, which can be transient, is
+retried and logged every second. After a good load the gateway keeps its last good rules through such a failure;
+before the first good load it forwards everything. Any file or glob match that changes is picked up within a second.
 
 Two Unbound rules the gateway follows too. A netblock named only by `access-control-view`, `access-control-tag`,
 `access-control-tag-action` or `access-control-tag-data` is allowed, unless an identical `access-control` row names it.

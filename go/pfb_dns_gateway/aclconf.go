@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -18,12 +20,11 @@ const (
 	maxACLFiles = 4096 // files read for one config, so that a glob cycle cannot fan out without end
 )
 
-// aclFile is a file the rules came from. info is nil only when the path was absent.
-// openFailed means Open failed even though Stat succeeded.
+// aclFile is a file the rules came from. info is nil when the path was absent or could not be opened for any
+// reason but permission, so that failure is retried on the next Refresh.
 type aclFile struct {
-	path       string
-	info       os.FileInfo
-	openFailed bool
+	path string
+	info os.FileInfo
 }
 
 // aclGlob is an `include:` pattern and the files it matched.
@@ -41,13 +42,6 @@ type aclDeps struct {
 func (d aclDeps) changed() bool {
 	for _, f := range d.files {
 		fi, err := os.Stat(f.path)
-		if f.openFailed {
-			// The recorded stat, mode included, is this permission error. A chmod is a different stat.
-			if err != nil || f.info == nil || !sameFile(f.info, fi) {
-				return true
-			}
-			continue
-		}
 		if (err != nil) != (f.info == nil) || (err == nil && !sameFile(f.info, fi)) {
 			return true
 		}
@@ -73,8 +67,8 @@ func newConfWalker() *confWalker { return &confWalker{rows: map[netip.Prefix]ACL
 
 // file reads path as a stream (an include can be a DNSBL list of millions of lines). The identity recorded for it
 // is taken BEFORE the read: a writer racing the read then changes (mtime, size, mode) against it, so the next
-// Refresh reloads instead of trusting a torn read. Open failing where Stat succeeds records that stat; a path
-// Stat cannot see stays absent. An error is one Unbound would not start on either.
+// Refresh reloads instead of trusting a torn read. A permission error keeps the stat taken before Open, so it
+// is retried only once that stat changes (a chmod included). An error is one Unbound would not start on either.
 func (w *confWalker) file(path string, depth int) error {
 	if depth > maxACLDepth {
 		return fmt.Errorf("%s: includes nest more than %d deep", path, maxACLDepth)
@@ -82,14 +76,14 @@ func (w *confWalker) file(path string, depth int) error {
 	if w.opened++; w.opened > maxACLFiles {
 		return fmt.Errorf("%s: more than %d files included", path, maxACLFiles)
 	}
+	before, statErr := os.Stat(path)
 	f, err := os.Open(path)
 	if err != nil {
-		info, statErr := os.Stat(path)
-		openFailed := statErr == nil
-		if statErr != nil {
-			info = nil
+		failed := aclFile{path: path}
+		if statErr == nil && errors.Is(err, fs.ErrPermission) {
+			failed.info = before
 		}
-		w.deps.files = append(w.deps.files, aclFile{path: path, info: info, openFailed: openFailed})
+		w.deps.files = append(w.deps.files, failed)
 		return err
 	}
 	defer f.Close()

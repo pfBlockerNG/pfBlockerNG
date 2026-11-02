@@ -13,7 +13,7 @@ import (
 type ACLAction int
 
 const (
-	ACLForward ACLAction = iota // let Unbound decide (every action but deny/refuse, and a config that cannot load)
+	ACLForward ACLAction = iota // let Unbound decide (every action but deny/refuse, and a config never loaded yet)
 	ACLDrop                     // Unbound `deny`: send nothing
 	ACLRefuse                   // Unbound `refuse`, or no row names the client: answer REFUSED
 )
