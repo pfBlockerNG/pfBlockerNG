@@ -3306,9 +3306,23 @@ function pfb_stop_start_unbound($type) {
 	$start_ack_deadline = NULL;
 	$deadline = NULL;
 
+	// issue #3663: KILL only queues the signal; wait (one more grace at most) until the
+	// killed members have exited and been reaped, and log any that outlast it.
+	$await_group_gone = static function (int $pid): void {
+		$deadline = hrtime(TRUE) + (PFB_HOOK_KILL_GRACE * 1000000000);
+		while (@posix_kill(-$pid, 0)) {
+			if (hrtime(TRUE) >= $deadline) {
+				pfb_logger("\nUnbound start process group {$pid} still present " .
+					PFB_HOOK_KILL_GRACE . 's after KILL', 2);
+				return;
+			}
+			usleep(10000);
+		}
+	};
+
 	// A successful Unbound daemon creates its own session and leaves this group.
 	// Any ordinary helper stays with the launcher, so expiry can reap the whole tree.
-	$stop_group = static function (&$proc, int $pid, bool $group_ready): void {
+	$stop_group = static function (&$proc, int $pid, bool $group_ready) use ($await_group_gone): void {
 		if (!is_resource($proc) || $pid <= 0) {
 			return;
 		}
@@ -3335,6 +3349,9 @@ function pfb_stop_start_unbound($type) {
 			@proc_terminate($proc, 9);
 			@proc_close($proc);
 			$proc = NULL;
+			if ($group_ready) {
+				$await_group_gone($pid);
+			}
 			return;
 		}
 
@@ -3350,6 +3367,7 @@ function pfb_stop_start_unbound($type) {
 			usleep(10000);
 		}
 		@posix_kill(-$pid, 9);
+		$await_group_gone($pid);
 	};
 
 	try {
