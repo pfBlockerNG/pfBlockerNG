@@ -697,10 +697,16 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	// Received-policy suppression (issue #3674)
 	// ------------------------------------------------------------------------------------------
 
-	/** A node that sends in scope all to a manual target, accepted a policy receive, and whose stored auto-VIP id the pass will rewrite. */
-	private function arrangeAcceptedReceiveInScopeAll(array $o): void
+	/**
+	 * A node that sends in scope all to a manual target, accepted a policy receive, and whose stored auto-VIP id the pass will
+	 * rewrite; $config (path => value) is stored before the receive.
+	 */
+	private function arrangeAcceptedReceiveInScopeAll(array $o, array $config = []): void
 	{
 		$this->arrange($o + ['demand' => TRUE]);
+		foreach ($config as $path => $value) {
+			config_set_path($path, $value);
+		}
 		config_set_path(self::DNSBL . '/pfb_dnsvip4', '');
 		config_set_path('installedpackages/pfblockerngsync/config/0', [
 			'varsynconchanges' => 'manual', 'varsynctimeout' => '5', 'syncscope' => 'all',
@@ -747,5 +753,33 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame('_vipauto4', config_get_path(self::DNSBL . '/pfb_dnsvip4'), 'control: the resync rewrote the stored VIP id');
 		config_set_path('installedpackages/pfblockerngsync/config/0/varsynconchanges', 'auto');
 		$this->assertSame([], pfblockerng_plugin_xmlrpc_send(), 'the resync of a received policy must not hand pfSense HA sync a pfBlockerNG path');
+	}
+
+	/** A pass the operator's own edit lifted the suppression for must send that edit: it absorbs nothing. */
+	public function testAnOperatorEditAfterAnAcceptedReceiveIsSentByTheNextPass(): void
+	{
+		$this->arrangeAcceptedReceiveInScopeAll([]);
+		config_set_path('installedpackages/pfblockernglistsv4/config/0/srcint', 'edited-by-the-operator');
+		$this->assertFalse(pfb_sync_receive_suppressed(), 'before-state: the edit lifted the suppression');
+
+		$this->runPass();
+
+		$this->assertArrayHasKey('pfb_test_xmlrpc_connection', $GLOBALS, 'the operator edit must be sent');
+	}
+
+	/** The MaxMind failure abort returns after the VIP write and before the sync step; HA sync, later, must not carry it. */
+	public function testAMaxMindAbortOfAnAcceptedReceiveHandsHaSyncNothingAfterItsOwnVipWrite(): void
+	{
+		$ip = 'installedpackages/pfblockerngipsettings/config/0';
+		$this->arrangeAcceptedReceiveInScopeAll([], ["{$ip}/maxmind_account" => 'acct', "{$ip}/maxmind_key" => 'key']);
+		$GLOBALS['pfb']['geoipshare'] = "{$this->dir}/geoip";
+		$GLOBALS['pfb']['timeout']    = '/bin/false';	// the MaxMind download re-entry fails at once
+
+		$this->runPass();
+
+		$this->assertStringContainsString('MaxMind processing failed; update deferred.', $this->passLog(), 'control: the pass aborted');
+		$this->assertSame('_vipauto4', config_get_path(self::DNSBL . '/pfb_dnsvip4'), 'control: the pass rewrote the stored VIP id');
+		config_set_path('installedpackages/pfblockerngsync/config/0/varsynconchanges', 'auto');
+		$this->assertSame([], pfblockerng_plugin_xmlrpc_send(), 'the aborted apply of a received policy must not hand pfSense HA sync a pfBlockerNG path');
 	}
 }
