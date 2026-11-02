@@ -121,9 +121,11 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
   agent branch rewrites over unfetched remote history (#1307); validates the final
   message of every outgoing commit and each outgoing agent commit's author/committer
   identity (same rule) and good signature from the configured user email; and
-  refuses a push whose `graphify-out/graph.json` differs from a rebuild (#3139;
-  contract in `repository-intelligence.md`). Refresh and commit the graph after
-  every rebase: a rebase replays commits without the pre-commit rebuild.
+  refuses a push whose `graphify-out/graph.json` differs from a rebuild
+  (`scripts/agent/check-graph-fresh.sh`, #3139) — one grade per pushed tip, in a scratch
+  worktree, decided by that tip's own tree and this host's Graphify. Refresh and commit
+  the graph after every rebase: a rebase replays commits without the pre-commit rebuild,
+  and only a pushed tip is ever proven. Contract: `repository-intelligence.md`.
 
 ## Rebase and diff hygiene
 
@@ -183,6 +185,8 @@ Copilot's cloud agent), `GROK_SESSION_ID` / `GROK_AGENT`, and `OMP_CLI` / `PI_CL
   **Author = the same**, or the unchanged author of a published commit an
   agent rebases or cherry-picks (#3642): accepted only when a commit on a remote-tracking
   ref has the same author name, email and timestamp. A fresh `--author=` is rejected.
+  This guards against accidents, not forgery: it checks identity, not content, so a
+  hand-made remote-tracking ref can satisfy it.
 - **Sign with the user's configured key.** Valid signature + matching user email preserves
   GitHub's normal **Verified** result.
 - **Message = ordinary project commit message.** No generated-by line, attribution footer,
