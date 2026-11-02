@@ -250,8 +250,11 @@ func TestProductionDefaults(t *testing.T) {
 		}
 	}
 	g := newGateway(nil, nil, nil, time.Second, nil)
-	if g.tcpIdle != defaultTCPIdle || g.grace != defaultGrace || g.handshake != defaultHandshake {
-		t.Errorf("a new gateway runs with tcpIdle=%s grace=%s handshake=%s, want the defaults", g.tcpIdle, g.grace, g.handshake)
+	if g.tcpIdle != defaultTCPIdle || g.grace != defaultGrace || g.handshake != defaultHandshake || g.doqHandshakeIdle != 5*time.Second {
+		t.Errorf("a new gateway runs with tcpIdle=%s grace=%s handshake=%s doqHandshakeIdle=%s, want the defaults", g.tcpIdle, g.grace, g.handshake, g.doqHandshakeIdle)
+	}
+	if got := g.doqQUICConfig().HandshakeIdleTimeout; got != 5*time.Second {
+		t.Errorf("DoQ HandshakeIdleTimeout = %s, want 5s", got)
 	}
 	d, _, _ := newPeer(t)
 	if d.writeTimeout != defaultWriteTimeout {

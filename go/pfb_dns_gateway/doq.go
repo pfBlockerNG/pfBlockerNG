@@ -27,8 +27,9 @@ const (
 	doqProtocolError    = 0x2
 	doqRequestCancelled = 0x3
 
-	maxDoQStreams  = 100              // concurrent query streams per connection
-	doqIdleTimeout = 30 * time.Second // QUIC idle timeout; RFC 9250 4.4 asks for it to be negotiated
+	maxDoQStreams           = 100              // concurrent query streams per connection
+	doqIdleTimeout          = 30 * time.Second // QUIC idle timeout; RFC 9250 4.4 asks for it to be negotiated
+	defaultDoQHandshakeIdle = 5 * time.Second  // quic-go's handshake idle timeout, set explicitly; not g.handshake (10s)
 )
 
 // doqConns is the accepted connections of one DoQ listener. quic-go's Listener.Close leaves accepted connections
@@ -63,13 +64,24 @@ func (c *doqConns) closeAll() {
 	wg.Wait()
 }
 
+// doqQUICConfig is the listener's QUIC config. HandshakeIdleTimeout is explicit: an admitted connection holds its
+// slot until the handshake finishes or this idle timeout, and quic-go's implicit value is not named on the listener.
+func (g *gateway) doqQUICConfig() *quic.Config {
+	return &quic.Config{
+		MaxIncomingStreams:    maxDoQStreams,
+		MaxIncomingUniStreams: -1,
+		MaxIdleTimeout:        doqIdleTimeout,
+		HandshakeIdleTimeout:  g.doqHandshakeIdle,
+	}
+}
+
 // serveDoQ serves QUIC on udp until stop() or the returned closeNow; when QUIC cannot listen on udp it is closed, the
 // reason is logged and returned. No 0-RTT (a replayed query is not harmless here) and no unidirectional streams
 // (RFC 9250 4.3.3 makes opening one a protocol error). Connections are admitted before their handshake.
 func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) (closeNow func(), err error) {
 	// A slot taken at the first Initial packet is only safe when its source is real: a Retry proves it first.
 	tr := &quic.Transport{Conn: udp, ConnContext: g.admitDoQ, VerifySourceAddress: func(net.Addr) bool { return true }}
-	ln, err := tr.Listen(conf, &quic.Config{MaxIncomingStreams: maxDoQStreams, MaxIncomingUniStreams: -1, MaxIdleTimeout: doqIdleTimeout})
+	ln, err := tr.Listen(conf, g.doqQUICConfig())
 	if err != nil {
 		g.logf("DoQ on %s: %v", udp.LocalAddr(), err)
 		_ = udp.Close()
@@ -165,12 +177,19 @@ func (g *gateway) serveQUICConn(conn *quic.Conn) {
 // first as a protocol error to be answered with CONNECTION_CLOSE and DOQ_PROTOCOL_ERROR, 5.5.2 the second).
 func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local netip.AddrPort) {
 	defer g.wg.Done()
-	_ = s.SetReadDeadline(time.Now().Add(g.timeout)) // a client sends the query and its FIN at once: no idle wait as on a TCP connection
+	// A query that never finishes must not keep a stream slot for a raised --timeout. The read stops at the Unbound
+	// wait or the handshake budget, whichever is shorter. The deadline ends with the read: Unbound still has g.timeout.
+	readFor := g.timeout
+	if g.handshake < readFor {
+		readFor = g.handshake
+	}
+	_ = s.SetReadDeadline(time.Now().Add(readFor))
 	wire, ok := readDoQQuery(s)
 	if !ok {
 		reset(s, doqProtocolError)
 		return
 	}
+	_ = s.SetReadDeadline(time.Time{})
 	if len(wire) >= 2 && wire[0]|wire[1] != 0 {
 		_ = conn.CloseWithError(doqProtocolError, "Message ID must be 0")
 		return
