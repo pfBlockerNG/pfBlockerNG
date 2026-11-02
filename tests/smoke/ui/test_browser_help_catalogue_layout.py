@@ -28,7 +28,7 @@ def test_catalogue_instructions_remain_visible_and_wrap(
     _open(browser_page, webui, f"/pfblockerng/pfblockerng_feeds.php?type={gtype}")
     panel = browser_page.locator(".panel-body.bg-info")
     expect(panel).to_have_count(1)
-    count_types = [label.strip().rstrip(":") for label in panel.locator("dl dt").all_text_contents()]
+    count_types = [label.strip().rstrip(":") for label in panel.locator("dl").first.locator("dt").all_text_contents()]
     tab_types = [label.strip() for label in _subtab_nav(browser_page).locator("a").all_text_contents()]
     assert count_types == tab_types, f"feed count labels {count_types!r} differ from the tabs {tab_types!r}"
     instructions = panel.locator("ul")
