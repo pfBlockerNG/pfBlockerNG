@@ -115,7 +115,7 @@ type connInfo struct {
 }
 
 // namedByProxy reports whether the connection's PROXY header named a client: a header that is not LOCAL and has an
-// address. An address equal to the peer's own IP counts.
+// IP address. An address equal to the peer's own IP counts.
 func (c connInfo) namedByProxy() bool {
 	if c.proxy == nil {
 		return false

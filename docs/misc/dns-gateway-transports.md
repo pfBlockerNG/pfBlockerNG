@@ -219,7 +219,7 @@ argument can match locally although Unbound refuses to load that configuration.
 | DoT | the TCP peer |
 | DoQ | the QUIC peer, whose address a Retry has validated |
 | DoH, peer not in `--doh-trusted` | the TCP peer. PROXY bytes are not parsed (the TLS handshake fails) and `X-Forwarded-For` is ignored |
-| DoH, peer in `--doh-trusted` | the source of its PROXY header when that header names one (a non-LOCAL header with an address; a source at the peer's own IP counts); otherwise the TCP peer, and then, if the request has `X-Forwarded-For`, the rightmost entry of the **last** such header when it parses as an IP address, else unchanged |
+| DoH, peer in `--doh-trusted` | the source of its PROXY header when that header names one (a non-LOCAL header with an IP address; a source at the peer's own IP counts); otherwise the TCP peer, and then, if the request has `X-Forwarded-For`, the rightmost entry of the **last** such header when it parses as an IP address, else unchanged |
 
 A `--doh-trusted` value is a prefix (host bits masked) or a bare address (/32, /128). One that is neither is logged and
 ignored; it never stops the gateway.
