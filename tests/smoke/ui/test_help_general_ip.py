@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .test_render_smoke import php_error_log_guard as php_error_log_guard
 
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page

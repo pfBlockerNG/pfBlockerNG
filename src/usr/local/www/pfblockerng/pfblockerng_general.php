@@ -376,10 +376,7 @@ $section->addInput(new Form_Checkbox(
 	gettext('Enable'),
 	pfb_cfg_toggle_read($pconfig['enable_cb']) === PfbToggle::On,
 	'on'
-))->setHelp('<span class="text-danger">Note: </span>'
-		. 'Context help is available on various pages by clicking the \'blue infoblock\' icons &emsp;---->'
-		. '<div class="infoblock">Sample help information.</div>'
-);
+))->setHelp('Turn pfBlockerNG on. Blue (i) icons open more help.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_keep',
@@ -387,14 +384,14 @@ $section->addInput(new Form_Checkbox(
 	gettext('Enable'),
 	pfb_cfg_toggle_read($pconfig['pfb_keep']) === PfbToggle::On,
 	'on'
-))->setHelp('<span class="text-danger">Note: </span>'
-		. 'With \'Keep settings\' enabled, pfBlockerNG will maintain run state on Installation/Upgrade.<br />'
-		. ' If \'Keep Settings\' is not \'enabled\' on pkg Install/De-Install, all settings will be Wiped!<br />'
-		. ' This also applies to a major pfSense version upgrade, which fully removes and reinstalls '
-		. 'packages &mdash; with \'Keep Settings\' disabled it wipes pfBlockerNG\'s settings too. A normal '
-		. 'package update keeps them.<br /><br />'
-		. '<span class="text-danger">Note: </span>'
-		. ' To clear all downloaded lists, uncheck this checkbox and \'Save\'. Re-check it and run an Update (\'Run Now\' on the Update tab)'
+))->setHelp('<p><strong>Keep Settings</strong> preserves settings and downloaded lists during package removal and while pfBlockerNG is disabled. A normal package update keeps them regardless.</p>'
+		. '<p><span class="text-danger"><strong>Warning:</strong></span> With <strong>Keep Settings</strong> off, removing the package, including removal during a major pfSense upgrade, deletes its settings, logs and lists.</p>'
+		. '<p>To clear downloaded lists:</p>'
+		. '<ol>'
+		. '<li>Turn off <strong>pfBlockerNG</strong> and <strong>Keep Settings</strong>, then save.</li>'
+		. '<li>Turn both settings back on and save again.</li>'
+		. '<li>Open <strong>Update</strong> and use <strong>Run Now</strong>.</li>'
+		. '</ol>'
 );
 
 $section->addInput(new Form_Checkbox(
@@ -404,7 +401,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_feed_internal_filter']) === PfbToggle::On,
 	'on'
 ))->setHelp('Restrict feeds from being fetched from non-public/internal addresses. '
-		. 'The exemptions list below allows specific IP/CIDRs through.'
+		. 'Use <strong>Block Private-Address Exceptions</strong> to allow additional internal feed hosts.'
 );
 
 $section->addInput(new Form_Textarea(
@@ -416,7 +413,7 @@ $section->addInput(new Form_Textarea(
   ->setWidth(8)
   ->setHelp('IP addresses or CIDR ranges (one per line) that are exempt from the '
 		. 'internal-address check &mdash; e.g. an internal mirror. '
-		. 'Leave empty to block all feeds that resolve to an internal/private address.'
+		. 'Leave empty to block every internal/private feed host except this firewall itself.'
 );
 
 // issue #1669 slice C: the client-side editor for the list and script fields. Label and
@@ -441,7 +438,7 @@ if (pfb_metrics_export_box_disabled($metrics_export_pkg, $metrics_export_stored_
 	$metrics_export_box->setAttribute('disabled', 'disabled');
 }
 $section->addInput($metrics_export_box)->setHelp(
-	'Publish Prometheus metrics through the node_exporter package\'s textfile collector (/var/tmp/node_exporter/pfblockerng.prom).'
+	'Publish Prometheus metrics through the node_exporter package\'s textfile collector (<code>/var/tmp/node_exporter/pfblockerng.prom</code>).'
 	. ($metrics_export_pkg ? '' : '<br /><span class="text-danger">Requires the <a href="/pkg_mgr_install.php?pkg=pfSense-pkg-node_exporter">node_exporter package</a>.</span>')
 );
 
@@ -450,9 +447,8 @@ $section->addInput(new Form_Select(
 	'Download Failure Threshold',
 	$pconfig['skipfeed'],
 	$options_skipfeed
-))->setHelp('Default: <strong>No limit</strong><br />'
-		. 'Select max daily download failure threshold via CRON. Clear widget \'failed downloads\' to reset.<br />'
-		. 'On a download failure, the previously downloaded list is reloaded.')
+))->setHelp('<p>Default: <strong>No Limit</strong>.</p>'
+		. '<p>Failed downloads per feed per day after which retries stop until the next day. <strong>No Limit</strong>: always retry. The last good copy stays in use. Use <strong>Clear Failed Downloads</strong> in the widget to reset the count.</p>')
   ->setAttribute('style', 'width: auto');
 
 $form->add($section);
@@ -464,11 +460,11 @@ $section->addInput(new Form_Checkbox(
 	gettext('Enable'),
 	$pconfig['pfb_scheduled_feed_updates'] === 'on',
 	'on'
-))->setHelp('Run enabled feed groups on their configured schedules. This does not affect manual updates, Extras refreshes, or pending applies.<br />'
+))->setHelp('Run enabled feed groups on their configured schedules. This does not affect manual updates, Extras refreshes, or pending applies.'
 	);
 
 $group = new Form_Group('Default Schedule');
-$group->setHelp('Default local-time schedule for feed groups and calendar-scheduled Extras. Hourly schedules use the minute; daily schedules use the time; weekly schedules use all three.');
+$group->setHelp('Default local-time schedule for feed groups and calendar-scheduled Extras. Hourly schedules use <strong>Minute</strong>; daily schedules use <strong>Hour</strong> and <strong>Minute</strong>; weekly schedules also use <strong>Weekday</strong>.');
 $group->add(new Form_Select(
 	'pfb_schedule_weekday',
 	'Weekday',
@@ -494,7 +490,7 @@ $section->addInput(new Form_Checkbox('pfb_quiet_hours_enabled',
 	gettext('Restrict automatic applies to a time window'),
 	$pconfig['pfb_quiet_hours_enabled'] === 'on',
 	'on'
-))->setHelp('Changes detected outside this window remain pending and apply on the first eligible tick inside it.');
+))->setHelp('Pending changes are applied only inside this window.');
 
 $group = new Form_Group('Apply Window');
 $group->add((new Form_Input(
@@ -582,7 +578,7 @@ $trim->add((new Form_Input(
 	$pconfig['pfb_log_trim_margin_pct']
 ))->setAttribute('min', '0')->setAttribute('max', '1000'));
 $trim->setHelp(
-	'Percent tolerance above whichever cap (Max lines or Max days) is active. The log is '
+	'Percent tolerance above whichever cap (<strong>Max lines</strong> or <strong>Max days</strong>) is active. The log is '
 	. 'rewritten only once it drifts past cap + margin%, then trimmed back to the exact cap. '
 	. '<strong>0</strong> (default) trims as soon as the cap is exceeded. A larger margin means '
 	. 'fewer, larger rewrites &mdash; less flash/SSD wear.'
@@ -600,7 +596,8 @@ $section->addInput(new Form_Checkbox(
 		. 'emitted to syslog (tagged <code>pfblockerng</code>, in <code>key=value</code> form) '
 		. 'at facility <strong>local6</strong> and severity <strong>info</strong>. '
 		. 'Remote delivery: pfSense '
-		. '<strong>Status &gt; System Logs &gt; Settings &gt; Remote Logging &rarr; Everything</strong>.'
+		. '<strong>Status &gt; System Logs &gt; Settings &gt; Remote Logging &rarr; Everything</strong>. '
+		. 'View events locally under <strong>Status &gt; System Logs &gt; Packages &gt; pfBlockerNG</strong>.'
 );
 
 $form->add($section);
@@ -610,22 +607,16 @@ $form->add($section);
 $section = new Form_Section('Advanced Settings', 'general_advanced', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Input(
 	'pfb_reentry_timeout',
-	'Nested pass timeout',
+	'Database download timeout',
 	'number',
 	$pconfig['pfb_reentry_timeout'],
 	[ 'min' => (string) PFB_REENTRY_TIMEOUT_MIN, 'max' => (string) PFB_REENTRY_TIMEOUT_MAX,
 	  'placeholder' => (string) PFB_REENTRY_TIMEOUT ]
 ))->setHelp('Default: <strong>' . PFB_REENTRY_TIMEOUT . '</strong> seconds (range '
-		. PFB_REENTRY_TIMEOUT_MIN . '&ndash;' . PFB_REENTRY_TIMEOUT_MAX . ', whole seconds).<br />'
-		. 'Time budget for ONE nested update pass &mdash; the MaxMind/GeoIP, blacklist, '
-		. 'TOP1M and ASN downloads an update pass runs as child processes.<br />'
-		. 'On expiry the <strong>whole process tree</strong> is terminated, not just the '
-		. 'interpreter, so a stalled download cannot outlive it; the expiry is named in the '
-		. 'pfBlockerNG and Error logs and the pass continues to a defined state. The download '
-		. 'is retried by the next scheduled update, or immediately via '
-		. '<strong>Run Now</strong> on the Update tab.<br />'
-		. 'Raise it for low-powered hardware or slow links where a full download pass needs '
-		. 'longer. A blank, non-numeric or out-of-range value falls back to '
+		. PFB_REENTRY_TIMEOUT_MIN . '&ndash;' . PFB_REENTRY_TIMEOUT_MAX . ').<br />'
+		. 'Maximum time for the MaxMind, ASN, TOP1M and DNSBL Category downloads during an update. '
+		. 'A download that runs longer is stopped, logged, and retried at the next update. '
+		. 'Raise it on slow links or hardware. A blank, non-numeric or out-of-range value falls back to '
 		. PFB_REENTRY_TIMEOUT . ' seconds.');
 
 $form->add($section);
@@ -676,7 +667,7 @@ $section->addInput(new Form_StaticText(
 
 $form->add($section);
 print($form);
-print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
+print_callout('<p><strong>General</strong> settings take effect when saved. Apply pending list and rule changes from other pages using <strong>Run Now</strong> on <strong>Update</strong>.</p>');
 ?>
 <?=$pfb_general_editor['asset']?>
 

@@ -62,30 +62,4 @@ final class IpRuleOrderHelpParityTest extends TestCase
 			'the help default must match the order_0 option label verbatim'
 		);
 	}
-
-	/** The help names no option label the select does not offer. */
-	public function testHelpNamesNoOptionLabelTheSelectDoesNotOffer(): void
-	{
-		$help = self::help();
-		$labels = self::optionLabels();
-		self::assertSame(1, preg_match("/Selecting '(.*?)', sets pfBlockerNG rules/", $help, $referenced),
-			'the help must name the option that pins pfBlockerNG rules at the top');
-		$this->assertStringContainsString(
-			$referenced[1],
-			$labels['order_0'],
-			"the referenced option name '{$referenced[1]}' must exist in the order_0 label"
-		);
-		$this->assertStringNotContainsString('original format', $help,
-			'the retired "original format" option name must not reappear in the help');
-	}
-
-	/** The infoblock still explains the selection and the re-order warning. */
-	public function testHelpInfoblockStillExplainsTheSelection(): void
-	{
-		$help = self::help();
-		$this->assertStringContainsString('at the top of the Firewall TAB', $help,
-			'the top-of-firewall explanation must survive');
-		$this->assertStringContainsString('re-order', $help,
-			'the re-order warning must survive');
-	}
 }

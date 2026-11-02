@@ -595,7 +595,7 @@ $section->addInput(new Form_StaticText(
 	'NOTES:',
 	'GeoIP data by MaxMind Inc. - GeoLite2<br />'
 	. 'MaxMind credentials are configured on the <a href="/pfblockerng/pfblockerng_ip.php">IP tab</a> (MaxMind GeoIP configuration).<br />'
-	. 'Click here for IMPORTANT info&emsp;-->&emsp;'
+	. 'Guidelines: '
 	. pfb_geoip_doc_link()
 
 	. '<hr style="height: 1px; border: none; background-color: #d6d6d6;"/>'
@@ -603,15 +603,14 @@ $section->addInput(new Form_StaticText(
 	. '<div id="Txtfld" tabindex="1" class="bg-info">'
 	. 'pfSense by default implicitly blocks all unsolicited inbound traffic to the WAN interface.<br />'
 	. 'Therefore adding GeoIP based firewall rules to the WAN will <strong>not</strong> provide any benefit, unless there are open WAN ports.<br /><br />'
-	. 'It\'s also <strong>not</strong> recommended to block the \'world\', instead consider rules to \'Permit\' traffic from selected Countries only.<br />'
-	. 'Also consider protecting just the specific open WAN ports and it\'s just as important to protect the outbound LAN traffic.<br /><br />'
+	. 'Do not block every country. Permit the countries you need, and also filter outbound LAN traffic, not only open WAN ports.<br /><br />'
 
-	. 'GeoIP ISOs can also be configured in the pfBlockerNG IPv4/IPv6 Alias(es) Source Definitions (Format: GeoIP)'
+	. 'GeoIP country codes can also be configured under <strong>Source Definitions</strong> on <strong>IPv4</strong> or <strong>IPv6</strong>, with <strong>Format</strong> set to <strong>GeoIP</strong>.'
 	. '</div>'
 
 	. '<hr style="height: 1px; border: none; background-color: #d6d6d6;"/>'
 
-	. '&emsp;Use &emsp;<strong>CTRL+CLICK</strong>&emsp;to&emsp;<strong>select/unselect</strong>&emsp; the IPv4/6 Countries below as required.'
+	. 'Use <code>Ctrl+click</code> to select or clear countries.'
 ));
 
 // Maxmind credential verification
@@ -644,65 +643,26 @@ $section->add($group);
 $form->add($section);
 
 $action_txt = "Default: <strong>Disabled</strong>
-		<br />For Non-Alias type rules you must define the appropriate <strong>Firewall 'Auto' Rule Order</strong> option.
-		<br />Click here for more info\xe2\x80\x83-->
+		<p>For automatic rules, choose the appropriate <strong>Firewall 'Auto' Rule Order</strong> on <strong>IP</strong>.</p>
+		Guidelines:
 		<div class=\"infoblock alert-info clearfix\">
-			Select the <strong>Action</strong> for Firewall Rules on lists you have selected.<br /><br />
-
-			<strong><u>'Disabled' Rules:</u></strong> Disables selection and does nothing to selected Alias.<br /><br />
-
-			<strong><u>'Deny' Rules:</u></strong><br />
-			'Deny' rules create high priority 'block' or 'reject' rules on the stated interfaces. They don't change the 'pass' rules on other
-			interfaces. Typical uses of 'Deny' rules are:<br />
-				<ul>
-					<li><strong>Deny Both</strong> -
-						blocks all traffic in both directions, if the source or destination IP is in the block list
-					</li>
-					<li><strong>Deny Inbound/Deny Outbound</strong> -
-						blocks all traffic in one direction <u>unless</u> it is part of a session started by
-						traffic sent in the other direction. Does not affect traffic in the other direction.
-					</li>
-					<li>One way 'Deny' rules can be used to selectively block <u>unsolicited</u> incoming
-						(new session) packets in one direction, while still allowing <u>deliberate</u> outgoing
-						sessions to be created in the other direction.
-					</li>
-				</ul>
-
-			<strong><u>'Permit' Rules:</u></strong><br />
-			'Permit' rules create high priority 'pass' rules on the stated interfaces. They are the opposite of Deny rules, and don't create
-			any 'blocking' effect anywhere. They have priority over all Deny rules. Typical uses of 'Permit' rules are:<br />
-				<ul>
-					<li><strong>To ensure</strong> that traffic to/from the listed IPs will <u>always</u> be allowed in the
-						stated directions. They override <u>almost all other</u> Firewall rules on the stated interfaces.
-					</li>
-					<li><strong>To act as a whitelist</strong> for Deny rule exceptions, for example if a large IP range
-						or pre-created blocklist blocks a few IPs that should be accessible.
-					</li>
-				</ul>
-
-			<strong><u>'Match' Rules:</u></strong><br />
-			'Match' or 'Log' only the traffic on the stated interfaces. This does not Block or Reject. It just Logs the traffic.
-			<ul>
-				<li><strong>Match Both</strong> - Matches all traffic in both directions,
-					if the source or destination IP is in the list.
-				</li>
-				<li><strong>Match Inbound/Match Outbound</strong> - Matches all traffic in one direction only.
-				</li>
-			</ul>
-
-			<strong><u>'Alias' Rules:</u></strong><br />
-			<strong>'Alias'</strong> rules create an <a href=\"/firewall_aliases.php\">alias</a> for the list (and do nothing else).
-			This enables a pfBlockerNG list to be used by name, in any firewall rule or pfSense function, as desired.
-				<ul>
-					<li><strong>Options - Alias Deny,&nbsp; Alias Permit,&nbsp; Alias Match,&nbsp; Alias Native</strong></li>
-					<li>'Alias Deny' can use De-Duplication and Reputation Processes if configured.</li>
-					<li>'Alias Permit' and 'Alias Match' will be saved in the Same folder as the other Permit/Match Auto-Rules</li>
-					<li>'Alias Native' lists are kept in their Native format without any modifications.</li></ul>
-
-			<span class=\"text-danger\">Note: </span><ul><li>
-				When manually creating 'Alias' type firewall rules; <strong>Do not add</strong> (pfB_) to the
-				start of the rule description, use (pfb_) (Lowercase prefix). Manually created 'Alias' rules with 'pfB_' in the
-				description will be auto-removed by package when 'Auto' rules are defined.</li></ul>
+			<dl>
+				<dt><strong>Disabled</strong></dt><dd>This list is not used.</dd>
+				<dt>Automatic rules</dt><dd><strong>Deny Inbound</strong>, <strong>Deny Outbound</strong> and <strong>Deny Both</strong> create block rules;
+					<strong>Permit Inbound</strong>, <strong>Permit Outbound</strong> and <strong>Permit Both</strong> create pass rules;
+					<strong>Match Inbound</strong>, <strong>Match Outbound</strong> and <strong>Match Both</strong> match and log traffic without blocking it.
+					Inbound rules match the list as the source address; outbound rules match it as the destination address.
+					Both-direction actions create both rules.</dd>
+				<dt>Aliases only</dt><dd><strong>Alias Deny</strong>, <strong>Alias Permit</strong>, <strong>Alias Match</strong> and <strong>Alias Native</strong>
+					create an alias for use in your own rules. No automatic rule is added.</dd>
+			</dl>
+			<p><strong>Alias Deny</strong> can use <strong>De-Duplication</strong> and Reputation processing if configured.
+				<strong>Alias Permit</strong> and <strong>Alias Match</strong> use the same folders as their automatic-rule counterparts.
+				<strong>Alias Native</strong> keeps the original list format without modification.</p>
+			<p>Deny rules do not change pass rules on other interfaces. A session started in the other direction can still pass.
+				Permit rules provide exceptions to Deny rules on the selected interfaces.</p>
+			<p>Start your own rule descriptions with <code>pfb_</code> so the widget counts them.
+				Do not use <code>pfB_</code>; pfBlockerNG removes rules with that prefix.</p>
 		</div>";
 
 $section->addInput(new Form_Select(
@@ -717,9 +677,9 @@ $section->addInput(new Form_Select(
 	'Enable Logging',
 	$pconfig['aliaslog'],
 	$options_aliaslog
-))->setHelp("Default: <strong>Enable</strong><br />
-	Select - Logging to Status: System Logs: FIREWALL ( Log )<br />
-	This can be overriden by the 'Force Global IP Logging' option on the IP Tab.");
+))->setHelp("Default: <strong>Enabled</strong><br />
+	Log events under <strong>Status &gt; System Logs &gt; Firewall</strong>.<br />
+	This can be overridden by <strong>Force Global IP Logging</strong> on <strong>IP</strong>.");
 
 // Print Advanced Firewall Rule Settings (Inbound and Outbound) section
 foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_type) {
@@ -733,7 +693,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 			<dl class=\"dl-horizontal\">
 				<dt>{$adv_mode}bound</dt><dd>'any' port, 'any' protocol, 'any' destination and 'any' gateway</dd>
 			</dl>
-			Configuring the Adv. {$adv_mode}bound Rule settings, will allow for more customization of the {$adv_mode}bound Auto-Rules."));
+			Use <strong>Advanced {$adv_mode}bound Firewall Rule Settings</strong> to customize these automatic rules."));
 
 	$section->addInput(new Form_Checkbox(
 		'autoaddrnot_' . $advmode,
@@ -758,8 +718,8 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'Custom Port',
 		'text',
 		$pconfig["aliasports_{$advmode}"]
-	))->setHelp("<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/firewall_aliases.php?tab=port\">Click Here to add/edit Aliases</a>
-			Do not manually enter port numbers.<br />Do not use 'pfB_' in the Port Alias name."
+	))->setHelp("<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/firewall_aliases.php?tab=port\">Add or edit aliases</a><br />
+			Do not enter port numbers directly.<br />Do not use <code>pfB_</code> in the port alias name."
 	)->setWidth(8);
 	$section->add($group);
 
@@ -791,9 +751,9 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		"Custom {$custom_location}",
 		'text',
 		$pconfig['aliasaddr_' . $advmode]
-	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-		. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
-		. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)"
+	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Add or edit aliases</a><br />'
+		. 'Do not enter addresses directly.<br />Do not use <code>pfB_</code> in the address-type (Host/Network/URL/URL Table) alias name.<br />'
+		. "Select <strong>Invert</strong> to match addresses outside the selected {$custom_location} alias."
 	)->setWidth(8);
 	$section->add($group);
 
@@ -803,8 +763,8 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		NULL,
 		$pconfig['autoproto_' . $advmode],
 		$options_autoproto_in
-	))->setHelp("<strong>Default: any</strong><br />Select the Protocol used for {$adv_mode}bound Firewall Rule(s).<br />
-		<span class=\"text-danger\">Note:</span>&nbsp;Do not use 'Any' with Adv. {$adv_mode}bound Rules as it will bypass these settings!");
+	))->setHelp("Choose <strong>Custom Protocol</strong> for {$adv_mode}bound firewall rules.<br />
+		<span class=\"text-danger\"><strong>Warning:</strong></span> An unrestricted protocol bypasses <strong>Advanced {$adv_mode}bound Firewall Rule Settings</strong>.");
 	$section->add($group);
 
 	$group = new Form_Group('Custom Gateway');
@@ -813,14 +773,14 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		NULL,
 		$pconfig['agateway_' . $advmode],
 		$options_agateway_in
-	))->setHelp("Select alternate Gateway or keep 'default' setting.");
+	))->setHelp("Choose <strong>Custom Gateway</strong>, or keep the default.");
 
 	$section->add($group);
 	$form->add($section);
 }
 
 print($form);
-print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
+print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.</p>');
 ?>
 
 <script type="text/javascript">
@@ -1133,19 +1093,16 @@ $section->addInput(new Form_StaticText(
 ));
 
 $section->addInput(new Form_StaticText(
-	'Why Reputation Matters',
-	'By enabling <strong>Reputation</strong>, each Blocklist will be analyzed for repeat offenders in each IP range.'
+	'How Reputation works',
+	'Reputation checks blocklists for repeat offenders in each IP range.'
 	. '<div class="infoblock">'
-	. '<ul><li>Example: &emsp;x.x.x.1, x.x.x.2, x.x.x.3, x.x.x.4, x.x.x.5<br />'
-	. 'No. of <strong> repeat offending IPs </strong> [ &nbsp;<strong>5</strong>&nbsp; ], in a Blocklist within the same IP range.</li></ul>'
-	. 'With <strong>Reputation</strong> enabled, these 5 IPs will be removed and a single<strong>x.x.x.0/24</strong> Block is used.<br />'
-	. 'This will completely Block/Reject this particular range from your Firewall.<br /><br />'
-	. 'Selecting Blocklists from various Threat Sources will help to highlight repeat offending IP ranges,<br />'
-	. 'Its important to select a broad range of Blocklists that cover different types of malicious activity.<br /><br />'
-	. 'You *may* experience some False Positives. Add any False Positive IPs manually to the<br />'
-	. '<strong>IPv4 Suppression custom list</strong> or use the "+" suppression Icon in the Alerts TAB<br /><br />'
-	. 'To help mitigate False Positives \'Countries\' can be <strong>Excluded</strong> from this process. (Refer to Country Code settings)'
-	. '<br /><br />Enabling <strong>De-Duplication</strong> is highly recommended before utilizing <strong>Reputation</strong> processes.'
+	. '<p>For example, a list containing <code>x.x.x.1</code> through <code>x.x.x.5</code> has five listed addresses in the same range. '
+	. 'Reputation can replace those addresses with a single <code>x.x.x.0/24</code> block.</p>'
+	. '<p><span class="text-danger"><strong>Warning:</strong></span> This blocks the entire range, including addresses not originally listed, and can cause false positives.</p>'
+	. '<p>Use a broad range of blocklists covering different types of malicious activity. '
+	. 'It\'s important to review false positives: add those IPs to <strong>IPv4 Suppression</strong>, or use the <strong>+</strong> icon on <strong>Reports</strong> &gt; <strong>Alerts</strong>.</p>'
+	. '<p>To exclude countries, use <strong>Country Code Settings (max/dMax)</strong>. '
+	. 'Enable <strong>De-Duplication</strong> on <strong>IP</strong> before using Reputation processing.</p>'
 	. '</div>'
 ));
 $form->add($section);
@@ -1170,16 +1127,13 @@ $form->add($section);
 $section = new Form_Section('Collective List Reputation');
 $section->addInput(new Form_StaticText(
 	NULL,
-	'Once all Blocklists are downloaded, these two additional processes <strong>[ pMax and dMax ]</strong><br />'
-	. 'Can be used to further analyze for repeat offenders.'
+	'<p>Across all blocklists:</p>'
 	. '<div class="infoblock">'
-	. '<ul><li>Analyzing all Blocklists as a whole:</li></ul>'
-	. '<ul><li><strong>[ pMax ]</strong> will analyze for repeat offenders in each IP range but will not use the Country Exclusion.<br />'
-	. 'Default is 50 IPs in any range. Having 50 repeat offenders IPs in any range will Block the entire range.<br /><br /></li></ul>'
-	. '<ul><li><strong>[ dMax ]</strong> will analyze for repeat offenders in each IP range. Country Exclusions will be applied.<br />'
-	. 'Default is 5 IPs in any range.</li></ul>'
-	. 'Note: <strong>MAX</strong> performs on individual Blocklists, while <strong>pMAX / dMAX</strong>'
-	. 'perform on all Lists together.'
+	. '<ul>'
+	. '<li><strong>pMAX</strong>: checks ranges without country exclusions. Default threshold: 50 addresses (<strong>pMax Setting</strong>).</li>'
+	. '<li><strong>dMAX</strong>: checks ranges with country exclusions. Default threshold: 5 addresses (<strong>dMax Setting</strong>).</li>'
+	. '</ul>'
+	. '<p><strong>Max</strong> checks individual blocklists; <strong>pMAX</strong> and <strong>dMAX</strong> check them together.</p>'
 	. '</div>'
 ));
 EOF;
@@ -1224,20 +1178,20 @@ $form->add($section);
 $section = new Form_Section('Country Code Settings (max/dMax)');
 $section->addInput(new Form_StaticText(
 	NULL,
-	'When performing queries for repeat offenders, you can choose to <strong>ignore</strong> repeat offenders in select'
-	. 'Countries. The original blocklisted IPs remain intact. All other repeat offending Country ranges will be processed.'
+	'<p>Choose how to handle repeat offenders in selected countries. '
+	. 'Excluded countries keep their original listed addresses when <strong>Ignore</strong> is selected; all other countries are processed.</p>'
 	. '<div class="infoblock">'
-	. 'Define repeat offending ranges [ <strong>Action</strong> ] Available settings are:<br />'
-	. '<ul><li><strong>Ignore</strong>: Repeat offenders that are in the <strong>ccwhite</strong> category will be <strong>Ignored</strong> (Default)</li></ul>'
-	. '<ul><li><strong>Block:</strong> Repeat offenders are set to Block the entire repeat offending range(s)</li></ul>'
-	. '<ul><li><strong>Match:</strong> Repeat offenders are added to a <strong>Match</strong> List which can be used in a Floating Match rule<br />'
-	. 'Selecting <strong>Match</strong> will consume more processing time, so only select this option if you enable rules for it.</li></ul>'
-	. '\'<strong>ccwhite</strong>\' are Countries that are selected to be excluded from the repeat offenders search.<br />'
-	. '\'<strong>ccblack</strong>\' are all other Countries that are not selected.<br /><br />'
-	. 'To use <strong>Match</strong> Lists, Create a new \'Alias\''
-	. 'and select one of the <strong>Action Match</strong> Formats and<br /> enter the <strong>Localfile</strong> as:'
-	. '<ul style="overflow-wrap: anywhere;"><li>/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt</li></ul><br />'
-	. '<strong>These Country Code options are only available when the MaxMind key has been entered and MaxMind database has been downloaded and updated</strong>'
+	. '<ul>'
+	. '<li><strong>Ignore</strong>: keep the excluded country\'s original listed addresses.</li>'
+	. '<li><strong>Block</strong>: block the matching range.</li>'
+	. '<li><strong>Match</strong>: add the range to a Match list for use in your rules.</li>'
+	. '</ul>'
+	. '<p><strong>ccwhite Action:</strong> applies to countries selected under <strong>IPv4 Country Exclusion</strong> and defaults to <strong>Ignore</strong>. '
+	. '<strong>ccblack Action:</strong> applies to all other countries and defaults to <strong>Block</strong>.</p>'
+	. '<p>Selecting <strong>Match</strong> takes additional processing time; use it only if you create rules for the resulting list.</p>'
+	. '<p>Create an alias and set <strong>List Action</strong> to <strong>Alias Match</strong>. Use this file as its <strong>Source</strong>:</p>'
+	. '<p><code style="overflow-wrap:anywhere">/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt</code></p>'
+	. '<p><strong>Note:</strong> Country Code options require a MaxMind key and a downloaded, updated MaxMind database.</p>'
 	. '</div>'
 ));
 
@@ -1265,8 +1219,8 @@ EOF;
 	\$pconfig['ccexclude'],
 	array($et_options),
 	TRUE
-))->setHelp('Select Countries you want to <strong>Exclude</strong> from the Reputation Process.<br />
-		<strong>Use CTRL&nbsp;+&nbsp;CLICK to select/unselect countries</strong>')
+))->setHelp('Select countries to exclude from Reputation processing.<br />
+		Use <code>Ctrl+click</code> to select or clear countries.')
   ->setAttribute('size', '20')
   ->setAttribute('style', 'overflow: auto;');
 
@@ -1279,18 +1233,16 @@ $form->add($section);
 $section = new Form_Section('Proofpoint ET IQRISK IPv4 Reputation', 'Proofpointsettings', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	'Professional Subscription Blocklist',
-	'<strong>Proofpoint ET IQRisk</strong> is a subscription based professional Reputation list.<br /><br />'
-	. 'The URL must include the name <strong>iprepdata.txt</strong><br />'
-	. 'ET IQRisk Blocklist URL must be entered in the IPv4 Lists Tab using the following example:'
-	. '<ul style="overflow-wrap: anywhere;"><li>https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz</li></ul>'
-	. 'Select the <strong>Auto</strong> format. The URL should use the .gz File type.<br />'
-	. 'Enter your "ETPRO" code in URL. Further information can be found @ '
-	. '<a target="_blank" rel="noopener noreferrer" href="https://www.proofpoint.com/us/solutions/products/threat-intelligence">Proofpoint IQRisk</a><br /><br />'
-	. 'To use <strong>Match</strong> Lists, Create a new Alias and select one of the <strong>'
-	. 'Action Match</strong> Formats and <br />'
-	. 'enter the <strong>Localfile</strong> as: <ul style="overflow-wrap: anywhere;"><li>/var/db/pfblockerng/match/generated/pfB_Match_ET_v4.txt</li></ul>'
-	. 'ET IQRisk Individual Match Lists can be found in the following folder:<br />'
-	. '<ul style="overflow-wrap: anywhere;"><li>/var/db/pfblockerng/ET</li></ul>'
+	'<p>Proofpoint ET IQRisk is a subscription-based reputation list.</p>'
+	. '<p>The URL must include <code>iprepdata.txt</code>. Enter it as a <strong>Source</strong> on <strong>IPv4</strong>, for example:</p>'
+	. '<p><code style="overflow-wrap:anywhere">https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz</code></p>'
+	. '<p>Select <strong>Format</strong> set to <strong>Auto</strong> and use a <code>.gz</code> file. '
+	. 'Replace <code>XXXXXXXXXXXXXXXX</code> with your ETPRO code. See '
+	. '<a target="_blank" rel="noopener noreferrer" href="https://www.proofpoint.com/us/solutions/products/threat-intelligence">Proofpoint IQRisk</a> for details.</p>'
+	. '<p>To use the Match list, create an alias with <strong>List Action</strong> set to <strong>Alias Match</strong> and this file as its <strong>Source</strong>:</p>'
+	. '<p><code style="overflow-wrap:anywhere">/var/db/pfblockerng/match/generated/pfB_Match_ET_v4.txt</code></p>'
+	. '<p>Individual ET IQRisk Match lists are stored in:</p>'
+	. '<p><code style="overflow-wrap:anywhere">/var/db/pfblockerng/ET</code></p>'
 ));
 
 $section->addInput(new Form_Input(
@@ -1299,7 +1251,7 @@ $section->addInput(new Form_Input(
 	'text',
 	$pconfig['et_header'],
 	['placeholder' => 'Enter the ET IQRisk Header Name']
-))->setHelp('Enter the \'Header Name\' referenced in the IPv4 List TAB for ET IQRisk IPRep.<br />This will be used to improve the Alerts TAB reporting for ET IPRep.');
+))->setHelp('Enter the <strong>Header/Label</strong> used for ET IQRisk under <strong>Source Definitions</strong> on <strong>IPv4</strong>. This improves ET IQRisk reporting on <strong>Reports</strong> &gt; <strong>Alerts</strong>.');
 
 $section->addInput(new Form_Select(
 	'etblock',
@@ -1323,7 +1275,7 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 print($form);
-print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
+print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.</p>');
 ?>
 <?php include('foot.inc');?>
 
