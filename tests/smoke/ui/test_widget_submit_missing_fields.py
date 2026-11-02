@@ -1,7 +1,7 @@
 """issue #1064 -- the widget's ``pfb_submit`` save must survive a POST with per-field keys omitted.
 
 The ``pfb_submit`` branch (``pfblockerng.widget.php`` ~76-122) read every per-field
-key (``pfb_popup``, ``pfb_sortcolumn``, ``pfb_dnsblquery``, ...) unguarded: the outer
+key (``pfb_popup``, ``pfb_sortcolumn``, ``pfb_maxfails``, ...) unguarded: the outer
 ``isset($_POST['pfb_submit'])`` gates the branch, not the keys, so a crafted POST
 missing a field -- or a NORMAL save with a checkbox unchecked (an unchecked checkbox
 posts no key at all) -- logged one PHP 8.3 "Undefined array key" warning per field.
