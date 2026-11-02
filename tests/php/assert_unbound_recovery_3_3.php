@@ -795,7 +795,7 @@ row('Row 6e: a group member that outlasts the post-KILL grace is logged after on
 		. 'file_put_contents($argv[2], (string) $pgid); sleep(30);';
 	$run = run_isolated($src, fastConstants([
 			'PFB_UNBOUND_START_CMD' => 'printf %s "$PFB_UNBOUND_START_PGID" > {{DIR}}/pgid.fifo; exec sleep 30',
-			'PFB_UNBOUND_START_WAIT' => 1,
+			'PFB_UNBOUND_START_WAIT' => 2,
 		]),
 		['pfb_stop_start_unbound'],
 		stopStartPrelude() . '$joiner_code = ' . var_export($joiner, true) . ";\n" . <<<'PHP'
