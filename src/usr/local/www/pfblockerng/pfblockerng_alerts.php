@@ -2267,7 +2267,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		$s_txt  = "Note:&emsp;The following Domain was blocked via 'DNSBL TLD' (TLD Blacklist):\n\n"
 			. "Blocked Domain:&emsp;&emsp;[ {$h_f2} ]\n"
 			. "Evaluated Domain:&emsp;&nbsp;[ {$h_f7} ]\n\n"
-			. "Add [ {$h_f2} ] to the TLD Whitelist?";
+			. "Add [ {$h_f2} ] to the [ DNSBL Whitelist ]?";
 
 		$supp_dom = '<i class="fa-regular fa-hand icon-pointer" id="DNSBLWT|' . 'tld|'
 			. $h_f2 . '|' . $h_f7 . '" title="' . $s_txt . '"></i>';
@@ -5706,6 +5706,7 @@ events.push(function() {
 				return;
 			}
 			var blocktype = '';		// Types (DNSBL/TLD/DNSBL TLD)
+			var button_text = '', descr_type = '';	// Local: never inherit the previous dialog's values
 
 			switch (DNSBLWT_Type) {
 				case 'add':
@@ -5728,6 +5729,7 @@ events.push(function() {
 				case 'tld':
 					$('#table').val(arr[3]);
 					var blocktype = arr[4];
+					button_text = 'Whitelist';
 					descr_type = 'dnsbl';
 					break;
 				case 'dnsbl_add':
