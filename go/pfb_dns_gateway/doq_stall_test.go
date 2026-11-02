@@ -86,7 +86,7 @@ func TestDoQPartialQueryDoesNotHoldItsStreamForARaisedTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	put(t, partial, []byte{0, 32}) // two bytes of a length prefix, then nothing
-	requireStreamReset(t, partial, rfcDoQProtocolError)
+	requireStreamReset(t, partial, rfcDoQRequestCancelled)
 
 	barrier := doqQuery(t, "barrier.example.")
 	if got := c.query(barrier); !bytes.Equal(got[2:], echoWithQR(seenQuery{wire: barrier})[0][2:]) {
@@ -116,8 +116,8 @@ func TestDoQShortTimeoutStillEndsAPartialQuery(t *testing.T) {
 	_ = partial.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, err = io.ReadAll(partial)
 	var se *quic.StreamError
-	if !errors.As(err, &se) || !se.Remote || se.ErrorCode != rfcDoQProtocolError {
-		t.Fatalf("partial query ended with %v, want a stream reset by the server with DOQ_PROTOCOL_ERROR before the handshake budget", err)
+	if !errors.As(err, &se) || !se.Remote || se.ErrorCode != rfcDoQRequestCancelled {
+		t.Fatalf("partial query ended with %v, want a stream reset by the server with DOQ_REQUEST_CANCELLED before the handshake budget", err)
 	}
 }
 

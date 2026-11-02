@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/netip"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -89,16 +90,23 @@ func (g *gateway) doqQUICConfig() *quic.Config {
 	}
 }
 
-// doqQueryContext is the context resolveShared sees for one DoQ query. It ends when the gateway stops or the
-// connection does, so a dropped connection releases the shared in-flight slot instead of holding it until shutdown.
-func doqQueryContext(gateway, conn context.Context) (context.Context, context.CancelFunc) {
+// doqQueryContext is the context resolveShared sees for one DoQ query. It ends when the gateway stops, the
+// connection ends, or a stream context passed with them ends, so a dropped connection or a cancelled stream
+// releases the shared in-flight slot instead of holding it for 2*timeout+grace.
+func doqQueryContext(gateway, conn context.Context, stream ...context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(gateway)
-	stop := context.AfterFunc(conn, cancel)
+	stops := make([]func() bool, 0, 1+len(stream))
+	stops = append(stops, context.AfterFunc(conn, cancel))
+	for _, parent := range stream {
+		stops = append(stops, context.AfterFunc(parent, cancel))
+	}
 	return ctx, func() {
-		stop() // unregisters the AfterFunc, so a long-lived connection does not keep one callback per query
+		for _, stop := range stops {
+			stop() // unregisters the AfterFunc, so a long-lived parent does not keep one callback per query
+		}
 		// cancel() drops this child of the gateway context when the caller stops the query.
-		// AfterFunc only runs when the connection context ends, so removing cancel() leaves
-		// every query context registered until the gateway itself stops.
+		// AfterFunc runs only when a parent ends, so removing cancel() leaves every query
+		// context registered until the gateway itself stops.
 		cancel()
 	}
 }
@@ -227,7 +235,7 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 	// A query that never finishes must not keep a stream slot for a raised --timeout. The read stops at the Unbound
 	// wait or the handshake budget, whichever is shorter. Only the query read is bounded: Unbound still has g.timeout.
 	_ = s.SetReadDeadline(time.Now().Add(min(g.timeout, g.handshake)))
-	wire, ok := readDoQQuery(s)
+	wire, err := readDoQQuery(s)
 	// The connection's current path, read once the read ends. A path change during the read is judged here, before the
 	// stream is parsed or dropped as malformed.
 	src, dst := proxyEndpoints(addrPortOf(conn.RemoteAddr()), local)
@@ -235,8 +243,12 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 		doqHangUp(conn, s)
 		return
 	}
-	if !ok {
-		reset(s, doqProtocolError)
+	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			reset(s, doqRequestCancelled) // the read only hit its deadline
+		} else {
+			reset(s, doqProtocolError)
+		}
 		return
 	}
 	if len(wire) >= 2 && wire[0]|wire[1] != 0 {
@@ -260,7 +272,7 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 		// generated according to the rules of the protocol that is in use."
 		binary.BigEndian.PutUint16(wire, uint16(1+rand.IntN(65535)))
 		fwd := func(ctx context.Context, q []byte) []byte { return g.up.exchangeUDPThenTCP(ctx, src, dst, q) }
-		qctx, stopQuery := doqQueryContext(g.ctx, conn.Context())
+		qctx, stopQuery := doqQueryContext(g.ctx, conn.Context(), s.Context())
 		defer stopQuery()
 		var admitted bool
 		if reply, admitted = g.resolveShared(qctx, src.Addr(), wire, fwd); !admitted {
@@ -285,22 +297,25 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 	_ = s.Close() // the FIN RFC 9250 4.2 requires after the last response
 }
 
-// readDoQQuery reads one length-prefixed message and then the FIN that must follow it. The buffer grows with the data
-// that arrives, not with the length the peer claims.
-func readDoQQuery(s io.Reader) ([]byte, bool) {
+// readDoQQuery reads one length-prefixed message and then the FIN that must follow it. The buffer grows with the
+// data that arrives, not with the length the peer claims. A deadline before the message is complete is
+// os.ErrDeadlineExceeded, so the caller resets with DOQ_REQUEST_CANCELLED. A short message, extra bytes, or a
+// missing FIN (a deadline once the message is complete and only the FIN is absent counts as that) is some
+// other error, and the caller resets with DOQ_PROTOCOL_ERROR.
+func readDoQQuery(s io.Reader) ([]byte, error) {
 	var size [2]byte
 	if _, err := io.ReadFull(s, size[:]); err != nil {
-		return nil, false
+		return nil, err
 	}
 	var msg bytes.Buffer
 	if _, err := io.CopyN(&msg, s, int64(binary.BigEndian.Uint16(size[:]))); err != nil {
-		return nil, false
+		return nil, err
 	}
 	var extra [1]byte
-	if n, err := s.Read(extra[:]); n != 0 || err != io.EOF {
-		return nil, false
+	if n, err := s.Read(extra[:]); n == 0 && err == io.EOF {
+		return msg.Bytes(), nil
 	}
-	return msg.Bytes(), true
+	return nil, io.ErrUnexpectedEOF
 }
 
 func reset(s *quic.Stream, code quic.StreamErrorCode) {

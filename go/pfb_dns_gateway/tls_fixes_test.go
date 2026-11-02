@@ -173,11 +173,11 @@ func TestDoHTrustIsThePeerAddressNotTheListenerAddress(t *testing.T) {
 // (the read then returns n=1 and io.EOF at once, which a check that looks at the error alone would accept).
 func TestReadDoQQueryRejectsOneExtraByteThatArrivesWithTheFIN(t *testing.T) {
 	good := doqQuery(t, "example.")
-	if wire, ok := readDoQQuery(iotest.DataErrReader(bytes.NewReader(framed(good)))); !ok || !bytes.Equal(wire, good) {
-		t.Fatalf("control: the exact stream gave ok=%v wire=%x, want ok and %x", ok, wire, good)
+	if wire, err := readDoQQuery(iotest.DataErrReader(bytes.NewReader(framed(good)))); err != nil || !bytes.Equal(wire, good) {
+		t.Fatalf("control: the exact stream gave err=%v wire=%x, want no error and %x", err, wire, good)
 	}
 	extra := append(framed(good), 'x')
-	if wire, ok := readDoQQuery(iotest.DataErrReader(bytes.NewReader(extra))); ok {
+	if wire, err := readDoQQuery(iotest.DataErrReader(bytes.NewReader(extra))); err == nil {
 		t.Fatalf("a %d-byte message with one more byte and the FIN was accepted: %x", len(good), wire)
 	}
 }
