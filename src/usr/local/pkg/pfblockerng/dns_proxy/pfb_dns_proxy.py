@@ -135,6 +135,7 @@ MAX_REPORT_OPTION_HEX = 1024  # hex of one option's data: fits a 2 KiB datagram 
 MAX_REPORT_BYTES = 2048  # one report is one datagram from the observer, which never sends more
 OBSERVER_RCVBUF = 256 * 1024  # bytes asked for the observer socket, so a burst queues in it
 MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
+MAX_DNS_MESSAGE = 65535  # one DNS message; a longer ANSWER is a protocol error at the gateway
 Forward = Callable[[bytes], Awaitable[bytes | None]]
 ReplyLogger = Callable[[dnswire.Message, str, bytes | None], None]  # query, client, Unbound's reply
 
@@ -252,10 +253,12 @@ def _error(query: dnswire.Message, rcode: int) -> bytes:
     return dnswire.encode(dnswire.Message(query.id, flags, query.questions, additional=_edns_for(query)))
 
 
-def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> bytes:
-    """The module's replacement message, addressed to this client, with its rcode. AD is not kept: the data is no longer
-    the one Unbound validated. Over `limit` bytes (a UDP client's) it becomes the question alone with TC set, so the
-    client asks again over TCP."""
+def _rendered(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> tuple[bytes, bool]:
+    """The module's replacement message, addressed to this client, with its rcode, and whether it was replaced by a
+    bare SERVFAIL. AD is not kept: the data is no longer the one Unbound validated. Over `limit` bytes (a UDP client's)
+    it becomes the question alone with TC set, so the client asks again over TCP; that keeps the module rcode, so the
+    callback stays reply. With no limit (a stream client), a message over MAX_DNS_MESSAGE bytes cannot be sent whole
+    and is not truncated: it is the bare SERVFAIL."""
     flags = (
         dnswire.QR
         | dnswire.RA
@@ -264,9 +267,14 @@ def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> byte
     )
     additional = [*msg.additional, *_edns_for(query)]
     wire = dnswire.encode(dnswire.Message(query.id, flags, query.questions, msg.answer, msg.authority, additional))
+    if limit is None and len(wire) > MAX_DNS_MESSAGE:
+        return _error(query, RCODE_SERVFAIL), True
     if limit is None or len(wire) <= limit:
-        return wire
-    return dnswire.encode(dnswire.Message(query.id, flags | dnswire.TC, query.questions, additional=_edns_for(query)))
+        return wire, False
+    return (
+        dnswire.encode(dnswire.Message(query.id, flags | dnswire.TC, query.questions, additional=_edns_for(query))),
+        False,
+    )
 
 
 def _is_u16(value: object) -> bool:
@@ -446,18 +454,24 @@ class Frontend:
     def _send(
         self, query: dnswire.Message, qstate: shim.module_qstate, relay: bytes | None, limit: int | None
     ) -> bytes:
-        """Reply to the client the way mesh_send_reply does: rcode != 0 is a bare error, no message is SERVFAIL."""
+        """Reply to the client the way mesh_send_reply does: rcode != 0 is a bare error, no message is SERVFAIL.
+        A stream answer over MAX_DNS_MESSAGE is that same bare SERVFAIL, so the callback is reply_servfail."""
         msg, rcode = qstate.return_msg, qstate.return_rcode
         if msg is None and rcode == shim.RCODE_NOERROR:
             rcode = RCODE_SERVFAIL
+        wire: bytes | None = None
+        if relay is None and msg is not None and rcode == shim.RCODE_NOERROR:
+            wire, replaced = _rendered(query, msg, limit)
+            if replaced:
+                rcode = RCODE_SERVFAIL
         shim.fire_reply_callback(
             "reply_servfail" if rcode == RCODE_SERVFAIL else "reply", qstate, msg and msg.rep, rcode
         )
         if relay is not None:
             return relay
-        if rcode != shim.RCODE_NOERROR or msg is None:
-            return _error(query, rcode)
-        return _answer(query, msg, limit)
+        if wire is not None:
+            return wire
+        return _error(query, rcode)
 
     def relay_upstream_response(self, data: bytes) -> None:
         """Handle one datagram from pfb_upstream_observer.py: fire the module's query_response callback on the raw

@@ -368,6 +368,55 @@ def test_servfail_goes_to_the_servfail_callback_not_the_reply_callback(
     assert kinds == ["reply_servfail"]
 
 
+@pytest.mark.parametrize(
+    ("datagram", "rcode", "tc", "callback"),
+    [
+        (False, pfb_dns_proxy.RCODE_SERVFAIL, 0, "reply_servfail"),
+        (True, shim.RCODE_NOERROR, dnswire.TC, "reply"),
+    ],
+    ids=["stream-servfail", "datagram-truncated"],
+)
+def test_an_oversized_answer_is_servfail_for_a_stream_and_truncated_for_a_datagram(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch, datagram: bool, rcode: int, tc: int, callback: str
+) -> None:
+    """A rebuilt stream answer longer than one DNS message cannot be sent. The client gets the bare SERVFAIL, and the
+    servfail callback is what fires — not a reply that still carries the module's NOERROR. A datagram client's
+    oversized answer is the truncated NOERROR it always was, so its callback stays reply."""
+    seen: list[tuple[str, int]] = []
+
+    def recorder(kind: str) -> Any:
+        def record(*args: Any, **_kwargs: Any) -> bool:
+            seen.append((kind, args[3]))
+            return True
+
+        return record
+
+    for kind in ("reply", "reply_servfail"):
+        monkeypatch.setitem(shim.callbacks, kind, recorder(kind))
+
+    planted = shim.DnsMsg(
+        shim.query_info(ALLOWED, dnswire.TYPE_A),
+        dnswire.QR | dnswire.RA,
+        [dnswire.RR(ALLOWED, dnswire.TYPE_A, dnswire.CLASS_IN, 300, b"\x00" * 65535)],
+        [],
+        [],
+    )
+
+    def finish_oversize(id: int, _event: int, qstate: Any, _qdata: Any) -> bool:
+        qstate.return_msg = planted
+        qstate.return_rcode = shim.RCODE_NOERROR
+        qstate.ext_state[id] = shim.MODULE_FINISHED
+        return True
+
+    monkeypatch.setattr(booted.module, "operate", finish_oversize)
+    query = build_query(ALLOWED)
+    frontend = pfb_dns_proxy.Frontend(booted.module)
+    wire = asyncio.run(frontend.resolve(query, CLIENT, FakeUnbound(ZONE), datagram=datagram))
+    message = dnswire.parse(wire or b"")
+    assert (message.rcode, message.flags & dnswire.TC, message.answers, message.authority) == (rcode, tc, [], [])
+    assert seen == [(callback, rcode)], seen
+
+
 # --- addressing and CLI --------------------------------------------------------------------------
 
 
