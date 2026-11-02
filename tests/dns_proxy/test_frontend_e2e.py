@@ -368,11 +368,20 @@ def test_servfail_goes_to_the_servfail_callback_not_the_reply_callback(
     assert kinds == ["reply_servfail"]
 
 
-def test_an_oversized_stream_answer_is_servfail_on_the_wire_and_in_the_callback(
-    booted: Booted, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("datagram", "rcode", "tc", "callback"),
+    [
+        (False, pfb_dns_proxy.RCODE_SERVFAIL, 0, "reply_servfail"),
+        (True, shim.RCODE_NOERROR, dnswire.TC, "reply"),
+    ],
+    ids=["stream-servfail", "datagram-truncated"],
+)
+def test_an_oversized_answer_is_servfail_for_a_stream_and_truncated_for_a_datagram(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch, datagram: bool, rcode: int, tc: int, callback: str
 ) -> None:
     """A rebuilt stream answer longer than one DNS message cannot be sent. The client gets the bare SERVFAIL, and the
-    servfail callback is what fires — not a reply that still carries the module's NOERROR."""
+    servfail callback is what fires — not a reply that still carries the module's NOERROR. A datagram client's
+    oversized answer is the truncated NOERROR it always was, so its callback stays reply."""
     seen: list[tuple[str, int]] = []
 
     def recorder(kind: str) -> Any:
@@ -401,11 +410,11 @@ def test_an_oversized_stream_answer_is_servfail_on_the_wire_and_in_the_callback(
 
     monkeypatch.setattr(booted.module, "operate", finish_oversize)
     query = build_query(ALLOWED)
-    wire = _resolve(booted, query, FakeUnbound(ZONE))
-    assert wire == pfb_dns_proxy._answer(dnswire.parse(query), planted, None)
+    frontend = pfb_dns_proxy.Frontend(booted.module)
+    wire = asyncio.run(frontend.resolve(query, CLIENT, FakeUnbound(ZONE), datagram=datagram))
     message = dnswire.parse(wire or b"")
-    assert (message.rcode, message.answers, message.authority) == (pfb_dns_proxy.RCODE_SERVFAIL, [], [])
-    assert seen == [("reply_servfail", pfb_dns_proxy.RCODE_SERVFAIL)], seen
+    assert (message.rcode, message.flags & dnswire.TC, message.answers, message.authority) == (rcode, tc, [], [])
+    assert seen == [(callback, rcode)], seen
 
 
 # --- addressing and CLI --------------------------------------------------------------------------

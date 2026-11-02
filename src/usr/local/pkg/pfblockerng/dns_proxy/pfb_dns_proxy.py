@@ -254,9 +254,11 @@ def _error(query: dnswire.Message, rcode: int) -> bytes:
 
 
 def _rendered(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> tuple[bytes, bool]:
-    """The client wire, and whether a stream answer was replaced by a bare SERVFAIL for exceeding MAX_DNS_MESSAGE.
-
-    UDP truncation is not that replacement: the wire keeps the module rcode and TC, so the callback stays reply."""
+    """The module's replacement message, addressed to this client, with its rcode, and whether it was replaced by a
+    bare SERVFAIL. AD is not kept: the data is no longer the one Unbound validated. Over `limit` bytes (a UDP client's)
+    it becomes the question alone with TC set, so the client asks again over TCP; that keeps the module rcode, so the
+    callback stays reply. With no limit (a stream client), a message over MAX_DNS_MESSAGE bytes cannot be sent whole
+    and is not truncated: it is the bare SERVFAIL."""
     flags = (
         dnswire.QR
         | dnswire.RA
@@ -273,14 +275,6 @@ def _rendered(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> tu
         dnswire.encode(dnswire.Message(query.id, flags | dnswire.TC, query.questions, additional=_edns_for(query))),
         False,
     )
-
-
-def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> bytes:
-    """The module's replacement message, addressed to this client, with its rcode. AD is not kept: the data is no longer
-    the one Unbound validated. Over `limit` bytes (a UDP client's) it becomes the question alone with TC set, so the
-    client asks again over TCP. With no limit (a stream client), a message over MAX_DNS_MESSAGE bytes is a bare
-    SERVFAIL: it cannot be sent whole and it is not truncated."""
-    return _rendered(query, msg, limit)[0]
 
 
 def _is_u16(value: object) -> bool:
