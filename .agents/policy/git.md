@@ -120,10 +120,10 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
 - **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; denies
   agent branch rewrites over unfetched remote history (#1307); validates the final
   message of every outgoing commit and each outgoing agent commit's author/committer
-  identity (same rule) and good signature from the configured user email; and refuses
-  a push whose `graphify-out/graph.json` differs from a rebuild (#3139; contract in
-  `repository-intelligence.md`). Refresh and commit the graph after every rebase: a
-  rebase replays commits without the pre-commit rebuild.
+  identity (same rule) and good signature from the configured user email; and
+  refuses a push whose `graphify-out/graph.json` differs from a rebuild (#3139;
+  contract in `repository-intelligence.md`). Refresh and commit the graph after
+  every rebase: a rebase replays commits without the pre-commit rebuild.
 
 ## Rebase and diff hygiene
 

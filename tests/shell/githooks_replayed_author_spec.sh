@@ -78,7 +78,7 @@ Describe 'agent replay of a published foreign author (issue #3642)'
     printf 'msg\n' > "${base}/MSG"
     cd "${base}/A" && agent_env GIT_AUTHOR_NAME="$1" GIT_AUTHOR_EMAIL="$2" \
       GIT_AUTHOR_DATE="$3" GIT_COMMITTER_NAME="${4:-A}" \
-      GIT_COMMITTER_EMAIL="${5:-a@example.com}" sh "$pcm" "${base}/MSG" message
+      GIT_COMMITTER_EMAIL="${5:-a@example.com}" sh "${PCM_HOOK:-$pcm}" "${base}/MSG" message
   }
 
   pcm_after_publish() {
@@ -86,11 +86,24 @@ Describe 'agent replay of a published foreign author (issue #3642)'
     pcm_as "$4" "$5" "$6" "${7:-A}" "${8:-a@example.com}"
   }
 
+  # The hook alone, without replayed-author.sh beside it: a foreign author must fail closed.
+  lone_hook() {
+    mkdir -p "${base}/lone" && cp "$1" "${base}/lone/" && printf '%s\n' "${base}/lone/$(basename "$1")"
+  }
+
+  pcm_without_helper() {
+    PCM_HOOK="$(lone_hook "$pcm")" pcm_after_publish Other o@x.io "$PUBLISHED_AT" Other o@x.io "$PUBLISHED_AT"
+  }
+
   # --- pre-push: an outgoing signed agent commit on a new branch ---
   pre_push_run() {
     update="refs/heads/work $(git_fixture -C "${base}/A" rev-parse refs/heads/work) refs/heads/work $Z40"
     cd "${base}/A" && printf '%s\n' "$update" \
-      | agent_env sh "$pre_push" origin "${base}/remote.git"
+      | agent_env sh "${PRE_PUSH_HOOK:-$pre_push}" origin "${base}/remote.git"
+  }
+
+  pre_push_without_helper() {
+    PRE_PUSH_HOOK="$(lone_hook "$pre_push")" outgoing_after_publish Other o@x.io "$PUBLISHED_AT" Other o@x.io "$PUBLISHED_AT"
   }
 
   outgoing_fresh() { # author_name author_email author_date [committer_name committer_email]
@@ -186,10 +199,22 @@ Describe 'agent replay of a published foreign author (issue #3642)'
       The stderr should equal ''
     End
 
-    It 'R6b: rejects a near-miss of a published name (A. vs Ax)'
-      When run pcm_after_publish 'A.' meta@x.io "$PUBLISHED_AT" Ax meta@x.io "$PUBLISHED_AT"
+    It 'R6b: rejects a name a published name would only match as a pattern (Ax published, A. asked)'
+      When run pcm_after_publish Ax meta@x.io "$PUBLISHED_AT" 'A.' meta@x.io "$PUBLISHED_AT"
       The status should equal 1
       The stderr should equal "$REFUSED"
+    End
+
+    It 'R6c: rejects a prefix of a published name (Other Person published, Other asked)'
+      When run pcm_after_publish 'Other Person' o@x.io "$PUBLISHED_AT" Other o@x.io "$PUBLISHED_AT"
+      The status should equal 1
+      The stderr should equal "$REFUSED"
+    End
+
+    It 'R8: fails closed when the replayed-author helper is missing'
+      When run pcm_without_helper
+      The status should equal 1
+      The stderr should include 'replayed-author helper missing'
     End
 
     It 'R7: still accepts the configured user as author'
@@ -236,10 +261,22 @@ Describe 'agent replay of a published foreign author (issue #3642)'
       The stderr should equal ''
     End
 
-    It 'R6b: rejects a near-miss of a published name (A. vs Ax)'
-      When run outgoing_after_publish 'A.' meta@x.io "$PUBLISHED_AT" Ax meta@x.io "$PUBLISHED_AT"
+    It 'R6b: rejects a name a published name would only match as a pattern (Ax published, A. asked)'
+      When run outgoing_after_publish Ax meta@x.io "$PUBLISHED_AT" 'A.' meta@x.io "$PUBLISHED_AT"
       The status should equal 1
       The stderr should equal "$REFUSED"
+    End
+
+    It 'R6c: rejects a prefix of a published name (Other Person published, Other asked)'
+      When run outgoing_after_publish 'Other Person' o@x.io "$PUBLISHED_AT" Other o@x.io "$PUBLISHED_AT"
+      The status should equal 1
+      The stderr should equal "$REFUSED"
+    End
+
+    It 'R8: fails closed when the replayed-author helper is missing'
+      When run pre_push_without_helper
+      The status should equal 1
+      The stderr should include 'replayed-author helper missing'
     End
 
     It 'R7: still accepts a signed commit by the configured user'
