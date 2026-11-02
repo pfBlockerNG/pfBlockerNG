@@ -66,6 +66,27 @@ func TestDoQQueryContextEndsWhenTheConnectionDoes(t *testing.T) {
 	if err := conn2.Err(); err != nil {
 		t.Fatalf("the connection context ended with the gateway: %v", err)
 	}
+
+	// Stopping the query itself must end its context while both parents stay live. AfterFunc only
+	// runs when the connection ends, so a cleanup that forgets cancel() leaves this context active.
+	gateway3, stopGateway3 := context.WithCancel(context.Background())
+	t.Cleanup(stopGateway3)
+	conn3, stopConn3 := context.WithCancel(context.Background())
+	t.Cleanup(stopConn3)
+	qctx3, stopQuery3 := doqQueryContext(gateway3, conn3)
+	t.Cleanup(stopQuery3)
+	stopQuery3()
+	select {
+	case <-qctx3.Done():
+	case <-time.After(watchdog):
+		t.Fatal("STUCK/ENVIRONMENT: stopping the query left its context active while the gateway and the connection are still live")
+	}
+	if err := gateway3.Err(); err != nil {
+		t.Fatalf("the gateway context ended when the query stopped: %v", err)
+	}
+	if err := conn3.Err(); err != nil {
+		t.Fatalf("the connection context ended when the query stopped: %v", err)
+	}
 }
 
 // A dropped DoQ connection releases the shared in-flight slot while the gateway is still serving. The decider
