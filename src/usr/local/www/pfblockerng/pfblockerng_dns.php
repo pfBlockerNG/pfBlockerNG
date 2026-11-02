@@ -171,6 +171,26 @@ foreach (pfb_dns_proxy_ddr_warnings() as $pfb_ddr_warning) {
 
 $form = new Form('Save pfB-DNS settings');
 
+$section = new Form_Section('DNS Reply Logging');
+$section->addInput(new Form_Checkbox(
+	'pfb_py_reply',
+	gettext('DNS Reply Logging'),
+	'Enable',
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_py_reply'] ?? NULL),
+	'on'
+))->setHelp('Log each DNS reply to the DNS Reply log (the client, the name asked, the reply type, TTL and answer, and the answer\'s country), '
+		. 'which fills the DNS Reply tab of Reports.'
+		. '<div class="infoblock">'
+		. 'This one setting applies to both DNS modes. With DNSBL enabled, the DNSBL Python module logs the replies that were not blocked. '
+		. 'With pfB-DNS enabled and DNSBL disabled, the pfB-DNS proxy logs every reply it forwards from the DNS Resolver, '
+		. 'without loading any DNSBL feed or module. '
+		. 'Disabled: no reply is logged, and nothing is written to the DNS Reply log.<br />'
+		. 'The log lists the names each client looked up: keep this disabled where that must not be recorded.<br />'
+		. 'The change is applied on the next Update.<br />'
+		. 'Default: <strong>Enabled</strong>'
+		. '</div>');
+$form->add($section);
+
 $section = new Form_Section('pfB-DNS Settings');
 $section->addInput(new Form_Checkbox(
 	'pfb_dns',
@@ -372,26 +392,6 @@ $section->addInput($pfb_ddr_doh_443)->setHelp('Some clients might not accept a p
 		. 'It is intended for users who, for example, serve multiple sites over HTTPS through a reverse proxy, '
 		. 'and who are responsible for configuring that reverse proxy correctly.'
 		. '<div class="infoblock">The change is applied on the next Update. Default: <strong>Disabled</strong></div>');
-$form->add($section);
-
-$section = new Form_Section('DNS Reply Logging');
-$section->addInput(new Form_Checkbox(
-	'pfb_py_reply',
-	gettext('DNS Reply Logging'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_py_reply'] ?? NULL),
-	'on'
-))->setHelp('Log each DNS reply to the DNS Reply log (the client, the name asked, the reply type, TTL and answer, and the answer\'s country), '
-		. 'which fills the DNS Reply tab of Reports.'
-		. '<div class="infoblock">'
-		. 'This one setting applies to both DNS modes. With DNSBL enabled, the DNSBL Python module logs the replies that were not blocked. '
-		. 'With pfB-DNS enabled and DNSBL disabled, the pfB-DNS proxy logs every reply it forwards from the DNS Resolver, '
-		. 'without loading any DNSBL feed or module. '
-		. 'Disabled: no reply is logged, and nothing is written to the DNS Reply log.<br />'
-		. 'The log lists the names each client looked up: keep this disabled where that must not be recorded.<br />'
-		. 'The change is applied on the next Update.<br />'
-		. 'Default: <strong>Enabled</strong>'
-		. '</div>');
 $form->add($section);
 
 print ($form);
