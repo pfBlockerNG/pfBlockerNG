@@ -211,6 +211,18 @@ Describe 'agent replay of a published foreign author (issue #3642)'
       The stderr should equal "$REFUSED"
     End
 
+    It 'R6d: rejects a name that only matches a published name used as a pattern (A. published, Ax asked)'
+      When run pcm_after_publish 'A.' meta@x.io "$PUBLISHED_AT" Ax meta@x.io "$PUBLISHED_AT"
+      The status should equal 1
+      The stderr should equal "$REFUSED"
+    End
+
+    It 'R6e: rejects a name that only contains a published name (Other published, Other Person asked)'
+      When run pcm_after_publish Other o@x.io "$PUBLISHED_AT" 'Other Person' o@x.io "$PUBLISHED_AT"
+      The status should equal 1
+      The stderr should equal "$REFUSED"
+    End
+
     It 'R8: fails closed when the replayed-author helper is missing'
       When run pcm_without_helper
       The status should equal 1
@@ -269,6 +281,18 @@ Describe 'agent replay of a published foreign author (issue #3642)'
 
     It 'R6c: rejects a prefix of a published name (Other Person published, Other asked)'
       When run outgoing_after_publish 'Other Person' o@x.io "$PUBLISHED_AT" Other o@x.io "$PUBLISHED_AT"
+      The status should equal 1
+      The stderr should equal "$REFUSED"
+    End
+
+    It 'R6d: rejects a name that only matches a published name used as a pattern (A. published, Ax asked)'
+      When run outgoing_after_publish 'A.' meta@x.io "$PUBLISHED_AT" Ax meta@x.io "$PUBLISHED_AT"
+      The status should equal 1
+      The stderr should equal "$REFUSED"
+    End
+
+    It 'R6e: rejects a name that only contains a published name (Other published, Other Person asked)'
+      When run outgoing_after_publish Other o@x.io "$PUBLISHED_AT" 'Other Person' o@x.io "$PUBLISHED_AT"
       The status should equal 1
       The stderr should equal "$REFUSED"
     End

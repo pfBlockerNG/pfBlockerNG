@@ -174,6 +174,14 @@ def test_ledger_has_its_own_larger_budget_than_the_policy_default(tmp_path: Path
     ]
 
 
+def test_git_policy_has_the_owner_raised_budget(tmp_path: Path) -> None:
+    # issue #3642: the owner raised git.md's cap so the replayed-author rule and its trust limit fit.
+    _write(tmp_path, ".agents/policy/git.md", "x" * 14_336)
+    assert ccb.check_sizes(tmp_path, [".agents/policy/git.md"]) == []
+    _write(tmp_path, ".agents/policy/git.md", "x" * 14_337)
+    assert ccb.check_sizes(tmp_path, [".agents/policy/git.md"]) == [".agents/policy/git.md: 14337 bytes > budget 14336"]
+
+
 # --- the append-only CodeRabbit ledger keeps its one-line format (#2829) -------
 
 
