@@ -2888,7 +2888,7 @@ $section->addInput(new Form_Checkbox(
 
 $form->add($section);
 
-$section = new Form_Section('DNSBL Webserver Configuration');
+$section = new Form_Section('DNSBL Webserver Configuration', 'dnsbl_webserver', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	'Deprecated',
 	'<i class="fa fa-exclamation-triangle text-warning"></i> <span class="text-warning">The DNSBL WebServer/VIP response is deprecated: prefer Null Blocking. '
