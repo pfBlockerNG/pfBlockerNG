@@ -195,6 +195,85 @@ func TestDoHLargestQueryIsAccepted(t *testing.T) {
 	}
 }
 
+// A denied DoH peer is closed inside Accept, before the address share or the connection budget takes a slot.
+// A client that a trusted front end names is still screened on the request: the TCP peer at accept is the front end.
+func TestDoHACLDenyClosesAtAcceptBeforeEitherConnectionCap(t *testing.T) {
+	r, m, addr := newDoHRig(t, clientAllowed) // the front end only; the denied address is not a trusted peer
+	r.autoAnswer(echoAnswer)
+	denied := netip.MustParseAddr(clientDenied)
+
+	held := make([]net.Conn, 0, maxDoHPerAddr)
+	for range maxDoHPerAddr {
+		held = append(held, dialRawFrom(t, addr.String(), clientDenied))
+	}
+	for range 2 { // accepted in order: once these are shut, every earlier peer has been through Accept
+		requireTCPClosed(t, dialRawFrom(t, addr.String(), clientDenied))
+	}
+	if n := r.g.dohConns.n.Load(); n != 0 {
+		t.Fatalf("%d DoH connections counted, want 0: a denied peer must not hold a slot", n)
+	}
+	r.g.dohAddrs.mu.Lock()
+	share := r.g.dohAddrs.held[denied]
+	r.g.dohAddrs.mu.Unlock()
+	if share != 0 {
+		t.Fatalf("denied peer holds %d of its address share, want 0: Accept took a slot before the ACL", share)
+	}
+	if n := addrLimitLogs(r); n != 0 {
+		t.Fatalf("a denied peer reached the address cap (%d lines): %s", n, r.logs.joined())
+	}
+	if n := strings.Count(r.logs.joined(), "DoH client limit"); n != 0 {
+		t.Fatalf("a denied peer reached the DoH connection cap (%d lines): %s", n, r.logs.joined())
+	}
+	for _, c := range held {
+		requireTCPClosed(t, c)
+	}
+
+	// The front end is allowed, so its connection is accepted; the denied client it names is still reset per request.
+	front := newDoHClient(t, addr, m, dohOptions{source: clientAllowed})
+	query := buildQuery(t, 0x6666, "blocked.example.", true)
+	if resp, err := front.http.Do(front.get(dnsParam(query), "X-Forwarded-For", clientDenied)); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a denied client behind an allowed front end got a response (status %d): the per-request screen must still reset it", resp.StatusCode)
+	}
+	front.http.CloseIdleConnections()
+	allowed := newDoHClient(t, addr, m, dohOptions{source: clientAllowed})
+	if resp, _ := allowed.do(allowed.get(dnsParam(buildQuery(t, 1, "allowed.example.", true)))); resp.StatusCode != 200 {
+		t.Fatalf("an allowed peer after the denied burst got status %d, want 200", resp.StatusCode)
+	}
+	if q := r.nextQuery(); q.ip != clientAllowed {
+		t.Fatalf("the decider's first query came from %s, want %s", q.ip, clientAllowed)
+	}
+	r.requireNoOtherQuery()
+}
+
+// A trusted front end whose own address the ACL denies is still accepted. An allowed client it names, by
+// X-Forwarded-For or a PROXY header, gets a DoH answer; the per-request screen decides that client.
+func TestDoHTrustedFrontEndWhoseAddressIsDeniedStillAnswersTheClientItNames(t *testing.T) {
+	r, m, addr := newDoHRig(t, clientDenied)
+	r.autoAnswer(echoAnswer)
+	query := buildQuery(t, 0, "allowed.example.", true)
+	cases := []struct {
+		name string
+		opt  dohOptions
+		hdr  []string
+	}{
+		{"X-Forwarded-For", dohOptions{source: clientDenied}, []string{"X-Forwarded-For", clientAllowed}},
+		{"PROXY", dohOptions{source: clientDenied, prefix: pp2TCP(clientAllowed+":51000", "192.0.2.1:443")}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newDoHClient(t, addr, m, tc.opt)
+			resp, _ := c.do(c.get(dnsParam(query), tc.hdr...))
+			if resp.StatusCode != 200 {
+				t.Fatalf("status %d, want 200: an allowed client behind a denied trusted front end must get a DoH answer", resp.StatusCode)
+			}
+			if q := r.nextQuery(); q.ip != clientAllowed {
+				t.Fatalf("the decider's client %s, want the named client %s", q.ip, clientAllowed)
+			}
+		})
+	}
+}
+
 // T8: ACL refuse answers REFUSED; ACL deny aborts the request (the client sees a reset, never a reply).
 func TestDoHACLRefuseAnswersRefusedAndDenyAbortsTheRequest(t *testing.T) {
 	for _, h2 := range []bool{false, true} {
