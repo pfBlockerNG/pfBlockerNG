@@ -2066,6 +2066,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$list['aliasname']	= "{$item['title']}";
 						$list['action']		= 'unbound';
 						$list['logging']	= pfb_dnsbl_blacklist_logging($pfb['blconfig']);
+						// issue #3648: the Category page has no "TOP1M Whitelist" box -- TOP1M
+						// never filters a content category (popular sites are what it lists).
 						$list['filter_top1m']	= '';
 
 						$feedname	= strtolower($item['title']);
@@ -2204,6 +2206,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					pfb_logger("\n Invalid Aliasname:{$list['aliasname']}, *skipping*", 1);
 					continue;
 				}
+				// issue #3648: the Group's "TOP1M Whitelist" box, carried into every feed's manifest row.
+				$filter_top1m = $list['filter_top1m'] ?? NULL;
 
 				if ($list['action'] != 'Disabled' && isset($list['row'])) {
 					$pfb['alias_dnsbl_all'][]	= "{$alias}";
@@ -2333,7 +2337,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
 									$custom ? 'user' : 'feed',
-									$mode);
+									$mode, $filter_top1m);
 								// issue #1162/#1261: pfb_count_lines() returns NULL on a read
 								// failure -- 0 preserves the exec()-era fallback.
 								$alias_cnt		= pfb_dnsbl_alias_count_verbatim("{$pfbfolder}/{$header}.txt", $alias_cnt);
@@ -2473,7 +2477,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									$pfb_py_feeds[]		= pfb_feed_manifest_row(
 										$header, $alias, $logging_type,
 										$custom ? 'user' : 'feed',
-										$mode);
+										$mode, $filter_top1m);
 									$alias_cnt		= pfb_dnsbl_alias_count_norm_skip("{$pfbfolder}/{$header}.txt", $alias_cnt);
 									unlink_if_exists("{$pfbfolder}/{$header}.update");
 									continue;
@@ -2498,10 +2502,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										    $pfb['dbdir'], "{$pfbfolder}/{$header}.update", $pfb_script_state,
 										    $staging_current_generation, "{$pfbfolder}/{$header}.txt",
 										    static function () use (&$lists_dnsbl_all, &$pfb_py_feeds, &$alias_cnt,
-										        $row, $header, $alias, $logging_type, $custom, $mode, $pfbfolder): void {
+										        $row, $header, $alias, $logging_type, $custom, $mode, $filter_top1m, $pfbfolder): void {
 										        $lists_dnsbl_all[] = "{$row['header']}.txt";
 										        $pfb_py_feeds[] = pfb_feed_manifest_row(
-										            $header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode);
+										            $header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
 										        $alias_cnt = pfb_dnsbl_alias_count_script_failure("{$pfbfolder}/{$header}.txt", $alias_cnt);
 										    });
 										continue;
@@ -2897,7 +2901,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
 									$custom ? 'user' : 'feed',
-									$mode);
+									$mode, $filter_top1m);
 
 								// Rename newly downloaded file to final location
 								if (file_exists("{$pfbfolder}/{$header}.bk")) {

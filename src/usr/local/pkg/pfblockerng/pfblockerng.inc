@@ -14255,10 +14255,13 @@ function pfb_sanitise_feed_header(string $header, string $reference = 'pfb_sanit
 // ADR-31: Build a single per-feed manifest row for $pfb_py_feeds[], parameterised by $mode so
 // DNSWL feeds can reuse the same structure as DNSBL. $mode = 'deny' omits the 'mode' key
 // (byte-identical with pre-ADR-31 entries; Python treats absent as deny); $mode = 'permit' adds
-// 'mode' => 'permit'. No file I/O, no exec, no validation side-effects — pure array
+// 'mode' => 'permit'. $filter_top1m is the Group's stored 'filter_top1m' ("TOP1M Whitelist")
+// value: ticked adds 'top1m' => TRUE, so pfb_unbound.py lets TOP1M filter this feed (issue
+// #3648); anything else omits the key (byte-identical with pre-#3648 entries; Python treats
+// absent as cleared). No file I/O, no exec, no validation side-effects — pure array
 // construction; callers have already validated $header and resolved $provenance.
 function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
-	string $provenance, string $mode = 'deny'): array
+	string $provenance, string $mode = 'deny', mixed $filter_top1m = NULL): array
 {
 	$row = array(
 		'header'     => $header,
@@ -14270,6 +14273,9 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 	if ($mode !== 'deny') {
 		$row['mode'] = $mode;
 	}
+	if (pfb_cfg_toggle_read($filter_top1m) === PfbToggle::On) {
+		$row['top1m'] = TRUE;
+	}
 	return $row;
 }
 
@@ -14279,7 +14285,8 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 // consumes. raw is the bare-domain extraction of the parsed '.txt' NDJSON (IPs already routed
 // elsewhere; #1083), with 'abp'-kind NDJSON rows' raw payload passed through verbatim so
 // Python's per-line capture guard routes them to parse_abp() intact. $feeds rows:
-// header/group/log/provenance ('user' Custom_List -> band 5, 'feed' download -> band 1).
+// header/group/log/provenance ('user' Custom_List -> band 5, 'feed' download -> band 1), plus
+// pfb_feed_manifest_row()'s optional 'mode' and 'top1m' keys.
 // PFBL-01: RE-validates each header via pfb_sanitise_feed_header() (PFB_FILTER_WORD, not
 // DOMAIN); a failing row is SKIPPED + logged before any file touch; pinned by
 // tests/php/PfbFilterContractTest.php.
@@ -14445,6 +14452,10 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 		// pre-ADR-31 entries; the Python side treats an absent 'mode' as deny).
 		if (isset($feed['mode']) && $feed['mode'] === 'permit') {
 			$manifest_feeds[count($manifest_feeds) - 1]['mode'] = 'permit';
+		}
+		// issue #3648: the feed's Group ticks "TOP1M Whitelist" -- TOP1M filters this feed only.
+		if (($feed['top1m'] ?? FALSE) === TRUE) {
+			$manifest_feeds[count($manifest_feeds) - 1]['top1m'] = TRUE;
 		}
 	}
 

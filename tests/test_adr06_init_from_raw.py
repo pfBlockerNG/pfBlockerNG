@@ -49,6 +49,7 @@ from tests.test_adr06_golden_oracle import (
     GOLDEN_EXTRACTED_IPS,
     GOLDEN_TOP1M_DISABLED,
     GOLDEN_TOP1M_ENABLED_OVERRIDES,
+    GOLDEN_TOP1M_FILTERED_OVERRIDES,
     ReferencePipeline,
     _build_cfg,
     _decision_label,
@@ -110,6 +111,7 @@ def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:
                 "feed": row["feed"],
                 "group": row["group"],
                 "log_flag": row["log_flag"],
+                "top1m": row.get("top1m", False),
             }
         )
 
@@ -205,7 +207,7 @@ class TestInitFromRawDecisionsTop1mEnabled:
         result = _build_from_manifest(tmp_path, top1m_enabled=True)
         config = _load_json("config.json")
         expected_map = dict(GOLDEN_TOP1M_DISABLED)
-        expected_map.update(GOLDEN_TOP1M_ENABLED_OVERRIDES)
+        expected_map.update(GOLDEN_TOP1M_FILTERED_OVERRIDES)
         expected_map.update(GOLDEN_ABP_CONFORMANT_OVERRIDES)  # conformant ABP zones (#718)
         failures: list[str] = []
         for q_name, expected in expected_map.items():
@@ -216,19 +218,13 @@ class TestInitFromRawDecisionsTop1mEnabled:
         assert not failures, "init-from-raw decision mismatch (TOP1M enabled):\n" + "\n".join(failures)
 
     def test_top1m_enabled_flows_from_manifest_config(self, tmp_path: Any) -> None:
-        # The manifest's config.top1m_enabled drives the whiteDB load: enabled ->
-        # the popular domain is un-blocked; disabled -> it blocks. ADR-07 P3 widened
-        # the whiteDB value to {"wildcard", "important"} (TOP1M is a user allow ->
-        # important=True); ADR-07 P6 added the numeric ``band`` (user-allow band 6).
-        # The net DNS decision is unchanged (pinned by the oracle).
+        # The global switch gates the opted-in Group's filter; it no longer adds a
+        # sovereign whiteDB allow that would override unchecked Groups (#3648).
         enabled = _build_from_manifest(tmp_path, top1m_enabled=True)
-        assert enabled.white_db.get("popularcdn.com") == {
-            "wildcard": False,
-            "important": True,
-            "band": pfb_unbound.PRIO_USER_ALLOW,
-        }
+        assert _evaluate_result(enabled, _load_json("config.json"), "popularcdn.com")["decision"] == "pass"
+        assert "popularcdn.com" not in enabled.white_db
         disabled = _build_from_manifest(tmp_path, top1m_enabled=False)
-        assert "popularcdn.com" not in disabled.white_db
+        assert _evaluate_result(disabled, _load_json("config.json"), "popularcdn.com")["decision"] == "block-null"
 
 
 # --------------------------------------------------------------------------- #
@@ -254,7 +250,11 @@ class TestInitFromRawEqualsOldLoader:
                 continue
             new = _evaluate_result(result, config, q_name)
             old = _evaluate(pipeline, config, q_name)
-            if new != old:
+            if top1m_enabled and q_name in GOLDEN_TOP1M_FILTERED_OVERRIDES:
+                # #3648: filtering a Group's entry passes instead of returning a
+                # global whiteDB hit; both still resolve.
+                assert new["decision"] == "pass" and old["decision"] == "whitelist"
+            elif new != old:
                 failures.append(f"{q_name}: new {new!r} != old {old!r}")
         assert not failures, "init-from-raw vs old-loader decision mismatch:\n" + "\n".join(failures)
 

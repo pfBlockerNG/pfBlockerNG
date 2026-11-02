@@ -45,6 +45,7 @@ from pfb_unbound import (
     _dnsbl_parse_abp_regex,
     _dnsbl_reduce_regex,
     _dnsbl_strip_hosts_prefix,
+    _dnsbl_top1m_names,
     _idn_dual_form,
     _regex_timed_search,
     _regex_warn_slow,
@@ -250,23 +251,21 @@ class TestReconcileIrreducibleProvenance:
 
 
 # --------------------------------------------------------------------------- #
-# _dnsbl_normalise_whitelist -- blank user line + blank TOP1M entry skipped
+# Whitelist and TOP1M normalisation -- blank and invalid entries skipped
 # --------------------------------------------------------------------------- #
 class TestNormaliseWhitelistBlanks:
     def test_blank_user_whitelist_line_skipped(self) -> None:
-        wdb = _dnsbl_normalise_whitelist(["", "   ", "keep.com"], [], top1m_enabled=False)
+        wdb = _dnsbl_normalise_whitelist(["", "   ", "keep.com"])
         assert set(wdb) == {"keep.com"}
 
     def test_blank_top1m_entry_skipped(self) -> None:
-        # TOP1M enabled: a blank entry is ignored, a real one loads as a band-6 allow.
-        wdb = _dnsbl_normalise_whitelist([], ["", "  ", "top.com"], top1m_enabled=True)
-        assert set(wdb) == {"top.com"}
-        assert wdb["top.com"]["band"] == PRIO_USER_ALLOW
+        names = _dnsbl_top1m_names(["", "  ", "top.com"])
+        assert names == frozenset({"top.com"})
+        assert isinstance(names, frozenset)
 
-    def test_top1m_disabled_loads_nothing(self) -> None:
-        # Contrast (the OFF side of the toggle): TOP1M list ignored when disabled.
-        wdb = _dnsbl_normalise_whitelist([], ["top.com"], top1m_enabled=False)
-        assert wdb == {}
+    def test_invalid_top1m_entries_load_nothing(self) -> None:
+        names = _dnsbl_top1m_names(["", "  ", ",top.com,", "bad domain!", "lan"])
+        assert names == frozenset()
 
 
 # --------------------------------------------------------------------------- #

@@ -39,7 +39,13 @@ $GLOBALS['pfb']['dnsblconfig'] = ['tld_wildcard_blacklist' => '', 'tld_wildcard_
 $GLOBALS['pfb']['unbound_py_rawdir'] = $root . '/pfb_py_raw';
 $GLOBALS['pfb']['unbound_py_sources'] = $root . '/pfb_py_sources.json';
 $GLOBALS['pfb']['unbound_py_top1m'] = $root . '/pfb_py_top1m.txt';
-$result = pfb_unbound_python_sources([], ['top1m_atomic' => [
+file_put_contents($root . '/dnsbl/fixture.txt',
+    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'offline.example') .
+    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'www.offline.example') .
+    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'deep.offline.example') .
+    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'blocked.example'));
+$feeds = [pfb_feed_manifest_row('fixture', 'g', '1', 'feed', 'deny', 'on')];
+$result = pfb_unbound_python_sources($feeds, ['top1m_atomic' => [
     'chown' => static fn(string $file, string $owner): bool => TRUE,
     'chgrp' => static fn(string $file, string $group): bool => TRUE,
     'chmod' => static fn(string $file, int $mode): bool => TRUE,
@@ -71,7 +77,7 @@ def _manifest(tmp_path: Path, *, enabled: bool = True) -> Path:
             {
                 "version": 1,
                 "config": {"top1m_enabled": enabled, "user_whitelist": []},
-                "feeds": [{"raw": raw.name, "feed": "feed", "group": "g", "log_flag": "1"}],
+                "feeds": [{"raw": raw.name, "feed": "feed", "group": "g", "log_flag": "1", "top1m": True}],
             }
         ),
         encoding="utf-8",
@@ -121,7 +127,7 @@ def test_current_canonical_whitelist_check_has_bounded_peak_memory(tmp_path: Pat
     ],
     ids=["python-mode", "native-mode"],
 )
-def test_offline_legacy_publication_projects_strict_exact_allow(tmp_path: Path, legacy_wire: bytes) -> None:
+def test_offline_legacy_publication_filters_only_listed_and_www_entries(tmp_path: Path, legacy_wire: bytes) -> None:
     dbdir = tmp_path / "db"
     dbdir.mkdir()
     (tmp_path / "dnsbl").mkdir()
@@ -148,10 +154,9 @@ def test_offline_legacy_publication_projects_strict_exact_allow(tmp_path: Path, 
 
     result = P.dnsbl_build_from_manifest(str(tmp_path / "pfb_py_sources.json"))
     assert result is not None
-    assert result.white_db["offline.example"]["wildcard"] is False
-    assert P.whitelist_check_domain("offline.example", result.white_db, 1)
-    assert P.whitelist_check_domain("www.offline.example", result.white_db, 1)
-    assert not P.whitelist_check_domain("deep.offline.example", result.white_db, 1)
+    assert set(result.data_db) == {"deep.offline.example", "blocked.example"}
+    assert result.zone_db == {}
+    assert result.white_db == {}
 
 
 @pytest.mark.parametrize(
@@ -162,7 +167,7 @@ def test_offline_legacy_publication_projects_strict_exact_allow(tmp_path: Path, 
     ],
     ids=["python-mode", "native-mode"],
 )
-def test_legacy_whitelist_reprocesses_to_python_exact_allow(tmp_path: Path, legacy_wire: bytes) -> None:
+def test_legacy_whitelist_reprocesses_to_python_group_filter(tmp_path: Path, legacy_wire: bytes) -> None:
     (tmp_path / "top-1m.csv").write_text("1,LEGACY.COM\n", encoding="utf-8")
     (tmp_path / "top-1m.csv.zip.orig").write_text("detector baseline\n", encoding="utf-8")
     (tmp_path / "pfbalexawhitelist.txt").write_bytes(legacy_wire)
@@ -185,7 +190,13 @@ $GLOBALS['pfb']['errlog'] = $dbdir . '/pfblockerng_error.log';
 $reprocess = pfb_top1m_reprocess_needed($dbdir);
 if ($reprocess) {
     pfblockerng_top1m();
-    $published = pfb_unbound_python_sources([], ['top1m_atomic' => [
+    file_put_contents($dbdir . '/dnsbl/fixture.txt',
+        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'legacy.com') .
+        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'www.legacy.com') .
+        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'deep.legacy.com') .
+        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'blocked.example'));
+    $feeds = [pfb_feed_manifest_row('fixture', 'g', '1', 'feed', 'deny', 'on')];
+    $published = pfb_unbound_python_sources($feeds, ['top1m_atomic' => [
         'chown' => static fn(string $file, string $owner): bool => TRUE,
         'chgrp' => static fn(string $file, string $group): bool => TRUE,
         'chmod' => static fn(string $file, int $mode): bool => TRUE,
@@ -211,39 +222,49 @@ echo json_encode(['reprocess' => $reprocess], JSON_THROW_ON_ERROR);
     assert json.loads(proc.stdout) == {"reprocess": True}
     assert (tmp_path / "pfbalexawhitelist.txt").read_bytes() == b"legacy.com\n"
 
-    result = P.dnsbl_build_from_manifest(str(_manifest(tmp_path)))
+    result = P.dnsbl_build_from_manifest(str(tmp_path / "pfb_py_sources.json"))
     assert result is not None
-    assert result.white_db["legacy.com"]["wildcard"] is False
-    assert P.whitelist_check_domain("legacy.com", result.white_db, 1)
-    assert P.whitelist_check_domain("www.legacy.com", result.white_db, 1)
-    assert not P.whitelist_check_domain("deep.legacy.com", result.white_db, 1)
+    assert set(result.data_db) == {"deep.legacy.com", "blocked.example"}
+    assert result.zone_db == {}
+    assert result.white_db == {}
 
 
 def test_disabled_does_not_require_fixed_file(tmp_path: Path) -> None:
     result = P.dnsbl_build_from_manifest(str(_manifest(tmp_path, enabled=False)))
     assert result is not None
+    assert set(result.data_db) == {"blocked.example"}
+    assert result.zone_db == {}
     assert result.white_db == {}
 
 
-def test_enabled_streams_fixed_file_with_crlf_blanks_and_first_writer_duplicates(tmp_path: Path) -> None:
+def test_enabled_streams_fixed_file_with_crlf_blanks_and_duplicate_domains(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
+    (tmp_path / "feed.raw").write_text(
+        "first.example\nwww.first.example\nsecond.example\nwww.second.example\nblocked.example\n",
+        encoding="utf-8",
+    )
     (tmp_path / "pfb_py_top1m.txt").write_bytes(b"first.example\r\n\r\n SECOND.EXAMPLE \r\nfirst.example\r\n")
     result = P.dnsbl_build_from_manifest(str(manifest))
     assert result is not None
-    assert set(result.white_db) == {"first.example", "second.example"}
-    assert result.white_db["first.example"]["important"] is True
+    assert set(result.data_db) == {"blocked.example"}
+    assert result.zone_db == {}
+    assert result.white_db == {}
 
 
 @pytest.mark.parametrize("legacy", [".legacy.example,,\n", ",legacy.example,,\n", ",www.legacy.example,,\n"])
 def test_enabled_rejects_retired_comma_framed_top1m_lines(tmp_path: Path, legacy: str) -> None:
     manifest = _manifest(tmp_path)
-    (tmp_path / "pfb_py_top1m.txt").write_text(legacy, encoding="utf-8")
+    (tmp_path / "feed.raw").write_text(
+        "legacy.example\nwww.legacy.example\naccepted.example\nblocked.example\n", encoding="utf-8"
+    )
+    (tmp_path / "pfb_py_top1m.txt").write_text(legacy + "accepted.example\n", encoding="utf-8")
 
     result = P.dnsbl_build_from_manifest(str(manifest))
 
     assert result is not None
-    assert result.white_db == {}, f"retired TOP1M record became a whitelist key: {result.white_db!r}"
-    assert all("," not in key for key in result.white_db)
+    assert set(result.data_db) == {"legacy.example", "www.legacy.example", "blocked.example"}
+    assert result.zone_db == {}
+    assert result.white_db == {}
 
 
 @pytest.mark.parametrize(
@@ -255,15 +276,19 @@ def test_enabled_rejects_retired_comma_framed_top1m_lines(tmp_path: Path, legacy
 )
 def test_enabled_rejects_invalid_top1m_domain_shape_and_wire_cap(tmp_path: Path, invalid: str) -> None:
     manifest = _manifest(tmp_path)
-    (tmp_path / "pfb_py_top1m.txt").write_text(invalid, encoding="utf-8")
+    (tmp_path / "feed.raw").write_text("accepted.example\nblocked.example\n", encoding="utf-8")
+    (tmp_path / "pfb_py_top1m.txt").write_text(invalid + "accepted.example\n", encoding="utf-8")
 
     result = P.dnsbl_build_from_manifest(str(manifest))
 
     assert result is not None
+    assert P.normalise(invalid.strip()) is None
+    assert set(result.data_db) == {"blocked.example"}
+    assert result.zone_db == {}
     assert result.white_db == {}
 
 
-def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_path: Path) -> None:
+def test_enabled_top1m_wildcard_spares_listed_and_www_names_but_blocks_deeper_names(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     (tmp_path / "feed.raw").write_text("||blocked.example^\n", encoding="utf-8")
     (tmp_path / "pfb_py_top1m.txt").write_text("blocked.example\nblocked.example\n", encoding="utf-8")
@@ -271,10 +296,9 @@ def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_
     result = P.dnsbl_build_from_manifest(str(manifest))
 
     assert result is not None
-    assert result.white_db["blocked.example"]["wildcard"] is False
-    assert P.whitelist_check_domain("blocked.example", result.white_db, 1)
-    assert P.whitelist_check_domain("www.blocked.example", result.white_db, 1)
-    assert not P.whitelist_check_domain("deep.blocked.example", result.white_db, 1)
+    assert result.data_db == {}
+    assert set(result.zone_db) == {"blocked.example"}
+    assert result.white_db == {}
 
     containers = {
         "dataDB": result.data_db,
@@ -287,16 +311,16 @@ def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": {},
     }
-    cfg = _build_cfg({}, has_white=True)
+    cfg = _build_cfg({}, has_white=False)
     assert (
         _decision_label(P.evaluate_domain("blocked.example", "blocked.example", "example", False, cfg, containers))
-        == "whitelist"
+        == "pass"
     )
     assert (
         _decision_label(
             P.evaluate_domain("www.blocked.example", "www.blocked.example", "example", False, cfg, containers)
         )
-        == "whitelist"
+        == "pass"
     )
     deep_decision = P.evaluate_domain("deep.blocked.example", "deep.blocked.example", "example", False, cfg, containers)
     assert deep_decision.is_found is True

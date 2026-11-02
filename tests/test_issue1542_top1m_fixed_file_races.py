@@ -129,6 +129,7 @@ def test_enabled_atomic_rename_after_open_allows_old_complete_inode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     manifest = _manifest(tmp_path)
+    (tmp_path / "feed.raw").write_text("old.example\nnew.example\nblocked.example\n", encoding="utf-8")
     path = tmp_path / "pfb_py_top1m.txt"
     replacement = tmp_path / "replacement.txt"
     path.write_text("old.example\n", encoding="utf-8")
@@ -149,7 +150,9 @@ def test_enabled_atomic_rename_after_open_allows_old_complete_inode(
     result = P.dnsbl_build_from_manifest(str(manifest))
     assert renamed
     assert result is not None
-    assert set(result.white_db) == {"old.example"}
+    assert set(result.data_db) == {"new.example", "blocked.example"}
+    assert result.zone_db == {}
+    assert result.white_db == {}
 
 
 def test_enabled_same_size_rewrite_with_restored_mtime_fails_closed(

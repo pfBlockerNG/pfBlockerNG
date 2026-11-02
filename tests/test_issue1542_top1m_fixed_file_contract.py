@@ -30,15 +30,22 @@ def test_enabled_without_nofollow_support_fails_closed(
 
 def test_enabled_multibyte_final_line_without_newline_consumes_exact_bytes(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
+    (tmp_path / "feed.raw").write_text("last.example\nwww.last.example\nblocked.example\n", encoding="utf-8")
     (tmp_path / "pfb_py_top1m.txt").write_bytes("éxample.test\nlast.example".encode())
 
     result = P.dnsbl_build_from_manifest(str(manifest))
     assert result is not None
-    assert set(result.white_db) == {"last.example"}
+    assert set(result.data_db) == {"blocked.example"}
+    assert result.zone_db == {}
+    assert result.white_db == {}
 
 
 def test_enabled_uses_bounded_prepass_and_streaming_iterator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
+    (tmp_path / "feed.raw").write_text(
+        "".join(f"domain-{index}.example\n" for index in range(10_000)) + "blocked.example\n",
+        encoding="utf-8",
+    )
     path = tmp_path / "pfb_py_top1m.txt"
     path.write_text("".join("domain-{}.example\n".format(index) for index in range(10_000)), encoding="utf-8")
     real_open = open
@@ -86,7 +93,9 @@ def test_enabled_uses_bounded_prepass_and_streaming_iterator(monkeypatch: pytest
     assert len(read_sizes) > 1
     assert max(read_sizes) == 64 * 1024
     assert result is not None
-    assert len(result.white_db) == 10_000
+    assert set(result.data_db) == {"blocked.example"}
+    assert result.zone_db == {}
+    assert result.white_db == {}
 
 
 def test_enabled_prehash_read_error_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

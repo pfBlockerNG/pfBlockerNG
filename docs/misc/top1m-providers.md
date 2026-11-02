@@ -2,7 +2,30 @@
 
 Scope: TOP1M Whitelist provider framework (ADR-59). Load when: adding/updating TOP1M provider descriptor, or auditing provider licences.
 
-DNSBL **TOP1M Whitelist** feature (DNSBL Configuration page → *TOP1M Whitelist*) download "most popular domains" list and whitelist it. Cut false positives on feeds blocking full URLs (PhishTank, OpenPhish, MalwarePatrol, …). ADR-59 turn single hardcoded Tranco/Cisco pair into provider framework — new source = descriptor row, not code fork. This note record framework, per-provider shapes, licence obligations, how user supply Cloudflare token. Sibling of `docs/misc/tld-lists.md` (similarly maintained, non-vendored external list).
+DNSBL **TOP1M Whitelist** feature (DNSBL Configuration page → *TOP1M Whitelist*) downloads a "most popular domains" list to filter opted-in Groups. It reduces false positives on feeds blocking full URLs (PhishTank, OpenPhish, MalwarePatrol, …). ADR-59 turned the single hardcoded Tranco/Cisco pair into a provider framework — a new source is a descriptor row, not a code fork. This note records the framework, per-provider shapes, licence obligations, and how users supply a Cloudflare token. Sibling of `docs/misc/tld-lists.md` (similarly maintained, non-vendored external list).
+
+## Per-Group filtering (#3648)
+
+The global switch loads the popularity list; a Group's **TOP1M Whitelist** checkbox
+opts its domain entries into filtering. The listed name and its `www.` form resolve
+unless another, unchecked Group blocks them. Deeper subdomains remain blocked by
+wildcards unless separately listed in TOP1M. The Group's Custom List follows its box.
+The user's DNSBL Whitelist and temporary unlocks remain unconditional user allows.
+
+New Groups default to unchecked. The wizard's advertising Group remains unchecked.
+The existing `filter_alexa` → `filter_top1m` migration preserves 3.3 checkbox states.
+Category feeds have no checkbox and remain unfiltered: popularity must not undo a
+chosen content category. Built-in blocks and irreducible regex are not Group domain
+entries and remain unfiltered.
+
+The manifest carries optional per-feed `top1m: true`. Python drops an opted-in
+Group's exact TOP1M entries before merging them. Filtered wildcard entries share
+one immutable TOP1M name set and retain the last unchecked writer as their fallback.
+Both zone discovery and numeric block-band scanning consult that set and fallback. This keeps
+the six-band allow/block model unchanged and preserves wildcard subdomain blocking,
+which deleting whole zone entries would lose. TOP1M no longer enters `whiteDB` at
+the sovereign user-allow band. Old manifests without the flag filter no Groups;
+the next DNSBL update republishes each Group's saved checkbox state.
 
 ## The descriptor table
 

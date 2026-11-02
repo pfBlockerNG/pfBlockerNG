@@ -540,6 +540,11 @@ GOLDEN_TOP1M_ENABLED_OVERRIDES: dict[str, dict[str, Any]] = {
     "popularcdn.com": {"decision": "whitelist"},
 }
 
+# Production #3648 filters the ticked Group instead of creating a global allow.
+GOLDEN_TOP1M_FILTERED_OVERRIDES: dict[str, dict[str, Any]] = {
+    "popularcdn.com": {"decision": "pass"},
+}
+
 # INTENTIONAL divergence from the legacy pipeline (#718): a conformant ABP
 # "||host^" anchor covers host + ALL subdomains at ANY depth, so production emits
 # a wildcard ZONE where the legacy basic-ABP pass demoted a deep anchor to exact
@@ -752,7 +757,7 @@ class TestReferencePipelineSanity:
         assert len(entries[-1]) == 254
         pipeline = ReferencePipeline({"feeds": []}, {"user_whitelist": entries}, top1m_enabled=False)
         pipeline._build_whitelist()
-        prod = pfb_unbound._dnsbl_normalise_whitelist(entries, [], False)
+        prod = pfb_unbound._dnsbl_normalise_whitelist(entries)
         assert {k: v["wildcard"] for k, v in prod.items()} == pipeline.white_db
         assert {"lan", "internal", "a" * 63, "www.com", "1.2.3.4"} <= set(pipeline.white_db)
         assert not {"123", "1", "a" * 64, "example.123", "01.02.03.04", "0x10", "example.0x10", entries[-1]} & set(

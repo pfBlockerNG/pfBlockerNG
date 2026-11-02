@@ -1716,7 +1716,9 @@ if ($gtype == 'dnsbl') {
 		'Enable',
 		pfb_cfg_toggle_read($pconfig['filter_top1m']) === PfbToggle::On,
 		'on'
-	))->setHelp('Filter Group via TOP1M');
+	))->setHelp('When TOP1M is enabled on the DNSBL tab, filter this Group\'s domain entries against it. '
+			. 'With this box cleared, this Group still blocks TOP1M domains, including its Custom List. '
+			. 'Other Groups can still block a filtered domain; the DNSBL Whitelist always takes precedence.');
 
 	$form->add($section);
 }

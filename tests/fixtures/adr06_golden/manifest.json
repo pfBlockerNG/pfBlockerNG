@@ -3,7 +3,7 @@
   "version": 1,
   "feeds": [
     { "raw": "feed_hosts.txt",   "feed": "HostsFeed", "group": "Ads",     "dialect": "hosts", "log_flag": "1" },
-    { "raw": "feed_plain.txt",   "feed": "PlainFeed", "group": "Malware", "dialect": "plain", "log_flag": "1" },
+    { "raw": "feed_plain.txt",   "feed": "PlainFeed", "group": "Malware", "dialect": "plain", "log_flag": "1", "top1m": true },
     { "raw": "feed_abp.txt",     "feed": "AbpFeed",   "group": "AbpAds",  "dialect": "abp",   "log_flag": "1" },
     { "raw": "feed_extra.txt",   "feed": "ExtraFeed", "group": "Extra",   "dialect": "plain", "log_flag": "1" },
     { "raw": "feed_nolog.txt",   "feed": "NoLogFeed", "group": "NoLog",   "dialect": "plain", "log_flag": "2" }

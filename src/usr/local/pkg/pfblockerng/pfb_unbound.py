@@ -5112,8 +5112,6 @@ def reconcile(
 
 def _dnsbl_normalise_whitelist(
     user_whitelist: Iterable[str],
-    top1m_lines: Iterable[str],
-    top1m_enabled: bool,
     tally: RejectTally | None = None,
     source: str = "user-whitelist",
 ) -> dict[str, dict[str, Any]]:
@@ -5125,20 +5123,14 @@ def _dnsbl_normalise_whitelist(
     trailing dot. A wildcard single label (``.lan``, ``.internal``) is kept -- only the
     has-a-dot rule is lifted for it (#3378); a non-wildcard single label is dropped.
     An entry the shape gate (_normalise_verdict) rejects is dropped and, when ``tally`` is given, counted under
-    (``source``, "DNSBL") in the ADR-48 reject tally (TOP1M drops are not tallied);
+    (``source``, "DNSBL") in the ADR-48 reject tally;
     ``source`` holds a hyphen so it can never equal a legal feed name.
     Colliding lines that collapse to one apex widen (broadest wildcard, any important,
-    max band) rather than last-wins. TOP1M entries are loaded ONLY when enabled as
-    validated canonical bare domains; retired comma-framed records and invalid
-    domains are explicitly rejected by normalise().
-    No build-time list pruning -- this only populates whiteDB.
+    max band) rather than last-wins.
 
     ADR-07: the whiteDB value widens from a bare ``bool`` (wildcard?) to
-    ``{"wildcard": bool, "important": bool}``. User whitelist + TOP1M load as
-    ``important=True`` (user-intent sovereignty, ADR.md SS2 / fact 7). Because an
-    allow already beats every block today, this changes NO decision now -- the
-    ``important`` flag is only consulted by the (currently unreachable) numeric
-    6-band branch of ``evaluate_domain``.
+    ``{"wildcard": bool, "important": bool}``. The user whitelist loads as
+    ``important=True`` (user-intent sovereignty, ADR.md SS2 / fact 7), band 6.
     """
     white_db: dict[str, dict[str, Any]] = {}
     for raw in user_whitelist:
@@ -5163,15 +5155,19 @@ def _dnsbl_normalise_whitelist(
         existing = white_db.get(domain)
         # issue #3191: colliding `.apex` / `www.apex` / bare apex widen, never last-wins demote.
         white_db[domain] = new_entry if existing is None else _white_widen_entry(existing, new_entry)
-
-    if top1m_enabled:
-        for raw in top1m_lines:
-            dom = normalise(raw)
-            if dom is not None:
-                # TOP1M behaves as a user allow (sovereign, band 6) -- fact 7.
-                white_db.setdefault(dom, {"wildcard": False, "important": True, "band": PRIO_USER_ALLOW})
-
     return white_db
+
+
+def _dnsbl_top1m_names(top1m_lines: Iterable[str]) -> frozenset[str]:
+    """The TOP1M list as validated canonical bare domains; retired comma-framed records
+    and invalid domains are rejected by normalise() and not tallied."""
+    return frozenset(dom for dom in map(normalise, top1m_lines) if dom is not None)
+
+
+def _top1m_listed(name: str, top1m: AbstractSet[str]) -> bool:
+    """Whether TOP1M names ``name``: the listed domain itself or its ``www.`` form, never a
+    deeper subdomain (#1542)."""
+    return name in top1m or (name.startswith("www.") and name[4:] in top1m)
 
 
 # ============================================================================ #
@@ -5546,10 +5542,16 @@ def build(
 
     Returns a FRESH ``BuildResult`` and mutates no module global -- calling it twice
     yields equal structures (reentrant / zero-downtime-ready). It performs NO dedup,
-    NO subdomain collapse and NO build-time whitelist/TOP1M removal: duplicate keys
+    NO subdomain collapse and NO build-time whitelist removal: duplicate keys
     are simply overwritten last-wins by dict assignment (the documented attribution
     change, ADR.md SS2), and redundant subdomains stay because their parent zone still
     matches them.
+
+    issue #3648: TOP1M is a per-Group list filter, not an allow. A manifest row marked
+    ``"top1m": true`` (its Group ticks "TOP1M Whitelist") never blocks a name TOP1M lists
+    (``_top1m_listed``): its exact entries for such names are dropped here, and its wildcard
+    entries yield for them to the key's last unmarked writer (``_zone_entry_for``). Every
+    other block -- unmarked rows, built-ins, regex -- and every allow is untouched.
 
     ADR-48 (issue #789): every domain target a normalise-fail rejects (permit path,
     plain path, both parse_abp() call sites) and the reconcile() wire-cap fold-drop
@@ -5583,6 +5585,23 @@ def build(
     next_index = 0
     # ADR-48 (issue #789): the per-entry reject tally this build accumulates.
     rejects: RejectTally = {}
+    top1m = _dnsbl_top1m_names(top1m_lines) if top1m_enabled else frozenset()
+    top1m_rows = (
+        {(row["feed"], row["group"]) for row in manifest.get("feeds", []) if row.get("top1m") is True}
+        if top1m
+        else set()
+    )
+    # issue #3648: zone key whose last writer is a TOP1M-filtered row -> the key's last
+    # unfiltered payload (None when it has none); _zone_entry_for() reads it.
+    zone_top1m: dict[str, dict[str, Any] | None] = {}
+
+    def track_zone_top1m(key: str, filtered: bool) -> None:
+        # Called before zone_db[key] is (over)written, only while some row is filtered.
+        if not filtered:
+            zone_top1m.pop(key, None)
+            return
+        prior = zone_db.get(key)
+        zone_top1m[key] = prior if prior is not None and key not in zone_top1m else zone_top1m.get(key)
 
     def index_for(feed: str, group: str) -> int:
         nonlocal next_index
@@ -5612,19 +5631,14 @@ def build(
     # an unlocked domain resolves (its feed / Custom_List block is overridden). A FULL
     # build emits an empty user_unlock (Force/Cron re-lock); only the incremental
     # dnsbl_remove handler populates it.
-    white_db = _dnsbl_normalise_whitelist(
-        config.get("user_whitelist", []),
-        top1m_lines,
-        top1m_enabled,
-        rejects,
-    )
+    white_db = _dnsbl_normalise_whitelist(config.get("user_whitelist", []), rejects)
     # Merge the unlock set WITHOUT narrowing an existing permanent allow: a domain may be
     # a wildcard in user_whitelist (".x" -> covers subdomains) yet exact in user_unlock,
     # and a plain last-wins concat would downgrade the wildcard to exact. Widen on
     # collision instead -- the same monotonic merge the feed @@ allows use below (keep
     # the broadest wildcard/important, highest band; both sides are band-6 user allows).
     for domain, unlock_entry in _dnsbl_normalise_whitelist(
-        config.get("user_unlock", []), (), False, rejects, "user-unlock"
+        config.get("user_unlock", []), rejects, "user-unlock"
     ).items():
         existing = white_db.get(domain)
         if existing is None:
@@ -5709,6 +5723,7 @@ def build(
         # plain path bands the entry directly here.
         provenance = RULE_PROV_USER if feed_row.get("provenance") == "user" else RULE_PROV_FEED
         block_band = PRIO_USER_BLOCK if provenance == RULE_PROV_USER else PRIO_FEED_BLOCK
+        top1m_row = (feed, group) in top1m_rows
         for raw_line in line_reader(feed_row["raw"]):
             # ADR-62/#1083: per-line ABP detection, broadened from ADR-21's
             # '||'/'@@||' to the full Decision-2 capture shape set (regex, element-
@@ -5761,10 +5776,13 @@ def build(
             payload = {"log": log_flag, "index": idx, "important": False, "band": block_band}
             if cls == DNSBL_CLASS_ZONE and policy == "apex":
                 _tally_reject(rejects, feed, group, "suffix_demote")
-                data_db[domain] = payload
+                if not (top1m_row and _top1m_listed(domain, top1m)):
+                    data_db[domain] = payload
             elif cls == DNSBL_CLASS_ZONE:
+                if top1m_rows:
+                    track_zone_top1m(key, top1m_row)
                 zone_db[key] = payload  # last-wins (dict; ADR-06 SS2 attribution change)
-            else:
+            elif not (top1m_row and _top1m_listed(key, top1m)):
                 data_db[key] = payload
 
     # ---- Stage-B reconcile + Stage-C emit for the ABP rule stream -------------- #
@@ -5796,9 +5814,12 @@ def build(
             idx = index_for(b.feed or "DNSBL", b.group or "DNSBL")
             # issue #3539: an unset ABP log is Null Blocking ("0"), never VIP.
             payload = {"log": b.log or "0", "index": idx, "important": b.important, "band": b.band}
+            top1m_row = bool(top1m_rows) and (b.feed, b.group) in top1m_rows
             if cls == DNSBL_CLASS_ZONE:
+                if top1m_rows:
+                    track_zone_top1m(b.key, top1m_row)
                 zone_db[b.key] = payload
-            else:
+            elif not (top1m_row and _top1m_listed(b.key, top1m)):
                 data_db[b.key] = payload
 
         # Domain allows (@@||domain^ and reduced @@/re/) -> whiteDB. A user whitelist
@@ -5841,6 +5862,12 @@ def build(
         # A loaded user regex needs the numeric precedence path: the fast path never reads the
         # allow-regex lists, so a user `@@/re/` could not override a plain feed block there.
         important_rules = important_rules or bool(user_regex_db) or bool(user_allow_regex_db)
+
+    for key, fallback in zone_top1m.items():
+        # Every filtered zone shares one immutable name set, retained by the snapshot.
+        zone_db[key]["top1m"] = top1m
+        if fallback is not None:
+            zone_db[key]["top1m_fallback"] = fallback
 
     return BuildResult(
         data_db=data_db,
@@ -5937,6 +5964,9 @@ def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> No
             raise _DnsblGenerationError("{}.provenance must be feed or user".format(prefix))
         if "mode" in feed and (not isinstance(feed["mode"], str) or feed["mode"] not in {"deny", "permit"}):
             raise _DnsblGenerationError("{}.mode must be deny or permit".format(prefix))
+        # issue #3648: the Group's "TOP1M Whitelist" box; absent means the box is cleared.
+        if "top1m" in feed and not isinstance(feed["top1m"], bool):
+            raise _DnsblGenerationError("{}.top1m must be bool".format(prefix))
 
     for index, feed in enumerate(feeds):
         raw = feed["raw"]
@@ -6221,7 +6251,8 @@ def dnsbl_emit_count(count_path: str, count: int) -> bool:
 
     ADR-06 redefines ``pfb_py_count`` to the LOADED entry total (len(dataDB)+len(
     zoneDB)); its value legitimately differs from the raw feed line count because
-    the lists are no longer dedup/collapse/whitelist/TOP1M-pruned. PHP's old
+    the lists are no longer dedup/collapse/whitelist-pruned (only a TOP1M-filtered
+    Group's exact TOP1M entries are dropped, issue #3648). PHP's old
     subtract-and-compare sync-check no longer applies -- pfb_update_unbound() now
     just reports both numbers for visibility. Returns True on success.
     """
@@ -6383,11 +6414,24 @@ def iter_domain_suffixes(name: str) -> Iterator[str]:
         q = q.split(".", 1)[-1]
 
 
+def _zone_entry_for(q_name: str, entry: dict[str, Any]) -> dict[str, Any] | None:
+    """The zone payload that blocks ``q_name`` (issue #3648): an entry last written by a
+    TOP1M-filtered Group yields, for a name TOP1M lists, to the key's last unfiltered writer --
+    or blocks nothing when there is none. All filtered zones share one immutable name set."""
+    top1m = entry.get("top1m")
+    if top1m is not None and _top1m_listed(q_name, top1m):
+        fallback: dict[str, Any] | None = entry.get("top1m_fallback")
+        return fallback
+    return entry
+
+
 def find_zone_match(q_name: str, zone_db: dict[str, Any]) -> tuple[str, dict] | tuple[None, None]:
     for q in iter_domain_suffixes(q_name):
         entry = zone_db.get(q)
         if entry is not None:
-            return q, entry
+            entry = _zone_entry_for(q_name, entry)
+            if entry is not None:
+                return q, entry
     return None, None
 
 
@@ -6647,8 +6691,8 @@ def _block_priority(important: bool, *, user: bool = False) -> int:
 
 
 def _allow_priority(important: bool, *, user: bool = False) -> int:
-    """Band of a matched ALLOW. A user allow (whiteDB ``important`` entry / TOP1M /
-    settings whitelist) is band 6; a feed allow (@@/allow-regex) is band 2, or 4 with
+    """Band of a matched ALLOW. A user allow (whiteDB ``important`` entry / settings
+    whitelist) is band 6; a feed allow (@@/allow-regex) is band 2, or 4 with
     $important."""
     if user:
         return PRIO_USER_ALLOW
@@ -6736,9 +6780,11 @@ def _scan_block_band(
         for q in iter_domain_suffixes(q_name):
             entry = zone_db.get(q)
             if entry is not None:
-                band = _block_entry_band(entry)
-                if band > best:
-                    best, best_meta = band, {"kind": "zone", "entry": entry, "matched": q}
+                entry = _zone_entry_for(q_name, entry)
+                if entry is not None:
+                    band = _block_entry_band(entry)
+                    if band > best:
+                        best, best_meta = band, {"kind": "zone", "entry": entry, "matched": q}
     if q_name:
         # Literal-prefilter: build (or reuse) a first-char bucket index so only rules
         # whose required literal substring is present in the query reach re.search.
@@ -6797,18 +6843,21 @@ def _scan_allow_regex_band(
 def whitelist_lookup_band(name: str, white_db: dict[str, Any], tld_seg: int) -> int:
     """Highest whiteDB allow band that matches ``name`` (exact, ``www.``-strip, then
     the wildcard suffix walk gated by ``tld_seg``); 0 if no whitelist entry matches.
-    A user whitelist / TOP1M entry is band 6; a feed @@/reduced-allow entry carries
-    its reconciled band (2 or 4). The match algorithm is identical to
-    whitelist_lookup_domain; this variant returns the numeric band for the 6-band
-    resolution instead of a bare ``important`` bool."""
+    A user whitelist entry is band 6; a feed @@/reduced-allow entry carries
+    its reconciled band (2 or 4). All matching entries compete, so an exact feed
+    allow cannot hide a higher-band user wildcard (#3648)."""
+    best = 0
     entry = white_db.get(name)
     if entry is not None:
-        return _white_entry_band(entry)
+        best = _white_entry_band(entry)
+        if best == PRIO_USER_ALLOW:
+            return best
     if name.startswith("www."):
         entry = white_db.get(name[4:])
         if entry is not None:
-            return _white_entry_band(entry)
-    best = 0
+            best = max(best, _white_entry_band(entry))
+            if best == PRIO_USER_ALLOW:
+                return best
     q = name.split(".", 1)[-1]
     for x in range(q.count(".") + 1, 0, -1):
         if x >= tld_seg:

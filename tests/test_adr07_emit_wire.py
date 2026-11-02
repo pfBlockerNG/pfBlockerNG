@@ -35,6 +35,7 @@ def _build(
     user_unlock: Iterable[str] = (),
     top1m_lines: Iterable[str] = (),
     top1m_enabled: bool = False,
+    top1m_feeds: Iterable[str] = (),
     user_feeds: Iterable[str] = (),
 ) -> P.BuildResult:
     """Build from an in-memory manifest. ``feeds`` maps a feed name -> raw lines;
@@ -45,9 +46,11 @@ def _build(
     ``user_feeds`` names the feeds tagged provenance='user' (a DNSBL Group Custom_List,
     sovereign band 5). ``user_unlock`` is the temporary per-alert unlock set (#51),
     merged into whiteDB as band-6 user allows exactly like ``user_whitelist``.
+    ``top1m_feeds`` names the feeds whose Groups tick TOP1M filtering.
     """
     raw_store = {name: lines for name, lines in feeds.items()}
     user_set = set(user_feeds)
+    top1m_set = set(top1m_feeds)
     manifest = {
         "feeds": [
             {
@@ -56,6 +59,7 @@ def _build(
                 "group": name,
                 "log_flag": "1",
                 "provenance": "user" if name in user_set else "feed",
+                "top1m": name in top1m_set,
             }
             for name in feeds
         ],
@@ -393,10 +397,11 @@ class TestUserSovereignty:
         assert _live_label(res, "z.example.com") == "resolve"
         assert _live_label(res, "z.example.com") == _oracle_label(feeds, ["@@||z.example.com^"], "z.example.com")
 
-    def test_top1m_behaves_as_user_allow(self) -> None:
+    def test_top1m_filters_ticked_group(self) -> None:
         feeds = {"f": ["||cdn.example.com^$important"]}
-        res = _build(feeds, top1m_lines=["cdn.example.com"], top1m_enabled=True)
-        assert _live_label(res, "cdn.example.com") == "resolve"
+        res = _build(feeds, top1m_lines=["cdn.example.com"], top1m_enabled=True, top1m_feeds=["f"])
+        assert _live_label(res, "cdn.example.com") == "pass"
+        assert res.white_db == {}
 
     def test_user_whitelist_not_pruned_by_feed_badfilter(self) -> None:
         # A feed $badfilter never removes the user whitelist (it isn't a feed rule).

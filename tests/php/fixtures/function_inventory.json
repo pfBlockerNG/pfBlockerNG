@@ -6097,6 +6097,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'deny'"
+            },
+            {
+                "name": "filter_top1m",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": "NULL"
             }
         ]
     },

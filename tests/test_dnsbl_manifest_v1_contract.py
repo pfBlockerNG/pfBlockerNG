@@ -60,7 +60,7 @@ def test_fixture_manifest_v1_builds_and_config_affects_result(tmp_path: Path) ->
 
     assert result is not None
     assert result.zone_db["zip"]["index"] >= 0
-    assert result.white_db["popularcdn.com"]["important"] is True
+    assert "popularcdn.com" not in result.white_db  # no Group in this vintage opts into TOP1M
     assert result.white_db["adblock.com"]["wildcard"] is False
     assert result.white_db["wildwhite.org"]["wildcard"] is True
     assert result.white_db["allowme.example"]["band"] == pfb_unbound.PRIO_FEED_ALLOW

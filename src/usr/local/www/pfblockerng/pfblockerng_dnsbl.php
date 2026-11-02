@@ -3516,10 +3516,11 @@ $top1m_text = 'The TOP1M feed can be used to whitelist the most popular Domain n
 
 		<div class="infoblock">
 			<span class="text-danger">Recommendation: </span>
-			<ul>TOP1M also contains the \'Top\' AD Servers, so its recommended to configure the first DNSBL Alias with AD Server<br />
-				(ie. yoyo, Adaway...) based feeds. TOP1M whitelisting can be disabled for this first defined Alias.<br /><br />
-				Generally, TOP1M should be used for feeds that post full URLs like PhishTank, OpenPhish or MalwarePatrol.<br /><br />
-				To bypass a TOP1M Domain, add the Domain to the first defined Alias \'Custom Block list\' with TOP1M disabled in this alias.<br />
+			<ul>TOP1M also contains advertising domains. Leave the TOP1M Whitelist box cleared on Groups with advertising feeds<br />
+				(e.g. yoyo, Adaway). Only Groups with that box ticked are filtered; other Groups and Category feeds still block TOP1M domains.<br /><br />
+				TOP1M is generally useful for feeds that post full URLs, such as PhishTank, OpenPhish or MalwarePatrol.<br /><br />
+				To block a TOP1M domain, add it to a Group\'s Custom List and clear that Group\'s TOP1M Whitelist box. Group order does not matter.<br />
+				The user\'s DNSBL Whitelist still overrides every block.<br />
 				When enabled, this list will be automatically updated once per month along with the MaxMind Database.
 			</ul>
 		</div>';

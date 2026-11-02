@@ -1639,6 +1639,34 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     )
 
 
+def test_top1m_help_explains_group_scope_and_the_custom_list_recipe(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """Group help and the DNSBL recipe expose the same per-Group TOP1M contract.
+
+    Runtime verdicts are exercised by test_issue3648_top1m_group_scope; this render
+    check catches a help regression that hides the unchecked-Group escape hatch.
+    """
+    pages = (
+        (
+            "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl",
+            ("TOP1M Whitelist",),
+            ("this Group still blocks TOP1M domains", "including its Custom List", "Whitelist always takes precedence"),
+        ),
+        (
+            "/pfblockerng/pfblockerng_dnsbl.php",
+            ("DNSBL Webserver Configuration",),
+            ("other Groups and Category feeds still block", "Group order does not matter", "Whitelist still overrides"),
+        ),
+    )
+    for path, markers, guidance in pages:
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, markers)
+        assert result.ok, f"{path}: render failed: {result.detail}"
+        for message in guidance:
+            assert message in resp.text, f"{path}: missing TOP1M scope guidance {message!r}"
+
+
 def test_apply_guidance_names_run_now_not_retired_actions(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """Settings pages point at actions that exist: the scheduled update and the
     Update tab's Run Now (issue #3237) — never the retired "Force Update" /

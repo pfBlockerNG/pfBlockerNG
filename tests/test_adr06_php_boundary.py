@@ -37,7 +37,7 @@ from tests.test_adr06_golden_oracle import (
     FIXTURES,
     GOLDEN_EXTRACTED_IPS,
     GOLDEN_TOP1M_DISABLED,
-    GOLDEN_TOP1M_ENABLED_OVERRIDES,
+    GOLDEN_TOP1M_FILTERED_OVERRIDES,
     ReferencePipeline,
     _build_cfg,
     _decision_label,
@@ -95,6 +95,7 @@ def _write_plain_boundary_manifest(tmp_path: Any, *, top1m_enabled: bool) -> tup
                 "feed": row["feed"],
                 "group": row["group"],
                 "log_flag": row["log_flag"],
+                "top1m": row.get("top1m", False),
             }
         )
 
@@ -185,7 +186,7 @@ class TestPlainBoundaryDecisionsTop1mEnabled:
         result, _ = _build(tmp_path, top1m_enabled=True)
         config = _load_json("config.json")
         expected_map = dict(GOLDEN_TOP1M_DISABLED)
-        expected_map.update(GOLDEN_TOP1M_ENABLED_OVERRIDES)
+        expected_map.update(GOLDEN_TOP1M_FILTERED_OVERRIDES)
         failures: list[str] = []
         for q_name, expected in expected_map.items():
             got = _evaluate(result, config, q_name)

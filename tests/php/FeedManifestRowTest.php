@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -115,5 +116,39 @@ final class FeedManifestRowTest extends TestCase
 		$this->assertSame('1',             $row['log']);
 		$this->assertSame('feed',          $row['provenance']);
 		$this->assertSame('permit',        $row['mode']);
+	}
+
+	// --- TOP1M scope (issue #3648) — the Group's "TOP1M Whitelist" box -------------
+
+	public function testTickedGroupRowIsMarkedForTop1mFiltering(): void
+	{
+		// GIVEN a feed of a Group whose stored 'filter_top1m' box is ticked ('on')
+		$row = pfb_feed_manifest_row('PhishTank', 'DNSBL_Phish', '1', 'feed', 'deny', 'on');
+
+		// THEN the manifest row tells Python that TOP1M filters this feed
+		$this->assertArrayHasKey('top1m', $row, 'a ticked Group must mark its rows for TOP1M filtering');
+		$this->assertTrue($row['top1m']);
+	}
+
+	/** @return array<string, array{mixed}> */
+	public static function clearedBoxProvider(): array
+	{
+		return [
+			'cleared box'      => [''],
+			'box never saved'  => [NULL],
+			'not the on token' => ['off'],
+		];
+	}
+
+	#[DataProvider('clearedBoxProvider')]
+	public function testClearedGroupRowStaysByteIdentical(mixed $stored): void
+	{
+		// GIVEN a feed of a Group whose box is cleared, never saved, or holds a non-'on' value
+		$row = pfb_feed_manifest_row('EasyList', 'DNSBL_Ads', '1', 'feed', 'deny', $stored);
+
+		// THEN the row carries no 'top1m' key: TOP1M never filters it, and the row is
+		// byte-identical with a row built before the box existed
+		$this->assertSame(pfb_feed_manifest_row('EasyList', 'DNSBL_Ads', '1', 'feed'), $row);
+		$this->assertArrayNotHasKey('top1m', $row);
 	}
 }

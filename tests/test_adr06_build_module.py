@@ -6,16 +6,15 @@ Phase 3 introduces the pure, stdlib-only, Unbound-symbol-free build layer
 (``parse`` -> ``normalise`` -> ``classify`` -> ``build``) that reproduces today's
 DNSBL preprocessing pipeline at the level of net DNS *decisions* (ADR.md SS2). This
 module unit-tests every build function AND drives ``build()`` end-to-end against the
-Phase-2 DECISION oracle: the SAME representative query set, the SAME golden labels
-(``GOLDEN_TOP1M_DISABLED`` / ``GOLDEN_TOP1M_ENABLED_OVERRIDES``) and the SAME
-extracted-IP expectations -- but now over the structures the NEW build produces.
+Phase-2 DECISION oracle: the SAME representative query set and extracted-IP
+expectations, with explicit production overrides for conformant ABP and TOP1M
+per-Group filtering.
 
-The contract is decisions, NOT list contents/counts. ADR-06 drops the build-time
-optimisations (dedup, subdomain collapse, user-whitelist removal, TOP1M removal),
-so ``data_db`` / ``zone_db`` contents and the counts change BY DESIGN. The tests
-therefore assert identical block/resolve/whitelist/HSTS/noAAAA/zone-subdomain
-DECISIONS, reusing the same Phase-2 golden tables from
-``tests/test_adr06_golden_oracle.py`` so the two layers cannot silently diverge.
+The contract is decisions, NOT list contents/counts. ADR-06 drops build-time
+dedup, subdomain collapse and user-whitelist removal. Issue #3648 filters TOP1M
+names only from ticked Groups, so an otherwise unblocked popular name passes
+without a global whitelist entry. The remaining decisions reuse the Phase-2
+golden tables from ``tests/test_adr06_golden_oracle.py``.
 
 WHAT THE TESTS COVER
 --------------------
@@ -28,9 +27,9 @@ WHAT THE TESTS COVER
     public suffix (``co.uk``), deep-subdomain -> exact DATA, and TLD-exclusion ->
     forced exact DATA.
   * whitelist normalisation (case-insensitive www-strip, leading-dot wildcard, normalise() lower-case +
-    shape gate with per-list reject tally, TOP1M-when-enabled).
-  * ``build()`` end-to-end == the Phase-2 decision oracle, BOTH TOP1M scenarios,
-    plus the noAAAA decisions and the no-IP-leak guarantee.
+    shape gate with per-list reject tally), plus TOP1M name normalisation.
+  * ``build()`` end-to-end against the Phase-2 decision oracle plus production
+    overrides, BOTH TOP1M scenarios, noAAAA decisions and the no-IP-leak guarantee.
   * ``build()`` is PURE / REENTRANT: two calls yield equal structures and mutate
     no module global.
 """
@@ -42,13 +41,13 @@ from typing import Any
 
 import pfb_unbound
 
-# Reuse the Phase-2 oracle's fixtures, golden decision tables and decision driver so
-# the new build layer is validated against the EXACT same contract, not a copy.
+# Reuse the Phase-2 oracle's fixtures and decision driver, with explicit
+# production overrides for intentional changes from the legacy contract.
 from tests.test_adr06_golden_oracle import (
     GOLDEN_ABP_CONFORMANT_OVERRIDES,
     GOLDEN_EXTRACTED_IPS,
     GOLDEN_TOP1M_DISABLED,
-    GOLDEN_TOP1M_ENABLED_OVERRIDES,
+    GOLDEN_TOP1M_FILTERED_OVERRIDES,
     _build_cfg,
     _decision_label,
     _load_json,
@@ -287,37 +286,36 @@ class TestClassify:
 class TestWhitelistNormalisation:
     # ADR-07 P3 widened the whiteDB value from a bare wildcard bool to
     # {"wildcard": bool, "important": bool}; ADR-07 P6 added the numeric ``band``
-    # (user whitelist + TOP1M are user allows -> important=True, band 6, the
-    # sovereign user-allow band). The net DNS decision is unchanged (pinned by the
-    # oracle).
+    # (user whitelist entries are user allows -> important=True, band 6, the
+    # sovereign user-allow band).
     def test_www_strip_and_exact(self) -> None:
-        wl = pfb_unbound._dnsbl_normalise_whitelist(["www.adblock.com"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["www.adblock.com"])
         assert wl == {"adblock.com": {"wildcard": False, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
 
     def test_leading_dot_wildcard(self) -> None:
-        wl = pfb_unbound._dnsbl_normalise_whitelist([".wildwhite.org"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([".wildwhite.org"])
         assert wl == {"wildwhite.org": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
 
     def test_mixed_case_entry_matches_lowercase_query(self) -> None:
         # issue #3367: block keys are lower-cased, so the whitelist key must be too.
-        wl = pfb_unbound._dnsbl_normalise_whitelist(["Example.COM"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["Example.COM"])
         assert list(wl) == ["example.com"]
         assert pfb_unbound.whitelist_lookup_domain("example.com", wl, 2)[0] is True
 
     def test_mixed_case_wildcard_keeps_wildcard(self) -> None:
-        wl = pfb_unbound._dnsbl_normalise_whitelist([".Example.COM"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([".Example.COM"])
         assert wl == {"example.com": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
 
     def test_www_prefix_mixed_case(self) -> None:
-        wl = pfb_unbound._dnsbl_normalise_whitelist(["WWW.Example.COM"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["WWW.Example.COM"])
         assert list(wl) == ["example.com"]
 
     def test_entry_rejected_by_normalise_is_dropped(self) -> None:
-        wl = pfb_unbound._dnsbl_normalise_whitelist(["bad domain!", "ok.com"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["bad domain!", "ok.com"])
         assert list(wl) == ["ok.com"]
 
     def test_trailing_dot_entry_stored_without_dot_and_matches(self) -> None:
-        wl = pfb_unbound._dnsbl_normalise_whitelist(["example.com."], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["example.com."])
         assert list(wl) == ["example.com"]
         assert pfb_unbound.whitelist_lookup_domain("example.com", wl, 2)[0] is True
 
@@ -325,7 +323,7 @@ class TestWhitelistNormalisation:
         # #3378 (replaces test_single_label_wildcard_is_dropped, deliberately): a wildcard
         # single label such as `.lan` / `.internal` exempts a whole TLD via
         # whitelist_lookup_domain (shipped python_tld_seg = 1), as it did before #3370.
-        wl = pfb_unbound._dnsbl_normalise_whitelist([".lan", ".Internal"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([".lan", ".Internal"])
         entry = {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}
         assert wl == {"lan": entry, "internal": entry}
         assert pfb_unbound.whitelist_lookup_domain("printer.lan", wl, 1)[0] is True
@@ -333,21 +331,21 @@ class TestWhitelistNormalisation:
         assert pfb_unbound.whitelist_lookup_domain("printer.lan", wl, 2)[0] is False
 
     def test_single_label_without_wildcard_dot_is_dropped(self) -> None:
-        assert pfb_unbound._dnsbl_normalise_whitelist(["lan", "com.", "www.", "www.."], [], False) == {}
+        assert pfb_unbound._dnsbl_normalise_whitelist(["lan", "com.", "www.", "www.."]) == {}
 
     def test_single_label_wildcard_still_validates_the_label(self) -> None:
         bad = [".-bad", ".bad-", "." + "a" * 64, ". example.com", ". lan", ".bad!", ".123", ".", ".."]
         for entry in bad:
-            assert pfb_unbound._dnsbl_normalise_whitelist([entry], [], False) == {}, entry
-        assert list(pfb_unbound._dnsbl_normalise_whitelist(["." + "a" * 63], [], False)) == ["a" * 63]
+            assert pfb_unbound._dnsbl_normalise_whitelist([entry]) == {}, entry
+        assert list(pfb_unbound._dnsbl_normalise_whitelist(["." + "a" * 63])) == ["a" * 63]
 
     def test_wildcard_flag_follows_the_www_stripped_body(self) -> None:
         # `www..example.com` strips to `.example.com`: a wildcard although the raw line
         # does not start with a dot.
-        wl = pfb_unbound._dnsbl_normalise_whitelist(["www..example.com"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["www..example.com"])
         assert wl == {"example.com": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
         # A single label behind the strip is a wildcard too; a first-call flag read from the raw line drops it.
-        assert list(pfb_unbound._dnsbl_normalise_whitelist(["www..lan"], [], False)) == ["lan"]
+        assert list(pfb_unbound._dnsbl_normalise_whitelist(["www..lan"])) == ["lan"]
 
     def test_single_label_wildcard_end_to_end_with_tld_allow(self) -> None:
         result = pfb_unbound.build({"feeds": []}, {"user_whitelist": [".lan"]}, line_reader=lambda raw: [])
@@ -385,23 +383,20 @@ class TestWhitelistNormalisation:
         # www.com / www.org / www.example: the remainder is one label, which normalise()
         # rejects, but the whole name is a valid domain and base matched it.
         for entry in ("www.com", "WWW.Org", "www.example"):
-            wl = pfb_unbound._dnsbl_normalise_whitelist([entry], [], False)
+            wl = pfb_unbound._dnsbl_normalise_whitelist([entry])
             name = entry.lower()
             assert list(wl) == [name]
             assert pfb_unbound.whitelist_lookup_domain(name, wl, 2)[0] is True
 
     def test_invalid_names_behind_www_prefix_are_rejected(self) -> None:
-        assert pfb_unbound._dnsbl_normalise_whitelist(["www.-bad.com", "www.bad domain"], [], False) == {}
+        assert pfb_unbound._dnsbl_normalise_whitelist(["www.-bad.com", "www.bad domain"]) == {}
 
-    def test_top1m_only_when_enabled(self) -> None:
-        disabled = pfb_unbound._dnsbl_normalise_whitelist([], ["popularcdn.com"], False)
-        assert "popularcdn.com" not in disabled
-        enabled = pfb_unbound._dnsbl_normalise_whitelist([], ["popularcdn.com"], True)
-        assert enabled.get("popularcdn.com") == {
-            "wildcard": False,
-            "important": True,
-            "band": pfb_unbound.PRIO_USER_ALLOW,
-        }
+    def test_top1m_names_are_normalised_and_invalid_entries_rejected(self) -> None:
+        names = pfb_unbound._dnsbl_top1m_names(
+            [" PopularCDN.COM. ", "popularcdn.com", "www.Example.COM", "", "bad domain!", ",retired.com,", "lan"]
+        )
+        assert names == frozenset({"popularcdn.com", "www.example.com"})
+        assert isinstance(names, frozenset)
 
     def _assert_apex_wildcard_covers_deep(self, white_db: dict[str, Any], apex: str) -> None:
         assert white_db[apex]["wildcard"] is True
@@ -411,25 +406,25 @@ class TestWhitelistNormalisation:
     def test_leading_dot_then_www_keeps_wildcard(self) -> None:
         """Colliding `.apex` then `www.apex` must keep subtree coverage (issue #3191)."""
         apex = "collapex.com"
-        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", f"www.{apex}"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", f"www.{apex}"])
         self._assert_apex_wildcard_covers_deep(wl, apex)
 
     def test_leading_dot_then_bare_apex_keeps_wildcard(self) -> None:
         """Colliding `.apex` then bare `apex` must keep subtree coverage (issue #3191)."""
         apex = "collapex.com"
-        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", apex], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", apex])
         self._assert_apex_wildcard_covers_deep(wl, apex)
 
     def test_www_then_leading_dot_keeps_wildcard(self) -> None:
         """Widen is order-independent: `www.apex` then `.apex` still covers the subtree."""
         apex = "collapex.com"
-        wl = pfb_unbound._dnsbl_normalise_whitelist([f"www.{apex}", f".{apex}"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f"www.{apex}", f".{apex}"])
         self._assert_apex_wildcard_covers_deep(wl, apex)
 
     def test_www_then_bare_apex_stays_exact(self) -> None:
         """Without a leading-dot line, www-strip + bare apex stay exact; deep names miss."""
         apex = "collapex.com"
-        wl = pfb_unbound._dnsbl_normalise_whitelist([f"www.{apex}", apex], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f"www.{apex}", apex])
         assert wl[apex]["wildcard"] is False
         assert pfb_unbound.whitelist_check_domain(f"stun.l.{apex}", wl, 1) is False
         assert pfb_unbound.whitelist_check_domain(f"a.b.{apex}", wl, 1) is False
@@ -437,17 +432,23 @@ class TestWhitelistNormalisation:
     def test_leading_dot_plus_mail_keeps_two_keys(self) -> None:
         """A different hostname is a second key; the `.apex` wildcard is not demoted."""
         apex = "collapex.com"
-        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", f"mail.{apex}"], [], False)
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", f"mail.{apex}"])
         assert set(wl) == {apex, f"mail.{apex}"}
         assert wl[apex]["wildcard"] is True
         assert wl[f"mail.{apex}"]["wildcard"] is False
         assert pfb_unbound.whitelist_check_domain(f"stun.l.{apex}", wl, 1) is True
 
     def test_user_wildcard_not_overwritten_by_top1m(self) -> None:
-        """TOP1M setdefault must not collapse an existing user `.apex` wildcard to exact."""
+        """An enabled TOP1M build must preserve the user's `.apex` subtree coverage."""
         apex = "collapex.com"
-        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}"], [apex], True)
-        self._assert_apex_wildcard_covers_deep(wl, apex)
+        result = pfb_unbound.build(
+            {"feeds": []},
+            {"user_whitelist": [f".{apex}"]},
+            line_reader=lambda raw: [],
+            top1m_enabled=True,
+            top1m_lines=[apex],
+        )
+        self._assert_apex_wildcard_covers_deep(result.white_db, apex)
 
 
 # --------------------------------------------------------------------------- #
@@ -473,13 +474,13 @@ class TestBuildDecisionsTop1mDisabled:
 
 
 class TestBuildDecisionsTop1mEnabled:
-    """With TOP1M enabled the popular domain flips to 'whitelist'; all other
-    decisions are unchanged -- identical to the Phase-2 oracle."""
+    """TOP1M filters the ticked Group's popular domain, so it passes without an
+    allow; all other decisions are unchanged."""
 
     def test_decisions(self) -> None:
         result, config = _run_build(top1m_enabled=True)
         expected_map = dict(GOLDEN_TOP1M_DISABLED)
-        expected_map.update(GOLDEN_TOP1M_ENABLED_OVERRIDES)
+        expected_map.update(GOLDEN_TOP1M_FILTERED_OVERRIDES)
         expected_map.update(GOLDEN_ABP_CONFORMANT_OVERRIDES)  # conformant ABP zones (#718)
         failures: list[str] = []
         for q_name, expected in expected_map.items():

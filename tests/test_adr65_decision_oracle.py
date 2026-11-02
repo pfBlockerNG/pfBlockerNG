@@ -272,7 +272,7 @@ class TestTop1mWhitelistArm:
         result = _build_from_manifest(tmp_path, top1m_enabled=True)
         config = _load_json("config.json")
         got = _evaluate_result(result, config, "popularcdn.com")
-        assert got["decision"] == "whitelist"
+        assert got["decision"] == "pass"  # #3648: per-Group filter, no global whiteDB allow
 
     def test_a7_top1m_disabled_blocks_the_same_domain(self, tmp_path: Any) -> None:
         """Guard the flip is real: with TOP1M disabled the same domain blocks."""
