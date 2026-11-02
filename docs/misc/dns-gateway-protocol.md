@@ -89,12 +89,14 @@ retry.
 
 Over UDP the gateway keeps the first datagram that is Unbound's reply to the FORWARD and ignores every other one, such as a
 late reply to an earlier query on a reused local port. A reply is a whole 12-byte DNS header with the query's id and QR set,
-and the query's question: the same name (ASCII case-insensitively), type and class. A reply with no question counts only
-when its rcode is an error or it has TC set. Unbound answers a query it refuses before it reads the question (TC set, an
-opcode it does not implement, a bad count, a question that does not parse) with a bare header with QDCOUNT 0 and FORMERR or
-NOTIMP, and that header is the REPLY. A reply with TC set counts even when it has lost all or part of its question. When
-the query's own question does not parse there is no name to compare: any other reply that carries a question then counts
-only when what follows its header is the query's own bytes.
+and the query's question: the same label boundaries and octets (ASCII name content case-insensitively), type and class.
+Labels may contain any octet, including a literal dot; names are not flattened to dotted text. Compression pointers are
+expanded with backward-only targets outside the header, a 127-pointer bound, and the 63-octet label/255-octet name limits.
+A reply with no question counts only when its rcode is an error or it has TC set. Unbound sends bare FORMERR or NOTIMP for
+some early refusals, including TC-set queries and IQUERY, STATUS and UPDATE; NOTIFY instead carries a question and REFUSED.
+A reply with TC set counts even when it has lost all or part of its question, but a readable different question is rejected.
+Other unreadable questions count only when the bytes after the header exactly echo the query's; parsing limitations of a
+text-name library do not make a legal binary label unreadable.
 
 The transport byte tells the decider whether the client has a UDP size limit: for a datagram client an answer the decider
 builds itself is held to the UDP size the client advertised (512 without EDNS, at most the 1232 the decider advertises

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	proxyproto "github.com/pires/go-proxyproto"
-	"golang.org/x/net/dns/dnsmessage"
 )
 
 // proxyEndpoints returns (client, local) as one IP family for the PROXYv2 header: IPv4-mapped IPv6 becomes IPv4,
@@ -87,7 +86,7 @@ func (u *upstream) exchangeUDPResult(ctx context.Context, header, wire []byte) (
 	if udpDatagramTooLong(u.addr, header, wire) {
 		return nil, true
 	}
-	if len(wire) < 2 {
+	if len(wire) < dnsHeaderLen {
 		return nil, false
 	}
 	var dialer net.Dialer
@@ -101,7 +100,8 @@ func (u *upstream) exchangeUDPResult(ctx context.Context, header, wire []byte) (
 	if _, err := conn.Write(slices.Concat(header, wire)); err != nil {
 		return nil, errors.Is(err, syscall.EMSGSIZE)
 	}
-	question, ok := firstQuestion(wire)
+	var question upstreamQuestion
+	ok := question.read(wire)
 	buf := datagrams.Get().(*[]byte)
 	defer datagrams.Put(buf)
 	for {
@@ -109,7 +109,7 @@ func (u *upstream) exchangeUDPResult(ctx context.Context, header, wire []byte) (
 		if err != nil {
 			return nil, false
 		}
-		if udpReplyFor(wire, (*buf)[:n], question, ok) {
+		if udpReplyFor(wire, (*buf)[:n], &question, ok) {
 			return bytes.Clone((*buf)[:n]), false
 		}
 	}
@@ -134,59 +134,88 @@ func udpDatagramTooLong(addr string, header, wire []byte) bool {
 
 const dnsHeaderLen = 12 // RFC 1035 4.1.1
 
-func firstQuestion(wire []byte) (dnsmessage.Question, bool) {
-	var p dnsmessage.Parser
-	if _, err := p.Start(wire); err != nil {
-		return dnsmessage.Question{}, false
-	}
-	q, err := p.Question()
-	if err != nil {
-		return dnsmessage.Question{}, false
-	}
-	return q, true
+// upstreamQuestion keeps label boundaries and every label octet (RFC 2181 section 11), folding only ASCII name content.
+// Text-name parsers may reject legal labels such as "a.b"; that is not a malformed DNS question.
+type upstreamQuestion struct {
+	name       [255]byte
+	length     uint16
+	typ, class uint16
 }
 
-// udpReplyFor reports whether reply is the response to query: a whole header with the query's id and QR set, then the
-// query's question. A reply with no question counts only when it is an error or truncated: Unbound answers a message it
-// refuses before it reads the question (TC set, an opcode it does not implement, a bad count, a question that does not
-// parse) with a bare header. A truncated reply may also have lost all or part of its question, which is not a different
-// question. Any other question that cannot be parsed, on either side, has no name, type and class to compare, so only
-// the query's own bytes sent back are that question.
-func udpReplyFor(query, reply []byte, question dnsmessage.Question, ok bool) bool {
-	var p dnsmessage.Parser
-	h, err := p.Start(reply)
-	if err != nil || h.ID != binary.BigEndian.Uint16(query) || !h.Response {
+func (q *upstreamQuestion) read(wire []byte) bool {
+	if len(wire) < dnsHeaderLen || binary.BigEndian.Uint16(wire[4:]) == 0 {
 		return false
 	}
-	got, err := p.Question()
-	switch {
-	case errors.Is(err, dnsmessage.ErrSectionDone):
-		return h.RCode != dnsmessage.RCodeSuccess || h.Truncated
-	case err != nil:
-		return h.Truncated || (!ok && bytes.Equal(reply[dnsHeaderLen:], query[min(dnsHeaderLen, len(query)):]))
-	case !ok:
-		return false
-	}
-	return got.Type == question.Type && got.Class == question.Class && sameDNSName(got.Name, question.Name)
-}
-
-func sameDNSName(a, b dnsmessage.Name) bool {
-	if a.Length != b.Length {
-		return false
-	}
-	for i := range int(a.Length) {
-		x, y := a.Data[i], b.Data[i]
-		if x >= 'A' && x <= 'Z' {
-			x += 'a' - 'A'
+	pos, end, size, hops := dnsHeaderLen, 0, 0, 0
+	for {
+		if pos >= len(wire) {
+			return false
 		}
-		if y >= 'A' && y <= 'Z' {
-			y += 'a' - 'A'
-		}
-		if x != y {
+		n := int(wire[pos])
+		switch n & 0xc0 {
+		case 0xc0:
+			if pos+1 >= len(wire) {
+				return false
+			}
+			target := (n&0x3f)<<8 | int(wire[pos+1])
+			// RFC 1035 pointers refer to prior name data, never the header. Bound pointer-only chains as dnswire.py does.
+			hops++
+			if target < dnsHeaderLen || target >= pos || hops > 127 {
+				return false
+			}
+			if end == 0 {
+				end = pos + 2
+			}
+			pos = target
+		case 0:
+			pos++
+			if n == 0 {
+				q.name[size] = 0
+				q.length = uint16(size + 1)
+				if end == 0 {
+					end = pos
+				}
+				if end+4 > len(wire) {
+					return false
+				}
+				q.typ = binary.BigEndian.Uint16(wire[end:])
+				q.class = binary.BigEndian.Uint16(wire[end+2:])
+				return true
+			}
+			if pos+n > len(wire) || size+1+n >= len(q.name) {
+				return false
+			}
+			q.name[size] = byte(n)
+			size++
+			for _, c := range wire[pos : pos+n] {
+				if c >= 'A' && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				q.name[size] = c
+				size++
+			}
+			pos += n
+		default:
 			return false
 		}
 	}
-	return true
+}
+
+// udpReplyFor requires a whole header, the query ID and QR. Questionless errors (including Unbound's bare FORMERR and
+// NOTIMP) and truncated replies need no question. Otherwise decoded labels, type and class must match; an unreadable
+// question counts only as the original bytes echoed back, not as an arbitrary error reply.
+func udpReplyFor(query, reply []byte, question *upstreamQuestion, ok bool) bool {
+	if len(query) < dnsHeaderLen || len(reply) < dnsHeaderLen || reply[0] != query[0] || reply[1] != query[1] || reply[2]&0x80 == 0 {
+		return false
+	}
+	if binary.BigEndian.Uint16(reply[4:]) == 0 {
+		return reply[3]&0x0f != 0 || truncated(reply)
+	}
+	var got upstreamQuestion
+	if !got.read(reply) {
+		return truncated(reply) || bytes.Equal(reply[dnsHeaderLen:], query[dnsHeaderLen:])
+	}
+	return ok && got == *question
 }
 
 // truncated reports whether reply is Unbound's answer with TC set, which a client of a size-limited UDP exchange

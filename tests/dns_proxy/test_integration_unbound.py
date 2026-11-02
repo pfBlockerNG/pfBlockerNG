@@ -86,6 +86,12 @@ def _conf(port: int, authoritative_port: int, *, observer: bool = False) -> str:
     access-control: 127.0.0.0/8 allow
     access-control: 192.0.2.0/24 allow
     access-control: {REFUSED_CLIENT}/32 refuse
+    local-zone: "binary-labels.example." static
+    local-data: "binary-labels.example. 300 IN SOA ns.example. hostmaster.example. 1 2 3 4 5"
+    local-data: "a\\046b.binary-labels.example. 300 IN A 192.0.2.11"
+    local-data: "a\\046b.binary-labels.example. 300 IN TXT \\"binary label\\""
+    local-data: "a\\046b\\046c.binary-labels.example. 300 IN A 192.0.2.12"
+    local-data: "\\046.binary-labels.example. 300 IN A 192.0.2.13"
 {server_extra}{python_clause}forward-zone:
     name: "example."
     forward-addr: 127.0.0.1@{authoritative_port}
