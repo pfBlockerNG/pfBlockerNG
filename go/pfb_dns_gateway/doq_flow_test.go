@@ -1,0 +1,85 @@
+package main
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+// The DoQ listener sizes each stream's receive window to one DNS message and the connection window to every
+// stream that connection may hold. The stream cap and the idle timeout stay as they are. A zero window is not
+// that size: quic-go substitutes its own default.
+func TestDoQListenerSetsReceiveWindowsForOneMessagePerStream(t *testing.T) {
+	cfg := doqQUICConfig()
+	if cfg.MaxIncomingStreams != maxDoQStreams || cfg.MaxIncomingUniStreams != -1 || cfg.MaxIdleTimeout != doqIdleTimeout {
+		t.Fatalf("DoQ stream cap or idle timeout changed: streams=%d uni=%d idle=%s; want %d, -1, %s",
+			cfg.MaxIncomingStreams, cfg.MaxIncomingUniStreams, cfg.MaxIdleTimeout, int64(maxDoQStreams), doqIdleTimeout)
+	}
+	if cfg.InitialStreamReceiveWindow != doqStreamReceiveWindow || cfg.MaxStreamReceiveWindow != doqStreamReceiveWindow ||
+		cfg.InitialConnectionReceiveWindow != doqConnReceiveWindow || cfg.MaxConnectionReceiveWindow != doqConnReceiveWindow {
+		t.Fatalf("DoQ receive windows are stream initial=%d max=%d conn initial=%d max=%d; want one DNS message (%d) and %d messages (%d)",
+			cfg.InitialStreamReceiveWindow, cfg.MaxStreamReceiveWindow,
+			cfg.InitialConnectionReceiveWindow, cfg.MaxConnectionReceiveWindow,
+			uint64(doqStreamReceiveWindow), maxDoQStreams, uint64(doqConnReceiveWindow))
+	}
+}
+
+// A DoQ query's context ends when the connection's does, including while the gateway context is still active,
+// and still ends when the gateway stops while the connection is up.
+func TestDoQQueryContextEndsWhenTheConnectionDoes(t *testing.T) {
+	gateway, stopGateway := context.WithCancel(context.Background())
+	t.Cleanup(stopGateway)
+	conn, stopConn := context.WithCancel(context.Background())
+	qctx, stopQuery := doqQueryContext(gateway, conn)
+	t.Cleanup(stopQuery)
+	if err := qctx.Err(); err != nil {
+		t.Fatalf("query context ended before the connection did: %v", err)
+	}
+
+	stopConn()
+	select {
+	case <-qctx.Done():
+	case <-time.After(watchdog):
+		t.Fatal("STUCK/ENVIRONMENT: cancelling the connection context left the DoQ query context active while the gateway context is still live")
+	}
+	if err := gateway.Err(); err != nil {
+		t.Fatalf("the gateway context ended with the connection: %v", err)
+	}
+
+	gateway2, stopGateway2 := context.WithCancel(context.Background())
+	conn2, stopConn2 := context.WithCancel(context.Background())
+	t.Cleanup(stopConn2)
+	qctx2, stopQuery2 := doqQueryContext(gateway2, conn2)
+	t.Cleanup(stopQuery2)
+	stopGateway2()
+	select {
+	case <-qctx2.Done():
+	case <-time.After(watchdog):
+		t.Fatal("STUCK/ENVIRONMENT: stopping the gateway left the DoQ query context active")
+	}
+	if err := conn2.Err(); err != nil {
+		t.Fatalf("the connection context ended with the gateway: %v", err)
+	}
+}
+
+// A dropped DoQ connection releases the shared in-flight slot while the gateway is still serving. The decider
+// never answers, so only the connection ending can free the slot before gateway shutdown.
+func TestDroppedDoQConnectionReleasesTheSharedInFlightSlot(t *testing.T) {
+	r, m, addr := newDoQRig(t, rigConfig{timeout: time.Hour})
+	c := dialDoQ(t, addr, m, clientAllowed)
+	sendDoQ(t, c.stream(), doqQuery(t, "held.example."))
+	if q := r.recvQuery(); q.ip != clientAllowed {
+		t.Fatalf("the decider saw the query from %s, want %s", q.ip, clientAllowed)
+	}
+	if n := r.g.muxInflight.Load(); n != 1 {
+		t.Fatalf("in flight before the drop: %d, want 1", n)
+	}
+	if err := r.g.ctx.Err(); err != nil {
+		t.Fatalf("the gateway context ended before the drop: %v", err)
+	}
+
+	_ = c.conn.CloseWithError(0, "dropped")
+	eventually(t, "the dropped DoQ connection to release its shared in-flight slot while the gateway is still serving", func() bool {
+		return r.g.muxInflight.Load() == 0 && r.g.ctx.Err() == nil
+	})
+}

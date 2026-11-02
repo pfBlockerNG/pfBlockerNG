@@ -29,6 +29,11 @@ const (
 
 	maxDoQStreams  = 100              // concurrent query streams per connection
 	doqIdleTimeout = 30 * time.Second // QUIC idle timeout; RFC 9250 4.4 asks for it to be negotiated
+
+	// One stream carries one DNS message (maxWire). The connection window is every stream it may hold.
+	// A zero quic.Config receive window selects quic-go's default, which is not a DNS message.
+	doqStreamReceiveWindow = maxWire
+	doqConnReceiveWindow   = maxWire * maxDoQStreams
 )
 
 // doqConns is the accepted connections of one DoQ listener. quic-go's Listener.Close leaves accepted connections
@@ -63,13 +68,38 @@ func (c *doqConns) closeAll() {
 	wg.Wait()
 }
 
+// doqQUICConfig is the listener config: the stream cap and idle timeout, and a receive window of one DNS message
+// per stream, enough of them for every stream the connection may hold.
+func doqQUICConfig() *quic.Config {
+	return &quic.Config{
+		MaxIncomingStreams:             maxDoQStreams,
+		MaxIncomingUniStreams:          -1,
+		MaxIdleTimeout:                 doqIdleTimeout,
+		InitialStreamReceiveWindow:     doqStreamReceiveWindow,
+		MaxStreamReceiveWindow:         doqStreamReceiveWindow,
+		InitialConnectionReceiveWindow: doqConnReceiveWindow,
+		MaxConnectionReceiveWindow:     doqConnReceiveWindow,
+	}
+}
+
+// doqQueryContext is the context resolveShared sees for one DoQ query. It ends when the gateway stops or the
+// connection does, so a dropped connection releases the shared in-flight slot instead of holding it until shutdown.
+func doqQueryContext(gateway, conn context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(gateway)
+	stop := context.AfterFunc(conn, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
 // serveDoQ serves QUIC on udp until stop() or the returned closeNow; when QUIC cannot listen on udp it is closed, the
 // reason is logged and returned. No 0-RTT (a replayed query is not harmless here) and no unidirectional streams
 // (RFC 9250 4.3.3 makes opening one a protocol error). Connections are admitted before their handshake.
 func (g *gateway) serveDoQ(udp *net.UDPConn, conf *tls.Config) (closeNow func(), err error) {
 	// A slot taken at the first Initial packet is only safe when its source is real: a Retry proves it first.
 	tr := &quic.Transport{Conn: udp, ConnContext: g.admitDoQ, VerifySourceAddress: func(net.Addr) bool { return true }}
-	ln, err := tr.Listen(conf, &quic.Config{MaxIncomingStreams: maxDoQStreams, MaxIncomingUniStreams: -1, MaxIdleTimeout: doqIdleTimeout})
+	ln, err := tr.Listen(conf, doqQUICConfig())
 	if err != nil {
 		g.logf("DoQ on %s: %v", udp.LocalAddr(), err)
 		_ = udp.Close()
@@ -193,8 +223,10 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local ne
 		// generated according to the rules of the protocol that is in use."
 		binary.BigEndian.PutUint16(wire, uint16(1+rand.IntN(65535)))
 		fwd := func(ctx context.Context, q []byte) []byte { return g.up.exchangeUDPThenTCP(ctx, src, dst, q) }
+		qctx, stopQuery := doqQueryContext(g.ctx, conn.Context())
+		defer stopQuery()
 		var admitted bool
-		if reply, admitted = g.resolveShared(g.ctx, src.Addr(), wire, fwd); !admitted {
+		if reply, admitted = g.resolveShared(qctx, src.Addr(), wire, fwd); !admitted {
 			reply = buildServfail(wire) // over the shared in-flight cap
 		} else if reply == nil {
 			reset(s, doqRequestCancelled) // the decider dropped the query
