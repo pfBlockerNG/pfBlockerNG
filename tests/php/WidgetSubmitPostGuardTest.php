@@ -27,7 +27,7 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		$result = $this->runWidget(['pfb_submit' => 'save']);
 		$this->assertSame(0, $result['status'], $result['stderr']);
 		foreach (['pfb_popup', 'pfb_sortmix', 'pfb_show_agg', 'pfb_sortcolumn', 'pfb_sortdir',
-			'pfb_clearip', 'pfb_cleardnsbl', 'pfb_dnsblquery', 'pfb_maxfails', 'pfb_maxheight'] as $field) {
+			'pfb_clearip', 'pfb_cleardnsbl', 'pfb_maxfails', 'pfb_maxheight'] as $field) {
 			$this->assertStringNotContainsString('Undefined array key "' . $field . '"', $result['stderr']);
 		}
 		$this->assertSame('', $result['state']['widget-popup'] ?? NULL);
@@ -46,7 +46,6 @@ final class WidgetSubmitPostGuardTest extends TestCase
 			'pfb_sortdir' => 'asc',
 			'pfb_clearip' => 'daily',
 			'pfb_cleardnsbl' => 'weekly',
-			'pfb_dnsblquery' => '60',
 			'pfb_maxfails' => '5',
 			'pfb_maxheight' => '200',
 		]);
@@ -59,13 +58,49 @@ final class WidgetSubmitPostGuardTest extends TestCase
 			'widget-sortdir' => 'asc',
 			'widget-clearip' => 'daily',
 			'widget-cleardnsbl' => 'weekly',
-			'widget-dnsblquery' => '60',
 			'widget-maxfails' => '5',
 			'widget-maxheight' => '200',
 		], array_intersect_key($result['state'], array_flip([
 			'widget-popup', 'widget-sortmix', 'widget-show_agg', 'widget-sortcolumn', 'widget-sortdir',
-			'widget-clearip', 'widget-cleardnsbl', 'widget-dnsblquery', 'widget-maxfails', 'widget-maxheight',
+			'widget-clearip', 'widget-cleardnsbl', 'widget-maxfails', 'widget-maxheight',
 		])));
+	}
+
+	/** @return array<string,array{bool,bool}> */
+	public static function obsoleteQueryCases(): array
+	{
+		return [
+			'fresh normal save' => [FALSE, FALSE],
+			'fresh legacy submission' => [FALSE, TRUE],
+			'stale normal save' => [TRUE, FALSE],
+			'stale legacy submission' => [TRUE, TRUE],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('obsoleteQueryCases')]
+	public function testSaveKeepsRealSettingsWithoutObsoleteQueryFrequency(bool $stale, bool $legacyPost): void
+	{
+		$initial = ['unrelated' => 'preserved', 'widget-maxheight' => '900'];
+		if ($stale) {
+			$initial['widget-dnsblquery'] = '77';
+		}
+		$post = [
+			'pfb_submit' => 'save', 'pfb_popup' => 'on', 'pfb_sortmix' => 'on', 'pfb_show_agg' => 'on',
+			'pfb_sortcolumn' => 'packets', 'pfb_sortdir' => 'des', 'pfb_clearip' => 'never',
+			'pfb_cleardnsbl' => 'never', 'pfb_maxfails' => '7', 'pfb_maxheight' => '450',
+		];
+		if ($legacyPost) {
+			$post['pfb_dnsblquery'] = '60';
+		}
+		$result = $this->runWidget($post, $initial);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertArrayNotHasKey('widget-dnsblquery', $result['config']);
+		$this->assertSame([
+			'unrelated' => 'preserved', 'widget-maxheight' => '450', 'widget-popup' => 'on',
+			'widget-sortmix' => 'on', 'widget-show_agg' => 'on', 'widget-sortcolumn' => 'packets',
+			'widget-sortdir' => 'des', 'widget-clearip' => 'never', 'widget-cleardnsbl' => 'never',
+			'widget-maxfails' => '7',
+		], $result['config']);
 	}
 
 	/**
@@ -103,12 +138,13 @@ final class WidgetSubmitPostGuardTest extends TestCase
 			'the include shim outlived the widget run: ' . implode(', ', $result['residue']));
 	}
 
-	/** @return array{status:int,stderr:string,state:array<string,mixed>,residue:list<string>,shim:string,base:string} */
-	private function runWidget(array $post): array
+	/** @return array{status:int,stderr:string,state:array<string,mixed>,config:array<string,mixed>,residue:list<string>,shim:string,base:string} */
+	private function runWidget(array $post, array $initial = []): array
 	{
 		$root = var_export(self::ROOT, TRUE);
 		$widget = var_export(self::WIDGET, TRUE);
 		$postCode = var_export($post, TRUE);
+		$initialCode = var_export($initial, TRUE);
 		// The child names its shim under a base directory the PARENT owns. The sibling
 		// classes instead glob sys_get_temp_dir() and filter by the child's PID from
 		// proc_get_status(); that works, but the glob sees every concurrent class's shims,
@@ -129,6 +165,7 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		$baseCode = var_export($base, TRUE);
 		$script = <<<PHP
 require {$root} . '/tests/php/bootstrap.php';
+\$GLOBALS['config'] = ['installedpackages' => ['pfblockerngglobal' => {$initialCode}]];
 \$_GET = [];
 \$_POST = {$postCode};
 \$_SERVER = ['HTTP_SEC_FETCH_SITE' => 'same-origin'];
@@ -150,6 +187,7 @@ set_error_handler(static function (int \$severity, string \$message): bool {
 });
 register_shutdown_function(static function () use (\$shim): void {
 	echo "\\n__PFB_SHIM__" . \$shim;
+	echo "\\n__PFB_CONFIG__" . json_encode(\$GLOBALS['config']['installedpackages']['pfblockerngglobal'] ?? []);
 	echo "\\n__PFB_STATE__" . json_encode(\$GLOBALS['pfb']['wglobal'] ?? []);
 });
 require {$widget};
@@ -166,6 +204,9 @@ PHP;
 		$this->assertIsInt($marker, $stdout);
 		$state = json_decode(substr($stdout, $marker + strlen('__PFB_STATE__')), TRUE, 512, JSON_THROW_ON_ERROR);
 		$this->assertIsArray($state);
+		$configMarker = strrpos($stdout, '__PFB_CONFIG__');
+		$this->assertIsInt($configMarker, $stdout);
+		$config = json_decode(substr($stdout, $configMarker + strlen('__PFB_CONFIG__'), $marker - $configMarker - strlen('__PFB_CONFIG__')), TRUE, 512, JSON_THROW_ON_ERROR);
 		// Captured BEFORE the cleanup below, which is what erases the evidence. Reversing
 		// these two makes every residue assertion in this class vacuously true.
 		$entries = scandir($base);
@@ -177,8 +218,8 @@ PHP;
 		rmdir_recursive($base);
 		$shimMarker = strrpos($stdout, '__PFB_SHIM__');
 		$this->assertIsInt($shimMarker, $stdout);
-		$shim = trim(substr($stdout, $shimMarker + strlen('__PFB_SHIM__'), $marker - $shimMarker - strlen('__PFB_SHIM__')));
-		return ['status' => $status, 'stderr' => $stderr, 'state' => $state, 'residue' => $residue,
+		$shim = trim(substr($stdout, $shimMarker + strlen('__PFB_SHIM__'), $configMarker - $shimMarker - strlen('__PFB_SHIM__')));
+		return ['status' => $status, 'stderr' => $stderr, 'state' => $state, 'config' => $config, 'residue' => $residue,
 			'shim' => $shim, 'base' => $base];
 	}
 }
