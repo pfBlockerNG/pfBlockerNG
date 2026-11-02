@@ -612,25 +612,61 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertFileDoesNotExist($this->channel());
 	}
 
-	public function testResumedReplyPollerRejectsVerdictPublishedAfterDeadline(): void
+	public function testMatchingReplyObservedBeforeDeadlineIsAccepted(): void
 	{
-		if (!defined('SIGSTOP') || !defined('SIGCONT')) {
-			$this->markTestSkipped('SIGSTOP/SIGCONT are unavailable -- cannot suspend the reply poller.');
-		}
+		$this->assertMatchingReplyAtDeadlineBoundary(100.499, false);
+	}
 
-		$child = $this->forkQuery('late-reply.example', 0.5, 'late-reply');
-		$request = $this->waitForRequest('late-reply.example');
-		$this->assertTrue(posix_kill($child['pid'], (int) constant('SIGSTOP')));
-		usleep(600000);
-		$late_reply = $this->verdictReply($request['id'], 'late-group');
-		$this->atomicWrite($this->replyPath(), $late_reply);
-		$this->assertFileExists($this->replyPath());
-		$this->assertTrue(posix_kill($child['pid'], (int) constant('SIGCONT')));
+	public function testMatchingReplyObservedAtDeadlineIsRejected(): void
+	{
+		$this->assertMatchingReplyAtDeadlineBoundary(100.5, true);
+	}
 
-		$this->assertNull($this->awaitQueryResult($child));
-		$this->reapChild($child['pid']);
+	public function testMatchingReplyObservedAfterDeadlineIsRejected(): void
+	{
+		$this->assertMatchingReplyAtDeadlineBoundary(100.501, true);
+	}
+
+	private function assertMatchingReplyAtDeadlineBoundary(float $observed_at, bool $expect_timeout): void
+	{
+		$request = null;
+		$now = function () use (&$request, $observed_at): float {
+			if ($request !== null) {
+				return $observed_at;
+			}
+			if (!file_exists($this->channel())) {
+				return 100.0;
+			}
+
+			$request = json_decode((string) file_get_contents($this->channel()), true, 512, JSON_THROW_ON_ERROR);
+			$this->assertIsArray($request);
+			$this->assertSame('reply-deadline.example', $request['domain'] ?? null);
+			$this->assertSame('A', $request['qtype'] ?? null);
+			$this->assertIsString($request['id'] ?? null);
+			$this->assertNotSame('', $request['id']);
+			$reply = $this->verdictReply($request['id'], 'boundary-group');
+			$this->atomicWrite($this->replyPath(), $reply);
+			$this->assertSame($reply, file_get_contents($this->replyPath()));
+
+			// Enter the poll before expiry; only the matching-reply read crosses the boundary.
+			return 100.25;
+		};
+
+		$result = pfb_dnsbl_query('reply-deadline.example', 'A', 0.5, $now);
+
+		$this->assertNotNull($request, 'the real request must be observed and answered before checking the verdict');
 		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
-		$this->assertStringContainsString('timed out waiting for a verdict', $logs);
+		if ($expect_timeout) {
+			$this->assertNull($result);
+			$this->assertStringContainsString('timed out waiting for a verdict', $logs);
+		} else {
+			$this->assertSame([
+				'blocked' => true, 'b_type' => 'dataDB', 'group' => 'boundary-group',
+				'b_eval' => 'exact', 'feed' => 'boundary-group-feed', 'p_type' => 'A',
+			], $result);
+			$this->assertStringNotContainsString('timed out waiting for a verdict', $logs);
+		}
+		clearstatcache();
 		$this->assertFileDoesNotExist($this->channel());
 		$this->assertFileDoesNotExist($this->replyPath());
 	}
