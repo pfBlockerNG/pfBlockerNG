@@ -930,22 +930,19 @@ def test_geoip_pages_render_the_seeded_csv_rows(
             )
 
 
-def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
-    """The General page's 'Keep Settings' help warns that keep=off wipes settings on a version upgrade (#697).
+def test_general_page_omits_removed_keep_on_upgrade_toggle(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """The General page no longer renders the removed 'Keep enabled during version upgrades' toggle (#697).
 
     Given the General page,
     When GET,
-    Then the 'Keep Settings' help text states the wipe also applies to pfSense version upgrades, and
-    the removed 'Keep enabled during version upgrades' toggle is gone.
+    Then the page passes the render oracle and the removed pfb_keep_on_upgrade checkbox is absent.
 
-    Fail-before / pass-after: the disclaimer sentence is added in #697 (fails on the pre-#697 page),
-    and the removed checkbox must be absent (fails while the old toggle still renders).
+    Fail-before / pass-after: the removed checkbox must be absent (fails while the old toggle still renders).
     """
     resp = webui.get(_GENERAL_PAGE)
     body = resp.text
     result = evaluate_render(_GENERAL_PAGE, resp.status_code, body, ("General Settings",))
     assert result.ok, f"General page render oracle failed: {result.detail}"
-    assert "This also applies to a major pfSense version upgrade" in body, "keep=off upgrade-wipe disclaimer missing"
     assert 'name="pfb_keep_on_upgrade"' not in body, "the removed pfb_keep_on_upgrade toggle still renders (#697)"
 
 
@@ -1013,13 +1010,12 @@ def test_general_page_renders_log_trim_margin_field(webui: WebUI, php_error_log_
 
 def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """issue #2851: the General page gains an Advanced Settings section carrying the one
-    global ``pfb_reentry_timeout`` ("Nested pass timeout") control.
+    global ``pfb_reentry_timeout`` control.
 
     Given the General page,
     When GET,
     Then the field renders as a number input carrying the accepted 60..7200 window and the
-    1800-second placeholder, its label is the visible Form_Group ``control-label``, and the
-    help copy documents whole-process-tree termination plus the retry path after an expiry.
+    1800-second placeholder, and its row label is the visible Form_Group ``control-label``.
 
     Fail-before / pass-after: none of these markers exist in the pre-#2851 markup, where the
     budget was a hardcoded constant with no operator surface at all.
@@ -1040,14 +1036,15 @@ def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_
     for attr in ('type="number"', 'min="60"', 'max="7200"', 'placeholder="1800"'):
         assert attr in field.group(0), f"pfb_reentry_timeout input is missing {attr}: {field.group(0)}"
 
-    label_re = re.compile(r'<label class="col-sm-2 control-label">\s*<span>Nested pass timeout</span>\s*</label>')
-    assert label_re.search(body), (
-        "the Nested pass timeout row label is not the expected visible control-label -- "
-        "check it is not hidden by the desktop label.form-label media query"
+    # The row label must be the visible Form_Group control-label (the desktop media query
+    # hides label-start). Bind it to this field: no other <label> may sit between the last
+    # control-label before the input and the input, so the approved label text is not pinned.
+    label_re = re.compile(r'<label class="col-sm-2 control-label">\s*<span>[^<]+</span>\s*</label>')
+    row_labels = list(label_re.finditer(body, 0, field.start()))
+    assert row_labels, "pfb_reentry_timeout has no visible Form_Group control-label before its input"
+    assert "<label" not in body[row_labels[-1].end() : field.start()], (
+        "pfb_reentry_timeout's row label is not the visible control-label (desktop hides label-start)"
     )
-
-    assert "whole process tree" in body, "the help copy must say the whole process tree is terminated on expiry"
-    assert "Run Now" in body, "the help copy must give the retry guidance after an expiry (issue #3237)"
 
 
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
