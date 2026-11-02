@@ -619,7 +619,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 		endforeach;
 }
 
-// Breadcrumb label for the active sub-tab type.
+// Display labels for the feed types.
 $type_label = array('ipv4' => 'IPv4', 'ipv6' => 'IPv6', 'dnsbl' => 'DNSBL');
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'), gettext($type_label[$gtype]));
@@ -722,7 +722,7 @@ print ($section);
 			if (is_array($feed_count)) {
 				print ("<strong>Number of Feeds per Category Type:</strong><dl class=\"dl-horizontal\">");
 				foreach ($feed_count as $type => $count) {
-					print ("<dt>" . strtoupper(htmlspecialchars($type)) . ":</dt><dd>" . htmlspecialchars($count) . "</dd>");
+					print ("<dt>" . htmlspecialchars($type_label[$type] ?? strtoupper($type)) . ":</dt><dd>" . htmlspecialchars($count) . "</dd>");
 				}
 				print ("</dl>");
 			}
@@ -762,7 +762,7 @@ print ($section);
 						<dd><?=gettext('Subscription required to access Feed');?></dd>
 				</dl>
 			</div>
-			<br /><strong><u>Disclaimer</u>: Use of the Feed(s) below are at your own risk!</strong>
+			<p><strong>Disclaimer:</strong> Use feeds at your own risk.</p>
 		</div>
 	</div>
 	<br />
