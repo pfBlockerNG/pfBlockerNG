@@ -224,8 +224,8 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 	// wait or the handshake budget, whichever is shorter. Only the query read is bounded: Unbound still has g.timeout.
 	_ = s.SetReadDeadline(time.Now().Add(min(g.timeout, g.handshake)))
 	wire, ok := readDoQQuery(s)
-	// RemoteAddr is the path this stream's bytes arrived on. A path can change during the read, so the address is read
-	// once the read ends, and the ACL judges it before the stream is parsed or dropped as malformed.
+	// The connection's current path, read once the read ends. A path change during the read is judged here, before the
+	// stream is parsed or dropped as malformed.
 	src, dst := proxyEndpoints(addrPortOf(conn.RemoteAddr()), local)
 	if g.acl.Lookup(src.Addr()) == ACLDrop {
 		doqHangUp(conn, s)
