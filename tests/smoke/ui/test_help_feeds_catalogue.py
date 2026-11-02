@@ -14,9 +14,8 @@ structure rather than prose:
 - a feed status icon names the status it reports (``discontinued`` or
   ``suspended``), not a generic "temporarily unavailable".
 
-Discontinued feeds are removed from the picker (``pfblockerng.inc``), so their
-tooltip never reaches a rendered page. Its catalogue-level invariants are pinned in
-``tests/php/FeedsCatalogueTooltipTest.php``. This module is read-only and writes no
+Discontinued feeds are removed from the picker, so their unused tooltip text is
+not part of this rendered-page coverage. This module is read-only and writes no
 config.
 """
 
