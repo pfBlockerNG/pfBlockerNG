@@ -183,7 +183,8 @@ def test_timed_parent_signal_kills_worker_process_group(tmp_path: Path) -> None:
             "    raise KeyboardInterrupt(f'signal {signum}')",
             "signal.signal(signal.SIGTERM, interrupted)",
             "worker = 'import os,pathlib,sys,time; "
-            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(300)'",
+            'path=pathlib.Path(sys.argv[1]); pending=path.with_suffix(".tmp"); '
+            "pending.write_text(str(os.getpid())); pending.replace(path); time.sleep(300)'",
             "time_bin = '/usr/bin/time'",
             "try:",
             "    bench._run_timed([sys.executable, '-c', worker, sys.argv[2]], "
