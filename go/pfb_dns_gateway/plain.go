@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -353,8 +354,9 @@ func (g *gateway) handshakeTLS(tc *tls.Conn) bool {
 // (RFC 7766 6.2.1.1). Unbound is asked over UDP, as a DoH or DoQ client's query is; a truncated reply is asked again
 // over the connection's own Unbound TCP connections. At the limit the connection is not read until a query is
 // answered. A client that closes its sending side between frames still gets its answers before the connection is
-// closed; any other read error, or a reply that cannot be written, abandons what is in flight. The slot was taken at
-// accept, so the TLS handshake (bounded by g.handshake) happens inside it.
+// closed, and so does one whose next read hits the idle timeout while a query is still running. Any other read
+// error, a timeout with nothing running, or a reply that cannot be written, abandons what is in flight. The slot
+// was taken at accept, so the TLS handshake (bounded by g.handshake) happens inside it.
 func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls.Config) {
 	defer g.wg.Done()
 	defer func() {
@@ -400,8 +402,9 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	ctx, cancel := context.WithCancel(g.ctx)
 	var (
 		handlers sync.WaitGroup
-		wmu      sync.Mutex // frames are written one at a time, each by one Write
-		broken   bool       // a reply could not be written; guarded by wmu
+		running  atomic.Int32  // handlers still inside resolve or its write
+		wmu      sync.Mutex   // frames are written one at a time, each by one Write
+		broken   bool         // a reply could not be written; guarded by wmu
 		slots    = make(chan struct{}, connPipeline)
 	)
 	defer func() { // the handlers end before the stream closes: a Close during a Write sends no close_notify
@@ -426,7 +429,10 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		}
 		wire, err := g.readQuery(ctx, stream)
 		if err != nil {
-			if errors.Is(err, io.EOF) { // the client half-closed after its last frame: what it asked is still owed an answer
+			// EOF still waits: the client half-closed, and what it asked is owed an answer. An idle timeout
+			// with a query still running and the context live waits too; the defer would cancel that query.
+			// A context that already ended, or a timeout with nothing running, still drops the connection.
+			if errors.Is(err, io.EOF) || (readTimedOut(err) && ctx.Err() == nil && running.Load() > 0) {
 				handlers.Wait()
 			}
 			return
@@ -441,8 +447,10 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 			<-slots
 		case toDecider:
 			handlers.Add(1)
+			running.Add(1)
 			go func() {
 				defer handlers.Done()
+				defer running.Add(-1)
 				defer func() { <-slots }()
 				if reply := g.resolve(ctx, src.Addr(), false, wire, fwd); reply != nil {
 					write(reply)
@@ -476,6 +484,13 @@ func (g *gateway) readFull(ctx context.Context, conn net.Conn, buf []byte) error
 	}
 	_, err := io.ReadFull(conn, buf)
 	return err
+}
+
+// readTimedOut is a read deadline. Stopping the connection also moves that deadline back; the caller uses the
+// context to tell an idle client from one that is already gone.
+func readTimedOut(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // writeReply gives a client that never reads one idle timeout, then gives up on it.

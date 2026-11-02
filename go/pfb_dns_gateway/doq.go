@@ -69,14 +69,18 @@ func (c *doqConns) closeAll() {
 	wg.Wait()
 }
 
-// doqQUICConfig is the listener config: the stream cap and idle timeout, a receive window of one DNS message per
-// stream, enough of them for every stream the connection may hold, and an explicit HandshakeIdleTimeout: an
-// admitted connection holds its slot until the handshake finishes or this idle timeout.
+// doqQUICConfig is the listener config, one for every connection. A keepalive would also keep a finished
+// connection up, so it is not set. The idle timeout is the resolve budget when that is longer than
+// doqIdleTimeout, and doqIdleTimeout otherwise: an in-flight query is not cut off, and a quiet connection
+// still ends. The stream cap, a receive window of one DNS message per stream, enough of them for every
+// stream the connection may hold, and an explicit HandshakeIdleTimeout: an admitted connection holds its
+// slot until the handshake finishes or this idle timeout.
 func (g *gateway) doqQUICConfig() *quic.Config {
+	budget := 2*g.timeout + g.grace
 	return &quic.Config{
 		MaxIncomingStreams:             maxDoQStreams,
 		MaxIncomingUniStreams:          -1,
-		MaxIdleTimeout:                 doqIdleTimeout,
+		MaxIdleTimeout:                 max(doqIdleTimeout, budget),
 		HandshakeIdleTimeout:           g.doqHandshakeIdle,
 		InitialStreamReceiveWindow:     doqStreamReceiveWindow,
 		MaxStreamReceiveWindow:         doqStreamReceiveWindow,
