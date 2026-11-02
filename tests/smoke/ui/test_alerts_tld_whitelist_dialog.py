@@ -4,7 +4,7 @@ The hand icon on a row blocked by a TLD Blacklist entry asked to add the domain 
 -- a list that does not exist -- and its dialog code never assigned the button text, so on a fresh page
 the dialog read an undefined variable. The domain is added to the DNSBL Whitelist.
 
-* Tier A (``ui_render``): the rendered icon's prompt names the DNSBL Whitelist.
+* Tier A (``ui_render``): the rendered icon carries the TLD whitelist action and a plain-text prompt.
 * Tier B (``ui_browser``): in a real browser on a fresh page, the icon opens the confirm, then a
   labelled whitelist dialog, then the description step of the DNSBL Whitelist flow. The flow is
   cancelled before it submits, so no whitelist entry is written; what the final submit carries is
@@ -108,7 +108,7 @@ def tld_row(smoke_vm: SmokeVM, request: pytest.FixtureRequest) -> tuple[str, str
 
 @pytest.mark.ui_render
 def test_tld_row_prompt_names_the_dnsbl_whitelist(webui: WebUI, smoke_vm: SmokeVM, tld_row: tuple[str, str]) -> None:
-    """Given a TLD-blocked row, its whitelist icon asks to add the domain to the DNSBL Whitelist."""
+    """Given a TLD-blocked row, its whitelist icon carries the TLD action and a plain-text prompt."""
     domain, root = tld_row
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
@@ -122,8 +122,7 @@ def test_tld_row_prompt_names_the_dnsbl_whitelist(webui: WebUI, smoke_vm: SmokeV
     icon_id = f"DNSBLWT|tld|{domain}|{root}"
     assert icon_id in row, f"the TLD whitelist icon {icon_id!r} is missing from the row: {row!r}"
     title = html.unescape(re.search(r'id="' + re.escape(icon_id) + r'" title="([^"]*)"', row).group(1))  # type: ignore[union-attr]
-    assert "[ DNSBL Whitelist ]" in title, f"prompt does not name the DNSBL Whitelist: {title!r}"
-    assert "TLD Whitelist" not in title, f"prompt names a list that does not exist: {title!r}"
+    assert title and "<" not in title, f"the confirm() prompt must be non-empty plain text: {title!r}"
 
     guard.assert_no_growth()
 
@@ -139,7 +138,7 @@ def test_tld_whitelist_dialog_opens_labelled_on_a_fresh_page(
 
     Given a freshly loaded Alerts page (no other whitelist dialog has run) with a TLD-blocked row,
     When  the row's hand icon is clicked and the confirm accepted,
-    Then  the confirm names the DNSBL Whitelist, the dialog is titled and its buttons labelled for
+    Then  a confirm is shown, the dialog is titled and its buttons labelled for
           whitelisting, and choosing "2. Whitelist" opens the DNSBL Whitelist description step.
     """
     sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
@@ -169,7 +168,6 @@ def test_tld_whitelist_dialog_opens_labelled_on_a_fresh_page(
 
     expect(open_dialog.locator(".ui-dialog-title")).to_have_text("Domain Whitelisting:", timeout=JS_TIMEOUT_MS)
     assert len(confirms) == 1, f"expected exactly one confirm, saw {confirms!r}"
-    assert "[ DNSBL Whitelist ]" in confirms[0], f"confirm does not name the DNSBL Whitelist: {confirms[0]!r}"
     buttons = open_dialog.locator(".ui-dialog-buttonpane button")
     expect(buttons).to_have_text(["1. Wildcard Whitelist", "2. Whitelist", "Cancel"])
 

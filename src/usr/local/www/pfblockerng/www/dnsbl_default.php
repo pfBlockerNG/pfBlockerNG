@@ -135,7 +135,7 @@
 				<caption>This website <span style="color: #FF0000; font-weight: bold;"><?=$ptype['HTTP_HOST']?></span> has been blocked by the Network Administrator!</caption>
 
 				<?php if ($ts == 'M d'): ?>
-				<div>The Evaluated Domain is uncertain, refer to the DNSBL Reports tab for more details</div>
+				<div>The evaluated domain is uncertain. Network administrators can see more details under <strong>Reports</strong> &gt; <strong>Alerts</strong>.</div>
 				<?php endif; ?>
 
 				<thead>

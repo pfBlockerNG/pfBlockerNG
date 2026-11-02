@@ -216,7 +216,7 @@ if (typeof window !== 'undefined') {
 
 		$('[id^=pfblockerngclearicon]').click(function(event) {
 			$('<div></div>').appendTo('body')
-			.html('<div><h6>Select which Packet Counts to clear:</h6><small>Note: Selecting \'IP\' will clear all pfSense counters.</small></div>')
+			.html('<div><p>Select the packet counters to clear.</p><p><span class="text-danger"><strong>Warning:</strong></span> Selecting <strong>IP</strong> clears all pfSense counters.</p></div>')
 			.dialog({
 				modal: true,
 				autoOpen: true,

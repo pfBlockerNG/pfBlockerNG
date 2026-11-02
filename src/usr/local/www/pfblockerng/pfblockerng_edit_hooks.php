@@ -173,8 +173,7 @@ $section = new Form_Section('Load an Existing Hook Script');
 $section->addInput(new Form_StaticText(
 	'About',
 	'<small>' . gettext('Use the pencil to load a script into the editor, or the trash can to delete it. ' .
-		'Only files already present in the hook-script folder are listed here -- the same picker model ' .
-		'as the Hooks tab.') . '</small>'
+		'Only files already in the hook-script folder are listed, as on <strong>Hooks</strong>.') . '</small>'
 ));
 
 // issue #1871: one table per Pre/Post instead of a run of inline links, matching the
@@ -182,7 +181,8 @@ $section->addInput(new Form_StaticText(
 // The name is a plain cell and the actions are explicit buttons, so "load" is no longer
 // hidden behind clicking the name -- and there is somewhere for delete to live, which the
 // page previously had no way to offer at all.
-foreach (array('pre' => gettext('Pre'), 'post' => gettext('Post')) as $pfb_eh_when_key => $pfb_eh_when_label) {
+$pfb_eh_when_labels = array('pre' => gettext('Pre'), 'post' => gettext('Post'));
+foreach ($pfb_eh_when_labels as $pfb_eh_when_key => $pfb_eh_when_label) {
 	// pfb_hook_scripts() is the SAME allow-list function the Hooks tab picker, the
 	// delete handler and the runner use -- basenames only, never a path.
 	$pfb_eh_scripts = pfb_hook_scripts($pfb_eh_when_key);
@@ -255,7 +255,7 @@ $group->add(new Form_Select(
 	'pfb_eh_new_when',
 	NULL,
 	$pfb_eh_new_when_val,
-	array('pre' => gettext('Pre'), 'post' => gettext('Post'))
+	$pfb_eh_when_labels
 ))->setHelp('When')->setWidth(2);
 $group->add(new Form_Input(
 	'pfb_eh_new_core',
@@ -300,7 +300,8 @@ $form->add($section);
 // (pfb_hook_script_valid()) regardless of what a crafted POST claims.
 $section = new Form_Section('Editor');
 $pfb_eh_loaded_label = ($pfb_eh_sel_script !== '')
-	? sprintf(gettext('Editing <strong>%1$s</strong> (%2$s)'), htmlspecialchars($pfb_eh_sel_script), htmlspecialchars($pfb_eh_sel_when))
+	? sprintf(gettext('Editing <code>%1$s</code> (<strong>%2$s</strong>)'), htmlspecialchars($pfb_eh_sel_script),
+		htmlspecialchars($pfb_eh_when_labels[$pfb_eh_sel_when] ?? $pfb_eh_sel_when))
 	: gettext('Load an existing script above, or create a new one, to start editing.');
 $section->addInput(new Form_StaticText('Now editing', $pfb_eh_loaded_label));
 
@@ -333,7 +334,7 @@ $pfb_eh_textarea->removeClass('form-control')
 	->setAttribute('style', 'width: 100%; font-family: monospace;')
 	->setHelp(gettext('Saved as typed, except line endings are normalized to LF, trailing whitespace is ' .
 		'stripped from each line, and control characters other than tab are removed -- write a literal ' .
-		'control byte as an escape (e.g. \\033) instead.'));
+		'control byte as an escape (e.g. <code>\\033</code>) instead.'));
 $section->addInput($pfb_eh_textarea);
 
 // Named pfb_eh_save directly -- same native-submit reasoning as the Create button

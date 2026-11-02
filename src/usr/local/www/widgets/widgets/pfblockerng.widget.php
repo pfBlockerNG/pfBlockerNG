@@ -49,7 +49,7 @@ pfb_global();
 // Image source definition
 $pfb['down']	= '<i class="fa-solid fa-turn-down" title="No Rules are Defined using this Alias"></i>';
 $pfb['up']	= '<i class="fa-solid fa-turn-up text-success" title="Rules are Defined using this Alias (# of fw rules defined)"></i>';
-$pfb['err']	= '<i class="fa-solid fa-minus-circle text-danger" title="pf Errors found."></i>';
+$pfb['err']	= '<i class="fa-solid fa-minus-circle text-danger" title="Firewall errors found for this alias."></i>';
 
 // Widget customizations
 $wglobal_array = array ('popup' => 'off', 'sortcolumn' => 'none', 'sortmix' => 'off', 'sortdir' => 'asc',
@@ -546,7 +546,7 @@ function pfBlockerNG_get_header($mode='') {
 			// would otherwise be misclassified as the dedup-sanity sentinel entry.
 			$pfb_ip_other	= array_filter($pfb_ip_open, fn ($entry) => $entry['stage'] !== 'dedup');
 			$pfb_msg	= empty($pfb_ip_other)
-				? 'pfBlockerNG deDuplication is out of sync. Run an Update with Force: Parse to correct.'
+				? 'pfBlockerNG deDuplication is out of sync. Use \'Run Now\' on \'Update\' with \'Force\' set to \'Parse\' to correct.'
 				: sprintf('pfBlockerNG has %d open issue(s). See the Failed Downloads list below.', count($pfb_ip_open));
 		}
 	} else {
@@ -603,7 +603,7 @@ function pfBlockerNG_get_header($mode='') {
 			$stats[$key][$type] = 0;
 			if ($type == 'DNSBL') {
 				if (isset($pfb['dnsbl_missing'])) {
-					$stats[$key][$type] = "<span title=\"*** SQLite database 'pfb_py_dnsbl.sqlite' is missing; run an Update with Run Scope: DNSBL (Force: Parse) to recover! ***\">Unknown</span>";
+					$stats[$key][$type] = "<span title=\"*** SQLite database 'pfb_py_dnsbl.sqlite' is missing; use 'Run Now' on 'Update' with 'Run Scope' set to 'DNSBL' and 'Force' set to 'Parse' to recover! ***\">Unknown</span>";
 				} else {
 					$stats[$key][$type] = htmlspecialchars($pfb_table['stats']['DNSBL'] ?? '');
 				}
@@ -787,14 +787,14 @@ function pfBlockerNG_get_header($mode='') {
 		// Update titles
 		print("Deny||Number of BLOCK & REJECT packet(s) blocked: {$stats[0]['Deny']}_BR_Total Count: {$counts['Deny']}"
 			. "_BR_Last clear: {$ip_last_clear}||title\n");
-		print("Pass||Number of PASS packet(s) passed: {$stats[0]['Pass']}_BR_Total Count: {$counts['Pass']}"
+		print("Pass||Number of PERMIT packet(s) passed: {$stats[0]['Pass']}_BR_Total Count: {$counts['Pass']}"
 			. "_BR_Last clear: {$ip_last_clear}||title\n");
 		print("Match||Number of MATCH packet(s) matched: {$stats[0]['Match']}_BR_Total Count: {$counts['Match']}"
 			. "_BR_Last clear: {$ip_last_clear}||title\n");
 
 		// Don't add DNSBL title if entry is "Unknown"
 		if (!isset($pfb['dnsbl_missing'])) {
-			print("DNSBL||Number of DNSBL Packet(s) blocked: {$stats[1]['DNSBL']}_BR_Total Count: {$counts['DNSBL']}"
+			print("DNSBL||DNSBL blocks: {$stats[1]['DNSBL']}_BR_Total Count: {$counts['DNSBL']}"
 				. "_BR_Last clear: {$dnsbl_last_clear}||title\n");
 			print("Queries||Number of Unbound Resolver Queries since last clearing_BR_Last clear: {$dnsbl_last_clear}\n");
 		}
@@ -819,7 +819,7 @@ function pfBlockerNG_get_header($mode='') {
 		$titles = array ( array (	'Deny'		=> "Number of BLOCK & REJECT packet(s) blocked: {$stats[0]['Deny']}"
 									. "\nTotal Count: {$counts['Deny']}"
 									. "\nLast clear: {$ip_last_clear}",
-						'Pass'		=> "Number of PASS packet(s) passed: {$stats[0]['Pass']}"
+						'Pass'		=> "Number of PERMIT packet(s) passed: {$stats[0]['Pass']}"
 									. "\nTotal Count: {$counts['Pass']}"
 									. "\nLast clear: {$ip_last_clear}",
 						'Match'		=> "Number of MATCH packet(s) matched: {$stats[0]['Match']}"
@@ -827,7 +827,7 @@ function pfBlockerNG_get_header($mode='') {
 									. "\nLast clear: {$ip_last_clear}",
 						'Suppression'	=> 'Number of IP entries in the Suppression List'),
 
-				 array (	'DNSBL'		=> "Number of DNSBL Packet(s) blocked: {$stats[1]['DNSBL']}"
+				 array (	'DNSBL'		=> "DNSBL blocks: {$stats[1]['DNSBL']}"
 									. "\nTotal Count: {$counts['DNSBL']}"
 									. "\nLast clear: {$dnsbl_last_clear}",
 						'Queries'	=> 'Number of Unbound Resolver Queries since last clearing'
@@ -876,7 +876,7 @@ function pfBlockerNG_get_header($mode='') {
 			// Print 'Click to Open Logs tab' icon
 			if ($key == 0) {
 				print("{$tab5}<td>\n{$tab6}<a target='_blank' rel='noopener noreferrer' href='pfblockerng/pfblockerng_log.php' "
-					. "title='" . gettext("Click to open Logs tab") . "'>\n{$tab7}<i class='fa-regular fa-rectangle-list'></i>\n{$tab5}</a></td>\n"
+					. "title='" . gettext('Open "Logs"') . "'>\n{$tab7}<i class='fa-regular fa-rectangle-list'></i>\n{$tab5}</a></td>\n"
 					. "{$tab4}</tr>");
 			}
 			elseif ($key == 1) {
@@ -922,7 +922,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 				// Packet column pivot to Alerts Tab
 				if ($values['packets'] > 0) {
 					$packets  = "<a href=\"/pfblockerng/pfblockerng_alerts.php?filterdnsbl={$pfb_alias}\" ";
-					$packets .= "target=\"_blank\" rel=\"noopener noreferrer\" title=\"Click to view these packets in Alerts tab\" >{$values['packets']}</a>";
+					$packets .= "target=\"_blank\" rel=\"noopener noreferrer\" title=\"Open &quot;Reports&quot; &gt; &quot;Alerts&quot;\" >{$values['packets']}</a>";
 				} else {
 					$packets = $values['packets'] ?: 0;
 				}
@@ -941,7 +941,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 				// Packet column pivot to Alerts Tab
 				if ($values['packets'] > 0) {
 					$packets  = "<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/pfblockerng/pfblockerng_alerts.php?filterip={$pfb_alias}\" ";
-					$packets .= "title=\"Click to view these packets in Alerts tab\" >{$values['packets']}</a>";
+					$packets .= "title=\"Open &quot;Reports&quot; &gt; &quot;Alerts&quot;\" >{$values['packets']}</a>";
 				}
 				else {
 					$packets = $values['packets'] ?: 0;

@@ -118,7 +118,7 @@ final class UpdateRunNowScheduleOwnershipTest extends TestCase
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_update.php');
 		$this->assertIsString($source);
 		$start = strpos($source, '$pfb_tick_min = 15;');
-		$end = strpos($source, "\n\$status = 'NEXT Scheduled CRON Event", $start);
+		$end = strpos($source, "\n\$status = ", $start);
 		$this->assertNotFalse($start);
 		$this->assertNotFalse($end);
 		eval(substr($source, $start, $end - $start));

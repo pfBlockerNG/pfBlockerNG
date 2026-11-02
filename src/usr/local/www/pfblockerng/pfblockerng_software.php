@@ -128,7 +128,7 @@ if ($input_errors) {
 // It names the CONTROL the admin pressed, which distinguishes it from the Status row's
 // standing-state help below; the two must not share a sentence.
 if (($_GET['check'] ?? '') === 'failed') {
-	print_info_box(gettext('Check now could not read the pfBlockerNG repository catalogue. The versions below are from the last check that succeeded.'), 'warning');
+	print_info_box(gettext('<strong>Check now</strong> could not read the pfBlockerNG repository catalogue. The versions below are from the last check that succeeded.'), 'warning');
 }
 
 // Tab bar (the Software tab is the active one here; gated like every page).

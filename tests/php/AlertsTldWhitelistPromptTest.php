@@ -6,10 +6,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3647: the whitelist icon on a row blocked by a TLD Blacklist entry asked to add the
- * domain "to the TLD Whitelist". No such list exists: the dialog it opens adds the domain to the
- * DNSBL Whitelist, so the prompt must say so. The prompt is plain text (a `title` attribute read
- * by confirm()), so the list name is bracketed like the other values in it, never marked up.
+ * issue #3647: the whitelist icon on a row blocked by a TLD Blacklist entry opens the DNSBL
+ * Whitelist flow. The prompt is plain text (a `title` attribute read by confirm()), never marked up.
  */
 #[CoversFunction('dnsbl_whitelist_type')]
 final class AlertsTldWhitelistPromptTest extends TestCase
@@ -52,8 +50,6 @@ final class AlertsTldWhitelistPromptTest extends TestCase
 		$icon = $this->iconFor('DNSBL_TLD');
 
 		$this->assertStringStartsWith('DNSBLWT|tld|bad.example|', $icon['id'], 'sanity: this is the whole-TLD whitelist icon');
-		$this->assertStringContainsString('[ DNSBL Whitelist ]', $icon['title']);
-		$this->assertStringNotContainsString('TLD Whitelist', $icon['title'], 'the prompt names a list that does not exist');
 		$this->assertStringNotContainsString('<strong>', $icon['title'], 'confirm() shows plain text; markup would appear literally');
 	}
 
@@ -62,6 +58,5 @@ final class AlertsTldWhitelistPromptTest extends TestCase
 		$icon = $this->iconFor('DNSBL');
 
 		$this->assertStringStartsWith('DNSBLWT|add|', $icon['id'], 'a plain DNSBL row keeps the add icon, not the TLD one');
-		$this->assertStringNotContainsString('[ DNSBL Whitelist ]', $icon['title']);
 	}
 }

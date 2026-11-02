@@ -1450,10 +1450,10 @@ if (isset($_POST) && !empty($_POST)) {
 						@unlink($flush_zone_file);
 						if ($flush_zone_status === 124) {
 							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone TIMED OUT (killed); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
-							$savemsg .= " The wildcard removal was saved, but the resolver cache flush TIMED OUT (killed after 30s) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' (Run Scope: DNSBL, Force: Parse) on the Update tab or run 'unbound-control flush_zone' to clear them.";
+							$savemsg .= " The wildcard removal was saved, but the resolver cache flush TIMED OUT (killed after 30s) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' on 'Update' with 'Run Scope' set to 'DNSBL' and 'Force' set to 'Parse', or run 'unbound-control flush_zone' to clear them.";
 						} elseif ($flush_zone_status !== 0) {
 							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone FAILED (exit {$flush_zone_status}); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
-							$savemsg .= " The wildcard removal was saved, but the resolver cache flush FAILED (exit {$flush_zone_status}) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' (Run Scope: DNSBL, Force: Parse) on the Update tab or run 'unbound-control flush_zone' to clear them.";
+							$savemsg .= " The wildcard removal was saved, but the resolver cache flush FAILED (exit {$flush_zone_status}) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' on 'Update' with 'Run Scope' set to 'DNSBL' and 'Force' set to 'Parse', or run 'unbound-control flush_zone' to clear them.";
 						}
 					} else {
 						pfb_unbound_py_ccache_flush(array($entry));
@@ -2146,7 +2146,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		$h_wt_line = pfb_hsc($wt_line);
 		$s_txt  = "Note:&emsp;The following Domain is in the TLD Exclusion customlist:\n\n"
 			. "TLD Exclusion:&emsp;[ {$h_wt_line} ]\n\n"
-			. "&#8226; TLD Exclusions require a DNSBL reload when a Domain is initially added: run 'Run Now' (Run Scope: DNSBL or Both) on the Update tab.\n"
+			. "&#8226; A Domain newly added to TLD Exclusion takes effect at the next DNSBL update: use 'Run Now' on 'Update' with 'Run Scope' set to 'DNSBL' or 'Both'.\n"
 			. "&#8226; To remove this Domain from the TLD Exclusion customlist, Click 'OK'";
 
 		$ex_dom = '&nbsp;<i class="fa-regular fa-trash-can no-confirm icon-pointer" id="DNSBLWT|'
@@ -2156,7 +2156,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 	$supp_dom = $s_txt = '';
 	// Default Whitelist text for DNSBL/TLD domains
 	if ($isTLD) {
-		$s_txt  = "Note:&emsp;The following Domain was Wildcard blocked via TLD.\n\n"
+		$s_txt  = "Note:&emsp;The following Domain was blocked by Wildcard Blocking.\n\n"
 			. "Blocked Domain:&emsp;&emsp;[ {$h_f2} ]\n"
 			. "Evaluated Domain:&emsp;&nbsp;[ {$h_f7} ]\n\n"
 			. "DNSBL Groupname:&emsp;[ {$h_f6} ]\n"
@@ -2165,7 +2165,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		$s_txt .= "Whitelist [ {$h_f2} ]\n\n"
 			. "Note:&emsp;This will immediately remove the blocked Domain\n"
 			. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n"
-			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in Alert settings\n"
+			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in 'Alert Settings' on 'Reports'\n"
 			. "&emsp;&emsp;&emsp;&nbsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
 			. "Whitelisting Options:\n\n"
 			. "1) Wildcard whitelist [ .{$h_f2} ]\n"
@@ -2175,7 +2175,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		$s_txt = "Whitelist [ {$h_f2} ]\n\n"
 			. "Note:&emsp;This will immediately remove the blocked Domain\n"
 			. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n"
-			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in Alert settings\n"
+			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in 'Alert Settings' on 'Reports'\n"
 			. "&emsp;&emsp;&emsp;&nbsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
 			. "Whitelisting Options:\n\n"
 			. "1) Wildcard whitelist [ .{$h_f2} ]\n"
@@ -2264,10 +2264,10 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 
 	// Whole TLD is blocked
 	else {
-		$s_txt  = "Note:&emsp;The following Domain was blocked via 'DNSBL TLD' (TLD Blacklist):\n\n"
+		$s_txt  = "Note:&emsp;The following Domain was blocked by a 'TLD Blacklist' entry:\n\n"
 			. "Blocked Domain:&emsp;&emsp;[ {$h_f2} ]\n"
 			. "Evaluated Domain:&emsp;&nbsp;[ {$h_f7} ]\n\n"
-			. "Add [ {$h_f2} ] to the [ DNSBL Whitelist ]?";
+			. "Add [ {$h_f2} ] to 'DNSBL Whitelist'?";
 
 		$supp_dom = '<i class="fa-regular fa-hand icon-pointer" id="DNSBLWT|' . 'tld|'
 			. $h_f2 . '|' . $h_f7 . '" title="' . $s_txt . '"></i>';
@@ -2550,8 +2550,7 @@ function convert_dnsbl_log($mode, $fields) {
 	$unlock_dom = '&nbsp;&nbsp;&nbsp;';
 
 
-	$tnote = "\n\nNote:&emsp;&#8226; Unlocking Domain(s) is temporary and may be automatically\n"
-		. "&emsp;&emsp;&emsp;&emsp;re-locked on a Cron or Force command with an Unbound Reload!\n"
+	$tnote = "\n\nNote:&emsp;&#8226; Unlocking is temporary; the next update locks the Domain again.\n"
 		. "&emsp;&emsp;&emsp;&nbsp;&#8226; Review Threat Source ( i ) Icon for Domain details.\n"
 		. "&emsp;&emsp;&emsp;&nbsp;&#8226; Clear your Browser and OS cache after each Lock/Unlock!";
 
@@ -3136,11 +3135,11 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 
 						. "Whitelisting Options:\n\n"
 						. "1) Suppress the IP. This will immediately remove the IP\n"
-						. "&emsp;and keep the IP suppressed until its removed from the customlist\n\n"
+						. "&emsp;and keep the IP suppressed until it's removed from the customlist\n\n"
 						. "2) Whitelist the IP to an existing 'Permit' Alias customlist. Ensure that this\n"
 						. "&emsp;Permit Alias/Rule is above the Block/Reject rules (Rule Order option)\n\n"
 						. "&emsp;If no 'Whitelist' is found, a default 'Whitelist' will be created.\n"
-						. "&emsp;A forced IP reload is required to add the associated Firewall Permit Rule: run 'Run Now' (Run Scope: IP, Force: Parse) on the Update tab!\n\n"
+						. "&emsp;A forced IP reload is required to add the associated Firewall Permit Rule: use 'Run Now' on 'Update' with 'Run Scope' set to 'IP' and 'Force' set to 'Parse'.\n\n"
 						. "Click 'OK' to continue";
 
 				$supp_ip = '<i class="fa-solid fa-plus icon-pointer" id="PFBIPSUP|' . 'add|' . $h_host
@@ -3170,8 +3169,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// row's table -- a host unlocked in another alias still shows the Unlock
 	// icon here.
 	if ($rtype == 'Block' && !$pfb_geoip) {
-		$tnote = "\n\nNote:\n&emsp;&emsp;&#8226; Unlocking IP(s) is temporary and may be automatically\n"
-			. "&emsp;&emsp;&emsp;re-locked on a Cron or Force command!\n"
+		$tnote = "\n\nNote:\n&emsp;&emsp;&#8226; Unlocking is temporary; the next update locks the IP again.\n"
 			. "&emsp;&emsp;&#8226; Review Threat Source ( i ) Icons for further IP details.";
 
 		if (($ip_unlock[$host] ?? NULL) !== $table) {
@@ -3209,7 +3207,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "&#8226; To permit access to this Blocked IP, you can add it to any\n"
 						. "&emsp;existing 'Permit' Alias.\n\n"
 						. "&emsp;If no 'Whitelist' is found, a default 'Whitelist' will be created.\n"
-						. "&emsp;A forced IP reload is required to add the associated Firewall Permit Rule: run 'Run Now' (Run Scope: IP, Force: Parse) on the Update tab!\n\n"
+						. "&emsp;A forced IP reload is required to add the associated Firewall Permit Rule: use 'Run Now' on 'Update' with 'Run Scope' set to 'IP' and 'Force' set to 'Parse'.\n\n"
 						. "&#8226; Ensure that this Permit Alias/Rule is above the "
 						. "Block/Reject rules\n&emsp;(Rule Order option)\n\n"
 						. "Click 'OK' to continue";
@@ -3538,7 +3536,7 @@ $group->add(new Form_Checkbox(
 	NULL,
 	$alertrefresh === PfbToggle::On,
 	'on'
-))->setHelp('Auto&nbsp;Refresh')->setAttribute('title', 'Select to \'Auto-Refresh\' Alerts page every 60 seconds.');
+))->setHelp('Auto-Refresh')->setAttribute('title', 'Select to \'Auto-Refresh\' Alerts page every 60 seconds.');
 
 // Remove 'Save' button when Alert Filtering is enabled to avoid saving incorrect filter entries
 if (!$pfb['filterlogentries']) {
@@ -3707,7 +3705,7 @@ $group->add(new Form_Input(
 	'text',
 	$pfbchart1,
 	['placeholder' => '#0C6197']
-))->setHelp('Two-Tone<br />Zero Hour bar color')
+))->setHelp('<strong>Two-Tone</strong>: midnight bar color')
   ->setAttribute('style', "background: {$pfbchart1}; color: white;")
   ->setWidth(2);
 
@@ -3717,7 +3715,7 @@ $group->add(new Form_Input(
 	'text',
 	$pfbchart2,
 	['placeholder' => '#7A7A7A']
-))->setHelp('Two-Tone<br />Other Hour bar color')
+))->setHelp('<strong>Two-Tone</strong>: other-hour bar color')
   ->setAttribute('style', "background: {$pfbchart2}; color: white;")
   ->setWidth(2);
 $section->add($group);
@@ -3922,7 +3920,7 @@ if (!$alert_summary && ($alert_title != 'DNS Reply')) {
 			'DNSBL - Domain',
 			'text',
 			$filterfieldsarray[1][8]
-		))->setAttribute('title', 'Enter filter \'Enter filter \'Domain\'.');
+		))->setAttribute('title', 'Filter by domain');
 
 		$group->add(new Form_Input(
 			'filterlogentries_dnsblsrcip',
@@ -4079,11 +4077,11 @@ if (!$alert_summary) {
 	$group = new Form_Group(NULL);
 	$group->add(new Form_StaticText(
 		'',
-		'( Save disabled during <strong>Apply Filter</strong>)'
+		'Saving is disabled while <strong>Apply Filter</strong> is active.'
 		. '&emsp;<div class="infoblock">'
-		. '<h6>Regex Style Matching Only! Do not prefix/suffix field with a backslash! <a href="https://regexr.com/" target="_blank" rel="noopener noreferrer">Regular Expression Help link</a>. '
-		. 'Precede with exclamation (!) as first character to exclude match.)</h6>'
-		. '<h6>Example: ( ^80$ - Match Port 80, ^80$|^8080$ - Match both port 80 & 8080 )</h6>'
+		. '<p>Filters use regular expressions (<a href="https://regexr.com/" target="_blank" rel="noopener noreferrer">regular expression help</a>). '
+		. 'Do not wrap a filter in backslashes. Prefix it with <code>!</code> to exclude matches.</p>'
+		. '<dl><dt><code>^80$</code></dt><dd>Match port 80.</dd><dt><code>^80$|^8080$</code></dt><dd>Match port 80 or 8080.</dd></dl>'
 		. '</div>'
 	));
 	$section->add($group);
@@ -4709,11 +4707,11 @@ if (!$alert_summary):
 		<dt><i class="fa-solid fa-info">&nbsp;</i></dt>
 			<dd><?=gettext('Links to Threat Source lookups');?></dd>
 		<dt><i class="fa-solid fa-plus"></i></dt>
-			<dd><?=gettext('Whitelist a IP/Domain');?></dd>
+			<dd><?=gettext('Whitelist an IP/Domain');?></dd>
 		<dt><i class="fa-solid fa-plus-circle"></i></dt>
-			<dd><?=gettext('Whitelist 1) A GeoIP or large CIDR IP or 2) A TLD Domain');?></dd>
+			<dd><?=gettext('Whitelist a GeoIP-blocked IP in a Permit list, or a domain blocked by <strong>Wildcard Blocking</strong>');?></dd>
 		<dt><i class="fa-regular fa-hand"></i></dt>
-			<dd><?=gettext('Domain is blocked by a whole TLD');?></dd>
+			<dd><?=gettext('Domain is blocked by a <strong>TLD Blacklist</strong> entry');?></dd>
 		<dt><i class="fa-solid fa-trash-can"></i></dt>
 			<dd><?=gettext('IP/Domain is already Whitelisted');?></dd>
 		<dt><i class="fa-regular fa-trash-can"></i></dt>
@@ -5092,7 +5090,7 @@ foreach ($stats as $stat_type => $stype):
 			<div>
 				&emsp;
 				<span class="text-warning" style="font-size:12px; background-color: #424242;"
-					title="Table limit reached! Setting can be modified in widget Alert Settings, but may slow page refresh time.">
+					title="Table limit reached! Change the limit in 'Alert Settings' on 'Reports'; a higher limit slows page refresh.">
 					<small>Displaying [ <?= $pfbmaxtable; ?> ] entries.</small>
 				</span>
 			</div>
@@ -5461,7 +5459,7 @@ function ip_suppression_type() {
 	// the enum raw is a page-killing fatal: not convertible to string).
 	var is_supp = "<?=($pfb['supp'] === PfbToggle::On ? 'on' : 'off')?>";
 	if (is_supp != 'on') {
-		alert('The IP Suppression option has not been enabled. Please enable this option in the IP Tab to suppress this IP.');
+		alert('Enable "Suppression" on "IP" to suppress this IP.');
 		return;
 	}
 
@@ -5540,10 +5538,10 @@ function select_whitelist(mode, permit_list) {
 
 	if (mode == 'ip') {
 		s_title = 'Whitelist';
-		d_title = 'Select a Permit Whitelist Alias:';
+		d_title = 'Select a Permit IP alias:';
 	} else {
-		s_title = 'DNSBL Customlist';
-		d_title = 'Select a DNSBL Customlist Group:';
+		s_title = 'DNSBL group Custom List';
+		d_title = 'Select the DNSBL group whose Custom List receives this domain:';
 	}
 
 	$('<div></div>').appendTo('body')

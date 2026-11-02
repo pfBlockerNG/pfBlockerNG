@@ -21,7 +21,7 @@
  */
 
 //set variables for custom title and link
-$pfblockerng_title = '<span title="Click to open Unified Log tab">pfBlockerNG</span>';
+$pfblockerng_title = '<span title="Open &quot;Reports&quot; &gt; &quot;Unified&quot;">pfBlockerNG</span>';
 $pfblockerng_title_link = 'pfblockerng/pfblockerng_alerts.php?view=unified';
 // issue #1777: pfSense dashboard widget-include convention (same family as
 // $widgetname/$pfblockerng_title above); the widget is a singleton (fixed POST

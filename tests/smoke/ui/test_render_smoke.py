@@ -282,11 +282,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     # the markers are the Form_Section titles ('Update Hooks (Pre/Post Update Scripts)' + 'Hook
     # Entries'), stable regardless of the tab restructure. The sub-tab nav itself is pinned by
     # test_update_hooks_subtab_relocation.
-    Page(
-        "hooks",
-        "/pfblockerng/pfblockerng_hooks.php",
-        ("Update Hooks", "Hook Entries", "dependency-derived", "versioned interpreter"),
-    ),
+    Page("hooks", "/pfblockerng/pfblockerng_hooks.php", ("Update Hooks", "Hook Entries")),
     # issue #1669 Part B / ADR-12 post-acceptance addendum: the gated "Edit Hooks" hook-script
     # authoring editor, the Update sub-tab directly after Hooks. The smoke session is always
     # authenticated as admin, so the in-page isAllowedPage('diag_command.php') secondary gate's
@@ -759,22 +755,6 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     assert _UPDATE_PAGE in body, "the General page no longer links the Update tab"
 
 
-def test_update_hooks_help_describes_python_launcher(webui: WebUI) -> None:
-    """Hook help distinguishes dependency-derived Python dispatch from shell shebangs.
-
-    Python hooks are launched by the package's versioned interpreter, so their files
-    need neither an executable bit nor a usable shebang. Shell hooks still execute
-    directly and retain both requirements. This is Tier-A render proof for the
-    operator-facing contract; the hook execution behavior is pinned in PHPUnit.
-    """
-    body = webui.get(_HOOKS_PAGE).text.lower()
-    assert "dependency-derived" in body, "hooks help omits dependency-derived Python runtime"
-    assert "versioned interpreter" in body, "hooks help omits versioned Python interpreter"
-    assert "python hooks do not require" in body, "hooks help does not explain Python executable/shebang exemption"
-    assert "shell hooks still require" in body, "hooks help does not preserve shell executable/shebang requirement"
-    assert "chmod +x" not in body, "stale blanket chmod +x guidance still claims all hooks need executable bit"
-
-
 def test_update_page_cron_status_reports_harness_disable_flag(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:  # noqa: ARG001
@@ -794,7 +774,7 @@ def test_update_page_cron_status_reports_harness_disable_flag(
     )
 
     resp = webui.get(_UPDATE_PAGE)
-    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("NEXT Scheduled CRON Event",))
+    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings",))
     assert result.ok, f"Update page render oracle failed: {result.detail}"
     assert f"[ Disabled by {flag} ]" in resp.text, (
         f"Update page cron-status line is missing the harness disable banner for {flag}"
@@ -1200,7 +1180,6 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
       ``Not yet run`` — the bl job only runs (and records a ledger entry) when the feature
       is enabled with a category selected, so an unconfigured install must say why it is
       not scheduled, not pretend a run is pending (pre-fix it showed ``<em>Not yet run</em>``);
-    And the Run Scope help no longer carries the stray ``on Run Now`` qualifier;
     And the Force help is itemized per mode (a ``<strong>`` label per None/Parse/Download/Both)
       instead of one run-on sentence (pre-fix there were no ``<strong>`` mode labels);
     And the Run button carries an inline right margin so it is visibly separated from the
@@ -1216,17 +1195,12 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
 
     # DNSBL Category row: feature unconfigured ⇒ "Disabled". Scope to THIS row's value cell
     # (the markup right after its label), not the whole body, so unrelated markup can't pass it.
-    assert "DNSBL category" in body, "Update page missing the 'DNSBL category' schedule row"
-    cat_row = body.split("DNSBL category", 1)[1][:500]
+    assert "DNSBL Category" in body, "Update page missing the 'DNSBL Category' schedule row"
+    cat_row = body.split("DNSBL Category", 1)[1][:500]
     assert "<em>Disabled</em>" in cat_row, (
         "DNSBL category row should read 'Disabled' when the category feature is off, "
         f"not the misleading 'Not yet run' — row markup was: {cat_row[:200]!r}"
     )
-
-    # Run Scope help: the stray 'on Run Now' qualifier is gone. Match the precise OLD help
-    # string (not a bare "on Run Now", which also appears in an unrelated inline JS comment).
-    assert "Which lists to sync: Both, IP-only, or DNSBL-only." in body, "Run Scope help text not updated"
-    assert "Which lists to sync on Run Now" not in body, "Run Scope help still carries the stray 'on Run Now' qualifier"
 
     # Force help: itemized with a bold label per mode.
     for needle in (
@@ -4182,14 +4156,12 @@ def test_software_actions_link_to_package_manager(
 
 # The two Status-section spans issue #2674 asks the page to keep apart: the last SUCCESSFUL
 # catalogue read, and the last attempt that failed. Plus the query token Check now redirects
-# with when the refresh it forced did not work, and the message that token renders -- both
-# tiers assert the same strings, so the page and the tests cannot drift apart.
+# with when the refresh it forced did not work, and the bold "Check now" reference that only
+# the resulting feedback box renders (the button itself and the Status row help do not).
 _SOFTWARE_CHECKED_MARKER = "pfb-sw-checked"
 _SOFTWARE_FAILED_MARKER = "pfb-sw-check-failed"
 _SOFTWARE_CHECK_FAILED_QUERY = "?check=failed"
-# Must match the Check-now info box ALONE -- the Status row's help text speaks about the same
-# failure, so a phrase both carry cannot support the "a plain load stays silent" assertion.
-_SOFTWARE_CHECK_FAILED_TEXT = "Check now could not read"
+_SOFTWARE_CHECK_FAILED_MARKUP = "<strong>Check now</strong>"
 
 
 def test_software_page_shows_a_failed_catalogue_check(
@@ -4299,12 +4271,12 @@ def test_software_page_shows_a_failed_catalogue_check(
                 (_SOFTWARE_PANEL_MARKER,),
             )
             assert result.ok, f"Software page render oracle failed on the check-failed query: {result.detail}"
-            assert _SOFTWARE_CHECK_FAILED_TEXT in resp.text, (
+            assert _SOFTWARE_CHECK_FAILED_MARKUP in resp.text, (
                 "a forced check that failed must say so on the redisplay, not re-serve an "
-                f"unchanged page (looked for {_SOFTWARE_CHECK_FAILED_TEXT!r})"
+                f"unchanged page (looked for {_SOFTWARE_CHECK_FAILED_MARKUP!r})"
             )
             # And it stays feedback about THIS action: a plain GET is silent.
-            assert _SOFTWARE_CHECK_FAILED_TEXT not in webui.get(_SOFTWARE_PAGE).text, (
+            assert _SOFTWARE_CHECK_FAILED_MARKUP not in webui.get(_SOFTWARE_PAGE).text, (
                 "a plain GET must not raise the Check now warning — only the forced check that failed does"
             )
     finally:

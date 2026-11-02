@@ -209,7 +209,7 @@ final class PfbWidgetOracleTest extends TestCase
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
 
 		$this->assertSame(self::ICON_YELLOW, $status);
-		$this->assertSame('pfBlockerNG deDuplication is out of sync. Run an Update with Force: Parse to correct.', $msg);
+		$this->assertStringContainsString("'Force' set to 'Parse'", $msg, 'the dedup branch names its Parse remedy');
 	}
 
 	public function testIpEnabledNonDedupEntryIsYellowRegardlessOfEnableDup(): void

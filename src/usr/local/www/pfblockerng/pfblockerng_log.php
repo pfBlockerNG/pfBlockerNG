@@ -168,7 +168,7 @@ $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						'download'	=> TRUE,
 						'clear'		=> FALSE
 						),
-			'dnsbl_safe'	=> array('name'		=> 'DNSBL Safe Search',
+			'dnsbl_safe'	=> array('name'		=> 'DNSBL SafeSearch',
 						'ext'		=> array('pfb_dnsbl*.conf'),
 						'logdir'	=> '/usr/local/pkg/pfblockerng/',
 						'download'	=> TRUE,
