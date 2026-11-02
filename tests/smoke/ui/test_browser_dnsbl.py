@@ -77,7 +77,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Locator, Page
+    from playwright.sync_api import BrowserContext, Locator, Page
 
     from .webui import WebUI
 
@@ -500,6 +500,74 @@ def test_idn_mode_select_gates_confusable_subtoggles(
 
 
 _IN_CLASS = re.compile(r"(^|\s)in(\s|$)")
+
+
+def test_dnsbl_webserver_defaults_closed_and_expands_without_changing_settings(
+    browser_context: BrowserContext,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """A fresh view hides the deprecated controls, but local and global toggles reveal them."""
+    browser = browser_context.browser
+    assert browser is not None, "the authenticated browser context must belong to a browser"
+    context = browser.new_context(ignore_https_errors=webui.base_url.startswith("https://"))
+    context.add_cookies(browser_context.cookies())
+    try:
+        page = context.new_page()
+        _open(page, webui, DNSBL_PAGE)
+        heading = page.locator(".panel-heading").filter(has_text="DNSBL Webserver Configuration")
+        expect(heading).to_be_visible(timeout=JS_TIMEOUT_MS)
+        panel = heading.locator("..")
+        body = panel.locator(".panel-body")
+        expect(body).to_be_attached(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "dnsbl_webserver_before_closed")
+        expect(body).to_be_hidden(timeout=JS_TIMEOUT_MS)
+
+        toggle = heading.locator('a[data-toggle="collapse"]')
+        expect(toggle).to_have_attribute("href", "#dnsbl_webserver_panel-body")
+        expect(body).to_have_attribute("id", "dnsbl_webserver_panel-body")
+        controls = panel.locator("input, select")
+        before = controls.evaluate_all(
+            "els => els.map(el => [el.name, el.value, el.checked, "
+            "el.tagName === 'SELECT' ? Array.from(el.selectedOptions, opt => opt.value) : null])"
+        )
+        interface = panel.locator("#dnsbl_interface")
+        webpage = panel.locator("#dnsbl_webpage")
+        notice = panel.get_by_text("The DNSBL WebServer/VIP response is deprecated:", exact=False)
+
+        toggle.click()
+        expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(panel.get_by_text("Web Server Interface", exact=True)).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(interface).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(interface).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        expect(webpage).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(webpage).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        expect(panel.locator("#pfb_dnsvip_auto")).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(notice).to_be_visible(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "dnsbl_webserver_after_expanded")
+
+        toggle.click()
+        expect(body).to_be_hidden(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "dnsbl_webserver_after_collapsed")
+        expand_all = page.locator("#pfb_expand_all")
+        expect(expand_all).to_have_text("Expand all", timeout=JS_TIMEOUT_MS)
+        expand_all.click()
+        expect(expand_all).to_have_text("Collapse all", timeout=JS_TIMEOUT_MS)
+        expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(interface).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(notice).to_be_visible(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "dnsbl_webserver_expand_all")
+        expand_all.click()
+        expect(body).to_be_hidden(timeout=JS_TIMEOUT_MS)
+        expect(expand_all).to_have_text("Expand all", timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "dnsbl_webserver_collapse_all")
+        after = controls.evaluate_all(
+            "els => els.map(el => [el.name, el.value, el.checked, "
+            "el.tagName === 'SELECT' ? Array.from(el.selectedOptions, opt => opt.value) : null])"
+        )
+        assert after == before, f"collapse toggles changed control values: before={before!r}, after={after!r}"
+    finally:
+        context.close()
 
 
 def test_expand_all_opens_then_collapses_every_form_panel(

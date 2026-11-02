@@ -411,6 +411,28 @@ def test_dnsbl_page_webserver_section_and_mechanism_help_announce_deprecation(we
 
 
 @pytest.mark.ui_render
+def test_dnsbl_webserver_panel_defaults_closed_but_retains_controls(webui: WebUI) -> None:
+    """The deprecated webserver stays reachable without occupying the initial view."""
+    resp = webui.get(DNSBL_PAGE)
+    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
+    section = _panel_html(resp.text, "DNSBL Webserver Configuration")
+    body = re.search(r'<div\b[^>]*\bclass="([^"]*\bpanel-body\b[^"]*)"', section)
+    assert body is not None, "the rendered webserver panel must retain its body"
+    classes = body.group(1).split()
+    assert "collapse" in classes and "in" not in classes, (
+        f"webserver panel must initially be collapsible and closed, got body classes {classes!r}"
+    )
+    assert re.search(
+        r'<a\b(?=[^>]*data-toggle="collapse")(?=[^>]*href="#dnsbl_webserver_panel-body")[^>]*>', section
+    ), "the webserver heading must offer a collapse link targeting its body"
+    assert 'id="dnsbl_webserver_panel-body"' in section, "the webserver collapse target must be rendered"
+    assert "deprecated" in section.lower(), "the closed panel must retain its deprecation notice"
+    for name in ("dnsbl_interface", "pfb_dnsvip4", "dnsbl_webpage"):
+        _select_block(section, name)
+
+
+@pytest.mark.ui_render
 def test_category_edit_logging_vip_label_and_help_are_deprecated(webui: WebUI) -> None:
     """issue #3539: the group editor's select label and help bullet name the VIP response deprecated."""
     resp = webui.get(CATEGORY_EDIT_DNSBL_PAGE)
