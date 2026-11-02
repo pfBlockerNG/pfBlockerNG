@@ -264,7 +264,8 @@ same directory.
 - Other malformed streams (FIN before the announced length, more bytes than announced, a second query, no FIN within
   the query timeout, fewer bytes than a DNS header, a response instead of a query) are reset with `DOQ_PROTOCOL_ERROR`
   and the connection goes on. RFC 9250 4.3.3 lists most of these as connection-fatal with the same SHOULD; the gateway
-  resets the stream only, so one bad stream cannot cancel the other queries of the connection.
+  resets the stream only, so one bad stream cannot cancel the other queries of the connection. A denied current address
+  is different: its connection closes on any stream (see the deny bullet below).
 - A stream is read for at most the query timeout (`--timeout`, default 5 s), not the 30 s TCP idle timeout: a client
   sends its query and the FIN at once, and a stream has no idle wait between queries as a TCP connection has.
 - Admission happens before the handshake (quic-go `ConnContext`). An address the ACL denies, and a connection over the
@@ -272,8 +273,11 @@ same directory.
   The slot is freed when the connection ends or its handshake fails. Because a slot is taken at the first Initial
   packet, every new client first proves its address with a Retry (one extra round trip), so a spoofed source cannot
   hold slots. ACL refuse still needs the handshake: REFUSED is a DNS answer on a stream.
-- A deny rule that appears while a connection is open, and a decider DROP, cancel the stream with
-  `DOQ_REQUEST_CANCELLED`.
+- An ACL deny of a connection's current address closes the connection with `DOQ_REQUEST_CANCELLED`, whatever the stream
+  holds (a query, a malformed or partial one, a response), and frees its admission slot. The address is checked before
+  a stream's read and again when the read ends, before the stream is parsed; a stream already being read when the deny
+  arrives is judged when its read ends, which the query timeout bounds. A decider DROP cancels only its stream, with the
+  same code.
 - Over the 512 queries in flight that DoQ shares with DoH, a stream is answered with a SERVFAIL (Message ID 0) built by
   the gateway, without asking the decider or Unbound; one log line per flood. DoQ has no status code to use instead.
 - A query is resolved on a context that ends with its connection, so a connection that drops while its queries wait
