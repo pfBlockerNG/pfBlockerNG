@@ -150,11 +150,10 @@ def test_ip_alternatives_and_firewall_warning_are_structured(browser_page: Page,
     warning = warning_row.locator("p:has(.text-danger)")
     assert warning.count() == 1, "the self-traffic control must carry its own warning paragraph"
     cases = warning_row.locator("ul > li")
-    assert cases.count() == 2, f"expected separate IPv4 NAT and IPv6 cases, found {cases.all_text_contents()!r}"
-    assert "IPv4" in cases.nth(0).text_content() and "NAT" in cases.nth(0).text_content(), (
-        "the IPv4 NAT case is missing"
-    )
-    assert "IPv6" in cases.nth(1).text_content() and "NAT" in cases.nth(1).text_content(), "the IPv6 case is missing"
+    case_text = cases.all_text_contents()
+    assert len(case_text) == 2, f"expected separate IPv4 NAT and IPv6 cases, found {case_text!r}"
+    assert "IPv4" in case_text[0] and "NAT" in case_text[0], "the IPv4 NAT case is missing"
+    assert "IPv6" in case_text[1] and "NAT" in case_text[1], "the IPv6 case is missing"
     assert "Outbound Firewall Rules" in _strong_texts(cases.nth(0)), "the NAT case must name the interface setting"
 
 
