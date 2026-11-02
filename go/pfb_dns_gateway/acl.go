@@ -69,8 +69,8 @@ func NewACL(path string, logf func(format string, args ...any)) *ACL {
 	return a
 }
 
-// Refresh reloads when any file or glob the rules came from changed (mtime, size, inode, mode, matches) and reports
-// whether it did.
+// Refresh reloads when any file or glob the rules came from changed (mtime, size, inode, mode, matches, whether a
+// glob could be listed) and reports whether it did.
 func (a *ACL) Refresh() (changed bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
