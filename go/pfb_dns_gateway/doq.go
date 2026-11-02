@@ -185,21 +185,22 @@ func (g *gateway) admitDoQ(ctx context.Context, info *quic.ClientInfo) (context.
 func (g *gateway) serveQUICConn(conn *quic.Conn) {
 	defer g.wg.Done()
 	defer func() { _ = conn.CloseWithError(doqNoError, "") }()
-	peer, local := addrPortOf(conn.RemoteAddr()), addrPortOf(conn.LocalAddr())
+	local := addrPortOf(conn.LocalAddr())
 	for {
 		s, err := conn.AcceptStream(g.ctx)
 		if err != nil {
 			return
 		}
 		g.wg.Add(1)
-		go g.serveDoQStream(conn, s, peer, local)
+		go g.serveDoQStream(conn, s, local)
 	}
 }
 
 // serveDoQStream answers one query stream. A malformed stream is reset with DOQ_PROTOCOL_ERROR and the connection
 // carries on; a non-zero Message ID, or an edns-tcp-keepalive option, closes the connection (RFC 9250 4.3.3 lists the
-// first as a protocol error to be answered with CONNECTION_CLOSE and DOQ_PROTOCOL_ERROR, 5.5.2 the second).
-func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local netip.AddrPort) {
+// first as a protocol error to be answered with CONNECTION_CLOSE and DOQ_PROTOCOL_ERROR, 5.5.2 the second). An ACL
+// deny of the stream's current address closes it too, so the admission slot is released.
+func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.AddrPort) {
 	defer g.wg.Done()
 	// A query that never finishes must not keep a stream slot for a raised --timeout. The read stops at the Unbound
 	// wait or the handshake budget, whichever is shorter. Only the query read is bounded: Unbound still has g.timeout.
@@ -217,14 +218,17 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, peer, local ne
 		_ = conn.CloseWithError(doqProtocolError, "edns-tcp-keepalive is not allowed")
 		return
 	}
-	src, dst := proxyEndpoints(peer, local)
+	// RemoteAddr is the path this packet arrived on. A later path replaces it, so it is read per stream.
+	src, dst := proxyEndpoints(addrPortOf(conn.RemoteAddr()), local)
 	disp, reply := g.screen(src.Addr(), netip.Addr{}, false, wire)
 	switch disp {
 	case discard:
 		reset(s, doqProtocolError)
 		return
 	case hangUp:
+		// The handshake address holds its admission slot until this connection's context ends.
 		reset(s, doqRequestCancelled)
+		_ = conn.CloseWithError(doqRequestCancelled, "")
 		return
 	case toDecider:
 		// RFC 9250 4.2.1: "When forwarding a DNS message from DoQ over another transport, a DNS Message ID MUST be
