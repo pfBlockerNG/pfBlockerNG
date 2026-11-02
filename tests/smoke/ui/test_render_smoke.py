@@ -166,23 +166,23 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("dns", "/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings", "pfB-DNS Status")),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
-    # StaticText label ("IPv4 Alias name(s):" etc.), which renders ONLY for the active
+    # StaticText label ("IPv4 alias name(s):" etc.), which renders ONLY for the active
     # type -- so it distinguishes the three views (the panel title is shared by all). The
     # coverage guard strips "?", so all three collapse to the one base path.
     Page(
         "feeds_ipv4",
         "/pfblockerng/pfblockerng_feeds.php?type=ipv4",
-        ("Pre-defined Alias/Group/Feeds", "IPv4 Alias name(s):"),
+        ("Pre-defined Feeds", "IPv4 alias name(s):"),
     ),
     Page(
         "feeds_ipv6",
         "/pfblockerng/pfblockerng_feeds.php?type=ipv6",
-        ("Pre-defined Alias/Group/Feeds", "IPv6 Alias name(s):"),
+        ("Pre-defined Feeds", "IPv6 alias name(s):"),
     ),
     Page(
         "feeds_dnsbl",
         "/pfblockerng/pfblockerng_feeds.php?type=dnsbl",
-        ("Pre-defined Alias/Group/Feeds", "DNSBL Alias name(s):"),
+        ("Pre-defined Feeds", "DNSBL group name(s):"),
     ),
     Page("alerts", "/pfblockerng/pfblockerng_alerts.php", ("Alert Settings",)),
     # The Reports sub-tabs are the same page under ?view=; the stats views (IP Block
@@ -2084,7 +2084,7 @@ def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: P
     """
     path = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Feeds",))
     assert result.ok, f"Feeds render oracle failed: {result.detail}"
     body = resp.text
     assert "CCT_IP" not in body, "Feeds page still offers the discontinued CCT_IP feed"
@@ -2125,7 +2125,7 @@ def test_feeds_non_contiguous_alternate_bucket_renders_every_row(
         )
 
         resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+        result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Feeds",))
         assert result.ok, f"Feeds render oracle failed: {result.detail}"
 
         markers = [f'value="alt_{header}"' for header in headers]
@@ -2151,7 +2151,7 @@ def test_feeds_tab_lists_qfeeds_under_its_group(
     """
     path = f"/pfblockerng/pfblockerng_feeds.php?type={ftype}"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Feeds",))
     assert result.ok, f"Feeds render oracle failed: {result.detail}"
     row = row_containing(resp.text, f'href="{url}"')
     assert re.search(rf">\s*{re.escape(group)}\s*<", row), f"{header} row is not under {group}: {row}"

@@ -175,14 +175,14 @@ function pfb_feeds_render_aliasname_inputs($section, $type, $feeds_list, $pconfi
 
 	$labels = array(
 		'ipv4'	=> array(
-			'IPv4 Alias name(s):',
-			'To change the default IPv4 Alias name(s), enter new Alias name(s) as desired.'),
+			'IPv4 alias name(s):',
+			'To change the default IPv4 alias name(s), enter new alias name(s) as desired.'),
 		'ipv6'	=> array(
-			'IPv6 Alias name(s):',
-			'To change the default IPv6 Alias name(s), enter new Alias name(s) as desired.'),
+			'IPv6 alias name(s):',
+			'To change the default IPv6 alias name(s), enter new alias name(s) as desired.'),
 		'dnsbl'	=> array(
-			'DNSBL Alias name(s):',
-			'To change the default DNSBL Group name(s), enter new Group name(s) as desired.'),
+			'DNSBL group name(s):',
+			'To change the default DNSBL group name(s), enter new group name(s) as desired.'),
 	);
 
 	if (!isset($labels[$type])) {
@@ -438,7 +438,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 						if ($ftype != $p_type) {
 							print ("<strong>{$type} Category</strong>");
 						} else {
-							print ("<p style=\"font-size: 75%\">{$type}<p>");
+							print ("<p style=\"font-size: 75%\">{$type}</p>");
 						}
 					?>
 			</td>
@@ -552,7 +552,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 						if ($aliasname != $p_aliasname) {
 							print ("{$aliasname}");
 						} else {
-							print ("<p style=\"font-size: 75%\">{$aliasname}<p>");
+							print ("<p style=\"font-size: 75%\">{$aliasname}</p>");
 						}
 					?>
 			</td>
@@ -581,12 +581,12 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 
 						// Print Feed offline status
 						if (isset($feed['status'])) {
-							print ("&emsp;<i class=\"fa-solid fa-bug text-danger\" title=\"Feed temporarily unavailable\"></i>");
+							print ("&emsp;<i class=\"fa-solid fa-bug text-danger\" title=\"Feed " . strtolower(htmlspecialchars($feed['status'])) . "\"></i>");
 						}
 
 						// Add link to Donate/support link
 						if (isset($feed['donate'])) {
-							print ("&emsp;<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"{$feed['donate']}\" title=\"Click to donation/support page.\">
+							print ("&emsp;<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"{$feed['donate']}\" title=\"Open the donation page.\">
 							<i class=\"fa-solid fa-cart-plus\"></i></a>");
 						}
 
@@ -708,7 +708,7 @@ print ($section);
 ?>
 <div class="panel panel-default">
 	<div class="panel-heading">
-		<h2 class="panel-title"><?=gettext("Pre-defined Alias/Group/Feeds")?></h2>
+		<h2 class="panel-title"><?=gettext("Pre-defined Feeds")?></h2>
 	</div>
 
 	&emsp;Links:&emsp;<small><a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;
@@ -717,31 +717,27 @@ print ($section);
 
 	<div class="panel-body bg-info">
 		<div style="margin: 10px 10px 10px 30px;">
-			<p>
-				The <strong>Feeds Management</strong> page is a collection of pre-defined Feeds arranged into Aliasnames/Groups.<br />
-				Review the <strong>infoblock icons</strong> beside each Alias/Group name for details about each Group.<br /><br />
-
-				<?php
-				if (is_array($feed_count)) {
-					print ("&emsp;<strong><u>Number of Feeds per Category Type:</strong></u><dl class=\"dl-horizontal\">");
-					foreach ($feed_count as $type => $count) {
-						print ("<dt>" . strtoupper(htmlspecialchars($type)) . ":</dt><dd>" . htmlspecialchars($count) . "</dd>");
-					}
-					print ("</dl>");
+			<p>The <strong>Feeds</strong> page lists predefined sources. Information icons show group details.</p>
+			<?php
+			if (is_array($feed_count)) {
+				print ("<strong>Number of Feeds per Category Type:</strong><dl class=\"dl-horizontal\">");
+				foreach ($feed_count as $type => $count) {
+					print ("<dt>" . strtoupper(htmlspecialchars($type)) . ":</dt><dd>" . htmlspecialchars($count) . "</dd>");
 				}
-				?>
-
-				&#8226; Feeds are listed by Category (IPv4/IPv6/DNSBL). Links are provided for each Feed website and Feed URL.<br />
-				&#8226; Clicking the "+" icon(s) in the Category column will import all Feeds in the Alias/Group at once, while clicking the
-				"+" icon(s) on the right will only import the individual feed.<br />
-
-				&#8226; Feeds with 'Alternative' URL(s) can be configured via the Radio button options.<br />
-				&#8226; Custom Feeds (user-defined Feeds not in the pre-defined list) are listed in a table below pre-defined Feeds<br />
-				&#8226; Permit Type feeds are listed with a green background.<br />
-			</p>
+				print ("</dl>");
+			}
+			?>
+			<ul>
+				<li>Use a group's <strong>+</strong> icon to import all its sources.</li>
+				<li>Use a feed's <strong>+</strong> icon to import that source only.</li>
+				<li>Use radio buttons to select an alternate URL where available.</li>
+				<li>Find user-defined entries under <strong>Custom Feeds</strong>.</li>
+				<li>A green background identifies Permit-type feeds.</li>
+			</ul>
+			<p><span class="text-danger"><strong>Warning:</strong></span> Do not enable every feed at once.</p>
 
 			<!-- Show Icon Legend -->
-			Click here for Legend&emsp;-->
+			Legend:
 			<div class="infoblock" style="text-align:left">
 				<dl class="dl-horizontal responsive">
 					<dt><?=gettext('Icon')?></dt>
@@ -761,13 +757,12 @@ print ($section);
 					<dt><i class="fa-solid fa-angle-right"></i></dt>
 						<dd><?=gettext('Alternate Feed URL options');?></dd>
 					<dt><span class="text-danger"><i class="fa-solid fa-bug"></i></span></dt>
-						<dd><?=gettext('Feed temporarily unavailable');?></dd>
+						<dd><?=gettext('Feed discontinued or suspended; see its info.');?></dd>
 					<dt><i class="fa-solid fa-right-to-bracket"></i></dt>
 						<dd><?=gettext('Subscription required to access Feed');?></dd>
 				</dl>
 			</div>
 			<br /><strong><u>Disclaimer</u>: Use of the Feed(s) below are at your own risk!</strong>
-			<span class="text-danger">&emsp;Note: Do not enable all Feeds at once.</span>
 		</div>
 	</div>
 	<br />
@@ -881,7 +876,7 @@ print ($section);
 								if ($type != $p_type) {
 									print ("{$type}");
 								} else {
-									print ("<p style=\"font-size:75%\">{$type}<p>");
+								print ("<p style=\"font-size:75%\">{$type}</p>");
 								}
 					?>
 				</td>
@@ -904,7 +899,7 @@ print ($section);
 									print ($aliasname);
 								}
 								else {
-									print ("<p style=\"font-size:75%\">{$row['aliasname']}<p>");
+								print ("<p style=\"font-size:75%\">{$row['aliasname']}</p>");
 								}
 					?>
 				</td>
