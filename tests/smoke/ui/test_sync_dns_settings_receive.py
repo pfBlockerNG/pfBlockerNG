@@ -7,6 +7,7 @@ which invokes the real receive hook. No receiver merge is copied or mocked.
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,18 @@ SHARED = {
     "pfb_dns_ddr": "on",
     "pfb_dns_ddr_doh_443": "",
 }
+SAVED_SNAPSHOT = base64.b64encode(
+    json.dumps(
+        {
+            "active_interface": {"present": True, "value": "lan"},
+            "enablessl": {"present": True, "value": ""},
+            "custom_options": {
+                "present": True,
+                "value": base64.b64encode(b"server:\n# receiver snapshot sentinel\nhide-identity: yes").decode(),
+            },
+        }
+    ).encode()
+).decode()
 
 
 def _php_value(value: object) -> str:
@@ -74,11 +87,9 @@ def test_real_legacy_receive_transfers_nine_shared_fields_and_keeps_seven_local_
         assert restored == original, "pfB-DNS receive fixture restoration changed original values"
 
     request.addfinalizer(restore)  # Registered before the first mutation, including failed setup.
-    rows = (original[0].get("config") or [{}]) if isinstance(original[0], dict) else [{}]
-    original_local = rows[0] or {}
     local = {
         "pfb_dns": toggle,
-        "pfb_dns_saved": original_local.get("pfb_dns_saved", ""),
+        "pfb_dns_saved": SAVED_SNAPSHOT,
         "pfb_dns_interface": "lan",
         "pfb_dns_dot_interface": "lo0",
         "pfb_dns_doh_interface": "192.0.2.2",
@@ -92,10 +103,13 @@ def test_real_legacy_receive_transfers_nine_shared_fields_and_keeps_seven_local_
         "write_config('pfBlockerNG smoke: prepare real legacy receive');\n"
         + _emit(
             f"array('local' => PfbConfig::readSection('{LOCAL_ROOT}/config/0'), "
-            "'unbound' => config_get_path('unbound'))"
+            "'snapshot_valid' => pfb_dns_proxy_saved() !== NULL, 'unbound' => config_get_path('unbound'))"
         ),
     )
     assert before["local"] == local, "receiver's seven local before-values were not stored as arranged"
+    assert before["snapshot_valid"] is True and before["local"]["pfb_dns_saved"], (
+        "receiver must start with a nonempty snapshot accepted by the production validator"
+    )
     port_text = helpers.config_get(vm, "system/webgui/port")
     port = int(port_text) if port_text else (443 if webgui_protocol == "https" else 80)
     user, password = admin_credentials

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .test_sync_dns_settings_receive import LOCAL_ROOT, SHARED, SHARED_ROOT, _php_value
+from .test_sync_dns_settings_receive import LOCAL_ROOT, SAVED_SNAPSHOT, SHARED, SHARED_ROOT, _php_value
 from .test_sync_policy_receive import _emit, _guest_json, _redact
 
 if TYPE_CHECKING:
@@ -50,12 +50,15 @@ def test_real_core_keeps_older_package_activation_and_snapshot_while_storing_unk
 
     request.addfinalizer(restore)
     helpers.config_set(vm, f"{LOCAL_ROOT}/config/0/pfb_dns", toggle)
+    helpers.config_set(vm, f"{LOCAL_ROOT}/config/0/pfb_dns_saved", SAVED_SNAPSHOT)
     state_expression = (
         f"array('local' => config_get_path('{LOCAL_ROOT}'), 'unbound' => config_get_path('unbound'), "
+        "'snapshot_valid' => pfb_dns_proxy_saved() !== NULL, "
         "'old_doh_port' => isset(pfb_cfg_registry()['dns/pfb_dns_doh_port']) "
         "? PfbConfig::read('dns/pfb_dns_doh_port') : NULL)"
     )
     before = _guest_json(vm, _emit(state_expression))
+    assert before["snapshot_valid"] is True, "older receiver must start with a valid nonempty Resolver snapshot"
     port_text = helpers.config_get(vm, "system/webgui/port")
     port = int(port_text) if port_text else (443 if webgui_protocol == "https" else 80)
     user, password = admin_credentials

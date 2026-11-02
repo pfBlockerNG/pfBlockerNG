@@ -712,8 +712,17 @@ Both transports keep their existing methods and receive behavior, with no extra 
 Keeping enable local preserves the secondary-first activation/deactivation requirement when
 DNS Resolver sync is enabled. That core sync can still copy a moved Resolver; this change
 neither sends its snapshot nor activates an unprepared receiver.
+Received pfB-DNS settings are stored only, without marking changes pending. They take effect
+at the receiving node's next manual or scheduled Update; use **Run Now** on **Update** there.
+Only a changed generated runtime configuration requires a proxy restart.
 
 The one-time migration preserves explicit stored values and favors already-received new
-values over stale old keys. An older automatic receiver ignores the new section; an older
-manual receiver stores it inertly. Their node-local activation and recovery state remain
-untouched. See `docs/misc/config-gateway.md` for seeding and downgrade semantics.
+values over stale old keys. Old DoT enable/port values on an unseeded node (old interface
+absent or empty) were ignored installer defaults: discard those two old values instead of
+promoting them to shared choices; retain any already-received explicit new values.
+An older automatic receiver ignores the new section; an older manual receiver stores it
+inertly. If its administrator later changes the old UI, the earlier received new values still
+win on upgrade; review and reapply intended transport choices in the upgraded UI.
+Node-local activation and recovery state remain untouched. Whole-section sync also means an
+unseeded sender's absent DoT fields clear the receiver's explicit DoT choices; configure those
+choices on the sender first if needed. See `docs/misc/config-gateway.md` for downgrade semantics.
