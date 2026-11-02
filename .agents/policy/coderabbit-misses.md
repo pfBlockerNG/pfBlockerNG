@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `79804e0bc0`  dns: keep the upstream exchange on the matching reply  (#3670) — two quota responses; combined review and Codex clean
 - `c8eeb66fad`  dns: screen each DoQ stream at its current address  (#3669) — two quota responses; condensed review and Codex clean
 - `009d3b8efa`  dnsbl: honor per-group TOP1M filtering  (#3668) — two quota responses; condensed review and Codex clean
 - `1fe857b0e`  feeds: add Q-Feeds malware IP and domain feeds to the catalog  (#3611) — two quota notices; four legs, two rounds; Codex clean
