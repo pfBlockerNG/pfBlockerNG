@@ -15,13 +15,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from .render_oracle import evaluate_render
+from .render_oracle import PhpErrorLogGuard, evaluate_render
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from playwright.sync_api import Page
 
+    from ..conftest import SmokeVM
     from .webui import WebUI
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
@@ -48,6 +49,15 @@ BLOCK_TAGS = frozenset({"p", "div", "ul", "ol", "dl", "table", "blockquote", "pr
 VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "wbr"})
 PHONE_WIDTH = 390
 JS_TIMEOUT_MS = 10_000
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _php_errors(smoke_vm: SmokeVM, webui: WebUI) -> Iterator[None]:  # noqa: ARG001
+    """Bracket every page read with the same on-box diagnostic guard as the render sweep."""
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+    yield
+    guard.assert_no_growth()
 
 
 # ---- a minimal tree of the shipped markup (no browser repair) ---------------------------------------------------
