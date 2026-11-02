@@ -368,6 +368,46 @@ def test_servfail_goes_to_the_servfail_callback_not_the_reply_callback(
     assert kinds == ["reply_servfail"]
 
 
+def test_an_oversized_stream_answer_is_servfail_on_the_wire_and_in_the_callback(
+    booted: Booted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rebuilt stream answer longer than one DNS message cannot be sent. The client gets the bare SERVFAIL, and the
+    servfail callback is what fires — not a reply that still carries the module's NOERROR."""
+    seen: list[tuple[str, int]] = []
+
+    def recorder(kind: str) -> Any:
+        def record(*args: Any, **_kwargs: Any) -> bool:
+            seen.append((kind, args[3]))
+            return True
+
+        return record
+
+    for kind in ("reply", "reply_servfail"):
+        monkeypatch.setitem(shim.callbacks, kind, recorder(kind))
+
+    planted = shim.DnsMsg(
+        shim.query_info(ALLOWED, dnswire.TYPE_A),
+        dnswire.QR | dnswire.RA,
+        [dnswire.RR(ALLOWED, dnswire.TYPE_A, dnswire.CLASS_IN, 300, b"\x00" * 65535)],
+        [],
+        [],
+    )
+
+    def finish_oversize(id: int, _event: int, qstate: Any, _qdata: Any) -> bool:
+        qstate.return_msg = planted
+        qstate.return_rcode = shim.RCODE_NOERROR
+        qstate.ext_state[id] = shim.MODULE_FINISHED
+        return True
+
+    monkeypatch.setattr(booted.module, "operate", finish_oversize)
+    query = build_query(ALLOWED)
+    wire = _resolve(booted, query, FakeUnbound(ZONE))
+    assert wire == pfb_dns_proxy._answer(dnswire.parse(query), planted, None)
+    message = dnswire.parse(wire or b"")
+    assert (message.rcode, message.answers, message.authority) == (pfb_dns_proxy.RCODE_SERVFAIL, [], [])
+    assert seen == [("reply_servfail", pfb_dns_proxy.RCODE_SERVFAIL)], seen
+
+
 # --- addressing and CLI --------------------------------------------------------------------------
 
 

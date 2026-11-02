@@ -253,11 +253,10 @@ def _error(query: dnswire.Message, rcode: int) -> bytes:
     return dnswire.encode(dnswire.Message(query.id, flags, query.questions, additional=_edns_for(query)))
 
 
-def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> bytes:
-    """The module's replacement message, addressed to this client, with its rcode. AD is not kept: the data is no longer
-    the one Unbound validated. Over `limit` bytes (a UDP client's) it becomes the question alone with TC set, so the
-    client asks again over TCP. With no limit (a stream client), a message over MAX_DNS_MESSAGE bytes is a bare
-    SERVFAIL: it cannot be sent whole and it is not truncated."""
+def _rendered(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> tuple[bytes, bool]:
+    """The client wire, and whether a stream answer was replaced by a bare SERVFAIL for exceeding MAX_DNS_MESSAGE.
+
+    UDP truncation is not that replacement: the wire keeps the module rcode and TC, so the callback stays reply."""
     flags = (
         dnswire.QR
         | dnswire.RA
@@ -267,10 +266,21 @@ def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> byte
     additional = [*msg.additional, *_edns_for(query)]
     wire = dnswire.encode(dnswire.Message(query.id, flags, query.questions, msg.answer, msg.authority, additional))
     if limit is None and len(wire) > MAX_DNS_MESSAGE:
-        return _error(query, RCODE_SERVFAIL)
+        return _error(query, RCODE_SERVFAIL), True
     if limit is None or len(wire) <= limit:
-        return wire
-    return dnswire.encode(dnswire.Message(query.id, flags | dnswire.TC, query.questions, additional=_edns_for(query)))
+        return wire, False
+    return (
+        dnswire.encode(dnswire.Message(query.id, flags | dnswire.TC, query.questions, additional=_edns_for(query))),
+        False,
+    )
+
+
+def _answer(query: dnswire.Message, msg: shim.DnsMsg, limit: int | None) -> bytes:
+    """The module's replacement message, addressed to this client, with its rcode. AD is not kept: the data is no longer
+    the one Unbound validated. Over `limit` bytes (a UDP client's) it becomes the question alone with TC set, so the
+    client asks again over TCP. With no limit (a stream client), a message over MAX_DNS_MESSAGE bytes is a bare
+    SERVFAIL: it cannot be sent whole and it is not truncated."""
+    return _rendered(query, msg, limit)[0]
 
 
 def _is_u16(value: object) -> bool:
@@ -450,18 +460,24 @@ class Frontend:
     def _send(
         self, query: dnswire.Message, qstate: shim.module_qstate, relay: bytes | None, limit: int | None
     ) -> bytes:
-        """Reply to the client the way mesh_send_reply does: rcode != 0 is a bare error, no message is SERVFAIL."""
+        """Reply to the client the way mesh_send_reply does: rcode != 0 is a bare error, no message is SERVFAIL.
+        A stream answer over MAX_DNS_MESSAGE is that same bare SERVFAIL, so the callback is reply_servfail."""
         msg, rcode = qstate.return_msg, qstate.return_rcode
         if msg is None and rcode == shim.RCODE_NOERROR:
             rcode = RCODE_SERVFAIL
+        wire: bytes | None = None
+        if relay is None and msg is not None and rcode == shim.RCODE_NOERROR:
+            wire, replaced = _rendered(query, msg, limit)
+            if replaced:
+                rcode = RCODE_SERVFAIL
         shim.fire_reply_callback(
             "reply_servfail" if rcode == RCODE_SERVFAIL else "reply", qstate, msg and msg.rep, rcode
         )
         if relay is not None:
             return relay
-        if rcode != shim.RCODE_NOERROR or msg is None:
-            return _error(query, rcode)
-        return _answer(query, msg, limit)
+        if wire is not None:
+            return wire
+        return _error(query, rcode)
 
     def relay_upstream_response(self, data: bytes) -> None:
         """Handle one datagram from pfb_upstream_observer.py: fire the module's query_response callback on the raw
