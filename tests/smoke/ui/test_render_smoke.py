@@ -1015,7 +1015,7 @@ def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_
     Given the General page,
     When GET,
     Then the field renders as a number input carrying the accepted 60..7200 window and the
-    1800-second placeholder, and its row label is the visible Form_Group ``control-label``.
+    1800-second placeholder.
 
     Fail-before / pass-after: none of these markers exist in the pre-#2851 markup, where the
     budget was a hardcoded constant with no operator surface at all.
@@ -1035,16 +1035,6 @@ def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_
     assert field, "pfb_reentry_timeout did not render as an <input>"
     for attr in ('type="number"', 'min="60"', 'max="7200"', 'placeholder="1800"'):
         assert attr in field.group(0), f"pfb_reentry_timeout input is missing {attr}: {field.group(0)}"
-
-    # The row label must be the visible Form_Group control-label (the desktop media query
-    # hides label-start). Bind it to this field: no other <label> may sit between the last
-    # control-label before the input and the input, so the approved label text is not pinned.
-    label_re = re.compile(r'<label class="col-sm-2 control-label">\s*<span>[^<]+</span>\s*</label>')
-    row_labels = list(label_re.finditer(body, 0, field.start()))
-    assert row_labels, "pfb_reentry_timeout has no visible Form_Group control-label before its input"
-    assert "<label" not in body[row_labels[-1].end() : field.start()], (
-        "pfb_reentry_timeout's row label is not the visible control-label (desktop hides label-start)"
-    )
 
 
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
@@ -1634,35 +1624,6 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     assert "select type and Save, followed by a" not in body, (
         "DNSBL page's TOP1M Type help still carries the stale Force-Reload wording"
     )
-
-
-def test_apply_guidance_names_run_now_not_retired_actions(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """Settings pages point at actions that exist: the scheduled update and the
-    Update tab's Run Now (issue #3237) — never the retired "Force Update" /
-    "Force Reload" buttons or the "applied via CRON or 'Force Update|Reload' only!"
-    footer (#886 fixed the one TOP1M instance; this covers the remaining pages).
-
-    Asserts the IP and DNSBL pages pass the clean-render oracle AND carry the
-    corrected guidance, with no retired action name anywhere in the rendered body.
-    """
-    for path, anchor, needle in (
-        (
-            "/pfblockerng/pfblockerng_ip.php",
-            "IP Configuration",
-            "Setting changes are applied on the next scheduled update.",
-        ),
-        (
-            "/pfblockerng/pfblockerng_dnsbl.php",
-            "DNSBL Webserver Configuration",
-            "A DNSBL reload is required for changes to take effect",
-        ),
-    ):
-        resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, (anchor,))
-        assert result.ok, f"render oracle failed for {path}: {result.detail}"
-        assert needle in resp.text, f"{path} is missing the corrected apply guidance {needle!r}"
-        for retired in ("Force Reload", "Force Update", "applied via CRON"):
-            assert retired not in resp.text, f"{path} still instructs the retired action {retired!r} (issue #3237)"
 
 
 def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

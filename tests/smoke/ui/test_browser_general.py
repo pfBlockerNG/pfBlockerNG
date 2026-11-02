@@ -426,6 +426,10 @@ def test_nested_pass_timeout_section_and_save_roundtrip(
 
         _expand_section(page, "general_advanced")
         expect(field).to_be_visible(timeout=JS_TIMEOUT_MS)
+        # The row label must be the visible Form_Group control-label: the desktop media query
+        # hides label.form-label, which would leave the field unlabelled on desktop.
+        row = field.locator("xpath=ancestor::div[contains(@class,'form-group')][1]")
+        expect(row.locator("label.control-label").first).to_be_visible(timeout=JS_TIMEOUT_MS)
         _shot(page, screenshot_dir, "general_advanced_nested_pass_timeout")
 
         resp = webui.post(GENERAL_PAGE, {"pfb_reentry_timeout": "7200"}, timeout=_GENERAL_POST_TIMEOUT)
