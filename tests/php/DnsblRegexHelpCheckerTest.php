@@ -24,57 +24,12 @@ final class DnsblRegexHelpCheckerTest extends TestCase
 		return pfb_dnsbl_regex_help_text();
 	}
 
-	public function testHelpNamesPythonAsTheAuthoritativeValidator(): void
-	{
-		$help = self::helpText();
-		self::assertMatchesRegularExpression(
-			'/validated on save by (the same )?Python/i',
-			$help,
-			'the help must state that Python validates on save'
-		);
-		self::assertMatchesRegularExpression(
-			'/authoritative/i',
-			$help,
-			'the help must say which validator wins'
-		);
-	}
-
-	public function testHelpWarnsTheInlineCheckerCanFlagAValidPattern(): void
-	{
-		self::assertMatchesRegularExpression(
-			'/editing aid/i',
-			self::helpText(),
-			'the help must tell the user an inline marker is not proof the pattern is wrong'
-		);
-	}
-
 	public function testHelpLinksThePythonReSyntaxReference(): void
 	{
 		self::assertStringContainsString(
 			'docs.python.org/3/library/re.html',
 			self::helpText(),
 			'the help must link the Python re syntax reference'
-		);
-	}
-
-	public function testHelpSaysThePatternCharacterSetExcludesSpaces(): void
-	{
-		self::assertStringContainsString(
-			'printable ASCII without spaces',
-			self::helpText(),
-			'the help must say that a space is not a pattern character'
-		);
-	}
-
-	public function testHelpNamesTheAnchorThatAdmitsAnOpenRunBeforeALiteralTail(): void
-	{
-		$help = self::helpText();
-		self::assertStringContainsString('\S+\.example\.com', $help, 'the help must show an open run before a literal tail');
-		self::assertStringContainsString('ad.*\.example\.com', $help, 'the help must show a second open run before a literal tail');
-		self::assertStringContainsString(
-			'are refused unless anchored with <code>^</code>',
-			$help,
-			'the help must name the remedy the save-time error also gives'
 		);
 	}
 

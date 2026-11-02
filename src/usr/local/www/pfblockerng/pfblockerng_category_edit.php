@@ -1321,30 +1321,37 @@ foreach ($rowdata[$rowid] as $tags) {
 }
 
 // Build Guideline text
+// How automatic rules use an IP alias (issue #354): shared by the Source Definitions guide and the Custom List help.
+$alias_roles = '<p>Feed entries and <strong>Custom List</strong> entries are combined into this IP alias.</p>'
+	. '<ul>'
+	. '<li>Inbound automatic rules match the alias as the source address.</li>'
+	. '<li>Outbound automatic rules match the alias as the destination address.</li>'
+	. '<li>Both-direction actions create both rules. Alias-only actions create no automatic rule; you choose its role in your own rules.</li>'
+	. '</ul>';
+
 $infotxt = '<dl class="dl-horizontal">';
 
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 	$infotxt .= '<dt>Format:</dt>
 			<dd>Select the Format type:
 			<dl class="dl-horizontal">
-				<dt>Auto:</dt><dd>Default parser</dd>
-				<dt>GeoIP:</dt><dd>GeoIP Country ISO (autocomplete form)</dd>
-				<dt>Regex:</dt><dd>\'Regex\' style parsing (ie: html Lists)</dd>
-				<dt>Whois:</dt><dd>Convert a Domain name into its respective IP addresses.</dd>
-				<dt>ASN:</dt><dd>Convert an ASN into its respective IP addresses.<br />
-							ASN list via cidr-report.org (autocomplete form - 3 character minimum)</dd>
-				<dt>Rsync:</dt><dd>RSync Lists</dd>
-			</dl>';
+				<dt><strong>Auto</strong></dt><dd>Default parser</dd>
+				<dt><strong>GeoIP</strong></dt><dd>GeoIP Country ISO (autocomplete form)</dd>
+				<dt><strong>Regex</strong></dt><dd>\'Regex\' style parsing (for example HTML lists)</dd>
+				<dt><strong>Whois</strong></dt><dd>Convert a domain name into its IP addresses.</dd>
+				<dt><strong>ASN</strong></dt><dd>Converts an AS number to its IP ranges using the IPinfo ASN database (needs <strong>ASN IPinfo Token</strong> on <strong>IP</strong>). Autocomplete list from cidr-report.org (type 3+ characters).</dd>
+				<dt><strong>RSync</strong></dt><dd>RSync Lists</dd>
+			</dl>
+			</dd>';
 }
 
-$infotxt .= '	</dd>
-	<dt>State:</dt>
+$infotxt .= '	<dt>State:</dt>
 		<dd>Select the run State:
 			<dl class="dl-horizontal">
-				<dt>On:</dt><dd>Enable List</dd>
-				<dt>Off:</dt><dd>Disable List</dd>
-				<dt>Hold:</dt><dd>Download List only once</dd>
-				<dt>Flex:</dt><dd>After a TLS failure, retry this feed with certificate verification disabled and a widened cipher list (Not Recommended). Only for feeds whose server has a broken certificate chain — the feed\'s contents are then unauthenticated.</dd>
+				<dt><strong>ON</strong></dt><dd>Enable List</dd>
+				<dt><strong>OFF</strong></dt><dd>Disable List</dd>
+				<dt><strong>HOLD</strong></dt><dd>Download List only once</dd>
+				<dt><strong>FLEX</strong></dt><dd>After a TLS failure, retry this feed with certificate verification disabled and a widened cipher list (Not Recommended). Only for feeds whose server has a broken certificate chain — the feed\'s contents are then unauthenticated.</dd>
 			</dl>
 		</dd>
 	<dt>Source:</dt>
@@ -1354,60 +1361,54 @@ $infotxt .= '	</dd>
 		';
 
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
-	$infotxt .= '			<dd>External link to source&emsp;(ie:&nbsp;
+	$infotxt .= '			<dd>External link to source (for example
 						<a target="_blank" rel="noopener noreferrer" href="https://rules.emergingthreats.net/blockrules/compromised-ips.txt">ET Compromised</a>,
 						<a target="_blank" rel="noopener noreferrer" href="https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt">ET Blocked</a>,
 						<a target="_blank" rel="noopener noreferrer" href="https://www.spamhaus.org/drop/drop.txt">Spamhaus Drop</a>)
 					</dd>
 				<dt>Local file:</dt>
-					<dd>http(s)://127.0.0.1/filename
-						&emsp;<strong>or</strong>&emsp; /var/db/pfblockerng/filename
-					</dd>
+					<dd><code>http(s)://127.0.0.1/filename</code> or <code>/var/db/pfblockerng/filename</code></dd>
 				<dt>GeoIP ISO:</dt>
-					<dd>Utilize the autocomplete <strong>GeoIP Format</strong> option
-						or manually enter the full URL as /usr/local/share/GeoIP/cc/US_v4.txt
-						&emsp;(Change \'US\' to required code)
-					</dd>
-				<dt>Whois:</dt><dd>Domain name to IP Address&emsp;(ie: facebook.com)<br />
+					<dd>Set <strong>Format</strong> to <strong>GeoIP</strong> and choose a country from autocomplete. For a local file, set <strong>Format</strong> to <strong>Auto</strong> and enter its path, such as <code>/usr/local/share/GeoIP/cc/US_v4.txt</code>.</dd>
+				<dt>Whois:</dt><dd>Domain name to IP address (for example <code>facebook.com</code>)<br />
 					Note: This will only return a partial list of resolved IPs for each Domain!</dd>
-				<dt>ASN:</dt><dd>ASN to IP Address&emsp;(ie: AS32934)
-						&emsp;(<a target="_blank" rel="noopener noreferrer" href="https://asn.cymru.com/">Click for IP<->ASN Lookup via Team Cymru.com</a>)</dd>
+				<dt>ASN:</dt><dd>ASN to IP address (for example <code>AS32934</code>)
+						(<a target="_blank" rel="noopener noreferrer" href="https://asn.cymru.com/">Click for IP<->ASN Lookup via Team Cymru.com</a>)</dd>
 			</dl>
 		</dd>';
 }
 else {
-	$infotxt .= '			<dd>External link to source&emsp;(ie:&nbsp;
-						<a target="_blank" rel="noopener noreferrer" href="https://pgl.yoyo.org/adservers/serverlist.php?hostformat=;showintro=0">yoyo</a>,&nbsp;
-						<a target="_blank" rel="noopener noreferrer" href="https://someonewhocares.org/hosts/hosts">SomeoneWhoCares</a>,&nbsp;
+	$infotxt .= '			<dd>External link to source (for example
+						<a target="_blank" rel="noopener noreferrer" href="https://pgl.yoyo.org/adservers/serverlist.php?hostformat=;showintro=0">yoyo</a>,
+						<a target="_blank" rel="noopener noreferrer" href="https://someonewhocares.org/hosts/hosts">SomeoneWhoCares</a>,
 						<a target="_blank" rel="noopener noreferrer" href="https://adaway.org/hosts.txt">Adaway</a>)
 					</dd>
 				<dt>Local file:</dt>
-					<dd>http(s)://127.0.0.1/filename &emsp;<strong>or</strong>&emsp; /var/db/pfblockerng/filename
-					</dd>
+					<dd><code>http(s)://127.0.0.1/filename</code> or <code>/var/db/pfblockerng/filename</code></dd>
 			</dl>
 		</dd>';
 }
 
 $infotxt .= '<dt>Header/Label:</dt>
-		<dd>This field must be <u>unique.</u> This names the file and is referenced in the widget.
-			&emsp;(ie: Spamhaus_drop, Spamhaus_edrop)
+		<dd>This field must be <u>unique.</u> This names the file and is referenced in the widget
+			(for example <code>Spamhaus_drop</code>, <code>Spamhaus_edrop</code>).
 		</dd>';
 
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 	$infotxt .= '<dt>Note:</dt>
-			<dd>Source lists musts follow the syntax below:<br />
-				<strong>Network ranges:</strong>172.16.1.0-172.16.1.255&emsp;
-				<strong>IP Address:</strong>172.16.1.10&emsp;
-				<strong>CIDR:</strong>172.16.1.0/24
-			</dd>';
+			<dd>Source lists must follow the syntax below:<br />
+				<strong>Network ranges:</strong> <code>172.16.1.0-172.16.1.255</code>&emsp;
+				<strong>IP Address:</strong> <code>172.16.1.10</code>&emsp;
+				<strong>CIDR:</strong> <code>172.16.1.0/24</code>
+			</dd>
+		<dt>IP alias:</dt>
+			<dd>' . $alias_roles . '</dd>';
 }
 
 if ($gtype == 'dnsbl') {
 	$infotxt .= '<dt>Action:</dt>
 			<dd>Default: <strong>Deny</strong> — blocks matched domains (standard block feed).<br />
-				<strong>Permit</strong> — marks this feed as an allow list: matched domains are
-				whitelisted and override block feeds (band 2). The manual DNSBL whitelist and
-				manual DNSBL blocks still take precedence.
+				<strong>Permit</strong> allows matching domains over ordinary feed blocks. <strong>Custom List</strong> entries, <strong>DNSBL Whitelist</strong> and rules marked <code>$important</code> still take precedence.
 			</dd>';
 }
 
@@ -1417,7 +1418,7 @@ $infotxt .= '	</dl>';
 $section->addInput(new Form_StaticText(
 		'',
 		"{$failed}"
-		. '&emsp;Click here for Guidelines ---><div class="infoblock alert-info clearfix">'
+		. 'Guidelines:<div class="infoblock alert-info clearfix">'
 		. $infotxt . '</div>'
 ));
 
@@ -1451,63 +1452,21 @@ $section->add($group);
 // Print Customization section
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 	$action_txt = "Default: <strong>Disabled</strong>
-			<br />For Non-Alias type rules you must define the appropriate <strong>Firewall 'Auto' Rule Order</strong> option.
-			<br />Click here for more info -->
+			<br />For automatic rules, also set <strong>Firewall 'Auto' Rule Order</strong> on <strong>IP</strong>.
+			<br />Guidelines:
 			<div class=\"infoblock alert-info clearfix\">
-				Select the <strong>Action</strong> for Firewall Rules on lists you have selected.<br /><br />
-				<strong><u>'Disabled' Rules:</u></strong> Disables selection and does nothing to selected Alias.<br /><br />
-				<strong><u>'Deny' Rules:</u></strong><br />
-				'Deny' rules create high priority 'block' or 'reject' rules on the stated interfaces. They don't change the 'pass' rules on other
-				interfaces. Typical uses of 'Deny' rules are:<br />
-					<ul>
-						<li><strong>Deny Both</strong> -
-							blocks all traffic in both directions, if the source or destination IP is in the block list
-						</li>
-						<li><strong>Deny Inbound/Deny Outbound</strong> -
-							blocks all traffic in one direction <u>unless</u> it is part of a session started by
-							traffic sent in the other direction. Does not affect traffic in the other direction.
-						</li>
-						<li>One way 'Deny' rules can be used to selectively block <u>unsolicited</u> incoming
-							(new session) packets in one direction, while still allowing <u>deliberate</u> outgoing
-							sessions to be created in the other direction.
-						</li>
-					</ul>
-				<strong><u>'Permit' Rules:</u></strong><br />
-				'Permit' rules create high priority 'pass' rules on the stated interfaces. They are the opposite of Deny rules, and don't create
-				any 'blocking' effect anywhere. They have priority over all Deny rules. Typical uses of 'Permit' rules are:<br />
-					<ul>
-						<li><strong>To ensure</strong> that traffic to/from the listed IPs will <u>always</u> be allowed in the
-							stated directions. They override <u>almost all other</u> Firewall rules on the stated interfaces.
-						</li>
-						<li><strong>To act as a whitelist</strong> for Deny rule exceptions, for example if a large IP range
-							or pre-created blocklist blocks a few IPs that should be accessible.
-						</li>
-					</ul>
-				<strong><u>'Match' Rules:</u></strong><br />
-				'Match' or 'Log' only the traffic on the stated interfaces. This does not Block or Reject. It just Logs the traffic.
-				<ul>
-					<li><strong>Match Both</strong> - Matches all traffic in both directions,
-						if the source or destination IP is in the list.
-					</li>
-					<li><strong>Match Inbound/Match Outbound</strong> - Matches all traffic in one direction only.
-					</li>
-				</ul>
-				<strong><u>'Alias' Rules:</u></strong><br />
-				<strong>'Alias'</strong> rules create an <a href=\"/firewall_aliases.php\">alias</a> for the list (and do nothing else).
-				This enables a pfBlockerNG list to be used by name, in any firewall rule or pfSense function, as desired.
-					<ul>
-						<li><strong>Options - Alias Deny,&nbsp; Alias Permit,&nbsp; Alias Match,&nbsp; Alias Native</strong></li>
-						<li>'Alias Deny' can use De-Duplication and Reputation Processes if configured.</li>
-						<li>'Alias Permit' and 'Alias Match' will be saved in the Same folder as the other Permit/Match Auto-Rules</li>
-						<li>'Alias Native' lists are kept in their Native format without any modifications.</li></ul>
-				<span class=\"text-danger\">Note: </span><ul>
-					When manually creating 'Alias' type firewall rules; Prefix the Firewall rule Description with <strong>pfb_</strong>
-					This will ensure that that Dashboard widget reports those statistics correctly. <strong>Do not</strong> 
-					prefix with (pfB_) as those Rules will be auto-removed by package when 'Auto' rules are defined.</ul>
+				<dl>
+					<dt><strong>Disabled</strong></dt><dd>This list is not used.</dd>
+					<dt>Automatic rules</dt><dd><strong>Deny Inbound</strong>, <strong>Deny Outbound</strong> and <strong>Deny Both</strong> create block or reject rules.
+						<strong>Permit Inbound</strong>, <strong>Permit Outbound</strong> and <strong>Permit Both</strong> create pass rules that take priority over Deny rules.
+						<strong>Match Inbound</strong>, <strong>Match Outbound</strong> and <strong>Match Both</strong> create match rules that only log the traffic.</dd>
+					<dt>Aliases only</dt><dd><strong>Alias Deny</strong>, <strong>Alias Permit</strong>, <strong>Alias Match</strong> and <strong>Alias Native</strong> create an <a href=\"/firewall_aliases.php\">alias</a> for use in your own rules.</dd>
+				</dl>
+				<p>Start your own rule descriptions with <code>pfb_</code> so the widget counts them. Do not use <code>pfB_</code>; pfBlockerNG removes rules with that prefix.</p>
 			</div>";
 }
 else {
-	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Enable</strong> to activate this DNSBL Group. Each feed's <strong>Action</strong> then decides how its domains are used: <strong>Deny</strong> blocks them; <strong>Permit</strong> allows them, overriding ordinary block feeds but not rules marked important or Custom List blocks.";
+	$action_txt = "Default: <strong>Disabled</strong><br />Select <strong>Enable</strong> to activate this DNSBL group. Each feed's <strong>Action</strong> then decides how its domains are used: <strong>Deny</strong> blocks them; <strong>Permit</strong> allows them over ordinary feed blocks. <strong>Custom List</strong> entries, <strong>DNSBL Whitelist</strong> and rules marked <code>\$important</code> still take precedence.";
 }
 
 $form->add($section);
@@ -1527,7 +1486,7 @@ $section->addInput(new Form_Select(
 	$pconfig['cron'],
 	$options_cron
 ))->setHelp('Default: <strong>Never</strong><br />'
-		. 'Select how often List files will be downloaded. <strong>This must be within the Cron Interval/Start Hour settings.</strong>')
+		. 'Choose how often feeds are checked. Uses <strong>Default Schedule</strong> on <strong>General</strong> unless <strong>Override Default Schedule</strong> is enabled. <strong>Never</strong> skips scheduled checks.')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Checkbox(
@@ -1536,7 +1495,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['schedule_override'] === 'on',
 	'on'
-))->setHelp('Use a custom schedule for this feed group. The General-page schedule remains the default.')
+))->setHelp('Use a custom schedule for this feed group. Otherwise <strong>Default Schedule</strong> on <strong>General</strong> applies.')
 	  ->setAttribute('data-pfb-schedule-override', 'true');
 
 $schedule_group = new Form_Group('Schedule');
@@ -1560,7 +1519,7 @@ $section->addInput(new Form_Select(
 	'Auto-Sort Header field',
 	$pconfig['sort'],
 	$options_sort
-))->setHelp('Automatic sorting of the Header/Label field grouped by the Enabled/Disabled State field setting.')
+))->setHelp('Automatic sorting of the <strong>Header/Label</strong> field, grouped by the <strong>State</strong> setting (<strong>ON</strong>/<strong>OFF</strong>).')
   ->setAttribute('style', 'width: auto');
 
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
@@ -1570,8 +1529,8 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		'Enable Logging',
 		$pconfig['aliaslog'],
 		$options_aliaslog
-	))->setHelp('Default: <strong>Enable</strong><br />Select - Logging to Status: System Logs: FIREWALL ( Log )<br />'
-		. 'This can be overriden by the \'Force Global IP Logging\' option on the IP Tab.')
+	))->setHelp('Default: <strong>Enabled</strong><br />Select - Logging to Status: System Logs: FIREWALL ( Log )<br />'
+		. 'This can be overridden by <strong>Force Global IP Logging</strong> on <strong>IP</strong>.')
 	  ->setAttribute('style', 'width: auto');
 
 	$section->addInput(new Form_Select(
@@ -1579,7 +1538,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		'States Removal',
 		$pconfig['stateremoval'],
 		$options_stateremoval
-	))->setHelp('With the \'Kill States\' option (IP Tab), you can disable States removal for this Alias.');
+	))->setHelp('With <strong>Kill States</strong> on <strong>IP</strong> enabled, you can disable states removal for this alias.');
 
 	$form->add($section);
 
@@ -1591,11 +1550,9 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		$section = new Form_Section("Advanced {$adv_mode}bound Firewall Rule Settings", "adv{$advmode}boundsettings", COLLAPSIBLE|SEC_CLOSED);
 		$section->addInput(new Form_StaticText(
 			NULL,
-			"<span class=\"text-danger\">Note:</span>&nbsp; In general, Auto-Rules are created as follows:<br />
-				<dl class=\"dl-horizontal\">
-					<dt>{$adv_mode}bound</dt><dd>'any' port, 'any' protocol, 'any' destination and 'any' gateway</dd>
-				</dl>
-				Configuring the Adv. {$adv_mode}bound Rule settings, will allow for more customization of the {$adv_mode}bound Auto-Rules."));
+			'By default, ' . strtolower($adv_mode) . 'bound automatic rules use any port, any protocol, any '
+			. (($adv_type == 'Source') ? 'destination' : 'source') . ' and any gateway. '
+			. "The settings in this section customize the {$advmode}bound automatic rules."));
 
 		$section->addInput(new Form_Checkbox(
 			'autoaddrnot_' . $advmode,
@@ -1620,8 +1577,8 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'Custom Port',
 			'text',
 			$pconfig["aliasports_{$advmode}"]
-		))->setHelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=port">Click Here to add/edit Aliases</a>
-				Do not manually enter port numbers.<br />Do not use \'pfB_\' in the Port Alias name.<br />Must be a Port-type alias.')
+		))->setHelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=port">Add or edit aliases</a><br />'
+				. 'Do not enter port numbers directly.<br />Do not use <code>pfB_</code> in the port alias name.<br />Must be a Port-type alias.')
 		  ->setWidth(8);
 		$section->add($group);
 
@@ -1653,9 +1610,9 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			"Custom {$custom_location}",
 			'text',
 			$pconfig['aliasaddr_' . $advmode]
-		))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
-			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be an address-type (Host, Network, URL or URL Table) alias.")
+		))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Add or edit aliases</a><br />'
+			. 'Do not enter addresses directly.<br />Do not use <code>pfB_</code> in the address-type (Host/Network/URL/URL Table) alias name.<br />'
+			. "Select <strong>Invert</strong> to invert the sense of the match: Not (!) {$custom_location} Address(es).<br />Must be an address-type (Host, Network, URL or URL Table) alias.")
 		  ->setWidth(8);
 		$section->add($group);
 
@@ -1666,7 +1623,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			$pconfig['autoproto_' . $advmode],
 			$options_autoproto_in
 		))->setHelp("<strong>Default: Any</strong><br />Select the Protocol used for {$adv_mode}bound Firewall Rule(s).<br />"
-				. "<span class=\"text-danger\">Note:</span>&nbsp;Do not use 'Any' with Adv. {$adv_mode}bound Rules as it will bypass these settings!");
+				. "<span class=\"text-danger\"><strong>Warning:</strong></span> Do not use 'Any' with <strong>Advanced {$adv_mode}bound Firewall Rule Settings</strong>; it bypasses these settings.");
 		$section->add($group);
 
 		$group = new Form_Group('Custom Gateway');
@@ -1690,21 +1647,17 @@ if ($gtype == 'dnsbl') {
 		$pconfig['order'],
 		$options_order
 	))->setHelp('Default: <strong>Default</strong><br />'
-			. 'When set as \'Primary\', this DNSBL Group will be processed before all other DNSBL Groups/Category(s)')
+			. 'When set to <strong>Primary</strong>, this DNSBL group is processed before all other DNSBL groups and categories.')
 	  ->setAttribute('style', 'width: auto');
 
-	$log_text = '<strong>Default</strong> inherits the Global Logging/Blocking Mode (DNSBL tab) live -- a later '
-			. 'change to the global mechanism applies to this Group immediately, without editing it again. Every '
-			. 'brand-new DNSBL Group starts on Default; an existing Group keeps its currently configured setting.<br />'
+	$log_text = '<p><strong>Default</strong> inherits <strong>Global Logging/Blocking Mode</strong> from <strong>DNS</strong> &gt; <strong>DNSBL</strong>. New DNSBL groups start on <strong>Default</strong>. '
+			. 'When <strong>Global Application Mode</strong> is <strong>Override</strong>, the global mode applies instead and this choice is kept for later.</p>'
 			. pfb_dnsbl_mechanism_help()
-			. '<br />'
-			. 'Blocked domains will be reported to the Alert/Block Table.<br />'
-			. 'The DNSBL tab\'s Global Application Mode, when set to <strong>Override</strong>, forces every Group onto the Global Logging/Blocking Mechanism WITHOUT erasing this saved choice -- return it to Default to restore this setting\'s effect.<br />'
-			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update';
+			. '<p>Logged blocks appear on <strong>Reports</strong> &gt; <strong>Alerts</strong>; no-logging modes only count them. Changes take effect when saved changes are applied.</p>';
 
 	$section->addInput(new Form_Select(
 		'logging',
-		'Logging / Blocking Mode',
+		'Logging/Blocking Mode',
 		$pconfig['logging'],
 		$options_logging
 	))->setHelp($log_text)
@@ -1716,9 +1669,9 @@ if ($gtype == 'dnsbl') {
 		'Enable',
 		pfb_cfg_toggle_read($pconfig['filter_top1m']) === PfbToggle::On,
 		'on'
-	))->setHelp('When TOP1M is enabled on the DNSBL tab, filter this Group\'s domain entries against it. '
-			. 'With this box cleared, this Group still blocks TOP1M domains, including its Custom List. '
-			. 'Other Groups can still block a filtered domain; the DNSBL Whitelist always takes precedence.');
+	))->setHelp('When <strong>TOP1M</strong> is enabled on <strong>DNS</strong> &gt; <strong>DNSBL</strong>, this group no longer blocks a name in the TOP1M list or its <code>www.</code> form; deeper subdomains stay blocked. '
+			. 'Groups without this box still block those names. This group\'s <strong>Custom List</strong> entries follow this box, and the <strong>DNSBL Whitelist</strong> always takes precedence. '
+			. 'Settings saved before a package upgrade apply after the next DNSBL update.');
 
 	$form->add($section);
 }
@@ -1737,8 +1690,8 @@ if ($gtype == 'ipv4') {
 		'Suppression CIDR Limit',
 		$pconfig['suppression_cidr'],
 		$options_suppression_cidr
-	))->setHelp('When suppression is enabled, this option will limit the CIDR block for this entire IPv4 Alias'
-		. '(Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (Use the Suppression CIDR Limit set in the IP Tab; GeoIP feeds are not limited)')
+	))->setHelp('When <strong>Suppression</strong> is enabled on <strong>IP</strong>, this limits the CIDR size for this whole IPv4 alias (excluding <strong>Custom List</strong> entries).<br />'
+		. 'Default: <strong>Disabled</strong> (uses <strong>Suppression CIDR Limit</strong> on <strong>IP</strong>; GeoIP feeds are not limited)')
 	  ->setAttribute('style', 'width: auto');
 }
 
@@ -1747,8 +1700,7 @@ $section->addInput(new Form_Select(
 	'cURL Interface',
 	$pconfig['srcint'],
 	$options_srcint
-))->setHelp('Use this interface when downloadling lists. This option sets <code>CURLOPT_INTERFACE</code>'
-	. ' to the value selected above for all Feeds in this Alias.')
+))->setHelp('Download every feed in this group through this interface. Default: normal routing.')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Select(
@@ -1766,7 +1718,7 @@ $section->addInput(new Form_Select(
 	$pconfig['script_post'],
 	$options_script_post
 ))->sethelp("Post-processing Shell script after download.<br />"
-	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_post_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_post_SCRIPT NAME.sh|py</strong>")
+	. 'Script location: <code>/usr/local/pkg/pfblockerng/list_scripts/</code>, named <code>ip_post_*.sh</code>, <code>ip_post_*.py</code>, <code>dnsbl_post_*.sh</code> or <code>dnsbl_post_*.py</code>.')
   ->setAttribute('style', 'width: auto')
   ->setAttribute('size', $options_script_post_cnt);
 
@@ -1774,19 +1726,14 @@ $form->add($section);
 
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 
-	$custom_txt = "<span class=\"text-danger\">Note: </span>&nbsp;Custom List can be used in <strong>ONE</strong> of two ways:<br />
-			<ul>
-				1. {$type} addresses entered directly into the custom list, as per the required format.<br />
-				2. Domain names or AS numbers (ASN), which will be converted into their respective {$type} addresses.
-			</ul>";
+	$custom_txt = '<p><strong>Custom List</strong> accepts one of two input types:</p>
+			<ol>
+				<li>IP addresses and CIDRs, entered directly.</li>
+				<li>Domain names or AS numbers, converted to addresses at update time. Select <strong>Enable Domain/AS</strong> for this mode; AS numbers need <strong>ASN IPinfo Token</strong> on <strong>IP</strong>.</li>
+			</ol>' . $alias_roles;
 }
 else {
-	$custom_txt = "No Regex Entries Allowed!
-			<div class=\"infoblock alert-info clearfix\">
-				Enter one &emsp; <strong>'Domain Name'</strong> &emsp; per line<br /><br />
-				You may use '<strong>#</strong>' after any Domain name to add comments. example ( ads.google.com # Block Google Ads )<br />
-				This List is stored as 'Base64' format in the config.xml file.
-			</div>";
+	$custom_txt = '<p>Enter one domain per line; add <code># comment</code> after an entry. Put regular expressions in <strong>Regex List</strong> on <strong>DNS</strong> &gt; <strong>DNSBL</strong>.</p>';
 }
 
 $custom_txt = '<div id="Customlist"></div>' . $custom_txt;
@@ -1842,12 +1789,13 @@ $form->add($section);
 print ($form);
 
 if ($gtype == 'dnsbl') {
-	print_callout('<p><strong>Click to SAVE Settings and/or Rule edits.&emsp;Changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.<br /><br />
-			DNSBL Category Feeds are processed first, followed by the DNSBL Groups.<br />
-			DNSBL Groups can be prioritized first, by selecting the \'Group Order\' option.</p>');
+	print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. '
+			. 'To apply them now, open <a href="/pfblockerng/pfblockerng_update.php">Update</a>, set <strong>Run Scope</strong> to <strong>DNSBL</strong> or <strong>Both</strong>, then use <strong>Run Now</strong>.</p>
+			<p>DNSBL Category feeds are processed first, followed by the DNSBL groups. Set <strong>Group Order</strong> to <strong>Primary</strong> to process a group first.</p>');
 }
 else {
-	print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
+	print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. '
+			. 'To apply them now, open <a href="/pfblockerng/pfblockerng_update.php">Update</a>, set <strong>Run Scope</strong> to <strong>IP</strong> or <strong>Both</strong>, then use <strong>Run Now</strong>.</p>');
 }
 
 ?>

@@ -805,7 +805,7 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertArrayHasKey('pfb_filter', $services);
 		$proxy = $services['pfb_dns_proxy'];
 		$this->assertSame('pfb_dns_proxy.sh', (string) $proxy->rcfile);
-		$this->assertSame('pfBlockerNG DNS proxy (experimental)', (string) $proxy->description);
+		$this->assertSame('pfB-DNS (experimental DNS proxy)', (string) $proxy->description);
 		$status = (string) $proxy->custom_php_service_status_command;
 		$this->assertSame("isvalidpid('" . PFB_DNS_PROXY_PIDFILE . "')", $status, 'util.inc alone is loaded where pfSense evals it');
 

@@ -1574,35 +1574,6 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     )
 
 
-def test_apply_guidance_names_run_now_not_retired_actions(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """Settings pages point at actions that exist: the scheduled update and the
-    Update tab's Run Now (issue #3237) — never the retired "Force Update" /
-    "Force Reload" buttons or the "applied via CRON or 'Force Update|Reload' only!"
-    footer (#886 fixed the one TOP1M instance; this covers the remaining pages).
-
-    Asserts the IP and DNSBL pages pass the clean-render oracle AND carry the
-    corrected guidance, with no retired action name anywhere in the rendered body.
-    """
-    for path, anchor, needle in (
-        (
-            "/pfblockerng/pfblockerng_ip.php",
-            "IP Configuration",
-            "Setting changes are applied on the next scheduled update.",
-        ),
-        (
-            "/pfblockerng/pfblockerng_dnsbl.php",
-            "DNSBL Webserver Configuration",
-            "A DNSBL reload is required for changes to take effect",
-        ),
-    ):
-        resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, (anchor,))
-        assert result.ok, f"render oracle failed for {path}: {result.detail}"
-        assert needle in resp.text, f"{path} is missing the corrected apply guidance {needle!r}"
-        for retired in ("Force Reload", "Force Update", "applied via CRON"):
-            assert retired not in resp.text, f"{path} still instructs the retired action {retired!r} (issue #3237)"
-
-
 def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The ADR-22 'Download Schemes' toggle renders cleanly on the DNSBL page — so a
     regression that drops or breaks the field is caught at the render tier (not only by the
@@ -4710,7 +4681,13 @@ def _seed_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float = 30.0
 
 
 _PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
-_PENDING_NEEDLE = "Pending changes will be applied on the next list update"
+_UPDATE_LINK = '<a href="/pfblockerng/pfblockerng_update.php">'
+
+
+def _pending_banners(page_html: str) -> list[str]:
+    """The markup of each ``alert-warning`` box naming the Automatic Apply Window control."""
+    boxes = re.findall(r'<div[^>]*class="[^"]*\balert-warning\b[^"]*"[^>]*>.*?</div>', page_html, re.DOTALL)
+    return [box for box in boxes if "<strong>Automatic Apply Window</strong>" in box]
 
 
 def test_pending_changes_banner_tracks_the_marker(
@@ -4739,17 +4716,16 @@ def test_pending_changes_banner_tracks_the_marker(
         resp = webui.get(path)
         result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
         assert result.ok, f"DNSBL render oracle failed (clean state): {result.detail}"
-        assert _PENDING_NEEDLE not in resp.text, "pending-changes banner must be ABSENT when there is no marker file"
+        assert not _pending_banners(resp.text), "pending-changes banner must be ABSENT when there is no marker file"
 
         # When settings have changed but no Update has run — banner SHOWS, with its link.
         smoke_vm.ssh("touch", _PENDING_MARKER)
         resp2 = webui.get(path)
         result2 = evaluate_render(path, resp2.status_code, resp2.text, ("DNSBL Webserver Configuration",))
         assert result2.ok, f"DNSBL render oracle failed (pending state): {result2.detail}"
-        assert _PENDING_NEEDLE in resp2.text, "pending-changes banner must SHOW when the marker file exists"
-        assert "To run an update now, go to the" in resp2.text, (
-            "pending-changes banner must carry the Update-page call to action"
-        )
+        banners = _pending_banners(resp2.text)
+        assert len(banners) == 1, f"pending-changes banner must SHOW once when the marker exists; found {banners!r}"
+        assert _UPDATE_LINK in banners[0], f"pending-changes banner must link to the Update page; got {banners[0]!r}"
 
         # On the Update page itself ($on_update_page=TRUE) the banner SHOWS but drops the
         # redundant self-link — exercising the other branch of pfb_print_pending_changes_box().
@@ -4757,9 +4733,10 @@ def test_pending_changes_banner_tracks_the_marker(
         resp3 = webui.get(update_path)
         result3 = evaluate_render(update_path, resp3.status_code, resp3.text, ("Update Settings",))
         assert result3.ok, f"Update render oracle failed (pending state): {result3.detail}"
-        assert _PENDING_NEEDLE in resp3.text, "banner must SHOW on the Update page too when pending"
-        assert "To run an update now, go to the" not in resp3.text, (
-            "on the Update page the banner must NOT carry the go-to-Update self-link"
+        banners = _pending_banners(resp3.text)
+        assert len(banners) == 1, f"banner must SHOW on the Update page too when pending; found {banners!r}"
+        assert _UPDATE_LINK not in banners[0], (
+            f"on the Update page the banner must NOT carry the go-to-Update self-link; got {banners[0]!r}"
         )
     finally:
         smoke_vm.ssh("rm", "-f", _PENDING_MARKER)

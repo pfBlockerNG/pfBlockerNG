@@ -21,7 +21,7 @@ pytestmark = pytest.mark.ui_render
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 WARNING_MARKER = "DNSBL IP rules may be skipped on the High Availability peer"
-WARNING_HINT = "re-select the DNSBL Virtual IP on the peer"
+WARNING_HINT = "<strong>DNSBL Virtual IP</strong>"  # the recovery step names the real DNSBL VIP control
 
 # Every stored condition of the warning except the Sync scope and mode, so a Tier-B flow can
 # drive those two through the Sync page's own save.

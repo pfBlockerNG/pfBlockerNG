@@ -44,7 +44,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 
 	private const HEAD = 'pfB-DNS started with problems: ';
-	private const TAIL = ' Correct the settings on the pfB-DNS page or the cause named, then run an Update.';
+	private const TAIL = ' Correct the settings on "DNS" > "pfB-DNS" or the cause named, then use "Run Now" on "Update".';
 
 	private const DOT_ON = ['pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'lan', 'pfb_dns_dot_port' => '853'];
 	private const DOH_ON = ['pfb_dns_doh' => 'on', 'pfb_dns_doh_interface' => 'lan', 'pfb_dns_doh_port' => '443'];

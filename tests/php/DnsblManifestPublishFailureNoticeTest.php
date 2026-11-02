@@ -81,7 +81,7 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 		$this->assertSame('pfBlockerNG DNSBL', $notice['id']);
 		$this->assertSame('/pfblockerng/pfblockerng_dnsbl.php', $notice['url']);
 		$this->assertSame(2, $notice['priority']);
-		$this->assertStringContainsString('pfb_py_sources.json', $notice['notice']);
+		$this->assertStringContainsString('pfb_py_sources.json', (string) @file_get_contents("{$this->tmp}/error.log"), 'the failing path goes to the error log');
 		$this->assertFileDoesNotExist(
 			"{$this->tmp}/readonly/pfb_py_sources.json",
 			'the manifest must not appear to have published'

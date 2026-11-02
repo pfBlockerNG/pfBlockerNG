@@ -65,7 +65,7 @@ final class DnsblRegexEntryErrorTest extends TestCase
 
 	// issue #1688 red-before proof: the save-time validator has no length-cap concept
 	// yet, so an over-length-but-otherwise-safe pattern is silently accepted here even
-	// though pfb_unbound.py drops it at load once "Limit long/complex regex" is on.
+	// though pfb_unbound.py drops it at load once "Limit regex length to 200 characters" is on.
 	public function testOverLengthPatternIsRejectedOnceTheSaveTimeCapExists(): void
 	{
 		$pattern = self::anchoredPattern(201);

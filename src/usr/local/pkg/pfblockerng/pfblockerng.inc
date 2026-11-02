@@ -3510,9 +3510,14 @@ if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
 // blacklist download pass on a slow link, and its only job is to stop a stalled child
 // from holding the pass -- and pfblockerng_tick()'s log-maintenance gate -- open forever.
 // Since issue #2851 it is also the ABSENT/INVALID value of the configurable budget
-// (General -> Advanced, 'Nested pass timeout'), so a degraded setting lands here.
+// (General -> Advanced, 'Database download timeout'), so a degraded setting lands here.
 if (!defined('PFB_REENTRY_TIMEOUT')) {
 	define('PFB_REENTRY_TIMEOUT', 1800);
+}
+
+// The DNSBL publication failure notice (plain text: notices are escaped); the stage and path go to the error log.
+if (!defined('PFB_DNSBL_UPDATE_FAILED_NOTICE')) {
+	define('PFB_DNSBL_UPDATE_FAILED_NOTICE', 'DNSBL lists could not be updated. Open "error.log" on "Logs" for details, fix the cause, then retry "Run Now" with "Run Scope" set to "DNSBL".');
 }
 
 // issue #2851: the window (whole seconds) an operator may configure the nested-pass
@@ -5708,7 +5713,7 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 	if ($problems !== []) {
 		pfb_dns_proxy_notify($id, 'pfB-DNS started with problems: ' .
 		    implode(' ', array_map(static fn (string $problem): string => rtrim($problem, '.') . '.', $problems)) .
-		    ' Correct the settings on the pfB-DNS page or the cause named, then run an Update.', '/pfblockerng/pfblockerng_dns.php');
+		    ' Correct the settings on "DNS" > "pfB-DNS" or the cause named, then use "Run Now" on "Update".', '/pfblockerng/pfblockerng_dns.php');
 	} elseif ($judged) {
 		foreach (get_notices() ?: [] as $key => $row) {
 			if (($row['id'] ?? NULL) === htmlentities($id)) {
@@ -9037,7 +9042,7 @@ function pfb_deinstall_clear_pending_changes(): void {
 }
 
 /*
- * Print the "settings changed — apply on the next Update" info banner when there are pending
+ * Print the "saved changes are pending" info banner when there are pending
  * changes; no-op otherwise. Call immediately after display_top_tabs() on each pfBlockerNG page.
  * $on_update_page drops the redundant cross-link when already on the Update page.
  */
@@ -9045,12 +9050,13 @@ function pfb_print_pending_changes_box(bool $on_update_page = FALSE): void {
 	if (!pfb_pending_changes()) {
 		return;
 	}
-	$msg = gettext('Pending changes will be applied on the next list update.');
+	$msg = gettext('Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. '
+		. 'If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window.');
 	if ($on_update_page) {
-		$msg .= ' ' . gettext('Use the Run Now function below to apply them now.');
+		$msg .= ' ' . gettext('To apply them now, use <strong>Run Now</strong> below.');
 	} else {
 		$msg .= ' ' . sprintf(
-			gettext('To run an update now, go to the %s tab and use the Run Now function.'),
+			gettext('To apply them now, open %s and use <strong>Run Now</strong>.'),
 			'<a href="/pfblockerng/pfblockerng_update.php">' . gettext('Update') . '</a>'
 		);
 	}
@@ -14325,8 +14331,8 @@ function pfb_unbound_python_sources($feeds, array $publication_ops=array()) {
 	$lock = pfb_unbound_py_publication_lock();
 	if ($lock === FALSE) {
 		$manifest_path = $GLOBALS['pfb']['unbound_py_sources'] ?? 'unknown path';
-		$manifest_notice = "DNSBL manifest publication lock failed: {$manifest_path}";
-		file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG',
+		pfb_logger("\nDNSBL manifest publication lock failed: {$manifest_path}", 2);
+		file_notice('pfBlockerNG DNSBL', PFB_DNSBL_UPDATE_FAILED_NOTICE, 'pfBlockerNG',
 			'/pfblockerng/pfblockerng_dnsbl.php', 2);
 		return FALSE;
 	}
@@ -14363,7 +14369,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	$abort_generation = static function (string $reason) use ($stage_dir) {
 		rmdir_recursive($stage_dir);
 		pfb_logger("\nDNSBL raw generation failed: {$reason}", 2);
-		file_notice('pfBlockerNG DNSBL', 'DNSBL raw generation publish failed', 'pfBlockerNG',
+		file_notice('pfBlockerNG DNSBL', PFB_DNSBL_UPDATE_FAILED_NOTICE, 'pfBlockerNG',
 			'/pfblockerng/pfblockerng_dnsbl.php', 2);
 		return FALSE;
 	};
@@ -14608,9 +14614,8 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			// ADR-65: a swallowed publish failure left Python running on a stale/absent
 			// manifest with no operator-visible signal -- surface it like the existing
 			// MaxMind/VIP credential notices (issue #331 pattern).
-			$manifest_notice = "DNSBL manifest publish failed: {$pfb['unbound_py_sources']}";
-			pfb_logger("\n{$manifest_notice}", 2);
-			file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+			pfb_logger("\nDNSBL manifest publish failed: {$pfb['unbound_py_sources']}", 2);
+			file_notice('pfBlockerNG DNSBL', PFB_DNSBL_UPDATE_FAILED_NOTICE, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
 			return FALSE;
 		}
 		if ($top1m_enabled && $top1m_backup !== FALSE) {
@@ -15142,7 +15147,7 @@ function pfb_dns_status_panel(array $status): string {
 				'listening'              => ['fa-check-circle text-success', 'Listening'],
 				'not_listening'          => ['fa-times-circle text-danger', 'Not listening'],
 				'configured_not_bound'   => ['fa-exclamation-circle text-warning', 'Configured, not bound'],
-				'configured_unconfirmed' => ['fa-exclamation-circle text-warning', 'Configured, not confirmed by the gateway'],
+				'configured_unconfirmed' => ['fa-exclamation-circle text-warning', 'Configured, not confirmed by pfB-DNS'],
 			};
 			$rows .= '<tr><td>' . htmlspecialchars($row['interface']) . '</td><td>' . implode('<br />', array_map('htmlspecialchars', $row['addresses'])) . '</td><td>'
 			    . "<i class=\"fa-solid {$icon}\" title=\"{$meaning}\" aria-hidden=\"true\"></i><span class=\"sr-only\">{$meaning}</span>"
@@ -15303,7 +15308,7 @@ function pfb_dns_proxy_listen_port_conflict(): ?string {
 /** The toggle-on refusal: the operator gets a notice, not only a log line, saying what stays as it was and what to correct. */
 function pfb_dns_proxy_refuse(string $why): bool {
 	$text = "DNS proxy: {$why}. " . pfb_dns_proxy_unmoved_effect(pfb_dns_proxy_saved() !== NULL) .
-	    ' Correct the Resolver in Services > DNS Resolver, or turn the DNS proxy option off.';
+	    ' Correct the Resolver in "Services" > "DNS Resolver", or turn "pfB-DNS" off on "DNS" > "pfB-DNS".';
 	pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/services_unbound.php');
 	return FALSE;
 }
@@ -18642,24 +18647,23 @@ function pfb_dnsbl_mechanism_labels(): array {
 	);
 }
 
-/** issue #3539: the one mechanism help (a bullet per mechanism label, each ending in <br />) shared by the DNSBL page and the group editor. */
+/** issue #3539: the one mechanism help, one list item per mechanism label, shared by the DNSBL tab, the group editor and the DNSBL Category page. */
 function pfb_dnsbl_mechanism_help(): string {
 	$notes = array(
-		'enabled'	=> 'Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer. '
-				. 'Deprecated: prefer Null Blocking; the web server and VIP run only while a list, the Blacklist category or a built-in block uses it.',
-		'disabled_log'	=> 'Utilize \'0.0.0.0\' with logging.',
-		'disabled'	=> 'Utilize \'0.0.0.0\' with no logging.',
-		'nxdomain_log'	=> 'Reply NXDOMAIN with logging. The DNSBL block page is bypassed.',
-		'nxdomain'	=> 'Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.',
-		'nodata_log'	=> 'Reply NOERROR with an empty answer (SOA in authority) with logging. The DNSBL block page is bypassed.',
-		'nodata'	=> 'Reply NOERROR with an empty answer (SOA in authority) with no logging. The DNSBL block page is bypassed.',
+		'enabled'	=> 'blocked names resolve to the DNSBL VIP. The web server can log requests and show the block page.',
+		'disabled_log'	=> 'answer <code>0.0.0.0</code> for A and <code>::</code> for AAAA; log the block.',
+		'disabled'	=> 'answer <code>0.0.0.0</code> for A and <code>::</code> for AAAA; do not log the event.',
+		'nxdomain_log'	=> 'answer NXDOMAIN and log the block. No block page.',
+		'nxdomain'	=> 'answer NXDOMAIN without an event log. No block page.',
+		'nodata_log'	=> 'return an empty successful answer with an SOA record; log the block. No block page.',
+		'nodata'	=> 'return an empty successful answer with an SOA record, without an event log. No block page.',
 	);
 
-	$help = '';
+	$help = '<ul>';
 	foreach (pfb_dnsbl_mechanism_labels() as $token => $label) {
-		$help .= "&#8226 <strong>{$label}</strong>, {$notes[$token]}<br />";
+		$help .= "<li><strong>{$label}</strong>: {$notes[$token]}</li>";
 	}
-	return $help;
+	return $help . '</ul>';
 }
 
 /** Existing groups count as domain configuration even without a settings section. */
@@ -26675,7 +26679,7 @@ function pfb_sync_sender_panel(array $send): string {
 	}
 	return '<div class="panel panel-default" id="pfb-sync-sender"><div class="panel-heading"><h2 class="panel-title">Sender: last sync attempts</h2></div><div class="panel-body">'
 	    . '<table class="table table-condensed"><thead><tr><th>Target</th><th>Time</th><th>Payload digest</th><th>Result</th></tr></thead><tbody>' . $rows . '</tbody></table>'
-	    . '<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own Sync page shows its receive. A failure shows its class; the system log keeps the client\'s full message.</p></div></div>';
+	    . '<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own <strong>Sync</strong> page shows its receive. A failure shows its class; the system log keeps the client\'s full message.</p></div></div>';
 }
 
 /*

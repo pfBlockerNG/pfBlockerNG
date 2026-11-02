@@ -229,7 +229,7 @@ final class PfbDnsStatusPanelTest extends TestCase
 			'not listening, with the gateway\'s reason' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', self::REASON],
 			'not listening, no reason given' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', 'the gateway did not report it'],
 			'configured, the service is not running' => ['configured_not_bound', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not bound', ''],
-			'configured, the gateway does not confirm it' => ['configured_unconfirmed', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not confirmed by the gateway', ''],
+			'configured, pfB-DNS does not confirm it' => ['configured_unconfirmed', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not confirmed by pfB-DNS', ''],
 		];
 	}
 

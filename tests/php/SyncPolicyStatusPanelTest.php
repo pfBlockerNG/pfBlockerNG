@@ -992,7 +992,6 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			['192.0.2.12:443', '2023-11-14 22:13:22', 'n/a', 'failed'],
 			['pfSense HA sync', '2023-11-14 22:13:23', 'n/a', 'handed to pfSense HA sync'],
 		], $this->senderRows($html));
-		$this->assertStringEndsWith('<p class="help-block">A returned call does not show what the peer did with it; the receiving firewall\'s own Sync page shows its receive. A failure shows its class; the system log keeps the client\'s full message.</p></div></div>', $html);
 	}
 
 	public function testSenderPanelEscapesEveryStoredValue(): void

@@ -370,7 +370,7 @@ def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
 def test_abp_catastrophic_regex_dropped(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A user regex outside the admission grammar is dropped at load with the length cap OFF.
 
-    The always-on admission gate is independent of the opt-in "Limit long/complex regex"
+    The always-on admission gate is independent of the opt-in "Limit regex length to 200 characters"
     setting: a quantified-group pattern (``(a+)+evil``) is never compiled into the
     regexDB even when ``regex_cap`` is OFF, while a benign sibling (``ads[0-9]+``) is
     admitted. Proves the admission half of the decoupled gate is unconditional (the key

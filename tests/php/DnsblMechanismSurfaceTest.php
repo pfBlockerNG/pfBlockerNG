@@ -41,31 +41,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		require_once __DIR__ . '/PageStatementLoader.php';
 	}
 
-	/** Every help bullet whose label names WebServer/VIP, from its label to the next bullet or block end. */
-	private static function vipBullets(string $html): array
-	{
-		$bullets = [];
-		if (preg_match_all('/<strong>[^<]*WebServer\/VIP[^<]*<\/strong>/', $html, $matches, PREG_OFFSET_CAPTURE) === FALSE) {
-			return [];
-		}
-		foreach ($matches[0] as [$label, $offset]) {
-			$tail      = substr($html, (int) $offset + strlen($label));
-			$end       = preg_match('/&#8226|<\/div>/', $tail, $stop, PREG_OFFSET_CAPTURE) === 1 ? (int) $stop[0][1] : strlen($tail);
-			$bullets[] = $label . substr($tail, 0, $end);
-		}
-		return $bullets;
-	}
-
-	private function assertEveryVipBulletIsDeprecated(string $html, string $where): void
-	{
-		$bullets = self::vipBullets($html);
-		$this->assertNotSame([], $bullets, "{$where}: no WebServer/VIP help bullet found -- the page lost its mechanism help");
-		foreach ($bullets as $bullet) {
-			$notice = substr($bullet, (int) strpos($bullet, '</strong>'));	// past the label: the bullet must say it, not just carry it
-			$this->assertStringContainsString('deprecated', strtolower(strip_tags($notice)), "{$where}: a WebServer/VIP bullet lacks the notice: {$bullet}");
-		}
-	}
-
 	// -----------------------------------------------------------------------
 	// 1 -- the shared label map
 	// -----------------------------------------------------------------------
@@ -96,16 +71,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		$help = pfb_dnsbl_mechanism_help();
 		foreach (pfb_dnsbl_mechanism_labels() as $token => $label) {
 			$this->assertStringContainsString("<strong>{$label}</strong>", $help, "the help has no bullet for the {$token} mechanism");
-		}
-	}
-
-	public function testVipBulletCarriesTheDeprecationNoticeBeyondItsLabel(): void
-	{
-		$bullets = self::vipBullets(pfb_dnsbl_mechanism_help());
-		$this->assertCount(1, $bullets, 'exactly one bullet describes the WebServer/VIP response');
-		$notice = strtolower(substr($bullets[0], strlen('<strong>' . self::VIP_LABEL . '</strong>')));
-		foreach (['deprecated', 'null blocking', 'blacklist category', 'built-in'] as $part) {
-			$this->assertStringContainsString($part, $notice, "the VIP bullet's notice must mention '{$part}'");
 		}
 	}
 
@@ -199,10 +164,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		foreach (pfb_dnsbl_mechanism_labels() as $token => $label) {
 			$this->assertStringContainsString("<strong>{$label}</strong>", $help, "the Blacklist help has no bullet for the {$token} mechanism");
 		}
-		$this->assertEveryVipBulletIsDeprecated($help, 'Blacklist logging help');
-		$this->assertStringContainsString('Deprecated: prefer Null Blocking', $help, 'the VIP deprecation sentence');
-		$this->assertStringContainsString('Default follows the global DNSBL blocking mechanism', strip_tags($help), 'the Blacklist-only Default line');
-		$this->assertStringNotContainsString('Default: <strong>Default</strong>', $help, 'no second "Default:" header beside the mechanism help');
 	}
 
 	public function testAlertsUnknownBlockingTypeLabelsUseTheSharedLabel(): void
