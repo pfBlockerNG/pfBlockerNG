@@ -111,6 +111,7 @@ test('TLD dialog on a fresh page is labelled and whitelists into the DNSBL White
 	assert.equal(page.submits[0]['#domain'], 'bad.example');
 	assert.equal(page.submits[0]['#table'], 'www.bad.example');
 	assert.equal(page.submits[0]['#dnsbl_exclude'] || '', '');
+	assert.ok(['', 'false'].includes(page.submits[0]['#dnsbl_wildcard'] || ''), 'exact choice must not request the wildcard');
 	assert.equal(page.submits[0]['#dnsbl_add'], undefined);
 	assert.equal(page.submits[0]['#ip_white'], undefined);
 });
