@@ -16,6 +16,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .test_browser_feeds import _open
+from .test_render_smoke import php_error_log_guard as php_error_log_guard
+
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page
 
@@ -45,12 +49,6 @@ DEFERRED_APPLY_PAGES = (
 
 def _norm(text: str | None) -> str:
     return " ".join((text or "").split())
-
-
-def _open(page: Page, webui: WebUI, path: str) -> None:
-    response = page.goto(webui.url(path), wait_until="domcontentloaded")
-    assert response is not None and response.status == 200, f"{path}: browser navigation failed"
-    assert page.locator("#usernamefld").count() == 0, f"{path}: browser session is not authenticated"
 
 
 def _row(page: Page, name: str) -> Locator:
@@ -372,10 +370,16 @@ class _Titles(HTMLParser):
 
 @pytest.mark.ui_render
 @pytest.mark.parametrize("ftype", ["ipv4", "ipv6", "dnsbl"])
-def test_feed_titles_are_plain_and_status_icons_name_the_status(webui: WebUI, ftype: str) -> None:
+def test_feed_titles_are_plain_and_status_icons_name_the_status(
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+    ftype: str,
+) -> None:
     """Native feed tooltips carry no markup, and each status icon names the catalogue status it marks."""
-    response = webui.get(f"{FEEDS}?type={ftype}")
-    assert response.status_code == 200, f"feeds {ftype}: HTTP {response.status_code}"
+    path = f"{FEEDS}?type={ftype}"
+    response = webui.get(path)
+    result = evaluate_render(path, response.status_code, response.text, ('id="pfb_table"',))
+    assert result.ok, f"{path}: {result.detail}"
     parser = _Titles()
     parser.feed(response.text)
     assert parser.titles, f"feeds {ftype}: no native titles rendered"
@@ -398,3 +402,20 @@ def test_feed_titles_are_plain_and_status_icons_name_the_status(webui: WebUI, ft
     assert len(rendered) >= len(statuses), f"feeds {ftype}: status icons {rendered!r} for statuses {statuses!r}"
     unnamed = [title for title in rendered if not any(status in title for status in statuses)]
     assert not unnamed, f"feeds {ftype}: status icon titles {unnamed!r} do not name a status in {sorted(statuses)!r}"
+
+
+@pytest.mark.ui_browser
+def test_feeds_count_labels_match_tabs_and_disclaimer_emphasis(browser_page: Page, webui: WebUI) -> None:
+    """Feed-count headings keep the tabs' displayed case, and only the disclaimer label is emphasized."""
+    _open(browser_page, webui, f"{FEEDS}?type=ipv4")
+    intro = browser_page.locator("div.panel-body.bg-info")
+    counts = [_norm(t).rstrip(":") for t in intro.locator(":scope dl").first.locator("dt").all_text_contents()]
+    tabs = {
+        _norm(browser_page.locator(f'ul.nav a[href="{FEEDS}?type={kind}"]').last.inner_text())
+        for kind in ("ipv4", "ipv6", "dnsbl")
+    }
+    assert set(counts) == tabs, f"count labels {counts!r} differ from actual tabs {sorted(tabs)!r}"
+    disclaimer = intro.locator("p").filter(has=browser_page.locator("strong", has_text="Disclaimer:"))
+    assert disclaimer.count() == 1, "the disclaimer needs its own paragraph with an emphasized label"
+    assert _strong_texts(disclaimer) == ["Disclaimer:"], "only the disclaimer label should be emphasized"
+    assert _norm(disclaimer.text_content()) != "Disclaimer:", "the disclaimer must retain its risk explanation"
