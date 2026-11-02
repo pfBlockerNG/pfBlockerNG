@@ -582,6 +582,22 @@ def test_a_truncated_query_for_a_blocked_name_gets_unbounds_formerr_from_the_rea
     assert (reply.rcode, reply.answers) == (1, [])
 
 
+# The same refusal for a query whose question does not parse: the gateway cannot read the question it asked about, and
+# Unbound's header-only FORMERR is still the answer.
+@pytest.mark.parametrize(
+    ("exchange", "source"), [(udp_exchange, ALLOWED_CLIENT), (tcp_exchange, ALLOWED_CLIENT_TCP)], ids=["udp", "tcp"]
+)
+@pytest.mark.parametrize(
+    "question", [b"\x07exam", b"\xc0\x0c\x00\x01\x00\x01"], ids=["question-cut-short", "name-pointing-to-itself"]
+)
+def test_a_truncated_query_whose_question_does_not_parse_gets_unbounds_formerr_from_the_real_unbound(
+    gateway: Running, exchange: Callable[..., Coroutine[Any, Any, Any]], source: str, question: bytes
+) -> None:
+    query = struct.pack("!HHHHHH", 0x0ABC, 0x0300, 1, 0, 0, 0) + question  # RD and TC: refused before the question
+    reply = dnswire.parse(_ask(exchange, gateway.server, query, source))
+    assert (reply.rcode, reply.answers) == (1, [])
+
+
 # Unbound answers an opcode it does not implement itself (NOTIMP), so the decider must forward it and not block it.
 @pytest.mark.parametrize(
     ("exchange", "source"), [(udp_exchange, ALLOWED_CLIENT), (tcp_exchange, ALLOWED_CLIENT_TCP)], ids=["udp", "tcp"]

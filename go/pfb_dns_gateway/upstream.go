@@ -74,8 +74,8 @@ const (
 	udpPayloadMax6 = 65535 - 8
 )
 
-// exchangeUDP sends header+wire from a fresh connected socket and returns the first reply that carries the
-// query's id, the response bit, and the same question name, type and class. Anything else is ignored.
+// exchangeUDP sends header+wire from a fresh connected socket and returns the first reply to the query (udpReplyFor);
+// anything else is ignored.
 func (u *upstream) exchangeUDP(ctx context.Context, header, wire []byte) []byte {
 	reply, _ := u.exchangeUDPResult(ctx, header, wire)
 	return reply
@@ -132,6 +132,8 @@ func udpDatagramTooLong(addr string, header, wire []byte) bool {
 	return len(header) > maxPayload || len(wire) > maxPayload-len(header)
 }
 
+const dnsHeaderLen = 12 // RFC 1035 4.1.1
+
 func firstQuestion(wire []byte) (dnsmessage.Question, bool) {
 	var p dnsmessage.Parser
 	if _, err := p.Start(wire); err != nil {
@@ -144,15 +146,26 @@ func firstQuestion(wire []byte) (dnsmessage.Question, bool) {
 	return q, true
 }
 
-// udpReplyFor reports whether reply is a response to query: same id, QR set, and the same question.
-// A truncated reply may be only the header, so it has no question to compare; that is not a different question.
+// udpReplyFor reports whether reply is the response to query: a whole header with the query's id and QR set, then the
+// query's question. A reply with no question counts only when it is an error or truncated: Unbound answers a message it
+// refuses before it reads the question (TC set, an opcode it does not implement, a bad count, a question that does not
+// parse) with a bare header. A truncated reply may also have lost all or part of its question, which is not a different
+// question. Any other question that cannot be parsed, on either side, has no name, type and class to compare, so only
+// the query's own bytes sent back are that question.
 func udpReplyFor(query, reply []byte, question dnsmessage.Question, ok bool) bool {
-	if !ok || len(reply) < 3 || reply[0] != query[0] || reply[1] != query[1] || reply[2]&0x80 == 0 {
+	var p dnsmessage.Parser
+	h, err := p.Start(reply)
+	if err != nil || h.ID != binary.BigEndian.Uint16(query) || !h.Response {
 		return false
 	}
-	got, gotOK := firstQuestion(reply)
-	if !gotOK {
-		return reply[2]&0x02 != 0
+	got, err := p.Question()
+	switch {
+	case errors.Is(err, dnsmessage.ErrSectionDone):
+		return h.RCode != dnsmessage.RCodeSuccess || h.Truncated
+	case err != nil:
+		return h.Truncated || (!ok && bytes.Equal(reply[dnsHeaderLen:], query[min(dnsHeaderLen, len(query)):]))
+	case !ok:
+		return false
 	}
 	return got.Type == question.Type && got.Class == question.Class && sameDNSName(got.Name, question.Name)
 }
