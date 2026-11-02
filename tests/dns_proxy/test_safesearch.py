@@ -388,7 +388,7 @@ def test_a_restart_with_nothing_planted_is_servfail_without_a_chase(
 
 
 def test_an_oversized_chase_is_a_servfail_callback_and_one_log_line_however_often_it_is_asked(
-    ss_booted: Booted, monkeypatch: pytest.MonkeyPatch
+    ss_booted: Booted, monkeypatch: pytest.MonkeyPatch, clock: Any
 ) -> None:
     """Issue #3641: a chase over one DNS message is never sent. Each client gets the SERVFAIL through the servfail
     callback, and a client repeating the query costs one log line per SILENCE_LOG_INTERVAL, not one per query: the
@@ -410,11 +410,20 @@ def test_an_oversized_chase_is_a_servfail_callback_and_one_log_line_however_ofte
     query = build_query(DUCK, edns=True, options=struct.pack("!HH", 12, padding) + bytes(padding))
     frontend = pfb_dns_proxy.Frontend(ss_booted.module)
     unbound = FakeUnbound(ZONE)
-    replies = [dnswire.parse(asyncio.run(frontend.resolve(query, CLIENT, unbound)) or b"") for _ in range(2)]
-    assert [reply.rcode for reply in replies] == [2, 2]
-    assert seen == [("reply_servfail", 2), ("reply_servfail", 2)]
-    assert _asked(unbound) == [(DUCK, dnswire.TYPE_A)] * 2  # the client's own queries; no chase
-    assert len(logged) == 1, logged
+
+    def ask() -> dnswire.Message:
+        return dnswire.parse(asyncio.run(frontend.resolve(query, CLIENT, unbound)) or b"")
+
+    replies = [ask(), ask()]
+    clock.advance(pfb_dns_proxy.SILENCE_LOG_INTERVAL - 0.5)
+    replies.append(ask())
+    assert len(logged) == 1, logged  # still inside the interval
+    clock.advance(0.5)  # the interval ends exactly here
+    replies.append(ask())
+    assert [reply.rcode for reply in replies] == [2] * 4
+    assert seen == [("reply_servfail", 2)] * 4
+    assert _asked(unbound) == [(DUCK, dnswire.TYPE_A)] * 4  # the client's own queries; no chase
+    assert len(logged) == 2, logged
 
 
 # --- real sockets: the chase is made as the client -----------------------------------------------
