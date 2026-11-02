@@ -51,8 +51,10 @@ def test_widget_settings_browser_has_no_obsolete_control(browser_page: Page, web
     response = browser_page.goto(webui.url(WIDGET_PAGE), wait_until="domcontentloaded", timeout=30000)
     assert response is not None and response.status == 200, "widget navigation did not return HTTP 200"
     assert browser_page.locator("#usernamefld").count() == 0, "widget navigation returned the login form"
-    form = browser_page.locator(f'form[action="{WIDGET_PAGE}"]')
-    assert form.count() == 1, "expected one widget settings form"
+    # The page has two widget forms: #formicons (status icons) and the settings form. Identify the settings
+    # form by its own submit button, not by action alone.
+    form = browser_page.locator(f'form[action="{WIDGET_PAGE}"]:has(button[name="pfb_submit"])')
+    assert form.count() == 1, "expected exactly one widget settings form"
     for key in SETTINGS:
         assert form.locator(f'[name="pfb_{key}"]').count() >= 1, f"widget lost its {key} control"
     assert form.locator('[name="pfb_dnsblquery"]').count() == 0, "obsolete query-frequency control remains"
