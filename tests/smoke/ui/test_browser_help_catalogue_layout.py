@@ -41,8 +41,9 @@ def test_catalogue_instructions_remain_visible_and_wrap(
 
 def test_general_documented_package_log_route_is_reachable(browser_page: Page, webui: WebUI) -> None:
     """The core navigation exposes the package log destination named by General help."""
+    browser_page.set_viewport_size({"width": 1280, "height": 900})
     _open(browser_page, webui, "/pfblockerng/pfblockerng_general.php")
-    browser_page.get_by_role("link", name="Status", exact=True).first.click()
+    browser_page.get_by_text("Status", exact=True).first.click()
     browser_page.get_by_role("link", name="System Logs", exact=True).first.click()
     browser_page.get_by_role("link", name="Packages", exact=True).first.click()
     package_log = browser_page.get_by_role("link", name="pfBlockerNG", exact=True)
