@@ -378,12 +378,14 @@ def _assert_vip_bullets_deprecated(body: str, where: str) -> None:
 
 
 def _panel_html(body: str, title: str) -> str:
-    """The rendered panel headed ``title``: from the heading to the next panel."""
+    """The rendered panel headed ``title``, including its collapse affordance."""
     for match in re.finditer(re.escape(title), body):
         if "panel-title" in body[max(0, match.start() - 200) : match.start()]:
             following = re.search(r'<div class="panel panel-default"', body[match.end() :])
             stop = len(body) if following is None else match.end() + following.start()
-            return body[match.start() : stop]
+            start = body.rfind('<div class="panel panel-default"', 0, match.start())
+            assert start >= 0, f"no outer panel before heading {title!r}"
+            return body[start:stop]
     raise AssertionError(f"no panel headed {title!r} in the rendered page")
 
 
