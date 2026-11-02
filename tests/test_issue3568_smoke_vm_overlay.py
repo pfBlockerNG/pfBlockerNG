@@ -28,7 +28,8 @@ from tests.smoke import conftest as smoke_conftest
 # Stand-in qemu: say "running" on the FIFO, then stay up / ignore SIGTERM / die, as $PFB_TEST_QEMU says.
 _QEMU = """#!/bin/sh
 [ "$PFB_TEST_QEMU" = ignore-term ] && trap '' TERM
-echo up > "$PFB_TEST_UP_FIFO"
+exec 3>"$PFB_TEST_UP_FIFO"
+echo up >&3
 case "$PFB_TEST_QEMU" in
     exit) exit 1 ;;
     ignore-term) while true; do sleep 1; done ;;
@@ -145,9 +146,10 @@ class _Rig:
         fd = os.open(self.fifo, os.O_RDONLY | os.O_NONBLOCK)
         try:
             ready, _, _ = select.select([fd], [], [], 30)
+            signal = os.read(fd, 3) if ready else b""
         finally:
             os.close(fd)
-        assert ready, "the stand-in qemu never started"
+        assert signal == b"up\n", f"STUCK/ENVIRONMENT: expected qemu readiness token, got {signal!r}"
         if self.failure == "wait_ready_raises":
             raise OSError("simulated wait_ready crash")
         if self.failure == "wait_ready_interrupt":
