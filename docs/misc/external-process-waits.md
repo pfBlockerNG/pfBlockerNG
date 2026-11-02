@@ -54,6 +54,13 @@ delay while creating the supervisor cannot become a false command expiry. A real
 sends TERM, then SIGKILL after the grace, to the negative PGID and explicitly reaps the
 supervisor. Stdio targets `/dev/null` plus a regular output file, never a capture pipe.
 
+SIGKILL only queues the signal: a killed member stays in the group until it has exited
+and been reaped, usually by init after its parent died too. So after either group SIGKILL the
+function polls `kill(-PGID, 0)` every 10 ms until the group is gone, for at most one more
+`PFB_HOOK_KILL_GRACE` (5 s); a group still present then is logged and the function returns
+anyway (issue #3663). An expired start therefore returns at most two graces after its
+30-second deadline: the TERM grace, then this post-KILL wait.
+
 ## Don't let a daemon hold the capture pipe
 
 PHP `exec()` / `$(command substitution)` read command stdout **to EOF**. Daemon the command spawned inherits command stdout/stderr, and while it lives pipe never reaches EOF — capture **blocks** even though command itself exited. (`timeout` reaper-wait above is *second*, independent way same hook hangs.)
