@@ -274,6 +274,10 @@ Authorization = property of **write**, not call site (generalises
     choices. Already-received explicit new values still win, including Off/empty; seeded old
     explicit choices migrate unchanged. A second run writes nothing. The registry pass preserves
     migrated/received choices even when its pre-migration section mode was NEWCFG.
+    A pre-split configuration backup restored onto this package bypasses the migration. Until
+    the next migration run moves them, `PfbConfig::read()` reads each absent `dns_shared` field
+    from its old `dns` location by the same rule (`pfb_dns_legacy_shared_value()`), so restored
+    encrypted listeners stay on; a value stored in `dns_shared` always wins.
     An old manual receiver stores the new section inertly; an old automatic receiver ignores it.
     Neither receives the sender's node enable or Resolver snapshot. If an old manual receiver's
     administrator edits the old UI after receiving a new section, those later old-key edits still

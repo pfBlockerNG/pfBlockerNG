@@ -125,7 +125,7 @@ final class SyncDnsSettingsTest extends TestCase
 			config_set_path(PFB_SECTIONS['sync'] . '/varsynconchanges', 'auto');
 			foreach (pfblockerng_plugin_xmlrpc_send() as $path) {
 				$this->assertStringNotContainsString('pfblockerngdnssettings', $path);
-				$this->assertStringNotContainsString('pfblockerngdns/config', $path);
+				$this->assertNotSame('installedpackages/pfblockerngdns', $path);
 			}
 		}
 	}

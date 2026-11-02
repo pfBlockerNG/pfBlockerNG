@@ -2645,6 +2645,10 @@ final class PfbConfig
 		$entry   = self::entry($key);
 		$path    = self::sectionPath($key);
 		$raw     = config_get_path($path, NULL);
+		// issue #3649: a restored pre-split backup bypasses pfb_run_migrations(); its transport settings are still in 'dns'.
+		if ($raw === NULL && str_starts_with($key, 'dns_shared/')) {
+			$raw = pfb_dns_legacy_shared_value(self::readSection(PFB_SECTIONS['dns']), substr($key, strlen('dns_shared/')));
+		}
 		$stored  = self::notConfigured($entry, $raw);
 		$adapter = $entry['read_adapter'];
 		return ($adapter !== NULL) ? $adapter($stored) : (string) $stored;
@@ -3834,21 +3838,34 @@ function pfb_dns_settings_migrate(array $sections): ?array
 	$new_path = PFB_SECTIONS['dns_shared'];
 	$old = is_array($sections[$old_path] ?? NULL) ? $sections[$old_path] : [];
 	$new = is_array($sections[$new_path] ?? NULL) ? $sections[$new_path] : [];
-	// Old installer defaults were ignored until the Resolver seed ran; they are not choices.
-	$unseeded = ($old['pfb_dns_interface'] ?? '') === '';
 	$changed = FALSE;
-	foreach ($old as $key => $value) {
+	foreach (array_keys($old) as $key) {
 		if (!in_array($key, PFB_DNS_SHARED_FIELDS, TRUE)) {
 			continue;
 		}
-		if (!array_key_exists($key, $new) &&
-		    !($unseeded && in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE))) {
-			$new[$key] = $old[$key];
+		$value = pfb_dns_legacy_shared_value($old, $key);
+		if ($value !== NULL && !array_key_exists($key, $new)) {
+			$new[$key] = $value;
 		}
 		unset($old[$key]);
 		$changed = TRUE;
 	}
 	return $changed ? [$old_path => $old, $new_path => $new] : NULL;
+}
+
+/**
+ * A shared transport value still stored in the pfB-DNS section, as the #3649 split moves it; NULL when there is none.
+ * Old installer DoT defaults on a node whose interfaces were never seeded were not choices, so they are not carried.
+ *
+ * @param array<string,mixed> $old
+ */
+function pfb_dns_legacy_shared_value(array $old, string $key): mixed
+{
+	if (!array_key_exists($key, $old) || !in_array($key, PFB_DNS_SHARED_FIELDS, TRUE)) {
+		return NULL;
+	}
+	$unseeded = ($old['pfb_dns_interface'] ?? '') === '';
+	return ($unseeded && in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE)) ? NULL : $old[$key];
 }
 
 /**
