@@ -14618,11 +14618,18 @@
         "returnType": "array",
         "params": [
             {
-                "name": "sections",
+                "name": "scopes",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -14778,6 +14785,19 @@
     "pfb_sync_receive_drift": {
         "returnsRef": false,
         "returnType": "?bool",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sync_receive_legacy_absorb": {
+        "returnsRef": false,
+        "returnType": "void",
         "params": [
             {
                 "name": "dbdir",

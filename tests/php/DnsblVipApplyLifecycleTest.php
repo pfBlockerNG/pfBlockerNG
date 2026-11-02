@@ -26,6 +26,7 @@ define('PFB_VIP_APPLY_PFB_BASELINE', $GLOBALS['pfb']);
 #[CoversFunction('sync_package_pfblockerng')]
 #[CoversFunction('pfb_create_dnsbl')]
 #[CoversFunction('pfb_manage_dnsbl_vip')]
+#[CoversFunction('pfb_sync_receive_suppressed')]
 final class DnsblVipApplyLifecycleTest extends TestCase
 {
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
@@ -77,9 +78,11 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->savedGlobals = [];
 		unset(
 			$GLOBALS['pfb_test_service_calls'], $GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_write_config_calls'],
-			$GLOBALS['pfb_test_service_hook'], $GLOBALS['pfb_test_write_config_hook'], $GLOBALS['pfb_test_process_running']
+			$GLOBALS['pfb_test_service_hook'], $GLOBALS['pfb_test_write_config_hook'], $GLOBALS['pfb_test_process_running'],
+			$GLOBALS['pfb_test_xmlrpc_connection'], $GLOBALS['pfb_test_xmlrpc_connections'], $GLOBALS['pfb_test_xmlrpc_calls']
 		);
 		rmdir_recursive($this->dir);
+		pfb_sync_receive_changed(FALSE);
 	}
 
 	private function reloadFinished(): bool
@@ -688,5 +691,61 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame([], $this->events('stop_service'));
 		$this->assertNotContains($conflict, pfb_sync_effective_findings(pfb_sync_effective_facts()));
 		$this->assertSame([], pfb_sync_effective_facts()['vip_conflict']);
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// Received-policy suppression (issue #3674)
+	// ------------------------------------------------------------------------------------------
+
+	/** A node that sends in scope all to a manual target, accepted a policy receive, and whose stored auto-VIP id the pass will rewrite. */
+	private function arrangeAcceptedReceiveInScopeAll(array $o): void
+	{
+		$this->arrange($o + ['demand' => TRUE]);
+		config_set_path(self::DNSBL . '/pfb_dnsvip4', '');
+		config_set_path('installedpackages/pfblockerngsync/config/0', [
+			'varsynconchanges' => 'manual', 'varsynctimeout' => '5', 'syncscope' => 'all',
+			'row' => [['varsyncdestinenable' => 'on', 'varsyncipaddress' => '192.0.2.10', 'varsyncport' => '443',
+				'varsyncpassword' => 'target-pass', 'varsyncprotocol' => 'https', 'varsyncusername' => 'admin']],
+		]);
+		$result = pfblockerng_plugin_xmlrpc_recv(['installedpackages' => pfb_sync_stored_sections() + [
+			'pfblockerngsync' => ['config' => [0 => ['syncscope' => 'policy']]],
+		]]);
+		foreach ($result as $path => $value) {
+			if ($path !== 'xmlrpc_recv_result') {
+				config_set_path($path, $value);
+			}
+		}
+		$this->assertTrue(pfb_sync_receive_suppressed(), 'before-state: the accepted receive suppresses the send');
+	}
+
+	/**
+	 * GIVEN that node
+	 * WHEN the apply pass runs
+	 * THEN its own VIP write, which the all payload carries, originates no sync on either send path
+	 */
+	public function testTheApplyOfAnAcceptedReceiveSendsNothingAfterItsOwnVipWrite(): void
+	{
+		$this->arrangeAcceptedReceiveInScopeAll([]);
+
+		$this->runPass();
+
+		$this->assertContains(self::VIP_WRITE, array_column($this->configWrites, 0), 'control: the apply wrote the VIP');
+		$this->assertSame('_vipauto4', config_get_path(self::DNSBL . '/pfb_dnsvip4'), 'control: the apply rewrote the stored VIP id');
+		$this->assertArrayNotHasKey('pfb_test_xmlrpc_connection', $GLOBALS, 'the apply of a received policy must not sync');
+		config_set_path('installedpackages/pfblockerngsync/config/0/varsynconchanges', 'auto');
+		$this->assertSame([], pfblockerng_plugin_xmlrpc_send(), 'nor hand pfSense HA sync a pfBlockerNG path');
+	}
+
+	/** The boot resync writes the VIP id and returns before the sync step; pfSense HA sync, later, must not carry it either. */
+	public function testTheBootResyncOfAnAcceptedReceiveHandsHaSyncNothingAfterItsOwnVipWrite(): void
+	{
+		$this->arrangeAcceptedReceiveInScopeAll(['install' => TRUE]);
+
+		$this->runPass();
+
+		$this->assertStringContainsString('Sync terminated during boot process.', $this->passLog(), 'control: the boot branch ran');
+		$this->assertSame('_vipauto4', config_get_path(self::DNSBL . '/pfb_dnsvip4'), 'control: the resync rewrote the stored VIP id');
+		config_set_path('installedpackages/pfblockerngsync/config/0/varsynconchanges', 'auto');
+		$this->assertSame([], pfblockerng_plugin_xmlrpc_send(), 'the resync of a received policy must not hand pfSense HA sync a pfBlockerNG path');
 	}
 }

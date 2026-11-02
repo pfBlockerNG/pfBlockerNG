@@ -25735,15 +25735,18 @@ function pfb_sync_legacy_sections(bool $all): array {
 }
 
 /**
- * Digest of the payload each legacy scope would send from $sections (bare section name => subtree, in the
- * persisted shape), so a received policy suppresses a legacy send only while that payload is as accepted (#3674).
- * @return array{all: string, lists: string}
+ * Digest of the payload each legacy scope in $scopes would send from $sections (bare section name => subtree; NULL
+ * reads this node's stored ones), taken in the persisted shape, so a received policy suppresses a legacy send only
+ * while that payload is as accepted (#3674).
+ * @param list<'all'|'lists'> $scopes
+ * @return array<string,string> scope => digest
  */
-function pfb_sync_legacy_digests(array $sections): array {
-	$digests = array();
-	foreach (array('all' => TRUE, 'lists' => FALSE) as $scope => $all) {
-		$payload         = array_intersect_key($sections, array_flip(pfb_sync_legacy_sections($all)));
-		$digests[$scope] = hash('sha256', json_encode(pfb_sync_copied_sorted($payload), JSON_THROW_ON_ERROR));
+function pfb_sync_legacy_digests(array $scopes, ?array $sections = NULL): array {
+	$sections ??= pfb_sync_stored_sections(pfb_sync_legacy_sections(in_array('all', $scopes, TRUE)));
+	$digests  = array();
+	foreach ($scopes as $scope) {
+		$payload         = array_intersect_key($sections, array_flip(pfb_sync_legacy_sections($scope === 'all')));
+		$digests[$scope] = hash('sha256', json_encode(pfb_sync_copied_sorted(array_map('pfb_sync_persisted_shape', $payload)), JSON_THROW_ON_ERROR));
 	}
 	return $digests;
 }
@@ -26811,13 +26814,27 @@ function pfb_sync_receive_accepted_clear(string $dbdir, array $io = []): void {
 			return NULL;
 		}
 		$state['accepted_digest'] = NULL;
-		unset($state['legacy_digests']);
 		return $state;
 	}, $io);
 	// A failed clear leaves the node accepting, so its findings stay.
 	if ($cleared) {
 		@unlink("{$dbdir}/pfb_sync_findings.json");
 	}
+}
+
+/*
+ * The apply of a received policy writes into synced sections too (DNSBL auto-VIP, name cleanup, one-shot flags). A pass
+ * that started suppressed records its result as the accepted legacy payload, so its own writes never read as an edit (#3674).
+ * shortcut: an operator save landing during that pass is absorbed as well; record per writer if that is ever reported.
+ */
+function pfb_sync_receive_legacy_absorb(string $dbdir): void {
+	pfb_sync_receive_state_update($dbdir, static function (array $state): ?array {
+		if ($state['accepted_digest'] === NULL) {
+			return NULL;
+		}
+		$state['legacy_digests'] = pfb_sync_legacy_digests(array('all', 'lists'));
+		return $state;
+	});
 }
 
 /*
@@ -27116,8 +27133,7 @@ function pfb_sync_receive_suppressed(): bool {
 	}
 	$scope = pfb_sync_stored_scope();
 	if ($scope === 'all' || $scope === 'lists') {
-		$current = array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections(pfb_sync_legacy_sections(TRUE)));
-		return ($state['legacy_digests'][$scope] ?? NULL) === pfb_sync_legacy_digests($current)[$scope];
+		return ($state['legacy_digests'][$scope] ?? NULL) === pfb_sync_legacy_digests(array($scope))[$scope];
 	}
 	return $state['accepted_digest'] === pfb_sync_policy_current_digest();
 }
@@ -27176,7 +27192,7 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 	}
 	$accepted = pfb_sync_policy_digest(pfb_sync_policy_projection($settled));
 	// What this node's legacy scopes send once the merge is written: merged sections as settled, the rest as stored.
-	$legacy = pfb_sync_legacy_digests($settled + array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections(pfb_sync_legacy_sections(TRUE))));
+	$legacy = pfb_sync_legacy_digests(array('all', 'lists'), $settled + pfb_sync_stored_sections(pfb_sync_legacy_sections(TRUE)));
 
 	// The accepted digest suppresses the echo of this policy: a receive whose record cannot be published fails closed, applying nothing.
 	if (!pfb_sync_receive_record(

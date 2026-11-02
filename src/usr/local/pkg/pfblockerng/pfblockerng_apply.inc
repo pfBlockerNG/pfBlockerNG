@@ -934,6 +934,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		return FALSE;
 	}
 
+	// issue #3674: a pass that starts suppressed applies a received policy; its own writes into synced sections stay unsent.
+	$pfb_sync_absorb = pfb_sync_receive_suppressed();
+
 	// issue #3288: opportunistically bring a legacy/still-fresh DNSBL policy
 	// state up to date under the held feed-pass lock, before this pass
 	// resolves any group's effective mechanism -- refresh pfb_global() only
@@ -1018,6 +1021,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		else {
 			// Package, DNSBL or resolver off: nothing may serve, so strip what an older version left (conf, certificate, NAT, auto-VIP).
 			pfb_create_dnsbl('disabled');
+		}
+		if ($pfb_sync_absorb) {
+			pfb_sync_receive_legacy_absorb($pfb['dbdir']);
 		}
 		$log = 'Sync terminated during boot process.';
 		pfb_logger("\n{$log}\nUPDATE PROCESS ENDED\n", 1);
@@ -5193,6 +5199,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	if ($pfb_found) {
 		write_config("pfBlockerNG: update NAT rule(s) aliasnames to include '_v4' suffix");
+	}
+
+	// Before the reload (pfSense HA sync) and the XMLRPC sync below can see this pass's own writes.
+	if ($pfb_sync_absorb) {
+		pfb_sync_receive_legacy_absorb($pfb['dbdir']);
 	}
 
 	#################################

@@ -393,9 +393,11 @@ The receiver's own `syncscope` is not consulted.
   targets it lists: `pfblockerng_sync_on_changes()`,
   which runs after every apply (`pfblockerng_apply.inc:5169-5171`), returns before its target
   loop, and `plugin_xmlrpc_send()` returns no pfBlockerNG path, while pfSense still syncs its own
-  sections. A receive-triggered apply therefore never originates a sync. The sender's authority
-  holds even when the receiver is itself configured as a sender or lists the original sender as a
-  target.
+  sections. A receive-triggered apply therefore never originates a sync: an apply pass that starts
+  suppressed records the legacy payload digests again after its own writes into synced sections
+  (the DNSBL auto-VIP id, for example), before its firewall reload and its sync step. The sender's
+  authority holds even when the receiver is itself configured as a sender or lists the original
+  sender as a target.
 - **Lifting it.** A local edit to what the node's own scope sends changes that digest, so a node
   also configured as a sender syncs that edit as before: a policy edit in `policy` scope, any edit
   its legacy payload carries in `all` or `lists` scope. Saving the Sync page, a deliberate role flip, clears the stored
