@@ -738,9 +738,10 @@ transport is green only when every one of its rows is `listening`), and `pfb_dns
 known shape. Pinned by `PfbDnsWidgetStatusTest` and `tests/js/widget_render.test.js`.
 
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
-`$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is on the **pfB-DNS** tab,
+`$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is first on the **pfB-DNS** tab,
 which is reachable in either mode; the DNSBL tab no longer has it, and its save never assigns the key, so what the pfB-DNS
-tab stored survives every DNSBL save. DNSBL on (module hosted by Unbound or by the proxy): the ini's `python_reply` carries
+tab stored survives every DNSBL save. The experimental pfB-DNS settings follow the logging section, retaining their
+experimental notices. DNSBL on (module hosted by Unbound or by the proxy): the ini's `python_reply` carries
 it as before and the module writes `dns_reply.log`; `--reply-log` is never passed, and the proxy refuses it without
 `--no-module`, so a reply is never logged twice. DNSBL off: `pfb_dns_proxy_service()` adds `--reply-log` to `--no-module` iff
 the preference is On, and the rc script (hence the proxy, which reads its flags only at start) changes with the preference, so
@@ -1096,7 +1097,8 @@ restarts the Resolver iff that marker drifts from the shipped files' fingerprint
 ## DNSBL sinkhole VIP (ADR-13)
 
 A DNSBL "VIP" block sinks the queried name to a **sinkhole Virtual IP** that the DNSBL web server
-(lighttpd) listens on. The WebServer/VIP response is deprecated but still works. The VIP must exist
+(lighttpd) listens on. The WebServer/VIP response is deprecated but still works. Its DNSBL Webserver Configuration
+section is collapsed by default; expand its heading or use Expand all to access the unchanged controls. The VIP must exist
 only while there is VIP demand (see *VIP demand* below); `pfb_validate_vips()` force-disables DNSBL
 only when that demand exists and the VIP is missing or invalid.
 A stored VIP id that no longer exists in Firewall > Virtual IPs (for example after the VIP is deleted and re-created) fails validation with `IPv4/IPv6 VIP <id> no longer exists in Firewall > Virtual IPs`, and the DNSBL page warns in manual mode until the VIP is re-selected (#3456).
