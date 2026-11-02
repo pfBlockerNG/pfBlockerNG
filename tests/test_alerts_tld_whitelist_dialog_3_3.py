@@ -64,6 +64,8 @@ def test_tld_dialog_on_a_fresh_page_is_labelled_and_whitelists_into_the_dnsbl_wh
     form = confirmed["submits"][0]
     assert form["#addwhitelistdom"] == "true"
     assert form["#domain"] == "bad.example"
+    assert form["#table"] == "www.bad.example"
+    assert form.get("#dnsbl_exclude", "") == ""
     assert "#dnsbl_add" not in form
     assert "#ip_white" not in form
 
@@ -74,6 +76,9 @@ def test_tld_wildcard_button_whitelists_the_wildcard_into_the_dnsbl_whitelist() 
     form = confirmed["submits"][0]
     assert form["#dnsbl_wildcard"] == "true"
     assert form["#addwhitelistdom"] == "true"
+    assert form["#domain"] == "bad.example"
+    assert form["#table"] == "www.bad.example"
+    assert form.get("#dnsbl_exclude", "") == ""
 
 
 def test_dnsbl_add_dialog_keeps_its_block_labels_and_customlist_target() -> None:
