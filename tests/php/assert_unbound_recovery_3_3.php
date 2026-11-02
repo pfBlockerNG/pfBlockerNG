@@ -717,6 +717,109 @@ PHP
 	rmdir_recursive_local($run['dir']);
 });
 
+/**
+ * issue #3663: a group SIGKILL only queues the signal; the killed members still have to exit and
+ * be reaped, so pfb_stop_start_unbound() can return while they exist. Expire a start whose
+ * TERM-ignoring member must be SIGKILLed, with posix_kill() replaced by a recording passthrough
+ * to the real kill(1), and report what the function observed after its group KILL plus whether
+ * the group exists the instant it returns. $stopSupervisor also SIGSTOPs the supervisor, so TERM
+ * cannot end it and the stop takes the unresponsive-leader branch.
+ */
+function killedGroupRun(string $src, bool $stopSupervisor): array
+{
+	$script = str_replace('@STOP_SUPERVISOR@', $stopSupervisor ? 'kill -STOP "$PFB_UNBOUND_START_PGID"' : ':', <<<'SH'
+trap '' TERM
+printf %s "$PFB_UNBOUND_START_PGID" > "$1/pgid"
+@STOP_SUPERVISOR@
+printf %s "$$" > "$1/stuck.pid"
+exec sleep 30
+SH);
+	return run_isolated($src, fastConstants([
+			'PFB_UNBOUND_START_CMD' => 'sh {{DIR}}/start.sh {{DIR}}',
+			'PFB_UNBOUND_START_WAIT' => 1,
+		]),
+		['pfb_stop_start_unbound'],
+		stopStartPrelude()
+		. "file_put_contents(\"\$dir/start.sh\", " . var_export($script, true) . ");\n"
+		. <<<'PHP'
+function posix_kill(int $pid, int $sig): bool
+{
+	exec("kill -{$sig} {$pid} 2>/dev/null", $output, $status);
+	$GLOBALS['pfb_kill_calls'][] = [$pid, $sig, $status === 0];
+	return $status === 0;
+}
+$GLOBALS['pfb_process_running']['unbound'] = false;
+$final = pfb_stop_start_unbound('');
+$calls = $GLOBALS['pfb_kill_calls'] ?? [];
+$pgid = (int) trim((string) @file_get_contents("$dir/pgid"));
+$group_alive = $pgid > 0 && posix_kill(-$pgid, 0);
+if ($group_alive) { posix_kill(-$pgid, 9); }
+echo json_encode(['final' => $final, 'pgid' => $pgid, 'kill_calls' => $calls, 'group_alive' => $group_alive]) . "\n";
+PHP
+		, 15, ['disable_functions=posix_kill']
+	);
+}
+
+function checkKilledGroupGone(array $run, string $why): void
+{
+	check($run['status'] === 0, 'isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+	$p = $run['payload'];
+	same(124, $p['final']['retval'] ?? null, 'the row must exercise a real start expiry');
+	same(false, $p['final']['start_completed'] ?? null, 'an expired start must never produce a completion record');
+	$pgid = (int) ($p['pgid'] ?? 0);
+	check($pgid > 0, 'the row must observe the supervised group before evaluating cleanup');
+	$calls = $p['kill_calls'] ?? [];
+	$kills = array_keys(array_filter($calls, fn ($call) => $call[0] === -$pgid && $call[1] === 9));
+	check($kills !== [], 'the row must reach the group SIGKILL; kill calls: ' . json_encode($calls));
+	$after = array_slice($calls, end($kills) + 1);
+	same([-$pgid, 0, false], end($after) ?: null,
+		"{$why}: its last kill(2) after the group SIGKILL must have found the group gone; calls after KILL: " . json_encode($after));
+	same(false, $p['group_alive'] ?? null, "{$why}: no member of its group may exist when it returns");
+	rmdir_recursive_local($run['dir']);
+}
+
+row('Row 6c: an expired start returns only once its SIGKILLed group is gone -- TERM-ignoring member', function () use ($src) {
+	checkKilledGroupGone(killedGroupRun($src, false),
+		'pfb_stop_start_unbound() must not return while a member it SIGKILLed after the TERM grace still exists');
+});
+
+row('Row 6d: an expired start returns only once its SIGKILLed group is gone -- stopped supervisor', function () use ($src) {
+	checkKilledGroupGone(killedGroupRun($src, true),
+		'pfb_stop_start_unbound() must not return while a group it SIGKILLed with its unresponsive supervisor still has members');
+});
+
+row('Row 6e: a group member that outlasts the post-KILL grace is logged and the start still returns', function () use ($src) {
+	// The runner's own child joins the supervised group. The runner cannot reap it while it is
+	// inside pfb_stop_start_unbound(), so once killed it stays a (zombie) member for the whole grace.
+	$joiner = 'if (!posix_setpgid(0, $pgid = (int) file_get_contents($argv[1]))) { exit(3); } '
+		. 'file_put_contents($argv[2], (string) $pgid); sleep(30);';
+	$run = run_isolated($src, fastConstants([
+			'PFB_UNBOUND_START_CMD' => 'printf %s "$PFB_UNBOUND_START_PGID" > {{DIR}}/pgid.fifo; exec sleep 30',
+			'PFB_UNBOUND_START_WAIT' => 1,
+		]),
+		['pfb_stop_start_unbound'],
+		stopStartPrelude() . '$joiner_code = ' . var_export($joiner, true) . ";\n" . <<<'PHP'
+posix_mkfifo("$dir/pgid.fifo", 0600);
+$joiner = proc_open([PHP_BINARY, '-r', $joiner_code, '--', "$dir/pgid.fifo", "$dir/joined"],
+	[0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+$GLOBALS['pfb_process_running']['unbound'] = false;
+$final = pfb_stop_start_unbound('');
+$pgid = (int) trim((string) @file_get_contents("$dir/joined"));
+proc_terminate($joiner, 9);
+proc_close($joiner);
+echo json_encode(['final' => $final, 'pgid' => $pgid, 'errlog' => (string) @file_get_contents($GLOBALS['pfb']['errlog'])]) . "\n";
+PHP
+	);
+	check($run['status'] === 0, 'isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+	$p = $run['payload'];
+	same(124, $p['final']['retval'] ?? null, 'the row must exercise a real start expiry');
+	$pgid = (int) ($p['pgid'] ?? 0);
+	check($pgid > 0, 'the runner child must have joined the supervised group before the expiry');
+	check(str_contains((string) $p['errlog'], "process group {$pgid} still present"),
+		'a member the post-KILL grace cannot remove must be named in the error log; errlog: ' . $p['errlog']);
+	rmdir_recursive_local($run['dir']);
+});
+
 function reloadCauseAwareRun(string $src, string $mode, bool $pyBlacklist): array
 {
 	$py_bool = $pyBlacklist ? 'true' : 'false';
