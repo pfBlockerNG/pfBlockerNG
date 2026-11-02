@@ -280,7 +280,7 @@ def test_alerts_dnsbl_stat_substitutes_invalid_utf8_byte(
 
 CFG_IPV4_FEEDS = "installedpackages/pfblockernglistsv4/config"
 FEEDS_PAGE_IPV4 = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
-FEEDS_PAGE_MARKERS = ("Pre-defined Alias/Group/Feeds", "IPv4 Alias name(s):")
+FEEDS_PAGE_MARKERS = ("Pre-defined Feeds", "IPv4 alias name(s):")
 
 # Reachable description value whose escaped form placed the old byte cut in
 # the middle of an entity. The edit form accepts and persists this value.

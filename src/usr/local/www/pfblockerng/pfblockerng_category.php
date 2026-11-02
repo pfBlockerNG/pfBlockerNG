@@ -606,13 +606,13 @@ if (isset($savemsg)) {
 					</td>
 				</tr>
 					<?php endforeach; ?>
-				<?php else: $r_id = -1; ?>
+				<?php else: $r_id = -1; $group_name = $gtype == 'dnsbl' ? 'DNSBL group' : 'IP alias'; $group_names = $gtype == 'dnsbl' ? 'DNSBL groups' : 'IP aliases'; ?>
 
 				<tr>
 					<td>
-						No Alias/Groups are defined.
-						<br />Click <strong>Add</strong> to define a new Alias/Group.
-						<br /><br /><strong>Note</strong>: Pre-defined Alias/Groups are available in the Feeds Tab.
+						No <?=$group_names?> are defined.
+						<br />Click <strong>Add</strong> to define a new <?=$group_name?>.
+						<br /><br /><strong>Note</strong>: Pre-defined <?=$group_names?> are available on the <strong>Feeds</strong> tab.
 					</td>
 				</tr>
 				<?php endif; ?>
@@ -627,7 +627,7 @@ if (isset($savemsg)) {
 			<?=gettext('Add')?>
 		</a>
 		<?php endif; ?>
-		<button class="btn btn-sm btn-primary" type="button" id="btnsave" title="Save the page 'Order' format">
+		<button class="btn btn-sm btn-primary" type="button" id="btnsave" title="Save group settings and order">
 			<i class="fa-solid fa-save icon-embed-btn"></i>
 			<?=gettext('Save')?>
 		</button>&emsp;
@@ -638,28 +638,26 @@ if (isset($savemsg)) {
 if ($gtype == 'geoip') {
 	print_callout('GeoIP database GeoLite2 distributed under the Creative Commons Attribution-ShareAlike 4.0 International License by:
 			<a target="_blank" rel="noopener noreferrer" href="https://www.maxmind.com">MaxMind Inc.</a><br /><br />
-			The GeoIP database is automatically updated each day at a random hour.<br /><br />
+			The GeoIP database is checked daily at <strong>Default Schedule</strong> on <strong>General</strong>.<br /><br />
 
-			<span class="text-danger"><strong>Note:&emsp;</strong></span>
+			<span class="text-danger"><strong>Note:</strong></span>
 			pfSense by default implicitly blocks all unsolicited inbound traffic to the WAN interface.<br />
 			Therefore adding GeoIP based firewall rules to the WAN will <strong>not</strong> provide any benefit, unless there are
 			open WAN ports.<br /><br />
-			Its also <strong>not</strong> recommended to block the "world", instead consider rules to "Permit" traffic to/from
-			selected Countries only.<br />
-			Also consider protecting just the specific open WAN ports and its just as important to protect the outbound LAN traffic.<br /><br />
+			Do not block every country. Permit the countries you need, and also filter outbound LAN traffic, not only open WAN ports.<br /><br />
 			Country ISOs can also be defined in the IPv4/6 Tabs (Refer to blue infoblocks for more details)<br /><br />
 			MaxMind Account ID and License Key are configured on the
 			<a href="/pfblockerng/pfblockerng_ip.php">IP tab</a>
 			(MaxMind GeoIP configuration).<br /><br />
-			<strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
+			Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.');
 }
 elseif ($gtype == 'dnsbl') {
-	print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.<br /><br />
+	print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.<br /><br />
 			DNSBL Category feeds are processed first, followed by the DNSBL Groups.<br />
-			DNSBL Groups can be prioritized first, by selecting the \'Group Order\' option.</p>');
+			DNSBL Groups can be prioritized first, by selecting the <strong>Group Order</strong> option.</p>');
 }
 else {
-	print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
+	print_callout('<p>Saved changes are applied automatically at a schedule check, normally within 15 minutes while pfBlockerNG is enabled. If an <strong>Automatic Apply Window</strong> is set on <strong>General</strong>, changes wait for that window. To apply them now, open <strong>Update</strong> and use <strong>Run Now</strong>.</p>');
 }
 ?>
 </form>

@@ -11,7 +11,7 @@ asserts, per type:
 * the requested type's sub-tab is the ACTIVE one (its ``<li>`` carries pfSense's
   ``active`` class — emitted by ``display_top_tabs`` for the highlighted tab), and
 * the page lists ONLY that type's feeds — proven by the type-scoped Feed Settings
-  alias-name label (``IPv4/IPv6/DNSBL Alias name(s):``), which ``pfblockerng_feeds.php``
+  alias-name label (``IPv4/IPv6/DNSBL alias name(s):``), which ``pfblockerng_feeds.php``
   renders for the ACTIVE type only (``pfb_feeds_render_aliasname_inputs($gtype)``,
   Phase 3) — so the other two types' labels are ABSENT from this tab's DOM, and
 
@@ -68,9 +68,9 @@ FEEDS_BASE = "/pfblockerng/pfblockerng_feeds.php"
 # The three sub-tab types + the per-type Feed Settings alias-name label that renders
 # for the ACTIVE type only (the type-scoped body) -- the "lists only its type" signal.
 TYPE_LABELS = {
-    "ipv4": "IPv4 Alias name(s):",
-    "ipv6": "IPv6 Alias name(s):",
-    "dnsbl": "DNSBL Alias name(s):",
+    "ipv4": "IPv4 alias name(s):",
+    "ipv6": "IPv6 alias name(s):",
+    "dnsbl": "DNSBL group name(s):",
 }
 
 # A short, explicit timeout (ms): the page renders server-side, so this is a flake
