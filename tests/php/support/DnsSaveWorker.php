@@ -20,7 +20,8 @@ $workerArgv = $argv;
 $scenario = (string) $workerArgv[1];
 $resultFile = (string) $workerArgv[2];
 $repo = dirname(__DIR__, 3);
-$page = $repo . '/src/usr/local/www/pfblockerng/pfblockerng_dns.php';
+$general = ($workerArgv[3] ?? '') === 'general';
+$page = $repo . '/src/usr/local/www/pfblockerng/' . ($general ? 'pfblockerng_dns_general.php' : 'pfblockerng_dns.php');
 $disk = NULL;
 $input_errors = [];
 $pconfig = [];
@@ -76,7 +77,10 @@ function dns_save_worker_block(string $source): string
 	throw new RuntimeException('worker: the pfB-DNS page save block has no end');
 }
 
-$block = dns_save_worker_block((string) file_get_contents($page));
+$source = (string) file_get_contents($page);
+$block = $general
+	? substr($source, strpos($source, 'if ($_POST &&'), strpos($source, '$pgtitle =') - strpos($source, 'if ($_POST &&'))
+	: dns_save_worker_block($source);
 $dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
 $dns = 'installedpackages/pfblockerngdns/config/0';
 $GLOBALS['config'] = [];
@@ -99,11 +103,14 @@ $tmp = $GLOBALS['pfb_test_tmp'];
 $pfb['pending_marker'] = "{$tmp}/pending";
 // The page renders the stored preference before the save: a failed save re-displays what the form posted, not this.
 $pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
-// The posted form: an absent toggle and an absent checkbox are the Off tokens, so the save turns pfB-DNS off and the
-// logging preference off. The page's first statements derive the two values the save writes.
+// Both pages submit their own checkbox Off; the other page's preference must survive.
 $_POST = ['save' => 'Save'];
-$pfb_dns = pfb_filter($_POST['pfb_dns'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
-$pfb_py_reply = pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+$pfb_dns = '';
+if ($general) {
+	$_POST += ['pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => 'none', 'pfb_dns_listen_interface' => 'lo0'];
+	$options_dns_listen_vip4 = $options_dns_listen_vip6 = ['none' => '', 'auto' => 'Create VIP automatically'];
+	$options_dns_listen_interface = ['lo0' => 'Localhost'];
+}
 preg_match_all("~\\\$_POST\\['([a-z0-9_]+)'\\]~", $block, $posted);
 foreach (array_unique($posted[1]) as $key) {
 	$_POST[$key] = $_POST[$key] ?? '';

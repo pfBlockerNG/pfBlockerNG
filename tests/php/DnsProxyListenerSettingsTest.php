@@ -364,17 +364,21 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_interface'     => 'lan',
 			'pfb_dns_dot'           => '',
 			'pfb_dns_dot_port'      => '853',
+			'pfb_dns_dot_port6'     => '',
 			'pfb_dns_dot_interface' => 'lan',
 			'pfb_dns_doh'           => '',
 			'pfb_dns_doh_port'      => '4443',
+			'pfb_dns_doh_port6'     => '',
 			'pfb_dns_doh_interface' => 'lan',
 			'pfb_dns_doh_trusted'   => '',
 			'pfb_dns_doq'           => '',
 			'pfb_dns_doq_port'      => '853',
+			'pfb_dns_doq_port6'     => '',
 			'pfb_dns_doq_interface' => 'lan',
 			'pfb_dns_sslcertref'    => '',
 			'pfb_dns_ddr'           => '',
 			'pfb_dns_ddr_doh_443'   => '',
+			'pfb_dns_ddr_doh_443_6' => '',
 		], pfb_dns_proxy_listeners_stored($this->post()));
 	}
 
@@ -409,17 +413,21 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_interface'     => 'lo0,lan',
 			'pfb_dns_dot'           => 'on',
 			'pfb_dns_dot_port'      => '8',
+			'pfb_dns_dot_port6'     => '',
 			'pfb_dns_dot_interface' => 'all',
 			'pfb_dns_doh'           => 'on',
 			'pfb_dns_doh_port'      => '443',
+			'pfb_dns_doh_port6'     => '',
 			'pfb_dns_doh_interface' => 'lan,opt1',
 			'pfb_dns_doh_trusted'   => '192.0.2.10 2001:db8::/32 10.0.0.0/8',
 			'pfb_dns_doq'           => '',
 			'pfb_dns_doq_port'      => '853',
+			'pfb_dns_doq_port6'     => '',
 			'pfb_dns_doq_interface' => 'lan',
 			'pfb_dns_sslcertref'    => 'cert5f3a',
 			'pfb_dns_ddr'           => '',
 			'pfb_dns_ddr_doh_443'   => '',
+			'pfb_dns_ddr_doh_443_6' => '',
 		], $stored, 'port without leading zeros; interfaces and trusted deduplicated; a toggle is on only for "on"');
 	}
 
@@ -446,7 +454,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 	{
 		$page = (string) file_get_contents(self::PAGE);
 
-		$sanitize = strpos($page, "'pfb_dns_dot_port', 'pfb_dns_doh_port', 'pfb_dns_doq_port', 'pfb_dns_doh_trusted'");
+		$sanitize = strpos($page, "'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doh_trusted'");
 		$validate = strpos($page, 'pfb_validate_dns_proxy_listeners_post(');
 		$gate     = strpos($page, 'if (!$input_errors) {');
 		$store    = strpos($page, 'pfb_dns_proxy_listeners_stored(');

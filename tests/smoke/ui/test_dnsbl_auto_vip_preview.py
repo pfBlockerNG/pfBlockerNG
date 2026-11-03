@@ -43,7 +43,7 @@ OWN_V6 = {
     "mode": "ipalias",
     "interface": helpers.SMOKE_VIP_IFACE,
     "type": "single",
-    "subnet": "fd00:53:53:53:53:53:53:53",
+    "subnet": "fd00:53:53:53:53:53:53:1",
     "subnet_bits": "128",
     "descr": "pfB_AUTO_VIP_v6",
     "uniqid": "pfbsmoke3565own6",

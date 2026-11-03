@@ -50,10 +50,10 @@ if (!class_exists('Form_Checkbox', FALSE)) {
 final class DnsblAutoVipPreviewUiTest extends TestCase
 {
 	private const PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php';
-	private const V4_FIRST = '172.16.53.53';
-	private const V4_SECOND = '192.168.53.53';
-	private const V4_THIRD = '10.53.53.53';
-	private const V6 = 'fd00:53:53:53:53:53:53:53';
+	private const V4_FIRST = '172.16.53.1';
+	private const V4_SECOND = '192.168.53.1';
+	private const V4_THIRD = '10.53.53.1';
+	private const V6 = 'fd00:53:53:53:53:53:53:1';
 	private const EXHAUSTED_WARNING = 'No free auto-create address is available';
 
 	private mixed $savedConfig;

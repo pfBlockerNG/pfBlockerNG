@@ -10,14 +10,15 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 * saving with a DNS interface list empty shows the input error and leaves config.xml alone, saving
   Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
   tokens render selected and survive a save that leaves the lists alone;
-* DNS Reply Logging comes first, ahead of pfB-DNS, DoT, DoH, DoQ and DDR, and remains operable with pfB-DNS off or on;
-* DDR's two checkboxes resolve by their visible labels ``DDR`` and ``DoH on port 443``, the second is disabled
-  while the DoH port is 443, and saving both on persists them;
+* DNS Reply Logging is on DNS General, separate from pfB-DNS transports;
+* DDR's three checkboxes resolve by ``DDR``, ``IPv4 DoH on port 443`` and ``IPv6 DoH on port 443``;
+  a family's port-443 checkbox is disabled when that family already listens on 443;
 * the status panel is a collapsible section per transport holding a table of Interface | Address | State rows, each
   state an icon with a hover title and a screen-reader text, and an off transport's table is empty; on a phone the
   tables scroll inside their sections.
-* the DNS top tab replaces the separate DNSBL and pfB-DNS tabs and opens pfB-DNS from General and from the keyboard;
-  each of the five second-row tabs (pfB-DNS, DNSBL, DNSBL Groups, DNSBL Category, DNSBL SafeSearch) opens its page with
+* the DNS top tab opens DNS General from the package General page and from the keyboard;
+  each of the six second-row tabs (General, pfB-DNS, DNSBL, DNSBL Groups, DNSBL Category,
+  DNSBL SafeSearch) opens its page with
   DNS selected, its own tab selected and the DNS breadcrumb, and the DNSBL group editor stays under DNSBL Groups.
 
 Scope is the controls and disclosures on this page only: no whole-page axe claim, since the
@@ -50,25 +51,29 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_browser
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+DNS_GENERAL_PAGE = "/pfblockerng/pfblockerng_dns_general.php"
 DNS_CFG = "installedpackages/pfblockerngdns/config/0/"
-# Everything the page's Save writes: the pfB-DNS toggle, the listener settings, the two DDR toggles and the certificate
-# (the Reply Logging preference lives in the DNSBL section).
+# Everything the pfB-DNS page's Save writes.
 DNS_SAVED_KEYS = (
     "pfb_dns",
     "pfb_dns_interface",
     "pfb_dns_sslcertref",
     "pfb_dns_dot",
     "pfb_dns_dot_port",
+    "pfb_dns_dot_port6",
     "pfb_dns_dot_interface",
     "pfb_dns_doh",
     "pfb_dns_doh_port",
+    "pfb_dns_doh_port6",
     "pfb_dns_doh_interface",
     "pfb_dns_doh_trusted",
     "pfb_dns_doq",
     "pfb_dns_doq_port",
+    "pfb_dns_doq_port6",
     "pfb_dns_doq_interface",
     "pfb_dns_ddr",
     "pfb_dns_ddr_doh_443",
+    "pfb_dns_ddr_doh_443_6",
 )
 REPLY_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
 INTERFACE_LABELS = ("DNS Interface(s)", "DoT Interface(s)", "DoH Interface(s)", "DoQ Interface(s)")
@@ -205,58 +210,42 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
             helpers.config_restore_state(smoke_vm, path, state)
 
 
-# issue #3583: the DDR section's panel title as the page renders it, the visible label and name of each of its two
-# checkboxes, and the DoH port the tests set (a stored 443 disables the second checkbox).
+# The DDR section's accessible checkbox names, in display order.
 DDR_SECTION = "Discovery of Designated Resolvers (DDR)"
-DDR_TOGGLES = (("DDR", "pfb_dns_ddr"), ("DoH on port 443", "pfb_dns_ddr_doh_443"))
+DDR_TOGGLES = (
+    ("DDR", "pfb_dns_ddr"),
+    ("IPv4 DoH on port 443", "pfb_dns_ddr_doh_443"),
+    ("IPv6 DoH on port 443", "pfb_dns_ddr_doh_443_6"),
+)
 DOH_PORT_CFG = helpers.dns_config_path("pfb_dns_doh_port")
 
 
-def test_dns_reply_logging_precedes_proxy_settings_and_stays_independent(
+def test_dns_reply_logging_lives_on_general_not_proxy_settings(
     browser_page: Page, webui: WebUI, screenshot_dir: Path
 ) -> None:
-    """Reply logging is first in DOM and on screen, and works with the experimental proxy off or on."""
+    """The shared logging control is operable on General, not on the transport page."""
     page = browser_page
-    _open(page, webui, DNS_PAGE)
+    _open(page, webui, DNS_GENERAL_PAGE)
+    _assert_dns_navigation(page, "General")
     titles = [title.strip() for title in page.locator(".panel-title").all_inner_texts()]
-    wanted = [
-        "DNS Reply Logging",
-        "pfB-DNS Settings",
-        "DNS over TLS (DoT)",
-        "DNS over HTTPS (DoH)",
-        "DNS over QUIC (DoQ)",
-        DDR_SECTION,
-    ]
-    assert titles[: len(wanted)] == wanted, f"expected settings panels {wanted} first, got {titles}"
+    assert titles[:2] == ["DNS Reply Logging", "Resolver addresses"], titles
     reply = page.locator('input[name="pfb_py_reply"]')
-    proxy = page.locator('input[name="pfb_dns"]')
-    assert reply.is_visible() and proxy.is_visible(), "reply logging and proxy controls must both be visible"
-    precedes = reply.evaluate(
-        "el => Boolean(el.compareDocumentPosition(document.querySelector('input[name=\"pfb_dns\"]')) "
-        "& Node.DOCUMENT_POSITION_FOLLOWING)"
-    )
-    assert precedes, "reply logging checkbox must precede the proxy checkbox in the DOM"
-    reply_box, proxy_box = reply.bounding_box(), proxy.bounding_box()
-    assert reply_box is not None and proxy_box is not None, "both controls must have painted bounds"
-    assert reply_box["y"] + reply_box["height"] <= proxy_box["y"], (
-        f"reply logging must paint above proxy controls: reply={reply_box}, proxy={proxy_box}"
-    )
-    for enabled in (False, True):
-        proxy.set_checked(enabled)
-        assert proxy.is_checked() is enabled, f"proxy checkbox must be {enabled}"
-        assert reply.is_visible() and reply.is_enabled(), f"reply logging unavailable with proxy={enabled}"
-        before = reply.is_checked()
-        reply.set_checked(not before)
-        assert reply.is_checked() is not before, f"reply logging did not toggle with proxy={enabled}"
-        _shot(page, screenshot_dir, f"pfb_dns_reply_first_proxy_{'on' if enabled else 'off'}")
-        reply.set_checked(before)
-        assert reply.is_checked() is before, f"reply logging did not restore with proxy={enabled}"
+    assert reply.is_visible() and reply.is_enabled()
+    before = reply.is_checked()
+    reply.set_checked(not before)
+    assert reply.is_checked() is not before
+    reply.set_checked(before)
+    _shot(page, screenshot_dir, "dns_general_reply_logging")
+    assert page.locator('input[name="pfb_dns"]').count() == 0
+    _open(page, webui, DNS_PAGE)
+    assert page.locator('input[name="pfb_py_reply"]').count() == 0
+    assert page.locator('input[name="pfb_dns"]').is_visible()
 
 
 def test_ddr_checkboxes_resolve_by_their_visible_labels_inside_the_ddr_section(
     browser_page: Page, webui: WebUI
 ) -> None:
-    """issue #3583: `DDR` and `DoH on port 443` each name one checkbox, both in the DDR section's panel."""
+    """All three DDR controls have distinct accessible names within the DDR panel."""
     page = browser_page
     _open(page, webui, DNS_PAGE)
     section = page.locator(".panel").filter(has=page.locator(".panel-title", has_text=DDR_SECTION)).last
@@ -314,7 +303,7 @@ def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
             helpers.config_set(smoke_vm, path, "")
         helpers.config_set(smoke_vm, DOH_PORT_CFG, "4443")
         before = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
-        assert before == ("", ""), f"seed did not take: both DDR toggles must start Off, got {before}"
+        assert before == ("", "", ""), f"seed did not take: DDR toggles must start Off, got {before}"
         _open(page, webui, DNS_PAGE)
         for _label, name in DDR_TOGGLES:
             page.locator(f'input[name="{name}"]').check()
@@ -323,9 +312,7 @@ def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         stored = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
-        assert stored == ("on", "on"), (
-            f"stored (dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443): expected on and on, got {stored}"
-        )
+        assert stored == ("on", "on", "on"), f"all three DDR toggles must store on, got {stored}"
     finally:
         for path, state in originals.items():
             helpers.config_restore_state(smoke_vm, path, state)
@@ -534,8 +521,7 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
         _write_rc_script(smoke_vm)
 
 
-# issue #3593: the DNS top tab replaces the separate DNSBL and pfB-DNS tabs. Its second row holds, in order, pfB-DNS,
-# DNSBL, DNSBL Groups, DNSBL Category and DNSBL SafeSearch; each opens its own page with DNS still selected.
+# DNS General is the DNS landing page; transports and all existing DNSBL pages remain sub-tabs.
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
@@ -544,6 +530,7 @@ BLACKLIST_PAGE = "/pfblockerng/pfblockerng_blacklist.php"
 SAFESEARCH_PAGE = "/pfblockerng/pfblockerng_safesearch.php"
 GROUP_EDITOR = "/pfblockerng/pfblockerng_category_edit.php"
 DNS_SUBTABS = (
+    ("General", DNS_GENERAL_PAGE),
     ("pfB-DNS", DNS_PAGE),
     ("DNSBL", DNSBL_PAGE),
     ("DNSBL Groups", GROUPS_PAGE),
@@ -597,7 +584,7 @@ def _assert_dns_navigation(page: Page, subtab: str) -> None:
     top = _tabs(_nav_row(page, UPDATE_PAGE))
     _assert_single_dns_top(top)
     selected = [(label, href) for label, href, active in top if active]
-    assert selected == [("DNS", DNS_PAGE)], f"the selected top tab is {selected}, expected DNS -> {DNS_PAGE}"
+    assert selected == [("DNS", DNS_GENERAL_PAGE)], f"the selected top tab is {selected}, expected DNS -> General"
     row = _tabs(_nav_row(page, SAFESEARCH_PAGE, GROUPS_PAGE))
     shown = [(label, href) for label, href, _ in row]
     assert shown == list(DNS_SUBTABS), f"the DNS sub-tabs are {shown}, expected {list(DNS_SUBTABS)}"
@@ -606,49 +593,54 @@ def _assert_dns_navigation(page: Page, subtab: str) -> None:
 
 
 def _assert_dns_crumb(page: Page) -> None:
-    """The breadcrumb's DNS parent links to pfB-DNS."""
+    """The breadcrumb's DNS parent links to DNS General."""
     hrefs = page.locator(_DNS_CRUMB).evaluate_all("crumbs => crumbs.map(a => a.getAttribute('href'))")
-    assert hrefs == [DNS_PAGE], f"the breadcrumb's DNS parent links {hrefs}, expected [{DNS_PAGE!r}]"
+    assert hrefs == [DNS_GENERAL_PAGE], f"the breadcrumb's DNS parent links {hrefs}, expected DNS General"
 
 
-def test_dns_navigation_general_top_tab_opens_pfb_dns(browser_page: Page, webui: WebUI, screenshot_dir: Path) -> None:
-    """From General, the one DNS top tab opens pfB-DNS with DNS selected and pfB-DNS the selected sub-tab."""
+def test_dns_navigation_general_top_tab_opens_dns_general(
+    browser_page: Page, webui: WebUI, screenshot_dir: Path
+) -> None:
+    """The package General page's DNS top tab opens DNS General."""
     page = browser_page
     _open(page, webui, GENERAL_PAGE)
     top = _tabs(_nav_row(page, UPDATE_PAGE))
     _assert_single_dns_top(top)
-    assert ("DNS", DNS_PAGE, False) in top, f"General's top tabs are {top}, expected an unselected DNS tab"
-    _follow(page, _nav_row(page, UPDATE_PAGE).locator(f'a[href="{DNS_PAGE}"]'))
-    assert _target(page.url) == DNS_PAGE, f"the DNS tab opened {_target(page.url)}, expected {DNS_PAGE}"
-    _assert_dns_navigation(page, "pfB-DNS")
+    assert ("DNS", DNS_GENERAL_PAGE, False) in top, f"General's top tabs are {top}, expected an unselected DNS tab"
+    _follow(page, _nav_row(page, UPDATE_PAGE).locator(f'a[href="{DNS_GENERAL_PAGE}"]'))
+    assert _target(page.url) == DNS_GENERAL_PAGE, f"the DNS tab opened {_target(page.url)}, expected DNS General"
+    _assert_dns_navigation(page, "General")
     _assert_dns_crumb(page)
     _shot(page, screenshot_dir, "dns_navigation_from_general")
 
 
 def test_dns_navigation_top_tab_opens_from_the_keyboard(browser_page: Page, webui: WebUI, screenshot_dir: Path) -> None:
-    """Focusing the General page's DNS top tab and pressing Enter opens pfB-DNS, as a click does."""
+    """Focusing the package General page's DNS top tab and pressing Enter opens DNS General."""
     page = browser_page
     _open(page, webui, GENERAL_PAGE)
-    link = _nav_row(page, UPDATE_PAGE).locator(f'a[href="{DNS_PAGE}"]')
+    link = _nav_row(page, UPDATE_PAGE).locator(f'a[href="{DNS_GENERAL_PAGE}"]')
     assert link.count() == 1, f"General has {link.count()} DNS top-tab links, expected one"
     link.focus()
     with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
         page.keyboard.press("Enter")
-    assert _target(page.url) == DNS_PAGE, f"Enter on the DNS tab opened {_target(page.url)}, expected {DNS_PAGE}"
-    _assert_dns_navigation(page, "pfB-DNS")
+    assert _target(page.url) == DNS_GENERAL_PAGE, (
+        f"Enter on the DNS tab opened {_target(page.url)}, expected DNS General"
+    )
+    _assert_dns_navigation(page, "General")
     _shot(page, screenshot_dir, "dns_navigation_keyboard_top_tab")
 
 
 @pytest.mark.parametrize(
     ("label", "target", "shot"),
     [
+        ("General", DNS_GENERAL_PAGE, "dns_navigation_dns_general"),
         ("pfB-DNS", DNS_PAGE, "dns_navigation_pfb_dns"),
         ("DNSBL", DNSBL_PAGE, "dns_navigation_dnsbl"),
         ("DNSBL Groups", GROUPS_PAGE, "dns_navigation_dnsbl_groups"),
         ("DNSBL Category", BLACKLIST_PAGE, "dns_navigation_dnsbl_category"),
         ("DNSBL SafeSearch", SAFESEARCH_PAGE, "dns_navigation_dnsbl_safesearch"),
     ],
-    ids=["pfb-dns", "dnsbl", "dnsbl-groups", "dnsbl-category", "dnsbl-safesearch"],
+    ids=["general", "pfb-dns", "dnsbl", "dnsbl-groups", "dnsbl-category", "dnsbl-safesearch"],
 )
 def test_dns_navigation_subtab_opens_its_page_under_dns(
     browser_page: Page, webui: WebUI, screenshot_dir: Path, label: str, target: str, shot: str

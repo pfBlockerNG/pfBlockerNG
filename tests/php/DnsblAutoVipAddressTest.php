@@ -15,9 +15,9 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_auto_vip_address')]
 final class DnsblAutoVipAddressTest extends TestCase
 {
-	private const V4_FIRST = '172.16.53.53';
-	private const V4_SECOND = '192.168.53.53';
-	private const V6 = 'fd00:53:53:53:53:53:53:53';
+	private const V4_FIRST = '172.16.53.1';
+	private const V4_SECOND = '192.168.53.1';
+	private const V6 = 'fd00:53:53:53:53:53:53:1';
 
 	private mixed $savedConfig;
 

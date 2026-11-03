@@ -937,6 +937,29 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// issue #3674: a pass that starts suppressed applies a received policy; its own writes into synced sections stay unsent.
 	$pfb_sync_absorb = pfb_sync_receive_suppressed();
 
+	if (PfbConfig::read('gen/pfb_dns_listen_vip') === PfbToggle::On
+	    || PfbConfig::read('gen/pfb_dns_listen_added') !== ''
+	    || PfbConfig::read('gen/pfb_dns_listen_auto4') !== ''
+	    || PfbConfig::read('gen/pfb_dns_listen_auto6') !== '') {
+		$pfb_listen_lock = pfb_dns_config_lock();
+		if ($pfb_listen_lock === NULL) {
+			pfb_logger("\n sync aborted: DNS configuration lock unavailable; pending changes retained.\n", 1);
+			pfb_mark_pending_changes();
+			if ($pfb_feed_pass_owner) {
+				pfb_feed_pass_release();
+			}
+			if ($pfb_dispatch_owner) {
+				pfb_schedule_dispatch_release();
+			}
+			return FALSE;
+		}
+		try {
+			pfb_dns_listen_vips_apply();
+		} finally {
+			unlock($pfb_listen_lock);
+		}
+	}
+
 	// issue #3288: opportunistically bring a legacy/still-fresh DNSBL policy
 	// state up to date under the held feed-pass lock, before this pass
 	// resolves any group's effective mechanism -- refresh pfb_global() only

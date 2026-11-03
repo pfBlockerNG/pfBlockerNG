@@ -13,13 +13,13 @@ final class PfbDnsPageWiringTest extends TestCase
 	/** The listener settings in the order the page shows them (issues #3513, #3538). */
 	private const LISTENER_FIELDS = [
 		'pfb_dns_interface', 'pfb_dns_sslcertref',
-		'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_interface',
-		'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_interface', 'pfb_dns_doh_trusted',
-		'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_interface',
+		'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_dot_interface',
+		'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_interface', 'pfb_dns_doh_trusted',
+		'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doq_interface',
 	];
 
 	/** The DDR controls in the order the page shows them, after the DoQ section (issue #3583). */
-	private const DDR_FIELDS = ['pfb_dns_ddr', 'pfb_dns_ddr_doh_443'];
+	private const DDR_FIELDS = ['pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6'];
 
 	/** The ones pfB-DNS seeds once from the Resolver: the page shows the pending seed value through pfb_dns_proxy_setting() (issue #3538). */
 	private const SEEDED_FIELDS = [
@@ -44,6 +44,8 @@ final class PfbDnsPageWiringTest extends TestCase
 			$GLOBALS['priv_list']['page-firewall-pfblockerng']['match'] ?? [],
 			'the package privilege matches the pfB-DNS page, or no scoped operator reaches it'
 		);
+		$this->assertContains('pfblockerng/pfblockerng_dns_general.php*',
+			$GLOBALS['priv_list']['page-firewall-pfblockerng']['match'] ?? []);
 		unset($GLOBALS['priv_list']);
 	}
 
@@ -117,7 +119,7 @@ final class PfbDnsPageWiringTest extends TestCase
 		$found = preg_match('/foreach \(array\(([^)]*)\) as \$pfb_dns_field\) \{\s*\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';/', $page, $restore);
 
 		$this->assertSame(1, $found, 'the page restores its scalar fields on an input error');
-		foreach (self::DDR_FIELDS as $field) {
+		foreach ([...self::DDR_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6'] as $field) {
 			$this->assertStringContainsString("'{$field}'", $restore[1] ?? '', "{$field} is restored on an input error");
 		}
 	}
@@ -226,7 +228,8 @@ final class PfbDnsPageWiringTest extends TestCase
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
 
 		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr', 'DDR'), "the pfb_dns_ddr checkbox has aria-label gettext('DDR')");
-		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr_doh_443', 'DoH on port 443'), "the pfb_dns_ddr_doh_443 checkbox has aria-label gettext('DoH on port 443')");
+		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr_doh_443', 'IPv4 DoH on port 443'));
+		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr_doh_443_6', 'IPv6 DoH on port 443'));
 	}
 
 	/**
@@ -358,6 +361,54 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 		foreach (['pfb_dns_proxy_do', 'pfb_validate_dns_proxy_listeners_post', 'pfb_dns_proxy_listeners_stored', 'options_dns_proxy_interface'] as $needle) {
 			$this->assertStringNotContainsString($needle, $page, "the DNSBL page has no trace of {$needle}");
+		}
+	}
+
+	public function testDnsGeneralOwnsSharedControlsAndReplyLoggingIsNotOnPfbDns(): void
+	{
+		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
+		$this->assertFileExists($path);
+		$page = self::src('www/pfblockerng/pfblockerng_dns_general.php');
+		foreach (['dnsbl/pfb_py_reply', 'gen/pfb_dns_listen_vip', 'gen/pfb_dns_listen_vip4',
+			'gen/pfb_dns_listen_vip6', 'gen/pfb_dns_listen_interface'] as $key) {
+			$this->assertStringContainsString("PfbConfig::read('{$key}')", $page);
+			$this->assertStringContainsString("PfbConfig::write('{$key}',", $page);
+		}
+		$this->assertStringContainsString('pfb_get_vip_options(AF_INET)', $page);
+		$this->assertStringContainsString('pfb_get_vip_options(AF_INET6)', $page);
+		$this->assertStringContainsString("'auto' =>", $page);
+		$this->assertStringNotContainsString('pfb_py_reply', self::src('www/pfblockerng/pfblockerng_dns.php'));
+	}
+
+	public function testEveryDnsSubtabRowStartsWithGeneralAndKeepsAllExistingTabs(): void
+	{
+		foreach (['dns_general' => 'General', 'dns' => 'pfB-DNS', 'dnsbl' => 'DNSBL',
+			'category' => 'DNSBL Groups', 'category_edit' => 'DNSBL Groups',
+			'blacklist' => 'DNSBL Category', 'safesearch' => 'DNSBL SafeSearch'] as $suffix => $selected) {
+			$path = dirname(__DIR__, 2) . "/src/usr/local/www/pfblockerng/pfblockerng_{$suffix}.php";
+			$this->assertFileExists($path);
+			$page = (string) file_get_contents($path);
+			$this->assertSame(1, preg_match('/(\$tab_array\[\][^\n]*gettext\(\'General\'\)[^\n]*dns_general\.php[^\n]*\n)(.*?display_top_tabs)/s', $page, $row), $suffix);
+			preg_match_all('/array\(gettext\(\'([^\']+)\'\),\s*([^,]+),\s*\'([^\']+)\'\)/', $row[0], $tabs, PREG_SET_ORDER);
+			$this->assertSame(['General', 'pfB-DNS', 'DNSBL', 'DNSBL Groups', 'DNSBL Category', 'DNSBL SafeSearch'],
+				array_column($tabs, 1), $suffix);
+			foreach ($tabs as $tab) {
+				$this->assertSame($tab[1] === $selected, $tab[2] !== 'FALSE', "{$suffix}: {$tab[1]} selected");
+			}
+		}
+	}
+
+	public function testEveryPackageDnsTopTabOpensGeneral(): void
+	{
+		$root = dirname(__DIR__, 2) . '/src/usr/local/';
+		$paths = glob($root . 'www/pfblockerng/*.php');
+		$paths[] = $root . 'pkg/pfblockerng/pfblockerng_geoip.inc';
+		foreach ($paths as $path) {
+			foreach (explode("\n", (string) file_get_contents($path)) as $line) {
+				if (str_contains($line, "array(gettext('DNS'),")) {
+					$this->assertStringContainsString('/pfblockerng/pfblockerng_dns_general.php', $line, basename($path));
+				}
+			}
 		}
 	}
 

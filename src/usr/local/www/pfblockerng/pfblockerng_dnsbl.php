@@ -2597,7 +2597,7 @@ $tld_info['bgTLD']	= 'List of Branded Generic Top-Level-Domains (bgTLD)';
 $tld_total = array_sum(array_map('count', $tld_list));
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('DNS'), gettext('DNSBL'));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_dns.php', '@self');
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_dns_general.php', '@self');
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
@@ -2611,7 +2611,7 @@ $get_req = pfb_alerts_default_page();
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns_general.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
@@ -2621,6 +2621,7 @@ pfb_software_add_tab($tab_array);
 display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
 $tab_array[]	= array(gettext('pfB-DNS'),	FALSE,		'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('DNSBL'),	TRUE,		'/pfblockerng/pfblockerng_dnsbl.php');
 $tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,		'/pfblockerng/pfblockerng_category.php?type=dnsbl');
@@ -2728,7 +2729,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_StaticText(
 	gettext('DNS Reply Logging'),
-	'Moved to the <a href="/pfblockerng/pfblockerng_dns.php">pfB-DNS</a> tab: one setting for the DNSBL module and for pfB-DNS without DNSBL.'
+	'Moved to the <a href="/pfblockerng/pfblockerng_dns_general.php">DNS General</a> tab: one setting for the DNSBL module and for pfB-DNS without DNSBL.'
 ));
 
 $section->addInput(new Form_Checkbox(

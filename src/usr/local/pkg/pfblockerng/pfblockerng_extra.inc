@@ -882,11 +882,21 @@ const PFB_DNS_SHARED_FIELDS = [
 	'pfb_dns_dot', 'pfb_dns_doh', 'pfb_dns_doq',
 	'pfb_dns_dot_port', 'pfb_dns_doh_port', 'pfb_dns_doq_port',
 	'pfb_dns_doh_trusted', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443',
+	'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6', 'pfb_dns_ddr_doh_443_6',
+];
+
+// Listener policy uses the existing policy-settings section, not the node-local Resolver snapshot.
+const PFB_DNS_POLICY_FIELDS = [
+	'pfb_dns_listen_vip', 'pfb_dns_listen_vip4', 'pfb_dns_listen_vip6',
+	'pfb_dns_listen_auto4', 'pfb_dns_listen_auto6',
 ];
 
 /** The registered home of a pfB-DNS page field (issue #3649). */
 function pfb_dns_config_key(string $key): string
 {
+	if (in_array($key, PFB_DNS_POLICY_FIELDS, TRUE)) {
+		return 'gen/' . $key;
+	}
 	return (in_array($key, PFB_DNS_SHARED_FIELDS, TRUE) ? 'dns_shared/' : 'dns/') . $key;
 }
 
@@ -2533,6 +2543,27 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key; absent reads \'\' = no certificate, and pfb_dns_proxy_seed() fills it once from the Resolver\'s certificate',
 		],
 	];
+
+	foreach ([...PFB_DNS_POLICY_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6', 'pfb_dns_ddr_doh_443_6'] as $key) {
+		$toggle = in_array($key, ['pfb_dns_listen_vip', 'pfb_dns_ddr_doh_443_6'], TRUE);
+		$policy = in_array($key, PFB_DNS_POLICY_FIELDS, TRUE);
+		$registry[($policy ? 'gen/' : 'dns_shared/') . $key] = [
+			'default' => '',
+			'read_adapter' => $toggle ? 'pfb_cfg_toggle_read' : NULL,
+			'write_adapter' => $toggle ? 'pfb_cfg_toggle_write' : NULL,
+			'sync' => $policy ? 'policy' : 'local',
+			'no_grandfather' => '#3688 opt-in listener policy; absent preserves the existing listeners',
+		];
+	}
+	foreach (['pfb_dns_listen_interface' => 'lo0', 'pfb_dns_listen_added' => ''] as $key => $default) {
+		$registry["gen/{$key}"] = [
+			'default' => $default,
+			'read_adapter' => NULL,
+			'write_adapter' => NULL,
+			'sync' => 'local',
+			'no_grandfather' => '#3688 node-local VIP interface and advertisement ownership',
+		];
+	}
 
 	return $registry;
 }

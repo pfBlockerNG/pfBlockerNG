@@ -67,12 +67,16 @@ type config struct {
 	dohTrusted  []string
 	doqListen   []string
 	doqPort     int
+	dotPort6    int // zero inherits the IPv4 port
+	dohPort6    int
+	doqPort6    int
 	noModule    bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
 	observer    bool
 	replyLog    bool
 	readyFile   string // --ready-file: the gateway's pid is published here once it serves; "" = none
 	ddr         string // --ddr: the firewall FQDN that DDR (RFC 9462) designates; "" = DDR off
 	ddrDoH443   bool   // --ddr-doh-443: the DDR DoH record carries no port, whatever port DoH is bound on; needs ddr
+	ddrDoH4436  bool
 	decider     []string
 
 	// Test seams; the zero value is production.
@@ -123,12 +127,16 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.Var(&dohTrusted, "doh-trusted", "front end trusted to send PROXYv2 and X-Forwarded-For to DoH (CIDR or address), repeatable")
 	fs.Var(&doqListen, "doq-listen", "DoQ (RFC 9250) address, repeatable; none = DoQ off")
 	fs.IntVar(&cfg.doqPort, "doq-port", cfg.doqPort, "DoQ UDP port; 0 picks one per address")
+	fs.IntVar(&cfg.dotPort6, "dot-port6", 0, "IPv6 DoT port; 0 inherits --dot-port")
+	fs.IntVar(&cfg.dohPort6, "doh-port6", 0, "IPv6 DoH port; 0 inherits --doh-port")
+	fs.IntVar(&cfg.doqPort6, "doq-port6", 0, "IPv6 DoQ port; 0 inherits --doq-port")
 	fs.BoolVar(&cfg.noModule, "no-module", false, "pfB-DNS without DNSBL: the decider boots no module and forwards every query")
 	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: the decider listens for the upstream observer's reports")
 	fs.BoolVar(&cfg.replyLog, "reply-log", false, "the decider logs each relayed reply to dns_reply.log (needs --no-module)")
 	fs.StringVar(&cfg.readyFile, "ready-file", "", "write the gateway's pid here, mode 0600, once it serves; removed at stop while it still names the gateway")
 	fs.StringVar(&cfg.ddr, "ddr", "", "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462); the firewall's FQDN the records name; empty = off")
 	fs.BoolVar(&cfg.ddrDoH443, "ddr-doh-443", false, "DDR leaves the port out of the DoH record, so clients use 443 (a reverse proxy in front of DoH); needs --ddr")
+	fs.BoolVar(&cfg.ddrDoH4436, "ddr-doh-4436", false, "DDR leaves the port out of IPv6 DoH records; needs --ddr")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -205,6 +213,17 @@ func (c config) validate() error {
 	}
 	if c.doqPort < 0 || c.doqPort > 65535 {
 		return fmt.Errorf("--doq-port %d is outside 0..65535", c.doqPort)
+	}
+	for _, p := range []struct {
+		name string
+		port int
+	}{{"dot-port6", c.dotPort6}, {"doh-port6", c.dohPort6}, {"doq-port6", c.doqPort6}} {
+		if p.port < 0 || p.port > 65535 {
+			return fmt.Errorf("--%s %d is outside 0..65535", p.name, p.port)
+		}
+	}
+	if c.ddr == "" && c.ddrDoH4436 {
+		return errors.New("--ddr-doh-4436 needs --ddr")
 	}
 	if c.ddr == "" && c.ddrDoH443 {
 		return errors.New("--ddr-doh-443 needs --ddr")

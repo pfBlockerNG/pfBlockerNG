@@ -757,8 +757,8 @@ final class CfgGatewayTest extends TestCase
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
 		return [
-			'v4' => ['dnsbl/pfb_dnsvip_auto4', "{$section}/pfb_dnsvip_auto4", '192.168.53.53'],
-			'v6' => ['dnsbl/pfb_dnsvip_auto6', "{$section}/pfb_dnsvip_auto6", 'fd00:53:53:53:53:53:53:53'],
+			'v4' => ['dnsbl/pfb_dnsvip_auto4', "{$section}/pfb_dnsvip_auto4", '192.168.53.1'],
+			'v6' => ['dnsbl/pfb_dnsvip_auto6', "{$section}/pfb_dnsvip_auto6", 'fd00:53:53:53:53:53:53:1'],
 		];
 	}
 

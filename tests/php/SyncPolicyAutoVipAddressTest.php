@@ -55,15 +55,15 @@ final class SyncPolicyAutoVipAddressTest extends TestCase
 	public function testProjectionListsTheSyncedAddressesAndNeverTheVipIds(): void
 	{
 		$sections = self::settings([
-			'pfb_dnsvip4' => '_vipLOCAL4', 'pfb_dnsvip_auto4' => '192.168.53.53',
-			'pfb_dnsvip6' => '_vipLOCAL6', 'pfb_dnsvip_auto6' => 'fd00:53:53:53:53:53:53:53',
+			'pfb_dnsvip4' => '_vipLOCAL4', 'pfb_dnsvip_auto4' => '192.168.53.1',
+			'pfb_dnsvip6' => '_vipLOCAL6', 'pfb_dnsvip_auto6' => 'fd00:53:53:53:53:53:53:1',
 		]);
 
 		$projection = $this->assertNoDiagnostics(static fn (): array => pfb_sync_policy_projection($sections));
 
 		$this->assertSame([
-			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto4' => '192.168.53.53',
-			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto6' => 'fd00:53:53:53:53:53:53:53',
+			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto4' => '192.168.53.1',
+			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto6' => 'fd00:53:53:53:53:53:53:1',
 		], $projection);
 	}
 
@@ -71,14 +71,14 @@ final class SyncPolicyAutoVipAddressTest extends TestCase
 	{
 		// GIVEN a receiver with its own VIP id and no synced address, and a sender that also names its own VIP id
 		$current  = self::settings(['pfb_dnsbl' => 'on', 'pfb_dnsvip4' => '_vipRECEIVER']);
-		$incoming = self::settings(['pfb_dnsbl' => 'on', 'pfb_dnsvip4' => '_vipSENDER', 'pfb_dnsvip_auto4' => '192.168.53.53']);
+		$incoming = self::settings(['pfb_dnsbl' => 'on', 'pfb_dnsvip4' => '_vipSENDER', 'pfb_dnsvip_auto4' => '192.168.53.1']);
 
 		// WHEN the receiver merges the sender's policy
 		$out = $this->assertNoDiagnostics(static fn (): array => pfb_sync_policy_merge($incoming, $current));
 
 		// THEN the address is stored and the receiver's VIP id is untouched
 		$map = $out[self::SECTION]['config'][0];
-		$this->assertSame('192.168.53.53', $map['pfb_dnsvip_auto4'] ?? NULL, 'the sender\'s address must be stored');
+		$this->assertSame('192.168.53.1', $map['pfb_dnsvip_auto4'] ?? NULL, 'the sender\'s address must be stored');
 		$this->assertSame('_vipRECEIVER', $map['pfb_dnsvip4'] ?? NULL, 'the receiver\'s own VIP id must be kept');
 		$this->assertEqualsCanonicalizing(['pfb_dnsbl', 'pfb_dnsvip4', 'pfb_dnsvip_auto4'], array_keys($map));
 	}
@@ -86,7 +86,7 @@ final class SyncPolicyAutoVipAddressTest extends TestCase
 	public function testMergeFromAnOlderSenderThatLacksTheAddressDeletesTheStoredAddress(): void
 	{
 		// GIVEN a receiver holding a synced address, and a sender without the key (a release before #3540)
-		$current  = self::settings(['pfb_dnsbl' => 'on', 'pfb_dnsvip4' => '_vipRECEIVER', 'pfb_dnsvip_auto4' => '192.168.53.53']);
+		$current  = self::settings(['pfb_dnsbl' => 'on', 'pfb_dnsvip4' => '_vipRECEIVER', 'pfb_dnsvip_auto4' => '192.168.53.1']);
 		$incoming = self::settings(['pfb_dnsbl' => 'on']);
 
 		// WHEN the receiver merges the sender's policy

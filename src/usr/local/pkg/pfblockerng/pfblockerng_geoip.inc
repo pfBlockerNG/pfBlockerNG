@@ -27,8 +27,8 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 	$pfbdns = "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
 	$update_continent = "\$tab_array[]\t= array(gettext('Update'),\t\tFALSE,\t'/pfblockerng/pfblockerng_update.php');\n";
 	$update_reputation = "\$tab_array[]\t= array(gettext('Update'),\tFALSE,\t'/pfblockerng/pfblockerng_update.php');\n";
-	$dns_continent = "\n\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
-	$dns_reputation = "\n\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');\n";
+	$dns_continent = "\n\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns_general.php');\n";
+	$dns_reputation = "\n\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns_general.php');\n";
 	// The unchanged Update row bounds the supported navigation layouts.
 	$legacy = [
 		$dnsbl_continent . $pfbdns . $update_continent,
@@ -37,6 +37,8 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 		$dnsbl_reputation . $update_reputation,
 		str_replace('FALSE', 'false', $dnsbl_continent . $update_continent),
 		str_replace('FALSE', 'false', $dnsbl_reputation . $update_reputation),
+		str_replace('pfblockerng_dns_general.php', 'pfblockerng_dns.php', $dns_continent) . $update_continent,
+		str_replace('pfblockerng_dns_general.php', 'pfblockerng_dns.php', $dns_reputation) . $update_reputation,
 	];
 	$current = [
 		$dns_continent . $update_continent,
@@ -45,6 +47,8 @@ function pfb_geoip_refresh_navigation(string $output_root = '/usr/local/www/pfbl
 		$dns_reputation . $update_reputation,
 		$dns_continent . str_replace('FALSE', 'false', $update_continent),
 		$dns_reputation . str_replace('FALSE', 'false', $update_reputation),
+		$dns_continent . $update_continent,
+		$dns_reputation . $update_reputation,
 	];
 	$pages = [
 		'Top_Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North_America',
@@ -557,7 +561,7 @@ $get_req = pfb_alerts_default_page();
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),		FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),			TRUE,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNS'),			FALSE,	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNS'),			FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
 $tab_array[]	= array(gettext('Update'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),		FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),		FALSE,	'/pfblockerng/pfblockerng_feeds.php');
@@ -1064,7 +1068,7 @@ $get_req = pfb_alerts_default_page();
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		TRUE,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNS'),		FALSE,	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNS'),		FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');

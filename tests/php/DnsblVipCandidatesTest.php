@@ -10,11 +10,11 @@ use PHPUnit\Framework\TestCase;
  * side-effect-free fixed ordered list of DNS-themed candidate sinkhole VIP addresses.
  *
  * IPv4: three candidates in Class-B-first order (least-used RFC1918 on end-user LANs first):
- *   172.16.53.53  (172.16/12)
- *   192.168.53.53 (192.168/16)
- *   10.53.53.53   (10/8, most common, so last)
+ *   172.16.53.1  (172.16/12)
+ *   192.168.53.1 (192.168/16)
+ *   10.53.53.1   (10/8, most common, so last)
  *
- * IPv6: single ULA candidate fd00:53:53:53:53:53:53:53.
+ * IPv6: single ULA candidate fd00:53:53:53:53:53:53:1.
  * On conflict the picker returns null and the user resolves it manually.
  *
  * Supersedes the prior sweep+disjoint-fallback pool from issue #487.
@@ -28,7 +28,7 @@ final class DnsblVipCandidatesTest extends TestCase
 	{
 		$candidates = pfb_dnsbl_vip_candidates(AF_INET);
 		$this->assertSame(
-			['172.16.53.53', '192.168.53.53', '10.53.53.53'],
+			['172.16.53.1', '192.168.53.1', '10.53.53.1'],
 			$candidates,
 			'IPv4 candidate list must be the exact Class-B/C/A fixed list in that order'
 		);
@@ -37,21 +37,21 @@ final class DnsblVipCandidatesTest extends TestCase
 	public function testV4FirstCandidateIsClassB(): void
 	{
 		$candidates = pfb_dnsbl_vip_candidates(AF_INET);
-		$this->assertSame('172.16.53.53', $candidates[0],
+		$this->assertSame('172.16.53.1', $candidates[0],
 			'First IPv4 candidate must be the Class-B address (least-used RFC1918 on end-user LANs)');
 	}
 
 	public function testV4SecondCandidateIsClassC(): void
 	{
 		$candidates = pfb_dnsbl_vip_candidates(AF_INET);
-		$this->assertSame('192.168.53.53', $candidates[1],
+		$this->assertSame('192.168.53.1', $candidates[1],
 			'Second IPv4 candidate must be the Class-C address');
 	}
 
 	public function testV4ThirdCandidateIsClassA(): void
 	{
 		$candidates = pfb_dnsbl_vip_candidates(AF_INET);
-		$this->assertSame('10.53.53.53', $candidates[2],
+		$this->assertSame('10.53.53.1', $candidates[2],
 			'Third (last) IPv4 candidate must be the Class-A address (most-used, so last)');
 	}
 
@@ -66,7 +66,7 @@ final class DnsblVipCandidatesTest extends TestCase
 	{
 		$candidates = pfb_dnsbl_vip_candidates(AF_INET6);
 		$this->assertSame(
-			['fd00:53:53:53:53:53:53:53'],
+			['fd00:53:53:53:53:53:53:1'],
 			$candidates,
 			'IPv6 candidate list must be the single ULA fixed address'
 		);

@@ -268,10 +268,10 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdns/config/0/pfb_dns",
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
-    # issue #3515: DNS Reply Logging is edited on pfB-DNS but stored in the DNSBL section (default on).
+    # DNS Reply Logging is edited on DNS General but stored in the DNSBL section (default on).
     ToggleFlow(
         name="pfb_py_reply",
-        page="/pfblockerng/pfblockerng_dns.php",
+        page="/pfblockerng/pfblockerng_dns_general.php",
         field="pfb_py_reply",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply",
         # Registry default 'on': an absent key means the feature is ON.
@@ -502,20 +502,20 @@ def test_reply_logging_off_survives_unrelated_dnsbl_save(
     smoke_vm: helpers.SmokeVM,
     dnsbl_vip_ready: None,
 ) -> None:
-    """DNS Reply Logging stored Off on pfB-DNS survives an unrelated DNSBL save and a reload.
+    """DNS Reply Logging stored Off on DNS General survives an unrelated DNSBL save and a reload.
 
     issue #3515: ``dnsbl/pfb_py_reply`` is stored in the DNSBL section but edited on the
-    pfB-DNS page, and the DNSBL form no longer posts it. An absent key reads as On (the
+    DNS General page, and the DNSBL form no longer posts it. An absent key reads as On (the
     registry default), so a DNSBL save that rebuilt the section without the key would revive
     logging. The oracle is the raw stored token (presence included) and the checkbox a fresh
-    GET of pfB-DNS renders; the original state is restored in ``finally``.
+    GET of DNS General renders; the original state is restored in ``finally``.
     """
     reply = next(flow for flow in FLOWS if flow.name == "pfb_py_reply")
     unrelated = next(flow for flow in FLOWS if flow.name == "dnsbl_tld_wildcard")
     reply_original = helpers.config_get_state(smoke_vm, reply.config_path)
     unrelated_original = helpers.config_get_state(smoke_vm, unrelated.config_path)
     try:
-        # UI save 1: Off on the pfB-DNS page (_set_and_confirm asserts the stored value).
+        # UI save 1: Off on DNS General (_set_and_confirm asserts the stored value).
         _set_and_confirm(webui, smoke_vm, reply, reply.off)
         # UI save 2: an unrelated DNSBL field, flipped away from its stored value.
         unrelated_now = helpers.config_get(smoke_vm, unrelated.config_path)
@@ -525,12 +525,12 @@ def test_reply_logging_off_survives_unrelated_dnsbl_save(
         assert helpers.config_get_state(smoke_vm, reply.config_path) == (True, reply.off), (
             "the unrelated DNSBL save changed the stored DNS Reply Logging preference"
         )
-        # Reload: the stored Off must render an unchecked box on a pfB-DNS page that really rendered.
+        # Reload: the stored Off must render an unchecked box on DNS General.
         page = webui.get(reply.page)
-        assert not looks_like_login_page(page.text), "pfB-DNS GET returned the login form (session lost)"
-        assert "pfB-DNS Settings" in page.text, "pfB-DNS page did not render its settings section"
+        assert not looks_like_login_page(page.text), "DNS General GET returned the login form (session lost)"
+        assert "Resolver addresses" in page.text, "DNS General did not render its settings section"
         assert reply.field not in scrape_form_fields(page.text), (
-            "pfB-DNS renders DNS Reply Logging checked after the stored Off"
+            "DNS General renders DNS Reply Logging checked after the stored Off"
         )
     finally:
         helpers.config_restore_state(smoke_vm, reply.config_path, reply_original)
@@ -1874,6 +1874,7 @@ DNS_PROXY_LISTENER_KEYS = (
 )
 # issue #3538: the plain DNS, DoT and certificate settings the same save writes, restored with the seven above
 DNS_PROXY_OWN_KEYS = ("pfb_dns_interface", "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_dot_interface")
+DNS_PROXY_V6_KEYS = ("pfb_dns_dot_port6", "pfb_dns_doh_port6", "pfb_dns_doq_port6", "pfb_dns_ddr_doh_443_6")
 CERT_CFG = DNS_PROXY_CFG + "pfb_dns_sslcertref"
 
 
@@ -1895,7 +1896,7 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
     vm = smoke_vm
     originals = {
         key: helpers.config_get_state(vm, helpers.dns_config_path(key))
-        for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS)
+        for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS, *DNS_PROXY_V6_KEYS)
     }
     original_cert = helpers.config_get_state(vm, CERT_CFG)
     seeded = {
@@ -1969,7 +1970,9 @@ DDR_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443")
 @contextlib.contextmanager
 def _dns_page_settings_restored(vm: helpers.SmokeVM) -> Iterator[None]:
     """Every pfB-DNS setting the page's Save writes, put back (presence included) on the way out."""
-    paths = [helpers.dns_config_path(key) for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS)]
+    paths = [
+        helpers.dns_config_path(key) for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS, *DNS_PROXY_V6_KEYS)
+    ]
     paths += [CERT_CFG, DDR_CFG, DDR_443_CFG]
     originals = {path: helpers.config_get_state(vm, path) for path in paths}
     try:
@@ -2174,7 +2177,7 @@ def test_dnsbl_adv_inbound_proto_any_guard(
 # `set_dnsvip_auto`. The UI tier's DISTINCT value is proving the DNSBL settings
 # PAGE persists pfb_dnsvip_auto through a real CSRF form POST, with the same
 # package machinery (pfb_create_dnsbl -> pfb_manage_dnsbl_vip) then provisioning
-# the marked VIP end-to-end. Auto picks 172.16.53.53 (issue #473's first Class-B
+# the marked VIP end-to-end. Auto picks 172.16.53.1 (issue #473's first Class-B
 # candidate, free in this topology), distinct from the manual VIP at 10.10.10.1
 # (dnsbl_vip_ready), so the two coexist on one VM.
 #
@@ -2201,7 +2204,7 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
     * ENABLE via the form: the CSRF POST must PERSIST pfb_dnsvip_auto=on (the
       UI-specific assertion -- config.xml, not the HTTP body); the next Force
       Update runs pfb_create_dnsbl('enabled') -> pfb_manage_dnsbl_vip, which
-      creates the marked VIP at 172.16.53.53 and brings it up live on lo0.
+      creates the marked VIP at 172.16.53.1 and brings it up live on lo0.
     * DISABLE via the form: the POST persists it off; a Force Update removes the
       marked VIP from config AND lo0.
 

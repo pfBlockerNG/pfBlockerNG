@@ -25,8 +25,8 @@ final class GeoipNavigationUpgradeTest extends TestCase
 	private const REPUTATION_OLD = "\$tab_array[]\t= array(gettext('DNSBL'),\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');\n"
 		. "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');";
 	// The single row the current generator emits; the migrated pair must become exactly this row.
-	private const CONTINENT_NEW = "\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');";
-	private const REPUTATION_NEW = "\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');";
+	private const CONTINENT_NEW = "\$tab_array[]\t= array(gettext('DNS'),\t\t\tFALSE,\t'/pfblockerng/pfblockerng_dns_general.php');";
+	private const REPUTATION_NEW = "\$tab_array[]\t= array(gettext('DNS'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dns_general.php');";
 	// Rows used only to build malformed fixtures.
 	private const DNSBL_CONTINENT_ROW = "\$tab_array[]\t= array(gettext('DNSBL'),\t\tFALSE,\t'/pfblockerng/pfblockerng_dnsbl.php');";
 	private const PFBDNS_CONTINENT_ROW = "\$tab_array[]\t= array(gettext('pfB-DNS'),\tFALSE,\t'/pfblockerng/pfblockerng_dns.php');";
@@ -100,6 +100,20 @@ final class GeoipNavigationUpgradeTest extends TestCase
 				basename($page) . ': a migrated page must equal the current generator output');
 		}
 		$this->assertSame($names, $this->listing($this->output), 'migration must not add or remove files');
+	}
+
+	public function testExistingConsolidatedDnsTopTabsMoveToGeneral(): void
+	{
+		$this->generateCurrentPages();
+		foreach ($this->pages() as $page) {
+			$current = $this->read($page);
+			$old = str_replace('pfblockerng_dns_general.php', 'pfblockerng_dns.php', $this->currentRow($page));
+			$this->assertNotFalse(file_put_contents($page, str_replace($this->currentRow($page), $old, $current)));
+		}
+		$this->assertTrue($this->refresh($this->output));
+		foreach ($this->pages() as $page) {
+			$this->assertStringContainsString($this->currentRow($page), $this->read($page));
+		}
 	}
 
 	public function testAtomicPublicationKeepsExistingReadersOnTheCompleteOriginalPage(): void

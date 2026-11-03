@@ -1733,8 +1733,8 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_
       NOT blocked (it forwards to the stub upstream, so it resolves to a non-VIP
       address).
     * ENABLE (``pfb_dnsvip_auto`` on + DNSBL on): the package creates an IP-Alias
-      VIP at ``172.16.53.53/32`` on ``lo0`` (live in ``ifconfig``), points
-      ``pfb_dnsvip4`` at it, and the listed name now sinks to ``172.16.53.53`` —
+      VIP at ``172.16.53.1/32`` on ``lo0`` (live in ``ifconfig``), points
+      ``pfb_dnsvip4`` at it, and the listed name now sinks to ``172.16.53.1`` —
       the AUTO address, NOT the harness's manual ``10.10.10.1`` VIP.
     * DISABLE: the marked VIP is removed from config AND ``lo0``.
 
@@ -1742,7 +1742,7 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_
     touched (only marker-owned VIPs are managed). Teardown restores the manual
     VIP + auto-off so the rest of the matrix runs against its own baseline.
 
-    Auto-create picks ``172.16.53.53`` (issue #473's first Class-B candidate)
+    Auto-create picks ``172.16.53.1`` (issue #473's first Class-B candidate)
     because this topology uses no 172.16/12 — it is free and distinct from the
     manual ``10.10.10.1`` VIP, so the two coexist and this case needs no second
     VM. Uses ``scope='update'`` (a full Force Update) so ``pfb_create_dnsbl`` ->
@@ -1802,7 +1802,7 @@ OCCUPIER_VIP = {
     "descr": "smoke 3565 web server",
     "uniqid": "pfbsmoke3565",
 }
-AUTO_VIP_SECOND_IP4 = "192.168.53.53"
+AUTO_VIP_SECOND_IP4 = "192.168.53.1"
 
 
 def _set_occupier(vm: SmokeVM, present: bool) -> None:
@@ -1845,9 +1845,9 @@ def _set_occupier(vm: SmokeVM, present: bool) -> None:
 def test_dnsbl_autovip_skips_a_candidate_held_by_a_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """issue #3565: a user's VIP at the first candidate makes auto-create use the second one.
 
-    Given: the user's described IP-alias VIP at ``172.16.53.53/32`` on ``lo0`` (stored and live), and no auto VIP
+    Given: the user's described IP-alias VIP at ``172.16.53.1/32`` on ``lo0`` (stored and live), and no auto VIP
     When:  "Create VIPs automatically" is on and a Force Update lists a name answered with the VIP
-    Then:  the marked VIP is created at ``192.168.53.53``, is live, and ``pfb_dnsvip4`` points at it;
+    Then:  the marked VIP is created at ``192.168.53.1``, is live, and ``pfb_dnsvip4`` points at it;
            the user's VIP is untouched
     """
     vm = deployed_vm

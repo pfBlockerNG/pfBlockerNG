@@ -44,26 +44,27 @@ if (pfb_dns_proxy_seed_values() !== []) {
 
 $pconfig = array();
 $pconfig['pfb_dns'] = PfbConfig::read('dns/pfb_dns');
-// issue #3515: the one DNS Reply Logging preference (dnsbl/pfb_py_reply) both DNS modes read: the DNSBL module's own log, and
-// the proxy's --reply-log while DNSBL is off. Its control is here because this page is reachable in either mode.
-$pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
 // issues #3513, #3538: pfB-DNS's listener and certificate settings. A setting not seeded yet shows the value the seed will write;
 // an interface list is split into the tokens the proxy reads from it (issue #3557: spaces too, as a hand edit may leave)
 $pconfig['pfb_dns_interface']		= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface'));
 $pconfig['pfb_dns_sslcertref']		= pfb_dns_proxy_setting('pfb_dns_sslcertref');
 $pconfig['pfb_dns_dot']			= pfb_dns_proxy_setting('pfb_dns_dot');
 $pconfig['pfb_dns_dot_port']		= pfb_dns_proxy_setting('pfb_dns_dot_port');
+$pconfig['pfb_dns_dot_port6']		= PfbConfig::read('dns_shared/pfb_dns_dot_port6');
 $pconfig['pfb_dns_dot_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_dot_interface'));
 $pconfig['pfb_dns_doh']			= PfbConfig::read('dns_shared/pfb_dns_doh');
 $pconfig['pfb_dns_doh_port']		= PfbConfig::read('dns_shared/pfb_dns_doh_port');
+$pconfig['pfb_dns_doh_port6']		= PfbConfig::read('dns_shared/pfb_dns_doh_port6');
 $pconfig['pfb_dns_doh_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doh_interface'));
 $pconfig['pfb_dns_doh_trusted']		= PfbConfig::read('dns_shared/pfb_dns_doh_trusted');
 $pconfig['pfb_dns_doq']			= PfbConfig::read('dns_shared/pfb_dns_doq');
 $pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns_shared/pfb_dns_doq_port');
+$pconfig['pfb_dns_doq_port6']		= PfbConfig::read('dns_shared/pfb_dns_doq_port6');
 $pconfig['pfb_dns_doq_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doq_interface'));
 // issue #3583: DDR (RFC 9462) answers, and the option that leaves the port out of the DoH record they carry
 $pconfig['pfb_dns_ddr']			= PfbConfig::read('dns_shared/pfb_dns_ddr');
 $pconfig['pfb_dns_ddr_doh_443']		= PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');
+$pconfig['pfb_dns_ddr_doh_443_6']		= PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443_6');
 // The Resolver's Network Interfaces (virtual IPs included) plus every stored token no longer offered (issue #3557)
 $options_dns_interface = pfb_dns_proxy_interface_options();
 // The certificates the Resolver offers: the same call, so the same list and descriptions
@@ -74,12 +75,11 @@ $input_errors = array();
 if ($_POST) {
 	if (isset($_POST['save'])) {
 		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
-		foreach (array('pfb_dns_dot_port', 'pfb_dns_doh_port', 'pfb_dns_doq_port', 'pfb_dns_doh_trusted') as $pfb_text_field) {
+		foreach (array('pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doh_trusted') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
 		}
 
 		$pfb_dns = pfb_filter($_POST['pfb_dns'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
-		$pfb_py_reply = pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';	// checkbox-absent is the owner-ruled empty Off token (issue #1907)
 
 		$input_errors = array_merge($input_errors, pfb_validate_dns_proxy_listeners_post(
 			$_POST,
@@ -102,7 +102,6 @@ if ($_POST) {
 			foreach (pfb_dns_proxy_listeners_stored($_POST) as $pfb_dns_key => $pfb_dns_value) {
 				PfbConfig::write(pfb_dns_config_key($pfb_dns_key), $pfb_dns_value);
 			}
-			PfbConfig::write('dnsbl/pfb_py_reply', $pfb_py_reply);
 			PfbConfig::write('dns/pfb_dns', $pfb_dns);
 			try {
 				$pfb_written = write_config('[pfBlockerNG] save pfB-DNS settings');
@@ -120,12 +119,14 @@ if ($_POST) {
 		}
 
 		$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
-		$pconfig['pfb_py_reply'] = $_POST['pfb_py_reply'] ?? '';
-		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_sslcertref') as $pfb_dns_field) {
+		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6', 'pfb_dns_sslcertref') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
 		}
 		if (pfb_dns_proxy_ddr_doh_443_locked()) {
 			$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');	// a disabled control posts nothing: the form shows the stored value, as the save keeps it
+		}
+		if (pfb_dns_proxy_ddr_doh_443_locked(TRUE)) {
+			$pconfig['pfb_dns_ddr_doh_443_6'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443_6');
 		}
 		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
@@ -134,7 +135,7 @@ if ($_POST) {
 }
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('DNS'), gettext('pfB-DNS'));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_dns.php', '@self');
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_dns_general.php', '@self');
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
@@ -148,7 +149,7 @@ $get_req = pfb_alerts_default_page();
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns_general.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
@@ -158,6 +159,7 @@ pfb_software_add_tab($tab_array);
 $tab_array[]	= array(gettext('Wizard'),	FALSE,	'/wizard.php?xml=pfblockerng_wizard.xml');
 display_top_tabs($tab_array, TRUE);
 $tab_array	= array();
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
 $tab_array[]	= array(gettext('pfB-DNS'),	TRUE,	'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
 $tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
@@ -170,25 +172,6 @@ foreach (pfb_dns_proxy_ddr_warnings() as $pfb_ddr_warning) {
 }
 
 $form = new Form('Save pfB-DNS settings');
-
-$section = new Form_Section('DNS Reply Logging');
-$section->addInput(new Form_Checkbox(
-	'pfb_py_reply',
-	gettext('DNS Reply Logging'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_py_reply'] ?? NULL),
-	'on'
-))->setHelp('Log each DNS reply to the DNS Reply log (the client, the name asked, the reply type, TTL and answer, and the answer\'s country), '
-		. 'which fills <strong>Reports</strong> &gt; <strong>DNS Reply</strong>.'
-		. '<div class="infoblock">'
-		. 'This one setting applies to both DNS modes. With DNSBL enabled, the DNSBL Python module logs the replies that were not blocked. '
-		. 'With pfB-DNS enabled and DNSBL disabled, the pfB-DNS proxy logs every reply it forwards from the DNS Resolver, '
-		. 'without loading any DNSBL feed or module. '
-		. 'When <strong>DNS Reply Logging</strong> is disabled, no replies are logged.<br />'
-		. 'The log lists the names each client looked up: keep this disabled where that must not be recorded.<br />'
-		. 'Default: <strong>Enabled</strong>'
-		. '</div>');
-$form->add($section);
 
 $section = new Form_Section('pfB-DNS Settings');
 $section->addInput(new Form_Checkbox(
@@ -271,11 +254,19 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Input(
 	'pfb_dns_dot_port',
-	gettext('DoT Port'),
+	gettext('IPv4 DoT Port'),
 	'number',
 	$pconfig['pfb_dns_dot_port'],
 	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoT Listening Port' ]
 ))->setHelp('Example ( 853 ) &mdash; a single PORT in the range 1 - 65535 (TCP).');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_dot_port6',
+	gettext('IPv6 DoT Port'),
+	'number',
+	$pconfig['pfb_dns_dot_port6'],
+	[ 'min' => 1, 'max' => 65535 ]
+))->setHelp(gettext('Empty: use the IPv4 port.'));
 
 $section->addInput(new Form_Select(
 	'pfb_dns_dot_interface',
@@ -303,11 +294,19 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doh_port',
-	gettext('DoH Port'),
+	gettext('IPv4 DoH Port'),
 	'number',
 	$pconfig['pfb_dns_doh_port'],
 	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoH Listening Port' ]
 ))->setHelp('Example ( 4443 ) &mdash; a single PORT in the range 1 - 65535 (TCP).');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_doh_port6',
+	gettext('IPv6 DoH Port'),
+	'number',
+	$pconfig['pfb_dns_doh_port6'],
+	[ 'min' => 1, 'max' => 65535 ]
+))->setHelp(gettext('Empty: use the IPv4 port.'));
 
 $section->addInput(new Form_Select(
 	'pfb_dns_doh_interface',
@@ -345,11 +344,19 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doq_port',
-	gettext('DoQ Port'),
+	gettext('IPv4 DoQ Port'),
 	'number',
 	$pconfig['pfb_dns_doq_port'],
 	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoQ Listening Port' ]
 ))->setHelp('Example ( 853 ) &mdash; a single PORT in the range 1 - 65535 (UDP).');
+
+$section->addInput(new Form_Input(
+	'pfb_dns_doq_port6',
+	gettext('IPv6 DoQ Port'),
+	'number',
+	$pconfig['pfb_dns_doq_port6'],
+	[ 'min' => 1, 'max' => 65535 ]
+))->setHelp(gettext('Empty: use the IPv4 port.'));
 
 $section->addInput(new Form_Select(
 	'pfb_dns_doq_interface',
@@ -380,11 +387,11 @@ $section->addInput(new Form_Checkbox(
 // DoH already listens on 443, so there is no port to leave out
 $pfb_ddr_doh_443 = (new Form_Checkbox(
 	'pfb_dns_ddr_doh_443',
-	gettext('DoH on port 443'),
-	'Advertise DoH on port 443',
+	gettext('IPv4 DoH on port 443'),
+	'Advertise IPv4 DoH on port 443',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr_doh_443'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setAttribute('aria-label', gettext('DoH on port 443'));
+))->setAttribute('aria-label', gettext('IPv4 DoH on port 443'));
 if (pfb_dns_proxy_ddr_doh_443_locked()) {
 	$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');
 }
@@ -394,6 +401,19 @@ $section->addInput($pfb_ddr_doh_443)->setHelp('Some clients might not accept a p
 		. 'It is intended for users who, for example, serve multiple sites over HTTPS through a reverse proxy, '
 		. 'and who are responsible for configuring that reverse proxy correctly.'
 		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
+
+$pfb_ddr_doh_443_6 = (new Form_Checkbox(
+	'pfb_dns_ddr_doh_443_6',
+	gettext('IPv6 DoH on port 443'),
+	'Advertise IPv6 DoH on port 443',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr_doh_443_6'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setAttribute('aria-label', gettext('IPv6 DoH on port 443'));
+if (pfb_dns_proxy_ddr_doh_443_locked(TRUE)) {
+	$pfb_ddr_doh_443_6->setAttribute('disabled', 'disabled');
+}
+$section->addInput($pfb_ddr_doh_443_6)->setHelp(gettext('Advertise IPv6 DoH on port 443 instead of the configured IPv6 port. DoH must be reachable on port 443.')
+		. '<div class="infoblock">' . gettext('Default: <strong>Disabled</strong>') . '</div>');
 $form->add($section);
 
 

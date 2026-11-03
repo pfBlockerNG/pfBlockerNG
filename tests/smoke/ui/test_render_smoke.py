@@ -152,6 +152,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     # issue #3515: the pfB-DNS tab (experimental DNS proxy). The section titles are the page's own: the tab label alone
     # is on every page's tab bar and proves nothing.
     Page("dns", "/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings", "pfB-DNS Status")),
+    Page("dns-general", "/pfblockerng/pfblockerng_dns_general.php", ("DNS Reply Logging", "Resolver addresses")),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
     # StaticText label ("IPv4 alias name(s):" etc.), which renders ONLY for the active
@@ -2142,11 +2143,10 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         "pfb_dns_doq",
         "pfb_dns_ddr",
         "pfb_dns_ddr_doh_443",
-        "pfb_py_reply",
+        "pfb_dns_ddr_doh_443_6",
     ]
     assert checkboxes == expected, (
-        "the page has the enable checkbox, the DoT, DoH and DoQ ones, the two DDR ones, then DNS Reply Logging; "
-        f"got {checkboxes}"
+        f"the page has the enable checkbox, DoT, DoH, DoQ, and the three DDR checkboxes; got {checkboxes}"
     )
     status_html = html[html.index('id="pfb-dns-status"') :]
     service = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]+)</td></tr>', status_html)
@@ -2359,13 +2359,16 @@ _DNS_LISTENER_FIELDS = (
     "pfb_dns_interface",
     "pfb_dns_dot",
     "pfb_dns_dot_port",
+    "pfb_dns_dot_port6",
     "pfb_dns_dot_interface",
     "pfb_dns_doh",
     "pfb_dns_doh_port",
+    "pfb_dns_doh_port6",
     "pfb_dns_doh_interface",
     "pfb_dns_doh_trusted",
     "pfb_dns_doq",
     "pfb_dns_doq_port",
+    "pfb_dns_doq_port6",
     "pfb_dns_doq_interface",
 )
 _DNS_INTERFACE_LISTS = ("pfb_dns_interface", "pfb_dns_dot_interface", "pfb_dns_doh_interface", "pfb_dns_doq_interface")
@@ -2390,11 +2393,11 @@ def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard:
 def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings_after_the_enable_toggle(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issues #3513, #3538: the listener settings follow the pfB-DNS enable checkbox, in order, before Reply Logging.
+    """issues #3513, #3538, #3688: the listener settings follow the pfB-DNS enable checkbox, in order, before DDR.
 
     Given the pfB-DNS page renders, Then the DNS interfaces, the SSL/TLS Certificate (or the Resolver's no-certificate
     text), DoT (enable, port, interfaces), DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
-    interfaces) appear in that order between the enable checkbox and DNS Reply Logging, as the right input kinds. Every
+    interfaces) appear in that order between the enable checkbox and DDR, as the right input kinds. Every
     interface list offers All and Localhost first and says one entry is required. The help says experimental, sends the
     operator to the certificate selector, says DoQ is UDP, names the HAProxy options and the binary the package ships
     (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
@@ -2406,13 +2409,13 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     html = resp.text
 
     start = html.index('name="pfb_dns"')
-    end = html.index('name="pfb_py_reply"')
+    end = html.index('name="pfb_dns_ddr"')
     cert_at = html.find(f'name="{_DNS_CERT_FIELD}"', start, end)
     if cert_at == -1:
         cert_at = html.find(_NO_CERT_TEXT, start, end)
     order = (_DNS_LISTENER_FIELDS[0], _DNS_CERT_FIELD, *_DNS_LISTENER_FIELDS[1:])
     positions = [cert_at if field == _DNS_CERT_FIELD else html.find(f'name="{field}', start, end) for field in order]
-    assert -1 not in positions, f"a field is missing between the pfB-DNS toggle and DNS Reply Logging: {positions}"
+    assert -1 not in positions, f"a field is missing between the pfB-DNS toggle and DDR: {positions}"
     assert positions == sorted(positions), f"fields are out of order: {dict(zip(order, positions, strict=True))}"
 
     def tag_at(position: int) -> str:
@@ -2420,8 +2423,11 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
 
     for name, kind in (
         ("pfb_dns_dot_port", "number"),
+        ("pfb_dns_dot_port6", "number"),
         ("pfb_dns_doh_port", "number"),
+        ("pfb_dns_doh_port6", "number"),
         ("pfb_dns_doq_port", "number"),
+        ("pfb_dns_doq_port6", "number"),
         ("pfb_dns_doh_trusted", "text"),
     ):
         tag = tag_at(html.index(f'name="{name}"', start, end))

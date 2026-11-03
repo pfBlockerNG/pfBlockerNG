@@ -410,4 +410,17 @@ final class DnsProxyDdrWarningTest extends TestCase
 	{
 		$this->assertSame($public, pfb_dns_proxy_public_address($address), "is '{$address}' public?");
 	}
+
+	public function testReverseProxyWarningsAreSuppressedOnlyForTheAdvertisedFamily(): void
+	{
+		$this->box(['wan' => ['8.8.8.8', '2606:4700::1']], [], [
+			'pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_doh_port' => '8443',
+			'pfb_dns_doh_port6' => '9443', 'pfb_dns_ddr_doh_443' => 'on',
+		]);
+		$this->assertSame([self::warning('2606:4700::1', 'DoH')], pfb_dns_proxy_ddr_warnings());
+		$this->store(['pfb_dns_ddr_doh_443' => '', 'pfb_dns_ddr_doh_443_6' => 'on']);
+		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings());
+		$this->store(['pfb_dns_doh_port6' => '443']);
+		$this->assertSame([self::warning('8.8.8.8', 'DoH'), self::warning('2606:4700::1', 'DoH')], pfb_dns_proxy_ddr_warnings());
+	}
 }

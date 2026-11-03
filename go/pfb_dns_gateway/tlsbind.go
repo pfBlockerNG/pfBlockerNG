@@ -1,12 +1,34 @@
 package main
 
-import "net"
+import (
+	"net"
+	"net/netip"
+)
 
 // tlsListeners are the DoT, DoH and DoQ sockets, bound while the gateway is still root; serving starts later.
 type tlsListeners struct {
 	certs    *certStore
 	dot, doh []*net.TCPListener
 	doq      []*net.UDPConn
+}
+
+// transportPort keeps initial binds and live additions on the same per-family port.
+func (c config) transportPort(kind, host string) int {
+	var port, port6 int
+	switch kind {
+	case "dot":
+		port, port6 = c.dotPort, c.dotPort6
+	case "doh":
+		port, port6 = c.dohPort, c.dohPort6
+	case "doq":
+		port, port6 = c.doqPort, c.doqPort6
+	default:
+		return c.port
+	}
+	if address, err := netip.ParseAddr(host); err == nil && address.Is6() && !address.Is4In6() && port6 != 0 {
+		return port6
+	}
+	return port
 }
 
 // bindTLS binds every requested TLS transport. The certificate file is read here, as root; when it is unusable the reason
@@ -25,25 +47,28 @@ func bindTLS(cfg config, logf func(format string, args ...any), refused map[stri
 	}
 	t := &tlsListeners{certs: certs}
 	for _, host := range cfg.dotListen {
-		if ln, err := bindTCP(host, cfg.dotPort); err != nil {
+		port := cfg.transportPort("dot", host)
+		if ln, err := bindTCP(host, port); err != nil {
 			logf("%v", err)
-			refuse(refused, "dot", host, cfg.dotPort, err)
+			refuse(refused, "dot", host, port, err)
 		} else {
 			t.dot = append(t.dot, ln)
 		}
 	}
 	for _, host := range cfg.dohListen {
-		if ln, err := bindTCP(host, cfg.dohPort); err != nil {
+		port := cfg.transportPort("doh", host)
+		if ln, err := bindTCP(host, port); err != nil {
 			logf("%v", err)
-			refuse(refused, "doh", host, cfg.dohPort, err)
+			refuse(refused, "doh", host, port, err)
 		} else {
 			t.doh = append(t.doh, ln)
 		}
 	}
 	for _, host := range cfg.doqListen {
-		if ln, err := bindUDP(host, cfg.doqPort); err != nil {
+		port := cfg.transportPort("doq", host)
+		if ln, err := bindUDP(host, port); err != nil {
 			logf("%v", err)
-			refuse(refused, "doq", host, cfg.doqPort, err)
+			refuse(refused, "doq", host, port, err)
 		} else {
 			t.doq = append(t.doq, ln)
 		}

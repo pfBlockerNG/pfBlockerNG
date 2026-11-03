@@ -33,10 +33,11 @@ var (
 
 // ddr is what answers DDR queries; built once at start. Only the listener addresses change afterwards (change).
 type ddr struct {
-	target dnsmessage.Name // the firewall's FQDN, which every record names
-	doh443 bool            // --ddr-doh-443: the DoH record has no port, whatever port DoH listens on
-	certs  *certStore      // nil when no TLS transport is configured
-	addrs  atomic.Pointer[ddrAddrs]
+	target  dnsmessage.Name // the firewall's FQDN, which every record names
+	doh443  bool            // --ddr-doh-443: the DoH record has no port, whatever port DoH listens on
+	doh4436 bool            // the separate IPv6 advertisement override
+	certs   *certStore      // nil when no TLS transport is configured
+	addrs   atomic.Pointer[ddrAddrs]
 }
 
 // ddrAddrs are the listeners DDR designates: unmapped, no zone. A stored value is never edited, so a query that loaded it
@@ -88,7 +89,11 @@ func ddrOnListeners(cfg config, t *tlsListeners) (*ddr, error) {
 	for _, c := range t.doq {
 		doq = append(doq, c.LocalAddr().(*net.UDPAddr).AddrPort())
 	}
-	return newDDR(cfg.ddr, cfg.ddrDoH443, t.certs, dot, doh, doq)
+	d, err := newDDR(cfg.ddr, cfg.ddrDoH443, t.certs, dot, doh, doq)
+	if d != nil {
+		d.doh4436 = cfg.ddrDoH4436
+	}
+	return d, err
 }
 
 func ddrBound(in []netip.AddrPort) []netip.AddrPort {
@@ -255,7 +260,7 @@ func (d *ddr) designate(owner dnsmessage.Name, local netip.Addr) (answers, extra
 	}
 	a := d.addrs.Load()
 	if port, ok := ddrListening(a.doh, local); ok {
-		if d.doh443 {
+		if (d.doh443 && local.Is4()) || (d.doh4436 && local.Is6()) {
 			port = ddrDoHPort
 		}
 		answers = append(answers, ddrRecord(owner, d.target, 1, "h2", port, ddrDoHPort, local, dohPath))

@@ -3,11 +3,11 @@
 Node A (``ha_pair.primary``) sends in policy scope, node B (``ha_pair.secondary``) receives. Both run "Create VIPs
 automatically". Each node owns its own VIP object (B's uniqid is never A's); only the ADDRESS follows the primary:
 
-* S1 A's first candidate address (172.16.53.53) lies inside one of its own interface subnets, so its pass picks the
-  second (192.168.53.53); B alone would pick 172.16.53.53. After A sends, B holds a marked VIP at A's address, keeps
+* S1 A's first candidate address (172.16.53.1) lies inside one of its own interface subnets, so its pass picks the
+  second (192.168.53.1); B alone would pick 172.16.53.1. After A sends, B holds a marked VIP at A's address, keeps
   its own stored VIP id and answers a blocked name with that address.
 * S2 B's first candidate is taken the same way and its own pass has already picked the second. After A (nothing in
-  the way, so it picks 172.16.53.53) sends, B removes its marked VIP, creates none, leaves its interface alone and
+  the way, so it picks 172.16.53.1) sends, B removes its marked VIP, creates none, leaves its interface alone and
   lists the conflict on the Sync page.
 
 A node's picker (``pfb_pick_free_dnsbl_vip``) treats an address as taken when a VIP already holds it or it lies inside
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.smoke
 
 # pfb_dnsbl_vip_candidates(AF_INET), in the order a node tries them.
-FIRST, SECOND, THIRD = h.AUTO_VIP_IP4, "192.168.53.53", "10.53.53.53"
+FIRST, SECOND, THIRD = h.AUTO_VIP_IP4, "192.168.53.1", "10.53.53.1"
 CANDIDATES = (FIRST, SECOND, THIRD)
 FINDING = "DNSBL auto-VIP: the synced IPv4 address is not free on this node"
 GROUP = "pfbha3540"
@@ -232,12 +232,12 @@ def subnets(rows: list[dict[str, Any]]) -> list[str]:
 # A's update pass with a new DNSBL group, then B's receive-spawned apply pass, then two probes
 @pytest.mark.timeout(2400)
 def test_secondary_creates_its_vip_at_the_address_the_primary_chose(ha_pair: HaPair, moved_lans: list[Lan]) -> None:
-    """A picks 192.168.53.53 because 172.16.53.53 lies in its LAN subnet; B, which would pick 172.16.53.53, follows.
+    """A picks 192.168.53.1 because 172.16.53.1 lies in its LAN subnet; B, which would pick 172.16.53.1, follows.
 
     Given: both nodes on Auto VIP, a VIP-answering DNSBL group on A only, A's LAN inside 172.16.53.0/24
     When:  A's update pass provisions its VIP and sends its policy to B
-    Then:  both hold a marked VIP at 192.168.53.53, live on lo0, B's stored VIP id names B's own object, and each
-           node answers the blocked name with 192.168.53.53
+    Then:  both hold a marked VIP at 192.168.53.1, live on lo0, B's stored VIP id names B's own object, and each
+           node answers the blocked name with 192.168.53.1
 
     Red when: B creates its VIP at its own first free candidate (the address never leaves A), or B's stored id is
     A's, or B answers with a different address than A.
@@ -301,11 +301,11 @@ def test_secondary_creates_its_vip_at_the_address_the_primary_chose(ha_pair: HaP
 def test_secondary_with_the_address_in_use_creates_no_vip_and_reports_it(
     ha_pair: HaPair, moved_lans: list[Lan]
 ) -> None:
-    """A picks 172.16.53.53, which lies in B's LAN subnet: B drops the VIP it made at 192.168.53.53 and lists why.
+    """A picks 172.16.53.1, which lies in B's LAN subnet: B drops the VIP it made at 192.168.53.1 and lists why.
 
     Given: both nodes on Auto VIP with the same DNSBL group, B's LAN inside 172.16.53.0/24; B's own pass has
-           picked 192.168.53.53 while it is no receiver
-    When:  A (free, so it picks 172.16.53.53) sends its policy to B
+           picked 192.168.53.1 while it is no receiver
+    When:  A (free, so it picks 172.16.53.1) sends its policy to B
     Then:  B has no VIP at any candidate address and no marked VIP, its LAN and its other VIPs are untouched, and
            B's findings file and rendered Sync page carry the conflict
 

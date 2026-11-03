@@ -660,6 +660,13 @@ if (!function_exists('services_unbound_configure')) {
 	}
 }
 
+if (!function_exists('services_dhcpd_configure')) {
+	function services_dhcpd_configure($family = 'all') {
+		$GLOBALS['pfb_test_service_calls'][] = [__FUNCTION__, $family];
+		return 0;
+	}
+}
+
 if (!function_exists('get_configured_vip_ipv4')) {
 	// pfSense util.inc (faithful-lite): resolve a '_vip<uniqid>' id against
 	// virtualip/vip and return the entry's v4 address, null when unresolved.

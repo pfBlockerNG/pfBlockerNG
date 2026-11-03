@@ -1762,6 +1762,29 @@
             }
         ]
     },
+    "pfb_dns_listen_vip_candidates": {
+        "returnsRef": false,
+        "returnType": "iterable",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_listen_vips": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_dns_listen_vips_apply": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
     "pfb_dns_proxy_acl_networks": {
         "returnsRef": false,
         "returnType": "array",
@@ -1927,7 +1950,15 @@
     "pfb_dns_proxy_ddr_doh_443_locked": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "ipv6",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            }
+        ]
     },
     "pfb_dns_proxy_ddr_flags": {
         "returnsRef": false,
@@ -10551,6 +10582,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "listen",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
             }
         ]
     },
@@ -11591,6 +11629,13 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "candidates",
+                "byRef": false,
+                "variadic": false,
+                "type": "?iterable",
                 "default": "NULL"
             }
         ]

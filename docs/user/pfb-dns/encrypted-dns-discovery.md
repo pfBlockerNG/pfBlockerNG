@@ -7,7 +7,7 @@ already uses; Android can also try DoT without either mechanism. [RFC 9463 §3.3
 [RFC 9462 §4][ddr], and [Android's announcement][android-blog] describe these different paths.
 
 This guide lives in `docs/user/pfb-dns/` because it is operator documentation, not a developer note in `docs/misc/`.
-The repository README links here. It covers Kea only: pfB-DNS does **not** write DHCP configuration for you.
+It covers Kea only: pfB-DNS does **not** write DNR options for you.
 The [design specification](../../specs/encrypted-dns-discovery.md) records that boundary and the investigation.
 
 **Baseline checked on 2026-10-22:** pfSense CE 2.8.1 package sources, Kea 2.6.2, and ACME package 1.3.2 from the
@@ -15,6 +15,20 @@ live CE repository; pfB-DNS labels and behavior at [devel `558169c39`][ui]. No C
 A reachable pfSense Plus 26.07 appliance reported Kea 3.0.4 and ACME 1.3.2; only version queries and scratch-file
 configuration checks were run there. The [specification's package inventory][inventory] identifies the CE packages,
 URLs, and checksums. Client sources and untested behavior are identified in each section below.
+
+## Shared DNS settings and per-family ports
+
+The top-level **DNS** tab opens **General**. **DNS Reply Logging** and **Resolver addresses** live there, not on
+the **pfB-DNS** or **DNSBL** sub-tabs. Resolver addresses offers an optional existing VIP or **Create VIP automatically**
+for each family; **Automatic VIP interface** defaults to Localhost and applies only to automatic creation.
+On a selected VIP, port 443 may already be taken; an automatically created resolver VIP leaves 443 free.
+
+Transport controls, the certificate and DDR remain under **DNS > pfB-DNS**. Each transport has an **IPv4** port and
+an **IPv6** port; an empty IPv6 port uses the IPv4 value. DDR has separate **IPv4 DoH on port 443** and
+**IPv6 DoH on port 443** checkboxes. These advertise 443; they do not change the listening ports.
+
+DDR omits `port` when the listener uses the transport default (DoH 443, DoT/DoQ 853), the compatible form for clients
+that do not understand the port key. A non-default listener port is advertised unless that family's DoH 443 checkbox is on.
 
 ## DNR with Kea
 
@@ -158,7 +172,7 @@ DnsResolver commit `4d70e9efa5ae4b5eae682e5267fa09a2d694d23e`, not a tested devi
 1. Have DHCP supply the pfB-DNS listener's address as the client's DNS server (or RDNSS in IPv6 Router Advertisements).
    It must be the address actually supplied to the device, not just some other address of the firewall. Android's
    opportunistic path uses those network-provided servers. [AOSP `DnsTlsServer.h`][android-server].
-2. Enable **DoT** and include that address's interface in **DoT Interface(s)**, with **DoT Port** set to **853**.
+2. Enable **DoT** and include that address's interface in **DoT Interface(s)**, with the family's **DoT Port** set to **853**.
    Permit LAN clients to reach TCP 853. Android's DoT default is 853; changing pfB-DNS to another port will not change
    the client's opportunistic probe port. [AOSP `PrivateDnsCommon.h`][android-common], [pfB-DNS page][ui].
 3. Leave the device in **Private DNS: Automatic**, rather than **Off** or a provider-hostname mode. Android describes
@@ -198,14 +212,15 @@ See [Public resolver addresses](#public-resolver-addresses) for that separate ro
 
 Under **Discovery of Designated Resolvers (DDR)** on the pfB-DNS page:
 
-- **DDR — Enable** (`dns/pfb_dns_ddr`): experimental, disabled by default, applied on the next **Update**. It lets
+- **DDR — Enable** (`dns_shared/pfb_dns_ddr`): experimental, disabled by default, applied on the next **Update**. It lets
   pfB-DNS answer `resolver.arpa` discovery queries. A plain DNS query to an address gets designation only for encrypted
   transports listening on that address with a certificate loaded. With DDR disabled, or pfB-DNS off, the DNS Resolver
   answers as before. Enabling it alone does not make private-address DDR usable by Apple clients.
-- **DoH on port 443 — Advertise DoH on port 443** (`dns/pfb_dns_ddr_doh_443`): disabled by default, applied on the next
-  **Update**; greyed out when the configured DoH port is already 443. It removes the DoH `port` from DDR records, so
-  clients use 443 instead of the configured DoH port. It does not change the listening port, name, path, address,
-  DoT/DoQ records, or configure a proxy. It has no effect without DDR enabled.
+- **IPv4 DoH on port 443 — Advertise IPv4 DoH on port 443** (`dns_shared/pfb_dns_ddr_doh_443`) and
+  **IPv6 DoH on port 443 — Advertise IPv6 DoH on port 443** (`dns_shared/pfb_dns_ddr_doh_443_6`): disabled by default,
+  applied on the next **Update**; greyed out when that family's configured DoH port is already 443. They remove
+  the family's DoH `port` from DDR records, so clients use 443 instead of its configured DoH port. They do not change
+  listening ports, names, paths, addresses, DoT/DoQ records, or configure a proxy. They have no effect without DDR enabled.
 
 These are the [shipped labels/help text][ui] and [gateway behavior][gateway]. The port-443 help warns:
 

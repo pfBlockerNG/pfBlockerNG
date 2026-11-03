@@ -347,7 +347,7 @@ $pg_url = '/pfblockerng/pfblockerng_category.php?type=ipv4';
 
 if ($gtype == 'dnsbl') {
 	$pgtype = 'DNS';
-	$pg_url = '/pfblockerng/pfblockerng_dns.php';
+	$pg_url = '/pfblockerng/pfblockerng_dns_general.php';
 }
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext($pgtype), gettext($gtype == 'dnsbl' ? 'DNSBL Groups' : $type));
@@ -1062,7 +1062,7 @@ $get_req = pfb_alerts_default_page();
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,			'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		$active['ip'],		'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNS'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_dns.php');
+$tab_array[]	= array(gettext('DNS'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_dns_general.php');
 $tab_array[]	= array(gettext('Update'),	FALSE,			'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	FALSE,			"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	FALSE,			'/pfblockerng/pfblockerng_feeds.php');
@@ -1079,6 +1079,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 	$tab_array[]	= array(gettext('Reputation'),	FALSE,			'/pfblockerng/pfblockerng_reputation.php');
 }
 else {
+	$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
 	$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
 	$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
 	$tab_array[]	= array(gettext('DNSBL Groups'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_category.php?type=dnsbl');

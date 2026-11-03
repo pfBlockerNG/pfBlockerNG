@@ -161,7 +161,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			'row' => [['url' => 'http://127.0.0.1:9/list.txt', 'state' => $o['rowState'], 'header' => 'T1_a', 'format' => 'auto']],
 		]]);
 		config_set_path('virtualip/vip', [[
-			'mode' => 'ipalias', 'interface' => 'opt1', 'type' => 'single', 'subnet' => '172.16.53.53', 'subnet_bits' => '32',
+			'mode' => 'ipalias', 'interface' => 'opt1', 'type' => 'single', 'subnet' => '172.16.53.1', 'subnet_bits' => '32',
 			'descr' => PFB_AUTO_VIP_DESCR_V4, 'uniqid' => 'auto4',
 		]]);
 		config_set_path('nat/rule', $o['served'] ? [self::USER_NAT, self::dnsblNatRow()] : [self::USER_NAT]);
@@ -194,7 +194,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	private static function dnsblNatRow(): array
 	{
 		return [
-			'source' => ['any' => ''], 'destination' => ['address' => '172.16.53.53', 'port' => '80'], 'protocol' => 'tcp',
+			'source' => ['any' => ''], 'destination' => ['address' => '172.16.53.1', 'port' => '80'], 'protocol' => 'tcp',
 			'target' => '127.0.0.1', 'local-port' => '8081', 'interface' => 'opt1', 'descr' => PFB_MANAGED_NAT_DESCR,
 			'associated-rule-id' => 'pass', 'natreflection' => 'purenat',
 		];
@@ -658,7 +658,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		// and a manual VIP at the auto-VIP's address, listed first so a delete that ignores the marker would take it
 		$this->arrange(['install' => TRUE, 'enable' => FALSE, 'demand' => TRUE, 'served' => TRUE]);
 		config_set_path('virtualip/vip', array_merge([[
-			'mode' => 'ipalias', 'interface' => 'opt1', 'type' => 'single', 'subnet' => '172.16.53.53', 'subnet_bits' => '32',
+			'mode' => 'ipalias', 'interface' => 'opt1', 'type' => 'single', 'subnet' => '172.16.53.1', 'subnet_bits' => '32',
 			'descr' => 'manual VIP', 'uniqid' => 'manual4',
 		]], config_get_path('virtualip/vip', [])));
 		$this->assertSame(['manual VIP', PFB_AUTO_VIP_DESCR_V4], array_column(config_get_path('virtualip/vip', []), 'descr'), 'before-state');
@@ -668,14 +668,14 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 		// THEN the pass took the boot branch, and only the marked auto-VIP is removed: the manual VIP stays at its address
 		$this->assertStringContainsString('Sync terminated during boot process.', $this->passLog());
-		$this->assertSame(['manual VIP' => '172.16.53.53'], array_column(config_get_path('virtualip/vip', []), 'subnet', 'descr'));
+		$this->assertSame(['manual VIP' => '172.16.53.1'], array_column(config_get_path('virtualip/vip', []), 'subnet', 'descr'));
 	}
 
 	public function testNoDemandHoldDoesNotReuseAConflictFromAnEarlierVipManagementPass(): void
 	{
 		$this->arrange(['save' => FALSE, 'served' => TRUE, 'demand' => TRUE, 'up' => FALSE]);
 		file_put_contents("{$this->dir}/pfb_sync_receive.json", json_encode(['accepted_digest' => 'd']));
-		PfbConfig::write('dnsbl/pfb_dnsvip_auto4', '192.168.53.53');
+		PfbConfig::write('dnsbl/pfb_dnsvip_auto4', '192.168.53.1');
 		PfbConfig::write('dnsbl/pfb_dnsvip4', '_vip_gone_missing');
 		pfb_global();
 		pfb_manage_dnsbl_vip('enabled');

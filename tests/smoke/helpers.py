@@ -1095,11 +1095,15 @@ DNS_SHARED_FIELDS = frozenset(
         "pfb_dns_doh",
         "pfb_dns_doq",
         "pfb_dns_dot_port",
+        "pfb_dns_dot_port6",
         "pfb_dns_doh_port",
+        "pfb_dns_doh_port6",
         "pfb_dns_doq_port",
+        "pfb_dns_doq_port6",
         "pfb_dns_doh_trusted",
         "pfb_dns_ddr",
         "pfb_dns_ddr_doh_443",
+        "pfb_dns_ddr_doh_443_6",
     )
 )
 
@@ -1736,14 +1740,14 @@ def set_dnsbl_vip6(vm: SmokeVM, present: bool, *, ip6: str = DNSBL_VIP6, timeout
 # The descr marker the package stamps on an auto-created v4 sinkhole VIP and the
 # first candidate address pfb_pick_free_dnsbl_vip() returns. Mirror the PHP
 # constants (PFB_AUTO_VIP_DESCR_V4) / fixed candidate list in pfblockerng.inc
-# (issue #473): Class B 172.16.53.53, then Class C 192.168.53.53, then Class A
-# 10.53.53.53. This two-VM topology uses 192.168.89.0/24 (WAN) + 192.168.1.0/24
-# (LAN) and no 172.16/12, so the first candidate 172.16.53.53 is free and is the
+# (issue #473): Class B 172.16.53.1, then Class C 192.168.53.1, then Class A
+# 10.53.53.1. This two-VM topology uses 192.168.89.0/24 (WAN) + 192.168.1.0/24
+# (LAN) and no 172.16/12, so the first candidate 172.16.53.1 is free and is the
 # one auto-create picks — distinct from the matrix's MANUAL VIP at 10.10.10.1
 # (DEFAULT_DNSBL_VIP4), so the two coexist and the auto-VIP case runs on the same
 # VM without disturbing the manual-VIP matrix.
 AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
-AUTO_VIP_IP4 = "172.16.53.53"
+AUTO_VIP_IP4 = "172.16.53.1"
 
 
 def _php_read_scalar(vm: SmokeVM, pre: str, expr: str, *, timeout: float = 60.0) -> str:

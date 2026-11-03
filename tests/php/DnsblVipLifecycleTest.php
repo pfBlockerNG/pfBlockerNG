@@ -32,7 +32,7 @@ final class DnsblVipLifecycleTest extends TestCase
 	private const USER_VIP = ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => '192.0.2.99', 'subnet_bits' => '32', 'descr' => 'my own VIP', 'uniqid' => 'user1'];
 	private const SYNCED4 = self::DNSBL . '/pfb_dnsvip_auto4';
 	private const SYNCED6 = self::DNSBL . '/pfb_dnsvip_auto6';
-	private const V6_CANDIDATE = 'fd00:53:53:53:53:53:53:53';
+	private const V6_CANDIDATE = 'fd00:53:53:53:53:53:53:1';
 	// A stored v6 id core no longer knows: it requests a v6 VIP without naming one that exists.
 	private const V6_REQUEST_ID = '_vip_gone_v6';
 
@@ -210,8 +210,8 @@ final class DnsblVipLifecycleTest extends TestCase
 	{
 		// GIVEN auto-create on, the package's v4 and v6 VIPs stored, a user VIP beside them, and no block answering with the VIP
 		$this->seedAutoVip(FALSE, [
-			self::markedVip('v4', 'auto4', '172.16.53.53'),
-			self::markedVip('v6', 'auto6', 'fd00:53:53:53:53:53:53:53'),
+			self::markedVip('v4', 'auto4', '172.16.53.1'),
+			self::markedVip('v6', 'auto6', 'fd00:53:53:53:53:53:53:1'),
 			self::USER_VIP,
 		], '_vipauto4', '_vipauto6');
 		$this->assertCount(3, config_get_path('virtualip/vip'), 'before-state: both marked VIPs and the user VIP exist');
@@ -264,11 +264,11 @@ final class DnsblVipLifecycleTest extends TestCase
 
 	public function testReceiverCreatesTheMarkedVipAtTheSyncedAddressNotItsOwnFirstPick(): void
 	{
-		// GIVEN a policy receiver whose primary published 192.168.53.53, with no VIP yet and every candidate free
+		// GIVEN a policy receiver whose primary published 192.168.53.1, with no VIP yet and every candidate free
 		$this->seedNode(TRUE, []);
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
-		$this->assertSame('172.16.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lo0'), 'before-state: a standalone node would take the first candidate');
+		config_set_path(self::SYNCED4, '192.168.53.1');
+		$this->assertSame('172.16.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lo0'), 'before-state: a standalone node would take the first candidate');
 		$this->assertSame([], config_get_path('virtualip/vip', []), 'before-state: no VIP in config');
 
 		// WHEN the VIP manager runs
@@ -277,40 +277,40 @@ final class DnsblVipLifecycleTest extends TestCase
 		// THEN the one marked VIP sits at the synced address and the stored id names it
 		$vips = $this->markedVips('v4');
 		$this->assertCount(1, $vips);
-		$this->assertSame('192.168.53.53', $vips[0]['subnet'], 'the receiver must provision at the primary\'s address');
+		$this->assertSame('192.168.53.1', $vips[0]['subnet'], 'the receiver must provision at the primary\'s address');
 		$this->assertSame('_vip' . $vips[0]['uniqid'], config_get_path(self::DNSBL . '/pfb_dnsvip4'));
 		// AND a receiver never rewrites the address it received
-		$this->assertSame('192.168.53.53', config_get_path(self::SYNCED4));
+		$this->assertSame('192.168.53.1', config_get_path(self::SYNCED4));
 	}
 
 	public function testReceiverWithTheSyncedAddressInUseCreatesNoVipAndReportsTheConflict(): void
 	{
-		// GIVEN a policy receiver whose primary published 172.16.53.53, a user VIP already holds it,
+		// GIVEN a policy receiver whose primary published 172.16.53.1, a user VIP already holds it,
 		// and the next candidate is free (a standalone node would take it)
-		$this->seedNode(TRUE, [self::userVipAt('172.16.53.53')]);
+		$this->seedNode(TRUE, [self::userVipAt('172.16.53.1')]);
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '172.16.53.53');
-		$this->assertSame('192.168.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lo0'), 'before-state: a standalone node would take 192.168.53.53');
+		config_set_path(self::SYNCED4, '172.16.53.1');
+		$this->assertSame('192.168.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lo0'), 'before-state: a standalone node would take 192.168.53.1');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
 
 		// THEN nothing was created anywhere: the user's VIP is the only one, and no id was stored
-		$this->assertSame([self::userVipAt('172.16.53.53')], config_get_path('virtualip/vip'));
+		$this->assertSame([self::userVipAt('172.16.53.1')], config_get_path('virtualip/vip'));
 		$this->assertEmpty(config_get_path(self::DNSBL . '/pfb_dnsvip4'));
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
 		// AND the conflict is reported for the Sync page and logged
 		$this->assertSame(['IPv4'], $this->conflictFact());
-		$this->assertStringContainsString('DNSBL auto-VIP: synced ' . PFB_AUTO_VIP_DESCR_V4 . ' address [ 172.16.53.53 ] is not free on this node; not created', $this->mainLog());
+		$this->assertStringContainsString('DNSBL auto-VIP: synced ' . PFB_AUTO_VIP_DESCR_V4 . ' address [ 172.16.53.1 ] is not free on this node; not created', $this->mainLog());
 	}
 
 	public function testReceiverMovesItsMarkedVipToTheSyncedAddress(): void
 	{
-		// GIVEN a receiver holding its own marked VIP at 172.16.53.53 while the primary published 192.168.53.53
-		$this->seedNode(TRUE, [self::markedVip('v4', 'old4', '172.16.53.53')], '_vipold4');
+		// GIVEN a receiver holding its own marked VIP at 172.16.53.1 while the primary published 192.168.53.1
+		$this->seedNode(TRUE, [self::markedVip('v4', 'old4', '172.16.53.1')], '_vipold4');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
-		$this->assertSame('172.16.53.53', $this->markedVips('v4')[0]['subnet'], 'before-state: the marked VIP sits at its own pick');
+		config_set_path(self::SYNCED4, '192.168.53.1');
+		$this->assertSame('172.16.53.1', $this->markedVips('v4')[0]['subnet'], 'before-state: the marked VIP sits at its own pick');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
@@ -320,7 +320,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		$this->assertSame('old4', $GLOBALS['pfb_test_vip_bring_down_calls'][0]['uniqid']);
 		$vips = $this->markedVips('v4');
 		$this->assertCount(1, $vips, 'exactly one marked VIP: the moved one replaces the old one');
-		$this->assertSame('192.168.53.53', $vips[0]['subnet']);
+		$this->assertSame('192.168.53.1', $vips[0]['subnet']);
 		$this->assertNotSame('old4', $vips[0]['uniqid']);
 		$this->assertSame('_vip' . $vips[0]['uniqid'], config_get_path(self::DNSBL . '/pfb_dnsvip4'), 'the stored id names the new VIP');
 		$this->assertSame(1, $this->vipWrites());
@@ -328,11 +328,11 @@ final class DnsblVipLifecycleTest extends TestCase
 
 	public function testReceiverRemovesItsMarkedVipWhenTheSyncedAddressIsInUse(): void
 	{
-		// GIVEN a receiver holding its marked VIP at 192.168.53.53 while the primary published 172.16.53.53,
+		// GIVEN a receiver holding its marked VIP at 192.168.53.1 while the primary published 172.16.53.1,
 		// an address a user VIP holds on this node
-		$this->seedNode(TRUE, [self::markedVip('v4', 'old4', '192.168.53.53'), self::userVipAt('172.16.53.53')], '_vipold4');
+		$this->seedNode(TRUE, [self::markedVip('v4', 'old4', '192.168.53.1'), self::userVipAt('172.16.53.1')], '_vipold4');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '172.16.53.53');
+		config_set_path(self::SYNCED4, '172.16.53.1');
 		$this->assertCount(1, $this->markedVips('v4'), 'before-state: the marked VIP exists');
 
 		// WHEN the VIP manager runs
@@ -341,7 +341,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		// THEN the marked VIP was brought down and removed, none replaced it, and the user's VIP is untouched
 		$this->assertCount(1, $GLOBALS['pfb_test_vip_bring_down_calls'], 'a marked VIP at another address than the synced one must be brought down');
 		$this->assertSame('old4', $GLOBALS['pfb_test_vip_bring_down_calls'][0]['uniqid']);
-		$this->assertSame([self::userVipAt('172.16.53.53')], config_get_path('virtualip/vip'));
+		$this->assertSame([self::userVipAt('172.16.53.1')], config_get_path('virtualip/vip'));
 		$this->assertEmpty(config_get_path(self::DNSBL . '/pfb_dnsvip4'), 'the stored id no longer names a VIP');
 		// AND the conflict survives the pass that changed config (which refreshes $pfb at its end)
 		$this->assertSame(['IPv4'], $this->conflictFact());
@@ -350,11 +350,11 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testReceiverWithItsMarkedVipAlreadyAtTheSyncedAddressChangesNothing(): void
 	{
 		// GIVEN a receiver whose marked VIP already sits at the synced address
-		$this->seedNode(TRUE, [self::markedVip('v4', 'auto4', '192.168.53.53')], '_vipauto4');
+		$this->seedNode(TRUE, [self::markedVip('v4', 'auto4', '192.168.53.1')], '_vipauto4');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 		$configBefore = $GLOBALS['config'];
-		$this->assertSame('192.168.53.53', $this->markedVips('v4')[0]['subnet'], 'before-state: the VIP is at the synced address');
+		$this->assertSame('192.168.53.1', $this->markedVips('v4')[0]['subnet'], 'before-state: the VIP is at the synced address');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
@@ -378,7 +378,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		// THEN it picked as a standalone node does
 		$vips = $this->markedVips('v4');
 		$this->assertCount(1, $vips);
-		$this->assertSame('172.16.53.53', $vips[0]['subnet']);
+		$this->assertSame('172.16.53.1', $vips[0]['subnet']);
 		// AND a receiver never writes the synced field: the primary owns it
 		$this->assertNull(config_get_path(self::SYNCED4), 'a receiver must not publish its own address');
 	}
@@ -386,9 +386,9 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testReceiverWithoutDemandRemovesTheMarkedVipAndLeavesTheSyncedAddressAsReceived(): void
 	{
 		// GIVEN a receiver with a marked VIP, a received synced address, and no block answering with the VIP
-		$this->seedNode(FALSE, [self::markedVip('v4', 'auto4', '172.16.53.53')], '_vipauto4');
+		$this->seedNode(FALSE, [self::markedVip('v4', 'auto4', '172.16.53.1')], '_vipauto4');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 		$this->assertCount(1, $this->markedVips('v4'), 'before-state: the marked VIP exists');
 
 		// WHEN the VIP manager runs
@@ -397,14 +397,14 @@ final class DnsblVipLifecycleTest extends TestCase
 		// THEN the VIP is gone and its id forgotten, but the received address is policy and stays
 		$this->assertSame([], $this->markedVips('v4'));
 		$this->assertEmpty(config_get_path(self::DNSBL . '/pfb_dnsvip4'));
-		$this->assertSame('192.168.53.53', config_get_path(self::SYNCED4));
+		$this->assertSame('192.168.53.1', config_get_path(self::SYNCED4));
 	}
 
 	public function testNonReceiverIgnoresAStoredSyncedAddressAndPublishesItsOwnPick(): void
 	{
 		// GIVEN a node that never received policy, holding a stale synced address, with no VIP yet
 		$this->seedNode(TRUE, []);
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 		$this->assertFileDoesNotExist("{$this->dir}/pfb_sync_receive.json", 'before-state: no receive state');
 
 		// WHEN the VIP manager runs
@@ -413,34 +413,34 @@ final class DnsblVipLifecycleTest extends TestCase
 		// THEN it picked as a standalone node does, ignoring the stored address
 		$vips = $this->markedVips('v4');
 		$this->assertCount(1, $vips);
-		$this->assertSame('172.16.53.53', $vips[0]['subnet']);
+		$this->assertSame('172.16.53.1', $vips[0]['subnet']);
 		// AND it published the address it picked, in the same single write
-		$this->assertSame('172.16.53.53', config_get_path(self::SYNCED4));
+		$this->assertSame('172.16.53.1', config_get_path(self::SYNCED4));
 		$this->assertSame(1, $this->vipWrites());
 	}
 
 	public function testNonReceiverPublishesTheAddressOfAMarkedVipItAlreadyHas(): void
 	{
 		// GIVEN an upgraded node: a marked VIP and its id exist, no address was ever published
-		$this->seedNode(TRUE, [self::markedVip('v4', 'auto4', '172.16.53.53')], '_vipauto4');
+		$this->seedNode(TRUE, [self::markedVip('v4', 'auto4', '172.16.53.1')], '_vipauto4');
 		$this->assertNull(config_get_path(self::SYNCED4), 'before-state: nothing published');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
 
 		// THEN the VIP address is published with one write, and the VIP itself is untouched
-		$this->assertSame('172.16.53.53', config_get_path(self::SYNCED4));
+		$this->assertSame('172.16.53.1', config_get_path(self::SYNCED4));
 		$this->assertSame(1, $this->vipWrites());
 		$this->assertSame([], $GLOBALS['pfb_test_vip_bring_down_calls']);
-		$this->assertSame('172.16.53.53', $this->markedVips('v4')[0]['subnet']);
+		$this->assertSame('172.16.53.1', $this->markedVips('v4')[0]['subnet']);
 	}
 
 	public function testNonReceiverWithoutDemandRemovesTheVipAndClearsThePublishedAddress(): void
 	{
 		// GIVEN a node that published its address, with no block answering with the VIP any more
-		$this->seedNode(FALSE, [self::markedVip('v4', 'auto4', '172.16.53.53')], '_vipauto4');
-		config_set_path(self::SYNCED4, '172.16.53.53');
-		$this->assertSame('172.16.53.53', config_get_path(self::SYNCED4), 'before-state: the address is published');
+		$this->seedNode(FALSE, [self::markedVip('v4', 'auto4', '172.16.53.1')], '_vipauto4');
+		config_set_path(self::SYNCED4, '172.16.53.1');
+		$this->assertSame('172.16.53.1', config_get_path(self::SYNCED4), 'before-state: the address is published');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
@@ -456,7 +456,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		// and a stale synced address
 		$this->seedNode(TRUE, []);
 		$this->assertTrue(pfb_sync_receive_record('refused', NULL, 'syncscope is not policy', $this->dir), 'before-state: the real writer recorded a refusal');
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 		$this->assertNull(pfb_sync_receive_state_read($this->dir)['accepted_digest'], 'before-state: a receive state without an accepted digest');
 
 		// WHEN the VIP manager runs
@@ -465,8 +465,8 @@ final class DnsblVipLifecycleTest extends TestCase
 		// THEN it behaves as a standalone/primary node: own pick, published
 		$vips = $this->markedVips('v4');
 		$this->assertCount(1, $vips);
-		$this->assertSame('172.16.53.53', $vips[0]['subnet']);
-		$this->assertSame('172.16.53.53', config_get_path(self::SYNCED4));
+		$this->assertSame('172.16.53.1', $vips[0]['subnet']);
+		$this->assertSame('172.16.53.1', config_get_path(self::SYNCED4));
 	}
 
 	public function testReceiverCreatesTheMarkedV6VipAtTheSyncedV6Address(): void
@@ -501,7 +501,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		$this->runVipManager('enabled');
 
 		// THEN each family publishes the address it created
-		$this->assertSame('172.16.53.53', config_get_path(self::SYNCED4));
+		$this->assertSame('172.16.53.1', config_get_path(self::SYNCED4));
 		$this->assertSame(self::V6_CANDIDATE, config_get_path(self::SYNCED6));
 	}
 
@@ -527,8 +527,8 @@ final class DnsblVipLifecycleTest extends TestCase
 	{
 		return [
 			'routable address'        => ['203.0.113.5'],
-			'candidate with a prefix' => ['172.16.53.53/12'],
-			'the v6 candidate on v4'  => ['fd00:53:53:53:53:53:53:53'],
+			'candidate with a prefix' => ['172.16.53.1/12'],
+			'the v6 candidate on v4'  => ['fd00:53:53:53:53:53:53:1'],
 			'300 chars with markup'   => ['<b>' . str_repeat('x', 297)],
 		];
 	}
@@ -575,7 +575,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		$this->seedNode(TRUE, []);
 		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 		$configBefore = $GLOBALS['config'];
 
 		// WHEN the VIP manager runs
@@ -589,10 +589,10 @@ final class DnsblVipLifecycleTest extends TestCase
 
 	public function testConflictFactIsClearedByTheNextPassWhoseSyncedAddressIsFree(): void
 	{
-		// GIVEN a receiver whose first pass hit a conflict at 172.16.53.53
-		$this->seedNode(TRUE, [self::userVipAt('172.16.53.53')]);
+		// GIVEN a receiver whose first pass hit a conflict at 172.16.53.1
+		$this->seedNode(TRUE, [self::userVipAt('172.16.53.1')]);
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '172.16.53.53');
+		config_set_path(self::SYNCED4, '172.16.53.1');
 		$this->runVipManager('enabled');
 		$this->assertSame(['IPv4'], $this->conflictFact(), 'before-state: the first pass reported the conflict');
 
@@ -603,7 +603,7 @@ final class DnsblVipLifecycleTest extends TestCase
 
 		// THEN the fact is empty again, so the finding does not outlive the conflict, and the VIP was created
 		$this->assertSame([], $this->conflictFact());
-		$this->assertSame('172.16.53.53', $this->markedVips('v4')[0]['subnet'] ?? NULL);
+		$this->assertSame('172.16.53.1', $this->markedVips('v4')[0]['subnet'] ?? NULL);
 	}
 
 	public function testStaleV6RemovalKeepsTheV4VipCreatedEarlierInTheSamePass(): void
@@ -611,7 +611,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		// GIVEN a receiver with no v4 VIP yet and a marked v6 VIP away from the synced v6 address
 		$this->seedNode(TRUE, [self::markedVip('v6', 'old6', 'fd00:53:53:53:53:53:53:99')], '', '_vipold6');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 		config_set_path(self::SYNCED6, self::V6_CANDIDATE);
 		$this->assertSame([], $this->markedVips('v4'), 'before-state: no v4 VIP');
 
@@ -622,7 +622,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		$v4 = $this->markedVips('v4');
 		$v6 = $this->markedVips('v6');
 		$this->assertCount(1, $v4, 'the v4 VIP created in the same pass must survive the v6 removal');
-		$this->assertSame('192.168.53.53', $v4[0]['subnet']);
+		$this->assertSame('192.168.53.1', $v4[0]['subnet']);
 		$this->assertCount(1, $v6);
 		$this->assertSame(self::V6_CANDIDATE, $v6[0]['subnet']);
 		$this->assertSame('_vip' . $v4[0]['uniqid'], config_get_path(self::DNSBL . '/pfb_dnsvip4'));
@@ -632,7 +632,7 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testReceiverWithoutASyncedAddressKeepsItsExistingMarkedVipUntouched(): void
 	{
 		// GIVEN a receiver of an older primary that already holds its own marked VIP
-		$this->seedNode(TRUE, [self::markedVip('v4', 'auto4', '172.16.53.53')], '_vipauto4');
+		$this->seedNode(TRUE, [self::markedVip('v4', 'auto4', '172.16.53.1')], '_vipauto4');
 		$this->writeReceiveState('d');
 		$before = $GLOBALS['config'];
 
@@ -649,9 +649,9 @@ final class DnsblVipLifecycleTest extends TestCase
 	{
 		// GIVEN a receiver of an older primary whose three IPv4 candidates are all taken
 		$this->seedNode(TRUE, [
-			self::userVipAt('172.16.53.53'),
-			array_merge(self::userVipAt('192.168.53.53'), ['uniqid' => 'o2']),
-			array_merge(self::userVipAt('10.53.53.53'), ['uniqid' => 'o3']),
+			self::userVipAt('172.16.53.1'),
+			array_merge(self::userVipAt('192.168.53.1'), ['uniqid' => 'o2']),
+			array_merge(self::userVipAt('10.53.53.1'), ['uniqid' => 'o3']),
 		]);
 		$this->writeReceiveState('d');
 
@@ -666,9 +666,9 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testBothFamiliesInConflictAreBothReported(): void
 	{
 		// GIVEN a receiver whose synced IPv4 and IPv6 addresses are both taken by the user's VIPs
-		$this->seedNode(TRUE, [self::userVipAt('172.16.53.53'), array_merge(self::userVipAt(self::V6_CANDIDATE), ['uniqid' => 'o6'])], '', self::V6_REQUEST_ID);
+		$this->seedNode(TRUE, [self::userVipAt('172.16.53.1'), array_merge(self::userVipAt(self::V6_CANDIDATE), ['uniqid' => 'o6'])], '', self::V6_REQUEST_ID);
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '172.16.53.53');
+		config_set_path(self::SYNCED4, '172.16.53.1');
 		config_set_path(self::SYNCED6, self::V6_CANDIDATE);
 
 		// WHEN the VIP manager runs
@@ -681,9 +681,9 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testAnIPv4ConflictDoesNotStopIPv6Provisioning(): void
 	{
 		// GIVEN a receiver whose synced IPv4 address is taken and whose synced IPv6 address is free
-		$this->seedNode(TRUE, [self::userVipAt('172.16.53.53')], '', self::V6_REQUEST_ID);
+		$this->seedNode(TRUE, [self::userVipAt('172.16.53.1')], '', self::V6_REQUEST_ID);
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '172.16.53.53');
+		config_set_path(self::SYNCED4, '172.16.53.1');
 		config_set_path(self::SYNCED6, self::V6_CANDIDATE);
 
 		// WHEN the VIP manager runs
@@ -699,16 +699,16 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testAMovedVipIsBroughtUpLiveAtTheSyncedAddress(): void
 	{
 		// GIVEN a receiver whose marked VIP sits away from the synced address
-		$this->seedNode(TRUE, [self::markedVip('v4', 'old4', '172.16.53.53')], '_vipold4');
+		$this->seedNode(TRUE, [self::markedVip('v4', 'old4', '172.16.53.1')], '_vipold4');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
 
 		// THEN the alias is configured live once, at the synced address
 		$this->assertCount(1, $GLOBALS['pfb_test_ipalias_configure_calls']);
-		$this->assertSame('192.168.53.53', $GLOBALS['pfb_test_ipalias_configure_calls'][0]['subnet']);
+		$this->assertSame('192.168.53.1', $GLOBALS['pfb_test_ipalias_configure_calls'][0]['subnet']);
 	}
 
 	public function testAPaddedSyncedAddressIsAConflictNotAVip(): void
@@ -716,7 +716,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		// GIVEN a receiver whose synced address carries a trailing newline
 		$this->seedNode(TRUE, []);
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, "172.16.53.53\n");
+		config_set_path(self::SYNCED4, "172.16.53.1\n");
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
@@ -729,7 +729,7 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testTheGuardedDeleteKeepsAMarkedCopyAtAnotherAddress(): void
 	{
 		// GIVEN no demand, the stored marked VIP, and a copy of it (pfSense's copy keeps the descr) at another address
-		$this->seedNode(FALSE, [self::markedVip('v4', 'auto4', '172.16.53.53'), self::markedVip('v4', 'copy4', '192.168.53.53')], '_vipauto4');
+		$this->seedNode(FALSE, [self::markedVip('v4', 'auto4', '172.16.53.1'), self::markedVip('v4', 'copy4', '192.168.53.1')], '_vipauto4');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
@@ -743,7 +743,7 @@ final class DnsblVipLifecycleTest extends TestCase
 	{
 		return [
 			'no demand, the VIP and its id already gone' => [FALSE, [], '', 'on'],
-			'auto-create off, the id repointed at a manual VIP' => [TRUE, [self::markedVip('v4', 'auto4', '172.16.53.53'), self::USER_VIP], '_vipuser1', ''],
+			'auto-create off, the id repointed at a manual VIP' => [TRUE, [self::markedVip('v4', 'auto4', '172.16.53.1'), self::USER_VIP], '_vipuser1', ''],
 		];
 	}
 
@@ -751,10 +751,10 @@ final class DnsblVipLifecycleTest extends TestCase
 	#[DataProvider('unmanagedNonReceiverStates')]
 	public function testNonReceiverThatNoLongerManagesTheFamilyClearsThePublishedAddress(bool $demand, array $vips, string $id4, string $auto): void
 	{
-		// GIVEN a node that published 172.16.53.53 and no longer manages an IPv4 auto-VIP, where the guard deletes nothing
+		// GIVEN a node that published 172.16.53.1 and no longer manages an IPv4 auto-VIP, where the guard deletes nothing
 		$this->seedNode($demand, $vips, $id4);
 		PfbConfig::write('dnsbl/pfb_dnsvip_auto', $auto);
-		config_set_path(self::SYNCED4, '172.16.53.53');
+		config_set_path(self::SYNCED4, '172.16.53.1');
 		$markedBefore = $this->markedVips('v4');
 
 		// WHEN the VIP manager runs
@@ -770,17 +770,17 @@ final class DnsblVipLifecycleTest extends TestCase
 	{
 		// GIVEN a receiver holding a marked VIP whose stored id was cleared (auto-create toggled off with no VIP
 		// selected, then on again), away from the synced address
-		$this->seedNode(TRUE, [self::markedVip('v4', 'orph4', '172.16.53.53')], '');
+		$this->seedNode(TRUE, [self::markedVip('v4', 'orph4', '172.16.53.1')], '');
 		$this->writeReceiveState('d');
-		config_set_path(self::SYNCED4, '192.168.53.53');
+		config_set_path(self::SYNCED4, '192.168.53.1');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
 
 		// THEN the guard keeps the VIP, nothing is created, and the node reports it instead of staying silent
-		$this->assertSame(['172.16.53.53'], array_column($this->markedVips('v4'), 'subnet'));
+		$this->assertSame(['172.16.53.1'], array_column($this->markedVips('v4'), 'subnet'));
 		$this->assertSame(['IPv4'], $this->conflictFact());
-		$this->assertStringContainsString(PFB_AUTO_VIP_DESCR_V4 . ' at [ 172.16.53.53 ] is not the stored VIP; not moved to the synced address', $this->mainLog());
+		$this->assertStringContainsString(PFB_AUTO_VIP_DESCR_V4 . ' at [ 172.16.53.1 ] is not the stored VIP; not moved to the synced address', $this->mainLog());
 	}
 
 	// ------------------------------------------------------------------------------------------
@@ -790,17 +790,17 @@ final class DnsblVipLifecycleTest extends TestCase
 	public function testStandaloneNodeCreatesItsVipAtTheNextCandidateWhenAUserVipHoldsTheFirst(): void
 	{
 		// GIVEN a node that never received policy, and the user's described VIP at the first candidate
-		$this->seedNode(TRUE, [self::userVipAt('172.16.53.53')]);
+		$this->seedNode(TRUE, [self::userVipAt('172.16.53.1')]);
 		$this->assertSame([], $this->markedVips('v4'), 'before-state: no marked VIP');
 
 		// WHEN the VIP manager runs
 		$this->runVipManager('enabled');
 
 		// THEN the marked VIP sits at the second candidate, the user's VIP is untouched, and that address is published
-		$this->assertSame(['192.168.53.53'], array_column($this->markedVips('v4'), 'subnet'),
-			'a VIP already at 172.16.53.53 must make the picker take 192.168.53.53');
-		$this->assertContains(self::userVipAt('172.16.53.53'), config_get_path('virtualip/vip'));
-		$this->assertSame('192.168.53.53', config_get_path(self::SYNCED4));
+		$this->assertSame(['192.168.53.1'], array_column($this->markedVips('v4'), 'subnet'),
+			'a VIP already at 172.16.53.1 must make the picker take 192.168.53.1');
+		$this->assertContains(self::userVipAt('172.16.53.1'), config_get_path('virtualip/vip'));
+		$this->assertSame('192.168.53.1', config_get_path(self::SYNCED4));
 	}
 
 	public function testStandaloneNodeCreatesNoV6VipWhenAUserVipHoldsTheV6Candidate(): void
@@ -815,7 +815,7 @@ final class DnsblVipLifecycleTest extends TestCase
 		// THEN no v6 VIP was created and the shortage is logged, while v4 is provisioned as usual with no Sync finding
 		$this->assertSame([], $this->markedVips('v6'), 'a VIP already at the v6 candidate must leave the family without an auto-VIP');
 		$this->assertStringContainsString('no free ' . PFB_AUTO_VIP_DESCR_V6 . ' address available; not created', $this->mainLog());
-		$this->assertSame(['172.16.53.53'], array_column($this->markedVips('v4'), 'subnet'));
+		$this->assertSame(['172.16.53.1'], array_column($this->markedVips('v4'), 'subnet'));
 		$this->assertSame([], $this->conflictFact());
 	}
 
