@@ -3364,7 +3364,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 			// DELETE (marker + IP-match only). The address must match what the stored
 			// config currently resolves to, so we never delete a marked VIP that is no
 			// longer the one our config points at, and never an unmarked VIP.
-			$match_ip = $listen ? (string) ($listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')][0] ?? $owned_address)
+			$match_ip = $listen ? (string) ($listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')][0] ?? '')
 			    : (($fam['family'] === AF_INET)
 				? (string) (get_configured_vip_ipv4($dnsblconfig[$fam['idkey']] ?? '') ?? '')
 				: (string) (get_configured_vip_ipv6($dnsblconfig[$fam['idkey']] ?? '') ?? ''));

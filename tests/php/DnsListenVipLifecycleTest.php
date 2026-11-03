@@ -171,6 +171,18 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame([$copy], config_get_path('virtualip/vip'), 'only the address this feature created is removed, on this apply and every later one');
 	}
 
+	public function testAnUnownedMarkedVipSurvivesEnableThenDisable(): void
+	{
+		$copy = ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd12:3456::99', 'subnet_bits' => '128', 'descr' => 'pfB_DNS_LISTEN_VIP_v6', 'uniqid' => 'copy'];
+		config_set_path('virtualip/vip', [$copy]);
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		pfb_dns_listen_vips_apply();
+		PfbConfig::write('gen/pfb_dns_listen_vip', '');
+		PfbConfig::write('gen/pfb_dns_listen_vip6', '');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['fd12:3456::99'], array_column(config_get_path('virtualip/vip'), 'subnet'), 'a marked VIP this feature did not create is not deleted when the option is turned off');
+	}
+
 	public function testReceiverAdvertisesTheSyncedAddressNotADifferentVipTheSendersIdResolvesTo(): void
 	{
 		$vip = static fn (string $id, string $address): array => ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => $address, 'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => $id];
