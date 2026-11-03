@@ -3226,15 +3226,19 @@ function pfb_unbound_listens_v6(): bool {
 // [ADR-13] Locate the index of the auto-managed DNSBL VIP this package owns inside a
 // virtualip/vip array. Pure. Ownership requires BOTH: (1) MARKER — pfb_managed_obj_match($vip,
 // $marker) (pfb_is_managed_obj($descr) AND a prefix match against PFB_AUTO_VIP_DESCR_V4/V6);
-// (2) IP MATCH — when $match_ip is non-empty, $vip['subnet'] must equal
-// it (binds delete to the address currently resolved from stored config, so a marked VIP whose
-// address no longer matches is never deleted). Pass null to match on the marker alone (create).
+// (2) IP MATCH — when $match_ip is non-empty, $vip['subnet'] must identify the same address
+// regardless of IPv6 spelling. A different address is never matched.
+// Pass null to match on the marker alone (create).
 function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_ip): ?int {
+	$match_packed = $match_ip === null || $match_ip === '' ? NULL : @inet_pton($match_ip);
+	if ($match_packed === FALSE) {
+		return null;
+	}
 	foreach ($vips_config as $idx => $vip) {
 		if (!pfb_managed_obj_match($vip, $marker)) {
 			continue;
 		}
-		if ($match_ip !== null && $match_ip !== '' && ($vip['subnet'] ?? '') !== $match_ip) {
+		if ($match_packed !== NULL && @inet_pton((string) ($vip['subnet'] ?? '')) !== $match_packed) {
 			continue;
 		}
 		if (is_int($idx)) {
@@ -3362,7 +3366,8 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 			}
 		}
 		// issue #3540: a marked VIP away from the synced address is replaced, not reused.
-		$stale  = $fam['managed'] && $idx !== null && $synced !== '' && ($vips_config[$idx]['subnet'] ?? '') !== $synced;
+		$stale  = $fam['managed'] && $idx !== null && $synced !== ''
+		    && @inet_pton((string) ($vips_config[$idx]['subnet'] ?? '')) !== @inet_pton($synced);
 		$listen_synced_address = NULL;
 		if ($listen && $fam['managed'] && $synced !== '' && ($idx === null || $stale)) {
 			$valid_synced = $fam['family'] === AF_INET ? is_ipaddrv4($synced) : is_ipaddrv6($synced);
@@ -4404,6 +4409,10 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, ?array &$skipped =
 			$known = is_ipaddr($interface) || array_key_exists($interface, (array) get_configured_interface_with_descr());
 			$skipped[] = ['interface' => $interface, 'why' => $known ? 'no address' : 'unknown'];
 		}
+	}
+	$loopback_only = $interfaces !== [] && array_diff($interfaces, ['lo0']) === [];
+	if ($listen === [] && !$loopback_only) {
+		return [];
 	}
 	foreach (pfb_dns_listen_vips() as $vip => $id) {
 		$v6 = str_contains($vip, ':');

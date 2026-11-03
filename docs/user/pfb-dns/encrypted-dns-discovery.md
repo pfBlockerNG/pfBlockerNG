@@ -23,6 +23,16 @@ the **pfB-DNS** or **DNSBL** sub-tabs. Resolver addresses offers an optional exi
 for each family; **Automatic VIP interface** defaults to Localhost and applies only to automatic creation.
 On a selected VIP, port 443 may already be taken; an automatically created resolver VIP leaves 443 free.
 
+Resolver VIPs remain available with a **Localhost**-only listener selection. Empty selections and selections containing
+only down or unusable interfaces do not gain a VIP listener. Loopback remains available independently.
+
+On a policy receiver, an existing listener VIP is moved only after the published address passes validation and
+conflict checks. Equivalent IPv6 spellings reuse the same VIP. A missing or invalid publication is not replaced
+by an unrelated local VIP, and unspecified addresses (`0.0.0.0` and `::`) are not valid dedicated listener VIPs.
+New VIP ownership is saved with creation, so an advertisement-save failure does not prevent later cleanup.
+Disabling the option removes only owned VIPs; uninstall also removes recorded advertisements and reapplies the
+affected DHCP and DNS Resolver settings.
+
 Transport controls, the certificate and DDR remain under **DNS > pfB-DNS**. Each transport has an **IPv4** port and
 an **IPv6** port; an empty IPv6 port uses the IPv4 value. DDR has separate **IPv4 DoH on port 443** and
 **IPv6 DoH on port 443** checkboxes. These advertise 443; they do not change the listening ports.

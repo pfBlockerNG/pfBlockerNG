@@ -321,6 +321,32 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertContains('IPv6', $GLOBALS['pfb']['dns_listen_vip_conflict']);
 	}
 
+	public function testAutoReceiverReusesAnOwnedVipWhenOnlyTheSyncedSpellingDiffers(): void
+	{
+		$owned = ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd00::53', 'subnet_bits' => '128', 'descr' => 'pfB_DNS_LISTEN_VIP_v6', 'uniqid' => 'owned'];
+		config_set_path('virtualip/vip', [$owned]);
+		$GLOBALS['pfb_test_vip_list'] = ['fd00::53'];
+		PfbConfig::write('gen/pfb_dns_listen_interface', 'lan');
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		PfbConfig::write('gen/pfb_dns_listen_added', json_encode(['vip6' => ['fd00::53']]));
+		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));
+		PfbConfig::write('gen/pfb_dns_listen_auto6', 'FD00::53');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$owned], config_get_path('virtualip/vip'));
+		$this->assertNotContains('IPv6', $GLOBALS['pfb']['dns_listen_vip_conflict'] ?? []);
+		$this->assertSame(['fd00::53' => '_vipowned'], pfb_dns_listen_vips());
+	}
+
+	public function testADownInterfaceDoesNotGainTheListenerVip(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		pfb_dns_listen_vips_apply();
+		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'down', 'enable' => TRUE];
+		$this->assertSame([], pfb_dns_proxy_interface_addresses(['opt1']));
+		$this->assertSame([], pfb_dns_proxy_interface_addresses([]));
+		$this->assertSame(['172.16.53.53'], pfb_dns_proxy_interface_addresses(['lo0']));
+	}
+
 	#[\PHPUnit\Framework\Attributes\DataProvider('rejectedSyncedAddresses')]
 	public function testAutoReceiverRejectsUnsafeSyncedAddressesWithoutDeletingItsVip(string $address, bool $owned): void
 	{
