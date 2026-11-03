@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 /*
  * issue #3647: Reports > Alerts. The whitelist icon on a row blocked by a TLD Blacklist entry asked to add
- * the domain "to the TLD Whitelist", a list that does not exist; the dialog adds it to the DNSBL Whitelist.
+ * the domain "to the TLD Whitelist", a different list; the dialog adds it to the DNSBL Whitelist.
  *
  * Standalone runner: release/3.3 ships no PHPUnit and no UI tier, so it eval()s the PRODUCTION
  * dnsbl_whitelist_type() straight out of pfblockerng_alerts.php.
@@ -61,7 +61,7 @@ eval(function_source($alerts, 'dnsbl_whitelist_type'));
 function tld_blocked_row_icon(): array
 {
 	$GLOBALS['pfb'] = ['dnsbl_py_blacklist' => false];
-	$fields = [2 => 'bad.example', 5 => 'DNSBL_TLD', 6 => 'TLD', 7 => 'www.bad.example', 8 => 'TLD'];
+	$fields = [2 => 'bad.example', 5 => 'DNSBL_TLD', 6 => 'TLD', 7 => 'example', 8 => 'TLD'];
 	[$icon] = dnsbl_whitelist_type($fields, [], false, false, 'bad.example');
 	check(preg_match('/id="([^"]*)" title="([^"]*)"/', (string) $icon, $m) === 1, 'no icon id/title in: ' . $icon);
 	return ['id' => $m[1], 'title' => html_entity_decode($m[2])];
@@ -69,13 +69,13 @@ function tld_blocked_row_icon(): array
 
 row('A TLD-blocked row prompt names the DNSBL Whitelist, not a TLD Whitelist', static function (): void {
 	$icon = tld_blocked_row_icon();
-	check(!str_contains($icon['title'], 'TLD Whitelist'), 'prompt names a non-existent TLD Whitelist: ' . $icon['title']);
+	check(!str_contains($icon['title'], 'TLD Whitelist'), 'prompt names the wrong whitelist: ' . $icon['title']);
 	check(str_contains($icon['title'], 'DNSBL Whitelist'), 'prompt does not name the DNSBL Whitelist: ' . $icon['title']);
 });
 
 row('B Whole-TLD icon still opens the whitelist dialog for the blocked domain', static function (): void {
 	$icon = tld_blocked_row_icon();
-	check($icon['id'] === 'DNSBLWT|tld|bad.example|www.bad.example', 'unexpected icon id: ' . $icon['id']);
+	check($icon['id'] === 'DNSBLWT|tld|bad.example|example', 'unexpected icon id: ' . $icon['id']);
 });
 
 echo $failures === 0 ? "ALL PASS\n" : "{$failures} FAILURE(S)\n";

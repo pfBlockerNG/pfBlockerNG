@@ -2,7 +2,7 @@
 
 The whitelist icon on a TLD-blocked row opened a dialog whose button text was never assigned (a
 ReferenceError on a fresh page, or the label of whichever dialog ran last) and whose prompt named a
-"TLD Whitelist" that does not exist: the domain goes to the DNSBL Whitelist.
+"TLD Whitelist", a different list: the domain goes to the DNSBL Whitelist.
 
 release/3.3 has no browser tier, so the JS rows run the PRODUCTION click handler under node with a
 recording jQuery double (tests/js/run_alerts_whitelist_dialog_3_3.js); the prompt rows eval the PRODUCTION
@@ -21,7 +21,7 @@ import pytest
 TESTS = Path(__file__).parent
 ALERTS = TESTS.parent / "src/usr/local/www/pfblockerng/pfblockerng_alerts.php"
 
-TLD_ICON = "DNSBLWT|tld|bad.example|www.bad.example"
+TLD_ICON = "DNSBLWT|tld|bad.example|example"
 ADD_ICON = "DNSBLWT|add|bad.example|FeedA|DNSBL"
 DNSBL_ADD_ICON = "DNSBLWT|dnsbl_add|bad.example|ListA|ListB"
 
@@ -64,7 +64,7 @@ def test_tld_dialog_on_a_fresh_page_is_labelled_and_whitelists_into_the_dnsbl_wh
     form = confirmed["submits"][0]
     assert form["#addwhitelistdom"] == "true"
     assert form["#domain"] == "bad.example"
-    assert form["#table"] == "www.bad.example"
+    assert form["#table"] == "example"
     assert form.get("#dnsbl_exclude", "") == ""
     assert form.get("#dnsbl_wildcard", "") in ("", "false")
     assert "#dnsbl_add" not in form
@@ -78,7 +78,7 @@ def test_tld_wildcard_button_whitelists_the_wildcard_into_the_dnsbl_whitelist() 
     assert form["#dnsbl_wildcard"] == "true"
     assert form["#addwhitelistdom"] == "true"
     assert form["#domain"] == "bad.example"
-    assert form["#table"] == "www.bad.example"
+    assert form["#table"] == "example"
     assert form.get("#dnsbl_exclude", "") == ""
 
 
