@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `e1ff3f6cc7`  dns: let an in-flight query outlive the idle read  (#3666) — two quota responses; condensed review and Codex clean
 - `927b416d65`  sync: send legacy-scope edits made after a policy receive  (#3681) — two quota responses; condensed review and Codex clean
 - `79804e0bc0`  dns: keep the upstream exchange on the matching reply  (#3670) — two quota responses; combined review and Codex clean
 - `c8eeb66fad`  dns: screen each DoQ stream at its current address  (#3669) — two quota responses; condensed review and Codex clean
