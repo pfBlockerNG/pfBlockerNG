@@ -123,6 +123,31 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertCount($before + 1, $GLOBALS['pfb_test_unbound_configure_calls'] ?? [], 'replay does not restart an unchanged Resolver');
 	}
 
+	public function testTurningTheListenerOffRemovesTheOwnedVipEvenWhenTheSelectionStaysAuto(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		pfb_dns_listen_vips_apply();
+		$owned = config_get_path('virtualip/vip/0/subnet');
+		$copy = ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd12:3456::99', 'subnet_bits' => '128', 'descr' => 'pfB_DNS_LISTEN_VIP_v6', 'uniqid' => 'copy'];
+		config_set_path('virtualip/vip', [$copy, config_get_path('virtualip/vip/0')]);
+		PfbConfig::write('gen/pfb_dns_listen_vip', '');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['fd12:3456::99'], array_column(config_get_path('virtualip/vip'), 'subnet'));
+		$this->assertNotSame('fd12:3456::99', $owned);
+	}
+
+	public function testASaveThatChangesUnboundAndDhcpAppliesBoth(): void
+	{
+		config_set_path('unbound/active_interface', 'lan');
+		config_set_path('dhcpd/lan', ['dnsserver' => ['192.0.2.1']]);
+		$unbound = count($GLOBALS['pfb_test_unbound_configure_calls'] ?? []);
+		$dhcp = count(array_filter($GLOBALS['pfb_test_service_calls'] ?? [], static fn (array $call): bool => $call[0] === 'services_dhcpd_configure'));
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		pfb_dns_listen_vips_apply();
+		$this->assertCount($unbound + 1, $GLOBALS['pfb_test_unbound_configure_calls'] ?? []);
+		$this->assertCount($dhcp + 1, array_filter($GLOBALS['pfb_test_service_calls'] ?? [], static fn (array $call): bool => $call[0] === 'services_dhcpd_configure'));
+	}
+
 	public function testReceiverDeletesOnlyItsOwnedVipAfterPolicyRemovesTheSyncedAddress(): void
 	{
 		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));

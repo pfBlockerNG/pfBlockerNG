@@ -3364,7 +3364,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 		$stale  = $fam['managed'] && $idx !== null && $synced !== '' && ($vips_config[$idx]['subnet'] ?? '') !== $synced;
 
 		if (!$fam['managed'] || $stale) {
-			if ($listen && !$stale && ($serve || !in_array($dnsblconfig[$fam['idkey']] ?? '', ['', 'none'], TRUE))) {
+			if ($listen && !$stale && $serve) {
 				continue;
 			}
 			// issue #3540: a node that no longer manages the family publishes no address, whatever the guard deletes.
@@ -3638,7 +3638,8 @@ function pfb_dns_listen_vips_apply(): bool {
 		if ($resolver_changed) {
 			require_once('unbound.inc');
 			services_unbound_configure(TRUE);
-		} elseif ($dhcp_changed) {
+		}
+		if ($dhcp_changed) {
 			services_dhcpd_configure();
 		}
 	}

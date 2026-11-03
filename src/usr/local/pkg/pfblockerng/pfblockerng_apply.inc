@@ -955,6 +955,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 		try {
 			if (!pfb_dns_listen_vips_apply()) {
+				pfb_mark_pending_changes();
 				pfb_logger("\n DNS listener advertisements could not be written.\n", 2);
 			}
 		} finally {
