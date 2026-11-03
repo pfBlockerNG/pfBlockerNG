@@ -180,6 +180,17 @@ final class DnsProxyDdrSettingsTest extends TestCase
 		$this->assertSame('on', pfb_dns_proxy_listeners_stored($post)[self::DOH_443] ?? NULL);
 	}
 
+	public function testAnAbsentIpv6Port443OverrideFollowsTheExistingOverrideUntilStored(): void
+	{
+		PfbConfig::write('dns_shared/pfb_dns_ddr', 'on');
+		PfbConfig::write('dns_shared/pfb_dns_ddr_doh_443', 'on');
+		$this->assertStringContainsString('--ddr-doh-4436', pfb_dns_proxy_ddr_flags());
+		$this->assertSame(PfbToggle::On, pfb_dns_proxy_seed_values()['pfb_dns_ddr_doh_443_6'] ?? NULL);
+		PfbConfig::write('dns_shared/pfb_dns_ddr_doh_443_6', '');
+		$this->assertStringNotContainsString('--ddr-doh-4436', pfb_dns_proxy_ddr_flags());
+		$this->assertArrayNotHasKey('pfb_dns_ddr_doh_443_6', pfb_dns_proxy_seed_values());
+	}
+
 	public function testTheDdrToggleIsAlwaysTakenFromThePostWhateverTheStoredDohPort(): void
 	{
 		PfbConfig::write('dns_shared/pfb_dns_doh_port', '443');

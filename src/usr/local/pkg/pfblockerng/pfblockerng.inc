@@ -4518,6 +4518,10 @@ function pfb_dns_proxy_seed_values(): array {
 			$values[$key] = $list;
 		}
 	}
+	$shared = PfbConfig::readSection(PFB_SECTIONS['dns_shared']);
+	if (!array_key_exists('pfb_dns_ddr_doh_443_6', $shared)) {
+		$values['pfb_dns_ddr_doh_443_6'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');
+	}
 	return $values;
 }
 
@@ -4721,7 +4725,7 @@ function pfb_dns_proxy_ddr_flags(): string {
 	}
 	return ' --ddr ' . escapeshellarg(config_get_path('system/hostname', 'pfSense') . '.' . config_get_path('system/domain', 'localdomain')) .
 	    ((PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '') .
-	    ((PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443_6') === PfbToggle::On) ? ' --ddr-doh-4436' : '');
+	    ((pfb_dns_proxy_setting('pfb_dns_ddr_doh_443_6') === PfbToggle::On) ? ' --ddr-doh-4436' : '');
 }
 
 // Ranges pfB-DNS never warns about (issue #3583): the private and local ones a public CA cannot certify (RFC 9462 section 4.3), and the
