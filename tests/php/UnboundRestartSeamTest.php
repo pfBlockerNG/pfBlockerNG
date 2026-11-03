@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -99,7 +100,10 @@ final class UnboundRestartSeamTest extends TestCase
 	 * Run the production function in a fresh PHP process so each row can set the
 	 * existing PFB_UNBOUND_START_CMD seam. The outer timeout is salvage only:
 	 * default mode reaps the whole runner tree if production regresses to an
-	 * unbounded wait.
+	 * unbounded wait. A $prelude may name another entry point in
+	 * $GLOBALS['pfb_test_start_entry'] and set a closure in
+	 * $GLOBALS['pfb_test_after_start'], called the instant the start returns; its
+	 * result is the payload's 'after'.
 	 *
 	 * @param list<string> $ini PHP INI settings applied only to the isolated runner
 	 * @return array{status: int, output: list<string>, payload: array<string, mixed>|null}
@@ -140,11 +144,12 @@ final class UnboundRestartSeamTest extends TestCase
 			. '$GLOBALS[\'g\'][\'varrun_path\'] = ' . var_export($this->dir, TRUE) . ";\n"
 			. "\$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;\n"
 			. $prelude
-			. "\$final = pfb_stop_start_unbound('');\n"
+			. "\$final = (\$GLOBALS['pfb_test_start_entry'] ?? 'pfb_stop_start_unbound')('');\n"
+			. "\$after = isset(\$GLOBALS['pfb_test_after_start']) ? (\$GLOBALS['pfb_test_after_start'])() : NULL;\n"
 			. 'echo json_encode([\'final\' => $final, \'log\' => (string) @file_get_contents('
 			. var_export($log, TRUE) . '), \'errlog\' => (string) @file_get_contents('
 			. var_export($errlog, TRUE) . '), \'mount_include_log\' => (string) @file_get_contents('
-			. '$GLOBALS[\'pfb_test_unbound_include_log\'] ?? \'\')]), "\\n";' . "\n");
+			. '$GLOBALS[\'pfb_test_unbound_include_log\'] ?? \'\'), \'after\' => $after]), "\\n";' . "\n");
 
 		$output = [];
 		$status = 0;
@@ -579,6 +584,175 @@ final class UnboundRestartSeamTest extends TestCase
 			'the direct TERM-ignoring launcher must be absent after kill grace');
 		$this->assertFalse($helperAlive,
 			'RED issue #2882: expiry must kill the launcher process group, not orphan its TERM-ignoring helper');
+	}
+
+	/**
+	 * issue #3663: runner prelude that loads pfb_stop_start_unbound() on the house clock fixture
+	 * with a recording posix_kill(): every call is sent for real and logged with the clock's time.
+	 * Sleeps stay real, so the clock follows the real start and supervisor; with $virtualAfterKill
+	 * they turn virtual once a group SIGKILL is sent, so the wait after it is measured on the clock
+	 * alone. When the start returns, the runner reports the calls, the group named in $pgidFile and
+	 * whether that group still exists, then kills what is left of it. $extra runs last.
+	 */
+	private function groupKillPrelude(string $pgidFile, bool $virtualAfterKill, string $extra = ''): string
+	{
+		return 'require_once ' . var_export(__DIR__ . '/support/PfbFlockClockFixture.php', TRUE) . ";\n"
+			. '$pgid_file = ' . var_export($pgidFile, TRUE) . ";\n"
+			. '$virtual_after_kill = ' . var_export($virtualAfterKill, TRUE) . ";\n"
+			. <<<'PHP'
+$GLOBALS['pfb_test_clock'] = $clock = new PfbFlockClockFixture();
+$ns = $clock->loadChain(['pfb_stop_start_unbound']);
+eval(str_replace('@NS@', $ns, <<<'NS'
+namespace @NS@;
+function posix_kill(int $pid, int $sig): bool
+{
+	$sent = \posix_kill($pid, $sig);
+	$GLOBALS['pfb_test_kill_calls'][] = [$pid, $sig, $sent, hrtime(TRUE)];
+	return $sent;
+}
+NS));
+$GLOBALS['pfb_test_start_entry'] = "{$ns}\\pfb_stop_start_unbound";
+$clock->setOnSleep(static function () use ($clock, $virtual_after_kill): void {
+	foreach ($GLOBALS['pfb_test_kill_calls'] ?? [] as [$pid, $sig]) {
+		if ($virtual_after_kill && $pid < 0 && $sig === 9) {
+			return;
+		}
+	}
+	$us = (int) end($clock->sleeps);
+	time_nanosleep(intdiv($us, 1000000), ($us % 1000000) * 1000);
+});
+$GLOBALS['pfb_test_after_start'] = static function () use ($pgid_file): array {
+	$pgid = (int) trim((string) @file_get_contents($pgid_file));
+	$alive = $pgid > 0 && posix_kill(-$pgid, 0);
+	if ($alive) {
+		posix_kill(-$pgid, 9);
+	}
+	return ['pgid' => $pgid, 'group_alive' => $alive, 'grace' => PFB_HOOK_KILL_GRACE,
+		'kill_calls' => $GLOBALS['pfb_test_kill_calls'] ?? []];
+};
+
+PHP
+			. $extra;
+	}
+
+	/**
+	 * The recorded kill() calls that follow the last SIGKILL sent to $pgid's group, plus that SIGKILL.
+	 *
+	 * @param list<array{0: int, 1: int, 2: bool, 3: int}> $calls
+	 * @return array{0: array{0: int, 1: int, 2: bool, 3: int}, 1: list<array{0: int, 1: int, 2: bool, 3: int}>}
+	 */
+	private function callsAfterGroupKill(array $calls, int $pgid): array
+	{
+		$kills = array_keys(array_filter($calls,
+			static fn (array $call): bool => $call[0] === -$pgid && $call[1] === 9));
+		$this->assertNotSame([], $kills,
+			'the expiry must reach the group SIGKILL; kill calls: ' . json_encode($calls));
+		$kill = (int) end($kills);
+		return [$calls[$kill], array_slice($calls, $kill + 1)];
+	}
+
+	/** @return array<string, array{bool}> */
+	public static function killedGroupProvider(): array
+	{
+		return [
+			'TERM-ignoring member outlives its reaped supervisor' => [FALSE],
+			'unresponsive supervisor is killed with its group'     => [TRUE],
+		];
+	}
+
+	/**
+	 * Scenario (issue #3663): SIGKILL only queues the signal, so a killed member stays in its
+	 * group until it has exited and been reaped.
+	 *   Given an expired start whose TERM-ignoring member is SIGKILLed with its group,
+	 *     with the supervisor either reaped after TERM or stopped and killed too,
+	 *   When pfb_stop_start_unbound() returns,
+	 *   Then its last kill() after the group SIGKILL found the group gone,
+	 *   And no member of that group exists.
+	 */
+	#[DataProvider('killedGroupProvider')]
+	public function testExpiredStartReturnsOnlyOnceItsKilledGroupIsGone(bool $stopSupervisor): void
+	{
+		$pgidFile = "{$this->dir}/pgid";
+		$script = $this->makeStartScript('group-member.sh',
+			"trap '' TERM\n"
+			. 'printf %s "$PFB_UNBOUND_START_PGID" > "$1"' . "\n"
+			. ($stopSupervisor ? 'kill -STOP "$PFB_UNBOUND_START_PGID"' : ':') . "\n"
+			. 'exec sleep 30');
+
+		$run = $this->runIsolatedStart(escapeshellarg($script) . ' ' . escapeshellarg($pgidFile), 1,
+			prelude: $this->groupKillPrelude($pgidFile, FALSE));
+		$pgid = (int) trim((string) @file_get_contents($pgidFile));
+		if ($pgid > 0 && @posix_kill(-$pgid, 0)) {
+			posix_kill(-$pgid, 9);
+		}
+
+		$this->assertSame(0, $run['status'],
+			'the runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(124, $run['payload']['final']['retval'], 'the row must exercise a real start expiry');
+		$after = $run['payload']['after'];
+		$this->assertSame($pgid, $after['pgid'], 'the runner must report the group the start command ran in');
+		$this->assertGreaterThan(0, $pgid, 'the row must observe the supervised group before evaluating cleanup');
+		[, $afterKill] = $this->callsAfterGroupKill($after['kill_calls'], $pgid);
+		$last = end($afterKill);
+		$this->assertSame([-$pgid, 0, FALSE], $last === FALSE ? NULL : array_slice($last, 0, 3),
+			'pfb_stop_start_unbound() must not return until a kill() after its group SIGKILL has found '
+			. 'the group gone; calls after the KILL: ' . json_encode($afterKill));
+		$this->assertFalse($after['group_alive'], 'no member of the SIGKILLed group may exist when the start returns');
+	}
+
+	/**
+	 * Scenario (issue #3663): the wait after the group SIGKILL is bounded and visible.
+	 *   Given an expired start whose group keeps a member the wait never sees go -- the runner's
+	 *     own child, which it cannot reap while it is inside the call,
+	 *   When pfb_stop_start_unbound() gives up on that member,
+	 *   Then it has waited one full PFB_HOOK_KILL_GRACE on the controlled clock, and no longer,
+	 *   And it names the group in the error log and still returns the expiry.
+	 */
+	public function testGroupOutlastingThePostKillWaitIsLoggedAfterOneFullGrace(): void
+	{
+		$fifo = "{$this->dir}/pgid.fifo";
+		$joined = "{$this->dir}/joined";
+		$this->assertTrue(posix_mkfifo($fifo, 0600), 'the row needs a FIFO to hand the group id to its joiner');
+		$joiner = 'if (!posix_setpgid(0, $pgid = (int) file_get_contents($argv[1]))) { exit(3); } '
+			. 'file_put_contents($argv[2], (string) $pgid); sleep(30);';
+		$extra = '$joiner = proc_open([PHP_BINARY, \'-r\', ' . var_export($joiner, TRUE) . ', \'--\', '
+			. var_export($fifo, TRUE) . ', ' . var_export($joined, TRUE) . "],\n"
+			. "\t[0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], \$pipes);\n"
+			. <<<'PHP'
+$report = $GLOBALS['pfb_test_after_start'];
+$GLOBALS['pfb_test_after_start'] = static function () use ($report, $joiner): array {
+	$after = $report();
+	proc_terminate($joiner, 9);
+	proc_close($joiner);
+	return $after;
+};
+
+PHP;
+
+		$run = $this->runIsolatedStart(
+			'printf %s "$PFB_UNBOUND_START_PGID" > ' . escapeshellarg($fifo) . '; exec sleep 30', 1,
+			prelude: $this->groupKillPrelude($joined, TRUE, $extra));
+
+		$this->assertSame(0, $run['status'],
+			'the runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(124, $run['payload']['final']['retval'], 'the row must exercise a real start expiry');
+		$after = $run['payload']['after'];
+		$pgid = (int) $after['pgid'];
+		$this->assertGreaterThan(0, $pgid, 'the runner child must have joined the supervised group before the expiry');
+		[$kill, $afterKill] = $this->callsAfterGroupKill($after['kill_calls'], $pgid);
+		$last = end($afterKill);
+		$this->assertSame([-$pgid, 0, TRUE], $last === FALSE ? NULL : array_slice($last, 0, 3),
+			'the wait must give up on a group it still finds present; calls after the KILL: ' . json_encode($afterKill));
+		$graceNs = $after['grace'] * 1_000_000_000;
+		$waitedNs = $last[3] - $kill[3];
+		$this->assertGreaterThanOrEqual($graceNs, $waitedNs,
+			'the wait after the group SIGKILL must last one full PFB_HOOK_KILL_GRACE on the clock before it gives up');
+		$this->assertLessThan(2 * $graceNs, $waitedNs,
+			'the wait after the group SIGKILL must be bounded by one grace, not run on into another');
+		$this->assertStringContainsString("Unbound start process group {$pgid} still present",
+			$run['payload']['errlog'], 'a group the wait gives up on must be named in the error log');
 	}
 
 	public function testImmediateNonZeroStartPreservesStatusAndOutput(): void
