@@ -336,6 +336,29 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertContains('IPv6', $GLOBALS['pfb']['dns_listen_vip_conflict']);
 	}
 
+	public function testAutoReceiverRejectsAnUnspecifiedIpv4AddressWithoutDeletingItsVip(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		pfb_dns_listen_vips_apply();
+		$before = config_get_path('virtualip/vip', []);
+		$this->assertNotSame([], $before, 'the owned IPv4 listener VIP exists before the bad sync');
+		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));
+		PfbConfig::write('gen/pfb_dns_listen_auto4', '0.0.0.0');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame($before, config_get_path('virtualip/vip', []));
+		$this->assertContains('IPv4', $GLOBALS['pfb']['dns_listen_vip_conflict']);
+	}
+
+	public function testAutoReceiverDoesNotCreateAnUnspecifiedIpv4Address(): void
+	{
+		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		PfbConfig::write('gen/pfb_dns_listen_auto4', '0.0.0.0');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([], config_get_path('virtualip/vip', []));
+		$this->assertContains('IPv4', $GLOBALS['pfb']['dns_listen_vip_conflict']);
+	}
+
 	public static function rejectedSyncedAddresses(): array
 	{
 		return [
@@ -345,6 +368,9 @@ final class DnsListenVipLifecycleTest extends TestCase
 			'mapped owned' => ['::ffff:192.0.2.53', TRUE],
 			'invalid fresh' => ['not-an-ip', FALSE],
 			'invalid owned' => ['not-an-ip', TRUE],
+			'unspecified fresh' => ['::', FALSE],
+			'unspecified owned' => ['::', TRUE],
+			'unspecified spelling' => ['::0', FALSE],
 		];
 	}
 

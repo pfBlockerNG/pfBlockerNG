@@ -3366,7 +3366,10 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 		$listen_synced_address = NULL;
 		if ($listen && $fam['managed'] && $synced !== '' && ($idx === null || $stale)) {
 			$valid_synced = $fam['family'] === AF_INET ? is_ipaddrv4($synced) : is_ipaddrv6($synced);
-			$listen_synced_address = $valid_synced && !is_linklocal($synced) && pfb_ipv4_from_mapped($synced) === NULL
+			$packed = $valid_synced ? @inet_pton($synced) : FALSE;
+			// 0.0.0.0 and :: bind every interface, so they are not a dedicated listener VIP.
+			$unspecified = $packed !== FALSE && $packed === inet_pton($fam['family'] === AF_INET ? '0.0.0.0' : '::');
+			$listen_synced_address = $valid_synced && !$unspecified && !is_linklocal($synced) && pfb_ipv4_from_mapped($synced) === NULL
 			    ? pfb_pick_free_dnsbl_vip($fam['family'], $interface, $synced, [$synced]) : NULL;
 			// Keep the owned VIP until its replacement is known to be usable.
 			if ($listen_synced_address === NULL) {
