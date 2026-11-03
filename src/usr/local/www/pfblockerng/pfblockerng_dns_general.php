@@ -67,8 +67,8 @@ if ($_POST && isset($_POST['save'])) {
 				PfbConfig::write('gen/pfb_dns_listen_vip4', $pconfig['pfb_dns_listen_vip4'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip4']);
 				PfbConfig::write('gen/pfb_dns_listen_vip6', $pconfig['pfb_dns_listen_vip6'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip6']);
 				PfbConfig::write('gen/pfb_dns_listen_interface', $pconfig['pfb_dns_listen_interface']);
-				pfb_dns_listen_vips_apply();
-				$pfb_written = write_config('[pfBlockerNG] save DNS General settings');
+				// A refused advertisement write re-read config.xml: the page write would hide it behind a success.
+				$pfb_written = pfb_dns_listen_vips_apply() ? write_config('[pfBlockerNG] save DNS General settings') : FALSE;
 			} finally {
 				unlock($pfb_config_lock);
 			}

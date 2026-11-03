@@ -3325,7 +3325,11 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 	foreach ($families as &$fam) {
 		$synced = $receiver ? (string) ($dnsblconfig[$fam['addrkey']] ?? '') : '';
 		$owned_address = (string) ($dnsblconfig[$fam['addrkey']] ?? '');
-		$idx    = pfb_find_marked_vip($vips_config, $fam['marker'], null);
+		// The VIP at the recorded address is ours; an operator's copy of the marker never displaces it. Reuse (not ownership) falls back
+		// to the first marked row when ours moved, so an address edited in place keeps its VIP.
+		$owned_vip = $listen ? (string) ($listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')][0] ?? '') : '';
+		$idx    = ($owned_vip === '' ? null : pfb_find_marked_vip($vips_config, $fam['marker'], $owned_vip))
+		    ?? pfb_find_marked_vip($vips_config, $fam['marker'], null);
 		$selection = (string) ($dnsblconfig[$fam['idkey']] ?? '');
 		if ($listen && $serve && $selection !== 'auto') {
 			$selected = $fam['family'] === AF_INET ? get_configured_vip_ipv4($selection) : get_configured_vip_ipv6($selection);
@@ -3447,6 +3451,8 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 			pfb_logger("\nDNSBL auto-VIP: created {$fam['marker']} at {$address}/{$fam['bits']} on {$interface}", 1);
 		}
 
+		$fam['address'] = $address;
+
 		// Point the stored DNSBL settings id at this VIP.
 		$vip_id = "_vip{$uniqid}";
 		if (!$listen && ($dnsblconfig[$fam['idkey']] ?? '') !== $vip_id) {
@@ -3479,7 +3485,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 			if (!$fam['managed']) {
 				continue;
 			}
-			$idx = pfb_find_marked_vip($vips_config, $fam['marker'], null);
+			$idx = pfb_find_marked_vip($vips_config, $fam['marker'], $fam['address'] ?? null);
 			if ($idx !== null) {
 				$vip = $vips_config[$idx];
 				interface_ipalias_configure($vip);
@@ -3493,7 +3499,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 	}
 }
 
-/** Active listener VIP address => core VIP id. A stale manual id is warned about, never substituted. */
+/** Active listener VIP address => core VIP id. A stale manual id is warned about, never substituted; a receiver advertises only the synced address. */
 function pfb_dns_listen_vips(): array {
 	if (PfbConfig::read('gen/pfb_dns_listen_vip') !== PfbToggle::On) {
 		return [];
@@ -3502,19 +3508,23 @@ function pfb_dns_listen_vips(): array {
 	$vips = config_get_path('virtualip/vip', []);
 	foreach ([4, 6] as $family) {
 		$id = (string) PfbConfig::read("gen/pfb_dns_listen_vip{$family}");
+		// The address in use: a sender's own, a receiver's synced one.
+		$published = (string) PfbConfig::read("gen/pfb_dns_listen_auto{$family}");
 		if ($id === 'auto') {
-			$idx = pfb_find_marked_vip($vips, "pfB_DNS_LISTEN_VIP_v{$family}", NULL);
+			$idx = $published === '' ? NULL : pfb_find_marked_vip($vips, "pfB_DNS_LISTEN_VIP_v{$family}", $published);
 			$id = $idx === NULL ? '' : '_vip' . ($vips[$idx]['uniqid'] ?? '');
 		}
 		if ($id === '' || $id === 'none') {
 			continue;
 		}
 		$address = $family === 4 ? get_configured_vip_ipv4($id) : get_configured_vip_ipv6($id);
-		if ($address === NULL && pfb_sync_receive_state_read($GLOBALS['pfb']['dbdir'])['accepted_digest'] !== NULL) {
-			$synced = (string) PfbConfig::read("gen/pfb_dns_listen_auto{$family}");
-			$idx = pfb_find_marked_vip($vips, "pfB_DNS_LISTEN_VIP_v{$family}", NULL);
-			foreach ($vips as $n => $row) {
-				if ($n === $idx || ($synced !== '' && @inet_pton((string) ($row['subnet'] ?? '')) === @inet_pton($synced))) {
+		$packed = $published === '' ? FALSE : @inet_pton($published);
+		// The sender's local id can resolve to another address here: the VIP that holds the synced address is the one to advertise.
+		if ($packed !== FALSE && ($address === NULL || @inet_pton($address) !== $packed)
+		    && pfb_sync_receive_state_read($GLOBALS['pfb']['dbdir'])['accepted_digest'] !== NULL) {
+			$address = NULL;
+			foreach ($vips as $row) {
+				if (@inet_pton((string) ($row['subnet'] ?? '')) === $packed) {
 					$address = (string) $row['subnet'];
 					$id = '_vip' . $row['uniqid'];
 					break;
@@ -3530,8 +3540,9 @@ function pfb_dns_listen_vips(): array {
 	return $result;
 }
 
-/** Save and policy apply share the VIP lifecycle and append-only DNS-list ownership. */
-function pfb_dns_listen_vips_apply(): void {
+/** Save and policy apply share the VIP lifecycle and append-only DNS-list ownership. @return bool FALSE iff config.xml did not take the advertisement write */
+function pfb_dns_listen_vips_apply(): bool {
+	$before = array_column(config_get_path('virtualip/vip', []), 'subnet');
 	pfb_manage_dnsbl_vip('enabled', TRUE);
 	$vips = pfb_dns_listen_vips();
 	$addresses = [];
@@ -3544,7 +3555,13 @@ function pfb_dns_listen_vips_apply(): void {
 	$next = [];
 	$rows = config_get_path('virtualip/vip', []);
 	foreach ([4, 6] as $family) {
-		$idx = pfb_find_marked_vip($rows, "pfB_DNS_LISTEN_VIP_v{$family}", NULL);
+		$marker = "pfB_DNS_LISTEN_VIP_v{$family}";
+		$kept = (string) ($added["vip{$family}"][0] ?? '');
+		$idx = $kept === '' ? NULL : pfb_find_marked_vip($rows, $marker, $kept);
+		if ($idx === NULL) {
+			// Owned: the recorded address, else the VIP this very call created. Any other marked row is the operator's.
+			$idx = array_key_first(array_filter($rows, static fn ($row): bool => pfb_managed_obj_match($row, $marker) && !in_array($row['subnet'] ?? '', $before, TRUE)));
+		}
 		if ($idx !== NULL) {
 			$next["vip{$family}"] = [(string) $rows[$idx]['subnet']];
 		}
@@ -3604,15 +3621,17 @@ function pfb_dns_listen_vips_apply(): void {
 		$changed = TRUE;
 	}
 	if ($changed) {
-		if (!pfb_dns_config_write_failed(write_config('pfBlockerNG: saving DNS listener advertisements'))) {
-			if ($resolver_changed) {
-				require_once('unbound.inc');
-				services_unbound_configure(TRUE);
-			} elseif ($dhcp_changed) {
-				services_dhcpd_configure();
-			}
+		if (pfb_dns_config_write_failed(write_config('pfBlockerNG: saving DNS listener advertisements'))) {
+			return FALSE;
+		}
+		if ($resolver_changed) {
+			require_once('unbound.inc');
+			services_unbound_configure(TRUE);
+		} elseif ($dhcp_changed) {
+			services_dhcpd_configure();
 		}
 	}
+	return TRUE;
 }
 
 // Validate length of labels (Max of 63 chars)

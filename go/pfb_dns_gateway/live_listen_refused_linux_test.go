@@ -186,6 +186,27 @@ func TestAnAddForAPortThatIsNotTheKindsIsRefused(t *testing.T) {
 	}
 }
 
+// G8: a live add on an IPv6 address takes that kind's IPv6 port: the IPv4 port is refused on ::1, the IPv6 port is served.
+func TestAnIPv6AddUsesTheFamilyPort(t *testing.T) {
+	liveNeedAddr(t, "::1")
+	r := newLiveRig(t, liveV6Ports())
+	v6 := map[string]int{"dot": r.cfg.dotPort6, "doh": r.cfg.dohPort6, "doq": r.cfg.doqPort6}
+	kinds := []string{"dot", "doh", "doq"}
+	// The refusals run first: a served connection closes on the gateway's side after the client has gone, and its
+	// descriptor would count against the next refusal's baseline.
+	for _, kind := range kinds {
+		other := netip.AddrPortFrom(netip.MustParseAddr("::1"), uint16(r.port[kind]))
+		r.refuse(kind+" on ::1 at its IPv4 port", false, func() []livePart {
+			return []livePart{{r.addFrame(kind, other), liveSockets(t, kind, other)}}
+		})
+	}
+	for _, kind := range kinds {
+		own := netip.AddrPortFrom(netip.MustParseAddr("::1"), uint16(v6[kind]))
+		r.add(kind, own)
+		r.ask(kind, own)
+	}
+}
+
 // G8: a TLS kind is served only when the start was given its listen address; plain DNS always is.
 func TestAnAddForATLSKindThatTheStartDidNotServeIsRefused(t *testing.T) {
 	for _, row := range []struct {

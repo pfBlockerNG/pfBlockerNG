@@ -11,6 +11,7 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
   Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
   tokens render selected and survive a save that leaves the lists alone;
 * DNS Reply Logging is on DNS General, separate from pfB-DNS transports;
+* DNS General's Resolver addresses save off with no listener VIP;
 * DDR's three checkboxes resolve by ``DDR``, ``IPv4 DoH on port 443`` and ``IPv6 DoH on port 443``;
   a family's port-443 checkbox is disabled when that family already listens on 443;
 * the status panel is a collapsible section per transport holding a table of Interface | Address | State rows, each
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -240,6 +242,60 @@ def test_dns_reply_logging_lives_on_general_not_proxy_settings(
     _open(page, webui, DNS_PAGE)
     assert page.locator('input[name="pfb_py_reply"]').count() == 0
     assert page.locator('input[name="pfb_dns"]').is_visible()
+
+
+# The Resolver addresses controls on DNS General, as stored after a save with the option off and both VIPs at none.
+RESOLVER_SAVED = {
+    "pfb_dns_listen_vip": "",
+    "pfb_dns_listen_vip4": "",
+    "pfb_dns_listen_vip6": "",
+    "pfb_dns_listen_interface": "lo0",
+}
+
+
+def _listener_vip_rows(vm: helpers.SmokeVM) -> int:
+    """How many virtual IP rows carry a Resolver addresses marker (``pfB_DNS_LISTEN_VIP_v4`` or ``_v6``)."""
+    snippet = (
+        "$n = 0;\n"
+        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+        "  if (strpos($v['descr'] ?? '', 'pfB_DNS_LISTEN_VIP') === 0) { $n++; }\n"
+        "}\n"
+        "echo 'LISTENER_VIPS=' . $n . ';';"
+    )
+    result = helpers.php_eval(vm, snippet)
+    match = re.search(r"LISTENER_VIPS=(\d+);", result.stdout)
+    assert result.returncode == 0 and match, f"counting the listener VIPs failed: {result.stdout!r} {result.stderr!r}"
+    return int(match.group(1))
+
+
+def test_resolver_addresses_off_saves_with_no_listener_vip(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """DNS General: Resolver addresses off, both VIP selects at none and Automatic VIP interface Localhost, then Save.
+
+    The stored option stays off and the save creates no listener VIP. "Create VIP automatically" is never selected:
+    on the shared box it would create a live VIP.
+    """
+    page = browser_page
+    paths = [f"{helpers.CFG_GLOBAL}/{key}" for key in (*RESOLVER_SAVED, "pfb_dns_listen_added")] + [REPLY_CFG]
+    originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
+    vips_before = _listener_vip_rows(smoke_vm)
+    try:
+        _open(page, webui, DNS_GENERAL_PAGE)
+        page.locator('input[name="pfb_dns_listen_vip"]').set_checked(False)
+        page.locator('select[name="pfb_dns_listen_vip4"]').select_option("none")
+        page.locator('select[name="pfb_dns_listen_vip6"]').select_option("none")
+        page.locator('select[name="pfb_dns_listen_interface"]').select_option("lo0")
+
+        _save(page)
+
+        assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
+        stored = {key: helpers.config_get(smoke_vm, f"{helpers.CFG_GLOBAL}/{key}") for key in RESOLVER_SAVED}
+        assert stored == RESOLVER_SAVED, f"the Off save stored {stored}, expected {RESOLVER_SAVED}"
+        assert _listener_vip_rows(smoke_vm) == vips_before, "the Off save created or removed a listener VIP"
+    finally:
+        for path, state in originals.items():
+            helpers.config_restore_state(smoke_vm, path, state)
 
 
 def test_ddr_checkboxes_resolve_by_their_visible_labels_inside_the_ddr_section(

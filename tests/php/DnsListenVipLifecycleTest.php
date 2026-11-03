@@ -153,4 +153,34 @@ final class DnsListenVipLifecycleTest extends TestCase
 		pfb_dns_listen_vips_apply();
 		$this->assertSame($before, config_get_path('virtualip/vip'), 'same-policy replay does not regenerate the VIP');
 	}
+
+	public function testACopiedMarkedVipPlacedFirstIsNotDeletedWhenTheOptionIsTurnedOff(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		pfb_dns_listen_vips_apply();
+		$created = config_get_path('virtualip/vip/0');
+		$this->assertSame('pfB_DNS_LISTEN_VIP_v6', $created['descr']);
+		$copy = ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd12:3456::99', 'subnet_bits' => '128', 'descr' => 'pfB_DNS_LISTEN_VIP_v6', 'uniqid' => 'copy'];
+		config_set_path('virtualip/vip', [$copy, $created]);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$created['subnet']], array_keys(pfb_dns_listen_vips()), 'the copy is not advertised in place of the VIP this feature made');
+		PfbConfig::write('gen/pfb_dns_listen_vip', '');
+		PfbConfig::write('gen/pfb_dns_listen_vip6', '');
+		pfb_dns_listen_vips_apply();
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$copy], config_get_path('virtualip/vip'), 'only the address this feature created is removed, on this apply and every later one');
+	}
+
+	public function testReceiverAdvertisesTheSyncedAddressNotADifferentVipTheSendersIdResolvesTo(): void
+	{
+		$vip = static fn (string $id, string $address): array => ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => $address, 'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => $id];
+		config_set_path('virtualip/vip', [$vip('sender', 'fd34::53'), $vip('local', 'fd12::53')]);
+		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::53']]);
+		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));
+		PfbConfig::write('gen/pfb_dns_listen_vip6', '_vipsender');
+		PfbConfig::write('gen/pfb_dns_listen_auto6', 'fd12::53');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['fd12::53' => '_viplocal'], pfb_dns_listen_vips());
+		$this->assertSame(['2001:db8::53', 'fd12::53'], config_get_path('dhcpdv6/lan/dnsserver'));
+	}
 }

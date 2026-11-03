@@ -129,4 +129,15 @@ final class DnsSettingsSaveRaceTest extends TestCase
 		$this->assertFalse($result['pendingMarked'], 'a failed save marks no pending change');
 		$this->assertTrue($result['returned'], 'a failed save renders its errors instead of exiting through a redirect');
 	}
+
+	public function testAFailedListenerAdvertisementWriteIsAnInputErrorEvenWhenTheGeneralPageWriteSucceeds(): void
+	{
+		$result = $this->runScenario('advert_write_fails', TRUE);
+
+		$this->assertContains('pfBlockerNG: saving DNS listener advertisements', $result['writes'], 'the advertisement write was attempted');
+		$this->assertNotSame([], $result['inputErrors'], 'the operator is told the save failed');
+		$this->assertTrue($result['returned'], 'the page renders its error instead of redirecting');
+		$this->assertFalse($result['pendingMarked'], 'a failed save marks no pending change');
+		$this->assertSame(0, $result['unboundCalls'], 'Unbound is not regenerated for a save that failed');
+	}
 }

@@ -1782,7 +1782,7 @@
     },
     "pfb_dns_listen_vips_apply": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": []
     },
     "pfb_dns_proxy_acl_networks": {

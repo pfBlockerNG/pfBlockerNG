@@ -10,9 +10,11 @@ declare(strict_types=1);
  *
  * Scenarios: `interleave` (an apply's Resolver move lands on disk after this request started), `lock_taken` (another
  * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written),
- * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1).
+ * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1), `advert_write_fails` (DNS General selects a
+ * listener VIP whose advertisement write_config answers FALSE while every other write succeeds).
  * The result file holds what config.xml would contain afterwards ("disk"), the lock/read/write order, the page's input
- * errors, whether the config lock is still held, the reply-logging preference the form would show ("reply") and whether
+ * errors, whether the config lock is still held, the reply-logging preference the form would show ("reply"), the write_config()
+ * descriptions ("writes"), how often Unbound was regenerated ("unboundCalls") and whether
  * the save marked pending changes ("pendingMarked") or returned to render instead of exiting via redirect ("returned").
  */
 
@@ -36,6 +38,8 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$input_
 		'reply'         => $pconfig['pfb_py_reply'] ?? NULL,
 		'pendingMarked' => is_file($GLOBALS['pfb']['pending_marker'] ?? ''),
 		'returned'      => $returned,
+		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
+		'unboundCalls'  => count($GLOBALS['pfb_test_unbound_configure_calls'] ?? []),
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -132,9 +136,23 @@ if ($scenario === 'interleave') {
 	$GLOBALS['pfb_test_write_config_result'] = FALSE;
 } elseif ($scenario === 'write_failed') {
 	$GLOBALS['pfb_test_write_config_result'] = -1;
+} elseif ($scenario === 'advert_write_fails') {
+	$_POST['pfb_dns_listen_vip'] = 'on';
+	$_POST['pfb_dns_listen_vip6'] = '_vipx';
+	$options_dns_listen_vip6['_vipx'] = 'fd12::53';
+	config_set_path("{$dns}/pfb_dns", '');	// the Resolver's own interfaces are what the listener advertisement edits
+	config_set_path('virtualip/vip', [['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd12::53', 'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => 'x']]);
+	$disk = $GLOBALS['config'];
 }
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
+	if ($scenario === 'advert_write_fails') {
+		$refused = str_contains($description, 'DNS listener advertisements');
+		$GLOBALS['pfb_test_write_config_result'] = !$refused;
+		if ($refused) {
+			return;
+		}
+	}
 	if ($scenario === 'write_throws') {
 		throw new RuntimeException("config.xml could not be written: {$description}");
 	}

@@ -289,6 +289,21 @@ func liveStranger() liveOpt {
 	}
 }
 
+// liveV6Ports gives DoT, DoH and DoQ an IPv6 port of their own, none of them one the rig binds on IPv4: a live add on ::1
+// is then configured on that port and not on the IPv4 one.
+func liveV6Ports() liveOpt {
+	return func(t *testing.T, cfg *config) {
+		taken := []int{cfg.port, cfg.dotPort, cfg.dohPort, cfg.doqPort}
+		for {
+			ports := liveFreePorts(t, 3)
+			if !slices.ContainsFunc(ports, func(p int) bool { return slices.Contains(taken, p) }) {
+				cfg.dotPort6, cfg.dohPort6, cfg.doqPort6 = ports[0], ports[1], ports[2]
+				return
+			}
+		}
+	}
+}
+
 func newLiveRig(t *testing.T, opts ...liveOpt) *liveRig {
 	t.Helper()
 	ports := liveFreePorts(t, 5)
