@@ -183,6 +183,20 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame(['fd12:3456::99'], array_column(config_get_path('virtualip/vip'), 'subnet'), 'a marked VIP this feature did not create is not deleted when the option is turned off');
 	}
 
+	public function testReceiverCreatesTheSyncedAddressWhenTheSendersIdNamesAnotherLocalVip(): void
+	{
+		config_set_path('virtualip/vip', [[
+			'mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd34::53',
+			'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => 'sender',
+		]]);
+		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));
+		PfbConfig::write('gen/pfb_dns_listen_vip6', '_vipsender');
+		PfbConfig::write('gen/pfb_dns_listen_auto6', 'fd12::53');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['fd34::53', 'fd12::53'], array_column(config_get_path('virtualip/vip'), 'subnet'));
+		$this->assertSame(['fd12::53'], array_keys(pfb_dns_listen_vips()));
+	}
+
 	public function testReceiverAdvertisesTheSyncedAddressNotADifferentVipTheSendersIdResolvesTo(): void
 	{
 		$vip = static fn (string $id, string $address): array => ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => $address, 'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => $id];

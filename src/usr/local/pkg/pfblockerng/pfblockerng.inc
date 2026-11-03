@@ -3117,7 +3117,17 @@ function pfb_dnsbl_vip_candidates(int $family): array {
 // candidate (NULL if it is not a candidate string), so a policy receiver follows its sender.
 function pfb_pick_free_dnsbl_vip(int $family, string $interface, ?string $address = NULL, ?iterable $candidates = NULL): ?string {
 
+	$explicit = $candidates === NULL;
 	$candidates ??= pfb_dnsbl_vip_candidates($family);
+	// A sender that already owns a .53 sinkhole still publishes it. A new create does not pick it.
+	if ($explicit && $address !== NULL && !in_array($address, $candidates, TRUE)) {
+		$legacy = $family === AF_INET
+			? ['172.16.53.53', '192.168.53.53', '10.53.53.53']
+			: ($family === AF_INET6 ? ['fd00:53:53:53:53:53:53:53'] : []);
+		if (in_array($address, $legacy, TRUE)) {
+			$candidates = [$address];
+		}
+	}
 
 	// Bare stored addresses (pfb_get_vips() values are display labels), compared as binary so a
 	// differently spelt IPv6 VIP still counts, as pfSense's own duplicate-address check does.
@@ -3338,7 +3348,8 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 				$changed = TRUE;
 			}
 			$valid_synced = $fam['family'] === AF_INET ? is_ipaddrv4($synced) : is_ipaddrv6($synced);
-			$fam['managed'] = $receiver && !in_array($selection, ['', 'none'], TRUE) && $selected === NULL
+			$selected_is_synced = $selected !== NULL && $valid_synced && @inet_pton((string) $selected) === @inet_pton($synced);
+			$fam['managed'] = $receiver && !in_array($selection, ['', 'none'], TRUE) && !$selected_is_synced
 			    && $valid_synced && !is_linklocal($synced) && pfb_ipv4_from_mapped($synced) === NULL;
 			if ($fam['managed']) {
 				foreach ($vips_config as $row) {

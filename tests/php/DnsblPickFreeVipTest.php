@@ -263,6 +263,15 @@ final class DnsblPickFreeVipTest extends TestCase
 			. var_export($address, TRUE) . ', got: ' . var_export($result, TRUE));
 	}
 
+	public function testAPublishedLegacySinkholeIsFreeEvenThoughNewCreatesUseDot1(): void
+	{
+		$this->assertSame('172.16.53.1', pfb_pick_free_dnsbl_vip(AF_INET, 'lan'));
+		$this->assertSame('172.16.53.53', pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '172.16.53.53'));
+		$this->assertSame('fd00:53:53:53:53:53:53:53', pfb_pick_free_dnsbl_vip(AF_INET6, 'lan', 'fd00:53:53:53:53:53:53:53'));
+		$GLOBALS['pfb_test_vip_list'] = ['_viptaken' => '172.16.53.53'];
+		$this->assertNull(pfb_pick_free_dnsbl_vip(AF_INET, 'lan', '172.16.53.53'));
+	}
+
 	// ---------- Scenario G — issue #3565: VIPs in pfSense's own shapes ----------
 
 	public function testV4_FirstCandidateHeldByADescribedVip_ReturnsSecond(): void
