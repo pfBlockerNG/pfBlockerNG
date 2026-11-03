@@ -3645,6 +3645,32 @@ function pfb_dns_listen_vips_apply(): bool {
 	return TRUE;
 }
 
+/** Uninstall removes recorded listener advertisements. It does not create a VIP. */
+function pfb_dns_listen_advertisements_drop(): void {
+	$added = json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE);
+	if (!is_array($added)) {
+		return;
+	}
+	$changed = FALSE;
+	foreach ($added as $path => $addresses) {
+		if (!is_string($path) || !str_contains($path, '/') || !is_array($addresses)) {
+			continue;
+		}
+		$csv = $path === 'unbound/active_interface';
+		$stored = config_get_path($path, $csv ? '' : []);
+		$list = $csv ? pfb_dns_proxy_tokens((string) $stored) : (is_array($stored) ? $stored : []);
+		$next = array_values(array_diff($list, $addresses));
+		if ($next !== array_values($list)) {
+			config_set_path($path, $csv ? implode(',', $next) : $next);
+			$changed = TRUE;
+		}
+	}
+	if ($changed || PfbConfig::read('gen/pfb_dns_listen_added') !== '') {
+		PfbConfig::writeSystem('gen/pfb_dns_listen_added', '');
+		write_config('pfBlockerNG: removing DNS listener advertisements');
+	}
+}
+
 // Validate length of labels (Max of 63 chars)
 function pfb_validate_domain_labels($input) {
 
@@ -25696,6 +25722,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	}
 
 	pfb_deinstall_sweep_managed_objects();
+	pfb_dns_listen_advertisements_drop();
 
 	unlink_if_exists("{$pfb['dnsbl_conf']}");
 	unlink_if_exists("{$pfb['dnsbl_cert']}");

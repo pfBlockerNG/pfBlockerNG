@@ -197,6 +197,32 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame(['fd12::53'], array_keys(pfb_dns_listen_vips()));
 	}
 
+	public function testUninstallDropsRecordedAdvertisementsAfterTheVipSweep(): void
+	{
+		config_set_path('dhcpdv6/lan/dnsserver', ['2001:db8::53', 'fd12::53']);
+		config_set_path('unbound/active_interface', 'lo0,fd12::53');
+		PfbConfig::write('gen/pfb_dns_listen_added', json_encode([
+			'vip6' => ['fd12::53'],
+			'dhcpdv6/lan/dnsserver' => ['fd12::53'],
+			'unbound/active_interface' => ['fd12::53'],
+		]));
+		config_set_path('virtualip/vip', [[
+			'mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd12::53',
+			'subnet_bits' => '128', 'descr' => 'pfB_DNS_LISTEN_VIP_v6', 'uniqid' => 'owned',
+		]]);
+		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$sweep = strpos($source, "pfb_deinstall_sweep_managed_objects();\n");
+		$drop = strpos($source, 'pfb_dns_listen_advertisements_drop();', $sweep === FALSE ? 0 : $sweep);
+		$this->assertNotFalse($sweep);
+		$this->assertNotFalse($drop, 'uninstall drops the recorded advertisements after the VIP sweep');
+		pfb_deinstall_sweep_managed_objects();
+		pfb_dns_listen_advertisements_drop();
+		$this->assertSame(['2001:db8::53'], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertSame('', PfbConfig::read('gen/pfb_dns_listen_added'));
+		$this->assertSame([], config_get_path('virtualip/vip'));
+	}
+
 	public function testReceiverAdvertisesTheSyncedAddressNotADifferentVipTheSendersIdResolvesTo(): void
 	{
 		$vip = static fn (string $id, string $address): array => ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => $address, 'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => $id];
