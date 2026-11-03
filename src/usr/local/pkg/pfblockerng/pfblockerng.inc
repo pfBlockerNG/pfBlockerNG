@@ -3331,6 +3331,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 	$changed     = FALSE;
 	$conflicts   = [];
 	$listen_owned = $listen ? json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE) : [];
+	$listen_owned = is_array($listen_owned) ? $listen_owned : [];
 
 	foreach ($families as &$fam) {
 		$synced = $receiver ? (string) ($dnsblconfig[$fam['addrkey']] ?? '') : '';
@@ -3362,6 +3363,18 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 		}
 		// issue #3540: a marked VIP away from the synced address is replaced, not reused.
 		$stale  = $fam['managed'] && $idx !== null && $synced !== '' && ($vips_config[$idx]['subnet'] ?? '') !== $synced;
+		$listen_synced_address = NULL;
+		if ($listen && $fam['managed'] && $synced !== '' && ($idx === null || $stale)) {
+			$valid_synced = $fam['family'] === AF_INET ? is_ipaddrv4($synced) : is_ipaddrv6($synced);
+			$listen_synced_address = $valid_synced && !is_linklocal($synced) && pfb_ipv4_from_mapped($synced) === NULL
+			    ? pfb_pick_free_dnsbl_vip($fam['family'], $interface, $synced, [$synced]) : NULL;
+			// Keep the owned VIP until its replacement is known to be usable.
+			if ($listen_synced_address === NULL) {
+				$conflicts[] = $fam['label'];
+				pfb_logger("\nDNS listener VIP: synced {$fam['label']} address [ " . substr(htmlspecialchars($synced), 0, 100) . " ] is not free or usable on this node; not created", 1);
+				continue;
+			}
+		}
 
 		if (!$fam['managed'] || $stale) {
 			if ($listen && !$stale && $serve) {
@@ -3435,8 +3448,9 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 				$changed = TRUE;
 			}
 		} else {
-			$address = pfb_pick_free_dnsbl_vip($fam['family'], $interface, $synced !== '' ? $synced : NULL,
-			    $listen ? ($selection === 'auto' ? pfb_dns_listen_vip_candidates($fam['family']) : [$synced]) : NULL);
+			$address = $listen && $synced !== '' ? $listen_synced_address
+			    : pfb_pick_free_dnsbl_vip($fam['family'], $interface, $synced !== '' ? $synced : NULL,
+				$listen ? pfb_dns_listen_vip_candidates($fam['family']) : NULL);
 			if ($address === null) {
 				if ($synced !== '') {
 					// issue #3540: the synced address is taken here -> no VIP; reported as a Sync finding.
@@ -3458,6 +3472,10 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 				'descr'       => $fam['marker'],
 				'uniqid'      => $uniqid,
 			];
+			if ($listen) {
+				$listen_owned['vip' . ($fam['family'] === AF_INET ? '4' : '6')] = [$address];
+				$dnsblconfig['pfb_dns_listen_added'] = (string) json_encode($listen_owned);
+			}
 			$changed = TRUE;
 			pfb_logger("\nDNSBL auto-VIP: created {$fam['marker']} at {$address}/{$fam['bits']} on {$interface}", 1);
 		}
@@ -3517,6 +3535,7 @@ function pfb_dns_listen_vips(): array {
 	}
 	$result = [];
 	$vips = config_get_path('virtualip/vip', []);
+	$receiver = pfb_sync_receive_state_read($GLOBALS['pfb']['dbdir'])['accepted_digest'] !== NULL;
 	foreach ([4, 6] as $family) {
 		$id = (string) PfbConfig::read("gen/pfb_dns_listen_vip{$family}");
 		// The address in use: a sender's own, a receiver's synced one.
@@ -3530,9 +3549,11 @@ function pfb_dns_listen_vips(): array {
 		}
 		$address = $family === 4 ? get_configured_vip_ipv4($id) : get_configured_vip_ipv6($id);
 		$packed = $published === '' ? FALSE : @inet_pton($published);
+		if ($receiver && $packed === FALSE) {
+			continue;
+		}
 		// The sender's local id can resolve to another address here: the VIP that holds the synced address is the one to advertise.
-		if ($packed !== FALSE && ($address === NULL || @inet_pton($address) !== $packed)
-		    && pfb_sync_receive_state_read($GLOBALS['pfb']['dbdir'])['accepted_digest'] !== NULL) {
+		if ($receiver && $packed !== FALSE && ($address === NULL || @inet_pton($address) !== $packed)) {
 			$address = NULL;
 			foreach ($vips as $row) {
 				if (@inet_pton((string) ($row['subnet'] ?? '')) === $packed) {
@@ -3653,6 +3674,8 @@ function pfb_dns_listen_advertisements_drop(): void {
 		return;
 	}
 	$changed = FALSE;
+	$resolver_changed = FALSE;
+	$dhcp_changed = FALSE;
 	foreach ($added as $path => $addresses) {
 		if (!is_string($path) || !str_contains($path, '/') || !is_array($addresses)) {
 			continue;
@@ -3664,11 +3687,22 @@ function pfb_dns_listen_advertisements_drop(): void {
 		if ($next !== array_values($list)) {
 			config_set_path($path, $csv ? implode(',', $next) : $next);
 			$changed = TRUE;
+			$resolver_changed = $resolver_changed || $csv;
+			$dhcp_changed = $dhcp_changed || str_starts_with($path, 'dhcpd/') || str_starts_with($path, 'dhcpdv6/');
 		}
 	}
 	if ($changed || PfbConfig::read('gen/pfb_dns_listen_added') !== '') {
 		PfbConfig::writeSystem('gen/pfb_dns_listen_added', '');
-		write_config('pfBlockerNG: removing DNS listener advertisements');
+		if (pfb_dns_config_write_failed(write_config('pfBlockerNG: removing DNS listener advertisements'))) {
+			return;
+		}
+		if ($resolver_changed) {
+			require_once('unbound.inc');
+			services_unbound_configure(TRUE);
+		}
+		if ($dhcp_changed) {
+			services_dhcpd_configure();
+		}
 	}
 }
 
@@ -4368,20 +4402,18 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, ?array &$skipped =
 			$skipped[] = ['interface' => $interface, 'why' => $known ? 'no address' : 'unknown'];
 		}
 	}
-	if ($listen !== []) {
-		foreach (pfb_dns_listen_vips() as $vip => $id) {
-			$v6 = str_contains($vip, ':');
-			$replaced = FALSE;
-			foreach ($listen as &$address) {
-				if (str_contains($address, ':') === $v6) {
-					$address = $vip;
-					$replaced = TRUE;
-				}
+	foreach (pfb_dns_listen_vips() as $vip => $id) {
+		$v6 = str_contains($vip, ':');
+		$replaced = FALSE;
+		foreach ($listen as &$address) {
+			if (str_contains($address, ':') === $v6) {
+				$address = $vip;
+				$replaced = TRUE;
 			}
-			unset($address);
-			if (!$replaced) {
-				$listen[$vip] = $vip;
-			}
+		}
+		unset($address);
+		if (!$replaced) {
+			$listen[$vip] = $vip;
 		}
 	}
 	return array_values(array_unique($listen));
