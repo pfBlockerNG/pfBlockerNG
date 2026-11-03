@@ -269,8 +269,16 @@ UNSEEDED_LOCAL_KEYS = {
         h.dns_config_path(
             f"pfb_dns_{leaf}"
         ): "read only while pfB-DNS is on, which this harness leaves off: a seeded value changes nothing"
-        for leaf in ("ddr", "ddr_doh_443")
+        for leaf in ("ddr", "ddr_doh_443", "ddr_doh_443_6")
     },
+    **{
+        h.dns_config_path(
+            f"pfb_dns_{leaf}"
+        ): "read only while its DoT/DoH/DoQ toggle is on, which this harness leaves off: a seeded value changes nothing"
+        for leaf in ("dot_port6", "doh_port6", "doq_port6")
+    },
+    f"{GEN}/pfb_dns_listen_interface": "must be the interface of this node's resolver VIP: a seeded foreign interface fails validation",
+    f"{GEN}/pfb_dns_listen_added": "the apply pass's own record of addresses it inserted; a seeded value would make a later disable remove a server the pass did not add",
 }
 
 

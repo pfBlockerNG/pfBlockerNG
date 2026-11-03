@@ -29,18 +29,18 @@
     "ZZ_v4.txt": "454debca5afcd37addd0dcca05094625dcde6402510f8fc664cd567893ec7096"
   },
   "continent_pages": {
-    "pfblockerng_Africa.php": "29057a0ad326acb371512c0ab05964064b1ad49e4b462d20bcd3c05bd5167335",
-    "pfblockerng_Antarctica.php": "ae3f35eed222bd248b0c1b07257ab4acf12fc06d116bcba58ee22d35b271142a",
-    "pfblockerng_Asia.php": "1a3127f911fd35592774d60840a8baaf79b27ef04d5737abd15ee68535e4d4a6",
-    "pfblockerng_Europe.php": "d0ebb3f773ccfb63552b83d942ab0433d0efd9f4ca8c27b0520c5ded94e8fcbc",
-    "pfblockerng_North_America.php": "9231b34a3cda39544321ebaba6cacbf81b21c4d2eaa26725a7a682c330ed69ec",
-    "pfblockerng_Oceania.php": "cfde962b23e6d21633eb2f6bbdf806b31ec51d6c6f95709f7180e16d4f489121",
-    "pfblockerng_South_America.php": "2f8e2cd62d8367107981c035507a19c28ee5c0b5d1ec6457134ddb7d8efd449a",
-    "pfblockerng_Proxy_and_Satellite.php": "511e6921476099cbad1a7d7f684565f1cbba63141e905dd5bf8edeb507080976",
-    "pfblockerng_Top_Spammers.php": "9c8e954c34e03aac6005de423360b0941e5b78ce236af3eeff0abf0f7a67f96b"
+    "pfblockerng_Africa.php": "c37395da21bde81da266579eba0070dfe74c31e124bc80bb45110c3037277a22",
+    "pfblockerng_Antarctica.php": "1212b995b88be802e07f951e0fd506ed8f1406d342c6700e46a6caa7374ac95a",
+    "pfblockerng_Asia.php": "c772530742ad3d9f2205177511d1657121fb2bdc44f0e12cf5fd56e2bf6222b9",
+    "pfblockerng_Europe.php": "591e69db9e714fab16bb983746d6396c29a20e4fef67356757ee451258a06055",
+    "pfblockerng_North_America.php": "4053c1e442e345beec31e4590454052cfdebae3660686a7d8748a2e89034d38d",
+    "pfblockerng_Oceania.php": "ec47b1e5b6d63b0a82200a3abb0453ee1de4b827cd029b1512848d2c477bee80",
+    "pfblockerng_South_America.php": "64696eb4e4af5f1587d16658974dd8bb7b9f89317d89ebc0ab34666d605fbc82",
+    "pfblockerng_Proxy_and_Satellite.php": "38b046d7eed3e3601fea81f396b8a65fafc683a156c344126e189305e22ccff9",
+    "pfblockerng_Top_Spammers.php": "05bf2fe299ee67bc375a0967acd9b77594e6d07b1c93a24d1d918707bf6492b0"
   },
-  "reputation_empty": "3223be966d96e204352d01f0ed583e723af92b2f35ad370dc18e164a5a189ca4",
-  "reputation_populated": "5a072dba3ccc86d3d6490539bd71327e8d689e8349c0b26569528c64b73bda2f",
+  "reputation_empty": "6c3a3f1e14c39b28e4e076e01f6c86e0ddaa49f66d712e161a1cd16ada825128",
+  "reputation_populated": "ab7f5fe9d72e7190471cab6fe7f6880935576c72fbc31c01e67fe0790ae89590",
   "continent_pages_amended": "issue #1845: the generated pages now carry the pfBlockerNG.js cache-buster; the pre-move template is otherwise unchanged",
   "reputation_hashes_amended": "issue #1896: the Reputation section's config_get_path/config_set_path calls now route through PfbConfig::readSection()/writeSection(); the pre-move template is otherwise unchanged",
   "continent_behavior_amended": "issue #2103: generated pages route anchor layout and MaxMind documentation rendering through behavior-tested helpers",
@@ -49,5 +49,6 @@
   "continent_noopener_amended": "issue #3085: generated country pages now carry rel=noopener noreferrer on the Custom Port alias help link; the pre-move template is otherwise unchanged",
   "continent_apply_wording_amended": "issue #3237: generated country pages point apply guidance at the scheduled update and the Update tab's 'Run Now' instead of the retired Force Update|Reload footer; the pre-move template is otherwise unchanged",
   "navigation_amended": "issue #3593 (navigation source 11fe12538; pre-navigation baseline 48fe66aa1): each generated continent and Reputation page replaces its DNSBL and pfB-DNS tab rows with one DNS row linking pfblockerng_dns.php, using the whitespace of the shipped source; continent_pages and reputation_empty/reputation_populated are refreshed, country_files are unchanged, and the pre-move template is otherwise unchanged",
-  "help_copy_amended": "issue #2918: generated continent and Reputation help text and markup are revised (apply timing, List Action definitions, Reputation lists, literal wrapping); continent_pages and reputation_empty/reputation_populated are refreshed, country_files are unchanged"
+  "help_copy_amended": "issue #2918: generated continent and Reputation help text and markup are revised (apply timing, List Action definitions, Reputation lists, literal wrapping); continent_pages and reputation_empty/reputation_populated are refreshed, country_files are unchanged",
+  "dns_general_nav_amended": "issue #3688: the generated DNS top tab opens pfblockerng_dns_general.php; continent_pages are refreshed"
 }

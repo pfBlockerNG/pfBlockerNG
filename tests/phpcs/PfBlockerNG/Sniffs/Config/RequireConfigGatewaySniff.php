@@ -297,6 +297,18 @@ class RequireConfigGatewaySniff implements Sniff
 		// issue #3583: pfB-DNS's DDR toggle and its DoH on port 443 toggle
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_ddr',
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_ddr_doh_443',
+		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot_port6',
+		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh_port6',
+		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq_port6',
+		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_ddr_doh_443_6',
+		// issue #3688: resolver VIP fields on package general config
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip',
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip4',
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip6',
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_auto4',
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_auto6',
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_interface',
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_added',
 		// issue #3450: IP-page scalars registered as plain strings
 		'installedpackages/pfblockerngipsettings/config/0/ip_placeholder',
 		'installedpackages/pfblockerngipsettings/config/0/maxmind_locale',
