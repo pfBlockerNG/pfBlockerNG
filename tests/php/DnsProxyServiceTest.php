@@ -2288,8 +2288,8 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then --ddr-doh-443 follows --ddr as a flag of its own, with no value
-		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--ddr', 'fw.example.lan', '--ddr-doh-443']), $argv);
-		$this->assertStringContainsString(" --ddr 'fw.example.lan' --ddr-doh-443 --no-module", $this->rcText());
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--ddr', 'fw.example.lan', '--ddr-doh-443', '--ddr-doh-4436']), $argv);
+		$this->assertStringContainsString(" --ddr 'fw.example.lan' --ddr-doh-443 --ddr-doh-4436 --no-module", $this->rcText());
 	}
 
 	/** @return array<string,array{string,string,list<string>}> stored DDR, stored 443 toggle, the DDR flags the script carries while pfB-DNS is on */
@@ -2299,7 +2299,7 @@ final class DnsProxyServiceTest extends TestCase
 			'both Off'                      => ['', '', []],
 			'the 443 toggle alone adds nothing' => ['', 'on', []],
 			'DDR alone'                     => ['on', '', ['--ddr']],
-			'both On'                       => ['on', 'on', ['--ddr', '--ddr-doh-443']],
+			'both On'                       => ['on', 'on', ['--ddr', '--ddr-doh-443', '--ddr-doh-4436']],
 		];
 	}
 

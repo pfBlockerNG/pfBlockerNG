@@ -4519,8 +4519,9 @@ function pfb_dns_proxy_seed_values(): array {
 		}
 	}
 	$shared = PfbConfig::readSection(PFB_SECTIONS['dns_shared']);
-	if (!array_key_exists('pfb_dns_ddr_doh_443_6', $shared)) {
-		$values['pfb_dns_ddr_doh_443_6'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');
+	if (!array_key_exists('pfb_dns_ddr_doh_443_6', $shared)
+	    && PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443') === PfbToggle::On) {
+		$values['pfb_dns_ddr_doh_443_6'] = PfbToggle::On;
 	}
 	return $values;
 }
