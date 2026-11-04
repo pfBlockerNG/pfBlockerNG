@@ -2001,8 +2001,10 @@ Live-VM smoke: `tests/smoke/test_smoke_managed_objects.py` (marker `smoke`).
 
 ## Optional NAT DNS-redirection (ADR-36)
 
-When enabled, pfBlockerNG creates and maintains a pair of NAT port-forward (rdr) rules per
-selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`) and one for IPv6 (`inet6`)
+When enabled, pfBlockerNG creates and maintains a pair of NAT port-forward (rdr) rules for each
+interface the administrator selects (DNSBL > DNS Bypass Prevention: Enable plus the interface
+list, empty by default; nothing is inferred from the Resolver, DHCP or listener settings) — one
+for IPv4 (`inet`, target `127.0.0.1:53`) and one for IPv6 (`inet6`)
 — that redirect all outbound port-53 DNS traffic to the firewall's own resolver. The IPv6 rule
 cannot target `::1`: FreeBSD drops a packet redirected to `::1` that arrived on a non-loopback
 interface (#3400), but delivers one to an address on `lo0`. `pfb_dns_redirect_target6()` therefore
@@ -2012,10 +2014,10 @@ assigned interfaces `wan`/`lan`/`optN` only) when that address is served, otherw
 IPv6 Resolver VIP, otherwise what it was before (`<iface>ip` on an assigned interface, `::1` on
 `enc0`/`openvpn`/`l2tp`, so IPv6 DNS there fails closed). "Served" is pfB-DNS's plain DNS listen
 set while pfB-DNS fronts the Resolver, and the Resolver's own interfaces (an unset list or `all`
-is every address) otherwise. IPv4 stays `127.0.0.1`. While pfB-DNS fronts the Resolver, its
-access control (`pfb_dns_proxy_acl_networks()`) also grants the IPv4 and IPv6 networks of the
-redirect interfaces, whichever listener list names them, or a redirected client would be REFUSED;
-with pfB-DNS off, pfSense derives the Resolver's access control itself. The builder also returns
+is every address) otherwise. IPv4 stays `127.0.0.1`. A redirected client keeps its source address, so
+the DNS service's own access control decides whether it is answered: DNS Redirect changes neither
+the Resolver's access control nor its listening interfaces, and a client its listeners do not admit is
+refused (#3694). The builder also returns
 `::1` for WireGuard, but pfSense has no `wireguard` entry in its filter
 interface list and skips the rule; that sibling case is tracked in #3403.
 `pfb_dns_redirect_rule()` builds each rule. The firewall itself is structurally exempt: every

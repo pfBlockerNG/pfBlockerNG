@@ -948,16 +948,6 @@ if (!function_exists('gen_subnetv6')) {
 	}
 }
 
-if (!function_exists('gen_subnet')) {
-	// pfSense util.inc: the BARE IPv4 network address of $ipaddr/$bits ("" for a non-IPv4 address or a prefix outside 0-32).
-	function gen_subnet($ipaddr, $bits) {
-		if (!is_ipaddrv4($ipaddr) || !is_numeric($bits) || $bits < 0 || $bits > 32) {
-			return '';
-		}
-		return long2ip(ip2long($ipaddr) & (((1 << (int) $bits) - 1) << (32 - (int) $bits)));
-	}
-}
-
 if (!function_exists('subnetv4_expand')) {
 	// pfSense util.inc: expand a CIDR subnet (e.g. '192.168.1.0/24') to a flat array
 	// of all host IP strings in that range. Faithful but capped at 65536 hosts so an
