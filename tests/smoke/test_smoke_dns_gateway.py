@@ -2355,7 +2355,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             source = "-6 -I::1" if ":" in address else "-I127.0.0.1"
             for kind, expected_address in zip(("A", "AAAA"), vips, strict=True):
                 result = vm.ssh(
-                    f"drill -b1232 {source} {shlex.quote(DDR_DNS_NAME)} @{shlex.quote(address)} {kind} -p {port} 2>&1"
+                    f"drill -b1232 {source} -p {port} {shlex.quote(DDR_DNS_NAME)} @{shlex.quote(address)} {kind} 2>&1"
                 )
                 reply = _parse_reply(result.stdout)
                 answers = [ipaddress.ip_address(r.rdata) for r in reply.answer if r.rtype == kind]
@@ -2368,6 +2368,19 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
                 answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
                 _say(f"VIP-only managed {transport} at {vips[0]}:{port}\n{raw}")
                 assert h.is_vip(answer), f"VIP-only {transport} failed: {answer}\n{raw}"
+        status = gui.get("/pfblockerng/pfblockerng_dns.php?refresh_ddr=1")
+        assert status.status_code == 200, status.text
+        observations = [
+            _parse_reply(ET.fromstring(block).text or "")
+            for block in re.findall(r'<pre class="pfb-dns-ddr-stdout"[^>]*>.*?</pre>', status.text, re.DOTALL)
+        ]
+        for observation in observations:
+            _say(f"VIP-only DDR status observation:\n{observation.raw}")
+        for vip in vips:
+            expected = _expected_svcb(DDR_TARGET, doh_443=True, address=vip)
+            assert any(reply.rcode == "NOERROR" and _svcb_records(reply) == expected for reply in observations), (
+                f"DDR status did not observe managed VIP {vip}: {[_svcb_records(reply) for reply in observations]}"
+            )
     finally:
         gui.post(
             DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none", "pfb_dns_listen_vip6": "none"}

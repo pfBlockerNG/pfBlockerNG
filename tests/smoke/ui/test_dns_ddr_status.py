@@ -78,12 +78,19 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
     bound = json.loads(match.group())["listening"]["udp+tcp"]
     assert bound, listeners.stdout
     expected = {}
+    loopback = gw.vm.ssh("/sbin/ifconfig", "lo0")
+    assert loopback.returncode == 0, loopback.stderr
+    loopback6 = {
+        str(ipaddress.ip_address(address.split("%", 1)[0]))
+        for address in re.findall(r"\binet6\s+(\S+)", loopback.stdout)
+    }
     for listener in bound:
         host, _, port = listener.rpartition(":")
         host = str(ipaddress.ip_address(host.strip("[]")))
         assert 1 <= int(port) <= 65535, listener
-        family = ["-6", "-I::1"] if ":" in host else ["-I127.0.0.1"]
-        result = gw.vm.ssh(
+        ipv6 = ":" in host
+        source = ("::1" if host in loopback6 else None) if ipv6 else "127.0.0.1"
+        arguments = [
             "/usr/bin/timeout",
             "-s",
             "TERM",
@@ -91,15 +98,19 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
             "3",
             "/usr/bin/drill",
             "-b1232",
-            *family,
+            *(["-6"] if ipv6 else []),
+            *(["-I", source] if source is not None else []),
+            "-p",
+            port,
             "_dns.resolver.arpa.",
             f"@{host}",
             "SVCB",
-            "-p",
-            port,
-        )
+        ]
+        result = gw.vm.ssh(*arguments)
+        print(f"DDR reference {listener}, source={source!r}: {arguments!r}\n{result.stdout}{result.stderr}")
         assert result.returncode == 0, f"{listener}: {result.stdout}\n{result.stderr}"
         assert "rcode: NOERROR" in result.stdout, result.stdout
+        assert re.search(r"^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$", result.stdout, re.MULTILINE), result.stdout
         expected[listener] = _records(result.stdout)
 
     refreshed = webui.get(DNS_PAGE + "?refresh_ddr=1&host=203.0.113.99&port=9")
@@ -116,6 +127,8 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
         stdout = cells[3].find(".//pre[@class='pfb-dns-ddr-stdout']")
         assert stdout is not None, f"{address}: query output absent: {ET.tostring(row, encoding='unicode')}"
         observations[address] = _records(stdout.text or "")
+        assert re.search(r"^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$", stdout.text or "", re.MULTILINE), stdout.text
+        print(f"DDR observed {address}:\n{stdout.text}")
         state = cells[3].find("strong")
         assert state is not None and state.text == (
             "Advertised" if expected[address] else "NOERROR, no advertisements"

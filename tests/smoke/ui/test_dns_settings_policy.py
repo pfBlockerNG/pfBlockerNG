@@ -92,7 +92,7 @@ def test_dns_policy_render_excludes_owned_vips_not_manual_or_unavailable(
     rendered = evaluate_render(DNS_PAGE, response.status_code, response.text, ("pfB-DNS Settings",))
     assert rendered.ok, rendered.detail
     for key in LISTS:
-        values = _option_values(_select_block(response.text, key))
+        values = _option_values(_select_block(response.text, key + "[]"))
         assert {"all", "lo0", "opt3699gone", "_vippfb3699manual"} <= values, (key, values)
         assert not values.intersection(f"_vippfb3699{suffix}" for suffix in ("sink4", "sink6", "dns4", "dns6")), (
             key,
