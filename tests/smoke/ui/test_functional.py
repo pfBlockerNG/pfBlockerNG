@@ -1939,7 +1939,9 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
 
         accepted = webui.post(DNS_PAGE, posted, timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(accepted.text), "the Save lost its authenticated session"
-        assert stored() == expected, "a valid DoH/DoQ configuration must persist, canonically"
+        assert stored() == expected, (
+            f"a valid DoH/DoQ configuration must persist, canonically: {_input_errors_text(accepted.text)}"
+        )
         assert helpers.config_get(vm, CERT_CFG), (
             "the save must store the certificate the form offered (the box needs one)"
         )
