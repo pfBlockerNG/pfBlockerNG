@@ -30,6 +30,7 @@ pfb_global();
 $pconfig = array();
 $pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_dns_listen_vip'] = PfbConfig::read('gen/pfb_dns_listen_vip');
+$pconfig['pfb_dns_listen_vip_only'] = PfbConfig::read('gen/pfb_dns_listen_vip_only');
 $pconfig['pfb_dns_listen_vip4'] = PfbConfig::read('gen/pfb_dns_listen_vip4') ?: 'none';
 $pconfig['pfb_dns_listen_vip6'] = PfbConfig::read('gen/pfb_dns_listen_vip6') ?: 'none';
 $pconfig['pfb_dns_listen_interface'] = PfbConfig::read('gen/pfb_dns_listen_interface');
@@ -49,6 +50,7 @@ if ($_POST && isset($_POST['save'])) {
 	}
 	$pconfig['pfb_py_reply'] = pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 	$pconfig['pfb_dns_listen_vip'] = pfb_filter($_POST['pfb_dns_listen_vip'] ?? '', PFB_FILTER_ON_OFF, 'gen') ?: '';
+	$pconfig['pfb_dns_listen_vip_only'] = pfb_filter($_POST['pfb_dns_listen_vip_only'] ?? '', PFB_FILTER_ON_OFF, 'gen') ?: '';
 	$pconfig['pfb_dns_listen_interface'] = pfb_filter($pconfig['pfb_dns_listen_interface'], PFB_FILTER_WORD, 'gen') ?: 'lo0';
 	foreach (array('pfb_dns_listen_vip4' => $options_dns_listen_vip4, 'pfb_dns_listen_vip6' => $options_dns_listen_vip6,
 		'pfb_dns_listen_interface' => $options_dns_listen_interface) as $field => $options) {
@@ -62,13 +64,18 @@ if ($_POST && isset($_POST['save'])) {
 			$input_errors[] = gettext('DNS General: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.');
 		} else {
 			try {
-				PfbConfig::write('dnsbl/pfb_py_reply', $pconfig['pfb_py_reply']);
-				PfbConfig::write('gen/pfb_dns_listen_vip', $pconfig['pfb_dns_listen_vip']);
-				PfbConfig::write('gen/pfb_dns_listen_vip4', $pconfig['pfb_dns_listen_vip4'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip4']);
-				PfbConfig::write('gen/pfb_dns_listen_vip6', $pconfig['pfb_dns_listen_vip6'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip6']);
-				PfbConfig::write('gen/pfb_dns_listen_interface', $pconfig['pfb_dns_listen_interface']);
-				// A refused advertisement write re-read config.xml: the page write would hide it behind a success.
-				$pfb_written = pfb_dns_listen_vips_apply() ? write_config('[pfBlockerNG] save DNS General settings') : FALSE;
+				$input_errors = pfb_validate_dns_listen_vip_only_post($pconfig);
+				$pfb_written = FALSE;
+				if (!$input_errors) {
+					PfbConfig::write('dnsbl/pfb_py_reply', $pconfig['pfb_py_reply']);
+					PfbConfig::write('gen/pfb_dns_listen_vip', $pconfig['pfb_dns_listen_vip']);
+					PfbConfig::write('gen/pfb_dns_listen_vip_only', $pconfig['pfb_dns_listen_vip_only']);
+					PfbConfig::write('gen/pfb_dns_listen_vip4', $pconfig['pfb_dns_listen_vip4'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip4']);
+					PfbConfig::write('gen/pfb_dns_listen_vip6', $pconfig['pfb_dns_listen_vip6'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip6']);
+					PfbConfig::write('gen/pfb_dns_listen_interface', $pconfig['pfb_dns_listen_interface']);
+					// A refused advertisement write re-read config.xml: the page write would hide it behind a success.
+					$pfb_written = pfb_dns_listen_vips_apply() ? write_config('[pfBlockerNG] save DNS General settings') : FALSE;
+				}
 			} finally {
 				unlock($pfb_config_lock);
 			}
@@ -77,7 +84,9 @@ if ($_POST && isset($_POST['save'])) {
 				header('Location: /pfblockerng/pfblockerng_dns_general.php');
 				exit;
 			}
-			$input_errors[] = gettext('DNS General: the configuration could not be written, so these settings were not saved. Save again in a moment.');
+			if (!$input_errors) {
+				$input_errors[] = gettext('DNS General: the configuration could not be written, so these settings were not saved. Save again in a moment.');
+			}
 		}
 	}
 }
@@ -167,6 +176,16 @@ $section->addInput(new Form_Select(
 	$pconfig['pfb_dns_listen_interface'],
 	$options_dns_listen_interface
 ))->setHelp(gettext('Used only for a family set to Create VIP automatically. Default: <strong>Localhost</strong>.'));
+$section->addInput(new Form_Checkbox(
+	'pfb_dns_listen_vip_only',
+	gettext('VIP-only mode'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dns_listen_vip_only'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setAttribute('aria-label', gettext('VIP-only mode'))
+  ->setHelp(gettext('Opt in to serving pfB-DNS only on the active selected Resolver VIPs; internal loopback remains available and this DNS Name always answers with the VIP pair, including on loopback. Requires pfB-DNS, Resolver addresses and at least one selected VIP family. Missing VIPs never fall back to interface addresses. Standalone Unbound is not restricted.')
+		. '<div class="infoblock">' . gettext('This removes ordinary interface DNS endpoints. Clients using old DHCPv4/DHCPv6 leases or RA-learned interface addresses may lose PLAIN DNS and DDR until renewal, RA refresh or manual reconnection. Static DNS clients need manual reconfiguration; static DNS can support DDR. Optional port 53 NAT prevents DNS escape and may redirect external DNS queries, but excludes firewall addresses: it is not a transition guarantee, and old firewall/interface DNS addresses still need reconfiguration. NAT does not guarantee DDR or TLS certificate acceptance and does not redirect encrypted DNS. No DHCP leases are deleted. Resolve administrator-selected servers or unknown interface addresses in configured DHCP/RA DNS lists, including dormant configurations, deliberately before enabling this mode.')
+		. '<br />' . gettext('Default: <strong>Disabled</strong>') . '</div>');
 $form->add($section);
 print ($form);
 include('foot.inc');

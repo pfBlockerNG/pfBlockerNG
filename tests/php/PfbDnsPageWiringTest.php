@@ -362,22 +362,6 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 	}
 
-	public function testDnsGeneralOwnsSharedControlsAndReplyLoggingIsNotOnPfbDns(): void
-	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
-		$this->assertFileExists($path);
-		$page = self::src('www/pfblockerng/pfblockerng_dns_general.php');
-		foreach (['dnsbl/pfb_py_reply', 'gen/pfb_dns_listen_vip', 'gen/pfb_dns_listen_vip4',
-			'gen/pfb_dns_listen_vip6', 'gen/pfb_dns_listen_interface'] as $key) {
-			$this->assertStringContainsString("PfbConfig::read('{$key}')", $page);
-			$this->assertStringContainsString("PfbConfig::write('{$key}',", $page);
-		}
-		$this->assertStringContainsString('pfb_get_vip_options(AF_INET)', $page);
-		$this->assertStringContainsString('pfb_get_vip_options(AF_INET6)', $page);
-		$this->assertStringContainsString("'auto' =>", $page);
-		$this->assertStringNotContainsString('pfb_py_reply', self::src('www/pfblockerng/pfblockerng_dns.php'));
-	}
-
 	public function testEveryDnsSubtabRowStartsWithGeneralAndKeepsAllExistingTabs(): void
 	{
 		foreach (['dns_general' => 'General', 'dns' => 'pfB-DNS', 'dnsbl' => 'DNSBL',

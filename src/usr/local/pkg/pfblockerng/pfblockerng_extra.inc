@@ -887,7 +887,7 @@ const PFB_DNS_SHARED_FIELDS = [
 
 // Listener policy uses the existing policy-settings section, not the node-local Resolver snapshot.
 const PFB_DNS_POLICY_FIELDS = [
-	'pfb_dns_listen_vip', 'pfb_dns_listen_vip4', 'pfb_dns_listen_vip6',
+	'pfb_dns_listen_vip', 'pfb_dns_listen_vip_only', 'pfb_dns_listen_vip4', 'pfb_dns_listen_vip6',
 	'pfb_dns_listen_auto4', 'pfb_dns_listen_auto6',
 ];
 
@@ -2554,7 +2554,7 @@ function pfb_cfg_registry(): array
 	];
 
 	foreach ([...PFB_DNS_POLICY_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6'] as $key) {
-		$toggle = ($key === 'pfb_dns_listen_vip');
+		$toggle = in_array($key, ['pfb_dns_listen_vip', 'pfb_dns_listen_vip_only'], TRUE);
 		$policy = in_array($key, PFB_DNS_POLICY_FIELDS, TRUE);
 		$registry[($policy ? 'gen/' : 'dns_shared/') . $key] = [
 			'default' => '',
