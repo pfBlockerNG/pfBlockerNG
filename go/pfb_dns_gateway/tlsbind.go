@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"net/netip"
+	"slices"
 )
 
 // tlsListeners are the DoT, DoH and DoQ sockets, bound while the gateway is still root; serving starts later.
@@ -39,13 +40,27 @@ func (c config) port443() int {
 	return ddrDoHPort
 }
 
+func (c config) port53() int {
+	if c.plain53Port != 0 {
+		return c.plain53Port
+	}
+	return 53
+}
+
+func (c config) port853() int {
+	if c.tls853Port != 0 {
+		return c.tls853Port
+	}
+	return 853
+}
+
 // bindTLS binds every requested TLS transport. The certificate file is read here, as root; when it is unusable the reason
 // is logged once and the store starts empty: the listeners are bound, handshakes fail, and the first certificate pushed on
 // the control socket (bound by start() in every mode) is served with no restart (plain DNS is unaffected either way: a
 // broken certificate must not take :53 down). An address that cannot be bound is logged, kept in refused and skipped.
 // The file is not looked at unless a transport is requested.
 func bindTLS(cfg config, logf func(format string, args ...any), refused map[string]string) *tlsListeners {
-	if len(cfg.dotListen) == 0 && len(cfg.dohListen) == 0 && len(cfg.doqListen) == 0 {
+	if len(cfg.dotListen)+len(cfg.dotListen853)+len(cfg.dohListen)+len(cfg.dohListen443)+len(cfg.doqListen)+len(cfg.doqListen853) == 0 {
 		return nil
 	}
 	certs, err := newCertStore(cfg.tlsPEM, logf)
@@ -54,37 +69,47 @@ func bindTLS(cfg config, logf func(format string, args ...any), refused map[stri
 		certs = newEmptyCertStore(logf)
 	}
 	t := &tlsListeners{certs: certs}
-	for _, host := range cfg.dotListen {
-		port := cfg.transportPort("dot", host)
+	bindStream := func(kind, host string, port int, listeners *[]*net.TCPListener) {
+		ap, _ := bindAddr(host, port)
+		if slices.ContainsFunc(*listeners, func(ln *net.TCPListener) bool { return ln.Addr().(*net.TCPAddr).AddrPort() == ap }) {
+			return
+		}
 		if ln, err := bindTCP(host, port); err != nil {
 			logf("%v", err)
-			refuse(refused, "dot", host, port, err)
+			refuse(refused, kind, host, port, err)
 		} else {
-			t.dot = append(t.dot, ln)
+			*listeners = append(*listeners, ln)
 		}
 	}
-	bindDoH := func(host string, port int) {
-		if ln, err := bindTCP(host, port); err != nil {
-			logf("%v", err)
-			refuse(refused, "doh", host, port, err)
-		} else {
-			t.doh = append(t.doh, ln)
-		}
+	for _, host := range cfg.dotListen {
+		bindStream("dot", host, cfg.transportPort("dot", host), &t.dot)
+	}
+	for _, host := range cfg.dotListen853 {
+		bindStream("dot", host, cfg.port853(), &t.dot)
 	}
 	for _, host := range cfg.dohListen {
-		bindDoH(host, cfg.transportPort("doh", host))
+		bindStream("doh", host, cfg.transportPort("doh", host), &t.doh)
 	}
-	for _, host := range cfg.dohListen443 { // a refusal here leaves DDR to advertise the configured port: it names listeners that are bound
-		bindDoH(host, cfg.port443())
+	for _, host := range cfg.dohListen443 {
+		bindStream("doh", host, cfg.port443(), &t.doh)
 	}
-	for _, host := range cfg.doqListen {
-		port := cfg.transportPort("doq", host)
+	bindPacket := func(host string, port int) {
+		ap, _ := bindAddr(host, port)
+		if slices.ContainsFunc(t.doq, func(c *net.UDPConn) bool { return c.LocalAddr().(*net.UDPAddr).AddrPort() == ap }) {
+			return
+		}
 		if ln, err := bindUDP(host, port); err != nil {
 			logf("%v", err)
 			refuse(refused, "doq", host, port, err)
 		} else {
 			t.doq = append(t.doq, ln)
 		}
+	}
+	for _, host := range cfg.doqListen {
+		bindPacket(host, cfg.transportPort("doq", host))
+	}
+	for _, host := range cfg.doqListen853 {
+		bindPacket(host, cfg.port853())
 	}
 	return t
 }

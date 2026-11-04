@@ -3682,8 +3682,8 @@ function pfb_dns_listen_foreign_warnings(): array {
 }
 
 /**
- * The active Resolver VIPs the package created itself (the families whose selection is `auto`), in family order. Only these serve DoH on port 443
- * beside the configured DoH port (--doh-listen-443, issue #3694): an address the operator chose may be taken on 443 by something else.
+ * The active Resolver VIPs the package created itself (the families whose selection is `auto`), in family order. Only these use
+ * standard transport ports instead of configured ports: an address the operator chose may already serve something else there.
  *
  * @return list<string>
  */
@@ -4993,16 +4993,13 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 		}
 		$addresses = array_merge(pfb_dns_proxy_interface_addresses($interfaces, pfb_dns_proxy_vip_only_families($kind), $skipped), PFB_DNS_PROXY_LOOPBACK);
 		array_push($warnings, ...pfb_dns_proxy_skipped_warnings($label, $skipped));
-		foreach ($addresses as $address) {
+		$managed = array_intersect(pfb_dns_listen_auto_vips(), $addresses);
+		foreach (array_diff($addresses, $managed) as $address) {
 			$flags .= " --{$kind}-listen " . escapeshellarg($address);
 		}
-		if ($kind === 'doh') {
-			// issue #3694: the VIP the package created also serves DoH on 443, unless that family's DoH port is 443 and it does already
-			foreach (pfb_dns_listen_auto_vips() as $vip) {
-				if (in_array($vip, $addresses, TRUE) && !pfb_dns_proxy_doh_port_443(str_contains($vip, ':'))) {
-					$flags .= ' --doh-listen-443 ' . escapeshellarg($vip);
-				}
-			}
+		$standard = ($kind === 'doh') ? 443 : 853;
+		foreach ($managed as $vip) {
+			$flags .= " --{$kind}-listen-{$standard} " . escapeshellarg($vip);
 		}
 		$flags .= " --{$kind}-port " . escapeshellarg($port);
 		$port6 = PfbConfig::read("dns_shared/pfb_dns_{$kind}_port6");
@@ -5782,8 +5779,12 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$warnings = [];
 	$listen = ($saved === NULL) ? [] : pfb_dns_proxy_plain_listen($warnings);
 	$addresses = '';
-	foreach (array_merge($listen, PFB_DNS_PROXY_LOOPBACK) as $address) {
+	$managed = array_intersect(pfb_dns_listen_auto_vips(), $listen);
+	foreach (array_diff(array_merge($listen, PFB_DNS_PROXY_LOOPBACK), $managed) as $address) {
 		$addresses .= ' --listen ' . escapeshellarg($address);
+	}
+	foreach ($managed as $vip) {
+		$addresses .= ' --listen-53 ' . escapeshellarg($vip);
 	}
 	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted());
 	pfb_dns_proxy_certificate_refresh($tls);
@@ -6303,8 +6304,8 @@ function pfb_dns_proxy_command_name_answers(): ?array {
 }
 
 /**
- * What the rc script's command asks the gateway to bind: --listen/--port for plain DNS, --<kind>-listen/--<kind>-port for DoT, DoH, DoQ, and the
- * --doh-listen-443 addresses as DoH listeners of port 443 (issue #3694).
+ * What the rc script's command asks the gateway to bind: ordinary --listen/--port pairs for each transport, and explicit
+ * --listen-53, --dot-listen-853, --doh-listen-443 and --doq-listen-853 addresses on their standard ports.
  *
  * @return array<string, list<string>> kind (udp+tcp, dot, doh, doq, in that order; one the command gives no port is left out) =>
  *         host:port of each of its addresses, in the command's order, as pfb_dns_proxy_host_port() spells it
@@ -6321,10 +6322,10 @@ function pfb_dns_proxy_command_listeners(): array {
 		$port6 = preg_match("/ --{$flag}port6 '?([0-9]+)'?(?= |\$)/", $command, $v6port) === 1 ? $v6port[1] : $port[1];
 		$listeners[$kind] = array_map(static fn (string $address): string => pfb_dns_proxy_host_port($address,
 		    str_contains($address, ':') ? $port6 : $port[1]), $addresses[1]);
-		if ($kind === 'doh') {
-			preg_match_all("/ --doh-listen-443 '([0-9A-Fa-f:.]+)'/", $command, $on443);
-			array_push($listeners['doh'], ...array_map(static fn (string $address): string => pfb_dns_proxy_host_port($address, '443'), $on443[1]));
-		}
+		$standard = ($kind === 'udp+tcp') ? '53' : (($kind === 'doh') ? '443' : '853');
+		preg_match_all("/ --{$flag}listen-{$standard} '([0-9A-Fa-f:.]+)'/", $command, $fixed);
+		array_push($listeners[$kind], ...array_map(static fn (string $address): string => pfb_dns_proxy_host_port($address, $standard), $fixed[1]));
+		$listeners[$kind] = array_values(array_unique($listeners[$kind]));
 	}
 	return $listeners;
 }
@@ -6690,8 +6691,8 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
  * reload, and restart a live one whose rc script changed in more than its listen addresses. The script bakes in the ports and the
  * DoT/DoH/DoQ/DDR settings, so a changed one is not served until the proxy restarts. A script that differs only in its listen addresses
- * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) and its name
- * answers (every `--dns-name-answer`, `--doh-listen-443` and `--ddr-doh-443`, issue #3694) is reconciled
+ * (every ordinary or fixed-port `--listen`/`--dot-listen`/`--doh-listen`/`--doq-listen` argument masked out of both texts) and its name
+ * answers (every `--dns-name-answer` and `--ddr-doh-443`) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket: the pass
  * asks once (pfb_dns_proxy_listener_list()) and the sync acts on that answer; with the proxy not READY, or with a gateway that gives
  * no list (nothing to compare with), it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()):
@@ -6738,7 +6739,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	} else {
 		$after = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 		$rc_changed = $before !== $after;
-		$mask = "/ --(?:(?:dot|doh|doq)-)?listen '[^']*'| --(?:dns-name-answer|doh-listen-443|ddr-doh-443) '[^']*'/";
+		$mask = "/ --(?:(?:dot|doh|doq)-)?listen(?:-(?:53|443|853))? '[^']*'| --(?:dns-name-answer|ddr-doh-443) '[^']*'/";
 		$addresses_only = $rc_changed && preg_replace($mask, '', (string) $before) === preg_replace($mask, '', (string) $after);
 		if ($deferred) {
 			if ($rc_changed) {

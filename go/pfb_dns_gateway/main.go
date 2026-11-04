@@ -53,6 +53,7 @@ const (
 
 type config struct {
 	listen       []string
+	listen53     []string
 	port         int
 	upstream     string
 	timeout      time.Duration
@@ -62,10 +63,12 @@ type config struct {
 	tlsPEM       string
 	ctlSocket    string
 	dotListen    []string
+	dotListen853 []string
 	dohListen    []string
 	dohPort      int
 	dohTrusted   []string
 	doqListen    []string
+	doqListen853 []string
 	doqPort      int
 	dotPort6     int // zero inherits the IPv4 port
 	dohPort6     int
@@ -78,7 +81,7 @@ type config struct {
 	nameAnswers  []string // --dns-name-answer: LOCAL=ADDR[,ADDR] values, each parsed by newNameAnswers; need dnsName
 	ddr          bool     // --ddr: answer resolver.arpa. and designate the encrypted transports (RFC 9462); needs dnsName
 	ddrDoH443    []string // --ddr-doh-443: addresses DDR advertises DoH on without a port, each parsed by doh443Set; need ddr
-	dohListen443 []string // --doh-listen-443: addresses DoH is also bound on, on port 443; need dohListen
+	dohListen443 []string // --doh-listen-443: addresses DoH is bound on port 443
 	decider      []string
 
 	// Test seams; the zero value is production.
@@ -90,6 +93,8 @@ type config struct {
 	shutdownBudget time.Duration
 	interrupt      <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
 	doh443Port     int             // the port --doh-listen-443 binds, and DDR advertises as 443; zero is 443. A test cannot bind 443
+	plain53Port    int             // zero is 53; tests bind a free port instead
+	tls853Port     int             // zero is 853; tests bind a free port instead
 }
 
 type listFlag []string
@@ -113,8 +118,9 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs := flag.NewFlagSet("pfb_dns_gateway", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
-	var listen listFlag
-	fs.Var(&listen, "listen", "plain DNS address (UDP and TCP), repeatable; required")
+	var listen, listen53 listFlag
+	fs.Var(&listen, "listen", "plain DNS address (UDP and TCP), repeatable")
+	fs.Var(&listen53, "listen-53", "plain DNS address on port 53 (UDP and TCP), repeatable")
 	fs.IntVar(&cfg.port, "port", cfg.port, "plain DNS port; 0 picks one per address")
 	fs.StringVar(&cfg.upstream, "upstream", cfg.upstream, "Unbound's proxy-protocol HOST:PORT")
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "wait for Unbound per exchange")
@@ -123,12 +129,14 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.IntVar(&cfg.dotPort, "dot-port", cfg.dotPort, "DoT port; 0 picks one per address")
 	fs.StringVar(&cfg.tlsPEM, "tls-pem", cfg.tlsPEM, "certificate chain and private key of DoT, DoH and DoQ, one PEM file, read once at start while still root")
 	fs.StringVar(&cfg.ctlSocket, "ctl-socket", cfg.ctlSocket, "Unix socket on which root pushes a renewed certificate; made in a root-only directory before the privilege drop")
-	var dotListen, dohListen, dohTrusted, doqListen listFlag
-	fs.Var(&dotListen, "dot-listen", "DoT address, repeatable; none = DoT off")
+	var dotListen, dotListen853, dohListen, dohTrusted, doqListen, doqListen853 listFlag
+	fs.Var(&dotListen, "dot-listen", "DoT address, repeatable; no DoT addresses = DoT off")
+	fs.Var(&dotListen853, "dot-listen-853", "DoT address on port 853, repeatable")
 	fs.Var(&dohListen, "doh-listen", "DoH address (HTTPS GET and POST on /dns-query), repeatable; none = DoH off")
 	fs.IntVar(&cfg.dohPort, "doh-port", cfg.dohPort, "DoH port; 0 picks one per address")
 	fs.Var(&dohTrusted, "doh-trusted", "front end trusted to send PROXYv2 and X-Forwarded-For to DoH (CIDR or address), repeatable")
 	fs.Var(&doqListen, "doq-listen", "DoQ (RFC 9250) address, repeatable; none = DoQ off")
+	fs.Var(&doqListen853, "doq-listen-853", "DoQ address on UDP port 853, repeatable")
 	fs.IntVar(&cfg.doqPort, "doq-port", cfg.doqPort, "DoQ UDP port; 0 picks one per address")
 	fs.IntVar(&cfg.dotPort6, "dot-port6", 0, "IPv6 DoT port; 0 inherits --dot-port")
 	fs.IntVar(&cfg.dohPort6, "doh-port6", 0, "IPv6 DoH port; 0 inherits --doh-port")
@@ -143,7 +151,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.Var(&answers, "dns-name-answer", "LOCAL=ADDR[,ADDR], repeatable: a query for --dns-name that reached LOCAL is answered with the ADDR of the family asked; needs --dns-name")
 	var ddrDoH443, dohListen443 listFlag
 	fs.Var(&ddrDoH443, "ddr-doh-443", "ADDR, repeatable: DDR leaves the port out of the DoH record on ADDR, so clients use 443 (something on 443 in front of DoH); needs --ddr")
-	fs.Var(&dohListen443, "doh-listen-443", "ADDR, repeatable: DoH is also served on ADDR:443, as --doh-listen serves it; needs --doh-listen")
+	fs.Var(&dohListen443, "doh-listen-443", "DoH address on port 443, repeatable")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -156,6 +164,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	}
 	cfg.listen, cfg.dotListen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dotListen, dohListen, dohTrusted, doqListen
 	cfg.nameAnswers, cfg.ddrDoH443, cfg.dohListen443 = answers, ddrDoH443, dohListen443
+	cfg.listen53, cfg.dotListen853, cfg.doqListen853 = listen53, dotListen853, doqListen853
 	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
@@ -192,8 +201,8 @@ func (c config) validate() error {
 	if c.unboundConf == "" {
 		return errors.New("--unbound-conf must not be empty")
 	}
-	if len(c.listen) == 0 {
-		return errors.New("--listen is required: the addresses to serve plain DNS on")
+	if len(c.listen) == 0 && len(c.listen53) == 0 {
+		return errors.New("--listen or --listen-53 is required: the addresses to serve plain DNS on")
 	}
 	if slices.Contains(c.listen, "") {
 		return errors.New("--listen must not be empty")
@@ -247,11 +256,18 @@ func (c config) validate() error {
 	if _, err := doh443Set(c.ddrDoH443); err != nil {
 		return err
 	}
-	if slices.Contains(c.dohListen443, "") {
-		return errors.New("--doh-listen-443 must not be empty")
-	}
-	if len(c.dohListen443) > 0 && len(c.dohListen) == 0 {
-		return errors.New("--doh-listen-443 needs --doh-listen")
+	for _, fixed := range []struct {
+		flag   string
+		values []string
+	}{{"listen-53", c.listen53}, {"dot-listen-853", c.dotListen853}, {"doh-listen-443", c.dohListen443}, {"doq-listen-853", c.doqListen853}} {
+		for _, host := range fixed.values {
+			if host == "" {
+				return fmt.Errorf("--%s must not be empty", fixed.flag)
+			}
+			if _, err := parseNameIP(host); err != nil {
+				return fmt.Errorf("--%s %.64q: %w", fixed.flag, host, err)
+			}
+		}
 	}
 	host, port, err := net.SplitHostPort(c.upstream)
 	if p, perr := strconv.Atoi(port); err != nil || host == "" || perr != nil || p < 1 || p > 65535 {
@@ -360,14 +376,23 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	acl := NewACL(cfg.unboundConf, logf)
 	refused := map[string]string{} // start-time bind refusals, for the list verb
 	var listeners []*plainListener
-	for _, host := range cfg.listen {
-		l, err := bindPlain(host, cfg.port)
-		if err != nil {
-			logf("%v", err)
-			refuse(refused, "udp+tcp", host, cfg.port, err)
-			continue
+	for _, requested := range []struct {
+		hosts []string
+		port  int
+	}{{cfg.listen, cfg.port}, {cfg.listen53, cfg.port53()}} {
+		for _, host := range requested.hosts {
+			ap, _ := bindAddr(host, requested.port)
+			if slices.ContainsFunc(listeners, func(l *plainListener) bool { return l.addr() == ap }) {
+				continue
+			}
+			l, err := bindPlain(host, requested.port)
+			if err != nil {
+				logf("%v", err)
+				refuse(refused, "udp+tcp", host, requested.port, err)
+				continue
+			}
+			listeners = append(listeners, l)
 		}
-		listeners = append(listeners, l)
 	}
 	var secure *tlsListeners
 	var ctl *ctlServer
