@@ -136,21 +136,22 @@ func TestConfigRejectsModeFlagsThatContradictEachOther(t *testing.T) {
 	}
 }
 
-// issue #3583: --ddr NAME turns DDR on; --ddr-doh-443 leaves the port out of the DoH record and needs --ddr. PHP is the
-// primary trust boundary; these are the gateway's own checks, so a bad flag is a usage error and never a broken record.
+// issue #3583, as issue #3694 changed it: --ddr turns DDR on and names --dns-name; --ddr-doh-443 leaves the port out of the DoH
+// record and needs --ddr. PHP is the primary trust boundary; these are the gateway's own checks, so a bad flag is a usage
+// error and never a broken record.
 func TestConfigDDRFlagsAreParsedAndOffByDefault(t *testing.T) {
 	cases := map[string]struct {
 		flags  []string
-		ddr    string
+		name   string
+		ddr    bool
 		doh443 bool
 	}{
-		"off by default":                     {nil, "", false},
-		"name without a trailing dot":        {[]string{"--ddr", "fw.example.lan"}, "fw.example.lan", false},
-		"name with a trailing dot":           {[]string{"--ddr", "fw.example.lan."}, "fw.example.lan.", false},
-		"name and --ddr-doh-443":             {[]string{"--ddr", "fw.example.lan", "--ddr-doh-443"}, "fw.example.lan", true},
-		"--ddr-doh-443 before the name":      {[]string{"--ddr-doh-443", "--ddr", "fw.example.lan"}, "fw.example.lan", true},
-		"the longest name (253 characters)":  {[]string{"--ddr", strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61)}, strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61), false},
-		"an empty name is off, not an error": {[]string{"--ddr", ""}, "", false},
+		"off by default":                    {nil, "", false, false},
+		"--ddr and the name":                {[]string{"--dns-name", "fw.example.lan", "--ddr"}, "fw.example.lan", true, false},
+		"the name with a trailing dot":      {[]string{"--dns-name", "fw.example.lan.", "--ddr"}, "fw.example.lan.", true, false},
+		"--ddr, the name and --ddr-doh-443": {[]string{"--dns-name", "fw.example.lan", "--ddr", "--ddr-doh-443"}, "fw.example.lan", true, true},
+		"--ddr-doh-443 before --ddr":        {[]string{"--ddr-doh-443", "--ddr", "--dns-name", "fw.example.lan"}, "fw.example.lan", true, true},
+		"the name alone is not DDR":         {[]string{"--dns-name", "fw.example.lan"}, "fw.example.lan", false, false},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -158,8 +159,8 @@ func TestConfigDDRFlagsAreParsedAndOffByDefault(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.ddr != c.ddr || cfg.ddrDoH443 != c.doh443 {
-				t.Fatalf("got ddr=%q doh443=%v, want ddr=%q doh443=%v", cfg.ddr, cfg.ddrDoH443, c.ddr, c.doh443)
+			if cfg.dnsName != c.name || cfg.ddr != c.ddr || cfg.ddrDoH443 != c.doh443 {
+				t.Fatalf("got dnsName=%q ddr=%v doh443=%v, want dnsName=%q ddr=%v doh443=%v", cfg.dnsName, cfg.ddr, cfg.ddrDoH443, c.name, c.ddr, c.doh443)
 			}
 		})
 	}
@@ -170,14 +171,16 @@ func TestConfigRejectsBadDDRUsage(t *testing.T) {
 		flags []string
 		want  string // the flag the error names
 	}{
-		"--ddr-doh-443 without --ddr":       {[]string{"--ddr-doh-443"}, "--ddr-doh-443"},
-		"--ddr-doh-443 with an empty --ddr": {[]string{"--ddr", "", "--ddr-doh-443"}, "--ddr-doh-443"},
-		"name with an empty label":          {[]string{"--ddr", "fw..lan"}, `--ddr "`},
-		"name with a leading dot":           {[]string{"--ddr", ".fw.lan"}, `--ddr "`},
-		"name with two trailing dots":       {[]string{"--ddr", "fw.lan.."}, `--ddr "`},
-		"the root as the name":              {[]string{"--ddr", "."}, `--ddr "`},
-		"name with a label over 63 bytes":   {[]string{"--ddr", strings.Repeat("a", 64) + ".lan"}, `--ddr "`},
-		"name over 253 characters":          {[]string{"--ddr", strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan"}, `--ddr "`},
+		"--ddr-doh-443 without --ddr":      {[]string{"--ddr-doh-443"}, "--ddr-doh-443"},
+		"--ddr-doh-443 with an empty name": {[]string{"--dns-name", "", "--ddr-doh-443"}, "--ddr-doh-443"},
+		"--ddr-doh-4436 without --ddr":     {[]string{"--ddr-doh-4436"}, "--ddr-doh-4436"},
+		"--ddr without a name":             {[]string{"--ddr"}, "--ddr needs --dns-name"},
+		"name with an empty label":         {[]string{"--dns-name", "fw..lan", "--ddr"}, `--dns-name "`},
+		"name with a leading dot":          {[]string{"--dns-name", ".fw.lan", "--ddr"}, `--dns-name "`},
+		"name with two trailing dots":      {[]string{"--dns-name", "fw.lan..", "--ddr"}, `--dns-name "`},
+		"the root as the name":             {[]string{"--dns-name", ".", "--ddr"}, `--dns-name "`},
+		"name with a label over 63 bytes":  {[]string{"--dns-name", strings.Repeat("a", 64) + ".lan", "--ddr"}, `--dns-name "`},
+		"name over 253 characters":         {[]string{"--dns-name", strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan", "--ddr"}, `--dns-name "`},
 	}
 	for label, c := range cases {
 		t.Run(label, func(t *testing.T) {

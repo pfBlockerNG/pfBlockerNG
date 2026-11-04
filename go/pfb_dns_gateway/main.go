@@ -73,9 +73,11 @@ type config struct {
 	noModule    bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
 	observer    bool
 	replyLog    bool
-	readyFile   string // --ready-file: the gateway's pid is published here once it serves; "" = none
-	ddr         string // --ddr: the firewall FQDN that DDR (RFC 9462) designates; "" = DDR off
-	ddrDoH443   bool   // --ddr-doh-443: the DDR DoH record carries no port, whatever port DoH is bound on; needs ddr
+	readyFile   string   // --ready-file: the gateway's pid is published here once it serves; "" = none
+	dnsName     string   // --dns-name: DDR's target and the name answered A and AAAA; "" = none
+	nameAnswers []string // --dns-name-answer: LOCAL=ADDR[,ADDR] values, each parsed by newNameAnswers; need dnsName
+	ddr         bool     // --ddr: answer resolver.arpa. and designate the encrypted transports (RFC 9462); needs dnsName
+	ddrDoH443   bool     // --ddr-doh-443: the DDR DoH record carries no port, whatever port DoH is bound on; needs ddr
 	ddrDoH4436  bool
 	decider     []string
 
@@ -134,7 +136,10 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: the decider listens for the upstream observer's reports")
 	fs.BoolVar(&cfg.replyLog, "reply-log", false, "the decider logs each relayed reply to dns_reply.log (needs --no-module)")
 	fs.StringVar(&cfg.readyFile, "ready-file", "", "write the gateway's pid here, mode 0600, once it serves; removed at stop while it still names the gateway")
-	fs.StringVar(&cfg.ddr, "ddr", "", "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462); the firewall's FQDN the records name; empty = off")
+	fs.StringVar(&cfg.dnsName, "dns-name", "", "the firewall's DNS name: DDR's target, and the one name answered (A and AAAA) from the address the query reached; empty = none")
+	fs.BoolVar(&cfg.ddr, "ddr", false, "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462), naming --dns-name; needs --dns-name")
+	var answers listFlag
+	fs.Var(&answers, "dns-name-answer", "LOCAL=ADDR[,ADDR], repeatable: a query for --dns-name that reached LOCAL is answered with the ADDR of the family asked; needs --dns-name")
 	fs.BoolVar(&cfg.ddrDoH443, "ddr-doh-443", false, "DDR leaves the port out of the DoH record, so clients use 443 (a reverse proxy in front of DoH); needs --ddr")
 	fs.BoolVar(&cfg.ddrDoH4436, "ddr-doh-4436", false, "DDR leaves the port out of IPv6 DoH records; needs --ddr")
 	if err := fs.Parse(args[:split]); err != nil {
@@ -148,6 +153,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q before `--`", fs.Arg(0))
 	}
 	cfg.listen, cfg.dotListen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dotListen, dohListen, dohTrusted, doqListen
+	cfg.nameAnswers = answers
 	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
@@ -222,14 +228,20 @@ func (c config) validate() error {
 			return fmt.Errorf("--%s %d is outside 0..65535", p.name, p.port)
 		}
 	}
-	if c.ddr == "" && c.ddrDoH4436 {
+	if !c.ddr && c.ddrDoH4436 {
 		return errors.New("--ddr-doh-4436 needs --ddr")
 	}
-	if c.ddr == "" && c.ddrDoH443 {
+	if !c.ddr && c.ddrDoH443 {
 		return errors.New("--ddr-doh-443 needs --ddr")
 	}
-	if c.ddr != "" {
-		if _, err := ddrName(c.ddr); err != nil {
+	if c.ddr && c.dnsName == "" {
+		return errors.New("--ddr needs --dns-name")
+	}
+	if c.dnsName == "" && len(c.nameAnswers) > 0 {
+		return errors.New("--dns-name-answer needs --dns-name")
+	}
+	if c.dnsName != "" {
+		if _, err := newNameAnswers(c.dnsName, c.nameAnswers); err != nil {
 			return err
 		}
 	}
@@ -374,8 +386,16 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 			logf("control socket: %v; the certificate cannot be renewed without a restart, nor the decider restarted alone", err)
 		}
 	}
+	var names *nameAnswers
+	if cfg.dnsName != "" {
+		var err error
+		if names, err = newNameAnswers(cfg.dnsName, cfg.nameAnswers); err != nil {
+			closeListeners()
+			return nil, err
+		}
+	}
 	var ddrAnswers *ddr
-	if cfg.ddr != "" {
+	if cfg.ddr {
 		var err error
 		if ddrAnswers, err = ddrOnListeners(cfg, secure); err != nil {
 			closeListeners()
@@ -417,7 +437,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	trace("ready")
 
 	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
-	g.ddr = ddrAnswers
+	g.ddr, g.names = ddrAnswers, names
 	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
 		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}
 	set := newListenerSet(g, cfg, secure)
@@ -427,7 +447,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	secure.serve(set)
 	if ctl != nil {
-		ctl.restart, ctl.listeners = s.restartDecider, set
+		ctl.restart, ctl.listeners, ctl.names = s.restartDecider, set, names
 		ctl.serve(g)
 	}
 	g.wg.Add(1)

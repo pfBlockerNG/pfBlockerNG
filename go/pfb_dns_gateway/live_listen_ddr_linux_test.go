@@ -11,7 +11,7 @@ import (
 // With --ddr, `_dns.resolver.arpa. SVCB` names the encrypted listeners that serve on the address it was asked on: the ones
 // the gateway serves now, so a live add is designated and a live remove no longer is.
 
-func liveDDR(_ *testing.T, cfg *config) { cfg.ddr = ddrTarget }
+func liveDDR(_ *testing.T, cfg *config) { cfg.dnsName, cfg.ddr = ddrTarget, true }
 
 // requireDesignates asks `_dns.resolver.arpa. SVCB` over plain UDP on host and requires exactly the records of kinds (the
 // encrypted listeners on host, in the order DDR ranks them), with the firewall's address record; none is NODATA.

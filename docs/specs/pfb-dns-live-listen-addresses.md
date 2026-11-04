@@ -64,6 +64,13 @@ The existing framing is kept: 4 bytes first. Two new values that no certificate 
 > **Amendment 2026-10-31 (#3625).** A third value, `FF FF FF FC` with nothing after it, lists what the gateway serves: one
 > `listening <kind> <host:port>` line per served listener, one `refused <kind> <host:port> <reason>` line per start-time bind
 > failure not served now, then `ok`.
+>
+> **Amendment 2026-11-04 (#3694).** A fourth value, `FF FF FF FB`, replaces the name-answer table: a 4-byte big-endian length 0 to
+> 65536 and a body of lines joined by `\n` (no trailing newline, no CRLF, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]`; an
+> empty body is an empty table. The whole body is checked first: one bad line is `error: <reason>` and the table is unchanged, else it is
+> replaced atomically and the reply is `ok`. It carries no descriptor, and the update pass and the cron tick send it after the listener
+> changes (`pfb_dns_proxy_listeners_sync()`) while the command names `--dns-name` and no restart is pending. See
+> [dns-gateway-transports.md](../misc/dns-gateway-transports.md), "Name-answer table".
 
 Then a 4-byte big-endian length `L` (1 to 256) and `L` bytes of ASCII `<kind> <host:port>`: `kind` is `udp+tcp`,
 `dot`, `doh` or `doq`; `host:port` is Go's `netip.AddrPort` spelling (IPv6 bracketed and compressed; no zone; no

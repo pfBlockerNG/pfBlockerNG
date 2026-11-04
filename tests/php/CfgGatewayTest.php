@@ -484,6 +484,7 @@ final class CfgGatewayTest extends TestCase
 			'DoT interfaces'      => ['dns/pfb_dns_dot_interface', '', 'lan'],
 			'listener interfaces' => ['dns/pfb_dns_interface', '', 'lan,opt1'],
 			'certificate'         => ['dns/pfb_dns_sslcertref', '', 'cert123'],
+			'DNS name'            => ['dns/pfb_dns_name', '', 'fw.example.lan'],
 		];
 	}
 
@@ -1702,6 +1703,8 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dns_dot_port',
 			'pfb_dns_dot_interface',
 			'pfb_dns_sslcertref',
+			// issue #3694: DDR's target name and the name pfB-DNS answers A and AAAA for
+			'pfb_dns_name',
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',

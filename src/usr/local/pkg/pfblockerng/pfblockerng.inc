@@ -4453,6 +4453,19 @@ EOF;
 
 
 /**
+ * Is this an address a client can be given: valid, no zone, not link-local, not loopback (127.0.0.0/8, ::1)?
+ *
+ * @phpstan-assert-if-true string $address
+ */
+function pfb_dns_proxy_usable_address(mixed $address): bool {
+	if (!is_string($address) || !is_ipaddr($address) || strpos($address, '%') !== FALSE || is_linklocal($address)) {
+		return FALSE;
+	}
+	$packed = (string) inet_pton($address);
+	return $packed !== inet_pton('::1') && !(strlen($packed) === 4 && $packed[0] === "\x7f");
+}
+
+/**
  * Addresses a DNS proxy listener binds for an interface list, derived the way pfSense's unbound.inc binds them.
  * An explicit list: each interface that is up and enabled (an IP entry verbatim, else its IPv4 and IPv6 address).
  * 'all' makes Unbound bind a wildcard, which the proxy cannot (one wildcard UDP socket cannot answer from
@@ -4494,11 +4507,7 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, array $vip_only, ?
 
 		$usable = FALSE;
 		foreach ($found as $address) {
-			if (!is_string($address) || !is_ipaddr($address) || strpos($address, '%') !== FALSE || is_linklocal($address)) {
-				continue;
-			}
-			$packed = (string) inet_pton($address);
-			if ($packed === inet_pton('::1') || (strlen($packed) === 4 && $packed[0] === "\x7f")) {
+			if (!pfb_dns_proxy_usable_address($address)) {
 				continue;
 			}
 			$listen[$address] = $address;
@@ -4722,6 +4731,32 @@ function pfb_dns_proxy_trusted_entry(string $entry): bool {
 }
 
 /**
+ * The DNS Name of a posted or stored value (issue #3694): trimmed, one trailing dot stripped, its case kept. '' is no name (DDR then
+ * answers nothing); NULL is a value that is no valid name: not text, over 253 characters, fewer than two labels, a label that is not
+ * 1-63 ASCII letters, digits and hyphens (or that starts or ends with a hyphen), a last label of digits only (an IPv4 literal), or
+ * resolver.arpa or a name under it, which DDR answers for itself. The gateway refuses to start with anything else.
+ */
+function pfb_dns_proxy_name_normalized(mixed $value): ?string {
+	if (!is_string($value)) {
+		return NULL;
+	}
+	$name = trim($value);
+	if ($name === '') {
+		return '';
+	}
+	if (str_ends_with($name, '.')) {
+		$name = substr($name, 0, -1);
+	}
+	$label = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';
+	$lower = strtolower($name);
+	if (strlen($name) > 253 || preg_match('/\A(?:' . $label . '\.)+(' . $label . ')\z/', $name, $last) !== 1 || ctype_digit($last[1])
+	    || $lower === 'resolver.arpa' || str_ends_with($lower, '.resolver.arpa')) {
+		return NULL;
+	}
+	return $name;
+}
+
+/**
  * The options of pfB-DNS's four interface lists, token => label, which its page offers and validates against: All,
  * Localhost and what the DNS Resolver's Network Interfaces offer (interfaces, virtual IPs as _vip<uniqid>; no link-local
  * entries, the proxy never binds one), then each stored token none of them is, labelled so, so a save keeps it (issue #3557).
@@ -4742,7 +4777,8 @@ function pfb_dns_proxy_interface_options(): array {
  * Save-time input errors of pfB-DNS's listener settings on its page. Every posted value was already sanitized at
  * ingestion. A port is a whole number 1-65535, each of the four interface lists (DNS, DoT, DoH, DoQ) an array of at
  * least one entry of $valid_iface_list, a trusted entry an IP or CIDR prefix, the certificate one of $valid_cert_refs
- * (the refids the page's selector offers) and required once DoT, DoH or DoQ is on.
+ * (the refids the page's selector offers) and required once DoT, DoH or DoQ is on, the DNS Name empty or a valid name
+ * (pfb_dns_proxy_name_normalized()) and not empty while DDR is on.
  *
  * @param array<string,mixed> $post
  * @param list<string> $valid_iface_list
@@ -4781,6 +4817,13 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 		$errors[] = 'DoT, DoH and DoQ need a certificate: select one in SSL/TLS Certificate.';
 	}
 
+	$name = pfb_dns_proxy_name_normalized($post['pfb_dns_name'] ?? '');
+	if ($name === NULL) {
+		$errors[] = 'DNS Name must be a fully qualified domain name of ASCII letters, digits and hyphens, such as fw.example.lan. An IP address, a wildcard and a name under resolver.arpa are not accepted.';
+	} elseif ($name === '' && ($post['pfb_dns_ddr'] ?? '') === 'on') {
+		$errors[] = 'DDR needs a DNS name: enter the name the certificate covers, or turn DDR off.';
+	}
+
 	$trusted = $post['pfb_dns_doh_trusted'] ?? '';
 	$bad = is_string($trusted) ? array_filter(pfb_dns_proxy_tokens($trusted), static fn (string $entry): bool => !pfb_dns_proxy_trusted_entry($entry)) : ['(not text)'];
 	if ($bad !== []) {
@@ -4800,9 +4843,9 @@ function pfb_dns_proxy_ddr_doh_443_locked(bool $ipv6 = FALSE): bool {
 }
 
 /**
- * The canonical stored value of each of the fourteen settings from a validated POST: a toggle is on only for 'on', a
- * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated, and the
- * DoH on port 443 toggle keeps its stored value while the page disables it.
+ * The canonical stored value of each setting from a validated POST: a toggle is on only for 'on', a
+ * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated, the DNS Name
+ * loses its trailing dot (pfb_dns_proxy_name_normalized()), and the DoH on port 443 toggle keeps its stored value while the page disables it.
  *
  * @param array<string,mixed> $post
  * @return array<string,string> config key => stored string
@@ -4822,6 +4865,7 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 	}
 	$certref = $post['pfb_dns_sslcertref'] ?? '';
 	$stored['pfb_dns_sslcertref'] = is_string($certref) ? $certref : '';
+	$stored['pfb_dns_name'] = pfb_dns_proxy_name_normalized($post['pfb_dns_name'] ?? '') ?? '';
 	$stored['pfb_dns_ddr'] = pfb_filter($post['pfb_dns_ddr'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
 	// issue #3583: a control the page disables posts nothing, so its stored value stays
 	$stored['pfb_dns_ddr_doh_443'] = pfb_dns_proxy_ddr_doh_443_locked()
@@ -4883,16 +4927,101 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 }
 
 /**
- * The gateway's --ddr arguments while DDR is on (dns_shared/pfb_dns_ddr, issue #3583): the firewall's FQDN, and --ddr-doh-443 when
- * dns_shared/pfb_dns_ddr_doh_443 is on too. That option alone adds nothing: the gateway rejects it without --ddr.
+ * The gateway's DNS Name arguments (issue #3694): --dns-name with dns/pfb_dns_name, then --ddr while DDR is on (dns_shared/pfb_dns_ddr, issue
+ * #3583; its target is that name) and after it --ddr-doh-443 and --ddr-doh-4436 as the DoH on port 443 options say (they alone add
+ * nothing: the gateway rejects them without --ddr), then one --dns-name-answer per entry of pfb_dns_proxy_name_answers(). No name is no
+ * flag at all: DDR answers nothing, as with DDR off, and nothing is intercepted. A stored name that is no valid name (a hand-edited
+ * config.xml, which the gateway would refuse to start with) counts as none.
+ *
+ * @param list<string>|null $warnings gets the line for a stored name that is no valid name
  */
-function pfb_dns_proxy_ddr_flags(): string {
-	if (PfbConfig::read('dns_shared/pfb_dns_ddr') !== PfbToggle::On) {
+function pfb_dns_proxy_ddr_flags(?array &$warnings = NULL): string {
+	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name'));
+	if ($name === NULL) {
+		$warnings[] = 'DNS proxy: the stored DNS Name is not a valid name; DDR and the name answers are off';
+	}
+	if ($name === NULL || $name === '') {
 		return '';
 	}
-	return ' --ddr ' . escapeshellarg(config_get_path('system/hostname', 'pfSense') . '.' . config_get_path('system/domain', 'localdomain')) .
-	    ((PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '') .
-	    ((pfb_dns_proxy_setting('pfb_dns_ddr_doh_443_6') === PfbToggle::On) ? ' --ddr-doh-4436' : '');
+	$flags = ' --dns-name ' . escapeshellarg($name);
+	if (PfbConfig::read('dns_shared/pfb_dns_ddr') === PfbToggle::On) {
+		$flags .= ' --ddr' .
+		    ((PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '') .
+		    ((pfb_dns_proxy_setting('pfb_dns_ddr_doh_443_6') === PfbToggle::On) ? ' --ddr-doh-4436' : '');
+	}
+	foreach (pfb_dns_proxy_name_answers() as $local => $answers) {
+		$flags .= ' --dns-name-answer ' . escapeshellarg("{$local}=" . implode(',', $answers));
+	}
+	return $flags;
+}
+
+/**
+ * The address as the gateway's flags spell it (inet_ntop() of inet_pton(), an IPv4-mapped one as its IPv4 address), or NULL when no
+ * client can be given it (pfb_dns_proxy_usable_address()).
+ */
+function pfb_dns_proxy_answer_address(mixed $address): ?string {
+	if (!pfb_dns_proxy_usable_address($address)) {
+		return NULL;
+	}
+	return (string) inet_ntop((string) inet_pton(pfb_ipv4_from_mapped($address) ?? $address));
+}
+
+/**
+ * What the gateway answers the DNS Name with, by the address a query reached it on (issue #3694, --dns-name-answer): for each address
+ * pfB-DNS listens on (plain DNS, then each of DoT, DoH and DoQ that is on, once each, in that order), the addresses of the query's own
+ * network, so that a client is sent to an address it can reach and the gateway picks the one of the family it asked for.
+ *   - an active Resolver VIP (pfb_dns_listen_vips()): the VIP, then the other family's active VIP, if there is one;
+ *   - any other address: the usable IPv4 and IPv6 addresses (pfb_dns_proxy_usable_address()) of the configured interface that carries
+ *     it, never a VIP: a host that queries 10.0.0.1 is sent to 10.0.0.1 whether or not a VIP is active;
+ *   - an address no configured interface carries has no entry: the gateway lets Unbound answer a query that reaches it there.
+ * Loopback is never listed here (pfb_dns_proxy_interface_addresses() leaves it out), so it has no entry either.
+ *
+ * @return array<string,list<string>> address the query reached => the addresses to answer with (at most one per IP family), both
+ *         spelled as pfb_dns_proxy_answer_address() does, in the order the gateway listens
+ */
+function pfb_dns_proxy_name_answers(): array {
+	$locals = pfb_dns_proxy_listen();
+	foreach (['dot', 'doh', 'doq'] as $kind) {
+		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") === PfbToggle::On) {
+			array_push($locals, ...pfb_dns_proxy_interface_addresses(
+				pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface")),
+				pfb_dns_proxy_vip_only_families($kind)
+			));
+		}
+	}
+	$family = static fn (string $address): int => str_contains($address, ':') ? 6 : 4;
+	$vips = [];	// IP family => the active Resolver VIP
+	foreach (array_keys(pfb_dns_listen_vips()) as $vip) {
+		if (($vip = pfb_dns_proxy_answer_address($vip)) !== NULL) {
+			$vips[$family($vip)] ??= $vip;
+		}
+	}
+	$carried = [];	// address => the usable addresses of the interface that carries it (the first of two that do)
+	foreach (array_keys((array) get_configured_interface_with_descr()) as $interface) {
+		$own = [];
+		foreach ([get_interface_ip($interface), get_interface_ipv6($interface)] as $address) {
+			if (($address = pfb_dns_proxy_answer_address($address)) !== NULL) {
+				$own[$family($address)] ??= $address;
+			}
+		}
+		foreach ($own as $address) {
+			$carried[$address] ??= array_values($own);
+		}
+	}
+	$answers = [];
+	foreach ($locals as $local) {
+		if (($local = pfb_dns_proxy_answer_address($local)) === NULL) {
+			continue;
+		}
+		$mine = $family($local);
+		$pair = (($vips[$mine] ?? NULL) === $local)
+		    ? array_values(array_filter([$local, $vips[($mine === 4) ? 6 : 4] ?? NULL]))
+		    : ($carried[$local] ?? []);
+		if ($pair !== []) {
+			$answers[$local] ??= $pair;
+		}
+	}
+	return $answers;
 }
 
 // Ranges pfB-DNS never warns about (issue #3583): the private and local ones a public CA cannot certify (RFC 9462 section 4.3), and the
@@ -4921,51 +5050,82 @@ function pfb_dns_proxy_public_address(string $address): bool {
 }
 
 /**
- * The iPAddress SANs of a config.xml <cert> entry, as packed addresses (inet_pton bytes => TRUE) so that two spellings of one address
- * match. A DNS SAN is not an address; a certificate that cannot be decoded or parsed has none.
+ * The subjectAltName entries of a config.xml <cert> entry that name an address or a host: the iPAddress ones as packed addresses
+ * (inet_pton bytes => TRUE, so that two spellings of one address match) and the dNSName ones lower-cased, in the certificate's order.
+ * A certificate that cannot be decoded or parsed has none.
  *
  * @param array<string,mixed> $entry
- * @return array<string,true>
+ * @return array{ip: array<string,true>, dns: list<string>}
  */
-function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
+function pfb_dns_proxy_certificate_sans(array $entry): array {
+	$sans = ['ip' => [], 'dns' => []];
 	try {
 		$parsed = @openssl_x509_parse(pfb_dns_proxy_pem_field($entry, 'cert', 'crt'));
 	} catch (RuntimeException $e) {
-		return [];
+		return $sans;
 	}
 	while (openssl_error_string() !== FALSE) {
 		continue; // the parse leaves its reason in OpenSSL's error queue, which is the next caller's
 	}
-	// shortcut: openssl_x509_parse() gives the SANs as one text, so a crafted DNS or URI SAN containing ", IP Address:x" reads as an IP SAN
-	// and can silence the advisory for its own certificate; an entry with a NUL byte is skipped (inet_pton() throws on one). Upgrade if
-	// pfSense exposes the SANs structured.
-	$sans = [];
+	// shortcut: openssl_x509_parse() gives the SANs as one text, so a crafted DNS or URI SAN containing ", IP Address:x" or ", DNS:x" reads as
+	// an SAN of its own and can silence an advisory for its own certificate; an entry with a NUL byte is skipped (inet_pton() throws on
+	// one). Upgrade if pfSense exposes the SANs structured.
 	foreach (explode(', ', is_array($parsed) ? (string) ($parsed['extensions']['subjectAltName'] ?? '') : '') as $san) {
-		if (str_starts_with($san, 'IP Address:') && !str_contains($san, "\0") && ($packed = @inet_pton(substr($san, 11))) !== FALSE) {
-			$sans[$packed] = TRUE;
+		if (str_contains($san, "\0")) {
+			continue;
+		}
+		if (str_starts_with($san, 'IP Address:')) {
+			if (($packed = @inet_pton(substr($san, 11))) !== FALSE) {
+				$sans['ip'][$packed] = TRUE;
+			}
+		} elseif (str_starts_with($san, 'DNS:')) {
+			$sans['dns'][] = strtolower(substr($san, 4));
 		}
 	}
 	return $sans;
 }
 
 /**
- * The pfB-DNS page's DDR certificate warnings (issue #3583), from the stored settings: with DDR on and a certificate selected, one text per
- * public IPv4 address that DoT, DoH or DoQ listens on and that is not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462
- * section 4.2) checks the address it queried against that SAN, so it will not use those transports there. A public IPv6 address is never
- * named: the gateway designates no transport on it (issue #3694). The DoH listener is left out while dns_shared/pfb_dns_ddr_doh_443 is on
- * and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose certificate is not visible here (on 443 they reach
- * this listener, so it is checked). Never blocks a save.
+ * The pfB-DNS page's DNS Name and DDR certificate warnings (issues #3583, #3694), from the stored settings. Never blocks a save.
+ *   - DDR on and no DNS Name: the one text that says DDR answers nothing (the upgrade notice for a box that had DDR on before the name
+ *     existed: no name is seeded). Nothing else is computed for a DDR that answers nothing.
+ *   - a DNS Name, DoT, DoH or DoQ on and a certificate selected: one text when no dNSName SAN of it covers the name, which is the name
+ *     itself or `*.<parent>` for a name of exactly one label under <parent>, ASCII case-insensitive; an iPAddress SAN never does.
+ *   - DDR on and a DNS Name, with a certificate selected: one text per public IPv4 address that DoT, DoH or DoQ listens on and that is
+ *     not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462 section 4.2) checks the address it queried against that
+ *     SAN, so it will not use those transports there. A public IPv6 address is never named: the gateway does designate on it, but a
+ *     global prefix changes and no certificate keeps an IP SAN for it. The DoH listener is left out while
+ *     dns_shared/pfb_dns_ddr_doh_443 is on and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose
+ *     certificate is not visible here (on 443 they reach this listener, so it is checked).
  *
- * @return list<string> HTML, each text starting "DDR: " and naming the address and the transports it serves
+ * @return list<string> HTML; the DDR address texts start "DDR: " and name the address and the transports it serves
  */
 function pfb_dns_proxy_ddr_warnings(): array {
-	if (pfb_dns_proxy_setting('pfb_dns_ddr') !== PfbToggle::On) {
-		return [];
+	$ddr = pfb_dns_proxy_setting('pfb_dns_ddr') === PfbToggle::On;
+	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name')) ?? '';
+	if ($name === '') {
+		return $ddr ? ['DDR: no DNS name is set, so DDR answers nothing. Enter the DNS Name the certificate covers.'] : [];
 	}
 	$ref = trim((string) pfb_dns_proxy_setting('pfb_dns_sslcertref'));
 	$certificate = ($ref === '') ? NULL : (lookup_cert($ref)['item'] ?? NULL);
 	if (!is_array($certificate)) {
 		return [];
+	}
+
+	$warnings = [];
+	$sans = NULL;
+	if (pfb_dns_proxy_tls_wanted()) {
+		$sans = pfb_dns_proxy_certificate_sans($certificate);
+		$lower = strtolower($name);
+		if (!in_array($lower, $sans['dns'], TRUE) && !in_array('*.' . substr($lower, (int) strpos($lower, '.') + 1), $sans['dns'], TRUE)) {
+			$warnings[] = sprintf(
+				'DNS Name: the selected SSL/TLS Certificate has no DNS name (dNSName) SAN for %s; clients that connect by that name will not accept it.',
+				htmlspecialchars($name)
+			);
+		}
+	}
+	if (!$ddr) {
+		return $warnings;
 	}
 
 	// A transport listens when pfb_dns_proxy_tls_flags() gives it flags: toggle on, usable port, an interface list with an address.
@@ -4992,10 +5152,11 @@ function pfb_dns_proxy_ddr_warnings(): array {
 		}
 	}
 
-	$sans = ($served === []) ? [] : pfb_dns_proxy_certificate_ip_sans($certificate);
-	$warnings = [];
+	if ($served !== []) {
+		$sans ??= pfb_dns_proxy_certificate_sans($certificate);
+	}
 	foreach ($served as $packed => $listener) {
-		if (!isset($sans[$packed])) {
+		if (!isset($sans['ip'][$packed])) {
 			$names = array_keys($listener['labels']);
 			$last = array_pop($names);
 			$warnings[] = sprintf(
@@ -5330,6 +5491,29 @@ function pfb_dns_proxy_listener_remove(string $kind, string $at, ?string $socket
 }
 
 /**
+ * Replace the running gateway's name-answer table on its control socket (FF FF FF FB, issue #3694): after the four head bytes, the length
+ * of the body as 4 bytes big-endian and then $lines joined by "\n", each `dns-name-answer LOCAL=ADDR[,ADDR]` (the value of a
+ * --dns-name-answer flag); no line is an empty table. The gateway checks the whole body first and answers one line: `ok` once the table is
+ * replaced, or `error: <reason>` with the table unchanged (an older gateway answers the head as a bad message length, one started without
+ * --dns-name `error: started without --dns-name`).
+ *
+ * @param list<string> $lines
+ * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
+ * @param float $timeout seconds each step may take
+ * @return string|null NULL once the gateway has the table; else why not
+ */
+function pfb_dns_proxy_address_table(array $lines, ?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?string {
+	global $pfb;
+
+	$body = implode("\n", $lines);
+	[$reply, $why] = pfb_dns_proxy_ctl_exchange("\xFF\xFF\xFF\xFB" . pack('N', strlen($body)) . $body, $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the address table');
+	if ($why !== NULL) {
+		return "cannot send the address table: {$why}";
+	}
+	return ($reply === 'ok') ? NULL : "the gateway did not take the address table: {$reply}";
+}
+
+/**
  * Ask the running gateway which listeners it serves, on its control socket (FF FF FF FC, nothing after it; ctl.go): it answers a line
  * `listening <kind> <host:port>` for each it serves and `refused <kind> <host:port> <reason>` for each it could not take, then a final
  * `ok` line, or one `error: <reason>` line (a gateway older than this verb answers it as a bad message length). <kind> is udp+tcp, dot,
@@ -5468,8 +5652,10 @@ function pfb_dns_proxy_certificate_sync(): void {
  * transport is wanted. A start that finds the file missing, which is /var after a boot with RAM disks, has PHP write it first, and
  * forgets what was pushed to the proxy it replaces. DoT, DoH and DoQ each listen on their own interface list's addresses and on loopback
  * (--dot-listen, --doh-listen, --doq-listen) at their own port (pfb_dns_proxy_tls_flags()).
- * DDR (RFC 9462): with dns_shared/pfb_dns_ddr On the line also carries, after the TLS flags, --ddr FQDN (system/hostname.system/domain) and, with
- * dns_shared/pfb_dns_ddr_doh_443 On too, --ddr-doh-443 (pfb_dns_proxy_ddr_flags()); a changed setting changes the script and restarts the proxy.
+ * DDR (RFC 9462) and the DNS Name (dns/pfb_dns_name, issue #3694): with a name the line also carries, after the TLS flags, --dns-name NAME,
+ * --ddr while dns_shared/pfb_dns_ddr is On (its target is that name) and, with dns_shared/pfb_dns_ddr_doh_443 On too, --ddr-doh-443, then one
+ * --dns-name-answer LOCAL=ADDR[,ADDR] per listen address (pfb_dns_proxy_ddr_flags()); with no name none of them. A changed name or DDR
+ * setting changes the script and restarts the proxy; a changed answer is reconciled live (pfb_dns_proxy_listeners_sync()).
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
  * bounce it. A restart stops first and starts only when that stop succeeded.
@@ -5506,7 +5692,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted());
 	pfb_dns_proxy_certificate_refresh($tls);
 	$tlsFlags = ($saved === NULL) ? '' : pfb_dns_proxy_tls_flags($warnings);
-	$ddrFlags = ($saved === NULL) ? '' : pfb_dns_proxy_ddr_flags();
+	$ddrFlags = ($saved === NULL) ? '' : pfb_dns_proxy_ddr_flags($warnings);
 	$replylog = (($pfb['dnsbl_py_reply'] ?? NULL) === PfbToggle::On) ? ' --reply-log' : '';
 	$module = !pfb_dnsbl_active() ? " --no-module{$replylog}" : (config_path_enabled('unbound', 'forwarding') ? ' --observer' : '');
 
@@ -5999,6 +6185,27 @@ function pfb_dns_proxy_host_port(string $host, string $port): string {
 	return (str_contains($host, ':') ? "[{$host}]" : $host) . ":{$port}";
 }
 
+/** The daemon line of the rc script, the command the proxy runs; '' when there is none. */
+function pfb_dns_proxy_rc_command(): string {
+	$rc = (string) @file_get_contents(PFB_DNS_PROXY_RCFILE);
+	return (preg_match('~^[ \t]*/usr/sbin/daemon .*$~m', $rc, $daemon) === 1) ? $daemon[0] : '';
+}
+
+/**
+ * The name-answer table the rc script's command asks for (issue #3694), as the lines of the gateway's address-table verb: one
+ * `dns-name-answer LOCAL=ADDR[,ADDR]` for each --dns-name-answer argument, in the command's order.
+ *
+ * @return list<string>|null NULL when the command names no DNS Name (--dns-name): a gateway started without one takes no table
+ */
+function pfb_dns_proxy_command_name_answers(): ?array {
+	$command = pfb_dns_proxy_rc_command();
+	if (!str_contains($command, ' --dns-name ')) {
+		return NULL;
+	}
+	preg_match_all("/ --dns-name-answer '([0-9A-Fa-f:.,=]+)'/", $command, $answers);
+	return array_map(static fn (string $value): string => "dns-name-answer {$value}", $answers[1]);
+}
+
 /**
  * What the rc script's command asks the gateway to bind: --listen/--port for plain DNS, --<kind>-listen/--<kind>-port for DoT, DoH, DoQ.
  *
@@ -6006,8 +6213,7 @@ function pfb_dns_proxy_host_port(string $host, string $port): string {
  *         host:port of each of its addresses, in the command's order, as pfb_dns_proxy_host_port() spells it
  */
 function pfb_dns_proxy_command_listeners(): array {
-	$rc = (string) @file_get_contents(PFB_DNS_PROXY_RCFILE);
-	$command = (preg_match('~^[ \t]*/usr/sbin/daemon .*$~m', $rc, $daemon) === 1) ? $daemon[0] : '';
+	$command = pfb_dns_proxy_rc_command();
 	$listeners = [];
 	foreach (['udp+tcp', 'dot', 'doh', 'doq'] as $kind) {
 		$flag = ($kind === 'udp+tcp') ? '' : "{$kind}-";
@@ -6031,11 +6237,13 @@ function pfb_dns_proxy_command_listeners(): array {
  * with nothing logged, any other failed bind is logged and skipped, a restart pending or not. While a restart is pending the rc script
  * may differ from the running gateway in more than addresses: nothing is removed or added, and a missing listener that binds now is the
  * reason to restart (issue #3598).
+ * Last, for a command that names a DNS Name (--dns-name) and with no restart pending, the whole name-answer table the command's
+ * --dns-name-answer arguments give is sent as one frame (pfb_dns_proxy_address_table(), issue #3694), so that a changed answer is never a restart.
  *
  * @param array{listening: array<string,array<string,true>>, refused: array<string,array<string,string>>}|null $served the gateway's list,
  *        NULL = unknown (nothing to compare with: nothing is done)
  * @return string|null NULL when nothing is left to do; why the pair must be restarted: the gateway did not take a change (an older
- *         gateway, an error, no control socket: no further frame is sent), or a restart is pending and a missing listener binds. NULL
+ *         gateway, an error, no control socket: no further frame is sent; the table not taken), or a restart is pending and a missing listener binds. NULL
  *         too, with nothing done, when the gateway gives no list (nothing to compare with) and when the rc script names no plain DNS
  *         listener (a real one always names loopback: it is unreadable, not a wish to serve nothing)
  */
@@ -6076,6 +6284,11 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
 			}
 			pfb_logger("\nDNS proxy: {$label} now listens on {$at} (added live, no restart)", 1);
 		}
+	}
+	// Last, and only for a command that names a DNS Name and with no restart pending (the script may then differ in more than the table):
+	// the whole name-answer table, which the gateway replaces atomically (issue #3694)
+	if (!$pending && ($table = pfb_dns_proxy_command_name_answers()) !== NULL) {
+		return pfb_dns_proxy_address_table($table);
 	}
 	return NULL;
 }
@@ -6376,7 +6589,8 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
  * reload, and restart a live one whose rc script changed in more than its listen addresses. The script bakes in the ports and the
  * DoT/DoH/DoQ/DDR settings, so a changed one is not served until the proxy restarts. A script that differs only in its listen addresses
- * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) is reconciled
+ * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) and its name
+ * answers (every `--dns-name-answer`, issue #3694) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket: the pass
  * asks once (pfb_dns_proxy_listener_list()) and the sync acts on that answer; with the proxy not READY, or with a gateway that gives
  * no list (nothing to compare with), it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()):
@@ -6423,7 +6637,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	} else {
 		$after = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 		$rc_changed = $before !== $after;
-		$mask = "/ --(?:(?:dot|doh|doq)-)?listen '[^']*'/";
+		$mask = "/ --(?:(?:dot|doh|doq)-)?listen '[^']*'| --dns-name-answer '[^']*'/";
 		$addresses_only = $rc_changed && preg_replace($mask, '', (string) $before) === preg_replace($mask, '', (string) $after);
 		if ($deferred) {
 			if ($rc_changed) {

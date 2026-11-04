@@ -2542,6 +2542,14 @@ function pfb_cfg_registry(): array
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads \'\' = no certificate, and pfb_dns_proxy_seed() fills it once from the Resolver\'s certificate',
 		],
+		// issue #3694: DDR's target name and the name pfB-DNS answers A and AAAA for, entered on the pfB-DNS page beside the certificate
+		'dns/pfb_dns_name' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads \'\' = no DNS name (no DDR answers, no name answers); per node like the certificate, which it must match',
+		],
 	];
 
 	foreach ([...PFB_DNS_POLICY_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6', 'pfb_dns_ddr_doh_443_6'] as $key) {

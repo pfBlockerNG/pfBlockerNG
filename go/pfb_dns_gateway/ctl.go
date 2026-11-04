@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,6 +21,8 @@ import (
 // connection, starting with 4 bytes: FF FF FF FF (nothing after it) restarts the decider; FF FF FF FE adds and FF FF FF FD
 // removes a listener, each followed by a 4-byte big-endian length (1 to 256) and `<kind> <host:port>`, an add carrying
 // its sockets as SCM_RIGHTS (see listeners.go); FF FF FF FC (nothing after it) lists the listeners, lines then `ok`;
+// FF FF FF FB replaces the table of name answers (dnsname.go): a 4-byte big-endian length (0 to 64 KiB) and that many bytes
+// of `\n`-separated `dns-name-answer LOCAL=ADDR[,ADDR]` lines, the whole body validated before any of it is taken;
 // anything else is the big-endian length of the PEM that follows (the certificate, the CAs after it, the key), which
 // replaces the TLS certificate. One reply line, `ok` or `error: <reason>`, except the list's (listeners.go).
 // Whoever is not root, by the kernel's credential of the peer, is closed on without a byte read from it. Descriptors that
@@ -33,7 +36,9 @@ const (
 	ctlAdd             = 0xfffffffe // above ctlMaxPEM, so that no certificate's length is one
 	ctlRemove          = 0xfffffffd
 	ctlList            = 0xfffffffc
-	ctlRightsRoom      = 8 // descriptors one read takes: an add carries 2
+	ctlAddrTable       = 0xfffffffb // above ctlMaxPEM too
+	ctlMaxTable        = 64 << 10   // the address table: one line of `dns-name-answer LOCAL=ADDR[,ADDR]` is about 100 bytes
+	ctlRightsRoom      = 8          // descriptors one read takes: an add carries 2
 	defaultCtlDeadline = 5 * time.Second
 )
 
@@ -50,6 +55,7 @@ type ctlServer struct {
 	refusing  atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
 	restart   func() error                        // the decider restart; start() sets it
 	listeners *listenerSet                        // what an add or remove changes; start() sets it. nil in a test of the PEM alone: no add or remove may be sent to it (a nil set would panic)
+	names     *nameAnswers                        // what the address table verb replaces; start() sets it. nil: the gateway started without --dns-name
 }
 
 // bindCtl makes path's directory private to the user running the gateway (root), replaces what an earlier gateway left at
@@ -166,6 +172,9 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		_ = conn.SetWriteDeadline(time.Now().Add(c.deadline))
 		_, _ = conn.Write([]byte(c.listeners.list()))
 		return
+	case ctlAddrTable:
+		reply(c.addressTable(in))
+		return
 	}
 	if n == 0 || n > ctlMaxPEM {
 		reply(fmt.Sprintf("error: a message of %d bytes is not between 1 and %d", n, ctlMaxPEM))
@@ -185,6 +194,35 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		return
 	}
 	reply("ok")
+}
+
+// addressTable is the reply to the address table verb: the body, read in full whatever it holds, is validated whole, so that a
+// bad line leaves the table as it was; a good body replaces the table at once, and is logged only when it differs from the one it
+// replaces.
+func (c *ctlServer) addressTable(in io.Reader) string {
+	var size [4]byte
+	if _, err := io.ReadFull(in, size[:]); err != nil {
+		return "error: no message: " + reason(err).Error()
+	}
+	n := binary.BigEndian.Uint32(size[:])
+	if n > ctlMaxTable {
+		return fmt.Sprintf("error: an address table of %d bytes is over %d", n, ctlMaxTable)
+	}
+	body := make([]byte, n)
+	if got, err := io.ReadFull(in, body); err != nil {
+		return fmt.Sprintf("error: the message ended after %d of %d bytes: %v", got, n, reason(err))
+	}
+	if c.names == nil {
+		return "error: started without --dns-name"
+	}
+	table, err := parseAddressTable(body)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if !maps.Equal(*c.names.table.Swap(&table), table) { // PHP pushes on every sync: a push that changes nothing is not news
+		c.logf("address table: %d name answers", len(table))
+	}
+	return "ok"
 }
 
 // ctlInput is the connection read with recvmsg, so that a descriptor riding with any byte of the message is found and

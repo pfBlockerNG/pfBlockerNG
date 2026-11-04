@@ -234,14 +234,40 @@ therefore do not offer the public-CA route to verified DDR. [RFC 9462 §4.3][ddr
 can still satisfy DNR if it matches the ADN. It does not satisfy DDR's IP-address check.
 See [Public resolver addresses](#public-resolver-addresses) for that separate route.
 
+### The DNS Name
+
+**DNS Name** (`dns/pfb_dns_name`) is the text input right after **SSL/TLS Certificate** on the pfB-DNS page. It is the target
+name DDR gives clients and the one name pfB-DNS answers for itself. There is no predefined name and none is filled in for you.
+Like the certificate it is stored per node, never synced, and applied on the next **Update**.
+
+- **Format:** a fully qualified name of at least two labels, each of 1 to 63 ASCII letters, digits and hyphens (not starting or
+  ending with one), at most 253 characters, with an optional trailing dot that is not stored. An IP address, a wildcard,
+  a single label and `resolver.arpa` or a name under it are refused; an internationalized name is entered as its punycode form.
+  Case is kept.
+- **What pfB-DNS answers:** `A` and `AAAA` queries for exactly this name (ASCII case-insensitive), after the Resolver ACL, with
+  TTL 300, on every transport. The answer depends on the address the query arrived on: an interface address is answered
+  with that interface's IPv4 and IPv6 addresses (a query for `A` on `10.0.0.1` gets `10.0.0.1`, whether or not a Resolver VIP is
+  active); a Resolver VIP with the VIP and the other family's VIP, if there is one. Where there is no address of the
+  family asked for, or the query arrived on loopback or on an address no interface carries, Unbound answers as before.
+  Subdomains and every other type (`MX`, `TXT`, `HTTPS`, ...) are Unbound's too.
+- **No name:** DDR answers nothing (Unbound answers `resolver.arpa`, as with DDR off) and pfB-DNS intercepts no query.
+  Turning **DDR** on without a name is refused when you save: *DDR needs a DNS name: enter the name the certificate
+  covers, or turn DDR off.*
+- **Upgrading:** a box that had DDR on before the name existed stops answering DDR queries once pfB-DNS applies this
+  version, because it has no name, and the page says so (below). No name is chosen for you, not even the firewall's hostname.
+- **Certificate:** clients that connect by the name, DDR's target included, need it among the certificate's DNS names
+  (`dNSName` SANs); `*.example.lan` covers `fw.example.lan` but not `example.lan` or `a.fw.example.lan`. The page warns when
+  it does not (below).
+
 ### DDR and DoH on port 443
 
 Under **Discovery of Designated Resolvers (DDR)** on the pfB-DNS page:
 
 - **DDR — Enable** (`dns_shared/pfb_dns_ddr`): experimental, disabled by default, applied on the next **Update**. It lets
-  pfB-DNS answer `resolver.arpa` discovery queries. A plain DNS query to an address gets designation only for encrypted
-  transports listening on that address with a certificate loaded. With DDR disabled, or pfB-DNS off, the DNS Resolver
-  answers as before. Enabling it alone does not make private-address DDR usable by Apple clients.
+  pfB-DNS answer `resolver.arpa` discovery queries, naming the **DNS Name** as the target, so it needs one. A plain DNS query
+  to an address gets designation only for encrypted transports listening on that address with a certificate loaded. With DDR
+  disabled, or pfB-DNS off, the DNS Resolver answers as before. Enabling it alone does not make private-address DDR usable by
+  Apple clients.
 - **IPv4 DoH on port 443 — Advertise IPv4 DoH on port 443** (`dns_shared/pfb_dns_ddr_doh_443`) and
   **IPv6 DoH on port 443 — Advertise IPv6 DoH on port 443** (`dns_shared/pfb_dns_ddr_doh_443_6`): disabled by default,
   applied on the next **Update**; greyed out when that family's configured DoH port is already 443. They remove
@@ -255,8 +281,8 @@ These are the [shipped labels/help text][ui] and [gateway behavior][gateway]. Th
 > for users who, for example, serve multiple sites over HTTPS through a reverse proxy, and who are responsible for
 > configuring that reverse proxy correctly.
 
-DDR always advertises the firewall's FQDN (`hostname.domain`), not a separately chosen DNR ADN. Configure the reverse
-proxy to route SNI/HTTP Host for that FQDN to DoH and to present the certificate with the original resolver IP SAN.
+DDR advertises the **DNS Name**, whatever the firewall's own hostname and domain are, and not a separately chosen DNR ADN.
+Configure the reverse proxy to route SNI/HTTP Host for that name to DoH and to present the certificate with the original resolver IP SAN.
 [Gateway behavior][gateway], [RFC 9461 §5][doh-svcb], [RFC 9462 §6.3](https://www.rfc-editor.org/rfc/rfc9462#section-6.3).
 
 For a listener on 4443, only enable this if you have configured a working client-facing DoH service on 443, for
@@ -269,9 +295,26 @@ DDR and documents global and interface DDR switches in `netsh dnsclient`; the de
 **[UNVERIFIED]**. Do not treat the toggles as proof that any particular client has switched. [Apple][apple],
 [Microsoft][windows-ddr], [netsh][netsh], [pending client checks][client-checks].
 
+### The DNS Name warnings
+
+Two non-blocking warnings concern the name; neither depends on the address warning below.
+
+> DDR: no DNS name is set, so DDR answers nothing. Enter the DNS Name the certificate covers.
+
+appears while **DDR** is on and **DNS Name** is empty (after an upgrade, until you enter one). With it showing, no
+address warning is computed, because a DDR that answers nothing designates no address.
+
+> DNS Name: the selected SSL/TLS Certificate has no DNS name (dNSName) SAN for NAME; clients that connect by that name will
+> not accept it.
+
+appears when a name is set, DoT, DoH or DoQ is on, a certificate is selected and none of its `dNSName` SANs is the name or a
+wildcard that covers it (`*.example.lan` covers exactly one label under `example.lan`; the comparison ignores ASCII case).
+An `iPAddress` SAN never covers a name. It is shown with DDR off too, because the name is also what pfB-DNS answers `A` and
+`AAAA` for. Like the address warning below it reads the SANs as one text, so a crafted SAN could hide it.
+
 ### The public-address certificate warning
 
-With DDR on and an **SSL/TLS Certificate** selected, the page warns about public encrypted-listener addresses missing
+With DDR on, a **DNS Name** set and an **SSL/TLS Certificate** selected, the page warns about public encrypted-listener addresses missing
 from that certificate's `iPAddress` SANs. The message names the address and transports:
 
 > DDR: DoT on ADDRESS will not be used by clients that verify DDR, because the selected SSL/TLS Certificate has no IP
@@ -283,7 +326,7 @@ other explicitly excluded ranges, or for a public IPv6 address (a global IPv6 pr
 cannot be fixed). It compares parsed addresses, so equivalent IPv6 spellings match.
 With **Advertise DoH on port 443** on **and** DoH not listening on 443, DoH is excluded because pfB-DNS cannot see the
 proxy's certificate; DoT and DoQ are still checked. If DoH itself listens on 443, it is checked even if the stored
-443 toggle is on. With DDR off or no selected certificate, no warning is shown. The exact excluded ranges and
+443 toggle is on. With DDR off, no DNS Name or no selected certificate, no address warning is shown. The exact excluded ranges and
 conditions are in the [shipped warning implementation][warning]. Absence of a warning is not proof of verified DDR.
 
 ## Public resolver addresses

@@ -15,6 +15,11 @@ Amended 2026-11-04 (owner decision, #3694): a Resolver VIP joins the interface a
 replacing them (DoH keeps the replacement for a family whose DoH port is 443), the gateway still designates the address a
 client queried, and the certificate warning does not name a public IPv6 address; see "Certificate warning (candidate 6)".
 
+Amended 2026-11-04 (owner decision, #3694): DDR's target name is no longer the firewall's FQDN but a **DNS Name**
+(`dns/pfb_dns_name`) entered on the pfB-DNS page beside the certificate, with no predefined value. pfB-DNS also answers `A` and
+`AAAA` for exactly that name, from the address the query arrived on, and the page warns when the certificate has no DNS SAN for
+it; see "DNS Name (#3694)". Where this text still says "the firewall FQDN" for the DDR record it means that name.
+
 ## Fixed constraints
 
 - ISC dhcpd is out of scope; only the Kea DHCP backend is considered.
@@ -202,7 +207,8 @@ radvd 2.20 (S1, S1s), P1 has `radvd-2.20`, and radvd's `DNR` block exists only o
 ### DDR answer (candidate 4)
 
 - Setting: one toggle on the pfB-DNS page, `dns/pfb_dns_ddr`, off by default, registered through `PfbConfig`. When it
-  is on, `pfb_dns_proxy_service()` adds `--ddr` to the gateway command line. A change restarts the gateway, as other flag
+  is on and a DNS Name is set, `pfb_dns_proxy_service()` adds `--dns-name NAME --ddr` to the gateway command line (#3694: `--ddr`
+  is a flag without a value; with no name there is no flag at all). A change restarts the gateway, as other flag
   changes do (`pfblockerng.inc:4627-4628`).
 - Scope: with `--ddr`, after the ACL check and before the decider, the gateway answers every query for a name at or
   under `resolver.arpa.` itself, on every transport. Refused or denied clients get what they get today. These answers
@@ -220,9 +226,9 @@ radvd 2.20 (S1, S1s), P1 has `radvd-2.20`, and radvd's `DNR` block exists only o
   - DoQ: priority 3, `alpn=doq`, and `port` only when the DoQ port is not 853.
   - `port` is a mandatory key for clients ([RFC 9461 §4.2](https://www.rfc-editor.org/rfc/rfc9461#section-4.2)), so a
     client that does not support it ignores the record; leaving it out at the default port avoids that.
-  - TargetName: the firewall's FQDN, `system/hostname` + `.` + `system/domain` (never `.` or `resolver.arpa`,
-    RFC 9462 §4). pfSense registers that name in the Resolver for the LAN address only (S2 `system.inc:402-459`), so the
-    answer carries the address itself:
+  - TargetName: the DNS Name (#3694; never `.` or `resolver.arpa`, RFC 9462 §4; it replaces the firewall's FQDN,
+    `system/hostname` + `.` + `system/domain`, which pfSense registers in the Resolver for the LAN address only, S2
+    `system.inc:402-459`). The name need not be in the Resolver, so the answer carries the address itself:
   - An A or AAAA record for TargetName = L in the Additional section (RFC 9462 §4: SHOULD), and `ipv4hint` or
     `ipv6hint` = L in the record ([RFC 9460 §7.3](https://www.rfc-editor.org/rfc/rfc9460#section-7.3)).
 - `resolver.arpa.` SOA: `resolver.arpa. 300 IN SOA localhost. nobody.invalid. 1 3600 1200 604800 300`.
@@ -256,7 +262,7 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
 - Setting: optional toggle `dns/pfb_dns_ddr_doh_443`, labelled "Advertise DoH on port 443", registered through
   `PfbConfig`, off by default (owner decision, 2026-10-22). Off: the DoH record is as in "DDR answer", with `port`
   exactly when the DoH port is not 443. On: the DoH record omits `port` even when the DoH listener port is not 443.
-  Everything else in the record is unchanged: TargetName the firewall FQDN, `ipv4hint` or `ipv6hint` and the Additional
+  Everything else in the record is unchanged: TargetName the DNS Name, `ipv4hint` or `ipv6hint` and the Additional
   A or AAAA record = L, `dohpath=/dns-query{?dns}`. It is still emitted only where DoH listens on L with a certificate
   loaded. DoT and DoQ records are unchanged.
 - Page: the toggle is rendered disabled (greyed out) when the configured DoH port is already 443, where it would change
@@ -265,7 +271,7 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
   longer be reachable. It is intended for users who, for example, serve multiple sites over HTTPS through a reverse
   proxy, and who are responsible for configuring that reverse proxy correctly."
 - Use: the owner runs `https://dns.brait.dev` behind HAProxy (443 to gateway port 4443). With the toggle on, a client
-  that follows the record connects to the firewall FQDN on 443, where the reverse proxy answers. Configuring the proxy
+  that follows the record connects to the DNS Name on 443, where the reverse proxy answers. Configuring the proxy
   is the user's responsibility; pfB-DNS cannot see it.
 - Limit: RFC 9462 §4.2 checks the certificate the client gets on 443 against the resolver address it queried. A
   hostname-only certificate (for example Let's Encrypt for `dns.brait.dev`) therefore does not make DDR verified. It
@@ -276,11 +282,40 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
 - No URL, hostname, path, or DoT or DoQ override (owner decision, 2026-10-22). DoQ cannot be fronted by HAProxy, and a
   DoT name is irrelevant to DDR verification, which checks the queried address (RFC 9462 §4.2).
 
+### DNS Name (#3694)
+
+- Setting: text input `dns/pfb_dns_name` right after the certificate selector, registered through `PfbConfig`, sync `local`
+  (per node, like the certificate), default `''`, never seeded. It is DDR's TargetName and the one name pfB-DNS answers itself.
+- Format, checked on save and again on the stored value before it reaches the gateway (which refuses to start with a bad one):
+  trimmed, one trailing dot dropped, case kept; at most 253 characters, at least two labels of 1 to 63 ASCII letters, digits and
+  hyphens (not starting or ending with one), a last label that is not all digits (an IPv4 literal is no name), and not
+  `resolver.arpa` or under it. A stored value that fails counts as no name and is logged.
+- No name: DDR answers nothing (Unbound answers `resolver.arpa.` as with DDR off) and no name query is intercepted. DDR On with no
+  name is a save error (`DDR needs a DNS name: enter the name the certificate covers, or turn DDR off.`). Upgrade: a box that
+  had DDR On stops answering DDR until a name is entered, and the page says so; no name is seeded.
+- Flags: `--dns-name NAME`, then `--ddr` while DDR is On (then `--ddr-doh-443`, `--ddr-doh-4436`), then one
+  `--dns-name-answer LOCAL=ADDR[,ADDR]` per address the gateway listens on (plain DNS, and each of DoT, DoH and DoQ that is on).
+  The table is replaced on the running gateway by the control-socket verb `FF FF FF FB` and never restarts it
+  ([dns-gateway-transports.md](../misc/dns-gateway-transports.md), "Name-answer table").
+- Answers: after the ACL and after DDR, before the decider, an `A` or `AAAA` query for exactly the name (ASCII case-insensitive; a
+  subdomain and any other type go to Unbound) is answered from the address it arrived on, TTL 300, on every transport:
+  - a query on an interface address gets that interface's IPv4 and IPv6 addresses, of which the family asked for is answered, whether or
+    not a Resolver VIP is active (`10.0.0.1` for `A` on `10.0.0.1`; the LAN's IPv6 for `AAAA` on its IPv4 address, global or ULA);
+  - a query on a Resolver VIP gets the VIP and the other family's active VIP: `AAAA` on the IPv4 VIP is the IPv6 VIP if it is
+    active, else Unbound's;
+  - a family with no address, loopback, an address no interface carries and an unknown interface: not intercepted.
+
 ### Certificate warning (candidate 6)
 
-With the DDR toggle on, the pfB-DNS page shows a non-blocking warning for each address an encrypted listener serves that
-is classified public and is not an `iPAddress` SAN of the selected certificate (`dns/pfb_dns_sslcertref`). Verified DDR
-needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses, not strings.
+With the DDR toggle on and a DNS Name set, the pfB-DNS page shows a non-blocking warning for each address an encrypted listener
+serves that is classified public and is not an `iPAddress` SAN of the selected certificate (`dns/pfb_dns_sslcertref`). Verified
+DDR needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses, not strings.
+
+- #3694: two more warnings do not depend on those. DDR On with no DNS Name: `DDR: no DNS name is set, so DDR answers nothing.
+  Enter the DNS Name the certificate covers.`, and then no address warning, since nothing is designated. A DNS Name set, DoT, DoH
+  or DoQ on and a certificate selected whose `dNSName` SANs do not cover the name (the name itself, ASCII case-insensitive, or
+  `*.<parent>` for a name of exactly one label under `<parent>`; an `iPAddress` SAN never does): `DNS Name: the selected SSL/TLS
+  Certificate has no DNS name (dNSName) SAN for <name>; clients that connect by that name will not accept it.`
 
 - Never warned (not public): 127.0.0.0/8, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10,
   169.254.0.0/16, fe80::/10, fc00::/7, plus the reserved ranges 0.0.0.0/8, ::/128, the deprecated site-local range
@@ -326,7 +361,7 @@ These apply to the follow-up work; this specification is met when it is on `deve
 
 1. WHEN the DDR toggle is on and a client sends `_dns.resolver.arpa. SVCB` over plain UDP or TCP to a pfB-DNS listener
    address L THEN the answer has one record per encrypted transport listening on L with a certificate loaded, with the
-   ALPN, `dohpath` and non-default `port` above, TargetName the firewall FQDN, a hint equal to L, and an A or AAAA
+   ALPN, `dohpath` and non-default `port` above, TargetName the DNS Name, a hint equal to L, and an A or AAAA
    record for TargetName equal to L in the Additional section.
 2. WHEN the DDR toggle is on and the query is another type at `_dns.resolver.arpa.`, any other name under
    `resolver.arpa.`, or `_dns.resolver.arpa.` SVCB over DoT, DoH or DoQ THEN the answer is NODATA with the 300-second
@@ -342,7 +377,7 @@ These apply to the follow-up work; this specification is met when it is on `deve
 7. WHEN reading the documentation page THEN each section states the pfSense, Kea, ACME package and client versions it
    was checked against, with sources.
 8. WHEN the DDR toggle is on THEN the pfB-DNS page shows a non-blocking warning for each address an encrypted listener
-   serves that is classified public (see "Certificate warning") and is not an `iPAddress` SAN of the selected
+   serves that is classified public (see "Certificate warning"), a DNS Name is set and it is not an `iPAddress` SAN of the selected
    certificate (`dns/pfb_dns_sslcertref`), and for no other address:
 
    | Case | Result |
@@ -362,7 +397,7 @@ These apply to the follow-up work; this specification is met when it is on `deve
    The page never warns about CA trust or DNR ADNs, and the warning never blocks saving.
 9. WHEN `dns/pfb_dns_ddr_doh_443` is off THEN the DoH record carries `port` exactly when the DoH port is not 443. WHEN
    it is on THEN the DoH record carries no `port` and is otherwise identical to the off case (TargetName the firewall
-   FQDN, `ipv4hint` or `ipv6hint` and Additional A or AAAA = L, `dohpath=/dns-query{?dns}`), still emitted only where
+   DNS Name, `ipv4hint` or `ipv6hint` and Additional A or AAAA = L, `dohpath=/dns-query{?dns}`), still emitted only where
    DoH listens on L with a certificate loaded, and the DoT and DoQ records are unchanged. WHEN the configured DoH port
    is 443 THEN the page renders the toggle disabled.
 10. Removed (owner decision, 2026-10-22): the advertised DoH URL setting and its save-time validation no longer exist.
@@ -370,6 +405,18 @@ These apply to the follow-up work; this specification is met when it is on `deve
 11. WHEN reading the documentation page THEN its Kea DNR section states that the ADN must be a name in the certificate
     the client reaches (the pfB-DNS certificate, or a reverse proxy's when one serves DoH on 443), and its certificate
     section states the limit given under "DoH on port 443".
+12. WHEN the DNS Name is empty THEN the gateway gets no `--dns-name`, `--ddr` or `--dns-name-answer` whatever the DDR toggle
+    says, `resolver.arpa.` and the name are Unbound's, and saving with DDR On is refused with the sentence under "DNS Name
+    (#3694)"; WHEN a name is set THEN `--dns-name`, `--ddr` (DDR On) and one `--dns-name-answer` per listen address are given, in
+    that order.
+13. WHEN a client queries `A` or `AAAA` for the DNS Name on an address that has an entry THEN it gets the address of that family
+    from the entry (an interface's own addresses, a VIP and the other family's VIP, see "DNS Name (#3694)"); WHEN the address has
+    none (loopback, an address no interface carries, no address of the family), or the query is for a subdomain or another type,
+    THEN Unbound answers.
+14. WHEN an interface gains or loses an address THEN the update pass replaces the running gateway's name-answer table with no
+    restart; WHEN the DNS Name or DDR changes THEN it restarts the proxy.
+15. WHEN the selected certificate has no `dNSName` SAN covering the DNS Name (exact, wildcard of one label, case-insensitive)
+    and an encrypted transport is on THEN the page warns; WHEN DDR is On and no name is set THEN it says DDR answers nothing.
 
 ## Out of scope
 

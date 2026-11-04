@@ -51,7 +51,7 @@ func TestDDRDoH443AdvertisementIsPerFamily(t *testing.T) {
 			if family == "6" {
 				flag += "6"
 			}
-			cfg, err := parseConfig([]string{"--listen", "127.0.0.1", "--ddr", "fw.example.lan", flag, "--", "decider"}, io.Discard)
+			cfg, err := parseConfig([]string{"--listen", "127.0.0.1", "--dns-name", "fw.example.lan", "--ddr", flag, "--", "decider"}, io.Discard)
 			if err != nil {
 				t.Fatal(err)
 			}

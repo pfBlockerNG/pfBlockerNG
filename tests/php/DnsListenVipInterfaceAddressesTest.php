@@ -255,13 +255,17 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 		return "DDR: {$served} on {$address} will not be used by clients that verify DDR, because the selected SSL/TLS Certificate has no IP address (iPAddress) SAN for it.";
 	}
 
-	/** DDR on and a certificate with these SANs; the LAN holds a public address and so does the VIP, which no case lists as a SAN unless it says so. */
+	/**
+	 * DDR on, a DNS Name the certificate covers (DDR needs one, issue #3694) and a certificate with these IP SANs; the LAN holds a public
+	 * address and so does the VIP, which no case lists as a SAN unless it says so.
+	 */
 	private function ddr(array $san, array $settings): void
 	{
 		$this->lan([self::PUBLIC_LAN4], []);
-		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost', NULL, $san))];
+		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost', NULL, [...$san, 'DNS:fw.example.lan']))];
 		config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key('pfb_dns_sslcertref'), 2)[0]] . '/pfb_dns_sslcertref', 'cert1');
 		PfbConfig::write('dns_shared/pfb_dns_ddr', 'on');
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		foreach ($settings + ['dns_shared/pfb_dns_dot' => 'on'] as $key => $value) {
 			PfbConfig::write($key, $value);
 		}

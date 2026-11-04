@@ -60,6 +60,7 @@ DNS_SAVED_KEYS = (
     "pfb_dns",
     "pfb_dns_interface",
     "pfb_dns_sslcertref",
+    "pfb_dns_name",
     "pfb_dns_dot",
     "pfb_dns_dot_port",
     "pfb_dns_dot_port6",
@@ -347,6 +348,8 @@ def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
 ) -> None:
     """issue #3583: saving both DDR checkboxes stores `dns_shared/pfb_dns_ddr` and `dns_shared/pfb_dns_ddr_doh_443` on.
 
+    DDR needs a DNS Name (issue #3694): the test types one into the DNS Name input and expects it stored.
+
     Given both stored empty and the DoH port 4443 (before-state, seeded directly), the save rewrites every setting of
     the page and the first load seeds the unset ones, so each one is read before the page is opened and put back.
     """
@@ -361,6 +364,7 @@ def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
         before = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
         assert before == ("", "", ""), f"seed did not take: DDR toggles must start Off, got {before}"
         _open(page, webui, DNS_PAGE)
+        page.get_by_label("DNS Name", exact=True).fill("fw.example.lan")
         for _label, name in DDR_TOGGLES:
             page.locator(f'input[name="{name}"]').check()
 
@@ -369,6 +373,7 @@ def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         stored = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
         assert stored == ("on", "on", "on"), f"all three DDR toggles must store on, got {stored}"
+        assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_name") == "fw.example.lan", "the DNS Name must persist"
     finally:
         for path, state in originals.items():
             helpers.config_restore_state(smoke_vm, path, state)

@@ -12,7 +12,7 @@ final class PfbDnsPageWiringTest extends TestCase
 {
 	/** The listener settings in the order the page shows them (issues #3513, #3538). */
 	private const LISTENER_FIELDS = [
-		'pfb_dns_interface', 'pfb_dns_sslcertref',
+		'pfb_dns_interface', 'pfb_dns_sslcertref', 'pfb_dns_name',
 		'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_dot_interface',
 		'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_interface', 'pfb_dns_doh_trusted',
 		'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doq_interface',
@@ -111,6 +111,31 @@ final class PfbDnsPageWiringTest extends TestCase
 	}
 
 
+	public function testTheDnsNameInputFollowsTheCertificateSelectorDirectly(): void
+	{
+		// Given the page, in which the DNS Name is DDR's target and the name the certificate must cover (issue #3694)
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$this->assertSame(1, preg_match('/new Form_Select\(\s*\'pfb_dns_sslcertref\',/', $page, $selector, PREG_OFFSET_CAPTURE), 'the certificate selector');
+		$cert = $selector[0][1];
+		$name = (int) strpos($page, "'pfb_dns_name',", $cert);
+		$this->assertGreaterThan($cert, $name, 'the DNS Name control is below the certificate selector');
+
+		// Then nothing but the selector (or its no-certificate notice) stands between them, and the DNS Name is a text input
+		$between = substr($page, $cert, $name - $cert);
+		$this->assertSame(2, substr_count($between, '$section->addInput('), 'the no-certificate notice, then the DNS Name');
+		$this->assertMatchesRegularExpression('/new Form_Input\(\s*\'pfb_dns_name\',\s*gettext\(\'DNS Name\'\),\s*\'text\',/', $page, 'a text input labelled DNS Name');
+	}
+
+	public function testThePageSanitizesTheDnsNameAtIngestionOnlyWhenItIsText(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		// An array post stays as posted for the validator to refuse: casting it would raise a PHP warning
+		$found = preg_match('/if \(is_string\(\$_POST\[\'pfb_dns_name\'\] \?\? \'\'\)\) \{\s*\$_POST\[\'pfb_dns_name\'\] = pfb_sanitize_text\(\(string\) \(\$_POST\[\'pfb_dns_name\'\] \?\? \'\'\)\);\s*\}/', $page, $guard, PREG_OFFSET_CAPTURE);
+		$this->assertSame(1, $found, 'the name is sanitized once, and only when it is text');
+		$this->assertLessThan((int) strpos($page, 'pfb_validate_dns_proxy_listeners_post('), $guard[0][1] ?? PHP_INT_MAX, 'before anything evaluates it');
+	}
+
 	public function testAFailedSaveBringsBackTheSubmittedDdrFields(): void
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
@@ -119,7 +144,7 @@ final class PfbDnsPageWiringTest extends TestCase
 		$found = preg_match('/foreach \(array\(([^)]*)\) as \$pfb_dns_field\) \{\s*\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';/', $page, $restore);
 
 		$this->assertSame(1, $found, 'the page restores its scalar fields on an input error');
-		foreach ([...self::DDR_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6'] as $field) {
+		foreach ([...self::DDR_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6', 'pfb_dns_name'] as $field) {
 			$this->assertStringContainsString("'{$field}'", $restore[1] ?? '', "{$field} is restored on an input error");
 		}
 	}

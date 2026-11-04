@@ -2375,8 +2375,10 @@ _DNS_INTERFACE_LISTS = ("pfb_dns_interface", "pfb_dns_dot_interface", "pfb_dns_d
 # The certificate sits right after the plain DNS interface list: a select, or the Resolver's static text on a box
 # with no certificate that has a private key.
 _DNS_CERT_FIELD = "pfb_dns_sslcertref"
+# issue #3694: the DNS Name (DDR's target, and the name pfB-DNS answers) is a text input directly after the certificate.
+_DNS_NAME_FIELD = "pfb_dns_name"
 _NO_CERT_TEXT = "No Certificates have been defined"
-_DNS_LISTENER_NAMES = tuple(f'name="{field}' for field in (*_DNS_LISTENER_FIELDS, _DNS_CERT_FIELD))
+_DNS_LISTENER_NAMES = tuple(f'name="{field}' for field in (*_DNS_LISTENER_FIELDS, _DNS_CERT_FIELD, _DNS_NAME_FIELD))
 
 
 def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
@@ -2396,8 +2398,9 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     """issues #3513, #3538, #3688: the listener settings follow the pfB-DNS enable checkbox, in order, before DDR.
 
     Given the pfB-DNS page renders, Then the DNS interfaces, the SSL/TLS Certificate (or the Resolver's no-certificate
-    text), DoT (enable, port, interfaces), DoH (enable, port, interfaces, trusted front ends) and DoQ (enable, port,
-    interfaces) appear in that order between the enable checkbox and DDR, as the right input kinds. Every
+    text), the DNS Name (a text input, issue #3694), DoT (enable, port, interfaces), DoH (enable, port, interfaces,
+    trusted front ends) and DoQ (enable, port, interfaces) appear in that order between the enable checkbox and DDR,
+    as the right input kinds. Every
     interface list offers All and Localhost first and says one entry is required. The help says experimental, sends the
     operator to the certificate selector, says DoQ is UDP, names the HAProxy options and the binary the package ships
     (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
@@ -2413,7 +2416,7 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     cert_at = html.find(f'name="{_DNS_CERT_FIELD}"', start, end)
     if cert_at == -1:
         cert_at = html.find(_NO_CERT_TEXT, start, end)
-    order = (_DNS_LISTENER_FIELDS[0], _DNS_CERT_FIELD, *_DNS_LISTENER_FIELDS[1:])
+    order = (_DNS_LISTENER_FIELDS[0], _DNS_CERT_FIELD, _DNS_NAME_FIELD, *_DNS_LISTENER_FIELDS[1:])
     positions = [cert_at if field == _DNS_CERT_FIELD else html.find(f'name="{field}', start, end) for field in order]
     assert -1 not in positions, f"a field is missing between the pfB-DNS toggle and DDR: {positions}"
     assert positions == sorted(positions), f"fields are out of order: {dict(zip(order, positions, strict=True))}"
@@ -2429,6 +2432,7 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
         ("pfb_dns_doq_port", "number"),
         ("pfb_dns_doq_port6", "number"),
         ("pfb_dns_doh_trusted", "text"),
+        (_DNS_NAME_FIELD, "text"),
     ):
         tag = tag_at(html.index(f'name="{name}"', start, end))
         assert re.search(rf"""\btype=["']?{kind}\b""", tag), f"{name} must be a {kind} input, got {tag}"
@@ -2557,8 +2561,12 @@ _DDR_WARNING_ADDRESS = "192.88.99.1"
 # change with the toggles, so a text is not comparable across states).
 _DDR_WARNED_ADDRESS = re.compile(r"^DDR: .+? on (\S+) will not be used\b")
 _DDR_WARNING_VIP = "pfb3583vip"
+# issue #3694: DDR needs a DNS Name, and no certificate of a box carries this one as a dNSName SAN.
+_DDR_WARNING_NAME = "dns.pfb3694.example"
+_NO_DNS_NAME_WARNING = "DDR: no DNS name is set, so DDR answers nothing. Enter the DNS Name the certificate covers."
 # Everything the warning tests set, and what the page's first load seeds beside it on a box that was never seeded.
 _DDR_WARNING_KEYS = (
+    "pfb_dns_name",
     "pfb_dns_interface",
     "pfb_dns_sslcertref",
     "pfb_dns_dot",
@@ -2758,8 +2766,9 @@ def _restore_config_paths(vm: SmokeVM, priors: Mapping[str, str | None]) -> None
 
 @contextmanager
 def _ddr_on_with_a_certificate_and_a_public_vip(vm: SmokeVM, webui: WebUI) -> Iterator[None]:
-    """DDR on, a certificate selected, DoT, DoH and DoQ off on the interface list All, and a lo0 IP-alias VIP at the
-    public address. A box's own certificates carry no iPAddress SAN for it, so a transport turned on warns.
+    """DDR on with a DNS Name, a certificate selected, DoT, DoH and DoQ off on the interface list All, and a lo0
+    IP-alias VIP at the public address. A box's own certificates carry no iPAddress SAN for it, so a transport turned
+    on warns.
 
     Every leaf touched and the VIP are put back on the way out.
     """
@@ -2787,6 +2796,7 @@ def _ddr_on_with_a_certificate_and_a_public_vip(vm: SmokeVM, webui: WebUI) -> It
             pfb_dns_doq_interface="all",
             pfb_dns_ddr="on",
             pfb_dns_ddr_doh_443="",
+            pfb_dns_name=_DDR_WARNING_NAME,
         )
         _set_ddr_warning_vip(vm, True)
         yield
@@ -2843,6 +2853,46 @@ def test_pfb_dns_page_warns_about_a_public_dot_address_the_certificate_lacks_onl
         _assert_ddr_warnings(webui, "DDR on, DoT on All", naming_the_vip=1)
         _set_dns(smoke_vm, pfb_dns_ddr="")
         _assert_ddr_warnings(webui, "DDR off (only the toggle changed)", naming_the_vip=0)
+
+
+def _dns_name_warning(name: str) -> str:
+    return (
+        f"DNS Name: the selected SSL/TLS Certificate has no DNS name (dNSName) SAN for {name}; "
+        "clients that connect by that name will not accept it."
+    )
+
+
+@pytest.mark.ui_e2e
+def test_pfb_dns_page_says_ddr_answers_nothing_without_a_name_and_warns_when_the_certificate_lacks_the_name(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3694: DDR on with no DNS Name says so (and names no address); a name no certificate SAN covers warns.
+
+    Given DDR on, DoT on All, a certificate the form offers and a public lo0 VIP,
+    When the DNS Name is empty, Then an alert-warning says DDR answers nothing and no other `DDR: ` warning is shown;
+    When a name the box's certificates do not carry is stored, Then the warning about the missing dNSName SAN names it,
+      the first text is gone and the address warning is back;
+    When only DDR is turned off, Then the dNSName warning stays (the name is also what pfB-DNS answers) and no `DDR: `
+      warning is left.
+    """
+    with _ddr_on_with_a_certificate_and_a_public_vip(smoke_vm, webui):
+        _set_dns(smoke_vm, pfb_dns_dot="on", pfb_dns_name="")
+        warnings = _alert_warnings(webui.get(_PFB_DNS_PAGE).text)
+        assert _NO_DNS_NAME_WARNING in warnings, f"DDR on, no name: expected {_NO_DNS_NAME_WARNING!r} in {warnings}"
+        assert [text for text in warnings if text.startswith("DDR: ")] == [_NO_DNS_NAME_WARNING], (
+            f"DDR on, no name: no address warning may follow it: {warnings}"
+        )
+
+        _set_dns(smoke_vm, pfb_dns_name=_DDR_WARNING_NAME)
+        warnings = _alert_warnings(webui.get(_PFB_DNS_PAGE).text)
+        assert _dns_name_warning(_DDR_WARNING_NAME) in warnings, f"a name the certificate lacks: {warnings}"
+        assert _NO_DNS_NAME_WARNING not in warnings, f"with a name the first text must be gone: {warnings}"
+        assert any(text.startswith("DDR: DoT on ") for text in warnings), f"the address warning is back: {warnings}"
+
+        _set_dns(smoke_vm, pfb_dns_ddr="")
+        warnings = _alert_warnings(webui.get(_PFB_DNS_PAGE).text)
+        assert _dns_name_warning(_DDR_WARNING_NAME) in warnings, f"DDR off, the name still warns: {warnings}"
+        assert not [text for text in warnings if text.startswith("DDR: ")], f"DDR off: {warnings}"
 
 
 @pytest.mark.ui_e2e

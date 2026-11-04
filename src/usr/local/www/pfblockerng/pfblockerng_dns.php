@@ -48,6 +48,7 @@ $pconfig['pfb_dns'] = PfbConfig::read('dns/pfb_dns');
 // an interface list is split into the tokens the proxy reads from it (issue #3557: spaces too, as a hand edit may leave)
 $pconfig['pfb_dns_interface']		= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface'));
 $pconfig['pfb_dns_sslcertref']		= pfb_dns_proxy_setting('pfb_dns_sslcertref');
+$pconfig['pfb_dns_name']		= PfbConfig::read('dns/pfb_dns_name');	// issue #3694: DDR's target and the name pfB-DNS answers for; never seeded
 $pconfig['pfb_dns_dot']			= pfb_dns_proxy_setting('pfb_dns_dot');
 $pconfig['pfb_dns_dot_port']		= pfb_dns_proxy_setting('pfb_dns_dot_port');
 $pconfig['pfb_dns_dot_port6']		= PfbConfig::read('dns_shared/pfb_dns_dot_port6');
@@ -77,6 +78,10 @@ if ($_POST) {
 		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
 		foreach (array('pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doh_trusted') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
+		}
+		// issue #3694: a name that is not text (an array post) stays as posted, for the validator to refuse; casting it would warn
+		if (is_string($_POST['pfb_dns_name'] ?? '')) {
+			$_POST['pfb_dns_name'] = pfb_sanitize_text((string) ($_POST['pfb_dns_name'] ?? ''));
 		}
 
 		$pfb_dns = pfb_filter($_POST['pfb_dns'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
@@ -119,7 +124,7 @@ if ($_POST) {
 		}
 
 		$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
-		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6', 'pfb_dns_sslcertref') as $pfb_dns_field) {
+		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6', 'pfb_dns_sslcertref', 'pfb_dns_name') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
 		}
 		if (pfb_dns_proxy_ddr_doh_443_locked()) {
@@ -130,6 +135,9 @@ if ($_POST) {
 		}
 		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
+		}
+		if (!is_string($pconfig['pfb_dns_name'])) {
+			$pconfig['pfb_dns_name'] = '';	// the validator refused a non-text name: the form cannot show it
 		}
 	}
 }
@@ -239,6 +247,16 @@ if ($options_dns_cert) {
 		)
 	));
 }
+
+$section->addInput(new Form_Input(
+	'pfb_dns_name',
+	gettext('DNS Name'),
+	'text',
+	$pconfig['pfb_dns_name'],
+	[ 'placeholder' => 'fw.example.lan' ]
+))->setHelp('The name <strong>DDR</strong> gives clients as the target of the encrypted transports, and the name pfB-DNS answers <code>A</code> and <code>AAAA</code> queries for, '
+		. 'with the address the query arrived on. Clients connect by this name, so the <strong>SSL/TLS Certificate</strong> must list it as a DNS name (SAN). '
+		. 'Example ( fw.example.lan ). Empty: pfB-DNS answers neither, and <strong>DDR</strong> needs a name.');
 $form->add($section);
 
 $section = new Form_Section('DNS over TLS (DoT)');
@@ -381,6 +399,7 @@ $section->addInput(new Form_Checkbox(
   ->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
 		. 'Answers Discovery of Designated Resolvers (RFC 9462) queries for <code>resolver.arpa</code> from pfB-DNS, so that clients that support DDR can find and switch to the encrypted transports enabled above (DoT, DoH, DoQ). '
 		. 'Clients verify the certificate against the address they queried, as an IP address SAN. '
+		. 'Requires a <strong>DNS Name</strong>, the target name DDR gives them: without one DDR answers nothing. '
 		. 'When disabled, the DNS Resolver answers these names.'
 		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
 
