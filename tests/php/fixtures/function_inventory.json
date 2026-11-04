@@ -2927,6 +2927,19 @@
             }
         ]
     },
+    "pfb_dns_redirect_target6": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "iface",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_reply_log_active": {
         "returnsRef": false,
         "returnType": "bool",

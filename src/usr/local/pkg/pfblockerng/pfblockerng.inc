@@ -890,20 +890,39 @@ function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, strin
 	];
 }
 
-// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6').
+/**
+ * The IPv6 target of an ADR-36 redirect row on $iface: an address the DNS service answering port 53 listens on. pfB-DNS serves its plain
+ * DNS list while it fronts the Resolver; otherwise the Resolver serves its own interfaces. FreeBSD drops `::1` redirected from a
+ * non-loopback interface (#3400) and delivers one to an address on lo0, so the target is `<iface>ip` (pfSense resolves it to the
+ * interface's current IPv6 address on every filter reload; assigned interfaces only) when that address is served, else the active
+ * IPv6 Resolver VIP, else what it was before: `<iface>ip` on an assigned interface, `::1` elsewhere (#3694).
+ */
+function pfb_dns_redirect_target6(string $iface): string {
+	$assigned = preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1;
+	$own      = $assigned ? get_interface_ipv6($iface) : NULL;
+	$packed   = is_string($own) ? @inet_pton($own) : FALSE;
+	if ($packed !== FALSE) {
+		$active = pfb_dns_proxy_tokens((string) config_get_path('unbound/active_interface', ''));
+		$served = pfb_dns_proxy_owns_resolver() ? pfb_dns_proxy_listen() : pfb_dns_proxy_interface_addresses($active === [] ? ['all'] : $active, []);
+		foreach ($served as $address) {
+			if (@inet_pton($address) === $packed) {
+				return "{$iface}ip";
+			}
+		}
+	}
+	foreach (array_keys(pfb_dns_listen_vips()) as $vip) {
+		if (str_contains((string) $vip, ':')) {
+			return (string) $vip;
+		}
+	}
+	return $assigned ? "{$iface}ip" : '::1';
+}
+
+// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6'); IPv4 always targets loopback.
 // The key order is the stored order used by sync change detection.
 function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias): array {
 	$v4 = ($family === 'inet');
-
-	// #3400: FreeBSD drops ::1 redirected from a non-loopback interface. pfSense
-	// resolves <iface>ip to an assigned interface's current IPv6 on each filter reload.
-	if ($v4) {
-		$target = '127.0.0.1';
-	} elseif (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1) {
-		$target = "{$iface}ip";
-	} else {
-		$target = '::1';
-	}
+	$target = $v4 ? '127.0.0.1' : pfb_dns_redirect_target6($iface);
 
 	return [
 		'source'             => pfb_redirect_exclude_source($exclude_alias, "DNS Redirect on {$iface} " . ($v4 ? 'IPv4' : 'IPv6')),
@@ -15870,6 +15889,8 @@ function pfb_dns_widget_row(array $cells): string {
  * granted), plus the enabled static routes that leave through such an interface. pfSense derives these from active_interface, so
  * with the Resolver on loopback they vanish from unbound.conf (the IPv4 grants come from the NAT networks and stay) and the
  * proxy's IPv6 clients, whose address Unbound only learns from the PROXYv2 header, would be REFUSED.
+ * While DNS Redirect is on (DNSBL running), the interfaces it redirects join the interfaces above and are also granted their IPv4
+ * network (issue #3694): a redirected client reaches the proxy from its own interface whichever list names it.
  *
  * @return list<string> valid CIDR networks (they are written into custom_options), once each; none when the
  *         admin turned the automatic access control off
@@ -15889,12 +15910,24 @@ function pfb_dns_proxy_acl_networks(): array {
 	if (in_array('all', $interfaces, TRUE)) {
 		$interfaces = array_keys(get_configured_interface_with_descr());
 	}
+	// A redirected client arrives from its own interface's network whichever list names it (#3694); the rows exist while DNS Redirect is on and DNSBL runs.
+	$redirect = (pfb_dnsbl_active() && PfbConfig::read('dnsbl/dnsbl_redir') === PfbToggle::On)
+	    ? pfb_dns_proxy_tokens((string) PfbConfig::read('dnsbl/dnsbl_redir_int')) : [];
+	$interfaces = array_unique([...$interfaces, ...$redirect]);
 
 	$routes = get_staticroutes(FALSE, FALSE, TRUE);
 	$networks = [];
 	foreach ($interfaces as $interface) {
+		if (interface_has_gateway($interface)) {
+			continue;
+		}
+		$v4 = in_array($interface, $redirect, TRUE) ? get_interface_ip($interface) : NULL;
+		if (is_ipaddrv4($v4)) {
+			$bits = get_interface_subnet($interface);
+			$networks[] = gen_subnet($v4, $bits) . "/{$bits}";
+		}
 		$address = get_interface_ipv6($interface);
-		if (!is_ipaddrv6($address) || interface_has_gateway($interface)) {
+		if (!is_ipaddrv6($address)) {
 			continue;
 		}
 		if (!is_linklocal($address)) {
