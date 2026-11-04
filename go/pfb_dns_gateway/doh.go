@@ -193,7 +193,8 @@ func (g *gateway) serveDoHRequest(w http.ResponseWriter, r *http.Request, truste
 	}
 	info := r.Context().Value(connInfoKey{}).(connInfo)
 	src, dst := proxyEndpoints(requestClient(r, info, trusted), info.local)
-	disp, reply := g.screen(src.Addr(), dst.Addr(), false, false, wire)
+	// The name is answered for the listener's own address; dst is the PROXYv2 form, which differs when the families do.
+	disp, reply := g.screen(src.Addr(), info.local.Addr(), false, false, wire)
 	switch disp {
 	case discard:
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)

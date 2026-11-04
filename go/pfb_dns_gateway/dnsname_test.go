@@ -399,3 +399,41 @@ func TestNameKeepsTheResolverACL(t *testing.T) {
 		requireTCPClosed(t, c)
 	})
 }
+
+// A trusted front end's PROXY header may name a client of the other family than the TCP connection that carries it (an IPv6
+// client through an IPv4 hop). The name is answered for the address the query reached, the listener's own; the mixed-family
+// destination that proxyEndpoints gives the PROXYv2 header to Unbound must not key that answer.
+func TestDoHNameAnswerIsKeyedByTheListenerEvenWhenTheHeaderNamesTheOtherFamily(t *testing.T) {
+	rows := []struct {
+		label  string
+		header []byte
+	}{
+		{"a client of the other family, named by the header", pp2TCP("[2001:db8::5]:51000", "[::1]:443")},
+		{"a client of the connection's own family, named by the header", pp2TCP("192.0.2.10:51000", "127.0.0.1:443")},
+	}
+	for _, c := range rows {
+		t.Run(c.label, func(t *testing.T) {
+			names := mustNames(t, "fw.example.lan", "127.0.0.1=198.51.100.7,2001:db8:1::1")
+			r := newRig(t, rigConfig{acl: aclMixed, beforeServe: func(g *gateway) { g.names = names }})
+			m := newTLSMaterial(t)
+			addr := r.serveDoH(m, "127.0.0.0/8")
+			r.autoAnswer(echoAnswer)
+			client := newDoHClient(t, addr, m, dohOptions{prefix: c.header})
+			resp, body := client.do(client.get(dnsParam(buildQuery(t, 7, "fw.example.lan.", true))))
+			if resp.StatusCode != 200 {
+				t.Fatalf("status %d, want 200", resp.StatusCode)
+			}
+			reply := parseReply(t, body)
+			var got netip.Addr
+			for _, rr := range reply.Answers {
+				if a, ok := rr.Body.(*dnsmessage.AResource); ok {
+					got = netip.AddrFrom4(a.A)
+				}
+			}
+			if want := netip.MustParseAddr("198.51.100.7"); got != want {
+				t.Fatalf("A for the name: got %v (answers %v), want %v from the listener's entry 127.0.0.1", got, reply.Answers, want)
+			}
+			r.requireNoOtherQuery()
+		})
+	}
+}
