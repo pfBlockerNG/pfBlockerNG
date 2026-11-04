@@ -469,6 +469,7 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 			'the IPv4 switch On, in the shared section' => ['pfb_dns_ddr_doh_443', 'dns_shared', 'on'],
 			'the IPv6 switch On, in the shared section' => ['pfb_dns_ddr_doh_443_6', 'dns_shared', 'on'],
 			'the IPv4 switch On, in the pfB-DNS section (before the split)' => ['pfb_dns_ddr_doh_443', 'dns', 'on'],
+			'the IPv6 switch On, in the pfB-DNS section' => ['pfb_dns_ddr_doh_443_6', 'dns', 'on'],
 			'the IPv4 switch Off' => ['pfb_dns_ddr_doh_443', 'dns_shared', ''],
 			'both switches On, in the shared section' => ['pfb_dns_ddr_doh_443', 'dns_shared', 'on', 'pfb_dns_ddr_doh_443_6'],
 			'no switch stored at all' => ['', 'dns_shared', ''],
@@ -476,7 +477,7 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 	}
 
 	/**
-	 * Issue #3694: a retired Nightly switch is never copied into the selection. The ordinary upgrade leaves the selection unset, advertises
+	 * Issue #3694: a retired Nightly switch is never copied into the selection. The ordinary upgrade leaves the selection empty, advertises
 	 * nothing on 443 by choice, and files no notice.
 	 */
 	#[DataProvider('retiredSwitches')]
@@ -491,8 +492,8 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 		// When the ordinary upgrade runs
 		pfb_run_migrations();
 
-		// Then the selection stays unset, nothing is advertised on 443 by choice, and no notice is filed
-		$this->assertNull(config_get_path(PFB_SECTIONS['dns'] . '/' . self::FIELD), 'the switch is not copied into the selection');
+		// Then the selection reads empty, nothing is advertised on 443 by choice, and no notice is filed
+		$this->assertSame('', PfbConfig::read('dns/' . self::FIELD), 'the switch is not copied into the selection');
 		$this->assertSame([], pfb_dns_proxy_ddr_doh_443_addresses());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'no notice about the retired switch');
 	}
