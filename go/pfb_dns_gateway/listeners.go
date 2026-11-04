@@ -33,7 +33,7 @@ func newListenerSet(g *gateway, cfg config, secure *tlsListeners) *listenerSet {
 	if secure != nil {
 		s.certs = secure.certs
 	}
-	if len(cfg.dohListen) > 0 {
+	if len(cfg.dohListen)+len(cfg.dohListen443) > 0 {
 		s.trusted = parseTrusted(cfg.dohTrusted, g.logf)
 	}
 	return s
@@ -79,11 +79,11 @@ func (s *listenerSet) port(kind string) (port int, served bool) {
 	case "udp+tcp":
 		return s.cfg.port, true
 	case "dot":
-		return s.cfg.dotPort, len(s.cfg.dotListen) > 0
+		return s.cfg.dotPort, len(s.cfg.dotListen)+len(s.cfg.dotListen853) > 0
 	case "doh":
-		return s.cfg.dohPort, len(s.cfg.dohListen) > 0
+		return s.cfg.dohPort, len(s.cfg.dohListen)+len(s.cfg.dohListen443) > 0
 	}
-	return s.cfg.doqPort, len(s.cfg.doqListen) > 0
+	return s.cfg.doqPort, len(s.cfg.doqListen)+len(s.cfg.doqListen853) > 0
 }
 
 // parseListener reads `<kind> <host:port>` in its one canonical spelling: netip's, with no zone, no IPv4-mapped IPv6 and
@@ -144,19 +144,22 @@ func (s *listenerSet) change(add bool, in *ctlInput) string {
 	return "ok"
 }
 
-// admit says why an add is not taken: the kind or port is not this gateway's (DoH is also taken on the 443 port, whichever
-// port it is configured on), the listener is served already, the gateway is stopping, or what came with the frame is not the
-// sockets of kind on ap.
+// admit checks transport enablement, configured or named standard port, listener ownership and the descriptors of kind on ap.
 func (s *listenerSet) admit(kind string, ap netip.AddrPort, isServed bool, in *ctlInput) error {
 	_, serves := s.port(kind)
 	port := s.cfg.transportPort(kind, ap.Addr().String())
+	standard := s.cfg.port53()
+	switch kind {
+	case "dot", "doq":
+		standard = s.cfg.port853()
+	case "doh":
+		standard = s.cfg.port443()
+	}
 	switch {
 	case !serves:
 		return fmt.Errorf("%s is not served by this gateway: it was started without a %s listen address", kind, kind)
-	case kind == "doh" && int(ap.Port()) != port && int(ap.Port()) != s.cfg.port443():
-		return fmt.Errorf("port %d is neither the port %d of doh nor %d", ap.Port(), port, s.cfg.port443())
-	case kind != "doh" && int(ap.Port()) != port:
-		return fmt.Errorf("port %d is not the port %d of %s", ap.Port(), port, kind)
+	case int(ap.Port()) != port && int(ap.Port()) != standard:
+		return fmt.Errorf("port %d is neither the port %d of %s nor %d", ap.Port(), port, kind, standard)
 	case isServed:
 		return fmt.Errorf("%s %s is served already", kind, ap)
 	case s.g.ctx.Err() != nil:

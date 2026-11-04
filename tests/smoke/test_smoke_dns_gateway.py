@@ -53,8 +53,8 @@ What it proves, in file order:
   ``port`` and keeps its hint and path;
 * the DNS name (issue #3694) is answered over plain DNS with the address the query reached: A at the LAN address is
   the LAN address and A at an automatic Resolver VIP is the VIP, in any letter case; a subdomain of it is Unbound's;
-* an automatic Resolver VIP (issue #3694) serves DoH on port 443 besides the configured DoH port, and DDR's DoH record
-  at the VIP has no ``port`` while the one at the LAN address keeps the configured port;
+* automatic Resolver VIPs use only standard transport ports, and DDR advertises those actual bound ports while ordinary
+  interfaces retain their configured ports;
 * ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
@@ -403,10 +403,10 @@ def _host_port(server: str, port: int) -> str:
 
 
 def _ask_doq(
-    client: SmokeVM, name: str, ca: str | None = CERT_CLIENT, server: str = PFSENSE_LAN_IP
+    client: SmokeVM, name: str, ca: str | None = CERT_CLIENT, server: str = PFSENSE_LAN_IP, port: int = DOQ_PORT
 ) -> tuple[h.DnsAnswer, str]:
     """pfb_doq_probe from the client; its stdout is `rcode X` then `answer <name> <type> <rdata>` lines."""
-    args = [PROBE_BIN, "-server", _host_port(server, DOQ_PORT), "-name", name, "-sni", CERT_NAME, "-timeout", "5s"]
+    args = [PROBE_BIN, "-server", _host_port(server, port), "-name", name, "-sni", CERT_NAME, "-timeout", "5s"]
     if ca:
         args += ["-ca", ca]
     result = client.ssh(shlex.join(args) + " 2>&1", timeout=40.0)
@@ -429,10 +429,10 @@ def _ask(
 ) -> tuple[h.DnsAnswer, str]:
     """The parsed answer and the tool's full output; no answer reads as rcode UNKNOWN with the tool's complaint.
 
-    `port` replaces the transport's own (DoH's DOH_PORT); DoQ takes none.
+    `port` replaces the transport's configured port.
     """
     if transport == "doq":
-        return _ask_doq(client, name, server=server)
+        return _ask_doq(client, name, server=server, port=port or DOQ_PORT)
     options, default_port = DIG_TRANSPORTS[transport]
     port = port or default_port
     args = ["dig", "+tries=1", "+time=5", *options]
@@ -1888,10 +1888,14 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
                     ("udp4", f"{address}:53"),
                     ("tcp4", f"{address}:53"),
                     ("tcp4", f"{address}:{DOT_PORT}"),
-                    ("tcp4", f"{address}:{DOH_PORT}"),
+                    ("tcp4", f"{address}:{443 if address == vip else DOH_PORT}"),
                     ("udp4", f"{address}:{DOQ_PORT}"),
                 }
                 expect(not wanted - sockets, f"the gateway holds no socket for {sorted(wanted - sockets)}")
+            expect(
+                ("tcp4", f"{vip}:{DOH_PORT}") not in sockets,
+                f"managed VIP still serves the configured DoH port {DOH_PORT}: {sorted(sockets)}",
+            )
 
             for address in (PFSENSE_LAN_IP, vip):
                 for transport in ("udp", "tcp", "dot"):
@@ -1912,7 +1916,7 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
                 reply = _dig(client, "udp", "SVCB", DDR_NAME, server=address)
                 records = _svcb_records(reply)
                 _say(f"DDR SVCB to {address}: {reply.rcode} {records}")
-                # the automatic VIP serves DoH on 443 as well, so only its DoH record leaves the port out
+                # The managed VIP serves only standard transport ports.
                 designations = _expected_svcb(DDR_TARGET, doh_443=address == vip, address=address)
                 expect(
                     records == designations,
@@ -2047,14 +2051,13 @@ def test_the_dns_name_is_answered_with_the_address_the_query_reached(
 def test_an_automatic_resolver_vip_serves_doh_on_443_and_ddr_advertises_it_there(
     gw: Gateway, gateway_on: State, gui: WebUI
 ) -> None:
-    """issue #3694: an automatically created Resolver VIP serves DoH on port 443 besides the configured DoH port.
+    """issue #3699: an automatically created Resolver VIP serves DoH only on port 443.
 
     Given DoH listens on the LAN at 4443, DDR is on and no interface is selected for "Advertise DoH on port 443",
     When the DNS General page turns on an automatic IPv4 Resolver VIP and the update pass applies it,
-    Then the gateway holds tcp4 sockets on the VIP at 443 and at 4443 and none on the LAN address at 443; a DDR SVCB
-      query to the VIP gets a DoH record without `port` and one to the LAN address a DoH record with `port=4443`; and a
-      DoH query from the client to the VIP at 443 and at 4443 is answered by the gateway (a listed name gets the DNSBL
-      VIP, an allowed one the upstream's answer).
+    Then the gateway holds a tcp4 socket on the VIP at 443, none there at 4443 and none on the LAN address at 443;
+      DDR at the VIP advertises DoH without `port` and at the LAN address with `port=4443`; a DoH query to the VIP
+      at 443 is answered by the gateway (a listed name gets the DNSBL VIP, an allowed one the upstream's answer).
     Every observation is taken before any is judged, so a failing run names each wrong one, with the sockets the box
     holds. Everything the test changes is put back.
     """
@@ -2089,14 +2092,18 @@ def test_an_automatic_resolver_vip_serves_doh_on_443_and_ddr_advertises_it_there
                 h.wait_until(lambda: on_443 in _capture(vm).proxy_sockets(), timeout=30.0, interval=2.0)
             sockets = _capture(vm).proxy_sockets()
             _say(f"VIP {vip}; sockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}")
-            wanted = {on_443, ("tcp4", f"{vip}:{DOH_PORT}")}
+            wanted = {on_443}
             expect(not wanted - sockets, f"the gateway holds no socket for {sorted(wanted - sockets)}")
+            expect(
+                ("tcp4", f"{vip}:{DOH_PORT}") not in sockets,
+                f"managed VIP still serves the configured DoH port {DOH_PORT}: {sorted(sockets)}",
+            )
             lan_443 = ("tcp4", f"{PFSENSE_LAN_IP}:443")
             expect(
                 lan_443 not in sockets, f"the gateway holds {lan_443}, but DoH listens on the LAN at {DOH_PORT} only"
             )
 
-            for port in (443, DOH_PORT):
+            for port in (443,):
                 answer, raw = _ask(client, "doh-post", gw.names.ready, server=vip, port=port)
                 _say(f"DoH to {vip}:{port}, listed name: {answer.rcode} {answer.records}")
                 expect(
@@ -2223,3 +2230,100 @@ def test_an_ipv6_local_address_in_brackets_reads_as_the_bare_form() -> None:
     listeners = _listeners(cast(SmokeVM, _SockstatBox(sockstat)))
     got = [(s.proto, s.local) for s in listeners]
     assert got == [("tcp6", "::1:53"), ("udp6", "::1:53"), ("tcp4", "127.0.0.1:53"), ("tcp4", "*:22")], got
+
+
+@pytest.mark.timeout(1500)
+def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    """Issue #3699: interfaces keep custom ports; managed IPv4/IPv6 VIPs use only live standard-port listeners."""
+    vm, client = gw.vm, gw.client
+    _ensure_ddr(gw, on=True)
+    settings = {
+        **LAN_ONLY_LISTS,
+        "pfb_dns_doh_interface": "lan",
+        "pfb_dns_doq_interface": "lan",
+        "pfb_dns_dot_port": "1853",
+        "pfb_dns_doh_port": "5443",
+        "pfb_dns_doq_port": "2853",
+        "pfb_dns_dot_port6": "1953",
+        "pfb_dns_doh_port6": "5543",
+        "pfb_dns_doq_port6": "2953",
+    }
+    prior = {key: h.config_get(vm, h.dns_config_path(key)) for key in settings}
+    plain_prior = h.config_get(vm, "unbound/port")
+    try:
+        _set_lists(vm, settings)
+        _php_ok(vm, "config_set_path('unbound/port', '1053'); write_config('smoke: custom plain port');", "plain port")
+        _apply(vm)
+        ordinary = _capture(vm)
+        for transport, port in (("udp", 1053), ("tcp", 1053), ("dot", 1853), ("doh-post", 5443), ("doq", 2853)):
+            answer, raw = _ask(client, transport, gw.names.ready, port=port)
+            assert h.is_vip(answer), f"ordinary {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
+        gui.post(
+            DNS_GENERAL_PAGE,
+            {
+                "pfb_dns_listen_vip": "on",
+                "pfb_dns_listen_vip4": "auto",
+                "pfb_dns_listen_vip6": "auto",
+                "pfb_dns_listen_interface": "lo0",
+            },
+        )
+        vips = [h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_dns_listen_auto{family}") for family in (4, 6)]
+        assert all(vips), f"missing managed IPv4/IPv6 VIPs: {vips}"
+        _apply(vm)
+        live = _capture(vm)
+        assert live.proxy_pid == ordinary.proxy_pid, (
+            f"managed endpoints should reconcile live, gateway pid {ordinary.proxy_pid} -> {live.proxy_pid}"
+        )
+        sockets = live.proxy_sockets()
+        _say(f"managed VIP standard-port sockets: {sorted(sockets)}")
+        for family, vip in zip((4, 6), vips, strict=True):
+            wanted = {
+                (f"udp{family}", f"{vip}:53"),
+                (f"tcp{family}", f"{vip}:53"),
+                (f"tcp{family}", f"{vip}:853"),
+                (f"tcp{family}", f"{vip}:443"),
+                (f"udp{family}", f"{vip}:853"),
+            }
+            assert wanted <= sockets, f"managed IPv{family}: missing {sorted(wanted - sockets)}; got {sorted(sockets)}"
+            custom = {1053, 1853, 5443, 2853, 1953, 5543, 2953}
+            stray = {
+                (proto, at)
+                for proto, at in sockets
+                if at.rsplit(":", 1)[0] == vip and int(at.rsplit(":", 1)[1]) in custom
+            }
+            assert not stray, f"managed IPv{family} still binds configured custom ports: {sorted(stray)}"
+            source = "-6 -I::1" if family == 6 else "-I127.0.0.1"
+            result = vm.ssh(f"drill -b1232 {source} {DDR_NAME} @{shlex.quote(vip)} SVCB 2>&1")
+            reply = _parse_reply(result.stdout)
+            expected = _expected_svcb(DDR_TARGET, doh_443=True, address=vip)
+            assert reply.rcode == "NOERROR" and _svcb_records(reply) == expected, (
+                f"IPv{family} local DDR must advertise actual 53/853/443 listeners: expected {expected}, "
+                f"got {_svcb_records(reply)}\n{reply.raw}"
+            )
+        ordinary_wanted = {
+            ("udp4", f"{PFSENSE_LAN_IP}:1053"),
+            ("tcp4", f"{PFSENSE_LAN_IP}:1053"),
+            ("tcp4", f"{PFSENSE_LAN_IP}:1853"),
+            ("tcp4", f"{PFSENSE_LAN_IP}:5443"),
+            ("udp4", f"{PFSENSE_LAN_IP}:2853"),
+        }
+        assert ordinary_wanted <= sockets, (
+            f"ordinary configured endpoints disappeared: {sorted(ordinary_wanted - sockets)}"
+        )
+        with _client_route(client, vips[0]):
+            for transport, port in (("udp", 53), ("tcp", 53), ("dot", 853), ("doh-post", 443), ("doq", 853)):
+                answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
+                assert h.is_vip(answer), f"managed {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
+    finally:
+        gui.post(
+            DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none", "pfb_dns_listen_vip6": "none"}
+        )
+        _set_lists(vm, prior)
+        _php_ok(
+            vm,
+            f"config_set_path('unbound/port', {h._php_str(plain_prior)}); write_config('smoke: restore plain port');",
+            "restore plain port",
+        )
+        _apply(vm)

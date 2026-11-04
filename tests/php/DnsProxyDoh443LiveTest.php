@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * Issue #3694 -- DoH on port 443 on the running gateway.
  *
- * An automatically created Resolver VIP serves DoH on 443 beside the configured DoH port: the rc script's command carries
+ * An automatically created Resolver VIP serves DoH only on 443, not the configured DoH port: the rc script's command carries
  * `--doh-listen-443 'VIP'` for it, and pfb_dns_proxy_command_listeners() names that listener as `doh <VIP>:443`, so that the update pass
  * adds it live (a bind the box refuses is reported by the startup check) and removes it live, and a script that differs only in those
  * arguments is never a restart. The addresses DDR advertises on 443 are `--ddr-doh-443 'ADDR'` arguments, masked the same way and sent to the
@@ -107,8 +107,7 @@ final class DnsProxyDoh443LiveTest extends TestCase
 	}
 
 	/**
-	 * What a gateway serves that started with the command: plain DNS and DoH on lan and loopback, DoH also on each of $dohHosts at the DoH port
-	 * and on 443 where $vips are given, as it lists them.
+	 * What a gateway serves: ordinary plain DNS and DoH on lan and loopback, and each managed VIP on plain 53 and DoH 443.
 	 *
 	 * @param list<string> $vips hosts as the gateway spells them (IPv6 bracketed)
 	 * @return list<string> `<kind> <host:port>`
@@ -119,10 +118,11 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		foreach (['192.0.2.1', '127.0.0.1', '[::1]'] as $host) {
 			$served[] = "udp+tcp {$host}:{$this->port}";
 		}
-		foreach (['192.0.2.1', ...$vips, '127.0.0.1', '[::1]'] as $host) {
+		foreach (['192.0.2.1', '127.0.0.1', '[::1]'] as $host) {
 			$served[] = "doh {$host}:{$this->dohPort}";
 		}
 		foreach ($vips as $host) {
+			$served[] = "udp+tcp {$host}:53";
 			$served[] = "doh {$host}:443";
 		}
 		return $served;
@@ -148,7 +148,7 @@ final class DnsProxyDoh443LiveTest extends TestCase
 	// what the command asks the gateway to listen on
 	// -----------------------------------------------------------------------
 
-	public function testTheCommandNamesTheVipOnPort443AsADohListenerBesideItsConfiguredPort(): void
+	public function testTheCommandNamesTheManagedVipOnlyOnPort443AsADohListener(): void
 	{
 		// Given DoH on lan, no VIP
 		$this->ready();
@@ -159,10 +159,10 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		$this->autoVip();
 		pfb_dns_proxy_service($this->krProxyDir);
 
-		// Then the command carries the extra listener, and names it as a DoH listener of port 443 after the configured ones
+		// Then the managed VIP is named only on 443, after the ordinary configured-port listeners.
 		$this->assertStringContainsString(" --doh-listen-443 '" . self::VIP . "'", $this->rc());
 		$this->assertSame(
-			["192.0.2.1:{$this->dohPort}", self::VIP . ":{$this->dohPort}", "127.0.0.1:{$this->dohPort}", "[::1]:{$this->dohPort}", self::VIP . ':443'],
+			["192.0.2.1:{$this->dohPort}", "127.0.0.1:{$this->dohPort}", "[::1]:{$this->dohPort}", self::VIP . ':443'],
 			pfb_dns_proxy_command_listeners()['doh'] ?? []
 		);
 	}
@@ -181,11 +181,11 @@ final class DnsProxyDoh443LiveTest extends TestCase
 
 	public function testAFamilyWhoseDohPortIs443AlreadyIsNamedOnceNotTwice(): void
 	{
-		// Given DoH on 443 for both families and the created VIP: DoH already listens on the VIP at 443 (row D7)
+		// Given DoH on 443 for both families and the created VIP, its fixed endpoint is still named only once.
 		$this->autoVip();
 		$this->ready([self::SHARED . 'pfb_dns_doh_port' => '443']);
 
-		$this->assertStringNotContainsString('--doh-listen-443', $this->rc());
+		$this->assertStringContainsString('--doh-listen-443', $this->rc());
 		$doh = pfb_dns_proxy_command_listeners()['doh'] ?? [];
 		$this->assertSame(array_values(array_unique($doh)), $doh, 'no listener twice');
 		$this->assertContains(self::VIP . ':443', $doh);
@@ -206,16 +206,16 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		// When the update pass runs
 		$ready = $this->krEnsure();
 
-		// Then the script now names the VIP's two DoH listeners, and nothing was restarted: those arguments are masked like the addresses
+		// Then the script names the VIP's standard DoH listener, with no restart.
 		$this->assertTrue($ready);
 		$this->assertStringContainsString(" --doh-listen-443 '" . self::VIP . "'", $this->rc());
 		$this->assertSame([], $this->krProxyCalls(), 'no restart');
 		$this->assertSame([], self::sent($record), 'the box cannot assign the VIP yet: nothing is sent, and the next pass tries again');
 	}
 
-	public function testAVipThatGoesIsRemovedLiveFromBothOfItsDohListenersAndRestartsNothing(): void
+	public function testAVipThatGoesIsRemovedLiveFromItsStandardDohListenerAndRestartsNothing(): void
 	{
-		// Given a ready proxy that serves the VIP at the DoH port and on 443, and the VIP removed by the time the update pass runs
+		// Given a ready proxy serving the VIP on 443, and the VIP removed before the update pass.
 		$this->autoVip();
 		$this->ready();
 		$record = $this->gateway($this->served([self::VIP]));
@@ -225,14 +225,14 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		// When the update pass runs
 		$ready = $this->krEnsure();
 
-		// Then both of its DoH listeners are removed, in frames of their own, and nothing restarted
+		// Then its DoH listener is removed live, with no restart.
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls(), 'no restart');
 		$removed = array_map(
 			static fn (string $verb): string => substr($verb, strlen('fffffffd doh ')),
 			array_filter(self::sent($record), static fn (string $verb): bool => str_starts_with($verb, 'fffffffd doh '))
 		);
-		$this->assertEqualsCanonicalizing([self::VIP . ":{$this->dohPort}", self::VIP . ':443'], $removed, 'one remove each for the VIP\'s two DoH listeners');
+		$this->assertEqualsCanonicalizing([self::VIP . ':443'], array_values($removed), 'one remove for the managed VIP DoH listener');
 		$this->assertStringNotContainsString('--doh-listen-443', $this->rc());
 	}
 

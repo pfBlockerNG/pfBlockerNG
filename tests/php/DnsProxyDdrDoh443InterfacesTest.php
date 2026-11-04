@@ -17,8 +17,8 @@ use PHPUnit\Framework\TestCase;
  *   - pfb_validate_dns_proxy_listeners_post() / pfb_dns_proxy_listeners_stored(): every entry must be an option of the POSTED DoH list; stored
  *     as a deduplicated comma list; the two retired toggles are stored no more.
  *   - pfb_dns_proxy_ddr_doh_443_addresses(): which DoH listen addresses DDR advertises on 443.
- *   - pfb_dns_proxy_ddr_flags() / pfb_dns_proxy_tls_flags(): one --ddr-doh-443 per such address after --ddr, and one --doh-listen-443 per
- *     active automatic VIP whose family's DoH port is not 443 already.
+ *   - pfb_dns_proxy_ddr_flags() / pfb_dns_proxy_tls_flags(): one --ddr-doh-443 per advertised address after --ddr, and one
+ *     --doh-listen-443 instead of an ordinary DoH listener per active automatic VIP.
  */
 #[CoversFunction('pfb_dns_proxy_ddr_doh_443_options')]
 #[CoversFunction('pfb_dns_proxy_ddr_doh_443_addresses')]
@@ -531,7 +531,7 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 		return $found[1];
 	}
 
-	public function testTheAutomaticVipServesDohOn443BesideItsConfiguredPortRightAfterTheDohListeners(): void
+	public function testTheAutomaticVipServesDohOnlyOn443RightAfterTheOrdinaryDohListeners(): void
 	{
 		// Given DoH on lan, and no VIP: no 443 listener
 		$warnings = [];
@@ -541,8 +541,8 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 		$this->vips([4 => ['auto', self::AUTO4]]);
 		$flags = pfb_dns_proxy_tls_flags($warnings);
 
-		// Then DoH listens on it at its configured port as before, and also on 443, the flag following the --doh-listen group
-		$this->assertStringContainsString(" --doh-listen '" . self::AUTO4 . "'", $flags);
+		// Then the managed VIP serves only 443, not the configured interface port.
+		$this->assertStringNotContainsString(" --doh-listen '" . self::AUTO4 . "'", $flags);
 		$this->assertSame([self::AUTO4], self::dohListen443($flags));
 		$this->assertStringContainsString(" --doh-listen '::1' --doh-listen-443 '" . self::AUTO4 . "' --doh-port '4443'", $flags);
 	}
@@ -577,9 +577,9 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 
 		$flags = pfb_dns_proxy_tls_flags($warnings);
 
-		// Then the IPv4 VIP serves 443 once, as its DoH port, and only the IPv6 one is given the extra listener
-		$this->assertSame([self::AUTO6], self::dohListen443($flags));
-		$this->assertStringContainsString(" --doh-listen '" . self::AUTO4 . "'", $flags);
+		// Both VIPs use the fixed listener once, regardless of their family's configured port.
+		$this->assertSame([self::AUTO4, self::AUTO6], self::dohListen443($flags));
+		$this->assertStringNotContainsString(" --doh-listen '" . self::AUTO4 . "'", $flags);
 	}
 
 	public function testNoVipListenerOnPort443WhileDohIsOffOrDoesNotListenOnTheVip(): void
