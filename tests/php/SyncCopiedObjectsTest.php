@@ -946,6 +946,34 @@ final class SyncCopiedObjectsTest extends TestCase
 		$this->assertSame(['pfB_DNS_Redirect_lan_v4' => '127.0.0.1', 'pfB_DNS_Redirect_lan_v6' => 'lanip'], array_column(config_get_path('nat/rule'), 'target', 'descr'));
 	}
 
+	/** Issue #3694: DNS Redirect creates rows only for the interfaces the administrator selected; no other interface of the box, listener list or Resolver setting adds one. */
+	public function testRedirectWriterCreatesRowsOnlyForTheSelectedInterfacesWhateverElseTheBoxOrTheDnsServiceHas(): void
+	{
+		global $pfb;
+
+		$spec = self::writerSpec('redirect');
+		$GLOBALS['config'] = [];
+		$pfb['dbdir']      = $this->dir;
+		$GLOBALS['pfb_test_interfaces'] = ['wan' => 'WAN', 'lan' => 'LAN', 'opt1' => 'OPT1'];
+		PfbConfig::write($spec['toggle'], 'on');
+		PfbConfig::write('dns/pfb_dns_interface', 'lan,opt1');
+		config_set_path('unbound/active_interface', 'all');
+		$descrs = static fn (): array => array_column(config_get_path('nat/rule', []), 'descr');
+		try {
+			// Given lan and opt1 selected: both get their pair (the fixture can show an interface that is redirected)
+			PfbConfig::write($spec['ifaces'], 'lan,opt1');
+			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			$this->assertSame(['pfB_DNS_Redirect_lan_v4', 'pfB_DNS_Redirect_lan_v6', 'pfB_DNS_Redirect_opt1_v4', 'pfB_DNS_Redirect_opt1_v6'], $descrs(), 'before: both selected interfaces');
+
+			// When only lan is selected, opt1 (still listened on, still a Resolver interface, still on the box) and wan lose or never get rows
+			PfbConfig::write($spec['ifaces'], 'lan');
+			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			$this->assertSame(['pfB_DNS_Redirect_lan_v4', 'pfB_DNS_Redirect_lan_v6'], $descrs());
+		} finally {
+			unset($GLOBALS['pfb_test_interfaces']);
+		}
+	}
+
 	/** Issue #3694: a listener VIP row as the Resolver addresses setting creates it. */
 	private static function listenVip(string $address, string $uniqid): array
 	{

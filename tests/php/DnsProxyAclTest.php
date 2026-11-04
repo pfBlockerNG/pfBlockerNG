@@ -100,12 +100,6 @@ final class DnsProxyAclTest extends TestCase
 		$GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 	}
 
-	/** pfB-DNS listens on loopback only (plain DNS list `lo0`), so no listener list names a LAN. */
-	private function seedLoopbackOnlyListeners(): void
-	{
-		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lo0');
-	}
-
 	private function customText(): string
 	{
 		return (string) base64_decode((string) config_get_path('unbound/custom_options'), TRUE);

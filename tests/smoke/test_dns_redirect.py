@@ -1414,7 +1414,7 @@ def _pfb_dns_on_with_resolver_vip6(vm: SmokeVM, domain: str, lan6: str, *, lan_l
     """pfB-DNS on (plain DNS on Localhost, the LAN if ``lan_listens``) and an automatic IPv6 Resolver VIP; yields it.
 
     With ``lan_listens`` False the VIP is the only non-loopback address pfB-DNS serves, and no listener list names the
-    LAN: nothing but DNS Redirect can make pfB-DNS grant the LAN's clients (they would be REFUSED).
+    LAN: a LAN no listener list names is REFUSED, as DNS Redirect adds no access control.
     Entry returns once pfB-DNS answers ``domain`` (a listed name) and listens on the VIP (and the LAN's IPv6 address
     ``lan6`` when ``lan_listens``). Exit turns DNS Redirect, the VIP and pfB-DNS off in one apply, puts back every
     setting the entry wrote, and fails if the Resolver did not come back.
