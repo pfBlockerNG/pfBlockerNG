@@ -49,9 +49,12 @@ What it proves, in file order:
   ``resolver.arpa.`` and the SVCB query over DoT and DoH get NODATA with the 300-second SOA, apex SOA and NS are
   answered, and Unbound's query log never names ``resolver.arpa``, so the decider saw none of it; a client the Resolver
   ACL refuses gets REFUSED; with the toggle off the client gets what Unbound itself answers, asked on the box at
-  port 5354; with ``dns_shared/pfb_dns_ddr_doh_443`` on the DoH record has no ``port`` and keeps its hint and path;
+  port 5354; with the LAN in ``dns/pfb_dns_ddr_doh_443_interfaces`` (issue #3694) the DoH record at its address has no
+  ``port`` and keeps its hint and path;
 * the DNS name (issue #3694) is answered over plain DNS with the address the query reached: A at the LAN address is
   the LAN address and A at an automatic Resolver VIP is the VIP, in any letter case; a subdomain of it is Unbound's;
+* an automatic Resolver VIP (issue #3694) serves DoH on port 443 besides the configured DoH port, and DDR's DoH record
+  at the VIP has no ``port`` while the one at the LAN address keeps the configured port;
 * ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
@@ -158,8 +161,9 @@ LISTENER_SETTINGS = {
     "pfb_dns_doq_port": str(DOQ_PORT),
     "pfb_dns_doq_interface": "lan",
 }
-CFG_DDR = h.dns_config_path("pfb_dns_ddr")  # issue #3583: the DDR toggle and the DoH-on-port-443 toggle
-CFG_DDR_DOH_443 = h.dns_config_path("pfb_dns_ddr_doh_443")
+CFG_DDR = h.dns_config_path("pfb_dns_ddr")  # issue #3583: the DDR toggle
+CFG_DDR_DOH_443 = h.dns_config_path("pfb_dns_ddr_doh_443_interfaces")  # issue #3694: "Advertise DoH on port 443"
+DDR_443_INTERFACES = "lan"  # the DoH interface the 443 advertisement is selected for
 CFG_DNS_NAME = h.dns_config_path("pfb_dns_name")  # issue #3694: DDR's target name, and the name the gateway answers
 DDR_DNS_NAME = h.unique_domain("ddrname")  # inert: not RFC 6761, not HSTS-preloaded, listed in no feed
 DDR_TARGET = f"{DDR_DNS_NAME}."  # the SVCB TargetName and the Additional record's owner, as dig prints them
@@ -408,12 +412,22 @@ def _ask_doq(
 
 
 def _ask(
-    client: SmokeVM, transport: str, name: str, *, source: str | None = None, server: str = PFSENSE_LAN_IP
+    client: SmokeVM,
+    transport: str,
+    name: str,
+    *,
+    source: str | None = None,
+    server: str = PFSENSE_LAN_IP,
+    port: int | None = None,
 ) -> tuple[h.DnsAnswer, str]:
-    """The parsed answer and the tool's full output; no answer reads as rcode UNKNOWN with the tool's complaint."""
+    """The parsed answer and the tool's full output; no answer reads as rcode UNKNOWN with the tool's complaint.
+
+    `port` replaces the transport's own (DoH's DOH_PORT); DoQ takes none.
+    """
     if transport == "doq":
         return _ask_doq(client, name, server=server)
-    options, port = DIG_TRANSPORTS[transport]
+    options, default_port = DIG_TRANSPORTS[transport]
+    port = port or default_port
     args = ["dig", "+tries=1", "+time=5", *options]
     if source:
         args += ["-b", source]
@@ -1455,18 +1469,29 @@ def _rows(section: tuple[Record, ...]) -> list[tuple[str, int, str, str]]:
     return [(r.owner.lower(), r.ttl, r.rtype, r.rdata.lower()) for r in section]
 
 
-def _gateway_ddr_flags(vm: SmokeVM) -> tuple[bool, bool] | None:
-    """(`--ddr` and `--ddr-doh-443` are on the running gateway's command line); None: no gateway runs."""
+def _gateway_ddr_on(vm: SmokeVM) -> bool | None:
+    """`--ddr` is on the running gateway's command line; None: no gateway runs.
+
+    Only `--ddr` can be read there: `--ddr-doh-443` and the name answers are taken live, the process keeps the command
+    line it started with.
+    """
     pid = _pid_file(vm, PROXY_PID_FILE)
     gateway = next((p for p in _processes(vm) if p.pid == pid), None)
     if gateway is None:
         return None
-    args = gateway.args.split()
-    return "--ddr" in args, "--ddr-doh-443" in args
+    return "--ddr" in gateway.args.split()
+
+
+def _ddr_doh_port_shown(client: SmokeVM, server: str = PFSENSE_LAN_IP) -> bool | None:
+    """Whether the DoH designation a DDR query at `server` gets has a `port`; None: not exactly one DoH record."""
+    reply = _dig(client, "udp", "SVCB", DDR_NAME, server=server)
+    doh = [svcb for svcb in _svcb_records(reply) if svcb.params.get("alpn") == "h2"]
+    return "port" in doh[0].params if len(doh) == 1 else None
 
 
 def _set_ddr(vm: SmokeVM, on: bool, doh_443: bool) -> None:
-    """The pfB-DNS tab's two DDR toggles as its Save stores them: 'on' or the empty Off token.
+    """The pfB-DNS tab's DDR settings as its Save stores them: the toggle ('on' or the empty Off token) and the
+    interface list of "Advertise DoH on port 443".
 
     DDR on is saved with the DNS name, its target (issue #3694); DDR off leaves the stored name as it is.
     """
@@ -1475,40 +1500,60 @@ def _set_ddr(vm: SmokeVM, on: bool, doh_443: bool) -> None:
         vm,
         name
         + f"config_set_path({h._php_str(CFG_DDR)}, {h._php_str('on' if on else '')});\n"
-        + f"config_set_path({h._php_str(CFG_DDR_DOH_443)}, {h._php_str('on' if doh_443 else '')});\n"
+        + f"config_set_path({h._php_str(CFG_DDR_DOH_443)}, {h._php_str(DDR_443_INTERFACES if doh_443 else '')});\n"
         + "write_config('pfBlockerNG smoke: pfB-DNS DDR for the #3583 gateway smoke');",
         "DDR settings",
     )
 
 
 def _ensure_ddr(gw: Gateway, *, on: bool, doh_443: bool = False) -> None:
-    """Have the gateway run with `--ddr` (and `--ddr-doh-443`) as asked, then serve: store and apply if it does not.
+    """Have the gateway run with `--ddr`, and DDR advertise DoH on 443 at the LAN address (`doh_443`), as asked.
 
-    DDR on also needs the module's DNS name stored (issue #3694). A gateway that never took the flags fails the first
-    assertion of the test with its command line and log, not a later query. The module's snapshot puts the settings
-    back with the rest of its config.
+    Stores and applies if it does not. DDR on also needs the module's DNS name stored (issue #3694). The running
+    gateway takes the 443 selection live, so that is read from its DDR answer, not its command line. A gateway that
+    never took the settings fails the first assertion of the test with what it runs, advertises and logged, not a later
+    query. The module's snapshot puts the settings back with the rest of its config.
     """
-    vm, want = gw.vm, (on, doh_443)
-    if _gateway_ddr_flags(vm) != want or (on and h.config_get(vm, CFG_DNS_NAME) != DDR_DNS_NAME):
+    vm, client = gw.vm, gw.client
+    selected = DDR_443_INTERFACES if doh_443 else ""
+    if (
+        _gateway_ddr_on(vm) != on
+        or (on and h.config_get(vm, CFG_DNS_NAME) != DDR_DNS_NAME)
+        or h.config_get(vm, CFG_DDR_DOH_443) != selected
+    ):
         _set_ddr(vm, on, doh_443)
         _apply(vm)
         # Not raised here: the assertion below says what the gateway runs and logged.
         with contextlib.suppress(RuntimeError):
-            h.wait_until(lambda: _gateway_ddr_flags(vm) == want, timeout=60.0, interval=2.0)
-    seen = _gateway_ddr_flags(vm)
+            h.wait_until(lambda: _gateway_ddr_on(vm) == on, timeout=60.0, interval=2.0)
+    seen = _gateway_ddr_on(vm)
     stored = (h.config_get(vm, CFG_DDR), h.config_get(vm, CFG_DDR_DOH_443), h.config_get(vm, CFG_DNS_NAME))
-    assert seen == want, (
-        f"after the apply the gateway should run with (--ddr, --ddr-doh-443) = {want}, runs with {seen}; stored "
-        f"(dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443, dns/pfb_dns_name) = {stored}\n{_proxy_log(vm, 30)}"
+    assert seen == on, (
+        f"after the apply the gateway should run with --ddr = {on}, runs with {seen}; stored "
+        f"(dns_shared/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443_interfaces, dns/pfb_dns_name) = {stored}\n"
+        f"{_proxy_log(vm, 30)}"
     )
 
     def serves() -> bool:
-        return h.is_vip(_ask(gw.client, "udp", gw.names.ready)[0])
+        return h.is_vip(_ask(client, "udp", gw.names.ready)[0])
 
     try:
         h.wait_until(serves, timeout=240.0, interval=3.0)
     except RuntimeError as exc:
         raise RuntimeError(f"{exc}\n{_diagnostics(vm)}") from exc
+    if not on:
+        return
+    port_shown = not doh_443
+    with contextlib.suppress(RuntimeError):
+        h.wait_until(lambda: _ddr_doh_port_shown(client) is port_shown, timeout=60.0, interval=2.0)
+    shown = _ddr_doh_port_shown(client)
+    reads = {True: "carries a `port`", False: "has no `port`", None: "is not exactly one record"}
+    assert shown is port_shown, (
+        f"after the apply DDR's DoH designation for {PFSENSE_LAN_IP} should "
+        f"{f'carry port {DOH_PORT}' if port_shown else 'have no `port` (443)'}; it {reads[shown]}; stored "
+        f"(dns_shared/pfb_dns_ddr, dns/pfb_dns_ddr_doh_443_interfaces, dns/pfb_dns_name) = {stored}\n"
+        f"{_proxy_log(vm, 30)}"
+    )
 
 
 def _assert_nodata(reply: Reply, what: str) -> None:
@@ -1697,13 +1742,14 @@ def test_ddr_off_leaves_resolver_arpa_to_unbound_and_relays_its_answer_unchanged
 def test_ddr_doh_on_port_443_leaves_the_port_out_of_the_doh_record_and_nothing_else_changed(
     gw: Gateway, gateway_on: State
 ) -> None:
-    """Criterion 9 (revised): with `dns_shared/pfb_dns_ddr_doh_443` on, DoH has no `port`, whatever DoH listens on.
+    """Criterion 9 (revised): an interface selected for "Advertise DoH on port 443" has DoH advertised without `port`.
 
-    Given DoH listens on 4443 and the gateway runs with `--ddr`, whose DoH record carries `port=4443`
-      (the before-state: the toggle is what removes it),
-    When `dns_shared/pfb_dns_ddr_doh_443` is turned on and applied, so that the gateway runs with `--ddr --ddr-doh-443`,
-    Then the DoH record has no `port` but the same TargetName (the DNS name), `ipv4hint` (the LAN
-      address) and `dohpath=/dns-query{?dns}`; DoT and DoQ are as before; Additional holds the DNS name's A record.
+    Given DoH listens on 4443 and the gateway runs with `--ddr` and no interface selected, whose DoH record carries
+      `port=4443` (the before-state: the selection is what removes it),
+    When `lan` is selected in `dns/pfb_dns_ddr_doh_443_interfaces` and applied,
+    Then the DoH record for the LAN address has no `port` but the same TargetName (the DNS name), `ipv4hint` (the LAN
+      address) and `dohpath=/dns-query{?dns}`; DoT and DoQ are as before; Additional holds the DNS name's A record; and
+      the gateway still answers DoH at the LAN address on 4443.
     """
     _ensure_ddr(gw, on=True)
     before = _dig(gw.client, "udp", "SVCB", DDR_NAME)
@@ -1721,6 +1767,10 @@ def test_ddr_doh_on_port_443_leaves_the_port_out_of_the_doh_record_and_nothing_e
     assert addresses == [(DDR_TARGET, 300, "A", PFSENSE_LAN_IP)], (
         f"Additional should hold only the DNS name's {(DDR_TARGET, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n"
         f"{reply.raw}"
+    )
+    answer, raw = _ask(gw.client, "doh-post", gw.names.ready)
+    assert h.is_vip(answer), (
+        f"DoH at {PFSENSE_LAN_IP}:{DOH_PORT} after the selection: expected the DNSBL VIP, got {answer}\n{raw}"
     )
 
 
@@ -1761,7 +1811,7 @@ def _client_route(client: SmokeVM, address: str) -> Iterator[None]:
 
 def _sockets_on_dns_ports(vm: SmokeVM) -> str:
     """What holds the DNS ports of this module, and on which address: the evidence of which listeners exist."""
-    return vm.ssh(f"sockstat -46lw | grep -E ':(53|{DOT_PORT}|{DOH_PORT}) ' | sort").stdout
+    return vm.ssh(f"sockstat -46lw | grep -E ':(53|443|{DOT_PORT}|{DOH_PORT}) ' | sort").stdout
 
 
 def _serves(gw: Gateway, server: str = PFSENSE_LAN_IP) -> bool:
@@ -1780,7 +1830,8 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
       TCP), DoT, DoH and DoQ on the LAN address and on the VIP; a LAN client querying the LAN address gets an answer
       (its ACL row admits it, and the answer is the gateway's, not a refusal), as it does at the VIP; a DDR SVCB query
       to the LAN address returns the DoH, DoT and DoQ designations for the LAN address and one to the VIP returns the
-      VIP's; and the status panel lists both addresses as listening.
+      VIP's, its DoH record without `port` (the automatic VIP serves DoH on 443 too); and the status panel lists both
+      addresses as listening.
     Every observation is taken before any is judged, so a failing run names each wrong one, with the sockets the box
     holds (no listener on the LAN address, and the client's query unanswered, is the VIP having taken its place; a
     REFUSED would be the ACL).
@@ -1854,10 +1905,11 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
                 reply = _dig(client, "udp", "SVCB", DDR_NAME, server=address)
                 records = _svcb_records(reply)
                 _say(f"DDR SVCB to {address}: {reply.rcode} {records}")
+                # the automatic VIP serves DoH on 443 as well, so only its DoH record leaves the port out
+                designations = _expected_svcb(DDR_TARGET, doh_443=address == vip, address=address)
                 expect(
-                    records == _expected_svcb(DDR_TARGET, address=address),
-                    f"DDR to {address}: expected {_expected_svcb(DDR_TARGET, address=address)}, got {records}\n"
-                    f"{reply.raw}",
+                    records == designations,
+                    f"DDR to {address}: expected {designations}, got {records}\n{reply.raw}",
                 )
                 addresses = [row for row in _rows(reply.additional) if row[2] in ("A", "AAAA")]
                 expect(
@@ -1971,6 +2023,97 @@ def test_the_dns_name_is_answered_with_the_address_the_query_reached(
                 f"DDR SVCB to {PFSENSE_LAN_IP}: expected every TargetName to be {DDR_TARGET}, got {targets}\n"
                 f"{reply.raw}",
             )
+        assert not problems, "\n".join(problems) + f"\nsockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}"
+    finally:
+        gui.post(DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none"})
+        _set_lists(vm, prior)
+        _apply(vm)
+        with contextlib.suppress(RuntimeError):
+            h.wait_until(lambda: _serves(gw), timeout=240.0, interval=3.0)
+
+
+@pytest.mark.timeout(1500)
+def test_an_automatic_resolver_vip_serves_doh_on_443_and_ddr_advertises_it_there(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    """issue #3694: an automatically created Resolver VIP serves DoH on port 443 besides the configured DoH port.
+
+    Given DoH listens on the LAN at 4443, DDR is on and no interface is selected for "Advertise DoH on port 443",
+    When the DNS General page turns on an automatic IPv4 Resolver VIP and the update pass applies it,
+    Then the gateway holds tcp4 sockets on the VIP at 443 and at 4443 and none on the LAN address at 443; a DDR SVCB
+      query to the VIP gets a DoH record without `port` and one to the LAN address a DoH record with `port=4443`; and a
+      DoH query from the client to the VIP at 443 and at 4443 is answered by the gateway (a listed name gets the DNSBL
+      VIP, an allowed one the upstream's answer).
+    Every observation is taken before any is judged, so a failing run names each wrong one, with the sockets the box
+    holds. Everything the test changes is put back.
+    """
+    vm, client = gw.vm, gw.client
+    _ensure_ddr(gw, on=True)
+    prior = {key: h.config_get(vm, h.dns_config_path(key)) for key in LAN_ONLY_LISTS}
+    assert all(prior.values()), f"premise: pfB-DNS's interface lists are seeded, got {prior}"
+    problems: list[str] = []
+
+    def expect(ok: bool, what: str) -> None:
+        if not ok:
+            problems.append(what)
+
+    try:
+        _set_lists(vm, LAN_ONLY_LISTS)
+        _apply(vm)
+        h.wait_until(lambda: _serves(gw), timeout=240.0, interval=3.0)
+        gui.post(
+            DNS_GENERAL_PAGE,
+            {"pfb_dns_listen_vip": "on", "pfb_dns_listen_vip4": "auto", "pfb_dns_listen_interface": "lo0"},
+        )
+        vip = h.config_get(vm, CFG_LISTEN_AUTO4)
+        assert vip and ipaddress.ip_address(vip).version == 4, (
+            f"the DNS General save made no IPv4 Resolver VIP: {vip!r}"
+        )
+        _apply(vm)
+        with _client_route(client, vip):
+            h.wait_until(lambda: _serves(gw, vip), timeout=240.0, interval=3.0)
+            on_443 = ("tcp4", f"{vip}:443")
+            # Not raised here: the observations below name what the gateway holds.
+            with contextlib.suppress(RuntimeError):
+                h.wait_until(lambda: on_443 in _capture(vm).proxy_sockets(), timeout=30.0, interval=2.0)
+            sockets = _capture(vm).proxy_sockets()
+            _say(f"VIP {vip}; sockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}")
+            wanted = {on_443, ("tcp4", f"{vip}:{DOH_PORT}")}
+            expect(not wanted - sockets, f"the gateway holds no socket for {sorted(wanted - sockets)}")
+            lan_443 = ("tcp4", f"{PFSENSE_LAN_IP}:443")
+            expect(
+                lan_443 not in sockets, f"the gateway holds {lan_443}, but DoH listens on the LAN at {DOH_PORT} only"
+            )
+
+            for port in (443, DOH_PORT):
+                answer, raw = _ask(client, "doh-post", gw.names.ready, server=vip, port=port)
+                _say(f"DoH to {vip}:{port}, listed name: {answer.rcode} {answer.records}")
+                expect(
+                    h.is_vip(answer),
+                    f"DoH to https://{vip}:{port}/dns-query, listed name: expected the DNSBL VIP, got {answer} "
+                    f"(UNKNOWN is no answer)\n{raw}",
+                )
+                allowed = h.unique_domain("dohvip")
+                answer, raw = _ask(client, "doh-post", allowed, server=vip, port=port)
+                _say(f"DoH to {vip}:{port}, allowed name: {answer.rcode} {answer.records}")
+                expect(
+                    h.resolves_to(answer, STUB_DNS_A),
+                    f"DoH to https://{vip}:{port}/dns-query: {allowed} expected the upstream's {STUB_DNS_A}, got "
+                    f"{answer}\n{raw}",
+                )
+
+            wanted_records = {
+                vip: _expected_svcb(DDR_TARGET, doh_443=True, address=vip),
+                PFSENSE_LAN_IP: _expected_svcb(DDR_TARGET),
+            }
+            for address, expected in wanted_records.items():
+                reply = _dig(client, "udp", "SVCB", DDR_NAME, server=address)
+                records = _svcb_records(reply)
+                _say(f"DDR SVCB to {address}: {reply.rcode} {records}")
+                expect(
+                    records == expected,
+                    f"DDR to {address}: expected {expected}, got {records}\n{reply.raw}",
+                )
         assert not problems, "\n".join(problems) + f"\nsockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}"
     finally:
         gui.post(DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none"})
