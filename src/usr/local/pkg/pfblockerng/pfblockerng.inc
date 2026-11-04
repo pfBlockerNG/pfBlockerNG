@@ -4534,8 +4534,8 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, array $vip_only, ?
 
 /**
  * The IP families whose Resolver VIP stands in for a listener's configured addresses instead of joining them (issue #3694). Every
- * listener keeps the interface addresses and adds the VIP, except DoH for a family DDR advertises on port 443: its DoH port is 443 or
- * its "Advertise DoH on port 443" option is on. Port 443 on the interface address belongs to the webConfigurator, so only the VIP serves it.
+ * listener keeps the interface addresses and adds the VIP, except DoH for a family whose DoH port is 443: port 443 on the interface
+ * address belongs to the webConfigurator or a reverse proxy, so only the VIP serves it. "Advertise DoH on port 443" changes no listener.
  *
  * @param string $kind 'plain', 'dot', 'doh' or 'doq'
  * @return list<int> 4 and/or 6
@@ -4544,11 +4544,7 @@ function pfb_dns_proxy_vip_only_families(string $kind): array {
 	if ($kind !== 'doh') {
 		return [];
 	}
-	return array_values(array_filter(
-		[4, 6],
-		static fn (int $family): bool => pfb_dns_proxy_ddr_doh_443_locked($family === 6)
-		    || pfb_dns_proxy_setting($family === 6 ? 'pfb_dns_ddr_doh_443_6' : 'pfb_dns_ddr_doh_443') === PfbToggle::On
-	));
+	return array_values(array_filter([4, 6], static fn (int $family): bool => pfb_dns_proxy_ddr_doh_443_locked($family === 6)));
 }
 
 /**

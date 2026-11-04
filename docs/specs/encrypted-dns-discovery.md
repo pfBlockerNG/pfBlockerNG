@@ -12,8 +12,8 @@ Amended 2026-10-22 (owner decision): the optional "Advertised DoH URL" setting i
 `dns/pfb_dns_ddr_doh_443` ("Advertise DoH on port 443"); see "DoH on port 443 (candidate 4)".
 
 Amended 2026-11-04 (owner decision, #3694): a Resolver VIP joins the interface addresses of every listener instead of
-replacing them (DoH keeps the replacement for a family advertised on port 443), and the gateway designates nothing on a
-public IPv6 address; see "Certificate warning (candidate 6)".
+replacing them (DoH keeps the replacement for a family whose DoH port is 443), the gateway still designates the address a
+client queried, and the certificate warning does not name a public IPv6 address; see "Certificate warning (candidate 6)".
 
 ## Fixed constraints
 
@@ -289,9 +289,6 @@ needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses, not
   IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is classified by its embedded IPv4 address. Every other address is public.
   RFC 9462 §4.3 names the private ranges (RFC 1918, ULA, link-local) as the ones a public CA cannot certify; the rest
   are reserved or not globally routable, so a missing SAN there is not actionable either.
-- A public IPv6 address is never warned about, and the gateway designates nothing on it: a global prefix changes, so no
-  certificate keeps an `iPAddress` SAN for it (amended 2026-11-04, owner decision, #3694). A ULA, such as the automatic
-  Resolver VIP, keeps full DDR.
 - With `dns/pfb_dns_ddr_doh_443` on and the DoH port not 443, the DoH listener is excluded: its clients reach the
   reverse proxy's certificate, which pfB-DNS cannot see. With the DoH port 443 the option changes nothing and clients
   reach the pfB-DNS certificate, so DoH is checked. DoT and DoQ listeners are always checked.

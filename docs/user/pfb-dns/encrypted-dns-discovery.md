@@ -36,10 +36,11 @@ While the interface's own address cannot be determined, for example a tracked IP
 left exactly as it is, DNS General does not warn about it, and the pfBlockerNG log gets one line for it on each apply.
 Disabling Resolver addresses behaves as before.
 
-A Resolver VIP joins the interface addresses; it does not replace them. Plain DNS, DoT and DoQ listen on the selected
+A Resolver VIP joins the interface addresses; it does not replace them. Plain DNS, DoT, DoH and DoQ listen on the selected
 interfaces' addresses and on the VIP, so a host whose DNS setting or lease still names an interface address keeps
-working. DoH does too, except for an address family whose **DoH port** is 443 or whose **Advertise DoH on port 443**
-option is on: there only the VIP listens, because port 443 on the interface address belongs to the webConfigurator.
+working, and DDR answers that address with the listeners it queried. The exception is DoH for an address family whose
+**DoH port** is 443: there only the VIP listens, because port 443 on the interface address belongs to the webConfigurator
+or a reverse proxy.
 
 On a policy receiver, an existing listener VIP is moved only after the published address passes validation and
 conflict checks. Equivalent IPv6 spellings reuse the same VIP. A missing or invalid publication is not replaced
@@ -278,8 +279,8 @@ from that certificate's `iPAddress` SANs. The message names the address and tran
 
 This is a non-blocking warning, not certificate validation: it does **not** check CA trust, expiry, or DNR ADNs.
 It does not warn for loopback, RFC 1918, CGNAT, link-local, ULA, documentation, benchmarking, deprecated site-local or
-other explicitly excluded ranges, or for a public IPv6 address (the gateway gives no DDR designations there, because a
-global IPv6 prefix changes and no certificate can keep an IP SAN for it). It compares parsed addresses, so equivalent IPv6 spellings match.
+other explicitly excluded ranges, or for a public IPv6 address (a global IPv6 prefix changes, so a missing SAN there
+cannot be fixed). It compares parsed addresses, so equivalent IPv6 spellings match.
 With **Advertise DoH on port 443** on **and** DoH not listening on 443, DoH is excluded because pfB-DNS cannot see the
 proxy's certificate; DoT and DoQ are still checked. If DoH itself listens on 443, it is checked even if the stored
 443 toggle is on. With DDR off or no selected certificate, no warning is shown. The exact excluded ranges and
@@ -294,18 +295,18 @@ DDR announcement (2021-10-27, no build number). A tested Windows version is **[U
 real-client DDR is pending [#3590][client-checks]. These are setup instructions, not measured results.
 
 Verified DDR checks the address used for the **initial plain DNS query**. DHCP must therefore hand out the public
-address as the DNS server. Merely putting a public address in a DDR answer while clients query a private address does
-not work.
+address as the DNS server; for IPv6 clients using RDNSS instead, advertise that same public address there. Merely
+putting a public address in a DDR answer while clients query a private address does not work.
 [RFC 9462 §4.2][ddr-verified], [DHCP DNS Server setting][dhcp4].
 
 | Setup | Listener and LAN reachability | What breaks it |
 |---|---|---|
-| IPv6 | Not offered: pfB-DNS gives no DDR designations on a public (global) IPv6 address, because the delegated prefix changes and no certificate can keep an IP SAN for it. Plain and encrypted DNS still listen there. | A client that queries a global IPv6 address is told nothing; use the IPv4 design, a ULA address, DNR or opportunistic DoT. |
+| IPv6 | Use a global IPv6 address of the firewall's **LAN interface**, from the delegated prefix; listen for plain and encrypted DNS there. LAN clients reach it without NAT. | ISP prefix changes invalidate the address, DHCP/RDNSS advertisement and IP certificate. |
 | IPv4 | Use the firewall's own **public WAN IPv4 address**; listen there for plain and encrypted DNS. LAN traffic is addressed to the firewall itself, not sent through a port forward to another host. Permit it on LAN. | Dynamic WAN changes invalidate the advertisement/certificate. A CGNAT address (`100.64.0.0/10`) is not publicly certifiable; with double NAT the firewall's WAN address is not the upstream public address. |
 
 Select **DNS Interface(s)** and the desired **DoT/DoH/DoQ Interface(s)** on the pfB-DNS page to include those addresses
-(WAN for the IPv4 design). Interface selection binds its addresses, not just one chosen IP.
-After an address change, use **Update** to rebind listeners as well as updating DHCP and the
+(LAN for the IPv6 design, WAN for the IPv4 design). Interface selection binds its addresses, not just one chosen IP.
+After an address or prefix change, use **Update** to rebind listeners as well as updating DHCP/RDNSS and the
 certificate; the old listener addresses were resolved at the preceding apply.
 [Page controls][ui], [interface binding](https://github.com/pfBlockerNG/pfBlockerNG/blob/558169c3928f2c23076149d6dc764c59b2bf6843/src/usr/local/pkg/pfblockerng/pfblockerng.inc#L4104-L4148).
 

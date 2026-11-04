@@ -13,9 +13,10 @@ use PHPUnit\Framework\TestCase;
  * place of the interface addresses. Hosts with a static DNS configuration keep resolving at the LAN address.
  *
  * Plain DNS, DoT and DoQ listen on the configured addresses plus each VIP. DoH does too, except for a family whose DoH port is
- * 443 or whose "Advertise DoH on port 443" option is on: port 443 on the interface address belongs to the webConfigurator and DDR
- * advertises the VIP there, so that family stays VIP-only. Loopback is unchanged. Every row asserts the before-state first (no
+ * 443: port 443 on the interface address belongs to the webConfigurator or a reverse proxy, so that family stays VIP-only. The
+ * "Advertise DoH on port 443" option changes no listener. Loopback is unchanged. Every row asserts the before-state first (no
  * VIP) so that the VIP is what is shown to change the set, and drives the production surface each transport is served through.
+ * The DDR certificate warning follows those sets and never names a public IPv6 address.
  */
 #[CoversFunction('pfb_dns_proxy_interface_addresses')]
 #[CoversFunction('pfb_dns_proxy_plain_listen')]
@@ -187,7 +188,7 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// DoH: the VIP is added, but replaces the address of a family DDR advertises on port 443
+	// DoH: the VIP is added, but replaces the address of a family whose DoH port is 443
 	// -----------------------------------------------------------------------
 
 	/**
@@ -214,11 +215,11 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 			'IPv4 VIP, IPv6 on 443: IPv4 is added' => [TRUE, FALSE, $v6Replaced, $lan, [...$lan, self::VIP4]],
 			'IPv6 VIP, IPv4 on 443: IPv6 is added' => [FALSE, TRUE, $v4Replaced, $lan, [...$lan, self::VIP6]],
 			'IPv6 VIP only, DoH port 443: IPv6 has a VIP to stand in, IPv4 has none to' => [FALSE, TRUE, ['dns_shared/pfb_dns_doh_port' => '443'], $lan, [self::LAN4, self::VIP6]],
-			'IPv4 VIP, IPv4 443 advertisement on: the VIP stands in for the IPv4 address' => [TRUE, FALSE, $not443 + $v4Advertised, $lan, [self::VIP4, self::LAN6]],
-			'IPv6 VIP, IPv6 443 advertisement on: the VIP stands in for the IPv6 address' => [FALSE, TRUE, $not443 + $v6Advertised, $lan, [self::LAN4, self::VIP6]],
-			'both VIPs, only the IPv4 advertisement on' => [TRUE, TRUE, $not443 + $v4Advertised, $lan, [self::VIP4, self::LAN6, self::VIP6]],
-			'both VIPs, only the IPv6 advertisement on' => [TRUE, TRUE, $not443 + $v6Advertised, $lan, [self::LAN4, self::VIP6, self::VIP4]],
-			'IPv4 VIP, IPv6 advertisement on: IPv4 is added' => [TRUE, FALSE, $not443 + $v6Advertised, $lan, [...$lan, self::VIP4]],
+			'IPv4 VIP, IPv4 443 advertisement on: DoH still listens on the interface address' => [TRUE, FALSE, $not443 + $v4Advertised, $lan, [...$lan, self::VIP4]],
+			'IPv6 VIP, IPv6 443 advertisement on: DoH still listens on the interface address' => [FALSE, TRUE, $not443 + $v6Advertised, $lan, [...$lan, self::VIP6]],
+			'both VIPs, only the IPv4 advertisement on: the option changes no listener' => [TRUE, TRUE, $not443 + $v4Advertised, $lan, [...$lan, self::VIP4, self::VIP6]],
+			'both VIPs, only the IPv6 advertisement on: the option changes no listener' => [TRUE, TRUE, $not443 + $v6Advertised, $lan, [...$lan, self::VIP4, self::VIP6]],
+			'both VIPs, both advertisements on, port 443 for IPv4 alone: only the port replaces' => [TRUE, TRUE, $v4Replaced + ['dns_shared/pfb_dns_ddr_doh_443' => 'on', 'dns_shared/pfb_dns_ddr_doh_443_6' => 'on'], $lan, [self::VIP4, self::LAN6, self::VIP6]],
 		];
 	}
 
@@ -307,5 +308,17 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 
 		// Then only the VIP is named: the interface address does not listen for DoH
 		$this->assertSame([self::warning(self::PUBLIC_VIP4, 'DoH')], pfb_dns_proxy_ddr_warnings());
+	}
+
+	public function testAPublicIpv6ListenerAddressIsNeverNamed(): void
+	{
+		// Given DoT on the LAN's public IPv4 and public IPv6 addresses, DDR on and a certificate that has no IP SAN
+		$this->ddr([], []);
+		$this->vips(FALSE, FALSE);
+		$this->lan([self::PUBLIC_LAN4], ['2606:4700::1']);
+		$this->assertSame([self::PUBLIC_LAN4, '2606:4700::1', '127.0.0.1', '::1'], $this->served('dot'), 'premise: DoT listens on both addresses');
+
+		// Then only the IPv4 one is named: a global IPv6 prefix changes, so a missing SAN there cannot be fixed
+		$this->assertSame([self::warning(self::PUBLIC_LAN4, 'DoT')], pfb_dns_proxy_ddr_warnings());
 	}
 }
