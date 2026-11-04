@@ -543,12 +543,93 @@ final class DnsListenVipLifecycleTest extends TestCase
 	}
 
 	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
-	public function testAVipTheAdministratorAddedByHandNextToAForeignServerIsNotTouched(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	public function testAVipTheAdministratorAddedByHandNextToAForeignServerIsNotTouchedButItsScopeIsWarned(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
 	{
 		$path = $this->dnsList($section, $list, $family, [$vip, $foreign]);
 		pfb_dns_listen_vips_apply();
 		$this->assertSame([$vip, $foreign], config_get_path($path));
 		$this->assertArrayNotHasKey($path, $this->ledger(), 'an unrecorded VIP is the administrator\'s');
+		$warnings = pfb_dns_listen_foreign_warnings();
+		$this->assertCount(1, $warnings, 'the scope is still left alone, so it is still warned of');
+		$this->assertStringContainsString("include {$foreign}, which", $warnings[0], 'the warning names the foreign server and not the VIP');
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertSame(1, substr_count($log, 'the Resolver VIP is not added'));
+		$this->assertStringContainsString($foreign, $log);
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testAVipTheAdministratorAddedByHandAloneIsNotAForeignServer(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, [$vip]);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$vip], config_get_path($path));
+		$this->assertArrayNotHasKey($path, $this->ledger());
+		$this->assertSame([], pfb_dns_listen_foreign_warnings());
+		$this->assertStringNotContainsString('the Resolver VIP is not added', (string) @file_get_contents($GLOBALS['pfb']['log']));
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testTheVipWeRecordedIsNotAForeignServerWhenTheSelectedVipChanges(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, []);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$vip], config_get_path($path), 'the first VIP was added and recorded');
+		$next = $family === 4 ? '192.0.2.99' : 'fd12:3456::99';
+		config_set_path('virtualip/vip', [...config_get_path('virtualip/vip', []), ['mode' => 'ipalias', 'interface' => 'lo0', 'type' => 'single', 'subnet' => $next, 'subnet_bits' => $family === 4 ? '32' : '128', 'descr' => 'operator', 'uniqid' => 'next']]);
+		PfbConfig::write("gen/pfb_dns_listen_vip{$family}", '_vipnext');
+		$this->assertSame([], pfb_dns_listen_foreign_warnings(), 'the recorded VIP is ours, selected or not');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$next], config_get_path($path), 'the recorded VIP is replaced by the selected one');
+		$this->assertSame([$next], $this->ledger()[$path] ?? NULL);
+		$this->assertStringNotContainsString('the Resolver VIP is not added', (string) @file_get_contents($GLOBALS['pfb']['log']));
+	}
+
+	/** The interface's own address of the family cannot be determined, as for a tracked IPv6 prefix that is down. */
+	private function withoutOwnAddress(int $family): void
+	{
+		if ($family === 4) {
+			unset($GLOBALS['pfb_test_interface_ip']['lan']);
+		} else {
+			unset($GLOBALS['pfb_test_configured_ipv6']['lan']);
+		}
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testAListOfAnInterfaceWhoseOwnAddressIsUnknownIsLeftExactlyAsItIs(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, []);
+		pfb_dns_listen_vips_apply();
+		config_set_path($path, [$own, $vip]);
+		$this->withoutOwnAddress($family);
+		$config = $GLOBALS['config'];
+		$ledger = PfbConfig::read('gen/pfb_dns_listen_added');
+		$this->assertSame([$path => [$vip]], array_intersect_key($this->ledger(), [$path => TRUE]), 'before-state: the VIP is recorded as ours');
+		$dhcp = count(array_filter($GLOBALS['pfb_test_service_calls'], static fn (array $call): bool => $call[0] === 'services_dhcpd_configure'));
+		pfb_dns_listen_vips_apply();
+		$this->assertSame($config, $GLOBALS['config'], 'no list changes while the interface\'s own address is unknown');
+		$this->assertSame($ledger, PfbConfig::read('gen/pfb_dns_listen_added'), 'the record of what we added is kept');
+		$this->assertSame([], pfb_dns_listen_foreign_warnings(), 'nothing is known to be foreign, so nothing is warned');
+		$this->assertStringNotContainsString('the Resolver VIP is not added', (string) @file_get_contents($GLOBALS['pfb']['log']));
+		$this->assertCount($dhcp, array_filter($GLOBALS['pfb_test_service_calls'], static fn (array $call): bool => $call[0] === 'services_dhcpd_configure'), 'DHCP is not regenerated');
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testAnEmptyListOfAnInterfaceWhoseOwnAddressIsUnknownStillGainsTheResolverVip(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, []);
+		$this->withoutOwnAddress($family);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$vip], config_get_path($path));
+	}
+
+	public function testAnEntryThatIsNotAStringNamesNoServerAndTheNextOneIsStillChecked(): void
+	{
+		$path = $this->dnsList('dhcpd', 'dnsserver', 4, [['x'], '172.20.0.53']);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([['x'], '172.20.0.53'], config_get_path($path));
+		$warnings = pfb_dns_listen_foreign_warnings();
+		$this->assertCount(1, $warnings);
+		$this->assertStringContainsString('include 172.20.0.53, which', $warnings[0]);
 	}
 
 	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
@@ -588,12 +669,13 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame(['2001:0DB8:0:0:0:0:0:1', 'fd00:53:53:53:53:53:53:53'], config_get_path($path));
 	}
 
-	public function testAnInterfaceWithoutAnAddressOfTheFamilyOwnsNoEntry(): void
+	public function testAnotherInterfacesAddressIsAServerOfTheAdministratorsOwn(): void
 	{
+		$GLOBALS['pfb_test_interface_ip']['opt1'] = '172.20.0.1';
 		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
 		config_set_path('dhcpd/opt1', ['dnsserver' => ['192.0.2.1']]);
 		pfb_dns_listen_vips_apply();
-		$this->assertSame(['192.0.2.1'], config_get_path('dhcpd/opt1/dnsserver'), 'another interface\'s address is a server of the administrator\'s here');
+		$this->assertSame(['192.0.2.1'], config_get_path('dhcpd/opt1/dnsserver'), 'lan\'s address in the opt1 list is not opt1\'s own');
 	}
 
 	public function testAnEmptyEntryNamesNoServer(): void
@@ -659,10 +741,20 @@ final class DnsListenVipLifecycleTest extends TestCase
 		config_set_path('dhcpd/opt1', ['dnsserver' => ['172.21.0.53']]);
 		$GLOBALS['pfb_test_interface_ip']['opt1'] = '172.21.0.1';
 		pfb_dns_listen_vips_apply();
+		$this->assertSame(2, substr_count((string) @file_get_contents($GLOBALS['pfb']['log']), 'the Resolver VIP is not added'), 'one log line per scope left alone');
 		pfb_test_page_eval(pfb_test_page_region($page, 'foreach (pfb_dns_listen_foreign_warnings()', '$form = new Form('), []);
 		$boxes = $GLOBALS['pfb_test_info_boxes'];
 		unset($GLOBALS['pfb_test_info_boxes']);
 		$this->assertCount(2, $boxes, 'one box per scope left alone');
 		$this->assertSame(array_map(static fn (string $text): array => [$text, 'warning'], pfb_dns_listen_foreign_warnings()), array_map(static fn (array $box): array => [$box[0], $box[1]], $boxes));
+	}
+
+	public function testDnsGeneralHelpSaysListsNamingAServerOfYourOwnAreLeftAlone(): void
+	{
+		require_once __DIR__ . '/PageStatementLoader.php';
+		$this->assertStringContainsString(
+			'Lists that name a server of your own are left alone; DNS General warns about each.',
+			pfb_test_page_source('src/usr/local/www/pfblockerng/pfblockerng_dns_general.php')
+		);
 	}
 }

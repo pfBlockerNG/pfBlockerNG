@@ -35,6 +35,7 @@ WARNING = re.compile(
     r"which pfBlockerNG did not add, so the Resolver VIP (?P<vip>\S+) is not added there\. "
     r"Add (?P=vip) to that list by hand if clients should use it\."
 )
+HELP = "Lists that name a server of your own are left alone; DNS General warns about each."
 LISTENER_KEYS = ("pfb_dns_listen_vip", "pfb_dns_listen_vip4")
 
 
@@ -91,8 +92,8 @@ def resolver_addresses_on(smoke_vm: SmokeVM) -> Iterator[None]:
             helpers.config_restore_state(smoke_vm, f"{helpers.CFG_GLOBAL}/{key}", state)
 
 
-def _warnings(smoke_vm: SmokeVM, webui: WebUI) -> list[dict[str, str]]:
-    """Render DNS General under the Tier-A oracle and return the foreign-list warnings it prints."""
+def _render(smoke_vm: SmokeVM, webui: WebUI) -> str:
+    """Render DNS General under the Tier-A oracle and return its HTML."""
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
     response = webui.get(DNS_GENERAL_PAGE)
@@ -101,7 +102,12 @@ def _warnings(smoke_vm: SmokeVM, webui: WebUI) -> list[dict[str, str]]:
     )
     assert rendered.ok, f"DNS General GET: {rendered.detail}"
     guard.assert_no_growth()
-    return [match.groupdict() for match in WARNING.finditer(response.text)]
+    return response.text
+
+
+def _warnings(html: str) -> list[dict[str, str]]:
+    """The foreign-list warnings in the rendered page."""
+    return [match.groupdict() for match in WARNING.finditer(html)]
 
 
 def test_dns_general_warns_of_a_dhcp_list_that_names_a_server_of_the_administrators_own(
@@ -113,12 +119,14 @@ def test_dns_general_warns_of_a_dhcp_list_that_names_a_server_of_the_administrat
     When:  the scope's list comes to name a server that is not the interface's own address
     Then:  DNS General warns of that scope, and only then
     """
-    before = _warnings(smoke_vm, webui)
+    before_html = _render(smoke_vm, webui)
+    assert HELP in before_html, f"the Resolver addresses help does not say lists of your own are left alone: {HELP!r}"
+    before = _warnings(before_html)
     assert before == [], f"before-state (an empty list is not foreign): expected no warning, got {before}"
 
     _put(smoke_vm, "dhcpd", {SCOPE_INTERFACE: {"dnsserver": [FOREIGN_SERVER]}})
 
-    after = _warnings(smoke_vm, webui)
+    after = _warnings(_render(smoke_vm, webui))
     assert len(after) == 1, f"expected one warning for the {SCOPE_INTERFACE} scope, got {after}"
     warning = after[0]
     assert warning["type"] == "DHCPv4", warning

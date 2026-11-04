@@ -31,7 +31,9 @@ list, but leaves alone any of those lists that names a server you chose: an addr
 address nor one pfBlockerNG added. **DNS > General** warns about each list left alone, naming the interface, the list and
 those servers; add the Resolver VIP to that list by hand if you want clients to use it. A VIP pfBlockerNG added earlier is
 removed from a list when you later add a server of your own to it, and returns when that server is gone. A VIP you added
-by hand is never touched. Disabling Resolver addresses behaves as before.
+by hand is never touched. A second address of the interface, such as an IP alias or CARP VIP, counts as a server you chose.
+While the interface's own address cannot be determined, for example a tracked IPv6 prefix that is down, a non-empty list is
+left exactly as it is and is not warned about. Disabling Resolver addresses behaves as before.
 
 On a policy receiver, an existing listener VIP is moved only after the published address passes validation and
 conflict checks. Equivalent IPv6 spellings reuse the same VIP. A missing or invalid publication is not replaced

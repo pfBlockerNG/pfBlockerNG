@@ -144,7 +144,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_listen_vip'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setAttribute('aria-label', gettext('Resolver addresses'))
-  ->setHelp(gettext('Add these addresses to Unbound, DHCPv4, DHCPv6 and Router Advertisements even when pfB-DNS and DNSBL are off.')
+  ->setHelp(gettext('Add these addresses to Unbound, DHCPv4, DHCPv6 and Router Advertisements even when pfB-DNS and DNSBL are off. Lists that name a server of your own are left alone; DNS General warns about each.')
 		. '<div class="infoblock">' . gettext('Default: <strong>Disabled</strong>') . '</div>');
 $group = new Form_Group(gettext('Resolver VIPs'));
 $group->add(new Form_Select(

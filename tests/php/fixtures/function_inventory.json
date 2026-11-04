@@ -1767,12 +1767,25 @@
         "returnType": "void",
         "params": []
     },
-    "pfb_dns_listen_foreign_scopes": {
+    "pfb_dns_listen_family_addresses": {
         "returnsRef": false,
         "returnType": "array",
         "params": [
             {
                 "name": "vips",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_listen_foreign_scopes": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "addresses",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
