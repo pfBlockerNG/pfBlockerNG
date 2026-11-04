@@ -168,21 +168,6 @@ func TestALive443AddAndRemoveFollowsDDR(t *testing.T) {
 	const host = "127.0.0.2"
 	configured, at443 := r.at("doh", host), r.at("doh443", host)
 	r.add("udp+tcp", r.at("udp+tcp", host)) // somewhere to ask DDR
-
-	r.add("doh", configured)
-	r.requireDoHRecord("the configured port only", host, r.port["doh"])
-	r.add("doh", at443)
-	r.ask("doh", at443)
-	r.requireDoHRecord("D8 the 443 listener is added: one record, no port", host, 0)
-
-	r.remove("doh", configured)
-	r.requireDoHRecord("the configured listener is removed: 443 is all that is left", host, 0)
-	r.add("doh", configured)
-	r.remove("doh", at443)
-	r.requireGone("doh", at443)
-	r.requireDoHRecord("D8 the 443 listener is removed: the configured port again", host, r.port["doh"])
-	r.ask("doh", configured)
-
 	strangerAt := netip.AddrPortFrom(netip.MustParseAddr(host), uint16(r.stranger))
 	reply := r.refuse("doh on a port that is neither the configured one nor 443", false, func() []livePart {
 		return []livePart{{r.addFrame("doh", strangerAt), liveSockets(t, "doh", strangerAt)}}
@@ -198,6 +183,21 @@ func TestALive443AddAndRemoveFollowsDDR(t *testing.T) {
 			t.Fatalf("the refusal %q does not name the port %d", reply, y)
 		}
 	}
+
+	r.add("doh", configured)
+	r.requireDoHRecord("the configured port only", host, r.port["doh"])
+	r.add("doh", at443)
+	r.ask("doh", at443)
+	r.requireDoHRecord("D8 the 443 listener is added: one record, no port", host, 0)
+
+	r.remove("doh", configured)
+	r.requireDoHRecord("the configured listener is removed: 443 is all that is left", host, 0)
+	r.add("doh", configured)
+	r.remove("doh", at443)
+	r.requireGone("doh", at443)
+	r.requireDoHRecord("D8 the 443 listener is removed: the configured port again", host, r.port["doh"])
+	r.ask("doh", configured)
+
 	r.requireDoHRecord("after the refused adds", host, r.port["doh"])
 }
 
