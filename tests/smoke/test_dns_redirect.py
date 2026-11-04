@@ -1488,11 +1488,11 @@ def _pfb_dns_on_with_resolver_vip6(vm: SmokeVM, domain: str, lan6: str, *, lan_l
 def test_dns_redirect_under_pfb_dns_answers_foreign_ipv6_resolver_query(
     deployed_vm: SmokeVM, client_vm: SmokeVM, lan_listens: bool
 ) -> None:
-    """Issue #3694: under pfB-DNS the IPv6 redirect targets an address pfB-DNS listens on, so pfSense answers.
+    """Issue #3694: under pfB-DNS the IPv6 redirect targets an address pfB-DNS listens on and widens no access control.
 
     Scenario: a LAN client hardcodes an IPv6 resolver that is not pfSense. pfB-DNS serves the IPv6 Resolver VIP and,
-    for ``lan_listens``, the LAN's own address; the LAN is in no listener list otherwise, and the redirect must still
-    get the client answered (the redirect interface's network is granted).
+    for ``lan_listens``, the LAN's own address. A LAN no listener list names stays refused (DNS Redirect adds no
+    access-control row); a listened-on LAN is answered.
 
       Given pfB-DNS on with plain DNS on Localhost (and on the LAN when ``lan_listens``) and Resolver addresses on with
             an automatic IPv6 VIP on lo0, which answers a listed name,
@@ -1501,7 +1501,8 @@ def test_dns_redirect_under_pfb_dns_answers_foreign_ipv6_resolver_query(
       Then the query does not get the VIP (before-state; an uplink may answer a foreign resolver itself),
       When DNS redirect is enabled for ``lan``,
       Then the redirect targets the LAN address when it is listened on, else the VIP,
-       And pfSense answers the same query with the VIP.
+       And the Resolver's custom options, listener interfaces and pfB-DNS interface list are exactly as before,
+       And the listened-on LAN's client is answered with the VIP while the other is REFUSED.
     """
     vm = deployed_vm
     lan6 = h.get_lan_ipv6(vm)
@@ -1529,6 +1530,12 @@ def test_dns_redirect_under_pfb_dns_answers_foreign_ipv6_resolver_query(
                 f"expected no A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect off, "
                 f"got rc={before.returncode}:\n{before.stdout}"
             )
+            access_paths = (
+                "unbound/custom_options",
+                "unbound/active_interface",
+                h.dns_config_path("pfb_dns_interface"),
+            )
+            access_before = {path: h.config_get_state(vm, path) for path in access_paths}
 
             _set_dns_redirect(vm, enabled=True, ifaces=["lan"])
             h.reload(vm, "update")
@@ -1543,10 +1550,24 @@ def test_dns_redirect_under_pfb_dns_answers_foreign_ipv6_resolver_query(
                 + _ipv6_dns_report(vm, vip6)
             )
 
-            after = client_vm.ssh(dig)
-            assert h.is_vip(h._parse_dig(after.stdout, "A")), (
-                f"expected A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect on, "
-                f"got rc={after.returncode}:\n{after.stdout}\n{_ipv6_dns_report(vm, vip6)}"
+            access_after = {path: h.config_get_state(vm, path) for path in access_paths}
+            assert access_after == access_before, (
+                "DNS Redirect changed the Resolver access control or listeners\n"
+                f"  before: {access_before}\n  after : {access_after}\n"
+                + vm.ssh("grep -h '^access-control:' /var/unbound/unbound.conf /var/unbound/access_lists.conf").stdout
             )
+
+            after = client_vm.ssh(dig)
+            answer = h._parse_dig(after.stdout, "A")
+            if lan_listens:
+                assert h.is_vip(answer), (
+                    f"expected A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect on, "
+                    f"got rc={after.returncode}:\n{after.stdout}\n{_ipv6_dns_report(vm, vip6)}"
+                )
+            else:
+                assert answer.rcode == "REFUSED" and not h.is_vip(answer), (
+                    f"expected REFUSED from {_FOREIGN_RESOLVER6} for a LAN no listener admits, "
+                    f"got rc={after.returncode}:\n{after.stdout}\n{_ipv6_dns_report(vm, vip6)}"
+                )
     finally:
         h.unpin_client_route6(client_vm, _FOREIGN_RESOLVER6)

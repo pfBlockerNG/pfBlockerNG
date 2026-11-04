@@ -336,140 +336,82 @@ final class DnsProxyAclTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// DNS Redirect: the networks of the redirect interfaces, both families
+	// DNS Redirect never widens the access control (#3694)
 	// -----------------------------------------------------------------------
 
-	/** A redirected client arrives from its own interface's network whichever listener list names that interface, so DNS Redirect grants it. */
-	public function testDnsRedirectGrantsTheRedirectInterfacesNetworksOfBothFamiliesWhateverTheListenerListsHold(): void
+	/**
+	 * @return array<string,array{string,string,list<string>}> redirect selection, pfB-DNS plain DNS list, the grants that list alone gives
+	 */
+	public static function redirectSelections(): array
 	{
-		// Given pfB-DNS on loopback only and a LAN with an IPv4 and an IPv6 network
-		$this->seedBox(['lan' => '2001:db8:1::1'], ['lan' => '64']);
-		$this->seedBoxV4(['lan' => '192.0.2.1'], ['lan' => '24']);
-		$this->seedResolver('lan');
-		$this->seedLoopbackOnlyListeners();
-		$this->seedRedirect('lan', '');
-		$this->moveOn();
-		$this->assertSame([], $this->grants(), 'before: DNS Redirect is off and no listener list names the LAN');
-
-		// When DNS Redirect is turned on for lan and the proxy is applied again
-		$this->seedRedirect('lan');
-		$changed = pfb_dns_proxy_resolver(TRUE);
-
-		// Then both networks of the LAN are granted, in the block rewritten in place
-		$this->assertSame(
-			['access-control: 192.0.2.0/24 allow', 'access-control: 2001:db8:1::/64 allow'],
-			$this->grants()
-		);
-		$this->assertTrue($changed);
-	}
-
-	public function testEveryRedirectInterfaceOfTheListIsGrantedItsNetworks(): void
-	{
-		$this->seedBox(['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1'], ['lan' => '64', 'opt1' => '56']);
-		$this->seedBoxV4(['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], ['lan' => '24', 'opt1' => '25']);
-		$this->seedResolver('lan');
-		$this->seedLoopbackOnlyListeners();
-		$this->seedRedirect('lan, opt1');
-
-		$this->moveOn();
-
-		$this->assertSame(
-			[
-				'access-control: 192.0.2.0/24 allow', 'access-control: 2001:db8:1::/64 allow',
-				'access-control: 198.51.100.0/25 allow', 'access-control: 2001:db8:2::/56 allow',
-			],
-			$this->grants()
-		);
-	}
-
-	public function testARedirectInterfaceWithoutAGlobalIpv6AddressIsGrantedItsIpv4NetworkOnly(): void
-	{
-		$this->seedBox(['lan' => 'fe80::1'], ['lan' => '64']);
-		$this->seedBoxV4(['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], ['lan' => '24', 'opt1' => '24']);
-		$this->seedResolver('lan');
-		$this->seedLoopbackOnlyListeners();
-		$this->seedRedirect('lan,opt1');
-
-		$this->moveOn();
-
-		$this->assertSame(
-			['access-control: 192.0.2.0/24 allow', 'access-control: 198.51.100.0/24 allow'],
-			$this->grants(),
-			'a link-local lan and an opt1 with no IPv6 address add no IPv6 row'
-		);
-	}
-
-	public function testAnInterfaceThatIsBothAListenerAndARedirectInterfaceIsGrantedEachNetworkOnce(): void
-	{
-		$this->seedBox(['lan' => '2001:db8:1::1'], ['lan' => '64']);
-		$this->seedBoxV4(['lan' => '192.0.2.1'], ['lan' => '24']);
-		$this->seedResolver('lan');
-		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
-		$this->seedRedirect('lan');
-
-		$this->moveOn();
-
-		$this->assertSame(
-			['access-control: 192.0.2.0/24 allow', 'access-control: 2001:db8:1::/64 allow'],
-			$this->grants()
-		);
-	}
-
-	public function testARedirectInterfaceWithAGatewayIsNeverGranted(): void
-	{
-		$this->seedBox(['wan' => '2001:db8:ff::2'], ['wan' => '64'], ['wan']);
-		$this->seedBoxV4(['wan' => '203.0.113.2'], ['wan' => '24']);
-		$this->seedResolver('lan');
-		$this->seedLoopbackOnlyListeners();
-		$this->seedRedirect('wan');
-
-		$this->moveOn();
-
-		$this->assertSame([], $this->grants(), 'the subnet of an Internet-facing interface is no client network, redirect or not');
-	}
-
-	/** The redirect list names interfaces and nothing else: `all`, an unknown name and text that is no name add no row, whatever else is configured. */
-	public function testOnlyConfiguredInterfaceNamesOfTheRedirectListAreGranted(): void
-	{
-		$this->seedBox(['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1'], ['lan' => '64', 'opt1' => '64']);
-		$this->seedBoxV4(['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], ['lan' => '24', 'opt1' => '24']);
-		$this->seedResolver('lan');
-		$this->seedLoopbackOnlyListeners();
-		$this->seedRedirect("all,opt9,\n\tx;rm -rf,2001:db8:1::1,192.0.2.1");
-
-		$this->moveOn();
-
-		$this->assertSame([], $this->grants());
-		$this->assertSame(1, substr_count($this->customText(), 'proxy-protocol-port'), 'nothing was injected into the clause');
-	}
-
-	/** @return array<string,array{string,bool,bool}> */
-	public static function redirectNotInForce(): array
-	{
+		$lan = 'access-control: 2001:db8:1::/64 allow';
 		return [
-			'DNS Redirect off'             => ['', TRUE, FALSE],
-			'DNSBL not running'            => ['on', FALSE, FALSE],
-			'automatic access control off' => ['on', TRUE, TRUE],
+			'LAN selected, no listener list names it'     => ['lan', 'lo0', []],
+			'two interfaces selected, none listened on'   => ['lan, opt1', 'lo0', []],
+			'LAN selected and listened on'                => ['lan', 'lan', [$lan]],
+			'another interface selected, LAN listened on' => ['opt1', 'lan', [$lan]],
+			'an Internet-facing interface selected'       => ['wan', 'lo0', []],
+			'names that are no interface'                 => ["all,opt9,\n\tx;rm -rf,2001:db8:1::1,192.0.2.1", 'lo0', []],
 		];
 	}
 
-	/** The redirect rows exist only while DNS Redirect is on and DNSBL runs, and a grant follows them; the admin's automatic-ACL switch still wins. */
-	#[DataProvider('redirectNotInForce')]
-	public function testNothingIsGrantedForARedirectThatIsNotInForce(string $on, bool $dnsblRuns, bool $autoAclOff): void
+	/**
+	 * The redirect rows carry the client's own source address, so a client its interface's listeners do not admit stays refused: DNS
+	 * Redirect adds no network to the Resolver's access control, in either family, and its turning on or off leaves the block as it was.
+	 *
+	 * @param list<string> $expected
+	 */
+	#[DataProvider('redirectSelections')]
+	public function testDnsRedirectAddsNoNetworkToTheAccessControlAndLeavesTheBlockUntouched(string $selection, string $plainList, array $expected): void
+	{
+		// Given a box with IPv4 and IPv6 networks on lan and opt1, a gateway on wan, and DNS Redirect off
+		$this->seedBox(
+			['lan' => '2001:db8:1::1', 'opt1' => '2001:db8:2::1', 'wan' => '2001:db8:ff::2'],
+			['lan' => '64', 'opt1' => '56', 'wan' => '64'],
+			['wan']
+		);
+		$this->seedBoxV4(['lan' => '192.0.2.1', 'opt1' => '198.51.100.1', 'wan' => '203.0.113.2'], ['lan' => '24', 'opt1' => '25', 'wan' => '24']);
+		$this->seedResolver('lan');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', $plainList);
+		$this->seedRedirect($selection, '');
+		$this->moveOn();
+		$block = $this->customText();
+		$this->assertSame($expected, $this->grants(), 'before: only the interfaces a listener list names are granted');
+
+		// When DNS Redirect is turned on for the selection and the proxy is applied again
+		$this->seedRedirect($selection);
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then no network joined the grants and the block was not rewritten
+		$this->assertSame($expected, $this->grants());
+		$this->assertFalse($changed);
+		$this->assertSame($block, $this->customText());
+
+		// And turning it off again leaves the same block
+		$this->seedRedirect($selection, '');
+		$this->assertFalse(pfb_dns_proxy_resolver(TRUE));
+		$this->assertSame($block, $this->customText());
+	}
+
+	/** A network the admin refuses stays refused, and the listener selections and custom access lists are exactly the admin's. */
+	public function testDnsRedirectOnAnInterfaceWithARefusedNetworkLeavesTheAdminsAccessListsAndListenersAsTheyAre(): void
 	{
 		$this->seedBox(['lan' => '2001:db8:1::1'], ['lan' => '64']);
 		$this->seedBoxV4(['lan' => '192.0.2.1'], ['lan' => '24']);
 		$this->seedResolver('lan');
-		$this->seedLoopbackOnlyListeners();
-		$this->seedRedirect('lan', $on);
-		$GLOBALS['pfb']['dnsbl'] = $dnsblRuns ? PfbToggle::On : PfbToggle::Off;
-		if ($autoAclOff) {
-			$GLOBALS['config']['unbound']['disable_auto_added_access_control'] = '';
-		}
+		$refusals = [[
+			'aclid' => '0', 'aclname' => 'Refuse LAN', 'aclaction' => 'refuse', 'description' => '',
+			'row' => [['acl_network' => '192.0.2.0', 'mask' => '24', 'description' => ''], ['acl_network' => '2001:db8:1::', 'mask' => '64', 'description' => '']],
+		]];
+		config_set_path('unbound/acls', $refusals);
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lo0');
+		$this->seedRedirect('lan');
 
 		$this->moveOn();
 
-		$this->assertSame([], $this->grants());
+		$this->assertSame([], $this->grants(), 'no allow row for the refused LAN networks');
+		$this->assertSame($refusals, config_get_path('unbound/acls'), 'the admin\'s access lists are untouched');
+		$this->assertSame('lo0', config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface'), 'the listener selection is untouched');
 	}
 
 	// -----------------------------------------------------------------------
