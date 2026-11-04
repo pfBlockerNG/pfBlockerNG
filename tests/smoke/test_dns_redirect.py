@@ -31,7 +31,8 @@ All cases use config.xml reads via the pfSense config API (``php_eval`` /
 ``config_get_path``). ``pfctl -sn`` rdr confirmation is the on-box live gate for
 Cases 1 and 2. **Case 10** drives the client-redirect behaviour itself for IPv6: civm
 sends a query to a foreign IPv6 resolver through pfSense, and only the redirect makes
-pfSense answer it.
+pfSense answer it. **Case 11** repeats that with pfB-DNS on and an IPv6 Resolver VIP: the redirect targets
+``<iface>ip`` when pfB-DNS listens on the LAN's address, else the VIP (the LAN is then in no listener list).
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``). Run
 only by the smoke workflow::
@@ -44,6 +45,7 @@ smoke deps; without them they skip cleanly.
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import os
 from collections.abc import Iterator
@@ -53,6 +55,14 @@ import pytest
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
 from .pkg_identity import branch_pkg_name
+from .test_smoke_dns_proxy import (
+    LISTENER_LISTS,
+    MOVED_KEYS,
+    _listeners,
+    _php_ok,
+    _require_payload,
+    _set_proxy_toggle,
+)
 
 pytestmark = pytest.mark.smoke
 
@@ -1357,5 +1367,186 @@ def test_dns_redirect_answers_foreign_ipv6_resolver_query(deployed_vm: SmokeVM, 
             )
         finally:
             _cleanup_redirect(vm)
+    finally:
+        h.unpin_client_route6(client_vm, _FOREIGN_RESOLVER6)
+
+
+# --------------------------------------------------------------------------- #
+# Case 11 — pfB-DNS serves IPv6 on an IPv6 Resolver VIP: the IPv6 redirect targets an address it listens on
+# --------------------------------------------------------------------------- #
+
+# DNS General > Resolver addresses, and the pfB-DNS interface lists that its first turn-on seeds.
+_LISTEN_KEYS = tuple(
+    f"{h.CFG_GLOBAL}/{key}"
+    for key in (
+        "pfb_dns_listen_vip",
+        "pfb_dns_listen_vip4",
+        "pfb_dns_listen_vip6",
+        "pfb_dns_listen_interface",
+        "pfb_dns_listen_added",
+        "pfb_dns_listen_auto4",
+        "pfb_dns_listen_auto6",
+    )
+)
+_PFB_DNS_LISTS = tuple(h.dns_config_path(key) for key in LISTENER_LISTS)
+_RESOLVER_KEYS = tuple(f"unbound/{key}" for key in MOVED_KEYS)
+
+
+def _answers_listed_name_with_vip(vm: SmokeVM, domain: str) -> bool:
+    """On the box: does pfB-DNS, asked at 127.0.0.1, answer an A query for the listed ``domain`` with the DNSBL VIP?"""
+    result = vm.ssh(f"{h.DRILL_BIN} {domain} A @127.0.0.1", timeout=30.0)
+    return h.is_vip(h._parse_drill(result.stdout, "A"))
+
+
+def _ipv6_dns_report(vm: SmokeVM, vip6: str) -> str:
+    """Who listens for DNS over IPv6 and where the redirect points (printed when the redirect gets no answer)."""
+    target = _nat_rule_field(vm, _redir_descr_for("lan", "inet6"), "target")
+    sockets = vm.ssh("sockstat -6 -l -p 53").stdout
+    return (
+        f"  IPv6 Resolver VIP : {vip6}\n"
+        f"  redirect target   : {target!r} (config.xml pfB_DNS_Redirect_lan_v6)\n"
+        f"  sockstat -6 -l -p 53:\n{sockets}"
+    )
+
+
+@contextlib.contextmanager
+def _pfb_dns_on_with_resolver_vip6(vm: SmokeVM, domain: str, lan6: str, *, lan_listens: bool) -> Iterator[str]:
+    """pfB-DNS on (plain DNS on Localhost, the LAN if ``lan_listens``) and an automatic IPv6 Resolver VIP; yields it.
+
+    With ``lan_listens`` False the VIP is the only non-loopback address pfB-DNS serves, and no listener list names the
+    LAN: nothing but DNS Redirect can make pfB-DNS grant the LAN's clients (they would be REFUSED).
+    Entry returns once pfB-DNS answers ``domain`` (a listed name) and listens on the VIP (and the LAN's IPv6 address
+    ``lan6`` when ``lan_listens``). Exit turns DNS Redirect, the VIP and pfB-DNS off in one apply, puts back every
+    setting the entry wrote, and fails if the Resolver did not come back.
+    """
+    restored = (*_LISTEN_KEYS, *_PFB_DNS_LISTS)
+    lists = "lo0,lan" if lan_listens else "lo0"
+    prior = {path: h.config_get_state(vm, path) for path in (*restored, *_RESOLVER_KEYS)}
+    try:
+        _require_payload(vm)
+        _php_ok(
+            vm,
+            f"config_set_path({h._php_str(h.CFG_GLOBAL + '/pfb_dns_listen_vip')}, 'on');\n"
+            f"config_set_path({h._php_str(h.CFG_GLOBAL + '/pfb_dns_listen_vip4')}, '');\n"
+            f"config_set_path({h._php_str(h.CFG_GLOBAL + '/pfb_dns_listen_vip6')}, 'auto');\n"
+            f"config_set_path({h._php_str(h.CFG_GLOBAL + '/pfb_dns_listen_interface')}, 'lo0');\n"
+            f"config_set_path({h._php_str(h.dns_config_path('pfb_dns_interface'))}, {h._php_str(lists)});\n"
+            "write_config('pfBlockerNG smoke: Resolver addresses on with an automatic IPv6 VIP');",
+            "Resolver addresses",
+        )
+        _set_proxy_toggle(vm, True)
+        h.reload(vm, "updatednsbl")
+        vip6 = h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_dns_listen_auto6")
+        try:
+            vip = ipaddress.IPv6Address(vip6)
+        except ValueError:
+            raise AssertionError(f"no IPv6 Resolver VIP after the apply: pfb_dns_listen_auto6 is {vip6!r}") from None
+        rows = (line.split() for line in vm.ssh("ifconfig lo0").stdout.splitlines())
+        on_lo0 = {ipaddress.IPv6Address(row[1].partition("%")[0]) for row in rows if len(row) > 1 and row[0] == "inet6"}
+        assert vip in on_lo0, f"the IPv6 Resolver VIP {vip} is not on lo0: {sorted(map(str, on_lo0))}"
+        try:
+            h.wait_until(lambda: _answers_listed_name_with_vip(vm, domain), timeout=240.0, interval=3.0)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{exc}\npfB-DNS gave no DNSBL answer for {domain}\n{_ipv6_dns_report(vm, vip6)}"
+            ) from exc
+        serving = {
+            ipaddress.ip_address(s.host)
+            for s in _listeners(vm)
+            if s.command == "pfb-dns" and s.port == 53 and s.host != "*"
+        }
+        assert vip in serving, f"pfB-DNS does not listen on the IPv6 Resolver VIP {vip}:53: {sorted(map(str, serving))}"
+        if lan_listens:
+            assert ipaddress.IPv6Address(lan6) in serving, (
+                f"pfB-DNS does not listen on the LAN {lan6}:53: {sorted(map(str, serving))}"
+            )
+        yield vip6
+    finally:
+        try:
+            _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
+            _php_ok(
+                vm,
+                f"config_set_path({h._php_str(h.CFG_GLOBAL + '/pfb_dns_listen_vip')}, '');\n"
+                "write_config('pfBlockerNG smoke: Resolver addresses off');",
+                "Resolver addresses off",
+            )
+            _set_proxy_toggle(vm, False)
+            h.reload(vm, "updatednsbl")
+            h.apply_filter_sync(vm)
+        finally:
+            for path in restored:
+                h.config_restore_state(vm, path, prior[path])
+    after = {path: h.config_get_state(vm, path) for path in _RESOLVER_KEYS}
+    assert after == {path: prior[path] for path in _RESOLVER_KEYS}, (
+        f"the Resolver did not come back after pfB-DNS went off: expected {[prior[p] for p in _RESOLVER_KEYS]}, "
+        f"got {list(after.values())}"
+    )
+
+
+@pytest.mark.parametrize("lan_listens", [False, True], ids=["lan-not-listened", "lan-listened"])
+@pytest.mark.timeout(1500)  # pfB-DNS turn-on and turn-off are each a full apply, plus two redirect reloads
+def test_dns_redirect_under_pfb_dns_answers_foreign_ipv6_resolver_query(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, lan_listens: bool
+) -> None:
+    """Issue #3694: under pfB-DNS the IPv6 redirect targets an address pfB-DNS listens on, so pfSense answers.
+
+    Scenario: a LAN client hardcodes an IPv6 resolver that is not pfSense. pfB-DNS serves the IPv6 Resolver VIP and,
+    for ``lan_listens``, the LAN's own address; the LAN is in no listener list otherwise, and the redirect must still
+    get the client answered (the redirect interface's network is granted).
+
+      Given pfB-DNS on with plain DNS on Localhost (and on the LAN when ``lan_listens``) and Resolver addresses on with
+            an automatic IPv6 VIP on lo0, which answers a listed name,
+        And civm routes the foreign resolver via pfSense's LAN IPv6 (read from config),
+        And DNS redirect is off for ``lan``,
+      Then the query does not get the VIP (before-state; an uplink may answer a foreign resolver itself),
+      When DNS redirect is enabled for ``lan``,
+      Then the redirect targets the LAN address when it is listened on, else the VIP,
+       And pfSense answers the same query with the VIP.
+    """
+    vm = deployed_vm
+    lan6 = h.get_lan_ipv6(vm)
+    case = "lan" if lan_listens else "vip"
+    domain = h.unique_domain(f"redir6{case}")
+    # One alias and feed file per case: the update pass does not fetch a feed it already holds again.
+    feed_url = h.write_local_feed(vm, f"smoke_dns_redirect_v6_{case}.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname=f"smokeredir6{case}", feed_url=feed_url, header=f"smokeredir6{case}")
+    dig = f"dig +tries=1 +time=5 A {domain} @{_FOREIGN_RESOLVER6}"
+
+    h.pin_client_route6(client_vm, _FOREIGN_RESOLVER6, lan6)
+    try:
+        # inject() replaces the DNSBL settings node, so the redirect keys go after it.
+        h.inject(vm, spec)
+        _set_dns_redirect(vm, enabled=False, ifaces=["lan"])
+        h.reload(vm, "update")
+        with _pfb_dns_on_with_resolver_vip6(vm, domain, lan6, lan_listens=lan_listens) as vip6:
+            h.apply_filter_sync(vm)
+            assert _pfctl_sn_redir_absent(vm, "lan"), (
+                "rdr rule on lan before enable — before-state not clean\n"
+                + _redir_match_report(vm, "lan", expected_present=False)
+            )
+            before = client_vm.ssh(dig)
+            assert not h.is_vip(h._parse_dig(before.stdout, "A")), (
+                f"expected no A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect off, "
+                f"got rc={before.returncode}:\n{before.stdout}"
+            )
+
+            _set_dns_redirect(vm, enabled=True, ifaces=["lan"])
+            h.reload(vm, "update")
+            h.apply_filter_sync(vm)
+            assert _pfctl_sn_has_redir(vm, "lan"), "no rdr rule on lan after enable\n" + _redir_match_report(
+                vm, "lan", expected_present=True
+            )
+            target = _nat_rule_field(vm, _redir_descr_for("lan", "inet6"), "target")
+            expected = "lanip" if lan_listens else vip6
+            assert target == expected, (
+                f"IPv6 redirect target: expected {expected!r} (LAN listened on: {lan_listens}), got {target!r}\n"
+                + _ipv6_dns_report(vm, vip6)
+            )
+
+            after = client_vm.ssh(dig)
+            assert h.is_vip(h._parse_dig(after.stdout, "A")), (
+                f"expected A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect on, "
+                f"got rc={after.returncode}:\n{after.stdout}\n{_ipv6_dns_report(vm, vip6)}"
+            )
     finally:
         h.unpin_client_route6(client_vm, _FOREIGN_RESOLVER6)

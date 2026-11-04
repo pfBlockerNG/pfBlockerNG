@@ -57,7 +57,7 @@ final class SyncCopiedObjectsTest extends TestCase
 		} else {
 			$GLOBALS['pfb'] = $this->savedPfb;
 		}
-		unset($GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_logger_calls'], $GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_vip_list']);
+		unset($GLOBALS['pfb_test_file_notices'], $GLOBALS['pfb_test_logger_calls'], $GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_vip_list'], $GLOBALS['pfb_test_configured_ipv6']);
 	}
 
 	private function makeDir(): string
@@ -944,6 +944,107 @@ final class SyncCopiedObjectsTest extends TestCase
 		$apply();
 
 		$this->assertSame(['pfB_DNS_Redirect_lan_v4' => '127.0.0.1', 'pfB_DNS_Redirect_lan_v6' => 'lanip'], array_column(config_get_path('nat/rule'), 'target', 'descr'));
+	}
+
+	/** Issue #3694: a listener VIP row as the Resolver addresses setting creates it. */
+	private static function listenVip(string $address, string $uniqid): array
+	{
+		return ['mode' => 'ipalias', 'interface' => 'lo0', 'type' => 'single', 'subnet' => $address,
+			'subnet_bits' => str_contains($address, ':') ? '128' : '32', 'descr' => 'listener VIP', 'uniqid' => $uniqid];
+	}
+
+	/**
+	 * Issue #3694: with pfB-DNS serving only loopback and an IPv6 Resolver VIP, every IPv6 redirect row targets the VIP; a moved VIP
+	 * rewrites the rows, and so does a listen set that gains the interface's own address (that row goes back to `<iface>ip`).
+	 */
+	public function testRedirectWriterFollowsTheIpv6ListenSetAndTheResolverVipAsTheyChange(): void
+	{
+		global $pfb;
+
+		$spec = self::writerSpec('redirect');
+		$GLOBALS['config'] = [];
+		$pfb['dbdir']      = $this->dir;
+		$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => '2001:db8:1::1'];
+		PfbConfig::write($spec['toggle'], 'on');
+		PfbConfig::write($spec['ifaces'], 'lan,enc0');
+		PfbConfig::write('gen/pfb_dns_listen_vip', 'on');
+		PfbConfig::write('gen/pfb_dns_listen_vip4', '_vip4');
+		PfbConfig::write('gen/pfb_dns_listen_vip6', '_vip6');
+		config_set_path('virtualip/vip', [self::listenVip('192.0.2.53', '4'), self::listenVip('fd00:53::53', '6')]);
+		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl'        => ['present' => FALSE, 'value' => NULL],
+			'custom_options'   => ['present' => FALSE, 'value' => NULL],
+		])));
+		PfbConfig::write('dns/pfb_dns_interface', 'lo0');
+
+		$apply = function () use ($spec): bool {
+			global $pfb;
+			$pfb['filter_configure'] = FALSE;
+			$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+			return $pfb['filter_configure'];
+		};
+		$targets = static fn (): array => array_column(config_get_path('nat/rule'), 'target', 'descr');
+
+		$this->assertTrue($apply(), 'the first apply writes the rows');
+		$this->assertSame(
+			[
+				'pfB_DNS_Redirect_lan_v4' => '127.0.0.1', 'pfB_DNS_Redirect_lan_v6' => 'fd00:53::53',
+				'pfB_DNS_Redirect_enc0_v4' => '127.0.0.1', 'pfB_DNS_Redirect_enc0_v6' => 'fd00:53::53',
+			],
+			$targets()
+		);
+		$this->assertFalse($apply(), 'an apply that changes nothing flags no reload');
+
+		config_set_path('virtualip/vip', [self::listenVip('192.0.2.53', '4'), self::listenVip('fd00:53::54', '6')]);
+
+		$this->assertTrue($apply(), 'a moved Resolver VIP flags a pf reload');
+		$this->assertSame(['fd00:53::54', 'fd00:53::54'], array_values(array_filter($targets(), static fn (string $t): bool => str_contains($t, ':'))));
+
+		PfbConfig::write('dns/pfb_dns_interface', 'lan,lo0');
+
+		$this->assertTrue($apply(), 'a plain DNS list that gains the LAN flags a pf reload');
+		$this->assertSame(
+			['pfB_DNS_Redirect_lan_v6' => 'lanip', 'pfB_DNS_Redirect_enc0_v6' => 'fd00:53::54'],
+			array_intersect_key($targets(), array_flip(['pfB_DNS_Redirect_lan_v6', 'pfB_DNS_Redirect_enc0_v6']))
+		);
+	}
+
+	/** Issue #3694: no active IPv6 Resolver VIP leaves the IPv6 targets as they were. */
+	#[DataProvider('noActiveIpv6ResolverVipScenarios')]
+	public function testRedirectWriterKeepsTheIpv6TargetsWithoutAnActiveIpv6ResolverVip(string $option, string $vip6, bool $vip6Exists): void
+	{
+		global $pfb;
+
+		$spec = self::writerSpec('redirect');
+		$GLOBALS['config'] = [];
+		$pfb['dbdir']      = $this->dir;
+		PfbConfig::write($spec['toggle'], 'on');
+		PfbConfig::write($spec['ifaces'], 'lan,enc0');
+		PfbConfig::write('gen/pfb_dns_listen_vip', $option);
+		PfbConfig::write('gen/pfb_dns_listen_vip4', '_vip4');
+		PfbConfig::write('gen/pfb_dns_listen_vip6', $vip6);
+		config_set_path('virtualip/vip', [self::listenVip('192.0.2.53', '4'), ...($vip6Exists ? [self::listenVip('fd00:53::53', '6')] : [])]);
+
+		$this->runApplyBlock($spec['from'], $spec['to'], 'enabled');
+
+		$this->assertSame(
+			[
+				'pfB_DNS_Redirect_lan_v4' => '127.0.0.1', 'pfB_DNS_Redirect_lan_v6' => 'lanip',
+				'pfB_DNS_Redirect_enc0_v4' => '127.0.0.1', 'pfB_DNS_Redirect_enc0_v6' => '::1',
+			],
+			array_column(config_get_path('nat/rule'), 'target', 'descr')
+		);
+	}
+
+	/** @return array<string,array{string,string,bool}> */
+	public static function noActiveIpv6ResolverVipScenarios(): array
+	{
+		return [
+			'option off with an IPv6 VIP selected' => ['', '_vip6', TRUE],
+			'only an IPv4 VIP selected'            => ['on', 'none', TRUE],
+			'IPv6 VIP selected but missing'        => ['on', '_vipgone', FALSE],
+		];
 	}
 
 	public function testFilterAutoruleWriteKeepsTheRawTrackerAndOnlyTheCheckedCopyIsCast(): void
