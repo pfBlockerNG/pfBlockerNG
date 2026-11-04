@@ -4892,9 +4892,10 @@ function pfb_dns_proxy_doh_port_443(bool $ipv6 = FALSE): bool {
  */
 function pfb_dns_proxy_ddr_doh_443_options(?array $doh_tokens = NULL): array {
 	$labels = pfb_dns_proxy_interface_options();
+	$auto_ids = array_intersect_key(pfb_dns_listen_vips(), array_flip(pfb_dns_listen_auto_vips()));
 	$options = [];
 	foreach ($doh_tokens ?? pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doh_interface')) as $token) {
-		if ($token !== 'lo0') {
+		if ($token !== 'lo0' && !in_array($token, $auto_ids, TRUE)) {
 			$options[$token] = $labels[$token] ?? $token;
 		}
 	}

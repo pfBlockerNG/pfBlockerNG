@@ -12,8 +12,8 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
   tokens render selected and survive a save that leaves the lists alone;
 * DNS Reply Logging is on DNS General, separate from pfB-DNS transports;
 * DNS General's Resolver addresses save off with no listener VIP;
-* DDR's three checkboxes resolve by ``DDR``, ``IPv4 DoH on port 443`` and ``IPv6 DoH on port 443``;
-  a family's port-443 checkbox is disabled when that family already listens on 443;
+* DDR's checkbox resolves by ``DDR`` and its interfaces multi-select by ``Advertise DoH on port 443``;
+  the select offers the configured DoH interfaces without Localhost;
 * the status panel is a collapsible section per transport holding a table of Interface | Address | State rows, each
   state an icon with a hover title and a screen-reader text, and an off transport's table is empty; on a phone the
   tables scroll inside their sections.
@@ -343,7 +343,7 @@ def test_doh_on_port_443_select_offers_the_doh_interfaces_without_localhost_and_
 
 
 def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
-    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM, screenshot_dir: Path
 ) -> None:
     """issues #3583, #3694: saving DDR and a choice under "Advertise DoH on port 443" stores both.
 
@@ -364,6 +364,19 @@ def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
         before = (helpers.config_get(smoke_vm, ddr_path), helpers.config_get(smoke_vm, DOH_443_CFG))
         assert before == ("", ""), f"seed did not take: DDR and the choice must start empty, got {before}"
         _open(page, webui, DNS_PAGE)
+        dns_name = page.locator('input[name="pfb_dns_name"]')
+        named = page.get_by_label("DNS Name", exact=True)
+        if named.count() != 1:
+            _shot(page, screenshot_dir, "pfb_dns_name_accessible_name_failure")
+            dom = dns_name.evaluate_all(
+                "els => els.map(el => ({html: el.outerHTML, labels: [...el.labels].map(label => label.outerHTML), "
+                "visible: !!el.getClientRects().length, disabled: el.disabled}))"
+            )
+            pytest.fail(
+                f"DNS Name label resolves {named.count()} inputs; input count={dns_name.count()}; "
+                f"DOM={dom}; "
+                f"accessible snapshot={page.locator('form').aria_snapshot()}"
+            )
         page.get_by_label("DNS Name", exact=True).fill("fw.example.lan")
         page.locator('input[name="pfb_dns_ddr"]').check()
         page.get_by_role("listbox", name=DOH_443_LABEL, exact=True).select_option("lan")
