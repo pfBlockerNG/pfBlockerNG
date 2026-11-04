@@ -1298,6 +1298,16 @@ if (!function_exists('alias_get_type')) {
 	}
 }
 
+if (!function_exists('print_info_box')) {
+	// pfSense guiconfig.inc: print an alert box. Off-appliance, record [message, class] in
+	// $GLOBALS['pfb_test_info_boxes'] (when a test seeds it) so a page region's boxes can be asserted.
+	function print_info_box($msg, $class = 'alert-warning', $btnname = 'close') {
+		if (isset($GLOBALS['pfb_test_info_boxes'])) {
+			$GLOBALS['pfb_test_info_boxes'][] = [$msg, $class];
+		}
+	}
+}
+
 if (!function_exists('get_configured_interface_with_descr')) {
 	// pfSense interfaces.inc: returns a map of interface_name => friendly description.
 	// Off-appliance, use pfb_test_interfaces if seeded; otherwise return an empty map.

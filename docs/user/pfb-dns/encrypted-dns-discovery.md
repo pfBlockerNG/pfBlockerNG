@@ -26,6 +26,13 @@ On a selected VIP, port 443 may already be taken; an automatically created resol
 Resolver VIPs remain available with a **Localhost**-only listener selection. Empty selections and selections containing
 only down or unusable interfaces do not gain a VIP listener. Loopback remains available independently.
 
+Resolver addresses adds the VIP to the DNS servers of each DHCPv4 scope, each DHCPv6 scope and the Router Advertisement
+list, but leaves alone any of those lists that names a server you chose: an address that is neither the interface's own
+address nor one pfBlockerNG added. **DNS > General** warns about each list left alone, naming the interface, the list and
+those servers; add the Resolver VIP to that list by hand if you want clients to use it. A VIP pfBlockerNG added earlier is
+removed from a list when you later add a server of your own to it, and returns when that server is gone. A VIP you added
+by hand is never touched. Disabling Resolver addresses behaves as before.
+
 On a policy receiver, an existing listener VIP is moved only after the published address passes validation and
 conflict checks. Equivalent IPv6 spellings reuse the same VIP. A missing or invalid publication is not replaced
 by an unrelated local VIP, and unspecified addresses (`0.0.0.0` and `::`) are not valid dedicated listener VIPs.

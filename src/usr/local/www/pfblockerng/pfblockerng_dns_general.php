@@ -112,6 +112,10 @@ $tab_array[] = array(gettext('DNSBL SafeSearch'), FALSE, '/pfblockerng/pfblocker
 display_top_tabs($tab_array, TRUE);
 pfb_print_pending_changes_box();
 
+foreach (pfb_dns_listen_foreign_warnings() as $pfb_foreign_warning) {
+	print_info_box($pfb_foreign_warning, 'warning', FALSE);
+}
+
 $form = new Form('Save DNS General settings');
 $section = new Form_Section('DNS Reply Logging');
 $section->addInput(new Form_Checkbox(

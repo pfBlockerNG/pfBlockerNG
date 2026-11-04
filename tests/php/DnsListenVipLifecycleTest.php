@@ -14,13 +14,14 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->saved = [];
 		foreach (['config', 'pfb', 'pfb_test_vip_list', 'pfb_test_interface_ip', 'pfb_test_configured_ipv6', 'pfb_test_interface_info',
 			'pfb_test_service_calls', 'pfb_test_unbound_configure_calls', 'pfb_test_write_config_hook', 'pfb_test_write_config_result',
-			'pfb_test_config_read_hook', 'pfb_test_config_read_calls'] as $name) {
+			'pfb_test_config_read_hook', 'pfb_test_config_read_calls', 'pfb_test_interfaces'] as $name) {
 			$this->saved[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
 		}
 		$this->dir = sys_get_temp_dir() . '/pfb_listen_vip_' . bin2hex(random_bytes(5));
 		mkdir($this->dir, 0700);
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['dbdir'] = $this->dir;
+		$GLOBALS['pfb']['log'] = $this->dir . '/pfblockerng.log';
 		$GLOBALS['pfb_test_vip_list'] = [];
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'lo0' => '127.0.0.1'];
 		$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => '2001:db8::1', 'lo0' => '::1'];
@@ -51,13 +52,13 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$policy = pfb_sync_policy_projection(['pfblockerng' => ['config' => [PfbConfig::readSection(PFB_SECTIONS['gen'])]]]);
 		$this->assertSame('_vipprimary', $policy[PFB_SECTIONS['gen'] . '/pfb_dns_listen_vip6']);
 		config_set_path('virtualip/vip', []);
-		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::53']]);
+		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::1']]);
 		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));
 		pfb_dns_listen_vips_apply();
 		$this->assertSame('fd12:3456::53', config_get_path('virtualip/vip/0/subnet'));
 		$this->assertSame('pfB_DNS_LISTEN_VIP_v6', config_get_path('virtualip/vip/0/descr'));
 		$this->assertSame('lo0', config_get_path('virtualip/vip/0/interface'));
-		$this->assertSame(['2001:db8::53', 'fd12:3456::53'], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertSame(['2001:db8::1', 'fd12:3456::53'], config_get_path('dhcpdv6/lan/dnsserver'));
 		$this->assertSame(['192.0.2.1', 'fd12:3456::53'], pfb_dns_proxy_listen());
 		$before = config_get_path('virtualip/vip');
 		pfb_dns_listen_vips_apply();
@@ -263,13 +264,13 @@ final class DnsListenVipLifecycleTest extends TestCase
 	{
 		$vip = static fn (string $id, string $address): array => ['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => $address, 'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => $id];
 		config_set_path('virtualip/vip', [$vip('sender', 'fd34::53'), $vip('local', 'fd12::53')]);
-		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::53']]);
+		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::1']]);
 		file_put_contents($this->dir . '/pfb_sync_receive.json', json_encode(['accepted_digest' => 'received']));
 		PfbConfig::write('gen/pfb_dns_listen_vip6', '_vipsender');
 		PfbConfig::write('gen/pfb_dns_listen_auto6', 'fd12::53');
 		pfb_dns_listen_vips_apply();
 		$this->assertSame(['fd12::53' => '_viplocal'], pfb_dns_listen_vips());
-		$this->assertSame(['2001:db8::53', 'fd12::53'], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertSame(['2001:db8::1', 'fd12::53'], config_get_path('dhcpdv6/lan/dnsserver'));
 	}
 
 	#[\PHPUnit\Framework\Attributes\DataProvider('preservedAddresses')]
@@ -465,5 +466,203 @@ final class DnsListenVipLifecycleTest extends TestCase
 	public static function unparsablePublishedAddresses(): array
 	{
 		return ['empty' => [''], 'newline suffix' => ["fd12::53\n"], 'not an IP' => ['not-an-ip']];
+	}
+
+	/**
+	 * Issue #3693: a DNS-server list that already names a server the administrator chose gets no Resolver VIP.
+	 *
+	 * @return array<string,array{string,string,int,string,string,string}> section, list, family, the interface's own address, a server of the administrator's own, the Resolver VIP
+	 */
+	public static function dnsServerLists(): array
+	{
+		return [
+			'DHCPv4 dnsserver' => ['dhcpd', 'dnsserver', 4, '192.0.2.1', '172.20.0.53', '172.16.53.53'],
+			'DHCPv6 dnsserver' => ['dhcpdv6', 'dnsserver', 6, '2001:db8::1', '2001:db8:77::53', 'fd00:53:53:53:53:53:53:53'],
+			'RA radnsserver' => ['dhcpdv6', 'radnsserver', 6, '2001:db8::1', '2001:db8:77::53', 'fd00:53:53:53:53:53:53:53'],
+		];
+	}
+
+	/** Select an automatic Resolver VIP of the family and seed the list on the lan scope; returns its config path. */
+	private function dnsList(string $section, string $list, int $family, array $servers): string
+	{
+		PfbConfig::write("gen/pfb_dns_listen_vip{$family}", 'auto');
+		config_set_path("{$section}/lan", [$list => $servers]);
+		return "{$section}/lan/{$list}";
+	}
+
+	private function ledger(): array
+	{
+		$ledger = json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE);
+		return is_array($ledger) ? $ledger : [];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testAnEmptyDnsServerListGainsTheResolverVip(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, []);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$vip], config_get_path($path));
+		$this->assertSame([$vip], $this->ledger()[$path] ?? NULL, 'the insertion is recorded as ours');
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testAListNamingOnlyTheInterfacesOwnAddressGainsTheResolverVip(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, [$own]);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$own, $vip], config_get_path($path));
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testAListNamingAServerOfTheAdministratorsOwnIsLeftAloneAndLogged(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, [$foreign]);
+		pfb_dns_listen_vips_apply();
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$foreign], config_get_path($path), 'the administrator\'s list is not changed, on this apply and the next');
+		$this->assertArrayNotHasKey($path, $this->ledger(), 'nothing was inserted, so nothing is recorded');
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertSame(2, substr_count($log, 'the Resolver VIP is not added'), 'one line per skipped scope, per apply');
+		$this->assertStringContainsString($foreign, $log);
+		$this->assertStringContainsString(' on lan ', $log);
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testOurRecordedVipIsRemovedWhenAForeignServerAppearsAndReturnsWhenItIsGone(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, []);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$vip], config_get_path($path), 'the VIP was added while the list was empty');
+		config_set_path($path, [$vip, $foreign]);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$foreign], config_get_path($path), 'our recorded VIP is removed, the administrator\'s server kept');
+		$this->assertArrayNotHasKey($path, $this->ledger());
+		config_set_path($path, []);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$vip], config_get_path($path), 'the decision is recomputed from config on every apply');
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testAVipTheAdministratorAddedByHandNextToAForeignServerIsNotTouched(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, [$vip, $foreign]);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$vip, $foreign], config_get_path($path));
+		$this->assertArrayNotHasKey($path, $this->ledger(), 'an unrecorded VIP is the administrator\'s');
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testTurningResolverAddressesOffStillRemovesOnlyTheRecordedVip(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, [$foreign, $vip]);
+		PfbConfig::write('gen/pfb_dns_listen_added', json_encode([$path => [$vip]]));
+		PfbConfig::write('gen/pfb_dns_listen_vip', '');
+		pfb_dns_listen_vips_apply();
+		$this->assertSame([$foreign], config_get_path($path));
+		$this->assertArrayNotHasKey($path, $this->ledger());
+	}
+
+	public function testEachDhcpv6ListIsDecidedOnItsOwn(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8:77::53'], 'radnsserver' => []]);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['2001:db8:77::53'], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertSame(['fd00:53:53:53:53:53:53:53'], config_get_path('dhcpdv6/lan/radnsserver'), 'a foreign DHCPv6 server does not withhold the VIP from the RA list');
+	}
+
+	public function testAnRaListTheDhcpv6ListReplacesIsNeitherSkippedNorWarned(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		config_set_path('dhcpdv6/lan', ['dnsserver' => [], 'radnsserver' => ['2001:db8:77::53'], 'rasamednsasdhcp6' => '']);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['fd00:53:53:53:53:53:53:53'], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertStringNotContainsString('the Resolver VIP is not added', (string) @file_get_contents($GLOBALS['pfb']['log']), 'an RA list nobody reads is not a skipped scope');
+		$this->assertSame([], pfb_dns_listen_foreign_warnings());
+	}
+
+	public function testAnotherSpellingOfTheInterfacesOwnIpv6AddressIsStillItsOwn(): void
+	{
+		$path = $this->dnsList('dhcpdv6', 'dnsserver', 6, ['2001:0DB8:0:0:0:0:0:1']);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['2001:0DB8:0:0:0:0:0:1', 'fd00:53:53:53:53:53:53:53'], config_get_path($path));
+	}
+
+	public function testAnInterfaceWithoutAnAddressOfTheFamilyOwnsNoEntry(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		config_set_path('dhcpd/opt1', ['dnsserver' => ['192.0.2.1']]);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['192.0.2.1'], config_get_path('dhcpd/opt1/dnsserver'), 'another interface\'s address is a server of the administrator\'s here');
+	}
+
+	public function testAnEmptyEntryNamesNoServer(): void
+	{
+		$path = $this->dnsList('dhcpd', 'dnsserver', 4, ['']);
+		pfb_dns_listen_vips_apply();
+		$this->assertSame(['', '172.16.53.53'], config_get_path($path));
+	}
+
+	public function testDnsGeneralWarnsOfEachScopeLeftAloneNamingTheInterfaceTheListAndTheServers(): void
+	{
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => 'LAN', 'opt1' => 'DOCKER'];
+		$GLOBALS['pfb_test_interface_ip']['opt1'] = '172.20.0.1';
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		config_set_path('dhcpd/opt1', ['dnsserver' => ['172.20.0.53']]);
+		pfb_dns_listen_vips_apply();
+		$warnings = pfb_dns_listen_foreign_warnings();
+		$this->assertCount(1, $warnings);
+		foreach (['DOCKER (opt1)', 'DHCPv4', '172.20.0.53', '172.16.53.53'] as $needle) {
+			$this->assertStringContainsString($needle, $warnings[0]);
+		}
+		$this->assertStringContainsString('by hand', $warnings[0], 'it tells the administrator how to add the VIP');
+		PfbConfig::write('gen/pfb_dns_listen_vip', '');
+		$this->assertSame([], pfb_dns_listen_foreign_warnings(), 'with Resolver addresses off there is nothing to warn about');
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]
+	public function testDnsGeneralNamesTheListTypeOfEachScopeAndNoOtherList(string $section, string $list, int $family, string $own, string $foreign, string $vip): void
+	{
+		$path = $this->dnsList($section, $list, $family, [$foreign]);
+		pfb_dns_listen_vips_apply();
+		$warnings = pfb_dns_listen_foreign_warnings();
+		$this->assertCount(1, $warnings, $path);
+		$label = $list === 'radnsserver' ? 'RA' : ($family === 4 ? 'DHCPv4' : 'DHCPv6');
+		$this->assertStringContainsString("the {$label} DNS servers of lan", $warnings[0]);
+		config_set_path($path, [$own]);
+		$this->assertSame([], pfb_dns_listen_foreign_warnings(), 'a list naming only the interface\'s own address is not warned about');
+	}
+
+	public function testDnsGeneralEscapesWhatItPrints(): void
+	{
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => '<b>LAN</b>'];
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		config_set_path('dhcpd/lan', ['dnsserver' => ['<i>x</i>']]);
+		pfb_dns_listen_vips_apply();
+		$text = implode('', pfb_dns_listen_foreign_warnings());
+		$this->assertStringContainsString('&lt;b&gt;LAN&lt;/b&gt;', $text);
+		$this->assertStringContainsString('&lt;i&gt;x&lt;/i&gt;', $text);
+		$this->assertStringNotContainsString('<b>', $text);
+		$this->assertStringNotContainsString('<i>', $text);
+	}
+
+	public function testDnsGeneralPrintsEachWarningInAWarningBoxJustBeforeTheForm(): void
+	{
+		require_once __DIR__ . '/PageStatementLoader.php';
+		$page = 'src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
+		$source = pfb_test_page_source($page);
+		$this->assertSame(1, substr_count($source, 'pfb_dns_listen_foreign_warnings()'), 'one loop');
+		$this->assertLessThan(strpos($source, 'pfb_dns_listen_foreign_warnings()'), strpos($source, 'pfb_print_pending_changes_box();'), 'below the pending-changes box');
+		$GLOBALS['pfb_test_info_boxes'] = [];
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		config_set_path('dhcpd/lan', ['dnsserver' => ['172.20.0.53']]);
+		config_set_path('dhcpd/opt1', ['dnsserver' => ['172.21.0.53']]);
+		$GLOBALS['pfb_test_interface_ip']['opt1'] = '172.21.0.1';
+		pfb_dns_listen_vips_apply();
+		pfb_test_page_eval(pfb_test_page_region($page, 'foreach (pfb_dns_listen_foreign_warnings()', '$form = new Form('), []);
+		$boxes = $GLOBALS['pfb_test_info_boxes'];
+		unset($GLOBALS['pfb_test_info_boxes']);
+		$this->assertCount(2, $boxes, 'one box per scope left alone');
+		$this->assertSame(array_map(static fn (string $text): array => [$text, 'warning'], pfb_dns_listen_foreign_warnings()), array_map(static fn (array $box): array => [$box[0], $box[1]], $boxes));
 	}
 }

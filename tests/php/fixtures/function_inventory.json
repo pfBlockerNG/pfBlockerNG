@@ -1767,6 +1767,31 @@
         "returnType": "void",
         "params": []
     },
+    "pfb_dns_listen_foreign_scopes": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "vips",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "added",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_listen_foreign_warnings": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dns_listen_vip_candidates": {
         "returnsRef": false,
         "returnType": "iterable",

@@ -171,17 +171,17 @@ final class DnsListenVipTest extends TestCase
 	public function testAdvertisementsPreserveExistingServersAndTrackOnlyOwnInsertions(bool $same): void
 	{
 		config_set_path('virtualip/vip', [$this->vip(self::V6)]);
-		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::53'], 'radnsserver' => ['2001:db8::54']] + ($same ? ['rasamednsasdhcp6' => ''] : []));
+		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::1'], 'radnsserver' => ['2001:db8::1']] + ($same ? ['rasamednsasdhcp6' => ''] : []));
 		$this->put('pfb_dns_listen_vip', 'on');
 		$this->put('pfb_dns_listen_vip6', '_vipchosen');
 		$this->apply();
 		$this->apply();
-		$this->assertSame(['2001:db8::53', self::V6], config_get_path('dhcpdv6/lan/dnsserver'));
-		$this->assertSame($same ? ['2001:db8::54'] : ['2001:db8::54', self::V6], config_get_path('dhcpdv6/lan/radnsserver'));
+		$this->assertSame(['2001:db8::1', self::V6], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertSame($same ? ['2001:db8::1'] : ['2001:db8::1', self::V6], config_get_path('dhcpdv6/lan/radnsserver'));
 		$this->put('pfb_dns_listen_vip', '');
 		$this->apply();
-		$this->assertSame(['2001:db8::53'], config_get_path('dhcpdv6/lan/dnsserver'));
-		$this->assertSame(['2001:db8::54'], config_get_path('dhcpdv6/lan/radnsserver'));
+		$this->assertSame(['2001:db8::1'], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertSame(['2001:db8::1'], config_get_path('dhcpdv6/lan/radnsserver'));
 	}
 
 	public static function raModes(): array { return [[false], [true]]; }
@@ -203,14 +203,14 @@ final class DnsListenVipTest extends TestCase
 	public function testIpv4AdvertisementAndProxyOnLeaveResolverOnLoopback(): void
 	{
 		config_set_path('virtualip/vip', [$this->vip('172.16.53.1')]);
-		config_set_path('dhcpd/lan', ['dnsserver' => ['192.0.2.53']]);
+		config_set_path('dhcpd/lan', ['dnsserver' => ['192.0.2.1']]);
 		config_set_path('unbound/active_interface', 'lo0');
 		PfbConfig::write('dns/pfb_dns', 'on');
 		$this->put('pfb_dns_listen_vip', 'on');
 		$this->put('pfb_dns_listen_vip4', '_vipchosen');
 		$this->apply();
 		$this->assertSame(['172.16.53.1', '2001:db8::1'], pfb_dns_proxy_interface_addresses(['lan']));
-		$this->assertSame(['192.0.2.53', '172.16.53.1'], config_get_path('dhcpd/lan/dnsserver'));
+		$this->assertSame(['192.0.2.1', '172.16.53.1'], config_get_path('dhcpd/lan/dnsserver'));
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
 	}
 
