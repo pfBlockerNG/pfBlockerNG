@@ -127,20 +127,41 @@ func parseNameIP(s string) (netip.Addr, error) {
 	return ip.Unmap(), nil
 }
 
-// parseAddressTable reads the body of the address table verb: lines separated by \n, no line empty, each led by the word
-// that says what it is. The only word is dns-name-answer, whose value is a flag's.
-func parseAddressTable(body []byte) (map[netip.Addr]nameAddrs, error) {
-	var values []string
+// addressTable is what the address table verb's body holds: the name answers by the address a query reached, and the addresses
+// DDR advertises DoH on without a port.
+type addressTable struct {
+	names  map[netip.Addr]nameAddrs
+	doh443 map[netip.Addr]struct{}
+}
+
+// parseAddressTable reads the body of the address table verb: lines separated by \n, no line empty, each led by the word that
+// says what it is. `dns-name-answer` carries a flag's value of --dns-name-answer, `ddr-doh-443` an address as --ddr-doh-443
+// takes it. The first bad line is the error, and no table is made of a body that has one.
+func parseAddressTable(body []byte) (addressTable, error) {
+	var answers []string
+	doh443 := map[netip.Addr]struct{}{}
 	if len(body) > 0 {
 		for i, line := range strings.Split(string(body), "\n") {
 			word, value, _ := strings.Cut(line, " ")
-			if word != "dns-name-answer" {
-				return nil, fmt.Errorf("line %d: %.64q does not start with dns-name-answer", i+1, line)
+			switch word {
+			case "dns-name-answer":
+				answers = append(answers, value)
+			case "ddr-doh-443":
+				ip, err := parseNameIP(value)
+				if err != nil {
+					return addressTable{}, fmt.Errorf("line %d: %.64q: %w", i+1, line, err)
+				}
+				doh443[ip] = struct{}{}
+			default:
+				return addressTable{}, fmt.Errorf("line %d: %.64q does not start with dns-name-answer or ddr-doh-443", i+1, line)
 			}
-			values = append(values, value)
 		}
 	}
-	return nameTable(values)
+	names, err := nameTable(answers)
+	if err != nil {
+		return addressTable{}, err
+	}
+	return addressTable{names: names, doh443: doh443}, nil
 }
 
 // answer is the reply to wire when it is a query for the DNS name, A or AAAA, that reached local and the table has an

@@ -52,34 +52,34 @@ const (
 )
 
 type config struct {
-	listen      []string
-	port        int
-	upstream    string
-	timeout     time.Duration
-	unboundConf string
-	user        string
-	dotPort     int
-	tlsPEM      string
-	ctlSocket   string
-	dotListen   []string
-	dohListen   []string
-	dohPort     int
-	dohTrusted  []string
-	doqListen   []string
-	doqPort     int
-	dotPort6    int // zero inherits the IPv4 port
-	dohPort6    int
-	doqPort6    int
-	noModule    bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
-	observer    bool
-	replyLog    bool
-	readyFile   string   // --ready-file: the gateway's pid is published here once it serves; "" = none
-	dnsName     string   // --dns-name: DDR's target and the name answered A and AAAA; "" = none
-	nameAnswers []string // --dns-name-answer: LOCAL=ADDR[,ADDR] values, each parsed by newNameAnswers; need dnsName
-	ddr         bool     // --ddr: answer resolver.arpa. and designate the encrypted transports (RFC 9462); needs dnsName
-	ddrDoH443   bool     // --ddr-doh-443: the DDR DoH record carries no port, whatever port DoH is bound on; needs ddr
-	ddrDoH4436  bool
-	decider     []string
+	listen       []string
+	port         int
+	upstream     string
+	timeout      time.Duration
+	unboundConf  string
+	user         string
+	dotPort      int
+	tlsPEM       string
+	ctlSocket    string
+	dotListen    []string
+	dohListen    []string
+	dohPort      int
+	dohTrusted   []string
+	doqListen    []string
+	doqPort      int
+	dotPort6     int // zero inherits the IPv4 port
+	dohPort6     int
+	doqPort6     int
+	noModule     bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
+	observer     bool
+	replyLog     bool
+	readyFile    string   // --ready-file: the gateway's pid is published here once it serves; "" = none
+	dnsName      string   // --dns-name: DDR's target and the name answered A and AAAA; "" = none
+	nameAnswers  []string // --dns-name-answer: LOCAL=ADDR[,ADDR] values, each parsed by newNameAnswers; need dnsName
+	ddr          bool     // --ddr: answer resolver.arpa. and designate the encrypted transports (RFC 9462); needs dnsName
+	ddrDoH443    []string // --ddr-doh-443: addresses DDR advertises DoH on without a port, each parsed by doh443Set; need ddr
+	dohListen443 []string // --doh-listen-443: addresses DoH is also bound on, on port 443; need dohListen
+	decider      []string
 
 	// Test seams; the zero value is production.
 	drop           func() error      // replaces the privilege drop to --user
@@ -89,6 +89,7 @@ type config struct {
 	killAfter      time.Duration
 	shutdownBudget time.Duration
 	interrupt      <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
+	doh443Port     int             // the port --doh-listen-443 binds, and DDR advertises as 443; zero is 443. A test cannot bind 443
 }
 
 type listFlag []string
@@ -140,8 +141,9 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.BoolVar(&cfg.ddr, "ddr", false, "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462), naming --dns-name; needs --dns-name")
 	var answers listFlag
 	fs.Var(&answers, "dns-name-answer", "LOCAL=ADDR[,ADDR], repeatable: a query for --dns-name that reached LOCAL is answered with the ADDR of the family asked; needs --dns-name")
-	fs.BoolVar(&cfg.ddrDoH443, "ddr-doh-443", false, "DDR leaves the port out of the DoH record, so clients use 443 (a reverse proxy in front of DoH); needs --ddr")
-	fs.BoolVar(&cfg.ddrDoH4436, "ddr-doh-4436", false, "DDR leaves the port out of IPv6 DoH records; needs --ddr")
+	var ddrDoH443, dohListen443 listFlag
+	fs.Var(&ddrDoH443, "ddr-doh-443", "ADDR, repeatable: DDR leaves the port out of the DoH record on ADDR, so clients use 443 (something on 443 in front of DoH); needs --ddr")
+	fs.Var(&dohListen443, "doh-listen-443", "ADDR, repeatable: DoH is also served on ADDR:443, as --doh-listen serves it; needs --doh-listen")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -153,7 +155,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q before `--`", fs.Arg(0))
 	}
 	cfg.listen, cfg.dotListen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dotListen, dohListen, dohTrusted, doqListen
-	cfg.nameAnswers = answers
+	cfg.nameAnswers, cfg.ddrDoH443, cfg.dohListen443 = answers, ddrDoH443, dohListen443
 	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
@@ -228,10 +230,7 @@ func (c config) validate() error {
 			return fmt.Errorf("--%s %d is outside 0..65535", p.name, p.port)
 		}
 	}
-	if !c.ddr && c.ddrDoH4436 {
-		return errors.New("--ddr-doh-4436 needs --ddr")
-	}
-	if !c.ddr && c.ddrDoH443 {
+	if !c.ddr && len(c.ddrDoH443) > 0 {
 		return errors.New("--ddr-doh-443 needs --ddr")
 	}
 	if c.ddr && c.dnsName == "" {
@@ -244,6 +243,15 @@ func (c config) validate() error {
 		if _, err := newNameAnswers(c.dnsName, c.nameAnswers); err != nil {
 			return err
 		}
+	}
+	if _, err := doh443Set(c.ddrDoH443); err != nil {
+		return err
+	}
+	if slices.Contains(c.dohListen443, "") {
+		return errors.New("--doh-listen-443 must not be empty")
+	}
+	if len(c.dohListen443) > 0 && len(c.dohListen) == 0 {
+		return errors.New("--doh-listen-443 needs --doh-listen")
 	}
 	host, port, err := net.SplitHostPort(c.upstream)
 	if p, perr := strconv.Atoi(port); err != nil || host == "" || perr != nil || p < 1 || p > 65535 {
@@ -447,7 +455,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	secure.serve(set)
 	if ctl != nil {
-		ctl.restart, ctl.listeners, ctl.names = s.restartDecider, set, names
+		ctl.restart, ctl.listeners, ctl.names, ctl.ddr = s.restartDecider, set, names, ddrAnswers
 		ctl.serve(g)
 	}
 	g.wg.Add(1)

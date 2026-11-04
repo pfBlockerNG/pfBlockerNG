@@ -75,8 +75,7 @@ DNS_SAVED_KEYS = (
     "pfb_dns_doq_port6",
     "pfb_dns_doq_interface",
     "pfb_dns_ddr",
-    "pfb_dns_ddr_doh_443",
-    "pfb_dns_ddr_doh_443_6",
+    "pfb_dns_ddr_doh_443_interfaces",
 )
 REPLY_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
 INTERFACE_LABELS = ("DNS Interface(s)", "DoT Interface(s)", "DoH Interface(s)", "DoQ Interface(s)")
@@ -215,12 +214,11 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
 
 # The DDR section's accessible checkbox names, in display order.
 DDR_SECTION = "Discovery of Designated Resolvers (DDR)"
-DDR_TOGGLES = (
-    ("DDR", "pfb_dns_ddr"),
-    ("IPv4 DoH on port 443", "pfb_dns_ddr_doh_443"),
-    ("IPv6 DoH on port 443", "pfb_dns_ddr_doh_443_6"),
-)
-DOH_PORT_CFG = helpers.dns_config_path("pfb_dns_doh_port")
+DDR_TOGGLES = (("DDR", "pfb_dns_ddr"),)
+# issue #3694: one multi-select replaced the two per-family DoH-on-443 checkboxes
+DOH_443_LABEL = "Advertise DoH on port 443"
+DOH_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443_interfaces")
+DOH_INTERFACE_CFG = helpers.dns_config_path("pfb_dns_doh_interface")
 
 
 def test_dns_reply_logging_lives_on_general_not_proxy_settings(
@@ -299,10 +297,8 @@ def test_resolver_addresses_off_saves_with_no_listener_vip(
             helpers.config_restore_state(smoke_vm, path, state)
 
 
-def test_ddr_checkboxes_resolve_by_their_visible_labels_inside_the_ddr_section(
-    browser_page: Page, webui: WebUI
-) -> None:
-    """All three DDR controls have distinct accessible names within the DDR panel."""
+def test_ddr_controls_resolve_by_their_visible_labels_inside_the_ddr_section(browser_page: Page, webui: WebUI) -> None:
+    """The DDR checkbox and the DoH-on-443 select have distinct accessible names within the DDR panel."""
     page = browser_page
     _open(page, webui, DNS_PAGE)
     section = page.locator(".panel").filter(has=page.locator(".panel-title", has_text=DDR_SECTION)).last
@@ -314,65 +310,69 @@ def test_ddr_checkboxes_resolve_by_their_visible_labels_inside_the_ddr_section(
         assert control.get_attribute("type") == "checkbox" and control.get_attribute("name") == name, (
             f"{label!r}: expected the checkbox named {name!r}, got {control.evaluate('el => el.outerHTML')}"
         )
+    select = section.get_by_role("listbox", name=DOH_443_LABEL, exact=True)
+    assert select.count() == 1, f"expected exactly one listbox named {DOH_443_LABEL!r} in the DDR section"
+    assert select.get_attribute("multiple") is not None, "the DoH-on-443 control must be a multi-select"
+    for gone in ("pfb_dns_ddr_doh_443", "pfb_dns_ddr_doh_443_6"):
+        assert page.locator(f'input[name="{gone}"]').count() == 0, f"the retired checkbox {gone} is still on the page"
 
 
-def test_doh_on_port_443_checkbox_is_disabled_only_while_the_stored_doh_port_is_443(
+def test_doh_on_port_443_select_offers_the_doh_interfaces_without_localhost_and_shows_its_choice(
     browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM, screenshot_dir: Path
 ) -> None:
-    """issue #3583: DoH already on port 443 leaves the toggle nothing to change, so its checkbox is disabled.
+    """issue #3694: the select offers the stored DoH interfaces but not Localhost, with the stored choice selected.
 
-    Given the stored DoH port is 4443, Then `DoH on port 443` is enabled; When the stored DoH port is 443 and the page
-    loads again, Then it is disabled. One screenshot per state is an artifact, not an asserted baseline.
+    Given the stored DoH interface list `lo0,lan` and the stored choice `lan`, Then the select offers `lan` alone and
+    has it selected. One screenshot is an artifact, not an asserted baseline.
     """
     page = browser_page
     paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     try:
-        for port, disabled in (("4443", False), ("443", True)):
-            helpers.config_set(smoke_vm, DOH_PORT_CFG, port)
-            _open(page, webui, DNS_PAGE)
-            toggle = page.locator('input[name="pfb_dns_ddr_doh_443"]')
-            assert toggle.count() == 1, f"expected one pfb_dns_ddr_doh_443 checkbox, got {toggle.count()}"
-            _shot(page, screenshot_dir, f"pfb_dns_ddr_doh_443_doh_port_{port}")
-            assert toggle.is_disabled() is disabled, (
-                f"stored DoH port {port}: expected the checkbox {'disabled' if disabled else 'enabled'}, got "
-                f"{toggle.evaluate('el => el.outerHTML')}"
-            )
+        helpers.config_set(smoke_vm, DOH_INTERFACE_CFG, "lo0,lan")
+        helpers.config_set(smoke_vm, DOH_443_CFG, "lan")
+        _open(page, webui, DNS_PAGE)
+        select = page.get_by_role("listbox", name=DOH_443_LABEL, exact=True)
+        _shot(page, screenshot_dir, "pfb_dns_ddr_doh_443_interfaces")
+        offered = select.locator("option").evaluate_all("options => options.map(option => option.value)")
+        assert offered == ["lan"], f"expected the DoH interfaces without Localhost, got {offered}"
+        assert select.evaluate(_SELECTED_VALUES_JS) == ["lan"], "the stored choice must be selected"
     finally:
         for path, state in originals.items():
             helpers.config_restore_state(smoke_vm, path, state)
 
 
-def test_saving_ddr_and_doh_on_port_443_checked_persists_both(
+def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
     browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
 ) -> None:
-    """issue #3583: saving both DDR checkboxes stores `dns_shared/pfb_dns_ddr` and `dns_shared/pfb_dns_ddr_doh_443` on.
+    """issues #3583, #3694: saving DDR and a choice under "Advertise DoH on port 443" stores both.
 
     DDR needs a DNS Name (issue #3694): the test types one into the DNS Name input and expects it stored.
 
-    Given both stored empty and the DoH port 4443 (before-state, seeded directly), the save rewrites every setting of
-    the page and the first load seeds the unset ones, so each one is read before the page is opened and put back.
+    Given DDR and the choice stored empty and the DoH interface list `lan` (before-state, seeded directly), the save
+    rewrites every setting of the page and the first load seeds the unset ones, so each one is read before the page is
+    opened and put back.
     """
     page = browser_page
     paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
-    toggle_paths = [helpers.dns_config_path(name) for _label, name in DDR_TOGGLES]
+    ddr_path = helpers.dns_config_path("pfb_dns_ddr")
     try:
-        for path in toggle_paths:
-            helpers.config_set(smoke_vm, path, "")
-        helpers.config_set(smoke_vm, DOH_PORT_CFG, "4443")
-        before = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
-        assert before == ("", "", ""), f"seed did not take: DDR toggles must start Off, got {before}"
+        helpers.config_set(smoke_vm, ddr_path, "")
+        helpers.config_set(smoke_vm, DOH_443_CFG, "")
+        helpers.config_set(smoke_vm, DOH_INTERFACE_CFG, "lan")
+        before = (helpers.config_get(smoke_vm, ddr_path), helpers.config_get(smoke_vm, DOH_443_CFG))
+        assert before == ("", ""), f"seed did not take: DDR and the choice must start empty, got {before}"
         _open(page, webui, DNS_PAGE)
         page.get_by_label("DNS Name", exact=True).fill("fw.example.lan")
-        for _label, name in DDR_TOGGLES:
-            page.locator(f'input[name="{name}"]').check()
+        page.locator('input[name="pfb_dns_ddr"]').check()
+        page.get_by_role("listbox", name=DOH_443_LABEL, exact=True).select_option("lan")
 
         _save(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
-        stored = tuple(helpers.config_get(smoke_vm, path) for path in toggle_paths)
-        assert stored == ("on", "on", "on"), f"all three DDR toggles must store on, got {stored}"
+        stored = (helpers.config_get(smoke_vm, ddr_path), helpers.config_get(smoke_vm, DOH_443_CFG))
+        assert stored == ("on", "lan"), f"DDR must store on and the choice lan, got {stored}"
         assert helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_name") == "fw.example.lan", "the DNS Name must persist"
     finally:
         for path, state in originals.items():

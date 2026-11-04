@@ -62,7 +62,8 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   compressed; no zone, no IPv4-mapped form, no port 0; no space, tab, NUL or non-ASCII byte anywhere else). An add carries
   `udp+tcp` the UDP socket then the listening TCP socket, `dot` and `doh` one listening TCP socket, `doq` one UDP socket. It is
   taken only when the kind is served by this gateway (`udp+tcp` always, a TLS kind only when its `--<kind>-listen` was given at
-  start), the port is the kind's own (`--port`, `--dot-port`, `--doh-port`, `--doq-port`), `<kind> <host:port>` is not served
+  start), the port is the kind's own (`--port`, `--dot-port`, `--doh-port`, `--doq-port`, and for `doh` also 443, issue #3694: the
+  `--doh-listen-443` listeners), `<kind> <host:port>` is not served
   already, the descriptor count is the kind's and nothing was truncated (`MSG_CTRUNC`; room for 8 descriptors), each descriptor
   is a socket of the type expected (`SO_TYPE`), a stream socket is listening (`SO_ACCEPTCONN`) and every one is bound
   (`getsockname()`) to the frame's address in its family, and the gateway is not stopping; otherwise the reply is
@@ -78,16 +79,19 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   removed one is not closed again. A gateway older than the verbs answers `FF FF FF FE` with
   `error: a message of 4294967294 bytes is not between 1 and 65536`.
 - **Name-answer table** (issue #3694; see DNS name). `FF FF FF FB`, a 4-byte big-endian length 0 to 65536 (judged before the body is
-  read), then a body of lines joined by `\n` (no trailing newline, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]`: the value of a `--dns-name-answer` flag,
-  with the line kind as its first word so that other kinds can join. The whole body is checked first: one bad line (an unknown first word, a
-  bad value, a LOCAL named twice, CRLF line endings) is `error: <reason>` and the table is unchanged; otherwise the table is replaced
-  atomically, `address table: N name answers` is logged and the reply is `ok`. An empty body is an empty table. A gateway started without
+  read), then a body of lines joined by `\n` (no trailing newline, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]` (the value of a `--dns-name-answer` flag)
+  or `ddr-doh-443 ADDR` (the value of a `--ddr-doh-443` flag), the line kind being its first word. The whole body is checked first: one bad
+  line (an unknown first word, a bad value, a LOCAL named twice, a trailing space or a second address in a `ddr-doh-443` line, CRLF
+  line endings, a `ddr-doh-443` line on a gateway started without `--ddr`) is `error: <reason>` and nothing changes; otherwise both tables,
+  the name answers and the set of addresses DDR advertises DoH on 443 for, are replaced together, atomically, `address table: N name answers`
+  is logged and the reply is `ok`. An empty body empties both. A gateway started without
   `--dns-name` answers `error: started without --dns-name`, and one older than the verb answers
   `error: a message of 4294967291 bytes is not between 1 and 65536`. PHP sends it (`pfb_dns_proxy_address_table()`) from
   `pfb_dns_proxy_listeners_sync()`, after the listener changes, on the update pass and the cron tick, while the rc script's command names
   `--dns-name` and no restart is pending; a gateway that does not take it is the reason to restart the pair. The update pass masks
-  `--dns-name-answer` out of the rc script before it compares the old and the new text, as it does the listen addresses, so a changed answer
-  never restarts the proxy; a changed `--dns-name` does.
+  `--dns-name-answer`, `--ddr-doh-443` and `--doh-listen-443` out of the rc script before it compares the old and the new text, as it does
+  the listen addresses, so a changed answer, a changed choice of advertised addresses or a Resolver VIP that comes or goes never restarts the
+  proxy; a changed `--dns-name` or DDR setting does. The lines are sent in the command's order.
 - **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
   30 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
   `decider restarted: pid N took over from pid M` is logged; the old one answers the queries it holds (for as long as a query
@@ -128,7 +132,7 @@ directory is a separate hardening and is not part of this change.
 | Transport | Flags | Socket | TLS | Cap |
 |---|---|---|---|---|
 | DoT | `--dot-listen` (repeatable), `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
-| DoH | `--doh-listen` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
+| DoH | `--doh-listen` (repeatable), `--doh-listen-443` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
 | DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle `max(30 s, 2*timeout+grace)` (the query budget, so an in-flight query is not cut off) and no keepalive; receive window one message (65535 bytes) per stream and 100 messages per connection; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 
 A listener that cannot be bound is logged and skipped. Every start logs `starting pid <pid>` first (before any bind error), so
@@ -136,6 +140,12 @@ that a reader of the log finds where a start begins; then, before `ready upstrea
 dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracketed (`[::1]:853`). A listener added or removed
 while the gateway serves logs `listening <kind> <host>:<port>` or `stopped listening <kind> <host>:<port>` after `ready upstream`.
 These lines are for people reading the log: nothing parses them for listener state, which the list (`FF FF FF FC`, above) answers.
+
+`--doh-listen-443 ADDR` (issue #3694) serves DoH on ADDR:443 too, beside the configured DoH port, with the same handler, certificate and trusted
+front ends; ADDR is a valid IP address with no zone (an IPv4-mapped one is unmapped) and the flag needs `--doh-listen` (otherwise the gateway
+does not start). It is bound at start like the other listeners: the readiness line is `listening doh ADDR:443`, the listener is tracked as
+`doh ADDR:443`, and a bind the box refuses is recorded under that key in the `refused` list while the gateway still starts. pfBlockerNG gives it
+to the Resolver VIP the package created.
 
 pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
 `--dot-listen`, `--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoT,
@@ -369,7 +379,7 @@ Its target name is the DNS name (below): there is no predefined name, and DDR wi
 | Flag | Meaning |
 |---|---|
 | `--ddr` | DDR on; every record names the DNS name. Needs `--dns-name`: without it the gateway does not start (`--ddr needs --dns-name`). |
-| `--ddr-doh-443` | The DoH record carries no `port` parameter, whatever port DoH listens on, so clients reach DoH on 443 (a reverse proxy in front). Needs `--ddr`: alone it is a usage error. |
+| `--ddr-doh-443 ADDR` | Repeatable (issue #3694). On the address ADDR the DoH record carries no `port` parameter, whatever port DoH listens on there, so clients reach DoH on 443 (a reverse proxy in front). ADDR is a valid IP address with no zone (an IPv4-mapped one is unmapped; a duplicate is harmless). Needs `--ddr`: otherwise `--ddr-doh-443 needs --ddr`. |
 
 With `--ddr`, after the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and before the decider, the
 gateway answers every query for a name at or under `resolver.arpa.` itself, on every transport; the decider never sees it
@@ -378,7 +388,8 @@ and nothing is written to the reply log. Names match case-insensitively (ASCII) 
 - `_dns.resolver.arpa. SVCB` over plain UDP or TCP, received on address L: one ServiceMode record (TTL 300) per transport
   listening on L, while a certificate is loaded: DoH priority 1 (`alpn=h2`, `dohpath=/dns-query{?dns}`), DoT priority 2
   (`alpn=dot`), DoQ priority 3 (`alpn=doq`). `port` only when the listener's port is not 443 (DoH) or 853 (DoT, DoQ), and
-  never on the DoH record with `--ddr-doh-443`. Each record has `TargetName` = the DNS name and an `ipv4hint` or `ipv6hint` = L;
+  never on the DoH record of an address that has a DoH listener on port 443 or is among the `--ddr-doh-443` addresses (so exactly one DoH
+  record per address, with the port of its DoH listener otherwise). Each record has `TargetName` = the DNS name and an `ipv4hint` or `ipv6hint` = L;
   the Additional section has the A or AAAA record for the DNS name = L.
 - `resolver.arpa.` SOA and NS: `resolver.arpa. 300 IN SOA localhost. nobody.invalid. 1 3600 1200 604800 300` and
   `resolver.arpa. 300 IN NS localhost.`.

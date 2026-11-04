@@ -3580,6 +3580,23 @@ function pfb_dns_listen_vips(): array {
 	return $result;
 }
 
+/**
+ * The active Resolver VIPs the package created itself (the families whose selection is `auto`), in family order. Only these serve DoH on port 443
+ * beside the configured DoH port (--doh-listen-443, issue #3694): an address the operator chose may be taken on 443 by something else.
+ *
+ * @return list<string>
+ */
+function pfb_dns_listen_auto_vips(): array {
+	$auto = [];
+	foreach (array_keys(pfb_dns_listen_vips()) as $address) {
+		$address = (string) $address;
+		if (PfbConfig::read('gen/pfb_dns_listen_vip' . (str_contains($address, ':') ? '6' : '4')) === 'auto') {
+			$auto[] = $address;
+		}
+	}
+	return $auto;
+}
+
 /** Save and policy apply share the VIP lifecycle and append-only DNS-list ownership. @return bool FALSE iff config.xml did not take the advertisement write */
 function pfb_dns_listen_vips_apply(): bool {
 	$before = array_column(config_get_path('virtualip/vip', []), 'subnet');
@@ -4450,7 +4467,7 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, array $vip_only, ?
 /**
  * The IP families whose Resolver VIP stands in for a listener's configured addresses instead of joining them (issue #3694). Every
  * listener keeps the interface addresses and adds the VIP, except DoH for a family whose DoH port is 443: port 443 on the interface
- * address belongs to the webConfigurator or a reverse proxy, so only the VIP serves it. "Advertise DoH on port 443" changes no listener.
+ * address belongs to the webConfigurator or a reverse proxy, so only the VIP serves it. Advertising 443 for an interface (issue #3694) changes no listener.
  *
  * @param string $kind 'plain', 'dot', 'doh' or 'doq'
  * @return list<int> 4 and/or 6
@@ -4459,7 +4476,7 @@ function pfb_dns_proxy_vip_only_families(string $kind): array {
 	if ($kind !== 'doh') {
 		return [];
 	}
-	return array_values(array_filter([4, 6], static fn (int $family): bool => pfb_dns_proxy_ddr_doh_443_locked($family === 6)));
+	return array_values(array_filter([4, 6], static fn (int $family): bool => pfb_dns_proxy_doh_port_443($family === 6)));
 }
 
 /**
@@ -4598,11 +4615,6 @@ function pfb_dns_proxy_seed_values(): array {
 			$values[$key] = $list;
 		}
 	}
-	$shared = PfbConfig::readSection(PFB_SECTIONS['dns_shared']);
-	if (!array_key_exists('pfb_dns_ddr_doh_443_6', $shared)
-	    && PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443') === PfbToggle::On) {
-		$values['pfb_dns_ddr_doh_443_6'] = PfbToggle::On;
-	}
 	return $values;
 }
 
@@ -4730,6 +4742,17 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 		$errors[] = 'DDR needs a DNS name: enter the name the certificate covers, or turn DDR off.';
 	}
 
+	// issue #3694: "Advertise DoH on port 443" chooses among the DoH interfaces of this very post and the Resolver VIPs the operator chose
+	$doh_443 = $post['pfb_dns_ddr_doh_443_interfaces'] ?? [];
+	if (is_array($doh_443) && $doh_443 !== []) {
+		$offered = pfb_dns_proxy_ddr_doh_443_options(array_values(array_filter((array) ($post['pfb_dns_doh_interface'] ?? []), 'is_string')));
+		foreach ($doh_443 as $token) {
+			if (!is_string($token) || !array_key_exists($token, $offered)) {
+				$errors[] = 'Advertise DoH on port 443: Invalid selection: ' . htmlspecialchars(is_string($token) ? $token : '', ENT_QUOTES);
+			}
+		}
+	}
+
 	$trusted = $post['pfb_dns_doh_trusted'] ?? '';
 	$bad = is_string($trusted) ? array_filter(pfb_dns_proxy_tokens($trusted), static fn (string $entry): bool => !pfb_dns_proxy_trusted_entry($entry)) : ['(not text)'];
 	if ($bad !== []) {
@@ -4739,19 +4762,68 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 	return $errors;
 }
 
-/**
- * Does the pfB-DNS page disable its "DoH on port 443" checkbox: does DoH already listen on 443 (the STORED DoH port, as the
- * gateway reads it), so that there is no port to leave out? The save keeps the stored toggle while this holds (issue #3583).
- */
-function pfb_dns_proxy_ddr_doh_443_locked(bool $ipv6 = FALSE): bool {
+/** Is the STORED DoH port of this family 443, as the gateway reads it: does DoH listen on 443 there already? */
+function pfb_dns_proxy_doh_port_443(bool $ipv6 = FALSE): bool {
 	$port = $ipv6 ? PfbConfig::read('dns_shared/pfb_dns_doh_port6') : '';
 	return pfb_dns_proxy_listener_port($port === '' ? PfbConfig::read('dns_shared/pfb_dns_doh_port') : $port) === '443';
 }
 
 /**
+ * The options of "Advertise DoH on port 443" (issue #3694), token => label: the DoH interface tokens, those of the stored list or of $doh_tokens
+ * while a POST is judged, except Localhost, labelled as pfb_dns_proxy_interface_options() labels them; then each Resolver VIP the operator chose
+ * (a stored selection that is not '', 'none' or 'auto') not listed yet, under its address. The VIP the package created is never offered: it serves
+ * DoH on 443 itself (--doh-listen-443), so DDR advertises 443 there with no choice to make.
+ *
+ * @param list<string>|null $doh_tokens
+ * @return array<string,string>
+ */
+function pfb_dns_proxy_ddr_doh_443_options(?array $doh_tokens = NULL): array {
+	$labels = pfb_dns_proxy_interface_options();
+	$options = [];
+	foreach ($doh_tokens ?? pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doh_interface')) as $token) {
+		if ($token !== 'lo0') {
+			$options[$token] = $labels[$token] ?? $token;
+		}
+	}
+	foreach ([4, 6] as $family) {
+		$id = (string) PfbConfig::read("gen/pfb_dns_listen_vip{$family}");
+		if (!in_array($id, ['', 'none', 'auto'], TRUE)) {
+			$address = ($family === 4) ? get_configured_vip_ipv4($id) : get_configured_vip_ipv6($id);
+			$options[$id] ??= $address ?? "{$id} (not currently available)";
+		}
+	}
+	return $options;
+}
+
+/**
+ * The addresses DDR advertises DoH on port 443 for (issue #3694, --ddr-doh-443 ADDR), in the order DoH listens on them. Of the addresses DoH
+ * listens on (its interface list's and the Resolver VIPs: pfb_dns_proxy_interface_addresses()): a Resolver VIP whose id is selected under
+ * "Advertise DoH on port 443", and any other address that a selected interface carries; choosing an interface never advertises a VIP that joins
+ * its addresses. The VIP the package created is not chosen: it serves 443 itself (--doh-listen-443). Nothing while DoH is off.
+ *
+ * @return list<string>
+ */
+function pfb_dns_proxy_ddr_doh_443_addresses(): array {
+	$selected = pfb_dns_proxy_tokens((string) PfbConfig::read('dns/pfb_dns_ddr_doh_443_interfaces'));
+	if ($selected === [] || pfb_dns_proxy_setting('pfb_dns_doh') !== PfbToggle::On) {
+		return [];
+	}
+	$vips = pfb_dns_listen_vips();
+	$carried = pfb_dns_proxy_interface_addresses($selected, []);
+	$addresses = [];
+	foreach (pfb_dns_proxy_interface_addresses(pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doh_interface')), pfb_dns_proxy_vip_only_families('doh')) as $address) {
+		$vip = $vips[$address] ?? NULL;
+		if (($vip === NULL) ? in_array($address, $carried, TRUE) : in_array($vip, $selected, TRUE)) {
+			$addresses[] = $address;
+		}
+	}
+	return $addresses;
+}
+
+/**
  * The canonical stored value of each setting from a validated POST: a toggle is on only for 'on', a
  * port loses its leading zeros (an unusable one keeps the stored value), interface and trusted lists are deduplicated, the DNS Name
- * loses its trailing dot (pfb_dns_proxy_name_normalized()), and the DoH on port 443 toggle keeps its stored value while the page disables it.
+ * loses its trailing dot (pfb_dns_proxy_name_normalized()), and the DoH on port 443 selection is a deduplicated list (none when it is not an array).
  *
  * @param array<string,mixed> $post
  * @return array<string,string> config key => stored string
@@ -4773,13 +4845,8 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 	$stored['pfb_dns_sslcertref'] = is_string($certref) ? $certref : '';
 	$stored['pfb_dns_name'] = pfb_dns_proxy_name_normalized($post['pfb_dns_name'] ?? '') ?? '';
 	$stored['pfb_dns_ddr'] = pfb_filter($post['pfb_dns_ddr'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
-	// issue #3583: a control the page disables posts nothing, so its stored value stays
-	$stored['pfb_dns_ddr_doh_443'] = pfb_dns_proxy_ddr_doh_443_locked()
-	    ? PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443')->toStored()
-	    : (pfb_filter($post['pfb_dns_ddr_doh_443'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '');
-	$stored['pfb_dns_ddr_doh_443_6'] = pfb_dns_proxy_ddr_doh_443_locked(TRUE)
-	    ? PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443_6')->toStored()
-	    : (pfb_filter($post['pfb_dns_ddr_doh_443_6'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '');
+	$doh_443 = $post['pfb_dns_ddr_doh_443_interfaces'] ?? [];
+	$stored['pfb_dns_ddr_doh_443_interfaces'] = is_array($doh_443) ? $list('pfb_dns_ddr_doh_443_interfaces') : '';
 	return $stored;
 }
 
@@ -4813,6 +4880,14 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 		foreach ($addresses as $address) {
 			$flags .= " --{$kind}-listen " . escapeshellarg($address);
 		}
+		if ($kind === 'doh') {
+			// issue #3694: the VIP the package created also serves DoH on 443, unless that family's DoH port is 443 and it does already
+			foreach (pfb_dns_listen_auto_vips() as $vip) {
+				if (in_array($vip, $addresses, TRUE) && !pfb_dns_proxy_doh_port_443(str_contains($vip, ':'))) {
+					$flags .= ' --doh-listen-443 ' . escapeshellarg($vip);
+				}
+			}
+		}
 		$flags .= " --{$kind}-port " . escapeshellarg($port);
 		$port6 = PfbConfig::read("dns_shared/pfb_dns_{$kind}_port6");
 		if ($port6 !== '') {
@@ -4834,7 +4909,7 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 
 /**
  * The gateway's DNS Name arguments (issue #3694): --dns-name with dns/pfb_dns_name, then --ddr while DDR is on (dns_shared/pfb_dns_ddr, issue
- * #3583; its target is that name) and after it --ddr-doh-443 and --ddr-doh-4436 as the DoH on port 443 options say (they alone add
+ * #3583; its target is that name) and after it one --ddr-doh-443 ADDR for each address of pfb_dns_proxy_ddr_doh_443_addresses() (they alone add
  * nothing: the gateway rejects them without --ddr), then one --dns-name-answer per entry of pfb_dns_proxy_name_answers(). No name is no
  * flag at all: DDR answers nothing, as with DDR off, and nothing is intercepted. A stored name that is no valid name (a hand-edited
  * config.xml, which the gateway would refuse to start with) counts as none.
@@ -4851,9 +4926,10 @@ function pfb_dns_proxy_ddr_flags(?array &$warnings = NULL): string {
 	}
 	$flags = ' --dns-name ' . escapeshellarg($name);
 	if (PfbConfig::read('dns_shared/pfb_dns_ddr') === PfbToggle::On) {
-		$flags .= ' --ddr' .
-		    ((PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443') === PfbToggle::On) ? ' --ddr-doh-443' : '') .
-		    ((pfb_dns_proxy_setting('pfb_dns_ddr_doh_443_6') === PfbToggle::On) ? ' --ddr-doh-4436' : '');
+		$flags .= ' --ddr';
+		foreach (pfb_dns_proxy_ddr_doh_443_addresses() as $address) {
+			$flags .= ' --ddr-doh-443 ' . escapeshellarg($address);
+		}
 	}
 	foreach (pfb_dns_proxy_name_answers() as $local => $answers) {
 		$flags .= ' --dns-name-answer ' . escapeshellarg("{$local}=" . implode(',', $answers));
@@ -5000,9 +5076,10 @@ function pfb_dns_proxy_certificate_sans(array $entry): array {
  *   - DDR on and a DNS Name, with a certificate selected: one text per public IPv4 address that DoT, DoH or DoQ listens on and that is
  *     not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462 section 4.2) checks the address it queried against that
  *     SAN, so it will not use those transports there. A public IPv6 address is never named: the gateway does designate on it, but a
- *     global prefix changes and no certificate keeps an IP SAN for it. The DoH listener is left out while
- *     dns_shared/pfb_dns_ddr_doh_443 is on and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose
- *     certificate is not visible here (on 443 they reach this listener, so it is checked).
+ *     global prefix changes and no certificate keeps an IP SAN for it. The DoH listener is left out on an address advertised on 443
+ *     (pfb_dns_proxy_ddr_doh_443_addresses()) while DoH does not listen on 443 there itself: its clients then reach a reverse proxy, whose
+ *     certificate is not visible here (on 443 they reach this listener, so it is checked). The VIP the package created is checked like any
+ *     address; it is private, so it never warns.
  *
  * @return list<string> HTML; the DDR address texts start "DDR: " and name the address and the transports it serves
  */
@@ -5035,6 +5112,7 @@ function pfb_dns_proxy_ddr_warnings(): array {
 	}
 
 	// A transport listens when pfb_dns_proxy_tls_flags() gives it flags: toggle on, usable port, an interface list with an address.
+	$advertised = pfb_dns_proxy_ddr_doh_443_addresses();
 	$served = [];
 	foreach (['dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
 		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On ||
@@ -5044,9 +5122,7 @@ function pfb_dns_proxy_ddr_warnings(): array {
 		$interfaces = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
 		foreach (pfb_dns_proxy_interface_addresses($interfaces, pfb_dns_proxy_vip_only_families($kind)) as $address) {
 			$ipv6 = str_contains($address, ':') && pfb_ipv4_from_mapped($address) === NULL;
-			$advertise = $ipv6 ? 'pfb_dns_ddr_doh_443_6' : 'pfb_dns_ddr_doh_443';
-			if ($kind === 'doh' && pfb_dns_proxy_setting($advertise) === PfbToggle::On
-			    && !pfb_dns_proxy_ddr_doh_443_locked($ipv6)) {
+			if ($kind === 'doh' && in_array($address, $advertised, TRUE) && !pfb_dns_proxy_doh_port_443($ipv6)) {
 				continue;
 			}
 			// The gateway designates nothing on a public IPv6 address (a global prefix changes: no certificate keeps an IP SAN for it)
@@ -5559,8 +5635,8 @@ function pfb_dns_proxy_certificate_sync(): void {
  * forgets what was pushed to the proxy it replaces. DoT, DoH and DoQ each listen on their own interface list's addresses and on loopback
  * (--dot-listen, --doh-listen, --doq-listen) at their own port (pfb_dns_proxy_tls_flags()).
  * DDR (RFC 9462) and the DNS Name (dns/pfb_dns_name, issue #3694): with a name the line also carries, after the TLS flags, --dns-name NAME,
- * --ddr while dns_shared/pfb_dns_ddr is On (its target is that name) and, with dns_shared/pfb_dns_ddr_doh_443 On too, --ddr-doh-443, then one
- * --dns-name-answer LOCAL=ADDR[,ADDR] per listen address (pfb_dns_proxy_ddr_flags()); with no name none of them. A changed name or DDR
+ * --ddr while dns_shared/pfb_dns_ddr is On (its target is that name) and, after it, one --ddr-doh-443 ADDR per address advertised on port 443
+ * (dns/pfb_dns_ddr_doh_443_interfaces), then one --dns-name-answer LOCAL=ADDR[,ADDR] per listen address (pfb_dns_proxy_ddr_flags()); with no name none of them. A changed name or DDR
  * setting changes the script and restarts the proxy; a changed answer is reconciled live (pfb_dns_proxy_listeners_sync()).
  *
  * A start over a proxy whose supervisor and child both serve keeps it: the package start after the boot hook must not
@@ -6098,8 +6174,8 @@ function pfb_dns_proxy_rc_command(): string {
 }
 
 /**
- * The name-answer table the rc script's command asks for (issue #3694), as the lines of the gateway's address-table verb: one
- * `dns-name-answer LOCAL=ADDR[,ADDR]` for each --dns-name-answer argument, in the command's order.
+ * The table the rc script's command asks for (issue #3694), as the lines of the gateway's address-table verb, in the command's order:
+ * `dns-name-answer LOCAL=ADDR[,ADDR]` for each --dns-name-answer argument and `ddr-doh-443 ADDR` for each --ddr-doh-443 argument.
  *
  * @return list<string>|null NULL when the command names no DNS Name (--dns-name): a gateway started without one takes no table
  */
@@ -6108,12 +6184,13 @@ function pfb_dns_proxy_command_name_answers(): ?array {
 	if (!str_contains($command, ' --dns-name ')) {
 		return NULL;
 	}
-	preg_match_all("/ --dns-name-answer '([0-9A-Fa-f:.,=]+)'/", $command, $answers);
-	return array_map(static fn (string $value): string => "dns-name-answer {$value}", $answers[1]);
+	preg_match_all("/ --(dns-name-answer|ddr-doh-443) '([0-9A-Fa-f:.,=]+)'/", $command, $lines, PREG_SET_ORDER);
+	return array_map(static fn (array $line): string => "{$line[1]} {$line[2]}", $lines);
 }
 
 /**
- * What the rc script's command asks the gateway to bind: --listen/--port for plain DNS, --<kind>-listen/--<kind>-port for DoT, DoH, DoQ.
+ * What the rc script's command asks the gateway to bind: --listen/--port for plain DNS, --<kind>-listen/--<kind>-port for DoT, DoH, DoQ, and the
+ * --doh-listen-443 addresses as DoH listeners of port 443 (issue #3694).
  *
  * @return array<string, list<string>> kind (udp+tcp, dot, doh, doq, in that order; one the command gives no port is left out) =>
  *         host:port of each of its addresses, in the command's order, as pfb_dns_proxy_host_port() spells it
@@ -6130,6 +6207,10 @@ function pfb_dns_proxy_command_listeners(): array {
 		$port6 = preg_match("/ --{$flag}port6 '?([0-9]+)'?(?= |\$)/", $command, $v6port) === 1 ? $v6port[1] : $port[1];
 		$listeners[$kind] = array_map(static fn (string $address): string => pfb_dns_proxy_host_port($address,
 		    str_contains($address, ':') ? $port6 : $port[1]), $addresses[1]);
+		if ($kind === 'doh') {
+			preg_match_all("/ --doh-listen-443 '([0-9A-Fa-f:.]+)'/", $command, $on443);
+			array_push($listeners['doh'], ...array_map(static fn (string $address): string => pfb_dns_proxy_host_port($address, '443'), $on443[1]));
+		}
 	}
 	return $listeners;
 }
@@ -6496,7 +6577,7 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  * reload, and restart a live one whose rc script changed in more than its listen addresses. The script bakes in the ports and the
  * DoT/DoH/DoQ/DDR settings, so a changed one is not served until the proxy restarts. A script that differs only in its listen addresses
  * (every `--listen`, `--dot-listen`, `--doh-listen` and `--doq-listen` argument masked out of both texts, issue #3599) and its name
- * answers (every `--dns-name-answer`, issue #3694) is reconciled
+ * answers (every `--dns-name-answer`, `--doh-listen-443` and `--ddr-doh-443`, issue #3694) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket: the pass
  * asks once (pfb_dns_proxy_listener_list()) and the sync acts on that answer; with the proxy not READY, or with a gateway that gives
  * no list (nothing to compare with), it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()):
@@ -6543,7 +6624,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	} else {
 		$after = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 		$rc_changed = $before !== $after;
-		$mask = "/ --(?:(?:dot|doh|doq)-)?listen '[^']*'| --dns-name-answer '[^']*'/";
+		$mask = "/ --(?:(?:dot|doh|doq)-)?listen '[^']*'| --(?:dns-name-answer|doh-listen-443|ddr-doh-443) '[^']*'/";
 		$addresses_only = $rc_changed && preg_replace($mask, '', (string) $before) === preg_replace($mask, '', (string) $after);
 		if ($deferred) {
 			if ($rc_changed) {

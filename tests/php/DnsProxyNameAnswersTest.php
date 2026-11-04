@@ -289,25 +289,39 @@ final class DnsProxyNameAnswersTest extends TestCase
 			. " --dns-name-answer '" . self::LAN6 . '=' . self::LAN4 . ',' . self::LAN6 . "'";
 	}
 
+	/** DoH on lan, and lan chosen under "Advertise DoH on port 443" (issue #3694). */
+	private function advertiseLanOn443(): void
+	{
+		$this->store('pfb_dns_doh', 'on');
+		$this->store('pfb_dns_doh_interface', 'lan');
+		$this->store('pfb_dns_ddr_doh_443_interfaces', 'lan');
+	}
+
+	/** The --ddr-doh-443 flags of lan's two addresses. */
+	private static function lanDohFlags(): string
+	{
+		return " --ddr-doh-443 '" . self::LAN4 . "' --ddr-doh-443 '" . self::LAN6 . "'";
+	}
+
 	public function testNoDnsNameMeansNoFlagAtAllEvenWithDdrOn(): void
 	{
-		// Given a name, DDR on and a transport: the full flag set (before-state, so that the empty result below is the name's doing)
+		// Given a name, DDR on and lan advertised for DoH on 443: the full flag set (before-state, so that the empty result below is the name's doing)
 		$this->store('pfb_dns_name', self::NAME);
 		$this->store('pfb_dns_ddr', 'on');
-		$this->store('pfb_dns_ddr_doh_443', 'on');
-		$this->assertSame(" --dns-name '" . self::NAME . "' --ddr --ddr-doh-443 --ddr-doh-4436" . self::lanFlags(), pfb_dns_proxy_ddr_flags(), 'before');
+		$this->advertiseLanOn443();
+		$this->assertSame(" --dns-name '" . self::NAME . "' --ddr" . self::lanDohFlags() . self::lanFlags(), pfb_dns_proxy_ddr_flags(), 'before');
 
 		// When the name is empty
 		$this->store('pfb_dns_name', '');
 
-		// Then there is no --dns-name, no --ddr, no --ddr-doh-* and no --dns-name-answer (row N2)
+		// Then there is no --dns-name, no --ddr, no --ddr-doh-443 and no --dns-name-answer (row N2)
 		$this->assertSame('', pfb_dns_proxy_ddr_flags());
 	}
 
 	public function testANameWithDdrOffGivesTheNameAndTheAnswersButNoDdrFlag(): void
 	{
 		$this->store('pfb_dns_name', self::NAME);
-		$this->store('pfb_dns_ddr_doh_443', 'on'); // stored, but it only means something beside --ddr
+		$this->advertiseLanOn443(); // stored, but it only means something beside --ddr
 
 		$this->assertSame(" --dns-name '" . self::NAME . "'" . self::lanFlags(), pfb_dns_proxy_ddr_flags());
 	}
@@ -318,8 +332,8 @@ final class DnsProxyNameAnswersTest extends TestCase
 		$this->store('pfb_dns_ddr', 'on');
 		$this->assertSame(" --dns-name '" . self::NAME . "' --ddr" . self::lanFlags(), pfb_dns_proxy_ddr_flags(), 'DDR alone');
 
-		$this->store('pfb_dns_ddr_doh_443', 'on');
-		$this->assertSame(" --dns-name '" . self::NAME . "' --ddr --ddr-doh-443 --ddr-doh-4436" . self::lanFlags(), pfb_dns_proxy_ddr_flags(), 'with the 443 options');
+		$this->advertiseLanOn443();
+		$this->assertSame(" --dns-name '" . self::NAME . "' --ddr" . self::lanDohFlags() . self::lanFlags(), pfb_dns_proxy_ddr_flags(), 'with lan advertised on 443');
 	}
 
 	public function testANameWithNothingToAnswerOnGivesTheNameAlone(): void

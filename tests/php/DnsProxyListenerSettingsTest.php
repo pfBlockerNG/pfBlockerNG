@@ -48,7 +48,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_doh_trusted' => '',
 			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_doq_interface' => ['lan'],
 			'pfb_dns_sslcertref' => '',
-			'pfb_dns_ddr' => '', 'pfb_dns_ddr_doh_443' => '',
+			'pfb_dns_ddr' => '',
 		];
 	}
 
@@ -378,8 +378,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_sslcertref'    => '',
 			'pfb_dns_name'          => '',
 			'pfb_dns_ddr'           => '',
-			'pfb_dns_ddr_doh_443'   => '',
-			'pfb_dns_ddr_doh_443_6' => '',
+			'pfb_dns_ddr_doh_443_interfaces' => '',
 		], pfb_dns_proxy_listeners_stored($this->post()));
 	}
 
@@ -428,8 +427,7 @@ final class DnsProxyListenerSettingsTest extends TestCase
 			'pfb_dns_sslcertref'    => 'cert5f3a',
 			'pfb_dns_name'          => '',
 			'pfb_dns_ddr'           => '',
-			'pfb_dns_ddr_doh_443'   => '',
-			'pfb_dns_ddr_doh_443_6' => '',
+			'pfb_dns_ddr_doh_443_interfaces' => '',
 		], $stored, 'port without leading zeros; interfaces and trusted deduplicated; a toggle is on only for "on"');
 	}
 

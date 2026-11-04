@@ -245,9 +245,11 @@ final class DnsListenVipTest extends TestCase
 		foreach (['pfb_dns_listen_vip', 'pfb_dns_listen_vip4', 'pfb_dns_listen_vip6', 'pfb_dns_listen_auto4', 'pfb_dns_listen_auto6'] as $key) {
 			$this->assertSame('policy', pfb_cfg_registry()['gen/' . $key]['sync'] ?? NULL, $key);
 		}
-		foreach (['pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6', 'pfb_dns_ddr_doh_443_6'] as $key) {
+		foreach (['pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6'] as $key) {
 			$this->assertSame('local', pfb_cfg_registry()['dns_shared/' . $key]['sync'] ?? NULL, $key);
 		}
+		// issue #3694: the per-interface DoH 443 selection is drawn from the node's own DoH interface list, so it stays with it
+		$this->assertSame('local', pfb_cfg_registry()['dns/pfb_dns_ddr_doh_443_interfaces']['sync'] ?? NULL);
 		$this->assertSame('local', pfb_cfg_registry()['gen/pfb_dns_listen_interface']['sync'] ?? NULL);
 		$this->put('pfb_dns_listen_vip6', '_vipchosen');
 		$sections = ['pfblockerng' => ['config' => [PfbConfig::readSection(PFB_SECTIONS['gen'])]]];

@@ -1742,6 +1742,19 @@
             }
         ]
     },
+    "pfb_dns_ddr_doh_443_migrate": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_legacy_shared_value": {
         "returnsRef": false,
         "returnType": "mixed",
@@ -1765,6 +1778,11 @@
     "pfb_dns_listen_advertisements_drop": {
         "returnsRef": false,
         "returnType": "void",
+        "params": []
+    },
+    "pfb_dns_listen_auto_vips": {
+        "returnsRef": false,
+        "returnType": "array",
         "params": []
     },
     "pfb_dns_listen_vip_candidates": {
@@ -1997,16 +2015,21 @@
             }
         ]
     },
-    "pfb_dns_proxy_ddr_doh_443_locked": {
+    "pfb_dns_proxy_ddr_doh_443_addresses": {
         "returnsRef": false,
-        "returnType": "bool",
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_dns_proxy_ddr_doh_443_options": {
+        "returnsRef": false,
+        "returnType": "array",
         "params": [
             {
-                "name": "ipv6",
+                "name": "doh_tokens",
                 "byRef": false,
                 "variadic": false,
-                "type": "bool",
-                "default": "false"
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -2086,6 +2109,19 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_doh_port_443": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "ipv6",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
             }
         ]
     },

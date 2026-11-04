@@ -1873,8 +1873,15 @@ DNS_PROXY_LISTENER_KEYS = (
     "pfb_dns_doq_interface",
 )
 # issue #3538: the plain DNS, DoT and certificate settings the same save writes, restored with the seven above
-DNS_PROXY_OWN_KEYS = ("pfb_dns_interface", "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_dot_interface", "pfb_dns_name")
-DNS_PROXY_V6_KEYS = ("pfb_dns_dot_port6", "pfb_dns_doh_port6", "pfb_dns_doq_port6", "pfb_dns_ddr_doh_443_6")
+DNS_PROXY_OWN_KEYS = (
+    "pfb_dns_interface",
+    "pfb_dns_dot",
+    "pfb_dns_dot_port",
+    "pfb_dns_dot_interface",
+    "pfb_dns_name",
+    "pfb_dns_ddr_doh_443_interfaces",
+)
+DNS_PROXY_V6_KEYS = ("pfb_dns_dot_port6", "pfb_dns_doh_port6", "pfb_dns_doq_port6")
 CERT_CFG = DNS_PROXY_CFG + "pfb_dns_sslcertref"
 
 
@@ -1961,10 +1968,12 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
         helpers.config_restore_state(vm, CERT_CFG, original_cert)
 
 
-# issue #3583: DDR and DoH on port 443, saved like the other pfB-DNS toggles: posted `on` is stored `on`, posted `''`
-# is stored as the empty Off token. DDR needs a DNS Name (issue #3694), which every save of it posts.
+# issue #3583: DDR, saved like the other pfB-DNS toggles: posted `on` is stored `on`, posted `''` is stored as the empty
+# Off token. DDR needs a DNS Name (issue #3694), which every save of it posts. The two DoH-on-443 checkboxes are one
+# selection of interfaces since issue #3694.
 DDR_CFG = helpers.dns_config_path("pfb_dns_ddr")
-DDR_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443")
+DDR_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443_interfaces")
+DOH_INTERFACE_CFG = helpers.dns_config_path("pfb_dns_doh_interface")
 DNS_NAME_CFG = helpers.dns_config_path("pfb_dns_name")
 DDR_NAME = "fw.example.lan"
 
@@ -1975,7 +1984,7 @@ def _dns_page_settings_restored(vm: helpers.SmokeVM) -> Iterator[None]:
     paths = [
         helpers.dns_config_path(key) for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS, *DNS_PROXY_V6_KEYS)
     ]
-    paths += [CERT_CFG, DDR_CFG, DDR_443_CFG]
+    paths += [CERT_CFG, DDR_CFG]
     originals = {path: helpers.config_get_state(vm, path) for path in paths}
     try:
         yield
@@ -1990,40 +1999,65 @@ def _input_errors_text(body: str) -> str:
     return " ".join(re.sub(r"<[^>]+>", " ", block).split()) if block else NO_INPUT_ERRORS
 
 
-def test_pfb_dns_ddr_toggles_save_on_and_clearing_both_stores_the_off_tokens(
+def test_pfb_dns_ddr_toggle_saves_on_and_clearing_it_stores_the_off_token(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """issue #3583: DDR and DoH on port 443 persist `on` and `on`; clearing both persists the empty Off tokens.
+    """issue #3583: DDR persists `on`; clearing it persists the empty Off token.
 
-    Given both stored Off and the stored DoH port 4443 (seeded directly, so the before-state does not depend on the
-      save path under test; the 443 checkbox renders disabled on port 443),
-    When Save posts both on, Then `dns_shared/pfb_dns_ddr` and `dns_shared/pfb_dns_ddr_doh_443` are stored `on`;
-    When it posts both as `''` (WebUI.post cannot omit a key, so an absent key is not exercised here), Then both are
+    Given DDR stored Off (seeded directly, so the before-state does not depend on the save path under test),
+    When Save posts it on with a DNS Name, Then `dns_shared/pfb_dns_ddr` is stored `on`;
+    When it posts it as `''` (WebUI.post cannot omit a key, so an absent key is not exercised here), Then it is
       stored `''`.
     """
     vm = smoke_vm
 
-    def stored() -> tuple[str, str]:
-        return helpers.config_get(vm, DDR_CFG), helpers.config_get(vm, DDR_443_CFG)
+    with _dns_page_settings_restored(vm):
+        helpers.config_set(vm, DDR_CFG, "")
+        assert helpers.config_get(vm, DDR_CFG) == "", "seed did not take: DDR must start Off"
+        for posted, expected in (("on", "on"), ("", "")):
+            saved = webui.post(DNS_PAGE, {"pfb_dns_ddr": posted, "pfb_dns_name": DDR_NAME}, timeout=SAVE_TIMEOUT)
+            assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
+            now = helpers.config_get(vm, DDR_CFG)
+            assert now == expected, (
+                f"Save posting DDR as {posted!r}: stored dns_shared/pfb_dns_ddr expected {expected!r}, got {now!r}; "
+                f"the page's input errors: {_input_errors_text(saved.text)}"
+            )
+
+
+def test_pfb_dns_doh_443_interfaces_persist_and_a_choice_that_is_no_option_aborts_the_save(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #3694: the interfaces DDR advertises DoH on port 443 for persist; Localhost or an unknown one is refused.
+
+    Given the stored DoH interface list `lan` and no choice (seeded directly),
+    When Save posts `lan` under "Advertise DoH on port 443", Then `dns/pfb_dns_ddr_doh_443_interfaces` is stored `lan`;
+    When it posts `lo0` (Localhost) or `opt99` (no interface), Then the page names the entry and the stored choice
+      is unchanged.
+    """
+    vm = smoke_vm
 
     with _dns_page_settings_restored(vm):
-        helpers.config_set(vm, helpers.dns_config_path("pfb_dns_doh_port"), "4443")
-        helpers.config_set(vm, DDR_CFG, "")
+        helpers.config_set(vm, DOH_INTERFACE_CFG, "lan")
         helpers.config_set(vm, DDR_443_CFG, "")
-        assert stored() == ("", ""), f"seed did not take: both DDR toggles must start Off, got {stored()}"
-        for posted, expected in (("on", ("on", "on")), ("", ("", ""))):
-            saved = webui.post(
-                DNS_PAGE,
-                {"pfb_dns_ddr": posted, "pfb_dns_ddr_doh_443": posted, "pfb_dns_name": DDR_NAME},
-                timeout=SAVE_TIMEOUT,
+        assert helpers.config_get(vm, DDR_443_CFG) == "", "seed did not take: nothing is advertised on 443"
+
+        saved = webui.post(DNS_PAGE, {"pfb_dns_ddr_doh_443_interfaces[]": "lan"}, timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
+        now = helpers.config_get(vm, DDR_443_CFG)
+        assert now == "lan", (
+            f"expected lan stored, got {now!r}; the page's input errors: {_input_errors_text(saved.text)}"
+        )
+
+        for token in ("lo0", "opt99"):
+            refused = webui.post(DNS_PAGE, {"pfb_dns_ddr_doh_443_interfaces[]": token}, timeout=SAVE_TIMEOUT)
+            error = f"Advertise DoH on port 443: Invalid selection: {token}"
+            assert error in refused.text, (
+                f"{token!r} must be refused with {error!r}: {_input_errors_text(refused.text)}"
             )
-            assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
-            now = stored()
-            assert now == expected, (
-                f"Save posting both toggles as {posted!r}: "
-                "stored (dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443) "
-                f"expected {expected}, got {now}; the page's input errors: {_input_errors_text(saved.text)}"
+            assert helpers.config_get(vm, DDR_443_CFG) == "lan", (
+                f"{token!r}: a refused Save must leave config.xml unchanged"
             )
 
 

@@ -32,6 +32,12 @@ working, and DDR answers that address with the listeners it queried. The excepti
 **DoH port** is 443: there only the VIP listens, because port 443 on the interface address belongs to the webConfigurator
 or a reverse proxy.
 
+A VIP that **Create VIP automatically** made also serves DoH on **port 443**, beside the configured DoH port, while DoH is on (unless
+that family's DoH port is already 443). DDR advertises 443 on it with no setting to change, because the gateway serves 443
+there. If the box refuses the bind (something else holds 443 on that address), the startup check says `DoH is not served on
+<VIP>:443` with the reason, and DDR advertises the configured DoH port on that VIP. A VIP you chose yourself gets no such listener,
+since port 443 may already be taken on it.
+
 On a policy receiver, an existing listener VIP is moved only after the published address passes validation and
 conflict checks. Equivalent IPv6 spellings reuse the same VIP. A missing or invalid publication is not replaced
 by an unrelated local VIP, and unspecified addresses (`0.0.0.0` and `::`) are not valid dedicated listener VIPs.
@@ -40,11 +46,12 @@ Disabling the option removes only owned VIPs; uninstall also removes recorded ad
 affected DHCP and DNS Resolver settings.
 
 Transport controls, the certificate and DDR remain under **DNS > pfB-DNS**. Each transport has an **IPv4** port and
-an **IPv6** port; an empty IPv6 port uses the IPv4 value. DDR has separate **IPv4 DoH on port 443** and
-**IPv6 DoH on port 443** checkboxes. These advertise 443; they do not change the listening ports.
+an **IPv6** port; an empty IPv6 port uses the IPv4 value. DDR has one **Advertise DoH on port 443** selection of interfaces
+(and Resolver VIPs you chose). It advertises 443 on the addresses of the selected entries; it does not change the listening ports.
 
 DDR omits `port` when the listener uses the transport default (DoH 443, DoT/DoQ 853), the compatible form for clients
-that do not understand the port key. A non-default listener port is advertised unless that family's DoH 443 checkbox is on.
+that do not understand the port key. A non-default listener port is advertised unless the address is advertised on 443 under
+**Advertise DoH on port 443**.
 
 ## DNR with Kea
 
@@ -258,18 +265,22 @@ Under **Discovery of Designated Resolvers (DDR)** on the pfB-DNS page:
   to an address gets designation only for encrypted transports listening on that address with a certificate loaded. With DDR
   disabled, or pfB-DNS off, the DNS Resolver answers as before. Enabling it alone does not make private-address DDR usable by
   Apple clients.
-- **IPv4 DoH on port 443 — Advertise IPv4 DoH on port 443** (`dns_shared/pfb_dns_ddr_doh_443`) and
-  **IPv6 DoH on port 443 — Advertise IPv6 DoH on port 443** (`dns_shared/pfb_dns_ddr_doh_443_6`): disabled by default,
-  applied on the next **Update**; greyed out when that family's configured DoH port is already 443. They remove
-  the family's DoH `port` from DDR records, so clients use 443 instead of its configured DoH port. They do not change
-  listening ports, names, paths, addresses, DoT/DoQ records, or configure a proxy. They have no effect without DDR enabled.
+- **Advertise DoH on port 443** (`dns/pfb_dns_ddr_doh_443_interfaces`): a multi-select, empty by default, applied on the next
+  **Update**, node-local like the DoH interface list it is drawn from. Its entries are the **DoH Interface(s)** (never Localhost) and each
+  Resolver VIP you chose under **Resolver addresses**, shown by its address; the VIP the package created is not offered, because it
+  serves DoH on 443 itself. On the addresses of a selected entry DDR advertises DoH **without a `port`**, so clients use 443, while
+  pfB-DNS keeps listening on its configured DoH port there; every other address advertises its own DoH port. Selecting an interface
+  advertises that interface's addresses only, never a Resolver VIP that joins them: choose the VIP separately. It changes no listening
+  port, name, path, DoT/DoQ record or proxy. It has no effect without DDR enabled, and it only helps where a reverse proxy really answers
+  DoH on 443 at that address.
+- **Upgrading** from the two checkboxes (IPv4 and IPv6 **DoH on port 443**) of the first DDR version: if either was on, every DoH interface
+  is selected and a notice says so; review it. The old settings are removed, on or off. The old checkboxes were greyed out while the DoH port was
+  443; the select never is: an interface whose family is on 443 is not listened on for DoH (the VIP serves it), so selecting it advertises
+  nothing there.
 
-These are the [shipped labels/help text][ui] and [gateway behavior][gateway]. The port-443 help warns:
-
-> Some clients might not accept a port for the DoH server provided over DDR. This option removes the port, so clients
-> reach DoH on port 443. If DoH is not already listening on port 443, it will no longer be reachable. It is intended
-> for users who, for example, serve multiple sites over HTTPS through a reverse proxy, and who are responsible for
-> configuring that reverse proxy correctly.
+These are the [shipped labels/help text][ui] and [gateway behavior][gateway]. The page help warns that some clients might not
+accept a port for the DoH server provided over DDR, and that the proxy must really serve DoH on 443 there: if DoH is not reachable on
+port 443 at an advertised address, clients that follow DDR no longer reach it.
 
 DDR advertises the **DNS Name**, whatever the firewall's own hostname and domain are, and not a separately chosen DNR ADN.
 Configure the reverse proxy to route SNI/HTTP Host for that name to DoH and to present the certificate with the original resolver IP SAN.
@@ -314,9 +325,9 @@ This is a non-blocking warning, not certificate validation: it does **not** chec
 It does not warn for loopback, RFC 1918, CGNAT, link-local, ULA, documentation, benchmarking, deprecated site-local or
 other explicitly excluded ranges, or for a public IPv6 address (a global IPv6 prefix changes, so a missing SAN there
 cannot be fixed). It compares parsed addresses, so equivalent IPv6 spellings match.
-With **Advertise DoH on port 443** on **and** DoH not listening on 443, DoH is excluded because pfB-DNS cannot see the
-proxy's certificate; DoT and DoQ are still checked. If DoH itself listens on 443, it is checked even if the stored
-443 toggle is on. With DDR off, no DNS Name or no selected certificate, no address warning is shown. The exact excluded ranges and
+For an address that is advertised under **Advertise DoH on port 443** **and** where DoH does not listen on 443, DoH is excluded because
+pfB-DNS cannot see the proxy's certificate; DoT and DoQ are still checked. If DoH itself listens on 443 there, it is checked even
+if the address is selected. The VIP the package created is checked like any other address, and being private it never warns. With DDR off, no DNS Name or no selected certificate, no address warning is shown. The exact excluded ranges and
 conditions are in the [shipped warning implementation][warning]. Absence of a warning is not proof of verified DDR.
 
 ## Public resolver addresses

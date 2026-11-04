@@ -66,10 +66,11 @@ The existing framing is kept: 4 bytes first. Two new values that no certificate 
 > failure not served now, then `ok`.
 >
 > **Amendment 2026-11-04 (#3694).** A fourth value, `FF FF FF FB`, replaces the name-answer table: a 4-byte big-endian length 0 to
-> 65536 and a body of lines joined by `\n` (no trailing newline, no CRLF, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]`; an
-> empty body is an empty table. The whole body is checked first: one bad line is `error: <reason>` and the table is unchanged, else it is
-> replaced atomically and the reply is `ok`. It carries no descriptor, and the update pass and the cron tick send it after the listener
-> changes (`pfb_dns_proxy_listeners_sync()`) while the command names `--dns-name` and no restart is pending. See
+> 65536 and a body of lines joined by `\n` (no trailing newline, no CRLF, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]` or
+> `ddr-doh-443 ADDR` (issue #3694); an empty body is an empty table. The whole body is checked first: one bad line is `error: <reason>` and
+> nothing changes, else the name answers and the DDR 443 set are replaced together, atomically, and the reply is `ok`. It carries no descriptor, and the update pass and the cron tick send it after the listener
+> changes (`pfb_dns_proxy_listeners_sync()`) while the command names `--dns-name` and no restart is pending. An add of kind `doh` is also
+> taken at port 443 (the `--doh-listen-443` listener of the Resolver VIP the package created), beside the configured DoH port. See
 > [dns-gateway-transports.md](../misc/dns-gateway-transports.md), "Name-answer table".
 
 Then a 4-byte big-endian length `L` (1 to 256) and `L` bytes of ASCII `<kind> <host:port>`: `kind` is `udp+tcp`,

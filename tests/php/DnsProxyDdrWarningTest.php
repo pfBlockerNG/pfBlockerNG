@@ -113,7 +113,7 @@ final class DnsProxyDdrWarningTest extends TestCase
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost', NULL, [...$san, 'DNS:' . self::NAME]))];
 		$names = implode(',', array_keys($interfaces));
 		$this->store($settings + [
-			'pfb_dns_interface' => $names, 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_ddr' => 'on', 'pfb_dns_ddr_doh_443' => '', 'pfb_dns_name' => self::NAME,
+			'pfb_dns_interface' => $names, 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_ddr' => 'on', 'pfb_dns_ddr_doh_443_interfaces' => '', 'pfb_dns_name' => self::NAME,
 			'pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '853', 'pfb_dns_dot_interface' => $names,
 			'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '8443', 'pfb_dns_doh_interface' => $names,
 			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '8853', 'pfb_dns_doq_interface' => $names,
@@ -205,34 +205,34 @@ final class DnsProxyDdrWarningTest extends TestCase
 	// which transports count
 	// -----------------------------------------------------------------------
 
-	public function testDohOn443LeavesTheDohListenerOutAndKeepsDotAndDoq(): void
+	public function testAnInterfaceAdvertisedOnPort443LeavesItsDohListenerOutAndKeepsDotAndDoq(): void
 	{
-		// Given DoH alone on a public address that the certificate lacks, the 443 option off
+		// Given DoH alone on a public address that the certificate lacks, nothing advertised on 443
 		$this->box(['wan' => ['8.8.8.8']], [], ['pfb_dns_dot' => '', 'pfb_dns_doh' => 'on']);
-		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings(), 'with the option off DoH warns');
+		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings(), 'with nothing advertised DoH warns');
 
-		// When the option is on, its clients see the reverse proxy's certificate: no warning
-		$this->store(['pfb_dns_ddr_doh_443' => 'on']);
-		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'DoH alone, the option on');
+		// When wan is advertised on 443, its clients see the reverse proxy's certificate: no warning
+		$this->store(['pfb_dns_ddr_doh_443_interfaces' => 'wan']);
+		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'DoH alone, wan advertised');
 
 		// And with DoT on the same address too, the warning is back and names DoT only
 		$this->store(['pfb_dns_dot' => 'on']);
-		$this->assertSame([self::warning('8.8.8.8', 'DoT')], pfb_dns_proxy_ddr_warnings(), 'DoT and DoH, the option on');
+		$this->assertSame([self::warning('8.8.8.8', 'DoT')], pfb_dns_proxy_ddr_warnings(), 'DoT and DoH, wan advertised');
 
 		// And with DoQ on as well it names DoT and DoQ
 		$this->store(['pfb_dns_doq' => 'on']);
-		$this->assertSame([self::warning('8.8.8.8', 'DoT and DoQ')], pfb_dns_proxy_ddr_warnings(), 'DoT, DoH and DoQ, the option on');
+		$this->assertSame([self::warning('8.8.8.8', 'DoT and DoQ')], pfb_dns_proxy_ddr_warnings(), 'DoT, DoH and DoQ, wan advertised');
 	}
 
-	public function testDohOn443StillWarnsWhileTheOptionIsOnButDohAlreadyListensOn443(): void
+	public function testAnAdvertisedInterfaceStillWarnsWhileDohListensOnPort443Itself(): void
 	{
-		// Given DoH alone on a public address that the certificate lacks, the 443 option on and DoH on 8443: no warning
-		$this->box(['wan' => ['8.8.8.8']], [], ['pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_ddr_doh_443' => 'on']);
+		// Given DoH alone on a public address that the certificate lacks, wan advertised on 443 and DoH on 8443: no warning
+		$this->box(['wan' => ['8.8.8.8']], [], ['pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_ddr_doh_443_interfaces' => 'wan']);
 		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'before: DoH on 8443, its clients go to the reverse proxy');
 
-		// When DoH itself listens on 443, the option sends clients to pfB-DNS's own certificate: the check runs again
+		// When DoH itself listens on 443, the clients reach pfB-DNS's own certificate: the check runs again
 		$this->store(['pfb_dns_doh_port' => '443']);
-		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings(), 'DoH on 443, the option still stored on');
+		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings(), 'DoH on 443, wan still advertised');
 	}
 
 	public function testOneAddressServedByTwoOrThreeTransportsIsOneWarningNamingThem(): void
@@ -421,21 +421,24 @@ final class DnsProxyDdrWarningTest extends TestCase
 		$this->assertSame($public, pfb_dns_proxy_public_address($address), "is '{$address}' public?");
 	}
 
-	public function testReverseProxyWarningsAreSuppressedOnlyForTheAdvertisedFamilyAndAPublicIpv6AddressIsNeverNamed(): void
+	public function testAnAdvertisedInterfaceIsLeftOutForItsIpv4AddressAndAPublicIpv6AddressIsNeverNamed(): void
 	{
-		// Given DoH on a public IPv4 and a public IPv6 address, the IPv4 family advertised on 443 (a reverse proxy answers there)
+		// Given DoH on a public IPv4 and a public IPv6 address, wan not advertised on 443
 		$this->box(['wan' => ['8.8.8.8', '2606:4700::1']], [], [
-			'pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_doh_port' => '8443',
-			'pfb_dns_doh_port6' => '9443', 'pfb_dns_ddr_doh_443' => 'on', 'pfb_dns_ddr_doh_443_6' => '',
+			'pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_doh_port' => '8443', 'pfb_dns_doh_port6' => '9443',
 		]);
+		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings(), 'before: the IPv4 address is named, the IPv6 one is not');
+
+		// When wan is advertised on 443 (a reverse proxy answers there), neither is
+		$this->store(['pfb_dns_ddr_doh_443_interfaces' => 'wan']);
 		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'IPv4 is the reverse proxy\'s, and the gateway designates nothing on the public IPv6 address');
 
-		// When the IPv6 family is the advertised one instead, the IPv4 address is checked
-		$this->store(['pfb_dns_ddr_doh_443' => '', 'pfb_dns_ddr_doh_443_6' => 'on']);
-		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings());
-
-		// And with DoH on 443 for IPv6 the IPv6 address is still not named
+		// And with DoH on 443 for IPv6 alone the IPv4 address is still the reverse proxy's, and the IPv6 address is still not named
 		$this->store(['pfb_dns_doh_port6' => '443']);
+		$this->assertSame([], pfb_dns_proxy_ddr_warnings());
+
+		// While with DoH on 443 for IPv4 the address is checked again
+		$this->store(['pfb_dns_doh_port' => '443', 'pfb_dns_doh_port6' => '9443']);
 		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings());
 	}
 }

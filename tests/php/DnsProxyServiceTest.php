@@ -2237,7 +2237,7 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issues #3583, #3694 -- the DNS Name, DDR and the name answers: --dns-name NAME [--ddr [--ddr-doh-443]] --dns-name-answer LOCAL=ADDR
+	// issues #3583, #3694 -- the DNS Name, DDR and the name answers: --dns-name NAME [--ddr [--ddr-doh-443 ADDR ...]] --dns-name-answer LOCAL=ADDR
 	// right after the TLS flags, only while pfB-DNS is on and a DNS Name is set
 	// -----------------------------------------------------------------------
 
@@ -2278,50 +2278,58 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertStringContainsString(" --doh-port '4443' --dns-name 'fw.example.lan' --ddr --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText(), 'the name and the answer are one quoted word each');
 	}
 
-	public function testTheDohOn443ToggleAddsItsFlagAfterDdrAndInTheDaemonsArgv(): void
+	/** DoH on lan: its listeners and port, in the daemon's argv, before the name flags. */
+	private static function dohFlags(): array
 	{
-		// Given DDR On with the 443 toggle Off
+		return ['--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443'];
+	}
+
+	public function testTheDohOn443SelectionAddsOneFlagPerAddressAfterDdrAndInTheDaemonsArgv(): void
+	{
+		// Given DDR On and DoH on lan, nothing advertised on 443
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$this->setting('pfb_dns_name', 'fw.example.lan');
 		$this->setting('pfb_dns_ddr', 'on');
+		$this->setting('pfb_dns_doh', 'on');
 		$this->generateWith($gateway);
-		$this->assertSame(['--ddr'], $this->ddrFlags(), 'before: the 443 toggle Off adds no flag');
+		$this->assertSame(['--ddr'], $this->ddrFlags(), 'before: nothing selected adds no flag');
 
-		// When the 443 toggle is turned on
-		$this->setting('pfb_dns_ddr_doh_443', 'on');
+		// When lan is chosen under "Advertise DoH on port 443"
+		$this->setting('pfb_dns_ddr_doh_443_interfaces', 'lan');
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then --ddr-doh-443 follows --ddr as a flag of its own, with no value
-		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--dns-name', 'fw.example.lan', '--ddr', '--ddr-doh-443', '--ddr-doh-4436', ...self::ANSWER]), $argv);
-		$this->assertStringContainsString(" --dns-name 'fw.example.lan' --ddr --ddr-doh-443 --ddr-doh-4436 --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText());
+		// Then --ddr-doh-443 follows --ddr with the address of lan, as a flag with a value of its own
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [...self::dohFlags(), '--dns-name', 'fw.example.lan', '--ddr', '--ddr-doh-443', '192.0.2.1', ...self::ANSWER]), $argv);
+		$this->assertStringContainsString(" --dns-name 'fw.example.lan' --ddr --ddr-doh-443 '192.0.2.1' --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText());
 	}
 
-	/** @return array<string,array{string,string,list<string>}> stored DDR, stored 443 toggle, the DDR flags the script carries while pfB-DNS is on */
-	public static function ddrToggleRows(): array
+	/** @return array<string,array{string,string,list<string>}> stored DDR, the interfaces chosen for 443, the DDR flags the script carries while pfB-DNS is on */
+	public static function ddrRows(): array
 	{
 		return [
-			'both Off'                      => ['', '', []],
-			'the 443 toggle alone adds nothing' => ['', 'on', []],
-			'DDR alone'                     => ['on', '', ['--ddr']],
-			'both On'                       => ['on', 'on', ['--ddr', '--ddr-doh-443', '--ddr-doh-4436']],
+			'both off'                          => ['', '', []],
+			'a selection alone adds nothing'    => ['', 'lan', []],
+			'DDR alone'                         => ['on', '', ['--ddr']],
+			'DDR and a selection'               => ['on', 'lan', ['--ddr', '--ddr-doh-443']],
 		];
 	}
 
 	/** @param list<string> $whileOn */
-	#[DataProvider('ddrToggleRows')]
-	public function testTheDdrFlagsFollowTheTwoTogglesWhilePfbDnsIsOnAndNeverWhileItIsOff(string $ddr, string $doh443, array $whileOn): void
+	#[DataProvider('ddrRows')]
+	public function testTheDdrFlagsFollowTheToggleAndTheSelectionWhilePfbDnsIsOnAndNeverWhileItIsOff(string $ddr, string $selected, array $whileOn): void
 	{
-		// Given a moved box (pfB-DNS on) with a DNS Name and both toggles Off
+		// Given a moved box (pfB-DNS on) with a DNS Name, DoH on and both settings off
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$this->setting('pfb_dns_name', 'fw.example.lan');
+		$this->setting('pfb_dns_doh', 'on');
 		$this->generateWith($gateway);
-		$this->assertSame([], $this->ddrFlags(), 'before: both Off');
+		$this->assertSame([], $this->ddrFlags(), 'before: both off');
 
-		// When the row's toggles are stored
+		// When the row's settings are stored
 		$this->setting('pfb_dns_ddr', $ddr);
-		$this->setting('pfb_dns_ddr_doh_443', $doh443);
+		$this->setting('pfb_dns_ddr_doh_443_interfaces', $selected);
 		$this->generateWith($gateway);
 
 		// Then pfB-DNS on carries exactly the row's flags, and the same settings carry none once pfB-DNS is off (the snapshot is gone)
@@ -2335,14 +2343,15 @@ final class DnsProxyServiceTest extends TestCase
 
 	public function testWithoutADnsNameTheScriptCarriesNoNameDdrOrAnswerEvenWithDdrOn(): void
 	{
-		// Given DDR On and a DNS Name: the flags are there (before-state)
+		// Given DDR On, DoH on lan advertised on 443, and a DNS Name: the flags are there (before-state)
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$this->setting('pfb_dns_ddr', 'on');
-		$this->setting('pfb_dns_ddr_doh_443', 'on');
+		$this->setting('pfb_dns_doh', 'on');
+		$this->setting('pfb_dns_ddr_doh_443_interfaces', 'lan');
 		$this->setting('pfb_dns_name', 'fw.example.lan');
 		$this->generateWith($gateway);
-		$this->assertSame(['--ddr', '--ddr-doh-443', '--ddr-doh-4436'], $this->ddrFlags(), 'before');
+		$this->assertSame(['--ddr', '--ddr-doh-443'], $this->ddrFlags(), 'before');
 		$this->assertSame(["'fw.example.lan'"], $this->scriptValues('--dns-name'), 'before');
 
 		// When the name is empty
@@ -2350,7 +2359,7 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then nothing of it reaches the daemon: DDR answers nothing and nothing is intercepted (row N2)
-		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, self::dohFlags()), $argv);
 		$this->assertStringNotContainsString('--dns-name', $this->rcText());
 		$this->assertStringNotContainsString('--ddr', $this->rcText());
 	}

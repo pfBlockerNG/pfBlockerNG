@@ -881,8 +881,8 @@ const PFB_SECTIONS = [
 const PFB_DNS_SHARED_FIELDS = [
 	'pfb_dns_dot', 'pfb_dns_doh', 'pfb_dns_doq',
 	'pfb_dns_dot_port', 'pfb_dns_doh_port', 'pfb_dns_doq_port',
-	'pfb_dns_doh_trusted', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443',
-	'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6', 'pfb_dns_ddr_doh_443_6',
+	'pfb_dns_doh_trusted', 'pfb_dns_ddr',
+	'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6',
 ];
 
 // Listener policy uses the existing policy-settings section, not the node-local Resolver snapshot.
@@ -2489,21 +2489,14 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key; \'\' = not seeded yet, and pfb_dns_proxy_seed() fills it from dns/pfb_dns_interface, only matters once DoQ is turned on',
 		],
 
-		// issue #3583: DDR (RFC 9462) answers for resolver.arpa. from pfB-DNS's gateway, and the option that leaves the port out of
-		// the DoH record they carry. Both are applied by the next Update.
+		// issue #3583: DDR (RFC 9462) answers for resolver.arpa. from pfB-DNS's gateway, applied by the next Update. The option that left the port
+		// out of the DoH record is a per-interface selection since issue #3694 (dns/pfb_dns_ddr_doh_443_interfaces, below).
 		'dns_shared/pfb_dns_ddr' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (the gateway does not touch resolver.arpa. names, the DNS Resolver answers them)',
-		],
-		'dns_shared/pfb_dns_ddr_doh_443' => [
-			'default'       => '',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads Off = pre-feature behaviour (the DDR DoH record names the port DoH listens on)',
 		],
 
 		// issue #3538: pfB-DNS's own listener settings; pfb_dns_proxy_seed() fills each one that is not seeded yet.
@@ -2550,10 +2543,18 @@ function pfb_cfg_registry(): array
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads \'\' = no DNS name (no DDR answers, no name answers); per node like the certificate, which it must match',
 		],
+		// issue #3694: the interfaces (and chosen Resolver VIPs) DDR advertises DoH on port 443 for; replaces the two per-family toggles
+		'dns/pfb_dns_ddr_doh_443_interfaces' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; \'\' = nothing advertised on 443; per node like the DoH interface list it is drawn from, and issue3694-ddr-doh-443-interfaces fills it from the retired pfb_dns_ddr_doh_443 and pfb_dns_ddr_doh_443_6 toggles',
+		],
 	];
 
-	foreach ([...PFB_DNS_POLICY_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6', 'pfb_dns_ddr_doh_443_6'] as $key) {
-		$toggle = in_array($key, ['pfb_dns_listen_vip', 'pfb_dns_ddr_doh_443_6'], TRUE);
+	foreach ([...PFB_DNS_POLICY_FIELDS, 'pfb_dns_dot_port6', 'pfb_dns_doh_port6', 'pfb_dns_doq_port6'] as $key) {
+		$toggle = ($key === 'pfb_dns_listen_vip');
 		$policy = in_array($key, PFB_DNS_POLICY_FIELDS, TRUE);
 		$registry[($policy ? 'gen/' : 'dns_shared/') . $key] = [
 			'default' => '',
@@ -3854,6 +3855,15 @@ function pfb_migration_registry(): array
 			'message'  => 'pfBlockerNG: separated shared pfB-DNS settings from node-local state (issue #3649)',
 			'since'    => '4.0.0',
 		],
+		// 8. issue #3694: the two per-family "Advertise DoH on port 443" toggles become a per-interface selection. Reads both sections: a
+		// configuration from before the #3649 split still keeps the toggles in the pfB-DNS section.
+		[
+			'id'       => 'issue3694-ddr-doh-443-interfaces',
+			'sections' => [PFB_SECTIONS['dns'], PFB_SECTIONS['dns_shared']],
+			'apply'    => 'pfb_dns_ddr_doh_443_migrate',
+			'message'  => 'pfBlockerNG: replaced the DoH on port 443 toggles by a selection of interfaces (issue #3694)',
+			'since'    => '4.0.0',
+		],
 	];
 }
 
@@ -3898,6 +3908,42 @@ function pfb_dns_legacy_shared_value(array $old, string $key): mixed
 	}
 	$unseeded = ($old['pfb_dns_interface'] ?? '') === '';
 	return ($unseeded && in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE)) ? NULL : $old[$key];
+}
+
+/**
+ * Issue #3694: the toggles `pfb_dns_ddr_doh_443` and `pfb_dns_ddr_doh_443_6` ("Advertise DoH on port 443", IPv4 and IPv6) become the selection
+ * `pfb_dns_ddr_doh_443_interfaces`. Either one On, in either section it may be stored in, selects every stored DoH interface but Localhost
+ * (comma-joined) unless the selection is already stored, and files one notice that says so. Both keys are removed whenever stored, On, Off or junk,
+ * so a second run has nothing to do. Nothing else in either section is touched.
+ *
+ * @param array<string,mixed> $sections
+ * @return array<string,array<string,mixed>>|null
+ */
+function pfb_dns_ddr_doh_443_migrate(array $sections): ?array
+{
+	$dns_path = PFB_SECTIONS['dns'];
+	$shared_path = PFB_SECTIONS['dns_shared'];
+	$blobs = [];
+	$was_on = FALSE;
+	$changed = FALSE;
+	foreach ([$dns_path, $shared_path] as $path) {
+		$blob = is_array($sections[$path] ?? NULL) ? $sections[$path] : [];
+		foreach (['pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6'] as $key) {
+			if (array_key_exists($key, $blob)) {
+				$was_on = $was_on || pfb_cfg_toggle_read($blob[$key]) === PfbToggle::On;
+				unset($blob[$key]);
+				$changed = TRUE;
+			}
+		}
+		$blobs[$path] = $blob;
+	}
+	if ($was_on && !array_key_exists('pfb_dns_ddr_doh_443_interfaces', $blobs[$dns_path])) {
+		$doh = $blobs[$dns_path]['pfb_dns_doh_interface'] ?? '';
+		$blobs[$dns_path]['pfb_dns_ddr_doh_443_interfaces'] = implode(',', array_diff(pfb_dns_proxy_tokens(is_string($doh) ? $doh : ''), ['lo0']));
+		file_notice('pfBlockerNG DNS', 'pfB-DNS: Advertise DoH on port 443 is now chosen per interface. The old option was on, so every DoH interface is selected; review the selection on the pfB-DNS page.',
+		    'pfBlockerNG', '/pfblockerng/pfblockerng_dns.php', 2);
+	}
+	return $changed ? $blobs : NULL;
 }
 
 /**

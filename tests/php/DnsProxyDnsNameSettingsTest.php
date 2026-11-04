@@ -53,7 +53,7 @@ final class DnsProxyDnsNameSettingsTest extends TestCase
 			'pfb_dns_doh_trusted' => '',
 			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_doq_interface' => ['lan'],
 			'pfb_dns_sslcertref' => '',
-			'pfb_dns_ddr' => '', 'pfb_dns_ddr_doh_443' => '',
+			'pfb_dns_ddr' => '',
 			self::NAME => '',
 		];
 	}

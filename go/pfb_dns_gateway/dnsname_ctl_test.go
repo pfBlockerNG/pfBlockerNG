@@ -142,7 +142,7 @@ func TestAnAddressTableLineIsTheFlagsSyntax(t *testing.T) {
 func TestABadLineLeavesTheAddressTableAsItWas(t *testing.T) {
 	good := tableLine("10.0.0.2=10.0.0.2")
 	rows := map[string]string{
-		"an unknown first word":                   "ddr-doh-443 10.0.0.2",
+		"an unknown first word":                   "ddr-doh-4436 10.0.0.2",
 		"an unknown first word after a good line": good + "\nsomething 10.0.0.9=10.0.0.9",
 		"a good line, then a bad value":           good + "\n" + tableLine("10.0.0.3="),
 		"a bad value, then a good line":           tableLine("10.0.0.3=") + "\n" + good,

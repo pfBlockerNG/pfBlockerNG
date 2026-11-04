@@ -15,7 +15,7 @@ final class SyncDnsRestoredBackupTest extends TestCase
 		'pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '8853',
 		'pfb_dns_doh' => 'on', 'pfb_dns_doh_port' => '8448',
 		'pfb_dns_doq' => 'on', 'pfb_dns_doq_port' => '8855',
-		'pfb_dns_ddr' => 'on', 'pfb_dns_ddr_doh_443' => 'on',
+		'pfb_dns_ddr' => 'on',
 	];
 
 	protected function setUp(): void
@@ -32,7 +32,7 @@ final class SyncDnsRestoredBackupTest extends TestCase
 		$this->assertSame('8448', PfbConfig::read('dns_shared/pfb_dns_doh_port'));
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_doq'));
 		$this->assertSame('8855', PfbConfig::read('dns_shared/pfb_dns_doq_port'));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns_shared/pfb_dns_ddr'));
 		$this->assertSame(PfbToggle::On, pfb_dns_proxy_setting('pfb_dns_dot'), 'restored DoT must stay on');
 		$this->assertSame('8853', pfb_dns_proxy_setting('pfb_dns_dot_port'));
 
