@@ -200,6 +200,9 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 		$not443 = ['dns_shared/pfb_dns_doh_port' => '4443'];
 		$v4Replaced = ['dns_shared/pfb_dns_doh_port' => '443', 'dns_shared/pfb_dns_doh_port6' => '4443'];
 		$v6Replaced = ['dns_shared/pfb_dns_doh_port' => '4443', 'dns_shared/pfb_dns_doh_port6' => '443'];
+		// both options are stored: an unstored IPv6 one is seeded from the IPv4 one (pfb_dns_proxy_seed_values())
+		$v4Advertised = ['dns_shared/pfb_dns_ddr_doh_443' => 'on', 'dns_shared/pfb_dns_ddr_doh_443_6' => ''];
+		$v6Advertised = ['dns_shared/pfb_dns_ddr_doh_443' => '', 'dns_shared/pfb_dns_ddr_doh_443_6' => 'on'];
 		return [
 			'IPv4 VIP, port 4443, no 443 advertisement' => [TRUE, FALSE, $not443, $lan, [...$lan, self::VIP4]],
 			'IPv6 VIP, port 4443, no 443 advertisement' => [FALSE, TRUE, $not443, $lan, [...$lan, self::VIP6]],
@@ -211,11 +214,11 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 			'IPv4 VIP, IPv6 on 443: IPv4 is added' => [TRUE, FALSE, $v6Replaced, $lan, [...$lan, self::VIP4]],
 			'IPv6 VIP, IPv4 on 443: IPv6 is added' => [FALSE, TRUE, $v4Replaced, $lan, [...$lan, self::VIP6]],
 			'IPv6 VIP only, DoH port 443: IPv6 has a VIP to stand in, IPv4 has none to' => [FALSE, TRUE, ['dns_shared/pfb_dns_doh_port' => '443'], $lan, [self::LAN4, self::VIP6]],
-			'IPv4 VIP, IPv4 443 advertisement on: the VIP stands in for the IPv4 address' => [TRUE, FALSE, $not443 + ['dns_shared/pfb_dns_ddr_doh_443' => 'on'], $lan, [self::VIP4, self::LAN6]],
-			'IPv6 VIP, IPv6 443 advertisement on: the VIP stands in for the IPv6 address' => [FALSE, TRUE, $not443 + ['dns_shared/pfb_dns_ddr_doh_443_6' => 'on'], $lan, [self::LAN4, self::VIP6]],
-			'both VIPs, only the IPv4 advertisement on' => [TRUE, TRUE, $not443 + ['dns_shared/pfb_dns_ddr_doh_443' => 'on'], $lan, [self::VIP4, self::LAN6, self::VIP6]],
-			'both VIPs, only the IPv6 advertisement on' => [TRUE, TRUE, $not443 + ['dns_shared/pfb_dns_ddr_doh_443_6' => 'on'], $lan, [self::LAN4, self::VIP6, self::VIP4]],
-			'IPv4 VIP, IPv6 advertisement on: IPv4 is added' => [TRUE, FALSE, $not443 + ['dns_shared/pfb_dns_ddr_doh_443_6' => 'on'], $lan, [...$lan, self::VIP4]],
+			'IPv4 VIP, IPv4 443 advertisement on: the VIP stands in for the IPv4 address' => [TRUE, FALSE, $not443 + $v4Advertised, $lan, [self::VIP4, self::LAN6]],
+			'IPv6 VIP, IPv6 443 advertisement on: the VIP stands in for the IPv6 address' => [FALSE, TRUE, $not443 + $v6Advertised, $lan, [self::LAN4, self::VIP6]],
+			'both VIPs, only the IPv4 advertisement on' => [TRUE, TRUE, $not443 + $v4Advertised, $lan, [self::VIP4, self::LAN6, self::VIP6]],
+			'both VIPs, only the IPv6 advertisement on' => [TRUE, TRUE, $not443 + $v6Advertised, $lan, [self::LAN4, self::VIP6, self::VIP4]],
+			'IPv4 VIP, IPv6 advertisement on: IPv4 is added' => [TRUE, FALSE, $not443 + $v6Advertised, $lan, [...$lan, self::VIP4]],
 		];
 	}
 

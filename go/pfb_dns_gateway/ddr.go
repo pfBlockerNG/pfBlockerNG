@@ -246,16 +246,30 @@ func soaRecord(owner dnsmessage.Name) dnsmessage.Resource {
 	}
 }
 
+// ddrNonPublicIPv6 are the IPv6 ranges of PHP's PFB_DNS_PROXY_NON_PUBLIC (pfblockerng.inc): the IPv6 addresses that are not public.
+// tests/fixtures/ddr_public_ipv6.json holds both languages to the same list (issue #3694).
+var ddrNonPublicIPv6 = []netip.Prefix{
+	netip.MustParsePrefix("::/128"), netip.MustParsePrefix("::1/128"), netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("fec0::/10"), netip.MustParsePrefix("2001:db8::/32"),
+}
+
+// ddrPublicIPv6 is whether a, unmapped, is an IPv6 address outside ddrNonPublicIPv6. A global prefix changes (SLAAC, DHCPv6,
+// a delegated prefix), so no certificate keeps an IP SAN for it, and a client whose lease or RA still names it would be handed
+// designations it cannot verify.
+func ddrPublicIPv6(a netip.Addr) bool {
+	return a.Is6() && !slices.ContainsFunc(ddrNonPublicIPv6, func(p netip.Prefix) bool { return p.Contains(a) })
+}
+
 // designate is the SVCB answer for owner on the plain address local, and the address record for the firewall's name that
 // goes with it. Both are empty while no certificate is loaded (every handshake would fail), when no transport listens
-// on local, and when local names no address a client queried: the zero Addr, or the wildcard that a datagram socket bound
-// to one reports as its own address.
+// on local, when local is a public IPv6 address, and when local names no address a client queried: the zero Addr, or the
+// wildcard that a datagram socket bound to one reports as its own address.
 func (d *ddr) designate(owner dnsmessage.Name, local netip.Addr) (answers, extra []dnsmessage.Resource) {
 	if d.certs == nil || d.certs.cert.Load() == nil {
 		return nil, nil
 	}
 	local = local.Unmap().WithZone("")
-	if !local.IsValid() || local.IsUnspecified() {
+	if !local.IsValid() || local.IsUnspecified() || ddrPublicIPv6(local) {
 		return nil, nil
 	}
 	a := d.addrs.Load()
