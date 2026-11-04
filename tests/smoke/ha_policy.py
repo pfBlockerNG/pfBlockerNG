@@ -270,7 +270,7 @@ UNSEEDED_LOCAL_KEYS = {
         h.dns_config_path(
             f"pfb_dns_{leaf}"
         ): "read only while pfB-DNS is on, which this harness leaves off: a seeded value changes nothing"
-        for leaf in ("ddr", "ddr_doh_443", "ddr_doh_443_6")
+        for leaf in ("ddr", "ddr_doh_443_interfaces")
     },
     **{
         h.dns_config_path(

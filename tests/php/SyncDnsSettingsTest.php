@@ -18,7 +18,7 @@ final class SyncDnsSettingsTest extends TestCase
 	private const VALUES = [
 		'pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_doq' => 'off',
 		'pfb_dns_dot_port' => '8853', 'pfb_dns_doh_port' => '443', 'pfb_dns_doq_port' => '8854',
-		'pfb_dns_doh_trusted' => '192.0.2.20/32', 'pfb_dns_ddr' => 'on', 'pfb_dns_ddr_doh_443' => '',
+		'pfb_dns_doh_trusted' => '192.0.2.20/32', 'pfb_dns_ddr' => 'on',
 	];
 
 	protected function setUp(): void

@@ -149,8 +149,8 @@ func TestConfigDDRFlagsAreParsedAndOffByDefault(t *testing.T) {
 		"off by default":                    {nil, "", false, false},
 		"--ddr and the name":                {[]string{"--dns-name", "fw.example.lan", "--ddr"}, "fw.example.lan", true, false},
 		"the name with a trailing dot":      {[]string{"--dns-name", "fw.example.lan.", "--ddr"}, "fw.example.lan.", true, false},
-		"--ddr, the name and --ddr-doh-443": {[]string{"--dns-name", "fw.example.lan", "--ddr", "--ddr-doh-443"}, "fw.example.lan", true, true},
-		"--ddr-doh-443 before --ddr":        {[]string{"--ddr-doh-443", "--ddr", "--dns-name", "fw.example.lan"}, "fw.example.lan", true, true},
+		"--ddr, the name and --ddr-doh-443": {[]string{"--dns-name", "fw.example.lan", "--ddr", "--ddr-doh-443", "192.0.2.1"}, "fw.example.lan", true, true},
+		"--ddr-doh-443 before --ddr":        {[]string{"--ddr-doh-443", "192.0.2.1", "--ddr", "--dns-name", "fw.example.lan"}, "fw.example.lan", true, true},
 		"the name alone is not DDR":         {[]string{"--dns-name", "fw.example.lan"}, "fw.example.lan", false, false},
 	}
 	for name, c := range cases {
@@ -159,8 +159,8 @@ func TestConfigDDRFlagsAreParsedAndOffByDefault(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.dnsName != c.name || cfg.ddr != c.ddr || cfg.ddrDoH443 != c.doh443 {
-				t.Fatalf("got dnsName=%q ddr=%v doh443=%v, want dnsName=%q ddr=%v doh443=%v", cfg.dnsName, cfg.ddr, cfg.ddrDoH443, c.name, c.ddr, c.doh443)
+			if got := len(cfg.ddrDoH443) > 0; cfg.dnsName != c.name || cfg.ddr != c.ddr || got != c.doh443 {
+				t.Fatalf("got dnsName=%q ddr=%v ddrDoH443=%q, want dnsName=%q ddr=%v with --ddr-doh-443 %v", cfg.dnsName, cfg.ddr, cfg.ddrDoH443, c.name, c.ddr, c.doh443)
 			}
 		})
 	}
@@ -171,9 +171,8 @@ func TestConfigRejectsBadDDRUsage(t *testing.T) {
 		flags []string
 		want  string // the flag the error names
 	}{
-		"--ddr-doh-443 without --ddr":      {[]string{"--ddr-doh-443"}, "--ddr-doh-443"},
-		"--ddr-doh-443 with an empty name": {[]string{"--dns-name", "", "--ddr-doh-443"}, "--ddr-doh-443"},
-		"--ddr-doh-4436 without --ddr":     {[]string{"--ddr-doh-4436"}, "--ddr-doh-4436"},
+		"--ddr-doh-443 without --ddr":      {[]string{"--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443"},
+		"--ddr-doh-443 with an empty name": {[]string{"--dns-name", "", "--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443"},
 		"--ddr without a name":             {[]string{"--ddr"}, "--ddr needs --dns-name"},
 		"name with an empty label":         {[]string{"--dns-name", "fw..lan", "--ddr"}, `--dns-name "`},
 		"name with a leading dot":          {[]string{"--dns-name", ".fw.lan", "--ddr"}, `--dns-name "`},

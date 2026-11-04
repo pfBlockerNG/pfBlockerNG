@@ -16,10 +16,12 @@ final class PfbDnsPageWiringTest extends TestCase
 		'pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_dot_interface',
 		'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_interface', 'pfb_dns_doh_trusted',
 		'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doq_interface',
+		'pfb_dns_ddr_doh_443_interfaces',
 	];
 
-	/** The DDR controls in the order the page shows them, after the DoQ section (issue #3583). */
-	private const DDR_FIELDS = ['pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6'];
+	/** The DDR toggle, after the DoQ section (issue #3583); its DoH 443 selection follows it (issue #3694). */
+	private const DDR_FIELDS = ['pfb_dns_ddr'];
+	private const DOH_443_FIELD = 'pfb_dns_ddr_doh_443_interfaces';
 
 	/** The ones pfB-DNS seeds once from the Resolver: the page shows the pending seed value through pfb_dns_proxy_setting() (issue #3538). */
 	private const SEEDED_FIELDS = [
@@ -149,60 +151,6 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 	}
 
-	/** Does the restore-on-error block, right after the loop that brings back the posted scalar fields, show the STORED "DoH on port 443" toggle while the page disables that control, once? */
-	private static function restoresLockedDohOn443FromStored(string $page): bool
-	{
-		return preg_match_all('/\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';\s*\}\s*if \(pfb_dns_proxy_ddr_doh_443_locked\(\)\) \{\s*\$pconfig\[\'pfb_dns_ddr_doh_443\'\] = PfbConfig::read\(\'dns_shared\/pfb_dns_ddr_doh_443\'\);[^\n]*\s*\}/', $page) === 1;
-	}
-
-	public function testTheRestoreCheckSeesAnUnguardedANegatedAPostedAWrongKeyAndAnEarlierRestore(): void
-	{
-		$loop = "\$pconfig[\$pfb_dns_field] = \$_POST[\$pfb_dns_field] ?? '';\n}\n";
-		$restore = "if (pfb_dns_proxy_ddr_doh_443_locked()) {\n\t\$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');\t// x\n}\n";
-
-		$this->assertTrue(self::restoresLockedDohOn443FromStored($loop . $restore), 'the stored value restored under the lock, after the loop');
-		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop), 'never restored');
-		$this->assertFalse(self::restoresLockedDohOn443FromStored($restore . $loop), 'restored before the loop, which then overwrites it with the empty post');
-		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('if (pfb_dns_proxy_ddr_doh_443_locked())', 'if (!pfb_dns_proxy_ddr_doh_443_locked())', $restore)), 'negated lock');
-		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('PfbConfig::read(\'dns_shared/pfb_dns_ddr_doh_443\')', '$_POST[\'pfb_dns_ddr_doh_443\']', $restore)), 'the posted value');
-		$this->assertFalse(self::restoresLockedDohOn443FromStored($loop . str_replace('dns_shared/pfb_dns_ddr_doh_443', 'dns_shared/pfb_dns_ddr', $restore)), 'the other toggle');
-	}
-
-	public function testAFailedSaveShowsTheStoredDohOn443ToggleWhileThePageDisablesIt(): void
-	{
-		$this->assertTrue(
-			self::restoresLockedDohOn443FromStored(self::src('www/pfblockerng/pfblockerng_dns.php')),
-			'a disabled checkbox posts nothing, so the restore must read dns_shared/pfb_dns_ddr_doh_443 from the store while pfb_dns_proxy_ddr_doh_443_locked(), as the save keeps it'
-		);
-	}
-
-	/** Is the 443 checkbox disabled exactly once, and only under the helper that says the stored DoH port is 443? */
-	private static function disabledOnlyForDohPort443(string $page): bool
-	{
-		$guarded = preg_match_all('/if \(pfb_dns_proxy_ddr_doh_443_locked\(\)\) \{\s*\$pfb_ddr_doh_443->setAttribute\(\'disabled\', \'disabled\'\);\s*\}/', $page);
-		return $guarded === 1 && substr_count($page, "\$pfb_ddr_doh_443->setAttribute('disabled'") === 1;
-	}
-
-	public function testTheDisabledCheckSeesAnUnguardedANegatedAnInlineAndADoubleDisable(): void
-	{
-		$guard = "if (pfb_dns_proxy_ddr_doh_443_locked()) {\n\t\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n}\n";
-
-		$this->assertTrue(self::disabledOnlyForDohPort443($guard), 'the guarded disable');
-		$this->assertFalse(self::disabledOnlyForDohPort443("\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'unguarded');
-		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace('if (pfb_dns_proxy_ddr_doh_443_locked())', 'if (!pfb_dns_proxy_ddr_doh_443_locked())', $guard)), 'negated guard');
-		$this->assertFalse(self::disabledOnlyForDohPort443(str_replace('pfb_dns_proxy_ddr_doh_443_locked()', "pfb_dns_proxy_listener_port(PfbConfig::read('dns_shared/pfb_dns_doh_port')) === '443'", $guard)), 'an inline condition the save does not share');
-		$this->assertFalse(self::disabledOnlyForDohPort443($guard . "\$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');\n"), 'disabled a second time');
-		$this->assertFalse(self::disabledOnlyForDohPort443(''), 'never disabled');
-	}
-
-	public function testThePageDisablesTheDohOn443ToggleOnlyWhileTheStoredDohPortIs443(): void
-	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
-
-		$this->assertTrue(self::disabledOnlyForDohPort443($page), 'the 443 checkbox is disabled under the stored DoH port 443 and under nothing else');
-		$this->assertStringContainsString("\$section->addInput(\$pfb_ddr_doh_443)", $page, 'and the disabled-or-not checkbox is the one added to the section');
-	}
-
 	/** Does the loop that prints the DDR certificate warnings come right after the pending-changes box, one 'warning' box per text, printed once? */
 	private static function warningsFollowThePendingChangesBox(string $page): bool
 	{
@@ -248,13 +196,38 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertFalse(self::checkboxNamedBy("{$head}->setHelp('x');\n\$s->addInput(new Form_Checkbox('other', 'o', 'o', TRUE, 'on')){$label};\n", 'pfb_dns_ddr', 'DDR'), 'the label on the next control');
 	}
 
-	public function testTheTwoDdrCheckboxesHaveAnAccessibleNameBecauseTheirGroupLabelHasNoFor(): void
+	public function testTheDdrCheckboxHasAnAccessibleNameBecauseItsGroupLabelHasNoFor(): void
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
 
 		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr', 'DDR'), "the pfb_dns_ddr checkbox has aria-label gettext('DDR')");
-		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr_doh_443', 'IPv4 DoH on port 443'));
-		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr_doh_443_6', 'IPv6 DoH on port 443'));
+	}
+
+	public function testTheDohOn443SelectIsAMultipleSelectOfTheOptionsFunctionNamedForAssistiveTechnologyAndFollowsTheDdrCheckbox(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		// Given the select that replaced the two per-family checkboxes (issue #3694): its options are the options function's, on the DoH list of the form
+		$this->assertSame(1, preg_match('/\$options_ddr_doh_443 = pfb_dns_proxy_ddr_doh_443_options\(\$pconfig\[\'pfb_dns_doh_interface\'\] \?\? array\(\)\);/', $page), 'the options come from the options function, on the DoH list as posted');
+		$this->assertSame(1, preg_match('/new Form_Select\(\s*\'pfb_dns_ddr_doh_443_interfaces\',\s*gettext\(\'Advertise DoH on port 443\'\),\s*\$pconfig\[\'pfb_dns_ddr_doh_443_interfaces\'\] \?\? \[\],\s*\$options_ddr_doh_443,\s*TRUE\s*\)\)([^;]*);/', $page, $select, PREG_OFFSET_CAPTURE), 'a multiple Form_Select of those options');
+		$this->assertStringContainsString("setAttribute('aria-label', gettext('Advertise DoH on port 443'))", $select[1][0] ?? '', 'named for assistive technology, as the interface lists are');
+		$this->assertSame(1, preg_match('/new Form_Checkbox\(\s*\'pfb_dns_ddr\',/', $page, $ddr, PREG_OFFSET_CAPTURE), 'the DDR checkbox');
+		$this->assertGreaterThan($ddr[0][1], $select[0][1] ?? 0, 'the select is below the DDR checkbox');
+
+		// And the two checkboxes and the lock that disabled one of them are gone
+		foreach (['pfb_dns_ddr_doh_443_6', "'pfb_dns_ddr_doh_443'", 'pfb_dns_proxy_ddr_doh_443_locked', 'Form_Checkbox(\n	\'pfb_dns_ddr_doh'] as $gone) {
+			$this->assertStringNotContainsString($gone, $page, "the page no longer carries {$gone}");
+		}
+	}
+
+	public function testAFailedSaveBringsBackTheSubmittedDohOn443SelectionLikeTheInterfaceLists(): void
+	{
+		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+
+		$found = preg_match('/foreach \(array\(([^)]*)\) as \$pfb_dns_field\) \{\s*\$pconfig\[\$pfb_dns_field\] = array_filter\(\(array\) \(\$_POST\[\$pfb_dns_field\] \?\? array\(\)\), \'is_string\'\);/', $page, $restore);
+
+		$this->assertSame(1, $found, 'the page restores its interface lists on an input error');
+		$this->assertStringContainsString("'" . self::DOH_443_FIELD . "'", $restore[1] ?? '', 'and the DoH 443 selection with them');
 	}
 
 	/**
@@ -439,7 +412,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testNoSourceStillNamesAnOldDohOrDoqSettingKey(): void
 	{
-		// The feature never shipped: the old names are gone from every reader, with no alias and no migration
+		// The feature never shipped: the old names are gone from every reader, with no alias and no migration (the DoH port 443 test, issue #3694, is a function)
 		$root = dirname(__DIR__, 2) . '/src';
 		$found = [];
 		$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
@@ -447,7 +420,7 @@ final class PfbDnsPageWiringTest extends TestCase
 			if (!$file->isFile() || !preg_match('/\.(php|inc|xml|sh)$/', $file->getFilename())) {
 				continue;
 			}
-			if (preg_match('/dnsbl\/pfb_dns_proxy_do[hq]|pfb_dns_proxy_do[hq]/', (string) file_get_contents($file->getPathname())) === 1) {
+			if (preg_match('/dnsbl\/pfb_dns_proxy_do[hq]|pfb_dns_proxy_do[hq](?!_port_443\()/', (string) file_get_contents($file->getPathname())) === 1) {
 				$found[] = substr($file->getPathname(), strlen($root) + 1);
 			}
 		}

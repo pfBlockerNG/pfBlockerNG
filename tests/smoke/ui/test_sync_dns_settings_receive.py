@@ -32,7 +32,6 @@ SHARED = {
     "pfb_dns_doq_port": "8854",
     "pfb_dns_doh_trusted": "192.0.2.20/32",
     "pfb_dns_ddr": "on",
-    "pfb_dns_ddr_doh_443": "",
 }
 SAVED_SNAPSHOT = base64.b64encode(
     json.dumps(
@@ -54,7 +53,7 @@ def _php_value(value: object) -> str:
 
 @pytest.mark.parametrize("transport", ["manual", "auto"])
 @pytest.mark.parametrize("toggle", ["", "on"], ids=["disabled", "enabled"])
-def test_real_legacy_receive_transfers_nine_shared_fields_and_keeps_seven_local_fields(
+def test_real_legacy_receive_transfers_eight_shared_fields_and_keeps_seven_local_fields(
     deployed_vm: SmokeVM,
     admin_credentials: tuple[str, str],
     webgui_protocol: str,

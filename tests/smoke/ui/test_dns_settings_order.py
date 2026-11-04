@@ -56,7 +56,5 @@ def test_dns_general_owns_reply_logging_and_proxy_keeps_transport_order(smoke_vm
         "pfb_dns_doh",
         "pfb_dns_doq",
         "pfb_dns_ddr",
-        "pfb_dns_ddr_doh_443",
-        "pfb_dns_ddr_doh_443_6",
     ]
     assert controls.names == wanted, f"expected settings checkboxes {wanted}, got {controls.names}"

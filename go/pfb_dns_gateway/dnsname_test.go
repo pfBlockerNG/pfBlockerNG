@@ -289,7 +289,7 @@ func TestWithoutANameTableEntryTheDeciderGetsTheNameQuery(t *testing.T) {
 
 func newNameDDRRig(t *testing.T, answers ...string) *ddrRig {
 	t.Helper()
-	return newDDRRigNames(t, ddrTarget, false, mustNames(t, ddrTarget, answers...))
+	return newDDRRigNames(t, ddrTarget, mustNames(t, ddrTarget, answers...))
 }
 
 // asks sends one query as an allowed client over each transport the DDR rig serves and returns the reply.

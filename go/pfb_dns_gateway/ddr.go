@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -30,51 +31,88 @@ var (
 	ddrNobody    = dnsmessage.MustNewName("nobody.invalid.")
 )
 
-// ddr is what answers DDR queries; built once at start. Only the listener addresses change afterwards (change).
+// ddr is what answers DDR queries; built once at start. Only the listener addresses (change) and the set of addresses DoH is
+// advertised on at 443 (setDoH443) change afterwards.
 type ddr struct {
 	target  dnsmessage.Name // the DNS name (--dns-name), which every record names
-	doh443  bool            // --ddr-doh-443: the DoH record has no port, whatever port DoH listens on
-	doh4436 bool            // the separate IPv6 advertisement override
 	certs   *certStore      // nil when no TLS transport is configured
+	port443 uint16          // the port of a DoH listener that is advertised as 443: 443, but for a test
 	addrs   atomic.Pointer[ddrAddrs]
+	doh443  atomic.Pointer[map[netip.Addr]struct{}] // --ddr-doh-443 and the address table: DoH is advertised without a port on these
 }
 
 // ddrAddrs are the listeners DDR designates: unmapped, no zone. A stored value is never edited, so a query that loaded it
 // reads one consistent set.
 type ddrAddrs struct{ dot, doh, doq []netip.AddrPort }
 
-// newDDR builds the answerer from the flags and the listeners that are bound; dot, doh and doq are their addresses.
-func newDDR(target string, doh443 bool, certs *certStore, dot, doh, doq []netip.AddrPort) (*ddr, error) {
+// newDDR builds the answerer from the flags and the listeners that are bound; dot, doh and doq are their addresses. The set of
+// addresses advertised on 443 starts empty.
+func newDDR(target string, certs *certStore, dot, doh, doq []netip.AddrPort) (*ddr, error) {
 	name, err := dnsName(target)
 	if err != nil {
 		return nil, err
 	}
-	d := &ddr{target: name, doh443: doh443, certs: certs}
+	d := &ddr{target: name, certs: certs, port443: ddrDoHPort}
 	d.addrs.Store(&ddrAddrs{dot: ddrBound(dot), doh: ddrBound(doh), doq: ddrBound(doq)})
+	d.setDoH443(nil)
 	return d, nil
 }
 
+// setDoH443 replaces the addresses DDR advertises DoH on without a port, and returns the set it replaced. Its writers are
+// start() and the control socket's one goroutine, so the replaced set is the one the caller's change is measured against.
+func (d *ddr) setDoH443(set map[netip.Addr]struct{}) map[netip.Addr]struct{} {
+	if set == nil {
+		set = map[netip.Addr]struct{}{}
+	}
+	old := d.doh443.Swap(&set)
+	if old == nil {
+		return nil
+	}
+	return *old
+}
+
 // ddrOnListeners is newDDR over the TLS listeners start() bound (t is nil without any), so a port the kernel picked for a
-// port-0 flag is the one a client is told.
+// port-0 flag is the one a client is told, with the --ddr-doh-443 addresses.
 func ddrOnListeners(cfg config, t *tlsListeners) (*ddr, error) {
-	if t == nil {
-		return newDDR(cfg.dnsName, cfg.ddrDoH443, nil, nil, nil, nil)
-	}
+	var certs *certStore
 	var dot, doh, doq []netip.AddrPort
-	for _, ln := range t.dot {
-		dot = append(dot, ln.Addr().(*net.TCPAddr).AddrPort())
+	if t != nil {
+		certs = t.certs
+		for _, ln := range t.dot {
+			dot = append(dot, ln.Addr().(*net.TCPAddr).AddrPort())
+		}
+		for _, ln := range t.doh {
+			doh = append(doh, ln.Addr().(*net.TCPAddr).AddrPort())
+		}
+		for _, c := range t.doq {
+			doq = append(doq, c.LocalAddr().(*net.UDPAddr).AddrPort())
+		}
 	}
-	for _, ln := range t.doh {
-		doh = append(doh, ln.Addr().(*net.TCPAddr).AddrPort())
+	d, err := newDDR(cfg.dnsName, certs, dot, doh, doq)
+	if err != nil {
+		return nil, err
 	}
-	for _, c := range t.doq {
-		doq = append(doq, c.LocalAddr().(*net.UDPAddr).AddrPort())
+	set, err := doh443Set(cfg.ddrDoH443)
+	if err != nil {
+		return nil, err
 	}
-	d, err := newDDR(cfg.dnsName, cfg.ddrDoH443, t.certs, dot, doh, doq)
-	if d != nil {
-		d.doh4436 = cfg.ddrDoH4436
+	d.setDoH443(set)
+	d.port443 = uint16(cfg.port443())
+	return d, nil
+}
+
+// doh443Set is the set --ddr-doh-443 values make: IP addresses with no zone, IPv4-mapped ones unmapped. The first bad value is
+// the error.
+func doh443Set(values []string) (map[netip.Addr]struct{}, error) {
+	set := make(map[netip.Addr]struct{}, len(values))
+	for _, v := range values {
+		ip, err := parseNameIP(v)
+		if err != nil {
+			return nil, fmt.Errorf("--ddr-doh-443 %.64q: %w", v, err)
+		}
+		set[ip] = struct{}{}
 	}
-	return d, err
+	return set, nil
 }
 
 func ddrBound(in []netip.AddrPort) []netip.AddrPort {
@@ -240,6 +278,27 @@ func soaRecord(owner dnsmessage.Name) dnsmessage.Resource {
 	}
 }
 
+// dohAdvertised is the port DDR advertises DoH on at local, and whether DoH listens there. It is 443 when a listener on local is
+// on the 443 port, or local is in the set of addresses advertised on 443 (clients reach those through something on 443): the
+// record then has no port. Otherwise it is the port of the DoH listener on local. Several listeners on local are one record.
+func (d *ddr) dohAdvertised(on []netip.AddrPort, local netip.Addr) (port uint16, listening bool) {
+	for _, ap := range on {
+		if ap.Addr() != local {
+			continue
+		}
+		if ap.Port() == d.port443 {
+			return ddrDoHPort, true
+		}
+		if !listening {
+			port, listening = ap.Port(), true
+		}
+	}
+	if _, advertised := (*d.doh443.Load())[local]; listening && advertised {
+		return ddrDoHPort, true
+	}
+	return port, listening
+}
+
 // designate is the SVCB answer for owner on the plain address local, and the address record for the firewall's name that
 // goes with it. Both are empty while no certificate is loaded (every handshake would fail), when no transport listens
 // on local, and when local names no address a client queried: the zero Addr, or the wildcard that a datagram socket bound
@@ -253,10 +312,7 @@ func (d *ddr) designate(owner dnsmessage.Name, local netip.Addr) (answers, extra
 		return nil, nil
 	}
 	a := d.addrs.Load()
-	if port, ok := ddrListening(a.doh, local); ok {
-		if (d.doh443 && local.Is4()) || (d.doh4436 && local.Is6()) {
-			port = ddrDoHPort
-		}
+	if port, ok := d.dohAdvertised(a.doh, local); ok {
 		answers = append(answers, ddrRecord(owner, d.target, 1, "h2", port, ddrDoHPort, local, dohPath))
 	}
 	if port, ok := ddrListening(a.dot, local); ok {

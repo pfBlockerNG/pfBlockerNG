@@ -29,8 +29,8 @@ func TestConfigDNSNameFlagsAreParsedAndOffByDefault(t *testing.T) {
 		"the longest name (253 characters)":  {[]string{"--dns-name", longest}, longest, false, false, nil},
 		"--ddr with the name":                {[]string{"--dns-name", "fw.example.lan", "--ddr"}, "fw.example.lan", true, false, nil},
 		"--ddr before the name":              {[]string{"--ddr", "--dns-name", "fw.example.lan"}, "fw.example.lan", true, false, nil},
-		"--ddr and --ddr-doh-443":            {[]string{"--dns-name", "fw.example.lan", "--ddr", "--ddr-doh-443"}, "fw.example.lan", true, true, nil},
-		"--ddr-doh-443 before --ddr":         {[]string{"--dns-name", "fw.example.lan", "--ddr-doh-443", "--ddr"}, "fw.example.lan", true, true, nil},
+		"--ddr and --ddr-doh-443":            {[]string{"--dns-name", "fw.example.lan", "--ddr", "--ddr-doh-443", "192.0.2.1"}, "fw.example.lan", true, true, nil},
+		"--ddr-doh-443 before --ddr":         {[]string{"--dns-name", "fw.example.lan", "--ddr-doh-443", "192.0.2.1", "--ddr"}, "fw.example.lan", true, true, nil},
 		"answers, each flag its own value":   {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", "10.0.0.1=10.0.0.1,2001:db8::1", "--dns-name-answer", "10.0.0.53=10.0.0.53"}, "fw.example.lan", false, false, []string{"10.0.0.1=10.0.0.1,2001:db8::1", "10.0.0.53=10.0.0.53"}},
 	}
 	for label, c := range cases {
@@ -39,8 +39,8 @@ func TestConfigDNSNameFlagsAreParsedAndOffByDefault(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.dnsName != c.name || cfg.ddr != c.ddr || cfg.ddrDoH443 != c.doh443 || !slices.Equal(cfg.nameAnswers, c.answers) {
-				t.Fatalf("got dnsName=%q ddr=%v doh443=%v answers=%q, want %q %v %v %q", cfg.dnsName, cfg.ddr, cfg.ddrDoH443, cfg.nameAnswers, c.name, c.ddr, c.doh443, c.answers)
+			if has443 := len(cfg.ddrDoH443) > 0; cfg.dnsName != c.name || cfg.ddr != c.ddr || has443 != c.doh443 || !slices.Equal(cfg.nameAnswers, c.answers) {
+				t.Fatalf("got dnsName=%q ddr=%v ddrDoH443=%q answers=%q, want %q %v with --ddr-doh-443 %v and %q", cfg.dnsName, cfg.ddr, cfg.ddrDoH443, cfg.nameAnswers, c.name, c.ddr, c.doh443, c.answers)
 			}
 		})
 	}

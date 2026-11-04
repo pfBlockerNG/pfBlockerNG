@@ -85,7 +85,7 @@ final class DnsProxyDnsNameWarningTest extends TestCase
 		$GLOBALS['pfb_test_interfaces'] = ['wan' => ''];
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost', NULL, $san))];
 		$this->store($settings + [
-			'pfb_dns_interface' => 'wan', 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_ddr' => '', 'pfb_dns_ddr_doh_443' => '', 'pfb_dns_name' => '',
+			'pfb_dns_interface' => 'wan', 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_ddr' => '', 'pfb_dns_name' => '',
 			'pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '853', 'pfb_dns_dot_interface' => 'wan',
 			'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '8443', 'pfb_dns_doh_interface' => 'wan',
 			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '8853', 'pfb_dns_doq_interface' => 'wan',

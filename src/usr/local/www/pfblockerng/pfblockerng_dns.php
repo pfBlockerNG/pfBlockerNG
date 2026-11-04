@@ -62,10 +62,9 @@ $pconfig['pfb_dns_doq']			= PfbConfig::read('dns_shared/pfb_dns_doq');
 $pconfig['pfb_dns_doq_port']		= PfbConfig::read('dns_shared/pfb_dns_doq_port');
 $pconfig['pfb_dns_doq_port6']		= PfbConfig::read('dns_shared/pfb_dns_doq_port6');
 $pconfig['pfb_dns_doq_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doq_interface'));
-// issue #3583: DDR (RFC 9462) answers, and the option that leaves the port out of the DoH record they carry
+// issue #3583: DDR (RFC 9462) answers
 $pconfig['pfb_dns_ddr']			= PfbConfig::read('dns_shared/pfb_dns_ddr');
-$pconfig['pfb_dns_ddr_doh_443']		= PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');
-$pconfig['pfb_dns_ddr_doh_443_6']		= PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443_6');
+$pconfig['pfb_dns_ddr_doh_443_interfaces'] = pfb_dns_proxy_tokens((string) PfbConfig::read('dns/pfb_dns_ddr_doh_443_interfaces'));	// issue #3694: where DDR advertises DoH on port 443
 // The Resolver's Network Interfaces (virtual IPs included) plus every stored token no longer offered (issue #3557)
 $options_dns_interface = pfb_dns_proxy_interface_options();
 // The certificates the Resolver offers: the same call, so the same list and descriptions
@@ -124,16 +123,10 @@ if ($_POST) {
 		}
 
 		$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
-		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_ddr', 'pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6', 'pfb_dns_sslcertref', 'pfb_dns_name') as $pfb_dns_field) {
+		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_ddr', 'pfb_dns_sslcertref', 'pfb_dns_name') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
 		}
-		if (pfb_dns_proxy_ddr_doh_443_locked()) {
-			$pconfig['pfb_dns_ddr_doh_443'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443');	// a disabled control posts nothing: the form shows the stored value, as the save keeps it
-		}
-		if (pfb_dns_proxy_ddr_doh_443_locked(TRUE)) {
-			$pconfig['pfb_dns_ddr_doh_443_6'] = PfbConfig::read('dns_shared/pfb_dns_ddr_doh_443_6');
-		}
-		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface') as $pfb_dns_field) {
+		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface', 'pfb_dns_ddr_doh_443_interfaces') as $pfb_dns_field) {
 			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
 		}
 		if (!is_string($pconfig['pfb_dns_name'])) {
@@ -403,36 +396,23 @@ $section->addInput(new Form_Checkbox(
 		. 'When disabled, the DNS Resolver answers these names.'
 		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
 
-// DoH already listens on 443, so there is no port to leave out
-$pfb_ddr_doh_443 = (new Form_Checkbox(
-	'pfb_dns_ddr_doh_443',
-	gettext('IPv4 DoH on port 443'),
-	'Advertise IPv4 DoH on port 443',
-	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr_doh_443'] ?? NULL) === PfbToggle::On,
-	'on'
-))->setAttribute('aria-label', gettext('IPv4 DoH on port 443'));
-if (pfb_dns_proxy_ddr_doh_443_locked()) {
-	$pfb_ddr_doh_443->setAttribute('disabled', 'disabled');
-}
-$section->addInput($pfb_ddr_doh_443)->setHelp('Some clients might not accept a port for the DoH server provided over DDR. '
-		. 'This option removes the port, so clients reach DoH on port 443. '
-		. 'If DoH is not already listening on port 443, it will no longer be reachable. '
-		. 'It is intended for users who, for example, serve multiple sites over HTTPS through a reverse proxy, '
-		. 'and who are responsible for configuring that reverse proxy correctly.'
-		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
-
-$pfb_ddr_doh_443_6 = (new Form_Checkbox(
-	'pfb_dns_ddr_doh_443_6',
-	gettext('IPv6 DoH on port 443'),
-	'Advertise IPv6 DoH on port 443',
-	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr_doh_443_6'] ?? NULL) === PfbToggle::On,
-	'on'
-))->setAttribute('aria-label', gettext('IPv6 DoH on port 443'));
-if (pfb_dns_proxy_ddr_doh_443_locked(TRUE)) {
-	$pfb_ddr_doh_443_6->setAttribute('disabled', 'disabled');
-}
-$section->addInput($pfb_ddr_doh_443_6)->setHelp(gettext('Advertise IPv6 DoH on port 443 instead of the configured IPv6 port. DoH must be reachable on port 443.')
-		. '<div class="infoblock">' . gettext('Default: <strong>Disabled</strong>') . '</div>');
+// issue #3694: where DDR advertises DoH on port 443, chosen among the DoH interfaces of the form (and the Resolver VIPs the operator chose)
+$options_ddr_doh_443 = pfb_dns_proxy_ddr_doh_443_options($pconfig['pfb_dns_doh_interface'] ?? array());
+$section->addInput(new Form_Select(
+	'pfb_dns_ddr_doh_443_interfaces',
+	gettext('Advertise DoH on port 443'),
+	$pconfig['pfb_dns_ddr_doh_443_interfaces'] ?? [],
+	$options_ddr_doh_443,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', count($options_ddr_doh_443) ?: '1')
+  ->setAttribute('aria-label', gettext('Advertise DoH on port 443'))
+  ->setHelp('On the addresses of each selected entry DDR advertises DoH on port 443, with no port, for an interface where a reverse proxy answers DoH on 443. '
+		. 'pfB-DNS keeps listening on its DoH port there, and the proxy must really serve DoH on 443. '
+		. 'Other addresses advertise the configured DoH port. '
+		. 'An automatically created Resolver VIP is not offered: it serves DoH on port 443 itself, so DDR advertises 443 there. '
+		. 'Some clients might not accept a port for the DoH server provided over DDR.'
+		. '<div class="infoblock">Default: <strong>None</strong></div>');
 $form->add($section);
 
 

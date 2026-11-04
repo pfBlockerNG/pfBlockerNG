@@ -20,6 +20,11 @@ Amended 2026-11-04 (owner decision, #3694): DDR's target name is no longer the f
 `AAAA` for exactly that name, from the address the query arrived on, and the page warns when the certificate has no DNS SAN for
 it; see "DNS Name (#3694)". Where this text still says "the firewall FQDN" for the DDR record it means that name.
 
+Amended 2026-11-04 (owner decision, #3694): "Advertise DoH on port 443" is one multi-select of interfaces (`dns/pfb_dns_ddr_doh_443_interfaces`)
+instead of the two per-family toggles `dns/pfb_dns_ddr_doh_443` and `dns/pfb_dns_ddr_doh_443_6`, and an automatically created Resolver VIP
+serves DoH on port 443 itself; see "DoH on port 443 (candidate 4)". Where this text still says "the toggle" or "the option" for it, it
+means the selection.
+
 ## Fixed constraints
 
 - ISC dhcpd is out of scope; only the Kea DHCP backend is considered.
@@ -201,7 +206,7 @@ radvd 2.20 (S1, S1s), P1 has `radvd-2.20`, and radvd's `DNR` block exists only o
 | 3 | DNR in Router Advertisements | Not applicable now | No released radvd supports DNR; pfSense ships radvd 2.20 and generates `radvd.conf` with no custom field (Q7). Revisit only if pfSense ships a DNR-capable radvd and exposes it. |
 | 4 | DDR toggle on the pfB-DNS page | Toggle | The gateway can answer per queried address and the answer disappears with pfB-DNS (Q3). It can help only verified-discovery clients (Apple; Windows with DDR on) that query a public listener address (candidate 7); for private addresses no current client uses it (Q2). Whether Apple and Windows accept DoH on a port other than 443 is [UNVERIFIED]. An optional "Advertise DoH on port 443" toggle omits the DoH `port` for clients that reject one, for DoH behind a reverse proxy on 443. |
 | 5 | Opportunistic DoT | Documentation | Works with no pfB-DNS change: Android's default "Automatic" mode upgrades to DoT if the network's DNS server supports it ([Android, 2018](https://android-developers.googleblog.com/2018/04/dns-over-tls-support-in-android-p.html)), connects to port 853 of each DHCP- or RA-provided server ([DnsTlsServer.h:39](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/DnsTlsServer.h#39), [PrivateDnsCommon.h:22](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/PrivateDnsCommon.h#22)) and verifies no certificate when no hostname is set ([DnsTlsSocket.cpp:238-251](https://android.googlesource.com/platform/packages/modules/DnsResolver/+/4d70e9efa5ae4b5eae682e5267fa09a2d694d23e/DnsTlsSocket.cpp#238)). Verified from source, not on a device [UNVERIFIED on a device]. |
-| 6 | Certificate guidance and warning | Documentation and page warning for public addresses | Verified DDR needs a trusted chain and the queried address as an `iPAddress` SAN (RFC 9462 §4.2); DNR needs the ADN as a name in the certificate (RFC 9463 §3.3). The page warns, only with the DDR toggle on and only for public listener addresses missing from the certificate's `iPAddress` SANs, and not for the DoH listener when "Advertise DoH on port 443" is on and DoH does not listen on 443 itself (clients then reach the reverse proxy's certificate). Loopback, private, CGNAT, link-local, ULA and reserved addresses never warn (RFC 9462 §4.3 names the private ones; the rest are not globally routable). It says nothing about CA trust, and nothing about DNR ADNs, which pfB-DNS cannot see in the user's Kea JSON. See "Certificate warning". |
+| 6 | Certificate guidance and warning | Documentation and page warning for public addresses | Verified DDR needs a trusted chain and the queried address as an `iPAddress` SAN (RFC 9462 §4.2); DNR needs the ADN as a name in the certificate (RFC 9463 §3.3). The page warns, only with the DDR toggle on and only for public listener addresses missing from the certificate's `iPAddress` SANs, and not for the DoH listener on an address advertised under "Advertise DoH on port 443" while DoH does not listen on 443 there itself (clients then reach the reverse proxy's certificate). Loopback, private, CGNAT, link-local, ULA and reserved addresses never warn (RFC 9462 §4.3 names the private ones; the rest are not globally routable). It says nothing about CA trust, and nothing about DNR ADNs, which pfB-DNS cannot see in the user's Kea JSON. See "Certificate warning". |
 | 7 | Public resolver address | Documentation | The only route to verified DDR that Apple accepts (Q2). An IP certificate from Let's Encrypt needs ACME package 1.3.2 (CE 2.8.1 baseline, Plus 26.07; Q1). With a reverse proxy such as HAProxy on 443, the certificate it serves must carry the queried resolver address as an `iPAddress` SAN ("DoH on port 443"). Costs and failure cases stay as listed in #3554. |
 
 ### DDR answer (candidate 4)
@@ -221,7 +226,7 @@ radvd 2.20 (S1, S1s), P1 has `radvd-2.20`, and radvd's `DNR` block exists only o
   transport that listens on L and has a certificate loaded (a listener with no certificate fails every handshake,
   [dns-gateway-transports.md](../misc/dns-gateway-transports.md), "Certificate"), TTL 300:
   - DoH: priority 1, `alpn=h2`, `dohpath=/dns-query{?dns}`, and `port` only when the DoH port is not 443. No `h3`:
-    the gateway serves no HTTP/3. With `dns/pfb_dns_ddr_doh_443` on, `port` is omitted (see "DoH on port 443").
+    the gateway serves no HTTP/3. On an address advertised on port 443, `port` is omitted (see "DoH on port 443").
   - DoT: priority 2, `alpn=dot`, and `port` only when the DoT port is not 853.
   - DoQ: priority 3, `alpn=doq`, and `port` only when the DoQ port is not 853.
   - `port` is a mandatory key for clients ([RFC 9461 §4.2](https://www.rfc-editor.org/rfc/rfc9461#section-4.2)), so a
@@ -259,20 +264,30 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
 
 ### DoH on port 443 (candidate 4)
 
-- Setting: optional toggle `dns/pfb_dns_ddr_doh_443`, labelled "Advertise DoH on port 443", registered through
-  `PfbConfig`, off by default (owner decision, 2026-10-22). Off: the DoH record is as in "DDR answer", with `port`
-  exactly when the DoH port is not 443. On: the DoH record omits `port` even when the DoH listener port is not 443.
-  Everything else in the record is unchanged: TargetName the DNS Name, `ipv4hint` or `ipv6hint` and the Additional
-  A or AAAA record = L, `dohpath=/dns-query{?dns}`. It is still emitted only where DoH listens on L with a certificate
-  loaded. DoT and DoQ records are unchanged.
-- Page: the toggle is rendered disabled (greyed out) when the configured DoH port is already 443, where it would change
-  nothing. Help text (owner wording): "Some clients might not accept a port for the DoH server provided over DDR. This
-  option removes the port, so clients reach DoH on port 443. If DoH is not already listening on port 443, it will no
-  longer be reachable. It is intended for users who, for example, serve multiple sites over HTTPS through a reverse
-  proxy, and who are responsible for configuring that reverse proxy correctly."
-- Use: the owner runs `https://dns.brait.dev` behind HAProxy (443 to gateway port 4443). With the toggle on, a client
-  that follows the record connects to the DNS Name on 443, where the reverse proxy answers. Configuring the proxy
-  is the user's responsibility; pfB-DNS cannot see it.
+- Setting (#3694): `dns/pfb_dns_ddr_doh_443_interfaces`, a multi-select labelled "Advertise DoH on port 443", registered through
+  `PfbConfig`, node-local (beside the DoH interface list it is drawn from), default `''` = nothing advertised on 443 (owner decision,
+  2026-11-04, which replaced the two per-family toggles of the 2026-10-22 decision). Its options are the DoH interfaces (not
+  Localhost) and each Resolver VIP the operator chose, under its address; the Resolver VIP the package created is never offered.
+- Effect: on the addresses of a selected entry DDR advertises DoH without `port` (the gateway's `--ddr-doh-443 ADDR`), even when the
+  DoH listener port there is not 443: pfB-DNS keeps listening on its configured DoH port, and a reverse proxy answers on 443. Any other
+  address advertises the port of its DoH listener. Everything else in the record is unchanged: TargetName the DNS Name, `ipv4hint` or
+  `ipv6hint` and the Additional A or AAAA record = L, `dohpath=/dns-query{?dns}`. It is still emitted only where DoH listens on L with a
+  certificate loaded. DoT and DoQ records are unchanged. Choosing an interface advertises its own addresses only, never a Resolver VIP
+  that joins them.
+- Automatic Resolver VIP: the VIP the package created (Resolver addresses > Create VIP automatically) also serves DoH on port 443 beside the
+  configured DoH port (`--doh-listen-443 VIP`, while DoH is on and that family's DoH port is not already 443), so it advertises 443 with no
+  choice to make. A bind of 443 the box refuses is reported like any listener the gateway did not take (the startup check names
+  `DoH is not served on <VIP>:443` with the reason) and DDR then advertises the configured port there; the update pass adds and removes
+  the listener live.
+- DoH interface listening is unchanged: for a family whose DoH port is 443, DoH skips the interface addresses of that family (port 443
+  there belongs to the webConfigurator or a reverse proxy) and the VIP serves it.
+- Upgrade: either old toggle On selects every DoH interface (Localhost excepted) in the new list and files a notice saying so; both old
+  keys are removed, off or on (migration `issue3694-ddr-doh-443-interfaces`).
+- Page help (owner wording of 2026-10-22, now per entry): "Some clients might not accept a port for the DoH server provided over DDR." The
+  select is not disabled for any DoH port: an interface whose family is on 443 is simply not listened on.
+- Use: the owner runs `https://dns.brait.dev` behind HAProxy (443 to gateway port 4443). With the interface selected, a client that
+  follows the record connects to the DNS Name on 443, where the reverse proxy answers. Configuring the proxy is the user's
+  responsibility; pfB-DNS cannot see it.
 - Limit: RFC 9462 §4.2 checks the certificate the client gets on 443 against the resolver address it queried. A
   hostname-only certificate (for example Let's Encrypt for `dns.brait.dev`) therefore does not make DDR verified. It
   matters for verified DDR only with the public-address route (candidate 7) and a reverse-proxy certificate that carries
@@ -293,7 +308,7 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
 - No name: DDR answers nothing (Unbound answers `resolver.arpa.` as with DDR off) and no name query is intercepted. DDR On with no
   name is a save error (`DDR needs a DNS name: enter the name the certificate covers, or turn DDR off.`). Upgrade: a box that
   had DDR On stops answering DDR until a name is entered, and the page says so; no name is seeded.
-- Flags: `--dns-name NAME`, then `--ddr` while DDR is On (then `--ddr-doh-443`, `--ddr-doh-4436`), then one
+- Flags: `--dns-name NAME`, then `--ddr` while DDR is On (then one `--ddr-doh-443 ADDR` per advertised address), then one
   `--dns-name-answer LOCAL=ADDR[,ADDR]` per address the gateway listens on (plain DNS, and each of DoT, DoH and DoQ that is on).
   The table is replaced on the running gateway by the control-socket verb `FF FF FF FB` and never restarts it
   ([dns-gateway-transports.md](../misc/dns-gateway-transports.md), "Name-answer table").
@@ -324,9 +339,10 @@ DDR needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses,
   IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is classified by its embedded IPv4 address. Every other address is public.
   RFC 9462 §4.3 names the private ranges (RFC 1918, ULA, link-local) as the ones a public CA cannot certify; the rest
   are reserved or not globally routable, so a missing SAN there is not actionable either.
-- With `dns/pfb_dns_ddr_doh_443` on and the DoH port not 443, the DoH listener is excluded: its clients reach the
-  reverse proxy's certificate, which pfB-DNS cannot see. With the DoH port 443 the option changes nothing and clients
-  reach the pfB-DNS certificate, so DoH is checked. DoT and DoQ listeners are always checked.
+- With an address advertised on 443 (`dns/pfb_dns_ddr_doh_443_interfaces`) and the DoH port not 443, the DoH listener on that
+  address is excluded: its clients reach the reverse proxy's certificate, which pfB-DNS cannot see. With the DoH port 443 the
+  selection changes nothing and clients reach the pfB-DNS certificate, so DoH is checked. DoT and DoQ listeners are always
+  checked. The VIP the package created is checked like any address (it is private, so it never warns).
 - No certificate selected: no warning. Saving already requires one when DoT, DoH or DoQ is on.
 - No warning about CA trust or DNR ADNs. The owner asked for this scope (2026-10-22). Acceptance criterion 8.
 
@@ -389,17 +405,17 @@ These apply to the follow-up work; this specification is met when it is on `deve
    | Reserved or documentation address (`0.0.0.1`, `::`, `192.0.2.1`, `2001:db8::1`, `198.18.0.1`, `fec0::1`) | No warning |
    | `::ffff:10.0.0.1` (classified by the embedded IPv4) | No warning |
    | `::ffff:8.8.8.8` with no matching SAN | Warning |
-   | `dns/pfb_dns_ddr_doh_443` on and the DoH port not 443, the DoH listener serves a public address missing from the certificate | No warning for the DoH listener; DoT and DoQ listeners are still checked |
-   | `dns/pfb_dns_ddr_doh_443` on and the DoH port 443, the DoH listener serves a public address missing from the certificate | Warning: clients reach the pfB-DNS certificate |
+   | The address is advertised on 443 (`dns/pfb_dns_ddr_doh_443_interfaces`) and the DoH port is not 443, the DoH listener serves a public address missing from the certificate | No warning for the DoH listener; DoT and DoQ listeners are still checked |
+   | The address is advertised on 443 and the DoH port is 443, the DoH listener serves a public address missing from the certificate | Warning: clients reach the pfB-DNS certificate |
    | No certificate selected | No warning (saving already requires one for DoT, DoH and DoQ) |
    | DDR toggle off | No warning |
 
    The page never warns about CA trust or DNR ADNs, and the warning never blocks saving.
-9. WHEN `dns/pfb_dns_ddr_doh_443` is off THEN the DoH record carries `port` exactly when the DoH port is not 443. WHEN
-   it is on THEN the DoH record carries no `port` and is otherwise identical to the off case (TargetName the firewall
-   DNS Name, `ipv4hint` or `ipv6hint` and Additional A or AAAA = L, `dohpath=/dns-query{?dns}`), still emitted only where
-   DoH listens on L with a certificate loaded, and the DoT and DoQ records are unchanged. WHEN the configured DoH port
-   is 443 THEN the page renders the toggle disabled.
+9. WHEN the address L is not advertised on 443 THEN the DoH record on L carries `port` exactly when the DoH listener port there is not 443.
+   WHEN L is advertised on 443 (`dns/pfb_dns_ddr_doh_443_interfaces`, `--ddr-doh-443 L`) THEN the DoH record carries no `port` and is
+   otherwise identical (TargetName the DNS Name, `ipv4hint` or `ipv6hint` and Additional A or AAAA = L, `dohpath=/dns-query{?dns}`),
+   still emitted only where DoH listens on L with a certificate loaded, and the DoT and DoQ records are unchanged. WHEN DoH also
+   listens on L at port 443 THEN the record carries no `port` whatever was chosen, and there is one DoH record for L.
 10. Removed (owner decision, 2026-10-22): the advertised DoH URL setting and its save-time validation no longer exist.
     The number is kept so references stay stable.
 11. WHEN reading the documentation page THEN its Kea DNR section states that the ADN must be a name in the certificate
@@ -417,13 +433,24 @@ These apply to the follow-up work; this specification is met when it is on `deve
     restart; WHEN the DNS Name or DDR changes THEN it restarts the proxy.
 15. WHEN the selected certificate has no `dNSName` SAN covering the DNS Name (exact, wildcard of one label, case-insensitive)
     and an encrypted transport is on THEN the page warns; WHEN DDR is On and no name is set THEN it says DDR answers nothing.
+16. WHEN an interface (or a Resolver VIP the operator chose) is selected under "Advertise DoH on port 443" THEN the gateway gets one
+    `--ddr-doh-443 ADDR` for each DoH listen address it carries (an interface never brings in a VIP that joins its addresses), DDR
+    advertises DoH on those addresses without `port` while DoH keeps listening on its configured port there, and every other address
+    advertises its own DoH port. WHEN nothing is selected THEN no `--ddr-doh-443` flag is given. The options are the DoH interfaces without
+    Localhost and the chosen Resolver VIPs, never the one the package created; any other posted entry is an input error that names it.
+17. WHEN the package created the Resolver VIP for a family and DoH is on THEN the gateway also serves DoH on port 443 of that VIP
+    (`--doh-listen-443`) unless that family's DoH port is 443 already, DDR advertises 443 there, and the update pass adds and removes that
+    listener live with no restart; WHEN the box refuses the bind THEN the startup check names the listener and DDR advertises the configured
+    port there.
+18. WHEN the configuration holds either retired toggle On at upgrade THEN every DoH interface (Localhost excepted) is selected and a notice
+    says so; WHEN it holds them Off THEN nothing is selected and no notice is filed; WHEN the migration runs again THEN it changes nothing.
 
 ## Out of scope
 
 - ISC dhcpd (`numberoptions` custom options included).
 - pfB-DNS writing Kea configuration (candidate 1).
 - Router Advertisement DNR, a patched radvd, or any pfSense core change (DHCP or RA hooks, generator fields).
-- URL, hostname or DoT and DoQ overrides for the advertised records (only the port-443 toggle exists, see "DoH on port
+- URL, hostname or DoT and DoQ overrides for the advertised records (only the port-443 selection exists, see "DoH on port
   443").
 - HTTP/3 in the gateway, which Android's DDR would need (Q2).
 - Browser DoH policies (Chrome, Firefox), NetworkManager, dhcpcd: they consume none of these mechanisms (#3554).

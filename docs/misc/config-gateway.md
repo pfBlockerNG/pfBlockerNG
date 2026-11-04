@@ -226,7 +226,7 @@ Authorization = property of **write**, not call site (generalises
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
     not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only its own leaves
-    (the toggle, the twelve listener settings, the two DDR settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
+    (the toggle, the twelve listener settings, the DDR settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
     (`pfblockerng_sync_sections()`), so neither key can leave the node. New key, no grandfather.
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
     the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
@@ -252,14 +252,22 @@ Authorization = property of **write**, not call site (generalises
     moved it, from its snapshot, on every apply that turns the proxy on. The seed is keyed on
     `dns/pfb_dns_interface` being `''`. Shared DoT enable/port keys are left absent by the registry pass until this seed;
     existing explicit values (including received Off/empty choices) are never replaced. The pfB-DNS page seeds on load and shows a
-    setting through `pfb_dns_proxy_setting()`, so a seed the lock refused still shows; its save writes all twelve and the two DDR keys below.
-  - **`dns_shared/pfb_dns_ddr` / `dns_shared/pfb_dns_ddr_doh_443` → `PfbToggle`** (issue #3583, pfB-DNS's DDR answers, RFC 9462): default
-    Off, sync `local`. New keys, no grandfather: absent reads Off = pre-feature behaviour (the gateway does not touch
-    `resolver.arpa.`). The second one leaves the port out of the DDR DoH record and does nothing while DDR is Off. Both
-    are written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`) and read through `PfbConfig::read()` by
-    `pfb_dns_proxy_ddr_flags()` for the gateway's `--ddr` and `--ddr-doh-443`. The page disables the second checkbox while
-    the STORED DoH port is `443` (`pfb_dns_proxy_ddr_doh_443_locked()`, no port to leave out); a disabled control posts
-    nothing, so the save keeps the stored value of that toggle then, and takes the posted one at any other stored port.
+    setting through `pfb_dns_proxy_setting()`, so a seed the lock refused still shows; its save writes all twelve and the DDR keys below.
+  - **`dns_shared/pfb_dns_ddr` → `PfbToggle`** (issue #3583, pfB-DNS's DDR answers, RFC 9462): default
+    Off, sync `local`. New key, no grandfather: absent reads Off = pre-feature behaviour (the gateway does not touch
+    `resolver.arpa.`). Written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`) and read through `PfbConfig::read()` by
+    `pfb_dns_proxy_ddr_flags()` for the gateway's `--ddr`, which needs a DNS Name.
+  - **`dns/pfb_dns_ddr_doh_443_interfaces`** (issue #3694, plain string): the interface tokens (and Resolver VIP ids the operator chose)
+    DDR advertises DoH on port 443 for, comma-joined; default `''` = nothing advertised, sync `local` (per node, beside the DoH interface list
+    it is drawn from). New key, no grandfather. Written by the page's save (each entry must be an option of the posted DoH list,
+    `pfb_dns_proxy_ddr_doh_443_options()`; a text that is no array stores `''`), read through `PfbConfig::read()` by
+    `pfb_dns_proxy_ddr_doh_443_addresses()` for the gateway's `--ddr-doh-443 ADDR`. **Retired locations:** `dns_shared/pfb_dns_ddr_doh_443` and
+    `dns_shared/pfb_dns_ddr_doh_443_6` (#3583, the IPv4 and IPv6 "Advertise DoH on port 443" toggles) are not registered any more, and are
+    not `old_name` slots either: migration `issue3694-ddr-doh-443-interfaces` (`pfb_dns_ddr_doh_443_migrate()`, after the #3649 split, over
+    both the pfB-DNS and the shared sections) selects every stored DoH interface but Localhost when either was On, files one notice,
+    and removes both keys from both sections whenever stored (On, Off or junk); a second run writes nothing. A configuration backup
+    restored from before the migration passes through it on the next install or upgrade; until then the keys are ignored. The lock the page
+    had (`pfb_dns_proxy_ddr_doh_443_locked()`) is `pfb_dns_proxy_doh_port_443()` now: it only says whether the stored DoH port of a family is 443.
   - **`dns/pfb_dns_name`** (issue #3694, plain string): the DNS Name, DDR's target name and the name pfB-DNS answers `A` and `AAAA` for;
     default `''` = no name, sync `local` (per node like the certificate, which must list it as a DNS SAN; not one of
     `PFB_DNS_SHARED_FIELDS`). New key, no grandfather, never seeded: a box that had DDR On before the key existed reads `''` and
@@ -268,8 +276,8 @@ Authorization = property of **write**, not call site (generalises
     for `--dns-name`, `--ddr` and one `--dns-name-answer` per listen address, and by `pfb_dns_proxy_ddr_warnings()`. A stored
     text that is no valid name (`pfb_dns_proxy_name_normalized()`) counts as `''` and is logged.
   - **pfB-DNS legacy sync split (issue #3649).** `dns_shared` resolves to
-    `installedpackages/pfblockerngdnssettings/config/0`. Its nine fields are the DoT/DoH/DoQ toggles
-    and ports, trusted DoH front ends, DDR and DDR DoH-on-443. Registry `sync: local` means
+    `installedpackages/pfblockerngdnssettings/config/0`. Its fields are the DoT/DoH/DoQ toggles
+    and ports (IPv4 and IPv6), trusted DoH front ends and DDR (the two DoH-on-443 toggles it held are retired, issue #3694). Registry `sync: local` means
     excluded from **Policy and lists**; **All settings (legacy)** alone sends this whole section
     on either transport. **Lists and global settings only (legacy)** excludes it. Node enable,
     Resolver snapshot, all four interface/address lists (VIPs included), and certificate reference

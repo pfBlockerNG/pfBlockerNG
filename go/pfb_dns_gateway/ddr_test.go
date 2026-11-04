@@ -75,11 +75,11 @@ func ddrAt(addr string, port uint16) []netip.AddrPort {
 	return []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr(addr), port)}
 }
 
-func mustDDR(t *testing.T, target string, doh443 bool, certs *certStore, dot, doh, doq []netip.AddrPort) *ddr {
+func mustDDR(t *testing.T, target string, certs *certStore, dot, doh, doq []netip.AddrPort) *ddr {
 	t.Helper()
-	d, err := newDDR(target, doh443, certs, dot, doh, doq)
+	d, err := newDDR(target, certs, dot, doh, doq)
 	if err != nil {
-		t.Fatalf("newDDR(%q, %v): %v", target, doh443, err)
+		t.Fatalf("newDDR(%q): %v", target, err)
 	}
 	return d
 }
@@ -235,7 +235,7 @@ func ddrOPTs(m dnsmessage.Message) (sizes []uint16) {
 // --- criterion 1: the records, built from literal listeners and a certificate store, no sockets ---
 
 func TestDDRDesignationRecordsAreRFC9460WireForEveryTransportOnTheQueriedAddress(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t),
+	d := mustDDR(t, ddrTarget, ddrLoaded(t),
 		ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
 	query := ddrQuery(t, 0x0DD1, ddrAsk, dnsmessage.TypeSVCB, 0)
 	reply := d.answer(query, netip.MustParseAddr(ddrL4), true)
@@ -265,7 +265,7 @@ func TestDDRDesignationRecordsAreRFC9460WireForEveryTransportOnTheQueriedAddress
 }
 
 func TestDDRIPv6QueriedAddressGetsAnIPv6HintAsBytesAndAnAAAA(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt("2001:db8::1", 8853), nil, nil)
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt("2001:db8::1", 8853), nil, nil)
 	query := ddrQuery(t, 1, ddrAsk, dnsmessage.TypeSVCB, 0)
 	reply := d.answer(query, netip.MustParseAddr("2001:db8::1"), true)
 	m := requireDDR(t, query, reply, ddrWant{
@@ -329,7 +329,7 @@ func TestDDRRecordsFollowTheListenersOfTheQueriedAddress(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := mustDDR(t, cmp.Or(c.target, ddrTarget), false, certs, c.dot, c.doh, c.doq)
+			d := mustDDR(t, cmp.Or(c.target, ddrTarget), certs, c.dot, c.doh, c.doq)
 			var local netip.Addr
 			if c.local != "" {
 				local = netip.MustParseAddr(c.local)
@@ -346,7 +346,7 @@ func TestDDRRecordsFollowTheListenersOfTheQueriedAddress(t *testing.T) {
 // query sees it.
 func TestDDRNodataUntilACertificateIsLoadedThenRecordsAfterAPush(t *testing.T) {
 	store := newEmptyCertStore(func(string, ...any) {})
-	d := mustDDR(t, ddrTarget, false, store, ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
+	d := mustDDR(t, ddrTarget, store, ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
 	local := netip.MustParseAddr(ddrL4)
 	query := ddrQuery(t, 7, ddrAsk, dnsmessage.TypeSVCB, 0)
 
@@ -370,17 +370,18 @@ func TestDDRNodataWithoutAnyTLSTransportOrCertificateAndWithDoH443(t *testing.T)
 	local := netip.MustParseAddr(ddrL4)
 	query := ddrQuery(t, 8, ddrAsk, dnsmessage.TypeSVCB, 0)
 	t.Run("no certificate store at all", func(t *testing.T) {
-		d := mustDDR(t, ddrTarget, false, nil, nil, nil, nil)
+		d := mustDDR(t, ddrTarget, nil, nil, nil, nil)
 		requireDDR(t, query, d.answer(query, local, true), ddrNODATA)
 	})
 	t.Run("--ddr-doh-443 does not make an empty store serve", func(t *testing.T) {
-		d := mustDDR(t, ddrTarget, true, newEmptyCertStore(func(string, ...any) {}),
+		d := mustDDR(t, ddrTarget, newEmptyCertStore(func(string, ...any) {}),
 			ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
+		d.setDoH443(addrSet(ddrL4))
 		requireDDR(t, query, d.answer(query, local, true), ddrNODATA)
 	})
 }
 
-// --- --ddr-doh-443: the DoH record without its port, and nothing else changed ---
+// --- --ddr-doh-443 ADDR: the DoH record without its port on that address, and nothing else changed ---
 
 func TestDDRDoH443LeavesThePortOutOfTheDoHRecordOnly(t *testing.T) {
 	certs := ddrLoaded(t)
@@ -408,7 +409,10 @@ func TestDDRDoH443LeavesThePortOutOfTheDoHRecordOnly(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := mustDDR(t, ddrTarget, c.doh443, certs, c.dot, c.doh, c.doq)
+			d := mustDDR(t, ddrTarget, certs, c.dot, c.doh, c.doq)
+			if c.doh443 {
+				d.setDoH443(addrSet(ddrL4))
+			}
 			query := ddrQuery(t, 0x0DD9, ddrAsk, dnsmessage.TypeSVCB, 0)
 			requireDDR(t, query, d.answer(query, netip.MustParseAddr(ddrL4), true), c.want)
 		})
@@ -438,7 +442,7 @@ var ddrOtherNames = []struct {
 }
 
 func TestDDROtherNamesAndTypesGetNODATAWithTheSOAAndTheApexItsSOAAndNS(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
 	for _, c := range ddrOtherNames {
 		t.Run(c.name, func(t *testing.T) {
 			query := ddrQuery(t, 0x0DD3, c.qname, c.typ, 0)
@@ -450,7 +454,7 @@ func TestDDROtherNamesAndTypesGetNODATAWithTheSOAAndTheApexItsSOAAndNS(t *testin
 }
 
 func TestDDRMatchesTheZoneCaseInsensitivelyAndEchoesTheNameAsReceived(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
 	query := ddrQuery(t, 9, "_DNS.Resolver.ARPA.", dnsmessage.TypeSVCB, 0)
 	reply := d.answer(query, netip.MustParseAddr(ddrL4), true)
 	// requireDDR compares the question and each owner with the received spelling
@@ -463,7 +467,7 @@ func TestDDRMatchesTheZoneCaseInsensitivelyAndEchoesTheNameAsReceived(t *testing
 // The apex SOA and NS answers are owned by the name as asked (as the SVCB answer is); the SOA of a negative answer is always
 // owned by the zone name in lower case.
 func TestDDRApexSOAAndNSAnswersEchoTheCaseOfTheQuestion(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
 	local := netip.MustParseAddr(ddrL4)
 	for _, c := range []struct {
 		typ  dnsmessage.Type
@@ -480,7 +484,7 @@ func TestDDRApexSOAAndNSAnswersEchoTheCaseOfTheQuestion(t *testing.T) {
 
 // Only class IN is designated: any other class gets NODATA and the SOA, for the designation name and the apex alike.
 func TestDDRNonINClassGetsNODATAWithTheSOA(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
 	local := netip.MustParseAddr(ddrL4)
 	for _, class := range []dnsmessage.Class{dnsmessage.ClassCHAOS, dnsmessage.ClassANY} {
 		for _, q := range []struct {
@@ -504,7 +508,7 @@ func TestDDRNonINClassGetsNODATAWithTheSOA(t *testing.T) {
 
 // RFC 6891 and 1035: the header of the reply follows the query's, whatever its flags.
 func TestDDRReplyHeaderFollowsTheQuery(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
 	for _, h := range []dnsmessage.Header{
 		{ID: 0xBEEF, RecursionDesired: true},
 		{ID: 0x0001, RecursionDesired: false},
@@ -522,7 +526,7 @@ func TestDDRReplyHeaderFollowsTheQuery(t *testing.T) {
 // --- EDNS and size ---
 
 func TestDDRReplyCarriesAnOPTAdvertising1232OnlyWhenTheQueryHadOne(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
 	local := netip.MustParseAddr(ddrL4)
 	want := ddrWant{svcb: []ddrSVCB{ddrDoTRec(ddrFQDN, 0, ddrL4)}, additional: []string{ddrAddrRR(ddrFQDN, ddrL4)}}
 	for _, c := range []struct {
@@ -576,7 +580,7 @@ func TestDDRUDPReplyOverTheLimitIsTruncatedAndAStreamReplyIsNot(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			local := netip.MustParseAddr(c.local)
-			d := mustDDR(t, c.target, false, ddrLoaded(t), ddrAt(c.local, 8853), ddrAt(c.local, 4443), ddrAt(c.local, 8853))
+			d := mustDDR(t, c.target, ddrLoaded(t), ddrAt(c.local, 8853), ddrAt(c.local, 4443), ddrAt(c.local, 8853))
 			query := ddrQuery(t, 0x0DD4, ddrAsk, dnsmessage.TypeSVCB, c.opt)
 			target := strings.TrimSuffix(c.target, ".") + "."
 			full := ddrWant{
@@ -617,7 +621,7 @@ func TestDDRUDPReplyOverTheLimitIsTruncatedAndAStreamReplyIsNot(t *testing.T) {
 // screen passes udp=true for the plain UDP socket: without EDNS a reply over 512 bytes is truncated there, and whole over TCP.
 func TestDDRPlainUDPReplyOverTheLimitIsTruncatedAndTCPGetsTheFullAnswer(t *testing.T) {
 	target := ddrLongName(49, 49, 49, 49, 3) // 203 characters: three records of about 250 bytes
-	r := newDDRRigFor(t, target, false)
+	r := newDDRRigFor(t, target)
 	query := ddrQuery(t, 0x0DDB, ddrAsk, dnsmessage.TypeSVCB, 0)
 	fqdn := target + "."
 
@@ -681,7 +685,7 @@ func ddrWires(t *testing.T) map[string][]byte {
 }
 
 func TestDDRDoesNotAnswerWhatIsNotAQueryForItsZone(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), ddrAt(ddrL4, 4443), ddrAt(ddrL4, 853))
 	local := netip.MustParseAddr(ddrL4)
 	if d.answer(ddrQuery(t, 1, ddrAsk, dnsmessage.TypeSVCB, 0), local, true) == nil { // control: this ddr does answer a good query
 		t.Fatal("the query for _dns.resolver.arpa. itself was not answered: the cases below prove nothing")
@@ -704,7 +708,7 @@ func TestDDRDoesNotAnswerWhatIsNotAQueryForItsZone(t *testing.T) {
 
 // A truncated copy of a good query never panics, and whatever is answered parses; a cut inside the question is not ours.
 func TestDDRSurvivesEveryPrefixOfAQuery(t *testing.T) {
-	d := mustDDR(t, ddrTarget, false, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
+	d := mustDDR(t, ddrTarget, ddrLoaded(t), ddrAt(ddrL4, 853), nil, nil)
 	local := netip.MustParseAddr(ddrL4)
 	questionEnd := len(ddrQuery(t, 1, ddrAsk, dnsmessage.TypeSVCB, 0))
 	if d.answer(ddrQuery(t, 1, ddrAsk, dnsmessage.TypeSVCB, 0), local, true) == nil { // control: the whole query is answered
@@ -736,18 +740,18 @@ type ddrRig struct {
 
 // newDDRRig binds the TLS sockets first, so the ddr is built from their addresses and set on the gateway before any
 // goroutine that reads it starts (production does the same: start() sets g.ddr before serving).
-func newDDRRig(t *testing.T, doh443 bool) *ddrRig {
+func newDDRRig(t *testing.T) *ddrRig {
 	t.Helper()
-	return newDDRRigFor(t, ddrTarget, doh443)
+	return newDDRRigFor(t, ddrTarget)
 }
 
-func newDDRRigFor(t *testing.T, target string, doh443 bool) *ddrRig {
+func newDDRRigFor(t *testing.T, target string) *ddrRig {
 	t.Helper()
-	return newDDRRigNames(t, target, doh443, nil)
+	return newDDRRigNames(t, target, nil)
 }
 
 // newDDRRigNames is the DDR rig whose gateway also answers the DNS name from names (nil: no name answers).
-func newDDRRigNames(t *testing.T, target string, doh443 bool, names *nameAnswers) *ddrRig {
+func newDDRRigNames(t *testing.T, target string, names *nameAnswers) *ddrRig {
 	t.Helper()
 	m := newTLSMaterial(t)
 	dotLn, err := bindTCP("127.0.0.1", 0)
@@ -764,7 +768,7 @@ func newDDRRigNames(t *testing.T, target string, doh443 bool, names *nameAnswers
 	}
 	d := &ddrRig{m: m,
 		dot: dotLn.Addr().(*net.TCPAddr).AddrPort(), doh: dohLn.Addr().(*net.TCPAddr).AddrPort(), doq: doqConn.LocalAddr().(*net.UDPAddr).AddrPort()}
-	ddrAnswers, err := newDDR(target, doh443, m.certs, []netip.AddrPort{d.dot}, []netip.AddrPort{d.doh}, []netip.AddrPort{d.doq})
+	ddrAnswers, err := newDDR(target, m.certs, []netip.AddrPort{d.dot}, []netip.AddrPort{d.doh}, []netip.AddrPort{d.doq})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +807,7 @@ func (r *rig) requireDeciderSawOnlyTheBarrier() {
 func TestDDRQueryOverUDPAndTCPGetsTheRecordsOfTheListenersItReached(t *testing.T) {
 	for _, tr := range transports {
 		t.Run(tr.name, func(t *testing.T) {
-			r := newDDRRig(t, false)
+			r := newDDRRig(t)
 			query := ddrQuery(t, 0x0DD5, ddrAsk, dnsmessage.TypeSVCB, 0)
 			requireDDR(t, query, r.roundTrip(tr, clientAllowed, query), r.records())
 			r.requireDeciderSawOnlyTheBarrier()
@@ -812,7 +816,7 @@ func TestDDRQueryOverUDPAndTCPGetsTheRecordsOfTheListenersItReached(t *testing.T
 }
 
 func TestDDRSVCBQueryOverDoTDoHAndDoQGetsNODATAAndTheDeciderSeesNone(t *testing.T) {
-	r := newDDRRig(t, false)
+	r := newDDRRig(t)
 	query := ddrQuery(t, 0, ddrAsk, dnsmessage.TypeSVCB, 0) // DoQ requires Message ID 0
 
 	t.Run("DoT", func(t *testing.T) {
@@ -836,7 +840,7 @@ func TestDDRSVCBQueryOverDoTDoHAndDoQGetsNODATAAndTheDeciderSeesNone(t *testing.
 }
 
 func TestDDROtherNamesAnsweredOverUDPNeverReachTheDecider(t *testing.T) {
-	r := newDDRRig(t, false)
+	r := newDDRRig(t)
 	for _, c := range ddrOtherNames {
 		query := ddrQuery(t, 0x0DD6, c.qname, c.typ, 0)
 		requireDDR(t, query, r.roundTrip(transport{"udp", false}, clientAllowed, query), c.want)
@@ -847,7 +851,7 @@ func TestDDROtherNamesAnsweredOverUDPNeverReachTheDecider(t *testing.T) {
 }
 
 func TestDDRNamesOutsideTheZoneReachTheDecider(t *testing.T) {
-	r := newDDRRig(t, false)
+	r := newDDRRig(t)
 	for i, name := range []string{"resolver.arpa.example.", "xresolver.arpa."} {
 		query := ddrQuery(t, uint16(0x0E00+i), name, dnsmessage.TypeSVCB, 0)
 		got := r.roundTrip(transport{"udp", false}, clientAllowed, query)
@@ -907,17 +911,17 @@ func TestDDRKeepsTheResolverACL(t *testing.T) {
 	query := ddrQuery(t, 0x0DD8, ddrAsk, dnsmessage.TypeSVCB, 0)
 	for _, tr := range transports {
 		t.Run("a refused client gets REFUSED over "+tr.name, func(t *testing.T) {
-			r := newDDRRig(t, false)
+			r := newDDRRig(t)
 			requireRefused(t, query, r.roundTrip(tr, clientRefused, query))
 			r.requireDeciderSawOnlyTheBarrier()
 		})
 		t.Run("an allowed client gets the records over "+tr.name, func(t *testing.T) {
-			r := newDDRRig(t, false)
+			r := newDDRRig(t)
 			requireDDR(t, query, r.roundTrip(tr, clientAllowed, query), r.records())
 		})
 	}
 	t.Run("a denied UDP client gets nothing", func(t *testing.T) {
-		r := newDDRRig(t, false)
+		r := newDDRRig(t)
 		denied := r.udpClient(clientDenied)
 		if _, err := denied.Write(query); err != nil {
 			t.Fatal(err)
@@ -926,7 +930,7 @@ func TestDDRKeepsTheResolverACL(t *testing.T) {
 		requireNoUDPReply(t, denied)
 	})
 	t.Run("a TCP client denied while connected is hung up on", func(t *testing.T) {
-		r := newDDRRig(t, false)
+		r := newDDRRig(t)
 		c := r.tcpClient("") // 127.0.0.1, open across the rewrite
 		tcpSend(t, c, query)
 		requireDDR(t, query, tcpReply(t, c), r.records()) // before the rule: answered
@@ -941,7 +945,7 @@ func TestDDRKeepsTheResolverACL(t *testing.T) {
 
 // screen: a packet that is not a query for the zone is the decider's, or nobody's when it is a response.
 func TestDDRScreenSendsWhatIsNotOursToTheDeciderAndNeverAnswersAResponse(t *testing.T) {
-	r := newDDRRig(t, false)
+	r := newDDRRig(t)
 	client, local := netip.MustParseAddr(clientAllowed), netip.MustParseAddr("127.0.0.1")
 	for name, wire := range ddrWires(t) {
 		want := toDecider
@@ -1099,7 +1103,7 @@ func TestDDRGatewayProcessTakesTheFlagsAndAnswersFromTheBoundListeners(t *testin
 		"--listen", "127.0.0.1", "--port", fmt.Sprint(ports[1]), "--unbound-conf", filepath.Join(t.TempDir(), "absent"),
 		"--dot-listen", "127.0.0.1", "--dot-port", fmt.Sprint(ports[0]), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
-		"--dns-name", ddrTarget, "--ddr", "--ddr-doh-443",
+		"--dns-name", ddrTarget, "--ddr", "--ddr-doh-443", "127.0.0.1",
 	}, decider("serve"))
 	plain := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("listening dot ")

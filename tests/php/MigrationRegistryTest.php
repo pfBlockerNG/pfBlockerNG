@@ -98,11 +98,11 @@ final class MigrationRegistryTest extends TestCase
 	 * before ADR-02 -- it must run while dnsbl_mode still evidences pre-upgrade
 	 * Unbound mode, which ADR-02 overwrites. The Sync scope and pfB-DNS section-split migrations follow.
 	 */
-	public function testRegistryHasEightEntriesInOrder(): void
+	public function testRegistryHasNineEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(8, $registry);
+		$this->assertCount(9, $registry);
 
 		// issue #3288: the DNSBL Default/Override policy migration runs first.
 		$this->assertSame('issue3288-dnsbl-policy-migrate', $registry[0]['id']);
@@ -120,6 +120,8 @@ final class MigrationRegistryTest extends TestCase
 		// issue #3452: the Sync scope migration reads only the Sync section.
 		$this->assertSame('issue3452-sync-scope-migrate', $registry[6]['id']);
 		$this->assertSame('issue3649-dns-settings-split', $registry[7]['id']);
+		// issue #3694: the per-family DoH 443 toggles become a per-interface selection, after the split that moved them
+		$this->assertSame('issue3694-ddr-doh-443-interfaces', $registry[8]['id']);
 	}
 
 	/**

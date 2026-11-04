@@ -1102,8 +1102,6 @@ DNS_SHARED_FIELDS = frozenset(
         "pfb_dns_doq_port6",
         "pfb_dns_doh_trusted",
         "pfb_dns_ddr",
-        "pfb_dns_ddr_doh_443",
-        "pfb_dns_ddr_doh_443_6",
     )
 )
 

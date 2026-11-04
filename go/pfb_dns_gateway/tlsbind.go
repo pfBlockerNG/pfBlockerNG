@@ -31,6 +31,14 @@ func (c config) transportPort(kind, host string) int {
 	return port
 }
 
+// port443 is the port --doh-listen-443 binds and DDR counts as 443, for both families.
+func (c config) port443() int {
+	if c.doh443Port != 0 {
+		return c.doh443Port
+	}
+	return ddrDoHPort
+}
+
 // bindTLS binds every requested TLS transport. The certificate file is read here, as root; when it is unusable the reason
 // is logged once and the store starts empty: the listeners are bound, handshakes fail, and the first certificate pushed on
 // the control socket (bound by start() in every mode) is served with no restart (plain DNS is unaffected either way: a
@@ -55,14 +63,19 @@ func bindTLS(cfg config, logf func(format string, args ...any), refused map[stri
 			t.dot = append(t.dot, ln)
 		}
 	}
-	for _, host := range cfg.dohListen {
-		port := cfg.transportPort("doh", host)
+	bindDoH := func(host string, port int) {
 		if ln, err := bindTCP(host, port); err != nil {
 			logf("%v", err)
 			refuse(refused, "doh", host, port, err)
 		} else {
 			t.doh = append(t.doh, ln)
 		}
+	}
+	for _, host := range cfg.dohListen {
+		bindDoH(host, cfg.transportPort("doh", host))
+	}
+	for _, host := range cfg.dohListen443 { // a refusal here leaves DDR to advertise the configured port: it names listeners that are bound
+		bindDoH(host, cfg.port443())
 	}
 	for _, host := range cfg.doqListen {
 		port := cfg.transportPort("doq", host)

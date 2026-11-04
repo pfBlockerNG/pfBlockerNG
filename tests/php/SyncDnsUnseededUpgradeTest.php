@@ -47,7 +47,6 @@ final class SyncDnsUnseededUpgradeTest extends TestCase
 			'pfb_dns_doq_port' => '8855',
 			'pfb_dns_doh_trusted' => base64_encode('192.0.2.0/24'),
 			'pfb_dns_ddr' => 'on',
-			'pfb_dns_ddr_doh_443' => 'on',
 		];
 		$old = array_merge([
 			'pfb_dns' => '', 'pfb_dns_saved' => '', 'pfb_dns_dot' => '', 'pfb_dns_dot_port' => '853',

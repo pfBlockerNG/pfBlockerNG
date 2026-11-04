@@ -460,7 +460,7 @@ final class CfgGatewayTest extends TestCase
 	/** @return array<string,array{string}> */
 	public static function dnsProxyListenerToggleKeys(): array
 	{
-		return ['DoT' => ['dns_shared/pfb_dns_dot'], 'DoH' => ['dns_shared/pfb_dns_doh'], 'DoQ' => ['dns_shared/pfb_dns_doq'], 'DDR' => ['dns_shared/pfb_dns_ddr'], 'DDR DoH on 443' => ['dns_shared/pfb_dns_ddr_doh_443']];
+		return ['DoT' => ['dns_shared/pfb_dns_dot'], 'DoH' => ['dns_shared/pfb_dns_doh'], 'DoQ' => ['dns_shared/pfb_dns_doq'], 'DDR' => ['dns_shared/pfb_dns_ddr']];
 	}
 
 	/** issue #3513: DoH/DoQ are opt-in; an absent key must leave them off. */
@@ -485,6 +485,7 @@ final class CfgGatewayTest extends TestCase
 			'listener interfaces' => ['dns/pfb_dns_interface', '', 'lan,opt1'],
 			'certificate'         => ['dns/pfb_dns_sslcertref', '', 'cert123'],
 			'DNS name'            => ['dns/pfb_dns_name', '', 'fw.example.lan'],
+			'DoH 443 interfaces'  => ['dns/pfb_dns_ddr_doh_443_interfaces', '', 'lan,opt1'],
 		];
 	}
 
@@ -501,10 +502,33 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame($value, PfbConfig::read($key), "write(read(v)) == v for {$key}");
 	}
 
+	/**
+	 * issue #3694: "Advertise DoH on port 443" is chosen per interface; the two per-family toggles are retired (the migration removes them) and the
+	 * selection lives beside the DoH interface list it is drawn from: node-local, in the pfB-DNS section, no adapters, no grandfather.
+	 */
+	public function testTheTwoDohOn443TogglesAreRetiredAndTheInterfaceSelectionIsRegisteredLocalBesideTheDohInterfaces(): void
+	{
+		$registry = pfb_cfg_registry();
+		foreach (['dns_shared/pfb_dns_ddr_doh_443', 'dns_shared/pfb_dns_ddr_doh_443_6', 'dns/pfb_dns_ddr_doh_443', 'dns/pfb_dns_ddr_doh_443_6'] as $retired) {
+			$this->assertArrayNotHasKey($retired, $registry, "{$retired} is retired");
+		}
+		$this->assertNotContains('pfb_dns_ddr_doh_443', PFB_DNS_SHARED_FIELDS);
+		$this->assertNotContains('pfb_dns_ddr_doh_443_6', PFB_DNS_SHARED_FIELDS);
+		$this->assertSame('dns/pfb_dns_ddr_doh_443_interfaces', pfb_dns_config_key('pfb_dns_ddr_doh_443_interfaces'));
+
+		$entry = $registry['dns/pfb_dns_ddr_doh_443_interfaces'] ?? NULL;
+		$this->assertIsArray($entry, 'the selection is registered');
+		$this->assertSame('', $entry['default']);
+		$this->assertSame('local', $entry['sync']);
+		$this->assertNull($entry['read_adapter']);
+		$this->assertNull($entry['write_adapter']);
+		$this->assertNotSame('', $entry['no_grandfather'] ?? '', 'the entry records why no grandfather is needed');
+	}
+
 	/** @return array<string,array{string}> */
 	public static function ddrKeys(): array
 	{
-		return ['DDR' => ['dns_shared/pfb_dns_ddr'], 'DDR DoH on port 443' => ['dns_shared/pfb_dns_ddr_doh_443']];
+		return ['DDR' => ['dns_shared/pfb_dns_ddr']];
 	}
 
 	/** issue #3583: the DDR toggles are per-node PfbToggles, default Off, with no grandfather. */
@@ -1696,7 +1720,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dns_doq_interface',
 			// issue #3583: pfB-DNS's DDR toggle and its DoH on port 443 toggle
 			'pfb_dns_ddr',
-			'pfb_dns_ddr_doh_443',
+			'pfb_dns_ddr_doh_443_interfaces',
 			// issue #3538: pfB-DNS's own listener settings (DoT, the listener interface, the certificate)
 			'pfb_dns_interface',
 			'pfb_dns_dot',

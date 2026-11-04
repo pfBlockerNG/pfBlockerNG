@@ -144,15 +144,18 @@ func (s *listenerSet) change(add bool, in *ctlInput) string {
 	return "ok"
 }
 
-// admit says why an add is not taken: the kind or port is not this gateway's, the listener is served already, the gateway is
-// stopping, or what came with the frame is not the sockets of kind on ap.
+// admit says why an add is not taken: the kind or port is not this gateway's (DoH is also taken on the 443 port, whichever
+// port it is configured on), the listener is served already, the gateway is stopping, or what came with the frame is not the
+// sockets of kind on ap.
 func (s *listenerSet) admit(kind string, ap netip.AddrPort, isServed bool, in *ctlInput) error {
 	_, serves := s.port(kind)
 	port := s.cfg.transportPort(kind, ap.Addr().String())
 	switch {
 	case !serves:
 		return fmt.Errorf("%s is not served by this gateway: it was started without a %s listen address", kind, kind)
-	case int(ap.Port()) != port:
+	case kind == "doh" && int(ap.Port()) != port && int(ap.Port()) != s.cfg.port443():
+		return fmt.Errorf("port %d is neither the port %d of doh nor %d", ap.Port(), port, s.cfg.port443())
+	case kind != "doh" && int(ap.Port()) != port:
 		return fmt.Errorf("port %d is not the port %d of %s", ap.Port(), port, kind)
 	case isServed:
 		return fmt.Errorf("%s %s is served already", kind, ap)
