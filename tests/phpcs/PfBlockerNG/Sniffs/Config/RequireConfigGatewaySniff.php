@@ -303,6 +303,7 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doq_port6',
 		// issue #3688: resolver VIP fields on package general config
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip',
+		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip_only',
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip4',
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_vip6',
 		'installedpackages/pfblockerng/config/0/pfb_dns_listen_auto4',

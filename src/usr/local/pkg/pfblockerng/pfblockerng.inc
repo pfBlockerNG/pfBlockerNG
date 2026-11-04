@@ -3657,6 +3657,49 @@ function pfb_dns_listen_foreign_scopes(array $addresses, array $added): array {
 	return [$foreign, $frozen];
 }
 
+/** VIP-only belongs to the proxy, not to standalone Unbound's listener policy. */
+function pfb_dns_listen_vip_only(): bool {
+	return PfbConfig::read('dns/pfb_dns') === PfbToggle::On
+	    && PfbConfig::read('gen/pfb_dns_listen_vip_only') === PfbToggle::On;
+}
+
+/** Validate prospective VIP policy under the fresh config lock, before creating VIPs or writing any settings. @return list<string> */
+function pfb_validate_dns_listen_vip_only_post(array $post): array {
+	if (pfb_cfg_toggle_read($post['pfb_dns_listen_vip_only'] ?? '') !== PfbToggle::On) {
+		return [];
+	}
+	if (PfbConfig::read('dns/pfb_dns') !== PfbToggle::On || pfb_cfg_toggle_read($post['pfb_dns_listen_vip'] ?? '') !== PfbToggle::On) {
+		return [gettext('VIP-only mode requires pfB-DNS and Resolver addresses enabled. Enable both first, or disable VIP-only mode.')];
+	}
+	$addresses = [];
+	foreach ([4, 6] as $family) {
+		$id = $post["pfb_dns_listen_vip{$family}"] ?? '';
+		if (!is_string($id) || $id === '' || $id === 'none') {
+			continue;
+		}
+		if ($id === 'auto') {
+			// A prospective automatic family need not have an address yet; the ownership helper still checks its scopes.
+			$addresses[$family] = (string) PfbConfig::read("gen/pfb_dns_listen_auto{$family}");
+		} else {
+			$address = $family === 4 ? get_configured_vip_ipv4($id) : get_configured_vip_ipv6($id);
+			if ($address !== NULL) {
+				$addresses[$family] = $address;
+			}
+		}
+	}
+	if ($addresses === []) {
+		return [gettext('VIP-only mode requires at least one available Resolver VIP family. Select a VIP or Create VIP automatically, or disable VIP-only mode.')];
+	}
+	$added = json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE);
+	[$foreign, $frozen] = pfb_dns_listen_foreign_scopes($addresses, is_array($added) ? $added : []);
+	$errors = [];
+	foreach ($foreign + $frozen as $scope) {
+		$errors[] = sprintf(gettext('VIP-only mode: reconfigure the configured %1$s DNS-server list on %2$s deliberately before enabling this mode, including dormant configurations; it contains administrator-selected servers or its interface address is unknown. No settings were saved.'),
+			$scope['type'], htmlspecialchars($scope['interface']));
+	}
+	return $errors;
+}
+
 /**
  * DNS General's warning per foreign list: the interface, the list type and the servers found, as HTML.
  *
@@ -3731,9 +3774,13 @@ function pfb_dns_listen_vips_apply(): bool {
 	$changed = FALSE;
 	$resolver_changed = FALSE;
 	$dhcp_changed = FALSE;
-	$sync = static function (string $path, array $wanted, bool $csv = FALSE) use ($added, &$next, &$changed, &$resolver_changed, &$dhcp_changed): void {
+	$vip_only = pfb_dns_listen_vip_only();
+	$sync = static function (string $path, array $wanted, bool $csv = FALSE) use ($added, $vip_only, &$next, &$changed, &$resolver_changed, &$dhcp_changed): void {
 		$stored = config_get_path($path, $csv ? '' : []);
 		$list = $csv ? pfb_dns_proxy_tokens((string) $stored) : (is_array($stored) ? $stored : []);
+		if ($vip_only && !$csv && $wanted !== []) {
+			$list = array_values(array_intersect($list, $wanted));
+		}
 		foreach ($added[$path] ?? [] as $address) {
 			if (!in_array($address, $wanted, TRUE)) {
 				$list = array_values(array_diff($list, [$address]));
@@ -3770,6 +3817,12 @@ function pfb_dns_listen_vips_apply(): bool {
 			}
 			foreach ($lists as $list => $list_wanted) {
 				$path = "{$section}/{$interface}/{$list}";
+				if ($vip_only && (isset($foreign[$path]) || isset($frozen[$path]))) {
+					if (isset($added[$path])) {
+						$next[$path] = $added[$path];
+					}
+					continue;
+				}
 				if (!isset($frozen[$path])) {
 					$sync($path, isset($foreign[$path]) ? [] : $list_wanted);
 				} elseif (isset($added[$path])) {
@@ -4516,6 +4569,7 @@ function pfb_dns_proxy_usable_address(mixed $address): bool {
  * A Resolver VIP (pfb_dns_listen_vips()) joins the addresses of the list, so a client that still queries an interface address is served
  * (issue #3694); a family in $vip_only has its VIP take the place of that family's addresses instead (pfb_dns_proxy_vip_only_families()).
  * A list that names no usable address gets no VIP, unless it is loopback only.
+ * Explicit VIP-only mode ignores interface selections and returns active VIPs only; missing VIPs never restore ordinary endpoints.
  *
  * @param list<string> $interfaces
  * @param list<int> $vip_only the IP families (4, 6) whose VIP replaces the addresses of that family
@@ -4527,6 +4581,9 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, array $vip_only, ?
 	// the others are served); one added since is listened on once the next update pass rewrites the script and adds it live
 	// (pfb_dns_proxy_listeners_sync()), and the cron tick adds one the start could not bind. No restart.
 	$skipped = [];
+	if (pfb_dns_listen_vip_only()) {
+		return array_keys(pfb_dns_listen_vips());
+	}
 	$listen = [];
 	foreach (in_array('all', $interfaces, TRUE) ? ['all'] : $interfaces as $interface) {
 		if ($interface === 'all') {
@@ -4578,14 +4635,17 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, array $vip_only, ?
 }
 
 /**
- * The IP families whose Resolver VIP stands in for a listener's configured addresses instead of joining them (issue #3694). Every
- * listener keeps the interface addresses and adds the VIP, except DoH for a family whose DoH port is 443: port 443 on the interface
- * address belongs to the webConfigurator or a reverse proxy, so only the VIP serves it. Advertising 443 for an interface (issue #3694) changes no listener.
+ * The IP families whose Resolver VIP stands in for a listener's configured addresses instead of joining them (issue #3694).
+ * Explicit VIP-only mode restricts every transport. Otherwise only DoH using port 443 replaces its family's interface addresses,
+ * since port 443 there belongs to the webConfigurator or a reverse proxy. Advertising 443 for an interface changes no listener.
  *
  * @param string $kind 'plain', 'dot', 'doh' or 'doq'
  * @return list<int> 4 and/or 6
  */
 function pfb_dns_proxy_vip_only_families(string $kind): array {
+	if (pfb_dns_listen_vip_only()) {
+		return [4, 6];
+	}
 	if ($kind !== 'doh') {
 		return [];
 	}
@@ -5072,7 +5132,7 @@ function pfb_dns_proxy_answer_address(mixed $address): ?string {
  *   - any other address: the usable IPv4 and IPv6 addresses (pfb_dns_proxy_usable_address()) of the configured interface that carries
  *     it, never a VIP: a host that queries 10.0.0.1 is sent to 10.0.0.1 whether or not a VIP is active;
  *   - an address no configured interface carries has no entry: the gateway lets Unbound answer a query that reaches it there.
- * Loopback is never listed here (pfb_dns_proxy_interface_addresses() leaves it out), so it has no entry either.
+ * In explicit VIP-only mode every served address, including internal loopback, answers with the active VIP pair instead.
  *
  * @return array<string,list<string>> address the query reached => the addresses to answer with (at most one per IP family), both
  *         spelled as pfb_dns_proxy_answer_address() does, in the order the gateway listens
@@ -5093,6 +5153,10 @@ function pfb_dns_proxy_name_answers(): array {
 		if (($vip = pfb_dns_proxy_answer_address($vip)) !== NULL) {
 			$vips[$family($vip)] ??= $vip;
 		}
+	}
+	if (pfb_dns_listen_vip_only()) {
+		$pair = array_values($vips);
+		return $pair === [] ? [] : array_fill_keys(array_unique([...$locals, ...PFB_DNS_PROXY_LOOPBACK]), $pair);
 	}
 	$carried = [];	// address => the usable addresses of the interface that carries it (the first of two that do)
 	foreach (array_keys((array) get_configured_interface_with_descr()) as $interface) {

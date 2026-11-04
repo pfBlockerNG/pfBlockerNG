@@ -219,6 +219,13 @@ Authorization = property of **write**, not call site (generalises
     experimental pfBlockerNG DNS proxy in front of the DNS Resolver, with or without DNSBL. The feature is
     unreleased, so there is no grandfather and no migration from the DNSBL-section key it started as
     (`dnsbl/pfb_dns_proxy`, retired without an alias): absent reads Off = pre-feature behaviour.
+  - **`gen/pfb_dns_listen_vip_only` → `PfbToggle`** (issue #3699): default Off, sync `policy`,
+    beside the Resolver VIP policy fields. Explicit opt-in restricts pfB-DNS client-facing
+    listeners to active selected Resolver VIPs and answers the DNS Name with their address
+    pair, including internal loopback. Dormant when pfB-DNS is off; standalone Unbound is
+    unchanged. Activation validates prospective families and rejects administrator-owned
+    or unknown-interface DHCP/RA DNS lists under the fresh config lock, before any write.
+    No migration, backup state or lease deletion; absent preserves interface-compatible behavior.
   - **`dns/pfb_dns_saved`** (issue #3515, plain string — `NULL`/`NULL` adapters, not a GUI field):
     base64 JSON snapshot of the Resolver's `active_interface`/`enablessl`/`custom_options`
     (presence and value) taken before the DNS proxy moves it; `''` = not moved; any other value that is no snapshot is never

@@ -250,6 +250,7 @@ $section->addInput(new Form_Input(
 ))->setAttribute('aria-label', gettext('DNS Name'))
   ->setHelp('The name <strong>DDR</strong> gives clients as the target of the encrypted transports, and the name pfB-DNS answers <code>A</code> and <code>AAAA</code> queries for, '
 		. 'with the address the query arrived on. Clients connect by this name, so the <strong>SSL/TLS Certificate</strong> must list it as a DNS name (SAN). '
+		. 'In VIP-only mode, this name always resolves to the selected Resolver VIPs, including queries on internal loopback. '
 		. 'Example ( fw.example.lan ). Empty: pfB-DNS answers neither, and <strong>DDR</strong> needs a name.');
 $form->add($section);
 
