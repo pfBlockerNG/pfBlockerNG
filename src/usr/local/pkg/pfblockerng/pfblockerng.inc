@@ -4789,16 +4789,25 @@ function pfb_dns_proxy_name_normalized(mixed $value): ?string {
 
 /**
  * The options of pfB-DNS's four interface lists, token => label, which its page offers and validates against: All,
- * Localhost and what the DNS Resolver's Network Interfaces offer (interfaces, virtual IPs as _vip<uniqid>; no link-local
- * entries, the proxy never binds one), then each stored token none of them is, labelled so, so a save keeps it (issue #3557).
+ * Localhost and what the DNS Resolver's Network Interfaces offer (interfaces, unmanaged virtual IPs as _vip<uniqid>;
+ * no link-local entries), then unavailable stored tokens except package-owned VIPs. Reading options never changes storage.
  *
  * @return array<string,string>
  */
 function pfb_dns_proxy_interface_options(): array {
 	$options = ['all' => gettext('All'), 'lo0' => gettext('Localhost')] + get_possible_listen_ips();
+	$owned = [];
+	foreach (config_get_path('virtualip/vip', []) as $vip) {
+		if (pfb_is_managed_obj($vip['descr'] ?? '')) {
+			$owned['_vip' . ($vip['uniqid'] ?? '')] = TRUE;
+		}
+	}
+	$options = array_diff_key($options, $owned);
 	foreach (['pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface'] as $key) {
 		foreach (pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting($key)) as $token) {
-			$options[$token] ??= "{$token} (not currently available)";
+			if (!isset($owned[$token])) {
+				$options[$token] ??= "{$token} (not currently available)";
+			}
 		}
 	}
 	return $options;
@@ -4809,7 +4818,7 @@ function pfb_dns_proxy_interface_options(): array {
  * ingestion. A port is a whole number 1-65535, each of the four interface lists (DNS, DoT, DoH, DoQ) an array of at
  * least one entry of $valid_iface_list, a trusted entry an IP or CIDR prefix, the certificate one of $valid_cert_refs
  * (the refids the page's selector offers) and required once DoT, DoH or DoQ is on, the DNS Name empty or a valid name
- * (pfb_dns_proxy_name_normalized()) and not empty while DDR is on.
+ * (pfb_dns_proxy_name_normalized()) and required while pfB-DNS is on with DoT, DoH, DoQ or DDR.
  *
  * @param array<string,mixed> $post
  * @param list<string> $valid_iface_list
@@ -4851,8 +4860,10 @@ function pfb_validate_dns_proxy_listeners_post(array $post, array $valid_iface_l
 	$name = pfb_dns_proxy_name_normalized($post['pfb_dns_name'] ?? '');
 	if ($name === NULL) {
 		$errors[] = 'DNS Name must be a fully qualified domain name of ASCII letters, digits and hyphens, such as fw.example.lan. An IP address, a wildcard and a name under resolver.arpa are not accepted.';
-	} elseif ($name === '' && ($post['pfb_dns_ddr'] ?? '') === 'on') {
-		$errors[] = 'DDR needs a DNS name: enter the name the certificate covers, or turn DDR off.';
+	} elseif ($name === '' && ($post['pfb_dns'] ?? '') === 'on'
+	    && (($post['pfb_dns_dot'] ?? '') === 'on' || ($post['pfb_dns_doh'] ?? '') === 'on'
+	    || ($post['pfb_dns_doq'] ?? '') === 'on' || ($post['pfb_dns_ddr'] ?? '') === 'on')) {
+		$errors[] = 'DNS Name is required for DoT, DoH, DoQ or DDR: enter the name the certificate covers, or disable these services.';
 	}
 
 	// issue #3694: "Advertise DoH on port 443" chooses among the DoH interfaces of this very post and the Resolver VIPs the operator chose

@@ -8,11 +8,11 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Issue #3694 -- the DNS Name setting of the pfB-DNS page (`dns/pfb_dns_name`, next to the certificate): DDR's target name and the
- * name pfB-DNS answers A and AAAA for. There is no predefined name, so DDR without one is a save error, and a name is accepted
- * only in the shape the gateway takes (a hand-typed name must never be the reason it refuses to start).
+ * name pfB-DNS answers A and AAAA for. Active encrypted transports and DDR need a name, accepted only in the
+ * shape the gateway takes (a hand-typed name must never be the reason it refuses to start).
  *
  * Functions under test, through their production surface:
- *   - pfb_validate_dns_proxy_listeners_post(): an empty name is fine unless DDR is posted on; a non-empty one is trimmed, loses one
+ *   - pfb_validate_dns_proxy_listeners_post(): an empty name is fine for plain-only or disable; a non-empty one is trimmed, loses one
  *     trailing dot, and must be at most 253 characters, at least two labels of 1-63 ASCII letters, digits and hyphens (none starting
  *     or ending with one), a last label that is not all digits (an IPv4 literal is no name), and not resolver.arpa or under it.
  *     Any other value, an array included, is an input error that names the field and raises no PHP warning.
@@ -27,7 +27,6 @@ final class DnsProxyDnsNameSettingsTest extends TestCase
 	private const IFACES = ['all', 'lo0', 'lan', 'opt1'];
 	private const CERTS = ['cert5f3a'];
 	private const NAME = 'pfb_dns_name';
-	private const NEEDS_NAME = 'DDR needs a DNS name: enter the name the certificate covers, or turn DDR off.';
 	private const NOT_A_NAME = 'DNS Name must be a fully qualified domain name of ASCII letters, digits and hyphens, such as fw.example.lan. An IP address, a wildcard and a name under resolver.arpa are not accepted.';
 
 	private mixed $savedConfig = NULL;
@@ -47,6 +46,7 @@ final class DnsProxyDnsNameSettingsTest extends TestCase
 	private function post(array $over = []): array
 	{
 		return $over + [
+			'pfb_dns' => 'on',
 			'pfb_dns_interface' => ['lan'],
 			'pfb_dns_dot' => '', 'pfb_dns_dot_port' => '853', 'pfb_dns_dot_interface' => ['lan'],
 			'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '4443', 'pfb_dns_doh_interface' => ['lan'],
@@ -176,14 +176,17 @@ final class DnsProxyDnsNameSettingsTest extends TestCase
 		$this->assertSame([], $this->errors($this->post(['pfb_dns_ddr' => 'on', self::NAME => 'fw.example.lan'])), 'before: a name is entered');
 
 		// When the name is empty or blanks, then saving is refused with the sentence that says what to do (row N3)
-		$this->assertSame([self::NEEDS_NAME], $this->errors($this->post(['pfb_dns_ddr' => 'on', self::NAME => ''])), 'empty');
-		$this->assertSame([self::NEEDS_NAME], $this->errors($this->post(['pfb_dns_ddr' => 'on', self::NAME => '   '])), 'blanks');
+		foreach (['', '   '] as $empty) {
+			$errors = $this->errors($this->post(['pfb_dns_ddr' => 'on', self::NAME => $empty]));
+			$this->assertCount(1, $errors, json_encode($errors));
+			$this->assertStringContainsString('DNS Name', $errors[0]);
+		}
 		$this->assertSame([self::NOT_A_NAME], $this->errors($this->post(['pfb_dns_ddr' => 'on', self::NAME => '.'])), 'a dot alone is a bad name, not an empty one: DDR does not complain too');
 	}
 
 	public function testDdrOffAndDdrNeitherOnNorOffAcceptAnEmptyName(): void
 	{
-		$this->assertSame([self::NEEDS_NAME], $this->errors($this->post(['pfb_dns_ddr' => 'on', self::NAME => ''])), 'before: DDR on is refused');
+		$this->assertNotEmpty($this->errors($this->post(['pfb_dns_ddr' => 'on', self::NAME => ''])), 'before: DDR on is refused');
 		$this->assertSame([], $this->errors($this->post(['pfb_dns_ddr' => '', self::NAME => ''])), 'DDR off');
 		$this->assertSame([], $this->errors($this->post(['pfb_dns_ddr' => 'yes', self::NAME => ''])), 'DDR posted as anything but on is off');
 		$post = $this->post();

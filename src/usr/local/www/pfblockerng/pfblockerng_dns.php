@@ -65,7 +65,7 @@ $pconfig['pfb_dns_doq_interface']	= pfb_dns_proxy_tokens((string) pfb_dns_proxy_
 // issue #3583: DDR (RFC 9462) answers
 $pconfig['pfb_dns_ddr']			= PfbConfig::read('dns_shared/pfb_dns_ddr');
 $pconfig['pfb_dns_ddr_doh_443_interfaces'] = pfb_dns_proxy_tokens((string) PfbConfig::read('dns/pfb_dns_ddr_doh_443_interfaces'));	// issue #3694: where DDR advertises DoH on port 443
-// The Resolver's Network Interfaces (virtual IPs included) plus every stored token no longer offered (issue #3557)
+// Resolver interface choices and unavailable stored tokens, excluding package-owned VIPs.
 $options_dns_interface = pfb_dns_proxy_interface_options();
 // The certificates the Resolver offers: the same call, so the same list and descriptions
 $options_dns_cert = cert_build_list('cert', 'IPsec');
@@ -220,8 +220,9 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DNS Interface(s)'))
-  ->setHelp('Interfaces pfB-DNS answers plain DNS on, at the DNS Resolver\'s <strong>Listen Port</strong>. Loopback (<code>127.0.0.1</code> and <code>::1</code>) is always served: the firewall\'s own lookups go through pfB-DNS. '
-		. '<strong>Localhost</strong>: loopback only. <strong>All</strong>: every firewall address except link-local. At least one entry is required.');
+  ->setHelp('Selected interfaces and unmanaged VIPs use the DNS Resolver\'s <strong>Listen Port</strong>. '
+		. 'Package-owned Resolver VIPs automatically serve plain DNS on port <strong>53</strong>. '
+		. '<strong>Localhost</strong>: loopback. <strong>All</strong>: every eligible firewall address except link-local. At least one entry is required.');
 
 if ($options_dns_cert) {
 	$section->addInput(new Form_Select(
@@ -249,8 +250,8 @@ $section->addInput(new Form_Input(
 	[ 'placeholder' => 'fw.example.lan' ]
 ))->setAttribute('aria-label', gettext('DNS Name'))
   ->setHelp('The name <strong>DDR</strong> gives clients as the target of the encrypted transports, and the name pfB-DNS answers <code>A</code> and <code>AAAA</code> queries for, '
-		. 'with the address the query arrived on. Clients connect by this name, so the <strong>SSL/TLS Certificate</strong> must list it as a DNS name (SAN). '
-		. 'Example ( fw.example.lan ). Empty: pfB-DNS answers neither, and <strong>DDR</strong> needs a name.');
+		. 'with the address pair of the interface or VIP the query arrived on. DoT, DoH and DoQ require this name, covered by the <strong>SSL/TLS Certificate</strong> as a DNS name (SAN). '
+		. 'Example ( fw.example.lan ). A name is also required for <strong>DDR</strong>. Empty is allowed for plain DNS only or when disabling pfB-DNS.');
 $form->add($section);
 
 $section = new Form_Section('DNS over TLS (DoT)');
@@ -270,7 +271,7 @@ $section->addInput(new Form_Input(
 	'number',
 	$pconfig['pfb_dns_dot_port'],
 	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoT Listening Port' ]
-))->setHelp('Example ( 853 ) &mdash; a single PORT in the range 1 - 65535 (TCP).');
+))->setHelp('Interfaces and unmanaged VIPs: a single PORT in the range 1 - 65535 (TCP), e.g. 853. Package-owned Resolver VIPs automatically use <strong>853</strong>, not this port.');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_dot_port6',
@@ -289,7 +290,7 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DoT Interface(s)'))
-  ->setHelp('Interface(s) DoT listens on, besides loopback (<code>127.0.0.1</code> and <code>::1</code>), which is always served. At least one entry is required.');
+  ->setHelp('Interface(s) and unmanaged VIPs DoT listens on at the configured ports. Package-owned Resolver VIPs listen automatically on <strong>853</strong> when DoT is enabled. At least one entry is required.');
 $form->add($section);
 
 $section = new Form_Section('DNS over HTTPS (DoH)');
@@ -310,7 +311,7 @@ $section->addInput(new Form_Input(
 	'number',
 	$pconfig['pfb_dns_doh_port'],
 	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoH Listening Port' ]
-))->setHelp('Example ( 4443 ) &mdash; a single PORT in the range 1 - 65535 (TCP).');
+))->setHelp('Interfaces and unmanaged VIPs: a single PORT in the range 1 - 65535 (TCP), e.g. 4443. Package-owned Resolver VIPs automatically use <strong>443</strong>, not this port.');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doh_port6',
@@ -329,7 +330,7 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DoH Interface(s)'))
-  ->setHelp('Interface(s) DoH listens on, besides loopback (<code>127.0.0.1</code> and <code>::1</code>), which is always served for a local front end. At least one entry is required.');
+  ->setHelp('Interface(s) and unmanaged VIPs DoH listens on at the configured ports. Package-owned Resolver VIPs listen automatically on <strong>443</strong> when DoH is enabled. At least one entry is required.');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doh_trusted',
@@ -360,7 +361,7 @@ $section->addInput(new Form_Input(
 	'number',
 	$pconfig['pfb_dns_doq_port'],
 	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DoQ Listening Port' ]
-))->setHelp('Example ( 853 ) &mdash; a single PORT in the range 1 - 65535 (UDP).');
+))->setHelp('Interfaces and unmanaged VIPs: a single PORT in the range 1 - 65535 (UDP), e.g. 853. Package-owned Resolver VIPs automatically use <strong>853</strong>, not this port.');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doq_port6',
@@ -379,7 +380,7 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_dns_interface) ?: '1')
   ->setAttribute('aria-label', gettext('DoQ Interface(s)'))
-  ->setHelp('Interface(s) DoQ listens on, besides loopback (<code>127.0.0.1</code> and <code>::1</code>). At least one entry is required.');
+  ->setHelp('Interface(s) and unmanaged VIPs DoQ listens on at the configured ports. Package-owned Resolver VIPs listen automatically on <strong>853</strong> when DoQ is enabled. At least one entry is required.');
 $form->add($section);
 
 $section = new Form_Section('Discovery of Designated Resolvers (DDR)');
@@ -408,10 +409,10 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_ddr_doh_443) ?: '1')
   ->setAttribute('aria-label', gettext('Advertise DoH on port 443'))
-  ->setHelp('On the addresses of each selected entry DDR advertises DoH on port 443, with no port, for an interface where a reverse proxy answers DoH on 443. '
-		. 'pfB-DNS keeps listening on its DoH port there, and the proxy must really serve DoH on 443. '
-		. 'Other addresses advertise the configured DoH port. '
-		. 'An automatically created Resolver VIP is not offered: it serves DoH on port 443 itself, so DDR advertises 443 there. '
+  ->setHelp('On selected interfaces and unmanaged VIPs DDR advertises DoH on port 443, with no port, where a reverse proxy answers DoH on 443. '
+		. 'pfB-DNS keeps listening on its configured DoH port there, and the proxy must really serve DoH on 443. '
+		. 'Other ordinary interfaces and unmanaged VIPs advertise the configured DoH port. '
+		. 'Package-owned Resolver VIPs are automatic: they serve DoH on port <strong>443</strong> itself and DDR advertises 443, with no selection needed. '
 		. 'Some clients might not accept a port for the DoH server provided over DDR.'
 		. '<div class="infoblock">Default: <strong>None</strong></div>');
 $form->add($section);
