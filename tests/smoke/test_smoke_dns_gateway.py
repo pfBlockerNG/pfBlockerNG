@@ -180,9 +180,12 @@ CONFIG_PATHS = tuple(
             CFG_DNS_NAME,
             # DNS General's Resolver addresses: the tests switch them on, and the apply pass records the VIP row it adds
             f"{h.CFG_GLOBAL}/pfb_dns_listen_vip",
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_vip_only",
             f"{h.CFG_GLOBAL}/pfb_dns_listen_vip4",
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_vip6",
             f"{h.CFG_GLOBAL}/pfb_dns_listen_interface",
             f"{h.CFG_GLOBAL}/pfb_dns_listen_auto4",
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_auto6",
             f"{h.CFG_GLOBAL}/pfb_dns_listen_added",
             "virtualip/vip",
         )
@@ -2259,6 +2262,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
         ordinary = _capture(vm)
         for transport, port in (("udp", 1053), ("tcp", 1053), ("dot", 1853), ("doh-post", 5443), ("doq", 2853)):
             answer, raw = _ask(client, transport, gw.names.ready, port=port)
+            _say(f"ordinary {transport} at {PFSENSE_LAN_IP}:{port}\n{raw}")
             assert h.is_vip(answer), f"ordinary {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
         gui.post(
             DNS_GENERAL_PAGE,
@@ -2297,6 +2301,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             source = "-6 -I::1" if family == 6 else "-I127.0.0.1"
             result = vm.ssh(f"drill -b1232 {source} {DDR_NAME} @{shlex.quote(vip)} SVCB 2>&1")
             reply = _parse_reply(result.stdout)
+            _say(f"managed IPv{family} DDR at {vip}:53\n{reply.raw}")
             expected = _expected_svcb(DDR_TARGET, doh_443=True, address=vip)
             assert reply.rcode == "NOERROR" and _svcb_records(reply) == expected, (
                 f"IPv{family} local DDR must advertise actual 53/853/443 listeners: expected {expected}, "
@@ -2315,7 +2320,54 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
         with _client_route(client, vips[0]):
             for transport, port in (("udp", 53), ("tcp", 53), ("dot", 853), ("doh-post", 443), ("doq", 853)):
                 answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
+                _say(f"managed {transport} at {vips[0]}:{port}\n{raw}")
                 assert h.is_vip(answer), f"managed {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
+        gui.post(
+            DNS_GENERAL_PAGE,
+            {
+                "pfb_dns_listen_vip": "on",
+                "pfb_dns_listen_vip_only": "on",
+                "pfb_dns_listen_vip4": "auto",
+                "pfb_dns_listen_vip6": "auto",
+                "pfb_dns_listen_interface": "lo0",
+            },
+        )
+        assert h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_dns_listen_vip_only") == "on", (
+            "VIP-only activation must be accepted before its listener behavior is tested"
+        )
+        _apply(vm)
+        exclusive = _capture(vm)
+        assert exclusive.proxy_pid == live.proxy_pid, "VIP-only address changes must reconcile without a restart"
+        exclusive_sockets = exclusive.proxy_sockets()
+        _say(f"VIP-only standard-port sockets: {sorted(exclusive_sockets)}")
+        assert not (ordinary_wanted & exclusive_sockets), (
+            f"VIP-only still binds ordinary interface endpoints: {sorted(ordinary_wanted & exclusive_sockets)}"
+        )
+        for family, vip in zip((4, 6), vips, strict=True):
+            source = "-6 -I::1" if family == 6 else "-I127.0.0.1"
+            result = vm.ssh(f"drill -b1232 {source} {DDR_NAME} @{shlex.quote(vip)} SVCB 2>&1")
+            reply = _parse_reply(result.stdout)
+            _say(f"VIP-only IPv{family} DDR at {vip}:53\n{reply.raw}")
+            assert reply.rcode == "NOERROR" and _svcb_records(reply) == _expected_svcb(
+                DDR_TARGET, doh_443=True, address=vip
+            ), reply.raw
+        for address, port in [(vips[0], 53), (vips[1], 53), ("127.0.0.1", 1053), ("::1", 1053)]:
+            source = "-6 -I::1" if ":" in address else "-I127.0.0.1"
+            for kind, expected_address in zip(("A", "AAAA"), vips, strict=True):
+                result = vm.ssh(
+                    f"drill -b1232 {source} {shlex.quote(DDR_DNS_NAME)} @{shlex.quote(address)} {kind} -p {port} 2>&1"
+                )
+                reply = _parse_reply(result.stdout)
+                answers = [ipaddress.ip_address(r.rdata) for r in reply.answer if r.rtype == kind]
+                _say(f"VIP-only {kind} at {address}:{port}\n{reply.raw}")
+                assert reply.rcode == "NOERROR" and answers == [ipaddress.ip_address(expected_address)], (
+                    f"VIP-only {kind}: expected only {expected_address}, got {answers}\n{reply.raw}"
+                )
+        with _client_route(client, vips[0]):
+            for transport, port in (("udp", 53), ("tcp", 53), ("dot", 853), ("doh-post", 443), ("doq", 853)):
+                answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
+                _say(f"VIP-only managed {transport} at {vips[0]}:{port}\n{raw}")
+                assert h.is_vip(answer), f"VIP-only {transport} failed: {answer}\n{raw}"
     finally:
         gui.post(
             DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none", "pfb_dns_listen_vip6": "none"}

@@ -7,6 +7,7 @@ require_once __DIR__ . '/support/LiveListenerStandIn.php';
 require_once __DIR__ . '/support/PfbFlockClockFixture.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversFunction('pfb_dns_proxy_service')]
@@ -34,6 +35,7 @@ final class DnsProxyManagedVipPortsTest extends TestCase
 		$GLOBALS['pfb_test_vip_list'] = [];
 		$GLOBALS['pfb_test_configured_subnets'] = [];
 		$this->store('pfb_dns_interface', 'lan');
+		$this->store('pfb_dns_name', 'dns.example.net');
 		foreach (['dot', 'doh', 'doq'] as $kind) {
 			$this->store("pfb_dns_{$kind}", 'on');
 			$this->store("pfb_dns_{$kind}_interface", 'lan');
@@ -91,6 +93,30 @@ final class DnsProxyManagedVipPortsTest extends TestCase
 			$this->assertEqualsCanonicalizing([
 				"192.0.2.1:{$port}", "[2001:db8::1]:{$port6}", "127.0.0.1:{$port}", "[::1]:{$port6}",
 				self::VIP4 . ':' . self::STANDARD[$kind], '[' . self::VIP6 . ']:' . self::STANDARD[$kind],
+			], $wanted[$kind] ?? [], $kind);
+		}
+	}
+
+	/** @return array<string,array{bool}> */
+	public static function vipOwnership(): array
+	{
+		return ['managed' => [TRUE], 'administrator-managed' => [FALSE]];
+	}
+
+	#[DataProvider('vipOwnership')]
+	public function testVipOnlyRemovesOrdinaryEndpointsAndKeepsEachVipsOwnPortsAndInternalLoopback(bool $managed): void
+	{
+		$this->vips($managed);
+		$this->store('pfb_dns', 'on');
+		$this->store('pfb_dns_listen_vip_only', 'on');
+		$wanted = $this->command();
+		foreach (self::PORTS as $kind => $port) {
+			$port6 = $kind === 'udp+tcp' ? $port : $port + 100;
+			$vip_port = $managed ? self::STANDARD[$kind] : $port;
+			$vip_port6 = $managed ? self::STANDARD[$kind] : $port6;
+			$this->assertEqualsCanonicalizing([
+				"127.0.0.1:{$port}", "[::1]:{$port6}",
+				self::VIP4 . ':' . $vip_port, '[' . self::VIP6 . ']:' . $vip_port6,
 			], $wanted[$kind] ?? [], $kind);
 		}
 	}
@@ -156,7 +182,7 @@ final class DnsProxyManagedVipPortsTest extends TestCase
 		config_set_path('virtualip/vip', []);
 		$this->assertTrue($this->krEnsure());
 		$this->assertSame([], $this->krProxyCalls(), 'all fixed flags are address-only changes');
-		$removed = array_column(self::changeFrames($record), 'body');
+		$removed = array_column(array_filter(self::changeFrames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffb'), 'body');
 		$expected = [];
 		foreach (self::STANDARD as $kind => $port) {
 			$expected[] = "{$kind} " . self::VIP4 . ":{$port}";

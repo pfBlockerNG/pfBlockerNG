@@ -142,7 +142,7 @@ CFG_MARKER = f"{CFG_PFB_DNS}/pfb_dns_saved"
 # pfB-DNS's own listener settings: the interface lists, whose emptiness (pfb_dns_interface first) marks them unseeded,
 # and what the first turn-on seeds from the Resolver beside them.
 LISTENER_LISTS = ("pfb_dns_interface", "pfb_dns_dot_interface", "pfb_dns_doh_interface", "pfb_dns_doq_interface")
-LISTENER_KEYS = (*LISTENER_LISTS, "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_sslcertref")
+LISTENER_KEYS = (*LISTENER_LISTS, "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_sslcertref", "pfb_dns_name")
 CFG_DNSBL = f"{h.CFG_DNSBL_SETTINGS}/pfb_dnsbl"
 CFG_GROUP_POLICY = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp"
 CFG_GROUP_POLICY_LIST = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp_bypass_list"
@@ -355,6 +355,7 @@ def _configure_resolver(vm: SmokeVM, refid: str) -> None:
         # a value an earlier rig left would keep the turn-on from taking this Resolver's certificate and interfaces
         f"$d = config_get_path({h._php_str(CFG_PFB_DNS)}, array());\n"
         f"foreach (array({', '.join(h._php_str(key) for key in LISTENER_LISTS)}) as $k) {{ $d[$k] = ''; }}\n"
+        f"$d['pfb_dns_name'] = {h._php_str(CERT_NAME)};\n"
         f"config_set_path({h._php_str(CFG_PFB_DNS)}, $d);\n"
         f"config_del_path({h._php_str(h.dns_config_path('pfb_dns_dot'))});\n"
         f"config_del_path({h._php_str(h.dns_config_path('pfb_dns_dot_port'))});\n"

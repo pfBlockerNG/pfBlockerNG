@@ -94,6 +94,7 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		foreach ($settings + [
 			self::SETTINGS . 'pfb_dns_interface' => 'lan', self::SHARED . 'pfb_dns_doh' => 'on', self::SHARED . 'pfb_dns_doh_port' => (string) $this->dohPort,
 			self::SETTINGS . 'pfb_dns_doh_interface' => 'lan',
+			self::SETTINGS . 'pfb_dns_name' => self::NAME,
 		] as $path => $value) {
 			config_set_path($path, $value);
 		}
@@ -210,7 +211,8 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		$this->assertTrue($ready);
 		$this->assertStringContainsString(" --doh-listen-443 '" . self::VIP . "'", $this->rc());
 		$this->assertSame([], $this->krProxyCalls(), 'no restart');
-		$this->assertSame([], self::sent($record), 'the box cannot assign the VIP yet: nothing is sent, and the next pass tries again');
+		$listener_changes = array_values(array_filter(self::changeFrames($record), static fn (array $frame): bool => $frame['head'] !== self::TABLE));
+		$this->assertSame([], $listener_changes, 'unavailable sockets are retried later; the independent name-address table can still refresh');
 	}
 
 	public function testAVipThatGoesIsRemovedLiveFromItsStandardDohListenerAndRestartsNothing(): void

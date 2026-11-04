@@ -92,14 +92,6 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->assertSame([4, 6], pfb_dns_proxy_vip_only_families($kind));
 		$this->assertSame($wanted, pfb_dns_proxy_interface_addresses($interfaces, pfb_dns_proxy_vip_only_families($kind)), 'no interface/public fallback, including unavailable VIP families');
 		$this->assertSame($wanted, pfb_dns_proxy_listen());
-		if ($kind !== 'plain') {
-			PfbConfig::write(pfb_dns_config_key("pfb_dns_{$kind}"), 'on');
-			PfbConfig::write(pfb_dns_config_key("pfb_dns_{$kind}_interface"), $selection);
-			$warnings = [];
-			$flags = pfb_dns_proxy_tls_flags($warnings);
-			preg_match_all('/--' . $kind . '-listen\s+\x27([^\x27]+)\x27/', $flags, $matches);
-			$this->assertSame([...$wanted, ...PFB_DNS_PROXY_LOOPBACK], $matches[1], 'actual encrypted command keeps internal loopback only beside VIPs');
-		}
 	}
 
 	public function testNameAnswersUseTheVipPairAlsoOnInternalLoopback(): void

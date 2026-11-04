@@ -5044,7 +5044,7 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
  * local HAProxy. Stored values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a
  * host prefix; an interface that is none, is down or has no address is warned about by name and adds no listener.
  *
- * @param list<string> $warnings gets one line per group left out (its port, or its interface list, is unusable) and per interface that adds no listener
+ * @param list<string> $warnings gets one line per group left out (its name, port or interface list is unusable) and per interface that adds no listener
  */
 function pfb_dns_proxy_tls_flags(array &$warnings): string {
 	$flags = '';

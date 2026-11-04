@@ -273,7 +273,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			// auto-create mode: the DNSBL sinkhole VIP is the apply's to provision, so its validation does not force DNSBL off here
 			'pfb_dnsbl' => $dnsbl ? 'on' : '', 'pfb_dnsvip_auto' => $dnsbl ? 'on' : '', 'dnsbl_interface' => 'lo0',
 		]);
-		PfbConfig::writeSectionSystem(self::PFB_DNS, ['pfb_dns' => 'on']);
+		PfbConfig::writeSectionSystem(self::PFB_DNS, ['pfb_dns' => 'on', 'pfb_dns_name' => 'fw.example.lan']);
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
 		$GLOBALS['pfb']['dnsbl_control'] = PfbToggle::Off;
 		$GLOBALS['pfb']['dnsbl_control_legacy'] = PfbToggle::Off;

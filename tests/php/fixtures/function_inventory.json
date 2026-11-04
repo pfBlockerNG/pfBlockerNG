@@ -1742,6 +1742,79 @@
             }
         ]
     },
+    "pfb_dns_ddr_probe": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "listener",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_ddr_result": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "stdout",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "stderr",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "exit",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_ddr_status": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "refresh",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_ddr_status_panel": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "status",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_legacy_shared_value": {
         "returnsRef": false,
         "returnType": "mixed",
