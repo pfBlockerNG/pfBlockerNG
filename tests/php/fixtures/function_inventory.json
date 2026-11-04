@@ -1742,6 +1742,19 @@
             }
         ]
     },
+    "pfb_dns_ddr_doh_443_migrate": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_legacy_shared_value": {
         "returnsRef": false,
         "returnType": "mixed",
@@ -1765,6 +1778,11 @@
     "pfb_dns_listen_advertisements_drop": {
         "returnsRef": false,
         "returnType": "void",
+        "params": []
+    },
+    "pfb_dns_listen_auto_vips": {
+        "returnsRef": false,
+        "returnType": "array",
         "params": []
     },
     "pfb_dns_listen_family_addresses": {
@@ -1838,6 +1856,46 @@
         "returnType": "array",
         "params": []
     },
+    "pfb_dns_proxy_address_table": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "lines",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "socket",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "3.0"
+            }
+        ]
+    },
+    "pfb_dns_proxy_answer_address": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "address",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_await_ready": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1858,19 +1916,6 @@
                 "variadic": false,
                 "type": "?string",
                 "default": "NULL"
-            }
-        ]
-    },
-    "pfb_dns_proxy_certificate_ip_sans": {
-        "returnsRef": false,
-        "returnType": "array",
-        "params": [
-            {
-                "name": "entry",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
             }
         ]
     },
@@ -1919,6 +1964,19 @@
             }
         ]
     },
+    "pfb_dns_proxy_certificate_sans": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_certificate_sync": {
         "returnsRef": false,
         "returnType": "void",
@@ -1927,6 +1985,11 @@
     "pfb_dns_proxy_command_listeners": {
         "returnsRef": false,
         "returnType": "array",
+        "params": []
+    },
+    "pfb_dns_proxy_command_name_answers": {
+        "returnsRef": false,
+        "returnType": "?array",
         "params": []
     },
     "pfb_dns_proxy_confirm_ready": {
@@ -1990,23 +2053,36 @@
             }
         ]
     },
-    "pfb_dns_proxy_ddr_doh_443_locked": {
+    "pfb_dns_proxy_ddr_doh_443_addresses": {
         "returnsRef": false,
-        "returnType": "bool",
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_dns_proxy_ddr_doh_443_options": {
+        "returnsRef": false,
+        "returnType": "array",
         "params": [
             {
-                "name": "ipv6",
+                "name": "doh_tokens",
                 "byRef": false,
                 "variadic": false,
-                "type": "bool",
-                "default": "false"
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
     "pfb_dns_proxy_ddr_flags": {
         "returnsRef": false,
         "returnType": "string",
-        "params": []
+        "params": [
+            {
+                "name": "warnings",
+                "byRef": true,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_dns_proxy_ddr_warnings": {
         "returnsRef": false,
@@ -2071,6 +2147,19 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_doh_port_443": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "ipv6",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
             }
         ]
     },
@@ -2144,6 +2233,13 @@
         "params": [
             {
                 "name": "interfaces",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "vip_only",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
@@ -2373,6 +2469,24 @@
         "returnType": "int",
         "params": []
     },
+    "pfb_dns_proxy_name_answers": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_dns_proxy_name_normalized": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_proxy_notify": {
         "returnsRef": false,
         "returnType": "void",
@@ -2462,6 +2576,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dns_proxy_rc_command": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
     },
     "pfb_dns_proxy_ready": {
         "returnsRef": false,
@@ -2793,6 +2912,32 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_dns_proxy_usable_address": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "address",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_proxy_vip_only_families": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dns_redirect_rule": {
         "returnsRef": false,
         "returnType": "array",
@@ -2813,6 +2958,19 @@
             },
             {
                 "name": "exclude_alias",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dns_redirect_target6": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "iface",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
