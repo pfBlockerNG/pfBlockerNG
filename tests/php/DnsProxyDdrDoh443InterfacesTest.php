@@ -459,7 +459,10 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 		$this->assertStringNotContainsString('--ddr-doh-4436', pfb_dns_proxy_ddr_flags());
 	}
 
-	/** @return array<string,array{string,string,string}> a retired switch, the section it is stored in, its value */
+	/**
+	 * @return array<string,list<string>> a retired switch, the section it is stored in, its value, and optionally a second switch kept
+	 *                                    in that section with the same value; a key of '' stores no switch at all
+	 */
 	public static function retiredSwitches(): array
 	{
 		return [
@@ -467,6 +470,8 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 			'the IPv6 switch On, in the shared section' => ['pfb_dns_ddr_doh_443_6', 'dns_shared', 'on'],
 			'the IPv4 switch On, in the pfB-DNS section (before the split)' => ['pfb_dns_ddr_doh_443', 'dns', 'on'],
 			'the IPv4 switch Off' => ['pfb_dns_ddr_doh_443', 'dns_shared', ''],
+			'both switches On, in the shared section' => ['pfb_dns_ddr_doh_443', 'dns_shared', 'on', 'pfb_dns_ddr_doh_443_6'],
+			'no switch stored at all' => ['', 'dns_shared', ''],
 		];
 	}
 
@@ -475,10 +480,12 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 	 * nothing on 443 by choice, and files no notice.
 	 */
 	#[DataProvider('retiredSwitches')]
-	public function testARetiredSwitchNeverSeedsTheSelectionOnTheOrdinaryUpgrade(string $key, string $section, string $value): void
+	public function testARetiredSwitchNeverSeedsTheSelectionOnTheOrdinaryUpgrade(string $key, string $section, string $value, string $other = ''): void
 	{
-		// Given DoH on lan with DDR on, a retired switch stored, and the selection never set
-		config_set_path(PFB_SECTIONS[$section] . '/' . $key, $value);
+		// Given DoH on lan with DDR on, the retired switch(es) stored, and the selection never set
+		foreach (array_filter([$key, $other]) as $name) {
+			config_set_path(PFB_SECTIONS[$section] . '/' . $name, $value);
+		}
 		$this->assertNull(config_get_path(PFB_SECTIONS['dns'] . '/' . self::FIELD), 'before: the selection is never set');
 
 		// When the ordinary upgrade runs
