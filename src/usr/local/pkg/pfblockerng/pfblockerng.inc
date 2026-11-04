@@ -4829,11 +4829,13 @@ function pfb_dns_proxy_ddr_doh_443_addresses(): array {
 		return [];
 	}
 	$vips = pfb_dns_listen_vips();
+	$automatic = pfb_dns_listen_auto_vips();
 	$carried = pfb_dns_proxy_interface_addresses($selected, []);
 	$addresses = [];
 	foreach (pfb_dns_proxy_interface_addresses(pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_doh_interface')), pfb_dns_proxy_vip_only_families('doh')) as $address) {
 		$vip = $vips[$address] ?? NULL;
-		if (($vip === NULL) ? in_array($address, $carried, TRUE) : in_array($vip, $selected, TRUE)) {
+		if (!in_array($address, $automatic, TRUE) &&
+		    (($vip === NULL) ? in_array($address, $carried, TRUE) : in_array($vip, $selected, TRUE))) {
 			$addresses[] = $address;
 		}
 	}

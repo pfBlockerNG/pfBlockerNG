@@ -9,6 +9,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_ddr_doh_443_options')]
 #[CoversFunction('pfb_validate_dns_proxy_listeners_post')]
 #[CoversFunction('pfb_dns_proxy_listeners_stored')]
+#[CoversFunction('pfb_dns_proxy_ddr_doh_443_addresses')]
+#[CoversFunction('pfb_dns_proxy_ddr_flags')]
 final class DnsProxyDdrDoh443AutoVipSelectionTest extends TestCase
 {
 	private const FIELD = 'pfb_dns_ddr_doh_443_interfaces';
@@ -97,5 +99,30 @@ final class DnsProxyDdrDoh443AutoVipSelectionTest extends TestCase
 		$post = $this->post(['lan', '_vipuser6']);
 		$this->assertSame([], pfb_validate_dns_proxy_listeners_post($post, ['lan', '_vipauto4', '_vipuser6'], []));
 		$this->assertSame('lan,_vipuser6', pfb_dns_proxy_listeners_stored($post)[self::FIELD] ?? NULL);
+	}
+
+	public function testStoredAutomaticVipSelectionDoesNotOverrideItsActualBoundPort(): void
+	{
+		$this->store('pfb_dns_doh', 'on');
+		$this->store('pfb_dns_doh_port', '4443');
+		$this->store(self::FIELD, 'lan,_vipauto4,_vipuser6');
+		$this->assertSame(
+			['192.0.2.1', 'fd12:3456::9'],
+			pfb_dns_proxy_ddr_doh_443_addresses(),
+			'a migrated or retained automatic VIP token must not force 443; its actual listener determines DDR'
+		);
+	}
+
+	public function testStoredAutomaticVipTokenAddsNoDdrPortOverrideFlag(): void
+	{
+		$this->store('pfb_dns_doh', 'on');
+		$this->store('pfb_dns_doh_port', '4443');
+		$this->store('pfb_dns_ddr', 'on');
+		$this->store('pfb_dns_name', 'fw.example.lan');
+		$this->store(self::FIELD, 'lan,_vipauto4,_vipuser6');
+		$flags = pfb_dns_proxy_ddr_flags();
+		$this->assertStringContainsString(" --ddr-doh-443 '192.0.2.1'", $flags);
+		$this->assertStringContainsString(" --ddr-doh-443 'fd12:3456::9'", $flags);
+		$this->assertStringNotContainsString(" --ddr-doh-443 '172.16.53.53'", $flags);
 	}
 }
