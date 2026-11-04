@@ -4978,8 +4978,8 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 }
 
 /**
- * The gateway's --dot-* / --doh-* / --doq-* arguments for each group that is on and has a parsable port and an interface list that
- * names an interface. A group listens on its own interface list's addresses and the Resolver VIPs (pfb_dns_proxy_vip_only_families() says
+ * The gateway's --dot-* / --doh-* / --doq-* arguments for each group that is on and has a valid DNS Name, a parsable port and an
+ * interface list that names an interface. A group listens on its own interface list's addresses and the Resolver VIPs (pfb_dns_proxy_vip_only_families() says
  * where a VIP takes an address's place), and always on loopback too, a stable backend for a
  * local HAProxy. Stored values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a
  * host prefix; an interface that is none, is down or has no address is warned about by name and adds no listener.
@@ -4988,8 +4988,13 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
  */
 function pfb_dns_proxy_tls_flags(array &$warnings): string {
 	$flags = '';
+	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name'));
 	foreach (['dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $kind => $label) {
 		if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
+			continue;
+		}
+		if ($name === NULL || $name === '') {
+			$warnings[] = "DNS proxy: {$label} requires a valid DNS Name; {$label} is not served";
 			continue;
 		}
 		$port = pfb_dns_proxy_listener_port(pfb_dns_proxy_setting("pfb_dns_{$kind}_port"));
