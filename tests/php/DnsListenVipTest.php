@@ -66,7 +66,7 @@ final class DnsListenVipTest extends TestCase
 		$before = $GLOBALS['config'];
 		$this->apply();
 		$this->assertSame($before, $GLOBALS['config']);
-		$this->assertSame(['192.0.2.1', '2001:db8::1'], pfb_dns_proxy_interface_addresses(['lan']));
+		$this->assertSame(['192.0.2.1', '2001:db8::1'], pfb_dns_proxy_interface_addresses(['lan'], []));
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
 	}
 
@@ -77,7 +77,7 @@ final class DnsListenVipTest extends TestCase
 		$this->put('pfb_dns_listen_vip6', $id);
 		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::53']]);
 		$this->apply();
-		$this->assertSame(['192.0.2.1', '2001:db8::1'], pfb_dns_proxy_interface_addresses(['lan']));
+		$this->assertSame(['192.0.2.1', '2001:db8::1'], pfb_dns_proxy_interface_addresses(['lan'], []));
 		$this->assertSame(['2001:db8::53'], config_get_path('dhcpdv6/lan/dnsserver'));
 		$this->assertSame([], config_get_path('virtualip/vip', []));
 	}
@@ -87,18 +87,44 @@ final class DnsListenVipTest extends TestCase
 		return [[''], ['none'], ['_vip_gone_old']];
 	}
 
-	public function testSelectedIpv6ReplacesOnlyIpv6AndPreservesUserVipOnDisable(): void
+	public function testSelectedIpv6JoinsTheInterfaceAddressesAndPreservesUserVipOnDisable(): void
 	{
 		config_set_path('virtualip/vip', [$this->vip(self::V6)]);
 		$this->put('pfb_dns_listen_vip', 'on');
 		$this->put('pfb_dns_listen_vip6', '_vipchosen');
 		$this->apply();
-		$this->assertSame(['192.0.2.1', self::V6], pfb_dns_proxy_interface_addresses(['lan']));
+		$this->assertSame(['192.0.2.1', '2001:db8::1', self::V6], pfb_dns_proxy_interface_addresses(['lan'], []), 'the IPv6 VIP joins the addresses and adds no IPv4 one');
+		$this->assertSame(['192.0.2.1', self::V6], pfb_dns_proxy_interface_addresses(['lan'], [6]), 'where it stands in, it takes the IPv6 address\'s place only');
 		$this->assertContains('_vipchosen', pfb_dns_proxy_tokens(config_get_path('unbound/active_interface')));
 		$this->put('pfb_dns_listen_vip', '');
 		$this->apply();
 		$this->assertSame([$this->vip(self::V6)], config_get_path('virtualip/vip'));
 		$this->assertSame('lan', config_get_path('unbound/active_interface'));
+	}
+
+	/** @return array<string,array{0:list<int>,1:list<string>}> families whose VIP stands in for the addresses, the addresses listened on */
+	public static function vipOnlyFamilies(): array
+	{
+		return [
+			'no family: both VIPs join' => [[], ['192.0.2.1', '2001:db8::1', '172.16.53.53', self::V6]],
+			'IPv4: its VIP takes the IPv4 address\'s place, the IPv6 VIP joins' => [[4], ['172.16.53.53', '2001:db8::1', self::V6]],
+			'IPv6: its VIP takes the IPv6 address\'s place, the IPv4 VIP joins' => [[6], ['192.0.2.1', self::V6, '172.16.53.53']],
+			'both families: the VIPs take both places' => [[4, 6], ['172.16.53.53', self::V6]],
+		];
+	}
+
+	/**
+	 * @param list<int> $vipOnly
+	 * @param list<string> $expected
+	 */
+	#[DataProvider('vipOnlyFamilies')]
+	public function testAFamilyListedAsVipOnlyHasItsVipTakeThePlaceOfItsAddresses(array $vipOnly, array $expected): void
+	{
+		config_set_path('virtualip/vip', [$this->vip('172.16.53.53', 'chosen4'), $this->vip(self::V6, 'chosen6')]);
+		$this->put('pfb_dns_listen_vip', 'on');
+		$this->put('pfb_dns_listen_vip4', '_vipchosen4');
+		$this->put('pfb_dns_listen_vip6', '_vipchosen6');
+		$this->assertSame($expected, pfb_dns_proxy_interface_addresses(['lan'], $vipOnly));
 	}
 
 	public function testAutoIpv6CreatesOnlyDedicated128AndNeverDeletesDnsblVip(): void
@@ -130,7 +156,7 @@ final class DnsListenVipTest extends TestCase
 		$this->apply();
 		$this->assertCount(2, config_get_path('virtualip/vip'));
 		$this->assertSame('fd00:53:53:53:53:53:53:54', config_get_path('virtualip/vip/1/subnet'));
-		$this->assertSame(['192.0.2.1', 'fd00:53:53:53:53:53:53:54'], pfb_dns_proxy_interface_addresses(['lan']));
+		$this->assertSame(['192.0.2.1', '2001:db8::1', 'fd00:53:53:53:53:53:53:54'], pfb_dns_proxy_interface_addresses(['lan'], []));
 	}
 
 	#[DataProvider('v4Conflicts')]
@@ -164,7 +190,7 @@ final class DnsListenVipTest extends TestCase
 		config_set_path('virtualip/vip', $rows);
 		$this->apply();
 		$this->assertSame($rows, config_get_path('virtualip/vip'));
-		$this->assertSame(['192.0.2.1', 'fd00:53:53:53:53:53:53:1'], pfb_dns_proxy_interface_addresses(['lan']));
+		$this->assertSame(['192.0.2.1', '2001:db8::1', 'fd00:53:53:53:53:53:53:1'], pfb_dns_proxy_interface_addresses(['lan'], []));
 	}
 
 	#[DataProvider('raModes')]
@@ -209,7 +235,7 @@ final class DnsListenVipTest extends TestCase
 		$this->put('pfb_dns_listen_vip', 'on');
 		$this->put('pfb_dns_listen_vip4', '_vipchosen');
 		$this->apply();
-		$this->assertSame(['172.16.53.1', '2001:db8::1'], pfb_dns_proxy_interface_addresses(['lan']));
+		$this->assertSame(['192.0.2.1', '2001:db8::1', '172.16.53.1'], pfb_dns_proxy_interface_addresses(['lan'], []), 'the VIP joins the interface addresses');
 		$this->assertSame(['192.0.2.53', '172.16.53.1'], config_get_path('dhcpd/lan/dnsserver'));
 		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
 	}

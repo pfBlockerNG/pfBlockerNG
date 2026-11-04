@@ -2112,6 +2112,13 @@
                 "default": null
             },
             {
+                "name": "vip_only",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
                 "name": "skipped",
                 "byRef": true,
                 "variadic": false,
@@ -2754,6 +2761,19 @@
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_dns_proxy_vip_only_families": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "kind",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_dns_redirect_rule": {
         "returnsRef": false,

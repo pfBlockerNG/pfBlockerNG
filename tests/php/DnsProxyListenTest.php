@@ -270,10 +270,10 @@ final class DnsProxyListenTest extends TestCase
 			['lan' => self::UP, 'opt1' => self::UP]
 		);
 
-		$this->assertSame(['198.51.100.1', '2001:db8:1::1'], pfb_dns_proxy_interface_addresses(['opt1']));
+		$this->assertSame(['198.51.100.1', '2001:db8:1::1'], pfb_dns_proxy_interface_addresses(['opt1'], []));
 		$this->assertSame(
 			$this->listen('lan,opt1'),
-			pfb_dns_proxy_interface_addresses(['lan', 'opt1']),
+			pfb_dns_proxy_interface_addresses(['lan', 'opt1'], []),
 			'listen() is this derivation over the stored list: one rule set, not two'
 		);
 	}
@@ -283,8 +283,8 @@ final class DnsProxyListenTest extends TestCase
 		$this->seedInterfaces(['lan' => '192.0.2.1'], [], ['lan' => self::UP]);
 		$GLOBALS['pfb_test_configured_ip_addresses'] = ['lan' => '192.0.2.1'];
 
-		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_interface_addresses(['lan', 'all']));
-		$this->assertSame([], pfb_dns_proxy_interface_addresses([], $skipped), 'an empty list is not a running value: it never means every address');
+		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_interface_addresses(['lan', 'all'], []));
+		$this->assertSame([], pfb_dns_proxy_interface_addresses([], [], $skipped), 'an empty list is not a running value: it never means every address');
 		$this->assertSame([], $skipped);
 	}
 
@@ -296,7 +296,7 @@ final class DnsProxyListenTest extends TestCase
 			['lan' => self::UP, 'opt1' => ['status' => 'down', 'enable' => TRUE]]
 		);
 
-		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_interface_addresses(['lan', 'lan', 'opt1']));
+		$this->assertSame(['192.0.2.1'], pfb_dns_proxy_interface_addresses(['lan', 'lan', 'opt1'], []));
 	}
 
 	// -----------------------------------------------------------------------

@@ -4370,11 +4370,16 @@ EOF;
  * interface), 'down' (down or disabled) or 'no address' (nothing usable after the filters above). 'lo0' (Localhost, which the
  * callers add) is never reported, and with 'all' in the list no named entry is.
  *
+ * A Resolver VIP (pfb_dns_listen_vips()) joins the addresses of the list, so a client that still queries an interface address is served
+ * (issue #3694); a family in $vip_only has its VIP take the place of that family's addresses instead (pfb_dns_proxy_vip_only_families()).
+ * A list that names no usable address gets no VIP, unless it is loopback only.
+ *
  * @param list<string> $interfaces
+ * @param list<int> $vip_only the IP families (4, 6) whose VIP replaces the addresses of that family
  * @param list<array{interface:string,why:string}>|null $skipped
  * @return list<string>
  */
-function pfb_dns_proxy_interface_addresses(array $interfaces, ?array &$skipped = NULL): array {
+function pfb_dns_proxy_interface_addresses(array $interfaces, array $vip_only, ?array &$skipped = NULL): array {
 	// shortcut: addresses are read at apply time and baked into the rc script. The proxy skips one that has gone away since (logged,
 	// the others are served); one added since is listened on once the next update pass rewrites the script and adds it live
 	// (pfb_dns_proxy_listeners_sync()), and the cron tick adds one the start could not bind. No restart.
@@ -4417,13 +4422,15 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, ?array &$skipped =
 	foreach (pfb_dns_listen_vips() as $vip => $id) {
 		$v6 = str_contains($vip, ':');
 		$replaced = FALSE;
-		foreach ($listen as &$address) {
-			if (str_contains($address, ':') === $v6) {
-				$address = $vip;
-				$replaced = TRUE;
+		if (in_array($v6 ? 6 : 4, $vip_only, TRUE)) {
+			foreach ($listen as &$address) {
+				if (str_contains($address, ':') === $v6) {
+					$address = $vip;
+					$replaced = TRUE;
+				}
 			}
+			unset($address);
 		}
-		unset($address);
 		if (!$replaced) {
 			$listen[$vip] = $vip;
 		}
@@ -4432,13 +4439,36 @@ function pfb_dns_proxy_interface_addresses(array $interfaces, ?array &$skipped =
 }
 
 /**
- * Addresses the DNS proxy binds for plain DNS: those of pfB-DNS's own interface list (dns/pfb_dns_interface).
+ * The IP families whose Resolver VIP stands in for a listener's configured addresses instead of joining them (issue #3694). Every
+ * listener keeps the interface addresses and adds the VIP, except DoH for a family DDR advertises on port 443: its DoH port is 443 or
+ * its "Advertise DoH on port 443" option is on. Port 443 on the interface address belongs to the webConfigurator, so only the VIP serves it.
+ *
+ * @param string $kind 'plain', 'dot', 'doh' or 'doq'
+ * @return list<int> 4 and/or 6
+ */
+function pfb_dns_proxy_vip_only_families(string $kind): array {
+	if ($kind !== 'doh') {
+		return [];
+	}
+	return array_values(array_filter(
+		[4, 6],
+		static fn (int $family): bool => pfb_dns_proxy_ddr_doh_443_locked($family === 6)
+		    || pfb_dns_proxy_setting($family === 6 ? 'pfb_dns_ddr_doh_443_6' : 'pfb_dns_ddr_doh_443') === PfbToggle::On
+	));
+}
+
+/**
+ * Addresses the DNS proxy binds for plain DNS: those of pfB-DNS's own interface list (dns/pfb_dns_interface), and the Resolver VIPs.
  *
  * @param list<array{interface:string,why:string}>|null $skipped as in pfb_dns_proxy_interface_addresses()
  * @return list<string>
  */
 function pfb_dns_proxy_listen(?array &$skipped = NULL): array {
-	return pfb_dns_proxy_interface_addresses(pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface')), $skipped);
+	return pfb_dns_proxy_interface_addresses(
+		pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting('pfb_dns_interface')),
+		pfb_dns_proxy_vip_only_families('plain'),
+		$skipped
+	);
 }
 
 /**
@@ -4715,7 +4745,8 @@ function pfb_dns_proxy_listeners_stored(array $post): array {
 
 /**
  * The gateway's --dot-* / --doh-* / --doq-* arguments for each group that is on and has a parsable port and an interface list that
- * names an interface. A group listens on its own interface list's addresses and always on loopback too, a stable backend for a
+ * names an interface. A group listens on its own interface list's addresses and the Resolver VIPs (pfb_dns_proxy_vip_only_families() says
+ * where a VIP takes an address's place), and always on loopback too, a stable backend for a
  * local HAProxy. Stored values are untrusted (a hand-edited config.xml): trusted entries must be IPs/CIDRs, a bare one is a
  * host prefix; an interface that is none, is down or has no address is warned about by name and adds no listener.
  *
@@ -4737,7 +4768,7 @@ function pfb_dns_proxy_tls_flags(array &$warnings): string {
 			$warnings[] = "DNS proxy: the stored {$label} interface list names no interface; {$label} is not served";
 			continue;
 		}
-		$addresses = array_merge(pfb_dns_proxy_interface_addresses($interfaces, $skipped), PFB_DNS_PROXY_LOOPBACK);
+		$addresses = array_merge(pfb_dns_proxy_interface_addresses($interfaces, pfb_dns_proxy_vip_only_families($kind), $skipped), PFB_DNS_PROXY_LOOPBACK);
 		array_push($warnings, ...pfb_dns_proxy_skipped_warnings($label, $skipped));
 		foreach ($addresses as $address) {
 			$flags .= " --{$kind}-listen " . escapeshellarg($address);
@@ -4829,10 +4860,11 @@ function pfb_dns_proxy_certificate_ip_sans(array $entry): array {
 
 /**
  * The pfB-DNS page's DDR certificate warnings (issue #3583), from the stored settings: with DDR on and a certificate selected, one text per
- * public address that DoT, DoH or DoQ listens on and that is not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462
- * section 4.2) checks the address it queried against that SAN, so it will not use those transports there. The DoH listener is left out
- * while dns_shared/pfb_dns_ddr_doh_443 is on and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose certificate
- * is not visible here (on 443 they reach this listener, so it is checked). Never blocks a save.
+ * public IPv4 address that DoT, DoH or DoQ listens on and that is not an iPAddress SAN of the certificate. A client verifying DDR (RFC 9462
+ * section 4.2) checks the address it queried against that SAN, so it will not use those transports there. A public IPv6 address is never
+ * named: the gateway designates no transport on it (issue #3694). The DoH listener is left out while dns_shared/pfb_dns_ddr_doh_443 is on
+ * and DoH does not listen on 443 itself: its clients then reach a reverse proxy, whose certificate is not visible here (on 443 they reach
+ * this listener, so it is checked). Never blocks a save.
  *
  * @return list<string> HTML, each text starting "DDR: " and naming the address and the transports it serves
  */
@@ -4854,14 +4886,15 @@ function pfb_dns_proxy_ddr_warnings(): array {
 			continue;
 		}
 		$interfaces = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
-		foreach (pfb_dns_proxy_interface_addresses($interfaces) as $address) {
+		foreach (pfb_dns_proxy_interface_addresses($interfaces, pfb_dns_proxy_vip_only_families($kind)) as $address) {
 			$ipv6 = str_contains($address, ':') && pfb_ipv4_from_mapped($address) === NULL;
 			$advertise = $ipv6 ? 'pfb_dns_ddr_doh_443_6' : 'pfb_dns_ddr_doh_443';
 			if ($kind === 'doh' && pfb_dns_proxy_setting($advertise) === PfbToggle::On
 			    && !pfb_dns_proxy_ddr_doh_443_locked($ipv6)) {
 				continue;
 			}
-			if (pfb_dns_proxy_public_address($address)) {
+			// The gateway designates nothing on a public IPv6 address (a global prefix changes: no certificate keeps an IP SAN for it)
+			if (!$ipv6 && pfb_dns_proxy_public_address($address)) {
 				$packed = (string) inet_pton($address);
 				$served[$packed] ??= ['address' => $address, 'labels' => []];
 				$served[$packed]['labels'][$label] = $label;

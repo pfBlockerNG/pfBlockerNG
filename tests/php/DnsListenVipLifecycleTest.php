@@ -58,7 +58,7 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame('pfB_DNS_LISTEN_VIP_v6', config_get_path('virtualip/vip/0/descr'));
 		$this->assertSame('lo0', config_get_path('virtualip/vip/0/interface'));
 		$this->assertSame(['2001:db8::53', 'fd12:3456::53'], config_get_path('dhcpdv6/lan/dnsserver'));
-		$this->assertSame(['192.0.2.1', 'fd12:3456::53'], pfb_dns_proxy_listen());
+		$this->assertSame(['192.0.2.1', '2001:db8::1', 'fd12:3456::53'], pfb_dns_proxy_listen());
 		$before = config_get_path('virtualip/vip');
 		pfb_dns_listen_vips_apply();
 		$this->assertSame($before, config_get_path('virtualip/vip'), 'sync replay reuses the marked VIP');
@@ -72,7 +72,7 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame(['lan', 'lo0', $id], pfb_dns_proxy_tokens(config_get_path('unbound/active_interface')));
 	}
 
-	public function testEveryEncryptedCategoryKeepsBothLoopbackBackendsWithVipSubstitution(): void
+	public function testEveryEncryptedCategoryKeepsBothLoopbackBackendsAndTheInterfaceAddressBesideTheVips(): void
 	{
 		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
 		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
@@ -84,11 +84,11 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$warnings = [];
 		$flags = pfb_dns_proxy_tls_flags($warnings);
 		foreach (['dot', 'doh', 'doq'] as $kind) {
-			foreach (['127.0.0.1', '::1', '172.16.53.53', 'fd00:53:53:53:53:53:53:53'] as $host) {
+			foreach (['127.0.0.1', '::1', '192.0.2.1', '172.16.53.53', 'fd00:53:53:53:53:53:53:53'] as $host) {
 				$this->assertStringContainsString('--' . $kind . "-listen '{$host}'", $flags);
 			}
 		}
-		$this->assertSame(['172.16.53.53', 'fd00:53:53:53:53:53:53:53'], pfb_dns_proxy_interface_addresses(['lo0']));
+		$this->assertSame(['172.16.53.53', 'fd00:53:53:53:53:53:53:53'], pfb_dns_proxy_interface_addresses(['lo0'], []));
 	}
 
 	public function testRcListenerInventoryUsesEachFamilysPortAndPlainDnsStillUses53(): void
@@ -342,9 +342,9 @@ final class DnsListenVipLifecycleTest extends TestCase
 		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
 		pfb_dns_listen_vips_apply();
 		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'down', 'enable' => TRUE];
-		$this->assertSame([], pfb_dns_proxy_interface_addresses(['opt1']));
-		$this->assertSame([], pfb_dns_proxy_interface_addresses([]));
-		$this->assertSame(['172.16.53.53'], pfb_dns_proxy_interface_addresses(['lo0']));
+		$this->assertSame([], pfb_dns_proxy_interface_addresses(['opt1'], []));
+		$this->assertSame([], pfb_dns_proxy_interface_addresses([], []));
+		$this->assertSame(['172.16.53.53'], pfb_dns_proxy_interface_addresses(['lo0'], []));
 	}
 
 	#[\PHPUnit\Framework\Attributes\DataProvider('rejectedSyncedAddresses')]
@@ -446,7 +446,7 @@ final class DnsListenVipLifecycleTest extends TestCase
 		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
 		pfb_dns_listen_vips_apply();
 		PfbConfig::write('gen/pfb_dns_listen_vip', '');
-		$this->assertSame([], pfb_dns_proxy_interface_addresses(['lo0']));
+		$this->assertSame([], pfb_dns_proxy_interface_addresses(['lo0'], []));
 	}
 
 	#[\PHPUnit\Framework\Attributes\DataProvider('unparsablePublishedAddresses')]

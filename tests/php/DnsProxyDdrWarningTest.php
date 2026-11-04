@@ -126,15 +126,15 @@ final class DnsProxyDdrWarningTest extends TestCase
 			'public IPv4, certificate without SANs' => [['wan' => ['8.8.8.8']], [], ['8.8.8.8'], ['8.8.8.8']],
 			'public IPv4, certificate has the SAN of another address' => [['wan' => ['8.8.8.8']], ['IP:1.1.1.1'], ['8.8.8.8'], ['8.8.8.8']],
 			'public IPv4, matching iPAddress SAN' => [['wan' => ['8.8.8.8']], ['IP:8.8.8.8'], ['8.8.8.8'], []],
-			'public IPv6, certificate without SANs' => [['wan' => ['2606:4700::1']], [], ['2606:4700::1'], ['2606:4700::1']],
+			'public IPv6, certificate without SANs: the gateway designates nothing there, so no warning' => [['wan' => ['2606:4700::1']], [], ['2606:4700::1'], []],
 			'IPv6 listener compressed, SAN written out in full' => [['wan' => ['2606:4700::1']], ['IP:2606:4700:0:0:0:0:0:1'], ['2606:4700::1'], []],
 			'IPv6 listener written out in full, SAN compressed' => [['wan' => ['2606:4700:0:0:0:0:0:1']], ['IP:2606:4700::1'], ['2606:4700:0:0:0:0:0:1'], []],
 			'a DNS SAN equal to the address is not an iPAddress SAN' => [['wan' => ['8.8.8.8']], ['DNS:8.8.8.8'], ['8.8.8.8'], ['8.8.8.8']],
 			'SANs of other kinds around two matching iPAddress SANs' => [
 				['wan' => ['8.8.8.8', '2606:4700::1']], ['DNS:fw.example.lan', 'IP:8.8.8.8', 'email:a@b.example', 'IP:2606:4700::1'], ['8.8.8.8', '2606:4700::1'], [],
 			],
-			'two public addresses, none in the certificate' => [['wan' => ['8.8.8.8', '2606:4700::1']], [], ['8.8.8.8', '2606:4700::1'], ['8.8.8.8', '2606:4700::1']],
-			'two public addresses, one in the certificate' => [['wan' => ['8.8.8.8', '2606:4700::1']], ['IP:8.8.8.8'], ['8.8.8.8', '2606:4700::1'], ['2606:4700::1']],
+			'two public addresses, none in the certificate: only the IPv4 one is named' => [['wan' => ['8.8.8.8', '2606:4700::1']], [], ['8.8.8.8', '2606:4700::1'], ['8.8.8.8']],
+			'two public addresses, the IPv4 one in the certificate' => [['wan' => ['8.8.8.8', '2606:4700::1']], ['IP:8.8.8.8'], ['8.8.8.8', '2606:4700::1'], []],
 			'loopback, private, CGNAT, link-local and ULA addresses' => [
 				['lan' => ['192.168.1.1', 'fd12:3456::1'], 'opt1' => ['172.31.255.254', 'fe80::1'], 'opt2' => ['100.127.255.254'], 'lo0' => ['127.0.0.1', '::1']],
 				[], ['192.168.1.1', 'fd12:3456::1', '172.31.255.254', '100.127.255.254'], [],
@@ -161,7 +161,7 @@ final class DnsProxyDdrWarningTest extends TestCase
 	{
 		// Given DDR on, DoT on these interfaces, and a certificate with these SANs
 		$this->box($interfaces, $san);
-		$this->assertSame($listened, pfb_dns_proxy_interface_addresses(array_keys($interfaces)), 'the addresses pfSense lists for the DoT interfaces');
+		$this->assertSame($listened, pfb_dns_proxy_interface_addresses(array_keys($interfaces), []), 'the addresses pfSense lists for the DoT interfaces');
 
 		// Then exactly the public addresses that are not an iPAddress SAN are named, one warning each
 		$this->assertSame(array_map(static fn (string $address): string => self::warning($address, 'DoT'), $warned), pfb_dns_proxy_ddr_warnings());
@@ -411,16 +411,21 @@ final class DnsProxyDdrWarningTest extends TestCase
 		$this->assertSame($public, pfb_dns_proxy_public_address($address), "is '{$address}' public?");
 	}
 
-	public function testReverseProxyWarningsAreSuppressedOnlyForTheAdvertisedFamily(): void
+	public function testReverseProxyWarningsAreSuppressedOnlyForTheAdvertisedFamilyAndAPublicIpv6AddressIsNeverNamed(): void
 	{
+		// Given DoH on a public IPv4 and a public IPv6 address, the IPv4 family advertised on 443 (a reverse proxy answers there)
 		$this->box(['wan' => ['8.8.8.8', '2606:4700::1']], [], [
 			'pfb_dns_dot' => '', 'pfb_dns_doh' => 'on', 'pfb_dns_doh_port' => '8443',
 			'pfb_dns_doh_port6' => '9443', 'pfb_dns_ddr_doh_443' => 'on', 'pfb_dns_ddr_doh_443_6' => '',
 		]);
-		$this->assertSame([self::warning('2606:4700::1', 'DoH')], pfb_dns_proxy_ddr_warnings());
+		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'IPv4 is the reverse proxy\'s, and the gateway designates nothing on the public IPv6 address');
+
+		// When the IPv6 family is the advertised one instead, the IPv4 address is checked
 		$this->store(['pfb_dns_ddr_doh_443' => '', 'pfb_dns_ddr_doh_443_6' => 'on']);
 		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings());
+
+		// And with DoH on 443 for IPv6 the IPv6 address is still not named
 		$this->store(['pfb_dns_doh_port6' => '443']);
-		$this->assertSame([self::warning('8.8.8.8', 'DoH'), self::warning('2606:4700::1', 'DoH')], pfb_dns_proxy_ddr_warnings());
+		$this->assertSame([self::warning('8.8.8.8', 'DoH')], pfb_dns_proxy_ddr_warnings());
 	}
 }

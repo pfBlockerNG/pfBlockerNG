@@ -369,8 +369,10 @@ and nothing is written to the reply log. Names match case-insensitively (ASCII) 
   the Additional section has the A or AAAA record for `NAME` = L.
 - `resolver.arpa.` SOA and NS: `resolver.arpa. 300 IN SOA localhost. nobody.invalid. 1 3600 1200 604800 300` and
   `resolver.arpa. 300 IN NS localhost.`.
-- Everything else at or under the zone, the SVCB query over DoT, DoH or DoQ, and a plain query on an address no
-  qualifying transport listens on: NOERROR, no data, that SOA in Authority.
+- Everything else at or under the zone, the SVCB query over DoT, DoH or DoQ, a plain query on an address no
+  qualifying transport listens on, and one on a public IPv6 address (outside the IPv6 ranges `::/128`, `::1/128`,
+  `fc00::/7`, `fe80::/10`, `fec0::/10` and `2001:db8::/32`; a global prefix changes, so no certificate keeps an IP SAN for
+  it, issue #3694): NOERROR, no data, that SOA in Authority.
 - Over UDP a reply over 512 bytes (the client's OPT size, clamped to 512 to 1232, when it sent one) is replaced by
   header, question and OPT with TC set; a reply to a query with an OPT carries an OPT advertising 1232.
 
