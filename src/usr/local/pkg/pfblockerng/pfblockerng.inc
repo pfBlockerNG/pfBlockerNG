@@ -15892,8 +15892,6 @@ function pfb_dns_widget_row(array $cells): string {
  * granted), plus the enabled static routes that leave through such an interface. pfSense derives these from active_interface, so
  * with the Resolver on loopback they vanish from unbound.conf (the IPv4 grants come from the NAT networks and stay) and the
  * proxy's IPv6 clients, whose address Unbound only learns from the PROXYv2 header, would be REFUSED.
- * While DNS Redirect is on (DNSBL running), the interfaces it redirects join the interfaces above and are also granted their IPv4
- * network (issue #3694): a redirected client reaches the proxy from its own interface whichever list names it.
  *
  * @return list<string> valid CIDR networks (they are written into custom_options), once each; none when the
  *         admin turned the automatic access control off
@@ -15913,24 +15911,12 @@ function pfb_dns_proxy_acl_networks(): array {
 	if (in_array('all', $interfaces, TRUE)) {
 		$interfaces = array_keys(get_configured_interface_with_descr());
 	}
-	// A redirected client arrives from its own interface's network whichever list names it (#3694); the rows exist while DNS Redirect is on and DNSBL runs.
-	$redirect = (pfb_dnsbl_active() && PfbConfig::read('dnsbl/dnsbl_redir') === PfbToggle::On)
-	    ? pfb_dns_proxy_tokens((string) PfbConfig::read('dnsbl/dnsbl_redir_int')) : [];
-	$interfaces = array_unique([...$interfaces, ...$redirect]);
 
 	$routes = get_staticroutes(FALSE, FALSE, TRUE);
 	$networks = [];
 	foreach ($interfaces as $interface) {
-		if (interface_has_gateway($interface)) {
-			continue;
-		}
-		$v4 = in_array($interface, $redirect, TRUE) ? get_interface_ip($interface) : NULL;
-		if (is_ipaddrv4($v4)) {
-			$bits = get_interface_subnet($interface);
-			$networks[] = gen_subnet($v4, $bits) . "/{$bits}";
-		}
 		$address = get_interface_ipv6($interface);
-		if (!is_ipaddrv6($address)) {
+		if (!is_ipaddrv6($address) || interface_has_gateway($interface)) {
 			continue;
 		}
 		if (!is_linklocal($address)) {
