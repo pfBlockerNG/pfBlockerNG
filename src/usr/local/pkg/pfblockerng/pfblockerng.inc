@@ -15868,6 +15868,172 @@ function pfb_dns_status_rows(array $entries, array $labels): array {
 }
 
 /**
+ * Classify drill's decoded response without interpreting SVCB parameters; keep both output streams verbatim.
+ *
+ * @return array{state:string,stdout:string,stderr:string}
+ */
+function pfb_dns_ddr_result(string $stdout, string $stderr, int $exit): array {
+	$state = 'error';
+	if ($exit === 124 || $exit === 137) {
+		$state = 'timeout';
+	} elseif ($exit === 0
+	    && preg_match('/^;; ->>HEADER<<- .*rcode: NOERROR,/m', $stdout) === 1
+	    && preg_match('/^;; flags: .*;\s*QUERY: \d+, ANSWER: (\d+),/m', $stdout, $answer) === 1) {
+		$state = (int) $answer[1] > 0 ? 'advertised' : 'empty';
+	}
+	return ['state' => $state, 'stdout' => $stdout, 'stderr' => $stderr];
+}
+
+/**
+ * Query one canonical bound IP:port, never a hostname. timeout reaps this transient command and its descendants.
+ *
+ * @return array{state:string,stdout:string,stderr:string}
+ */
+function pfb_dns_ddr_probe(string $listener, float $budget): array {
+	$colon = strrpos($listener, ':');
+	$host = $colon === FALSE ? '' : trim(substr($listener, 0, $colon), '[]');
+	$port = $colon === FALSE ? '' : substr($listener, $colon + 1);
+	if (@inet_pton($host) === FALSE || !ctype_digit($port) || (string) (int) $port !== $port
+	    || (int) $port < 1 || (int) $port > 65535 || pfb_dns_proxy_host_port($host, $port) !== $listener) {
+		return pfb_dns_ddr_result('', 'Invalid bound listener', 1);
+	}
+	if (!is_finite($budget) || $budget <= 0) {
+		return ['state' => 'budget', 'stdout' => '', 'stderr' => ''];
+	}
+	$args = ['/usr/bin/timeout', '-s', 'TERM', '-k1', sprintf('%.3F', max(0.001, min(2.0, $budget))), '/usr/bin/drill', '-b1232'];
+	array_push($args, ...(str_contains($host, ':') ? ['-6', '-I::1'] : ['-I127.0.0.1']));
+	array_push($args, '_dns.resolver.arpa.', "@{$host}", 'SVCB', '-p', $port);
+	$stdout = @tmpfile();
+	$stderr = @tmpfile();
+	if ($stdout === FALSE || $stderr === FALSE) {
+		if (is_resource($stdout)) {
+			fclose($stdout);
+		}
+		if (is_resource($stderr)) {
+			fclose($stderr);
+		}
+		return pfb_dns_ddr_result('', 'Cannot capture drill output', 1);
+	}
+	try {
+		$pipes = [];
+		$process = @proc_open('exec ' . implode(' ', array_map('escapeshellarg', $args)),
+		    [0 => ['file', '/dev/null', 'r'], 1 => $stdout, 2 => $stderr], $pipes);
+		if (!is_resource($process)) {
+			return pfb_dns_ddr_result('', 'Cannot start drill', 1);
+		}
+		$exit = proc_close($process);
+		rewind($stdout);
+		rewind($stderr);
+		return pfb_dns_ddr_result((string) stream_get_contents($stdout), (string) stream_get_contents($stderr), $exit);
+	} finally {
+		fclose($stdout);
+		fclose($stderr);
+	}
+}
+
+/**
+ * Read-only local DDR observations at the gateway's actual plain listeners, independent of pending settings and the rc script.
+ * No drill runs until refresh; the widget never calls this page-only helper.
+ *
+ * @return array{notice:string,queried:?string,rows:list<array<string,string>>}
+ */
+function pfb_dns_ddr_status(bool $refresh): array {
+	$deadline = hrtime(TRUE) + 10000000000;
+	$status = ['notice' => '', 'queried' => NULL, 'rows' => []];
+	if (!pfb_dns_proxy_ready()) {
+		$status['notice'] = 'pfB-DNS service is not running; no addresses queried.';
+		return $status;
+	}
+	$listeners = pfb_dns_proxy_listener_list(NULL, min(PFB_DNS_PROXY_CTL_TIMEOUT, 3.0));
+	if ($listeners === NULL) {
+		$status['notice'] = 'Bound listener list unavailable; no addresses queried.';
+		return $status;
+	}
+	$labels = pfb_dns_proxy_address_interfaces();
+	$interfaces = (array) get_configured_interface_with_descr();
+	$vips = [];
+	foreach (config_get_path('virtualip/vip', []) as $vip) {
+		$packed = @inet_pton((string) ($vip['subnet'] ?? ''));
+		if ($packed === FALSE) {
+			continue;
+		}
+		$managed = pfb_managed_obj_match($vip, 'pfB_DNS_LISTEN_VIP_v4') || pfb_managed_obj_match($vip, 'pfB_DNS_LISTEN_VIP_v6');
+		$vips[(string) inet_ntop($packed)] = [
+			'interface' => (string) ($interfaces[$vip['interface'] ?? ''] ?? $vip['interface'] ?? ''),
+			'identity' => $managed ? 'Managed Resolver VIP' : 'Manual VIP: ' . (string) ($vip['descr'] ?? $vip['uniqid'] ?? ''),
+		];
+	}
+	if ($refresh) {
+		$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
+	}
+	foreach (array_keys($listeners['listening']['udp+tcp'] ?? []) as $listener) {
+		$host = trim(substr($listener, 0, (int) strrpos($listener, ':')), '[]');
+		$row = $vips[$host] ?? ['interface' => $labels[$host] ?? $host, 'identity' => 'Interface'];
+		$row['address'] = $listener;
+		$result = ['state' => 'not_queried', 'stdout' => '', 'stderr' => ''];
+		if ($refresh) {
+			// Reserve timeout's one-second KILL grace inside the whole-request deadline.
+			$remaining = ($deadline - hrtime(TRUE)) / 1000000000 - 1.0;
+			$result = $remaining <= 0
+			    ? ['state' => 'budget', 'stdout' => '', 'stderr' => '']
+			    : pfb_dns_ddr_probe($listener, $remaining);
+		}
+		$status['rows'][] = array_merge($row, $result);
+	}
+	if ($status['rows'] === []) {
+		$status['notice'] = 'pfB-DNS reports no bound plain DNS listeners; no addresses queried.';
+	}
+	return $status;
+}
+
+/**
+ * The page-only DDR section: decoded answers are observations, never an encrypted endpoint health check.
+ *
+ * @param array{notice:string,queried:?string,rows:list<array<string,string>>} $status
+ */
+function pfb_dns_ddr_status_panel(array $status): string {
+	$body = '<p><a class="btn btn-default" id="pfb-dns-ddr-refresh" href="pfblockerng_dns.php?refresh_ddr=1#pfb-dns-status-ddr">Refresh DDR advertisements</a></p>'
+	    . '<p>Local-source SVCB queries to <code>_dns.resolver.arpa.</code> at current bound plain DNS listeners. '
+	    . 'Advertised does not prove client ACL access, certificate acceptance or reverse-proxy reachability. '
+	    . 'An omitted SVCB port means the protocol default (DoH 443; DoT/DoQ 853).</p>';
+	if ($status['queried'] !== NULL) {
+		$body .= '<p>Queried: ' . htmlspecialchars($status['queried']) . '</p>';
+	}
+	if ($status['notice'] !== '') {
+		$body .= '<p>' . htmlspecialchars($status['notice']) . '</p>';
+	}
+	$rows = '';
+	foreach ($status['rows'] as $row) {
+		$meaning = match ($row['state']) {
+			'advertised' => 'Advertised',
+			'empty' => 'NOERROR, no advertisements',
+			'error' => 'Query error',
+			'timeout' => 'Query timed out',
+			'budget' => 'Not queried: request deadline reached',
+			default => 'Not yet queried',
+		};
+		$output = '';
+		foreach (['stdout', 'stderr'] as $stream) {
+			if ($row[$stream] !== '') {
+				$output .= '<div>' . strtoupper($stream) . '</div><pre class="pfb-dns-ddr-' . $stream
+				    . '" style="white-space:pre;overflow-x:auto;max-width:100%">' . htmlspecialchars($row[$stream]) . '</pre>';
+			}
+		}
+		$rows .= '<tr><td>' . htmlspecialchars($row['interface']) . '</td><td>' . htmlspecialchars($row['identity']) . '</td><td>'
+		    . htmlspecialchars($row['address']) . '</td><td><strong>' . $meaning . '</strong>' . $output . '</td></tr>';
+	}
+	if ($rows !== '') {
+		$body .= '<div class="table-responsive"><table class="table table-striped table-hover table-condensed">'
+		    . '<thead><tr><th>Interface</th><th>Address identity</th><th>Plain DNS listener</th><th>DDR observation</th></tr></thead><tbody>'
+		    . $rows . '</tbody></table></div>';
+	}
+	return '<div class="panel panel-default" id="pfb-dns-status-ddr"><div class="panel-heading"><h2 class="panel-title">DDR Advertisements'
+	    . '<span class="widget-heading-icon"><a data-toggle="collapse" href="#pfb-dns-status-ddr_panel-body" aria-label="Toggle DDR Advertisements">'
+	    . '<i class="fa-solid fa-plus-circle"></i></a></span></h2></div><div id="pfb-dns-status-ddr_panel-body" class="panel-body collapse in">'
+	    . $body . '</div></div>';
+}
+
+/**
  * The pfB-DNS tab's status panel for a pfb_dns_status() result: a section for the service and the mode, then a section per transport
  * holding a table of Interface | Address | State rows (header only when the transport is off) or, when it is on with no listener, the
  * notice; no transport section when the status claims no transport. Each section is the markup of an open COLLAPSIBLE Form_Section,
@@ -15907,6 +16073,9 @@ function pfb_dns_status_panel(array $status): string {
 		// No <tbody> without a row: pfSenseHelpers.js fills every empty one with a blank row
 		$html .= $section("pfb-dns-status-{$key}", "{$title} Listeners", '<div class="table-responsive"><table class="table table-striped table-hover table-condensed">'
 		    . '<thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead>' . ($rows === '' ? '' : "<tbody>{$rows}</tbody>") . '</table></div>');
+	}
+	if (isset($status['ddr'])) {
+		$html .= pfb_dns_ddr_status_panel($status['ddr']);
 	}
 	return "<div id=\"pfb-dns-status\">{$html}</div>";
 }
