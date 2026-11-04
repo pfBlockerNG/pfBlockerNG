@@ -8,9 +8,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #3557 -- the pfB-DNS page offers and accepts the interface tokens the DNS Resolver's Network Interfaces do
- * (configured interfaces and virtual IPs, `_vip<uniqid>`), and keeps every token it already stores selectable, labelled
- * "not currently available" when nothing offers it any more (a removed or disabled interface, a deleted VIP). A save
- * that leaves the selection alone therefore stores every token it read; a token neither offered nor stored is rejected.
+ * (configured interfaces and unmanaged virtual IPs, `_vip<uniqid>`), and keeps unavailable stored tokens selectable.
+ * Package-owned service VIPs are excluded; manual VIPs survive an unchanged save.
  *
  * Page-level round trip: the page's own load statements (from `$pconfig = array();` to the option lists) run against a
  * seeded config, a browser POST is derived from what they render (a multi-select submits each selected value that is an
@@ -64,6 +63,7 @@ final class DnsProxyInterfaceOptionsTest extends TestCase
 		$dns = $stored === '' ? [] : array_fill_keys(self::LISTS, $stored);
 		$GLOBALS['config'] = [
 			'unbound' => ['enable' => '', 'port' => '53', 'active_interface' => $active],
+			'virtualip' => ['vip' => [['uniqid' => '5f3a1b2c3d4e5', 'subnet' => '192.0.2.5', 'descr' => 'Manual Resolver VIP']]],
 			'installedpackages' => ['pfblockerngdns' => ['config' => [0 => $dns]]],
 		];
 	}
