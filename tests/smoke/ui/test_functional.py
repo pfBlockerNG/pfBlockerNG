@@ -1926,8 +1926,8 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
     }
     # a multi-select posts as name[]: a bare scalar is not a list and the page rejects it
     posted = {f"{key}[]" if key.endswith("_interface") else key: value for key, value in valid.items()}
-    # Clear the 443 multi-select: the form scraper otherwise posts its first option, not an empty selection.
-    posted["pfb_dns_ddr_doh_443_interfaces[]"] = ""
+    # Select the offered LAN explicitly: the form scraper otherwise carries "all" into the changed DoH list.
+    posted["pfb_dns_ddr_doh_443_interfaces[]"] = "lan"
     expected = {**valid, "pfb_dns_doh_trusted": "192.0.2.10 2001:db8::/32"}
 
     def stored() -> dict[str, str]:
@@ -1935,8 +1935,8 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
 
     try:
         helpers.config_set(vm, CERT_CFG, "")
-        helpers.config_set(vm, DDR_443_CFG, "")
-        assert helpers.config_get(vm, DDR_443_CFG) == "", "seed did not take: nothing is advertised on 443"
+        helpers.config_set(vm, DDR_443_CFG, "lan")
+        assert helpers.config_get(vm, DDR_443_CFG) == "lan", "seed did not take: LAN must be advertised on 443"
         for key, value in seeded.items():
             helpers.config_set(vm, helpers.dns_config_path(key), value)
         assert stored() == seeded, "seed did not take: DoH/DoQ must start Off with the default ports"
