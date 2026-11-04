@@ -247,7 +247,8 @@ $section->addInput(new Form_Input(
 	'text',
 	$pconfig['pfb_dns_name'],
 	[ 'placeholder' => 'fw.example.lan' ]
-))->setHelp('The name <strong>DDR</strong> gives clients as the target of the encrypted transports, and the name pfB-DNS answers <code>A</code> and <code>AAAA</code> queries for, '
+))->setAttribute('aria-label', gettext('DNS Name'))
+  ->setHelp('The name <strong>DDR</strong> gives clients as the target of the encrypted transports, and the name pfB-DNS answers <code>A</code> and <code>AAAA</code> queries for, '
 		. 'with the address the query arrived on. Clients connect by this name, so the <strong>SSL/TLS Certificate</strong> must list it as a DNS name (SAN). '
 		. 'Example ( fw.example.lan ). Empty: pfB-DNS answers neither, and <strong>DDR</strong> needs a name.');
 $form->add($section);
