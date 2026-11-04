@@ -42,14 +42,16 @@ What it proves, in file order:
   over UDP and TCP; the client VM too, on every transport, where its IPv6 address reaches the firewall: the smoke
   pfSense's pf carries `block drop in log inet6 all` and no LAN pass rule, so there it does not and the diagnostics
   are logged);
-* DDR (issue #3583), with ``dns_shared/pfb_dns_ddr`` on and the gateway restarted with ``--ddr``:
-  ``_dns.resolver.arpa. SVCB``
+* DDR (issue #3583, its target name issue #3694), with ``dns_shared/pfb_dns_ddr`` on, the DNS name set
+  (``dns/pfb_dns_name``) and the gateway restarted with ``--dns-name NAME --ddr``: ``_dns.resolver.arpa. SVCB``
   over UDP and TCP gets the DoH, DoT and DoQ records for the LAN address (alpn, ``port`` only off its default,
-  ``dohpath``, ``ipv4hint``, the firewall's FQDN as TargetName, its A record in Additional); another type or name under
+  ``dohpath``, ``ipv4hint``, the DNS name as TargetName, its A record in Additional); another type or name under
   ``resolver.arpa.`` and the SVCB query over DoT and DoH get NODATA with the 300-second SOA, apex SOA and NS are
   answered, and Unbound's query log never names ``resolver.arpa``, so the decider saw none of it; a client the Resolver
   ACL refuses gets REFUSED; with the toggle off the client gets what Unbound itself answers, asked on the box at
   port 5354; with ``dns_shared/pfb_dns_ddr_doh_443`` on the DoH record has no ``port`` and keeps its hint and path;
+* the DNS name (issue #3694) is answered over plain DNS with the address the query reached: A at the LAN address is
+  the LAN address and A at an automatic Resolver VIP is the VIP, in any letter case; a subdomain of it is Unbound's;
 * ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
@@ -158,6 +160,9 @@ LISTENER_SETTINGS = {
 }
 CFG_DDR = h.dns_config_path("pfb_dns_ddr")  # issue #3583: the DDR toggle and the DoH-on-port-443 toggle
 CFG_DDR_DOH_443 = h.dns_config_path("pfb_dns_ddr_doh_443")
+CFG_DNS_NAME = h.dns_config_path("pfb_dns_name")  # issue #3694: DDR's target name, and the name the gateway answers
+DDR_DNS_NAME = h.unique_domain("ddrname")  # inert: not RFC 6761, not HSTS-preloaded, listed in no feed
+DDR_TARGET = f"{DDR_DNS_NAME}."  # the SVCB TargetName and the Additional record's owner, as dig prints them
 # SNAPSHOT_PATHS already holds the interface lists, which LISTENER_SETTINGS names again
 CONFIG_PATHS = tuple(
     dict.fromkeys(
@@ -168,6 +173,7 @@ CONFIG_PATHS = tuple(
             AUTO_ROWS_OFF,
             CFG_DDR,
             CFG_DDR_DOH_443,
+            CFG_DNS_NAME,
         )
     )
 )
@@ -1433,21 +1439,16 @@ def _port(port: int, default: int) -> dict[str, str]:
     return {} if port == default else {"port": str(port)}
 
 
-def _expected_svcb(fqdn: str, *, doh_443: bool = False, address: str = PFSENSE_LAN_IP) -> list[Svcb]:
-    """The records a query gets at `address` (the LAN's by default): DoH, DoT and DoQ, each with that address as hint;
-    `doh_443` leaves the DoH port out."""
+def _expected_svcb(target: str, *, doh_443: bool = False, address: str = PFSENSE_LAN_IP) -> list[Svcb]:
+    """The records a query gets at `address` (the LAN's by default): DoH, DoT and DoQ, each with `target` as
+    TargetName and that address as hint; `doh_443` leaves the DoH port out."""
     hint = {"ipv4hint": address}
     doh_port = {} if doh_443 else _port(DOH_PORT, 443)
     return [
-        Svcb(1, fqdn, {"alpn": "h2", **doh_port, "dohpath": "/dns-query{?dns}", **hint}),
-        Svcb(2, fqdn, {"alpn": "dot", **_port(DOT_PORT, 853), **hint}),
-        Svcb(3, fqdn, {"alpn": "doq", **_port(DOQ_PORT, 853), **hint}),
+        Svcb(1, target, {"alpn": "h2", **doh_port, "dohpath": "/dns-query{?dns}", **hint}),
+        Svcb(2, target, {"alpn": "dot", **_port(DOT_PORT, 853), **hint}),
+        Svcb(3, target, {"alpn": "doq", **_port(DOQ_PORT, 853), **hint}),
     ]
-
-
-def _firewall_fqdn(vm: SmokeVM) -> str:
-    """`system/hostname` + `.` + `system/domain` + `.`: the TargetName the gateway is given, from the box's config."""
-    return f"{h.config_get(vm, 'system/hostname')}.{h.config_get(vm, 'system/domain')}.".lower()
 
 
 def _rows(section: tuple[Record, ...]) -> list[tuple[str, int, str, str]]:
@@ -1465,12 +1466,17 @@ def _gateway_ddr_flags(vm: SmokeVM) -> tuple[bool, bool] | None:
 
 
 def _set_ddr(vm: SmokeVM, on: bool, doh_443: bool) -> None:
-    """The pfB-DNS tab's two DDR toggles as its Save stores them: 'on' or the empty Off token."""
+    """The pfB-DNS tab's two DDR toggles as its Save stores them: 'on' or the empty Off token.
+
+    DDR on is saved with the DNS name, its target (issue #3694); DDR off leaves the stored name as it is.
+    """
+    name = f"config_set_path({h._php_str(CFG_DNS_NAME)}, {h._php_str(DDR_DNS_NAME)});\n" if on else ""
     _php_ok(
         vm,
-        f"config_set_path({h._php_str(CFG_DDR)}, {h._php_str('on' if on else '')});\n"
-        f"config_set_path({h._php_str(CFG_DDR_DOH_443)}, {h._php_str('on' if doh_443 else '')});\n"
-        "write_config('pfBlockerNG smoke: pfB-DNS DDR for the #3583 gateway smoke');",
+        name
+        + f"config_set_path({h._php_str(CFG_DDR)}, {h._php_str('on' if on else '')});\n"
+        + f"config_set_path({h._php_str(CFG_DDR_DOH_443)}, {h._php_str('on' if doh_443 else '')});\n"
+        + "write_config('pfBlockerNG smoke: pfB-DNS DDR for the #3583 gateway smoke');",
         "DDR settings",
     )
 
@@ -1478,21 +1484,22 @@ def _set_ddr(vm: SmokeVM, on: bool, doh_443: bool) -> None:
 def _ensure_ddr(gw: Gateway, *, on: bool, doh_443: bool = False) -> None:
     """Have the gateway run with `--ddr` (and `--ddr-doh-443`) as asked, then serve: store and apply if it does not.
 
-    A gateway that never took the flags fails the first assertion of the test with its command line and log, not a
-    later query. The module's snapshot puts the two settings back with the rest of its config.
+    DDR on also needs the module's DNS name stored (issue #3694). A gateway that never took the flags fails the first
+    assertion of the test with its command line and log, not a later query. The module's snapshot puts the settings
+    back with the rest of its config.
     """
     vm, want = gw.vm, (on, doh_443)
-    if _gateway_ddr_flags(vm) != want:
+    if _gateway_ddr_flags(vm) != want or (on and h.config_get(vm, CFG_DNS_NAME) != DDR_DNS_NAME):
         _set_ddr(vm, on, doh_443)
         _apply(vm)
         # Not raised here: the assertion below says what the gateway runs and logged.
         with contextlib.suppress(RuntimeError):
             h.wait_until(lambda: _gateway_ddr_flags(vm) == want, timeout=60.0, interval=2.0)
     seen = _gateway_ddr_flags(vm)
-    stored = (h.config_get(vm, CFG_DDR), h.config_get(vm, CFG_DDR_DOH_443))
+    stored = (h.config_get(vm, CFG_DDR), h.config_get(vm, CFG_DDR_DOH_443), h.config_get(vm, CFG_DNS_NAME))
     assert seen == want, (
         f"after the apply the gateway should run with (--ddr, --ddr-doh-443) = {want}, runs with {seen}; stored "
-        f"(dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443) = {stored}\n{_proxy_log(vm, 30)}"
+        f"(dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443, dns/pfb_dns_name) = {stored}\n{_proxy_log(vm, 30)}"
     )
 
     def serves() -> bool:
@@ -1521,25 +1528,25 @@ def test_ddr_svcb_query_over_plain_dns_gets_one_record_per_encrypted_transport_o
     Given the gateway runs with `--ddr`,
     Then NOERROR, authoritative, three SVCB records for the owner asked: DoH priority 1 (`alpn=h2`, `port` only off
       443, `dohpath=/dns-query{?dns}`), DoT priority 2 (`alpn=dot`, `port` only off 853) and DoQ priority 3
-      (`alpn=doq`, `port` only off 853), each with TargetName the firewall's `hostname.domain.`, `ipv4hint` the LAN
+      (`alpn=doq`, `port` only off 853), each with TargetName the DNS name (`dns/pfb_dns_name`), `ipv4hint` the LAN
       address and TTL 300, and the Additional section holds that name's A record, the LAN address, TTL 300.
     """
     _ensure_ddr(gw, on=True)
-    fqdn = _firewall_fqdn(gw.vm)
     reply = _dig(gw.client, transport, "SVCB", DDR_NAME)
     _say(f"DDR SVCB over {transport}: {reply.rcode} {sorted(reply.flags)} {_rows(reply.answer)}")
     assert reply.rcode == "NOERROR" and "aa" in reply.flags, (
         f"{transport}: expected NOERROR with the aa flag, got {reply.rcode} {sorted(reply.flags)}\n{reply.raw}"
     )
-    assert _svcb_records(reply) == _expected_svcb(fqdn), (
-        f"{transport}: SVCB records expected {_expected_svcb(fqdn)}, got {_svcb_records(reply)}\n{reply.raw}"
+    assert _svcb_records(reply) == _expected_svcb(DDR_TARGET), (
+        f"{transport}: SVCB records expected {_expected_svcb(DDR_TARGET)}, got {_svcb_records(reply)}\n{reply.raw}"
     )
     assert {(r.owner.lower(), r.ttl) for r in reply.answer} == {(f"{DDR_NAME}.", 300)}, (
         f"{transport}: every answer should be owned by {DDR_NAME}. with TTL 300, got {_rows(reply.answer)}"
     )
     addresses = [row for row in _rows(reply.additional) if row[2] in ("A", "AAAA")]
-    assert addresses == [(fqdn, 300, "A", PFSENSE_LAN_IP)], (
-        f"{transport}: Additional should hold only {(fqdn, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n{reply.raw}"
+    assert addresses == [(DDR_TARGET, 300, "A", PFSENSE_LAN_IP)], (
+        f"{transport}: Additional should hold only {(DDR_TARGET, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n"
+        f"{reply.raw}"
     )
 
 
@@ -1695,25 +1702,25 @@ def test_ddr_doh_on_port_443_leaves_the_port_out_of_the_doh_record_and_nothing_e
     Given DoH listens on 4443 and the gateway runs with `--ddr`, whose DoH record carries `port=4443`
       (the before-state: the toggle is what removes it),
     When `dns_shared/pfb_dns_ddr_doh_443` is turned on and applied, so that the gateway runs with `--ddr --ddr-doh-443`,
-    Then the DoH record has no `port` but the same TargetName (the firewall's `hostname.domain.`), `ipv4hint` (the LAN
-      address) and `dohpath=/dns-query{?dns}`; DoT and DoQ are as before; Additional holds the firewall's A record.
+    Then the DoH record has no `port` but the same TargetName (the DNS name), `ipv4hint` (the LAN
+      address) and `dohpath=/dns-query{?dns}`; DoT and DoQ are as before; Additional holds the DNS name's A record.
     """
     _ensure_ddr(gw, on=True)
-    fqdn = _firewall_fqdn(gw.vm)
     before = _dig(gw.client, "udp", "SVCB", DDR_NAME)
-    assert _svcb_records(before) == _expected_svcb(fqdn), (
-        f"premise: without the toggle the DoH record carries port {DOH_PORT}: expected {_expected_svcb(fqdn)}, got "
-        f"{_svcb_records(before)}\n{before.raw}"
+    assert _svcb_records(before) == _expected_svcb(DDR_TARGET), (
+        f"premise: without the toggle the DoH record carries port {DOH_PORT}: expected {_expected_svcb(DDR_TARGET)}, "
+        f"got {_svcb_records(before)}\n{before.raw}"
     )
     _ensure_ddr(gw, on=True, doh_443=True)
     reply = _dig(gw.client, "udp", "SVCB", DDR_NAME)
-    expected = _expected_svcb(fqdn, doh_443=True)
+    expected = _expected_svcb(DDR_TARGET, doh_443=True)
     assert reply.rcode == "NOERROR" and _svcb_records(reply) == expected, (
         f"expected NOERROR and {expected}, got {reply.rcode} {_svcb_records(reply)}\n{reply.raw}"
     )
     addresses = [row for row in _rows(reply.additional) if row[2] in ("A", "AAAA")]
-    assert addresses == [(fqdn, 300, "A", PFSENSE_LAN_IP)], (
-        f"Additional should hold only the firewall's {(fqdn, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n{reply.raw}"
+    assert addresses == [(DDR_TARGET, 300, "A", PFSENSE_LAN_IP)], (
+        f"Additional should hold only the DNS name's {(DDR_TARGET, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n"
+        f"{reply.raw}"
     )
 
 
@@ -1780,7 +1787,6 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
     """
     vm, client = gw.vm, gw.client
     _ensure_ddr(gw, on=True)
-    fqdn = _firewall_fqdn(vm)
     prior = {key: h.config_get(vm, h.dns_config_path(key)) for key in LAN_ONLY_LISTS}
     assert all(prior.values()), f"premise: pfB-DNS's interface lists are seeded, got {prior}"
     problems: list[str] = []
@@ -1795,7 +1801,7 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
         h.wait_until(lambda: _serves(gw), timeout=240.0, interval=3.0)
         pid = _capture(vm).proxy_pid
         before = _dig(client, "udp", "SVCB", DDR_NAME)
-        assert _svcb_records(before) == _expected_svcb(fqdn), (
+        assert _svcb_records(before) == _expected_svcb(DDR_TARGET), (
             f"premise: with no VIP the LAN address gets the DoH, DoT and DoQ designations: "
             f"{_svcb_records(before)}\n{before.raw}"
         )
@@ -1849,12 +1855,13 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
                 records = _svcb_records(reply)
                 _say(f"DDR SVCB to {address}: {reply.rcode} {records}")
                 expect(
-                    records == _expected_svcb(fqdn, address=address),
-                    f"DDR to {address}: expected {_expected_svcb(fqdn, address=address)}, got {records}\n{reply.raw}",
+                    records == _expected_svcb(DDR_TARGET, address=address),
+                    f"DDR to {address}: expected {_expected_svcb(DDR_TARGET, address=address)}, got {records}\n"
+                    f"{reply.raw}",
                 )
                 addresses = [row for row in _rows(reply.additional) if row[2] in ("A", "AAAA")]
                 expect(
-                    addresses == [(fqdn, 300, "A", address)],
+                    addresses == [(DDR_TARGET, 300, "A", address)],
                     f"DDR to {address}: Additional holds {addresses}\n{reply.raw}",
                 )
 
@@ -1881,6 +1888,89 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
                     f"{LAN_V6_ADDR}): no designations on a public IPv6 address is covered by "
                     "go/pfb_dns_gateway/ddr_public_ipv6_test.go and tests/php/DdrPublicIpv6ParityTest.php"
                 )
+        assert not problems, "\n".join(problems) + f"\nsockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}"
+    finally:
+        gui.post(DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none"})
+        _set_lists(vm, prior)
+        _apply(vm)
+        with contextlib.suppress(RuntimeError):
+            h.wait_until(lambda: _serves(gw), timeout=240.0, interval=3.0)
+
+
+def _a_answers(reply: Reply) -> list[str]:
+    return [record.rdata for record in reply.answer if record.rtype == "A"]
+
+
+@pytest.mark.timeout(1500)
+def test_the_dns_name_is_answered_with_the_address_the_query_reached(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    """issue #3694: pfB-DNS answers A for its DNS name with the address the query arrived on.
+
+    Given the gateway serves plain DNS and DoT on the LAN, DDR is on with the DNS name set, and the DNS General page
+      has turned on an automatic IPv4 Resolver VIP that the client reaches through a host route,
+    When the LAN client asks A for the name over UDP at the LAN address and at the VIP (lower case, then mixed case),
+      A for a subdomain of the name at the LAN address, and the DDR SVCB query at the LAN address,
+    Then A for the name at the LAN address is that address and no other, at the VIP the VIP and no other, mixed case
+      the same; the subdomain gets the upstream's answer through Unbound, not the LAN address; and every SVCB
+      record's TargetName is the name.
+    Every observation is taken before any is judged, so a failing run names each wrong one. Everything the test
+    changes is put back.
+    """
+    vm, client = gw.vm, gw.client
+    _ensure_ddr(gw, on=True)
+    prior = {key: h.config_get(vm, h.dns_config_path(key)) for key in LAN_ONLY_LISTS}
+    assert all(prior.values()), f"premise: pfB-DNS's interface lists are seeded, got {prior}"
+    mixed = "".join(c.upper() if i % 2 else c for i, c in enumerate(DDR_DNS_NAME))
+    subdomain = f"sub.{DDR_DNS_NAME}"
+    problems: list[str] = []
+
+    def expect(ok: bool, what: str) -> None:
+        if not ok:
+            problems.append(what)
+
+    try:
+        _set_lists(vm, LAN_ONLY_LISTS)
+        _apply(vm)
+        h.wait_until(lambda: _serves(gw), timeout=240.0, interval=3.0)
+        gui.post(
+            DNS_GENERAL_PAGE,
+            {"pfb_dns_listen_vip": "on", "pfb_dns_listen_vip4": "auto", "pfb_dns_listen_interface": "lo0"},
+        )
+        vip = h.config_get(vm, CFG_LISTEN_AUTO4)
+        assert vip and ipaddress.ip_address(vip).version == 4, (
+            f"the DNS General save made no IPv4 Resolver VIP: {vip!r}"
+        )
+        _apply(vm)
+        with _client_route(client, vip):
+            h.wait_until(lambda: _serves(gw, vip), timeout=240.0, interval=3.0)
+            for address in (PFSENSE_LAN_IP, vip):
+                for asked in (DDR_DNS_NAME, mixed):
+                    reply = _dig(client, "udp", "A", asked, server=address)
+                    _say(f"A {asked} to {address}: {reply.rcode} {_rows(reply.answer)}")
+                    expect(
+                        reply.rcode == "NOERROR" and _a_answers(reply) == [address],
+                        f"A {asked} to {address}: expected NOERROR and exactly {[address]}, got {reply.rcode} "
+                        f"{_a_answers(reply)} (the upstream's {STUB_DNS_A} is Unbound's answer: the gateway did "
+                        f"not answer the name)\n{reply.raw}",
+                    )
+
+            reply = _dig(client, "udp", "A", subdomain, server=PFSENSE_LAN_IP)
+            _say(f"A {subdomain} to {PFSENSE_LAN_IP}: {reply.rcode} {_rows(reply.answer)}")
+            expect(
+                reply.rcode == "NOERROR" and _a_answers(reply) == [STUB_DNS_A],
+                f"A {subdomain} to {PFSENSE_LAN_IP}: expected Unbound's answer, the upstream's {STUB_DNS_A} (not "
+                f"{PFSENSE_LAN_IP}), got {reply.rcode} {_a_answers(reply)}\n{reply.raw}",
+            )
+
+            reply = _dig(client, "udp", "SVCB", DDR_NAME, server=PFSENSE_LAN_IP)
+            targets = sorted({svcb.target for svcb in _svcb_records(reply)})
+            _say(f"DDR SVCB to {PFSENSE_LAN_IP}: {reply.rcode} {_svcb_records(reply)}")
+            expect(
+                targets == [DDR_TARGET],
+                f"DDR SVCB to {PFSENSE_LAN_IP}: expected every TargetName to be {DDR_TARGET}, got {targets}\n"
+                f"{reply.raw}",
+            )
         assert not problems, "\n".join(problems) + f"\nsockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}"
     finally:
         gui.post(DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none"})
