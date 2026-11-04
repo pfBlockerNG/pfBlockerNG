@@ -419,7 +419,9 @@ $form->add($section);
 
 
 print ($form);
-print pfb_dns_status_panel(pfb_dns_status());
+$status = pfb_dns_status();
+$status['ddr'] = pfb_dns_ddr_status(isset($_GET['refresh_ddr']) && $_GET['refresh_ddr'] === '1');
+print pfb_dns_status_panel($status);
 
 include('foot.inc');
 ?>
