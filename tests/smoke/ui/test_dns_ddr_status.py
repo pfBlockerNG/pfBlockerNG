@@ -12,7 +12,11 @@ import pytest
 
 from .. import helpers
 from ..test_smoke_dns_gateway import (
+    DDR_TARGET,
     _ensure_ddr,
+    _expected_svcb,
+    _parse_reply,
+    _svcb_records,
 )
 from ..test_smoke_dns_gateway import (
     gateway_on as gateway_on,
@@ -84,6 +88,7 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
         str(ipaddress.ip_address(address.split("%", 1)[0]))
         for address in re.findall(r"\binet6\s+(\S+)", loopback.stdout)
     }
+    expected_rcodes = {}
     for listener in bound:
         host, _, port = listener.rpartition(":")
         host = str(ipaddress.ip_address(host.strip("[]")))
@@ -109,9 +114,15 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
         result = gw.vm.ssh(*arguments)
         print(f"DDR reference {listener}, source={source!r}: {arguments!r}\n{result.stdout}{result.stderr}")
         assert result.returncode == 0, f"{listener}: {result.stdout}\n{result.stderr}"
-        assert "rcode: NOERROR" in result.stdout, result.stdout
+        reply = _parse_reply(result.stdout)
+        assert reply.rcode in {"NOERROR", "REFUSED"}, result.stdout
         assert re.search(r"^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$", result.stdout, re.MULTILINE), result.stdout
         expected[listener] = _records(result.stdout)
+        expected_rcodes[listener] = reply.rcode
+        if host in {"127.0.0.1", "::1"}:
+            assert reply.rcode == "NOERROR" and _svcb_records(reply) == _expected_svcb(
+                DDR_TARGET, doh_443=False, address=host
+            ), result.stdout
 
     refreshed = webui.get(DNS_PAGE + "?refresh_ddr=1&host=203.0.113.99&port=9")
     assert refreshed.status_code == 200, refreshed.text
@@ -129,10 +140,14 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
         observations[address] = _records(stdout.text or "")
         assert re.search(r"^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$", stdout.text or "", re.MULTILINE), stdout.text
         print(f"DDR observed {address}:\n{stdout.text}")
+        assert _parse_reply(stdout.text or "").rcode == expected_rcodes[address], stdout.text
         state = cells[3].find("strong")
-        assert state is not None and state.text == (
-            "Advertised" if expected[address] else "NOERROR, no advertisements"
-        ), ET.tostring(row, encoding="unicode")
+        expected_state = (
+            "Query error"
+            if expected_rcodes[address] == "REFUSED"
+            else ("Advertised" if expected[address] else "NOERROR, no advertisements")
+        )
+        assert state is not None and state.text == expected_state, ET.tostring(row, encoding="unicode")
     assert observations == expected, f"bound targets {expected!r}; UI observations {observations!r}"
     assert _config_digest(gw.vm) == before, "read-only DDR refresh changed config.xml"
     assert "203.0.113.99" not in observations, observations
