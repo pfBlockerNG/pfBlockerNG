@@ -33,7 +33,8 @@ those servers; add the Resolver VIP to that list by hand if you want clients to 
 removed from a list when you later add a server of your own to it, and returns when that server is gone. A VIP you added
 by hand is never touched. A second address of the interface, such as an IP alias or CARP VIP, counts as a server you chose.
 While the interface's own address cannot be determined, for example a tracked IPv6 prefix that is down, a non-empty list is
-left exactly as it is and is not warned about. Disabling Resolver addresses behaves as before.
+left exactly as it is, DNS General does not warn about it, and the pfBlockerNG log gets one line for it on each apply.
+Disabling Resolver addresses behaves as before.
 
 On a policy receiver, an existing listener VIP is moved only after the published address passes validation and
 conflict checks. Equivalent IPv6 spellings reuse the same VIP. A missing or invalid publication is not replaced

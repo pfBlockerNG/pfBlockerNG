@@ -617,8 +617,14 @@ final class DnsListenVipLifecycleTest extends TestCase
 		pfb_dns_listen_vips_apply();
 		$this->assertSame($config, $GLOBALS['config'], 'no list changes while the interface\'s own address is unknown');
 		$this->assertSame($ledger, PfbConfig::read('gen/pfb_dns_listen_added'), 'the record of what we added is kept');
-		$this->assertSame([], pfb_dns_listen_foreign_warnings(), 'nothing is known to be foreign, so nothing is warned');
-		$this->assertStringNotContainsString('the Resolver VIP is not added', (string) @file_get_contents($GLOBALS['pfb']['log']));
+		$this->assertCount(0, pfb_dns_listen_foreign_warnings(), 'nothing is known to be foreign, so nothing is warned');
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringNotContainsString('the Resolver VIP is not added', $log);
+		$frozen = $family === 4 ? ['DHCPv4'] : ['DHCPv6', 'RA'];
+		$this->assertSame(count($frozen), substr_count($log, 'are left unchanged; the interface\'s own address is unknown'), 'one log line per list left unchanged');
+		foreach ($frozen as $type) {
+			$this->assertSame(1, substr_count($log, "the {$type} DNS servers on lan are left unchanged"), "the {$type} list is named on its own line");
+		}
 		$this->assertCount($dhcp, array_filter($GLOBALS['pfb_test_service_calls'], static fn (array $call): bool => $call[0] === 'services_dhcpd_configure'), 'DHCP is not regenerated');
 	}
 
@@ -629,6 +635,7 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->withoutOwnAddress($family);
 		pfb_dns_listen_vips_apply();
 		$this->assertSame([$vip], config_get_path($path));
+		$this->assertStringNotContainsString('left unchanged', (string) @file_get_contents($GLOBALS['pfb']['log']), 'an empty list is not left unchanged, so it is not logged');
 	}
 
 	#[\PHPUnit\Framework\Attributes\DataProvider('dnsServerLists')]

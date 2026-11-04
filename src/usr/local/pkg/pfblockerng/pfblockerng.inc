@@ -3600,7 +3600,7 @@ function pfb_dns_listen_family_addresses(array $vips): array {
  *
  * @param array<int,string> $addresses Resolver VIP per family
  * @param array<string,mixed> $added decoded gen/pfb_dns_listen_added
- * @return array{0:array<string,array{interface:string,type:string,servers:list<string>,vip:string}>,1:list<string>} foreign by path, frozen paths
+ * @return array{0:array<string,array{interface:string,type:string,servers:list<string>,vip:string}>,1:array<string,array{interface:string,type:string}>} foreign and frozen, by path
  */
 function pfb_dns_listen_foreign_scopes(array $addresses, array $added): array {
 	$canonical = static fn (string $address): string => ($packed = @inet_pton($address)) === FALSE ? $address : (string) inet_ntop($packed);
@@ -3623,7 +3623,7 @@ function pfb_dns_listen_foreign_scopes(array $addresses, array $added): array {
 				$entries = array_values(array_filter(is_array($stored) ? $stored : [], static fn ($server): bool => is_string($server) && $server !== ''));
 				if (!is_string($own)) {
 					if ($entries !== []) {
-						$frozen[] = $path;
+						$frozen[$path] = ['interface' => $interface, 'type' => $type];
 					}
 					continue;
 				}
@@ -3674,6 +3674,9 @@ function pfb_dns_listen_vips_apply(): bool {
 	[$foreign, $frozen] = pfb_dns_listen_foreign_scopes($addresses, $added);
 	foreach ($foreign as $scope) {
 		pfb_logger("\nDNS listener VIP: the {$scope['type']} DNS servers on {$scope['interface']} name " . implode(', ', $scope['servers']) . ', which pfBlockerNG did not add; the Resolver VIP is not added there', 1);
+	}
+	foreach ($frozen as $scope) {
+		pfb_logger("\nDNS listener VIP: the {$scope['type']} DNS servers on {$scope['interface']} are left unchanged; the interface's own address is unknown", 1);
 	}
 	$next = [];
 	$rows = config_get_path('virtualip/vip', []);
@@ -3731,7 +3734,7 @@ function pfb_dns_listen_vips_apply(): bool {
 			}
 			foreach ($lists as $list => $list_wanted) {
 				$path = "{$section}/{$interface}/{$list}";
-				if (!in_array($path, $frozen, TRUE)) {
+				if (!isset($frozen[$path])) {
 					$sync($path, isset($foreign[$path]) ? [] : $list_wanted);
 				} elseif (isset($added[$path])) {
 					$next[$path] = $added[$path];
