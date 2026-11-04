@@ -896,12 +896,11 @@ The Resolver VIP the package created (`pfb_dns_listen_auto_vips()`: the family w
 on port 443 beside the configured DoH port: `pfb_dns_proxy_tls_flags()` adds `--doh-listen-443 'VIP'` for it while DoH listens on the VIP and
 that family's DoH port is not 443 already (`pfb_dns_proxy_doh_port_443()`). `pfb_dns_proxy_command_listeners()` names it `doh <VIP>:443`, so the
 sync adds and removes it live like any listener and the startup check reports a refused bind of 443. DDR advertises 443 there without a choice
-(the gateway sees a DoH listener on 443). Upgrade: migration `issue3694-ddr-doh-443-interfaces` selects every DoH interface (Localhost excepted)
-when either retired toggle (`dns_shared/pfb_dns_ddr_doh_443`, `_6`) was On, files a notice, and removes both keys, On or Off. The page warns when DDR is On
-with no name, and when the selected certificate has no `dNSName` SAN covering the name (`pfb_dns_proxy_ddr_warnings()`). Legacy sync receives store configuration only,
+(the gateway sees a DoH listener on 443). The retired Nightly toggles (`dns_shared/pfb_dns_ddr_doh_443`, `_6`) are ignored, never migrated: the selection starts empty and
+no notice is filed. The page warns when the selected certificate has no `dNSName` SAN covering the name (`pfb_dns_proxy_ddr_warnings()`). Legacy sync receives store configuration only,
 without marking changes pending; the receiver's next manual or scheduled Update regenerates the script.
 Use **Run Now** on **Update** at the receiver to apply received settings without waiting.
-Pinned by `DnsProxyDdrSettingsTest`, `DnsProxyDdrDoh443InterfacesTest`, `DnsProxyDdrDoh443MigrationTest`, `DnsProxyDoh443LiveTest`,
+Pinned by `DnsProxyDdrSettingsTest`, `DnsProxyDdrDoh443InterfacesTest`, `DnsProxyDoh443LiveTest`,
 `DnsProxyServiceTest` and `PfbDnsPageWiringTest`.
 
 In forwarding mode Unbound runs

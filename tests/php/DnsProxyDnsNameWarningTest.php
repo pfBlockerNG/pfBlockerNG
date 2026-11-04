@@ -10,8 +10,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Issue #3694 -- what the pfB-DNS page says about the DNS Name, without blocking the save:
- *   (a) DDR is On and no DNS Name is set: DDR answers nothing until one is entered (the upgrade notice too: a box that had DDR on
- *       and never had a name stops answering, and no name is seeded);
+ *   (a) DDR is On and no DNS Name is set: nothing is said, and DDR answers nothing until a name is entered;
  *   (b) a name is set, DoT, DoH or DoQ is on, the selected certificate resolves, and none of its dNSName SANs covers the name: a
  *       client that connects by that name will not accept it. Covering is the name itself, ASCII case-insensitive, or a wildcard
  *       `*.<parent>` whose parent is everything after the name's first label. An iPAddress SAN never covers a name.
@@ -24,7 +23,6 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyDnsNameWarningTest extends TestCase
 {
 	private const NAME = 'fw.example.lan';
-	private const NO_NAME = 'DDR: no DNS name is set, so DDR answers nothing. Enter the DNS Name the certificate covers.';
 	private const GLOBALS = [
 		'config', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_configured_ipv6', 'pfb_test_configured_ip_addresses', 'pfb_test_interfaces',
 	];
@@ -204,7 +202,7 @@ final class DnsProxyDnsNameWarningTest extends TestCase
 	// (a) DDR On and no name
 	// -----------------------------------------------------------------------
 
-	public function testDdrOnWithoutANameSaysDdrAnswersNothingAndNoOtherWarning(): void
+	public function testDdrOnWithoutANameWarnsAboutNothing(): void
 	{
 		// Given DDR off with a public address the certificate lacks, and no name: nothing to say
 		$this->box();
@@ -213,10 +211,10 @@ final class DnsProxyDnsNameWarningTest extends TestCase
 		// When DDR is On (row N14), with a transport and a certificate that would otherwise warn about the address
 		$this->store(['pfb_dns_ddr' => 'on']);
 
-		// Then it is the one text, and the iPAddress warning is not computed for a DDR that answers nothing
-		$this->assertSame([self::NO_NAME], pfb_dns_proxy_ddr_warnings());
+		// Then nothing is said, and the iPAddress warning is not computed for a DDR that answers nothing
+		$this->assertSame([], pfb_dns_proxy_ddr_warnings());
 
-		// And entering a name brings the address warning and the name warning back, and takes the first text away
+		// And entering a name brings the address warning and the name warning back
 		$this->store(['pfb_dns_name' => self::NAME]);
 		$this->assertSame([self::noSan(self::NAME), self::noIpSan('8.8.8.8')], pfb_dns_proxy_ddr_warnings(), 'with a name');
 	}
@@ -228,7 +226,7 @@ final class DnsProxyDnsNameWarningTest extends TestCase
 
 		$this->store(['pfb_dns_name' => "fw.example.lan'; rm -rf /"]);
 
-		$this->assertSame([self::NO_NAME], pfb_dns_proxy_ddr_warnings());
+		$this->assertSame([], pfb_dns_proxy_ddr_warnings());
 	}
 
 	public function testTheAddressWarningsAreOnlyComputedWhileDdrIsOn(): void

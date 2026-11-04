@@ -1742,19 +1742,6 @@
             }
         ]
     },
-    "pfb_dns_ddr_doh_443_migrate": {
-        "returnsRef": false,
-        "returnType": "?array",
-        "params": [
-            {
-                "name": "sections",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
-    },
     "pfb_dns_legacy_shared_value": {
         "returnsRef": false,
         "returnType": "mixed",

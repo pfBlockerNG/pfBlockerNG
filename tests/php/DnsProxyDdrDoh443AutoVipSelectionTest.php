@@ -109,7 +109,7 @@ final class DnsProxyDdrDoh443AutoVipSelectionTest extends TestCase
 		$this->assertSame(
 			['192.0.2.1', 'fd12:3456::9'],
 			pfb_dns_proxy_ddr_doh_443_addresses(),
-			'a migrated or retained automatic VIP token must not force 443; its actual listener determines DDR'
+			'a stored automatic VIP token must not force 443; its actual listener determines DDR'
 		);
 	}
 

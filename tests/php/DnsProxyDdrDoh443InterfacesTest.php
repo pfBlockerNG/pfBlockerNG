@@ -42,6 +42,7 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 	private const GLOBALS = [
 		'config', 'pfb', 'pfb_test_vip_list', 'pfb_test_configured_subnets', 'pfb_test_interface_ip', 'pfb_test_configured_ipv6',
 		'pfb_test_interface_info', 'pfb_test_configured_ip_addresses', 'pfb_test_interfaces',
+		'pfb_test_file_notices', 'pfb_test_write_config_calls',
 	];
 
 	/** @var array<string,array{0:bool,1:mixed}> */
@@ -53,6 +54,8 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 			$this->saved[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
 		}
 		$GLOBALS['config'] = [];
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$GLOBALS['pfb_test_vip_list'] = [];
 		$GLOBALS['pfb_test_configured_subnets'] = [];
 		unset($GLOBALS['pfb_test_configured_ip_addresses']);
@@ -454,6 +457,53 @@ final class DnsProxyDdrDoh443InterfacesTest extends TestCase
 		config_set_path(PFB_SECTIONS['dns_shared'] . '/pfb_dns_ddr_doh_443_6', 'on');
 		$this->assertSame([], self::doh443Flags(pfb_dns_proxy_ddr_flags()), 'a retired toggle on');
 		$this->assertStringNotContainsString('--ddr-doh-4436', pfb_dns_proxy_ddr_flags());
+	}
+
+	/** @return array<string,array{string,string,string}> a retired switch, the section it is stored in, its value */
+	public static function retiredSwitches(): array
+	{
+		return [
+			'the IPv4 switch On, in the shared section' => ['pfb_dns_ddr_doh_443', 'dns_shared', 'on'],
+			'the IPv6 switch On, in the shared section' => ['pfb_dns_ddr_doh_443_6', 'dns_shared', 'on'],
+			'the IPv4 switch On, in the pfB-DNS section (before the split)' => ['pfb_dns_ddr_doh_443', 'dns', 'on'],
+			'the IPv4 switch Off' => ['pfb_dns_ddr_doh_443', 'dns_shared', ''],
+		];
+	}
+
+	/**
+	 * Issue #3694: a retired Nightly switch is never copied into the selection. The ordinary upgrade leaves the selection unset, advertises
+	 * nothing on 443 by choice, and files no notice.
+	 */
+	#[DataProvider('retiredSwitches')]
+	public function testARetiredSwitchNeverSeedsTheSelectionOnTheOrdinaryUpgrade(string $key, string $section, string $value): void
+	{
+		// Given DoH on lan with DDR on, a retired switch stored, and the selection never set
+		config_set_path(PFB_SECTIONS[$section] . '/' . $key, $value);
+		$this->assertNull(config_get_path(PFB_SECTIONS['dns'] . '/' . self::FIELD), 'before: the selection is never set');
+
+		// When the ordinary upgrade runs
+		pfb_run_migrations();
+
+		// Then the selection stays unset, nothing is advertised on 443 by choice, and no notice is filed
+		$this->assertNull(config_get_path(PFB_SECTIONS['dns'] . '/' . self::FIELD), 'the switch is not copied into the selection');
+		$this->assertSame([], pfb_dns_proxy_ddr_doh_443_addresses());
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'no notice about the retired switch');
+	}
+
+	/** Issue #3694: an explicit selection is kept on the ordinary upgrade, whatever the retired switches say. */
+	public function testAnExplicitSelectionSurvivesTheOrdinaryUpgradeWhateverTheRetiredSwitches(): void
+	{
+		// Given lan chosen under the new selection, and the Nightly switch On beside it
+		$this->select('lan');
+		config_set_path(PFB_SECTIONS['dns_shared'] . '/pfb_dns_ddr_doh_443', 'on');
+
+		// When the ordinary upgrade runs
+		pfb_run_migrations();
+
+		// Then lan stays chosen and is still advertised on 443 on its addresses, and no notice is filed
+		$this->assertSame('lan', PfbConfig::read('dns/' . self::FIELD));
+		$this->assertSame([self::LAN4, self::LAN6], pfb_dns_proxy_ddr_doh_443_addresses());
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'no notice: nothing was seeded');
 	}
 
 	public function testTheAutomaticVipIsNeverInTheNameFlagsAndAChosenOneIsWhenSelected(): void

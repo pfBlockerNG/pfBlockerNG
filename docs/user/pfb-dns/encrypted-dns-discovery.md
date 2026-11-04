@@ -260,8 +260,8 @@ Like the certificate it is stored per node, never synced, and applied on the nex
 - **No name:** DDR answers nothing (Unbound answers `resolver.arpa`, as with DDR off) and pfB-DNS intercepts no query.
   Turning **DDR** on without a name is refused when you save: *DDR needs a DNS name: enter the name the certificate
   covers, or turn DDR off.*
-- **Upgrading:** a box that had DDR on before the name existed stops answering DDR queries once pfB-DNS applies this
-  version, because it has no name, and the page says so (below). No name is chosen for you, not even the firewall's hostname.
+- **Upgrading:** a box that had DDR on before the name existed answers no DDR queries until you enter one. No name is chosen for you,
+  not even the firewall's hostname.
 - **Certificate:** clients that connect by the name, DDR's target included, need it among the certificate's DNS names
   (`dNSName` SANs); `*.example.lan` covers `fw.example.lan` but not `example.lan` or `a.fw.example.lan`. The page warns when
   it does not (below).
@@ -283,10 +283,9 @@ Under **Discovery of Designated Resolvers (DDR)** on the pfB-DNS page:
   advertises that interface's addresses only, never a Resolver VIP that joins them: choose the VIP separately. It changes no listening
   port, name, path, DoT/DoQ record or proxy. It has no effect without DDR enabled, and it only helps where a reverse proxy really answers
   DoH on 443 at that address.
-- **Upgrading** from the two checkboxes (IPv4 and IPv6 **DoH on port 443**) of the first DDR version: if either was on, every DoH interface
-  is selected and a notice says so; review it. The old settings are removed, on or off. The old checkboxes were greyed out while the DoH port was
-  443; the select never is: an interface whose family is on 443 is not listened on for DoH (the VIP serves it), so selecting it advertises
-  nothing there.
+- **Upgrading** from the two checkboxes of the first DDR version (Nightly builds only): they are ignored, so the selection starts empty.
+  Choose the interfaces again. The select is never disabled: an interface whose family is on 443 is not listened on for DoH (the VIP
+  serves it), so selecting it advertises nothing there.
 
 These are the [shipped labels/help text][ui] and [gateway behavior][gateway]. The page help warns that some clients might not
 accept a port for the DoH server provided over DDR, and that the proxy must really serve DoH on 443 there: if DoH is not reachable on
@@ -308,12 +307,7 @@ DDR and documents global and interface DDR switches in `netsh dnsclient`; the de
 
 ### The DNS Name warnings
 
-Two non-blocking warnings concern the name; neither depends on the address warning below.
-
-> DDR: no DNS name is set, so DDR answers nothing. Enter the DNS Name the certificate covers.
-
-appears while **DDR** is on and **DNS Name** is empty (after an upgrade, until you enter one). With it showing, no
-address warning is computed, because a DDR that answers nothing designates no address.
+One non-blocking warning concerns the name; it does not depend on the address warning below.
 
 > DNS Name: the selected SSL/TLS Certificate has no DNS name (dNSName) SAN for NAME; clients that connect by that name will
 > not accept it.

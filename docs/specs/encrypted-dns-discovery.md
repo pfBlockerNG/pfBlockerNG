@@ -281,8 +281,8 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
   the listener live.
 - DoH interface listening is unchanged: for a family whose DoH port is 443, DoH skips the interface addresses of that family (port 443
   there belongs to the webConfigurator or a reverse proxy) and the VIP serves it.
-- Upgrade: either old toggle On selects every DoH interface (Localhost excepted) in the new list and files a notice saying so; both old
-  keys are removed, off or on (migration `issue3694-ddr-doh-443-interfaces`).
+- Upgrade: none. The retired per-family toggles are not migrated: they were Nightly-only, so they are ignored and the selection starts
+  empty, with no notice (the two old keys stay in config.xml, unread).
 - Page help (owner wording of 2026-10-22, now per entry): "Some clients might not accept a port for the DoH server provided over DDR." The
   select is not disabled for any DoH port: an interface whose family is on 443 is simply not listened on.
 - Use: the owner runs `https://dns.brait.dev` behind HAProxy (443 to gateway port 4443). With the interface selected, a client that
@@ -307,7 +307,7 @@ Resolver's behaviour unchanged, and the same must hold for its own toggle. What 
   `resolver.arpa` or under it. A stored value that fails counts as no name and is logged.
 - No name: DDR answers nothing (Unbound answers `resolver.arpa.` as with DDR off) and no name query is intercepted. DDR On with no
   name is a save error (`DDR needs a DNS name: enter the name the certificate covers, or turn DDR off.`). Upgrade: a box that
-  had DDR On stops answering DDR until a name is entered, and the page says so; no name is seeded.
+  had DDR On answers DDR only once a name is entered; no name is seeded, and the upgrade shows no notice.
 - Flags: `--dns-name NAME`, then `--ddr` while DDR is On (then one `--ddr-doh-443 ADDR` per advertised address), then one
   `--dns-name-answer LOCAL=ADDR[,ADDR]` per address the gateway listens on (plain DNS, and each of DoT, DoH and DoQ that is on).
   The table is replaced on the running gateway by the control-socket verb `FF FF FF FB` and never restarts it
@@ -326,11 +326,10 @@ With the DDR toggle on and a DNS Name set, the pfB-DNS page shows a non-blocking
 serves that is classified public and is not an `iPAddress` SAN of the selected certificate (`dns/pfb_dns_sslcertref`). Verified
 DDR needs that SAN (RFC 9462 §4.2). Addresses are compared as parsed addresses, not strings.
 
-- #3694: two more warnings do not depend on those. DDR On with no DNS Name: `DDR: no DNS name is set, so DDR answers nothing.
-  Enter the DNS Name the certificate covers.`, and then no address warning, since nothing is designated. A DNS Name set, DoT, DoH
-  or DoQ on and a certificate selected whose `dNSName` SANs do not cover the name (the name itself, ASCII case-insensitive, or
-  `*.<parent>` for a name of exactly one label under `<parent>`; an `iPAddress` SAN never does): `DNS Name: the selected SSL/TLS
-  Certificate has no DNS name (dNSName) SAN for <name>; clients that connect by that name will not accept it.`
+- #3694: one more warning does not depend on those. A DNS Name set, DoT, DoH or DoQ on and a certificate selected whose `dNSName` SANs do
+  not cover the name (the name itself, ASCII case-insensitive, or `*.<parent>` for a name of exactly one label under `<parent>`; an
+  `iPAddress` SAN never does): `DNS Name: the selected SSL/TLS Certificate has no DNS name (dNSName) SAN for <name>; clients that connect
+  by that name will not accept it.` With no name there is no such warning and no notice.
 
 - Never warned (not public): 127.0.0.0/8, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10,
   169.254.0.0/16, fe80::/10, fc00::/7, plus the reserved ranges 0.0.0.0/8, ::/128, the deprecated site-local range
@@ -432,7 +431,7 @@ These apply to the follow-up work; this specification is met when it is on `deve
 14. WHEN an interface gains or loses an address THEN the update pass replaces the running gateway's name-answer table with no
     restart; WHEN the DNS Name or DDR changes THEN it restarts the proxy.
 15. WHEN the selected certificate has no `dNSName` SAN covering the DNS Name (exact, wildcard of one label, case-insensitive)
-    and an encrypted transport is on THEN the page warns; WHEN DDR is On and no name is set THEN it says DDR answers nothing.
+    and an encrypted transport is on THEN the page warns; WHEN DDR is On and no name is set THEN the page says nothing about DDR.
 16. WHEN an interface (or a Resolver VIP the operator chose) is selected under "Advertise DoH on port 443" THEN the gateway gets one
     `--ddr-doh-443 ADDR` for each DoH listen address it carries (an interface never brings in a VIP that joins its addresses), DDR
     advertises DoH on those addresses without `port` while DoH keeps listening on its configured port there, and every other address
@@ -442,8 +441,8 @@ These apply to the follow-up work; this specification is met when it is on `deve
     (`--doh-listen-443`) unless that family's DoH port is 443 already, DDR advertises 443 there, and the update pass adds and removes that
     listener live with no restart; WHEN the box refuses the bind THEN the startup check names the listener and DDR advertises the configured
     port there.
-18. WHEN the configuration holds either retired toggle On at upgrade THEN every DoH interface (Localhost excepted) is selected and a notice
-    says so; WHEN it holds them Off THEN nothing is selected and no notice is filed; WHEN the migration runs again THEN it changes nothing.
+18. WHEN the configuration holds either retired toggle at upgrade THEN nothing is selected from it and no notice is filed; WHEN the selection
+    is stored THEN it is kept as stored.
 
 ## Out of scope
 

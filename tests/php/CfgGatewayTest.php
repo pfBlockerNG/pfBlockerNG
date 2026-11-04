@@ -503,7 +503,7 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * issue #3694: "Advertise DoH on port 443" is chosen per interface; the two per-family toggles are retired (the migration removes them) and the
+	 * issue #3694: "Advertise DoH on port 443" is chosen per interface; the two per-family toggles are retired and never read, and the
 	 * selection lives beside the DoH interface list it is drawn from: node-local, in the pfB-DNS section, no adapters, no grandfather.
 	 */
 	public function testTheTwoDohOn443TogglesAreRetiredAndTheInterfaceSelectionIsRegisteredLocalBesideTheDohInterfaces(): void

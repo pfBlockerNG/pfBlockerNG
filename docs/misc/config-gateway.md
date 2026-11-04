@@ -262,12 +262,9 @@ Authorization = property of **write**, not call site (generalises
     it is drawn from). New key, no grandfather. Written by the page's save (each entry must be an option of the posted DoH list,
     `pfb_dns_proxy_ddr_doh_443_options()`; a text that is no array stores `''`), read through `PfbConfig::read()` by
     `pfb_dns_proxy_ddr_doh_443_addresses()` for the gateway's `--ddr-doh-443 ADDR`. **Retired locations:** `dns_shared/pfb_dns_ddr_doh_443` and
-    `dns_shared/pfb_dns_ddr_doh_443_6` (#3583, the IPv4 and IPv6 "Advertise DoH on port 443" toggles) are not registered any more, and are
-    not `old_name` slots either: migration `issue3694-ddr-doh-443-interfaces` (`pfb_dns_ddr_doh_443_migrate()`, after the #3649 split, over
-    both the pfB-DNS and the shared sections) selects every stored DoH interface but Localhost when either was On, files one notice,
-    and removes both keys from both sections whenever stored (On, Off or junk); a second run writes nothing. A configuration backup
-    restored from before the migration passes through it on the next install or upgrade; until then the keys are ignored. The lock the page
-    had (`pfb_dns_proxy_ddr_doh_443_locked()`) is `pfb_dns_proxy_doh_port_443()` now: it only says whether the stored DoH port of a family is 443.
+    `dns_shared/pfb_dns_ddr_doh_443_6` (#3583, the IPv4 and IPv6 "Advertise DoH on port 443" toggles) are not registered, not `old_name`
+    slots and not migrated: they were Nightly-only, so they are ignored, and a box that had one On starts with an empty selection and no notice.
+    The lock the page had (`pfb_dns_proxy_ddr_doh_443_locked()`) is `pfb_dns_proxy_doh_port_443()` now: it only says whether the stored DoH port of a family is 443.
   - **`dns/pfb_dns_name`** (issue #3694, plain string): the DNS Name, DDR's target name and the name pfB-DNS answers `A` and `AAAA` for;
     default `''` = no name, sync `local` (per node like the certificate, which must list it as a DNS SAN; not one of
     `PFB_DNS_SHARED_FIELDS`). New key, no grandfather, never seeded: a box that had DDR On before the key existed reads `''` and

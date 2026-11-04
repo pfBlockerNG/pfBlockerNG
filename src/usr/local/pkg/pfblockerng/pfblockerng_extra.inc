@@ -2549,7 +2549,7 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'local',
-			'no_grandfather' => 'new key; \'\' = nothing advertised on 443; per node like the DoH interface list it is drawn from, and issue3694-ddr-doh-443-interfaces fills it from the retired pfb_dns_ddr_doh_443 and pfb_dns_ddr_doh_443_6 toggles',
+			'no_grandfather' => 'new key; \'\' = nothing advertised on 443 by choice; per node like the DoH interface list it is drawn from; the retired Nightly toggles are not carried over',
 		],
 	];
 
@@ -3855,15 +3855,6 @@ function pfb_migration_registry(): array
 			'message'  => 'pfBlockerNG: separated shared pfB-DNS settings from node-local state (issue #3649)',
 			'since'    => '4.0.0',
 		],
-		// 8. issue #3694: the two per-family "Advertise DoH on port 443" toggles become a per-interface selection. Reads both sections: a
-		// configuration from before the #3649 split still keeps the toggles in the pfB-DNS section.
-		[
-			'id'       => 'issue3694-ddr-doh-443-interfaces',
-			'sections' => [PFB_SECTIONS['dns'], PFB_SECTIONS['dns_shared']],
-			'apply'    => 'pfb_dns_ddr_doh_443_migrate',
-			'message'  => 'pfBlockerNG: replaced the DoH on port 443 toggles by a selection of interfaces (issue #3694)',
-			'since'    => '4.0.0',
-		],
 	];
 }
 
@@ -3908,42 +3899,6 @@ function pfb_dns_legacy_shared_value(array $old, string $key): mixed
 	}
 	$unseeded = ($old['pfb_dns_interface'] ?? '') === '';
 	return ($unseeded && in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE)) ? NULL : $old[$key];
-}
-
-/**
- * Issue #3694: the toggles `pfb_dns_ddr_doh_443` and `pfb_dns_ddr_doh_443_6` ("Advertise DoH on port 443", IPv4 and IPv6) become the selection
- * `pfb_dns_ddr_doh_443_interfaces`. Either one On, in either section it may be stored in, selects every stored DoH interface but Localhost
- * (comma-joined) unless the selection is already stored, and files one notice that says so. Both keys are removed whenever stored, On, Off or junk,
- * so a second run has nothing to do. Nothing else in either section is touched.
- *
- * @param array<string,mixed> $sections
- * @return array<string,array<string,mixed>>|null
- */
-function pfb_dns_ddr_doh_443_migrate(array $sections): ?array
-{
-	$dns_path = PFB_SECTIONS['dns'];
-	$shared_path = PFB_SECTIONS['dns_shared'];
-	$blobs = [];
-	$was_on = FALSE;
-	$changed = FALSE;
-	foreach ([$dns_path, $shared_path] as $path) {
-		$blob = is_array($sections[$path] ?? NULL) ? $sections[$path] : [];
-		foreach (['pfb_dns_ddr_doh_443', 'pfb_dns_ddr_doh_443_6'] as $key) {
-			if (array_key_exists($key, $blob)) {
-				$was_on = $was_on || pfb_cfg_toggle_read($blob[$key]) === PfbToggle::On;
-				unset($blob[$key]);
-				$changed = TRUE;
-			}
-		}
-		$blobs[$path] = $blob;
-	}
-	if ($was_on && !array_key_exists('pfb_dns_ddr_doh_443_interfaces', $blobs[$dns_path])) {
-		$doh = $blobs[$dns_path]['pfb_dns_doh_interface'] ?? '';
-		$blobs[$dns_path]['pfb_dns_ddr_doh_443_interfaces'] = implode(',', array_diff(pfb_dns_proxy_tokens(is_string($doh) ? $doh : ''), ['lo0']));
-		file_notice('pfBlockerNG DNS', 'pfB-DNS: Advertise DoH on port 443 is now chosen per interface. The old option was on, so every DoH interface is selected; review the selection on the pfB-DNS page.',
-		    'pfBlockerNG', '/pfblockerng/pfblockerng_dns.php', 2);
-	}
-	return $changed ? $blobs : NULL;
 }
 
 /**

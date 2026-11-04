@@ -5185,8 +5185,6 @@ function pfb_dns_proxy_certificate_sans(array $entry): array {
 
 /**
  * The pfB-DNS page's DNS Name and DDR certificate warnings (issues #3583, #3694), from the stored settings. Never blocks a save.
- *   - DDR on and no DNS Name: the one text that says DDR answers nothing (the upgrade notice for a box that had DDR on before the name
- *     existed: no name is seeded). Nothing else is computed for a DDR that answers nothing.
  *   - a DNS Name, DoT, DoH or DoQ on and a certificate selected: one text when no dNSName SAN of it covers the name, which is the name
  *     itself or `*.<parent>` for a name of exactly one label under <parent>, ASCII case-insensitive; an iPAddress SAN never does.
  *   - DDR on and a DNS Name, with a certificate selected: one text per public IPv4 address that DoT, DoH or DoQ listens on and that is
@@ -5203,7 +5201,7 @@ function pfb_dns_proxy_ddr_warnings(): array {
 	$ddr = pfb_dns_proxy_setting('pfb_dns_ddr') === PfbToggle::On;
 	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name')) ?? '';
 	if ($name === '') {
-		return $ddr ? ['DDR: no DNS name is set, so DDR answers nothing. Enter the DNS Name the certificate covers.'] : [];
+		return [];
 	}
 	$ref = trim((string) pfb_dns_proxy_setting('pfb_dns_sslcertref'));
 	$certificate = ($ref === '') ? NULL : (lookup_cert($ref)['item'] ?? NULL);

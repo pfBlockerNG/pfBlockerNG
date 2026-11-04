@@ -2563,7 +2563,6 @@ _DDR_WARNING_VIP = "pfb3583vip"
 _DOH_443_SELECT = "pfb_dns_ddr_doh_443_interfaces"
 # issue #3694: DDR needs a DNS Name, and no certificate of a box carries this one as a dNSName SAN.
 _DDR_WARNING_NAME = "dns.pfb3694.example"
-_NO_DNS_NAME_WARNING = "DDR: no DNS name is set, so DDR answers nothing. Enter the DNS Name the certificate covers."
 # Everything the warning tests set, and what the page's first load seeds beside it on a box that was never seeded.
 _DDR_WARNING_KEYS = (
     "pfb_dns_name",
@@ -2875,30 +2874,28 @@ def _dns_name_warning(name: str) -> str:
 
 
 @pytest.mark.ui_e2e
-def test_pfb_dns_page_says_ddr_answers_nothing_without_a_name_and_warns_when_the_certificate_lacks_the_name(
+def test_pfb_dns_page_shows_no_ddr_warning_without_a_name_and_warns_when_the_certificate_lacks_the_name(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issue #3694: DDR on with no DNS Name says so (and names no address); a name no certificate SAN covers warns.
+    """issue #3694: DDR on with no DNS Name says nothing (and names no address); a name no certificate SAN covers warns.
 
     Given DDR on, DoT on All, a certificate the form offers and a public lo0 VIP,
-    When the DNS Name is empty, Then an alert-warning says DDR answers nothing and no other `DDR: ` warning is shown;
+    When the DNS Name is empty, Then no `DDR: ` warning is shown and no notice says that DDR answers nothing;
     When a name the box's certificates do not carry is stored, Then the warning about the missing dNSName SAN names it,
-      the first text is gone and the address warning is back;
+      and the address warning is back;
     When only DDR is turned off, Then the dNSName warning stays (the name is also what pfB-DNS answers) and no `DDR: `
       warning is left.
     """
     with _ddr_on_with_a_certificate_and_a_public_vip(smoke_vm, webui):
         _set_dns(smoke_vm, pfb_dns_dot="on", pfb_dns_name="")
         warnings = _alert_warnings(webui.get(_PFB_DNS_PAGE).text)
-        assert _NO_DNS_NAME_WARNING in warnings, f"DDR on, no name: expected {_NO_DNS_NAME_WARNING!r} in {warnings}"
-        assert [text for text in warnings if text.startswith("DDR: ")] == [_NO_DNS_NAME_WARNING], (
-            f"DDR on, no name: no address warning may follow it: {warnings}"
+        assert not [text for text in warnings if text.startswith("DDR: ")], (
+            f"DDR on, no name: no DDR warning may show: {warnings}"
         )
 
         _set_dns(smoke_vm, pfb_dns_name=_DDR_WARNING_NAME)
         warnings = _alert_warnings(webui.get(_PFB_DNS_PAGE).text)
         assert _dns_name_warning(_DDR_WARNING_NAME) in warnings, f"a name the certificate lacks: {warnings}"
-        assert _NO_DNS_NAME_WARNING not in warnings, f"with a name the first text must be gone: {warnings}"
         assert any(text.startswith("DDR: DoT on ") for text in warnings), f"the address warning is back: {warnings}"
 
         _set_dns(smoke_vm, pfb_dns_ddr="")
