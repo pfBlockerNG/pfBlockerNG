@@ -1433,9 +1433,10 @@ def _port(port: int, default: int) -> dict[str, str]:
     return {} if port == default else {"port": str(port)}
 
 
-def _expected_svcb(fqdn: str, *, doh_443: bool = False) -> list[Svcb]:
-    """The records a LAN query gets: DoH, DoT and DoQ, each with the LAN hint; `doh_443` leaves the DoH port out."""
-    hint = {"ipv4hint": PFSENSE_LAN_IP}
+def _expected_svcb(fqdn: str, *, doh_443: bool = False, address: str = PFSENSE_LAN_IP) -> list[Svcb]:
+    """The records a query gets at `address` (the LAN's by default): DoH, DoT and DoQ, each with that address as hint;
+    `doh_443` leaves the DoH port out."""
+    hint = {"ipv4hint": address}
     doh_port = {} if doh_443 else _port(DOH_PORT, 443)
     return [
         Svcb(1, fqdn, {"alpn": "h2", **doh_port, "dohpath": "/dns-query{?dns}", **hint}),
@@ -1714,6 +1715,179 @@ def test_ddr_doh_on_port_443_leaves_the_port_out_of_the_doh_record_and_nothing_e
     assert addresses == [(fqdn, 300, "A", PFSENSE_LAN_IP)], (
         f"Additional should hold only the firewall's {(fqdn, 300, 'A', PFSENSE_LAN_IP)}, got {addresses}\n{reply.raw}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# A Resolver VIP joins the interface addresses (issue #3694)
+# --------------------------------------------------------------------------- #
+
+DNS_GENERAL_PAGE = "/pfblockerng/pfblockerng_dns_general.php"
+CFG_LISTEN_AUTO4 = f"{h.CFG_GLOBAL}/pfb_dns_listen_auto4"  # the address the automatic IPv4 Resolver VIP took
+LAN_ONLY_LISTS = {
+    "pfb_dns_interface": "lan",
+    "pfb_dns_dot_interface": "lan",
+}  # plain DNS and DoT on the LAN, as the issue asks
+
+
+def _set_lists(vm: SmokeVM, lists: dict[str, str]) -> None:
+    """pfB-DNS's interface lists as its Save stores them."""
+    assignments = "".join(
+        f"config_set_path({h._php_str(h.dns_config_path(key))}, {h._php_str(value)});\n" for key, value in lists.items()
+    )
+    _php_ok(
+        vm,
+        assignments + "write_config('pfBlockerNG smoke: pfB-DNS interface lists for the #3694 smoke');",
+        "interface lists",
+    )
+
+
+@contextlib.contextmanager
+def _client_route(client: SmokeVM, address: str) -> Iterator[None]:
+    """A host route from the client to `address` through the firewall, which holds it on loopback."""
+    added = client.ssh(f"ip route replace {address}/32 via {PFSENSE_LAN_IP}")
+    assert added.returncode == 0, f"cannot route {address} through {PFSENSE_LAN_IP} on the client: {added.stderr!r}"
+    try:
+        yield
+    finally:
+        client.ssh(f"ip route del {address}/32")
+
+
+def _sockets_on_dns_ports(vm: SmokeVM) -> str:
+    """What holds the DNS ports of this module, and on which address: the evidence of which listeners exist."""
+    return vm.ssh(f"sockstat -46lw | grep -E ':(53|{DOT_PORT}|{DOH_PORT}) ' | sort").stdout
+
+
+def _serves(gw: Gateway, server: str = PFSENSE_LAN_IP) -> bool:
+    return h.is_vip(_ask(gw.client, "udp", gw.names.ready, server=server)[0])
+
+
+@pytest.mark.timeout(1500)
+def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_address_asked(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    """issue #3694: the Resolver VIP is listened on besides the LAN address, for plain DNS, DoT, DoH and DoQ.
+
+    Given the gateway serves plain DNS and DoT on the LAN, DoH and DoQ on the LAN, and DDR is on,
+    When the DNS General page turns on the Resolver addresses with an automatic IPv4 VIP and the update pass applies it,
+    Then the gateway is the same process (the listen addresses changed live, no restart) and holds plain DNS (UDP and
+      TCP), DoT, DoH and DoQ on the LAN address and on the VIP; a LAN client querying the LAN address gets an answer
+      (its ACL row admits it, and the answer is the gateway's, not a refusal), as it does at the VIP; a DDR SVCB query
+      to the LAN address returns the DoH, DoT and DoQ designations for the LAN address and one to the VIP returns the
+      VIP's; and the status panel lists both addresses as listening.
+    Every observation is taken before any is judged, so a failing run names each wrong one, with the sockets the box
+    holds (no listener on the LAN address, and the client's query unanswered, is the VIP having taken its place; a
+    REFUSED would be the ACL).
+    """
+    vm, client = gw.vm, gw.client
+    _ensure_ddr(gw, on=True)
+    fqdn = _firewall_fqdn(vm)
+    prior = {key: h.config_get(vm, h.dns_config_path(key)) for key in LAN_ONLY_LISTS}
+    assert all(prior.values()), f"premise: pfB-DNS's interface lists are seeded, got {prior}"
+    problems: list[str] = []
+
+    def expect(ok: bool, what: str) -> None:
+        if not ok:
+            problems.append(what)
+
+    try:
+        _set_lists(vm, LAN_ONLY_LISTS)
+        _apply(vm)
+        h.wait_until(lambda: _serves(gw), timeout=240.0, interval=3.0)
+        pid = _capture(vm).proxy_pid
+        before = _dig(client, "udp", "SVCB", DDR_NAME)
+        assert _svcb_records(before) == _expected_svcb(fqdn), (
+            f"premise: with no VIP the LAN address gets the DoH, DoT and DoQ designations: "
+            f"{_svcb_records(before)}\n{before.raw}"
+        )
+
+        gui.post(
+            DNS_GENERAL_PAGE,
+            {"pfb_dns_listen_vip": "on", "pfb_dns_listen_vip4": "auto", "pfb_dns_listen_interface": "lo0"},
+        )
+        vip = h.config_get(vm, CFG_LISTEN_AUTO4)
+        assert vip and ipaddress.ip_address(vip).version == 4, (
+            f"the DNS General save made no IPv4 Resolver VIP: {vip!r}"
+        )
+        _apply(vm)
+        with _client_route(client, vip):
+            h.wait_until(lambda: _serves(gw, vip), timeout=240.0, interval=3.0)
+            now = _capture(vm)
+            sockets = now.proxy_sockets()
+            held = _sockets_on_dns_ports(vm)
+            _say(f"VIP {vip}; gateway pid {pid} -> {now.proxy_pid}; sockets on the DNS ports:\n{held}")
+            expect(
+                now.proxy_pid == pid,
+                f"the gateway restarted (pid {pid} -> {now.proxy_pid}): its listen addresses should change live",
+            )
+            for address in (PFSENSE_LAN_IP, vip):
+                wanted = {
+                    ("udp4", f"{address}:53"),
+                    ("tcp4", f"{address}:53"),
+                    ("tcp4", f"{address}:{DOT_PORT}"),
+                    ("tcp4", f"{address}:{DOH_PORT}"),
+                    ("udp4", f"{address}:{DOQ_PORT}"),
+                }
+                expect(not wanted - sockets, f"the gateway holds no socket for {sorted(wanted - sockets)}")
+
+            for address in (PFSENSE_LAN_IP, vip):
+                for transport in ("udp", "tcp", "dot"):
+                    answer, raw = _ask(client, transport, gw.names.ready, server=address)
+                    _say(f"{transport} to {address}: {answer.rcode} {answer.records}")
+                    expect(
+                        h.is_vip(answer),
+                        f"{transport} to {address}: expected the VIP, got {answer} "
+                        f"(UNKNOWN is no answer, REFUSED the ACL)\n{raw}",
+                    )
+                allowed = h.unique_domain("vipkeeps")
+                answer, raw = _ask(client, "udp", allowed, server=address)
+                expect(
+                    h.resolves_to(answer, STUB_DNS_A),
+                    f"udp to {address}: {allowed} expected the upstream's {STUB_DNS_A}, got {answer}\n{raw}",
+                )
+
+                reply = _dig(client, "udp", "SVCB", DDR_NAME, server=address)
+                records = _svcb_records(reply)
+                _say(f"DDR SVCB to {address}: {reply.rcode} {records}")
+                expect(
+                    records == _expected_svcb(fqdn, address=address),
+                    f"DDR to {address}: expected {_expected_svcb(fqdn, address=address)}, got {records}\n{reply.raw}",
+                )
+                addresses = [row for row in _rows(reply.additional) if row[2] in ("A", "AAAA")]
+                expect(
+                    addresses == [(fqdn, 300, "A", address)],
+                    f"DDR to {address}: Additional holds {addresses}\n{reply.raw}",
+                )
+
+            page = gui.get(STATUS_PAGE).text
+            listed = {at: state for _, ats, state in _status_rows(page, "plain") for at in ats}
+            _say(f"status panel, plain DNS: {_status_rows(page, 'plain')}")
+            for address in (PFSENSE_LAN_IP, vip):
+                expect(
+                    listed.get(f"{address}:53") == "Listening",
+                    f"the status panel does not list {address}:53 as Listening: {listed}",
+                )
+
+            lan_global = [a for a in _lan_addresses(vm) if ":" in a and ipaddress.ip_address(a).is_global]
+            if lan_global:
+                for address in lan_global:
+                    own = _parse_reply(vm.ssh(f"drill @{address} {DDR_NAME} TYPE64 2>&1").stdout)
+                    expect(
+                        own.rcode == "NOERROR" and not own.answer,
+                        f"DDR to the public IPv6 address {address}: expected no designations, got {_rows(own.answer)}",
+                    )
+            else:
+                _say(
+                    "the LAN holds no global IPv6 address (its IPv6 is the documentation address "
+                    f"{LAN_V6_ADDR}): no designations on a public IPv6 address is covered by "
+                    "go/pfb_dns_gateway/ddr_public_ipv6_test.go and tests/php/DdrPublicIpv6ParityTest.php"
+                )
+        assert not problems, "\n".join(problems) + f"\nsockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}"
+    finally:
+        gui.post(DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none"})
+        _set_lists(vm, prior)
+        _apply(vm)
+        with contextlib.suppress(RuntimeError):
+            h.wait_until(lambda: _serves(gw), timeout=240.0, interval=3.0)
 
 
 # --------------------------------------------------------------------------- #
