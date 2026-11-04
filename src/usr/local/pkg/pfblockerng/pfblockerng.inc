@@ -5239,7 +5239,7 @@ function pfb_dns_proxy_ddr_warnings(): array {
 			if ($kind === 'doh' && in_array($address, $advertised, TRUE) && !pfb_dns_proxy_doh_port_443($ipv6)) {
 				continue;
 			}
-			// The gateway designates nothing on a public IPv6 address (a global prefix changes: no certificate keeps an IP SAN for it)
+			// Public IPv6 prefixes can change: warn only for public IPv4, without changing DDR's per-address designations.
 			if (!$ipv6 && pfb_dns_proxy_public_address($address)) {
 				$packed = (string) inet_pton($address);
 				$served[$packed] ??= ['address' => $address, 'labels' => []];

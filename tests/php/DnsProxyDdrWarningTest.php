@@ -132,7 +132,7 @@ final class DnsProxyDdrWarningTest extends TestCase
 			'public IPv4, certificate without SANs' => [['wan' => ['8.8.8.8']], [], ['8.8.8.8'], ['8.8.8.8']],
 			'public IPv4, certificate has the SAN of another address' => [['wan' => ['8.8.8.8']], ['IP:1.1.1.1'], ['8.8.8.8'], ['8.8.8.8']],
 			'public IPv4, matching iPAddress SAN' => [['wan' => ['8.8.8.8']], ['IP:8.8.8.8'], ['8.8.8.8'], []],
-			'public IPv6, certificate without SANs: the gateway designates nothing there, so no warning' => [['wan' => ['2606:4700::1']], [], ['2606:4700::1'], []],
+			'public IPv6, certificate without SANs: public IPv6 IP-SAN warnings are suppressed' => [['wan' => ['2606:4700::1']], [], ['2606:4700::1'], []],
 			'IPv6 listener compressed, SAN written out in full' => [['wan' => ['2606:4700::1']], ['IP:2606:4700:0:0:0:0:0:1'], ['2606:4700::1'], []],
 			'IPv6 listener written out in full, SAN compressed' => [['wan' => ['2606:4700:0:0:0:0:0:1']], ['IP:2606:4700::1'], ['2606:4700:0:0:0:0:0:1'], []],
 			'a DNS SAN equal to the address is not an iPAddress SAN' => [['wan' => ['8.8.8.8']], ['DNS:8.8.8.8'], ['8.8.8.8'], ['8.8.8.8']],
@@ -431,7 +431,7 @@ final class DnsProxyDdrWarningTest extends TestCase
 
 		// When wan is advertised on 443 (a reverse proxy answers there), neither is
 		$this->store(['pfb_dns_ddr_doh_443_interfaces' => 'wan']);
-		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'IPv4 is the reverse proxy\'s, and the gateway designates nothing on the public IPv6 address');
+		$this->assertSame([], pfb_dns_proxy_ddr_warnings(), 'IPv4 is the reverse proxy\'s, and public IPv6 IP-SAN warnings are suppressed');
 
 		// And with DoH on 443 for IPv6 alone the IPv4 address is still the reverse proxy's, and the IPv6 address is still not named
 		$this->store(['pfb_dns_doh_port6' => '443']);

@@ -281,6 +281,21 @@ func TestDDRIPv6QueriedAddressGetsAnIPv6HintAsBytesAndAnAAAA(t *testing.T) {
 	}
 }
 
+func TestDDRPublicIPv6DesignatesEveryBoundTransportWithItsHintAndNameAddress(t *testing.T) {
+	const address = "2606:4700:4700::1111"
+	d := mustDDR(t, ddrTarget, ddrLoaded(t),
+		ddrAt(address, 853), ddrAt(address, 4443), ddrAt(address, 853))
+	query := ddrQuery(t, 7, ddrAsk, dnsmessage.TypeSVCB, 0)
+	requireDDR(t, query, d.answer(query, netip.MustParseAddr(address), true), ddrWant{
+		svcb: []ddrSVCB{
+			ddrDoHRec(ddrFQDN, 4443, address, ddrDoHPath),
+			ddrDoTRec(ddrFQDN, 0, address),
+			ddrDoQRec(ddrFQDN, 0, address),
+		},
+		additional: []string{ddrAddrRR(ddrFQDN, address)},
+	})
+}
+
 func paramsEqual(a, b []dnsmessage.SVCParam) bool {
 	return slices.EqualFunc(a, b, func(x, y dnsmessage.SVCParam) bool { return x.Key == y.Key && bytes.Equal(x.Value, y.Value) })
 }
