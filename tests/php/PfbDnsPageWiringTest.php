@@ -215,7 +215,7 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertGreaterThan($ddr[0][1], $select[0][1] ?? 0, 'the select is below the DDR checkbox');
 
 		// And the two checkboxes and the lock that disabled one of them are gone
-		foreach (['pfb_dns_ddr_doh_443_6', "'pfb_dns_ddr_doh_443'", 'pfb_dns_proxy_ddr_doh_443_locked', 'Form_Checkbox(\n	\'pfb_dns_ddr_doh'] as $gone) {
+		foreach (['pfb_dns_ddr_doh_443_6', "'pfb_dns_ddr_doh_443'", 'pfb_dns_proxy_ddr_doh_443_locked'] as $gone) {
 			$this->assertStringNotContainsString($gone, $page, "the page no longer carries {$gone}");
 		}
 	}

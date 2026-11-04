@@ -178,6 +178,13 @@ CONFIG_PATHS = tuple(
             CFG_DDR,
             CFG_DDR_DOH_443,
             CFG_DNS_NAME,
+            # DNS General's Resolver addresses: the tests switch them on, and the apply pass records the VIP row it adds
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_vip",
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_vip4",
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_interface",
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_auto4",
+            f"{h.CFG_GLOBAL}/pfb_dns_listen_added",
+            "virtualip/vip",
         )
     )
 )
