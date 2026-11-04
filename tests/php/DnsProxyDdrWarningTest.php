@@ -17,12 +17,17 @@ use PHPUnit\Framework\TestCase;
  * The warnings come from the stored settings (config.xml), the certificate is a real one issued with the SANs of the case, and
  * the listener addresses are what pfb_dns_proxy_interface_addresses() derives from seeded interfaces, as on a box: the tests
  * assert that derived list too, so a case never passes only because no address was listened on.
+ *
+ * DDR needs a DNS Name (issue #3694): the box has one, and its certificate carries it as a DNS SAN, so that these cases are about the
+ * addresses alone; DnsProxyDnsNameWarningTest pins the name warnings and that no address is named without a name.
  */
 #[CoversFunction('pfb_dns_proxy_ddr_warnings')]
 #[CoversFunction('pfb_dns_proxy_public_address')]
-#[CoversFunction('pfb_dns_proxy_certificate_ip_sans')]
+#[CoversFunction('pfb_dns_proxy_certificate_sans')]
 final class DnsProxyDdrWarningTest extends TestCase
 {
+
+	private const NAME = 'fw.example.lan';
 
 	private const GLOBALS = [
 		'config', 'pfb_test_interface_ip', 'pfb_test_interface_info', 'pfb_test_configured_ipv6', 'pfb_test_configured_ip_addresses', 'pfb_test_interfaces',
@@ -95,7 +100,8 @@ final class DnsProxyDdrWarningTest extends TestCase
 	}
 
 	/**
-	 * A box with DDR on and DoT on every one of these interfaces (port 853), certificate `cert1` with these SANs selected.
+	 * A box with DDR on, the DNS Name set, and DoT on every one of these interfaces (port 853), certificate `cert1` selected with these SANs
+	 * and the DNS Name's.
 	 *
 	 * @param array<string,list<string>> $interfaces
 	 * @param list<string> $san OpenSSL subjectAltName entries of the certificate
@@ -104,10 +110,10 @@ final class DnsProxyDdrWarningTest extends TestCase
 	private function box(array $interfaces, array $san = [], array $settings = []): void
 	{
 		$this->interfaces($interfaces);
-		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost', NULL, $san))];
+		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::issue('localhost', NULL, [...$san, 'DNS:' . self::NAME]))];
 		$names = implode(',', array_keys($interfaces));
 		$this->store($settings + [
-			'pfb_dns_interface' => $names, 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_ddr' => 'on', 'pfb_dns_ddr_doh_443' => '',
+			'pfb_dns_interface' => $names, 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_ddr' => 'on', 'pfb_dns_ddr_doh_443' => '', 'pfb_dns_name' => self::NAME,
 			'pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '853', 'pfb_dns_dot_interface' => $names,
 			'pfb_dns_doh' => '', 'pfb_dns_doh_port' => '8443', 'pfb_dns_doh_interface' => $names,
 			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '8853', 'pfb_dns_doq_interface' => $names,
@@ -326,8 +332,12 @@ final class DnsProxyDdrWarningTest extends TestCase
 		}
 		$GLOBALS['config']['cert'][0]['crt'] = $crt;
 
-		// Then the address is warned about, without an exception, and the failed parse leaves nothing in the queue for the next caller
-		$this->assertSame([self::warning('8.8.8.8', 'DoT')], pfb_dns_proxy_ddr_warnings());
+		// Then the address is warned about, and so is the DNS Name, which no SAN of an unreadable certificate covers; nothing throws, and
+		// the failed parse leaves nothing in the queue for the next caller
+		$this->assertSame(
+			['DNS Name: the selected SSL/TLS Certificate has no DNS name (dNSName) SAN for ' . self::NAME . '; clients that connect by that name will not accept it.', self::warning('8.8.8.8', 'DoT')],
+			pfb_dns_proxy_ddr_warnings()
+		);
 		$this->assertFalse(openssl_error_string(), 'OpenSSL error queue left empty');
 	}
 

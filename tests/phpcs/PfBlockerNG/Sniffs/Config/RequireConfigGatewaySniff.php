@@ -294,6 +294,7 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot_port',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_sslcertref',
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_name',
 		// issue #3583: pfB-DNS's DDR toggle and its DoH on port 443 toggle
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_ddr',
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_ddr_doh_443',

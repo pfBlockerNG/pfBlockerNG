@@ -743,6 +743,12 @@ func newDDRRig(t *testing.T, doh443 bool) *ddrRig {
 
 func newDDRRigFor(t *testing.T, target string, doh443 bool) *ddrRig {
 	t.Helper()
+	return newDDRRigNames(t, target, doh443, nil)
+}
+
+// newDDRRigNames is the DDR rig whose gateway also answers the DNS name from names (nil: no name answers).
+func newDDRRigNames(t *testing.T, target string, doh443 bool, names *nameAnswers) *ddrRig {
+	t.Helper()
 	m := newTLSMaterial(t)
 	dotLn, err := bindTCP("127.0.0.1", 0)
 	if err != nil {
@@ -762,7 +768,7 @@ func newDDRRigFor(t *testing.T, target string, doh443 bool) *ddrRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.rig = newRig(t, rigConfig{acl: aclMixed, beforeServe: func(g *gateway) { g.ddr = ddrAnswers }})
+	d.rig = newRig(t, rigConfig{acl: aclMixed, beforeServe: func(g *gateway) { g.ddr, g.names = ddrAnswers, names }})
 	d.rig.autoAnswer(echoAnswer)
 	d.g.serveDoT(dotLn, m.certs.dot())
 	d.g.serveDoH(dohLn, m.certs.doh(), parseTrusted(nil, d.logs.logf))
@@ -943,7 +949,7 @@ func TestDDRScreenSendsWhatIsNotOursToTheDeciderAndNeverAnswersAResponse(t *test
 			want = discard
 		}
 		t.Run(name, func(t *testing.T) {
-			disp, reply := r.g.screen(client, local, true, wire)
+			disp, reply := r.g.screen(client, local, true, true, wire)
 			if disp != want || reply != nil {
 				t.Fatalf("screen: got disposition %d reply %x, want disposition %d and no reply", disp, reply, want)
 			}
@@ -951,7 +957,7 @@ func TestDDRScreenSendsWhatIsNotOursToTheDeciderAndNeverAnswersAResponse(t *test
 	}
 	t.Run("a query for the zone is answered at once", func(t *testing.T) {
 		query := ddrQuery(t, 5, ddrAsk, dnsmessage.TypeSVCB, 0)
-		disp, reply := r.g.screen(client, local, true, query)
+		disp, reply := r.g.screen(client, local, true, true, query)
 		if disp != replyNow {
 			t.Fatalf("screen: got disposition %d, want replyNow (%d)", disp, replyNow)
 		}
@@ -979,7 +985,7 @@ func TestDDRStartAnswersFromTheBoundListenersIncludingPortsPickedByTheKernel(t *
 	cfg.dotListen, cfg.dotPort = cfg.listen, freePort(t)
 	cfg.dohListen, cfg.dohPort = cfg.listen, 0
 	cfg.doqListen, cfg.doqPort = cfg.listen, 0
-	cfg.ddr = ddrTarget
+	cfg.dnsName, cfg.ddr = ddrTarget, true
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
@@ -1022,7 +1028,7 @@ func TestDDRPlainWildcardSocketDesignatesOnlyOverTCPAndOnlyAnExplicitListener(t 
 		t.Run(c.name, func(t *testing.T) {
 			cfg, logs := lifecycleConfig(t, "serve")
 			path, _ := goodPEM(t)
-			cfg.listen, cfg.tlsPEM, cfg.ddr = []string{"0.0.0.0"}, path, ddrTarget
+			cfg.listen, cfg.tlsPEM, cfg.dnsName, cfg.ddr = []string{"0.0.0.0"}, path, ddrTarget, true
 			cfg.dotListen, cfg.dotPort = []string{c.tlsListen}, freePort(t)
 			if c.tlsListen == "0.0.0.0" {
 				cfg.dohListen, cfg.dohPort = cfg.dotListen, 0
@@ -1055,7 +1061,7 @@ func TestDDRPlainWildcardSocketDesignatesOnlyOverTCPAndOnlyAnExplicitListener(t 
 
 func TestDDRStartWithoutTLSListenersAnswersNODATA(t *testing.T) {
 	cfg, logs := lifecycleConfig(t, "serve")
-	cfg.ddr = ddrTarget
+	cfg.dnsName, cfg.ddr = ddrTarget, true
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
@@ -1069,13 +1075,13 @@ func TestDDRStartWithoutTLSListenersAnswersNODATA(t *testing.T) {
 func TestDDRStartWithAnUnusableNameFailsAndLeavesNothingBound(t *testing.T) {
 	cfg, logs := lifecycleConfig(t, "serve")
 	cfg.port = freePort(t)
-	cfg.ddr = "a..b"
+	cfg.dnsName, cfg.ddr = "a..b", true
 	srv, err := start(cfg, logs.logf)
 	if err == nil {
 		srv.shutdown()
 		t.Fatal("start with --ddr a..b succeeded, want an error: an empty label is no name")
 	}
-	if !strings.Contains(err.Error(), "--ddr") {
+	if !strings.Contains(err.Error(), "--dns-name") {
 		t.Fatalf("the error must name the flag: %v", err)
 	}
 	l, err := bindPlain("127.0.0.1", cfg.port)
@@ -1093,7 +1099,7 @@ func TestDDRGatewayProcessTakesTheFlagsAndAnswersFromTheBoundListeners(t *testin
 		"--listen", "127.0.0.1", "--port", fmt.Sprint(ports[1]), "--unbound-conf", filepath.Join(t.TempDir(), "absent"),
 		"--dot-listen", "127.0.0.1", "--dot-port", fmt.Sprint(ports[0]), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
-		"--ddr", ddrTarget, "--ddr-doh-443",
+		"--dns-name", ddrTarget, "--ddr", "--ddr-doh-443",
 	}, decider("serve"))
 	plain := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("listening dot ")

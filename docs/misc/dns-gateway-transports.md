@@ -44,7 +44,8 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
   line). The mode 0600 on the socket is a second wall, not the one relied on.
 - **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FF`, with nothing after it, is the decider restart
-  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener (below). `FF FF FF FC`, with nothing after it, lists the
+  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener, and `FF FF FF FB` replaces the name-answer table (both below).
+  `FF FF FF FC`, with nothing after it, lists the
   listeners: `listening <kind> <host:port>` for each one served, then `refused <kind> <host:port> <reason>` for each start-time
   bind not served since (keyed by kind, then address, so DoT and DoQ on :853 are two lines), then `ok`; a live add clears the
   refusal of the same kind and address. Anything else is the length of the PEM,
@@ -76,6 +77,17 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   without it; descriptors may ride with any byte of the frame. The shutdown closes every listener, added ones included, and a
   removed one is not closed again. A gateway older than the verbs answers `FF FF FF FE` with
   `error: a message of 4294967294 bytes is not between 1 and 65536`.
+- **Name-answer table** (issue #3694; see DNS name). `FF FF FF FB`, a 4-byte big-endian length 0 to 65536 (judged before the body is
+  read), then a body of lines joined by `\n` (no trailing newline, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]`: the value of a `--dns-name-answer` flag,
+  with the line kind as its first word so that other kinds can join. The whole body is checked first: one bad line (an unknown first word, a
+  bad value, a LOCAL named twice, CRLF line endings) is `error: <reason>` and the table is unchanged; otherwise the table is replaced
+  atomically, `address table: N name answers` is logged and the reply is `ok`. An empty body is an empty table. A gateway started without
+  `--dns-name` answers `error: started without --dns-name`, and one older than the verb answers
+  `error: a message of 4294967291 bytes is not between 1 and 65536`. PHP sends it (`pfb_dns_proxy_address_table()`) from
+  `pfb_dns_proxy_listeners_sync()`, after the listener changes, on the update pass and the cron tick, while the rc script's command names
+  `--dns-name` and no restart is pending; a gateway that does not take it is the reason to restart the pair. The update pass masks
+  `--dns-name-answer` out of the rc script before it compares the old and the new text, as it does the listen addresses, so a changed answer
+  never restarts the proxy; a changed `--dns-name` does.
 - **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
   30 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
   `decider restarted: pid N took over from pid M` is logged; the old one answers the queries it holds (for as long as a query
@@ -352,10 +364,11 @@ exercised with hand-built headers in `doh_test.go`.
 ## DDR
 
 Discovery of Designated Resolvers ([RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html), issue #3583), off unless asked for.
+Its target name is the DNS name (below): there is no predefined name, and DDR with no DNS name answers nothing.
 
 | Flag | Meaning |
 |---|---|
-| `--ddr NAME` | DDR on. `NAME` is the firewall's FQDN, with or without a trailing dot; every record names it. Empty or absent: off. |
+| `--ddr` | DDR on; every record names the DNS name. Needs `--dns-name`: without it the gateway does not start (`--ddr needs --dns-name`). |
 | `--ddr-doh-443` | The DoH record carries no `port` parameter, whatever port DoH listens on, so clients reach DoH on 443 (a reverse proxy in front). Needs `--ddr`: alone it is a usage error. |
 
 With `--ddr`, after the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and before the decider, the
@@ -365,8 +378,8 @@ and nothing is written to the reply log. Names match case-insensitively (ASCII) 
 - `_dns.resolver.arpa. SVCB` over plain UDP or TCP, received on address L: one ServiceMode record (TTL 300) per transport
   listening on L, while a certificate is loaded: DoH priority 1 (`alpn=h2`, `dohpath=/dns-query{?dns}`), DoT priority 2
   (`alpn=dot`), DoQ priority 3 (`alpn=doq`). `port` only when the listener's port is not 443 (DoH) or 853 (DoT, DoQ), and
-  never on the DoH record with `--ddr-doh-443`. Each record has `TargetName` = `NAME` and an `ipv4hint` or `ipv6hint` = L;
-  the Additional section has the A or AAAA record for `NAME` = L.
+  never on the DoH record with `--ddr-doh-443`. Each record has `TargetName` = the DNS name and an `ipv4hint` or `ipv6hint` = L;
+  the Additional section has the A or AAAA record for the DNS name = L.
 - `resolver.arpa.` SOA and NS: `resolver.arpa. 300 IN SOA localhost. nobody.invalid. 1 3600 1200 604800 300` and
   `resolver.arpa. 300 IN NS localhost.`.
 - Everything else at or under the zone, the SVCB query over DoT, DoH or DoQ, and a plain query on an address no
@@ -382,6 +395,34 @@ the client gets Unbound's own answer unchanged.
 
 The listeners DDR designates are the ones the gateway serves now: a DoT, DoH or DoQ listener added over the control socket
 is designated from then on, and one that is removed (bound at start or added) no longer is, with no restart.
+
+DDR designates on plain DNS only: a query that reaches a DoT, DoH or DoQ listener is never a DDR query (see DNS name for what those
+transports do answer).
+
+## DNS name
+
+The DNS name (issue #3694) is entered on the pfB-DNS page beside the certificate (`dns/pfb_dns_name`, per node like the certificate, which
+must list it as a DNS SAN) and is both DDR's target name and the one name pfB-DNS answers `A` and `AAAA` for itself.
+
+| Flag | Meaning |
+|---|---|
+| `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. The pfB-DNS page also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
+| `--dns-name-answer LOCAL=ADDR[,ADDR]` | Repeatable. A query for the name that arrives on LOCAL is answered with the ADDR of the family it asked for. LOCAL and every ADDR are IP addresses without a zone (an IPv4-mapped one is read as its IPv4 address); at most one ADDR per family; a LOCAL named twice is an error, and so is any of these flags without `--dns-name` (`--dns-name-answer needs --dns-name`). LOCAL need not be one of its ADDRs. |
+
+After the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and after DDR, before the decider, the gateway
+answers a query for exactly the DNS name itself, on every transport, when it has an answer: the question is one `IN` `QUERY` of type `A` or
+`AAAA`, its name equals the DNS name (ASCII case-insensitive; `sub.<name>` and every other type, MX, TXT and HTTPS included, go on to
+Unbound), LOCAL is in the table and has an address of the family asked for. The reply is NOERROR with AA, RA and the query's RD, one
+record of TTL 300 owned by the name as asked (its case kept), an EDNS OPT echoed as DDR's replies do; the decider never sees the query
+and nothing is written to the reply log. Any other query, including one on loopback or on an address no entry names, is the decider's and
+Unbound's as before. On DoT, DoH and DoQ LOCAL is the address the connection reached (after any PROXY header); DDR still sees only plain
+DNS.
+
+The table is what PHP derives for each address the gateway listens on (`pfb_dns_proxy_name_answers()`): an active Resolver VIP is
+answered with the VIP and the other family's active VIP, if any; any other address with the IPv4 and IPv6 addresses of the interface that
+carries it, never a VIP, so a client that queries `10.0.0.1` is sent to `10.0.0.1` whether or not a VIP is active; an address no interface
+carries, and loopback, get no entry. The table is given at start by the flags and replaced while running by the name-answer verb (see
+the control socket), so an interface that gains or loses an address changes the answers with no restart.
 
 ## RFCs read for this step
 

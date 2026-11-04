@@ -122,7 +122,8 @@ type gateway struct {
 	doqListenerClosed                                          func() // test seam: DoQ's closer calls it once ln.Close() has returned, before it waits for the accept loop
 	deciderRead                                                func() // test seam: resolve calls it between reading the active decider and asking it
 
-	ddr *ddr // issue #3583: answers resolver.arpa. itself, after the ACL and before the decider; nil = off
+	ddr   *ddr         // issue #3583: answers resolver.arpa. itself, after the ACL and before the decider; nil = off
+	names *nameAnswers // issue #3694: answers A and AAAA for the DNS name, after the ACL and DDR; nil = no DNS name
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -198,9 +199,10 @@ const (
 )
 
 // screen applies what never needs the decider: no header or a response (never answered, so no reflection
-// loops), then the Resolver ACL, then DDR when it is on (issue #3583). local is the address a plain query arrived on
-// (the zero Addr over DoT, DoH and DoQ) and udp says it came as a datagram.
-func (g *gateway) screen(client, local netip.Addr, udp bool, wire []byte) (disposition, []byte) {
+// loops), then the Resolver ACL, then DDR when it is on (issue #3583), then the DNS name's A and AAAA (issue #3694). local is
+// the address the query reached on any transport; plain says it came over plain DNS, the only transport DDR designates on
+// (it is handed no address on the others), and udp says it came as a datagram.
+func (g *gateway) screen(client, local netip.Addr, plain, udp bool, wire []byte) (disposition, []byte) {
 	if len(wire) < 12 || wire[2]&0x80 != 0 {
 		return discard, nil
 	}
@@ -211,7 +213,16 @@ func (g *gateway) screen(client, local netip.Addr, udp bool, wire []byte) (dispo
 		return replyNow, buildRefused(wire)
 	}
 	if g.ddr != nil {
-		if reply := g.ddr.answer(wire, local, udp); reply != nil {
+		designated := local
+		if !plain {
+			designated = netip.Addr{}
+		}
+		if reply := g.ddr.answer(wire, designated, udp); reply != nil {
+			return replyNow, reply
+		}
+	}
+	if g.names != nil {
+		if reply := g.names.answer(wire, local, udp); reply != nil {
 			return replyNow, reply
 		}
 	}

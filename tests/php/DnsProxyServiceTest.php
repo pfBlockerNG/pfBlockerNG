@@ -2237,7 +2237,8 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issue #3583 -- DDR: --ddr FQDN [--ddr-doh-443] right after the TLS flags, only while pfB-DNS is on and DDR is On
+	// issues #3583, #3694 -- the DNS Name, DDR and the name answers: --dns-name NAME [--ddr [--ddr-doh-443]] --dns-name-answer LOCAL=ADDR
+	// right after the TLS flags, only while pfB-DNS is on and a DNS Name is set
 	// -----------------------------------------------------------------------
 
 	private function firewallName(string $hostname = 'fw', string $domain = 'example.lan'): void
@@ -2253,24 +2254,28 @@ final class DnsProxyServiceTest extends TestCase
 		return $found[1];
 	}
 
-	public function testDdrOnAddsTheFirewallFqdnRightAfterTheTlsFlagsAndOffAddsNothing(): void
+	/** lan (192.0.2.1) is the box's one address: the one name answer the script carries. */
+	private const ANSWER = ['--dns-name-answer', '192.0.2.1=192.0.2.1'];
+
+	public function testDdrOnAddsItsFlagBetweenTheDnsNameAndTheNameAnswersRightAfterTheTlsFlagsAndOffAddsNone(): void
 	{
-		// Given a moved box with DoH on and DDR Off
+		// Given a moved box with DoH on, a DNS Name and DDR Off
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->firewallName();
+		$this->setting('pfb_dns_name', 'fw.example.lan');
 		$this->setting('pfb_dns_doh', 'on');
 		$this->generateWith($gateway);
-		$this->assertSame([], $this->ddrFlags(), 'before: DDR Off adds no flag');
+		$this->assertSame([], $this->ddrFlags(), 'before: DDR Off adds no DDR flag');
+		$this->assertStringContainsString(" --doh-port '4443' --dns-name 'fw.example.lan' --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText(), 'before: the name and its answers are there without DDR');
 
 		// When DDR is turned on
 		$this->setting('pfb_dns_ddr', 'on');
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then the daemon gets --ddr with the FQDN after the DoH group and before the mode flags, and nothing else changed
+		// Then the daemon gets --ddr after the name and before its answers, all after the DoH group and before the mode flags, and nothing else changed
 		$doh = ['--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443'];
-		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [...$doh, '--ddr', 'fw.example.lan']), $argv);
-		$this->assertStringContainsString(" --doh-port '4443' --ddr 'fw.example.lan' --no-module", $this->rcText(), 'the FQDN is one quoted word');
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [...$doh, '--dns-name', 'fw.example.lan', '--ddr', ...self::ANSWER]), $argv);
+		$this->assertStringContainsString(" --doh-port '4443' --dns-name 'fw.example.lan' --ddr --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText(), 'the name and the answer are one quoted word each');
 	}
 
 	public function testTheDohOn443ToggleAddsItsFlagAfterDdrAndInTheDaemonsArgv(): void
@@ -2278,7 +2283,7 @@ final class DnsProxyServiceTest extends TestCase
 		// Given DDR On with the 443 toggle Off
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->firewallName();
+		$this->setting('pfb_dns_name', 'fw.example.lan');
 		$this->setting('pfb_dns_ddr', 'on');
 		$this->generateWith($gateway);
 		$this->assertSame(['--ddr'], $this->ddrFlags(), 'before: the 443 toggle Off adds no flag');
@@ -2288,8 +2293,8 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then --ddr-doh-443 follows --ddr as a flag of its own, with no value
-		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--ddr', 'fw.example.lan', '--ddr-doh-443', '--ddr-doh-4436']), $argv);
-		$this->assertStringContainsString(" --ddr 'fw.example.lan' --ddr-doh-443 --ddr-doh-4436 --no-module", $this->rcText());
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, ['--dns-name', 'fw.example.lan', '--ddr', '--ddr-doh-443', '--ddr-doh-4436', ...self::ANSWER]), $argv);
+		$this->assertStringContainsString(" --dns-name 'fw.example.lan' --ddr --ddr-doh-443 --ddr-doh-4436 --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText());
 	}
 
 	/** @return array<string,array{string,string,list<string>}> stored DDR, stored 443 toggle, the DDR flags the script carries while pfB-DNS is on */
@@ -2307,10 +2312,10 @@ final class DnsProxyServiceTest extends TestCase
 	#[DataProvider('ddrToggleRows')]
 	public function testTheDdrFlagsFollowTheTwoTogglesWhilePfbDnsIsOnAndNeverWhileItIsOff(string $ddr, string $doh443, array $whileOn): void
 	{
-		// Given a moved box (pfB-DNS on) with both toggles Off
+		// Given a moved box (pfB-DNS on) with a DNS Name and both toggles Off
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->firewallName();
+		$this->setting('pfb_dns_name', 'fw.example.lan');
 		$this->generateWith($gateway);
 		$this->assertSame([], $this->ddrFlags(), 'before: both Off');
 
@@ -2324,34 +2329,64 @@ final class DnsProxyServiceTest extends TestCase
 		config_set_path(self::SAVED, '');
 		$this->generateWith($gateway);
 		$this->assertSame([], $this->ddrFlags(), 'pfB-DNS off');
+		$this->assertSame([], $this->scriptValues('--dns-name'), 'pfB-DNS off: no name either');
+		$this->assertStringNotContainsString('--dns-name-answer', $this->rcText(), 'pfB-DNS off: no answer');
 	}
 
-	public function testTheFqdnIsTheSystemHostnameAndDomainOrPfsensesOwnDefaults(): void
+	public function testWithoutADnsNameTheScriptCarriesNoNameDdrOrAnswerEvenWithDdrOn(): void
 	{
+		// Given DDR On and a DNS Name: the flags are there (before-state)
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$this->setting('pfb_dns_ddr', 'on');
-
+		$this->setting('pfb_dns_ddr_doh_443', 'on');
+		$this->setting('pfb_dns_name', 'fw.example.lan');
 		$this->generateWith($gateway);
-		$this->assertSame(["'pfSense.localdomain'"], $this->scriptValues('--ddr'), 'no hostname or domain stored');
+		$this->assertSame(['--ddr', '--ddr-doh-443', '--ddr-doh-4436'], $this->ddrFlags(), 'before');
+		$this->assertSame(["'fw.example.lan'"], $this->scriptValues('--dns-name'), 'before');
 
-		$this->firewallName('gw-1', 'corp.example');
-		$this->generateWith($gateway);
-		$this->assertSame(["'gw-1.corp.example'"], $this->scriptValues('--ddr'));
-	}
-
-	public function testAHostnameWithShellCharactersReachesTheDaemonAsOneLiteralWord(): void
-	{
-		// Given a hostname and domain that hold $, (, ), ; and a quote
-		$gateway = $this->gateway();
-		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
-		$this->firewallName("a\$HOME'(b)", 'c;d.example');
-		$this->setting('pfb_dns_ddr', 'on');
-
-		// When the script is generated and started under dash
+		// When the name is empty
+		$this->setting('pfb_dns_name', '');
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then the daemon receives exactly hostname.domain: nothing expanded, split or backgrounded
-		$this->assertSame(["a\$HOME'(b).c;d.example"], $this->flagValues($argv, '--ddr'));
+		// Then nothing of it reaches the daemon: DDR answers nothing and nothing is intercepted (row N2)
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
+		$this->assertStringNotContainsString('--dns-name', $this->rcText());
+		$this->assertStringNotContainsString('--ddr', $this->rcText());
+	}
+
+	public function testTheDnsNameIsDdrsTargetAndTheFirewallsOwnHostnameAndDomainPlayNoPart(): void
+	{
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->firewallName('gw-1', 'corp.example');
+		$this->setting('pfb_dns_ddr', 'on');
+		$this->setting('pfb_dns_name', 'dns.example.net');
+
+		$this->generateWith($gateway);
+
+		$this->assertSame(["'dns.example.net'"], $this->scriptValues('--dns-name'));
+		$this->assertStringNotContainsString('gw-1', $this->rcText());
+		$this->assertStringNotContainsString('corp.example', $this->rcText());
+	}
+
+	public function testAStoredNameThatIsNoValidNameReachesTheDaemonAsNothingAndIsLogged(): void
+	{
+		// Given a valid stored name with DDR on: the daemon is handed it
+		$gateway = $this->gateway();
+		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
+		$this->setting('pfb_dns_ddr', 'on');
+		$this->setting('pfb_dns_name', 'fw.example.lan');
+		$this->assertSame(['fw.example.lan'], $this->flagValues($this->startAndReadArgv($gateway), '--dns-name'), 'before');
+
+		// When a hand-edited config.xml holds text that holds shell characters
+		$this->setting('pfb_dns_name', "a\$HOME'(b).c;d.example");
+		$argv = $this->startAndReadArgv($gateway);
+
+		// Then the daemon gets none of the name flags (the gateway would refuse them) and the log says why
+		$this->assertSame([], $this->flagValues($argv, '--dns-name'));
+		$this->assertNotContains('--ddr', $argv);
+		$this->assertNotContains('--dns-name-answer', $argv);
+		$this->assertStringContainsString('DNS proxy: the stored DNS Name is not a valid name; DDR and the name answers are off', $this->errorLog());
 	}
 }

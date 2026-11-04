@@ -1873,7 +1873,7 @@ DNS_PROXY_LISTENER_KEYS = (
     "pfb_dns_doq_interface",
 )
 # issue #3538: the plain DNS, DoT and certificate settings the same save writes, restored with the seven above
-DNS_PROXY_OWN_KEYS = ("pfb_dns_interface", "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_dot_interface")
+DNS_PROXY_OWN_KEYS = ("pfb_dns_interface", "pfb_dns_dot", "pfb_dns_dot_port", "pfb_dns_dot_interface", "pfb_dns_name")
 DNS_PROXY_V6_KEYS = ("pfb_dns_dot_port6", "pfb_dns_doh_port6", "pfb_dns_doq_port6", "pfb_dns_ddr_doh_443_6")
 CERT_CFG = DNS_PROXY_CFG + "pfb_dns_sslcertref"
 
@@ -1962,9 +1962,11 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
 
 
 # issue #3583: DDR and DoH on port 443, saved like the other pfB-DNS toggles: posted `on` is stored `on`, posted `''`
-# is stored as the empty Off token.
+# is stored as the empty Off token. DDR needs a DNS Name (issue #3694), which every save of it posts.
 DDR_CFG = helpers.dns_config_path("pfb_dns_ddr")
 DDR_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443")
+DNS_NAME_CFG = helpers.dns_config_path("pfb_dns_name")
+DDR_NAME = "fw.example.lan"
 
 
 @contextlib.contextmanager
@@ -2011,7 +2013,11 @@ def test_pfb_dns_ddr_toggles_save_on_and_clearing_both_stores_the_off_tokens(
         helpers.config_set(vm, DDR_443_CFG, "")
         assert stored() == ("", ""), f"seed did not take: both DDR toggles must start Off, got {stored()}"
         for posted, expected in (("on", ("on", "on")), ("", ("", ""))):
-            saved = webui.post(DNS_PAGE, {"pfb_dns_ddr": posted, "pfb_dns_ddr_doh_443": posted}, timeout=SAVE_TIMEOUT)
+            saved = webui.post(
+                DNS_PAGE,
+                {"pfb_dns_ddr": posted, "pfb_dns_ddr_doh_443": posted, "pfb_dns_name": DDR_NAME},
+                timeout=SAVE_TIMEOUT,
+            )
             assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
             now = stored()
             assert now == expected, (
@@ -2019,6 +2025,51 @@ def test_pfb_dns_ddr_toggles_save_on_and_clearing_both_stores_the_off_tokens(
                 "stored (dns_shared/pfb_dns_ddr, dns_shared/pfb_dns_ddr_doh_443) "
                 f"expected {expected}, got {now}; the page's input errors: {_input_errors_text(saved.text)}"
             )
+
+
+def test_pfb_dns_name_is_saved_without_its_trailing_dot_and_ddr_needs_one(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #3694: the DNS Name persists (trailing dot dropped, case kept); DDR with no name or a bad name is refused.
+
+    Given DDR and the name stored empty (seeded directly, so the before-state does not depend on the save path under
+      test),
+    When Save posts DDR on with an empty name, Then the page shows `DDR needs a DNS name: ...` and nothing changes;
+    When it posts a name that is no valid name (one label, an IPv4 literal, under resolver.arpa, a wildcard), Then the
+      page names the field `DNS Name` and neither value changes;
+    When it posts ` FW.Example.LAN. ` with DDR on, Then `FW.Example.LAN` and `on` are stored.
+    """
+    vm = smoke_vm
+
+    def stored() -> tuple[str, str]:
+        return helpers.config_get(vm, DNS_NAME_CFG), helpers.config_get(vm, DDR_CFG)
+
+    with _dns_page_settings_restored(vm):
+        helpers.config_set(vm, DNS_NAME_CFG, "")
+        helpers.config_set(vm, DDR_CFG, "")
+        assert stored() == ("", ""), f"seed did not take: no name and DDR Off expected, got {stored()}"
+
+        refused = webui.post(DNS_PAGE, {"pfb_dns_ddr": "on", "pfb_dns_name": ""}, timeout=SAVE_TIMEOUT)
+        assert "DDR needs a DNS name: enter the name the certificate covers, or turn DDR off." in refused.text, (
+            f"DDR on with no name must be refused; the page's input errors: {_input_errors_text(refused.text)}"
+        )
+        assert stored() == ("", ""), "a refused Save must leave config.xml unchanged"
+
+        for bad in ("fw", "10.0.0.1", "fw.resolver.arpa", "*.example.lan"):
+            rejected = webui.post(DNS_PAGE, {"pfb_dns_ddr": "", "pfb_dns_name": bad}, timeout=SAVE_TIMEOUT)
+            assert "DNS Name must be a fully qualified domain name" in rejected.text, (
+                f"{bad!r} must be refused naming the field; the page's input errors: "
+                f"{_input_errors_text(rejected.text)}"
+            )
+            assert stored() == ("", ""), f"{bad!r}: a refused Save must leave config.xml unchanged"
+
+        saved = webui.post(DNS_PAGE, {"pfb_dns_ddr": "on", "pfb_dns_name": " FW.Example.LAN. "}, timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
+        assert stored() == ("FW.Example.LAN", "on"), (
+            f"expected ('FW.Example.LAN', 'on'), got {stored()}; "
+            f"the page's input errors: {_input_errors_text(saved.text)}"
+        )
 
 
 def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(

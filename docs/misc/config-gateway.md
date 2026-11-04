@@ -260,6 +260,13 @@ Authorization = property of **write**, not call site (generalises
     `pfb_dns_proxy_ddr_flags()` for the gateway's `--ddr` and `--ddr-doh-443`. The page disables the second checkbox while
     the STORED DoH port is `443` (`pfb_dns_proxy_ddr_doh_443_locked()`, no port to leave out); a disabled control posts
     nothing, so the save keeps the stored value of that toggle then, and takes the posted one at any other stored port.
+  - **`dns/pfb_dns_name`** (issue #3694, plain string): the DNS Name, DDR's target name and the name pfB-DNS answers `A` and `AAAA` for;
+    default `''` = no name, sync `local` (per node like the certificate, which must list it as a DNS SAN; not one of
+    `PFB_DNS_SHARED_FIELDS`). New key, no grandfather, never seeded: a box that had DDR On before the key existed reads `''` and
+    stops answering DDR until a name is entered. Written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`, trailing dot
+    stripped, case kept; the save refuses DDR On with no name), read through `PfbConfig::read()` by `pfb_dns_proxy_ddr_flags()`
+    for `--dns-name`, `--ddr` and one `--dns-name-answer` per listen address, and by `pfb_dns_proxy_ddr_warnings()`. A stored
+    text that is no valid name (`pfb_dns_proxy_name_normalized()`) counts as `''` and is logged.
   - **pfB-DNS legacy sync split (issue #3649).** `dns_shared` resolves to
     `installedpackages/pfblockerngdnssettings/config/0`. Its nine fields are the DoT/DoH/DoQ toggles
     and ports, trusted DoH front ends, DDR and DDR DoH-on-443. Registry `sync: local` means

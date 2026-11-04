@@ -536,7 +536,7 @@ none of this applies and the predicates read Unbound as before.
 script has one launch line:
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log /bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1
---port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [--dot-listen T ... --dot-port D] [the DoH/DoQ flags below] [--ddr FQDN [--ddr-doh-443]]
+--port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [--dot-listen T ... --dot-port D] [the DoH/DoQ flags below] [--dns-name NAME [--ddr [--ddr-doh-443]] [--dns-name-answer L=A[,B] ...]]
 [--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
 /var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
 --module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53;
@@ -866,16 +866,27 @@ by `pfb_dns_proxy` in its command line, or by the installed path of the binary t
 whose command line is neither. Pinned by
 `DnsProxyServiceTest`, `DnsProxyGatewayOnlyTest`, `DnsProxyApplyStartTest` and `DnsProxyListenerSettingsTest`.
 
-**DDR flags (issues #3583, #3649).** The pfB-DNS page's DDR section has two toggles,
+**DDR flags and the DNS Name (issues #3583, #3649, #3694).** The pfB-DNS page's DDR section has two toggles,
 `dns_shared/pfb_dns_ddr` and `dns_shared/pfb_dns_ddr_doh_443`, both included only in **All settings (legacy)**
 and excluded from **Policy and lists** and **Lists and global settings only (legacy)**. They are saved by
 the same save as the listener settings (`pfb_dns_proxy_listeners_stored()`; a toggle is on only for a posted `on`).
+The DNS Name (`dns/pfb_dns_name`, a text input right after the certificate selector, `sync` `local`: per node like the
+certificate, never seeded) is DDR's target and the one name pfB-DNS answers `A` and `AAAA` for. The save refuses DDR On with no name
+and a name that is no valid name (`pfb_dns_proxy_name_normalized()`: at least two LDH labels, at most 253 characters, no IP literal, not
+`resolver.arpa` or under it; trailing dot dropped, case kept); the stored value is checked again before it reaches the gateway, which
+refuses to start with a bad one, so a hand-edited bad value counts as no name and is logged.
 `pfb_dns_proxy_service()` adds, right after the TLS flags and only while the snapshot is stored (pfB-DNS on)
-and `dns_shared/pfb_dns_ddr` is On, `--ddr FQDN` (`system/hostname` + `.` + `system/domain`, quoted:
-`pfb_dns_proxy_ddr_flags()`) and, with `dns_shared/pfb_dns_ddr_doh_443` On too, `--ddr-doh-443`,
-which leaves the port out of the DDR DoH record. The second toggle alone adds nothing, as the gateway
-rejects `--ddr-doh-443` without `--ddr`. A changed toggle changes the script, so a live proxy restarts
-on the next apply like for any other changed flag. Legacy sync receives store configuration only,
+and a name is set, `--dns-name NAME` (quoted: `pfb_dns_proxy_ddr_flags()`), then `--ddr` while `dns_shared/pfb_dns_ddr` is On, with
+`--ddr-doh-443` after it when `dns_shared/pfb_dns_ddr_doh_443` is On too (it leaves the port out of the DDR DoH record; alone it adds
+nothing, as the gateway rejects it without `--ddr`), then one `--dns-name-answer 'LOCAL=ADDR[,ADDR]'` for each address the gateway
+listens on (`pfb_dns_proxy_name_answers()`: plain DNS plus each of DoT, DoH and DoQ that is on): an active Resolver VIP is answered with
+itself and the other family's VIP, any other address with the IPv4 and IPv6 addresses of the interface that carries it, never a VIP; loopback
+and an address no interface carries get no entry. No name is no flag at all, DDR On or not. A changed name or toggle changes the
+script, so a live proxy restarts on the next apply like for any other changed flag. A changed `--dns-name-answer` does not: the update
+pass masks those arguments out of both scripts (as it does the listen addresses) and `pfb_dns_proxy_listeners_sync()` sends the whole
+table to the running gateway as one control-socket frame (`FF FF FF FB`, `pfb_dns_proxy_address_table()`), after the listener changes
+and only when no restart is pending; a gateway that does not take it is the reason to restart the pair. The page warns when DDR is On
+with no name, and when the selected certificate has no `dNSName` SAN covering the name (`pfb_dns_proxy_ddr_warnings()`). Legacy sync receives store configuration only,
 without marking changes pending; the receiver's next manual or scheduled Update regenerates the script.
 Use **Run Now** on **Update** at the receiver to apply received settings without waiting.
 The page disables the `dns_shared/pfb_dns_ddr_doh_443` checkbox while the stored DoH port is 443

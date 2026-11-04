@@ -1,11 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"net/netip"
 	"slices"
-	"strings"
 	"sync/atomic"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -13,7 +11,8 @@ import (
 
 // issue #3583: with --ddr the gateway answers every query at or under resolver.arpa. itself (RFC 9462), after the ACL and
 // before the decider. _dns.resolver.arpa. SVCB over plain DNS designates the encrypted transports bound on the address the
-// client queried; everything else under the zone is NODATA, apart from the apex SOA and NS.
+// client queried; everything else under the zone is NODATA, apart from the apex SOA and NS. Every record names the DNS name
+// (--dns-name, issue #3694).
 
 const (
 	ddrTTL        = 300
@@ -33,7 +32,7 @@ var (
 
 // ddr is what answers DDR queries; built once at start. Only the listener addresses change afterwards (change).
 type ddr struct {
-	target  dnsmessage.Name // the firewall's FQDN, which every record names
+	target  dnsmessage.Name // the DNS name (--dns-name), which every record names
 	doh443  bool            // --ddr-doh-443: the DoH record has no port, whatever port DoH listens on
 	doh4436 bool            // the separate IPv6 advertisement override
 	certs   *certStore      // nil when no TLS transport is configured
@@ -44,27 +43,9 @@ type ddr struct {
 // reads one consistent set.
 type ddrAddrs struct{ dot, doh, doq []netip.AddrPort }
 
-// ddrName is the --ddr value as an absolute name; one trailing dot is optional.
-func ddrName(s string) (dnsmessage.Name, error) {
-	bad := func(why string) error { return fmt.Errorf("--ddr %q: %s", s, why) }
-	host := strings.TrimSuffix(s, ".")
-	if host == "" {
-		return dnsmessage.Name{}, bad("empty name")
-	}
-	if len(host) > 253 {
-		return dnsmessage.Name{}, bad("longer than 253 characters")
-	}
-	for _, label := range strings.Split(host, ".") {
-		if label == "" || len(label) > 63 {
-			return dnsmessage.Name{}, bad("every label must be 1 to 63 bytes")
-		}
-	}
-	return dnsmessage.NewName(host + ".")
-}
-
 // newDDR builds the answerer from the flags and the listeners that are bound; dot, doh and doq are their addresses.
 func newDDR(target string, doh443 bool, certs *certStore, dot, doh, doq []netip.AddrPort) (*ddr, error) {
-	name, err := ddrName(target)
+	name, err := dnsName(target)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +58,7 @@ func newDDR(target string, doh443 bool, certs *certStore, dot, doh, doq []netip.
 // port-0 flag is the one a client is told.
 func ddrOnListeners(cfg config, t *tlsListeners) (*ddr, error) {
 	if t == nil {
-		return newDDR(cfg.ddr, cfg.ddrDoH443, nil, nil, nil, nil)
+		return newDDR(cfg.dnsName, cfg.ddrDoH443, nil, nil, nil, nil)
 	}
 	var dot, doh, doq []netip.AddrPort
 	for _, ln := range t.dot {
@@ -89,7 +70,7 @@ func ddrOnListeners(cfg config, t *tlsListeners) (*ddr, error) {
 	for _, c := range t.doq {
 		doq = append(doq, c.LocalAddr().(*net.UDPAddr).AddrPort())
 	}
-	d, err := newDDR(cfg.ddr, cfg.ddrDoH443, t.certs, dot, doh, doq)
+	d, err := newDDR(cfg.dnsName, cfg.ddrDoH443, t.certs, dot, doh, doq)
 	if d != nil {
 		d.doh4436 = cfg.ddrDoH4436
 	}
@@ -156,13 +137,7 @@ func (d *ddr) answer(wire []byte, local netip.Addr, udp bool) []byte {
 	}
 	size, edns := clientOPT(&p)
 
-	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{
-			ID: h.ID, Response: true, Authoritative: true, OpCode: h.OpCode, RecursionDesired: h.RecursionDesired,
-			RecursionAvailable: true, CheckingDisabled: h.CheckingDisabled,
-		},
-		Questions: []dnsmessage.Question{q},
-	}
+	msg := replyTo(h, q)
 	switch {
 	case q.Class != dnsmessage.ClassINET:
 	case q.Type == dnsmessage.TypeSVCB && asciiEqualFold(name, ddrDesignated):
@@ -178,6 +153,25 @@ func (d *ddr) answer(wire []byte, local netip.Addr, udp bool) []byte {
 	if len(msg.Answers) == 0 {
 		msg.Authorities = []dnsmessage.Resource{soaRecord(ddrZoneName)}
 	}
+	return packReply(wire, msg, size, edns, udp)
+}
+
+// replyTo is the reply to the query behind h and q that this gateway makes itself (DDR and the DNS name): authoritative,
+// recursion available, RD and CD as the query had them, the question as asked. The caller fills the sections.
+func replyTo(h dnsmessage.Header, q dnsmessage.Question) dnsmessage.Message {
+	return dnsmessage.Message{
+		Header: dnsmessage.Header{
+			ID: h.ID, Response: true, Authoritative: true, OpCode: h.OpCode, RecursionDesired: h.RecursionDesired,
+			RecursionAvailable: true, CheckingDisabled: h.CheckingDisabled,
+		},
+		Questions: []dnsmessage.Question{q},
+	}
+}
+
+// packReply is msg on the wire, with the OPT record the query's EDNS earned. size and edns are clientOPT's; a UDP reply over
+// what the client can take (at least 512 bytes, at most 1232) is the empty answer with TC set. A message that cannot be packed
+// is SERVFAIL.
+func packReply(wire []byte, msg dnsmessage.Message, size uint16, edns, udp bool) []byte {
 	var opt []dnsmessage.Resource
 	if edns {
 		var oh dnsmessage.ResourceHeader

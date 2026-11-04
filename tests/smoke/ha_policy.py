@@ -253,6 +253,7 @@ UNSEEDED_LOCAL_KEYS = {
     ): "read only while DoT is on, which this harness leaves off: a seeded value changes nothing",
     f"{DNS}/pfb_dns_dot_interface": "read only while DoT is on, which this harness leaves off: a seeded value changes nothing",
     f"{DNS}/pfb_dns_sslcertref": "names the Resolver's certificate, which the guests do not have: a seeded value would dangle",
+    f"{DNS}/pfb_dns_name": "read only while pfB-DNS is on, which this harness leaves off: a seeded value changes nothing",
     **{
         h.dns_config_path(
             f"pfb_dns_{kind}"

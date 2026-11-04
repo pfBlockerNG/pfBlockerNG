@@ -83,6 +83,7 @@ trait SyncPolicyFixtureTrait
 			'dns_shared/pfb_dns_dot_port6',
 			'dns/pfb_dns_dot_interface',
 			'dns/pfb_dns_sslcertref',
+			'dns/pfb_dns_name',
 			'dns_shared/pfb_dns_ddr',
 			'dns_shared/pfb_dns_ddr_doh_443',
 			'dns_shared/pfb_dns_ddr_doh_443_6',

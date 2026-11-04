@@ -16,7 +16,8 @@ use PHPUnit\Framework\TestCase;
  *     except that the 443 toggle keeps its stored value while the page disables it (the STORED DoH port is 443), because
  *     a disabled control posts nothing.
  *
- * The rc command line (--ddr, --ddr-doh-443) is pinned in DnsProxyServiceTest; the page wiring in PfbDnsPageWiringTest.
+ * The rc command line (--ddr, --ddr-doh-443) is pinned in DnsProxyServiceTest; the page wiring in PfbDnsPageWiringTest. DDR needs a DNS
+ * name (issue #3694): every post here carries one, so that a toggle is the only thing that varies; DnsProxyDnsNameSettingsTest pins the rest.
  */
 #[CoversFunction('pfb_validate_dns_proxy_listeners_post')]
 #[CoversFunction('pfb_dns_proxy_listeners_stored')]
@@ -40,7 +41,7 @@ final class DnsProxyDdrSettingsTest extends TestCase
 		$GLOBALS['config'] = $this->savedConfig;
 	}
 
-	/** @param array<string,mixed> $over fields replacing the defaults the page posts: every list holds one entry, every transport and both DDR toggles are off */
+	/** @param array<string,mixed> $over fields replacing the defaults the page posts: every list holds one entry, every transport and both DDR toggles are off, the DNS Name is set */
 	private function post(array $over = []): array
 	{
 		return $over + [
@@ -50,6 +51,7 @@ final class DnsProxyDdrSettingsTest extends TestCase
 			'pfb_dns_doh_trusted' => '',
 			'pfb_dns_doq' => '', 'pfb_dns_doq_port' => '853', 'pfb_dns_doq_interface' => ['lan'],
 			'pfb_dns_sslcertref' => '',
+			'pfb_dns_name' => 'fw.example.lan',
 			self::DDR => '', self::DOH_443 => '',
 		];
 	}
@@ -182,6 +184,7 @@ final class DnsProxyDdrSettingsTest extends TestCase
 
 	public function testAnAbsentIpv6Port443OverrideFollowsTheExistingOverrideUntilStored(): void
 	{
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		PfbConfig::write('dns_shared/pfb_dns_ddr', 'on');
 		PfbConfig::write('dns_shared/pfb_dns_ddr_doh_443', 'on');
 		$this->assertStringContainsString('--ddr-doh-4436', pfb_dns_proxy_ddr_flags());

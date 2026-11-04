@@ -458,7 +458,10 @@ final class DnsProxyLiveListenersTest extends TestCase
 	#[DataProvider('settingsThatRestartThePair')]
 	public function testAnyOtherChangeOfTheRcScriptRestartsTheWholePairAndSendsNoFrame(string $what, bool $withAddress): void
 	{
-		// Given a ready proxy, and a setting that differs from what the running gateway was started with
+		// Given a ready proxy, and a setting that differs from what the running gateway was started with (DDR needs a DNS Name to mean anything)
+		if ($what === 'DDR') {
+			config_set_path(self::SETTINGS . 'pfb_dns_name', 'fw.example.lan');
+		}
 		$this->quiet(['dot' => $what === 'a TLS group turned off']);
 		$record = $this->gateway();
 		match ($what) {

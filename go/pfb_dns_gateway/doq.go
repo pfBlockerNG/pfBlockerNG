@@ -254,7 +254,7 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 		_ = conn.CloseWithError(doqProtocolError, "edns-tcp-keepalive is not allowed")
 		return
 	}
-	disp, reply := g.screen(src.Addr(), netip.Addr{}, false, wire)
+	disp, reply := g.screen(src.Addr(), dst.Addr(), false, false, wire)
 	switch disp {
 	case discard:
 		reset(s, doqProtocolError)

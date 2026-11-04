@@ -61,7 +61,7 @@ final class SyncPolicyOwnershipTest extends TestCase
 	public function testEveryRegistryEntryDeclaresPolicyOrLocal(): void
 	{
 		$registry = pfb_cfg_registry();
-		$this->assertCount(184, $registry, '173 existing fields plus 11 resolver VIP and per-family transport fields (#3688)');
+		$this->assertCount(185, $registry, '173 existing fields plus 11 resolver VIP and per-family transport fields (#3688) and the DNS name (#3694)');
 
 		$this->assertSame([], self::unclassifiedSyncEntries($registry),
 			"every pfb_cfg_registry() entry must declare 'sync' => 'policy'|'local'");
@@ -90,10 +90,10 @@ final class SyncPolicyOwnershipTest extends TestCase
 	}
 
 	// A3 -- the local set is exactly the spec table.
-	public function testLocalKeySetIsExactlyTheSpecifiedEightyThree(): void
+	public function testLocalKeySetIsExactlyTheSpecifiedEightyFour(): void
 	{
 		$expected = self::localRegistryKeys();
-		$this->assertCount(83, $expected, 'the local set has 83 keys');
+		$this->assertCount(84, $expected, 'the local set has 84 keys');
 		sort($expected, SORT_STRING);
 
 		$this->assertSame($expected, self::keysClassified('local'),
