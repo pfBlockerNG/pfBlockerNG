@@ -2937,8 +2937,8 @@ def test_pfb_dns_page_leaves_the_doh_listener_unchecked_while_its_interface_is_a
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
 # ip/suppression (IP page) flipped their registry default to 'on' -- the checkbox must
 # render CHECKED with no stored config, and still render UNCHECKED for a present Off token
-# for both canonical empty and legacy ``off`` storage. issue #3515: pfb_py_reply (still the
-# DNSBL-section key, read by both DNS modes) is edited on the pfB-DNS page, not the DNSBL page.
+# for both canonical empty and legacy ``off`` storage. pfb_py_reply (still the
+# DNSBL-section key, read by both DNS modes) is edited on DNS General, not the DNSBL page.
 _ISSUE1907_TOGGLE_PAGES = (
     (
         "/pfblockerng/pfblockerng_dnsbl.php",
@@ -2949,8 +2949,8 @@ _ISSUE1907_TOGGLE_PAGES = (
         ),
     ),
     (
-        "/pfblockerng/pfblockerng_dns.php",
-        "pfB-DNS Settings",
+        "/pfblockerng/pfblockerng_dns_general.php",
+        "DNS Reply Logging",
         (("pfb_py_reply", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"),),
     ),
 )
@@ -2978,7 +2978,7 @@ def _set_scalar_or_absent(vm: SmokeVM, path: str, value: str | None) -> None:
     )
 
 
-@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "pfb-dns-page"])
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "dns-general-page"])
 def test_dnsbl_python_gated_toggles_render_checked_when_absent(
     smoke_vm: SmokeVM,
     webui: WebUI,
@@ -2990,7 +2990,7 @@ def test_dnsbl_python_gated_toggles_render_checked_when_absent(
     """issue #1907: pfb_cache/pfb_py_reply/pfb_hsts render CHECKED with no stored config --
     the registry default flipped to 'on', matching the page's REMOVED
     ``isset(...) ? ... : 'on'`` fallback (PfbConfig::read() now owns the default).
-    issue #3515: pfb_py_reply is checked the same way on the pfB-DNS page, where it now lives.
+    pfb_py_reply is checked the same way on DNS General, where it now lives.
     """
     vm = smoke_vm
     priors = {path: helpers.config_get(vm, path) if _config_path_exists(vm, path) else None for _name, path in toggles}
@@ -3010,7 +3010,7 @@ def test_dnsbl_python_gated_toggles_render_checked_when_absent(
             _set_scalar_or_absent(vm, path, priors[path])
 
 
-@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "pfb-dns-page"])
+@pytest.mark.parametrize(("page", "marker", "toggles"), _ISSUE1907_TOGGLE_PAGES, ids=["dnsbl-page", "dns-general-page"])
 def test_dnsbl_python_gated_toggles_render_unchecked_when_stored_off(
     smoke_vm: SmokeVM,
     webui: WebUI,
