@@ -13,6 +13,7 @@ final class PfbDnsDdrStatusTest extends TestCase
 {
 	private const ANSWERS = ";; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: 29492\n"
 		. ";; flags: qr aa rd ra ; QUERY: 1, ANSWER: 3, AUTHORITY: 0, ADDITIONAL: 1\n"
+		. ";; QUESTION SECTION:\n;; _dns.resolver.arpa. IN SVCB\n"
 		. ";; ANSWER SECTION:\n"
 		. "_dns.resolver.arpa. 300 IN SVCB 1 dns.example.com. alpn=h2 port=4443 ipv4hint=192.0.2.53 dohpath=/dns-query{?dns}\n"
 		. "_dns.resolver.arpa. 300 IN SVCB 2 dns.example.com. alpn=dot ipv6hint=2001:db8::53\n"
@@ -95,7 +96,7 @@ final class PfbDnsDdrStatusTest extends TestCase
 	{
 		return [
 			'actual advertisements' => [self::ANSWERS, '', 0, 'advertised'],
-			'NOERROR with no advertisements' => [";; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: 1\n;; flags: qr ; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0\n", '', 0, 'empty'],
+			'NOERROR with no advertisements' => [";; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: 1\n;; flags: qr ; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0\n;; QUESTION SECTION:\n;; _dns.resolver.arpa. IN SVCB\n", '', 0, 'empty'],
 			'refused is not empty' => [";; ->>HEADER<<- opcode: QUERY, rcode: REFUSED, id: 1\n;; flags: qr ; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0\n", '', 0, 'error'],
 			'NXDOMAIN is not empty' => [";; ->>HEADER<<- opcode: QUERY, rcode: NXDOMAIN, id: 1\n;; flags: qr ; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0\n", '', 0, 'error'],
 			'incomplete header is not success' => [';; ANSWER: 3', '', 0, 'error'],

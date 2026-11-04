@@ -15959,8 +15959,17 @@ function pfb_dns_ddr_result(string $stdout, string $stderr, int $exit): array {
 		$state = 'timeout';
 	} elseif ($exit === 0
 	    && preg_match('/^;; ->>HEADER<<- .*rcode: NOERROR,/m', $stdout) === 1
+	    && preg_match('/^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$/mi', $stdout) === 1
 	    && preg_match('/^;; flags: .*;\s*QUERY: \d+, ANSWER: (\d+),/m', $stdout, $answer) === 1) {
-		$state = (int) $answer[1] > 0 ? 'advertised' : 'empty';
+		if ((int) $answer[1] === 0) {
+			$state = 'empty';
+		} else {
+			$sections = explode(';; ANSWER SECTION:', $stdout, 2);
+			$records = explode(';; AUTHORITY SECTION:', $sections[1] ?? '', 2)[0];
+			if (preg_match('/^\S+\s+\d+\s+IN\s+SVCB\s/mi', $records) === 1) {
+				$state = 'advertised';
+			}
+		}
 	}
 	return ['state' => $state, 'stdout' => $stdout, 'stderr' => $stderr];
 }
@@ -15974,7 +15983,8 @@ function pfb_dns_ddr_probe(string $listener, float $budget): array {
 	$colon = strrpos($listener, ':');
 	$host = $colon === FALSE ? '' : trim(substr($listener, 0, $colon), '[]');
 	$port = $colon === FALSE ? '' : substr($listener, $colon + 1);
-	if (@inet_pton($host) === FALSE || !ctype_digit($port) || (string) (int) $port !== $port
+	$packed = @inet_pton($host);
+	if ($packed === FALSE || !ctype_digit($port) || (string) (int) $port !== $port
 	    || (int) $port < 1 || (int) $port > 65535 || pfb_dns_proxy_host_port($host, $port) !== $listener) {
 		return pfb_dns_ddr_result('', 'Invalid bound listener', 1);
 	}
@@ -15982,8 +15992,26 @@ function pfb_dns_ddr_probe(string $listener, float $budget): array {
 		return ['state' => 'budget', 'stdout' => '', 'stderr' => ''];
 	}
 	$args = ['/usr/bin/timeout', '-s', 'TERM', '-k1', sprintf('%.3F', max(0.001, min(2.0, $budget))), '/usr/bin/drill', '-b1232'];
-	array_push($args, ...(str_contains($host, ':') ? ['-6', '-I::1'] : ['-I127.0.0.1']));
-	array_push($args, '_dns.resolver.arpa.', "@{$host}", 'SVCB', '-p', $port);
+	$source = '127.0.0.1';
+	if (strlen($packed) === 16) {
+		$args[] = '-6';
+		$interfaces = net_get_interfaces();
+		if ($interfaces === FALSE) {
+			return pfb_dns_ddr_result('', 'Cannot inspect local IPv6 addresses', 1);
+		}
+		// ::1 cannot reach ordinary IPv6 interfaces; loopback-assigned VIPs need it to avoid a self-address ACL refusal.
+		$source = NULL;
+		foreach ($interfaces['lo0']['unicast'] ?? [] as $address) {
+			if (@inet_pton($address['address'] ?? '') === $packed) {
+				$source = '::1';
+				break;
+			}
+		}
+	}
+	if ($source !== NULL) {
+		array_push($args, '-I', $source);
+	}
+	array_push($args, '-p', $port, '_dns.resolver.arpa.', "@{$host}", 'SVCB');
 	$stdout = @tmpfile();
 	$stderr = @tmpfile();
 	if ($stdout === FALSE || $stderr === FALSE) {
