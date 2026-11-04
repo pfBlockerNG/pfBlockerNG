@@ -43,6 +43,7 @@ final class DnsProxyServiceTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->sandboxUp();
+		$this->setting('pfb_dns_name', 'fw.example.lan');
 	}
 
 	protected function tearDown(): void
@@ -1376,6 +1377,19 @@ final class DnsProxyServiceTest extends TestCase
 		if ($dot) {
 			array_push($dotFlags, '--dot-port', $dotPort);
 		}
+		$name = (string) PfbConfig::read('dns/pfb_dns_name');
+		if ($name !== '' && !in_array('--dns-name', $tls, TRUE)) {
+			array_push($tls, '--dns-name', $name);
+			foreach ($listen as $local) {
+				foreach ($GLOBALS['pfb_test_interface_ip'] as $interface => $v4) {
+					$pair = array_values(array_filter([$v4, $GLOBALS['pfb_test_configured_ipv6'][$interface] ?? NULL]));
+					if (in_array($local, $pair, TRUE)) {
+						array_push($tls, '--dns-name-answer', $local . '=' . implode(',', $pair));
+						break;
+					}
+				}
+			}
+		}
 		return [
 			'-r', '-R', '5', '-t', 'pfb_dns_proxy',
 			'-P', $this->pidfile('pfb_dns_proxy_daemon.pid'), '-p', $this->pidfile('pfb_dns_proxy.pid'),
@@ -2358,10 +2372,14 @@ final class DnsProxyServiceTest extends TestCase
 		$this->setting('pfb_dns_name', '');
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then nothing of it reaches the daemon: DDR answers nothing and nothing is intercepted (row N2)
-		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, self::dohFlags()), $argv);
+		// Then the daemon serves plain DNS only: no encrypted listener, DDR or name interception remains.
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
 		$this->assertStringNotContainsString('--dns-name', $this->rcText());
 		$this->assertStringNotContainsString('--ddr', $this->rcText());
+		foreach (['--dot-listen', '--doh-listen', '--doq-listen', '--doh-listen-443'] as $flag) {
+			$this->assertNotContains($flag, $argv);
+		}
+		$this->assertStringContainsString('DoH requires a valid DNS Name; DoH is not served', $this->errorLog());
 	}
 
 	public function testTheDnsNameIsDdrsTargetAndTheFirewallsOwnHostnameAndDomainPlayNoPart(): void

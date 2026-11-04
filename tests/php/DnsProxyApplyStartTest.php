@@ -98,6 +98,7 @@ final class DnsProxyApplyStartTest extends TestCase
 	 */
 	private function runningGatewayBox(): string
 	{
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		$gateway = "{$this->dir}/dns_proxy";
 		mkdir("{$gateway}/bin/freebsd-amd64", 0777, TRUE);
 		file_put_contents("{$gateway}/bin/freebsd-amd64/pfb-dns", "#!/bin/sh\n");

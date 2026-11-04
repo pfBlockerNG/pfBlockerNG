@@ -407,6 +407,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key("pfb_dns_{$kind}{$suffix}"), 2)[0]] . "/pfb_dns_{$kind}{$suffix}", $value);
 		}
 		config_set_path(self::SETTINGS . 'pfb_dns_interface', 'lan');
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
 		$GLOBALS['pfb_test_interface_info']['opt1'] = ['status' => 'up', 'enable' => TRUE];
 		$GLOBALS['pfb_test_interfaces']['opt1'] = '';
@@ -421,7 +422,10 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Then only that kind's address changed, live, with the kind's own socket; nothing restarted and plain DNS was left alone
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame(["remove {$kind} 198.51.100.1:{$port}", "add {$kind} 0.0.0.0:{$port}"], self::verbs($record));
+		$this->assertSame([
+			"remove {$kind} 198.51.100.1:{$port}", "add {$kind} 0.0.0.0:{$port}",
+			'fffffffb dns-name-answer 192.0.2.1=192.0.2.1',
+		], self::verbs($record));
 		$this->assertSame([[($kind === 'doq') ? 'dgram' : 'stream', "0.0.0.0:{$port}", $kind !== 'doq']], self::fdsOf($record, 1));
 		$this->assertSame([], $this->startupNotices());
 	}

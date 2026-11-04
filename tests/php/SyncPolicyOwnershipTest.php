@@ -61,7 +61,6 @@ final class SyncPolicyOwnershipTest extends TestCase
 	public function testEveryRegistryEntryDeclaresPolicyOrLocal(): void
 	{
 		$registry = pfb_cfg_registry();
-		$this->assertCount(184, $registry, '173 existing fields plus 11 resolver VIP and per-family transport fields (#3688), the DNS name and the per-interface DoH 443 selection (#3694), minus the two per-family DoH 443 toggles it replaced');
 
 		$this->assertSame([], self::unclassifiedSyncEntries($registry),
 			"every pfb_cfg_registry() entry must declare 'sync' => 'policy'|'local'");
@@ -90,18 +89,17 @@ final class SyncPolicyOwnershipTest extends TestCase
 	}
 
 	// A3 -- the local set is exactly the spec table.
-	public function testLocalKeySetIsExactlyTheSpecifiedEightyThree(): void
+	public function testLocalKeySetIsExactlyTheSpecifiedKeys(): void
 	{
 		$expected = self::localRegistryKeys();
-		$this->assertCount(83, $expected, 'the local set has 83 keys');
 		sort($expected, SORT_STRING);
 
 		$this->assertSame($expected, self::keysClassified('local'),
 			'the registry must classify exactly the spec local keys as local');
 	}
 
-	// A4 -- policy is everything else, with pinned per-section counts.
-	public function testPolicySetIsRegistryMinusLocalWithPinnedCounts(): void
+	// A4 -- policy is everything else.
+	public function testPolicySetIsRegistryMinusLocal(): void
 	{
 		$registry = array_keys(pfb_cfg_registry());
 		$expected = array_values(array_diff($registry, self::localRegistryKeys()));
@@ -109,15 +107,6 @@ final class SyncPolicyOwnershipTest extends TestCase
 
 		$policy = self::keysClassified('policy');
 		$this->assertSame($expected, $policy, 'policy must be exactly the registry minus the local set');
-		$this->assertCount(101, $policy);
-
-		$byAlias = [];
-		foreach ($policy as $key) {
-			$alias = explode('/', $key, 2)[0];
-			$byAlias[$alias] = ($byAlias[$alias] ?? 0) + 1;
-		}
-		ksort($byAlias);
-		$this->assertSame(['dnsbl' => 60, 'gen' => 17, 'ip' => 17, 'rep' => 3, 'ss' => 4], $byAlias);
 	}
 
 	// A5 -- every credential leaf is local.

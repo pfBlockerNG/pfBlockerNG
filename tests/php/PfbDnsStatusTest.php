@@ -113,6 +113,7 @@ final class PfbDnsStatusTest extends TestCase
 			'custom_options'   => ['present' => FALSE, 'value' => NULL],
 		];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
 		$GLOBALS['pfb_test_configured_ipv6'] = [];
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];

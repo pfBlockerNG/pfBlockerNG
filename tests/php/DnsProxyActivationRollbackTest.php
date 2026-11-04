@@ -119,6 +119,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$GLOBALS['pfb_test_file_notices'] = [];
 		$GLOBALS['pfb_test_lock_events'] = [];
 		DnsProxyCertificateFixtures::seedResolver($this->tmp);
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		$GLOBALS['pfb_test_lock_held'] = FALSE;
 		unset($GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_rcfile_writes'], $GLOBALS['pfb_test_rcfiles']);
 		$GLOBALS['pfb_test_lock_holders'] = [];

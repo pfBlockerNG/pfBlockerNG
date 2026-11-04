@@ -130,7 +130,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 		];
 		config_set_path(self::SAVED, base64_encode((string) json_encode($keys)));
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::shared())];
-		foreach ($settings + ['pfb_dns_interface' => 'lan', 'pfb_dns_sslcertref' => 'cert1'] as $key => $value) {
+		foreach ($settings + ['pfb_dns_interface' => 'lan', 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_name' => 'fw.example.lan'] as $key => $value) {
 			config_set_path(PFB_SECTIONS[explode('/', pfb_dns_config_key($key), 2)[0]] . '/' . $key, $value);
 		}
 		$names = array_keys($v4 + $v6);
