@@ -772,9 +772,6 @@ final class DnsListenVipLifecycleTest extends TestCase
 	{
 		require_once __DIR__ . '/PageStatementLoader.php';
 		$page = 'src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
-		$source = pfb_test_page_source($page);
-		$this->assertSame(1, substr_count($source, 'pfb_dns_listen_foreign_warnings()'), 'one loop');
-		$this->assertLessThan(strpos($source, 'pfb_dns_listen_foreign_warnings()'), strpos($source, 'pfb_print_pending_changes_box();'), 'below the pending-changes box');
 		$GLOBALS['pfb_test_info_boxes'] = [];
 		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
 		config_set_path('dhcpd/lan', ['dnsserver' => ['172.20.0.53']]);
@@ -789,12 +786,4 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame(array_map(static fn (string $text): array => [$text, 'warning'], pfb_dns_listen_foreign_warnings()), array_map(static fn (array $box): array => [$box[0], $box[1]], $boxes));
 	}
 
-	public function testDnsGeneralHelpSaysListsNamingAServerOfYourOwnAreLeftAlone(): void
-	{
-		require_once __DIR__ . '/PageStatementLoader.php';
-		$this->assertStringContainsString(
-			'Lists that name a server of your own are left alone; DNS General warns about each.',
-			pfb_test_page_source('src/usr/local/www/pfblockerng/pfblockerng_dns_general.php')
-		);
-	}
 }

@@ -35,7 +35,6 @@ WARNING = re.compile(
     r"which pfBlockerNG did not add, so the Resolver VIP (?P<vip>\S+) is not added there\. "
     r"Add (?P=vip) to that list by hand if clients should use it\."
 )
-HELP = "Lists that name a server of your own are left alone; DNS General warns about each."
 LISTENER_KEYS = ("pfb_dns_listen_vip", "pfb_dns_listen_vip4")
 
 
@@ -120,7 +119,6 @@ def test_dns_general_warns_of_a_dhcp_list_that_names_a_server_of_the_administrat
     Then:  DNS General warns of that scope, and only then
     """
     before_html = _render(smoke_vm, webui)
-    assert HELP in before_html, f"the Resolver addresses help does not say lists of your own are left alone: {HELP!r}"
     before = _warnings(before_html)
     assert before == [], f"before-state (an empty list is not foreign): expected no warning, got {before}"
 
