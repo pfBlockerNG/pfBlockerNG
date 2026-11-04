@@ -1456,7 +1456,7 @@ def _port(port: int, default: int) -> dict[str, str]:
 def _expected_svcb(target: str, *, doh_443: bool = False, address: str = PFSENSE_LAN_IP) -> list[Svcb]:
     """The records a query gets at `address` (the LAN's by default): DoH, DoT and DoQ, each with `target` as
     TargetName and that address as hint; `doh_443` leaves the DoH port out."""
-    hint = {"ipv4hint": address}
+    hint = {"ipv6hint" if ipaddress.ip_address(address).version == 6 else "ipv4hint": address}
     doh_port = {} if doh_443 else _port(DOH_PORT, 443)
     return [
         Svcb(1, target, {"alpn": "h2", **doh_port, "dohpath": "/dns-query{?dns}", **hint}),
@@ -1930,16 +1930,20 @@ def test_a_resolver_vip_joins_the_interface_addresses_and_ddr_follows_the_addres
             if lan_global:
                 for address in lan_global:
                     own = _parse_reply(vm.ssh(f"drill @{address} {DDR_NAME} TYPE64 2>&1").stdout)
+                    expected = _expected_svcb(DDR_TARGET, address=address)
                     expect(
-                        own.rcode == "NOERROR" and not own.answer,
-                        f"DDR to the public IPv6 address {address}: expected no designations, got {_rows(own.answer)}",
+                        own.rcode == "NOERROR" and _svcb_records(own) == expected,
+                        f"DDR to the public IPv6 address {address}: expected {expected}, "
+                        f"got {_svcb_records(own)}\n{own.raw}",
+                    )
+                    additional = [row for row in _rows(own.additional) if row[2] in ("A", "AAAA")]
+                    expect(
+                        additional == [(DDR_TARGET, 300, "AAAA", address.lower())],
+                        f"DDR to the public IPv6 address {address}: expected its AAAA additional, "
+                        f"got {additional}\n{own.raw}",
                     )
             else:
-                _say(
-                    "the LAN holds no global IPv6 address (its IPv6 is the documentation address "
-                    f"{LAN_V6_ADDR}): no designations on a public IPv6 address is covered by "
-                    "go/pfb_dns_gateway/ddr_public_ipv6_test.go and tests/php/DdrPublicIpv6ParityTest.php"
-                )
+                _say(f"the LAN has no public IPv6 address; only its configured IPv6 {LAN_V6_ADDR} is available")
         assert not problems, "\n".join(problems) + f"\nsockets on the DNS ports:\n{_sockets_on_dns_ports(vm)}"
     finally:
         gui.post(DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none"})
