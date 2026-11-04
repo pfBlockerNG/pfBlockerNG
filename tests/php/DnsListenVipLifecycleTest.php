@@ -76,6 +76,7 @@ final class DnsListenVipLifecycleTest extends TestCase
 	public function testEveryEncryptedCategoryKeepsBothLoopbackBackendsAndTheInterfaceAddressBesideTheVips(): void
 	{
 		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
 		pfb_dns_listen_vips_apply();
 		foreach (['dot', 'doh', 'doq'] as $kind) {
@@ -85,8 +86,9 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$warnings = [];
 		$flags = pfb_dns_proxy_tls_flags($warnings);
 		foreach (['dot', 'doh', 'doq'] as $kind) {
+			preg_match_all("/ --{$kind}-listen(?:-(?:443|853))? '([^']+)'/", $flags, $listeners);
 			foreach (['127.0.0.1', '::1', '192.0.2.1', '172.16.53.53', 'fd00:53:53:53:53:53:53:53'] as $host) {
-				$this->assertStringContainsString('--' . $kind . "-listen '{$host}'", $flags);
+				$this->assertContains($host, $listeners[1]);
 			}
 		}
 		$this->assertSame(['172.16.53.53', 'fd00:53:53:53:53:53:53:53'], pfb_dns_proxy_interface_addresses(['lo0'], []));

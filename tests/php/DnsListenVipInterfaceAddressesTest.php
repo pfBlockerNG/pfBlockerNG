@@ -50,6 +50,7 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 		unset($GLOBALS['pfb_test_configured_ip_addresses']);
 		$this->lan([self::LAN4], [self::LAN6]);
 		PfbConfig::write('dns/pfb_dns_interface', 'lan'); // seeded: an unseeded list makes every setting read as the Resolver's
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 	}
 
 	protected function tearDown(): void
@@ -110,8 +111,8 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 		PfbConfig::write("dns/pfb_dns_{$kind}_interface", $interfaces);
 		$warnings = [];
 		$flags = pfb_dns_proxy_tls_flags($warnings);
-		preg_match_all("/ --{$kind}-listen '([^']+)'/", $flags, $found);
-		return $found[1];
+		preg_match_all("/ --{$kind}-listen(?:-(?:443|853))? '([^']+)'/", $flags, $found);
+		return array_values(array_unique($found[1]));
 	}
 
 	/** @param list<string> $addresses the addresses of the interface list; the encrypted transports add loopback after them */

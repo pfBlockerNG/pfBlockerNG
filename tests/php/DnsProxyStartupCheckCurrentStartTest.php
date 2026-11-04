@@ -111,6 +111,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$GLOBALS['config']['cert'] = [DnsProxyCertificateFixtures::certEntry('cert1', DnsProxyCertificateFixtures::shared())];
 		$settings = [
 			'pfb_dns_interface' => 'lan', 'pfb_dns_sslcertref' => 'cert1',
+			'pfb_dns_name' => 'fw.example.lan',
 			'pfb_dns_dot' => 'on', 'pfb_dns_dot_interface' => 'lan', 'pfb_dns_dot_port' => '853',
 		];
 		foreach ($settings as $key => $value) {

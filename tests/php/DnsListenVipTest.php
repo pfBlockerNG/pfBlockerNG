@@ -262,6 +262,7 @@ final class DnsListenVipTest extends TestCase
 	#[DataProvider('transports')]
 	public function testFamilyPortsDefaultToIpv4AndCanDiffer(string $kind): void
 	{
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		PfbConfig::write('dns_shared/pfb_dns_' . $kind, 'on');
 		PfbConfig::write('dns_shared/pfb_dns_' . $kind . '_port', '8853');
 		PfbConfig::write('dns/pfb_dns_' . $kind . '_interface', 'lan');

@@ -219,6 +219,7 @@ trait KeepRunningScenario
 	{
 		// A stored plain interface list: without one, the one-time seed (pfb_dns_proxy_seed_values()) turns DoT off
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
+		PfbConfig::write('dns/pfb_dns_name', 'fw.example.lan');
 		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot', 'on');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dot_interface', 'lan');
 		config_set_path('installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot_port', '853');
