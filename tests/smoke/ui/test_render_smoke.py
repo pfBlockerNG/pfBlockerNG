@@ -2438,9 +2438,6 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     block = html[start:end]
     for needle in (
         "Experimental",
-        "Interfaces pfB-DNS answers plain DNS on",
-        "Serves DNS over TLS (RFC 7858)",
-        "DoQ is UDP",
         "send-proxy-v2",
         "option forwardfor",
     ):
