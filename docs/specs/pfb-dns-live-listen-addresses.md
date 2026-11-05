@@ -72,6 +72,13 @@ The existing framing is kept: 4 bytes first. Two new values that no certificate 
 > changes (`pfb_dns_proxy_listeners_sync()`) while the command names `--dns-name` and no restart is pending. An add of kind `doh` is also
 > taken at port 443 (the `--doh-listen-443` listener of the Resolver VIP the package created), beside the configured DoH port. See
 > [dns-gateway-transports.md](../misc/dns-gateway-transports.md), "Name-answer table".
+>
+> **Amendment 2026-11-05 (#3699).** Fixed-port lists may independently enable their transport:
+> `--listen-53`, `--dot-listen-853`, `--doh-listen-443`, `--doq-listen-853`.
+> A live add accepts its kind's configured family port or its own standard port (53/853/443 respectively), never another
+> kind's standard port; all existing descriptor, protocol, address and stopping checks still apply.
+> Managed VIPs use only their standard endpoints, not a custom endpoint plus a standard one. Duplicate ordinary/fixed endpoints
+> bind once. All fixed listen flags participate in address-only reconciliation without a restart.
 
 Then a 4-byte big-endian length `L` (1 to 256) and `L` bytes of ASCII `<kind> <host:port>`: `kind` is `udp+tcp`,
 `dot`, `doh` or `doq`; `host:port` is Go's `netip.AddrPort` spelling (IPv6 bracketed and compressed; no zone; no

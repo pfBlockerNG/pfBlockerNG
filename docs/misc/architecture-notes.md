@@ -536,18 +536,36 @@ none of this applies and the predicates read Unbound as before.
 script has one launch line:
 `daemon -r -R 5 -t pfb_dns_proxy -P /var/run/pfb_dns_proxy_daemon.pid -p /var/run/pfb_dns_proxy.pid
 -o /var/log/pfblockerng/dns_proxy.log /bin/sh /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns.sh --listen A ... --listen 127.0.0.1 --listen ::1
---port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [--dot-listen T ... --dot-port D] [the DoH/DoQ flags below] [--dns-name NAME [--ddr [--ddr-doh-443 ADDR ...]] [--dns-name-answer L=A[,B] ...]] [--doh-listen-443 VIP ...]
+--port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [--dot-listen T ... --dot-port D] [the DoH/DoQ flags below] [--listen-53 VIP ...] [--dot-listen-853 VIP ...] [--doh-listen-443 VIP ...] [--doq-listen-853 VIP ...] [--dns-name NAME [--ddr [--ddr-doh-443 ADDR ...]] [--dns-name-answer L=A[,B] ...]]
 [--no-module [--reply-log]|--observer] --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file
 /var/unbound/pfb_dns_ready -- /usr/local/pkg/pfblockerng/pfb_python.sh -u .../dns_proxy/pfb_dns_proxy.py --decision-fd 3
 --module-dir /var/unbound --user unbound` (`P` is `unbound/port` when it is a port, else 53;
 `--upstream` uses `127.0.0.1:5353` when pfSense reports that IPv4 address on `lo0`, otherwise `[::1]:5353`;
 `--no-module` iff DNSBL is off, so the decider boots no `pfb_unbound.py` and every query is forwarded;
 `--observer` iff DNSBL is on and the Resolver forwards, so the decider creates the observer's report socket). The gateway
-starts the decider as its child and hands the three mode flags on to it. `--listen` takes the addresses of `dns/pfb_dns_interface` (`pfb_dns_proxy_listen()`, below); Localhost adds none of its own, and loopback is always added. `--dot-listen` is repeatable and takes the addresses of `dns/pfb_dns_dot_interface` (`pfb_dns_proxy_tls_flags()`) plus loopback; the DoT group is there iff `dns/pfb_dns_dot` is On, with `--dot-port` from `dns/pfb_dns_dot_port`.
+starts the decider as its child and hands the three mode flags on to it. Ordinary `--listen` addresses come from
+`dns/pfb_dns_interface`, with internal loopback always added. Enabled encrypted groups use their own interface lists and
+`dns_shared` ports, but require a valid DNS Name. Automatically created Resolver VIPs instead use the fixed-port flags below.
 `pfb_dns_proxy_listen()` derives the addresses of pfB-DNS's own interface list (`dns/pfb_dns_interface`) the way `unbound.inc` binds them (explicit interfaces that are up
 and enabled, an IP entry verbatim, else the interface's IPv4/IPv6 address) and, for `all`, every
 address pfSense lists for the box (`get_configured_ip_addresses()` / `get_configured_ipv6_addresses()`, which carry
-alias/carp VIPs; a list that names no interface gives none), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself), at apply time, and bakes them into the script. A Resolver VIP (`pfb_dns_listen_vips()`) joins the addresses of every listener, so a client that still queries an interface address (static DNS, a lease not yet renewed) is served (#3694). Only DoH for a family whose DoH port is 443 (`pfb_dns_proxy_vip_only_families()`) has the VIP take the interface address's place: 443 there belongs to the webConfigurator or a reverse proxy; "Advertise DoH on port 443" changes no listener. The gateway is unchanged: DDR designates the address a client queried, VIP or interface address alike. `pfb_dns_proxy_ddr_warnings()` follows these sets and never names a public IPv6 address (a global prefix changes, so a missing SAN there cannot be fixed). An entry that adds no address (not a configured interface, down or disabled, no usable address) is warned about by name (`pfb_dns_proxy_skipped_warnings()`); a down or disabled one is only logged, never put in the startup notice, since its listeners return with its link (#3627). The gateway binds each
+alias/carp VIPs; a list that names no interface gives none), never loopback (`pfb_dns_proxy_service()` appends `127.0.0.1` and `::1` itself),
+at apply time, and bakes them into the script. By default a Resolver VIP joins the configured interface addresses, preserving clients
+still using those addresses. Only DoH with a configured port of 443 replaces that family's interface addresses with its available VIP:
+443 on the interface may belong to the webConfigurator or reverse proxy. Advertising DoH on 443 changes no listener.
+Automatically created Resolver VIPs serve only standard plain DNS 53, DoT/DoQ 853 and DoH 443 for enabled transports; ordinary
+interfaces and administrator-managed VIPs retain their configured family ports (#3699). Package-owned VIPs are excluded from all
+four interface selectors, including stored-token recovery; administrator-managed VIPs and other unavailable stored tokens remain.
+The opt-in `gen/pfb_dns_listen_vip_only` policy, off by default, restricts pfB-DNS's client-facing listeners to the selected Resolver VIPs,
+without interface fallback for a missing VIP or family. Internal loopback remains. Its DNS Name answers use the available VIP pair,
+including queries on loopback. The mode is dormant with pfB-DNS off and does not restrict standalone Unbound.
+Activating it requires resolving configured foreign or frozen DHCP/RA DNS lists first; it never overwrites administrator-selected
+servers. Clients still using old DNS addresses may lose plain DNS and DDR until DHCP renewal, RA DNS refresh or manual reconfiguration.
+Static DNS can use DDR, but those clients must be reconfigured by their administrator. No leases are deleted.
+DNS redirection remains independent opt-in bypass prevention, not compatibility machinery, and is not enabled by this mode.
+DDR designates the receiving address where that address has bound encrypted listeners. Certificate warnings follow those sets and
+do not name public IPv6 addresses. Skipped interface entries are named in the log; down/disabled entries do not raise startup notices,
+since their listeners return with the link (#3627). The gateway binds each
 `--listen` address on its own: one that cannot be bound (a DHCP/PPPoE/prefix change took the address away, a VIP on a
 disabled interface) is logged once and skipped, the others are served, and it exits non-zero only when
 no address binds. A DoT/DoH/DoQ setup whose certificate file (written from `dns/pfb_dns_sslcertref`, below) is unusable or absent at start (a passphrase-protected key, no file)
@@ -730,6 +748,15 @@ transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the
 `test_smoke_dns_gateway.py` (native all-transport tables, also with Unbound stopped while gateway bindings remain) and the
 `ui_browser` test in `test_browser_dns.py`.
 
+**DDR advertisement observations (#3699).** A separate page-only section queries the actual bound plain DNS listeners on demand,
+using installed `drill` under a bounded probe/request budget. It shows interface/VIP identity, target address, complete escaped
+stdout/stderr and query time. IPv4 uses a loopback source; IPv6 uses `::1` only for addresses currently assigned to `lo0`
+(`net_get_interfaces()`), otherwise the kernel selects the source. The Resolver ACL may refuse that local source.
+Query errors/refusals, timeouts, no advertisements and unqueried rows remain distinct. Classification requires the intended
+`_dns.resolver.arpa. IN SVCB` question; a positive label also requires an SVCB answer, not merely a nonzero answer count.
+An advertisement is not proof of client ACL access, certificate acceptance or reverse-proxy reachability. The widget does not run
+these probes. Live render/browser coverage and the managed-VIP wire scenario exercise the real query output.
+
 **Dashboard widget row (issue #3588).** While pfB-DNS is on, the widget's status header gains a row above the IP and DNSBL rows: the
 service, then DNS, DoT, DoH and DoQ, each an icon (green on and working, yellow on with a fault, red off) whose hover title says why.
 `pfb_dns_widget_status()` derives the five cells from the same `pfb_dns_status()` the tab renders, so the two never disagree (a
@@ -874,29 +901,32 @@ never synced: it is drawn from the node's own DoH interface list). They are save
 posted DoH list, `pfb_dns_proxy_ddr_doh_443_options()`: those interfaces without Localhost and each Resolver VIP the operator chose, never
 the one the package created).
 The DNS Name (`dns/pfb_dns_name`, a text input right after the certificate selector, `sync` `local`: per node like the
-certificate, never seeded) is DDR's target and the one name pfB-DNS answers `A` and `AAAA` for. The save refuses DDR On with no name
-and a name that is no valid name (`pfb_dns_proxy_name_normalized()`: at least two LDH labels, at most 253 characters, no IP literal, not
-`resolver.arpa` or under it; trailing dot dropped, case kept); the stored value is checked again before it reaches the gateway, which
-refuses to start with a bad one, so a hand-edited bad value counts as no name and is logged.
+certificate, never seeded) is DDR's target and the one name pfB-DNS answers `A` and `AAAA` for. An enabled pfB-DNS configuration
+with DoT, DoH, DoQ or DDR requires a valid name, even with DDR off for the encrypted transports (#3699).
+Plain-only operation and disabling pfB-DNS may leave it empty. Format validation requires at least two LDH labels, at most
+253 characters, no IP literal and no `resolver.arpa` name; a trailing dot is dropped and case kept.
+Runtime command generation also omits each encrypted group with a missing/invalid stored name, reports why and leaves plain DNS
+available. There is no generated fallback name or migration.
 `pfb_dns_proxy_service()` adds, right after the TLS flags and only while the snapshot is stored (pfB-DNS on)
 and a name is set, `--dns-name NAME` (quoted: `pfb_dns_proxy_ddr_flags()`), then `--ddr` while `dns_shared/pfb_dns_ddr` is On, with
 one `--ddr-doh-443 'ADDR'` after it for each DoH listen address of a selected entry
 (`pfb_dns_proxy_ddr_doh_443_addresses()`: a selected Resolver VIP, and the addresses a selected interface carries, never a VIP that joins
 them; each leaves the port out of that address's DDR DoH record; alone they add nothing, as the gateway rejects them without `--ddr`), then one `--dns-name-answer 'LOCAL=ADDR[,ADDR]'` for each address the gateway
-listens on (`pfb_dns_proxy_name_answers()`: plain DNS plus each of DoT, DoH and DoQ that is on): an active Resolver VIP is answered with
-itself and the other family's VIP, any other address with the IPv4 and IPv6 addresses of the interface that carries it, never a VIP; loopback
-and an address no interface carries get no entry. No name is no flag at all, DDR On or not. A changed name or toggle changes the
-script, so a live proxy restarts on the next apply like for any other changed flag. A changed `--dns-name-answer` or `--ddr-doh-443` does not:
-the update pass masks those arguments (and `--doh-listen-443`) out of both scripts, as it does the listen addresses, and
+listens on (`pfb_dns_proxy_name_answers()`: plain DNS plus each enabled encrypted group): by default an active Resolver VIP is answered
+with itself and the other family's VIP, and an ordinary address with its interface's IPv4/IPv6 pair. Unknown addresses and loopback
+have no entry in the default mode. VIP-only mode instead supplies the available VIP pair, including on internal loopback.
+No name produces no name/DDR flags. A changed name or DDR toggle restarts the proxy on apply; changed answer tables do not.
+The comparison masks the answer/advertisement arguments and all four fixed-port listener flags, as it does ordinary listen addresses.
 `pfb_dns_proxy_listeners_sync()` sends the whole table, the name answers and the advertised addresses together, to the running gateway as one
 control-socket frame (`FF FF FF FB`, lines `dns-name-answer LOCAL=ADDR[,ADDR]` and `ddr-doh-443 ADDR` in the command's order,
 `pfb_dns_proxy_address_table()`), after the listener changes and only when no restart is pending; a gateway that does not take it is the
 reason to restart the pair.
-The Resolver VIP the package created (`pfb_dns_listen_auto_vips()`: the family whose `gen/pfb_dns_listen_vip4`/`6` is `auto`) also serves DoH
-on port 443 beside the configured DoH port: `pfb_dns_proxy_tls_flags()` adds `--doh-listen-443 'VIP'` for it while DoH listens on the VIP and
-that family's DoH port is not 443 already (`pfb_dns_proxy_doh_port_443()`). `pfb_dns_proxy_command_listeners()` names it `doh <VIP>:443`, so the
-sync adds and removes it live like any listener and the startup check reports a refused bind of 443. DDR advertises 443 there without a choice
-(the gateway sees a DoH listener on 443). The retired Nightly toggles (`dns_shared/pfb_dns_ddr_doh_443`, `_6`) are ignored, never migrated: the selection starts empty and
+Automatically created Resolver VIPs (`pfb_dns_listen_auto_vips()`: a family selected as `auto`) use only fixed standard endpoints:
+`--listen-53`, `--dot-listen-853`, `--doh-listen-443` and `--doq-listen-853`, as enabled. They are not also placed in the configured-port
+lists. `pfb_dns_proxy_command_listeners()` names the same endpoints, deduplicates them and reconciles additions/removals live.
+A refused bind is reported and is not designated by DDR. Managed DoH therefore advertises 443 automatically; it has no custom-port
+fallback. Administrator-managed VIPs retain configured ports and their explicit 443-advertisement choice.
+The retired Nightly toggles (`dns_shared/pfb_dns_ddr_doh_443`, `_6`) are ignored, never migrated: the selection starts empty and
 no notice is filed. The page warns when the selected certificate has no `dNSName` SAN covering the name (`pfb_dns_proxy_ddr_warnings()`). Legacy sync receives store configuration only,
 without marking changes pending; the receiver's next manual or scheduled Update regenerates the script.
 Use **Run Now** on **Update** at the receiver to apply received settings without waiting.

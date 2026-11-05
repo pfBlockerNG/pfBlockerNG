@@ -15,7 +15,7 @@ as one PEM text. The gateway does not read `config.xml`. It has the certificate 
    the Unbound chroot, with the `dns/pfb_dns_sslcertref` certificate, the chain its `caref` leads to (a missing CA or a loop ends it), and a
    key that is neither encrypted nor another certificate's; it replaces the file by rename, when the certificate changed, at every
    apply, at every cron tick (15 minutes) and at a start that finds no file. The gateway reads it once, as root, before the privilege
-   drop, and not at all unless `--dot-listen`, `--doh-listen` or `--doq-listen` is given. It never looks at the file again: what is in
+   drop, and not at all unless an ordinary or fixed-port DoT/DoH/DoQ listen flag is given. It never looks at the file again: what is in
    it after the start is none of the running gateway's business. The DoT port is `--dot-port`, from `dns_shared/pfb_dns_dot_port`
    (853 by default). PKCS#8, PKCS#1 and SEC1 keys load; an encrypted key is refused (a daemon cannot be asked for a
    passphrase).
@@ -61,9 +61,9 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   `doh` or `doq`, exactly; `host:port` is Go's `netip.AddrPort` spelling and must equal its own `String()` (IPv6 bracketed and
   compressed; no zone, no IPv4-mapped form, no port 0; no space, tab, NUL or non-ASCII byte anywhere else). An add carries
   `udp+tcp` the UDP socket then the listening TCP socket, `dot` and `doh` one listening TCP socket, `doq` one UDP socket. It is
-  taken only when the kind is served by this gateway (`udp+tcp` always, a TLS kind only when its `--<kind>-listen` was given at
-  start), the port is the kind's own (`--port`, `--dot-port`, `--doh-port`, `--doq-port`, and for `doh` also 443, issue #3694: the
-  `--doh-listen-443` listeners), `<kind> <host:port>` is not served
+  taken only when the kind is served by this gateway (`udp+tcp` always; a TLS kind when its ordinary or fixed listen list was given),
+  the port is its configured family port or its own standard port (plain DNS 53, DoT/DoQ 853, DoH 443; #3699), and
+  `<kind> <host:port>` is not served
   already, the descriptor count is the kind's and nothing was truncated (`MSG_CTRUNC`; room for 8 descriptors), each descriptor
   is a socket of the type expected (`SO_TYPE`), a stream socket is listening (`SO_ACCEPTCONN`) and every one is bound
   (`getsockname()`) to the frame's address in its family, and the gateway is not stopping; otherwise the reply is
@@ -89,7 +89,7 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   `error: a message of 4294967291 bytes is not between 1 and 65536`. PHP sends it (`pfb_dns_proxy_address_table()`) from
   `pfb_dns_proxy_listeners_sync()`, after the listener changes, on the update pass and the cron tick, while the rc script's command names
   `--dns-name` and no restart is pending; a gateway that does not take it is the reason to restart the pair. The update pass masks
-  `--dns-name-answer`, `--ddr-doh-443` and `--doh-listen-443` out of the rc script before it compares the old and the new text, as it does
+  `--dns-name-answer`, `--ddr-doh-443` and all four fixed-port listen flags out of the rc script before comparison, as it does
   the listen addresses, so a changed answer, a changed choice of advertised addresses or a Resolver VIP that comes or goes never restarts the
   proxy; a changed `--dns-name` or DDR setting does. The lines are sent in the command's order.
 - **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
@@ -131,9 +131,9 @@ directory is a separate hardening and is not part of this change.
 
 | Transport | Flags | Socket | TLS | Cap |
 |---|---|---|---|---|
-| DoT | `--dot-listen` (repeatable), `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
+| DoT | `--dot-listen`, `--dot-listen-853` (repeatable), `--dot-port` (853) | TCP | 1.2+ | 128 connections, shared with plain TCP, checked at accept before the handshake; handshake 10 s; 4 queries in flight per connection |
 | DoH | `--doh-listen` (repeatable), `--doh-listen-443` (repeatable), `--doh-port` (4443), `--doh-trusted` (repeatable) | TCP, HTTP/1.1 and HTTP/2 (ALPN `h2`, `http/1.1`) | 1.2+ | 128 connections of their own, closed at accept; read-header 10 s, idle 30 s, 100 streams per connection; 512 queries in flight, shared with DoQ and apart from UDP's (over it: 503 with `Retry-After: 1`) |
-| DoQ | `--doq-listen` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle `max(30 s, 2*timeout+grace)` (the query budget, so an in-flight query is not cut off) and no keepalive; receive window one message (65535 bytes) per stream and 100 messages per connection; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
+| DoQ | `--doq-listen`, `--doq-listen-853` (repeatable), `--doq-port` (853) | UDP, ALPN `doq` | 1.3 | 128 connections of their own, admitted before the handshake (the 129th, and an address the ACL denies, are refused with `CONNECTION_REFUSED`); 100 streams, idle `max(30 s, 2*timeout+grace)` (the query budget, so an in-flight query is not cut off) and no keepalive; receive window one message (65535 bytes) per stream and 100 messages per connection; 512 queries in flight, shared with DoH (over it: SERVFAIL on the stream) |
 
 A listener that cannot be bound is logged and skipped. Every start logs `starting pid <pid>` first (before any bind error), so
 that a reader of the log finds where a start begins; then, before `ready upstream`, the readiness lines in the order udp+tcp,
@@ -141,11 +141,13 @@ dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracket
 while the gateway serves logs `listening <kind> <host>:<port>` or `stopped listening <kind> <host>:<port>` after `ready upstream`.
 These lines are for people reading the log: nothing parses them for listener state, which the list (`FF FF FF FC`, above) answers.
 
-`--doh-listen-443 ADDR` (issue #3694) serves DoH on ADDR:443 too, beside the configured DoH port, with the same handler, certificate and trusted
-front ends; ADDR is a valid IP address with no zone (an IPv4-mapped one is unmapped) and the flag needs `--doh-listen` (otherwise the gateway
-does not start). It is bound at start like the other listeners: the readiness line is `listening doh ADDR:443`, the listener is tracked as
-`doh ADDR:443`, and a bind the box refuses is recorded under that key in the `refused` list while the gateway still starts. pfBlockerNG gives it
-to the Resolver VIP the package created.
+The repeatable fixed-port flags `--listen-53 ADDR`, `--dot-listen-853 ADDR`, `--doh-listen-443 ADDR` and
+`--doq-listen-853 ADDR` bind only their named kind on the named standard port (#3699). ADDR is an IP address without a zone;
+mapped IPv4 forms follow existing normalization. A fixed list may be the only list enabling its transport. Ordinary and fixed
+lists that resolve to the same endpoint bind it once. Bind failures retain the existing per-kind refusal reporting.
+pfBlockerNG uses these flags for automatically created Resolver VIPs and excludes those VIPs from ordinary configured-port lists:
+they do not also serve custom ports. Administrator-managed VIPs remain ordinary configured-port addresses. DDR follows actual
+bound listeners, so a managed DoH VIP advertises 443 without an explicit advertisement override.
 
 pfBlockerNG's rc script always adds `127.0.0.1` and `::1` to
 `--dot-listen`, `--doh-listen` and `--doq-listen`, next to the interfaces' addresses, so a local HAProxy has a stable backend; the DoT,
@@ -414,6 +416,10 @@ transports do answer).
 
 The DNS name (issue #3694) is entered on the pfB-DNS page beside the certificate (`dns/pfb_dns_name`, per node like the certificate, which
 must list it as a DNS SAN) and is both DDR's target name and the one name pfB-DNS answers `A` and `AAAA` for itself.
+An active pfB-DNS configuration requires this name for any of DoT, DoH, DoQ or DDR, even when DDR is off.
+Save validation rejects a missing name; runtime command generation also leaves unnamed/invalid-name encrypted groups out with
+a diagnostic, preserving plain DNS. Plain-only operation and disabling pfB-DNS may leave the name empty. This is pfBlockerNG's
+configuration policy, not a new restriction on the standalone gateway's generic CLI.
 
 | Flag | Meaning |
 |---|---|
@@ -425,8 +431,8 @@ answers a query for exactly the DNS name itself, on every transport, when it has
 `AAAA`, its name equals the DNS name (ASCII case-insensitive; `sub.<name>` and every other type, MX, TXT and HTTPS included, go on to
 Unbound), LOCAL is in the table and has an address of the family asked for. The reply is NOERROR with AA, RA and the query's RD, one
 record of TTL 300 owned by the name as asked (its case kept), an EDNS OPT echoed as DDR's replies do; the decider never sees the query
-and nothing is written to the reply log. Any other query, including one on loopback or on an address no entry names, is the decider's and
-Unbound's as before. On DoT, DoH and DoQ LOCAL is the address the connection reached (after any PROXY header); DDR still sees only plain
+and nothing is written to the reply log. Any query on an address without a matching entry goes to the decider and
+Unbound as before. On DoT, DoH and DoQ LOCAL is the address the connection reached (after any PROXY header); DDR still sees only plain
 DNS.
 
 The table is what PHP derives for each address the gateway listens on (`pfb_dns_proxy_name_answers()`): an active Resolver VIP is
@@ -434,6 +440,11 @@ answered with the VIP and the other family's active VIP, if any; any other addre
 carries it, never a VIP, so a client that queries `10.0.0.1` is sent to `10.0.0.1` whether or not a VIP is active; an address no interface
 carries, and loopback, get no entry. The table is given at start by the flags and replaced while running by the name-answer verb (see
 the control socket), so an interface that gains or loses an address changes the answers with no restart.
+
+The explicit VIP-only policy (`gen/pfb_dns_listen_vip_only`, off by default) instead gives the selected active VIP pair to every
+served address, including internal loopback. Missing VIP families never fall back to an interface address. It applies only while
+pfB-DNS is enabled; standalone Unbound restoration is unchanged. Enabling it does not enable DNS redirect or delete leases:
+clients with old resolver addresses need DHCP renewal, RA DNS refresh or manual reconfiguration.
 
 ## RFCs read for this step
 

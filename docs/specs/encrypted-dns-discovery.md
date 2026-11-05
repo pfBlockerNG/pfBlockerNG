@@ -25,6 +25,20 @@ instead of the two per-family toggles `dns/pfb_dns_ddr_doh_443` and `dns/pfb_dns
 serves DoH on port 443 itself; see "DoH on port 443 (candidate 4)". Where this text still says "the toggle" or "the option" for it, it
 means the selection.
 
+Amended 2026-11-05 (owner decision, #3699): automatically created Resolver VIPs serve only the enabled standard ports
+(plain DNS 53, DoT/DoQ 853, DoH 443), not those ports beside custom ones. Administrator-managed VIPs retain configured ports.
+The DNS Name is required for enabled DoT, DoH, DoQ or DDR; plain-only/disable paths can leave it empty, and runtime generation
+does not start encrypted groups with a missing or invalid stored name. These rules supersede the older additive-VIP-port and
+DDR-only name requirements below.
+
+The new opt-in VIP-only policy defaults off. It restricts pfB-DNS's client-facing endpoints to selected active VIPs and answers
+the DNS Name with that VIP pair, including on internal loopback; missing families never fall back to interfaces.
+Clients with old DHCP/RA DNS information or static DNS addresses require renewal/refresh/reconfiguration. Static DNS can use DDR.
+DNS redirect remains independent bypass prevention, never automatically enabled as compatibility machinery; leases are not deleted.
+The existing interface-compatible behavior remains the default. Actual per-address DDR observations are available on demand in
+the pfB-DNS status panel, with explicit query errors and no claim that an advertised endpoint is reachable or accepted by a client.
+Current protocol details are in [dns-gateway-transports.md](../misc/dns-gateway-transports.md).
+
 ## Fixed constraints
 
 - ISC dhcpd is out of scope; only the Kea DHCP backend is considered.
