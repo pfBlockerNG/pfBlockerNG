@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -582,9 +583,15 @@ func requireRefused(t *testing.T, query, reply []byte) {
 	if m.ID != binary.BigEndian.Uint16(query) || !m.Response || !m.RecursionDesired || m.RCode != dnsmessage.RCodeRefused {
 		t.Fatalf("want REFUSED with the query's id and RD set, got %+v", m.Header)
 	}
-	if !bytes.Equal(reply[12:], query[12:]) {
-		t.Fatalf("question echo:\n got  %x\n want %x", reply[12:], query[12:])
+	q := parseReply(t, query)
+	if !refusedSectionsMatch(q, m) {
+		t.Fatalf("want only query questions %v, got questions=%v answers=%v authorities=%v additionals=%v", q.Questions, m.Questions, m.Answers, m.Authorities, m.Additionals)
 	}
+}
+
+func refusedSectionsMatch(query, reply dnsmessage.Message) bool {
+	return slices.Equal(reply.Questions, query.Questions) && len(reply.Answers) == 0 &&
+		len(reply.Authorities) == 0 && len(reply.Additionals) == 0
 }
 
 // G10: a refused client gets REFUSED from the gateway, never the decider's (block) answer.

@@ -91,7 +91,9 @@ func TestTheAddressTableVerbReplacesTheWholeTable(t *testing.T) {
 	k.requireAnswer(t, "10.0.0.2", dnsmessage.TypeA, "10.0.0.2", "after the push")
 	k.requireAnswer(t, "10.0.0.2", dnsmessage.TypeAAAA, "2001:db8:1::2", "after the push")
 	k.requireAnswer(t, "10.0.0.53", dnsmessage.TypeA, "10.0.0.53", "after the push")
-	k.requireAnswer(t, "10.0.0.53", dnsmessage.TypeAAAA, "", "after the push: that entry has no IPv6")
+	query := nameQuery(t, nameFQDN, dnsmessage.TypeAAAA)
+	_, reply := screenAs(k.r.g, "10.0.0.53", true, true, query)
+	requireNameNODATA(t, query, reply)
 	k.requireAnswer(t, "10.0.0.1", dnsmessage.TypeA, "", "after the push: the old entry is gone, not merged")
 	if n := k.logsAbout("address table: 2 name answers"); n != 1 {
 		t.Fatalf("want one `address table: 2 name answers` line, got %d: %s", n, k.r.logs.joined())
@@ -144,8 +146,8 @@ func TestABadLineLeavesTheAddressTableAsItWas(t *testing.T) {
 	rows := map[string]string{
 		"an unknown first word":                   "ddr-doh-4436 10.0.0.2",
 		"an unknown first word after a good line": good + "\nsomething 10.0.0.9=10.0.0.9",
-		"a good line, then a bad value":           good + "\n" + tableLine("10.0.0.3="),
-		"a bad value, then a good line":           tableLine("10.0.0.3=") + "\n" + good,
+		"a good line, then a bad value":           good + "\n" + tableLine("10.0.0.3=bad"),
+		"a bad value, then a good line":           tableLine("10.0.0.3=bad") + "\n" + good,
 		"CRLF line endings":                       good + "\r\n" + tableLine("10.0.0.3=10.0.0.3"),
 		"the same LOCAL twice":                    good + "\n" + tableLine("10.0.0.2=10.0.0.9"),
 		"the same LOCAL, once IPv4-mapped":        good + "\n" + tableLine("::ffff:10.0.0.2=10.0.0.9"),

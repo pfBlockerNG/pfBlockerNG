@@ -5169,7 +5169,7 @@ function pfb_dns_proxy_name_answers(): array {
 	}
 	if (pfb_dns_listen_vip_only()) {
 		$pair = array_values($vips);
-		return $pair === [] ? [] : array_fill_keys(array_unique([...$locals, ...PFB_DNS_PROXY_LOOPBACK]), $pair);
+		return array_fill_keys(array_unique([...$locals, ...PFB_DNS_PROXY_LOOPBACK]), $pair);
 	}
 	$carried = [];	// address => the usable addresses of the interface that carries it (the first of two that do)
 	foreach (array_keys((array) get_configured_interface_with_descr()) as $interface) {

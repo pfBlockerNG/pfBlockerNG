@@ -12,7 +12,7 @@ import (
 
 // issue #3694: the DNS name (--dns-name) is DDR's target and the one name the gateway answers itself: A and AAAA, from the
 // address the query reached, after the ACL and DDR and before the decider. Every other name, type and query shape is the
-// decider's, and so is a query that reached an address the table has no answer of that family for.
+// decider's, and so is a query that reached an address without a table entry. An owned entry's absent family gets NODATA.
 
 const nameTTL = ddrTTL
 
@@ -70,7 +70,7 @@ func asciiLower(s string) string {
 }
 
 // nameTable is the table the values make; a value is `LOCAL=ADDR[,ADDR]`, as a flag and as a line of the address table verb.
-// The first bad value is the error.
+// LOCAL= owns the name with no addresses. The first bad value is the error.
 func nameTable(values []string) (map[netip.Addr]nameAddrs, error) {
 	table := make(map[netip.Addr]nameAddrs, len(values))
 	for _, v := range values {
@@ -87,7 +87,7 @@ func nameTable(values []string) (map[netip.Addr]nameAddrs, error) {
 }
 
 // parseNameAnswer reads LOCAL=ADDR[,ADDR]: IP addresses with no zone, IPv4-mapped ones unmapped, at most one of each family.
-// LOCAL need not be among the ADDRs.
+// LOCAL need not be among the ADDRs; an empty RHS owns both families with NODATA.
 func parseNameAnswer(v string) (local netip.Addr, addrs nameAddrs, err error) {
 	lhs, rhs, ok := strings.Cut(v, "=")
 	if !ok {
@@ -97,7 +97,7 @@ func parseNameAnswer(v string) (local netip.Addr, addrs nameAddrs, err error) {
 		return local, addrs, err
 	}
 	if rhs == "" {
-		return local, addrs, errors.New("no address to answer with")
+		return local, addrs, nil
 	}
 	for _, s := range strings.Split(rhs, ",") {
 		ip, err := parseNameIP(s)
@@ -164,9 +164,9 @@ func parseAddressTable(body []byte) (addressTable, error) {
 	return addressTable{names: names, doh443: doh443}, nil
 }
 
-// answer is the reply to wire when it is a query for the DNS name, A or AAAA, that reached local and the table has an
-// address of that family for, and nil when it is not (it does not parse, is not opcode QUERY, has not exactly one question,
-// is not class IN, or asks about another name). udp limits the size of the reply.
+// answer replies to exactly one IN QUERY for the DNS name, A or AAAA, at an owned local address; an absent family gets
+// NOERROR/NODATA with an SOA for negative caching. Other names, types, query shapes and unknown locals return nil.
+// udp limits the size of the reply.
 func (n *nameAnswers) answer(wire []byte, local netip.Addr, udp bool) []byte {
 	var p dnsmessage.Parser
 	h, err := p.Start(wire)
@@ -178,18 +178,23 @@ func (n *nameAnswers) answer(wire []byte, local netip.Addr, udp bool) []byte {
 		!asciiEqualFold(q.Name.Data[:q.Name.Length], n.key) {
 		return nil
 	}
-	addrs := (*n.table.Load())[local.Unmap().WithZone("")]
+	addrs, owned := (*n.table.Load())[local.Unmap().WithZone("")]
+	if !owned {
+		return nil
+	}
 	ip := addrs.v4
 	if q.Type == dnsmessage.TypeAAAA {
 		ip = addrs.v6
-	}
-	if !ip.IsValid() {
-		return nil
 	}
 	if _, err := p.Question(); err != dnsmessage.ErrSectionDone {
 		return nil
 	}
 	size, edns := clientOPT(&p)
+	msg := replyTo(h, q)
+	if !ip.IsValid() {
+		msg.Authorities = []dnsmessage.Resource{soaRecord(q.Name)}
+		return packReply(wire, msg, size, edns, udp)
+	}
 
 	rr := dnsmessage.Resource{Header: dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: nameTTL}}
 	if ip.Is4() {
@@ -197,7 +202,6 @@ func (n *nameAnswers) answer(wire []byte, local netip.Addr, udp bool) []byte {
 	} else {
 		rr.Body = &dnsmessage.AAAAResource{AAAA: ip.As16()}
 	}
-	msg := replyTo(h, q)
 	msg.Answers = []dnsmessage.Resource{rr}
 	return packReply(wire, msg, size, edns, udp)
 }
