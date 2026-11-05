@@ -78,34 +78,10 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		);
 	}
 
-	public function testThreeTwoCannotSkipThreeThreeBridgeToFourX(): void
-	{
-		$order = [];
-		try {
-			pfb_install_settings_family_capture_restore(
-				static function () use (&$order): string { $order[] = 'current'; return '3.2'; },
-				static function (string $family) use (&$order): bool { $order[] = "save:{$family}"; return TRUE; },
-				static function () use (&$order): string { $order[] = 'version'; return 'v20260819010101.abcdef1'; },
-				static function (string $version) use (&$order): string {
-					$order[] = "from:{$version}";
-					return '4.1';
-				},
-				static function (string $family) use (&$order): bool { $order[] = "replace:{$family}"; return TRUE; }
-			);
-			$this->fail('3.2 must not skip the 3.3 bridge onto a 4.x family');
-		} catch (RuntimeException $error) {
-			$this->assertSame(
-				'pfBlockerNG: install the 3.3 bridge before a 4.x family',
-				$error->getMessage()
-			);
-		}
-		$this->assertSame(['current', 'version', 'from:v20260819010101.abcdef1'], $order);
-	}
-
 	public function testFirstInstallWithNoOwnedSectionsAllowsFourX(): void
 	{
 		$GLOBALS['config'] = ['installedpackages' => []];
-		$this->assertSame('3.2', pfb_settings_family_current());
+		$this->assertSame('3.3', pfb_settings_family_current());
 		$order = [];
 		$installed = pfb_install_settings_family_capture_restore(
 			NULL,
@@ -127,7 +103,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 			}
 		);
 		$this->assertSame('4.0', $installed);
-		$this->assertSame(['version', 'from:4.0.0.a1', 'save:3.2', 'replace:4.0'], $order);
+		$this->assertSame(['version', 'from:4.0.0.a1', 'save:3.3', 'replace:4.0'], $order);
 	}
 
 	public function testFirstInstallWithNoOwnedSectionsAndUnmappedVersionShapesDoNotThrow(): void
@@ -161,11 +137,9 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		pfb_install_settings_family_capture_restore();
 	}
 
-	public function testFirstInstallRecordsNightlyCeilingSoRealUpgradeSkipsBridgeGuard(): void
+	public function testFirstInstallRecordsNightlyCeiling(): void
 	{
-		// issue #3296 follow-up: recording the registry default '3.2' for an unmapped
-		// dev/smoke version would misrepresent this devel install as pre-3.3 legacy,
-		// tripping the #2158 bridge guard on the box's first REAL versioned upgrade.
+		// issue #3296 follow-up: an unmapped dev version records the nightly ceiling, not the legacy default.
 		$GLOBALS['config'] = ['installedpackages' => ['package' => []]];
 		$installed = pfb_install_settings_family_capture_restore();
 		pfb_install_settings_family_finalize($installed, static function (): void {});
@@ -184,74 +158,11 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		// issue #3296 follow-up: the empty-owned/unmapped-version branch's best-effort
 		// restore of the recorded source family must still fail closed, not swallow errors.
 		$GLOBALS['config'] = ['installedpackages' => ['package' => []]];
-		file_put_contents($this->root . '/settings-3.2.xml', 'stale');
-		chmod($this->root . '/settings-3.2.xml', 0644);
+		file_put_contents($this->root . '/settings-3.3.xml', 'stale');
+		chmod($this->root . '/settings-3.3.xml', 0644);
 		$this->expectException(RuntimeException::class);
 		$this->expectExceptionMessage('pfBlockerNG: unable to restore settings family');
 		pfb_install_settings_family_capture_restore();
-	}
-
-	public function testProductionCurrentMissingMarkerWithOwnedConfigCannotSkipBridge(): void
-	{
-		$this->assertSame('3.2', pfb_settings_family_current());
-		$order = [];
-		try {
-			pfb_install_settings_family_capture_restore(
-				NULL,
-				static function (string $family) use (&$order): bool {
-					$order[] = "save:{$family}";
-					return TRUE;
-				},
-				static function () use (&$order): string {
-					$order[] = 'version';
-					return '4.0.0.a1';
-				},
-				static function (string $version) use (&$order): string {
-					$order[] = "from:{$version}";
-					return '4.0';
-				},
-				static function (string $family) use (&$order): bool {
-					$order[] = "replace:{$family}";
-					return TRUE;
-				}
-			);
-			$this->fail('owned 3.2-default config must not skip the 3.3 bridge onto 4.x');
-		} catch (RuntimeException $error) {
-			$this->assertSame(
-				'pfBlockerNG: install the 3.3 bridge before a 4.x family',
-				$error->getMessage()
-			);
-		}
-		$this->assertSame(['version', 'from:4.0.0.a1'], $order);
-	}
-
-	public function testThreeTwoCanInstallThreeThreeBridge(): void
-	{
-		$order = [];
-		$installed = pfb_install_settings_family_capture_restore(
-			static function () use (&$order): string {
-				$order[] = 'current';
-				return '3.2';
-			},
-			static function (string $family) use (&$order): bool {
-				$order[] = "save:{$family}";
-				return TRUE;
-			},
-			static function () use (&$order): string {
-				$order[] = 'version';
-				return '3.3.2';
-			},
-			static function (string $version) use (&$order): string {
-				$order[] = "from:{$version}";
-				return '3.3';
-			},
-			static function (string $family) use (&$order): bool {
-				$order[] = "replace:{$family}";
-				return TRUE;
-			}
-		);
-		$this->assertSame('3.3', $installed);
-		$this->assertSame(['current', 'version', 'from:3.3.2', 'save:3.2', 'replace:3.3'], $order);
 	}
 
 	public function testCaptureAndRestoreFailuresStopBeforeLaterEffects(): void

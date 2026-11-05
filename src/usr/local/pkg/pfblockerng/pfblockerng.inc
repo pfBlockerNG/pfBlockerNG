@@ -58,20 +58,6 @@ function pfb_install_settings_family_capture_restore(
 	$source_family = $current();
 	$installed_family = $from_version((string) $version());
 	$owned_sections = pfb_settings_family_owned_sections();
-	$bridge_rank = PFB_SETTINGS_FAMILY_RANK['3.3'];
-	$source_rank = (is_string($source_family) && isset(PFB_SETTINGS_FAMILY_RANK[$source_family]))
-		? PFB_SETTINGS_FAMILY_RANK[$source_family]
-		: -1;
-	$target_rank = (is_string($installed_family) && isset(PFB_SETTINGS_FAMILY_RANK[$installed_family]))
-		? PFB_SETTINGS_FAMILY_RANK[$installed_family]
-		: NULL;
-	// Owner ruling #2158: 3.3 is the migration floor. Skip the guard when
-	// owned sections are empty (first install); current() defaults missing
-	// markers to '3.2', which is indistinguishable from a real 3.2 box.
-	if ($target_rank !== NULL && $target_rank > $bridge_rank && $source_rank < $bridge_rank
-		&& $owned_sections !== []) {
-		throw new RuntimeException('pfBlockerNG: install the 3.3 bridge before a 4.x family');
-	}
 	if ($source_family === NULL || !$save($source_family)) {
 		throw new RuntimeException('pfBlockerNG: unable to save source settings family');
 	}

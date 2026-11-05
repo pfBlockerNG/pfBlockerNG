@@ -49,10 +49,10 @@ final class PfbSettingsFamilyTest extends TestCase
 		$this->removeTree($this->root);
 	}
 
-	public function testMissingMarkerDefaultsToThreeTwoAndRecordUsesGateway(): void
+	public function testMissingMarkerDefaultsToThreeThreeAndRecordUsesGateway(): void
 	{
-		$this->assertSame('3.2', pfb_settings_family_current());
-		$this->assertSame('3.2', PfbConfig::read('gen/settings_family'));
+		$this->assertSame('3.3', pfb_settings_family_current());
+		$this->assertSame('3.3', PfbConfig::read('gen/settings_family'));
 		$this->assertTrue(pfb_settings_family_record('4.0'));
 		$this->assertSame('4.0', pfb_settings_family_current());
 		$this->assertSame('4.0', PfbConfig::read('gen/settings_family'));
@@ -62,7 +62,7 @@ final class PfbSettingsFamilyTest extends TestCase
 	{
 		PfbConfig::write('gen/settings_family', '9.0');
 		$this->assertNull(pfb_settings_family_current());
-		$this->assertSame('3.2', pfb_settings_family_from_version('3.2.0'));
+		$this->assertNull(pfb_settings_family_from_version('3.2.0'));
 		$this->assertSame('3.3', pfb_settings_family_from_version('3.3.0'));
 		$this->assertSame('4.0', pfb_settings_family_from_version('4.0.0'));
 		$this->assertSame('4.1', pfb_settings_family_from_version('4.1.0'));
@@ -92,10 +92,10 @@ final class PfbSettingsFamilyTest extends TestCase
 			'pfblockerng' => $GLOBALS['config']['installedpackages']['pfblockerng'],
 			'pfblockerngglobal' => $GLOBALS['config']['installedpackages']['pfblockerngglobal'],
 		];
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'changed';
 		$GLOBALS['config']['installedpackages']['otherpackage']['config']['untouched'] = 'changed';
-		$this->assertTrue(pfb_settings_family_replace('3.2'));
+		$this->assertTrue(pfb_settings_family_replace('3.3'));
 		$this->assertSame($owned['pfblockerng'], $GLOBALS['config']['installedpackages']['pfblockerng']);
 		$this->assertSame($owned['pfblockerngglobal'], $GLOBALS['config']['installedpackages']['pfblockerngglobal']);
 		$this->assertSame('changed', $GLOBALS['config']['installedpackages']['otherpackage']['config']['untouched']);
@@ -111,7 +111,7 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testRawDowngradeWithoutContextDoesNotReplaceV3(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'current-v4';
 		$this->assertNull(pfb_settings_downgrade_context_target('4.0'));
 		$this->assertSame('current-v4', $GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential']);
@@ -119,11 +119,11 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testValidGuiContextRestoresExactLowerSlotAndConsumes(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'current-v4';
-		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time()]);
-		$this->assertSame('3.2', pfb_settings_downgrade_context_target('4.0'));
-		$this->assertTrue(pfb_settings_family_replace('3.2'));
+		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => time()]);
+		$this->assertSame('3.3', pfb_settings_downgrade_context_target('4.0'));
+		$this->assertTrue(pfb_settings_family_replace('3.3'));
 		pfb_settings_downgrade_context_consume();
 		$this->assertFileDoesNotExist($this->contextPath());
 		$this->assertSame('secret-canary', $GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential']);
@@ -134,13 +134,13 @@ final class PfbSettingsFamilyTest extends TestCase
 		// 'created_at' is an OFFSET, resolved against the clock read immediately before
 		// that row's OWN write (#2029) -- see FUTURE_MARGIN_S.
 		$contexts = [
-			'with an unsupported version'          => ['version' => 2, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => 0],
-			'older than the 300-second window'     => ['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => -301],
-			'created in the future'                => ['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => self::FUTURE_MARGIN_S],
-			'whose source family is not the live family' => ['version' => 1, 'source_family' => '3.2', 'target_family' => '3.2', 'created_at' => 0],
+			'with an unsupported version'          => ['version' => 2, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => 0],
+			'older than the 300-second window'     => ['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => -301],
+			'created in the future'                => ['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => self::FUTURE_MARGIN_S],
+			'whose source family is not the live family' => ['version' => 1, 'source_family' => '4.1', 'target_family' => '3.3', 'created_at' => 0],
 			'whose target family does not rank below its source' => ['version' => 1, 'source_family' => '4.0', 'target_family' => '4.0', 'created_at' => 0],
-			'whose version is a string, not an int' => ['version' => '1', 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => 0],
-			'whose source family is an array, not a string' => ['version' => 1, 'source_family' => ['4.0'], 'target_family' => '3.2', 'created_at' => 0],
+			'whose version is a string, not an int' => ['version' => '1', 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => 0],
+			'whose source family is an array, not a string' => ['version' => 1, 'source_family' => ['4.0'], 'target_family' => '3.3', 'created_at' => 0],
 		];
 		foreach ($contexts as $why => $context) {
 			$offset                = (int) $context['created_at'];
@@ -168,7 +168,7 @@ final class PfbSettingsFamilyTest extends TestCase
 		pfb_settings_downgrade_context_consume();
 		$this->assertFileDoesNotExist($this->contextPath());
 
-		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time(), 'future' => TRUE]);
+		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => time(), 'future' => TRUE]);
 		$this->assertNull(pfb_settings_downgrade_context_target('4.0'));
 		pfb_settings_downgrade_context_consume();
 		$this->assertFileDoesNotExist($this->contextPath());
@@ -179,7 +179,7 @@ final class PfbSettingsFamilyTest extends TestCase
 		pfb_settings_downgrade_context_consume();
 		$this->assertFileDoesNotExist($this->contextPath());
 
-		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time()]);
+		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => time()]);
 		chmod($this->contextPath(), 0644);
 		$this->assertNull(pfb_settings_downgrade_context_target('4.0'));
 		pfb_settings_downgrade_context_consume();
@@ -196,9 +196,9 @@ final class PfbSettingsFamilyTest extends TestCase
 	public function testValidContextWithMissingTargetIsConsumedWithoutMutation(): void
 	{
 		$before = $GLOBALS['config'];
-		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time()]);
-		$this->assertSame('3.2', pfb_settings_downgrade_context_target('4.0'));
-		$this->assertTrue(pfb_settings_family_replace('3.2'));
+		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => time()]);
+		$this->assertSame('3.3', pfb_settings_downgrade_context_target('4.0'));
+		$this->assertTrue(pfb_settings_family_replace('3.3'));
 		pfb_settings_downgrade_context_consume();
 		$this->assertSame($before, $GLOBALS['config']);
 		$this->assertFileDoesNotExist($this->contextPath());
@@ -207,7 +207,7 @@ final class PfbSettingsFamilyTest extends TestCase
 	public function testKeepOffIsPreservedAtLegacyBoundary(): void
 	{
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_keep'));
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_keep'));
 	}
 
@@ -218,38 +218,38 @@ final class PfbSettingsFamilyTest extends TestCase
 				unset($GLOBALS['config']['installedpackages'][$section]);
 			}
 		}
-		$this->assertTrue(pfb_settings_family_save('3.2'));
-		$this->assertFileDoesNotExist($this->root . '/settings-3.2.xml');
+		$this->assertTrue(pfb_settings_family_save('3.3'));
+		$this->assertFileDoesNotExist($this->root . '/settings-3.3.xml');
 	}
 
 	public function testSaveCreatesSecureSlotAndOverwritesExisting(): void
 	{
 		$rootMode = fileperms($this->root) & 0777;
-		$this->assertTrue(pfb_settings_family_save('3.2'));
-		$slot = $this->root . '/settings-3.2.xml';
+		$this->assertTrue(pfb_settings_family_save('3.3'));
+		$slot = $this->root . '/settings-3.3.xml';
 		$this->assertSame($rootMode, fileperms($this->root) & 0777);
 		$this->assertSame(0600, fileperms($slot) & 0777);
 		$first = file_get_contents($slot);
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'overwrite-proof';
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$second = file_get_contents($slot);
 		$this->assertNotSame($first, $second);
 	}
 
 	public function testCorruptSlotFailsWithoutMutatingLiveConfig(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
-		$slot = $this->root . '/settings-3.2.xml';
+		$this->assertTrue(pfb_settings_family_save('3.3'));
+		$slot = $this->root . '/settings-3.3.xml';
 		file_put_contents($slot, 'corrupt');
 		chmod($slot, 0600);
 		$before = $GLOBALS['config'];
-		$this->assertFalse(pfb_settings_family_replace('3.2'));
+		$this->assertFalse(pfb_settings_family_replace('3.3'));
 		$this->assertSame($before, $GLOBALS['config']);
 	}
 
 	public function testPreUninstallRawPathSavesCurrentFamilyWithoutRestoringLowerSlot(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$this->assertTrue(pfb_settings_family_record('4.0'));
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'current-v4';
 		pfb_settings_family_pre_uninstall();
@@ -259,10 +259,10 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testPreUninstallValidContextSavesCurrentRestoresLowerAndConsumes(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$this->assertTrue(pfb_settings_family_record('4.0'));
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'current-v4';
-		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time()]);
+		$this->writeContext(['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => time()]);
 		pfb_settings_family_pre_uninstall();
 		$this->assertFileExists($this->root . '/settings-4.0.xml');
 		$this->assertSame('secret-canary', $GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential']);
@@ -271,10 +271,10 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testPreUninstallInvalidContextSavesOnlyAndConsumes(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$this->assertTrue(pfb_settings_family_record('4.0'));
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'current-v4';
-		$this->writeContext(['version' => 2, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time()]);
+		$this->writeContext(['version' => 2, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => time()]);
 		pfb_settings_family_pre_uninstall();
 		$this->assertFileExists($this->root . '/settings-4.0.xml');
 		$this->assertSame('current-v4', $GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential']);

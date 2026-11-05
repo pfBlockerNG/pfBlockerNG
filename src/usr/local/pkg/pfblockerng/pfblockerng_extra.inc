@@ -961,9 +961,9 @@ function pfb_cfg_registry(): array
 		// General section (pfblockerng/config/0)
 		// -------------------------------------------------------------------
 
-		// Settings snapshot schema marker. Missing installs are the legacy 3.2 family.
+		// Settings snapshot schema marker. Missing markers are the 3.3 family.
 		'gen/settings_family' => [
-			'default'       => '3.2',
+			'default'       => '3.3',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'sync'          => 'local',
@@ -3106,7 +3106,7 @@ final class PfbConfig
 
 // Settings-family snapshots capture only pfBlockerNG-owned installedpackages sections. Foreign
 // config remains live while the registered marker records the exact schema family.
-const PFB_SETTINGS_FAMILY_RANK = ['3.2' => 0, '3.3' => 1, '4.0' => 2, '4.1' => 3];
+const PFB_SETTINGS_FAMILY_RANK = ['3.3' => 0, '4.0' => 1, '4.1' => 2];
 const PFB_NIGHTLY_SETTINGS_FAMILY = '4.1';
 
 function pfb_settings_family_from_version(string $version): ?string

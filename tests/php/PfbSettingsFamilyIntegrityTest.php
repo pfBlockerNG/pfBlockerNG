@@ -31,30 +31,30 @@ final class PfbSettingsFamilyIntegrityTest extends TestCase
 	{
 		chmod($this->root, 0777);
 
-		$this->assertFalse(pfb_settings_family_save('3.2'));
-		$this->assertFileDoesNotExist($this->root . '/settings-3.2.xml');
+		$this->assertFalse(pfb_settings_family_save('3.3'));
+		$this->assertFileDoesNotExist($this->root . '/settings-3.3.xml');
 	}
 
 	public function testReplaceRejectsGroupOrWorldWritableDbdir(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		chmod($this->root, 0777);
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential'] = 'live';
 
-		$this->assertFalse(pfb_settings_family_replace('3.2'));
+		$this->assertFalse(pfb_settings_family_replace('3.3'));
 		$this->assertSame('live', $GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['credential']);
 	}
 
 	public function testReplaceRestoresSnapshotOwnedOrderAroundUnrelatedEntries(): void
 	{
-		$this->assertTrue(pfb_settings_family_save('3.2'));
+		$this->assertTrue(pfb_settings_family_save('3.3'));
 		$GLOBALS['config']['installedpackages'] = [
 			'pfblockerngglobal' => ['config' => ['0' => ['marker' => 'live-global']]],
 			'otherpackage' => ['config' => ['0' => ['marker' => 'keep']]],
 			'pfblockerng' => ['config' => ['0' => ['credential' => 'live']]],
 		];
 
-		$this->assertTrue(pfb_settings_family_replace('3.2'));
+		$this->assertTrue(pfb_settings_family_replace('3.3'));
 		$this->assertSame(
 			['pfblockerng', 'otherpackage', 'pfblockerngglobal'],
 			array_keys($GLOBALS['config']['installedpackages'])

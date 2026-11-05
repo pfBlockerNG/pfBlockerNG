@@ -3343,6 +3343,7 @@ final class CfgGatewayTest extends TestCase
 				'pfb_dnsport_ssl' => ['', '8443', '#2994 page/save default 8443'],
 				'aliaslog' => ['', 'enabled', '#2994 page/save/help default enabled'],
 				'global_log' => ['', 'disabled_log', '#3288 fresh-install default disabled_log'],
+				'settings_family' => ['3.2', '3.3', '#3710 missing marker is the 3.3 family'],
 			];
 			if (isset($deliberate[$bare])) {
 				[$historical, $current, $why] = $deliberate[$bare];

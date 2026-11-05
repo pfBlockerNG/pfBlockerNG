@@ -32,14 +32,14 @@ final class PfbSettingsFamilyObjectSlotTest extends TestCase
 			'pfblockerng' => ['config' => ['0' => ['credential' => 'snapshot', 'nested' => new stdClass()]]],
 		];
 		$encoded = base64_encode(serialize($payload));
-		$xml = '<pfblockerng-settings><family>3.2</family><payload>' . $encoded
+		$xml = '<pfblockerng-settings><family>3.3</family><payload>' . $encoded
 			. '</payload></pfblockerng-settings>';
-		$slot = $this->root . '/settings-3.2.xml';
+		$slot = $this->root . '/settings-3.3.xml';
 		file_put_contents($slot, $xml);
 		chmod($slot, 0600);
 		$before = $GLOBALS['config'];
 
-		$this->assertFalse(pfb_settings_family_replace('3.2'));
+		$this->assertFalse(pfb_settings_family_replace('3.3'));
 		$this->assertSame($before, $GLOBALS['config']);
 	}
 
