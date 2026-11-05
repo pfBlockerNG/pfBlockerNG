@@ -35,15 +35,13 @@ from ..test_smoke_dns_gateway import (
 )
 from .test_browser_feeds import JS_TIMEOUT_MS, _open
 from .test_dns_ddr_refresh_client import (
-    test_ddr_ajax_dispatch_exits_before_seeding_and_releases_session as _check_dispatch,
-)
-from .test_dns_ddr_refresh_client import (
     test_periodic_ddr_refresh_replaces_only_results_and_recovers as _check_refresh,
 )
 from .test_sync_status_panels import panel
-from .webui import looks_like_login_page
+from .webui import CSRF_FIELD, extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from playwright.sync_api import Page
@@ -56,6 +54,27 @@ DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 PANEL_ID = "pfb-dns-status-ddr"
 
 
+@pytest.fixture(autouse=True)
+def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Preserve the module gateway, not the UI session's pre-gateway baseline."""
+    if not request.node.get_closest_marker("ui_browser") or "gw" not in request.fixturenames:
+        yield
+        return
+    gw = request.getfixturevalue("gw")
+    snapshot = "/root/pfb_ddr_ui_baseline.xml"
+    result = gw.vm.ssh("/bin/cp", "/conf/config.xml", snapshot)
+    assert result.returncode == 0, result.stderr
+    before = helpers.pfb_config_digest(gw.vm)
+    try:
+        yield
+    finally:
+        try:
+            if helpers.pfb_config_digest(gw.vm) != before:
+                helpers.restore_pfb_config_baseline(gw.vm, snapshot_path=snapshot)
+        finally:
+            gw.vm.ssh("/bin/rm", "-f", snapshot)
+
+
 @pytest.mark.ui_browser
 @pytest.mark.parametrize("failure", ["timeout", "http", "redirect", "json", "missing", "duplicate"])
 def test_dns_ddr_refresh_failure_recovery(failure: str) -> None:
@@ -64,8 +83,21 @@ def test_dns_ddr_refresh_failure_recovery(failure: str) -> None:
 
 @pytest.mark.ui_render
 @pytest.mark.parametrize("method", ["GET", "POST"])
-def test_dns_ddr_read_only_dispatch(method: str) -> None:
-    _check_dispatch(method)
+def test_dns_ddr_read_only_dispatch(method: str, webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    form_page = webui.get(DNS_PAGE)
+    before = _config_digest(smoke_vm)
+    url = DNS_PAGE + "?ajax=ddr"
+    if method == "GET":
+        response = webui.get(url)
+        assert response.status_code == 200, response.text
+        assert panel(response.json()["html"], PANEL_ID) is not None, response.text
+    else:
+        token = extract_csrf_token(form_page.text)
+        response = webui.session.post(webui.url(url), data={CSRF_FIELD: token}, timeout=30)
+        assert response.status_code == 405, response.text
+        assert response.headers.get("Allow") == "GET", response.headers
+    assert "no-store" in response.headers.get("Cache-Control", ""), response.headers
+    assert _config_digest(smoke_vm) == before, "DDR dispatch changed config.xml"
 
 
 @pytest.mark.ui_render
@@ -119,12 +151,14 @@ def test_dns_ddr_page_load_checks_each_actual_listener_without_writing_config(
     rows = _status_rows(initial.text)
     listeners = helpers.php_eval(
         gw.vm,
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');echo json_encode(pfb_dns_proxy_listener_list());",
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');echo json_encode(["
+        "'listening'=>pfb_dns_proxy_listener_list()['listening'],'names'=>pfb_dns_proxy_name_answers()]);",
     )
     assert listeners.returncode == 0, listeners.stderr
     match = re.search(r'\{"listening":.*\}', listeners.stdout)
     assert match, listeners.stdout
-    bound = json.loads(match.group())["listening"]["udp+tcp"]
+    observed = json.loads(match.group())
+    bound = observed["listening"]["udp+tcp"]
     assert bound and set(rows) == set(bound), f"bound: {bound}; page: {rows}"
     loopback = gw.vm.ssh("/sbin/ifconfig", "lo0")
     assert loopback.returncode == 0, loopback.stderr
@@ -164,10 +198,19 @@ def test_dns_ddr_page_load_checks_each_actual_listener_without_writing_config(
         if reply.rcode == "REFUSED":
             assert state == "error", ET.tostring(row, encoding="unicode")
         else:
-            assert _svcb_records(reply) == _expected_svcb(DDR_TARGET, doh_443=False, address=host), reply.raw
-            assert state in ({"matched", "unverified"} if host in {"127.0.0.1", "::1"} else {"matched"}), ET.tostring(
-                row, encoding="unicode"
-            )
+            wanted = []
+            for record in _expected_svcb(DDR_TARGET, doh_443=False, address=host):
+                alpn = record.params["alpn"]
+                service_port = record.params.get("port", "443" if alpn == "h2" else "853")
+                endpoint = f"[{host}]:{service_port}" if ":" in host else f"{host}:{service_port}"
+                kind = {"h2": "doh", "dot": "dot", "doq": "doq"}[alpn]
+                if endpoint in observed["listening"].get(kind, {}):
+                    wanted.append(record)
+            assert _svcb_records(reply) == wanted, reply.raw
+            expected_state = "matched" if host in observed["names"] or host in {"127.0.0.1", "::1"} else "unverified"
+            if not wanted:
+                expected_state = "no_transport"
+            assert state == expected_state, ET.tostring(row, encoding="unicode")
     reloaded = webui.get(DNS_PAGE)
     assert reloaded.status_code == 200, reloaded.text
     assert set(_status_rows(reloaded.text)) == set(rows)
@@ -219,7 +262,7 @@ def test_dns_ddr_checks_automatically_after_saving(
     _open(page, webui, DNS_PAGE)
     assert any(row.attrib["data-state"] == "matched" for row in _status_rows(page.content()).values())
     with page.expect_navigation(wait_until="domcontentloaded"):
-        page.get_by_role("button", name="Save", exact=True).click()
+        page.locator('button[type="submit"][name="save"]').click()
     assert page.locator(".input-errors").count() == 0, page.locator("body").inner_text()
     assert any(row.attrib["data-state"] == "matched" for row in _status_rows(page.content()).values())
 
@@ -239,6 +282,8 @@ def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
     body = section.locator(f"#{PANEL_ID}_panel-body")
     assert section.locator("pre, #pfb-dns-ddr-refresh").count() == 0
     assert section.locator("tr[data-address]").count() > 0
+    states = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    assert "matched" in states.values(), states
     for icon in section.locator("td i").all():
         assert icon.get_attribute("title"), icon.evaluate("el => el.outerHTML")
         assert icon.locator("..").locator(".sr-only").inner_text()
@@ -253,6 +298,10 @@ def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
         page.clock.run_for(30000)
     assert refreshed.value.status == 200, refreshed.value.text()
     page.locator("#ddr-before-refresh").wait_for(state="detached", timeout=JS_TIMEOUT_MS)
+    refreshed_states = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    assert refreshed_states == states, (
+        f"Automatic refresh changed unchanged DNS results: {states} -> {refreshed_states}"
+    )
     assert page.locator("#pfb_dns_name").input_value() == "unsaved-ddr-name.com"
     assert page.evaluate("window.ddrBody === document.getElementById('pfb-dns-status-ddr_panel-body')")
     assert not body.is_visible(), "refresh expanded the collapsed panel"
