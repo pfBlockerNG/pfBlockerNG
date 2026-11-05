@@ -16198,9 +16198,14 @@ function pfb_dns_ddr_status(): array {
 		];
 	}
 	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name'));
-	$answers = pfb_dns_proxy_name_answers();
-	$advertised = pfb_dns_proxy_ddr_doh_443_addresses();
-	$managed = pfb_dns_listen_auto_vips();
+	// config.xml keeps addresses as typed; listener keys use the gateway's canonical spelling.
+	$canon = static fn (array $list): array => array_values(array_filter(array_map('pfb_dns_proxy_answer_address', $list), 'is_string'));
+	$answers = [];
+	foreach (pfb_dns_proxy_name_answers() as $local => $pair) {
+		$answers[pfb_dns_proxy_answer_address((string) $local) ?? (string) $local] ??= $pair;
+	}
+	$advertised = $canon(pfb_dns_proxy_ddr_doh_443_addresses());
+	$managed = $canon(pfb_dns_listen_auto_vips());
 	$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
 	foreach (array_keys($listeners['listening']['udp+tcp'] ?? []) as $listener) {
 		$host = trim(substr($listener, 0, (int) strrpos($listener, ':')), '[]');
@@ -16213,7 +16218,7 @@ function pfb_dns_ddr_status(): array {
 				continue;
 			}
 			$tokens = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
-			$addresses = [...pfb_dns_proxy_interface_addresses($tokens, pfb_dns_proxy_vip_only_families($kind)), ...PFB_DNS_PROXY_LOOPBACK];
+			$addresses = [...$canon(pfb_dns_proxy_interface_addresses($tokens, pfb_dns_proxy_vip_only_families($kind))), ...PFB_DNS_PROXY_LOOPBACK];
 			if ($tokens === [] || !in_array($host, $addresses, TRUE)) {
 				continue;
 			}

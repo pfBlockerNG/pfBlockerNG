@@ -145,7 +145,7 @@ def test_dns_ddr_read_only_dispatch(method: str, webui: WebUI, smoke_vm: helpers
         assert panel(response.json()["html"], PANEL_ID) is not None, response.text
     else:
         token = extract_csrf_token(form_page.text)
-        response = webui.session.post(webui.url(url), data={CSRF_FIELD: token}, timeout=30)
+        response = webui.session.post(webui.url(url), data={CSRF_FIELD: token}, verify=webui._verify, timeout=30)  # noqa: SLF001
         assert response.status_code == 405, response.text
         assert response.headers.get("Allow") == "GET", response.headers
     assert "no-store" in response.headers.get("Cache-Control", ""), response.headers

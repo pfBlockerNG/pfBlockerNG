@@ -150,4 +150,56 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 		$status = $fixture->status();
 		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
 	}
+
+	public static function nonCanonicalVips(): array
+	{
+		$cases = [];
+		foreach (['dot' => 'dot', 'doh' => 'h2', 'doq' => 'doq'] as $kind => $alpn) {
+			foreach (['manual', 'auto', 'only'] as $mode) {
+				$cases["{$kind} {$mode}"] = [$kind, $alpn, $mode, FALSE];
+			}
+		}
+		$cases['DoH 443 override manual'] = ['doh', 'h2', 'manual', TRUE];
+		return $cases;
+	}
+
+	/** config.xml keeps a VIP as typed; the gateway lists it canonically, so a typed spelling must not lose the match. */
+	#[DataProvider('nonCanonicalVips')]
+	public function testVipStoredInNonCanonicalSpellingStillMatches(string $kind, string $alpn, string $mode, bool $override): void
+	{
+		$auto = $mode === 'auto';
+		$host = '2001:db8::53';
+		$rows = [];
+		foreach ([4 => '192.0.2.53', 6 => '2001:DB8:0::53'] as $family => $stored) {
+			$rows[] = ['mode' => 'ipalias', 'interface' => 'lo0', 'type' => 'single', 'subnet' => $stored,
+				'subnet_bits' => $family === 4 ? '32' : '128', 'descr' => $auto ? "pfB_DNS_LISTEN_VIP_v{$family}" : 'Admin VIP', 'uniqid' => "v{$family}"];
+			PfbConfig::write("gen/pfb_dns_listen_vip{$family}", $auto ? 'auto' : "_vipv{$family}");
+			PfbConfig::write("gen/pfb_dns_listen_auto{$family}", $auto ? $stored : '');
+		}
+		config_set_path('virtualip/vip', $rows);
+		PfbConfig::write('gen/pfb_dns_listen_vip', 'on');
+		if ($mode === 'only') {
+			PfbConfig::write('gen/pfb_dns_listen_vip_only', 'on');
+			PfbConfig::write('dns/pfb_dns', 'on');
+		}
+		$port = $kind === 'doh' ? 4443 : 8853;
+		PfbConfig::write("dns_shared/pfb_dns_{$kind}", 'on');
+		PfbConfig::write("dns/pfb_dns_{$kind}_interface", 'lan');
+		PfbConfig::write("dns_shared/pfb_dns_{$kind}_port", (string) $port);
+		if ($override) {
+			PfbConfig::write('dns/pfb_dns_ddr_doh_443_interfaces', '_vipv6');
+		}
+		$bound = $auto ? ($kind === 'doh' ? 443 : 853) : $port;
+		$this->gatewayServes(["udp+tcp [{$host}]:5353", "{$kind} [{$host}]:{$bound}"]);
+		$fixture = new DdrProbeFixture();
+		$fixture->responses = [
+			'_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response(
+				[PfbDnsDdrStatusTest::record($host, $alpn, $override ? 443 : $bound)],
+				additional: ["dns.example.com. 300 IN AAAA {$host}"]),
+			'dns.example.com A' => PfbDnsDdrStatusTest::response(['dns.example.com. 300 IN A 192.0.2.53'], 'dns.example.com.', 'A'),
+			'dns.example.com AAAA' => PfbDnsDdrStatusTest::response(["dns.example.com. 300 IN AAAA {$host}"], 'dns.example.com.', 'AAAA'),
+		];
+		$status = $fixture->status();
+		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
+	}
 }
