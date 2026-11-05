@@ -13,6 +13,7 @@ from .test_smoke_dns_gateway import (
     DDR_DNS_NAME,
     DNS_GENERAL_PAGE,
     _apply,
+    _capture,
     _ensure_ddr,
     _parse_reply,
     _say,
@@ -34,9 +35,11 @@ pytestmark = [pytest.mark.smoke, pytest.mark.timeout(900)]
 
 
 def _check_name_pair(vm: SmokeVM, targets: list[str], pair: tuple[str | None, str | None], phase: str) -> None:
+    kinds = ("AAAA", "A") if pair[0] is None else ("A", "AAAA")
     for address in targets:
         for transport in ("udp", "tcp"):
-            for kind, expected in zip(("A", "AAAA"), pair, strict=True):
+            for kind in kinds:
+                expected = pair[0 if kind == "A" else 1]
                 args = ["/usr/bin/timeout", "-s", "TERM", "-k1", "5", "/usr/bin/drill", "-b1232"]
                 args += ["-6", "-I::1"] if ":" in address else ["-I127.0.0.1"]
                 if transport == "tcp":
@@ -83,8 +86,7 @@ def test_vip_only_single_family_name_returns_owned_nodata(
             },
         )
         assert response.status_code == 200, response.text
-        for key, value in (("vip_only", "on"), ("vip4", v4), ("vip6", v6)):
-            assert helpers.config_get(vm, f"{helpers.CFG_GLOBAL}/pfb_dns_listen_{key}") == value, response.text
+        assert helpers.config_get(vm, f"{helpers.CFG_GLOBAL}/pfb_dns_listen_vip_only") == "on", response.text
         _apply(vm)
         return (
             helpers.config_get(vm, f"{helpers.CFG_GLOBAL}/pfb_dns_listen_auto4"),
@@ -100,6 +102,10 @@ def test_vip_only_single_family_name_returns_owned_nodata(
         current = select_families("auto" if family == 4 else "none", "auto" if family == 6 else "none")
         active = current[0 if family == 4 else 1]
         assert active, f"IPv{family} Resolver VIP fixture missing: {current}"
+        sockets = _capture(vm).proxy_sockets()
+        assert {(f"udp{family}", f"{active}:53"), (f"tcp{family}", f"{active}:53")} <= sockets, sockets
+        removed = full[1 if family == 4 else 0]
+        assert not any(local == f"{removed}:53" for _, local in sockets), sockets
         expected = (active, None) if family == 4 else (None, active)
         _check_name_pair(vm, [active, "127.0.0.1", "::1"], expected, f"IPv{family}-only")
     finally:
