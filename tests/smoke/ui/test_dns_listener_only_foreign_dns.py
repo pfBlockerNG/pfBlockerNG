@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import TYPE_CHECKING
 
 import pytest
@@ -27,7 +28,7 @@ MODE_PATH = f"{helpers.CFG_GLOBAL}/pfb_dns_listen_vip_only"
 def test_listener_only_mode_saves_without_rewriting_foreign_dhcp_or_ra_dns(
     browser_page: Page, smoke_vm: SmokeVM, webui: WebUI, screenshot_dir: Path
 ) -> None:
-    """A real General save accepts independent foreign DHCP4, DHCP6 and RA DNS lists."""
+    """General saves preserve foreign lists and append-only ownership through listener-mode transitions."""
     paths = (helpers.CFG_GLOBAL, "installedpackages/pfblockerngdns", "virtualip/vip", "dhcpd", "dhcpdv6")
     originals = {path: _snapshot(smoke_vm, path) for path in paths}
     vip = {
@@ -78,6 +79,33 @@ def test_listener_only_mode_saves_without_rewriting_foreign_dhcp_or_ra_dns(
         help_group.locator('[class^="infoblock"]').wait_for(state="visible", timeout=JS_TIMEOUT_MS)
         _shot(browser_page, screenshot_dir, "dns_listener_only_warning_full")
         help_group.screenshot(path=str(screenshot_dir / "dns_listener_only_warning_field.png"))
+        own_address = helpers._php_read_scalar(
+            smoke_vm,
+            "require_once('interfaces.inc');",
+            f"get_interface_ip({helpers._php_str(helpers.IPV6_LOCAL_IFACE)})",
+        )
+        assert ipaddress.ip_address(own_address).version == 4
+        dns_path = f"dhcpd/{helpers.IPV6_LOCAL_IFACE}/dnsserver"
+        _put(smoke_vm, dns_path, [own_address])
+        for enabled in (True, False):
+            _open(browser_page, webui, PAGE)
+            mode.set_checked(enabled)
+            _save(browser_page)
+            errors = browser_page.locator(".input-errors").all_inner_texts()
+            assert not errors, f"listener-mode transition failed: {errors}"
+            actual = _snapshot(smoke_vm, dns_path)
+            print(f"LISTENER_ONLY_OWN_DNS mode={enabled} servers={actual}")
+            assert actual == [own_address, vip["subnet"]], "listener mode deleted a pre-existing DNS address"
+            assert helpers.config_get(smoke_vm, MODE_PATH) == ("on" if enabled else "")
+        _open(browser_page, webui, PAGE)
+        browser_page.locator('input[name="pfb_dns_listen_vip"]').uncheck()
+        browser_page.locator('select[name="pfb_dns_listen_vip4"]').select_option("none")
+        _save(browser_page)
+        errors = browser_page.locator(".input-errors").all_inner_texts()
+        assert not errors, f"Resolver VIP removal failed: {errors}"
+        actual = _snapshot(smoke_vm, dns_path)
+        print(f"LISTENER_ONLY_OWN_DNS removed servers={actual}")
+        assert actual == [own_address], "removing package VIPs removed an original DNS address"
     finally:
         for path, value in originals.items():
             _put(smoke_vm, path, value)
