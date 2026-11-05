@@ -34,9 +34,6 @@ from ..test_smoke_dns_gateway import (
     probe_binary as probe_binary,
 )
 from .test_browser_feeds import JS_TIMEOUT_MS, _open
-from .test_dns_ddr_refresh_client import (
-    test_periodic_ddr_refresh_replaces_only_results_and_recovers as _check_refresh,
-)
 from .test_sync_status_panels import panel
 from .webui import CSRF_FIELD, extract_csrf_token, looks_like_login_page
 
@@ -44,7 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    from playwright.sync_api import Page
+    from playwright.sync_api import Page, Route
 
     from ..test_smoke_dns_gateway import Gateway
     from ..test_smoke_dns_proxy import State
@@ -76,9 +73,64 @@ def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
 
 
 @pytest.mark.ui_browser
-@pytest.mark.parametrize("failure", ["timeout", "http", "redirect", "json", "missing", "duplicate"])
-def test_dns_ddr_refresh_failure_recovery(failure: str) -> None:
-    _check_refresh(failure)
+@pytest.mark.parametrize("failure", ["http", "login", "redirect", "json", "shape", "missing", "duplicate", "timeout"])
+def test_dns_ddr_failed_refresh_clears_stale_results_and_recovers(
+    gw: Gateway, gateway_on: State, browser_page: Page, webui: WebUI, failure: str
+) -> None:
+    _ensure_ddr(gw, on=True)
+    page = browser_page
+    page.clock.install()
+    _open(page, webui, DNS_PAGE)
+    section = page.locator(f"#{PANEL_ID}")
+    states = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    assert "matched" in states.values(), states
+    endpoint = "**/pfblockerng_dns.php?ajax=ddr"
+    panel_html = f'<div id="{PANEL_ID}"><div id="{PANEL_ID}_panel-body"></div></div>'
+    replies = {
+        "http": (503, "text/plain", "Service unavailable"),
+        "login": (200, "text/html", '<form id="unexpected-login"></form>'),
+        "json": (200, "application/json", "{"),
+        "shape": (200, "application/json", '{"html":7}'),
+        "missing": (200, "application/json", json.dumps({"html": "<p>No DDR panel</p>"})),
+        "duplicate": (200, "application/json", json.dumps({"html": panel_html + panel_html})),
+    }
+    held: list[Route] = []
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if request.url.endswith("?ajax=ddr") else None)
+
+    def fail_refresh(route: Route) -> None:
+        if failure == "timeout":
+            held.append(route)
+        elif failure == "redirect":
+            route.fulfill(status=302, headers={"Location": DNS_PAGE + "?ajax=ddr&redirected=1"})
+        else:
+            status, content_type, body = replies[failure]
+            route.fulfill(status=status, content_type=content_type, body=body)
+
+    page.route(endpoint, fail_refresh)
+    if failure == "timeout":
+        with page.expect_request(lambda request: request.url.endswith("?ajax=ddr")):
+            page.clock.run_for(30000)
+        assert len(requests) == 1, requests
+        page.clock.run_for(15000)
+    else:
+        with page.expect_response(lambda response: response.url.endswith("?ajax=ddr")):
+            page.clock.run_for(30000)
+    unavailable = section.get_by_role("status")
+    unavailable.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
+    assert section.locator(".text-success").count() == 0, "Failed refresh retained stale green results"
+    if failure == "timeout":
+        assert len(held) == 1 and len(requests) == 1, requests
+    page.unroute(endpoint)
+    with page.expect_response(lambda response: "ajax=ddr" in response.url):
+        page.clock.run_for(30000)
+    unavailable.wait_for(state="detached", timeout=JS_TIMEOUT_MS)
+    restored = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    assert restored == states, f"Expected restored DNS results {states}, got {restored}"
+    count = len(requests)
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+    page.clock.run_for(60000)
+    assert len(requests) == count, "Polling continued after the page was hidden"
 
 
 @pytest.mark.ui_render
