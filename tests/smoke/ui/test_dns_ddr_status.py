@@ -232,9 +232,11 @@ def test_dns_ddr_failed_refresh_keeps_rows_and_last_results_then_recovers(
     before = len(requests)
     page.clock.run_for(30000)
     if failure == "timeout":
-        # Each held row times out after its own 15 s request budget; the next row is then queried.
-        for index in range(len(addresses)):
-            _wait_until(page, lambda: len(held) > index, f"row {index} to be queried")
+        # Held rows time out after their own 15 s request budget; then the next rows are queried.
+        seen = 0
+        while seen < len(addresses):
+            _wait_until(page, lambda: len(held) > seen, f"rows after {seen} to be queried")
+            seen = len(held)
             page.clock.run_for(15000)
     _wait_sweep_done(page)
     assert len(requests) - before == len(addresses), requests[before:]
