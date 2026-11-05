@@ -51,7 +51,8 @@ def test_dnsbl_save_ignores_retired_cache_and_preserves_clear_cache_toggle(
     original_cache = helpers.config_get_state(smoke_vm, cache)
     original_flush = helpers.config_get_state(smoke_vm, flush)
     try:
-        helpers.config_restore_state(smoke_vm, cache, (False, ""))
+        helpers.config_restore_state(smoke_vm, cache, (True, "on"))
+        assert helpers.config_get_state(smoke_vm, cache) == (True, "on")
         helpers.config_restore_state(smoke_vm, flush, (True, ""))
         assert helpers.config_get_state(smoke_vm, flush) == (True, ""), "could not seed Clear Resolver Cache Off"
         for token in ("on", ""):
