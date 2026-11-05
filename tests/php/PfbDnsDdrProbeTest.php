@@ -7,6 +7,7 @@ require_once __DIR__ . '/support/DdrProbeFixture.php';
 require_once __DIR__ . '/PfbDnsDdrStatusTest.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversFunction('pfb_dns_ddr_status')]
@@ -62,6 +63,75 @@ final class PfbDnsDdrProbeTest extends TestCase
 				unset($GLOBALS[$key]);
 			}
 		}
+	}
+
+	public function testMetadataKeepsAllBoundRowsPendingWithoutDnsProcesses(): void
+	{
+		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853', 'udp+tcp [2001:db8::1]:5354', 'dot [2001:db8::1]:853']);
+		$status = $this->fixture->status();
+		$this->assertSame([], $this->fixture->calls, 'Page metadata must not launch DNS subprocesses');
+		$this->assertNull($status['queried']);
+		$this->assertSame('dns.example.com', $status['name']);
+		$this->assertSame(['192.0.2.1:5353', '[2001:db8::1]:5354'], array_column($status['rows'], 'address'));
+		$this->assertSame(['pending', 'pending'], array_column($status['rows'], 'state'));
+		foreach ($status['rows'] as $row) {
+			$this->assertArrayNotHasKey('name', $row);
+		}
+	}
+
+	public static function selectedListeners(): array
+	{
+		return [['192.0.2.1:5353', '192.0.2.1'], ['[2001:db8::1]:5354', '2001:db8::1']];
+	}
+
+	#[DataProvider('selectedListeners')]
+	public function testSelectedListenerQueriesOnlyItsExactCurrentBoundAddress(string $listener, string $host): void
+	{
+		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853', 'udp+tcp [2001:db8::1]:5354', 'dot [2001:db8::1]:853']);
+		$this->fixture->responses['_dns.resolver.arpa. SVCB'] = PfbDnsDdrStatusTest::response(
+			[PfbDnsDdrStatusTest::record($host)], additional: ['dns.example.com. 300 IN ' . (str_contains($host, ':') ? 'AAAA' : 'A') . " {$host}"]);
+		$status = $this->fixture->status($listener);
+		$this->assertSame([$listener], array_column($status['rows'], 'address'));
+		$this->assertSame(['matched'], array_column($status['rows'], 'state'), json_encode($status));
+		$this->assertNotNull($status['queried']);
+		$this->assertCount(3, $this->fixture->calls);
+		foreach ($this->fixture->calls as $call) {
+			$this->assertContains("@{$host}", $call);
+			$this->assertSame(str_contains($host, ':') ? '5354' : '5353', $call[array_search('-p', $call, TRUE) + 1]);
+		}
+	}
+
+	public static function rejectedSelectors(): array
+	{
+		return array_merge(PfbDnsDdrStatusTest::hostileListeners(), [
+			['192.0.2.99:53'], ['192.0.2.50:53'], ['192.0.2.1:853'], ['192.0.2.1:53'],
+		]);
+	}
+
+	#[DataProvider('rejectedSelectors')]
+	public function testRejectedSelectorNeverQueriesAnotherBoundListener(string $listener): void
+	{
+		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853'], ['udp+tcp 192.0.2.50:53' => 'refused']);
+		$status = $this->fixture->status($listener);
+		$this->assertSame([], $this->fixture->calls, "Rejected selector {$listener} must not launch DNS subprocesses");
+		$this->assertSame([], $status['rows']);
+		$this->assertNull($status['queried']);
+	}
+
+	public function testSlowSelectedRequestCannotStarveTheNextSelectedRequest(): void
+	{
+		$this->gatewayServes(['udp+tcp 192.0.2.1:53', 'dot 192.0.2.1:853', 'udp+tcp 127.0.0.1:53', 'dot 127.0.0.1:853']);
+		$this->fixture->elapsedPerQuery = 5000000000;
+		$first = $this->fixture->status('192.0.2.1:53');
+		$this->assertSame(['budget'], array_column($first['rows'], 'state'));
+		$this->assertCount(2, $this->fixture->calls);
+		$this->fixture->elapsedPerQuery = 0;
+		$this->fixture->responses['_dns.resolver.arpa. SVCB'] = PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record('127.0.0.1')],
+			additional: ['dns.example.com. 300 IN A 127.0.0.1']);
+		$second = $this->fixture->status('127.0.0.1:53');
+		$this->assertSame(['127.0.0.1:53'], array_column($second['rows'], 'address'));
+		$this->assertSame(['matched'], array_column($second['rows'], 'state'), json_encode($second));
+		$this->assertCount(3, $this->fixture->calls, 'The next request must receive a fresh deadline');
 	}
 
 	public function testAutomaticQueriesUseActualPlainPortAndBothOwnedNameFamilies(): void

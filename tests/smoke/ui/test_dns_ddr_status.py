@@ -8,6 +8,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -70,6 +71,116 @@ def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
                 helpers.restore_pfb_config_baseline(gw.vm, snapshot_path=snapshot)
         finally:
             gw.vm.ssh("/bin/rm", "-f", snapshot)
+
+
+@pytest.mark.ui_render
+def test_dns_ddr_initial_page_keeps_pending_rows_and_shared_name(gw: Gateway, gateway_on: State, webui: WebUI) -> None:
+    """The initial response exposes every bound listener before any DNS result is available."""
+    _ensure_ddr(gw, on=True)
+    response = webui.get(DNS_PAGE)
+    assert response.status_code == 200, response.text
+    section = panel(response.text, PANEL_ID)
+    assert section is not None, response.text
+    table_match = re.search(r"<table\b.*?</table>", section, re.DOTALL)
+    assert table_match, section
+    table = ET.fromstring(table_match.group())
+    assert [cell.text for cell in table.findall("./thead/tr/th")] == ["Interface", "Address", "State"]
+    names = re.findall(r'<([a-z]+)\b[^>]*\bid="pfb-dns-ddr-name"[^>]*>.*?</\1>', section, re.DOTALL)
+    assert len(names) == 1, section
+    name_match = re.search(r'<[a-z]+\b[^>]*\bid="pfb-dns-ddr-name"[^>]*>.*?</[a-z]+>', section, re.DOTALL)
+    assert name_match is not None and name_match.start() < table_match.start(), section
+    name = ET.fromstring(name_match.group())
+    assert "".join(name.itertext()).rstrip(".").lower() == DDR_DNS_NAME.rstrip(".").lower()
+    assert sum(DDR_DNS_NAME.lower() in text.lower() for text in table.itertext()) == 0
+    listeners = helpers.php_eval(
+        gw.vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+        "echo json_encode(pfb_dns_proxy_listener_list()['listening']['udp+tcp']);",
+    )
+    assert listeners.returncode == 0, listeners.stderr
+    bound = json.loads(listeners.stdout)
+    rows = table.findall("./tbody/tr")
+    assert bound and {row.attrib["data-address"] for row in rows} == set(bound), listeners.stdout
+    assert len(rows) == len(bound), section
+    for row in rows:
+        assert row.attrib["data-state"] == "pending", ET.tostring(row, encoding="unicode")
+        cells = row.findall("td")
+        assert len(cells) == 3, ET.tostring(row, encoding="unicode")
+        icon = cells[2].find(".//i")
+        assert icon is not None and {"fa-spinner", "fa-spin", "text-muted"} <= set(icon.attrib["class"].split())
+        spoken = cells[2].find(".//span[@class='sr-only']")
+        assert spoken is not None and spoken.text, ET.tostring(row, encoding="unicode")
+
+
+@pytest.mark.ui_browser
+def test_dns_ddr_initial_checks_are_async_and_keep_rows_on_failure(
+    gw: Gateway, gateway_on: State, browser_page: Page, webui: WebUI
+) -> None:
+    """A stalled first query cannot block the form, later rows, or retained background results."""
+    _ensure_ddr(gw, on=True)
+    page = browser_page
+    page.clock.install()
+    held: list[Route] = []
+    requested: list[str] = []
+    phase = "hold"
+
+    def selected_listener(route: Route) -> None:
+        query = parse_qs(urlsplit(route.request.url).query)
+        assert set(query) == {"ajax", "listener"}, query
+        requested.append(query["listener"][0])
+        if phase == "hold" and not held:
+            held.append(route)
+        elif phase == "fail":
+            route.abort()
+        else:
+            route.continue_()
+
+    page.route("**/pfblockerng_dns.php?ajax=ddr&listener=*", selected_listener)
+    with page.expect_request(lambda request: "ajax=ddr&listener=" in request.url):
+        page.goto(webui.url(DNS_PAGE), wait_until="domcontentloaded", timeout=JS_TIMEOUT_MS * 3)
+    assert page.locator("#usernamefld").count() == 0
+    rows = page.locator(f"#{PANEL_ID} tr[data-address]")
+    addresses = rows.evaluate_all("rows => rows.map(row => row.dataset.address)")
+    assert len(addresses) > 1 and len(held) == 1, addresses
+    assert rows.evaluate_all("rows => rows.every(row => row.dataset.state === 'pending')")
+    assert rows.locator("td:nth-child(3) .fa-spinner.fa-spin.text-muted").count() == len(addresses)
+    page.evaluate(
+        """() => {
+            window.ddrInitialTable = document.querySelector('#pfb-dns-status-ddr table');
+            window.ddrInitialRows = [...window.ddrInitialTable.querySelectorAll('tbody tr')];
+        }"""
+    )
+    page.locator("#pfb_dns_name").fill("unsaved-ddr-name.com")
+    assert page.locator('button[type="submit"][name="save"]').is_enabled()
+    phase = "pass"
+    held[0].abort()
+    page.wait_for_function(
+        """() => window.ddrInitialRows.slice(1).every(row => row.dataset.state !== 'pending')""",
+        timeout=JS_TIMEOUT_MS,
+    )
+    assert requested == addresses, requested
+    assert rows.first.get_attribute("data-state") == "pending"
+    note = page.locator("#pfb-dns-ddr-refresh-status")
+    note.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
+    page.clock.run_for(30000)
+    page.wait_for_function(
+        "() => window.ddrInitialRows.every(row => row.dataset.state !== 'pending')",
+        timeout=JS_TIMEOUT_MS,
+    )
+    note.wait_for(state="hidden", timeout=JS_TIMEOUT_MS)
+    assert requested == addresses + addresses, requested
+    results = rows.evaluate_all("rows => rows.map(row => [row.dataset.state, row.cells[2].innerHTML])")
+    assert any(state == "matched" for state, _ in results), results
+    phase = "fail"
+    page.clock.run_for(30000)
+    note.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
+    assert rows.evaluate_all("rows => rows.map(row => [row.dataset.state, row.cells[2].innerHTML])") == results
+    assert page.evaluate(
+        """() => window.ddrInitialTable === document.querySelector('#pfb-dns-status-ddr table') &&
+            window.ddrInitialRows.every((row, index) =>
+                row === document.querySelectorAll('#pfb-dns-status-ddr tbody tr')[index])"""
+    )
+    assert page.locator("#pfb_dns_name").input_value() == "unsaved-ddr-name.com"
 
 
 @pytest.mark.ui_browser

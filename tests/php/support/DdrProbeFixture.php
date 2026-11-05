@@ -59,9 +59,9 @@ final class DdrProbeFixture
 		return tmpfile();
 	}
 
-	public function status(): array
+	public function status(?string $only = NULL): array
 	{
-		return ($this->namespace . '\\pfb_dns_ddr_status')();
+		return ($this->namespace . '\\pfb_dns_ddr_status')($only);
 	}
 
 	public function probe(string $at, float $budget): array

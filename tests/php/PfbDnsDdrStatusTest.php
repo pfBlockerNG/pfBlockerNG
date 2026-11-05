@@ -111,6 +111,32 @@ final class PfbDnsDdrStatusTest extends TestCase
 		$this->assertArrayNotHasKey('stdout', $result);
 	}
 
+	public function testPendingPanelShowsOneSharedNameOutsideThreeColumnTable(): void
+	{
+		$name = 'dns.example.com"><script>';
+		$rows = [];
+		foreach (['192.0.2.1:53', '[2001:db8::1]:5353'] as $address) {
+			$rows[] = ['interface' => 'LAN', 'identity' => 'Interface', 'address' => $address, 'name' => $name,
+				'state' => 'pending', 'reason' => ''];
+		}
+		$doc = new DOMDocument();
+		$this->assertTrue($doc->loadXML('<root>' . pfb_dns_ddr_status_panel([
+			'notice' => '', 'queried' => NULL, 'name' => $name, 'rows' => $rows,
+		]) . '</root>'));
+		$xpath = new DOMXPath($doc);
+		$this->assertSame(1, $xpath->query('//*[@id="pfb-dns-ddr-name" and not(ancestor::table)]')->length);
+		$this->assertSame($name, $xpath->evaluate('string(//*[@id="pfb-dns-ddr-name"])'));
+		$this->assertSame(1, substr_count($doc->textContent, $name));
+		$this->assertSame(0, $xpath->query('//script | //button | //th[text()="DNS Name"]')->length);
+		$this->assertSame(3, $xpath->query('//thead/tr/th')->length);
+		$this->assertSame(2, $xpath->query('//tbody/tr[count(td)=3 and @data-state="pending"]')->length);
+		$this->assertSame(2, $xpath->query('//tbody/tr/td[3]/i[contains(@class,"fa-spinner") and contains(@class,"fa-spin") and contains(@class,"text-muted")]')->length);
+		$this->assertSame(2, $xpath->query('//tbody/tr/td[3]/span[@class="sr-only" and contains(text(),"Checking")]')->length);
+		$this->assertSame(0, $xpath->query('//tbody//i[contains(@class,"text-danger")]')->length);
+		$this->assertSame(1, $xpath->query('//*[@id="pfb-dns-ddr-refresh-status" and @role="status" and @hidden="hidden"]')->length);
+		$this->assertSame(1, $xpath->query('//*[@id="pfb-dns-status-ddr"]//*[@id="pfb-dns-status-ddr_panel-body"]')->length);
+	}
+
 	public function testAccessibleHouseTableEscapesAllValuesAndHasNoManualOrRawControl(): void
 	{
 		$hostile = '<script>" & label</script>';
