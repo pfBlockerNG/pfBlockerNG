@@ -3617,16 +3617,16 @@ function pfb_dns_listen_family_addresses(array $vips): array {
  * Issue #3693: the DHCP/RA DNS-server lists that get no Resolver VIP. Foreign: names a server that is neither the interface's own
  * address nor ours. Frozen: non-empty while the interface's own address is unknown, so the list and its record stay as they are.
  *
- * @param array<int,string> $addresses Resolver VIP per family
+ * @param array<int,?string> $addresses Resolver VIP per family; absent is unmanaged, NULL is VIP-only without that family
  * @param array<string,mixed> $added decoded gen/pfb_dns_listen_added
- * @return array{0:array<string,array{interface:string,type:string,servers:list<string>,vip:string}>,1:array<string,array{interface:string,type:string}>} foreign and frozen, by path
+ * @return array{0:array<string,array{interface:string,type:string,servers:list<string>,vip:?string,family?:int}>,1:array<string,array{interface:string,type:string}>} foreign and frozen, by path
  */
 function pfb_dns_listen_foreign_scopes(array $addresses, array $added): array {
 	$canonical = static fn (string $address): string => ($packed = @inet_pton($address)) === FALSE ? $address : (string) inet_ntop($packed);
 	$foreign = [];
 	$frozen = [];
 	foreach (['dhcpd' => 4, 'dhcpdv6' => 6] as $section => $family) {
-		if (!isset($addresses[$family])) {
+		if (!array_key_exists($family, $addresses)) {
 			continue;
 		}
 		foreach (config_get_path($section, []) as $interface => $settings) {
@@ -3636,10 +3636,49 @@ function pfb_dns_listen_foreign_scopes(array $addresses, array $added): array {
 			$interface = (string) $interface;
 			$own = $family === 4 ? get_interface_ip($interface) : get_interface_ipv6($interface);
 			$lists = $family === 4 ? ['dnsserver' => 'DHCPv4'] : ['dnsserver' => 'DHCPv6'] + (isset($settings['rasamednsasdhcp6']) ? [] : ['radnsserver' => 'RA']);
+			$automatic = [];
+			$shared_ra = isset($settings['rasamednsasdhcp6']);
+			if ($addresses[$family] === NULL) {
+				$valid = $family === 4 ? is_ipaddrv4($own) : is_ipaddrv6($own);
+				$local_dns = config_path_enabled('dnsmasq') || config_path_enabled('unbound');
+				$system = config_get_path('system/dnsserver', []);
+				$system_dns = array_values(array_filter(is_array($system) ? $system : [], $family === 4 ? 'is_ipaddrv4' : 'is_ipaddrv6'));
+				$enabled = config_path_enabled("interfaces/{$interface}");
+				$pppoe = $family === 6 && str_contains($interface, 'poes');
+				$configured = get_configured_interface_list();
+				if (isset($settings['enable']) && (isset($configured[$interface]) || $pppoe) && ($valid || $pppoe)
+				    && ($family === 4 || $enabled || $pppoe) && ($family === 4 || ($settings['dhcp6c-dns'] ?? '') !== 'disabled')) {
+					$automatic['dnsserver'] = $local_dns && $valid ? [$own] : ($family === 6 && empty($system[0]) ? [] : $system_dns);
+				}
+				if ($family === 6 && $enabled && ($settings['radvd-dns'] ?? '') !== 'disabled') {
+					// Core's dynamic track6 pass needs an explicit DNS flag; the manual pass defaults to automatic DNS.
+					$manual = $settings !== [] && $valid && ($settings['ramode'] ?? $settings['mode'] ?? '') !== 'disabled';
+					$track = config_get_path("interfaces/{$interface}/track6-interface", '');
+					$dynamic = !$manual && config_get_path("interfaces/{$interface}/ipaddrv6") === 'track6'
+					    && is_string($track) && $track !== '' && !empty(config_get_path("interfaces/{$track}"))
+					    && ($settings['ramode'] ?? '') !== 'disabled' && isset($settings['radvd-dns']);
+					$fallback = !$manual || ($shared_ra ? empty($settings['dnsserver']) : !is_array($settings['radnsserver'] ?? NULL));
+					if (($manual || $dynamic) && $fallback) {
+						$ra_dns = $local_dns ? ($valid ? [$own] : []) : $system_dns;
+						$list = $shared_ra ? 'dnsserver' : 'radnsserver';
+						$automatic[$list] = array_values(array_unique([...($automatic[$list] ?? []), ...$ra_dns]));
+						if ($shared_ra && $ra_dns !== []) {
+							$lists[$list] = 'DHCPv6/RA';
+						}
+					}
+				}
+			}
 			foreach ($lists as $list => $type) {
 				$path = "{$section}/{$interface}/{$list}";
 				$stored = $settings[$list] ?? [];
 				$entries = array_values(array_filter(is_array($stored) ? $stored : [], static fn ($server): bool => is_string($server) && $server !== ''));
+				if ($addresses[$family] === NULL) {
+					$servers = $entries === [] ? ($automatic[$list] ?? []) : $entries;
+					if ($servers !== []) {
+						$foreign[$path] = ['interface' => $interface, 'type' => $type, 'servers' => $servers, 'vip' => NULL, 'family' => $family];
+					}
+					continue;
+				}
 				if (!is_string($own)) {
 					if ($entries !== []) {
 						$frozen[$path] = ['interface' => $interface, 'type' => $type];
@@ -3691,9 +3730,14 @@ function pfb_validate_dns_listen_vip_only_post(array $post): array {
 		return [gettext('VIP-only mode requires at least one available Resolver VIP family. Select a VIP or Create VIP automatically, or disable VIP-only mode.')];
 	}
 	$added = json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE);
-	[$foreign, $frozen] = pfb_dns_listen_foreign_scopes($addresses, is_array($added) ? $added : []);
+	[$foreign, $frozen] = pfb_dns_listen_foreign_scopes($addresses + [4 => NULL, 6 => NULL], is_array($added) ? $added : []);
 	$errors = [];
 	foreach ($foreign + $frozen as $scope) {
+		if (isset($scope['family'])) {
+			$errors[] = sprintf(gettext('VIP-only mode: the %1$s DNS scope on %2$s can advertise IPv%3$d DNS without a selected Resolver VIP. Select the IPv%3$d VIP family, or disable that family DNS advertising using the core DHCP/RA controls and deliberately reconfigure any stored DNS-server list. No settings were saved.'),
+				$scope['type'], htmlspecialchars($scope['interface']), $scope['family']);
+			continue;
+		}
 		$errors[] = sprintf(gettext('VIP-only mode: reconfigure the configured %1$s DNS-server list on %2$s deliberately before enabling this mode, including dormant configurations; it contains administrator-selected servers or its interface address is unknown. No settings were saved.'),
 			$scope['type'], htmlspecialchars($scope['interface']));
 	}
@@ -3707,12 +3751,18 @@ function pfb_validate_dns_listen_vip_only_post(array $post): array {
  */
 function pfb_dns_listen_foreign_warnings(): array {
 	$added = json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE);
-	[$foreign] = pfb_dns_listen_foreign_scopes(pfb_dns_listen_family_addresses(pfb_dns_listen_vips()), is_array($added) ? $added : []);
+	$addresses = pfb_dns_listen_family_addresses(pfb_dns_listen_vips());
+	[$foreign] = pfb_dns_listen_foreign_scopes(pfb_dns_listen_vip_only() ? $addresses + [4 => NULL, 6 => NULL] : $addresses, is_array($added) ? $added : []);
 	$descriptions = get_configured_interface_with_descr();
 	$warnings = [];
 	foreach ($foreign as $scope) {
 		$description = $descriptions[$scope['interface']] ?? '';
 		$name = $description === '' ? $scope['interface'] : "{$description} ({$scope['interface']})";
+		if ($scope['vip'] === NULL) {
+			$warnings[] = sprintf(gettext('VIP-only mode: the %1$s DNS scope on %2$s can advertise IPv%3$d DNS without a selected Resolver VIP. Select that VIP family or disable its DNS advertising using the core DHCP/RA controls; pfBlockerNG left the scope unchanged.'),
+				$scope['type'], htmlspecialchars($name), $scope['family']);
+			continue;
+		}
 		$warnings[] = sprintf(
 			gettext('Resolver addresses: the %1$s DNS servers of %2$s include %3$s, which pfBlockerNG did not add, so the Resolver VIP %4$s is not added there. Add %4$s to that list by hand if clients should use it.'),
 			$scope['type'],
@@ -3750,8 +3800,12 @@ function pfb_dns_listen_vips_apply(): bool {
 	$raw = (string) PfbConfig::read('gen/pfb_dns_listen_added');
 	$added = json_decode($raw, TRUE);
 	$added = is_array($added) ? $added : [];
-	[$foreign, $frozen] = pfb_dns_listen_foreign_scopes($addresses, $added);
+	[$foreign, $frozen] = pfb_dns_listen_foreign_scopes(pfb_dns_listen_vip_only() ? $addresses + [4 => NULL, 6 => NULL] : $addresses, $added);
 	foreach ($foreign as $scope) {
+		if ($scope['vip'] === NULL) {
+			pfb_logger("\nDNS listener VIP: the {$scope['type']} DNS scope on {$scope['interface']} has no selected IPv{$scope['family']} Resolver VIP; its DNS advertising and ownership record are left unchanged", 1);
+			continue;
+		}
 		pfb_logger("\nDNS listener VIP: the {$scope['type']} DNS servers on {$scope['interface']} name " . implode(', ', $scope['servers']) . ', which pfBlockerNG did not add; the Resolver VIP is not added there', 1);
 	}
 	foreach ($frozen as $scope) {
