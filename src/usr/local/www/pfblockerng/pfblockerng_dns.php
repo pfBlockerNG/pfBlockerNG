@@ -474,7 +474,7 @@ events.push(function() {
 	const rows = Array.from(panelBody.querySelectorAll('tr[data-address]'));
 	let session = 0;
 	let timer = null;
-	const controllers = new Set();
+	let controller = null;
 
 	function setNote(visible) {
 		if (note) {
@@ -488,7 +488,7 @@ events.push(function() {
 		const address = row.getAttribute('data-address');
 		const own = new AbortController();
 		const timeout = setTimeout(function() { own.abort(); }, 15000);
-		controllers.add(own);
+		controller = own;
 		try {
 			const response = await fetch('pfblockerng_dns.php?ajax=ddr&listener=' + encodeURIComponent(address), {
 				cache: 'no-store',
@@ -522,31 +522,27 @@ events.push(function() {
 			}
 		} finally {
 			clearTimeout(timeout);
-			controllers.delete(own);
+			if (controller === own) {
+				controller = null;
+			}
 		}
 	}
 
-	// Up to four rows are checked at once; each row is its own request, taken in table order.
 	async function sweep(current) {
 		panelBody.setAttribute('aria-busy', 'true');
 		let complete = true;
-		let next = 0;
-		async function worker() {
-			while (next < rows.length && current === session) {
-				const row = rows[next++];
-				try {
-					await check(row, current);
-				} catch (error) {
-					if (current === session) {
-						complete = false;
-						setNote(true);
-					}
+		for (const row of rows) {
+			try {
+				await check(row, current);
+			} catch (error) {
+				if (current === session) {
+					complete = false;
+					setNote(true);
 				}
 			}
-		}
-		await Promise.all(Array.from({length: Math.min(4, rows.length)}, worker));
-		if (current !== session) {
-			return;
+			if (current !== session) {
+				return;
+			}
 		}
 		panelBody.removeAttribute('aria-busy');
 		if (complete) {
@@ -573,7 +569,9 @@ events.push(function() {
 		session += 1;
 		clearTimeout(timer);
 		timer = null;
-		controllers.forEach(function(own) { own.abort(); });
+		if (controller) {
+			controller.abort();
+		}
 		panelBody.removeAttribute('aria-busy');
 	});
 	window.addEventListener('pageshow', function(event) {
