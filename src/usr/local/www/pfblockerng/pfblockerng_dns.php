@@ -37,6 +37,10 @@ if (($_GET['ajax'] ?? '') === 'ddr') {
 	session_write_close();
 	// No listener is the metadata panel. A non-string (an array) is refused before any probe.
 	$listener = $_GET['listener'] ?? NULL;
+	if ($listener !== NULL && !is_string($listener)) {
+		http_response_code(400);
+		exit;
+	}
 	header('Content-Type: application/json');
 	echo json_encode(['html' => pfb_dns_ddr_status_panel(pfb_dns_ddr_status($listener))]);
 	exit;
@@ -466,15 +470,9 @@ events.push(function() {
 	}
 	const note = document.getElementById('pfb-dns-ddr-refresh-status');
 	const rows = Array.from(panelBody.querySelectorAll('tr[data-address]'));
-	const configuredName = nameOf(panelBody);
 	let session = 0;
 	let timer = null;
 	let controller = null;
-
-	function nameOf(root) {
-		const node = root.querySelector('#pfb-dns-ddr-name');
-		return node ? node.textContent.trim() : '';
-	}
 
 	function setNote(visible) {
 		if (note) {
@@ -505,7 +503,7 @@ events.push(function() {
 			}
 			const parsed = new DOMParser().parseFromString(result.html, 'text/html');
 			const panels = parsed.querySelectorAll('#pfb-dns-status-ddr > #pfb-dns-status-ddr_panel-body');
-			if (panels.length !== 1 || nameOf(panels[0]) !== configuredName) {
+			if (panels.length !== 1) {
 				throw new Error('Missing DDR panel');
 			}
 			const returned = panels[0].querySelectorAll('tr[data-address]');

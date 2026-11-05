@@ -94,20 +94,17 @@ def test_dns_ddr_initial_page_keeps_pending_rows_and_shared_name(gw: Gateway, ga
     assert table_match, section
     table = ET.fromstring(table_match.group())
     assert [cell.text for cell in table.findall("./thead/tr/th")] == ["Interface", "Address", "State"]
-    names = re.findall(r'<([a-z]+)\b[^>]*\bid="pfb-dns-ddr-name"[^>]*>.*?</\1>', section, re.DOTALL)
-    assert len(names) == 1, section
-    name_match = re.search(r'<[a-z]+\b[^>]*\bid="pfb-dns-ddr-name"[^>]*>.*?</[a-z]+>', section, re.DOTALL)
-    assert name_match is not None and name_match.start() < table_match.start(), section
-    name = ET.fromstring(name_match.group())
-    assert "".join(name.itertext()).rstrip(".").lower() == DDR_DNS_NAME.rstrip(".").lower()
+    assert _shared_name(response.text).rstrip(".").lower() == DDR_DNS_NAME.rstrip(".").lower()
     assert sum(DDR_DNS_NAME.lower() in text.lower() for text in table.itertext()) == 0
     listeners = helpers.php_eval(
         gw.vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
-        "echo json_encode(pfb_dns_proxy_listener_list()['listening']['udp+tcp']);",
+        "echo json_encode(['bound'=>pfb_dns_proxy_listener_list()['listening']['udp+tcp']]);",
     )
     assert listeners.returncode == 0, listeners.stderr
-    bound = json.loads(listeners.stdout)
+    match = re.search(r'\{"bound":.*\}', listeners.stdout)
+    assert match, listeners.stdout
+    bound = json.loads(match.group())["bound"]
     rows = table.findall("./tbody/tr")
     assert bound and {row.attrib["data-address"] for row in rows} == set(bound), listeners.stdout
     assert len(rows) == len(bound), section
@@ -336,12 +333,10 @@ def _status_rows(html: str) -> dict[str, ET.Element]:
 
 
 def _shared_name(html: str) -> str:
-    """The configured DNS Name, shown once above the table."""
-    section = panel(html, PANEL_ID)
-    assert section is not None, html
-    match = re.search(r'<([a-z]+)\b[^>]*\bid="pfb-dns-ddr-name"[^>]*>(.*?)</\1>', section, re.DOTALL)
-    assert match, section
-    return unescape(re.sub(r"<[^>]+>", "", match.group(2))).strip()
+    """The applied DNS Name, shown once in the pfB-DNS Status overview."""
+    match = re.search(r'<tr id="pfb-dns-status-name"><th>DNS Name</th><td>([^<]*)</td></tr>', html)
+    assert match, html
+    return unescape(match.group(1)).strip()
 
 
 def _page_html(webui: WebUI) -> str:
@@ -450,7 +445,6 @@ def test_dns_ddr_listener_checks_agree_with_directed_svcb_without_writing_config
         html = _listener_html(webui, listener)
         checked = _status_rows(html)
         assert set(checked) == {listener}, html
-        assert _shared_name(html).rstrip(".").lower() == DDR_TARGET.rstrip(".").lower(), html
         row = checked[listener]
         host, _, port = listener.rpartition(":")
         host = str(ipaddress.ip_address(host.strip("[]")))

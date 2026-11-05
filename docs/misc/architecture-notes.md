@@ -753,7 +753,7 @@ transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the
 `test_smoke_dns_gateway.py` (native all-transport tables, also with Unbound stopped while gateway bindings remain) and the
 `ui_browser` test in `test_browser_dns.py`.
 
-**DDR advertisement checks (#3702).** The page-only section loads every bound plain DNS listener as pending, with the configured DNS Name shown once above the table. Each listener is then checked by its own authenticated, read-only AJAX request, one after another, and the sweep repeats 30 seconds after it finishes. A refresh changes only the State cells: the form, the collapse state and the row elements stay.
+**DDR advertisement checks (#3702).** The page-only section loads every bound plain DNS listener as pending; the applied DNS Name is shown once in the **pfB-DNS Status** overview, beside the **pfB-DNS** and **DNSBL** on/off icons. Each listener is then checked by its own authenticated, read-only AJAX request, one after another, and the sweep repeats 30 seconds after it finishes. A refresh changes only the State cells: the form, the collapse state, the row elements and the last results stay, even when a refresh fails.
 The table has Interface | Address | State columns and uses the listener tables' accessible check/cross icons, never raw
 command output. Green requires matching SVCB targets, transport priorities, ALPNs, ports, address hints, DoH paths and the complete
 Additional address set. Where the gateway owns the DNS Name, directed A/AAAA queries must also match its per-address answer map,

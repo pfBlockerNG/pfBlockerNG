@@ -15834,6 +15834,9 @@ function pfb_dns_status(): array {
 	$ready = pfb_dns_proxy_ready();
 	// Running requires the gateway and its Unbound upstream; the front-end evidence below depends only on the gateway's own readiness.
 	$service = pfb_dns_proxy_serving_ready() ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
+	// The overview's pfB-DNS and DNSBL ticks are independent; the DNS Name is the one the running command applies.
+	$dnsbl = pfb_dnsbl_active();
+	$off = ['active' => FALSE, 'dnsbl' => $dnsbl, 'name' => ''];
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
 		return [
 			'service'    => $service,
@@ -15841,7 +15844,7 @@ function pfb_dns_status(): array {
 			    ? 'Recovery required: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings, but pfBlockerNG has no valid saved copy of its previous settings to put back. Correct the Resolver in Services > DNS Resolver (see the notices).'
 			    : 'Recovery required: the saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so whether pfBlockerNG moved the Resolver cannot be confirmed, and nothing was put back; manual repair is required in Services > DNS Resolver (see the notices).',
 			'transports' => NULL,
-		];
+		] + $off;
 	}
 	if ($saved === NULL) {
 		if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
@@ -15858,7 +15861,7 @@ function pfb_dns_status(): array {
 			'service'    => 'Not in use',
 			'mode'       => $mode,
 			'transports' => NULL,
-		];
+		] + $off;
 	}
 
 	if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
@@ -15898,7 +15901,9 @@ function pfb_dns_status(): array {
 			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows($entries, $labels)];
 		}
 	}
-	return ['service' => $service, 'mode' => $mode, 'transports' => $transports];
+	$active = ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['enable'] ?? NULL) === PfbToggle::On;
+	$name = ($active && preg_match("/ --dns-name '([^']*)'/", pfb_dns_proxy_rc_command(), $applied) === 1) ? $applied[1] : '';
+	return ['service' => $service, 'mode' => $mode, 'transports' => $transports, 'active' => $active, 'dnsbl' => $dnsbl, 'name' => $name];
 }
 
 /**
@@ -16291,8 +16296,7 @@ function pfb_dns_ddr_status(?string $only = NULL): array {
  */
 function pfb_dns_ddr_status_panel(array $status): string {
 	$body = '<p>DDR and DNS Name answers are checked automatically against current settings. '
-	    . 'This does not check certificates or encrypted endpoint connectivity.</p>'
-	    . '<p>DNS Name: <span id="pfb-dns-ddr-name">' . htmlspecialchars($status['name']) . '</span></p>';
+	    . 'This does not check certificates or encrypted endpoint connectivity.</p>';
 	if ($status['queried'] !== NULL) {
 		$body .= '<p>Checked: ' . htmlspecialchars($status['queried']) . '</p>';
 	}
@@ -16351,8 +16355,12 @@ function pfb_dns_status_panel(array $status): string {
 	$section = static fn (string $id, string $title, string $body): string => "<div class=\"panel panel-default\" id=\"{$id}\"><div class=\"panel-heading\">"
 	    . "<h2 class=\"panel-title\">{$title}<span class=\"widget-heading-icon\"><a data-toggle=\"collapse\" href=\"#{$id}_panel-body\" aria-label=\"Toggle {$title}\"><i class=\"fa-solid fa-plus-circle\"></i></a></span></h2>"
 	    . "</div><div id=\"{$id}_panel-body\" class=\"panel-body collapse in\">{$body}</div></div>";
+	$toggle = static fn (string $id, string $label, bool $on): string => "<tr id=\"pfb-dns-status-{$id}\"><th>{$label}</th><td>"
+	    . ($on ? '<i class="fa-solid fa-check-circle text-success" title="On" aria-hidden="true"></i><span class="sr-only">On</span>'
+	        : '<i class="fa-solid fa-times-circle text-danger" title="Off" aria-hidden="true"></i><span class="sr-only">Off</span>') . '</td></tr>';
 	$html = $section('pfb-dns-status-overview', 'pfB-DNS Status', '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>'
-	    . htmlspecialchars($status['service']) . '</td></tr><tr id="pfb-dns-status-mode"><th>Mode</th><td>' . htmlspecialchars($status['mode']) . '</td></tr></table>');
+	    . htmlspecialchars($status['service']) . '</td></tr>' . $toggle('pfbdns', 'pfB-DNS', $status['active']) . $toggle('dnsbl', 'DNSBL', $status['dnsbl'])
+	    . '<tr id="pfb-dns-status-name"><th>DNS Name</th><td>' . htmlspecialchars($status['name'] === '' ? 'None' : $status['name']) . '</td></tr></table>');
 	foreach (['plain' => 'Plain DNS', 'dot' => 'DNS over TLS', 'doh' => 'DNS over HTTPS', 'doq' => 'DNS over QUIC'] as $key => $title) {
 		$transport = $status['transports'][$key] ?? NULL;
 		if ($transport === NULL) {

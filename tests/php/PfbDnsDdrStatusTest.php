@@ -124,9 +124,7 @@ final class PfbDnsDdrStatusTest extends TestCase
 			'notice' => '', 'queried' => NULL, 'name' => $name, 'rows' => $rows,
 		]) . '</root>'));
 		$xpath = new DOMXPath($doc);
-		$this->assertSame(1, $xpath->query('//*[@id="pfb-dns-ddr-name" and not(ancestor::table)]')->length);
-		$this->assertSame($name, $xpath->evaluate('string(//*[@id="pfb-dns-ddr-name"])'));
-		$this->assertSame(1, substr_count($doc->textContent, $name));
+		$this->assertSame(0, substr_count($doc->textContent, $name), 'the DNS Name belongs to the pfB-DNS Status overview, not the DDR panel');
 		$this->assertSame(0, $xpath->query('//script | //button | //th[text()="DNS Name"]')->length);
 		$this->assertSame(3, $xpath->query('//thead/tr/th')->length);
 		$this->assertSame(2, $xpath->query('//tbody/tr[count(td)=3 and @data-state="pending"]')->length);
@@ -154,7 +152,6 @@ final class PfbDnsDdrStatusTest extends TestCase
 		$this->assertSame(8, $xpath->query('//i[contains(@class,"text-danger")]')->length);
 		$this->assertSame(9, $xpath->query('//span[@class="sr-only"]')->length);
 		$this->assertSame($hostile, $xpath->evaluate('string(//tbody/tr/td[1])'));
-		$this->assertSame($hostile, $xpath->evaluate('string(//*[@id="pfb-dns-ddr-name"])'));
 		$this->assertSame(1, $xpath->query('//div[@class="table-responsive"]/table')->length);
 		$this->assertSame('#pfb-dns-status-ddr_panel-body', $xpath->evaluate('string(//a[@data-toggle="collapse"]/@href)'));
 	}

@@ -2395,10 +2395,8 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             checked_rows = checked_root.findall(".//tbody/tr")
             assert len(checked_rows) == 1 and checked_rows[0].attrib["data-address"] == endpoint, checked_section
             assert checked_rows[0].attrib["data-state"] == "matched", checked_section
-            name_field = checked_root.find(".//*[@id='pfb-dns-ddr-name']")
-            assert name_field is not None, checked_section
-            name = "".join(name_field.itertext())
-            assert name.rstrip(".").lower() == DDR_TARGET.rstrip(".").lower(), name
+        applied = re.search(r'<tr id="pfb-dns-status-name"><th>DNS Name</th><td>([^<]*)</td></tr>', status.text)
+        assert applied and applied.group(1).rstrip(".").lower() == DDR_TARGET.rstrip(".").lower(), status.text
     finally:
         gui.post(
             DNS_GENERAL_PAGE,

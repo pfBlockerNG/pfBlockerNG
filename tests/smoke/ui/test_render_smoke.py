@@ -2129,14 +2129,21 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
     )
     status_html = html[html.index('id="pfb-dns-status"') :]
     service = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]+)</td></tr>', status_html)
-    mode = re.search(r'<tr id="pfb-dns-status-mode"><th>Mode</th><td>([^<]+)</td></tr>', status_html)
-    assert service and mode, "the pfB-DNS status panel has no Service and Mode rows"
+    toggles = re.findall(
+        r'<tr id="pfb-dns-status-(pfbdns|dnsbl)"><th>[^<]+</th><td><i [^>]*></i><span class="sr-only">(On|Off)</span>',
+        status_html,
+    )
+    name = re.search(r'<tr id="pfb-dns-status-name"><th>DNS Name</th><td>([^<]+)</td></tr>', status_html)
+    assert service and name and [key for key, _ in toggles] == ["pfbdns", "dnsbl"], (
+        "the pfB-DNS status panel has no Service, pfB-DNS, DNSBL and DNS Name rows"
+    )
+    assert toggles[0][1] == "Off" and name.group(1) == "None", "a default box applies neither pfB-DNS nor a DNS Name"
     assert service.group(1) == "Not in use", (
         f"a default box has not moved the Resolver; the Service row says {service.group(1)!r}"
     )
     # the overview table closes its section's body, the section and the status panel: no transport section follows
     assert status_html.split("</table>", 1)[1].startswith("</div></div></div>"), (
-        "a box with nothing moved claims no transport: nothing may follow the Service and Mode rows"
+        "a box with nothing moved claims no transport: nothing may follow the overview rows"
     )
 
 
