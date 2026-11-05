@@ -753,14 +753,17 @@ transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the
 `test_smoke_dns_gateway.py` (native all-transport tables, also with Unbound stopped while gateway bindings remain) and the
 `ui_browser` test in `test_browser_dns.py`.
 
-**DDR advertisement observations (#3699).** A separate page-only section queries the actual bound plain DNS listeners on demand,
-using installed `drill` under a bounded probe/request budget. It shows interface/VIP identity, target address, complete escaped
-stdout/stderr and query time. IPv4 uses a loopback source; IPv6 uses `::1` only for addresses currently assigned to `lo0`
-(`net_get_interfaces()`), otherwise the kernel selects the source. The Resolver ACL may refuse that local source.
-Query errors/refusals, timeouts, no advertisements and unqueried rows remain distinct. Classification requires the intended
-`_dns.resolver.arpa. IN SVCB` question; a positive label also requires an SVCB answer, not merely a nonzero answer count.
-An advertisement is not proof of client ACL access, certificate acceptance or reverse-proxy reachability. The widget does not run
-these probes. Live render/browser coverage and the managed-VIP wire scenario exercise the real query output.
+**DDR advertisement checks (#3702).** The page-only section loads every bound plain DNS listener as pending; the applied DNS Name is shown once in the **pfB-DNS Status** overview, beside the **pfB-DNS** and **DNSBL** on/off icons. Each listener is then checked by its own authenticated, read-only AJAX request, one after another, and the sweep repeats 30 seconds after it finishes. A refresh changes only the State cells: the form, the collapse state, the row elements and the last results stay, even when a refresh fails.
+The table has Interface | Address | State columns and uses the listener tables' accessible check/cross icons, never raw
+command output. Green requires matching SVCB targets, transport priorities, ALPNs, ports, address hints, DoH paths and the complete
+Additional address set. Where the gateway owns the DNS Name, directed A/AAAA queries must also match its per-address answer map,
+including an absent family's NOERROR/NODATA response. Unmapped loopback checks only SVCB and states that limitation in its hover
+and screen-reader text; other unmapped addresses remain unverified. Disabled DDR, missing encrypted listeners and query failures
+never turn green. A failed or interrupted refresh keeps every row, its element and its last results, and shows a small status note until a complete sweep succeeds.
+Installed `drill` runs under bounded probe/request deadlines because PHP's standard DNS API cannot select a nameserver.
+IPv4 uses a loopback source; IPv6 uses `::1` only for addresses assigned to `lo0`, otherwise the kernel selects the source.
+These local checks do not prove client ACL access, certificate acceptance or encrypted endpoint reachability. The widget does
+not run them. Coverage includes PHP semantic/collection tests, live render/browser checks and the managed-VIP wire scenario.
 
 **Dashboard widget row (issue #3588).** While pfB-DNS is on, the widget's status header gains a row above the IP and DNSBL rows: the
 service, then DNS, DoT, DoH and DoQ, each an icon (green on and working, yellow on with a fault, red off) whose hover title says why.

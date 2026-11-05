@@ -6149,6 +6149,19 @@ function pfb_dns_proxy_upstream_address(): string {
 	return get_interface_ip('lo0') === '127.0.0.1' ? '127.0.0.1' : '::1';
 }
 
+/** The running gateway's command line, read from the process table ($pfb['ps'], default /bin/ps) for the PID the ready marker names; '' when unknown. */
+function pfb_dns_proxy_running_command(): string {
+	global $pfb;
+
+	$gateway = rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n");
+	$lines = [];
+	if ($gateway === '' || pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg($gateway) . ' 2>/dev/null',
+	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
+		return '';
+	}
+	return trim(implode("\n", $lines));
+}
+
 /**
  * The upstream the RUNNING gateway forwards to must have both transports owned by the live Unbound pidfile's process. The endpoint
  * is the one in the command line the gateway was started with, read from the process table ($pfb['ps'], default /bin/ps) for the PID the ready
@@ -6164,13 +6177,7 @@ function pfb_dns_proxy_upstream_ready(): bool {
 		return FALSE;
 	}
 	$pid = rtrim((string) @file_get_contents($pidfile), "\n");
-	$gateway = rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n");
-	$lines = [];
-	if (pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg($gateway) . ' 2>/dev/null',
-	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
-		return FALSE;
-	}
-	$command = trim(implode("\n", $lines));
+	$command = pfb_dns_proxy_running_command();
 	if (preg_match('~\A' . preg_quote(PFB_DNS_PROXY_DIR, '~') . '/bin/freebsd-(?:amd64|arm64)/pfb-dns(?=[ \t]|\z)~', $command) !== 1 ||
 	    substr_count($command, '--upstream') !== 1 ||
 	    preg_match('~[ \t]--upstream[ \t]+([^ \t]+)(?=[ \t]|\z)~', $command, $upstream) !== 1) {
@@ -15825,7 +15832,7 @@ function pfb_dns_proxy_port(): string {
  * A gateway that is not ready lists the command's addresses as `configured_not_bound`; a ready gateway that gives no list, as
  * `configured_unconfirmed`.
  *
- * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>}
+ * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>,active:bool,dnsbl:bool,name:string}
  */
 function pfb_dns_status(): array {
 	global $pfb;
@@ -15834,6 +15841,9 @@ function pfb_dns_status(): array {
 	$ready = pfb_dns_proxy_ready();
 	// Running requires the gateway and its Unbound upstream; the front-end evidence below depends only on the gateway's own readiness.
 	$service = pfb_dns_proxy_serving_ready() ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
+	// The overview's pfB-DNS and DNSBL ticks are independent; the DNS Name is the one the running command applies.
+	$dnsbl = pfb_dnsbl_active();
+	$off = ['active' => FALSE, 'dnsbl' => $dnsbl, 'name' => ''];
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
 		return [
 			'service'    => $service,
@@ -15841,7 +15851,7 @@ function pfb_dns_status(): array {
 			    ? 'Recovery required: the DNS Resolver still carries pfBlockerNG\'s DNS proxy settings, but pfBlockerNG has no valid saved copy of its previous settings to put back. Correct the Resolver in Services > DNS Resolver (see the notices).'
 			    : 'Recovery required: the saved copy of the DNS Resolver\'s previous settings (pfb_dns_saved) is invalid, so whether pfBlockerNG moved the Resolver cannot be confirmed, and nothing was put back; manual repair is required in Services > DNS Resolver (see the notices).',
 			'transports' => NULL,
-		];
+		] + $off;
 	}
 	if ($saved === NULL) {
 		if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
@@ -15858,7 +15868,7 @@ function pfb_dns_status(): array {
 			'service'    => 'Not in use',
 			'mode'       => $mode,
 			'transports' => NULL,
-		];
+		] + $off;
 	}
 
 	if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
@@ -15898,7 +15908,9 @@ function pfb_dns_status(): array {
 			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows($entries, $labels)];
 		}
 	}
-	return ['service' => $service, 'mode' => $mode, 'transports' => $transports];
+	$on = ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['enable'] ?? NULL) === PfbToggle::On;
+	$name = ($on && $ready && preg_match('~[ \t]--dns-name[ \t]+([^ \t]+)~', pfb_dns_proxy_running_command(), $applied) === 1) ? $applied[1] : '';
+	return ['service' => $service, 'mode' => $mode, 'transports' => $transports, 'active' => $on, 'dnsbl' => $dnsbl, 'name' => $name];
 }
 
 /**
@@ -15927,48 +15939,204 @@ function pfb_dns_status_rows(array $entries, array $labels): array {
 	return array_values($rows);
 }
 
-/**
- * Classify drill's decoded response without interpreting SVCB parameters; keep both output streams verbatim.
- *
- * @return array{state:string,stdout:string,stderr:string}
- */
-function pfb_dns_ddr_result(string $stdout, string $stderr, int $exit): array {
-	$state = 'error';
+/** Decode only complete drill replies for the intended question; never expose subprocess output to the page. */
+function pfb_dns_ddr_result(string $stdout, int $exit, string $name = '_dns.resolver.arpa.', string $type = 'SVCB'): array {
+	$error = ['state' => 'error', 'reason' => 'Invalid or unsuccessful DNS response'];
 	if ($exit === 124 || $exit === 137) {
-		$state = 'timeout';
-	} elseif ($exit === 0
-	    && preg_match('/^;; ->>HEADER<<- .*rcode: NOERROR,/m', $stdout) === 1
-	    && preg_match('/^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$/mi', $stdout) === 1
-	    && preg_match('/^;; flags: .*;\s*QUERY: \d+, ANSWER: (\d+),/m', $stdout, $answer) === 1) {
-		if ((int) $answer[1] === 0) {
-			$state = 'empty';
+		return ['state' => 'timeout', 'reason' => 'Query timed out'];
+	}
+	if ($exit !== 0 || strlen($stdout) > 65536 || preg_match('/[^\x09\x0a\x0d\x20-\x7e]/', $stdout) === 1) {
+		return $error;
+	}
+	$owner = strtolower(rtrim($name, '.'));
+	$sections = ['ANSWER' => [], 'AUTHORITY' => [], 'ADDITIONAL' => []];
+	$seen = [];
+	$header = FALSE;
+	$counts = NULL;
+	$question = FALSE;
+	$section = '';
+	foreach (explode("\n", $stdout) as $line) {
+		$line = trim($line);
+		if ($line === '') {
+			continue;
+		}
+		if (str_starts_with($line, ';; ->>HEADER<<-')) {
+			if ($header || preg_match('/^;; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: [0-9]+$/D', $line) !== 1) {
+				return $error;
+			}
+			$header = TRUE;
+		} elseif (str_starts_with($line, ';; flags:')) {
+			if (!$header || $counts !== NULL || preg_match('/^;; flags: ([a-z ]+); QUERY: 1, ANSWER: ([0-9]+), AUTHORITY: ([0-9]+), ADDITIONAL: ([0-9]+)$/D', $line, $m) !== 1) {
+				return $error;
+			}
+			$flags = explode(' ', trim($m[1]));
+			if (!in_array('qr', $flags, TRUE) || in_array('tc', $flags, TRUE)) {
+				return $error;
+			}
+			$counts = array_map('intval', array_slice($m, 2));
+		} elseif (preg_match('/^;; (QUESTION|ANSWER|AUTHORITY|ADDITIONAL) SECTION:$/D', $line, $m) === 1) {
+			$next = $m[1];
+			$order = ['QUESTION', 'ANSWER', 'AUTHORITY', 'ADDITIONAL'];
+			if ($counts === NULL || isset($seen[$next]) || $next !== $order[count($seen)]) {
+				return $error;
+			}
+			$seen[$next] = TRUE;
+			$section = $next;
+		} elseif ($section === 'QUESTION' && str_starts_with($line, ';; ')) {
+			if ($question || preg_match('/^;; ([A-Za-z0-9_.-]+)[ \t]+IN[ \t]+(SVCB|A|AAAA)$/D', $line, $m) !== 1
+			    || !in_array(strtolower($m[1]), [$owner, "{$owner}."], TRUE) || $m[2] !== $type) {
+				return $error;
+			}
+			$question = TRUE;
+		} elseif (str_starts_with($line, ';;')) {
+			if ($section !== 'ADDITIONAL' || preg_match('/^;; (?:Query time:|EDNS: version 0;|SERVER:|WHEN:|MSG SIZE  rcvd:)/', $line) !== 1) {
+				return $error;
+			}
 		} else {
-			$sections = explode(';; ANSWER SECTION:', $stdout, 2);
-			$records = explode(';; AUTHORITY SECTION:', $sections[1] ?? '', 2)[0];
-			if (preg_match('/^\S+\s+\d+\s+IN\s+SVCB\s/mi', $records) === 1) {
-				$state = 'advertised';
+			if (!isset($sections[$section]) || !$question
+			    || preg_match('/^([A-Za-z0-9_.-]+)[ \t]+[0-9]+[ \t]+IN[ \t]+(SVCB|A|AAAA|SOA)[ \t]+(.+)$/D', $line, $m) !== 1) {
+				return $error;
+			}
+			$rrOwner = strtolower(str_ends_with($m[1], '.') ? substr($m[1], 0, -1) : $m[1]);
+			$rrType = $m[2];
+			$data = $m[3];
+			if ($section === 'AUTHORITY') {
+				if ($rrType !== 'SOA' || $rrOwner !== ($type === 'SVCB' ? 'resolver.arpa' : $owner)
+				    || preg_match('/^[A-Za-z0-9.-]+[ \t]+[A-Za-z0-9.-]+(?:[ \t]+[0-9]+){5}$/D', $data) !== 1) {
+					return $error;
+				}
+				$sections[$section][] = $rrOwner;
+			} elseif ($rrType === 'SVCB' && $section === 'ANSWER' && $type === 'SVCB' && $rrOwner === $owner) {
+				$record = pfb_dns_ddr_svcb($data);
+				if ($record === NULL) {
+					return $error;
+				}
+				$sections[$section][] = $record;
+			} elseif (in_array($rrType, ['A', 'AAAA'], TRUE)
+			    && (($section === 'ANSWER' && $type === $rrType && $rrOwner === $owner) || ($section === 'ADDITIONAL' && $type === 'SVCB'))) {
+				$ip = @inet_pton($data);
+				if ($ip === FALSE || strlen($ip) !== ($rrType === 'A' ? 4 : 16) || pfb_ipv4_from_mapped($data) !== NULL) {
+					return $error;
+				}
+				$sections[$section][] = ['owner' => $rrOwner, 'address' => (string) inet_ntop($ip)];
+			} else {
+				return $error;
 			}
 		}
 	}
-	return ['state' => $state, 'stdout' => $stdout, 'stderr' => $stderr];
+	if (!$question || count($seen) !== 4 || $counts !== array_map('count', array_values($sections))) {
+		return $error;
+	}
+	$targets = array_column($sections['ANSWER'], 'target');
+	foreach ($sections['ADDITIONAL'] as $record) {
+		if (!in_array($record['owner'], $targets, TRUE)) {
+			return $error;
+		}
+	}
+	return ['state' => 'ok', 'reason' => '', 'answers' => $type === 'SVCB' ? $sections['ANSWER'] : array_column($sections['ANSWER'], 'address'),
+	    'additional' => array_column($sections['ADDITIONAL'], 'address')];
+}
+
+/** The semantic fields the gateway emits, independent of parameter order, quoting and omitted default ports. */
+function pfb_dns_ddr_svcb(string $data): ?array {
+	$tokens = preg_split('/[ \t]+/', $data);
+	$priority = array_shift($tokens);
+	$target = array_shift($tokens);
+	if (!is_string($priority) || !ctype_digit($priority) || (int) $priority < 1 || (int) $priority > 65535
+	    || !is_string($target) || ($target = pfb_dns_proxy_name_normalized($target)) === NULL || $target === '') {
+		return NULL;
+	}
+	$params = [];
+	foreach ($tokens as $token) {
+		if (preg_match('/^(alpn|port|ipv4hint|ipv6hint|dohpath)=(?:"([A-Za-z0-9:.,\/?{}=-]+)"|([A-Za-z0-9:.,\/?{}=-]+))$/D', $token, $m) !== 1 || isset($params[$m[1]])) {
+			return NULL;
+		}
+		$params[$m[1]] = $m[2] !== '' ? $m[2] : $m[3];
+	}
+	$alpn = $params['alpn'] ?? '';
+	if (preg_match('/^[a-z0-9]+(?:,[a-z0-9]+)*$/D', $alpn) !== 1) {
+		return NULL;
+	}
+	$port = isset($params['port']) ? pfb_dns_proxy_listener_port($params['port']) : ($alpn === 'h2' ? '443' : '853');
+	if ($port === NULL) {
+		return NULL;
+	}
+	$hints = [];
+	foreach (['ipv4hint' => 4, 'ipv6hint' => 16] as $key => $length) {
+		if (!isset($params[$key])) {
+			continue;
+		}
+		foreach (explode(',', $params[$key]) as $hint) {
+			$packed = @inet_pton($hint);
+			if ($packed === FALSE || strlen($packed) !== $length || pfb_ipv4_from_mapped($hint) !== NULL) {
+				return NULL;
+			}
+			$hints[] = (string) inet_ntop($packed);
+		}
+	}
+	if ($hints === []) {
+		return NULL;
+	}
+	sort($hints);
+	return ['priority' => (int) $priority, 'target' => strtolower($target), 'alpn' => $alpn, 'port' => (int) $port,
+	    'hint' => implode(',', $hints), 'path' => $params['dohpath'] ?? ''];
+}
+
+/** Compare whole record sets; an absent owned mapping limits the successful check to SVCB only. */
+function pfb_dns_ddr_compare(array $expected, array $svcb, ?array $answers, array $names): array {
+	if ($svcb['state'] !== 'ok') {
+		return ['state' => $svcb['state'], 'reason' => $svcb['reason']];
+	}
+	$want = array_map('json_encode', $expected);
+	$have = array_map('json_encode', $svcb['answers']);
+	sort($want);
+	sort($have);
+	$wantAddresses = array_values(array_unique(array_column($expected, 'hint')));
+	$haveAddresses = $svcb['additional'];
+	sort($wantAddresses);
+	sort($haveAddresses);
+	if ($want !== $have || $wantAddresses !== $haveAddresses) {
+		return ['state' => 'mismatch', 'reason' => 'SVCB records do not match the expected target, address and transports'];
+	}
+	if ($answers === NULL) {
+		return ['state' => 'matched', 'reason' => 'SVCB matched; name resolution not checked (no owned address mapping)'];
+	}
+	foreach (['A' => 4, 'AAAA' => 16] as $type => $length) {
+		$result = $names[$type] ?? ['state' => 'unverified', 'reason' => 'Name resolution not checked'];
+		if ($result['state'] !== 'ok') {
+			return ['state' => $result['state'], 'reason' => "{$type}: " . $result['reason']];
+		}
+		$want = array_values(array_filter($answers, static fn (string $ip): bool => strlen((string) inet_pton($ip)) === $length));
+		$have = $result['answers'];
+		sort($want);
+		sort($have);
+		if ($want !== $have) {
+			return ['state' => 'mismatch', 'reason' => "{$type} records do not match the expected DNS Name addresses"];
+		}
+	}
+	return ['state' => 'matched', 'reason' => 'SVCB and DNS Name addresses match'];
 }
 
 /**
  * Query one canonical bound IP:port, never a hostname. timeout reaps this transient command and its descendants.
  *
- * @return array{state:string,stdout:string,stderr:string}
+ * @return array<string,mixed>
  */
-function pfb_dns_ddr_probe(string $listener, float $budget): array {
+function pfb_dns_ddr_probe(string $listener, float $budget, string $name = '_dns.resolver.arpa.', string $type = 'SVCB'): array {
 	$colon = strrpos($listener, ':');
 	$host = $colon === FALSE ? '' : trim(substr($listener, 0, $colon), '[]');
 	$port = $colon === FALSE ? '' : substr($listener, $colon + 1);
 	$packed = @inet_pton($host);
 	if ($packed === FALSE || !ctype_digit($port) || (string) (int) $port !== $port
 	    || (int) $port < 1 || (int) $port > 65535 || pfb_dns_proxy_host_port($host, $port) !== $listener) {
-		return pfb_dns_ddr_result('', 'Invalid bound listener', 1);
+		return ['state' => 'error', 'reason' => 'Invalid bound listener'];
+	}
+	if (!in_array($type, ['SVCB', 'A', 'AAAA'], TRUE)
+	    || ($name !== '_dns.resolver.arpa.' && (pfb_dns_proxy_name_normalized($name) === NULL || $name === ''))) {
+		return ['state' => 'error', 'reason' => 'Invalid DNS question'];
 	}
 	if (!is_finite($budget) || $budget <= 0) {
-		return ['state' => 'budget', 'stdout' => '', 'stderr' => ''];
+		return ['state' => 'budget', 'reason' => 'Not queried: request deadline reached'];
 	}
 	$args = ['/usr/bin/timeout', '-s', 'TERM', '-k1', sprintf('%.3F', max(0.001, min(2.0, $budget))), '/usr/bin/drill', '-b1232'];
 	$source = '127.0.0.1';
@@ -15976,7 +16144,7 @@ function pfb_dns_ddr_probe(string $listener, float $budget): array {
 		$args[] = '-6';
 		$interfaces = net_get_interfaces();
 		if ($interfaces === FALSE) {
-			return pfb_dns_ddr_result('', 'Cannot inspect local IPv6 addresses', 1);
+			return ['state' => 'error', 'reason' => 'Cannot inspect local IPv6 addresses'];
 		}
 		// ::1 cannot reach ordinary IPv6 interfaces; loopback-assigned VIPs need it to avoid a self-address ACL refusal.
 		$source = NULL;
@@ -15990,43 +16158,36 @@ function pfb_dns_ddr_probe(string $listener, float $budget): array {
 	if ($source !== NULL) {
 		array_push($args, '-I', $source);
 	}
-	array_push($args, '-p', $port, '_dns.resolver.arpa.', "@{$host}", 'SVCB');
+	array_push($args, '-p', $port, $name, "@{$host}", $type);
 	$stdout = @tmpfile();
-	$stderr = @tmpfile();
-	if ($stdout === FALSE || $stderr === FALSE) {
-		if (is_resource($stdout)) {
-			fclose($stdout);
-		}
-		if (is_resource($stderr)) {
-			fclose($stderr);
-		}
-		return pfb_dns_ddr_result('', 'Cannot capture drill output', 1);
+	if ($stdout === FALSE) {
+		return ['state' => 'error', 'reason' => 'Cannot capture DNS response'];
 	}
 	try {
 		$pipes = [];
 		$process = @proc_open('exec ' . implode(' ', array_map('escapeshellarg', $args)),
-		    [0 => ['file', '/dev/null', 'r'], 1 => $stdout, 2 => $stderr], $pipes);
+		    [0 => ['file', '/dev/null', 'r'], 1 => $stdout, 2 => ['file', '/dev/null', 'w']], $pipes);
 		if (!is_resource($process)) {
-			return pfb_dns_ddr_result('', 'Cannot start drill', 1);
+			return ['state' => 'error', 'reason' => 'Cannot start DNS query'];
 		}
 		$exit = proc_close($process);
 		rewind($stdout);
-		rewind($stderr);
-		return pfb_dns_ddr_result((string) stream_get_contents($stdout), (string) stream_get_contents($stderr), $exit);
+		return pfb_dns_ddr_result((string) stream_get_contents($stdout, 65537), $exit, $name, $type);
 	} finally {
 		fclose($stdout);
-		fclose($stderr);
 	}
 }
 
 /**
- * Read-only local DDR observations at the gateway's actual plain listeners, independent of pending settings and the rc script.
- * No drill runs until refresh; the widget never calls this page-only helper.
+ * Automatic DDR verification at the actual bound plain listeners against saved intent and bound encrypted listeners.
+ * NULL is the page's cheap metadata: every bound plain listener, pending, with no DNS process. A listener address checks only
+ * that exact current bound listener, within its own 10-second deadline; any other value is refused without a query.
  *
  * @return array{notice:string,queried:?string,rows:list<array<string,string>>}
  */
-function pfb_dns_ddr_status(bool $refresh): array {
+function pfb_dns_ddr_status(?string $only = NULL): array {
 	$deadline = hrtime(TRUE) + 10000000000;
+	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name')) ?? '';
 	$status = ['notice' => '', 'queried' => NULL, 'rows' => []];
 	if (!pfb_dns_proxy_ready()) {
 		$status['notice'] = 'pfB-DNS service is not running; no addresses queried.';
@@ -16051,68 +16212,138 @@ function pfb_dns_ddr_status(bool $refresh): array {
 			'identity' => $managed ? 'Managed Resolver VIP' : 'Manual VIP: ' . (string) ($vip['descr'] ?? $vip['uniqid'] ?? ''),
 		];
 	}
-	if ($refresh) {
-		$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
+	// config.xml keeps addresses as typed; listener keys use the gateway's canonical spelling.
+	$canon = static fn (array $list): array => array_map(static fn (string $a): string => pfb_dns_proxy_answer_address($a) ?? $a, $list);
+	// Name answers and DoH-443 addresses take about a second to derive; only a checked row needs them.
+	$answers = [];
+	$advertised = $managed = [];
+	if ($only !== NULL) {
+		foreach (pfb_dns_proxy_name_answers() as $local => $pair) {
+			$answers[pfb_dns_proxy_answer_address((string) $local) ?? (string) $local] ??= $pair;
+		}
+		$advertised = $canon(pfb_dns_proxy_ddr_doh_443_addresses());
+		$managed = $canon(pfb_dns_listen_auto_vips());
 	}
 	foreach (array_keys($listeners['listening']['udp+tcp'] ?? []) as $listener) {
+		if ($only !== NULL && $listener !== $only) {
+			continue;
+		}
 		$host = trim(substr($listener, 0, (int) strrpos($listener, ':')), '[]');
 		$row = $vips[$host] ?? ['interface' => $labels[$host] ?? $host, 'identity' => 'Interface'];
 		$row['address'] = $listener;
-		$result = ['state' => 'not_queried', 'stdout' => '', 'stderr' => ''];
-		if ($refresh) {
-			// Reserve timeout's one-second KILL grace inside the whole-request deadline.
-			$remaining = ($deadline - hrtime(TRUE)) / 1000000000 - 1.0;
-			$result = $remaining <= 0
-			    ? ['state' => 'budget', 'stdout' => '', 'stderr' => '']
-			    : pfb_dns_ddr_probe($listener, $remaining);
+		if ($only === NULL) {
+			$status['rows'][] = $row + ['state' => 'pending', 'reason' => ''];
+			continue;
+		}
+		$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
+		$expected = [];
+		foreach (['doh' => [1, 'h2', 443], 'dot' => [2, 'dot', 853], 'doq' => [3, 'doq', 853]] as $kind => [$priority, $alpn, $standard]) {
+			if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
+				continue;
+			}
+			$tokens = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
+			$addresses = [...$canon(pfb_dns_proxy_interface_addresses($tokens, pfb_dns_proxy_vip_only_families($kind))), ...PFB_DNS_PROXY_LOOPBACK];
+			if ($tokens === [] || !in_array($host, $addresses, TRUE)) {
+				continue;
+			}
+			$port = pfb_dns_proxy_listener_port(pfb_dns_proxy_setting("pfb_dns_{$kind}_port"));
+			if ($port === NULL) {
+				continue;
+			}
+			$port6 = PfbConfig::read("dns_shared/pfb_dns_{$kind}_port6");
+			if (str_contains($host, ':') && $port6 !== '') {
+				$port = pfb_dns_proxy_listener_port($port6) ?? $port;
+			}
+			if (in_array($host, $managed, TRUE)) {
+				$port = (string) $standard;
+			}
+			if ($port === NULL || !isset($listeners['listening'][$kind][pfb_dns_proxy_host_port($host, $port)])) {
+				continue;
+			}
+			if ($kind === 'doh' && in_array($host, $advertised, TRUE)) {
+				$port = '443';
+			}
+			$expected[] = ['priority' => $priority, 'target' => strtolower($name), 'alpn' => $alpn, 'port' => (int) $port,
+			    'hint' => $host, 'path' => $kind === 'doh' ? '/dns-query{?dns}' : ''];
+		}
+		$result = ['state' => 'off', 'reason' => 'DDR is disabled'];
+		if (PfbConfig::read('dns_shared/pfb_dns_ddr') === PfbToggle::On) {
+			if ($name === '') {
+				$result = ['state' => 'unverified', 'reason' => 'No valid configured DNS Name'];
+			} elseif ($expected === []) {
+				$result = ['state' => 'no_transport', 'reason' => 'No expected encrypted listener is bound on this address'];
+			} else {
+				// Reserve timeout's one-second KILL grace inside the whole-request deadline.
+				$probe = static fn (string $qname, string $type): array => pfb_dns_ddr_probe($listener,
+				    ($deadline - hrtime(TRUE)) / 1000000000 - 1.0, $qname, $type);
+				$svcb = $probe('_dns.resolver.arpa.', 'SVCB');
+				$names = [];
+				$owned = $answers[$host] ?? NULL;
+				if ($svcb['state'] === 'ok' && $owned !== NULL) {
+					foreach (['A', 'AAAA'] as $type) {
+						$names[$type] = $probe($name, $type);
+					}
+				}
+				$result = pfb_dns_ddr_compare($expected, $svcb, $owned, $names);
+				if ($owned === NULL && !in_array($host, PFB_DNS_PROXY_LOOPBACK, TRUE) && $result['state'] === 'matched') {
+					$result['state'] = 'unverified';
+				}
+			}
 		}
 		$status['rows'][] = array_merge($row, $result);
 	}
 	if ($status['rows'] === []) {
-		$status['notice'] = 'pfB-DNS reports no bound plain DNS listeners; no addresses queried.';
+		$status['notice'] = $only === NULL ? 'pfB-DNS reports no bound plain DNS listeners; no addresses queried.'
+		    : 'Address is not a bound plain DNS listener; no address queried.';
 	}
 	return $status;
 }
 
 /**
- * The page-only DDR section: decoded answers are observations, never an encrypted endpoint health check.
+ * The page-only DDR check table; endpoint health and certificate acceptance are not checked. Rows are Interface, Address and
+ * State; a pending row shows a neutral spinner until the browser checks it.
  *
  * @param array{notice:string,queried:?string,rows:list<array<string,string>>} $status
  */
 function pfb_dns_ddr_status_panel(array $status): string {
-	$body = '<p><a class="btn btn-default" id="pfb-dns-ddr-refresh" href="pfblockerng_dns.php?refresh_ddr=1#pfb-dns-status-ddr">Refresh DDR advertisements</a></p>'
-	    . '<p>Local-source SVCB queries to <code>_dns.resolver.arpa.</code> at current bound plain DNS listeners. '
-	    . 'Advertised does not prove client ACL access, certificate acceptance or reverse-proxy reachability. '
-	    . 'An omitted SVCB port means the protocol default (DoH 443; DoT/DoQ 853).</p>';
+	$body = '<p>DDR and DNS Name answers are checked automatically against current settings. '
+	    . 'This does not check certificates or encrypted endpoint connectivity.</p>';
 	if ($status['queried'] !== NULL) {
-		$body .= '<p>Queried: ' . htmlspecialchars($status['queried']) . '</p>';
+		$body .= '<p>Checked: ' . htmlspecialchars($status['queried']) . '</p>';
 	}
 	if ($status['notice'] !== '') {
 		$body .= '<p>' . htmlspecialchars($status['notice']) . '</p>';
 	}
+	$body .= '<p id="pfb-dns-ddr-refresh-status" role="status" hidden="hidden"></p>';
 	$rows = '';
 	foreach ($status['rows'] as $row) {
+		$address = htmlspecialchars($row['address']);
+		$cells = '<td>' . htmlspecialchars($row['interface']) . '</td><td>' . $address . '</td>';
+		if ($row['state'] === 'pending') {
+			$rows .= '<tr data-address="' . $address . '" data-state="pending">' . $cells
+			    . '<td><i class="fa-solid fa-spinner fa-spin text-muted" aria-hidden="true"></i><span class="sr-only">Checking</span></td></tr>';
+			continue;
+		}
+		$matched = $row['state'] === 'matched';
 		$meaning = match ($row['state']) {
-			'advertised' => 'Advertised',
-			'empty' => 'NOERROR, no advertisements',
+			'matched' => 'Matched',
+			'mismatch' => 'Mismatch',
 			'error' => 'Query error',
 			'timeout' => 'Query timed out',
-			'budget' => 'Not queried: request deadline reached',
-			default => 'Not yet queried',
+			'budget' => 'Request deadline reached',
+			'off' => 'DDR disabled',
+			'no_transport' => 'No encrypted listener',
+			default => 'Not verified',
 		};
-		$output = '';
-		foreach (['stdout', 'stderr'] as $stream) {
-			if ($row[$stream] !== '') {
-				$output .= '<div>' . strtoupper($stream) . '</div><pre class="pfb-dns-ddr-' . $stream
-				    . '" style="white-space:pre;overflow-x:auto;max-width:100%">' . htmlspecialchars($row[$stream]) . '</pre>';
-			}
-		}
-		$rows .= '<tr><td>' . htmlspecialchars($row['interface']) . '</td><td>' . htmlspecialchars($row['identity']) . '</td><td>'
-		    . htmlspecialchars($row['address']) . '</td><td><strong>' . $meaning . '</strong>' . $output . '</td></tr>';
+		$icon = $matched ? 'fa-check-circle text-success' : 'fa-times-circle text-danger';
+		$details = htmlspecialchars($meaning . ($row['reason'] === '' ? '' : ': ' . $row['reason']));
+		$rows .= '<tr data-address="' . $address . '" data-state="' . htmlspecialchars($row['state']) . '">' . $cells
+		    . '<td><i class="fa-solid ' . $icon . '" title="' . $details . '" aria-hidden="true"></i><span class="sr-only">' . $details . '</span>'
+		    . ($matched || $row['reason'] === '' ? '' : ' ' . htmlspecialchars($row['reason'])) . '</td></tr>';
 	}
 	if ($rows !== '') {
 		$body .= '<div class="table-responsive"><table class="table table-striped table-hover table-condensed">'
-		    . '<thead><tr><th>Interface</th><th>Address identity</th><th>Plain DNS listener</th><th>DDR observation</th></tr></thead><tbody>'
+		    . '<thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead><tbody>'
 		    . $rows . '</tbody></table></div>';
 	}
 	return '<div class="panel panel-default" id="pfb-dns-status-ddr"><div class="panel-heading"><h2 class="panel-title">DDR Advertisements'
@@ -16135,8 +16366,12 @@ function pfb_dns_status_panel(array $status): string {
 	$section = static fn (string $id, string $title, string $body): string => "<div class=\"panel panel-default\" id=\"{$id}\"><div class=\"panel-heading\">"
 	    . "<h2 class=\"panel-title\">{$title}<span class=\"widget-heading-icon\"><a data-toggle=\"collapse\" href=\"#{$id}_panel-body\" aria-label=\"Toggle {$title}\"><i class=\"fa-solid fa-plus-circle\"></i></a></span></h2>"
 	    . "</div><div id=\"{$id}_panel-body\" class=\"panel-body collapse in\">{$body}</div></div>";
+	$toggle = static fn (string $id, string $label, bool $on): string => "<tr id=\"pfb-dns-status-{$id}\"><th>{$label}</th><td>"
+	    . ($on ? '<i class="fa-solid fa-check-circle text-success" title="On" aria-hidden="true"></i><span class="sr-only">On</span>'
+	        : '<i class="fa-solid fa-times-circle text-danger" title="Off" aria-hidden="true"></i><span class="sr-only">Off</span>') . '</td></tr>';
 	$html = $section('pfb-dns-status-overview', 'pfB-DNS Status', '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>'
-	    . htmlspecialchars($status['service']) . '</td></tr><tr id="pfb-dns-status-mode"><th>Mode</th><td>' . htmlspecialchars($status['mode']) . '</td></tr></table>');
+	    . htmlspecialchars($status['service']) . '</td></tr>' . $toggle('pfbdns', 'pfB-DNS', $status['active']) . $toggle('dnsbl', 'DNSBL', $status['dnsbl'])
+	    . '<tr id="pfb-dns-status-name"><th>DNS Name</th><td>' . htmlspecialchars($status['name'] === '' ? 'None' : $status['name']) . '</td></tr></table>');
 	foreach (['plain' => 'Plain DNS', 'dot' => 'DNS over TLS', 'doh' => 'DNS over HTTPS', 'doq' => 'DNS over QUIC'] as $key => $title) {
 		$transport = $status['transports'][$key] ?? NULL;
 		if ($transport === NULL) {

@@ -65,7 +65,7 @@ final class PfbDnsStatusPanelTest extends TestCase
 	{
 		$document = new DOMDocument();
 		$previous = libxml_use_internal_errors(TRUE);
-		$loaded = $document->loadXML('<root>' . pfb_dns_status_panel($status) . '</root>');
+		$loaded = $document->loadXML('<root>' . pfb_dns_status_panel($status + ['active' => FALSE, 'dnsbl' => FALSE, 'name' => '']) . '</root>');
 		$errors = array_map(static fn (LibXMLError $error): string => trim($error->message), libxml_get_errors());
 		libxml_clear_errors();
 		libxml_use_internal_errors($previous);
@@ -103,8 +103,9 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$this->assertSame('pfB-DNS Status', $panel->evaluate(self::title('pfb-dns-status-overview')));
 		$this->assertSame('Service', $panel->evaluate("string(//tr[@id='pfb-dns-status-service']/th)"));
 		$this->assertSame($service, $panel->evaluate("string(//tr[@id='pfb-dns-status-service']/td)"));
-		$this->assertSame('Mode', $panel->evaluate("string(//tr[@id='pfb-dns-status-mode']/th)"));
-		$this->assertSame($mode, $panel->evaluate("string(//tr[@id='pfb-dns-status-mode']/td)"));
+		$this->assertSame('pfB-DNS', $panel->evaluate("string(//tr[@id='pfb-dns-status-pfbdns']/th)"));
+		$this->assertSame('Off', $panel->evaluate("string(//tr[@id='pfb-dns-status-pfbdns']//span[@class='sr-only'])"));
+		$this->assertSame('None', $panel->evaluate("string(//tr[@id='pfb-dns-status-name']/td)"));
 		$this->assertSame(1, $panel->query("//div[@id='pfb-dns-status']/div[contains(@class, 'panel')]")->length, 'no transport section');
 		$this->assertSame(0, $panel->query('//thead')->length, 'no transport table');
 	}
@@ -121,7 +122,7 @@ final class PfbDnsStatusPanelTest extends TestCase
 		}
 		$this->assertSame(['pfB-DNS Status', 'Plain DNS Listeners', 'DNS over TLS Listeners', 'DNS over HTTPS Listeners', 'DNS over QUIC Listeners'], $titles);
 		$this->assertSame(['pfb-dns-status-overview', 'pfb-dns-status-plain', 'pfb-dns-status-dot', 'pfb-dns-status-doh', 'pfb-dns-status-doq'], $ids);
-		$this->assertSame(1, $panel->query("//div[@id='pfb-dns-status-overview']//tr[@id='pfb-dns-status-mode']")->length, 'the service and the mode are the first section');
+		$this->assertSame(1, $panel->query("//div[@id='pfb-dns-status-overview']//tr[@id='pfb-dns-status-pfbdns']")->length, 'the service and the toggles are the first section');
 		$this->assertSame('', $panel->evaluate("string(//div[@id='pfb-dns-status']/@class)"), 'the sections sit in a bare container, never a panel nesting panels');
 	}
 
@@ -280,10 +281,27 @@ final class PfbDnsStatusPanelTest extends TestCase
 		// Then each reads back as the text it was, so none became markup and none was escaped twice
 		$this->assertSame(0, $panel->query('//script')->length, 'no element came from a value');
 		$this->assertSame("{$hostile}service", $panel->evaluate("string(//tr[@id='pfb-dns-status-service']/td)"));
-		$this->assertSame("{$hostile}mode", $panel->evaluate("string(//tr[@id='pfb-dns-status-mode']/td)"));
+		$this->assertSame(0, $panel->query("//tr[@id='pfb-dns-status-mode']")->length, 'the mode sentence is not shown');
 		$this->assertSame("{$hostile}if", $panel->evaluate("string({$row}/td[1])"));
 		$this->assertSame("{$hostile}addr", $panel->evaluate("string({$row}/td[2])"));
 		$this->assertSame("Not listening {$hostile}why", $panel->evaluate("string({$row}/td[3])"));
 		$this->assertSame("{$hostile}notice", $panel->evaluate('string(' . self::block('dot') . '//p)'));
+	}
+
+	public function testTheOverviewShowsPfbDnsAndDnsblAsIconsAndTheDnsNameWithoutTheModeSentence(): void
+	{
+		$status = self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off'])
+		    + ['active' => TRUE, 'dnsbl' => FALSE, 'name' => 'dns.example.com'];
+		$panel = $this->panel($status);
+		$overview = "//div[@id='pfb-dns-status-overview']";
+
+		$this->assertSame(['Service', 'pfB-DNS', 'DNSBL', 'DNS Name'], array_map(
+		    static fn (DOMNode $th): string => $th->textContent, iterator_to_array($panel->query("{$overview}//tr/th"))));
+		$this->assertSame(1, $panel->query("{$overview}//tr[@id='pfb-dns-status-pfbdns']//i[contains(@class, 'fa-check-circle') and contains(@class, 'text-success')]")->length);
+		$this->assertSame('On', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-pfbdns']//span[@class='sr-only'])"));
+		$this->assertSame(1, $panel->query("{$overview}//tr[@id='pfb-dns-status-dnsbl']//i[contains(@class, 'fa-times-circle') and contains(@class, 'text-danger')]")->length);
+		$this->assertSame('Off', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-dnsbl']//span[@class='sr-only'])"));
+		$this->assertSame('dns.example.com', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-name']/td)"));
+		$this->assertStringNotContainsString('forwards', $panel->evaluate("string({$overview})"), 'no mode explanation');
 	}
 }

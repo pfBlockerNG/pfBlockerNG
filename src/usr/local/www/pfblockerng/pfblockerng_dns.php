@@ -27,6 +27,25 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
+if (($_GET['ajax'] ?? '') === 'ddr') {
+	header('Cache-Control: no-store');
+	if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+		header('Allow: GET');
+		http_response_code(405);
+		exit;
+	}
+	session_write_close();
+	// No listener is the metadata panel. A non-string (an array) is refused before any probe.
+	$listener = $_GET['listener'] ?? NULL;
+	if ($listener !== NULL && !is_string($listener)) {
+		http_response_code(400);
+		exit;
+	}
+	header('Content-Type: application/json');
+	echo json_encode(['html' => pfb_dns_ddr_status_panel(pfb_dns_ddr_status($listener))]);
+	exit;
+}
+
 // issue #3538: the first load takes pfB-DNS's listener settings from the Resolver once, so a box that is already moved has
 // them without a save. A lock that stays taken skips the write: the form still shows the pending seed values.
 if (pfb_dns_proxy_seed_values() !== []) {
@@ -438,8 +457,127 @@ $form->add($section);
 
 print ($form);
 $status = pfb_dns_status();
-$status['ddr'] = pfb_dns_ddr_status(isset($_GET['refresh_ddr']) && $_GET['refresh_ddr'] === '1');
+if ($status['transports'] !== NULL) {
+	$status['ddr'] = pfb_dns_ddr_status();
+}
 print pfb_dns_status_panel($status);
 
 include('foot.inc');
 ?>
+<script>
+events.push(function() {
+	const panelBody = document.getElementById('pfb-dns-status-ddr_panel-body');
+	if (!panelBody) {
+		return;
+	}
+	const note = document.getElementById('pfb-dns-ddr-refresh-status');
+	const rows = Array.from(panelBody.querySelectorAll('tr[data-address]'));
+	let session = 0;
+	let timer = null;
+	let controller = null;
+
+	function setNote(visible) {
+		if (note) {
+			note.textContent = 'Some checks could not be refreshed. Previous results are retained.';
+			note.hidden = !visible;
+		}
+	}
+
+	// One selected listener per request. Only its State cell and data-state change, and only for a response that proves it.
+	async function check(row, current) {
+		const address = row.getAttribute('data-address');
+		const own = new AbortController();
+		const timeout = setTimeout(function() { own.abort(); }, 15000);
+		controller = own;
+		try {
+			const response = await fetch('pfblockerng_dns.php?ajax=ddr&listener=' + encodeURIComponent(address), {
+				cache: 'no-store',
+				credentials: 'same-origin',
+				signal: own.signal
+			});
+			if (!response.ok || response.redirected ||
+			    !(response.headers.get('Content-Type') || '').includes('application/json')) {
+				throw new Error('Invalid DDR response');
+			}
+			const result = await response.json();
+			if (!result || typeof result.html !== 'string') {
+				throw new Error('Invalid DDR panel');
+			}
+			const parsed = new DOMParser().parseFromString(result.html, 'text/html');
+			const panels = parsed.querySelectorAll('#pfb-dns-status-ddr > #pfb-dns-status-ddr_panel-body');
+			if (panels.length !== 1) {
+				throw new Error('Missing DDR panel');
+			}
+			const returned = panels[0].querySelectorAll('tr[data-address]');
+			const matches = Array.from(returned).filter(function(candidate) {
+				return candidate.getAttribute('data-address') === address && candidate.cells.length === 3;
+			});
+			const state = returned.length === 1 && matches.length === 1 ? matches[0].getAttribute('data-state') : null;
+			if (!state) {
+				throw new Error('Missing DDR row');
+			}
+			if (current === session) {
+				row.setAttribute('data-state', state);
+				row.cells[2].replaceChildren(...matches[0].cells[2].childNodes);
+			}
+		} finally {
+			clearTimeout(timeout);
+			if (controller === own) {
+				controller = null;
+			}
+		}
+	}
+
+	async function sweep(current) {
+		panelBody.setAttribute('aria-busy', 'true');
+		let complete = true;
+		for (const row of rows) {
+			try {
+				await check(row, current);
+			} catch (error) {
+				if (current === session) {
+					complete = false;
+					setNote(true);
+				}
+			}
+			if (current !== session) {
+				return;
+			}
+		}
+		panelBody.removeAttribute('aria-busy');
+		if (complete) {
+			setNote(false);
+		}
+	}
+
+	// The next sweep starts 30 seconds after this one finishes, so sweeps never overlap.
+	function cycle(current) {
+		sweep(current).then(function() {
+			if (current === session) {
+				timer = setTimeout(function() { cycle(current); }, 30000);
+			}
+		});
+	}
+
+	function start() {
+		session += 1;
+		cycle(session);
+	}
+
+	start();
+	window.addEventListener('pagehide', function() {
+		session += 1;
+		clearTimeout(timer);
+		timer = null;
+		if (controller) {
+			controller.abort();
+		}
+		panelBody.removeAttribute('aria-busy');
+	});
+	window.addEventListener('pageshow', function(event) {
+		if (event.persisted) {
+			start();
+		}
+	});
+});
+</script>
