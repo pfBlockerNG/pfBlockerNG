@@ -2386,7 +2386,13 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             )
     finally:
         gui.post(
-            DNS_GENERAL_PAGE, {"pfb_dns_listen_vip": "", "pfb_dns_listen_vip4": "none", "pfb_dns_listen_vip6": "none"}
+            DNS_GENERAL_PAGE,
+            {
+                "pfb_dns_listen_vip": "",
+                "pfb_dns_listen_vip_only": "",
+                "pfb_dns_listen_vip4": "none",
+                "pfb_dns_listen_vip6": "none",
+            },
         )
         _set_lists(vm, prior)
         _php_ok(
@@ -2395,3 +2401,9 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             "restore plain port",
         )
         _apply(vm)
+        cleanup = (
+            h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_dns_listen_vip_only"),
+            h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_dns_listen_vip"),
+        )
+        _say(f"managed-VIP cleanup mode/Resolver addresses: {cleanup!r}")
+        assert cleanup == ("", ""), f"managed-VIP cleanup did not disable both settings: {cleanup!r}"

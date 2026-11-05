@@ -3758,12 +3758,9 @@ function pfb_dns_listen_vips_apply(): bool {
 	$resolver_changed = FALSE;
 	$dhcp_changed = FALSE;
 	$vip_only = pfb_dns_listen_vip_only();
-	$sync = static function (string $path, array $wanted, bool $csv = FALSE) use ($added, $vip_only, &$next, &$changed, &$resolver_changed, &$dhcp_changed): void {
+	$sync = static function (string $path, array $wanted, bool $csv = FALSE) use ($added, &$next, &$changed, &$resolver_changed, &$dhcp_changed): void {
 		$stored = config_get_path($path, $csv ? '' : []);
 		$list = $csv ? pfb_dns_proxy_tokens((string) $stored) : (is_array($stored) ? $stored : []);
-		if ($vip_only && !$csv && $wanted !== []) {
-			$list = array_values(array_intersect($list, $wanted));
-		}
 		foreach ($added[$path] ?? [] as $address) {
 			if (!in_array($address, $wanted, TRUE)) {
 				$list = array_values(array_diff($list, [$address]));

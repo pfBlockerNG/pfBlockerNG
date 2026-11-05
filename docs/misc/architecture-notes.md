@@ -564,6 +564,8 @@ not certification of DHCP/RA advertisements: native defaults, pool/reservation o
 the administrator's responsibility. Existing Resolver VIP advertisement and ownership handling remain; custom DNS lists do not
 block activation. Clients still using non-VIP DNS addresses may lose plain DNS and DDR until DHCP renewal,
 RA DNS refresh or manual reconfiguration. An empty core DNS list is not necessarily silent.
+The DNS-list updater remains append-only in both listener modes: it preserves pre-existing interface DNS addresses and records
+only the VIPs it adds. Disabling VIP-only mode never removes those original addresses; disabling Resolver addresses removes only recorded VIPs.
 Static DNS can use DDR, but those clients must be reconfigured by their administrator. No leases are deleted.
 DNS redirection remains independent opt-in bypass prevention, not compatibility machinery, and is not enabled by this mode.
 DDR designates the receiving address where that address has bound encrypted listeners. Certificate warnings follow those sets and

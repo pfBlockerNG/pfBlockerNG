@@ -147,25 +147,24 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->assertSame([], $this->validate(['pfb_dns_listen_vip_only' => '']), 'disable is unconditional');
 	}
 
-	public function testOwnDnsListsBecomeVipOnlyAndSharedRaListIsNotInvented(): void
+	public function testOwnDnsListsRemainAppendOnlyAndSharedRaListIsNotInvented(): void
 	{
 		$this->vips([4, 6]);
 		config_set_path('dhcpd/lan/dnsserver', ['192.0.2.1']);
 		config_set_path('dhcpdv6/lan', ['dnsserver' => ['2001:db8::1'], 'radnsserver' => ['2001:db8::1']]);
 		$this->mode(TRUE);
 		pfb_dns_listen_vips_apply();
-		$this->assertSame([self::VIP4], config_get_path('dhcpd/lan/dnsserver'));
-		$this->assertSame([self::VIP6], config_get_path('dhcpdv6/lan/dnsserver'));
-		$this->assertSame([self::VIP6], config_get_path('dhcpdv6/lan/radnsserver'));
+		$this->assertSame(['192.0.2.1', self::VIP4], config_get_path('dhcpd/lan/dnsserver'));
+		$this->assertSame(['2001:db8::1', self::VIP6], config_get_path('dhcpdv6/lan/dnsserver'));
+		$this->assertSame(['2001:db8::1', self::VIP6], config_get_path('dhcpdv6/lan/radnsserver'));
 		config_set_path('dhcpdv6/lan/rasamednsasdhcp6', '');
 		config_set_path('dhcpdv6/lan/radnsserver', ['2001:db8:99::99']);
 		$this->assertSame([], $this->validate($this->post()), 'unused RA override is not an active custom list');
 		pfb_dns_listen_vips_apply();
 		$this->assertSame(['2001:db8:99::99'], config_get_path('dhcpdv6/lan/radnsserver'));
 		$this->mode(FALSE);
-		config_set_path('dhcpd/lan/dnsserver', ['192.0.2.1']);
 		pfb_dns_listen_vips_apply();
-		$this->assertSame(['192.0.2.1', self::VIP4], config_get_path('dhcpd/lan/dnsserver'), 'mode off restores append-only policy without invented backups');
+		$this->assertSame(['192.0.2.1', self::VIP4], config_get_path('dhcpd/lan/dnsserver'), 'changing listener mode never removes pre-existing DNS servers');
 		$this->mode(TRUE);
 		config_set_path('dhcpd/lan/dnsserver', ['203.0.113.53']);
 		$foreign = config_get_path('dhcpd/lan/dnsserver');

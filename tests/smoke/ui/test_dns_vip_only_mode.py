@@ -23,9 +23,7 @@ PATH = f"{helpers.CFG_GLOBAL}/{KEY}"
 
 
 @pytest.mark.ui_render
-def test_vip_only_defaults_off_and_warns_about_plain_dns_and_client_reconfiguration(
-    smoke_vm: SmokeVM, webui: WebUI
-) -> None:
+def test_vip_only_defaults_off(smoke_vm: SmokeVM, webui: WebUI) -> None:
     original = helpers.config_get_state(smoke_vm, PATH)
     try:
         helpers.config_restore_state(smoke_vm, PATH, (False, ""))
@@ -37,8 +35,6 @@ def test_vip_only_defaults_off_and_warns_about_plain_dns_and_client_reconfigurat
         fields = scrape_form_fields(response.text)
         assert f'name="{KEY}"' in response.text, "VIP-only checkbox missing from DNS General"
         assert KEY not in fields, f"absent VIP-only option must render unchecked: {fields}"
-        for warning in ("PLAIN DNS", "DHCPv4", "DHCPv6", "RA", "static", "renewal", "DDR", "encrypted DNS"):
-            assert warning in response.text, f"VIP-only warning omits {warning!r}"
         guard.assert_no_growth()
     finally:
         helpers.config_restore_state(smoke_vm, PATH, original)

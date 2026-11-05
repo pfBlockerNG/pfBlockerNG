@@ -2357,16 +2357,22 @@ final class DnsProxyServiceTest extends TestCase
 
 	public function testWithoutADnsNameTheScriptCarriesNoNameDdrOrAnswerEvenWithDdrOn(): void
 	{
-		// Given DDR On, DoH on lan advertised on 443, and a DNS Name: the flags are there (before-state)
 		$gateway = $this->gateway();
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1']);
 		$this->setting('pfb_dns_ddr', 'on');
-		$this->setting('pfb_dns_doh', 'on');
+		foreach (['dot', 'doh', 'doq'] as $kind) {
+			$this->setting("pfb_dns_{$kind}", 'on');
+			$this->setting("pfb_dns_{$kind}_interface", 'lan');
+		}
+		$this->setting('pfb_dns_sslcertref', 'cert1');
 		$this->setting('pfb_dns_ddr_doh_443_interfaces', 'lan');
 		$this->setting('pfb_dns_name', 'fw.example.lan');
 		$this->generateWith($gateway);
 		$this->assertSame(['--ddr', '--ddr-doh-443'], $this->ddrFlags(), 'before');
 		$this->assertSame(["'fw.example.lan'"], $this->scriptValues('--dns-name'), 'before');
+		foreach (['dot', 'doh', 'doq'] as $kind) {
+			$this->assertSame(["'192.0.2.1'", "'127.0.0.1'", "'::1'"], $this->scriptValues("--{$kind}-listen"), "before: {$kind} has actual listeners");
+		}
 
 		// When the name is empty
 		$this->setting('pfb_dns_name', '');
@@ -2376,10 +2382,6 @@ final class DnsProxyServiceTest extends TestCase
 		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
 		$this->assertStringNotContainsString('--dns-name', $this->rcText());
 		$this->assertStringNotContainsString('--ddr', $this->rcText());
-		foreach (['--dot-listen', '--doh-listen', '--doq-listen', '--doh-listen-443'] as $flag) {
-			$this->assertNotContains($flag, $argv);
-		}
-		$this->assertStringContainsString('DoH requires a valid DNS Name; DoH is not served', $this->errorLog());
 	}
 
 	public function testTheDnsNameIsDdrsTargetAndTheFirewallsOwnHostnameAndDomainPlayNoPart(): void

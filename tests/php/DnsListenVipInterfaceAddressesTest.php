@@ -112,7 +112,7 @@ final class DnsListenVipInterfaceAddressesTest extends TestCase
 		$warnings = [];
 		$flags = pfb_dns_proxy_tls_flags($warnings);
 		preg_match_all("/ --{$kind}-listen(?:-(?:443|853))? '([^']+)'/", $flags, $found);
-		return array_values(array_unique($found[1]));
+		return $found[1];
 	}
 
 	/** @param list<string> $addresses the addresses of the interface list; the encrypted transports add loopback after them */
