@@ -736,6 +736,24 @@ jobs:
             --py-flavor  "$PY_FLAVOR")"
           echo "SMOKE_PREV_PKG=$PKG" >> "$GITHUB_ENV"
 
+      # Issue #3710: the settings-family lifecycle smoke installs the SHIPPED v3.3.13 package over
+      # the branch build (SMOKE_LEGACY_PKG). scripts/fetch-legacy-pkg.sh owns the pinned tag and the
+      # per-asset sha256, and picks the asset for the edition and pfSense version of the image ref
+      # resolved above. The bytes are downloaded and verified, never rebuilt.
+      # Only the `smoke` marker collects the lifecycle module that reads it. A failed fetch or hash
+      # mismatch fails this step, so the job stops before pytest instead of failing the module.
+      - name: Fetch the shipped v3.3.13 .pkg (settings-family lifecycle smoke)
+        if: ${{ (inputs.pytest_marker || 'smoke') == 'smoke' }}
+        env:
+          IMAGE_REF:       ${{ steps.ref.outputs.ref }}
+          PFSENSE_VERSION: ${{ inputs.pfsense_version }}
+        run: |
+          set -eu
+          PKG="$(sh scripts/fetch-legacy-pkg.sh \
+            --image-ref       "$IMAGE_REF" \
+            --pfsense-version "$PFSENSE_VERSION")"
+          echo "SMOKE_LEGACY_PKG=$PKG" >> "$GITHUB_ENV"
+
       # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
       # uses the public pin (the `mac` input + the CE source-VM uuid). A non-CE
       # (Plus) image is LICENSE/NDI-keyed to its OWN source-VM identity, which is
@@ -824,6 +842,10 @@ jobs:
           # the step above for the `smoke` marker. The prev_pkg fixture fails, never skips,
           # when it is missing next to a built SMOKE_PKG.
           SMOKE_PREV_PKG: ${{ env.SMOKE_PREV_PKG }}
+          # The shipped v3.3.13 .pkg the settings-family lifecycle installs over the branch build
+          # (issue #3710), fetched by the step above for the `smoke` marker. The legacy_pkg
+          # fixture fails, never skips, when it is missing next to a built SMOKE_PKG.
+          SMOKE_LEGACY_PKG: ${{ env.SMOKE_LEGACY_PKG }}
           # Live nightly Pages URL for test_install_from_live_nightly_url (ADR-18 §7).
           # Unset (blank) -> the test SKIPS; set to .../nightly to run it post-deploy.
           SMOKE_NIGHTLY_LIVE_URL: ${{ inputs.smoke_nightly_live_url }}

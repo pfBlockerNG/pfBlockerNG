@@ -44,6 +44,15 @@ printf '%s\n' "$*" > "${PREV_PKG_ARGV_LOG:-/dev/null}"
 printf '%s\n' "${PREV_PKG_OUT:-/tmp/fake-prev.pkg}"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-prev-pkg.sh"
+    # fetch-legacy-pkg.sh fetches the shipped v3.3.13 package (issue #3710); its own spec
+    # covers it. Here it is a stub that records argv and prints a fake package path.
+    cat > "${FAKE_ROOT}/scripts/fetch-legacy-pkg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "${LEGACY_PKG_ARGV_LOG:-/dev/null}"
+[ "${LEGACY_PKG_EXIT:-0}" -eq 0 ] || { printf 'fetch-legacy-pkg: download failed\n' >&2; exit "$LEGACY_PKG_EXIT"; }
+printf '%s\n' "${LEGACY_PKG_OUT:-/tmp/fake-legacy.pkg}"
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/fetch-legacy-pkg.sh"
     mkdir -p "${WORK}/bin"
     cat > "${WORK}/bin/oras" <<'STUBEOF'
 #!/bin/sh
@@ -621,7 +630,7 @@ printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_v
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
 #!/bin/sh
-printf 'smoke_pkg=%s\nsmoke_prev_pkg=%s\n' "$SMOKE_PKG" "${SMOKE_PREV_PKG-<unset>}"
+printf 'smoke_pkg=%s\nsmoke_prev_pkg=%s\nsmoke_legacy_pkg=%s\n' "$SMOKE_PKG" "${SMOKE_PREV_PKG-<unset>}" "${SMOKE_LEGACY_PKG-<unset>}"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
         "${FAKE_ROOT}/scripts/run-smoke.sh"
@@ -634,7 +643,10 @@ STUBEOF
     SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-ce@sha256:manifest
     PREV_PKG_ARGV_LOG="${WORK}/prev-pkg-argv"
     PREV_PKG_OUT="${WORK}/prev dir/prev.pkg"
-    export SMOKE_SSH_KEY SMOKE_GHCR_TOKEN SMOKE_PFSENSE_REF PREV_PKG_ARGV_LOG PREV_PKG_OUT
+    LEGACY_PKG_ARGV_LOG="${WORK}/legacy-pkg-argv"
+    LEGACY_PKG_OUT="${WORK}/legacy dir/legacy.pkg"
+    export SMOKE_SSH_KEY SMOKE_GHCR_TOKEN SMOKE_PFSENSE_REF PREV_PKG_ARGV_LOG PREV_PKG_OUT \
+      LEGACY_PKG_ARGV_LOG LEGACY_PKG_OUT
     cat > "${WORK}/bin/pkill" <<'STUBEOF'
 #!/bin/sh
 exit 0
@@ -665,6 +677,45 @@ STUBEOF
     The status should not equal 0
     The stdout should not include 'smoke_pkg='
     The stderr should include 'build-prev-pkg failed'
+    The stderr should not include 'running smoke'
+  End
+
+  # ── the shipped legacy package (issue #3710) ─────────────────────────────── #
+  # The settings-family lifecycle smoke installs the shipped v3.3.13 package over the branch
+  # build; the harness reads it from SMOKE_LEGACY_PKG, so a run that cannot fetch it must stop
+  # here, not start pytest.
+
+  It 'fetches the shipped legacy package for this leg and runs smoke with SMOKE_LEGACY_PKG set'
+    prev_pkg_leg
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The stdout should include "smoke_legacy_pkg=${WORK}/legacy dir/legacy.pkg"
+    # A digest-only ref has no tag, so the version is the `?` smoke-on-box.sh derives for it.
+    The contents of file "$LEGACY_PKG_ARGV_LOG" should equal \
+      '--image-ref ghcr.io/pfblockerng/pfsense-ce@sha256:manifest --pfsense-version ?'
+  End
+
+  It 'hands the leg image ref and the pfSense version to the legacy fetch, so a Plus leg gets its own asset'
+    prev_pkg_leg
+    SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-plus:26.03
+    export SMOKE_PFSENSE_REF
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The stdout should include 'smoke_legacy_pkg='
+    The contents of file "$LEGACY_PKG_ARGV_LOG" should equal \
+      '--image-ref ghcr.io/pfblockerng/pfsense-plus:26.03 --pfsense-version 26.03'
+  End
+
+  It 'stops before the smoke run, naming fetch-legacy-pkg, when the legacy package cannot be fetched'
+    prev_pkg_leg
+    LEGACY_PKG_EXIT=3
+    export LEGACY_PKG_EXIT
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should not equal 0
+    The stdout should not include 'smoke_pkg='
+    The stderr should include 'fetch-legacy-pkg failed'
     The stderr should not include 'running smoke'
   End
 

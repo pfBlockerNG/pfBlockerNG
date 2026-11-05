@@ -71,6 +71,7 @@ SMOKE_DIR = Path(__file__).resolve().parent
 BOOT_VM_SH = SMOKE_DIR / "boot_vm.sh"
 WAIT_READY_SH = SMOKE_DIR / "wait_ready.sh"
 BUILD_PREV_PKG_SH = SMOKE_DIR.parents[1] / "scripts" / "build-prev-pkg.sh"
+FETCH_LEGACY_PKG_SH = SMOKE_DIR.parents[1] / "scripts" / "fetch-legacy-pkg.sh"
 FIXTURES_DIR = SMOKE_DIR / "fixtures"
 
 GUEST_IDENTITY_COMMAND = (
@@ -906,6 +907,35 @@ def prev_pkg() -> Path:
         ["sh", str(BUILD_PREV_PKG_SH), "--print-ref"], capture_output=True, text=True, check=True
     ).stdout.strip()
     print(f"PFB_PREV_PKG ref={ref} path={path}")
+    return path
+
+
+@pytest.fixture(scope="session")
+def legacy_pkg() -> Path:
+    """The shipped v3.3.13 .pkg (``SMOKE_LEGACY_PKG``) the settings-family lifecycle smoke installs over the branch.
+
+    These are the exact bytes of the GitHub Release asset for this leg's edition and pfSense version, fetched and
+    checked against a pinned sha256 by ``scripts/fetch-legacy-pkg.sh``: ``smoke-on-box.sh`` runs it for a local leg
+    and ``smoke-single.yml`` for a CI leg, and a failed fetch stops that run before pytest. So when a branch .pkg
+    exists and this one does not, the leg is broken and this FAILS: skipping would let the lifecycle read as "not
+    applicable". With no branch .pkg at all (a dev box collecting) there is nothing to deploy, and it skips like
+    ``prev_pkg``. Prints ``PFB_LEGACY_PKG tag=<tag> path=<file>`` once, so the log names what was installed.
+    """
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    raw = os.environ.get("SMOKE_LEGACY_PKG", "")
+    path = Path(raw)
+    if not raw or not path.is_file():
+        pytest.fail(
+            f"SMOKE_LEGACY_PKG is {raw!r}, not a file, though SMOKE_PKG is set: the shipped v3.3.13 package was not "
+            "fetched. smoke-on-box.sh and smoke-single.yml run scripts/fetch-legacy-pkg.sh for it; fix that step "
+            "(fetch-legacy-pkg) rather than skipping the lifecycle that needs it",
+            pytrace=False,
+        )
+    tag = subprocess.run(
+        ["sh", str(FETCH_LEGACY_PKG_SH), "--print-tag"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    print(f"PFB_LEGACY_PKG tag={tag} path={path}")
     return path
 
 
