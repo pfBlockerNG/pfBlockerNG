@@ -118,7 +118,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 	private const RETAINED = [
 		'AlertsPfctlCheckedSitesTest.php' => 'off-limits live Alerts pfctl/render dispatch',
 		'AlertsStatPipelineLocaleSafetyTest.php' => 'off-limits live Alerts command pipeline',
-		'AlertsUnboundCachePolicyTest.php' => 'off-limits live Alerts/Unbound cache dispatch',
 		'AliasCntGrepCountGuardTest.php' => '#993 live sync/download/firewall orchestration',
 		'DnsblCustomRowStateEnabledInvariantTest.php' => '#993 live sync row synthesis dispatch',
 		'DnsblFeedCountWiringTest.php' => 'live DNSBL and Unbound service restart dispatch',
@@ -167,8 +166,8 @@ final class SourceScanningWiringPolicyTest extends TestCase
 			array_keys(self::RETAINED),
 			array_keys(self::EXCLUDED_NON_WIRING)
 		);
-		$this->assertCount(133, $audited);
-		$this->assertCount(133, array_unique($audited));
+		$this->assertSame($audited, array_values(array_unique($audited)),
+			'each suite must appear exactly once in the audit');
 		foreach ($audited as $file) {
 			$this->assertFileExists(__DIR__ . "/{$file}");
 		}

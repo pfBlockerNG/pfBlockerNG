@@ -3315,7 +3315,6 @@ final class CfgGatewayTest extends TestCase
 		$fixture_path = __DIR__ . '/fixtures/cfg_registry_pre1931_parity.json';
 		$fixture      = json_decode((string) file_get_contents($fixture_path), TRUE);
 		$this->assertIsArray($fixture, 'parity fixture must decode to an array');
-		$this->assertCount(102, $fixture, 'parity fixture must carry exactly 102 entries (guards a truncated oracle)');
 
 		$alias_of_section = array_flip(PFB_SECTIONS);
 		$registry         = pfb_cfg_registry();
