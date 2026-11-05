@@ -16207,12 +16207,16 @@ function pfb_dns_ddr_status(?string $only = NULL): array {
 	}
 	// config.xml keeps addresses as typed; listener keys use the gateway's canonical spelling.
 	$canon = static fn (array $list): array => array_map(static fn (string $a): string => pfb_dns_proxy_answer_address($a) ?? $a, $list);
+	// Name answers and DoH-443 addresses take about a second to derive; only a checked row needs them.
 	$answers = [];
-	foreach (pfb_dns_proxy_name_answers() as $local => $pair) {
-		$answers[pfb_dns_proxy_answer_address((string) $local) ?? (string) $local] ??= $pair;
+	$advertised = $managed = [];
+	if ($only !== NULL) {
+		foreach (pfb_dns_proxy_name_answers() as $local => $pair) {
+			$answers[pfb_dns_proxy_answer_address((string) $local) ?? (string) $local] ??= $pair;
+		}
+		$advertised = $canon(pfb_dns_proxy_ddr_doh_443_addresses());
+		$managed = $canon(pfb_dns_listen_auto_vips());
 	}
-	$advertised = $canon(pfb_dns_proxy_ddr_doh_443_addresses());
-	$managed = $canon(pfb_dns_listen_auto_vips());
 	foreach (array_keys($listeners['listening']['udp+tcp'] ?? []) as $listener) {
 		if ($only !== NULL && $listener !== $only) {
 			continue;
