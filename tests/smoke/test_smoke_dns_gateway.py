@@ -70,6 +70,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -732,7 +733,9 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
     _record_client_tools(client_vm)
     _say(f"pfSense VM: {vm.ssh('uname -mrs').stdout.strip()}")
     names = _make_names()
-    feed_url = h.write_local_feed(vm, "smoke_3513_dns_gateway.txt", "".join(f"{name}\n" for name in names.listed()))
+    # New names must not reuse another module fixture's cached feed.
+    feed_header = f"{FEED_HEADER}_{secrets.token_hex(4)}"
+    feed_url = h.write_local_feed(vm, f"{feed_header}.txt", "".join(f"{name}\n" for name in names.listed()))
     _snapshot(vm)
     lan_v6_prior: dict[str, str] | None = None
     try:
@@ -744,7 +747,7 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
         )
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _configure_resolver(vm, refid)
-        h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
+        h.inject(vm, h.DnsblCase(aliasname=feed_header, feed_url=feed_url, header=feed_header, mode=h.DnsblMode.VIP))
         _set_listeners(vm)
         _upload(client_vm, probe_binary, PROBE_BIN, "root:root")  # the gateway itself is the package's, never uploaded
         _apply(vm)  # toggle off: pfBlockerNG's own wiring, the module inside Unbound
