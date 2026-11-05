@@ -280,7 +280,7 @@ final class PfbDnsStatusTest extends TestCase
 			],
 			'active'     => TRUE,
 			'dnsbl'      => TRUE,
-			'name'       => 'fw.example.lan',
+			'name'       => '',
 		], $status);
 	}
 
@@ -679,7 +679,7 @@ final class PfbDnsStatusTest extends TestCase
 			],
 			'active'     => TRUE,
 			'dnsbl'      => FALSE,
-			'name'       => 'fw.example.lan',
+			'name'       => '',
 		], pfb_dns_status());
 	}
 
@@ -1048,6 +1048,7 @@ final class PfbDnsStatusTest extends TestCase
 		// Given a moved box running with DNSBL on and the name in its command
 		$this->box(self::DOT_ON);
 		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
+		file_put_contents($GLOBALS['pfb_test_ps_output'], rtrim((string) file_get_contents($GLOBALS['pfb_test_ps_output'])) . " --dns-name fw.example.lan\n");
 		$this->assertStringContainsString(" --dns-name 'fw.example.lan'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'premise');
 		$status = pfb_dns_status();
 		$this->assertSame([TRUE, TRUE, 'fw.example.lan'], [$status['active'], $status['dnsbl'], $status['name']]);
@@ -1060,9 +1061,30 @@ final class PfbDnsStatusTest extends TestCase
 		// Then each is independent and the name is the applied one
 		$this->assertSame([TRUE, FALSE, 'fw.example.lan'], [$status['active'], $status['dnsbl'], $status['name']]);
 
+		// And with pfBlockerNG disabled while the Resolver is still moved, pfB-DNS is not applied
+		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
+		$status = pfb_dns_status();
+		$this->assertSame([FALSE, ''], [$status['active'], $status['name']]);
+		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+
 		// And with pfB-DNS off nothing is applied
 		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::Off;
 		$status = pfb_dns_status();
 		$this->assertSame([FALSE, FALSE, ''], [$status['active'], $status['dnsbl'], $status['name']]);
+	}
+
+	public function testTheDnsNameIsTheRunningGatewaysNotAPendingScripts(): void
+	{
+		// Given a running gateway started with one name, and a regenerated script awaiting a restart with another
+		$this->box(self::DOT_ON);
+		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
+		$ps = $GLOBALS['pfb_test_ps_output'];
+		file_put_contents($ps, rtrim((string) file_get_contents($ps)) . " --dns-name fw.example.lan\n");
+		PfbConfig::write('dns/pfb_dns_name', 'pending.example.lan');
+		pfb_dns_proxy_service();
+		$this->assertStringContainsString(" --dns-name 'pending.example.lan'", pfb_dns_proxy_rc_command(), 'premise: the script awaits a restart');
+
+		// Then the overview shows what the gateway actually runs with
+		$this->assertSame('fw.example.lan', pfb_dns_status()['name']);
 	}
 }

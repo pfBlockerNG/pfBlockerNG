@@ -71,7 +71,6 @@ final class PfbDnsDdrProbeTest extends TestCase
 		$status = $this->fixture->status();
 		$this->assertSame([], $this->fixture->calls, 'Page metadata must not launch DNS subprocesses');
 		$this->assertNull($status['queried']);
-		$this->assertSame('dns.example.com', $status['name']);
 		$this->assertSame(['192.0.2.1:5353', '[2001:db8::1]:5354'], array_column($status['rows'], 'address'));
 		$this->assertSame(['pending', 'pending'], array_column($status['rows'], 'state'));
 		foreach ($status['rows'] as $row) {

@@ -111,7 +111,7 @@ final class PfbDnsDdrStatusTest extends TestCase
 		$this->assertArrayNotHasKey('stdout', $result);
 	}
 
-	public function testPendingPanelShowsOneSharedNameOutsideThreeColumnTable(): void
+	public function testPendingPanelKeepsTheNameOutOfTheThreeColumnTable(): void
 	{
 		$name = 'dns.example.com"><script>';
 		$rows = [];
@@ -121,7 +121,7 @@ final class PfbDnsDdrStatusTest extends TestCase
 		}
 		$doc = new DOMDocument();
 		$this->assertTrue($doc->loadXML('<root>' . pfb_dns_ddr_status_panel([
-			'notice' => '', 'queried' => NULL, 'name' => $name, 'rows' => $rows,
+			'notice' => '', 'queried' => NULL, 'rows' => $rows,
 		]) . '</root>'));
 		$xpath = new DOMXPath($doc);
 		$this->assertSame(0, substr_count($doc->textContent, $name), 'the DNS Name belongs to the pfB-DNS Status overview, not the DDR panel');
@@ -144,7 +144,7 @@ final class PfbDnsDdrStatusTest extends TestCase
 				'state' => $state, 'reason' => $hostile];
 		}
 		$doc = new DOMDocument();
-		$this->assertTrue($doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => $hostile, 'queried' => 'now', 'name' => $hostile, 'rows' => $rows]) . '</root>'));
+		$this->assertTrue($doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => $hostile, 'queried' => 'now', 'rows' => $rows]) . '</root>'));
 		$xpath = new DOMXPath($doc);
 		$this->assertSame(0, $xpath->query('//script | //pre | //form | //a[@id="pfb-dns-ddr-refresh"]')->length);
 		$this->assertSame(9, $xpath->query('//tr[@data-address="192.0.2.1:53"]')->length);

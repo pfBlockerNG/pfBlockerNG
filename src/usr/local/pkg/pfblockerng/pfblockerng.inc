@@ -6149,6 +6149,19 @@ function pfb_dns_proxy_upstream_address(): string {
 	return get_interface_ip('lo0') === '127.0.0.1' ? '127.0.0.1' : '::1';
 }
 
+/** The running gateway's command line, read from the process table ($pfb['ps'], default /bin/ps) for the PID the ready marker names; '' when unknown. */
+function pfb_dns_proxy_running_command(): string {
+	global $pfb;
+
+	$gateway = rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n");
+	$lines = [];
+	if ($gateway === '' || pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg($gateway) . ' 2>/dev/null',
+	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
+		return '';
+	}
+	return trim(implode("\n", $lines));
+}
+
 /**
  * The upstream the RUNNING gateway forwards to must have both transports owned by the live Unbound pidfile's process. The endpoint
  * is the one in the command line the gateway was started with, read from the process table ($pfb['ps'], default /bin/ps) for the PID the ready
@@ -6164,13 +6177,7 @@ function pfb_dns_proxy_upstream_ready(): bool {
 		return FALSE;
 	}
 	$pid = rtrim((string) @file_get_contents($pidfile), "\n");
-	$gateway = rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n");
-	$lines = [];
-	if (pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg($gateway) . ' 2>/dev/null',
-	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
-		return FALSE;
-	}
-	$command = trim(implode("\n", $lines));
+	$command = pfb_dns_proxy_running_command();
 	if (preg_match('~\A' . preg_quote(PFB_DNS_PROXY_DIR, '~') . '/bin/freebsd-(?:amd64|arm64)/pfb-dns(?=[ \t]|\z)~', $command) !== 1 ||
 	    substr_count($command, '--upstream') !== 1 ||
 	    preg_match('~[ \t]--upstream[ \t]+([^ \t]+)(?=[ \t]|\z)~', $command, $upstream) !== 1) {
@@ -15825,7 +15832,7 @@ function pfb_dns_proxy_port(): string {
  * A gateway that is not ready lists the command's addresses as `configured_not_bound`; a ready gateway that gives no list, as
  * `configured_unconfirmed`.
  *
- * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>}
+ * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>,active:bool,dnsbl:bool,name:string}
  */
 function pfb_dns_status(): array {
 	global $pfb;
@@ -15901,9 +15908,9 @@ function pfb_dns_status(): array {
 			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows($entries, $labels)];
 		}
 	}
-	$active = ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['enable'] ?? NULL) === PfbToggle::On;
-	$name = ($active && preg_match("/ --dns-name '([^']*)'/", pfb_dns_proxy_rc_command(), $applied) === 1) ? $applied[1] : '';
-	return ['service' => $service, 'mode' => $mode, 'transports' => $transports, 'active' => $active, 'dnsbl' => $dnsbl, 'name' => $name];
+	$on = ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['enable'] ?? NULL) === PfbToggle::On;
+	$name = ($on && $ready && preg_match('~[ \t]--dns-name[ \t]+([^ \t]+)~', pfb_dns_proxy_running_command(), $applied) === 1) ? $applied[1] : '';
+	return ['service' => $service, 'mode' => $mode, 'transports' => $transports, 'active' => $on, 'dnsbl' => $dnsbl, 'name' => $name];
 }
 
 /**
@@ -16176,12 +16183,12 @@ function pfb_dns_ddr_probe(string $listener, float $budget, string $name = '_dns
  * NULL is the page's cheap metadata: every bound plain listener, pending, with no DNS process. A listener address checks only
  * that exact current bound listener, within its own 10-second deadline; any other value is refused without a query.
  *
- * @return array{notice:string,name:string,queried:?string,rows:list<array<string,string>>}
+ * @return array{notice:string,queried:?string,rows:list<array<string,string>>}
  */
 function pfb_dns_ddr_status(?string $only = NULL): array {
 	$deadline = hrtime(TRUE) + 10000000000;
 	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name')) ?? '';
-	$status = ['notice' => '', 'name' => $name, 'queried' => NULL, 'rows' => []];
+	$status = ['notice' => '', 'queried' => NULL, 'rows' => []];
 	if (!pfb_dns_proxy_ready()) {
 		$status['notice'] = 'pfB-DNS service is not running; no addresses queried.';
 		return $status;
@@ -16293,10 +16300,10 @@ function pfb_dns_ddr_status(?string $only = NULL): array {
 }
 
 /**
- * The page-only DDR check table; endpoint health and certificate acceptance are not checked. The DNS Name is shown once above the
- * table, whose rows are Interface, Address and State; a pending row shows a neutral spinner until the browser checks it.
+ * The page-only DDR check table; endpoint health and certificate acceptance are not checked. Rows are Interface, Address and
+ * State; a pending row shows a neutral spinner until the browser checks it.
  *
- * @param array{notice:string,name:string,queried:?string,rows:list<array<string,string>>} $status
+ * @param array{notice:string,queried:?string,rows:list<array<string,string>>} $status
  */
 function pfb_dns_ddr_status_panel(array $status): string {
 	$body = '<p>DDR and DNS Name answers are checked automatically against current settings. '

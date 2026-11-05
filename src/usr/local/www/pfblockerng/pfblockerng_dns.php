@@ -457,7 +457,9 @@ $form->add($section);
 
 print ($form);
 $status = pfb_dns_status();
-$status['ddr'] = pfb_dns_ddr_status();
+if ($status['transports'] !== NULL) {
+	$status['ddr'] = pfb_dns_ddr_status();
+}
 print pfb_dns_status_panel($status);
 
 include('foot.inc');
