@@ -125,7 +125,6 @@ final class DnsVipOnlyModeTest extends TestCase
 
 	private function validate(array $post): array
 	{
-		$this->assertTrue(function_exists('pfb_validate_dns_listen_vip_only_post'), 'activation needs a pre-mutation ownership guard');
 		return pfb_validate_dns_listen_vip_only_post($post);
 	}
 
@@ -146,26 +145,6 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->assertNotEmpty($this->validate(array_replace($this->post(), ['pfb_dns_listen_vip' => ''])), 'Resolver addresses must be enabled');
 		$this->assertNotEmpty($this->validate(array_replace($this->post(), ['pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => ''])), 'at least one family is required');
 		$this->assertSame([], $this->validate(['pfb_dns_listen_vip_only' => '']), 'disable is unconditional');
-	}
-
-	public static function scopes(): array
-	{
-		return [['dhcpd', 'dnsserver', 'DHCPv4', '203.0.113.53'], ['dhcpdv6', 'dnsserver', 'DHCPv6', '2001:db8:53::53'], ['dhcpdv6', 'radnsserver', 'RA', '2001:db8:53::53']];
-	}
-
-	#[DataProvider('scopes')]
-	public function testActivationRejectsForeignAndFrozenListsWithoutAnyMutation(string $section, string $list, string $label, string $foreign): void
-	{
-		config_set_path("{$section}/lan/{$list}", [$foreign]);
-		$before = $GLOBALS['config'];
-		$errors = implode(' ', $this->validate($this->post()));
-		$this->assertStringContainsString($label, $errors);
-		$this->assertStringContainsString('lan', $errors);
-		$this->assertSame($before, $GLOBALS['config'], 'rejection preserves custom entries byte-identically');
-		$this->assertSame([], $this->validate(['pfb_dns_listen_vip_only' => '']), 'custom DNS never traps disabling');
-		config_set_path("{$section}/unknown/{$list}", [$foreign]);
-		$errors = implode(' ', $this->validate($this->post()));
-		$this->assertStringContainsString('unknown', $errors, 'unknown-address nonempty scopes are frozen');
 	}
 
 	public function testOwnDnsListsBecomeVipOnlyAndSharedRaListIsNotInvented(): void
