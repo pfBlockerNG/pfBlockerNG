@@ -165,7 +165,7 @@ func TestABadLineOfEitherKindLeavesBothTablesAsTheyWere(t *testing.T) {
 		"the retired IPv6 flag's name":                    "ddr-doh-4436 " + tblB,
 		"a prefix of the word":                            "ddr-doh-44 " + tblB,
 		"a bad 443 line after good lines of both kinds":   good + "\n" + doh443Line(tblB) + "\n" + doh443Line("1.2.3"),
-		"a bad name line after a good 443 line":           doh443Line(tblB) + "\n" + tableLine(tblB+"="),
+		"a bad name line after a good 443 line":           doh443Line(tblB) + "\n" + tableLine("="+tblB),
 		"a good 443 line then an unknown word":            doh443Line(tblB) + "\nsomething " + tblB,
 		"a good 443 line, then an empty line":             doh443Line(tblB) + "\n\n" + good,
 		"a good name line, a good 443 line and a newline": good + "\n" + doh443Line(tblB) + "\n",

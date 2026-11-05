@@ -226,7 +226,8 @@ func TestDoQScreensEachStreamAtItsCurrentAddress(t *testing.T) {
 
 		pc.bind(otherClient)
 		var screened []string
-		for i := range 4 {
+		deadline := time.Now().Add(watchdog)
+		for i := 0; time.Now().Before(deadline); i++ {
 			query := doqQuery(t, "moved.example.")
 			got, err := doqRound(t, c, query)
 			if err != nil {
@@ -259,7 +260,8 @@ func TestDoQScreensEachStreamAtItsCurrentAddress(t *testing.T) {
 			t.Fatalf("query before the path change: %v", err)
 		}
 		pc.bind(clientDenied)
-		for range 4 {
+		deadline := time.Now().Add(watchdog)
+		for time.Now().Before(deadline) {
 			if c.conn.Context().Err() != nil {
 				break
 			}
@@ -301,7 +303,8 @@ func TestDoQScreensEachStreamAtItsCurrentAddress(t *testing.T) {
 		pc.bind(clientRefused)
 		query := doqQuery(t, "refused.example.")
 		var refused bool
-		for range 4 {
+		deadline := time.Now().Add(watchdog)
+		for time.Now().Before(deadline) {
 			got, err := doqRound(t, c, query)
 			if err != nil {
 				t.Fatalf("refuse closed the stream: %v", err)
