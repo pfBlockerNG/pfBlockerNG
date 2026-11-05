@@ -67,7 +67,7 @@ too.
 
 ---
 
-## Memory and CPU (v3, 3.3 bridge, v4)
+## Memory and CPU (v3, 3.3, v4)
 
 Take a snapshot from the dashboard **System Information** widget (Memory
 used, CPU / load). Optional: **Diagnostics → System Activity** if you want
@@ -78,8 +78,8 @@ Record three stages if you can:
 
 | Stage | When | Idle memory | Idle CPU/load | During/after update |
 | --- | --- | --- | --- | --- |
-| v3 (3.2.x, if that is where you start) | Before the bridge install | | | |
-| 3.3.x bridge | After Stable install, lists still loaded | | | |
+| v3 (3.2.x, if that is where you start) | Before installing 3.3 or v4 | | | |
+| 3.3.x (if used) | After Stable install, lists still loaded | | | |
 | v4 Nightly | After Nightly install, then after a Run Now | | | |
 
 **What “fine” looks like**
@@ -100,18 +100,20 @@ You do not need a lab benchmark. The three dashboard numbers are enough.
 
 ---
 
-## Step 1 — install the 3.3.x bridge
+## Step 1 — install 3.3.x (recommended for this walkthrough)
 
-You cannot jump from the old Netgate **3.2.x** package straight to v4 if you
-already have pfBlockerNG settings. The install will stop and tell you to
-install the 3.3 bridge first. (A firewall with **no** pfBlockerNG settings
-yet can go straight to v4.)
+You can go from the old Netgate **3.2.x** package straight to v4. v4 keeps a
+copy of your 3.2 settings, and installing 3.3 later restores that copy. If you
+go straight to v4, skip to Step 2 and use your 3.2 settings as **snapshot A**.
+
+This walkthrough still starts on 3.3 so you can test the round trip back to a
+v3-style package before and after v4.
 
 If you are still on **3.2.x**, write down idle memory and CPU **before** you
 run the Stable installer.
 
 The 3.3.x package still **looks like v3**. That is on purpose. It saves a
-copy of your current settings so v4 can upgrade them, and so you can go back.
+copy of your current settings so you can come back to them from v4.
 
 On the firewall, as root, copy the **Stable** command from
 [pkg.pfblockerng.com](https://pkg.pfblockerng.com/):
@@ -120,7 +122,7 @@ On the firewall, as root, copy the **Stable** command from
 fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel stable
 ```
 
-**Stable** is the 3.3.x bridge (whatever 3.3.x that page currently lists).
+**Stable** is the 3.3.x release (whatever 3.3.x that page currently lists).
 If the site’s copy command differs, use the site.
 
 When it finishes:
@@ -216,6 +218,14 @@ To try that round trip:
 Leave **Keep Settings** on. Do not send us the files under
 `/var/db/pfblockerng/settings-*.xml` — they can contain passwords and API
 keys.
+
+**Going back to the Netgate 3.2.x package**
+
+The Netgate 3.2.x package cannot restore saved settings. Installing it
+directly over v4 leaves it with v4 settings it does not understand. To go
+back to 3.2.x, install 3.3 first (the **stable** command above), check that
+it shows snapshot A, then install 3.2.x the way you normally would. Keep
+**Keep Settings** on so 3.2.x keeps what 3.3 restored.
 
 ---
 
@@ -913,7 +923,7 @@ Please include:
 1. pfSense CE or Plus version, and CPU type (amd64 / ARM)
 2. pfBlockerNG version and channel (copy them from the **Software** tab)
 3. Lab / spare / VM with snapshot, or live box
-4. Path you took: `3.2 → 3.3 → v4` / `3.3 → v4` / `v4 → 3.3 → v4`
+4. Path you took: `3.2 → v4` / `3.2 → 3.3 → v4` / `3.3 → v4` / `v4 → 3.3 → v4`
 5. The page URL (`/pfblockerng/...`)
 6. What you clicked, what you expected, what happened
 7. A screenshot of **that** page
@@ -924,8 +934,7 @@ Please include:
 11. Memory and CPU from the dashboard at 3.2 (if used), 3.3, and v4 — idle
     and during/after update
 
-For update or install trouble, paste the SSH / Package Manager text
-(including `install the 3.3 bridge` if you saw it).
+For update or install trouble, paste the SSH / Package Manager text.
 
 For a “going back” surprise, include snapshot A, snapshot B, and what 3.3
 and v4 showed after each jump.
@@ -940,7 +949,7 @@ say so and still send the packet.
 pfSense: CE/Plus ____   arch: ____
 pfBlockerNG: version ____  channel ____
 Lab/VM/snapshot: yes / live box
-Path: 3.2→3.3→v4 / 3.3→v4 / v4→3.3→v4
+Path: 3.2→v4 / 3.2→3.3→v4 / 3.3→v4 / v4→3.3→v4
 URL: /pfblockerng/____
 Did:
 Expected:
