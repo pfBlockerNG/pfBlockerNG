@@ -308,9 +308,19 @@ def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
     toggle.click()
     body.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
     dimensions = section.evaluate(
-        "el => ({right: el.getBoundingClientRect().right, width: innerWidth, "
-        "page: document.documentElement.scrollWidth, tables: [...el.querySelectorAll('.table-responsive')]"
-        ".map(n => getComputedStyle(n).overflowX)})"
+        """el => {
+            const page = document.documentElement.scrollWidth;
+            const display = el.style.display;
+            el.style.display = 'none';
+            const withoutPanel = document.documentElement.scrollWidth;
+            el.style.display = display;
+            return {right: el.getBoundingClientRect().right, width: innerWidth, page, withoutPanel,
+                overflow: [...document.querySelectorAll('body *')].filter(n =>
+                    n.getClientRects().length && n.getBoundingClientRect().right > innerWidth &&
+                    !n.closest('.table-responsive')).slice(0, 12).map(n =>
+                    ({tag: n.tagName, id: n.id, classes: n.className, right: n.getBoundingClientRect().right})),
+                tables: [...el.querySelectorAll('.table-responsive')].map(n => getComputedStyle(n).overflowX)};
+        }"""
     )
     assert dimensions["right"] <= dimensions["width"], dimensions
     assert dimensions["page"] <= dimensions["width"], dimensions
