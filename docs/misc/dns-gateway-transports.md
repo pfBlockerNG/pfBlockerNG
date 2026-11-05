@@ -448,6 +448,9 @@ local NODATA. If every VIP becomes unavailable, explicit owned-empty loopback en
 The policy applies only while pfB-DNS is enabled; standalone Unbound restoration is unchanged.
 Enabling it does not enable DNS redirect or delete leases: clients with old resolver addresses need DHCP renewal, RA DNS refresh
 or manual reconfiguration.
+This is a listener policy, not a guarantee that every DHCP/RA configuration advertises only VIPs. Existing Resolver VIP
+advertisement handling remains; administrators must configure native defaults, overrides and static clients for the VIPs.
+Custom DHCP/RA lists do not block activation.
 
 ## RFCs read for this step
 

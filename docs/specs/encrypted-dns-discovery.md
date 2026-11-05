@@ -46,6 +46,13 @@ VIP-only activation checks configured and effective automatic DHCP/RA DNS advert
 can advertise ordinary or system addresses; where a family has no VIP, those advertisements must be deliberately disabled or a
 matching VIP selected. Conflicting stored lists, including dormant lists, are preserved and block activation rather than being migrated.
 
+Amended 2026-11-05 (later owner decision, #3699): the owner selected **Listener-only mode with warning** instead of the
+DHCP/RA activation guard above. VIP-only guarantees its listener addresses and locally owned Name answers, not exclusive
+DHCP/RA advertisement. Native defaults, pool/reservation overrides and custom DHCP configuration are the administrator's
+responsibility and do not block activation. Existing Resolver VIP advertisement and ownership handling remain unchanged.
+The basic pfB-DNS, Resolver-address and selected-VIP-family prerequisites still apply. No DHCP parser, migration or lease
+deletion is added. This supersedes the earlier same-day DHCP/RA guard requirement, not the Name-ownership correction.
+
 ## Fixed constraints
 
 - ISC dhcpd is out of scope; only the Kea DHCP backend is considered.
