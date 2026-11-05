@@ -251,7 +251,7 @@ final class SuppressionCidrLimitTest extends TestCase
 		}
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
 		foreach (['pfb_dnsvip4' => '', 'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443', 'top1m_enable' => '',
-			'pfb_cache' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '', 'pfb_cname' => '', 'tld_allow' => '',
+			'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '', 'pfb_cname' => '', 'tld_allow' => '',
 			'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '', 'pfb_gp' => '', 'pfb_gp_bypass_list' => ''] as $key => $value) {
 			config_set_path("{$dnsbl}/{$key}", $value);
 		}

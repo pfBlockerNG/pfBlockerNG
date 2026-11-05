@@ -305,7 +305,7 @@ final class AlertsWildcardFlushTimeoutTest extends TestCase
 	/**
 	 * Carve the shipped `if ($swapped) { ... }` wildcard-flush block from the
 	 * page's delete_domainwildcard POST tail. It is located from the block's
-	 * unique `pfb_reload_unbound('enabled', FALSE, FALSE, TRUE)` anchor (the
+	 * unique `pfb_reload_unbound('enabled', FALSE, TRUE)` anchor (the
 	 * page has two other `if ($swapped)` sites) and brace-matched through the
 	 * tokenizer, so string-interpolated braces (`{$pfb['chroot_cmd']}`) can
 	 * never truncate it and the same extraction drives the pre-#2880
@@ -319,7 +319,7 @@ final class AlertsWildcardFlushTimeoutTest extends TestCase
 		if ($source === FALSE) {
 			throw new RuntimeException('test oracle: failed to read pfblockerng_alerts.php');
 		}
-		$anchor = "\$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);";
+		$anchor = "\$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);";
 		$anchor_pos = strpos($source, $anchor);
 		if ($anchor_pos === FALSE) {
 			throw new RuntimeException('test oracle: wildcard flush anchor not found');

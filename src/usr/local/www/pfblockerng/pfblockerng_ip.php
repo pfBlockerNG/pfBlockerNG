@@ -409,7 +409,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['enable_agg'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('Default: <strong>Off</strong><br />'
-		. 'Optimise CIDRs - merge contiguous CIDRs into larger CIDR blocks.');
+		. 'Merge contiguous IPv4 CIDRs into larger blocks. IPv6 entries are not CIDR-aggregated.');
 
 $section->addInput(new Form_Checkbox(
 	'suppression',
@@ -711,14 +711,14 @@ $section->addInput(new Form_Select(
 	$pconfig['pfb_agg_types'],
 	$options_pfb_agg_types,
 	TRUE
-))->setHelp('Default: <strong>none</strong><br />'
-		. 'For each type selected, build a <code>pfB_&lt;Type&gt;_Aggregated_v4/_v6</code> '
-		. 'alias holding the CIDR-aggregated union of every feed of that type, '
-		. 'whichever <strong>List Action</strong> produced it &mdash; <strong>Deny</strong> covers <strong>Deny Inbound</strong>, <strong>Deny Outbound</strong> '
-		. 'and <strong>Deny Both</strong> as well as <strong>Alias Deny</strong>.<br />'
-		. 'Each aggregate is <strong>reference only &mdash; no firewall rule is added</strong>. '
-		. 'Use it by name where you need it (your own rule, an HAProxy ACL). Each one loads as a '
-		. 'pf table, so enable only the types you use.')
+))->setHelp('Build a combined <code>pfB_&lt;Type&gt;_Aggregated_v4/_v6</code> alias for each selected type.'
+		. '<div class="infoblock"><ul>'
+		. '<li>Each alias contains the union of feeds with the matching <strong>List Action</strong> type.</li>'
+		. '<li><strong>Deny</strong> includes <strong>Deny Inbound</strong>, <strong>Deny Outbound</strong>, <strong>Deny Both</strong> and <strong>Alias Deny</strong>.</li>'
+		. '<li>IPv4 members may be CIDR-aggregated. IPv6 aliases are deduplicated unions, not CIDR-collapsed.</li>'
+		. '<li>No firewall rules are created. Use the aliases in your own rules or integrations such as HAProxy.</li>'
+		. '</ul><p>Each aggregate loads an additional firewall table; enable only the types you need.</p>'
+		. '<p>Default: <strong>none</strong></p></div>')
   ->setAttribute('size', count($options_pfb_agg_types))
   ->setAttribute('style', 'width: auto');
 
@@ -729,9 +729,9 @@ $section->addInput(new Form_Select(
 	$options_pfb_alias_delta_mode
 ))->setHelp('<p>Default: <strong>Auto (recommended)</strong>.</p>'
 		. '<ul>'
-		. '<li><strong>Auto (recommended)</strong>: small changes are incremental; first load, boot and large changes replace the table.</li>'
-		. '<li><strong>Always incremental</strong>: keep existing entries during the update; a full rebuild can be slow.</li>'
-		. '<li><strong>Always full replace</strong>: reload the whole table every time.</li>'
+		. '<li><strong>Auto (recommended)</strong>: apply small changes incrementally. Replace the table when changes reach <strong>5%</strong>, on first load or at boot.</li>'
+		. '<li><strong>Always incremental</strong>: apply additions and removals without the percentage-based fallback.</li>'
+		. '<li><strong>Always full replace</strong>: replace the entire table.</li>'
 		. '</ul>')
   ->setAttribute('id', 'pfb_alias_delta_mode')
   ->setAttribute('style', 'width: auto');

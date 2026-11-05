@@ -914,7 +914,7 @@ if (isset($_POST) && !empty($_POST)) {
 		// ADR-10: this is a #51 user custom-list DATA edit -- take the zero-downtime
 		// fast path (no restart), then flush this exact allow-to-block change.
 		if ($cl_added || $wl_removed) {
-			$swapped = pfb_reload_unbound('enabled', FALSE, TRUE, TRUE);
+			$swapped = pfb_reload_unbound('enabled', TRUE, TRUE);
 			if ($swapped) {
 				pfb_unbound_py_ccache_flush(array($domain));
 			}
@@ -1119,7 +1119,7 @@ if (isset($_POST) && !empty($_POST)) {
 			// ADR-10: #51 whitelist add is a block->allow DATA edit -> zero-downtime
 			// fast path (no restart). block->allow is immediate (blocks were never
 			// C-cached since #43).
-			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+			pfb_reload_unbound('enabled', FALSE, TRUE);
 		}
 
 		// Save Domain/CNAME(s) to the TLD Exclusion customlist
@@ -1426,7 +1426,7 @@ if (isset($_POST) && !empty($_POST)) {
 				// ADR-10: whitelist removal is allow->block. Exact entries get one
 				// targeted flush; wildcard removal can affect an unknown set of cached
 				// subdomains, so flush the full cache after the applied-generation wait.
-				$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+				$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 				if ($swapped) {
 					if ($_POST['entry_delete'] == 'delete_domainwildcard') {
 						// issue #2880: this flush rides resolver-control IPC inside the
@@ -1503,7 +1503,7 @@ if (isset($_POST) && !empty($_POST)) {
 			// (blocks were never C-cached since #43).
 			// The store toggle (re-lock on Force/Cron) is unchanged -- only the apply
 			// mechanism (swap, not restart) changed.
-			$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+			$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
 			if ($swapped) {
 				if ($ua['mode'] === 'lock') {

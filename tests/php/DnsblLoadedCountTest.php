@@ -24,7 +24,7 @@ final class DnsblLoadedCountTest extends TestCase
 	private const PFB_KEYS = [
 		'dnsbldir', 'dbdir', 'dnsbl_file', 'dnsdir', 'dnsbl_cache', 'unbound_py_count',
 		'unbound_py_sources', 'unbound_py_rawdir', 'unbound_py_reject_stats', 'chroot_cmd',
-		'dnsbl_python_unmount', 'dnsbl_res_cache', 'dnsbl_cache_flush',
+		'dnsbl_python_unmount', 'dnsbl_cache_flush',
 		'enable', 'dnsbl', 'save', 'dnsbl_tld_wildcard', 'domain_update', 'reuse_dnsbl',
 		'dnsbl_unlock', 'keep', 'install', 'errlog', 'log',
 	];
@@ -74,7 +74,7 @@ final class DnsblLoadedCountTest extends TestCase
 			'unbound_py_reject_stats' => "{$this->dir}/pfb_py_reject_stats.json",
 			'chroot_cmd' => "{$this->dir}/unbound-control-recorder",
 			'dnsbl_python_unmount' => FALSE,
-			'dnsbl_res_cache' => PfbToggle::On,
+
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,

@@ -4232,7 +4232,6 @@ function pfb_global() {
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
 	$pfb['dnsbl_top1m']	= PfbConfig::read('dnsbl/top1m_enable');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
-	$pfb['dnsbl_res_cache']	= PfbConfig::read('dnsbl/pfb_cache');							// DNSBL Option to backup/restore Resolver cache (default on, issue #1907)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: experimental DNS proxy front end, with or without DNSBL (default off)
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
@@ -17721,7 +17720,7 @@ function pfb_dnsbl_manifest_failure_notice(): bool {
 // applied-generation handshake; FALSE = restart fallback (resolver broken) OR unconfirmed-
 // in-flight (issue #3200): queries keep the previous snapshot and the ADR-61 tick retry
 // re-publishes until the swap converges.
-function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE, ?callable $apply_ledger = NULL) {
+function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable $apply_ledger = NULL) {
 	global $g, $pfb;
 	$apply_ledger ??= static function (): bool {
 		return pfb_dnsbl_apply_ledger_update();
@@ -17826,25 +17825,10 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 
 
 
-	$cache_dumpfile = tempnam('/var/tmp/', 'unbound_cache_');
 	if ($mode == 'enabled' && is_process_running('unbound') && !$pfb['dnsbl_python_unmount'] && !$pfbpython) {
 
 		$log = "\nReloading Unbound Resolver{$type}";
 		pfb_logger($log, 1);
-
-		if ($cache && $pfb['dnsbl_res_cache'] === PfbToggle::On) {
-			$dumped = pfb_unbound_control_exec("{$pfb['chroot_cmd']} dump_cache > " .
-				escapeshellarg($cache_dumpfile) . ' 2>&1 < /dev/null', 'dump_cache');
-			// issue #2879: an expired or refused dump leaves a truncated cache (or a
-			// control error message) in the file. Discard it so the restore below cannot
-			// load a partial dump back into the fresh resolver. A failed tempnam() gives
-			// FALSE, not a path: nothing to discard, and the restart below must still
-			// happen on a box that cannot stage a cache file.
-			if ($dumped !== 0 && is_string($cache_dumpfile)) {
-				@file_put_contents($cache_dumpfile, '');
-			}
-			pfb_logger('.', 1);
-		}
 	}
 
 	$final = pfb_stop_start_unbound($type);
@@ -17896,15 +17880,6 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		pfb_logger('.', 1);
 		if ($status_retval === 0 && preg_grep("/is running.../", $status_result)) {
 			pfb_logger(" completed", 1);
-
-			// Restore Resolver cache
-			if ($cache && $pfb['dnsbl_res_cache'] === PfbToggle::On && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
-				$restored = pfb_unbound_control_exec("{$pfb['chroot_cmd']} load_cache < " .
-					escapeshellarg($cache_dumpfile) . ' 2>&1', 'load_cache');
-				if ($restored === 0) {
-					pfb_logger("\nResolver cache restored", 1);
-				}
-			}
 		}
 		else {
 			$log = htmlspecialchars(implode("\n", $status_result));
@@ -17943,7 +17918,6 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
 	}
 
-	unlink_if_exists($cache_dumpfile);
 	return FALSE;
 }
 
@@ -17970,8 +17944,7 @@ function pfb_unbound_clear_work_files() {
 			"{$pfb['dnsdir']}/DNSBL_TLD.txt",
 			// ADR-65: same opportunistic-sweep rationale for the retired interchange files.
 			$pfb['unbound_py_data'],
-			$pfb['unbound_py_zone'],
-			"/var/tmp/unbound_cache_*") as $remove) {
+			$pfb['unbound_py_zone']) as $remove) {
 		unlink_if_exists($remove);
 	}
 }
@@ -18036,7 +18009,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// Disable DNSBL
 	if (($pfb['enable'] !== PfbToggle::On || $pfb['dnsbl'] !== PfbToggle::On) && !$pfb['install']) {
 
-		pfb_reload_unbound('disabled', FALSE, $pfbpython);
+		pfb_reload_unbound('disabled', $pfbpython);
 		if (is_service_running('pfb_dnsbl')) {
 			pfb_logger("\nStop Service DNSBL", 1);
 			stop_service('pfb_dnsbl');
@@ -18061,9 +18034,9 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 		// pfb_unbound_python_sources() above; flip the sentinel, no restart. A config
 		// change ($pfbpython TRUE) -> $datapath FALSE -> the restart path. The bulk
 		// fast path optionally flushes the full resolver cache after the applied-generation
-		// handshake; config restarts preserve cache, data fallback clears it by passing FALSE.
+		// handshake; restart paths use Unbound's normal cache lifecycle.
 		$datapath = !$pfbpython;
-		$swapped = pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath);
+		$swapped = pfb_reload_unbound($mode, $pfbpython, $datapath);
 		if ($datapath && $swapped &&
 		    ($pfb['dnsbl_cache_flush'] ?? PfbToggle::Off) === PfbToggle::On) {
 			pfb_unbound_control_exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1 < /dev/null",
@@ -18074,7 +18047,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// Start Unbound Service with new DNSBL Updates
 	else {
 		// Unbound is down -> there is nothing to swap into; always (re)start.
-		pfb_reload_unbound($mode, FALSE, $pfbpython);
+		pfb_reload_unbound($mode, $pfbpython);
 	}
 
 	// issue #1263: per-file sum, not cat|grep -c ^ -- differs from the old count

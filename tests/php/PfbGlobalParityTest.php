@@ -15,8 +15,8 @@ use PHPUnit\Framework\TestCase;
  *
  * The intentional divergences are the #281/#1907 default-repair class: pfb_keep (OLD
  * code used `?? 'on'`, PHP null-coalesce) and, per the #1907 owner decision,
- * pfb_hsts/pfb_cache/pfb_py_reply (OLD code called the toggle adapter directly on the
- * raw section value, bypassing the gateway's registry default entirely). All four now
+ * pfb_hsts/pfb_py_reply (OLD code called the toggle adapter directly on the
+ * raw section value, bypassing the gateway's registry default entirely). All three now
  * default to On, formalising what was already the de-facto page default since 3.2;
  * each test below asserts the repaired value and documents its origin.
  *
@@ -278,35 +278,7 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * pfb_cache (issue #1907 DEFAULT REPAIR): OLD pfb_global() =
-	 * pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cache'] ?? '') -- a DIRECT adapter
-	 * call bypassing the gateway entirely, so absent/'' fell to the adapter's bare
-	 * parse-fallback (Off), never the registry default. Post-#1907, pfb_global() routes
-	 * this key through PfbConfig::read('dnsbl/pfb_cache'), whose registry default is
-	 * now 'on' -- the de-facto page default since 3.2 (pfblockerng_dnsbl.php's own
-	 * isset(...) ? ... : 'on' render fallback). DIVERGENCE (intentional): adopting the
-	 * gateway repairs the same #281-class defect pfb_keep already had fixed.
-	 */
-	public function testParityPfbCacheAbsentYieldsOn(): void
-	{
-		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache')
-		);
-
-		// Before: the OLD direct-adapter call (bypassing the gateway) fell to Off.
-		$old_result = pfb_cfg_toggle_read('');
-		$this->assertSame(PfbToggle::Off, $old_result, 'before: the pre-#1907 direct adapter call fell to Off');
-
-		// When: gateway read (the #1907-repaired registry default).
-		$result = PfbConfig::read('dnsbl/pfb_cache');
-
-		// Then: On -- the registry default, adopted at pfb_global()'s assignment site.
-		$this->assertSame(PfbToggle::On, $result, 'pfb_cache absent -> On (issue #1907 default repair)');
-		$this->assertSame('on', $result->value, 'pfb_cache absent -> on token');
-	}
-
-	/**
-	 * pfb_py_reply (issue #1907 DEFAULT REPAIR): same shape as pfb_cache above.
+	 * pfb_py_reply (issue #1907 DEFAULT REPAIR): absent reads the registry default On.
 	 */
 	public function testParityPfbPyReplyAbsentYieldsOn(): void
 	{

@@ -153,8 +153,14 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_listen_vip'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setAttribute('aria-label', gettext('Resolver addresses'))
-  ->setHelp(gettext('Add these addresses to Unbound, DHCPv4, DHCPv6 and Router Advertisements even when pfB-DNS and DNSBL are off. Administrator-selected DNS servers are preserved. A Resolver VIP previously added by pfBlockerNG is removed from any list that names them; DNS General warns about each affected list.')
-		. '<div class="infoblock">' . gettext('Default: <strong>Disabled</strong>') . '</div>');
+  ->setHelp(gettext('Provide dedicated DNS service addresses, even when <strong>DNSBL</strong> and <strong>pfB-DNS</strong> are disabled.')
+		. '<div class="infoblock"><p>' . gettext('The selected <strong>Resolver VIPs</strong> integrate with:') . '</p><ul>'
+		. '<li>' . gettext('<strong>DNS Resolver</strong> — listening addresses.') . '</li>'
+		. '<li>' . gettext('<strong>DHCPv4</strong> — advertised IPv4 DNS servers.') . '</li>'
+		. '<li>' . gettext('<strong>DHCPv6</strong> — advertised IPv6 DNS servers.') . '</li>'
+		. '<li>' . gettext('<strong>Router Advertisements</strong> — advertised IPv6 DNS servers.') . '</li>'
+		. '</ul><p>' . gettext('Administrator-selected DNS servers are preserved. Page warnings identify affected DNS server lists.') . '</p>'
+		. '<p>' . gettext('Default: <strong>Disabled</strong>') . '</p></div>');
 $group = new Form_Group(gettext('Resolver VIPs'));
 $group->add(new Form_Select(
 	'pfb_dns_listen_vip4',
@@ -183,9 +189,16 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_listen_vip_only'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setAttribute('aria-label', gettext('VIP-only mode'))
-  ->setHelp(gettext('Opt in to serving pfB-DNS only on the active selected Resolver VIPs; internal loopback remains available and this DNS Name always answers with the VIP pair, including on loopback. Requires pfB-DNS, Resolver addresses and at least one selected VIP family. Missing VIPs never fall back to interface addresses. Standalone Unbound is not restricted.')
-		. '<div class="infoblock">' . gettext('This removes ordinary interface DNS endpoints. Clients using old DHCPv4/DHCPv6 leases or RA-learned interface addresses may lose PLAIN DNS and DDR until renewal, RA refresh or manual reconnection. Static DNS clients need manual reconfiguration; static DNS can support DDR. Optional port 53 NAT prevents DNS escape and may redirect external DNS queries, but excludes firewall addresses: it is not a transition guarantee, and old firewall/interface DNS addresses still need reconfiguration. NAT does not guarantee DDR or TLS certificate acceptance and does not redirect encrypted DNS. No DHCP leases are deleted. VIP-only controls listeners, not every DHCP/RA advertisement. Configure DHCP/RA defaults and overrides, including pool/reservation options and custom DHCP settings, to use the Resolver VIPs. These settings do not block activation and are not automatically validated or migrated.')
-		. '<br />' . gettext('Default: <strong>Disabled</strong>') . '</div>');
+  ->setHelp(gettext('Serve <strong>pfB-DNS</strong> only on the selected <strong>Resolver VIPs</strong>.')
+		. '<div class="infoblock"><ul>'
+		. '<li>' . gettext('Requires <strong>pfB-DNS</strong>, <strong>Resolver addresses</strong> and at least one available VIP.') . '</li>'
+		. '<li>' . gettext('Removes ordinary interface listeners; internal loopback remains available.') . '</li>'
+		. '<li>' . gettext('<strong>DNS Name</strong> resolves to the selected VIP address pair.') . '</li>'
+		. '<li>' . gettext('Missing VIPs do not restore ordinary interface listeners.') . '</li>'
+		. '</ul><p>' . gettext('<span class="text-danger"><strong>Warning:</strong></span> Reconfigure client DNS settings and DHCP/RA advertisements before enabling. Existing leases and custom DNS options are not migrated.') . '</p>'
+		. '<p>' . gettext('Manually configured DNS port forwards may temporarily redirect queries from old firewall DNS addresses to the <strong>Resolver VIPs</strong>. For a permanent transition, update client DNS settings and DHCP/RA advertisements, then remove the temporary rules.') . '</p>'
+		. '<p>' . gettext('This setting does not restrict standalone <strong>DNS Resolver</strong> listeners.') . '</p>'
+		. '<p>' . gettext('Default: <strong>Disabled</strong>') . '</p></div>');
 $form->add($section);
 print ($form);
 include('foot.inc');

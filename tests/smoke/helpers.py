@@ -4644,7 +4644,7 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
         f"pfb_unlock($ua['mode'], 'dnsbl', $u, {_php_str(domain)}, 'python');\n"
         "pfb_unbound_python_sources_unlock();\n"
-        "$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+        "$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);\n"
         "if ($swapped) {\n"
         "if ($ua['mode'] === 'lock') {\n"
         f"pfb_unbound_py_ccache_flush(array({_php_str(domain)}));\n"

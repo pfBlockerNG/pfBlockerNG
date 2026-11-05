@@ -141,7 +141,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		}
 		foreach (['pfb_dnsvip4' => '_vipauto4', 'pfb_dnsvip6' => '', 'pfb_dnsport' => $o['ports'] ? '8081' : '',
 			'pfb_dnsport_ssl' => $o['ports'] ? '8443' : '', 'top1m_enable' => '', 'top1m_count' => '', 'top1m_inclusion' => '',
-			'pfb_cache' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '', 'pfb_cname' => '', 'tld_allow' => '',
+			'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '', 'pfb_cname' => '', 'tld_allow' => '',
 			'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '', 'pfb_gp' => '', 'pfb_gp_bypass_list' => '',
 			'pfb_dnsbl_rule' => 'on', 'tld_wildcard' => '', 'pfb_control' => '', 'whitelist' => '', 'dnsbl_allow_int' => 'lan'] as $key => $value) {
 			config_set_path("{$dnsbl}/{$key}", $value);

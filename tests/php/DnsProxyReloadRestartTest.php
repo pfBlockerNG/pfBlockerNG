@@ -59,7 +59,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 			'unbound_py_reject_stats' => "{$this->dir}/pfb_py_reject_stats.json",
 			'chroot_cmd' => '/bin/echo',
 			'dnsbl_python_unmount' => FALSE,
-			'dnsbl_res_cache' => PfbToggle::On,
+
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
@@ -162,7 +162,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$before = $this->startAttempts();
 
 		// When the Resolver is reloaded
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 
 		// Then the proxy is restarted exactly once, after Unbound's start attempt, with a fresh rc script
 		$this->assertCount(1, $seen, 'exactly one service call');
@@ -179,7 +179,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->observeServiceCalls($seen);
 
 		// When the Resolver is reloaded
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 
 		// Then the log says the proxy is ready, and no rollback ran (no notice, no second service call)
 		$this->assertStringContainsString('the DNS proxy is ready', (string) file_get_contents($GLOBALS['pfb']['log']));
@@ -196,7 +196,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$seen = [];
 		$this->observeServiceCalls($seen);
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertSame([['restart_service', 'pfb_dns_proxy']], array_column($seen, 'call'));
 	}
@@ -212,7 +212,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->observeServiceCalls($seen);
 		$before = $this->startAttempts();
 
-		$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertTrue($swapped, 'before: the swap took the fast path');
 		$this->assertSame([], $seen, 'the proxy applies the swap itself: no restart');
@@ -226,7 +226,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->observeServiceCalls($seen);
 		$before = $this->startAttempts();
 
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 
 		$this->assertGreaterThan($before, $this->startAttempts(), 'before: the restart path ran');
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls'], 'toggle off: not one call about the proxy');
@@ -241,7 +241,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->observeServiceCalls($seen);
 		$before = $this->startAttempts();
 
-		pfb_reload_unbound('disabled', FALSE, TRUE);
+		pfb_reload_unbound('disabled', TRUE);
 
 		$this->assertGreaterThan($before, $this->startAttempts(), 'before: the restart path ran');
 		$this->assertSame([], $seen, 'a Resolver being given back is not a reason to bring the proxy up');
@@ -267,7 +267,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 
 		// When the Resolver is reloaded
 		[$clock, $reload] = $this->clockedReload();
-		$reload('enabled', FALSE, TRUE);
+		$reload('enabled', TRUE);
 
 		// Then the ledger saw the serving proxy: no "not converged" entry is open
 		$this->assertGreaterThanOrEqual(3, $state['probes'], 'the marker was waited for until it appeared');
@@ -286,7 +286,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->observeServiceCalls($seen, FALSE);
 
 		// When the Resolver is reloaded
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 
 		// Then the apply is reported as not converged, and the message names the DNS proxy, not Unbound
 		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
@@ -299,7 +299,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 	public function testOutsideProxyModeTheNotConvergedMessageStillNamesUnbound(): void
 	{
 		// Given no snapshot and no Unbound start (the test double fails it): not converged, as today
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 
 		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
 		$this->assertCount(1, $open, 'before: the apply did not converge');

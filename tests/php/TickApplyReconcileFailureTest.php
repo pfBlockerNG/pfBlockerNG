@@ -44,7 +44,7 @@ final class TickApplyReconcileFailureTest extends TestCase
 		config_set_path("{$ip}/maxmind_locale", 'en');
 		config_set_path("{$ip}/asn_reporting", 'disabled');
 		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		foreach (['pfb_dnsvip4', 'pfb_dnsvip6', 'top1m_enable', 'pfb_cache', 'pfb_py_reply', 'pfb_regex',
+		foreach (['pfb_dnsvip4', 'pfb_dnsvip6', 'top1m_enable', 'pfb_py_reply', 'pfb_regex',
 			'pfb_regex_list', 'pfb_cname', 'tld_allow', 'pfb_py_nolog', 'pfb_noaaaa', 'pfb_noaaaa_list',
 			'pfb_gp', 'pfb_gp_bypass_list'] as $key) {
 			config_set_path("{$dnsbl}/{$key}", '');

@@ -158,7 +158,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->assertNotNull($this->krMarker(), 'before: a restart is pending');
 
 		// When the reload runs outside a package operation
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 
 		// Then the proxy was restarted once and the pending restart is gone
 		$this->assertSame($this->pair(), $this->krProxyCalls());

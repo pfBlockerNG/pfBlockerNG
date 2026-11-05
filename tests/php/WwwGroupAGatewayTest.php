@@ -95,7 +95,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * issue #1907: pfb_cache, pfb_py_reply, pfb_hsts -- the #1907-class page/registry
+	 * issue #1907: pfb_py_reply, pfb_hsts -- the #1907-class page/registry
 	 * divergence this closes. Their page-local `isset(...) ? ... : 'on'` defaults were
 	 * REMOVED and replaced by PfbConfig::read(); the registry default flipped from ''
 	 * to 'on' to match, closing the mismatch this test used to document (previously
@@ -105,13 +105,8 @@ final class WwwGroupAGatewayTest extends TestCase
 	 *
 	 * Parity: absent key -> PfbConfig::read($key) === On (matches the prior page default).
 	 */
-	public function testDnsblPfbCachePfbPyReplyPfbHstsAbsentDefaultMatchesPriorPageDefault(): void
+	public function testDnsblPfbPyReplyPfbHstsAbsentDefaultMatchesPriorPageDefault(): void
 	{
-		// pfb_cache: registry default now 'on' (matches the removed page default).
-		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache'));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_cache'),
-			'pfb_cache absent -> On (parity with prior isset default)');
-
 		// pfb_py_reply: registry default now 'on' (matches the removed page default).
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply'));
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_py_reply'),
@@ -360,7 +355,6 @@ final class WwwGroupAGatewayTest extends TestCase
 			'dnsbl_allow_int'            => '',
 			'global_log'                 => '',
 			'dnsbl_webpage'              => 'dnsbl_default.php',
-			'pfb_cache'                  => 'on',
 			'pfb_cache_flush'            => 'on',
 			'pfb_py_reply'               => 'on',
 			'pfb_hsts'                   => 'on',

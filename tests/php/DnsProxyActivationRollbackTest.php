@@ -104,7 +104,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			'unbound_py_module_src' => ["{$this->tmp}/absent_a.py", "{$this->tmp}/absent_b.py"],
 			'unbound_py_module_applied' => "{$this->tmp}/pfb_py_module.applied",
 			'chroot_cmd' => '/bin/echo', 'php' => PHP_BINARY,
-			'dnsbl_res_cache' => PfbToggle::Off, 'dnsbl_cache_flush' => PfbToggle::Off,
+			'dnsbl_cache_flush' => PfbToggle::Off,
 			'keep' => PfbToggle::On,
 		]);
 		// Nothing of an apply pass's own state (save, install, reuse_dnsbl): a rollback runs from the installer and the Reports pages too
@@ -267,7 +267,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
 		PfbConfig::writeSectionSystem(self::DNSBL, [
 			'pfb_dnsvip4' => '', 'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443',
-			'top1m_enable' => '', 'pfb_cache' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '',
+			'top1m_enable' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '',
 			'pfb_cname' => '', 'tld_allow' => '', 'tld_wildcard' => '',
 			'pfb_gp' => '', 'pfb_gp_bypass_list' => '', 'whitelist' => '', 'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '',
 			// auto-create mode: the DNSBL sinkhole VIP is the apply's to provision, so its validation does not force DNSBL off here
@@ -477,7 +477,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$before = $this->startAttempts();
 
 		// When the proxy never becomes ready
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 
 		// Then the activation is rolled back, as above ...
 		$this->assertSame('', $this->toggleStored());
@@ -1516,10 +1516,10 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$before = $this->startAttempts();
 
 		// When the DNSBL reload restarts Unbound with the Resolver enabled, then again with it disabled
-		pfb_reload_unbound('enabled', FALSE, TRUE);
+		pfb_reload_unbound('enabled', TRUE);
 		$enabled = $this->startAttempts();
 		config_del_path('unbound/enable');
-		pfb_reload_unbound('', FALSE, TRUE);
+		pfb_reload_unbound('', TRUE);
 
 		// Then only the enabled Resolver was started
 		$this->assertSame($before + 1, $enabled, 'an enabled Resolver is restarted as before');

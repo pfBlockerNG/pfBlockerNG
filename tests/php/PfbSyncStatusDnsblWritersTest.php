@@ -396,7 +396,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		try {
 			$ledger_calls = pfb_test_as_unprivileged(function (): int {
 				$ledger_calls = 0;
-				pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, static function () use (&$ledger_calls): bool {
+				pfb_reload_unbound('enabled', FALSE, TRUE, static function () use (&$ledger_calls): bool {
 					$ledger_calls++;
 					return pfb_dnsbl_apply_ledger_update();
 				});
@@ -437,7 +437,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 		$ledgerCalls = 0;
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+		pfb_reload_unbound('enabled', FALSE, FALSE,
 			static function () use (&$ledgerCalls): bool {
 				$ledgerCalls++;
 				return pfb_dnsbl_apply_ledger_update();
@@ -502,7 +502,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$startLog = (string) $GLOBALS['pfb_test_unbound_start_log'];
 		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+		pfb_reload_unbound('enabled', FALSE, FALSE,
 			static fn (): bool => pfb_dnsbl_apply_ledger_update());
 
 		$after = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
@@ -584,7 +584,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$startLog = (string) $GLOBALS['pfb_test_unbound_start_log'];
 		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn (): bool => TRUE);
+		pfb_reload_unbound('enabled', FALSE, FALSE, static fn (): bool => TRUE);
 
 		$after = count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []);
 		$this->assertSame($before + 2, $after,
@@ -641,7 +641,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		};
 
 		$ledger_calls = 0;
-		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, static function () use (&$ledger_calls): bool {
+		pfb_reload_unbound('enabled', FALSE, TRUE, static function () use (&$ledger_calls): bool {
 			$ledger_calls++;
 			return pfb_dnsbl_apply_ledger_update();
 		});
@@ -686,7 +686,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		// Unbound stays alive throughout: the watcher is merely slow, nothing is broken.
 		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
 
-		$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
 		$this->assertFalse($swapped, 'an unconfirmed swap must read as not-swapped so the caller skips its cache flushes');
@@ -733,7 +733,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		};
 
 		$started = microtime(TRUE);
-		$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 		$elapsed = microtime(TRUE) - $started;
 
 		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
@@ -771,7 +771,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			return $calls <= 2;
 		};
 
-		$swapped = pfb_reload_unbound('enabled', TRUE, FALSE, TRUE);
+		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertSame(2, $calls, 'bulk apply must return through the zero-downtime success path');
 		$this->assertTrue($swapped, 'successful applied-generation swap must return TRUE to its bulk caller');
@@ -779,32 +779,6 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			[],
 			file_exists($commands) ? file($commands, FILE_IGNORE_NEW_LINES) : [],
 			'generic reload must leave the full-cache policy to its bulk caller'
-		);
-	}
-
-	public function testLockCallerTargetsOnlyAfterGenericReloadReturns(): void
-	{
-		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
-		$this->assertNotSame('', $source, 'pfblockerng_alerts.php must be readable');
-		$start = strpos($source, "if (\$ua['mode'] !== '')");
-		$end = strpos($source, 'header("Location:', $start);
-		$this->assertNotFalse($start, 'Lock/Unlock handler must exist');
-		$this->assertNotFalse($end, 'Lock/Unlock handler end boundary must exist');
-		$region = substr($source, $start, $end - $start);
-
-		$this->assertStringNotContainsString('$newly_blocked', $region);
-		$targeted = 'pfb_unbound_py_ccache_flush(array($domain));';
-		preg_match("/pfb_reload_unbound\('enabled',\s*FALSE,\s*(?:FALSE|TRUE),\s*TRUE\);/", $region, $reload_match, PREG_OFFSET_CAPTURE);
-		$reload_pos = $reload_match[0][1] ?? FALSE;
-		$targeted_pos = strpos($region, $targeted);
-		$this->assertNotFalse($reload_pos, 'Lock/Unlock must call the four-argument generic reload');
-		$this->assertNotFalse($targeted_pos, 'Lock must retain the validated targeted flush in its caller');
-		$this->assertGreaterThan($reload_pos, $targeted_pos,
-			'targeted Lock flush must run only after generic reload returns');
-		$this->assertMatchesRegularExpression(
-			'/if \(\$ua\[\x27mode\x27\] === \x27lock\x27\) \{\s*pfb_unbound_py_ccache_flush\(array\(\$domain\)\);/s',
-			$region,
-			'only Lock, not Unlock, may invoke the targeted helper'
 		);
 	}
 
@@ -835,7 +809,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		// is ever written -- pfb_dnsbl_converged() would read FALSE too, but mode !=
 		// 'enabled' means it is never even reached on this path (confirmed by source read).
 
-		pfb_reload_unbound('disabled', FALSE, FALSE);
+		pfb_reload_unbound('disabled', FALSE);
 
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
 			'a disabled-mode reload must close the dnsbl apply entry via the unconditional else branch, even though the state never converged');

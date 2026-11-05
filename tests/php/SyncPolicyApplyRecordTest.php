@@ -336,7 +336,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 			config_set_path("installedpackages/pfblockerngreputation/config/0/{$key}", '');
 		}
 		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		foreach (['top1m_enable', 'top1m_count', 'top1m_inclusion', 'pfb_cache', 'pfb_py_reply', 'pfb_regex', 'pfb_regex_list', 'pfb_cname', 'tld_allow', 'pfb_py_nolog', 'pfb_noaaaa', 'pfb_noaaaa_list', 'pfb_gp', 'pfb_gp_bypass_list', 'pfb_dnsbl_rule', 'tld_wildcard', 'pfb_control'] as $key) {
+		foreach (['top1m_enable', 'top1m_count', 'top1m_inclusion', 'pfb_py_reply', 'pfb_regex', 'pfb_regex_list', 'pfb_cname', 'tld_allow', 'pfb_py_nolog', 'pfb_noaaaa', 'pfb_noaaaa_list', 'pfb_gp', 'pfb_gp_bypass_list', 'pfb_dnsbl_rule', 'tld_wildcard', 'pfb_control'] as $key) {
 			config_set_path("{$dnsbl}/{$key}", '');
 		}
 		$GLOBALS['g']['pfblockerng_install'] = FALSE;

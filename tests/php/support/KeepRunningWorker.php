@@ -32,7 +32,7 @@ final class KeepRunningWorker
 		} elseif ($scenario['op'] === 'tick') {
 			$this->krTick();
 		} else {
-			pfb_reload_unbound('enabled', FALSE, TRUE);
+			pfb_reload_unbound('enabled', TRUE);
 		}
 		file_put_contents($resultFile, json_encode([
 			'operation' => $operation,

@@ -43,7 +43,6 @@ final class ToggleMirrorTypeTest extends TestCase
 		'pfb_dns',
 		// issue #1907 (#1921 S3): moved from ToggleSectionMirrorTypeTest -- now sourced
 		// through PfbConfig::read() (registered, default 'on'), not a raw section reach.
-		'dnsbl_res_cache',
 		'dnsbl_py_reply',
 		'supp',
 		'unbound_state',
@@ -84,7 +83,6 @@ final class ToggleMirrorTypeTest extends TestCase
 		config_set_path("{$dnsbl}/pfb_dnsport",     '8081');
 		config_set_path("{$dnsbl}/pfb_dnsport_ssl", '8443');
 		config_set_path("{$dnsbl}/top1m_enable",    '');
-		config_set_path("{$dnsbl}/pfb_cache",       '');
 		config_set_path("{$dnsbl}/pfb_py_reply",    '');
 		config_set_path("{$dnsbl}/pfb_regex",       '');
 		config_set_path("{$dnsbl}/pfb_regex_list",  '');

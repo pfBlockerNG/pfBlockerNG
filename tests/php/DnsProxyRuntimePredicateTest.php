@@ -59,7 +59,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 			'unbound_py_reject_stats' => "{$this->dir}/pfb_py_reject_stats.json",
 			'chroot_cmd' => '/bin/echo',
 			'dnsbl_python_unmount' => FALSE,
-			'dnsbl_res_cache' => PfbToggle::On,
+
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
@@ -503,7 +503,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->applyEveryPublishedGeneration();
 		$starts = $this->startAttempts();
 
-		$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertTrue($swapped, 'the proxy applied the generation: the swap is confirmed');
 		$this->assertSame(1, $this->sentinel(), 'the sentinel was flipped');
@@ -522,7 +522,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->applyEveryPublishedGeneration();
 		$starts = $this->startAttempts();
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload",
 			'no module host to consume a generation: the sentinel must not be flipped');
@@ -539,7 +539,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->applyEveryPublishedGeneration();
 		$starts = $this->startAttempts();
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload",
 			'Unbound is the module host here: a live proxy pid must not open the zero-downtime path');
@@ -557,7 +557,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$starts = $this->startAttempts();
 
 		[$clock, $reload] = $this->clockedReload();
-		$swapped = $reload('enabled', FALSE, FALSE, TRUE);
+		$swapped = $reload('enabled', FALSE, TRUE);
 
 		$this->assertSame(FALSE, $swapped, 'an unconfirmed swap reads as not swapped');
 		$this->assertStringContainsString('swap still in flight', $this->logText(),
@@ -581,7 +581,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->proxyComesUpReadyWhenStarted();
 		$starts = $this->startAttempts();
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertStringContainsString('recovering via restart', $this->logText(),
 			'a dead module host can never apply the generation');

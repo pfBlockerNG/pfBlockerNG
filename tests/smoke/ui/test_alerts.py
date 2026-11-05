@@ -464,7 +464,7 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
                 "$patched = pfb_unbound_python_sources_whitelist();\n"
                 "if ($had_manifest && !$patched) { exit(1); }\n"
                 "$was_active = pfb_unbound_py_mode_active();\n"
-                "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+                "pfb_reload_unbound('enabled', FALSE, TRUE);\n"
                 "if ($was_active && !pfb_dnsbl_converged()) { exit(1); }\n"
                 "echo 'OK';",
             )

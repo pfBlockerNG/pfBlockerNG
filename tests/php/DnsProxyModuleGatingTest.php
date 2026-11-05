@@ -120,7 +120,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
 		PfbConfig::writeSectionSystem(self::DNSBL, [
 			'pfb_dnsvip4' => '', 'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443',
-			'top1m_enable' => '', 'pfb_cache' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '',
+			'top1m_enable' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '',
 			'pfb_cname' => '', 'tld_allow' => '', 'tld_wildcard' => '',
 			'pfb_gp' => '', 'pfb_gp_bypass_list' => '', 'whitelist' => '', 'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '',
 			'pfb_dnsbl' => '', 'pfb_dnsvip_auto' => '', 'dnsbl_interface' => 'lo0',

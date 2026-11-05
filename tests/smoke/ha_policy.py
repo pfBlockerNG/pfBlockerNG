@@ -206,7 +206,6 @@ LOCAL_SEEDS: dict[str, tuple[str, str]] = {
     f"{IP}/enable_rdns": ("on", ""),
     f"{IP}/inbound_interface": ("lan", "wan"),
     f"{IP}/outbound_interface": ("lan", "wan"),
-    f"{DNSBL}/pfb_cache": ("on", ""),
     f"{DNSBL}/dnsbl_allow_int": ("lan", ""),
     f"{DNSBL}/dnsbl_redir_int": ("lan", ""),
     f"{DNSBL}/dnsbl_dot_block_int": ("lan", ""),

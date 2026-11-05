@@ -327,7 +327,7 @@ final class RegistryPassTest extends TestCase
 	}
 
 	/**
-	 * Row 9: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
+	 * Row 9: dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
 	 * issue #1907 owner decision: default flipped to 'on' (the de-facto page default
 	 * since 3.2). Present empty remains canonical Off; 'on' remains On; absent (OLDCFG
 	 * and NEWCFG alike) seeds the registered On default. No grandfather arm remains.
@@ -335,7 +335,6 @@ final class RegistryPassTest extends TestCase
 	public function testDefaultOnGroupPreservesEmptyAndSeedsAbsent(): void
 	{
 		$cases = [
-			[self::DNSBL_SECTION, 'pfb_cache',    ['pfb_dnsbl' => 'on']],
 			[self::DNSBL_SECTION, 'pfb_py_reply', ['pfb_dnsbl' => 'on']],
 			[self::DNSBL_SECTION, 'pfb_hsts',     ['pfb_dnsbl' => 'on']],
 			[self::IP_SECTION,    'suppression',  ['v6suppression' => 'x']],

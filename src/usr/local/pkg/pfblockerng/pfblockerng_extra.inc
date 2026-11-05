@@ -1430,17 +1430,6 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-59 Cloudflare Radar credential; new 4.0 field, \'\' = none',
 		],
 
-		// Resolver cache backup/restore option. Default on (the de-facto page default
-		// since 3.2 -- #1907 owner decision). A present '' remains an explicit uncheck;
-		// no grandfather arm is needed.
-		'dnsbl/pfb_cache' => [
-			'default'       => 'on',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
-			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
-		],
-
 		// Full resolver-cache flush after a successful DNSBL data swap. Default off.
 		'dnsbl/pfb_cache_flush' => [
 			'default'       => '',
@@ -3759,6 +3748,16 @@ function pfb_sync_scope_migrate(array $cfg): ?array
 	return $cfg;
 }
 
+/** Retire only the current DNSBL Resolver cache preference; saved settings families stay intact. */
+function pfb_resolver_cache_migrate(array $cfg): ?array
+{
+	if (!array_key_exists('pfb_cache', $cfg)) {
+		return NULL;
+	}
+	unset($cfg['pfb_cache']);
+	return $cfg;
+}
+
 /**
  * pfb_migration_registry — the ordered list of upgrade migrations.
  *
@@ -3854,6 +3853,13 @@ function pfb_migration_registry(): array
 			'apply'    => 'pfb_dns_settings_migrate',
 			'message'  => 'pfBlockerNG: separated shared pfB-DNS settings from node-local state (issue #3649)',
 			'since'    => '4.0.0',
+		],
+		[
+			'id'      => 'issue3701-resolver-cache-retire',
+			'section' => $dnsbl,
+			'apply'   => 'pfb_resolver_cache_migrate',
+			'message' => 'pfBlockerNG: removed obsolete Resolver cache preference (issue #3701)',
+			'since'   => '4.0.0',
 		],
 	];
 }

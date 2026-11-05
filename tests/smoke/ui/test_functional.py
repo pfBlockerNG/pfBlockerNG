@@ -245,15 +245,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp",
     ),
     ToggleFlow(
-        name="dnsbl_cache",
-        page="/pfblockerng/pfblockerng_dnsbl.php",
-        field="pfb_cache",
-        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache",
-        # Adapter-backed unchecked saves use the canonical empty Off token.
-        # Registry default 'on': an absent key means the feature is ON.
-        absent="on",
-    ),
-    ToggleFlow(
         name="dnsbl_cache_flush",
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_cache_flush",

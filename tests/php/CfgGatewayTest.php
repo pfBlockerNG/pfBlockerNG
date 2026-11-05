@@ -164,7 +164,6 @@ final class CfgGatewayTest extends TestCase
 			'dns_shared/pfb_dns_dot' => 'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_dot',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
-			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
 			'dnsbl/pfb_py_reply'     => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply',
 			'ip/suppression'         => 'installedpackages/pfblockerngipsettings/config/0/suppression',
 		];
@@ -189,7 +188,7 @@ final class CfgGatewayTest extends TestCase
 	public function testToggleFieldsRoundTripOff(): void
 	{
 		// pfb_keep is default-on — see testPfbKeepRoundTrip*() below. issue #1907:
-		// dnsbl/pfb_hsts, dnsbl/pfb_cache, dnsbl/pfb_py_reply, ip/suppression joined
+		// dnsbl/pfb_hsts, dnsbl/pfb_py_reply, ip/suppression joined
 		// that same default-on class. Their present empty token is explicit Off and is
 		// covered by ConfigEmptyStorageContractTest.
 		$toggle_fields = [
@@ -904,14 +903,13 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
+	 * issue #1907: dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
 	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent resolves
 	 * to On; present empty and legacy 'off' resolve to Off; present 'on' resolves to On.
 	 */
 	public function testIssue1907FieldsDistinguishAbsentFromEmpty(): void
 	{
 		$fields = [
-			'dnsbl/pfb_cache'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
 			'dnsbl/pfb_py_reply' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply',
 			'dnsbl/pfb_hsts'     => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 			'ip/suppression'     => 'installedpackages/pfblockerngipsettings/config/0/suppression',
@@ -1705,7 +1703,6 @@ final class CfgGatewayTest extends TestCase
 			'top1m_count',
 			'top1m_inclusion',
 			'top1m_token', // ADR-59 P5
-			'pfb_cache',
 			'pfb_cache_flush',
 			// issue #3515: pfB-DNS enable toggle and the Resolver snapshot it keeps (pfblockerngdns section)
 			'pfb_dns',
@@ -3309,8 +3306,8 @@ final class CfgGatewayTest extends TestCase
 	 *
 	 * issue #1907: the fixture pins the #1931 re-key TRANSITION (that flipping bare
 	 * keys to alias/bare paths changed nothing else), not future default-value
-	 * decisions -- so pfb_cache/pfb_py_reply/pfb_hsts's rows were updated in step with
-	 * the registry (default '' -> 'on'; pfb_cache/pfb_py_reply additionally gained the
+	 * decisions -- so pfb_py_reply/pfb_hsts's rows were updated in step with
+	 * the registry (default '' -> 'on'; pfb_py_reply additionally gained the
 	 * toggle adapter pfb_hsts already carried) rather than frozen against it.
 	 */
 	public function testPathKeyedRegistryMatchesPre1931ParityFixture(): void

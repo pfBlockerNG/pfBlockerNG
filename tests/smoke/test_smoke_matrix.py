@@ -1109,7 +1109,7 @@ def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mo
                 "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
                 f"pfb_unlock($ua['mode'], 'dnsbl', $u, {h._php_str(domain)}, 'python');\n"
                 "pfb_unbound_python_sources_unlock();\n"
-                "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+                "pfb_reload_unbound('enabled', FALSE, TRUE);\n"
                 "echo 'OK';"
             )
             result = h.php_eval(deployed_vm, snippet, timeout=150.0)
@@ -1550,7 +1550,7 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
     it converges. Deterministic seat method: corrupt the manifest (parse failure with
     unbound:unbound ownership preserved — the same trick as
     ``test_dnsbl_fail_closed_broken_manifest``) so the applied marker can never advance,
-    then drive the REAL ``pfb_reload_unbound('enabled', FALSE, FALSE, TRUE)`` fast path
+    then drive the REAL ``pfb_reload_unbound('enabled', FALSE, TRUE)`` fast path
     under the test-only budget seam (``$GLOBALS['pfb_test_swap_wait_s'] = 1``) so the
     wait expires deterministically into the in-flight branch.
 
@@ -1595,7 +1595,7 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
             "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
             "pfb_global();\n"
             "$GLOBALS['pfb_test_swap_wait_s'] = 1;\n"
-            "$ret = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+            "$ret = pfb_reload_unbound('enabled', FALSE, TRUE);\n"
             f"echo '{_RET_OPEN}' . var_export($ret, TRUE) . '{_RET_CLOSE}';\n"
             f"echo '{_SYNC_OPEN}' . var_export("
             "file_exists($GLOBALS['pfb']['dnsbl_file'] . '.sync'), TRUE) . "

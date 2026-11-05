@@ -69,9 +69,6 @@ $pconfig['dnsbl_allow_int']	= pfb_csv_list(PfbConfig::read('dnsbl/dnsbl_allow_in
 $pconfig['global_log']		= $pfb['dnsbl_global_log'];
 $pconfig['global_log_mode']	= $pfb['dnsbl_global_mode']->toStored();
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
-// Default 'on' owned by the registry (ADR-29, issue #1907); PfbConfig::read applies it
-// when absent.
-$pconfig['pfb_cache']		= PfbConfig::read('dnsbl/pfb_cache');
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
@@ -898,8 +895,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsport_ssl']	= $_POST['pfb_dnsport_ssl']						?: '8443';
 			$pfb['dconfig']['pfb_dnsbl_rule']	= pfb_filter($_POST['pfb_dnsbl_rule'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
-			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
-			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+			unset($pfb['dconfig']['pfb_cache']);
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
@@ -3407,14 +3403,6 @@ $form->add($section);
 
 
 $section = new Form_Section('DNS Caching', 'dnsbl_caches', COLLAPSIBLE|SEC_CLOSED);
-$section->addInput(new Form_Checkbox(
-	'pfb_cache',
-	gettext('Resolver cache'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_cache'] ?? NULL),
-	'on'
-))->setHelp('Default: <strong>Enabled</strong><br />Back up and restore the DNS Resolver cache on each DNSBL update.');
-
 $section->addInput(new Form_Checkbox(
 	'pfb_cache_flush',
 	gettext('Clear Resolver Cache'),

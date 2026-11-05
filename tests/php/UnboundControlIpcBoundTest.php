@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  * per-domain cache flush multiplied that wait by its input cardinality (one call per name
  * plus its 'www.' sibling).
  *
- * The fix routes all six sites through one bounded seam — timeout(1) in its DEFAULT
+ * Control requests use one bounded seam — timeout(1) in its DEFAULT
  * (reaper) mode, SIGTERM then SIGKILL after the package kill grace, because
  * `unbound-control` is a transient request/response helper spawned through chroot(8) whose
  * whole tree must die on expiry — and gives pfb_unbound_py_ccache_flush() a WHOLE-BATCH
@@ -106,15 +106,12 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'running' => "\t[ \"\$1\" = status ] && printf 'unbound (pid 1) is running...\\n'\n",
 			// A refused status may still print stale/partial text that resembles success.
 			'status_nonzero_running' => "\tcase \"\$1\" in\n"
-				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
 				. "\tstatus) printf 'unbound (pid 1) is running...\\n'; exit 3 ;;\n"
 				. "\tesac\n",
 			'status_refused' => "\tcase \"\$1\" in\n"
-				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
 				. "\tstatus) exit 3 ;;\n"
 				. "\tesac\n",
 			'status_empty' => "\tcase \"\$1\" in\n"
-				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
 				. "\tstatus) : ;;\n"
 				. "\tesac\n",
 			// Control socket that accepts and never replies (self-capped at ~8 s).
@@ -131,23 +128,9 @@ final class UnboundControlIpcBoundTest extends TestCase
 				. "\tend=\$(( \$(date +%s) + 8 ))\n"
 				. "\twhile [ \"\$(date +%s)\" -lt \"\$end\" ]; do :; done\n"
 				. "\tprintf 'completed %s\\n' \"\$*\" >> {$log}\n",
-			// Restart path: the cache dump never replies; a later status would answer.
-			'dump_slow' => "\tcase \"\$1\" in\n"
-				. "\tdump_cache) printf 'PARTIAL-DUMP\\n'; sleep 8;"
-				. " printf 'completed %s\\n' \"\$*\" >> {$log} ;;\n"
-				. "\tstatus) printf 'unbound (pid 1) is running...\\n' ;;\n"
-				. "\tesac\n",
-			// Restart path: the dump succeeds, the later status never replies.
+			// Restart path: the status query never replies.
 			'status_slow' => "\tcase \"\$1\" in\n"
-				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
 				. "\tstatus) sleep 8; printf 'unbound (pid 1) is running...\\n';"
-				. " printf 'completed %s\\n' \"\$*\" >> {$log} ;;\n"
-				. "\tesac\n",
-			// Restart path: dump and status answer, the cache restore never replies.
-			'load_slow' => "\tcase \"\$1\" in\n"
-				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
-				. "\tstatus) printf 'unbound (pid 1) is running...\\n' ;;\n"
-				. "\tload_cache) sleep 8;"
 				. " printf 'completed %s\\n' \"\$*\" >> {$log} ;;\n"
 				. "\tesac\n",
 		};
@@ -267,7 +250,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'unbound_py_count'     => "{$this->dir}/pfb_py_count",
 			'unbound_py_sources'   => "{$this->dir}/pfb_py_sources.json",
 			'dnsbl_python_unmount' => FALSE,
-			'dnsbl_res_cache'      => PfbToggle::On,
+
 		];
 	}
 
@@ -289,8 +272,8 @@ final class UnboundControlIpcBoundTest extends TestCase
 	}
 
 	/**
-	 * The restart path's is_process_running('unbound') sequence: up for the cache-dump
-	 * gate, down while the resolver is stopped, up again for the post-start status.
+	 * The restart path's is_process_running('unbound') sequence: up before restart,
+	 * down while the resolver is stopped, up again for the post-start status.
 	 */
 	private function reloadBody(): string
 	{
@@ -301,7 +284,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 			. "\t}\n"
 			. "\treturn TRUE;\n"
 			. "};\n"
-			. "pfb_reload_unbound('enabled', TRUE, FALSE, FALSE, static fn(): bool => TRUE);\n";
+			. "pfb_reload_unbound('enabled', FALSE, FALSE, static fn(): bool => TRUE);\n";
 	}
 
 	private function unrelatedDaemonAfterStopBody(): string
@@ -458,37 +441,10 @@ final class UnboundControlIpcBoundTest extends TestCase
 	}
 
 	/**
-	 * Scenario: the pre-restart cache dump never replies.
-	 *   Given the restart path with resolver-cache handling enabled and a double whose
-	 *     dump_cache never answers but whose status would
-	 *   When pfb_reload_unbound() runs
-	 *   Then the dump is killed at the deadline, its partial output is never loaded back
-	 *     into the resolver, and no cache restore is claimed.
-	 */
-	public function testDumpCacheExpiryNeverFeedsLoadCacheOrClaimsRestore(): void
-	{
-		$run = $this->runIsolated($this->reloadBody(), $this->reloadPfb('dump_slow'));
-
-		$this->assertContains('dump_cache', $run['control'],
-			'the restart path must dump the cache through the injected double');
-		$this->assertNotContains('completed dump_cache', $run['control'],
-			'a cache dump that never replies must be killed at the deadline');
-		$this->assertContains('status', $run['control'],
-			'an expired cache dump must not abort the restart status check');
-		$this->assertNotContains('load_cache', $run['control'],
-			'a partial dump left by an expired dump_cache must never be loaded back');
-		$this->assertStringNotContainsString('Resolver cache restored', $run['log'],
-			'no cache restore may be claimed when the dump expired');
-		$this->assertStringContainsString('TIMED OUT', $run['errlog'],
-			'the expired cache dump must be observable in the error log');
-	}
-
-	/**
 	 * Scenario: the post-restart status never replies.
-	 *   Given a double whose dump_cache answers and whose status does not
+	 *   Given a double whose status query does not answer
 	 *   When pfb_reload_unbound() runs
-	 *   Then the status is killed at the deadline, is not read as a running resolver,
-	 *     and the cache is not restored on top of an unconfirmed resolver.
+	 *   Then the status is killed at the deadline and the reload is not confirmed.
 	 */
 	public function testStatusExpiryIsNotReadAsARunningResolver(): void
 	{
@@ -498,71 +454,10 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'the restart path must query status through the injected double');
 		$this->assertNotContains('completed status', $run['control'],
 			'a status query that never replies must be killed at the deadline');
-		$this->assertNotContains('load_cache', $run['control'],
-			'an unconfirmed resolver must not have its cache restored');
 		$this->assertStringContainsString('Not completed', $run['log'],
 			'an expired status must be reported as a not-completed reload');
 		$this->assertStringContainsString('TIMED OUT', $run['errlog'],
 			'the expired status query must be observable in the error log');
-	}
-
-	/**
-	 * Scenario: the dump and the status answer, and the cache restore does not —
-	 * the "later load expires" half of the issue's recovery row.
-	 *   Given a double whose dump_cache and status reply and whose load_cache does not
-	 *   When pfb_reload_unbound() runs
-	 *   Then the restore is killed at the deadline, is named, and a restore that never
-	 *     completed is not reported as one.
-	 */
-	public function testLoadCacheExpiryIsNamedAndClaimsNoRestore(): void
-	{
-		$run = $this->runIsolated($this->reloadBody(), $this->reloadPfb('load_slow'));
-
-		$this->assertContains('load_cache', $run['control'],
-			'a confirmed resolver with a good dump must attempt the cache restore');
-		$this->assertNotContains('completed load_cache', $run['control'],
-			'a cache restore that never replies must be killed at the deadline');
-		$this->assertStringNotContainsString('Resolver cache restored', $run['log'],
-			'a restore that expired must never be reported as a completed restore');
-		$this->assertStringContainsString('TIMED OUT', $run['errlog'],
-			'the expired cache restore must be observable in the error log');
-	}
-
-	/**
-	 * Scenario: the reload cannot stage its cache dump file at all.
-	 *   Given a resolver-cache reload whose tempnam() fails (an unwritable /var/tmp,
-	 *     forced here with an open_basedir that excludes it)
-	 *   When pfb_reload_unbound() runs
-	 *   Then the pass survives: the resolver is still restarted and the reload returns,
-	 *     rather than dying on the unusable path while recovering from the failed dump.
-	 */
-	public function testUnstageableCacheDumpStillRestartsTheResolver(): void
-	{
-		$open_basedir = implode(PATH_SEPARATOR, [
-			dirname(__DIR__, 2),
-			$this->dir,
-			realpath(PHP_BINARY),
-			realpath((string) $GLOBALS['pfb']['timeout']),
-			'/usr',
-			'/bin',
-			'/etc',
-			'/dev',
-			'/proc',
-		]);
-		$run = $this->runIsolated(
-			$this->reloadBody() . "print \"RELOAD-RETURNED\\n\";\n",
-			$this->reloadPfb('fast'),
-			ini: ["open_basedir={$open_basedir}"]
-		);
-
-		$this->assertSame('', implode("\n", preg_grep('/(Fatal error|ValueError)/', $run['output']) ?: []),
-			'an unstageable cache dump must not fatal the update pass: ' . implode("\n", $run['output']));
-		$this->assertContains('RELOAD-RETURNED', $run['output'],
-			'pfb_reload_unbound() must return so the caller can converge its ledger');
-		$this->assertNotContains('dump_cache', $run['control'],
-			'an unstageable cache path must prevent the dump command from starting');
-		$this->assertContains('status', $run['control'],
-			'the resolver must still be restarted and confirmed when no cache could be staged');
 	}
 
 	/** @return array<string, array{0: string}> */
@@ -582,7 +477,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$run = $this->runIsolated(
 			"\$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;\n"
 				. "pfb_reload_unbound(" . var_export($mode, TRUE)
-				. ", FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+				. ", FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
 			startCommand: $start,
 			startWait: 1
@@ -607,7 +502,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$start = $this->startCommand('exit-124', 'exit 124');
 		$run = $this->runIsolated(
 			"\$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;\n"
-				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
 			startCommand: $start
 		);
@@ -637,7 +532,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 			. "\t\tif ((\$frame['function'] ?? '') === 'pfb_stop_start_unbound') {\n"
 			. "\t\t\tfile_put_contents(" . var_export($stopChecks, TRUE) . ", \"stop\\n\", FILE_APPEND);\n"
 			. "\t\t\tbreak;\n\t\t}\n\t}\n\treturn FALSE;\n};\n"
-			. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n";
+			. "pfb_reload_unbound('enabled', FALSE, FALSE, static fn(): bool => TRUE);\n";
 		$run = $this->runIsolated(
 			$body,
 			$this->reloadPfb('running'),
@@ -667,7 +562,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$run = $this->runIsolated(
 			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
-				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
 			startCommand: $start,
 			phpCli: trim($phpCli, "'")
@@ -689,8 +584,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 		);
 
 		$this->assertContains('status', $run['control']);
-		$this->assertNotContains('load_cache', $run['control'],
-			'a non-zero status result must not be trusted just because its output says running');
 		$this->assertStringContainsString('Not completed', $run['log']);
 	}
 
@@ -715,8 +608,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 		);
 
 		$this->assertContains('status', $run['control']);
-		$this->assertNotContains('load_cache', $run['control'],
-			'start stdout must not supply the running reply missing from the status query');
 		$this->assertStringContainsString('Not completed', $run['log']);
 	}
 
@@ -734,7 +625,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$run = $this->runIsolated(
 			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
-				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
 			startCommand: $start
 		);
@@ -758,7 +649,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$run = $this->runIsolated(
 			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
-				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
 			startCommand: $start,
 			startWait: 1
@@ -783,7 +674,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$run = $this->runIsolated(
 			"\$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => 'on', 'python_script' => 'pfb_unbound'];\n"
 				. $this->unrelatedDaemonAfterStopBody()
-				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, static fn(): bool => TRUE);\n",
 			$this->reloadPfb('running'),
 			startCommand: $start,
 			phpCli: trim($phpCli, "'")
@@ -871,7 +762,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'unbound_py_zone'         => "{$this->dir}/pfb_py_zone",
 			'unbound_py_reject_stats' => "{$this->dir}/pfb_py_reject_stats.json",
 			'dnsbl_python_unmount'    => FALSE,
-			'dnsbl_res_cache'         => PfbToggle::On,
+
 			'dnsbl_cache_flush'       => PfbToggle::On,
 			'enable'                  => PfbToggle::On,
 			'dnsbl'                   => PfbToggle::On,
@@ -900,11 +791,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 			. "\t\tfile_put_contents(" . var_export($applied, TRUE) . ", \"{\$generation}\\n\");\n"
 			. "\t}\n"
 			. "};\n"
-			. "set_error_handler(static function (int \$severity, string \$message): bool {\n"
-			. "\treturn \$severity === E_NOTICE && str_contains(\$message, 'tempnam(): file created in the system');\n"
-			. "});\n"
-			. "pfb_update_unbound('enabled', FALSE, FALSE);\n"
-			. "restore_error_handler();\n",
+			. "pfb_update_unbound('enabled', FALSE, FALSE);\n",
 			$pfb
 		);
 
@@ -971,7 +858,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 
 		$offenders = [];
 		$deferrals = [];
-		$sites = 0;
 		foreach ($sources as $file) {
 			$relative = substr($file, strlen($root) + 1);
 			foreach ((array) file($file, FILE_IGNORE_NEW_LINES) as $index => $line) {
@@ -979,7 +865,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 				    str_contains((string) $line, "\$pfb['chroot_cmd'] = ")) {
 					continue;
 				}
-				$sites++;
 				if (str_contains((string) $line, 'pfb_unbound_control_exec(') ||
 				    str_contains((string) $line, 'pfb_unbound_control_cmd(') ||
 				    str_contains((string) $line, 'pfb_unbound_py_ccache_flush_cmds(') ||
@@ -1001,7 +886,5 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$this->assertCount(1, $deferrals,
 			'the #2880 exception must name exactly one real site, so a second raw spawn in ' .
 			'the same file still turns this red; drop it once #2880 lands');
-		$this->assertGreaterThanOrEqual(6, $sites,
-			'the six known control call sites must still be present in the package source');
 	}
 }

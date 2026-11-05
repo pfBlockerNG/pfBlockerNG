@@ -26,7 +26,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		foreach ([
 			'dnsbldir', 'dbdir', 'dnsbl_file', 'dnsdir', 'dnsbl_cache', 'unbound_py_count',
 			'unbound_py_sources', 'unbound_py_rawdir', 'unbound_py_data', 'unbound_py_zone',
-			'unbound_py_reject_stats', 'chroot_cmd', 'dnsbl_python_unmount', 'dnsbl_res_cache',
+			'unbound_py_reject_stats', 'chroot_cmd', 'dnsbl_python_unmount',
 			'dnsbl_cache_flush',
 			'enable', 'dnsbl', 'save', 'dnsbl_tld_wildcard', 'domain_update', 'reuse_dnsbl',
 			'dnsbl_unlock', 'keep', 'install', 'errlog', 'log',
@@ -54,7 +54,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			'unbound_py_reject_stats' => "{$this->dir}/pfb_py_reject_stats.json",
 			'chroot_cmd' => "{$this->dir}/unbound-control-recorder",
 			'dnsbl_python_unmount' => FALSE,
-			'dnsbl_res_cache' => PfbToggle::On,
+
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
@@ -138,25 +138,13 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		};
 	}
 
-	private function runUpdateIgnoringMacOsTempnamNotice(): void
-	{
-		set_error_handler(static function (int $severity, string $message): bool {
-			return $severity === E_NOTICE && str_contains($message, 'tempnam(): file created in the system');
-		});
-		try {
-			pfb_update_unbound('enabled', FALSE, FALSE);
-		} finally {
-			restore_error_handler();
-		}
-	}
-
 	public function testDefaultDisabledBulkSwapRetainsResolverCache(): void
 	{
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
 		$this->installAppliedMarkerWatcher();
 
-		$this->runUpdateIgnoringMacOsTempnamNotice();
+		pfb_update_unbound('enabled', FALSE, FALSE);
 
 		$this->assertSame("2\n", file_get_contents("{$this->dir}/pfb_py_reload.applied"),
 			'default-disabled assertion must follow a fresh generation application');
@@ -179,7 +167,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		$this->assertTrue(pfb_unbound_py_swap_fits_ram(), 'test setup must allow the data swap');
 		$this->assertTrue(is_process_running('unbound'), 'test setup must keep Unbound running');
 
-		$this->runUpdateIgnoringMacOsTempnamNotice();
+		pfb_update_unbound('enabled', FALSE, FALSE);
 
 		$this->assertSame("2\n", file_get_contents("{$this->dir}/pfb_py_reload.applied"),
 			'cache flush must follow a fresh generation application');
@@ -189,7 +177,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			'full cache flush must be issued by the bulk caller after the applied marker is live');
 	}
 
-	public function testRestartFallbackDoesNotRestoreOrBulkFlushCache(): void
+	public function testRestartFallbackDoesNotBulkFlushCache(): void
 	{
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
@@ -201,16 +189,12 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			return in_array($checks, [1, 3, 5], TRUE);
 		};
 
-		$this->runUpdateIgnoringMacOsTempnamNotice();
+		pfb_update_unbound('enabled', FALSE, FALSE);
 
 		$this->assertStringContainsString('RAM-constrained box', file_get_contents($GLOBALS['pfb']['log']) ?: '',
 			'low-RAM data update must take the restart fallback');
 		$lines = file_exists($log) ? (file($log, FILE_IGNORE_NEW_LINES) ?: []) : [];
 		$commands = implode('\n', $lines);
-		$this->assertStringNotContainsString('dump_cache', $commands,
-			'data-path fallback must not dump the old cache before restart');
-		$this->assertStringNotContainsString('load_cache', $commands,
-			'data-path fallback must not restore stale cache after restart');
 		$this->assertStringNotContainsString('flush_zone +c .', $commands,
 			'a failed data swap must not issue the post-load bulk flush');
 	}

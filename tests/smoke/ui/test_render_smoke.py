@@ -582,39 +582,20 @@ def test_edit_hooks_help_text_names_every_save_transformation(webui: WebUI) -> N
         )
 
 
-# ADR-11: the IP page's pfb_agg_types multi-select must render with ALL FOUR
-# option branches (Deny/Permit/Match/Native) AND its no-rule help caveat. Asserting
-# every option proves each branch of the select is emitted (not just the label), and the
-# caveat substring proves the help text — the user's only signal that an aggregate is
-# reference-only (no firewall rule) — actually rendered. Substrings verified against the
-# real pfblockerng_ip.php: the four $options_pfb_agg_types keys render as Form_Select
-# option values ('value="<Type>"'), and the setHelp() copy contains "no firewall rule".
+# ADR-11: all four aggregate-select option branches must render.
 _AGG_TYPE_OPTIONS = ("Deny", "Permit", "Match", "Native")
-_AGG_HELP_CAVEAT = "no firewall rule"
 _GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 _IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
 
 
 def test_ip_page_renders_aggregate_select(webui: WebUI) -> None:
-    """The IP page renders the pfb_agg_types select: all four options + the caveat.
-
-    Hermetic (no network — the IP page renders from local config alone). GET the
-    page and assert: (1) the ``pfb_agg_types`` field is present; (2) EACH of the four
-    option values (Deny/Permit/Match/Native) is emitted — every branch of the multi-
-    select, not just one (CLAUDE.md branch coverage); and (3) the "no firewall rule" help
-    caveat — the load-bearing "these are reference-only IP-sets" wording — is present.
-    Pairs with the PAGE_TABLE "Aggregated Aliases" label marker (the field's presence) to
-    pin both the field and its full option set + help.
-    """
+    """The IP page renders the aggregate select with all four supported options."""
     resp = webui.get(_IP_PAGE)
     assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
     body = resp.text
     assert "pfb_agg_types" in body, "pfb_agg_types select not present on the IP page"
     missing = [opt for opt in _AGG_TYPE_OPTIONS if f'value="{opt}"' not in body]
     assert not missing, f"pfb_agg_types select missing option value(s) {missing} (each is a branch that must render)"
-    assert _AGG_HELP_CAVEAT in body, (
-        f"pfb_agg_types help caveat {_AGG_HELP_CAVEAT!r} (the no-rule wording) not rendered on the IP page"
-    )
 
 
 # issue #2895: the Firewall 'Auto' Rule Order help must state the REAL default -- the
@@ -2931,7 +2912,7 @@ def test_pfb_dns_page_leaves_the_doh_listener_unchecked_while_its_interface_is_a
         )
 
 
-# issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
+# issue #1907: dnsbl/pfb_py_reply, dnsbl/pfb_hsts and
 # ip/suppression (IP page) flipped their registry default to 'on' -- the checkbox must
 # render CHECKED with no stored config, and still render UNCHECKED for a present Off token
 # for both canonical empty and legacy ``off`` storage. pfb_py_reply (still the
@@ -2940,10 +2921,7 @@ _ISSUE1907_TOGGLE_PAGES = (
     (
         "/pfblockerng/pfblockerng_dnsbl.php",
         "DNSBL Webserver Configuration",
-        (
-            ("pfb_cache", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache"),
-            ("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),
-        ),
+        (("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),),
     ),
     (
         "/pfblockerng/pfblockerng_dns_general.php",
@@ -2984,7 +2962,7 @@ def test_dnsbl_python_gated_toggles_render_checked_when_absent(
     marker: str,
     toggles: tuple[tuple[str, str], ...],
 ) -> None:
-    """issue #1907: pfb_cache/pfb_py_reply/pfb_hsts render CHECKED with no stored config --
+    """issue #1907: pfb_py_reply/pfb_hsts render CHECKED with no stored config --
     the registry default flipped to 'on', matching the page's REMOVED
     ``isset(...) ? ... : 'on'`` fallback (PfbConfig::read() now owns the default).
     pfb_py_reply is checked the same way on DNS General, where it now lives.

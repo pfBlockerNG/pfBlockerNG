@@ -205,9 +205,10 @@ $section->addInput(new Form_Checkbox(
 		. '<p>Alternatively, turn DNS Resolver sync off before changing <strong>pfB-DNS</strong>.</p>'
 		. '<p>Unset DNS, DoT, DoH and DoQ interfaces, the DoT setting and port, and the certificate are taken from the DNS Resolver once, the first time this page loads or <strong>pfB-DNS</strong> is turned on; '
 		. 'later Resolver changes do not change them. Explicit DoT choices received through <strong>Sync</strong> are kept.</p>'
-		. '<p><strong>Sync:</strong> the <strong>pfB-DNS</strong> enable toggle is never synced. The saved Resolver settings, listen interfaces and addresses (including VIPs) and the certificate stay per node. '
-		. '<strong>All settings (legacy)</strong> sends the DoT, DoH and DoQ toggles and ports, trusted DoH front ends and DDR settings; '
-		. '<strong>Policy and lists</strong> and <strong>Lists and global settings only (legacy)</strong> send no pfB-DNS settings.</p>'
+		. '<p><strong>Sync:</strong></p><ul>'
+		. '<li><strong>Resolver addresses</strong> and <strong>VIP-only mode</strong> follow <strong>Sync Scope</strong>.</li>'
+		. '<li>The <strong>pfB-DNS</strong> enable switch, saved Resolver settings, <strong>DNS Name</strong>, <strong>SSL/TLS Certificate</strong> and transport interface selections stay local.</li>'
+		. '</ul><p>See <strong>Sync</strong> for the settings included in each scope.</p>'
 		. '<p>Default: <strong>Disabled</strong></p>'
 		. '</div>');
 
@@ -263,8 +264,12 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_dot'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Serves DNS over TLS (RFC 7858) from pfB-DNS, with or without DNSBL. Requires the <strong>SSL/TLS Certificate</strong> selected above.'
-		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
+		. 'Encrypt client DNS traffic using TLS over TCP.'
+		. '<div class="infoblock"><ul>'
+		. '<li>Enable <strong>pfB-DNS</strong>.</li>'
+		. '<li>Set <strong>DNS Name</strong> and select an <strong>SSL/TLS Certificate</strong> covering that name.</li>'
+		. '<li><strong>DNSBL</strong> filtering applies when enabled; DNSBL is not required.</li>'
+		. '</ul><p>Default: <strong>Disabled</strong></p></div>');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_dot_port',
@@ -302,9 +307,13 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doh'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Serves DNS over HTTPS (RFC 8484, <code>/dns-query</code>) from pfB-DNS, with or without DNSBL. '
-		. 'Requires the <strong>SSL/TLS Certificate</strong> selected above.'
-		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
+		. 'Serve encrypted client DNS over HTTPS at <code>/dns-query</code>.'
+		. '<div class="infoblock"><ul>'
+		. '<li>Enable <strong>pfB-DNS</strong>.</li>'
+		. '<li>Set <strong>DNS Name</strong> and select an <strong>SSL/TLS Certificate</strong> covering that name.</li>'
+		. '<li><strong>DNSBL</strong> filtering applies when enabled; DNSBL is not required.</li>'
+		. '<li>Configure <strong>DoH Trusted Front Ends</strong> only when a trusted reverse proxy supplies client addresses.</li>'
+		. '</ul><p>Default: <strong>Disabled</strong></p></div>');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doh_port',
@@ -352,9 +361,12 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doq'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Serves DNS over QUIC (RFC 9250) from pfB-DNS, with or without DNSBL. DoQ is UDP. '
-		. 'Requires the <strong>SSL/TLS Certificate</strong> selected above.'
-		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
+		. 'Encrypt client DNS traffic using QUIC over UDP.'
+		. '<div class="infoblock"><ul>'
+		. '<li>Enable <strong>pfB-DNS</strong>.</li>'
+		. '<li>Set <strong>DNS Name</strong> and select an <strong>SSL/TLS Certificate</strong> covering that name.</li>'
+		. '<li><strong>DNSBL</strong> filtering applies when enabled; DNSBL is not required.</li>'
+		. '</ul><p>Default: <strong>Disabled</strong></p></div>');
 
 $section->addInput(new Form_Input(
 	'pfb_dns_doq_port',
@@ -393,11 +405,14 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setAttribute('aria-label', gettext('DDR'))
   ->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Answers Discovery of Designated Resolvers (RFC 9462) queries for <code>resolver.arpa</code> from pfB-DNS, so that clients that support DDR can find and switch to the encrypted transports enabled above (DoT, DoH, DoQ). '
-		. 'Clients verify the certificate against the address they queried, as an IP address SAN. '
-		. 'Requires a <strong>DNS Name</strong>, the target name DDR gives them: without one DDR answers nothing. '
-		. 'When disabled, the DNS Resolver answers these names.'
-		. '<div class="infoblock">Default: <strong>Disabled</strong></div>');
+		. 'Let compatible clients discover this firewall\'s encrypted DNS services.'
+		. '<div class="infoblock"><ul>'
+		. '<li>Enable <strong>pfB-DNS</strong> and set <strong>DNS Name</strong>.</li>'
+		. '<li>Enable the <strong>DoT</strong>, <strong>DoH</strong> or <strong>DoQ</strong> services clients should discover.</li>'
+		. '<li>Only running encrypted listeners on the queried DNS address are advertised.</li>'
+		. '<li>Clients verifying <strong>DDR</strong> require an endpoint certificate covering the queried IP address.</li>'
+		. '</ul><p>When disabled, the <strong>DNS Resolver</strong> answers these discovery queries.</p>'
+		. '<p>Default: <strong>Disabled</strong></p></div>');
 
 // issue #3694: where DDR advertises DoH on port 443, chosen among the DoH interfaces of the form (and the Resolver VIPs the operator chose)
 $options_ddr_doh_443 = pfb_dns_proxy_ddr_doh_443_options($pconfig['pfb_dns_doh_interface'] ?? array());
@@ -410,12 +425,14 @@ $section->addInput(new Form_Select(
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', count($options_ddr_doh_443) ?: '1')
   ->setAttribute('aria-label', gettext('Advertise DoH on port 443'))
-  ->setHelp('On selected interfaces and unmanaged VIPs DDR advertises DoH on port 443, with no port, where a reverse proxy answers DoH on 443. '
-		. 'pfB-DNS keeps listening on its configured DoH port there, and the proxy must really serve DoH on 443. '
-		. 'Other ordinary interfaces and unmanaged VIPs advertise the configured DoH port. '
-		. 'Package-owned Resolver VIPs are automatic: they serve DoH on port <strong>443</strong> itself and DDR advertises 443, with no selection needed. '
-		. 'Some clients might not accept a port for the DoH server provided over DDR.'
-		. '<div class="infoblock">Default: <strong>None</strong></div>');
+  ->setHelp('Tell <strong>DDR</strong> clients to use <strong>DoH</strong> on port <code>443</code> for the selected interfaces or administrator-managed VIPs.'
+		. '<div class="infoblock"><ul>'
+		. '<li>Requires <strong>DDR</strong> and <strong>DoH</strong>.</li>'
+		. '<li>A reverse proxy must already serve DoH on port <code>443</code>.</li>'
+		. '<li>Does not change <strong>IPv4 DoH Port</strong> or <strong>IPv6 DoH Port</strong>.</li>'
+		. '<li>Automatically created <strong>Resolver VIPs</strong> serve DoH directly on port <code>443</code> and need no selection here.</li>'
+		. '</ul><p>Some clients do not accept a non-standard DoH port advertised through <strong>DDR</strong>.</p>'
+		. '<p>Default: <strong>None</strong></p></div>');
 $form->add($section);
 
 

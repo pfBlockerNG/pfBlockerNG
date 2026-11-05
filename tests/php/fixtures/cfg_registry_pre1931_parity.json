@@ -324,12 +324,6 @@
         "read_adapter": null,
         "write_adapter": null
     },
-    "pfb_cache": {
-        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
-        "default": "on",
-        "read_adapter": "pfb_cfg_toggle_read",
-        "write_adapter": "pfb_cfg_toggle_write"
-    },
     "pfb_cache_flush": {
         "section": "installedpackages/pfblockerngdnsblsettings/config/0",
         "default": "",

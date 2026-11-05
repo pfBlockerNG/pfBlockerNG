@@ -19,7 +19,7 @@ final class PfbReloadCachePolicyTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_reload_cache_policy_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0777, TRUE);
 		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'unbound_py_sources',
-			'unbound_py_rawdir', 'chroot_cmd', 'dnsbl_python_unmount', 'dnsbl_res_cache', 'log', 'errlog'] as $key) {
+			'unbound_py_rawdir', 'chroot_cmd', 'dnsbl_python_unmount', 'log', 'errlog'] as $key) {
 			$this->savedPfb[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$key] : FALSE;
 		}
 		$this->savedG['varrun_path'] = array_key_exists('varrun_path', $GLOBALS['g'] ?? [])
@@ -35,7 +35,6 @@ final class PfbReloadCachePolicyTest extends TestCase
 		$GLOBALS['pfb']['unbound_py_rawdir']      = "{$this->dir}/pfb_py_raw";
 		$GLOBALS['pfb']['chroot_cmd']             = "{$this->dir}/chroot-control-recorder";
 		$GLOBALS['pfb']['dnsbl_python_unmount']   = FALSE;
-		$GLOBALS['pfb']['dnsbl_res_cache']        = 'on';
 		$GLOBALS['pfb']['log']                    = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog']                 = "{$this->dir}/error.log";
 		$GLOBALS['g']['varrun_path']              = $this->dir;
@@ -92,7 +91,7 @@ final class PfbReloadCachePolicyTest extends TestCase
 			return $calls <= 2;
 		};
 
-		$swapped = pfb_reload_unbound('enabled', TRUE, FALSE, TRUE);
+		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertSame(2, $calls, 'generic reload must use the no-restart success path');
 		$this->assertTrue($swapped, 'successful applied-generation swap must return TRUE');

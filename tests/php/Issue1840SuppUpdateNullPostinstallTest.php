@@ -139,7 +139,6 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 		config_set_path("{$dnsbl}/top1m_enable",    '');
 		config_set_path("{$dnsbl}/top1m_count",     '');
 		config_set_path("{$dnsbl}/top1m_inclusion", '');
-		config_set_path("{$dnsbl}/pfb_cache",       '');
 		config_set_path("{$dnsbl}/pfb_py_reply",    '');
 		config_set_path("{$dnsbl}/pfb_regex",       '');
 		config_set_path("{$dnsbl}/pfb_regex_list",  '');

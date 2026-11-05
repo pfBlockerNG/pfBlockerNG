@@ -234,7 +234,7 @@ $section->addInput(new Form_Input(
 	'number',
 	$pconfig['varsynctimeout'],
 	[ 'min' => 0, 'max' => 5000, 'step' => 50, 'placeholder' => 'Enter timeout in seconds' ]
-));
+))->setHelp('Timeout for each replication request. Default: <strong>150 seconds</strong>; blank or <code>0</code> uses the default.');
 
 $section->addInput(new Form_Select(
 	'syncscope',
@@ -242,19 +242,18 @@ $section->addInput(new Form_Select(
 	$pconfig['syncscope'],
 	$options_syncscope
 ))->setHelp('<ul>'
-		. '<li><strong>Policy and lists (local settings stay local)</strong>: copies what this firewall blocks, permits, logs or transforms. Interfaces, VIPs, ports, gateways, credentials, pfB-DNS settings and other local settings stay local.</li>'
-		. '<li><strong>All settings (legacy)</strong>: copies the <strong>General</strong>, <strong>IP</strong> and <strong>DNSBL</strong> settings, lists, GeoIP, Reputation, DNSBL Category, SafeSearch and hook entries, '
-		. 'plus the pfB-DNS transport settings: DoT, DoH and DoQ on/off and ports, trusted DoH front ends, DDR and DDR DoH on 443. '
-		. 'The pfB-DNS enable switch, saved Resolver settings, listen interfaces and addresses (including VIPs) and certificate stay on each firewall.</li>'
-		. '<li><strong>Lists and global settings only (legacy)</strong>: copies lists and global settings without the <strong>General</strong>, <strong>IP</strong>, <strong>DNSBL</strong> and pfB-DNS settings.</li>'
-		. '</ul>'
-		. '<p>Received pfB-DNS settings are stored only; the receiving firewall applies them at its next update, or with <strong>Run Now</strong> on <strong>Update</strong> there. '
-		. 'Set the sender\'s DoT choices first: absent DoT fields clear the receiver\'s stored choices. '
-		. 'When DNS Resolver sync is on, enable pfB-DNS on the secondary first, and disable it there first too.</p>'
-		. '<p>Hook entries are copied only with <strong>All settings (legacy)</strong>; hook script files are never copied. '
-		. 'Sync settings themselves are not copied; automatic HA sync carries only the Sync mode marker.</p>'
-		. '<p><strong>Note:</strong> When <strong>System &gt; High Availability Sync</strong> also synchronizes firewall rules, enable DNSBL with the same DNSBL IP settings on both nodes. '
-		. 'Otherwise the peer skips the <code>pfB_DNSBLIP_v4</code> and <code>pfB_DNSBLIP_v6</code> rules as "Unresolvable alias".</p>');
+		. '<li><strong>Policy and lists (local settings stay local)</strong>: copies filtering policy and Resolver VIP policy, including <strong>VIP-only mode</strong>. Node-local interfaces, transport ports, gateways, certificates and credentials stay local.</li>'
+		. '<li><strong>All settings (legacy)</strong>: also copies General, IP and DNSBL settings, GeoIP, Reputation, DNSBL Category, SafeSearch, hook entries and shared encrypted-transport/DDR settings.</li>'
+		. '<li><strong>Lists and global settings only (legacy)</strong>: copies lists and global settings without General, IP, DNSBL, pfB-DNS or Resolver VIP settings.</li>'
+		. '</ul><p>The following pfB-DNS settings stay on each firewall in every scope:</p><ul>'
+		. '<li>The <strong>pfB-DNS</strong> enable switch and saved Resolver settings.</li>'
+		. '<li><strong>DNS Name</strong> and <strong>SSL/TLS Certificate</strong>.</li>'
+		. '<li>Transport interface selections and <strong>Advertise DoH on port 443</strong>.</li>'
+		. '<li><strong>Automatic VIP interface</strong> and local ownership records.</li>'
+		. '</ul><p>Received shared settings apply at the receiver\'s next update, or with <strong>Run Now</strong> on <strong>Update</strong>.</p>'
+		. '<p>Set the sender\'s DoT choices first: absent DoT fields clear the receiver\'s stored choices. When DNS Resolver sync is enabled, enable pfB-DNS on the secondary first and disable it there first too.</p>'
+		. '<p>Hook entries are copied only with <strong>All settings (legacy)</strong>; script files and Sync settings are not copied. Automatic HA sync carries only the Sync mode marker.</p>'
+		. '<p><strong>Note:</strong> If <strong>System &gt; High Availability Sync</strong> also copies firewall rules, enable matching DNSBL IP settings on both nodes. Otherwise the peer skips <code>pfB_DNSBLIP_v4</code> and <code>pfB_DNSBLIP_v6</code> rules as "Unresolvable alias".</p>');
 $form->add($section);
 
 $section = new Form_Section('XMLRPC Replication Targets');

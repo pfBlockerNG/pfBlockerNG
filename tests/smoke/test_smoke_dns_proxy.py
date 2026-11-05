@@ -987,7 +987,7 @@ def test_alerts_whitelist_reload_takes_the_zero_downtime_swap_without_restarting
             "write_config('pfBlockerNG smoke: DNSBL whitelist for the #3515 swap');\n"
             "pfb_unbound_python_whitelist('alerts');\n"
             "$patched = pfb_unbound_python_sources_whitelist();\n"
-            "$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+            "$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);\n"
             "echo '<<<WL>>>' . ($patched ? 'patched' : 'unpatched') . ',' . ($swapped ? 'swapped' : 'restarted')"
             " . '<<<END>>>';",
             timeout=300.0,
