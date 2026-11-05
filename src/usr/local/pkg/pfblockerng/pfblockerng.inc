@@ -25949,7 +25949,6 @@ function pfb_clear_contents() {
 	foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_cache']}-shm") as $legacy_cache) {
 		unlink_if_exists($legacy_cache);
 	}
-	unlink_if_exists("/var/tmp/unbound_cache_*");
 	unlink_if_exists("{$pfb['asn_cache']}");
 	unlink_if_exists("{$pfb['ip_cache']}");
 	rmdir_recursive("{$pfb['origdir']}");
@@ -26523,7 +26522,6 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_cache']}-shm") as $legacy_cache) {
 		unlink_if_exists($legacy_cache);
 	}
-	unlink_if_exists("/var/tmp/unbound_cache_*");
 	unlink_if_exists("{$pfb['ip_cache']}");
 
 	// Remove incorrect xml setting
