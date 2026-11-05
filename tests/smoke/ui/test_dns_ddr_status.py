@@ -315,15 +315,11 @@ def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
             const withoutPanel = document.documentElement.scrollWidth;
             el.style.display = display;
             return {right: el.getBoundingClientRect().right, width: innerWidth, page, withoutPanel,
-                overflow: [...document.querySelectorAll('body *')].filter(n =>
-                    n.getClientRects().length && n.getBoundingClientRect().right > innerWidth &&
-                    !n.closest('.table-responsive')).slice(0, 12).map(n =>
-                    ({tag: n.tagName, id: n.id, classes: n.className, right: n.getBoundingClientRect().right})),
                 tables: [...el.querySelectorAll('.table-responsive')].map(n => getComputedStyle(n).overflowX)};
         }"""
     )
     assert dimensions["right"] <= dimensions["width"], dimensions
-    assert dimensions["page"] <= dimensions["width"], dimensions
+    assert dimensions["page"] == dimensions["withoutPanel"], f"DDR must not widen the rest of the page: {dimensions}"
     assert dimensions["tables"] and all(value in ("auto", "scroll") for value in dimensions["tables"]), dimensions
     assert _config_digest(gw.vm) == before, "browser refresh changed config.xml"
     section.screenshot(path=str(screenshot_dir / f"pfb-dns-ddr-{width}.png"))
