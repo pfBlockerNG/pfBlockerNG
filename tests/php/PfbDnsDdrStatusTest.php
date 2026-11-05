@@ -142,11 +142,11 @@ final class PfbDnsDdrStatusTest extends TestCase
 		$hostile = '<script>" & label</script>';
 		$rows = [];
 		foreach (['matched', 'mismatch', 'error', 'timeout', 'budget', 'off', 'no_transport', 'unverified', 'unexpected'] as $state) {
-			$rows[] = ['interface' => $hostile, 'identity' => 'Interface', 'address' => '192.0.2.1:53', 'name' => $hostile,
+			$rows[] = ['interface' => $hostile, 'identity' => 'Interface', 'address' => '192.0.2.1:53',
 				'state' => $state, 'reason' => $hostile];
 		}
 		$doc = new DOMDocument();
-		$this->assertTrue($doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => $hostile, 'queried' => 'now', 'rows' => $rows]) . '</root>'));
+		$this->assertTrue($doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => $hostile, 'queried' => 'now', 'name' => $hostile, 'rows' => $rows]) . '</root>'));
 		$xpath = new DOMXPath($doc);
 		$this->assertSame(0, $xpath->query('//script | //pre | //form | //a[@id="pfb-dns-ddr-refresh"]')->length);
 		$this->assertSame(9, $xpath->query('//tr[@data-address="192.0.2.1:53"]')->length);
@@ -154,7 +154,7 @@ final class PfbDnsDdrStatusTest extends TestCase
 		$this->assertSame(8, $xpath->query('//i[contains(@class,"text-danger")]')->length);
 		$this->assertSame(9, $xpath->query('//span[@class="sr-only"]')->length);
 		$this->assertSame($hostile, $xpath->evaluate('string(//tbody/tr/td[1])'));
-		$this->assertSame($hostile, $xpath->evaluate('string(//tbody/tr/td[3])'));
+		$this->assertSame($hostile, $xpath->evaluate('string(//*[@id="pfb-dns-ddr-name"])'));
 		$this->assertSame(1, $xpath->query('//div[@class="table-responsive"]/table')->length);
 		$this->assertSame('#pfb-dns-status-ddr_panel-body', $xpath->evaluate('string(//a[@data-toggle="collapse"]/@href)'));
 	}
@@ -163,13 +163,13 @@ final class PfbDnsDdrStatusTest extends TestCase
 	{
 		$reason = 'SVCB matched; name resolution not checked (no owned address mapping)';
 		$doc = new DOMDocument();
-		$doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => '', 'queried' => NULL, 'rows' => [[
+		$doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => '', 'queried' => NULL, 'name' => 'dns.example.com', 'rows' => [[
 			'interface' => 'Localhost', 'identity' => 'Interface', 'address' => '127.0.0.1:53',
-			'name' => 'dns.example.com', 'state' => 'matched', 'reason' => $reason,
+			'state' => 'matched', 'reason' => $reason,
 		]]]) . '</root>');
 		$xpath = new DOMXPath($doc);
-		$this->assertSame('', trim($xpath->evaluate('string(//tbody/tr/td[4]/text())')), 'Successful rows must not repeat prose');
-		$this->assertStringContainsString($reason, $xpath->evaluate('string(//tbody/tr/td[4]/i/@title)'));
-		$this->assertStringContainsString($reason, $xpath->evaluate('string(//tbody/tr/td[4]/span[@class="sr-only"])'));
+		$this->assertSame('', trim($xpath->evaluate('string(//tbody/tr/td[3]/text())')), 'Successful rows must not repeat prose');
+		$this->assertStringContainsString($reason, $xpath->evaluate('string(//tbody/tr/td[3]/i/@title)'));
+		$this->assertStringContainsString($reason, $xpath->evaluate('string(//tbody/tr/td[3]/span[@class="sr-only"])'));
 	}
 }

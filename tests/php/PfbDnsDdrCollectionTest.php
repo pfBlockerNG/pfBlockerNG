@@ -56,7 +56,7 @@ final class PfbDnsDdrCollectionTest extends TestCase
 		$GLOBALS['pfb_test_valid_pids'][$GLOBALS['pfb']['dns_proxy_pidfile']] = TRUE;
 	}
 
-	public function testOnlyBoundPlainAddressesAreAutomaticallyCheckedWithTheirRealAddressIdentity(): void
+	public function testOnlyBoundPlainAddressesArePendingWithTheirRealAddressIdentity(): void
 	{
 		$this->ready();
 		config_set_path('virtualip/vip', [
@@ -73,7 +73,7 @@ final class PfbDnsDdrCollectionTest extends TestCase
 
 		$status = pfb_dns_ddr_status();
 		$this->assertSame('', $status['notice']);
-		$this->assertNotNull($status['queried']);
+		$this->assertNull($status['queried']);
 		$this->assertSame([
 			['LAN <guest>', 'Interface', '192.0.2.1:5353'],
 			['LAN <guest>', 'Interface', '[2001:db8::1]:5354'],
@@ -82,10 +82,10 @@ final class PfbDnsDdrCollectionTest extends TestCase
 			['LAN <guest>', 'Manual VIP: Admin <VIP>', '192.0.2.54:1053'],
 		], array_map(static fn (array $row): array => [$row['interface'], $row['identity'], $row['address']], $status['rows']));
 		foreach ($status['rows'] as $row) {
-			$this->assertSame('off', $row['state']);
+			$this->assertSame('pending', $row['state']);
 			$this->assertArrayNotHasKey('stdout', $row);
 			$this->assertArrayNotHasKey('stderr', $row);
-			$this->assertArrayHasKey('name', $row);
+			$this->assertArrayNotHasKey('name', $row);
 			$this->assertArrayHasKey('reason', $row);
 		}
 	}

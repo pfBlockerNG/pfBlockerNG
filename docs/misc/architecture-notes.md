@@ -753,14 +753,13 @@ transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the
 `test_smoke_dns_gateway.py` (native all-transport tables, also with Unbound stopped while gateway bindings remain) and the
 `ui_browser` test in `test_browser_dns.py`.
 
-**DDR advertisement checks (#3702).** The page-only section queries actual bound plain DNS listeners on every page load and
-refreshes its results through authenticated, read-only AJAX every 30 seconds, without replacing the form or collapse state.
-The responsive Interface | Address | DNS Name | State table uses the listener tables' accessible check/cross icons, never raw
+**DDR advertisement checks (#3702).** The page-only section loads every bound plain DNS listener as pending, with the configured DNS Name shown once above the table. Each listener is then checked by its own authenticated, read-only AJAX request, one after another, and the sweep repeats 30 seconds after it finishes. A refresh changes only the State cells: the form, the collapse state and the row elements stay.
+The table has Interface | Address | State columns and uses the listener tables' accessible check/cross icons, never raw
 command output. Green requires matching SVCB targets, transport priorities, ALPNs, ports, address hints, DoH paths and the complete
 Additional address set. Where the gateway owns the DNS Name, directed A/AAAA queries must also match its per-address answer map,
 including an absent family's NOERROR/NODATA response. Unmapped loopback checks only SVCB and states that limitation in its hover
 and screen-reader text; other unmapped addresses remain unverified. Disabled DDR, missing encrypted listeners and query failures
-never turn green. A failed AJAX refresh removes stale results.
+never turn green. A failed or interrupted refresh keeps every row, its element and its last results, and shows a small status note until a complete sweep succeeds.
 Installed `drill` runs under bounded probe/request deadlines because PHP's standard DNS API cannot select a nameserver.
 IPv4 uses a loopback source; IPv6 uses `::1` only for addresses assigned to `lo0`, otherwise the kernel selects the source.
 These local checks do not prove client ACL access, certificate acceptance or encrypted endpoint reachability. The widget does

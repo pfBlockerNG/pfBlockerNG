@@ -16167,13 +16167,16 @@ function pfb_dns_ddr_probe(string $listener, float $budget, string $name = '_dns
 }
 
 /**
- * Automatically verify DDR at actual bound plain listeners against saved intent and bound encrypted listeners.
+ * Automatic DDR verification at the actual bound plain listeners against saved intent and bound encrypted listeners.
+ * NULL is the page's cheap metadata: every bound plain listener, pending, with no DNS process. A listener address checks only
+ * that exact current bound listener, within its own 10-second deadline; any other value is refused without a query.
  *
- * @return array{notice:string,queried:?string,rows:list<array<string,string>>}
+ * @return array{notice:string,name:string,queried:?string,rows:list<array<string,string>>}
  */
-function pfb_dns_ddr_status(): array {
+function pfb_dns_ddr_status(?string $only = NULL): array {
 	$deadline = hrtime(TRUE) + 10000000000;
-	$status = ['notice' => '', 'queried' => NULL, 'rows' => []];
+	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name')) ?? '';
+	$status = ['notice' => '', 'name' => $name, 'queried' => NULL, 'rows' => []];
 	if (!pfb_dns_proxy_ready()) {
 		$status['notice'] = 'pfB-DNS service is not running; no addresses queried.';
 		return $status;
@@ -16197,7 +16200,6 @@ function pfb_dns_ddr_status(): array {
 			'identity' => $managed ? 'Managed Resolver VIP' : 'Manual VIP: ' . (string) ($vip['descr'] ?? $vip['uniqid'] ?? ''),
 		];
 	}
-	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name'));
 	// config.xml keeps addresses as typed; listener keys use the gateway's canonical spelling.
 	$canon = static fn (array $list): array => array_map(static fn (string $a): string => pfb_dns_proxy_answer_address($a) ?? $a, $list);
 	$answers = [];
@@ -16206,12 +16208,18 @@ function pfb_dns_ddr_status(): array {
 	}
 	$advertised = $canon(pfb_dns_proxy_ddr_doh_443_addresses());
 	$managed = $canon(pfb_dns_listen_auto_vips());
-	$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
 	foreach (array_keys($listeners['listening']['udp+tcp'] ?? []) as $listener) {
+		if ($only !== NULL && $listener !== $only) {
+			continue;
+		}
 		$host = trim(substr($listener, 0, (int) strrpos($listener, ':')), '[]');
 		$row = $vips[$host] ?? ['interface' => $labels[$host] ?? $host, 'identity' => 'Interface'];
 		$row['address'] = $listener;
-		$row['name'] = $name ?? '';
+		if ($only === NULL) {
+			$status['rows'][] = $row + ['state' => 'pending', 'reason' => ''];
+			continue;
+		}
+		$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
 		$expected = [];
 		foreach (['doh' => [1, 'h2', 443], 'dot' => [2, 'dot', 853], 'doq' => [3, 'doq', 853]] as $kind => [$priority, $alpn, $standard]) {
 			if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
@@ -16239,12 +16247,12 @@ function pfb_dns_ddr_status(): array {
 			if ($kind === 'doh' && in_array($host, $advertised, TRUE)) {
 				$port = '443';
 			}
-			$expected[] = ['priority' => $priority, 'target' => strtolower($name ?? ''), 'alpn' => $alpn, 'port' => (int) $port,
+			$expected[] = ['priority' => $priority, 'target' => strtolower($name), 'alpn' => $alpn, 'port' => (int) $port,
 			    'hint' => $host, 'path' => $kind === 'doh' ? '/dns-query{?dns}' : ''];
 		}
 		$result = ['state' => 'off', 'reason' => 'DDR is disabled'];
 		if (PfbConfig::read('dns_shared/pfb_dns_ddr') === PfbToggle::On) {
-			if ($name === NULL || $name === '') {
+			if ($name === '') {
 				$result = ['state' => 'unverified', 'reason' => 'No valid configured DNS Name'];
 			} elseif ($expected === []) {
 				$result = ['state' => 'no_transport', 'reason' => 'No expected encrypted listener is bound on this address'];
@@ -16269,27 +16277,38 @@ function pfb_dns_ddr_status(): array {
 		$status['rows'][] = array_merge($row, $result);
 	}
 	if ($status['rows'] === []) {
-		$status['notice'] = 'pfB-DNS reports no bound plain DNS listeners; no addresses queried.';
+		$status['notice'] = $only === NULL ? 'pfB-DNS reports no bound plain DNS listeners; no addresses queried.'
+		    : 'Address is not a bound plain DNS listener; no address queried.';
 	}
 	return $status;
 }
 
 /**
- * The page-only DDR check table; endpoint health and certificate acceptance are not checked.
+ * The page-only DDR check table; endpoint health and certificate acceptance are not checked. The DNS Name is shown once above the
+ * table, whose rows are Interface, Address and State; a pending row shows a neutral spinner until the browser checks it.
  *
- * @param array{notice:string,queried:?string,rows:list<array<string,string>>} $status
+ * @param array{notice:string,name:string,queried:?string,rows:list<array<string,string>>} $status
  */
 function pfb_dns_ddr_status_panel(array $status): string {
 	$body = '<p>DDR and DNS Name answers are checked automatically against current settings. '
-	    . 'This does not check certificates or encrypted endpoint connectivity.</p>';
+	    . 'This does not check certificates or encrypted endpoint connectivity.</p>'
+	    . '<p>DNS Name: <span id="pfb-dns-ddr-name">' . htmlspecialchars($status['name']) . '</span></p>';
 	if ($status['queried'] !== NULL) {
 		$body .= '<p>Checked: ' . htmlspecialchars($status['queried']) . '</p>';
 	}
 	if ($status['notice'] !== '') {
 		$body .= '<p>' . htmlspecialchars($status['notice']) . '</p>';
 	}
+	$body .= '<p id="pfb-dns-ddr-refresh-status" role="status" hidden="hidden"></p>';
 	$rows = '';
 	foreach ($status['rows'] as $row) {
+		$address = htmlspecialchars($row['address']);
+		$cells = '<td>' . htmlspecialchars($row['interface']) . '</td><td>' . $address . '</td>';
+		if ($row['state'] === 'pending') {
+			$rows .= '<tr data-address="' . $address . '" data-state="pending">' . $cells
+			    . '<td><i class="fa-solid fa-spinner fa-spin text-muted" aria-hidden="true"></i><span class="sr-only">Checking</span></td></tr>';
+			continue;
+		}
 		$matched = $row['state'] === 'matched';
 		$meaning = match ($row['state']) {
 			'matched' => 'Matched',
@@ -16303,14 +16322,13 @@ function pfb_dns_ddr_status_panel(array $status): string {
 		};
 		$icon = $matched ? 'fa-check-circle text-success' : 'fa-times-circle text-danger';
 		$details = htmlspecialchars($meaning . ($row['reason'] === '' ? '' : ': ' . $row['reason']));
-		$rows .= '<tr data-address="' . htmlspecialchars($row['address']) . '" data-state="' . htmlspecialchars($row['state']) . '"><td>' . htmlspecialchars($row['interface']) . '</td><td>'
-		    . htmlspecialchars($row['address']) . '</td><td>' . htmlspecialchars($row['name']) . '</td><td>'
-		    . '<i class="fa-solid ' . $icon . '" title="' . $details . '" aria-hidden="true"></i><span class="sr-only">' . $details . '</span>'
+		$rows .= '<tr data-address="' . $address . '" data-state="' . htmlspecialchars($row['state']) . '">' . $cells
+		    . '<td><i class="fa-solid ' . $icon . '" title="' . $details . '" aria-hidden="true"></i><span class="sr-only">' . $details . '</span>'
 		    . ($matched || $row['reason'] === '' ? '' : ' ' . htmlspecialchars($row['reason'])) . '</td></tr>';
 	}
 	if ($rows !== '') {
 		$body .= '<div class="table-responsive"><table class="table table-striped table-hover table-condensed">'
-		    . '<thead><tr><th>Interface</th><th>Address</th><th>DNS Name</th><th>State</th></tr></thead><tbody>'
+		    . '<thead><tr><th>Interface</th><th>Address</th><th>State</th></tr></thead><tbody>'
 		    . $rows . '</tbody></table></div>';
 	}
 	return '<div class="panel panel-default" id="pfb-dns-status-ddr"><div class="panel-heading"><h2 class="panel-title">DDR Advertisements'

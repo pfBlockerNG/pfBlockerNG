@@ -137,7 +137,7 @@ final class PfbDnsDdrProbeTest extends TestCase
 	public function testAutomaticQueriesUseActualPlainPortAndBothOwnedNameFamilies(): void
 	{
 		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853', 'doh 192.0.2.99:443'], ['udp+tcp 192.0.2.50:53' => 'refused']);
-		$result = $this->fixture->status();
+		$result = $this->fixture->status('192.0.2.1:5353');
 		$this->assertSame(['matched'], array_column($result['rows'], 'state'));
 		$this->assertCount(3, $this->fixture->calls);
 		foreach ($this->fixture->calls as $call) {
@@ -168,28 +168,19 @@ final class PfbDnsDdrProbeTest extends TestCase
 	public function testDisabledInvalidNameAndRefusedTransportCannotTurnGreenOrLaunchQueries(): void
 	{
 		$this->gatewayServes(['udp+tcp 192.0.2.1:53'], ['dot 192.0.2.1:853' => 'refused']);
-		$this->assertSame('no_transport', $this->fixture->status()['rows'][0]['state']);
+		$this->assertSame('no_transport', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
 		PfbConfig::write('dns/pfb_dns_name', '');
-		$this->assertSame('unverified', $this->fixture->status()['rows'][0]['state']);
+		$this->assertSame('unverified', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
 		PfbConfig::write('dns_shared/pfb_dns_ddr', '');
-		$this->assertSame('off', $this->fixture->status()['rows'][0]['state']);
+		$this->assertSame('off', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
 		$this->assertSame([], $this->fixture->calls);
 	}
 
 	public function testStaleBoundPortsDoNotBlessTheStaleAdvertisement(): void
 	{
 		$this->gatewayServes(['udp+tcp 192.0.2.1:53', 'dot 192.0.2.1:8853']);
-		$this->assertSame('no_transport', $this->fixture->status()['rows'][0]['state']);
+		$this->assertSame('no_transport', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
 		$this->assertSame([], $this->fixture->calls);
-	}
-
-	public function testWholeRequestBudgetStopsFurtherProcesses(): void
-	{
-		$this->gatewayServes(['udp+tcp 192.0.2.1:53', 'dot 192.0.2.1:853', 'udp+tcp 127.0.0.1:53', 'dot 127.0.0.1:853']);
-		$this->fixture->elapsedPerQuery = 5000000000;
-		$result = $this->fixture->status();
-		$this->assertSame(['budget', 'budget'], array_column($result['rows'], 'state'));
-		$this->assertCount(2, $this->fixture->calls);
 	}
 
 	public function testLoopbackWithoutOwnedNameMappingChecksOnlySvcb(): void
@@ -197,7 +188,7 @@ final class PfbDnsDdrProbeTest extends TestCase
 		$this->gatewayServes(['udp+tcp 127.0.0.1:53', 'dot 127.0.0.1:853']);
 		$this->fixture->responses['_dns.resolver.arpa. SVCB'] = PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record('127.0.0.1')],
 			additional: ['dns.example.com. 300 IN A 127.0.0.1']);
-		$result = $this->fixture->status()['rows'][0];
+		$result = $this->fixture->status('127.0.0.1:53')['rows'][0];
 		$this->assertSame('matched', $result['state']);
 		$this->assertStringContainsString('name resolution not checked', $result['reason']);
 		$this->assertCount(1, $this->fixture->calls);

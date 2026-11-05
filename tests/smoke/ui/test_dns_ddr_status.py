@@ -6,9 +6,11 @@ import hashlib
 import ipaddress
 import json
 import re
+import time
 import xml.etree.ElementTree as ET
+from html import unescape
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 
@@ -39,7 +41,7 @@ from .test_sync_status_panels import panel
 from .webui import CSRF_FIELD, extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from playwright.sync_api import Page, Route
@@ -50,6 +52,13 @@ if TYPE_CHECKING:
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 PANEL_ID = "pfb-dns-status-ddr"
+
+LISTENER_QUERY = "ajax=ddr&listener="
+PENDING_ROWS = (
+    "() => [...document.querySelectorAll('#pfb-dns-status-ddr tr[data-address]')]"
+    ".some(row => row.dataset.state === 'pending')"
+)
+SWEEP_RUNNING = "() => document.getElementById('pfb-dns-status-ddr_panel-body').hasAttribute('aria-busy')"
 
 
 @pytest.fixture(autouse=True)
@@ -185,17 +194,23 @@ def test_dns_ddr_initial_checks_are_async_and_keep_rows_on_failure(
 
 @pytest.mark.ui_browser
 @pytest.mark.parametrize("failure", ["http", "login", "redirect", "json", "shape", "missing", "duplicate", "timeout"])
-def test_dns_ddr_failed_refresh_clears_stale_results_and_recovers(
+def test_dns_ddr_failed_refresh_keeps_rows_and_last_results_then_recovers(
     gw: Gateway, gateway_on: State, browser_page: Page, webui: WebUI, failure: str
 ) -> None:
+    """A failed refresh keeps every row, its element and its last results; the next complete sweep clears the note."""
     _ensure_ddr(gw, on=True)
     page = browser_page
     page.clock.install()
+    requests = _track_listener_requests(page)
     _open(page, webui, DNS_PAGE)
+    _wait_settled(page)
     section = page.locator(f"#{PANEL_ID}")
-    states = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    states = _states(page)
+    addresses = list(states)
     assert "matched" in states.values(), states
-    endpoint = "**/pfblockerng_dns.php?ajax=ddr"
+    successes = section.locator(".text-success").count()
+    _remember_rows(page)
+    endpoint = "**/pfblockerng_dns.php?ajax=ddr&listener=*"
     panel_html = f'<div id="{PANEL_ID}"><div id="{PANEL_ID}_panel-body"></div></div>'
     replies = {
         "http": (503, "text/plain", "Service unavailable"),
@@ -206,8 +221,6 @@ def test_dns_ddr_failed_refresh_clears_stale_results_and_recovers(
         "duplicate": (200, "application/json", json.dumps({"html": panel_html + panel_html})),
     }
     held: list[Route] = []
-    requests: list[str] = []
-    page.on("request", lambda request: requests.append(request.url) if request.url.endswith("?ajax=ddr") else None)
 
     def fail_refresh(route: Route) -> None:
         if failure == "timeout":
@@ -219,25 +232,30 @@ def test_dns_ddr_failed_refresh_clears_stale_results_and_recovers(
             route.fulfill(status=status, content_type=content_type, body=body)
 
     page.route(endpoint, fail_refresh)
+    before = len(requests)
+    page.clock.run_for(30000)
     if failure == "timeout":
-        with page.expect_request(lambda request: request.url.endswith("?ajax=ddr")):
-            page.clock.run_for(30000)
-        assert len(requests) == 1, requests
-        page.clock.run_for(15000)
-    else:
-        with page.expect_response(lambda response: response.url.endswith("?ajax=ddr")):
-            page.clock.run_for(30000)
+        # Each held row times out after its own 15 s request budget; the next row is then queried.
+        for index in range(len(addresses)):
+            _wait_until(page, lambda: len(held) > index, f"row {index} to be queried")
+            page.clock.run_for(15000)
+    _wait_sweep_done(page)
+    assert len(requests) - before == len(addresses), requests[before:]
+    assert len(held) == (len(addresses) if failure == "timeout" else 0), held
     unavailable = section.get_by_role("status")
     unavailable.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
-    assert section.locator(".text-success").count() == 0, "Failed refresh retained stale green results"
-    if failure == "timeout":
-        assert len(held) == 1 and len(requests) == 1, requests
+    assert section.locator(".text-success").count() == successes, "A failed refresh changed the last results"
+    assert _states(page) == states, "A failed refresh changed the last results"
+    assert _rows_kept(page), "A failed refresh replaced the DDR table or its rows"
     page.unroute(endpoint)
-    with page.expect_response(lambda response: "ajax=ddr" in response.url):
-        page.clock.run_for(30000)
-    unavailable.wait_for(state="detached", timeout=JS_TIMEOUT_MS)
-    restored = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    before = len(requests)
+    page.clock.run_for(30000)
+    _wait_sweep_done(page)
+    assert len(requests) - before == len(addresses), requests[before:]
+    unavailable.wait_for(state="hidden", timeout=JS_TIMEOUT_MS)
+    restored = _states(page)
     assert restored == states, f"Expected restored DNS results {states}, got {restored}"
+    assert _rows_kept(page), "Recovery replaced the DDR table or its rows"
     count = len(requests)
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide'))")
     page.clock.run_for(60000)
@@ -264,6 +282,15 @@ def test_dns_ddr_read_only_dispatch(method: str, webui: WebUI, smoke_vm: helpers
 
 
 @pytest.mark.ui_render
+def test_dns_ddr_array_selector_is_rejected(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    before = _config_digest(smoke_vm)
+    response = webui.get(DNS_PAGE + "?ajax=ddr&listener[]=127.0.0.1%3A53")
+    assert response.status_code == 400, response.text
+    assert "no-store" in response.headers.get("Cache-Control", ""), response.headers
+    assert _config_digest(smoke_vm) == before, "Rejected DDR selector changed config.xml"
+
+
+@pytest.mark.ui_render
 def test_dns_ddr_ajax_requires_the_web_session(webui: WebUI) -> None:
     response = webui.get_unauthenticated(DNS_PAGE + "?ajax=ddr")
     assert looks_like_login_page(response.text), response.text
@@ -278,40 +305,130 @@ def _config_digest(vm: helpers.SmokeVM) -> str:
 
 
 def _status_rows(html: str) -> dict[str, ET.Element]:
+    """Rows of the DDR table: one per listener, each State cell an accessible icon with a valid data-state."""
     section = panel(html, PANEL_ID)
     assert section is not None, "pfB-DNS has no DDR Advertisements section"
     assert "refresh_ddr" not in section and "Refresh DDR advertisements" not in section, section
     assert "<pre" not in section and "STDOUT" not in section and "STDERR" not in section, section
-    assert re.search(r"Checked: \d{4}-\d{2}-\d{2}", section), section
     table = re.search(r"<table\b.*?</table>", section, re.DOTALL)
     assert table, section
     root = ET.fromstring(table.group())
-    assert [cell.text for cell in root.findall("./thead/tr/th")] == ["Interface", "Address", "DNS Name", "State"]
+    assert [cell.text for cell in root.findall("./thead/tr/th")] == ["Interface", "Address", "State"]
     rows = root.findall("./tbody/tr")
     result = {row.attrib["data-address"]: row for row in rows}
     assert len(result) == len(rows), f"duplicate addresses: {section}"
     for row in rows:
-        state = row.findall("td")[3]
-        icon = state.find(".//i")
-        spoken = state.find(".//span[@class='sr-only']")
-        assert icon is not None and icon.attrib.get("title"), ET.tostring(row, encoding="unicode")
-        assert spoken is not None and spoken.text, ET.tostring(row, encoding="unicode")
-        assert ("text-success" in " ".join(node.attrib.get("class", "") for node in state.iter())) == (
+        cells = row.findall("td")
+        assert len(cells) == 3, ET.tostring(row, encoding="unicode")
+        icon = cells[2].find(".//i")
+        spoken = cells[2].find(".//span[@class='sr-only']")
+        assert icon is not None and spoken is not None and spoken.text, ET.tostring(row, encoding="unicode")
+        if row.attrib["data-state"] == "pending":
+            assert {"fa-spinner", "fa-spin", "text-muted"} <= set(icon.attrib.get("class", "").split()), ET.tostring(
+                row, encoding="unicode"
+            )
+        else:
+            assert icon.attrib.get("title"), ET.tostring(row, encoding="unicode")
+        assert ("text-success" in " ".join(node.attrib.get("class", "") for node in cells[2].iter())) == (
             row.attrib["data-state"] == "matched"
         ), ET.tostring(row, encoding="unicode")
     return result
 
 
+def _shared_name(html: str) -> str:
+    """The configured DNS Name, shown once above the table."""
+    section = panel(html, PANEL_ID)
+    assert section is not None, html
+    match = re.search(r'<([a-z]+)\b[^>]*\bid="pfb-dns-ddr-name"[^>]*>(.*?)</\1>', section, re.DOTALL)
+    assert match, section
+    return unescape(re.sub(r"<[^>]+>", "", match.group(2))).strip()
+
+
+def _page_html(webui: WebUI) -> str:
+    response = webui.get(DNS_PAGE)
+    assert response.status_code == 200, response.text
+    return response.text
+
+
+def _listener_html(webui: WebUI, address: str) -> str:
+    """One selected listener's check, fetched as the page fetches it: uncached and timestamped."""
+    response = webui.get(f"{DNS_PAGE}?{LISTENER_QUERY}{quote(address, safe='')}")
+    assert response.status_code == 200, response.text
+    assert "no-store" in response.headers.get("Cache-Control", ""), response.headers
+    html = response.json()["html"]
+    assert re.search(r"Checked: \d{4}-\d{2}-\d{2}", html), html
+    return html
+
+
+def _checked_rows(webui: WebUI) -> dict[str, ET.Element]:
+    """Every bound listener's result, one selected request each, as the page's own sweep fetches them."""
+    rows: dict[str, ET.Element] = {}
+    for address in _status_rows(_page_html(webui)):
+        checked = _status_rows(_listener_html(webui, address))
+        assert set(checked) == {address}, checked
+        rows.update(checked)
+    return rows
+
+
+def _wait_until(page: Page, done: Callable[[], bool], what: str) -> None:
+    """Poll from Python, so the page's fake clock never stalls the wait."""
+    deadline = time.monotonic() + 3 * JS_TIMEOUT_MS / 1000
+    while not done():
+        assert time.monotonic() < deadline, f"timed out waiting for {what}"
+        page.wait_for_timeout(50)
+
+
+def _wait_settled(page: Page) -> None:
+    _wait_until(page, lambda: not page.evaluate(PENDING_ROWS), "every DDR row to get a result")
+
+
+def _wait_sweep_done(page: Page) -> None:
+    _wait_until(page, lambda: not page.evaluate(SWEEP_RUNNING), "the DDR sweep to finish")
+
+
+def _states(page: Page) -> dict[str, str]:
+    return {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+
+
+def _remember_rows(page: Page) -> None:
+    page.evaluate("""() => {
+        window.ddrTable = document.querySelector('#pfb-dns-status-ddr table');
+        window.ddrRows = [...document.querySelectorAll('#pfb-dns-status-ddr tbody tr')];
+    }""")
+
+
+def _rows_kept(page: Page) -> bool:
+    """True while the table and every row element are the ones remembered by _remember_rows."""
+    return page.evaluate("""() => {
+        const rows = [...document.querySelectorAll('#pfb-dns-status-ddr tbody tr')];
+        return document.querySelector('#pfb-dns-status-ddr table') === window.ddrTable &&
+            rows.length === window.ddrRows.length && rows.every((row, index) => row === window.ddrRows[index]);
+    }""")
+
+
+def _track_listener_requests(page: Page) -> list[str]:
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if LISTENER_QUERY in request.url else None)
+    return requests
+
+
+def _run_poll(page: Page, requests: list[str], rows: int) -> None:
+    """Fire the 30 second poll under the fake clock; the sweep must query each row once and then finish."""
+    before = len(requests)
+    page.clock.run_for(30000)
+    _wait_sweep_done(page)
+    assert len(requests) - before == rows, requests[before:]
+
+
 @pytest.mark.ui_render
-def test_dns_ddr_page_load_checks_each_actual_listener_without_writing_config(
+def test_dns_ddr_listener_checks_agree_with_directed_svcb_without_writing_config(
     gw: Gateway, gateway_on: State, webui: WebUI
 ) -> None:
-    """Load/reload and AJAX agree with independent directed SVCB observations, without a refresh control."""
+    """Each selected listener check agrees with an independent directed SVCB observation; the page carries no result."""
     _ensure_ddr(gw, on=True)
     before = _config_digest(gw.vm)
-    initial = webui.get(DNS_PAGE)
-    assert initial.status_code == 200, initial.text
-    rows = _status_rows(initial.text)
+    rows = _status_rows(_page_html(webui))
+    assert rows and all(row.attrib["data-state"] == "pending" for row in rows.values()), rows
     listeners = helpers.php_eval(
         gw.vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');echo json_encode(["
@@ -329,7 +446,12 @@ def test_dns_ddr_page_load_checks_each_actual_listener_without_writing_config(
         str(ipaddress.ip_address(address.split("%", 1)[0]))
         for address in re.findall(r"\binet6\s+(\S+)", loopback.stdout)
     }
-    for listener, row in rows.items():
+    for listener in rows:
+        html = _listener_html(webui, listener)
+        checked = _status_rows(html)
+        assert set(checked) == {listener}, html
+        assert _shared_name(html).rstrip(".").lower() == DDR_TARGET.rstrip(".").lower(), html
+        row = checked[listener]
         host, _, port = listener.rpartition(":")
         host = str(ipaddress.ip_address(host.strip("[]")))
         source = ("::1" if host in loopback6 else None) if ":" in host else "127.0.0.1"
@@ -356,7 +478,6 @@ def test_dns_ddr_page_load_checks_each_actual_listener_without_writing_config(
         assert reply.rcode in {"NOERROR", "REFUSED"}, result.stdout
         cells = row.findall("td")
         assert "".join(cells[1].itertext()) == listener, ET.tostring(row, encoding="unicode")
-        assert "".join(cells[2].itertext()).rstrip(".").lower() == DDR_TARGET.rstrip(".").lower()
         state = row.attrib["data-state"]
         if reply.rcode == "REFUSED":
             assert state == "error", ET.tostring(row, encoding="unicode")
@@ -374,23 +495,22 @@ def test_dns_ddr_page_load_checks_each_actual_listener_without_writing_config(
             if not wanted:
                 expected_state = "no_transport"
             assert state == expected_state, ET.tostring(row, encoding="unicode")
-    reloaded = webui.get(DNS_PAGE)
-    assert reloaded.status_code == 200, reloaded.text
-    assert set(_status_rows(reloaded.text)) == set(rows)
-    refreshed = webui.get(DNS_PAGE + "?ajax=ddr&host=203.0.113.99&port=9")
-    assert refreshed.status_code == 200, refreshed.text
-    assert "no-store" in refreshed.headers.get("Cache-Control", ""), refreshed.headers
-    assert set(_status_rows(refreshed.json()["html"])) == set(rows)
+    reloaded = _status_rows(_page_html(webui))
+    assert set(reloaded) == set(rows)
+    unbound = webui.get(f"{DNS_PAGE}?{LISTENER_QUERY}{quote('203.0.113.99:9', safe='')}")
+    assert unbound.status_code == 200, unbound.text
+    assert "no-store" in unbound.headers.get("Cache-Control", ""), unbound.headers
+    assert "203.0.113.99:9" not in unbound.json()["html"], unbound.text
     assert _config_digest(gw.vm) == before, "read-only DDR checks changed config.xml"
 
 
 @pytest.mark.ui_render
 def test_dns_ddr_disabled_is_not_a_successful_match(gw: Gateway, gateway_on: State, webui: WebUI) -> None:
     _ensure_ddr(gw, on=True)
-    assert any(row.attrib["data-state"] == "matched" for row in _status_rows(webui.get(DNS_PAGE).text).values())
+    assert any(row.attrib["data-state"] == "matched" for row in _checked_rows(webui).values())
     try:
         _ensure_ddr(gw, on=False)
-        rows = _status_rows(webui.get(DNS_PAGE).text)
+        rows = _checked_rows(webui)
         assert rows and all(row.attrib["data-state"] == "off" for row in rows.values()), rows
     finally:
         _ensure_ddr(gw, on=True)
@@ -400,14 +520,14 @@ def test_dns_ddr_disabled_is_not_a_successful_match(gw: Gateway, gateway_on: Sta
 def test_dns_ddr_stale_dns_name_is_a_mismatch(gw: Gateway, gateway_on: State, webui: WebUI) -> None:
     """A valid advertisement for the old name must not bless the current configured name."""
     _ensure_ddr(gw, on=True)
-    baseline = _status_rows(webui.get(DNS_PAGE).text)
+    baseline = _checked_rows(webui)
     verified = {address for address, row in baseline.items() if row.attrib["data-state"] == "matched"}
     assert verified, baseline
     replacement = helpers.unique_domain("ddr-stale")
     try:
         _set_lists(gw.vm, {"pfb_dns_name": replacement})
         before = _config_digest(gw.vm)
-        rows = _status_rows(webui.get(DNS_PAGE).text)
+        rows = _checked_rows(webui)
         assert set(rows) == set(baseline), rows
         assert all(rows[address].attrib["data-state"] == "mismatch" for address in verified), rows
         assert all(row.attrib["data-state"] != "matched" for row in rows.values()), rows
@@ -423,11 +543,13 @@ def test_dns_ddr_checks_automatically_after_saving(
     _ensure_ddr(gw, on=True)
     page = browser_page
     _open(page, webui, DNS_PAGE)
-    assert any(row.attrib["data-state"] == "matched" for row in _status_rows(page.content()).values())
+    _wait_settled(page)
+    assert any(state == "matched" for state in _states(page).values()), _states(page)
     with page.expect_navigation(wait_until="domcontentloaded"):
         page.locator('button[type="submit"][name="save"]').click()
     assert page.locator(".input-errors").count() == 0, page.locator("body").inner_text()
-    assert any(row.attrib["data-state"] == "matched" for row in _status_rows(page.content()).values())
+    _wait_settled(page)
+    assert any(state == "matched" for state in _states(page).values()), _states(page)
 
 
 @pytest.mark.ui_browser
@@ -435,17 +557,19 @@ def test_dns_ddr_checks_automatically_after_saving(
 def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
     gw: Gateway, gateway_on: State, browser_page: Page, webui: WebUI, width: int, screenshot_dir: Path
 ) -> None:
-    """An automatic real request changes only panel children, including while collapsed, at every supported width."""
+    """An automatic refresh changes only State cells, including while collapsed, at every supported width."""
     _ensure_ddr(gw, on=True)
     page = browser_page
     page.set_viewport_size({"width": width, "height": 900})
     page.clock.install()
+    requests = _track_listener_requests(page)
     _open(page, webui, DNS_PAGE)
     section = page.locator(f"#{PANEL_ID}")
     body = section.locator(f"#{PANEL_ID}_panel-body")
     assert section.locator("pre, #pfb-dns-ddr-refresh").count() == 0
     assert section.locator("tr[data-address]").count() > 0
-    states = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    _wait_settled(page)
+    states = _states(page)
     assert "matched" in states.values(), states
     for icon in section.locator("td i").all():
         assert icon.get_attribute("title"), icon.evaluate("el => el.outerHTML")
@@ -454,19 +578,19 @@ def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
     page.locator("#pfb_dns_name").fill("unsaved-ddr-name.com")
     page.evaluate("window.ddrBody = document.getElementById('pfb-dns-status-ddr_panel-body')")
     body.evaluate("el => el.insertAdjacentHTML('beforeend', '<span id=\"ddr-before-refresh\"></span>')")
+    _remember_rows(page)
     toggle = section.get_by_role("link", name="Toggle DDR Advertisements", exact=True)
     toggle.click()
     body.wait_for(state="hidden", timeout=JS_TIMEOUT_MS)
-    with page.expect_response(lambda response: "ajax=ddr" in response.url, timeout=30000) as refreshed:
-        page.clock.run_for(30000)
-    assert refreshed.value.status == 200, refreshed.value.text()
-    page.locator("#ddr-before-refresh").wait_for(state="detached", timeout=JS_TIMEOUT_MS)
-    refreshed_states = {address: row.attrib["data-state"] for address, row in _status_rows(page.content()).items()}
+    _run_poll(page, requests, len(states))
+    assert page.locator("#ddr-before-refresh").count() == 1, "A refresh replaced the panel body"
+    assert page.evaluate("window.ddrBody === document.getElementById('pfb-dns-status-ddr_panel-body')")
+    assert _rows_kept(page), "A refresh replaced the DDR table or its rows"
+    refreshed_states = _states(page)
     assert refreshed_states == states, (
         f"Automatic refresh changed unchanged DNS results: {states} -> {refreshed_states}"
     )
     assert page.locator("#pfb_dns_name").input_value() == "unsaved-ddr-name.com"
-    assert page.evaluate("window.ddrBody === document.getElementById('pfb-dns-status-ddr_panel-body')")
     assert not body.is_visible(), "refresh expanded the collapsed panel"
     toggle.click()
     body.wait_for(state="visible", timeout=JS_TIMEOUT_MS)

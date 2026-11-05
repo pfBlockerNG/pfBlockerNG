@@ -35,8 +35,10 @@ if (($_GET['ajax'] ?? '') === 'ddr') {
 		exit;
 	}
 	session_write_close();
+	// No listener is the metadata panel. A non-string (an array) is refused before any probe.
+	$listener = $_GET['listener'] ?? NULL;
 	header('Content-Type: application/json');
-	echo json_encode(['html' => pfb_dns_ddr_status_panel(pfb_dns_ddr_status())]);
+	echo json_encode(['html' => pfb_dns_ddr_status_panel(pfb_dns_ddr_status($listener))]);
 	exit;
 }
 
@@ -458,23 +460,40 @@ include('foot.inc');
 ?>
 <script>
 events.push(function() {
-	const body = document.getElementById('pfb-dns-status-ddr_panel-body');
-	if (!body) {
+	const panelBody = document.getElementById('pfb-dns-status-ddr_panel-body');
+	if (!panelBody) {
 		return;
 	}
-	let request = null;
-	let stopped = false;
-	async function refresh() {
-		if (request || stopped) {
-			return;
+	const note = document.getElementById('pfb-dns-ddr-refresh-status');
+	const rows = Array.from(panelBody.querySelectorAll('tr[data-address]'));
+	const configuredName = nameOf(panelBody);
+	let session = 0;
+	let timer = null;
+	let controller = null;
+
+	function nameOf(root) {
+		const node = root.querySelector('#pfb-dns-ddr-name');
+		return node ? node.textContent.trim() : '';
+	}
+
+	function setNote(visible) {
+		if (note) {
+			note.textContent = 'Some checks could not be refreshed. Previous results are retained.';
+			note.hidden = !visible;
 		}
-		request = new AbortController();
-		const timeout = setTimeout(function() { request.abort(); }, 15000);
+	}
+
+	// One selected listener per request. Only its State cell and data-state change, and only for a response that proves it.
+	async function check(row, current) {
+		const address = row.getAttribute('data-address');
+		const own = new AbortController();
+		const timeout = setTimeout(function() { own.abort(); }, 15000);
+		controller = own;
 		try {
-			const response = await fetch('pfblockerng_dns.php?ajax=ddr', {
+			const response = await fetch('pfblockerng_dns.php?ajax=ddr&listener=' + encodeURIComponent(address), {
 				cache: 'no-store',
 				credentials: 'same-origin',
-				signal: request.signal
+				signal: own.signal
 			});
 			if (!response.ok || response.redirected ||
 			    !(response.headers.get('Content-Type') || '').includes('application/json')) {
@@ -484,33 +503,80 @@ events.push(function() {
 			if (!result || typeof result.html !== 'string') {
 				throw new Error('Invalid DDR panel');
 			}
-			const document = new DOMParser().parseFromString(result.html, 'text/html');
-			const panels = document.querySelectorAll('#pfb-dns-status-ddr > #pfb-dns-status-ddr_panel-body');
-			if (panels.length !== 1) {
+			const parsed = new DOMParser().parseFromString(result.html, 'text/html');
+			const panels = parsed.querySelectorAll('#pfb-dns-status-ddr > #pfb-dns-status-ddr_panel-body');
+			if (panels.length !== 1 || nameOf(panels[0]) !== configuredName) {
 				throw new Error('Missing DDR panel');
 			}
-			if (!stopped) {
-				body.replaceChildren(...panels[0].childNodes);
+			const returned = panels[0].querySelectorAll('tr[data-address]');
+			const matches = Array.from(returned).filter(function(candidate) {
+				return candidate.getAttribute('data-address') === address && candidate.cells.length === 3;
+			});
+			const state = returned.length === 1 && matches.length === 1 ? matches[0].getAttribute('data-state') : null;
+			if (!state) {
+				throw new Error('Missing DDR row');
 			}
-		} catch (error) {
-			if (!stopped) {
-				const message = window.document.createElement('p');
-				message.className = 'text-danger';
-				message.setAttribute('role', 'status');
-				message.textContent = 'DDR results unavailable. Automatic refresh failed.';
-				body.replaceChildren(message);
+			if (current === session) {
+				row.setAttribute('data-state', state);
+				row.cells[2].replaceChildren(...matches[0].cells[2].childNodes);
 			}
 		} finally {
 			clearTimeout(timeout);
-			request = null;
+			if (controller === own) {
+				controller = null;
+			}
 		}
 	}
-	const timer = setInterval(refresh, 30000);
+
+	async function sweep(current) {
+		panelBody.setAttribute('aria-busy', 'true');
+		let complete = true;
+		for (const row of rows) {
+			try {
+				await check(row, current);
+			} catch (error) {
+				if (current === session) {
+					complete = false;
+					setNote(true);
+				}
+			}
+			if (current !== session) {
+				return;
+			}
+		}
+		panelBody.removeAttribute('aria-busy');
+		if (complete) {
+			setNote(false);
+		}
+	}
+
+	// The next sweep starts 30 seconds after this one finishes, so sweeps never overlap.
+	function cycle(current) {
+		sweep(current).then(function() {
+			if (current === session) {
+				timer = setTimeout(function() { cycle(current); }, 30000);
+			}
+		});
+	}
+
+	function start() {
+		session += 1;
+		cycle(session);
+	}
+
+	start();
 	window.addEventListener('pagehide', function() {
-		stopped = true;
-		clearInterval(timer);
-		if (request) {
-			request.abort();
+		session += 1;
+		clearTimeout(timer);
+		timer = null;
+		if (controller) {
+			controller.abort();
+		}
+		panelBody.removeAttribute('aria-busy');
+	});
+	window.addEventListener('pageshow', function(event) {
+		if (event.persisted) {
+			start();
 		}
 	});
 });

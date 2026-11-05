@@ -117,11 +117,11 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 			'dns.example.com A' => PfbDnsDdrStatusTest::response(["dns.example.com. 300 IN A {$v4}"], 'dns.example.com.', 'A'),
 			'dns.example.com AAAA' => PfbDnsDdrStatusTest::response(["dns.example.com. 300 IN AAAA {$v6}"], 'dns.example.com.', 'AAAA'),
 		];
-		$result = $fixture->status();
+		$result = $fixture->status(pfb_dns_proxy_host_port($host, '5353'));
 		$this->assertSame('matched', $result['rows'][0]['state'], json_encode($result));
 		$this->assertCount(3, $fixture->calls);
 		PfbConfig::write("dns_shared/pfb_dns_{$kind}_port", 'invalid');
-		$invalid = $fixture->status();
+		$invalid = $fixture->status(pfb_dns_proxy_host_port($host, '5353'));
 		$this->assertSame('no_transport', $invalid['rows'][0]['state'], 'An invalid base port disables the group even for IPv6 and managed VIP overrides: ' . json_encode($invalid));
 		$this->assertCount(3, $fixture->calls, 'Invalid settings must not launch more queries');
 	}
@@ -147,7 +147,7 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 			'dns.example.com A' => PfbDnsDdrStatusTest::response(['dns.example.com. 300 IN A 192.0.2.1'], 'dns.example.com.', 'A'),
 			'dns.example.com AAAA' => PfbDnsDdrStatusTest::response(['dns.example.com. 300 IN AAAA 2001:db8::1'], 'dns.example.com.', 'AAAA'),
 		];
-		$status = $fixture->status();
+		$status = $fixture->status('[2001:db8::1]:5353');
 		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
 	}
 
@@ -199,7 +199,7 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 			'dns.example.com A' => PfbDnsDdrStatusTest::response(['dns.example.com. 300 IN A 192.0.2.53'], 'dns.example.com.', 'A'),
 			'dns.example.com AAAA' => PfbDnsDdrStatusTest::response(["dns.example.com. 300 IN AAAA {$host}"], 'dns.example.com.', 'AAAA'),
 		];
-		$status = $fixture->status();
+		$status = $fixture->status("[{$host}]:5353");
 		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
 	}
 
@@ -221,7 +221,7 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 			'_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record($host, 'dot', 8853)],
 				additional: ["dns.example.com. 300 IN A {$host}"]),
 		];
-		$status = $fixture->status();
+		$status = $fixture->status("{$host}:5353");
 		// No DNS Name answer is owned for an address clients cannot be given, so a matching SVCB stays unverified.
 		$this->assertSame('unverified', $status['rows'][0]['state'], json_encode($status));
 		$this->assertCount(1, $fixture->calls);

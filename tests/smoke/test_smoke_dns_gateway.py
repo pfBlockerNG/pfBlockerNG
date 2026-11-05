@@ -2386,8 +2386,18 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             row = observations.get(endpoint)
             assert row is not None, f"DDR status omitted {endpoint}: {observations}"
             _say(f"VIP-only DDR status {endpoint}: {ET.tostring(row, encoding='unicode')}")
-            assert row.attrib["data-state"] == "matched", ET.tostring(row, encoding="unicode")
-            name = "".join(row.findall("td")[2].itertext())
+            assert row.attrib["data-state"] == "pending", ET.tostring(row, encoding="unicode")
+            checked = gui.get("/pfblockerng/pfblockerng_dns.php?ajax=ddr", params={"listener": endpoint})
+            assert checked.status_code == 200, checked.text
+            checked_section = panel(checked.json()["html"], "pfb-dns-status-ddr")
+            assert checked_section is not None, checked.text
+            checked_root = ET.fromstring(checked_section)
+            checked_rows = checked_root.findall(".//tbody/tr")
+            assert len(checked_rows) == 1 and checked_rows[0].attrib["data-address"] == endpoint, checked_section
+            assert checked_rows[0].attrib["data-state"] == "matched", checked_section
+            name_field = checked_root.find(".//*[@id='pfb-dns-ddr-name']")
+            assert name_field is not None, checked_section
+            name = "".join(name_field.itertext())
             assert name.rstrip(".").lower() == DDR_TARGET.rstrip(".").lower(), name
     finally:
         gui.post(
