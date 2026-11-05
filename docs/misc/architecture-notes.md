@@ -915,6 +915,9 @@ them; each leaves the port out of that address's DDR DoH record; alone they add 
 listens on (`pfb_dns_proxy_name_answers()`: plain DNS plus each enabled encrypted group): by default an active Resolver VIP is answered
 with itself and the other family's VIP, and an ordinary address with its interface's IPv4/IPv6 pair. Unknown addresses and loopback
 have no entry in the default mode. VIP-only mode instead supplies the available VIP pair, including on internal loopback.
+For a known table entry, a missing requested family returns local NOERROR/NODATA with an SOA, never a public/upstream address.
+VIP-only mode retains explicit `LOCAL=` entries for internal loopback when all selected VIPs disappear; an empty whole table
+still means no locally owned Name entries. Unknown local addresses without an entry continue through the decider.
 No name produces no name/DDR flags. A changed name or DDR toggle restarts the proxy on apply; changed answer tables do not.
 The comparison masks the answer/advertisement arguments and all four fixed-port listener flags, as it does ordinary listen addresses.
 `pfb_dns_proxy_listeners_sync()` sends the whole table, the name answers and the advertised addresses together, to the running gateway as one

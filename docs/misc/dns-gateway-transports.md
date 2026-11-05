@@ -80,7 +80,7 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   `error: a message of 4294967294 bytes is not between 1 and 65536`.
 - **Name-answer table** (issue #3694; see DNS name). `FF FF FF FB`, a 4-byte big-endian length 0 to 65536 (judged before the body is
   read), then a body of lines joined by `\n` (no trailing newline, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]` (the value of a `--dns-name-answer` flag)
-  or `ddr-doh-443 ADDR` (the value of a `--ddr-doh-443` flag), the line kind being its first word. The whole body is checked first: one bad
+  or `ddr-doh-443 ADDR` (the value of a `--ddr-doh-443` flag). `dns-name-answer LOCAL=` explicitly owns the Name without either address family; it is not an empty table. The line kind is its first word. The whole body is checked first: one bad
   line (an unknown first word, a bad value, a LOCAL named twice, a trailing space or a second address in a `ddr-doh-443` line, CRLF
   line endings, a `ddr-doh-443` line on a gateway started without `--ddr`) is `error: <reason>` and nothing changes; otherwise both tables,
   the name answers and the set of addresses DDR advertises DoH on 443 for, are replaced together, atomically, `address table: N name answers`
@@ -424,16 +424,17 @@ configuration policy, not a new restriction on the standalone gateway's generic 
 | Flag | Meaning |
 |---|---|
 | `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. The pfB-DNS page also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
-| `--dns-name-answer LOCAL=ADDR[,ADDR]` | Repeatable. A query for the name that arrives on LOCAL is answered with the ADDR of the family it asked for. LOCAL and every ADDR are IP addresses without a zone (an IPv4-mapped one is read as its IPv4 address); at most one ADDR per family; a LOCAL named twice is an error, and so is any of these flags without `--dns-name` (`--dns-name-answer needs --dns-name`). LOCAL need not be one of its ADDRs. |
+| `--dns-name-answer LOCAL=ADDR[,ADDR]` | Repeatable. A query for the name that arrives on LOCAL is answered with the ADDR of the family it asked for, or local NOERROR/NODATA when that family is absent. `LOCAL=` owns the Name without any addresses. LOCAL and every ADDR are IP addresses without a zone (an IPv4-mapped one is read as its IPv4 address); at most one ADDR per family; a LOCAL named twice is an error, and so is any of these flags without `--dns-name` (`--dns-name-answer needs --dns-name`). LOCAL need not be one of its ADDRs. |
 
 After the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and after DDR, before the decider, the gateway
-answers a query for exactly the DNS name itself, on every transport, when it has an answer: the question is one `IN` `QUERY` of type `A` or
+answers a query for exactly the DNS name itself, on every transport, when LOCAL is in the table: the question is one `IN` `QUERY` of type `A` or
 `AAAA`, its name equals the DNS name (ASCII case-insensitive; `sub.<name>` and every other type, MX, TXT and HTTPS included, go on to
-Unbound), LOCAL is in the table and has an address of the family asked for. The reply is NOERROR with AA, RA and the query's RD, one
-record of TTL 300 owned by the name as asked (its case kept), an EDNS OPT echoed as DDR's replies do; the decider never sees the query
-and nothing is written to the reply log. Any query on an address without a matching entry goes to the decider and
-Unbound as before. On DoT, DoH and DoQ LOCAL is the address the connection reached (after any PROXY header); DDR still sees only plain
-DNS.
+Unbound). When the requested family is available, the reply is NOERROR with AA, RA and the query's RD, one
+record of TTL 300 owned by the name as asked (its case kept), and an EDNS OPT echoed as DDR's replies do.
+When that family is absent, the local reply is NOERROR/NODATA with an SOA for negative caching, not a public/upstream answer.
+In either case the decider never sees the query and nothing is written to the reply log.
+An address without a table entry still delegates to the decider and Unbound. On DoT, DoH and DoQ LOCAL is the address the connection reached
+(after any PROXY header); DDR still sees only plain DNS.
 
 The table is what PHP derives for each address the gateway listens on (`pfb_dns_proxy_name_answers()`): an active Resolver VIP is
 answered with the VIP and the other family's active VIP, if any; any other address with the IPv4 and IPv6 addresses of the interface that
@@ -442,9 +443,11 @@ carries, and loopback, get no entry. The table is given at start by the flags an
 the control socket), so an interface that gains or loses an address changes the answers with no restart.
 
 The explicit VIP-only policy (`gen/pfb_dns_listen_vip_only`, off by default) instead gives the selected active VIP pair to every
-served address, including internal loopback. Missing VIP families never fall back to an interface address. It applies only while
-pfB-DNS is enabled; standalone Unbound restoration is unchanged. Enabling it does not enable DNS redirect or delete leases:
-clients with old resolver addresses need DHCP renewal, RA DNS refresh or manual reconfiguration.
+served address, including internal loopback. Missing VIP families never fall back to an interface or public address: they return
+local NODATA. If every VIP becomes unavailable, explicit owned-empty loopback entries preserve that behavior for both families.
+The policy applies only while pfB-DNS is enabled; standalone Unbound restoration is unchanged.
+Enabling it does not enable DNS redirect or delete leases: clients with old resolver addresses need DHCP renewal, RA DNS refresh
+or manual reconfiguration.
 
 ## RFCs read for this step
 
