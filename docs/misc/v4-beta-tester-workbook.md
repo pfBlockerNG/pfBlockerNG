@@ -180,9 +180,10 @@ Change one obvious setting so you can recognise this box as v4. Call that
 Think of 3.3 and v4 as two separate saved copies of *your pfBlockerNG
 settings*, not as one config that is edited in both directions.
 
-**When you go 3.3 → v4**
+**When you go 3.3 (or 3.2) → v4**
 
-- pfBlockerNG stores your 3.3 settings as they are at that moment.
+- pfBlockerNG stores your 3.3 (or 3.2) settings as they are at that moment.
+  3.3 restores that copy if you go back.
 - It then rewrites the live settings into the v4 layout (new names, new
   pages, new options).
 - That rewrite does **not** run backwards. New v4 options have no home on
