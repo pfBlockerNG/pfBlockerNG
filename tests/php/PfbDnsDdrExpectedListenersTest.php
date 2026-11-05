@@ -202,4 +202,28 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 		$status = $fixture->status();
 		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
 	}
+
+	/** A manual VIP no client can be handed (loopback here) still has its bound listener checked, not reported as absent. */
+	public function testUnusableManualVipStillComparesItsBoundListener(): void
+	{
+		$host = '127.0.0.2';
+		config_set_path('virtualip/vip', [['mode' => 'ipalias', 'interface' => 'lo0', 'type' => 'single', 'subnet' => $host,
+			'subnet_bits' => '32', 'descr' => 'Admin VIP', 'uniqid' => 'v4']]);
+		PfbConfig::write('gen/pfb_dns_listen_vip4', '_vipv4');
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'none');
+		PfbConfig::write('gen/pfb_dns_listen_vip', 'on');
+		PfbConfig::write('dns_shared/pfb_dns_dot', 'on');
+		PfbConfig::write('dns/pfb_dns_dot_interface', 'lan');
+		PfbConfig::write('dns_shared/pfb_dns_dot_port', '8853');
+		$this->gatewayServes(["udp+tcp {$host}:5353", "dot {$host}:8853"]);
+		$fixture = new DdrProbeFixture();
+		$fixture->responses = [
+			'_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record($host, 'dot', 8853)],
+				additional: ["dns.example.com. 300 IN A {$host}"]),
+		];
+		$status = $fixture->status();
+		// No DNS Name answer is owned for an address clients cannot be given, so a matching SVCB stays unverified.
+		$this->assertSame('unverified', $status['rows'][0]['state'], json_encode($status));
+		$this->assertCount(1, $fixture->calls);
+	}
 }

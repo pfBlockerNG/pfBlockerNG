@@ -16199,7 +16199,7 @@ function pfb_dns_ddr_status(): array {
 	}
 	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name'));
 	// config.xml keeps addresses as typed; listener keys use the gateway's canonical spelling.
-	$canon = static fn (array $list): array => array_values(array_filter(array_map('pfb_dns_proxy_answer_address', $list), 'is_string'));
+	$canon = static fn (array $list): array => array_map(static fn (string $a): string => pfb_dns_proxy_answer_address($a) ?? $a, $list);
 	$answers = [];
 	foreach (pfb_dns_proxy_name_answers() as $local => $pair) {
 		$answers[pfb_dns_proxy_answer_address((string) $local) ?? (string) $local] ??= $pair;
