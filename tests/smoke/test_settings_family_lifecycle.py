@@ -17,7 +17,7 @@ Two scenarios, each arranged from scratch (neither reads state the other left):
 
   Scenario: the shipped 3.3.13 package restores the 3.3 settings over 4.x
     Given the branch .pkg installed over unmarked 3.2 settings, and a sentinel edited afterwards (as 4.x edits would)
-    When the shipped v3.3.13 .pkg is installed over it (``pkg add -f``, a downgrade)
+    When the package is removed (Keep Settings on) and the shipped v3.3.13 .pkg is installed in its place
     Then config.xml holds the ORIGINAL sentinel again
      And the marker reads 3.3
 
@@ -25,6 +25,12 @@ STAGING. The branch's pre-deinstall hook saves the CURRENT family's snapshot on 
 looks at the operation, so it can never be the install path under test. The legacy state is therefore staged AFTER
 the package is removed: ``pkg delete`` with Keep Settings on (the config survives), then the marker and every
 snapshot are stripped and the sentinel is seeded, and only then is the branch .pkg installed.
+
+DOWNGRADE SHAPE. The shipped 3.3.13 package is the STABLE port (``pfSense-pkg-pfBlockerNG``) and the branch is the
+``-edge`` one, so ``pkg add -f`` of the shipped file over the branch does not replace it: pkg ignores the file
+conflict "by forced mode" and registers BOTH packages (seen on a live VM). Going back is therefore modelled as the
+removal and install a package-manager switch to the stable port performs: ``pkg delete`` of the branch build (its
+pre-deinstall hook saves the 4.x snapshot), then ``pkg add`` of the shipped file.
 
 SENTINEL. An unknown key in an owned section is carried verbatim by the snapshot save and restore (a whole-tree
 write that bypasses the field adapters), so a unique value in ``pfblockerngdnsblsettings`` is a precise tracer.
@@ -52,7 +58,6 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM
-from .pkg_identity import branch_pkg_name
 
 pytestmark = pytest.mark.smoke
 
@@ -160,12 +165,14 @@ class Slot:
 # --------------------------------------------------------------------------- #
 
 
-def _pkg_add(vm: SmokeVM, pkg: Path, *, what: str) -> None:
-    """Install ``pkg`` with ``pkg add -f``, which replaces whatever build is installed (an upgrade or a downgrade).
+def _pkg_add(vm: SmokeVM, pkg: Path, *, force: bool, what: str) -> None:
+    """Install ``pkg`` with ``pkg add`` (``-f`` when ``force``: reinstall over a registered build of the same name).
 
-    The cron-disable flag is re-asserted before and after, as ``helpers.deploy`` does; the ABI override matches
-    ``install-pkg.sh`` and ``ha_versions.install_build``. The installer's own output is printed, so the log carries
-    the settings-family messages of a passing install too.
+    Never ``-f`` over a differently named package: the shipped stable package and the branch's ``-edge`` one install the
+    same files, and ``pkg add -f`` then registers BOTH and overwrites files ("conflicts with ... ignored by forced
+    mode") instead of replacing the old one, as ``pkg install`` does. The cron-disable flag is re-asserted before and
+    after, as ``helpers.deploy`` does; the ABI override matches ``install-pkg.sh``. The installer's own output is
+    printed, so the log carries the settings-family messages of a passing install too.
     """
     h._write_cron_disable_flag(vm)
     remote = f"/tmp/pfb-3710-{pkg.name}"
@@ -176,23 +183,23 @@ def _pkg_add(vm: SmokeVM, pkg: Path, *, what: str) -> None:
     assert sent.returncode == 0, f"{what}: copying {pkg.name} failed: rc={sent.returncode} {sent.stderr[-300:]!r}"
     abi = os.environ.get("SMOKE_ABI", "")
     add = f"pkg -o ABI={shlex.quote(abi)} add" if abi else "pkg add"
-    added = vm.ssh(f"env ASSUME_ALWAYS_YES=yes {add} -f {shlex.quote(remote)}", timeout=600.0)
+    command = f"{add} {'-f ' if force else ''}{shlex.quote(remote)}"
+    added = vm.ssh(f"env ASSUME_ALWAYS_YES=yes {command}", timeout=600.0)
     output = added.stdout + added.stderr
-    print(f"PFB_SETTINGS_FAMILY pkg add -f {pkg.name}: rc={added.returncode}\n{output[-3000:]}", flush=True)
+    print(f"PFB_SETTINGS_FAMILY {command}: rc={added.returncode}\n{output[-3000:]}", flush=True)
     vm.ssh("rm", "-f", remote)
     assert added.returncode == 0 and not _SCRIPT_FAILED.search(output), (
-        f"{what}: pkg add -f {pkg.name} failed: rc={added.returncode}\n{output[-1500:]}"
+        f"{what}: {command} failed: rc={added.returncode}\n{output[-1500:]}"
     )
     h.wait_unbound_ready(vm)
     h._write_cron_disable_flag(vm)
 
 
-def _pkg_delete(vm: SmokeVM) -> None:
-    """Remove the branch package; Keep Settings (``pfb_keep`` on) leaves the config sections in place."""
-    name = branch_pkg_name(os.environ.get("SMOKE_PKG"))
+def _pkg_delete(vm: SmokeVM, pkg_id: str) -> None:
+    """Remove ``pkg_id`` (``<name>-<version>``); Keep Settings (``pfb_keep`` on) leaves the config sections in place."""
     h._write_cron_disable_flag(vm)
-    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", name, timeout=300.0)
-    assert result.returncode == 0, f"pkg delete {name}: rc={result.returncode}\n{result.stdout}{result.stderr}"
+    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", pkg_id, timeout=300.0)
+    assert result.returncode == 0, f"pkg delete {pkg_id}: rc={result.returncode}\n{result.stdout}{result.stderr}"
     h._write_cron_disable_flag(vm)
 
 
@@ -204,7 +211,7 @@ def _stage_unmarked_legacy_settings(vm: SmokeVM) -> str:
     """
     sentinel = f"legacy-3710-{uuid.uuid4().hex}"
     h.config_set(vm, KEEP_PATH, "on")
-    _pkg_delete(vm)
+    _pkg_delete(vm, _branch_pkg().name.removesuffix(".pkg"))
     h.config_restore_state(vm, MARKER_PATH, (False, ""))
     _sh(vm, f"rm -f {h.PFB_DBDIR}/settings-*.xml", what="remove the settings snapshots")
     h.config_set(vm, SENTINEL_PATH, sentinel)
@@ -239,8 +246,12 @@ def _put_back(vm: SmokeVM, slots_before: list[str]) -> None:
     failures: list[str] = []
 
     def reinstall_branch() -> None:
-        if _installed(vm) != branch.name.removesuffix(".pkg"):
-            _pkg_add(vm, branch, what="restore the branch build")
+        wanted = branch.name.removesuffix(".pkg")
+        others = [pkg_id for pkg_id in _installed(vm).splitlines() if pkg_id != wanted]
+        if others or _installed(vm) != wanted:
+            for pkg_id in others:
+                _pkg_delete(vm, pkg_id)
+            _pkg_add(vm, branch, force=True, what="restore the branch build")
 
     def restore_config() -> None:
         h.restore_pfb_config_baseline(vm, snapshot_path=BASELINE_COPY)
@@ -296,7 +307,7 @@ def test_unmarked_legacy_settings_install_as_the_4x_family_with_a_3_3_snapshot(l
     vm, branch = lifecycle_vm, _branch_pkg()
     sentinel = _stage_unmarked_legacy_settings(vm)
 
-    _pkg_add(vm, branch, what="install the branch package over unmarked legacy settings")
+    _pkg_add(vm, branch, force=False, what="install the branch package over unmarked legacy settings")
     _announce(vm, "branch installed over unmarked legacy settings")
 
     _expect("installed package", branch.name.removesuffix(".pkg"), _installed(vm))
@@ -310,20 +321,22 @@ def test_unmarked_legacy_settings_install_as_the_4x_family_with_a_3_3_snapshot(l
 
 
 @pytest.mark.timeout(1200)  # pkg delete + two installs + a fixture put-back that reinstalls the branch
-def test_shipped_3_3_13_restores_the_3_3_settings_and_marker_over_the_4x_package(
+def test_shipped_3_3_13_restores_the_3_3_settings_and_marker_after_the_4x_package(
     lifecycle_vm: SmokeVM, legacy_pkg: Path
 ) -> None:
-    """Installing the shipped v3.3.13 package over 4.x brings back the settings saved before 4.x, marker 3.3."""
+    """Going back to the shipped v3.3.13 package brings back the settings saved before 4.x, marker 3.3."""
     vm, branch = lifecycle_vm, _branch_pkg()
     sentinel = _stage_unmarked_legacy_settings(vm)
-    _pkg_add(vm, branch, what="install the branch package over unmarked legacy settings")
+    _pkg_add(vm, branch, force=False, what="install the branch package over unmarked legacy settings")
     edited = f"edited-on-4x-3710-{uuid.uuid4().hex}"
     h.config_set(vm, SENTINEL_PATH, edited)  # what an edit made while 4.x ran looks like
     _expect("settings_family marker before the downgrade", (True, _branch_family(branch)), _marker(vm))
     _expect("sentinel before the downgrade (present, value)", (True, edited), h.config_get_state(vm, SENTINEL_PATH))
 
-    _pkg_add(vm, legacy_pkg, what="install the shipped v3.3.13 package over the branch build")
-    _announce(vm, "shipped 3.3.13 installed over the branch build")
+    _pkg_delete(vm, branch.name.removesuffix(".pkg"))
+    _expect("package installed between the 4.x removal and the shipped install", "", _installed(vm))
+    _pkg_add(vm, legacy_pkg, force=False, what="install the shipped v3.3.13 package after the branch build")
+    _announce(vm, "shipped 3.3.13 installed after the branch build")
 
     shipped = re.match(r"pfSense-pkg-pfBlockerNG-\d+\.\d+\.\d+", legacy_pkg.name)
     assert shipped, f"not a shipped pfBlockerNG package file name: {legacy_pkg.name}"
